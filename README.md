@@ -182,7 +182,7 @@ task add "Leap‑day check" anchor:y:29-02 due:today
 task add "Sourdough bake day" anchor:m:1sat due:today
 ```
 
-**Parent–teacher night**
+**3rd Wednesday of the month**
 
 ```
 task add "Parent–teacher night" anchor:m:3wed anchor_mode:all due:today

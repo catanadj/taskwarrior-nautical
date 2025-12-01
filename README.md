@@ -230,11 +230,11 @@ Every add and complete shows a short, readable panel:
 ```
 # 1. Get the hooks
 cd ~/.task/hooks
-wget https://github.com/catanadj/taskwarrior-nautical/raw/main/on-add-nautical.py
 wget https://github.com/catanadj/taskwarrior-nautical/raw/main/on-modify-nautical.py
+wget https://github.com/catanadj/taskwarrior-nautical/raw/main/on-add-nautical.py
 chmod +x on-*-nautical.py
 cd ..
-wget https://github.com/catanadj/taskwarrior-nautical/raw/main/nautical_core.py
+wget https://github.com/catanadj/taskwarrior-nautical/raw/main/on-modify-nautical.py
 
 
 # 2. Add to your ~/.taskrc

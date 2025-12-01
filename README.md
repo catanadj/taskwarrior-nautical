@@ -1,6 +1,6 @@
 # Taskwarrior Nautical ⚓︎⛓
 
-**Chains and Anchors for Taskwarrior** — The missing layer between what your task manager can do and what your actual life requires.
+**Chains and Anchors for Taskwarrior** -- The missing layer between what your task manager can do and what your actual life requires.
 
 While other tools force you to choose between oversimplified repeats and cloud-based complexity, Nautical gives you enterprise-grade scheduling with local privacy. Express any real-world pattern in plain English, then watch it execute with mathematical precision.
 
@@ -15,7 +15,7 @@ Have you ever found yourself thinking:
 
 You're not alone. I hit those exact walls with traditional task management. As someone who values precision and reliability, I needed tools that could handle real-world complexity without becoming a burden themselves.
 
-Nautical gives you the expressive power to describe any real-world rhythm in plain English—from "2nd Monday with roll-forward" to "random weekday in the first half of the month"—then executes it with mathematical precision, keeping your data local and your privacy intact.
+Nautical gives you the expressive power to describe any real-world rhythm in plain English--from "2nd Monday with roll-forward" to "random weekday in the first half of the month"--then executes it with mathematical precision, keeping your data local and your privacy intact.
 
 **Here's what that means in practice:**
 
@@ -342,6 +342,6 @@ That's the real promise of Nautical. It's not just about managing tasks - it's a
 
 Your brain is for solving problems, not remembering schedules. Your tools should handle the predictable so you can focus on the meaningful.
 
-TaskWarrior for the Real World — because your work deserves tools that understand reality.
+TaskWarrior for the Real World -- because your work deserves tools that understand reality.
 
 Deus vult.

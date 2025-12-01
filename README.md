@@ -2,7 +2,7 @@
 
 **Chains and Anchors for Taskwarrior** — The missing layer between what your task manager can do and what your actual life requires.
 
-While other tools force you to choose between oversimplified repeats and cloud-based complexity, Nautical gives you enterprise-grade scheduling with local-first privacy. Express any real-world pattern in plain English, then watch it execute with mathematical precision.
+While other tools force you to choose between oversimplified repeats and cloud-based complexity, Nautical gives you enterprise-grade scheduling with local privacy. Express any real-world pattern in plain English, then watch it execute with mathematical precision.
 
 Have you ever found yourself thinking:
 
@@ -23,7 +23,7 @@ Instead of wrestling with basic repeats that create more work than they save, or
 
 ```
 # Business logic that understands reality
-task add "Financial closing" anchor:"m:-1@nbd"
+task add "Monthly review" anchor:"m:-1"
 
 # Complex patterns made simple  
 task add "Team planning" anchor:"w:mon + m:1:15"

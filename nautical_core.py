@@ -14,7 +14,7 @@ import hashlib
 from datetime import date as _date
 
 
-CORE_VERSION = "chain-core 2025.11.25"
+CORE_VERSION = "chain-core 2025.12.01"
 
 # -------- TZ ----------
 LOCAL_TZ_NAME = (

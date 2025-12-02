@@ -717,10 +717,18 @@ def _fmt_yearly_atom(tok: str) -> str:
         return f"{left}\u2013{right} each year"
     else:
         d1, m1 = _pair(a, b)
+        # ✨ Special case: 29 Feb → label as leap-only
+        if m1 == 2 and d1 == 29:
+            if _yearfmt() == "DM":
+                return f"{d1} {_MONTH_ABBR[m1-1]} (leap years only)"
+            else:
+                return f"{_MONTH_ABBR[m1-1]} {d1} (leap years only)"
+        # Default single-day wording
         if _yearfmt() == "DM":
             return f"{d1} {_MONTH_ABBR[m1-1]} each year"
         else:
             return f"{_MONTH_ABBR[m1-1]} {d1} each year"
+
 
 
 def describe_anchor_term(term: list, default_due_dt=None) -> str:
@@ -2454,38 +2462,58 @@ def expand_weekly_cached(spec: str):
 
 @lru_cache(maxsize=128)
 def expand_yearly_cached(spec: str, y: int):
+    """
+    Expand yearly tokens into concrete dates for year y.
+    Honors ANCHOR_YEAR_FMT == 'DM' or 'MD'.
+    - Single dates (e.g., 02-29) are STRICT: if invalid in year y → no date.
+    - Ranges (e.g., 01-02:03-31) clamp endpoints to that year's month lengths,
+      so whole-month windows stay sensible in non-leap years.
+    """
     if not spec:
         return []
 
     def _mlen(mm: int) -> int:
         return month_len(y, mm)
 
-    def _safe(d: int, m: int) -> date | None:
-        if not (1 <= m <= 12):
+    def _strict_date(d: int, m: int) -> date | None:
+        # For single dates: do NOT clamp; skip invalid combos (e.g., 29 Feb in non-leap years).
+        if not (1 <= m <= 12): return None
+        if not (1 <= d <= _mlen(m)): return None
+        try:
+            return date(y, m, d)
+        except Exception:
             return None
+
+    def _clamped_date(d: int, m: int) -> date | None:
+        # For range endpoints only: clamp inside valid month length.
+        if not (1 <= m <= 12): return None
         d = max(1, min(d, _mlen(m)))
         try:
             return date(y, m, d)
-        except:
+        except Exception:
             return None
 
     def _pair(a: int, b: int) -> tuple[int, int]:
-        # Respect ANCHOR_YEAR_FMT: return (day, month)
+        # Interpret according to ANCHOR_YEAR_FMT; return (day, month)
         return (b, a) if _yearfmt() == "MD" else (a, b)
 
     days = []
-    tokens = [t.strip().lower() for t in spec.split(",") if t.strip()]
+    tokens = [t.strip().lower() for t in str(spec).split(",") if t.strip()]
+
     for tok in tokens:
         m = re.fullmatch(r"(\d{2})-(\d{2})(?::(\d{2})-(\d{2}))?$", tok)
         if not m:
-            continue  # (quarters/month-names should already be rewritten earlier)
+            # Quarters and month-name windows should be rewritten earlier; ignore others.
+            continue
+
         a, b = int(m.group(1)), int(m.group(2))
         if m.group(3):
+            # Range: clamp endpoints
             c, d = int(m.group(3)), int(m.group(4))
             d1, m1 = _pair(a, b)
             d2, m2 = _pair(c, d)
-            start = _safe(d1, m1)
-            end = _safe(d2, m2)
+            start = _clamped_date(d1, m1)
+            end   = _clamped_date(d2, m2)
             if not start or not end or end < start:
                 continue
             cur = start
@@ -2493,11 +2521,14 @@ def expand_yearly_cached(spec: str, y: int):
                 days.append(cur)
                 cur += timedelta(days=1)
         else:
+            # Single date: strict
             d1, m1 = _pair(a, b)
-            dd = _safe(d1, m1)
+            dd = _strict_date(d1, m1)
             if dd:
                 days.append(dd)
+
     return sorted(days)
+
 
 
 @lru_cache(maxsize=128)

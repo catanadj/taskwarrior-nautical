@@ -51,7 +51,7 @@ Nautical isn't trying to be everything to everyone. It solves one problem except
 
 - `w:mon@t=09:00,wed@t=15:00` → Monday at 09:00, Wednesday at 15:00.
 
-- `y:05:15@prev-sat` → 15 of May if Saturday or roll to the previous Saturday.
+- `y:05-15@prev-sat` → 15 of May if Saturday or roll to the previous Saturday.
 
 - `w:rand` →  A random day per week.
 

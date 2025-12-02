@@ -105,6 +105,7 @@ The next link is scheduled **12 days later**; because 12 days is a multiple of 2
 task add "Take the vitamin" due:today+15h cp:36h
 ```
 The next link is **exactly end (completion time) + 36h**.
+
 ![36h](https://github.com/user-attachments/assets/20b9a106-f94f-41d8-be50-8eda18750b7a)
 
 

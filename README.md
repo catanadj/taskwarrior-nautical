@@ -92,28 +92,30 @@ Run odd cadences like **every 28 hours** and want **exact adds with no drift**?
 ### Real‑world examples
 
 **1) Trim the garden grass every 12 days at 09:00**
-
 ```
 task add "Trim the grass" due:tomorrow+9h cp:12d
 ```
+![12d](https://github.com/user-attachments/assets/deb5592d-b756-44be-ad88-1222bd5d06d3)
 
 The next link is scheduled **12 days later**; because 12 days is a multiple of 24h, Nautical **preserves the 09:00 due time** so your routine stays fixed.
 
-**2) Take a vitamin every 36 hours**
 
+**2) Take a vitamin every 36 hours**
 ```
 task add "Take the vitamin" due:today+15h cp:36h
 ```
-
 The next link is **exactly end (completion time) + 36h**.
+![36h](https://github.com/user-attachments/assets/20b9a106-f94f-41d8-be50-8eda18750b7a)
+
 
 **3) Chain task with a max cap
-
 ```
 task add "Tool calibration" cp:P3D chainMax:5 due:today+12h
 ```
-
 What happens: panels show **links left** and the **final date**. When you reach the last link, Nautical stops  -  no extra spawns.
+![3d](https://github.com/user-attachments/assets/b4363406-aecf-4754-9a62-cf8ff6b79430)
+
+
 ## Part II - Anchors - Real-World Patterns for Sophisticated Workflows
 
 **What it is**

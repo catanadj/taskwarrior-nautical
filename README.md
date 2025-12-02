@@ -109,7 +109,7 @@ The next link is **exactly end (completion time) + 36h**.
 ![36h](https://github.com/user-attachments/assets/20b9a106-f94f-41d8-be50-8eda18750b7a)
 
 
-**3) Chain task with a max cap
+**3) Chain task with a max cap**
 ```
 task add "Tool calibration" cp:P3D chainMax:5 due:today+12h
 ```
@@ -182,12 +182,6 @@ task add "Focus day (early bucket)" anchor:'m:1:7 + m:rand@bd' due:today
 
 ```
 task add "Quarterly review" anchor:y:01-15,04-15,07-15,10-15 anchor_mode:all due:today
-```
-
-**Leap day**  -  every Feb 29 (leap years only)
-
-```
-task add "Leap‑day check" anchor:y:29-02 due:today
 ```
 
 > **Many more in the Nautical Manual:** buckets (e.g., `m:22:28`), nth‑weekday (`m:3wed`), year‑month random (`y:rand-10`), and combining patterns with parentheses/operators.

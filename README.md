@@ -114,6 +114,7 @@ The next link is **exactly end (completion time) + 36h**.
 task add "Tool calibration" cp:P3D chainMax:5 due:today+12h
 ```
 What happens: panels show **links left** and the **final date**. When you reach the last link, Nautical stops  -  no extra spawns.
+
 ![3d](https://github.com/user-attachments/assets/b4363406-aecf-4754-9a62-cf8ff6b79430)
 
 

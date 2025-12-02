@@ -24,12 +24,16 @@ Instead of wrestling with basic repeats that create more work than they save, or
 ```
 # Business logic that understands reality
 task add "Monthly review" anchor:"m:-1"
+<img width="714" height="249" alt="image" src="https://github.com/user-attachments/assets/055aa839-7799-45d5-8c0c-9c19ca600f08" />
 
 # Complex patterns made simple  
 task add "Team planning" anchor:"w:mon + m:1:15"
+<img width="714" height="246" alt="image" src="https://github.com/user-attachments/assets/00694fad-3085-45f2-a9aa-8a7ca402fb1d" />
 
 # Exact timing without drift
 task add "Medication" cp:8h chain:on due:today+14h
+<img width="528" height="213" alt="image" src="https://github.com/user-attachments/assets/3b33003e-71ed-4e5f-8915-aa8e0b3a8fe1" />
+
 ```
 ### What Makes Nautical Different
 

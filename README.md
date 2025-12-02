@@ -78,7 +78,9 @@ The Manual includes:
 ## Part I - Chains - Classic Chained Recurrence
 
 Need the next occurrence to be **based on when you complete** the current one?
+
 Want to **keep the same due time** for day‑based periods (e.g., always 09:00) even though you complete early or late?
+
 Run odd cadences like **every 28 hours** and want **exact adds with no drift**?
 
 ### Real‑world examples
@@ -114,13 +116,18 @@ A compact pattern language to express real calendar logic  -  weekly, monthly, o
 ### Is this you for you?
 
 Need a task that recurs only on **Monday and Friday**? Or Monday at 11:00 and Friday at 18:00?
+
 Want **1st and last day** of every month in one line?
+
 Need **2nd Monday** or **last Friday** of the month?
+
 Need the **first business day** when the 1st is a weekend?
+
 Need the **nearest weekday**, or the **previous/next business day**?
+
 Want **Mondays that are also the 1st or 15th** (AND), or **either 1st Saturday or 3rd Friday** (OR)?
+
 Want **one random weekday each month** ?
-Want a **random day in October** each year for an annual surprise?
 
 If you answered **yes** to any of the above, Nautical can provide you with **even more**.
 

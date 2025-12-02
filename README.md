@@ -24,7 +24,7 @@ Instead of wrestling with basic repeats that create more work than they save, or
 ```
 # Business logic that understands reality
 task add "Monthly review" anchor:"m:-1"
-![last month day](https://github.com/user-attachments/assets/055aa839-7799-45d5-8c0c-9c19ca600f08)
+![lastday](https://github.com/user-attachments/assets/95a35bd9-3ee9-4e89-9b73-dfb8588af73e)
 
 # Complex patterns made simple  
 task add "Team planning" anchor:"w:mon + m:1:15"

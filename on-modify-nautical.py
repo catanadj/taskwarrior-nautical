@@ -23,12 +23,25 @@ import re
 _MAX_CHAIN_WALK = 2000  # max tasks to walk backwards in chain
 _MAX_UUID_LOOKUPS = 50  # max individual UUID exports before giving up
 _MAX_ITERATIONS = 5000  # prevent infinite loops in stepping functions
-_MIN_FUTURE_WARN = 365 * 5  # warn if chain extends >2 years
+_MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
 
 
 _MAX_SPAWN_ATTEMPTS = 3
 _SPAWN_RETRY_DELAY = 0.1  # seconds between retries
 
+# ------------------------------------------------------------------------------
+# Colour per chain toggle - performance in termux has a significative reduction. 
+# ------------------------------------------------------------------------------
+
+_CHAIN_COLOR_PER_CHAIN = os.environ.get("NAUTICAL_CHAIN_COLOR", "").strip().lower() in {
+    "chain",
+    "per-chain",
+    "per",
+    "1",
+    "yes",
+    "true",
+    "on",
+}
 
 # ------------------------------------------------------------------------------
 # Locate nautical_core
@@ -175,7 +188,7 @@ def _panel(
             "label": "cyan",
         },
         "preview_cp": {
-            "border": "magenta",
+            "border": "medium_violet_red",
             "title": "bright_green",
             "label": "green",
         },
@@ -728,9 +741,16 @@ def _chain_colour_for_task(task: dict, kind: str) -> str:
 
 
 def _future_style_for_chain(task: dict, kind: str) -> str:
-    """Style for FUTURE links in the timeline (one colour per chain)."""
-    return _chain_colour_for_task(task, kind)
+    """
+    Style for FUTURE links in the timeline.
+    - When per-chain mode is OFF → static colour per kind (fast path)
+    - When per-chain mode is ON  → cached colour per chain root
+    """
+    if not _CHAIN_COLOR_PER_CHAIN:
+        # Original static behaviour
+        return "orchid1" if kind == "cp" else "cyan"
 
+    return _chain_colour_for_task(task, kind)
 
 
 
@@ -1395,17 +1415,17 @@ def _timeline_lines(
     )
     lines: list[str] = []
     if kind == "cp":
-        prev_style = "bright_black"        
-        cur_style = "pale_green1"
+        prev_style = "dim green"        
+        cur_style = "spring_green1"
         next_style = "bold yellow"
     else:  # anchor (default)
-        prev_style = "dim green"
-        cur_style = "pale_green1"
+        prev_style = "sky_blue3"
+        cur_style = "spring_green1"
         next_style = "bold yellow"
     # Cheap deterministic "random" for FUTURE links
     future_style = _future_style_for_chain(task, kind)
 
-    # previous two (completed) - dim green
+    # previous two (completed)
     prevs = _collect_prev_two(task)
     for obj in prevs:
         no = core.coerce_int(obj.get("link"), None)
@@ -1416,7 +1436,7 @@ def _timeline_lines(
         delta = _fmt_on_time_delta(due_dt, end_dt)
         end_s = _fmtlocal(end_dt) if end_dt else "(no end)"
         short = _short(obj.get("uuid"))
-        # previous links (dim green)
+        # previous links
         lines.append(f"[{prev_style}]# {no:>2} {end_s} {delta} {short}[/]")
 
 
@@ -1852,14 +1872,19 @@ def main():
 
         fb = _format_next_anchor_rows(fb)
 
-        chain_colour = _chain_colour_for_task(new, "anchor")
-        _panel(
-            title,
-            fb,
-            kind="preview_anchor",
-            border_style=chain_colour,
-            title_style=chain_colour,
-        )
+        if _CHAIN_COLOR_PER_CHAIN:
+            chain_colour = _chain_colour_for_task(new, "anchor")
+            _panel(
+                title,
+                fb,
+                kind="preview_anchor",
+                border_style=chain_colour,
+                title_style=chain_colour,
+            )
+        else:
+            # Fast path: use the static theme colours
+            _panel(title, fb, kind="preview_anchor")
+
 
     else:
         delta = core.humanize_delta(now_utc, child_due, use_months_days=False)
@@ -1906,14 +1931,18 @@ def main():
 
         fb = _format_next_cp_rows(fb)
 
-        chain_colour = _chain_colour_for_task(new, "cp")
-        _panel(
-            title,
-            fb,
-            kind="preview_cp",
-            border_style=chain_colour,
-            title_style=chain_colour,
-        )
+        if _CHAIN_COLOR_PER_CHAIN:
+            chain_colour = _chain_colour_for_task(new, "cp")
+            _panel(
+                title,
+                fb,
+                kind="preview_cp",
+                border_style=chain_colour,
+                title_style=chain_colour,
+            )
+        else:
+            _panel(title, fb, kind="preview_cp")
+
 
 
 

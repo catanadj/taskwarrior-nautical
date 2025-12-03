@@ -121,6 +121,7 @@ What happens: panels show **links left** and the **final date**. When you reach 
 ## Part II - Anchors - Real-World Patterns for Sophisticated Workflows
 
 **What it is**
+
 A compact pattern language to express real calendar logic  -  weekly, monthly, or yearly anchors  -  with business‑day rolls, explicit times, AND/OR operators and parentheses.
 
 ### Is this you for you?

@@ -183,9 +183,9 @@ def _panel(
 
     THEMES = {
         "preview_anchor": {
-            "border": "bright_cyan",
+            "border": "turquoise2",
             "title": "bright_cyan",
-            "label": "cyan",
+            "label": "light_sea_green",
         },
         "preview_cp": {
             "border": "medium_violet_red",

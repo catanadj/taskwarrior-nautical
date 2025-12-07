@@ -705,25 +705,40 @@ def _validate_anchor_on_modify(expr: str):
         raise ValueError(f"anchor validation failed: {str(e)}")
 
 
-def _validate_cp_on_modify(cp_str: str):
-    """Light cp validation: parseable duration and positive chainMax if present."""
+def _validate_cp_on_modify(cp_str: str, chain_max_val, chain_until_val):
+    """
+    Mirror on-add CP checks for a plain modify:
+      - cp must parse as a duration
+      - optional chainMax must be a non-negative int
+      - optional chainUntil must parse as a datetime
+    """
     if not cp_str or not cp_str.strip():
-        return
+        return  # nothing to validate
+
     td = core.parse_cp_duration(cp_str)
     if td is None:
         raise ValueError(f"Invalid duration format '{cp_str}' (expected: 3d, 2w, 1h, etc.)")
 
-    # Optional extras: keep it small but useful
-    cpmax = core.coerce_int(new.get('chainMax'), 0)
-    if cpmax is not None and cpmax < 0:
-        raise ValueError("chainMax must be a positive integer")
+    # chainMax
+    if chain_max_val not in (None, ""):
+        try:
+            cpmax = core.coerce_int(chain_max_val, 0)
+        except Exception:
+            # fallback if coerce_int isn't available
+            try:
+                cpmax = int(str(chain_max_val).strip())
+            except Exception:
+                raise ValueError("chainMax must be an integer")
+        if cpmax < 0:
+            raise ValueError("chainMax must be a non-negative integer")
 
-    # chainUntil parsing (warning-level on add; here we just fail if unparsable)
-    cu = (new.get("chainUntil") or "").strip()
+    # chainUntil
+    cu = (chain_until_val or "").strip()
     if cu:
         dt = core.parse_dt_any(cu)
         if dt is None:
             raise ValueError(f"Invalid chainUntil '{cu}'")
+
 
 # ------------------------------------------------------------------------------
 # Pretty helpers
@@ -1689,9 +1704,16 @@ def main():
                 if new_anchor:
                     _validate_anchor_on_modify(new_anchor)
 
-            if _field_changed(old, new, "cp") or _field_changed(old, new, "chainMax") or _field_changed(old, new, "chainUntil"):
+            if (_field_changed(old, new, "cp")
+                or _field_changed(old, new, "chainMax")
+                or _field_changed(old, new, "chainUntil")):
                 if new_cp:
-                    _validate_cp_on_modify(new_cp)
+                    _validate_cp_on_modify(
+                        new_cp,
+                        new.get("chainMax"),
+                        new.get("chainUntil"),
+                    )
+
 
             # Optionally, show a tiny success panel for visibility (comment out if you prefer silence)
             # _panel("✓ Updated", [("Note", "Schedule fields validated successfully.")], kind="info")

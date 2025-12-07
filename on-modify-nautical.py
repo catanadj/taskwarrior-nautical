@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 import re
-
+from decimal import Decimal, InvalidOperation
 
 # ------------------------------------------------------------------------------
 # Constants
@@ -675,8 +675,36 @@ def _root_uuid_from(task: dict) -> str:
 # ------------------------------------------------------------------------------
 # On modify-without-completion helpers
 # ------------------------------------------------------------------------------
+
+
+def _canon_for_compare(v):
+    """Canonicalize values so 5 == 5.0, strings are trimmed, and
+    dict/list comparisons are stable."""
+    if v is None:
+        return None
+    # Booleans/numbers
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return Decimal(str(v))  # 5 and 5.0 normalize equal
+    # Strings that might be numeric
+    if isinstance(v, str):
+        s = v.strip()
+        try:
+            return Decimal(s)  # if numeric string, compare numerically
+        except (InvalidOperation, ValueError):
+            return s  # non-numeric string
+    # Collections → stable JSON
+    try:
+        return json.dumps(v, sort_keys=True, ensure_ascii=False)
+    except Exception:
+        return str(v)
+
 def _field_changed(old: dict, new: dict, key: str) -> bool:
-    return (old.get(key) or "").strip() != (new.get(key) or "").strip()
+    ov = old.get(key)
+    nv = new.get(key)
+    return _canon_for_compare(ov) != _canon_for_compare(nv)
+
 
 
 def _validate_anchor_on_modify(expr: str):
@@ -1707,12 +1735,10 @@ def main():
             if (_field_changed(old, new, "cp")
                 or _field_changed(old, new, "chainMax")
                 or _field_changed(old, new, "chainUntil")):
+                new_cp = (new.get("cp") or "").strip()
                 if new_cp:
-                    _validate_cp_on_modify(
-                        new_cp,
-                        new.get("chainMax"),
-                        new.get("chainUntil"),
-                    )
+                    _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
+
 
 
             # Optionally, show a tiny success panel for visibility (comment out if you prefer silence)

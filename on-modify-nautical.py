@@ -672,6 +672,58 @@ def _root_uuid_from(task: dict) -> str:
         prev = obj.get("prevLink")
     return u
 
+# ------------------------------------------------------------------------------
+# On modify-without-completion helpers
+# ------------------------------------------------------------------------------
+def _field_changed(old: dict, new: dict, key: str) -> bool:
+    return (old.get(key) or "").strip() != (new.get(key) or "").strip()
+
+
+def _validate_anchor_on_modify(expr: str):
+    """Mirror on-add strict checks for anchor; raise ValueError on problems."""
+    if not expr or not expr.strip():
+        raise ValueError("anchor is required if chaining by anchor")
+
+    # Syntax first (for friendlier messages)
+    try:
+        dnf_raw = core.parse_anchor_expr_to_dnf(expr)
+    except Exception as e:
+        raise ValueError(f"anchor syntax error: {str(e)}")
+
+    # Weekday legacy ':' hint (parity with on-add)
+    for term in dnf_raw:
+        for atom in term:
+            if (atom.get("typ") or atom.get("type")) == "w":
+                spec = (atom.get("spec") or "").lower()
+                if ":" in spec:
+                    raise ValueError("Weekday ranges use '-' not ':'. Example: w:mon-fri")
+
+    # Strict validation
+    try:
+        _validate_anchor_expr_cached(expr)  # calls core.validate_anchor_expr_strict
+    except Exception as e:
+        raise ValueError(f"anchor validation failed: {str(e)}")
+
+
+def _validate_cp_on_modify(cp_str: str):
+    """Light cp validation: parseable duration and positive chainMax if present."""
+    if not cp_str or not cp_str.strip():
+        return
+    td = core.parse_cp_duration(cp_str)
+    if td is None:
+        raise ValueError(f"Invalid duration format '{cp_str}' (expected: 3d, 2w, 1h, etc.)")
+
+    # Optional extras: keep it small but useful
+    cpmax = core.coerce_int(new.get('chainMax'), 0)
+    if cpmax is not None and cpmax < 0:
+        raise ValueError("chainMax must be a positive integer")
+
+    # chainUntil parsing (warning-level on add; here we just fail if unparsable)
+    cu = (new.get("chainUntil") or "").strip()
+    if cu:
+        dt = core.parse_dt_any(cu)
+        if dt is None:
+            raise ValueError(f"Invalid chainUntil '{cu}'")
 
 # ------------------------------------------------------------------------------
 # Pretty helpers
@@ -1623,10 +1675,35 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
 def main():
     old, new = _read_two()
 
-    # Only react on completion
+    # Pre-flight: validate on simple modify (not completion) if scheduling fields changed
     if (old.get("status") == new.get("status")) or (new.get("status") != "completed"):
-        _print_task(new)
-        return
+        try:
+            # Reject cp+anchor conflict (parity with on-add)
+            new_anchor = (new.get("anchor") or "").strip()
+            new_cp     = (new.get("cp") or "").strip()
+            if new_anchor and new_cp:
+                raise ValueError("Both 'anchor' and 'cp' set; choose one.")
+
+            # Validate only if these fields actually changed
+            if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
+                if new_anchor:
+                    _validate_anchor_on_modify(new_anchor)
+
+            if _field_changed(old, new, "cp") or _field_changed(old, new, "chainMax") or _field_changed(old, new, "chainUntil"):
+                if new_cp:
+                    _validate_cp_on_modify(new_cp)
+
+            # Optionally, show a tiny success panel for visibility (comment out if you prefer silence)
+            # _panel("✓ Updated", [("Note", "Schedule fields validated successfully.")], kind="info")
+
+            _print_task(new)
+            return
+
+        except ValueError as e:
+            _panel("❌ Invalid Chain", [("Validation", str(e))], kind="error")
+            # Non-zero exit stops the modify (same behavior as on-add invalid)
+            sys.exit(1)
+
 
     now_utc = core.now_utc()
     parent_short = _short(new.get("uuid"))

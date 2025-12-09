@@ -1,0 +1,11 @@
+# Nautical config
+anchor_year_fmt = "MD"              # or "DM" (DD-MM or MM-DD preference)
+wrand_salt      = "nautical|wrand|v2"
+tz              = "Australia/Sydney"
+holiday_region  = "" 				# not implemented yet
+
+
+# Toggle file cache
+enable_anchor_cache = true
+anchor_cache_dir = ""  # optional; defaults beside core
+anchor_cache_ttl = 0                               # optional; 0 = never expires

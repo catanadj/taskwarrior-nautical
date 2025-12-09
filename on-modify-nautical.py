@@ -707,6 +707,8 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 
 
 
+
+
 def _validate_anchor_on_modify(expr: str):
     """Mirror on-add strict checks for anchor; raise ValueError on problems."""
     if not expr or not expr.strip():
@@ -1023,6 +1025,11 @@ def _safe_parse_cp_duration(duration_str: str) -> tuple[timedelta | None, str | 
 
 def _compute_anchor_child_due(parent: dict):
     expr_str = (parent.get("anchor") or "").strip()
+    mode = (parent.get("anchor_mode") or "skip").strip().lower()
+    if mode not in ("skip", "all", "flex"):
+        raise ValueError(f"anchor_mode must be 'skip', 'all', or 'flex', got '{mode}'")
+
+    expr_key = core.cache_key_for_task(expr_str, mode)
     if not expr_str:
         return (None, None, None)
 
@@ -1047,9 +1054,6 @@ def _compute_anchor_child_due(parent: dict):
     default_seed = due_d_local
     seed_base = _root_uuid_from(parent) or "preview"
 
-    mode = (parent.get("anchor_mode") or "skip").strip().lower()
-    if mode not in ("skip", "all", "flex"):
-        raise ValueError(f"anchor_mode must be 'skip', 'all', or 'flex', got '{mode}'")
 
     info = {"mode": mode, "basis": None, "missed_count": 0, "missed_preview": []}
 
@@ -1440,6 +1444,7 @@ def _end_chain_summary(current: dict, reason: str, now_utc) -> None:
     if kind == "anchor":
         expr = (current.get("anchor") or "").strip()
         mode = (current.get("anchor_mode") or "skip").lower()
+        expr_key = core.cache_key_for_task(expr, mode)
         tag = {
             "skip": "[cyan]SKIP[/]",
             "all": "[yellow]ALL[/]",
@@ -1635,6 +1640,11 @@ def _timeline_lines(
 
     return lines
 
+def _got_anchor_invalid(msg: str) -> None:
+    _panel("❌ Invalid anchor", [("Validation", msg)], kind="error")
+    print(json.dumps({"error": "Invalid anchor", "message": msg}))
+    sys.exit(1)
+
 
 # chainUntil -> numeric cap and "Final (until)"
 def _cap_from_until_cp(task, next_due_utc):
@@ -1711,6 +1721,13 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
     final_dt = core.build_local_datetime(last_hit, hhmm).astimezone(timezone.utc)
     return (final_no, final_dt)
 
+def _ensure_acf(task: dict) -> None:
+    anch = (task.get("anchor") or "").strip()
+    try:
+        task["acf"] = core.build_acf(anch) if anch else ""
+    except Exception:
+        task["acf"] = ""
+
 
 # ------------------------------------------------------------------------------
 # Main
@@ -1718,39 +1735,53 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
 def main():
     old, new = _read_two()
 
-    # Pre-flight: validate on simple modify (not completion) if scheduling fields changed
+    # Pre-flight: validate on simple modify (not completion)
     if (old.get("status") == new.get("status")) or (new.get("status") != "completed"):
         try:
-            # Reject cp+anchor conflict (parity with on-add)
             new_anchor = (new.get("anchor") or "").strip()
-            new_cp     = (new.get("cp") or "").strip()
-            if new_anchor and new_cp:
-                raise ValueError("Both 'anchor' and 'cp' set; choose one.")
+            if new_anchor:
+                fatal, warns = core.lint_anchor_expr(new_anchor)
+                if fatal:
+                    _got_anchor_invalid(fatal)
+                for w in warns:
+                    _panel("ℹ️  Lint", [("Hint", w)], kind="note")
+                anchor_mode = ((new.get("anchor_mode") or old.get("anchor_mode") or "").strip().upper() or "ALL")
+                try:
+                    if core.ENABLE_ANCHOR_CACHE:
+                        _ = core.build_and_cache_hints(new_anchor, anchor_mode, default_due_dt=new.get("due"))
+                    else:
+                        _ = core.validate_anchor_expr_strict(new_anchor)
+                except Exception as e:
+                    s = new_anchor
+                    emsg = str(e)
+                    # helpful hint for the “missing colon after type”
+                    if (":" not in s) and re.search(r'(^|\W)(w|m|y)(/\d+)?(\W|$)', s, re.I):
+                        emsg = "Expected ':' after anchor type. Examples: 'w:mon', 'm:-1', 'y:06-01'."
+                    _got_anchor_invalid(emsg)
 
-            # Validate only if these fields actually changed
+            # Pre-validate CP only if present
+            new_cp = (new.get("cp") or "").strip()
+            if new_cp:
+                _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
+
+            # Run deeper checks only if fields actually changed
             if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
                 if new_anchor:
                     _validate_anchor_on_modify(new_anchor)
+                _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
 
             if (_field_changed(old, new, "cp")
                 or _field_changed(old, new, "chainMax")
-                or _field_changed(old, new, "chainUntil")):
-                new_cp = (new.get("cp") or "").strip()
-                if new_cp:
-                    _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
-
-
-
-            # Optionally, show a tiny success panel for visibility (comment out if you prefer silence)
-            # _panel("✓ Updated", [("Note", "Schedule fields validated successfully.")], kind="info")
+                or _field_changed(old, new, "chainUntil")) and new_cp:
+                _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
 
             _print_task(new)
             return
 
         except ValueError as e:
             _panel("❌ Invalid Chain", [("Validation", str(e))], kind="error")
-            # Non-zero exit stops the modify (same behavior as on-add invalid)
             sys.exit(1)
+
 
 
     now_utc = core.now_utc()
@@ -1904,6 +1935,12 @@ def main():
         child = _build_child_from_parent(
             new, child_due, next_no, parent_short, kind, cpmax, until_dt
         )
+        # If anchor survives to the child, stamp/refresh ACF
+        anch = (child.get("anchor") or "").strip()
+        if anch:
+            child["acf"] = core.build_acf(anch)
+        else:
+            child["acf"] = ""
     except Exception as e:
         _panel(
             "⛓ Chain error",

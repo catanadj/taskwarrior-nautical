@@ -3,30 +3,132 @@
 """
 Shared core for Taskwarrior Nautical hooks.
 
-Contact email: catalin.nadjan@gmail.com
 """
-
+from __future__ import annotations
 import os, re
 from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache
 from calendar import month_name
-import hashlib
 from datetime import date as _date
+import json, zlib, base64, hashlib, tempfile, time
+import difflib
 
 
-CORE_VERSION = "chain-core 2025.12.01"
+
+# --- Embedded config -----------------------------------
+
+
+try:
+    import tomllib  # Python 3.11+
+except Exception:
+    tomllib = None  # config file remains optional
+
+# Defaults 
+_DEFAULTS = {
+    "anchor_year_fmt": "DM",            # "DM" or "MD"
+    "wrand_salt": "nautical|wrand|v1",  # change to reshuffle weekly-rand streams
+    "tz": "Europe/Bucharest",           # reserved for future DST/zone features
+    "holiday_region": "",               # reserved for future holiday features
+}
+
+# Small cache to avoid re-reading per import
+_CONF_CACHE = None
+
+def _read_toml(path: str) -> dict:
+    if not tomllib:
+        return {}
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f) or {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        # swallow parse errors → fall back to defaults
+        return {}
+
+def _config_paths() -> list[str]:
+    # 1) Explicit env override always wins
+    env_path = os.environ.get("NAUTICAL_CONFIG")
+    if env_path:
+        return [env_path]
+
+    # 2) Local file next to this core module
+    moddir = os.path.dirname(os.path.abspath(__file__))
+    local_candidates = [
+        os.path.join(moddir, "nautical.toml"),
+        os.path.join(moddir, "config.toml"),
+        os.path.join(moddir, "config-nautical.toml"),
+        os.path.join(moddir, ".nautical.toml"),
+    ]
+
+    # 3) XDG-style path (if set)
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    xdg_candidate = [os.path.join(xdg, "nautical", "config.toml", "config-nautical")] if xdg else []
+
+    # 4) Home fallbacks
+    home_candidates = [
+        os.path.expanduser("~/.config/nautical/config-nautical.toml"),
+        os.path.expanduser("~/.nautical.toml"),
+    ]
+
+    # Returned in priority order; the loader will use the first that exists & parses
+    return local_candidates + xdg_candidate + home_candidates
+
+
+def _normalize_keys(d: dict) -> dict:
+    # allow users to write either `anchor_year_fmt` or `ANCHOR_YEAR_FMT`
+    out = {}
+    for k, v in (d or {}).items():
+        kk = str(k).strip().lower()
+        out[kk] = v
+    return out
+
+def _load_config() -> dict:
+    cfg = dict(_DEFAULTS)
+    for p in _config_paths():
+        data = _read_toml(p)
+        if data:
+            cfg.update(_normalize_keys(data))
+            break
+
+    # normalize values
+    ayf = str(cfg.get("anchor_year_fmt") or "").strip().upper()
+    cfg["anchor_year_fmt"] = "MD" if ayf == "MD" else "DM"  # only two modes
+    cfg["wrand_salt"]      = str(cfg.get("wrand_salt") or _DEFAULTS["wrand_salt"])
+    cfg["tz"]              = str(cfg.get("tz") or _DEFAULTS["tz"])
+    cfg["holiday_region"]  = str(cfg.get("holiday_region") or "")
+    return cfg
+
+def _get_config() -> dict:
+    global _CONF_CACHE
+    if _CONF_CACHE is None:
+        _CONF_CACHE = _load_config()
+    return _CONF_CACHE
+
+ANCHOR_YEAR_FMT = _get_config()["anchor_year_fmt"]  # "DM" or "MD"
+WRAND_SALT      = _get_config()["wrand_salt"]
+LOCAL_TZ_NAME     = _get_config()["tz"]
+HOLIDAY_REGION  = _get_config()["holiday_region"]
+
+_CONF = _get_config()
+
+ENABLE_ANCHOR_CACHE = str(_CONF.get("enable_anchor_cache", "false")).lower() in ("1","true","yes")
+ANCHOR_CACHE_DIR_OVERRIDE = _CONF.get("anchor_cache_dir") or ""   # optional custom path
+
+# TTL is optional; 0 = no TTL
+try:
+    ANCHOR_CACHE_TTL = int(_CONF.get("anchor_cache_ttl", "0"))
+except Exception:
+    ANCHOR_CACHE_TTL = 0
+
 
 # -------- TZ ----------
-LOCAL_TZ_NAME = (
-    os.environ.get("TASKWARRIOR_TZ") or os.environ.get("TZ") or "Australia/Sydney"
-)  # <= MODIFY THIS TO YOUR TIME-ZONE
 try:
     from zoneinfo import ZoneInfo
 
     _LOCAL_TZ = ZoneInfo(LOCAL_TZ_NAME)
 except Exception:
     _LOCAL_TZ = None
-
 
 def now_utc():
     """Get current UTC time without microseconds."""
@@ -53,10 +155,9 @@ def fmt_isoz(dt_utc: datetime) -> str:
 
 # -------- Config ----------
 DATE_FORMATS = ("%Y%m%dT%H%M%SZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d")
-ANCHOR_YEAR_FMT = "MD"  # "DM" (DD-MM) or "MD" (MM-DD) <= MODIFY THIS TO YOUR PREFERENCE; Make sure that you stay with it though because if you change it after you have multiple anchors set, trouble looms ahead.
 UNTIL_COUNT_CAP = 1000
 INTERSECTION_GUARD_STEPS = 256
-DEFAULT_DUE_HOUR = 9
+DEFAULT_DUE_HOUR = 11
 
 _WEEKDAYS = {
     "mon": 0,
@@ -299,6 +400,688 @@ def _advance_to_next_allowed_month(y: int, m: int, pairs) -> tuple[int, int]:
         if mm == 1:
             yy += 1
     return (y, m)  # fallback
+
+
+# --- Anchor Canonical Form (ACF) ----------------------------------------------
+
+
+# Constants - no runtime config dependency
+ACF_COMPRESSED = True  # Always compress for best storage
+ACF_CHECKSUM_LEN = 8   # 8 chars = 32 bits of entropy
+
+
+# Weekday normalize, with rand / rand*
+_WD_ABBR = ["mon","tue","wed","thu","fri","sat","sun"]
+def _normalize_weekday(s: str) -> str | None:
+    s = (s or "").strip().lower()
+    if not s:
+        return None
+    if s in ("rand", "rand*"):
+        return s
+    if s in _WD_ABBR:
+        return s
+    # allow numeric 1..7 (Mon..Sun)
+    try:
+        n = int(s)
+        if 1 <= n <= 7:
+            return _WD_ABBR[n-1]
+    except Exception:
+        pass
+    return None
+
+def _atom_sort_key(x: dict) -> tuple:
+    # Stable order by (type, interval, spec-json, mods-json)
+    sj = json.dumps(x.get("s"), separators=(",", ":"), sort_keys=True)
+    mj = json.dumps(x.get("m"), separators=(",", ":"), sort_keys=True)
+    return (x.get("t",""), int(x.get("i",1) or 1), sj, mj)
+
+# Unpack function your validators call
+def _acf_unpack(packed: str) -> dict:
+    raw = base64.b85decode(packed.encode("ascii"))
+    return json.loads(zlib.decompress(raw).decode("utf-8"))
+
+def build_acf(expr: str) -> str:
+    """
+    Build canonical form with integrity protection.
+    Format: "sha256:base85(zlib(json))"
+    """
+    if not expr or not expr.strip():
+        return ""
+    
+    try:
+        dnf = parse_anchor_expr_to_dnf(expr)
+    except Exception:
+        # Parse failed - return sentinel
+        return "!PARSE_ERROR"
+    
+    # Build canonical structure
+    terms = []
+    for term in dnf:
+        atoms = []
+        for a in term:
+            typ = (a.get("typ") or "").lower()
+            ival = int(a.get("ival") or 1)
+            spec = a.get("spec") or ""
+            mods = a.get("mods") or {}
+            
+            # Normalize spec
+            norm_spec = _normalize_spec_for_acf(typ, spec)
+            if norm_spec is None:
+                continue  # Skip invalid atom
+                
+            # Build atom
+            atom_obj = {
+                "t": typ,
+                "s": norm_spec,
+                "m": _mods_to_acf(mods)
+            }
+            if ival != 1:
+                atom_obj["i"] = ival
+                
+            atoms.append(atom_obj)
+        
+        if atoms:
+            atoms.sort(key=lambda x: _atom_sort_key(x))
+            terms.append(atoms)
+    
+    if not terms:
+        return ""
+    
+    # Sort terms
+    terms.sort(key=lambda x: json.dumps(x, sort_keys=True))
+    
+    # Pack with compression
+    structure = {"terms": terms}
+    json_str = json.dumps(structure, separators=(",", ":"), sort_keys=True)
+    
+    # Always compress
+    compressed = zlib.compress(json_str.encode(), level=9)
+    packed = base64.b85encode(compressed).decode("ascii")
+    
+    # Add checksum
+    checksum = hashlib.sha256(packed.encode()).hexdigest()[:ACF_CHECKSUM_LEN]
+    
+    return f"{checksum}:{packed}"
+
+def _normalize_spec_for_acf(typ: str, spec: str):
+    """Comprehensive spec normalization."""
+    spec = (spec or "").strip().lower()
+    
+    if typ == "w":
+        tokens = []
+        for token in spec.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            if "-" in token or ":" in token:
+                sep = "-" if "-" in token else ":"
+                start, end = token.split(sep, 1)
+                s1 = _normalize_weekday(start)
+                s2 = _normalize_weekday(end)
+                if s1 and s2:
+                    tokens.append(f"{s1}-{s2}")
+            else:
+                s = _normalize_weekday(token)
+                if s:
+                    tokens.append(s)
+        if not tokens:
+            return None
+        # keep distinct; ranges before singles for stability
+        ranges = sorted([t for t in tokens if "-" in t])
+        singles = sorted([t for t in tokens if "-" not in t])
+        return ",".join(ranges + singles)
+
+    
+    elif typ == "m":
+        # Monthly: already normalized by parser
+        return spec
+    
+    elif typ == "y":
+        out = []
+        for token in (t.strip() for t in spec.split(",") if t.strip()):
+            m = re.fullmatch(r"(\d{2})-(\d{2})(?::(\d{2})-(\d{2}))?$", token)
+            if not m:
+                # assume already rewritten; if not, keep as string (worst case)
+                out.append(token)
+                continue
+            a, b = int(m.group(1)), int(m.group(2))
+            d1, m1 = _year_pair(a, b)
+            if m.group(3):
+                c, d = int(m.group(3)), int(m.group(4))
+                d2, m2 = _year_pair(c, d)
+                out.append({"m": m1, "d": d1, "to": {"m": m2, "d": d2}})
+            else:
+                out.append({"m": m1, "d": d1})
+        return out
+
+    
+    return spec
+
+def is_valid_acf(acf_str: str) -> bool:
+    if not acf_str:
+        return False
+    parts = acf_str.split(":", 2)  # c8, checksum, payload
+    if len(parts) == 3 and parts[0].startswith("c"):
+        _, checksum, payload = parts
+    else:
+        # legacy "checksum:payload"
+        if ":" not in acf_str:
+            return False
+        checksum, payload = acf_str.split(":", 1)
+
+    if len(checksum) != ACF_CHECKSUM_LEN:
+        return False
+    if hashlib.sha256(payload.encode()).hexdigest()[:ACF_CHECKSUM_LEN] != checksum:
+        return False
+    try:
+        obj = _acf_unpack(payload)
+        return bool(obj and "terms" in obj)
+    except Exception:
+        return False
+
+
+
+def acf_to_original_format(acf_str: str) -> str:
+    """
+    Convert ACF back to approximate original expression.
+    Useful for debugging and migration.
+    """
+    if not is_valid_acf(acf_str):
+        return ""
+    parts = acf_str.split(":", 2)
+    if len(parts) == 3 and parts[0].startswith("c"):
+        packed = parts[2]          # cN:checksum:payload
+    else:
+        packed = acf_str.split(":", 1)[1]  # checksum:payload
+    obj = _acf_unpack(packed)
+    if not obj:
+        return ""
+    
+    terms_str = []
+    for term in obj.get("terms", []):
+        atoms_str = []
+        for atom in term:
+            typ = atom["t"]
+            spec = atom["s"]
+            ival = atom.get("i", 1)
+            mods = atom.get("m", {})
+            
+            # Convert spec back to string
+            spec_str = _acf_spec_to_string(typ, spec)
+            
+            # Build atom string
+            atom_str = f"{typ}"
+            if ival != 1:
+                atom_str += f"/{ival}"
+            atom_str += f":{spec_str}"
+            
+            # Add modifiers
+            if mods:
+                mods_str = _acf_mods_to_string(mods)
+                if mods_str:
+                    atom_str += mods_str
+            
+            atoms_str.append(atom_str)
+        
+        terms_str.append("+".join(sorted(atoms_str)))
+    
+    return " | ".join(sorted(terms_str))
+
+
+def _year_pair(a: int, b: int) -> tuple[int, int]:
+    """Interpret (a,b) according to ANCHOR_YEAR_FMT; return (day, month)."""
+    return (b, a) if _yearfmt() == "MD" else (a, b)
+
+def _mods_to_acf(mods: dict) -> dict:
+    """Keep only active modifiers in a compact, stable shape for ACF."""
+    out = {}
+    if not mods:
+        return out
+    t = mods.get("t")
+    if t:
+        if isinstance(t, tuple):
+            out["t"] = f"{t[0]:02d}:{t[1]:02d}"
+        elif isinstance(t, str) and _hhmm_re.fullmatch(t):
+            out["t"] = t
+    roll = mods.get("roll")
+    if roll in ("pbd", "nbd", "nw", "next-wd", "prev-wd"):
+        out["roll"] = roll
+    if mods.get("bd"):
+        out["bd"] = True
+    if isinstance(mods.get("wd"), int):
+        out["wd"] = int(mods["wd"])
+    off = int(mods.get("day_offset") or 0)
+    if off:
+        out["+d"] = off
+    return out
+
+def _acf_mods_to_string(m: dict) -> str:
+    """Turn ACF mods back into @-mod strings (best-effort, stable order)."""
+    parts = []
+    if m.get("t"):
+        parts.append(f"@t={m['t']}")
+    roll = m.get("roll")
+    if roll in ("pbd", "nbd", "nw"):
+        parts.append(f"@{roll}")
+    elif roll in ("next-wd", "prev-wd"):
+        wd = m.get("wd")
+        wd_s = _WD_ABBR[wd] if isinstance(wd, int) and 0 <= wd < 7 else None
+        if wd_s:
+            parts.append(f"@{roll.split('-')[0]}-{wd_s}")
+    if m.get("bd"):
+        parts.append("@bd")
+    if isinstance(m.get("+d"), int) and m["+d"]:
+        parts.append(f"@{m['+d']:+d}d")
+    return "".join(parts)
+
+def _acf_spec_to_string(typ: str, spec) -> str:
+    """Inverse of ACF spec normalization, back to anchor text."""
+    if typ == "y" and isinstance(spec, list):
+        out = []
+        for item in spec:
+            if isinstance(item, dict) and "m" in item and "d" in item:
+                d1, m1 = item["d"], item["m"]
+                if "to" in item and item["to"]:
+                    d2, m2 = item["to"]["d"], item["to"]["m"]
+                    out.append(_tok_range(d1, m1, d2, m2))
+                else:
+                    out.append(_tok(d1, m1))
+            else:
+                out.append(str(item))
+        return ",".join(out)
+    return str(spec)
+
+
+def _cache_dir() -> str:
+    if ANCHOR_CACHE_DIR_OVERRIDE:
+        p = os.path.expanduser(ANCHOR_CACHE_DIR_OVERRIDE)
+    else:
+        here = os.path.dirname(os.path.abspath(__file__))
+        p = os.path.join(here, ".nautical-cache")
+    os.makedirs(p, exist_ok=True)
+    return p
+
+def _cache_key(acf: str, anchor_mode: str) -> str:
+    payload = "|".join([acf, anchor_mode or "", ANCHOR_YEAR_FMT, WRAND_SALT, LOCAL_TZ_NAME, HOLIDAY_REGION, "nautical-cache|v1"])
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+def _cache_path(key: str) -> str:
+    return os.path.join(_cache_dir(), f"{key}.jsonz")
+
+def cache_load(key: str) -> dict | None:
+    if not ENABLE_ANCHOR_CACHE:
+        return None
+    path = _cache_path(key)
+    try:
+        st = os.stat(path)
+        if ANCHOR_CACHE_TTL and (time.time() - st.st_mtime) > ANCHOR_CACHE_TTL:
+            return None
+        with open(path, "rb") as f:
+            blob = f.read()
+        data = zlib.decompress(base64.b85decode(blob))
+        return json.loads(data.decode("utf-8"))
+    except Exception:
+        return None
+
+def cache_save(key: str, obj: dict) -> None:
+    if not ENABLE_ANCHOR_CACHE:
+        return
+    data = json.dumps(obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    blob = base64.b85encode(zlib.compress(data, 9))
+    path = _cache_path(key)
+    tmpf = None
+    try:
+        fd, tmpf = tempfile.mkstemp(dir=_cache_dir(), prefix=f".{key}.", suffix=".tmp")
+        os.write(fd, blob); os.close(fd)
+        os.replace(tmpf, path)
+    finally:
+        if tmpf and os.path.exists(tmpf):
+            try: os.unlink(tmpf)
+            except Exception: pass
+
+def cache_key_for_task(anchor_expr: str, anchor_mode: str) -> str:
+    # Ephemeral canonical: never stored on the task, used only to build a stable key
+    try:
+        acf = build_acf(anchor_expr)
+    except Exception:
+        acf = (anchor_expr or "").strip()
+    return _cache_key(acf, anchor_mode or "")
+
+
+# ---- Core iterator over DNF ---------------------------------------------------
+_NTH_RE  = re.compile(r"^(?:(\d)(?:st|nd|rd|th)|last)-(" + "|".join(_WD_ABBR) + r")$")
+
+def _days_in_month(y:int, m:int) -> int:
+    return calendar.monthrange(y, m)[1]
+
+def _wd_idx(s: str) -> int | None:
+    s = (s or "").strip().lower()
+    if s in _WD_ABBR: return _WD_ABBR.index(s)
+    try:
+        n = int(s)
+        if 1 <= n <= 7: return n-1
+    except Exception:
+        pass
+    return None
+
+def _doms_for_weekly_spec(spec:str, y:int, m:int) -> set[int]:
+    """Return DOMs in month (y,m) whose weekday matches any in spec (e.g., 'mon,thu' or 'mon-fri')."""
+    spec = (spec or "").strip().lower()
+    if not spec: return set()
+    allowed: set[int] = set()
+    # expand tokens and ranges
+    wset: set[int] = set()
+    for tok in [t.strip() for t in spec.split(",") if t.strip()]:
+        if "-" in tok or ":" in tok:
+            sep = "-" if "-" in tok else ":"
+            a,b = tok.split(sep,1)
+            ia, ib = _wd_idx(a), _wd_idx(b)
+            if ia is None or ib is None: continue
+            rng = list(range(ia, ib+1)) if ia <= ib else (list(range(ia,7))+list(range(0,ib+1)))
+            wset.update(rng)
+        else:
+            i = _wd_idx(tok)
+            if i is not None: wset.add(i)
+    if not wset: return set()
+    dim = _days_in_month(y,m)
+    for d in range(1, dim+1):
+        if date(y,m,d).weekday() in wset:
+            allowed.add(d)
+    return allowed
+
+def _doms_for_monthly_token(tok: str, y:int, m:int) -> set[int]:
+    """Support: 'rand' -> full month; '10:20'; '31'; '-1'; '2nd-mon'; 'last-fri'."""
+    tok = (tok or "").strip().lower()
+    dim = _days_in_month(y,m)
+    if tok == "rand":
+        return set(range(1, dim+1))
+    # range a:b
+    m2 = re.fullmatch(r"(\-?\d{1,2}):(\-?\d{1,2})", tok)
+    if m2:
+        a, b = int(m2.group(1)), int(m2.group(2))
+        if a < 0: a = dim + 1 + a  # -1 -> dim
+        if b < 0: b = dim + 1 + b
+        a = max(1, min(dim, a)); b = max(1, min(dim, b))
+        lo, hi = (a,b) if a <= b else (b,a)
+        return set(range(lo, hi+1))
+    # single int (may be negative)
+    if re.fullmatch(r"\-?\d{1,2}", tok):
+        d = int(tok)
+        if d < 0: d = dim + 1 + d
+        if 1 <= d <= dim: return {d}
+        return set()
+    # nth/last weekday
+    m3 = _NTH_RE.fullmatch(tok)
+    if m3:
+        nth_s, wd_s = m3.group(1), m3.group(2)
+        wd = _wd_idx(wd_s)
+        if wd is None: return set()
+        days = [d for d in range(1, dim+1) if date(y,m,d).weekday() == wd]
+        if nth_s:
+            idx = int(nth_s)-1
+            return {days[idx]} if 0 <= idx < len(days) else set()
+        else:  # last-*
+            return {days[-1]} if days else set()
+    # unknown monthly token -> empty set (parser should have validated earlier)
+    return set()
+
+def _y_ranges_from_spec(spec: str) -> list[tuple[int,int,int,int]]:
+    """
+    Parse 'y:' spec into list of (m1,d1,m2,d2) inclusive ranges.
+    Accepts single days 'dd-mm' as (m,d,m,d).
+    """
+    out = []
+    for tok in [t.strip().lower() for t in (spec or "").split(",") if t.strip()]:
+        m = re.fullmatch(r"(\d{2})-(\d{2})(?::(\d{2})-(\d{2}))?$", tok)
+        if not m:
+            # names/quarters should be rewritten already; ignore unknowns
+            continue
+        a,b = int(m.group(1)), int(m.group(2))
+        d1, m1 = _year_pair(a,b)
+        if m.group(3):
+            c,d = int(m.group(3)), int(m.group(4))
+            d2, m2 = _year_pair(c,d)
+        else:
+            d2, m2 = d1, m1
+        out.append((m1,d1,m2,d2))
+    return out
+
+def _doms_allowed_by_year(y:int, m:int, y_specs: list[str]) -> set[int]:
+    """Return DOMs in month (y,m) that are inside ANY yearly range/day specified across all y atoms of the term."""
+    if not y_specs:
+        return set(range(1, _days_in_month(y,m)+1))
+    # Collect all ranges from all y atoms, then union the DOMs in (y,m)
+    ranges = []
+    for sp in y_specs:
+        ranges.extend(_y_ranges_from_spec(sp))
+    if not ranges:
+        return set()
+    dim = _days_in_month(y,m)
+    allowed = set()
+    for (m1,d1,m2,d2) in ranges:
+        if m1 == m2:
+            if m == m1:
+                lo, hi = max(1, d1), min(dim, d2)
+                allowed.update(range(lo, hi+1))
+        else:
+            # spans months
+            if m < m1 or m > m2:
+                continue
+            if m == m1:
+                allowed.update(range(max(1,d1), dim+1))
+            elif m == m2:
+                allowed.update(range(1, min(dim,d2)+1))
+            elif m1 < m < m2:
+                allowed.update(range(1, dim+1))
+    return allowed
+
+def _choose_rand_dom(y:int, m:int, doms: set[int]) -> int | None:
+    """Deterministic pick of one day from 'doms' using WRAND_SALT."""
+    if not doms:
+        return None
+    pool = sorted(doms)
+    h = hashlib.sha256(f"{WRAND_SALT}|{y:04d}-{m:02d}".encode("utf-8")).digest()
+    idx = int.from_bytes(h[:8], "big") % len(pool)
+    return pool[idx]
+
+def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
+    """
+    Find the next date > ref_d satisfying ALL atoms in 'term'.
+    Rand-aware: if the term contains m:rand and any y:, choose the random
+    day from the intersection of ALL constraints for each candidate month.
+    Otherwise, fall back to the fast alignment loop.
+    """
+    # Detect rand + yearly presence
+    has_m_rand = any((a.get("typ") or a.get("type")) == "m" and "rand" in str(a.get("spec") or "").lower()
+                     for a in term)
+    y_specs = [str(a.get("spec") or "") for a in term if (a.get("typ") or a.get("type")) == "y"]
+
+    if has_m_rand and y_specs:
+        # Month-by-month scan, pick deterministic random from allowed set
+        y, m = ref_d.year, ref_d.month
+        # step starts at ref day + 1
+        probe = ref_d + timedelta(days=1)
+        for _ in range(60):  # scan up to 5 years (60 months)
+            y, m = probe.year, probe.month
+            dim = _days_in_month(y,m)
+
+            # Start with all days in month
+            allowed = set(range(1, dim+1))
+
+            # Intersect with yearly windows
+            allowed &= _doms_allowed_by_year(y,m, y_specs)
+            if not allowed:
+                # jump to first day of next month
+                probe = (date(y,m,1) + timedelta(days=dim))  # first day next month
+                continue
+
+            # Intersect with all monthly atoms (except 'rand', which we resolve after)
+            for a in term:
+                typ = (a.get("typ") or a.get("type") or "").lower()
+                spec = str(a.get("spec") or "")
+                if typ != "m":
+                    continue
+                toks = [t.strip().lower() for t in spec.split(",") if t.strip()]
+                if not toks:
+                    continue
+                # union across tokens in this atom, then intersect across atoms
+                u: set[int] = set()
+                for tok in toks:
+                    if tok == "rand":
+                        # defer to final choose-from-allowed
+                        u.update(range(1, dim+1))
+                    else:
+                        u.update(_doms_for_monthly_token(tok, y, m))
+                allowed &= u
+                if not allowed:
+                    break
+            if not allowed:
+                probe = (date(y,m,1) + timedelta(days=dim))
+                continue
+
+            # Intersect with weekly atoms
+            for a in term:
+                typ = (a.get("typ") or a.get("type") or "").lower()
+                if typ != "w":
+                    continue
+                spec = str(a.get("spec") or "")
+                wdom = _doms_for_weekly_spec(spec, y, m)
+                if not wdom:
+                    allowed = set()
+                else:
+                    allowed &= wdom
+                if not allowed:
+                    break
+            if not allowed:
+                probe = (date(y,m,1) + timedelta(days=dim))
+                continue
+
+            # Choose deterministic random day from allowed set
+            pick = _choose_rand_dom(y, m, allowed)
+            if pick is None:
+                probe = (date(y,m,1) + timedelta(days=dim))
+                continue
+
+            cand = date(y, m, pick)
+            if cand > ref_d:
+                return cand
+            # else move to next month if pick ≤ ref
+            probe = (date(y,m,1) + timedelta(days=dim))
+        # fallback
+        return ref_d + timedelta(days=365)
+
+    # -------- Fast path (no rand+yearly combo) ----------
+    probe = ref_d
+    for _ in range(128):
+        cands = [next_after_atom_with_mods(atom, probe, seed) for atom in term]
+        target = max(cands)
+        chk = target - timedelta(days=1)
+        ok = True
+        for atom in term:
+            if next_after_atom_with_mods(atom, chk, seed) != target:
+                ok = False
+                break
+        if ok:
+            return target
+        probe = target
+    return ref_d + timedelta(days=365)
+
+
+def _next_for_or(dnf: list[list[dict]], ref_d: date, seed: date) -> date:
+    best = None
+    for term in dnf:
+        d = _next_for_and(term, ref_d, seed)
+        if d and d > ref_d and (best is None or d < best):
+            best = d
+    return best or (ref_d + timedelta(days=365))
+
+# ---- Public precompute --------------------------------------------------------
+
+def precompute_hints(dnf: list[list[dict]],
+                     start_dt: datetime | None = None,
+                     anchor_mode: str = "ALL",
+                     rand_seed: str | None = None,
+                     k_next: int = 24,
+                     sample_days_for_year: int = 366) -> dict:
+
+    # Operate in local dates; let hooks add times if they prefer.
+    today = datetime.now().date()
+    start_d = (start_dt.date() if isinstance(start_dt, datetime) else start_dt) or today
+
+    # Next K future dates
+    out_next: list[str] = []
+    ref = start_d
+    # default_seed = start of current week (keeps /N consistent with your w/m/y gating)
+    default_seed = ref
+    safety_limit = 366*5  # don't scan more than 5 years
+    steps = 0
+    while len(out_next) < k_next and steps < safety_limit:
+        nxt = _next_for_or(dnf, ref, default_seed)
+        if not nxt or nxt <= ref:
+            break
+        out_next.append(nxt.isoformat() + "T00:00")
+        ref = nxt + timedelta(days=1)
+        steps += 1
+
+    # Estimate per-year by scanning ~1 year ahead
+    year_hits = 0
+    first_hit = last_hit = ""
+    ref = today
+    steps = 0
+    seen = set()
+    while steps < sample_days_for_year:
+        nxt = _next_for_or(dnf, ref, default_seed)
+        if not nxt or nxt <= ref:
+            break
+        iso = nxt.isoformat() + "T00:00"
+        if not first_hit:
+            first_hit = iso
+        last_hit = iso
+        if nxt not in seen:
+            seen.add(nxt)
+            year_hits += 1
+        # move ref just past this hit
+        ref = nxt + timedelta(days=1)
+        steps += 1
+
+    per_year = {"est": year_hits, "first": first_hit, "last": last_hit}
+
+    # Limits (placeholder here; hooks can compute from task UDAs)
+    limits = {"stop": "none", "max_left": 0, "until": ""}
+
+    # Rand preview = first 10 upcoming (same as next, clipped)
+    rand_preview = out_next[:10]
+
+    return {
+        "next_dates": out_next,
+        "per_year": per_year,
+        "limits": limits,
+        "rand_preview": rand_preview,
+    }
+
+# ───────────────── Cache writer ───────────────── 
+
+def build_and_cache_hints(anchor_expr: str,
+                          anchor_mode: str = "ALL",
+                          default_due_dt=None) -> dict:
+    key = cache_key_for_task(anchor_expr, anchor_mode)
+    cached = cache_load(key)
+    if cached:
+        return cached
+
+    dnf = validate_anchor_expr_strict(anchor_expr)
+    natural = describe_anchor_expr(anchor_expr, default_due_dt=default_due_dt)
+    hints = precompute_hints(dnf, start_dt=default_due_dt, anchor_mode=anchor_mode)
+
+    payload = {
+        "meta": {"created": int(time.time()),
+                 "cfg": {"fmt": ANCHOR_YEAR_FMT, "salt": WRAND_SALT, "tz": LOCAL_TZ_NAME, "hol": HOLIDAY_REGION}},
+        "dnf": dnf,
+        "natural": natural,
+        **hints,
+    }
+    cache_save(key, payload)
+    return payload
 
 
 # ───────────────── Quarter helpers ─────────────────
@@ -1001,6 +1784,42 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
     )  # add @pbd/@nbd/@nw or @bd wording
     return txt or "any day"
 
+def describe_anchor_expr(anchor_expr: str, default_due_dt=None) -> str:
+    """
+    Natural text for a full anchor expression (OR of AND terms).
+    Reuses describe_anchor_term(...) for each AND term and joins them with 'or'.
+    """
+    if not anchor_expr or not str(anchor_expr).strip():
+        return ""
+    try:
+        dnf = parse_anchor_expr_to_dnf(anchor_expr)
+    except Exception:
+        return ""
+
+    # Build natural text for each AND term
+    nat_terms = []
+    for term in dnf:
+        try:
+            t = describe_anchor_term(term, default_due_dt=default_due_dt)
+        except Exception:
+            t = ""
+        if t:
+            nat_terms.append(t)
+
+    if not nat_terms:
+        return ""
+
+    # Deduplicate while preserving order
+    seen, ordered = set(), []
+    for t in nat_terms:
+        if t not in seen:
+            seen.add(t)
+            ordered.append(t)
+
+    # Single vs multiple terms
+    return ordered[0] if len(ordered) == 1 else " or ".join(ordered)
+
+
 
 def _term_prevnext_wd(term):
     """Return ('next'|'prev', 'Friday') if a prev/next weekday modifier exists, else None."""
@@ -1379,7 +2198,6 @@ def _ainterval(atom):  # monthly /N (accept both ival and intv)
 # --- Random anchors helpers ---------------------------------------------------
 
 _WD = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
-WRAND_SALT = "nautical|wrand|v1"
 
 
 def _week_monday(d: date) -> date:
@@ -1571,6 +2389,15 @@ def _term_candidates_in_month(
         allowed_days = set.intersection(*msets) if msets else set()
         dates = [d for d in dates if d.day in allowed_days]
 
+    # Yearly gating (e.g., y:04-20:05-15) — keep only DOMs allowed by the y: windows
+    y_specs = [str(a.get("spec") or "") for a in term if _atype(a) == "y"]
+    if y_specs:
+        allowed_dom = _doms_allowed_by_year(y, m, y_specs)
+        if allowed_dom:
+            dates = [d for d in dates if d.day in allowed_dom]
+        else:
+            dates = []
+
     return dates
 
 
@@ -1716,7 +2543,7 @@ def parse_anchor_expr_to_dnf(s: str):
             i += 1
         head = s[start:i].strip()
         if not take(":"):
-            raise ParseError("Expected ':' after anchor type")
+            raise ParseError("Expected ':' after anchor type. Example 'w:mon', 'm:-8','y:06-01'")
 
         # read until atom terminator: ')' or '|' or '+' (but allow '@+Nd' inside modifiers)
         start = i
@@ -2469,6 +3296,8 @@ def expand_yearly_cached(spec: str, y: int):
     - Ranges (e.g., 01-02:03-31) clamp endpoints to that year's month lengths,
       so whole-month windows stay sensible in non-leap years.
     """
+    # Normalize month-name tokens ('mar', 'sep', 'mar:may') to numeric DM/MD ranges
+    spec = _rewrite_month_names_to_ranges(spec)
     if not spec:
         return []
 
@@ -2580,7 +3409,7 @@ def expand_monthly_cached(spec: str, y: int, m: int):
         return None
 
     for tok in [t.strip().lower() for t in spec.split(",") if t.strip()]:
-        m1 = _nth_weekday_re.match(spec)
+        m1 = _nth_weekday_re.match(tok)
         if m1:
             n_raw, wd_s = m1.group(1), m1.group(2)
             if n_raw == "last":
@@ -2808,6 +3637,8 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
             return next_jan1 - timedelta(days=1)
         return cand
 
+
+
     # ---- Monthly valid-month helpers ----
     # Treating a month as "valid" if ANY token in the monthly spec yields >=1 day.
     _MONTH_TOKENS = [t.strip().lower() for t in (spec or "").split(",") if t.strip()]
@@ -3015,6 +3846,12 @@ def next_after_expr(dnf, after_date, default_seed=None, seed_base=None):
         rk, info = _term_rand_info(term)
 
         if rk == "m":
+            if any(_atype(a) == "y" for a in term):
+                cand = _next_for_and(term, after_date, default_seed)
+                if cand and (best is None or cand < best):
+                    best, best_meta = cand, {"basis": "rand+yearly"}
+                continue
+
             if seed_base is None:
                 seed_base = "preview"
             mods = info.get("mods") or {}
@@ -3160,3 +3997,129 @@ def build_local_datetime(d: date, hhmm=(DEFAULT_DUE_HOUR, 0)) -> datetime:
     if _LOCAL_TZ:
         return datetime(d.year, d.month, d.day, hh, mm, 0, tzinfo=_LOCAL_TZ)
     return datetime(d.year, d.month, d.day, hh, mm, 0, tzinfo=timezone.utc)
+
+
+
+def _iter_y_segments(s: str):
+    """
+    Yield the raw yearly-spec segments that follow 'y:' up to the next
+    term delimiter (+, |, ) or end. We don't fully parse here; it's
+    just for linting.
+    """
+    for m in re.finditer(r'y\s*:\s*([^\+\|\)]*)', s):
+        yield (m.group(1) or "").strip()
+
+def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
+    s = (expr or "").strip().lower()
+    if not s:
+        return None, []
+    warnings: list[str] = []
+
+    # 0) missing ':' after type (w/m/y)
+    if re.search(r'\b(w|m|y)(/\d+)?\b(?!\s*:\s*)', s):
+        return ("Expected ':' after anchor type. Examples: 'w:mon', 'm:-1', 'y:06-01'.", [])
+
+    # 1) Yearly tokens: check only inside y: segments
+    fmt = _yearfmt()  # "MD" or "DM"
+    for seg in _iter_y_segments(s):
+        # split on commas (multiple y tokens)
+        for tok in [t.strip() for t in seg.split(",") if t.strip()]:
+            # bare dd:mm (no hyphens anywhere) → definitely wrong (and not a range)
+            if re.fullmatch(r'\d{2}:\d{2}', tok):
+                return ("Yearly day/month must use '-', not ':'. Try '05-15' (not '05:15').", [])
+            # valid single day?
+            if re.fullmatch(r'\d{2}-\d{2}', tok):
+                a, b = tok.split("-")
+                x, y = int(a), int(b)
+                if fmt == "MD":
+                    if x > 12 and 1 <= y <= 12:
+                        return (f"'{tok}' looks like DD-MM but config expects MM-DD. Try '{y:02d}-{x:02d}'.", [])
+                else:  # DM
+                    if y > 12 and 1 <= x <= 12:
+                        return (f"'{tok}' looks like MM-DD but config expects DD-MM. Try '{y:02d}-{x:02d}'.", [])
+                continue
+            # valid range?
+            if re.fullmatch(r'\d{2}-\d{2}:\d{2}-\d{2}', tok):
+                a, b, c, d = tok[0:2], tok[3:5], tok[6:8], tok[9:11]
+                x, y, u, v = int(a), int(b), int(c), int(d)
+                if fmt == "MD":
+                    if x > 12 and 1 <= y <= 12:
+                        return (f"'{tok}' starts like DD-MM but config expects MM-DD. "
+                                f"Try '{y:02d}-{x:02d}:{v:02d}-{u:02d}'.", [])
+                else:
+                    if y > 12 and 1 <= x <= 12:
+                        return (f"'{tok}' starts like MM-DD but config expects DD-MM. "
+                                f"Try '{y:02d}-{x:02d}:{v:02d}-{u:02d}'.", [])
+                continue
+
+    # 2) MD/DM confusion (use configured ANCHOR_YEAR_FMT)
+    for m in re.finditer(r'\b(\d{2})-(\d{2})(?=([^\d:]|$))', s):
+        a, b = int(m.group(1)), int(m.group(2))
+        fmt = _yearfmt()  # "MD" or "DM"
+        if fmt == "MD":
+            if a > 12 and 1 <= b <= 12:
+                return (f"'{m.group(0)}' looks like DD-MM but config expects MM-DD. Try '{b:02d}-{a:02d}'.", [])
+        else:  # DM
+            if b > 12 and 1 <= a <= 12:
+                return (f"'{m.group(0)}' looks like MM-DD but config expects DD-MM. Try '{b:02d}-{a:02d}'.", [])
+
+    # 3) invalid weekday names in typical contexts
+    _wd = set(_WD_ABBR)  # ["mon","tue","wed","thu","fri","sat","sun"]
+    for wd in re.findall(r'\b[a-z]{3,}\b', s):
+        if wd in _wd or wd in ("rand", "rand*"):
+            continue
+        if re.search(rf'(?:^|[\s\+\|,:@-])(w:|@prev-|@next-|last-|1st|2nd|3rd|4th|5th-){wd}\b', s):
+            sug = difflib.get_close_matches(wd, list(_wd), n=1, cutoff=0.6)
+            if sug:
+                return (f"Unknown weekday '{wd}'. Did you mean '{sug[0]}'?", [])
+
+    # 4) nth weekday suffix errors and range
+    ord_ok = {"1": "1st", "2": "2nd", "3": "3rd", "4": "4th", "5": "5th"}
+    for m in re.finditer(r'\b(\d+)(st|nd|rd|th)-([a-z]+)\b', s):
+        n, suff, wd = m.group(1), m.group(2), m.group(3)
+        if n not in ord_ok:
+            return (f"Invalid ordinal '{n}{suff}'. Only 1st..5th are supported.", [])
+        expect = ord_ok[n]
+        if f"{n}{suff}" != expect:
+            return (f"Did you mean '{expect}-{wd}' instead of '{n}{suff}-{wd}'?", [])
+
+    # 5) unsatisfiable '+' for pure weekly AND like "w:sat + w:mon"
+    and_terms = [t.strip() for t in re.split(r'\|', s)]
+    for t in and_terms:
+        atoms = [a.strip() for a in re.split(r'\+', t)]
+        wsets, only_weekly = [], True
+        for a in atoms:
+            m = re.match(r'^w(?:(/\d+)?):([a-z0-9\-\:\,]+)$', a)
+            if not m:
+                only_weekly = False
+                break
+            spec = m.group(2)
+            ws = set()
+            simple = True
+            for tok in spec.split(","):
+                tok = tok.strip()
+                if "-" in tok or ":" in tok:
+                    simple = False
+                    break
+                if tok in _wd:
+                    ws.add(tok)
+            if not simple:
+                only_weekly = False
+                break
+            if ws:
+                wsets.append(ws)
+        if only_weekly and wsets and not set.intersection(*wsets):
+            return ("These anchors joined with '+' don't share any possible date. "
+                    "If you meant 'either/or', join them with ',' or '|'.", [])
+
+    # 6) quarter ranges like "q4:q2" backwards
+    g = re.search(r'\bq([1-4])\s*:\s*q([1-4])\b', s)
+    if g and int(g.group(2)) < int(g.group(1)):
+        return ("Invalid quarter range 'qX:qY': end quarter precedes start quarter. "
+                "Split across the year boundary, e.g., 'q4, q1'.", [])
+
+    # 7) gentle tip for legacy multi-@t in one atom
+    if re.search(r'y:[^|+)]*@t=\d{2}:\d{2},', s):
+        warnings.append("Multiple @t times inside a single 'y:' atom; ensure each spec has its own @t or use '|'.")
+
+    return None, warnings

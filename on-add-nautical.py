@@ -352,6 +352,12 @@ def _format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]
     return out or rows
 
 
+def _fail_and_exit(title: str, msg: str) -> None:
+    # Pretty panel -> stderr
+    _panel(f"❌ {title}", [("Message", msg)], kind="error")
+    # Minimal feedback -> stdout (what Task expects when a hook fails)
+    print(f"{title}: {msg}")
+    sys.exit(1)
 
 
 def _error_and_exit(msg_tuples):
@@ -632,6 +638,14 @@ def main():
         is_valid, err = _validate_anchor_syntax_strict(anchor_str)
         if not is_valid:
             _error_and_exit([("Invalid anchor", err)])
+        anchor_mode = ((task.get("anchor_mode") or "").strip().upper() or "ALL")
+        if core.ENABLE_ANCHOR_CACHE:
+            pkg = core.build_and_cache_hints(anchor_str, anchor_mode, default_due_dt=task.get("due"))
+            natural = pkg.get("natural") or core.describe_anchor_expr(anchor_str, default_due_dt=task.get("due"))
+            dnf = pkg.get("dnf")  # if you need it for the panel
+        else:
+            natural = core.describe_anchor_expr(anchor_str, default_due_dt=task.get("due"))
+            dnf = core.validate_anchor_expr_strict(anchor_str)
 
         # ========== EDGE CASE 6: Invalid anchor_mode ==========
         mode, warn_msg = _validate_anchor_mode(task.get("anchor_mode"))
@@ -643,7 +657,8 @@ def main():
         try:
             dnf = _validate_anchor_expr_cached(anchor_str)
         except Exception as e:
-            _error_and_exit([("anchor validation", str(e))])
+            _fail_and_exit("Invalid anchor", f"anchor syntax error: {e}")
+
 
         tag = {
             "skip": "[bold bright_cyan]SKIP[/]",
@@ -767,6 +782,16 @@ def main():
 
         allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
         allow_by_until = exact_until_count if exact_until_count is not None else 10**9
+
+        # pass it through the linter
+        fatal, warns = core.lint_anchor_expr(anchor_str)
+        if fatal:
+            _fail_and_exit("Invalid anchor", fatal)
+        for w in warns:
+            _panel("ℹ️  Lint", [("Hint", w)], kind="note")
+
+
+
         preview_limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until))
 
         preview = []
@@ -844,6 +869,7 @@ def main():
             rows,
             kind="preview_anchor",
         )
+
         print(json.dumps(task), end="")
         return
 

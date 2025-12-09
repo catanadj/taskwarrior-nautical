@@ -188,9 +188,9 @@ def _panel(
             "label": "light_sea_green",
         },
         "preview_cp": {
-            "border": "medium_violet_red",
-            "title": "bright_green",
-            "label": "green",
+            "border": "deep_pink1",
+            "title": "green",
+            "label": "medium_violet_red",
         },
         "summary": {
             "border": "indian_red",
@@ -842,8 +842,8 @@ def _future_style_for_chain(task: dict, kind: str) -> str:
     - When per-chain mode is ON  → cached colour per chain root
     """
     if not _CHAIN_COLOR_PER_CHAIN:
-        # Original static behaviour
-        return "orchid1" if kind == "cp" else "cyan"
+        # Static behaviour
+        return "medium_violet_red" if kind == "cp" else "cyan"
 
     return _chain_colour_for_task(task, kind)
 

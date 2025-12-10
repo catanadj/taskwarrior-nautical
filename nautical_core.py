@@ -121,6 +121,26 @@ try:
 except Exception:
     ANCHOR_CACHE_TTL = 0
 
+# --- ChainID config ----------------------------------------------------------
+def _trueish(v, default=False):
+    if v is None: return default
+    s = str(v).strip().lower()
+    return s in ("1","true","yes","on")
+ENABLE_CHAIN_ID = _trueish(_CONF.get("enable_chain_id", "true"), default=True)
+
+def short_uuid(u: str | None) -> str:
+    """Taskwarrior-style short uuid (first 8 hex)."""
+    u = (u or "").strip().lower()
+    return u.split("-")[0] if u else ""
+
+def should_stamp_chain_id(task: dict) -> bool:
+    """We stamp a chainID when task becomes/starts a nautical chain."""
+    if not ENABLE_CHAIN_ID: return False
+    if not isinstance(task, dict): return False
+    has_anchor = bool((task.get("anchor") or "").strip())
+    has_cp     = bool((task.get("cp") or "").strip())
+    already    = bool((task.get("chainID") or "").strip())
+    return (has_anchor or has_cp) and not already
 
 # -------- TZ ----------
 try:
@@ -4123,3 +4143,12 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
         warnings.append("Multiple @t times inside a single 'y:' atom; ensure each spec has its own @t or use '|'.")
 
     return None, warnings
+
+
+def tw_export_chain_or_fallback(current_task: dict, fallback_query: str) -> list[dict]:
+    q = None
+    if core.ENABLE_CHAIN_ID:
+        cid = (current_task.get("chainID") or "").strip()
+        if cid:
+            q = f'chainID:{cid} status.not:deleted'
+    return tw_export(q or fallback_query)

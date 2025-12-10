@@ -9,3 +9,6 @@ holiday_region  = "" 				# not implemented yet
 enable_anchor_cache = true
 anchor_cache_dir = ""  # optional; defaults beside core
 anchor_cache_ttl = 0                               # optional; 0 = never expires
+
+# ChainID toggle
+enable_chain_id = true

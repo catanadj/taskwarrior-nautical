@@ -20,7 +20,7 @@ from decimal import Decimal, InvalidOperation
 # Constants
 # ------------------------------------------------------------------------------
 
-_MAX_CHAIN_WALK = 2000  # max tasks to walk backwards in chain
+_MAX_CHAIN_WALK = 500  # max tasks to walk backwards in chain
 _MAX_UUID_LOOKUPS = 50  # max individual UUID exports before giving up
 _MAX_ITERATIONS = 5000  # prevent infinite loops in stepping functions
 _MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
@@ -535,6 +535,7 @@ def _spawn_child(child_task: dict) -> tuple[str, set[str]]:
     if "modified" not in obj:
         obj["modified"] = obj["entry"]
 
+
     obj = _strip_none_and_cast(obj)
     _normalise_datetime_fields(obj)
 
@@ -671,6 +672,70 @@ def _root_uuid_from(task: dict) -> str:
         u = obj.get("uuid") or u
         prev = obj.get("prevLink")
     return u
+
+# --- Chain export: prefer chainID, else walk the legacy links -----------------
+def _task(args, env=None) -> str:
+    """
+    Thin wrapper around 'task' returning stdout as text.
+    Always disables hooks; caller should provide rc.json.array flag when needed.
+    """
+    env = env or os.environ.copy()
+    r = subprocess.run(
+        ["task", "rc.hooks=off"] + list(args),
+        text=True,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return r.stdout or ""
+
+def _export_uuid_full(u: str, env=None) -> dict | None:
+    """Export a single task by full UUID."""
+    try:
+        out = _task(["rc.json.array=1", f"export uuid:{u}"], env=env)  # uses existing _task()
+        arr = json.loads(out) if out and out.strip().startswith("[") else []
+        return arr[0] if arr else None
+    except Exception:
+        return None
+
+def tw_export_chain_or_fallback(seed_task: dict, env=None) -> list[dict]:
+    """
+    Fast path: export by chainID (new chains).
+    Fallback: walk legacy chain via prevLink/nextLink starting from the root UUID.
+    """
+    # 1) Prefer chainID short token, if present
+    short = (seed_task.get("chainID") or core.short_uuid(seed_task.get("uuid")) or "").strip()
+    if short:
+        try:
+            out = _task(["rc.json.array=1", f"export chainID:{short}"], env=env)
+            arr = json.loads(out) if out and out.strip().startswith("[") else []
+            if arr:
+                return arr
+        except Exception:
+            pass
+
+    # 2) Fallback: legacy chain (no chainID) — BFS from root via prevLink/nextLink
+    root_u = _root_uuid_from(seed_task) or seed_task.get("uuid")
+    if not root_u:
+        return [seed_task]
+
+    seen, queue, bag = set(), [root_u], {}
+    while queue and len(seen) < _MAX_CHAIN_WALK:
+        u = queue.pop(0)
+        if u in seen:
+            continue
+        seen.add(u)
+        obj = _export_uuid_full(u, env=env)
+        if not obj:
+            continue
+        bag[u] = obj
+        for k in ("prevLink", "nextLink"):
+            s = (obj.get(k) or "").strip()
+            if s and s not in seen:
+                queue.append(s)
+
+    return list(bag.values()) or [seed_task]
+
 
 # ------------------------------------------------------------------------------
 # On modify-without-completion helpers
@@ -1280,6 +1345,17 @@ def _build_child_from_parent(
         child["chainMax"] = int(cpmax)
     if until_dt:
         child["chainUntil"] = core.fmt_isoz(until_dt)
+
+    # [CHAINID] Inherit parent chainID (fallback to parent's short uuid)
+    try:
+        if core.ENABLE_CHAIN_ID:
+            parent_chain = (parent.get("chainID") or "").strip()
+            if not parent_chain:
+                parent_chain = core.short_uuid(parent.get("uuid"))
+            child["chainID"] = parent_chain
+    except Exception:
+        pass
+
     return child
 
 
@@ -1415,10 +1491,25 @@ def _end_chain_summary(current: dict, reason: str, now_utc) -> None:
     kind_anchor = bool((current.get("anchor") or "").strip())
     kind = "anchor" if kind_anchor else "cp"
 
-    # Cap the full chain walk for performance on long chains
-    chain = _walk_chain_all(current, cap=_MAX_CHAIN_WALK)
+    # Prefer chainID export; fallback to legacy prev/next traversal
+    chain = tw_export_chain_or_fallback(current)
+
+    # Sort chronologically by link number (falls back to due date when link missing)
+    def _link_sort_key(obj):
+        ln = core.coerce_int(obj.get("link"), None)
+        if ln is not None:
+            return (0, ln)
+        due = _dtparse(obj.get("due")) or datetime.max.replace(tzinfo=timezone.utc)
+        return (1, due)
+
+    try:
+        chain.sort(key=_link_sort_key)
+    except Exception:
+        pass
+
     L = core.coerce_int(current.get("link"), len(chain))
-    root = _short(_root_uuid_from(current))
+    root = _short(chain[0].get("uuid") if chain else _root_uuid_from(current))
+
     cur_s = _short(current.get("uuid"))
     first = _dtparse(chain[0].get("due")) if chain else None
     last = _dtparse(chain[-1].get("end")) if chain else None
@@ -1768,12 +1859,26 @@ def main():
             if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
                 if new_anchor:
                     _validate_anchor_on_modify(new_anchor)
-                _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
+               # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
 
             if (_field_changed(old, new, "cp")
                 or _field_changed(old, new, "chainMax")
                 or _field_changed(old, new, "chainUntil")) and new_cp:
                 _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
+
+            # [CHAINID] Stamp only when a task *just* became nautical and still has no chainID
+            try:
+                became_anchor = (not (old.get("anchor") or "").strip()) and ((new.get("anchor") or "").strip())
+                became_cp     = (not (old.get("cp")     or "").strip()) and ((new.get("cp")     or "").strip())
+                already_chain = bool((new.get("chainID") or "").strip())
+                linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
+
+                if core.ENABLE_CHAIN_ID and (became_anchor or became_cp) and not already_chain and not linked_already:
+                    new["chainID"] = core.short_uuid(new.get("uuid"))
+            except Exception:
+                pass
+
+
 
             _print_task(new)
             return
@@ -1935,12 +2040,6 @@ def main():
         child = _build_child_from_parent(
             new, child_due, next_no, parent_short, kind, cpmax, until_dt
         )
-        # If anchor survives to the child, stamp/refresh ACF
-        anch = (child.get("anchor") or "").strip()
-        if anch:
-            child["acf"] = core.build_acf(anch)
-        else:
-            child["acf"] = ""
     except Exception as e:
         _panel(
             "⛓ Chain error",

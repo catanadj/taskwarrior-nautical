@@ -630,6 +630,13 @@ def main():
 
     rows = []
 
+    # [CHAINID] Stamp short root id on new chains (anchor/cp present, no existing chainID)
+    try:
+        if core.ENABLE_CHAIN_ID and ((task.get("anchor") or task.get("cp")) and not (task.get("chainID") or "").strip()):
+            task["chainID"] = core.short_uuid(task.get("uuid"))
+    except Exception:
+        # Never block task creation on bookkeeping
+        pass
     # ==================================================================================
     # ANCHOR PREVIEW
     # ==================================================================================

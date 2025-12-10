@@ -176,10 +176,20 @@ def _panel(
         sys.stderr.write(title + "\n")
         for k, v in rows:
             if k is None:
-                sys.stderr.write(f"{v}\n")
-            else:
-                sys.stderr.write(f"{k}: {v}\n")
-        return
+                t.add_row("", ("" if v is None else str(v)))
+                continue
+
+            label_text = Text(str(k))
+            lk = str(k).lower()
+            if "warning" in lk:
+                label_text.stylize("bold yellow")
+            elif "error" in lk:
+                label_text.stylize("bold red")
+            elif "note" in lk:
+                label_text.stylize("italic cyan")
+
+            t.add_row(label_text, ("" if v is None else str(v)))
+
 
     THEMES = {
         "preview_anchor": {
@@ -231,7 +241,8 @@ def _panel(
         elif "note" in lk:
             label_text.stylize("italic cyan")
 
-        t.add_row(label_text, v)
+        t.add_row(label_text, "" if v is None else str(v))
+
 
     console.print(
         Panel(
@@ -1819,6 +1830,11 @@ def _ensure_acf(task: dict) -> None:
     except Exception:
         task["acf"] = ""
 
+def _safe_dt(v):
+    try:
+        return _dtparse(v) if isinstance(v, str) else v
+    except Exception:
+        return None
 
 # ------------------------------------------------------------------------------
 # Main
@@ -1826,66 +1842,68 @@ def _ensure_acf(task: dict) -> None:
 def main():
     old, new = _read_two()
 
-    # Pre-flight: validate on simple modify (not completion)
+    # Skip all Nautical logic when task is being deleted
+    if (new.get("status") or "").lower() == "deleted":
+        print(json.dumps(new))
+        return
+
+
+    # --- pre-flight: validate on simple modify (not completion) ---
     if (old.get("status") == new.get("status")) or (new.get("status") != "completed"):
-        try:
-            new_anchor = (new.get("anchor") or "").strip()
-            if new_anchor:
-                fatal, warns = core.lint_anchor_expr(new_anchor)
-                if fatal:
-                    _got_anchor_invalid(fatal)
-                for w in warns:
-                    _panel("ℹ️  Lint", [("Hint", w)], kind="note")
-                anchor_mode = ((new.get("anchor_mode") or old.get("anchor_mode") or "").strip().upper() or "ALL")
-                try:
-                    if core.ENABLE_ANCHOR_CACHE:
-                        _ = core.build_and_cache_hints(new_anchor, anchor_mode, default_due_dt=new.get("due"))
-                    else:
-                        _ = core.validate_anchor_expr_strict(new_anchor)
-                except Exception as e:
-                    s = new_anchor
-                    emsg = str(e)
-                    # helpful hint for the “missing colon after type”
-                    if (":" not in s) and re.search(r'(^|\W)(w|m|y)(/\d+)?(\W|$)', s, re.I):
-                        emsg = "Expected ':' after anchor type. Examples: 'w:mon', 'm:-1', 'y:06-01'."
-                    _got_anchor_invalid(emsg)
+        new_anchor = (new.get("anchor") or "").strip()
+        if new_anchor:
+            fatal, warns = core.lint_anchor_expr(new_anchor)
+            if fatal:
+                _got_anchor_invalid(fatal)
+            for w in warns:
+                _panel("ℹ️  Lint", [("Hint", w)], kind="note")
+
+            anchor_mode = ((new.get("anchor_mode") or old.get("anchor_mode") or "").strip().upper() or "ALL")
+            due_dt = _safe_dt(new.get("due") or old.get("due"))
+
+            try:
+                if core.ENABLE_ANCHOR_CACHE:
+                    # precompute; if core trips over timedelta formatting, fall back
+                    _ = core.build_and_cache_hints(new_anchor, anchor_mode, default_due_dt=due_dt)
+                else:
+                    _ = core.validate_anchor_expr_strict(new_anchor)
+            except TypeError:
+                _ = core.validate_anchor_expr_strict(new_anchor)
+            except Exception as e:
+                emsg = str(e)
+                if (":" not in new_anchor) and re.search(r'(^|\W)(w|m|y)(/\d+)?(\W|$)', new_anchor, re.I):
+                    emsg = "Expected ':' after anchor type. Examples: 'w:mon', 'm:-1', 'y:06-01'."
+                _got_anchor_invalid(emsg)
 
             # Pre-validate CP only if present
             new_cp = (new.get("cp") or "").strip()
             if new_cp:
                 _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
 
-            # Run deeper checks only if fields actually changed
+            # Deep checks only if fields changed
             if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
                 if new_anchor:
                     _validate_anchor_on_modify(new_anchor)
-               # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
+                # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
 
             if (_field_changed(old, new, "cp")
                 or _field_changed(old, new, "chainMax")
                 or _field_changed(old, new, "chainUntil")) and new_cp:
                 _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
 
-            # [CHAINID] Stamp only when a task *just* became nautical and still has no chainID
+            # [CHAINID] stamp only when task just became nautical and has no chainID/links
             try:
                 became_anchor = (not (old.get("anchor") or "").strip()) and ((new.get("anchor") or "").strip())
                 became_cp     = (not (old.get("cp")     or "").strip()) and ((new.get("cp")     or "").strip())
                 already_chain = bool((new.get("chainID") or "").strip())
                 linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
-
                 if core.ENABLE_CHAIN_ID and (became_anchor or became_cp) and not already_chain and not linked_already:
                     new["chainID"] = core.short_uuid(new.get("uuid"))
             except Exception:
                 pass
 
-
-
             _print_task(new)
             return
-
-        except ValueError as e:
-            _panel("❌ Invalid Chain", [("Validation", str(e))], kind="error")
-            sys.exit(1)
 
 
 

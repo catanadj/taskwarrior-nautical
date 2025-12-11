@@ -265,8 +265,10 @@ _QUARTERS = {
 
 
 # Input/Output preference: "DM" (default) or "MD"
-def _yearfmt() -> str:
-    return (globals().get("ANCHOR_YEAR_FMT") or "DM").upper()
+def _yearfmt():
+    fmt = (globals().get("ANCHOR_YEAR_FMT") or "MD").upper()
+    return "DM" if fmt == "DM" else "MD"
+
 
 
 def _tok(d: int, m: int) -> str:
@@ -333,6 +335,22 @@ def _static_month_last_day(mm: int) -> int:
         11: 30,
         12: 31,
     }[mm]
+
+
+def _month_from_alias(tok: str) -> int | None:
+    s = (tok or "").strip().lower()
+    if s.isdigit() and len(s) == 2:
+        mm = int(s)
+        return mm if 1 <= mm <= 12 else None
+    return _MONTH_ALIAS.get(s)
+
+
+def _year_full_months_span_token(m1: int, m2: int) -> str:
+    # Full span across months [m1..m2], respecting ANCHOR_YEAR_FMT
+    if _yearfmt() == "MD":
+        return f"{m1:02d}-01:{m2:02d}-31"
+    else:
+        return f"01-{m1:02d}:31-{m2:02d}"
 
 
 def _rewrite_month_names_to_ranges(spec: str) -> str:
@@ -421,6 +439,73 @@ def _advance_to_next_allowed_month(y: int, m: int, pairs) -> tuple[int, int]:
             yy += 1
     return (y, m)  # fallback
 
+def _unwrap_quotes(s: str) -> str:
+    """Trim one pair of wrapping quotes ('...' or "...") if present."""
+    if not s:
+        return s
+    s = str(s).strip()
+    if len(s) >= 2 and ((s[0] == s[-1] == "'") or (s[0] == s[-1] == '"')):
+        return s[1:-1].strip()
+    return s
+
+def _year_full_month_range_token(mm: int) -> str:
+    """
+    Return a yearly range token that covers the entire month `mm`
+    formatted according to ANCHOR_YEAR_FMT.
+    MD: 'MM-01:MM-31' ; DM: '01-MM:31-MM' (31 will be clamped later)
+    """
+    mm = int(mm)
+    if _yearfmt() == "MD":
+        return f"{mm:02d}-01:{mm:02d}-31"
+    else:
+        return f"01-{mm:02d}:31-{mm:02d}"
+
+# --- helpers used by the monthly /N branch ---
+def _month_doms_for_spec(spec: str, y: date, m: int) -> list[int]:
+    # must return day-of-month integers that match 'spec' in (y,m)
+    try:
+        return sorted(expand_monthly_cached(spec, y.year if isinstance(y, date) else y, m))
+    except Exception:
+        return []
+
+def _month_has_hit(spec: str, y: int, m: int) -> bool:
+    return bool(_month_doms_for_spec(spec, date(y, m, 1), m))
+
+def _first_hit_after_probe_in_month(spec: str, y: int, m: int, probe: date) -> date | None:
+    doms = _month_doms_for_spec(spec, date(y, m, 1), m)
+    for d in doms:
+        try:
+            dt = date(y, m, d)
+            if dt > probe:
+                return dt
+        except ValueError:
+            continue
+    return None
+
+def _next_valid_month_on_or_after(spec: str, y: int, m: int) -> tuple[int, int]:
+    yy, mm = y, m
+    for _ in range(480):  # upper bound for safety
+        if _month_has_hit(spec, yy, mm):
+            return yy, mm
+        mm += 1
+        if mm > 12:
+            yy += 1
+            mm = 1
+    return y, m  # fallback (should never hit)
+
+def _advance_k_valid_months(spec: str, y: int, m: int, k: int) -> tuple[int, int]:
+    """Advance forward by k valid months (k>=0)."""
+    yy, mm = y, m
+    steps = max(k, 0)
+    while steps >= 0:
+        # hop to the next calendar month first
+        mm += 1
+        if mm > 12:
+            yy += 1
+            mm = 1
+        yy, mm = _next_valid_month_on_or_after(spec, yy, mm)
+        steps -= 1
+    return yy, mm
 
 # --- Anchor Canonical Form (ACF) ----------------------------------------------
 
@@ -846,15 +931,19 @@ def _doms_for_monthly_token(tok: str, y:int, m:int) -> set[int]:
     return set()
 
 def _y_ranges_from_spec(spec: str) -> list[tuple[int,int,int,int]]:
-    """
-    Parse 'y:' spec into list of (m1,d1,m2,d2) inclusive ranges.
-    Accepts single days 'dd-mm' as (m,d,m,d).
-    """
     out = []
     for tok in [t.strip().lower() for t in (spec or "").split(",") if t.strip()]:
+
+        # NEW: support 'rand-MM' → entire month (clamped later)
+        m_randm = re.fullmatch(r"rand-(\d{2})", tok)
+        if m_randm:
+            mm = int(m_randm.group(1))
+            if 1 <= mm <= 12:
+                out.append((mm, 1, mm, 31))  # end will be clamped downstream
+            continue
+
         m = re.fullmatch(r"(\d{2})-(\d{2})(?::(\d{2})-(\d{2}))?$", tok)
         if not m:
-            # names/quarters should be rewritten already; ignore unknowns
             continue
         a,b = int(m.group(1)), int(m.group(2))
         d1, m1 = _year_pair(a,b)
@@ -866,10 +955,15 @@ def _y_ranges_from_spec(spec: str) -> list[tuple[int,int,int,int]]:
         out.append((m1,d1,m2,d2))
     return out
 
+
 def _doms_allowed_by_year(y:int, m:int, y_specs: list[str]) -> set[int]:
     """Return DOMs in month (y,m) that are inside ANY yearly range/day specified across all y atoms of the term."""
     if not y_specs:
         return set(range(1, _days_in_month(y,m)+1))
+    # plain 'rand' means "no yearly restriction"
+    if any((sp or "").strip().lower() == "rand" for sp in y_specs):
+        return set(range(1, _days_in_month(y,m)+1))
+
     # Collect all ranges from all y atoms, then union the DOMs in (y,m)
     ranges = []
     for sp in y_specs:
@@ -995,13 +1089,8 @@ def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
     for _ in range(128):
         cands = [next_after_atom_with_mods(atom, probe, seed) for atom in term]
         target = max(cands)
-        chk = target - timedelta(days=1)
-        ok = True
-        for atom in term:
-            if next_after_atom_with_mods(atom, chk, seed) != target:
-                ok = False
-                break
-        if ok:
+        # Verify target matches all atoms (handles modifiers like @bd)
+        if all(atom_matches_on(atom, target, seed) for atom in term):
             return target
         probe = target
     return ref_d + timedelta(days=365)
@@ -1292,6 +1381,57 @@ def _rewrite_quarters_in_context(dnf):
             ya["spec"] = _rewrite_quarter_spec_mode(spec, mode)
     return dnf
 
+def _rewrite_year_month_aliases_in_dnf(dnf: list[list[dict]]) -> list[list[dict]]:
+    """
+    In-place rewrite for y: specs:
+      - 'y:apr'           → 'y:04-01:04-31' (per FMT)
+      - 'y:jan:jun'       → 'y:01-01:06-31'
+      - 'y:04'            → 'y:04-01:04-31'
+      - 'y:04:06'         → 'y:04-01:06-31'
+      - mixed 'y:apr:06'  → 'y:04-01:06-31' etc.
+    Leaves standard 'DD-MM[:DD-MM]' and 'rand', 'rand-MM' as-is.
+    """
+    for term in dnf:
+        for atom in term:
+            if (atom.get("typ") or atom.get("type") or "").lower() != "y":
+                continue
+            spec = (atom.get("spec") or atom.get("value") or "").strip().lower()
+            if not spec:
+                continue
+
+            toks_in  = [t.strip() for t in spec.split(",") if t.strip()]
+            toks_out = []
+
+            for tok in toks_in:
+                # Pass through already-standard forms and rand variants
+                if re.fullmatch(r"\d{2}-\d{2}(?::\d{2}-\d{2})?$", tok) or tok == "rand" or re.fullmatch(r"rand-\d{2}", tok):
+                    toks_out.append(tok)
+                    continue
+
+                # Single month alias (name or MM)
+                m_single = _month_from_alias(tok)
+                if m_single:
+                    toks_out.append(_year_full_month_range_token(m_single))
+                    continue
+
+                # Month:Month range (name/name, name/MM, MM/name, MM/MM)
+                m = re.fullmatch(r"([a-z]{3}|\d{2}):([a-z]{3}|\d{2})", tok)
+                if m:
+                    m1 = _month_from_alias(m.group(1))
+                    m2 = _month_from_alias(m.group(2))
+                    if m1 and m2:
+                        toks_out.append(_year_full_months_span_token(m1, m2))
+                        continue
+                    # fall-through if bad alias; validator will flag later
+
+                # Unknown token -> keep as-is; strict validator/linter can surface a friendly error
+                toks_out.append(tok)
+
+            atom["spec"] = ",".join(toks_out)
+
+    return dnf
+
+
 
 def _bd_shift_from_term(term) -> str | None:
     """Return 'pbd' (previous) or 'nbd' (next) if any atom has that modifier."""
@@ -1489,12 +1629,26 @@ def _is_full_month(d1, m1, d2, m2) -> int | None:
 
 
 def _fmt_yearly_atom(tok: str) -> str:
-    s = tok.strip().lower()
+    s = (tok or "").strip().lower()
+
+    # NEW: yearly random phrasing
+    if s == "rand":
+        return "one random day each year"
+
+    m_randm = re.fullmatch(r"rand-(\d{2})", s)
+    if m_randm:
+        mm = int(m_randm.group(1))
+        if 1 <= mm <= 12:
+            return f"one random day in {_MONTH_ABBR[mm-1]} each year"
+        # fall through to generic handling if somehow invalid
+
+    # Existing numeric handling (single or range), respecting ANCHOR_YEAR_FMT
     m = re.fullmatch(r"(\d{2})-(\d{2})(?::(\d{2})-(\d{2}))?$", s)
     if not m:
         return tok
 
     def _pair(a: int, b: int) -> tuple[int, int]:
+        # returns (day, month) according to current FMT
         return (b, a) if _yearfmt() == "MD" else (a, b)
 
     a, b = int(m.group(1)), int(m.group(2))
@@ -1504,13 +1658,19 @@ def _fmt_yearly_atom(tok: str) -> str:
         d2, m2 = _pair(c, d)
         # full-month?
         if m1 == m2 and d1 == 1 and 28 <= d2 <= 31:
+            # Example: '04-01:04-30' (or DM equivalent) → "Apr each year"
             return f"{_MONTH_ABBR[m1-1]} each year"
         if m1 == m2:
+            # Same month, day range
             if _yearfmt() == "DM":
                 return f"{d1}\u2013{d2} {_MONTH_ABBR[m1-1]} each year"
             else:
                 return f"{_MONTH_ABBR[m1-1]} {d1}\u2013{d2} each year"
-        # cross-month
+        # Cross-month range
+        # If both ends cover full months (1..31), prefer "Jan–Jun each year".
+        if d1 == 1 and 28 <= d2 <= 31:
+            return f"{_MONTH_ABBR[m1-1]}\u2013{_MONTH_ABBR[m2-1]} each year"
+
         if _yearfmt() == "DM":
             left = f"{d1} {_MONTH_ABBR[m1-1]}"
             right = f"{d2} {_MONTH_ABBR[m2-1]}"
@@ -1519,18 +1679,16 @@ def _fmt_yearly_atom(tok: str) -> str:
             right = f"{_MONTH_ABBR[m2-1]} {d2}"
         return f"{left}\u2013{right} each year"
     else:
+        # Single day
         d1, m1 = _pair(a, b)
-        # ✨ Special case: 29 Feb → label as leap-only
+        # Special-case Feb 29 phrasing remains
         if m1 == 2 and d1 == 29:
-            if _yearfmt() == "DM":
-                return f"{d1} {_MONTH_ABBR[m1-1]} (leap years only)"
-            else:
-                return f"{_MONTH_ABBR[m1-1]} {d1} (leap years only)"
-        # Default single-day wording
+            return "Feb 29 each leap year"
         if _yearfmt() == "DM":
             return f"{d1} {_MONTH_ABBR[m1-1]} each year"
         else:
             return f"{_MONTH_ABBR[m1-1]} {d1} each year"
+
 
 
 
@@ -1769,13 +1927,17 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
             parts.append(f"that fall on {mp}")
 
     if y_parts:
-        if yr_ival > 1:
-            y_parts = [p.replace(" each year", "") for p in y_parts]
         yp = " or ".join(y_parts) if len(y_parts) > 1 else y_parts[0]
-        if w_phrase or m_parts:
-            parts.append(f"and within {yp}")
-        else:
+        # If yearly already carries the leading semantics ("one random day ..."),
+        # don't prefix with "and within".
+        if yp.startswith("one random day"):
             parts.append(yp)
+        else:
+            if (w_phrase or m_parts):
+                parts.append(f"and within {yp}")
+            else:
+                parts.append(yp)
+
 
     if bd_filter and any("random day each month" in p for p in m_parts):
         parts.append("on a business day")
@@ -2258,23 +2420,19 @@ def _sha_pick(seq_len: int, seed_key: str) -> int:
 
 
 def _term_rand_info(term):
-    """Extract random atom information from term."""
     for i, a in enumerate(term):
         typ = (a.get("typ") or a.get("type") or "").lower()
         spec = str(a.get("spec") or a.get("value") or "").lower()
         if typ == "m" and spec == "rand":
-            return (
-                "m",
-                {
-                    "mods": a.get("mods") or {},
-                    "ival": int(a.get("ival") or a.get("intv") or 1),
-                    "atom_idx": i,
-                },
-            )
-        if typ == "y" and spec.startswith("rand-"):
-            mm = int(spec.split("-", 1)[1])
-            return ("y", {"mods": a.get("mods") or {}, "month": mm, "atom_idx": i})
+            return ("m", {"mods": a.get("mods") or {}, "ival": int(a.get("ival") or a.get("intv") or 1), "atom_idx": i})
+        if typ == "y":
+            if spec == "rand":
+                return ("y", {"mods": a.get("mods") or {}, "month": None, "atom_idx": i})
+            if spec.startswith("rand-"):
+                mm = int(spec.split("-", 1)[1])
+                return ("y", {"mods": a.get("mods") or {}, "month": mm, "atom_idx": i})
     return (None, None)
+
 
 
 def _filter_by_w(dt_list: list[_date], term: list[dict]):
@@ -2456,16 +2614,28 @@ def _parse_hhmm(s: str):
     return (int(m.group(1)), int(m.group(2)))
 
 
-def _parse_atom_head(head: str):
-    """Parse atom type and interval (e.g., 'w/2')."""
-    m = _atom_head_re.match(head.strip().lower())
+def _parse_atom_head(head: str) -> tuple[str, int]:
+    """
+    Parse the atom head:  'w' | 'm' | 'y'  with optional '/N' (1..100).
+    Examples: 'w', 'w/2', 'm', 'm/3', 'y/4'
+    Returns (typ, ival).
+    """
+    h = (head or "").strip().lower()
+    m = re.fullmatch(r'(w|m|y)(?:/(\d{1,3}))?$', h)
     if not m:
-        raise ParseError("Invalid atom head; use w|m|y with optional /N")
+        raise ParseError(
+            f"Invalid anchor head '{head}'. Expected 'w', 'm', or 'y' with optional '/N', "
+            "e.g., 'w/2', 'm/3', 'y/4'."
+        )
     typ = m.group(1)
-    ival = int(m.group(2) or "1")
-    if ival <= 0:
-        raise ParseError("Interval /N must be >= 1")
+    ival = int(m.group(2) or 1)
+    if ival < 1:
+        ival = 1
+    if ival > 100:
+        ival = 100
     return typ, ival
+
+
 
 
 def _parse_atom_mods(mods_str: str):
@@ -2537,9 +2707,40 @@ def _parse_y_token(tok: str):
 
 def parse_anchor_expr_to_dnf(s: str):
     """Parse anchor expression into Disjunctive Normal Form."""
-    s = s.strip()
+    # Accept anchors wrapped in quotes from the CLI; normalize rand-month alias.
+    s = _unwrap_quotes(s or "").strip()
+    s = re.sub(r'\b(\d{2})-rand\b', r'rand-\1', s)
+    s = _rewrite_weekly_multi_time_atoms(s)
     i = 0
     n = len(s)
+
+    # --- FATAL: numeric yearly tokens using ':' (should be '-') ----------------
+    # Scan for every 'y[:spec]' tail; ignore modifiers after '@'; then check
+    # each comma-separated token for a numeric colon form like '05:15' or
+    # '05:01:06:30'. Month-name forms ('jan:jun') are allowed and rewritten later.
+    def _fatal_bad_colon_in_year_tail(tail: str) -> str | None:
+        head = tail.split("@", 1)[0]  # strip modifiers
+        for tok in [t.strip() for t in head.split(",") if t.strip()]:
+            # numeric with ':'  → fatal (e.g., '05:15' or '05:01:06:30')
+            if re.fullmatch(r"\d{2}:\d{2}(?::\d{2}:\d{2})?", tok):
+                fmt = (globals().get("ANCHOR_YEAR_FMT") or "DM").upper()
+                example = "06-01" if fmt == "MD" else "01-06"
+                return (f"Yearly token '{tok}' uses ':' between numbers. "
+                        f"Use '-' and order per ANCHOR_YEAR_FMT={fmt}. Example: '{example}'.")
+        return None
+
+    # Find every 'y' atom head (with optional '/N') then grab its tail up to +,|,) or EOL
+    for m in re.finditer(r"\by\s*(?:/\d+)?\s*:", s):
+        j = m.end()  # start of tail
+        k = j
+        while k < len(s) and s[k] not in "+|)":
+            k += 1
+        tail = s[j:k]
+        fatal_msg = _fatal_bad_colon_in_year_tail(tail)
+        if fatal_msg:
+            # FIX: Raise ParseError instead of returning tuple
+            raise ParseError(fatal_msg)
+
 
     def skip_ws():
         nonlocal i
@@ -2554,18 +2755,33 @@ def parse_anchor_expr_to_dnf(s: str):
         return False
 
     def parse_atom():
+        """
+        Parse a single anchor atom and return it in DNF as a list of terms, where each
+        term is a list of atom dicts:
+        return value shape: [ [ {typ, spec, ival, mods}, ... ], ... ]
+
+        Expectations (provided by the outer parser scope):
+        - nonlocal i, n, s
+        - helpers: skip_ws(), take(ch), ParseError,
+                    _parse_atom_head(head) -> (typ, ival),
+                    _parse_atom_mods(mods_str) -> dict,
+                    _parse_group_with_inline_mods(typ, ival, tail, leading_mods_str) -> dnf|None
+        """
         nonlocal i
         skip_ws()
 
-        # head like "m", "w/2", "y" etc
+        # ---- read head like "m", "w/2", "y", "m/3" etc. (up to the ':') ----
         start = i
         while i < n and s[i] not in ":()+|":
             i += 1
         head = s[start:i].strip()
-        if not take(":"):
-            raise ParseError("Expected ':' after anchor type. Example 'w:mon', 'm:-8','y:06-01'")
 
-        # read until atom terminator: ')' or '|' or '+' (but allow '@+Nd' inside modifiers)
+        # require ':' after head (type + optional /N)
+        if not take(":"):
+            raise ParseError("Expected ':' after anchor type. Example 'w:mon', 'm:-1', 'y:06-01'")
+
+        # ---- read the tail (spec + optional '@mods') until atom terminator ----
+        # stop at ')' or '|' or '+' (but allow '@+Nd' inside modifiers)
         start = i
         while i < n:
             ch = s[i]
@@ -2575,70 +2791,73 @@ def parse_anchor_expr_to_dnf(s: str):
                 break
             i += 1
 
-        full = s[start:i].strip()
+        full_tail = s[start:i].strip()  # e.g. "mon,tue@t=09:00" or "1st-mon@t=08:00,fri@t=15:00"
 
         # ─────────────────────────────────────────────────────────────
-        # guard: detect commas that try to "join" atoms.
-        # allow commas INSIDE specs (e.g. w:mon,tue  or m:1st-mon,3rd-wed),
-        # but if a comma appears in the modifiers section or is followed by a new
-        # anchor head (w|m|y)(/|:), it's almost certainly a join mistake.
-
-        # Fast scan: if there's an '@' and then a comma that looks like it starts a new atom
-        if re.search(r"@[^)]*?,\s*(?:w|m|y)(?:/|:)", full):
+        # Guards against comma "joining" separate atoms:
+        #  - legal: w:mon,tue            (list inside spec)
+        #           m:1st-mon,3rd-wed    (list inside spec)
+        #  - illegal: m:31@t=14:00,w:sun (comma used to start a new anchor)
+        if re.search(r"@[^)]*?,\s*(?:w|m|y)(?:/|:)", full_tail):
             raise ParseError(
                 "It looks like you used a comma to join anchors. "
                 "Use '+' (AND) or '|' (OR), e.g. 'm:31@t=14:00 | w:sun@t=22:00'."
             )
 
-        # Secondary guard: comma between atoms without @, e.g. 'm:31, w:sun'
-        # This only triggers if the comma is followed by a fresh anchor head,
-        # so it won't fire for legal lists like 'w:mon,tue' or 'm:1st-mon,3rd-wed'.
-        if re.search(r",\s*(?:w|m|y)(?:/|:)", full):
+        if re.search(r",\s*(?:w|m|y)(?:/|:)", full_tail):
             raise ParseError(
                 "Anchors must be joined with '+' (AND) or '|' (OR). "
                 "For example: 'm:31 + w:sun' or 'm:31 | w:sun'."
             )
         # ─────────────────────────────────────────────────────────────
 
-        spec, mods_str = (full.split("@", 1) + [""])[:2]
+        # Parse type + optional /N from head
         typ, ival = _parse_atom_head(head)
+        tlo = (typ or "").lower()
 
-        # Try the inline @mods rewriter on the FULL tail *before* splitting.
-        # This catches cases like 'w:mon@t=09:00,fri@t=15:00'.
-        if (typ or "").lower() in ("w", "m", "y"):
-            dnf_or = _parse_group_with_inline_mods(typ.lower(), ival, full, "")
-            if dnf_or is not None:
-                return dnf_or  # already an OR over singletons
+        # Try inline per-item mods rewriter BEFORE we split spec/mods.
+        # This handles cases like "w:mon@t=09:00,fri@t=15:00" (→ OR of per-item atoms).
+        dnf_or = _parse_group_with_inline_mods(tlo, ival, full_tail, "")
+        if dnf_or is not None:
+            return dnf_or  # already an OR over singletons with their own mods
 
-        if (typ or "").lower() == "w":
+        # Split into spec and mods (if any)
+        spec, mods_str = (full_tail.split("@", 1) + [""])[:2]
+
+        # Normalize monthly ordinal-hyphen tokens (accept "1st-mon", "2nd-tue", ...)
+        # Your monthly engine already understands the compact "1mon" form, so normalize to that.
+        if tlo == "m":
+            def _ord_norm(mo: re.Match) -> str:
+                return f"{mo.group(1)}{mo.group(3).lower()}"
+            spec = re.sub(
+                r'\b([1-5])\s*(st|nd|rd|th)\s*-\s*(mon|tue|wed|thu|fri|sat|sun)\b',
+                _ord_norm,
+                spec,
+                flags=re.IGNORECASE
+            )
+
+        # Special-case: w:rand,mon → OR of singletons so 'rand' doesn't mingle with fixed dows
+        if tlo == "w":
             toks = [t.strip().lower() for t in spec.split(",") if t.strip()]
             if "rand" in toks and len(toks) > 1:
-                # rewrite 'w:rand,mon' to OR-of-singletons
+                mods = _parse_atom_mods(mods_str)
                 return [
                     [
                         {
                             "typ": "w",
                             "spec": t,
                             "ival": ival,
-                            "mods": _parse_atom_mods(mods_str),
+                            "mods": mods,
                         }
                     ]
                     for t in toks
                 ]
 
-        # No inline per-item mods → proceed with normal split
-        spec, mods_str = (full.split("@", 1) + [""])[:2]
         mods = _parse_atom_mods(mods_str)
-        return [
-            [
-                {
-                    "typ": typ.lower(),
-                    "spec": spec.strip().lower(),
-                    "ival": ival,
-                    "mods": mods,
-                }
-            ]
-        ]
+
+        # Return a single-term, single-atom DNF node
+        return [[{"typ": tlo, "spec": spec.strip().lower(), "ival": ival, "mods": mods}]]
+
 
     def parse_factor():
         skip_ws()
@@ -2679,11 +2898,12 @@ def parse_anchor_expr_to_dnf(s: str):
             left = left + right
         return left
 
-    res = parse_expr()
-    skip_ws()
+    res = parse_expr(); skip_ws()
     if i != n:
         raise ParseError("Unexpected trailing characters")
+
     dnf = _rewrite_quarters_in_context(res)
+    dnf = _rewrite_year_month_aliases_in_dnf(dnf)  # NEW
     _validate_year_tokens_in_dnf(dnf)
     _validate_and_terms_satisfiable(dnf, ref_d=date.today())
     return dnf
@@ -2696,17 +2916,46 @@ class YearTokenFormatError(ParseError):
 
 def _validate_yearly_token_format(spec: str):
     """
-    Ensure numeric yearly tokens in 'spec' match ANCHOR_YEAR_FMT ('DM' or 'MD'):
-      - DM:  DD-MM or DD-MM:DD-MM  (first number is day, second is month)
-      - MD:  MM-DD or MM-DD:MM-DD  (first number is month, second is day)
-    Also checks that months are 1..12, days 1..31, and that ranges are non-decreasing.
-    Month-name and quarter aliases are already rewritten earlier and pass this check.
+    Enforce yearly numeric format and known allowances.
+    Fatal on numeric tokens that use ':' instead of '-'.
     """
     fmt = (globals().get("ANCHOR_YEAR_FMT") or "DM").upper()
     if not spec:
         return
 
     tokens = [t.strip().lower() for t in spec.split(",") if t.strip()]
+
+    for tok in tokens:
+        s = tok
+
+        # Allow 'rand' and 'rand-XX'
+        if s == "rand" or re.fullmatch(r"rand-\d{2}", s):
+            continue
+
+        # FATAL: numeric with ':' (e.g., '05:15' or '05:01:06:30')
+        if re.fullmatch(r"\d{2}:\d{2}(?::\d{2}:\d{2})?", s):
+            example = "06-01" if fmt == "MD" else "01-06"
+            raise YearTokenFormatError(
+                f"Yearly token '{tok}' uses ':' between numbers. "
+                f"Use '-' and order per ANCHOR_YEAR_FMT={fmt}. Example: '{example}'."
+            )
+
+        # Accept standard numeric day-month (single or range) — parser ensures order (MD/DM)
+        if re.fullmatch(r"\d{2}-\d{2}(?::\d{2}-\d{2})?", s):
+            continue
+
+        # Accept month aliases and month:month (they are rewritten to numeric windows downstream)
+        if re.fullmatch(r"(?:[a-z]{3}|\d{2}):(?:[a-z]{3}|\d{2})", s):
+            continue
+        if re.fullmatch(r"[a-z]{3}", s):  # 'apr', 'jul'
+            continue
+
+        # Accept quarters (rewritten earlier)
+        if re.fullmatch(r"q[1-4](?::q[1-4])?", s):
+            continue
+
+        # Everything else is invalid
+        raise YearTokenFormatError(f"Unknown yearly token '{tok}'. Expected day-month, month alias, or quarter.")
     bad = None
 
     def _pair(a:int, b:int) -> tuple[int,int]:  # returns (day, month)
@@ -2721,6 +2970,16 @@ def _validate_yearly_token_format(spec: str):
 
     for tok in tokens:
         s = tok.strip().lower()
+
+        if s == "rand":
+            continue
+        m_randm = re.fullmatch(r"rand-(\d{2})", s)
+        if m_randm:
+            mm = int(m_randm.group(1))
+            if 1 <= mm <= 12:
+                continue
+            raise YearTokenFormatError(f"Invalid month in yearly token '{tok}'. Expected 01..12.")
+
 
         # Proper numeric tokens: DD-MM or MM-DD, with optional :DD-MM / :MM-DD tail
         m = re.fullmatch(r"(\d{2})-(\d{2})(?::(\d{2})-(\d{2}))?$", s)
@@ -3218,33 +3477,47 @@ def _validate_yearly_spec(spec: str):
             )
 
 
-def validate_anchor_expr_strict(expr: str):
+def validate_anchor_expr_strict(expr):
     """
-    Parse and validate that every token in every atom is recognised.
-    Returns DNF on success.
+    Validate an anchor expression. Accepts:
+      - str  (e.g., "w/2:sun + m:1st-mon"), parsed to DNF
+      - DNF  (list[list[dict]]), already parsed
+
+    Returns the normalized DNF on success; raises ParseError on failure.
     """
+    # 1) Normalize to DNF
+    if isinstance(expr, str):
+        s = (expr or "").strip()
+        if not s:
+            raise ParseError("Empty anchor expression.")
+        dnf = parse_anchor_expr_to_dnf(s)
+    elif isinstance(expr, (list, tuple)):
+        dnf = expr
+    else:
+        raise ParseError(f"Invalid anchor type {type(expr).__name__}; expected string or parsed DNF.")
 
-    dnf = parse_anchor_expr_to_dnf(expr)
+    # FIX: Handle case where parse_anchor_expr_to_dnf might return (message, [])
+    if isinstance(dnf, tuple) and len(dnf) == 2 and isinstance(dnf[0], str):
+        # This is an error message tuple from the parser
+        raise ParseError(dnf[0])
 
+    # 2) Defensive structure checks (avoid calling .get on strings)
+    if not isinstance(dnf, (list, tuple)):
+        raise ParseError("Internal error: DNF must be a list of terms.")
     for term in dnf:
-        # forbid >1 rand per group
-        rkinds = []
+        if not isinstance(term, (list, tuple)):
+            raise ParseError("Internal error: each term must be a list of atoms.")
         for atom in term:
-            t = _atype(atom)
-            s = _aspec(atom)
-            if (t == "m" and s == "rand") or (t == "y" and s.startswith("rand-")):
-                rkinds.append(f"{t}:{s}")
-        if len(rkinds) > 1:
-            raise ParseError(
-                f"Multiple 'rand' tokens in the same group are not allowed: {', '.join(rkinds)}"
-            )
+            if not isinstance(atom, dict):
+                raise ParseError("Internal error: each atom must be a dict.")
 
-        # validate atoms
-        for atom in term:
-            typ = _atype(atom)
-            spec = _aspec(atom)
-            mods = _amods(atom)
-            ival = _ainterval(atom)
+    # 3) Per-atom strict checks
+    for term in dnf:
+        for a in term:
+            typ = (a.get("typ") or a.get("type") or "").lower()
+            spec = (a.get("spec") or a.get("value") or "").lower()
+            ival = int(a.get("ival") or a.get("intv") or 1)
+            mods = a.get("mods") or {}
 
             if typ == "w":
                 _validate_weekly_spec(spec)
@@ -3262,22 +3535,19 @@ def validate_anchor_expr_strict(expr: str):
                     _validate_monthly_spec(spec)
 
             elif typ == "y":
-                if spec.startswith("rand-"):
-                    try:
-                        mm = int(spec.split("-", 1)[1])
-                    except Exception:
-                        raise ParseError(f"Invalid token 'y:{spec}'")
-                    if not (1 <= mm <= 12):
-                        raise ParseError(f"Invalid month in y:{spec}")
+                if spec == "rand" or spec.startswith("rand-"):
+                    if spec.startswith("rand-"):
+                        try:
+                            mm = int(spec.split("-", 1)[1])
+                        except Exception:
+                            raise ParseError(f"Invalid token 'y:{spec}'")
+                        if not (1 <= mm <= 12):
+                            raise ParseError(f"Invalid month in y:{spec}")
                     active = _active_mod_keys(mods)
                     bad = [k for k in active if k not in ("t", "bd", "wd")]
                     if bad:
-                        raise ParseError(
-                            f"y:rand-MM does not support @{', '.join(bad)}"
-                        )
+                        raise ParseError(f"y:{spec} does not support @{', '.join(bad)}")
                 else:
-                    # MD/DM-aware validation that follows ANCHOR_YEAR_FMT and
-                    # throws friendly guidance if the order is wrong.
                     _validate_yearly_token_format(spec)
 
             else:
@@ -3519,6 +3789,13 @@ def roll_apply(dt: date, mods: dict) -> date:
 
     return dt
 
+def _weeks_between(d1: date, d2: date) -> int:
+    """Return number of ISO weeks between two dates (d2 - d1)."""
+    # Convert both dates to Monday of their ISO week
+    mon1 = d1 - timedelta(days=d1.weekday())
+    mon2 = d2 - timedelta(days=d2.weekday())
+    # Compute difference in weeks
+    return (mon2 - mon1).days // 7
 
 def apply_day_offset(d: date, mods: dict) -> date:
     """Apply day offset modifier."""
@@ -3550,6 +3827,13 @@ def base_next_after_atom(atom, ref_d: date) -> date:
     # Normal weekly path (non-rand)
     if typ == "w":
         days = expand_weekly_cached(spec)
+        # Filter out weekends if @bd modifier
+        if mods.get("bd"):
+            days = [d for d in days if d < 5]  # 0-4 = Mon-Fri
+            if not days:  # No weekdays in spec
+                # Fallback: return far future to avoid infinite loop
+                return ref_d + timedelta(days=365)
+        
         for i in range(1, 15):  # next 2 weeks is plenty
             cand = ref_d + timedelta(days=i)
             if cand.weekday() in days:
@@ -3595,61 +3879,52 @@ def base_next_after_atom(atom, ref_d: date) -> date:
 
 def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
     """
-    Strictly-after guard + /N gating by buckets (weeks/months/years) + rolls + offsets.
-    Weekly /N -> ISO week buckets, Monthly /N -> month buckets *filtered to valid months*,
-    Yearly /N -> year buckets (direct adjust to next allowed year).
-
-    For monthly anchors, "valid months" means months that actually contain at least one
-    matching day for the given monthly spec (e.g., months that have a 5th Monday for
-    '5th-mon', or months that have day '31' for '31', etc.).
+    Strictly-after guard + /N gating by buckets:
+      - Weekly: ISO week buckets
+      - Monthly: *valid-month* buckets (months that actually have a match for 'spec')
+      - Yearly: calendar year buckets
+    Then applies roll + day offsets.
     """
     ival = int(atom.get("ival", 1) or 1)
-    if ival > 100:  # Cap unrealistic intervals
+    if ival > 100:
         ival = 100
 
     seed = default_seed or ref_d
     probe = ref_d
-    typ = atom["typ"]
-    mods = atom["mods"]
-    spec = atom.get("spec") or ""
+    typ   = atom["typ"]
+    mods  = atom.get("mods") or {}
+    spec  = atom.get("spec") or ""
 
-    # Fast path: ival==1 and no mods → just delegate
+    # Fast path: ival==1 and no modifiers
     if ival == 1 and not _active_mod_keys(mods):
         candidate = base_next_after_atom(atom, ref_d)
         if candidate > ref_d:
             return candidate
 
-    # --- helpers specific to /N gating ---
+    # ---- helpers for weekly/yearly gating ----
     def _allowed_by_interval(cand: date) -> bool:
         if ival <= 1:
             return True
         if typ == "w":
-            return (_iso_week_index(cand) - _iso_week_index(seed)) % ival == 0
-        if typ == "m":
-            # calendar-bucket check is *not* used for monthly; handled below via valid-month counting
-            return True
+            # FIX: Use proper week difference
+            weeks_diff = _weeks_between(seed, cand)
+            return weeks_diff % ival == 0
         if typ == "y":
             return (_year_index(cand) - _year_index(seed)) % ival == 0
-        # default: allow (other types not bucketed)
+        # monthly handled separately
         return True
 
     def _advance_probe_to_next_allowed_bucket(cand: date) -> date:
         if ival <= 1:
             return cand
         if typ == "w":
-            # jump to Monday of next allowed week, then step from day before it
             cur_monday = cand - timedelta(days=cand.weekday())
-            diff = (_iso_week_index(cand) - _iso_week_index(seed)) % ival
+            #  Use proper week difference
+            weeks_from_seed = _weeks_between(seed, cur_monday)
+            diff = weeks_from_seed % ival
             add_weeks = (ival - diff) if diff != 0 else 0
             next_allowed_monday = cur_monday + timedelta(weeks=add_weeks or ival)
             return next_allowed_monday - timedelta(days=1)
-        if typ == "m":
-            # calendar-month bucket advance (only used as fallback);
-            # monthly /N will be handled by valid-month logic below.
-            diff = (_month_index(cand) - _month_index(seed)) % ival
-            add_m = (ival - diff) if diff != 0 else 0
-            next_first = add_months(date(cand.year, cand.month, 1), add_m or ival)
-            return next_first - timedelta(days=1)
         if typ == "y":
             diff = (_year_index(cand) - _year_index(seed)) % ival
             add_y = (ival - diff) if diff != 0 else 0
@@ -3659,142 +3934,112 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
 
 
 
-    # ---- Monthly valid-month helpers ----
-    # Treating a month as "valid" if ANY token in the monthly spec yields >=1 day.
-    _MONTH_TOKENS = [t.strip().lower() for t in (spec or "").split(",") if t.strip()]
-
-    def _month_doms(y: int, m: int):
-        days = set()
-        toks = _MONTH_TOKENS or []
-        if not toks:
+    # ---- helpers for monthly valid-month gating ----
+    def _month_doms(y: int, m: int) -> list[int]:
+        try:
+            return sorted(expand_monthly_cached(spec, y, m))
+        except Exception:
             return []
-        for tok in toks:
-            try:
-                for d in expand_monthly_cached(tok, y, m):
-                    days.add(d)
-            except Exception:
-                # ignore bad token here; validation should have caught it earlier
-                pass
-        return sorted(days)
 
-    def _month_has_match(y: int, m: int) -> bool:
+    def _month_has_hit(y: int, m: int) -> bool:
         return bool(_month_doms(y, m))
 
-    def _next_valid_month_on_or_after(y: int, m: int) -> tuple[int, int]:
-        yy, mm = y, m
-        for _ in range(240):
-            if _month_has_match(yy, mm):
-                return yy, mm
-            mm += 1
-            if mm > 12:
-                yy += 1
-                mm = 1
-        return y, m  # fallback (shouldn't happen)
-
-    def _first_date_in_month_after_probe(y: int, m: int, p: date):
+    def _first_hit_after_probe_in_month(y: int, m: int, p: date) -> date | None:
         for d0 in _month_doms(y, m):
             dt = date(y, m, d0)
             if dt > p:
                 return dt
         return None
 
-    def _advance_allowed_months(
-        start_y: int, start_m: int, steps: int
-    ) -> tuple[int, int]:
+    def _next_valid_month_on_or_after(y: int, m: int) -> tuple[int, int]:
+        yy, mm = y, m
+        for _ in range(480):  # safety bound
+            if _month_has_hit(yy, mm):
+                return yy, mm
+            mm += 1
+            if mm > 12:
+                yy += 1
+                mm = 1
+        return y, m
+
+    def _advance_k_valid_months(start_y: int, start_m: int, k: int) -> tuple[int, int]:
         yy, mm = start_y, start_m
-        for _ in range(
-            max(steps, 0) + 1
-        ):  # +1 so that steps=0 returns the next valid (after)
+        steps = max(k, 0)
+        while steps >= 0:
             mm += 1
             if mm > 12:
                 mm = 1
                 yy += 1
             yy, mm = _next_valid_month_on_or_after(yy, mm)
+            steps -= 1
         return yy, mm
 
-    # Guarded iteration
-    for _ in range(64):  # was 32; still tiny
+    # ---- guarded iteration ----
+    for _ in range(128):
         base = base_next_after_atom(atom, probe)
-
-        # Yearly direct adjust for /N (puts base inside the next allowed year immediately)
-        if typ == "y" and ival > 1:
-            s = seed
-            diff = (base.year - s.year) % ival
-            if diff != 0:
-                tgt_year = base.year + (ival - diff)
-                days = expand_yearly_cached(spec, tgt_year)
-                # pick the first match > probe if available, else the first match of that year
-                nb = next((d for d in days if d > probe), (days[0] if days else None))
-                if nb:
-                    base = nb
-                else:
-                    # If the spec yields nothing in that allowed year (extremely unlikely), push probe to its Jan 1 - 1d
-                    probe = date(tgt_year, 1, 1) - timedelta(days=1)
-                    continue
-
-        # Weekly/yearly /N gating (bucketed) – keeps behavior consistent for 'w' and double-checks 'y'
-        if not _allowed_by_interval(base):
+        
+        # @bd modifier: weekdays only - skip weekends
+        if mods.get("bd") and base.weekday() > 4:  # 5=Saturday, 6=Sunday
+            probe = base + timedelta(days=1)
+            continue
+        
+        # weekly/yearly gating first
+        if typ in ("w", "y") and not _allowed_by_interval(base):
             probe = _advance_probe_to_next_allowed_bucket(base)
             continue
 
-        # Monthly special-case: /N by *valid months* (months that actually match the spec)
+        # monthly special-case: /N by valid months
         if typ == "m" and ival > 1:
             by, bm = base.year, base.month
 
-            # Seed bucket: first valid month on/after seed
+            # seed bucket = first valid month on/after seed
             sy, sm = _next_valid_month_on_or_after(seed.year, seed.month)
 
-            # Ensure base month is valid; if not, move to next valid month and choose first > probe
-            if not _month_has_match(by, bm):
+            # ensure base is in a valid month and strictly > probe
+            if not _month_has_hit(by, bm):
                 by, bm = _next_valid_month_on_or_after(by, bm)
-                nxt = _first_date_in_month_after_probe(by, bm, probe)
+                nxt = _first_hit_after_probe_in_month(by, bm, probe)
                 if nxt is None:
-                    # All matches in that month are <= probe; go to the next valid month
-                    ny, nm = _advance_allowed_months(by, bm, 0)
+                    ny, nm = _advance_k_valid_months(by, bm, 0)
                     doms = _month_doms(ny, nm)
                     base = date(ny, nm, doms[0])
                 else:
                     base = nxt
             else:
-                # Month is valid; ensure chosen base is > probe; if not, jump forward
                 if base <= probe:
-                    nxt = _first_date_in_month_after_probe(by, bm, probe)
+                    nxt = _first_hit_after_probe_in_month(by, bm, probe)
                     if nxt is None:
-                        ny, nm = _advance_allowed_months(by, bm, 0)
+                        ny, nm = _advance_k_valid_months(by, bm, 0)
                         doms = _month_doms(ny, nm)
                         base = date(ny, nm, doms[0])
                     else:
                         base = nxt
 
-            # Count index of base's month among valid months starting from (sy, sm)
+            # count valid-month steps from (sy,sm) to base(y,m)
             cnt = 0
             ty, tm = sy, sm
-            while (ty, tm) != (base.year, base.month) and cnt < 240:
-                ty, tm = _advance_allowed_months(ty, tm, 0)
+            while (ty, tm) != (base.year, base.month) and cnt < 480:
+                ty, tm = _advance_k_valid_months(ty, tm, 0)
                 cnt += 1
 
             if (cnt % ival) != 0:
                 steps = ival - (cnt % ival)
-                ny, nm = _advance_allowed_months(base.year, base.month, steps - 1)
-                # pick the first matching day in that month (guaranteed to exist)
+                ny, nm = _advance_k_valid_months(base.year, base.month, steps - 1)
                 doms = _month_doms(ny, nm)
                 base = date(ny, nm, doms[0])
 
+        # apply roll + offsets and return if strictly after ref_d
         cand = roll_apply(base, mods)
         cand = apply_day_offset(cand, mods)
-        # @bd = filter (no roll)
-        if mods.get("bd") and cand.weekday() > 4:
-            # skip this occurrence; look strictly after 'base'
-            probe = base + timedelta(days=1)
-            continue
-
         if cand > ref_d:
             return cand
 
+        # advance probe
         probe = base + timedelta(days=1)
 
-    # last-resort fallback
+    # fallback
     return ref_d + timedelta(days=365)
+
 
 
 def atom_matches_on(atom, d: date, default_seed: date) -> bool:
@@ -3911,24 +4156,27 @@ def next_after_expr(dnf, after_date, default_seed=None, seed_base=None):
             if seed_base is None:
                 seed_base = "preview"
             mods = info.get("mods") or {}
-            bd_only = bool(mods.get("bd"))  # <-- only business day flag
-            target_m = int(info["month"])
+            bd_only = bool(mods.get("bd"))
+            target_m = info.get("month", None)
             y = after_date.year
 
             for _ in range(10):  # up to 10 years ahead
-                cands = _term_candidates_in_month(
-                    term, y, target_m, info["atom_idx"], bd_only
-                )
+                if target_m is None:
+                    # NEW: plain y:rand → gather all monthly candidates for this year
+                    cands = []
+                    for mm in range(1, 13):
+                        cands.extend(_term_candidates_in_month(term, y, mm, info["atom_idx"], bd_only))
+                    period_key = f"{y:04d}"
+                else:
+                    cands = _term_candidates_in_month(term, y, int(target_m), info["atom_idx"], bd_only)
+                    period_key = f"{y:04d}-{int(target_m):02d}"
+
                 if cands:
-                    period_key = f"{y:04d}-{target_m:02d}"
                     seed_key = f"{seed_base}|y|{term_id}|{period_key}"
                     idx = _sha_pick(len(cands), seed_key)
                     choice = cands[idx]
                     if choice > after_date:
-                        cand, meta = choice, {
-                            "basis": "rand",
-                            "rand_period": period_key,
-                        }
+                        cand, meta = choice, {"basis": "rand", "rand_period": period_key}
                         if best is None or cand < best:
                             best, best_meta = cand, meta
                         break
@@ -4030,14 +4278,24 @@ def _iter_y_segments(s: str):
         yield (m.group(1) or "").strip()
 
 def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
-    s = (expr or "").strip().lower()
+    # Accept anchors wrapped in single or double quotes and normalize rand-month alias.
+    s = _unwrap_quotes(expr or "").strip().lower()
+    # normalize 'mm-rand' → 'rand-mm' for consistency
+    s = re.sub(r'\b(\d{2})-rand\b', r'rand-\1', s)
+    # Allow bare month aliases: replace 'y:jun' with a canonical monthly window for linting
+    def _lint_month_alias_sub(m):
+        mm = _month_from_alias(m.group(1))
+        if not mm: return m.group(0)
+        return f"y:{_year_full_month_range_token(mm)}"
+    s = re.sub(r'\by:([a-z]{3}|\d{2})(?=\b|[,+|()])', _lint_month_alias_sub, s)
     if not s:
         return None, []
     warnings: list[str] = []
+    
 
     # 0) missing ':' after type (w/m/y)
-    if re.search(r'\b(w|m|y)(/\d+)?\b(?!\s*:\s*)', s):
-        return ("Expected ':' after anchor type. Examples: 'w:mon', 'm:-1', 'y:06-01'.", [])
+    # if re.search(r'\b(w|m|y)(/\d+)?\b(?!\s*:\s*)', s):
+    #     return ("Expected ':' after anchor type. Examples: 'w:mon', 'm:-1', 'y:06-01'.", [])
 
     # 1) Yearly tokens: check only inside y: segments
     fmt = _yearfmt()  # "MD" or "DM"
@@ -4145,10 +4403,74 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
     return None, warnings
 
 
-def tw_export_chain_or_fallback(current_task: dict, fallback_query: str) -> list[dict]:
-    q = None
-    if core.ENABLE_CHAIN_ID:
-        cid = (current_task.get("chainID") or "").strip()
-        if cid:
-            q = f'chainID:{cid} status.not:deleted'
-    return tw_export(q or fallback_query)
+
+def _rewrite_weekly_multi_time_atoms(s: str) -> str:
+    """
+    Rewrite patterns like:
+        w:mon@t=09:00,fri@t=15:00
+    into:
+        w:mon@t=09:00 | w:fri@t=15:00
+
+    Rules:
+      - Only triggers inside a single weekly atom (starts with 'w:').
+      - Splits on top-level commas, but keeps each token's @t with it.
+      - Leaves existing '|' and '+' structure intact.
+    """
+    out = []
+    i, n = 0, len(s)
+
+    def flush_atom(prefix: str, body: str):
+        # body like "mon@t=09:00,fri@t=15:00"
+        parts = [p.strip() for p in body.split(",") if p.strip()]
+        if len(parts) <= 1:
+            out.append(prefix + body)
+            return
+        # if every part looks like <dow>(@t=..)? then expand with OR
+        pat = re.compile(r"^(mon|tue|wed|thu|fri|sat|sun)(@t=\d{2}:\d{2})?$", re.I)
+        if all(pat.match(p) for p in parts):
+            expanded = " | ".join(f"{prefix}{p}" for p in parts)
+            out.append(expanded)
+        else:
+            out.append(prefix + body)
+
+    while i < n:
+        if s[i] == "w":
+            # Find the ':' that terminates the weekly head (supports 'w:' and 'w/2:')
+            j = i
+            depth = 0
+            # First, find the colon that ends the head
+            colon = -1
+            k = i + 1
+            while k < n:
+                if s[k] == ":":
+                    colon = k
+                    break
+                if s[k] in "|+)(":
+                    break
+                k += 1
+            if colon == -1:
+                out.append(s[i])
+                i += 1
+                continue
+            # Now find the end of this atom at top level
+            j = colon + 1
+            depth = 0
+            while j < n:
+                c = s[j]
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif depth == 0 and c in "|+":
+                    break
+                j += 1
+            prefix = s[i:colon+1]    # e.g., "w:" or "w/2:"
+            body   = s[colon+1:j]    # after the colon up to op/end
+            flush_atom(prefix, body)
+            i = j
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)

@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 import re
 from decimal import Decimal, InvalidOperation
+import shlex
+
 
 # ------------------------------------------------------------------------------
 # Constants
@@ -22,7 +24,7 @@ from decimal import Decimal, InvalidOperation
 
 _MAX_CHAIN_WALK = 500  # max tasks to walk backwards in chain
 _MAX_UUID_LOOKUPS = 50  # max individual UUID exports before giving up
-_MAX_ITERATIONS = 5000  # prevent infinite loops in stepping functions
+_MAX_ITERATIONS = 2000  # prevent infinite loops in stepping functions
 _MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
 
 
@@ -254,6 +256,9 @@ def _panel(
         )
     )
 
+def _strip_quotes(s: str) -> str:
+    s = (s or "").strip()
+    return s[1:-1] if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"') else s
 
 
 def _format_chain_summary_rows(
@@ -1836,6 +1841,22 @@ def _safe_dt(v):
     except Exception:
         return None
 
+def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None) -> list[dict]:
+    if not chain_id:
+        return []
+    args = ["task", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
+    if since:
+        args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
+    if extra:
+        args += shlex.split(extra)
+    args.append("export")
+    try:
+        out = subprocess.check_output(args, text=True)
+        data = json.loads(out.strip() or "[]")
+        return data if isinstance(data, list) else [data]
+    except Exception:
+        return []
+
 # ------------------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------------------
@@ -1845,23 +1866,26 @@ def main():
     # Skip all Nautical logic when task is being deleted
     if (new.get("status") or "").lower() == "deleted":
         print(json.dumps(new))
-        return
+        retu
 
 
     # --- pre-flight: validate on simple modify (not completion) ---
     if (old.get("status") == new.get("status")) or (new.get("status") != "completed"):
-        new_anchor = (new.get("anchor") or "").strip()
+        # This is a non-completion modification
+        anchor_raw = (new.get("anchor") or "").strip()
+        new_anchor = _strip_quotes(anchor_raw) 
+        
         if new_anchor:
-            fatal, warns = core.lint_anchor_expr(new_anchor)
-            if fatal:
-                _got_anchor_invalid(fatal)
-            for w in warns:
-                _panel("ℹ️  Lint", [("Hint", w)], kind="note")
-
-            anchor_mode = ((new.get("anchor_mode") or old.get("anchor_mode") or "").strip().upper() or "ALL")
-            due_dt = _safe_dt(new.get("due") or old.get("due"))
-
+            # Anchor validation on modification (catch errors early)
             try:
+                # Lint only for non-blocking hints
+                _, warns = core.lint_anchor_expr(new_anchor)
+                for w in warns:
+                    _panel("ℹ️  Lint", [("Hint", w)], kind="note")
+
+                anchor_mode = ((new.get("anchor_mode") or old.get("anchor_mode") or "").strip().upper() or "ALL")
+                due_dt = _safe_dt(new.get("due") or old.get("due"))
+
                 if core.ENABLE_ANCHOR_CACHE:
                     # precompute; if core trips over timedelta formatting, fall back
                     _ = core.build_and_cache_hints(new_anchor, anchor_mode, default_due_dt=due_dt)
@@ -1871,14 +1895,52 @@ def main():
                 _ = core.validate_anchor_expr_strict(new_anchor)
             except Exception as e:
                 emsg = str(e)
-                if (":" not in new_anchor) and re.search(r'(^|\W)(w|m|y)(/\d+)?(\W|$)', new_anchor, re.I):
+                has_type_colon = bool(re.search(r'(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:', anchor_str, re.IGNORECASE))
+                if not has_type_colon:
                     emsg = "Expected ':' after anchor type. Examples: 'w:mon', 'm:-1', 'y:06-01'."
                 _got_anchor_invalid(emsg)
 
-            # Pre-validate CP only if present
-            new_cp = (new.get("cp") or "").strip()
-            if new_cp:
-                _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
+            # Deep checks only if anchor field changed
+            if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
+                _validate_anchor_on_modify(new_anchor)
+                # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
+
+        # CP validation only happens on completion, NOT on modification
+        # because taskwarrior already validates the duration format
+        
+        # [CHAINID] stamp only when task just became nautical and has no chainID/links
+        try:
+            became_anchor = (not (old.get("anchor") or "").strip()) and ((new.get("anchor") or "").strip())
+            became_cp     = (not (old.get("cp")     or "").strip()) and ((new.get("cp")     or "").strip())
+            already_chain = bool((new.get("chainID") or "").strip())
+            linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
+            if core.ENABLE_CHAIN_ID and (became_anchor or became_cp) and not already_chain and not linked_already:
+                new["chainID"] = core.short_uuid(new.get("uuid"))
+        except Exception:
+            pass
+
+        _print_task(new)
+        return
+
+    # If we reach here, the task is being completed
+    # Now we should validate CP (in addition to anchor which was already validated on modify)
+    cp_raw = (new.get("cp") or "").strip()
+    new_cp = _strip_quotes(cp_raw)
+
+    if new_cp:
+        # Validate CP on completion
+        try:
+            td = core.parse_cp_duration(new_cp)
+            if td is None:
+                raise ValueError(f"Invalid duration format '{new_cp}'")
+        except ValueError as e:
+            _panel("❌ Invalid CP", [("Validation", str(e))], kind="error")
+            print(json.dumps({"error": "Invalid CP", "message": str(e)}))
+            sys.exit(1)
+        except Exception as e:
+            _panel("❌ CP Error", [("Validation", f"Unexpected error: {str(e)}")], kind="error")
+            print(json.dumps({"error": "CP parsing error", "message": str(e)}))
+            sys.exit(1)
 
             # Deep checks only if fields changed
             if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
@@ -2084,7 +2146,8 @@ def main():
     # Feedback panel
     fb = []
     if kind == "anchor":
-        expr_str = (new.get("anchor") or "").strip()
+        anchor_raw = (new.get("anchor") or "").strip()
+        expr_str = _strip_quotes(anchor_raw) 
         mode_tag = {
             "skip": "[cyan]SKIP[/]",
             "all": "[yellow]ALL[/]",

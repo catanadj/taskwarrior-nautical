@@ -25,7 +25,7 @@ except Exception:
 
 # Defaults 
 _DEFAULTS = {
-    "anchor_year_fmt": "DM",            # "DM" or "MD"
+    "anchor_year_fmt": "MD",            # "DM" or "MD"
     "wrand_salt": "nautical|wrand|v1",  # change to reshuffle weekly-rand streams
     "tz": "Europe/Bucharest",           # reserved for future DST/zone features
     "holiday_region": "",               # reserved for future holiday features
@@ -236,6 +236,8 @@ _MONTH_ALIAS = {
     "dec": 12,
     "december": 12,
 }
+
+
 
 # Quarter mappings
 _Q_FIRST_MONTH_RANGE = {  # full window for the quarter's first month
@@ -459,6 +461,68 @@ def _year_full_month_range_token(mm: int) -> str:
         return f"{mm:02d}-01:{mm:02d}-31"
     else:
         return f"01-{mm:02d}:31-{mm:02d}"
+
+def _mon_to_int(tok: str) -> int | None:
+    s = (tok or "").strip().lower()
+    if not s:
+        return None
+    if s.isdigit() and len(s) == 2:
+        mm = int(s)
+        return mm if 1 <= mm <= 12 else None
+    return _MONTH_ALIAS.get(s)
+
+
+def _rewrite_year_month_aliases_in_context(dnf: list[list[dict]]) -> list[list[dict]]:
+    """
+    In-place normalize yearly specs that are pure month references into
+    full-month numeric ranges that the yearly gate understands.
+      - 'y:04'           -> 'y:MM-01:MM-31'
+      - 'y:jan'          -> 'y:MM-01:MM-31'
+      - 'y:jan:apr'      -> 'y:01-MM:MM-31' (DM variant analogous)
+      - 'y:04:06'        -> 'y:MM-01:MM-31'
+      - 'y:apr,aug,12'   -> list of full-month ranges
+    Quarters/other names should be rewritten earlier already; only
+    handle obvious “month-only” forms here.
+    """
+    for term in dnf:
+        for atom in term:
+            if (atom.get("typ") or atom.get("type") or "").lower() != "y":
+                continue
+            spec = (atom.get("spec") or atom.get("value") or "").strip().lower()
+            if not spec:
+                continue
+
+            new_tokens: list[str] = []
+            changed = False
+            for tok in [t.strip() for t in spec.split(",") if t.strip()]:
+
+                # 'mon1:mon2' or 'MM1:MM2' → full-month range covering both months
+                if ":" in tok and "-" not in tok:
+                    left, right = [x.strip() for x in tok.split(":", 1)]
+                    m1, m2 = _mon_to_int(left), _mon_to_int(right)
+                    if m1 and m2:
+                        # Build a single cross-month range token; downstream clamping handles month-end.
+                        if _yearfmt() == "MD":
+                            new_tokens.append(f"{m1:02d}-01:{m2:02d}-31")
+                        else:
+                            new_tokens.append(f"01-{m1:02d}:31-{m2:02d}")
+                        changed = True
+                        continue  # handled
+
+                # Single month token (name or two-digit) → full-month
+                m_single = _mon_to_int(tok)
+                if m_single:
+                    new_tokens.append(_year_full_month_range_token(m_single))
+                    changed = True
+                    continue
+
+                # Else leave it as-is (numeric 'DD-MM' or 'DD-MM:DD-MM', 'rand', 'rand-MM', etc.)
+                new_tokens.append(tok)
+
+            if changed:
+                atom["spec"] = ",".join(new_tokens)
+
+    return dnf
 
 # --- helpers used by the monthly /N branch ---
 def _month_doms_for_spec(spec: str, y: date, m: int) -> list[int]:
@@ -2901,12 +2965,12 @@ def parse_anchor_expr_to_dnf(s: str):
     res = parse_expr(); skip_ws()
     if i != n:
         raise ParseError("Unexpected trailing characters")
-
     dnf = _rewrite_quarters_in_context(res)
-    dnf = _rewrite_year_month_aliases_in_dnf(dnf)  # NEW
+    dnf = _rewrite_year_month_aliases_in_context(dnf)   # NEW
     _validate_year_tokens_in_dnf(dnf)
     _validate_and_terms_satisfiable(dnf, ref_d=date.today())
     return dnf
+
 
 
 # ---- Yearly token format validator (that honors ANCHOR_YEAR_FMT) -----------------
@@ -4287,7 +4351,11 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
         mm = _month_from_alias(m.group(1))
         if not mm: return m.group(0)
         return f"y:{_year_full_month_range_token(mm)}"
-    s = re.sub(r'\by:([a-z]{3}|\d{2})(?=\b|[,+|()])', _lint_month_alias_sub, s)
+    # Allow bare month aliases ONLY when they are not part of a numeric day-month like 'y:01-13'.
+    #  - 'y:jan' or 'y:03' → expand to full month window
+    #  - do NOT touch 'y:01-13' / 'y:jun-01' etc.
+    s = re.sub(r'\by:([a-z]{3})(?=\b(?!-)|[,+|()])', _lint_month_alias_sub, s)
+    s = re.sub(r'\by:(\d{2})(?=(?:\b(?!-)|[,+|()]))', _lint_month_alias_sub, s)
     if not s:
         return None, []
     warnings: list[str] = []

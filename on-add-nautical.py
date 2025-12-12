@@ -19,14 +19,15 @@ from __future__ import annotations
 
 import sys, json, os, importlib
 from pathlib import Path
-from datetime import timedelta, timezone
+from datetime import timedelta, timezone, datetime
 from functools import lru_cache
+import shlex, subprocess
 
 # ========= User-togglable constants =========================================
 ANCHOR_WARN = True  # If True, warn when a user-provided due is not on an anchor day
 UPCOMING_PREVIEW = 5  # How many future dates to preview.
 _MAX_ITERATIONS = 2000
-_MAX_PREVIEW_ITERATIONS = 5000
+_MAX_PREVIEW_ITERATIONS = 2000
 _MAX_CHAIN_DURATION_YEARS = 5  # warn if chain extends this far
 # ============================================================================
 
@@ -114,6 +115,10 @@ def _root_uuid_from(task: dict) -> str | None:
     u = task.get("uuid")
     return str(u) if u else None
 
+
+def _strip_quotes(s: str) -> str:
+    s = (s or "").strip()
+    return s[1:-1] if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"') else s
 
 def _panel(title, rows, kind: str = "info"):
     """
@@ -470,6 +475,42 @@ def _safe_parse_datetime(s, field_name) -> tuple[datetime | None, str | None]:
         return (None, f"{field_name}: Unexpected parsing error: {str(e)}")
 
 
+def _validate_no_legacy_colon_ranges(expr: str) -> tuple[bool, str | None]:
+    """
+    Reject legacy weekly colon ranges (e.g., 'mon:wed:fri').
+    Users should use w:mon-fri instead.
+    Returns (is_valid, error_msg).
+    """
+    if not expr:
+        return (True, None)
+    
+    expr = expr.strip()
+    
+    # Check for colon-separated day patterns (legacy format)
+    # Patterns like: mon:wed:fri, mon:wed, tue:thu
+    day_names = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+    
+    # Split by spaces first to handle DNF terms
+    terms = expr.split()
+    for term in terms:
+        # Remove optional parentheses for DNF
+        clean_term = term.strip("()")
+        
+        # Check if this looks like a colon-separated day list
+        if ":" in clean_term:
+            parts = clean_term.split(":")
+            # Check if all parts look like day abbreviations
+            if len(parts) >= 2 and all(p.lower() in day_names for p in parts):
+                legacy_example = ":".join(parts)
+                new_format = f"w:{parts[0]}-{parts[-1]}"
+                return (
+                    False,
+                    f"Legacy colon range '{legacy_example}' detected. "
+                    f"Use '{new_format}' instead (e.g., '{new_format}' for '{legacy_example}')."
+                )
+    
+    return (True, None)
+
 def _safe_parse_duration(s, field_name) -> tuple[timedelta | None, str | None]:
     """
     Parse duration with error context.
@@ -492,34 +533,16 @@ def _safe_parse_duration(s, field_name) -> tuple[timedelta | None, str | None]:
         return (None, f"{field_name}: Unexpected parsing error: {str(e)}")
 
 
-def _validate_anchor_syntax_strict(expr_str) -> tuple[bool, str | None]:
+def _validate_anchor_syntax_strict(expr) -> tuple[bool, str | None]:
     """
-    Strict validation of anchor expression. Returns (is_valid, error_msg).
+    Strictly validate an anchor. Accepts string or DNF.
+    Returns (True, None) on success, (False, message) on failure.
     """
-    if not expr_str or not expr_str.strip():
-        return (False, "anchor is required if chaining by anchor")
-
     try:
-        dnf_raw = core.parse_anchor_expr_to_dnf(expr_str)
+        core.validate_anchor_expr_strict(expr)
+        return True, None
     except Exception as e:
-        return (False, f"anchor syntax error: {str(e)}")
-
-    # Check for legacy colon-based weekday ranges
-    for term in dnf_raw:
-        for atom in term:
-            atype = atom.get("typ") or atom.get("type")
-            if atype == "w":
-                spec = (atom.get("spec") or "").lower()
-                if ":" in spec:
-                    return (False, "Weekday ranges use '-' not ':'. Example: w:mon-fri")
-
-    # Strict validation
-    try:
-        _ = core.validate_anchor_expr_strict(expr_str)
-    except Exception as e:
-        return (False, f"anchor validation failed: {str(e)}")
-
-    return (True, None)
+        return False, str(e)
 
 
 def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
@@ -536,7 +559,21 @@ def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
 
     return (mode, None)
 
-
+def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None) -> list[dict]:
+    if not chain_id:
+        return []
+    args = ["task", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
+    if since:
+        args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
+    if extra:
+        args += shlex.split(extra)
+    args.append("export")
+    try:
+        out = subprocess.check_output(args, text=True)
+        data = json.loads(out.strip() or "[]")
+        return data if isinstance(data, list) else [data]
+    except Exception:
+        return []
 # --------------------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------------------
@@ -642,9 +679,16 @@ def main():
     # ==================================================================================
     if kind == "anchor":
         # ========== EDGE CASE 5: Invalid anchor expression ==========
+        # ========== EDGE CASE 5a: Check for legacy colon ranges ==========
+        is_valid, err = _validate_no_legacy_colon_ranges(anchor_str)
+        if not is_valid:
+            _error_and_exit([("Invalid anchor", err)])
+        
+        # ========== EDGE CASE 5b: Invalid anchor expression ==========
         is_valid, err = _validate_anchor_syntax_strict(anchor_str)
         if not is_valid:
             _error_and_exit([("Invalid anchor", err)])
+
         anchor_mode = ((task.get("anchor_mode") or "").strip().upper() or "ALL")
         if core.ENABLE_ANCHOR_CACHE:
             pkg = core.build_and_cache_hints(anchor_str, anchor_mode, default_due_dt=task.get("due"))
@@ -681,17 +725,21 @@ def main():
         base_local_date = due_day if user_provided_due else now_local.date()
         seed_base = _root_uuid_from(task) or "preview"
 
+        # Fix: use a stable default_seed for /N gating
+        interval_seed = base_local_date  # or first anchor day if you prefer
+
         def step_once(prev_local_date):
             try:
                 nxt_date, _ = core.next_after_expr(
                     dnf,
                     prev_local_date,
-                    default_seed=prev_local_date,
+                    default_seed=interval_seed,  # <-- fixed seed for the whole chain
                     seed_base=seed_base,
                 )
                 return nxt_date
             except Exception:
                 return None
+
 
         first_date_local = step_once(base_local_date - timedelta(days=1))
 
@@ -790,12 +838,13 @@ def main():
         allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
         allow_by_until = exact_until_count if exact_until_count is not None else 10**9
 
-        # pass it through the linter
-        fatal, warns = core.lint_anchor_expr(anchor_str)
-        if fatal:
-            _fail_and_exit("Invalid anchor", fatal)
+        # Lint for *hints only*; do not fail on linter
+        _, warns = core.lint_anchor_expr(anchor_str)
         for w in warns:
             _panel("ℹ️  Lint", [("Hint", w)], kind="note")
+
+        # Validator is the single source of truth
+        core.validate_anchor_expr_strict(anchor_str)
 
 
 

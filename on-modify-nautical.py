@@ -1866,7 +1866,7 @@ def main():
     # Skip all Nautical logic when task is being deleted
     if (new.get("status") or "").lower() == "deleted":
         print(json.dumps(new))
-        retu
+        return
 
 
     # --- pre-flight: validate on simple modify (not completion) ---

@@ -691,9 +691,9 @@ def main():
 
         anchor_mode = ((task.get("anchor_mode") or "").strip().upper() or "ALL")
         if core.ENABLE_ANCHOR_CACHE:
-            pkg = core.build_and_cache_hints(anchor_str, anchor_mode, default_due_dt=task.get("due"))
-            natural = pkg.get("natural") or core.describe_anchor_expr(anchor_str, default_due_dt=task.get("due"))
-            dnf = pkg.get("dnf")  # if you need it for the panel
+            pkg = core.build_and_cache_hints(anchor_str, anchor_mode, default_due_dt=due_dt)
+            natural = pkg.get("natural") or core.describe_anchor_expr(anchor_str, default_due_dt=due_dt)
+            dnf = pkg.get("dnf")  
         else:
             natural = core.describe_anchor_expr(anchor_str, default_due_dt=task.get("due"))
             dnf = core.validate_anchor_expr_strict(anchor_str)

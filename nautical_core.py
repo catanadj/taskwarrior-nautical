@@ -1181,17 +1181,32 @@ def precompute_hints(dnf: list[list[dict]],
     today = datetime.now().date()
     start_d = (start_dt.date() if isinstance(start_dt, datetime) else start_dt) or today
 
-    # Next K future dates
+    # If any rand atom exists, the optimized _next_for_or/_next_for_and path is not sufficient
+    # (notably for yearly rand windows like y:rand-07). Use next_after_expr which is authoritative.
+    has_rand = any(
+        "rand" in str((a.get("spec") or "")).lower()
+        for term in (dnf or [])
+        for a in (term or [])
+    )
+
     out_next: list[str] = []
     ref = start_d
-    # default_seed = start of current week (keeps /N consistent with your w/m/y gating)
+
+    # Keep /N gating stable relative to preview start.
     default_seed = ref
-    safety_limit = 366*5  # don't scan more than 5 years
+    seed_base = rand_seed or "preview"
+
+    safety_limit = 366 * 5
     steps = 0
     while len(out_next) < k_next and steps < safety_limit:
-        nxt = _next_for_or(dnf, ref, default_seed)
+        if has_rand:
+            nxt, _ = next_after_expr(dnf, ref, default_seed=default_seed, seed_base=seed_base)
+        else:
+            nxt = _next_for_or(dnf, ref, default_seed)
+
         if not nxt or nxt <= ref:
             break
+
         out_next.append(nxt.isoformat() + "T00:00")
         ref = nxt + timedelta(days=1)
         steps += 1
@@ -1201,28 +1216,31 @@ def precompute_hints(dnf: list[list[dict]],
     first_hit = last_hit = ""
     ref = today
     steps = 0
-    seen = set()
+    seen: set[date] = set()
+
     while steps < sample_days_for_year:
-        nxt = _next_for_or(dnf, ref, default_seed)
+        if has_rand:
+            nxt, _ = next_after_expr(dnf, ref, default_seed=default_seed, seed_base=seed_base)
+        else:
+            nxt = _next_for_or(dnf, ref, default_seed)
+
         if not nxt or nxt <= ref:
             break
-        iso = nxt.isoformat() + "T00:00"
+
+        iso_s = nxt.isoformat() + "T00:00"
         if not first_hit:
-            first_hit = iso
-        last_hit = iso
+            first_hit = iso_s
+        last_hit = iso_s
+
         if nxt not in seen:
             seen.add(nxt)
             year_hits += 1
-        # move ref just past this hit
+
         ref = nxt + timedelta(days=1)
         steps += 1
 
     per_year = {"est": year_hits, "first": first_hit, "last": last_hit}
-
-    # Limits (placeholder here; hooks can compute from task UDAs)
     limits = {"stop": "none", "max_left": 0, "until": ""}
-
-    # Rand preview = first 10 upcoming (same as next, clipped)
     rand_preview = out_next[:10]
 
     return {
@@ -1231,6 +1249,7 @@ def precompute_hints(dnf: list[list[dict]],
         "limits": limits,
         "rand_preview": rand_preview,
     }
+
 
 # ───────────────── Cache writer ───────────────── 
 
@@ -1589,12 +1608,25 @@ def _fmt_hhmm_for_term(term: list, default_due_dt):
         return f"{tmod[0]:02d}:{tmod[1]:02d}"
     if isinstance(tmod, str) and tmod:
         return tmod
-    # Only fall back to task due time if it isn't midnight
+
+    # Only fall back to task due time if it isn't midnight.
+    # Taskwarrior commonly stores date-only due values as 00:00:00Z; converting
+    # that to local time may yield a non-zero hour (e.g., +02:00), so we check the
+    # *UTC* time to avoid accidentally treating "date-only" as an explicit HH:MM.
     if default_due_dt:
-        loc = to_local(default_due_dt)
-        if loc.hour != 0 or loc.minute != 0:
-            return f"{loc.hour:02d}:{loc.minute:02d}"
+        dt = default_due_dt
+        if isinstance(dt, str):
+            dt = parse_dt_any(dt)
+        # A plain date carries no explicit time → ignore.
+        if isinstance(dt, date) and not isinstance(dt, datetime):
+            return None
+        if isinstance(dt, datetime):
+            utc = dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            if utc.hour != 0 or utc.minute != 0:
+                loc = to_local(utc)
+                return f"{loc.hour:02d}:{loc.minute:02d}"
     return None
+
 
 
 def _fmt_weekdays_list(spec: str) -> str:
@@ -3970,7 +4002,7 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
         if ival <= 1:
             return True
         if typ == "w":
-            # FIX: Use proper week difference
+            # Use proper week difference
             weeks_diff = _weeks_between(seed, cand)
             return weeks_diff % ival == 0
         if typ == "y":
@@ -3983,7 +4015,6 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
             return cand
         if typ == "w":
             cur_monday = cand - timedelta(days=cand.weekday())
-            #  Use proper week difference
             weeks_from_seed = _weeks_between(seed, cur_monday)
             diff = weeks_from_seed % ival
             add_weeks = (ival - diff) if diff != 0 else 0
@@ -3995,8 +4026,6 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
             next_jan1 = date(cand.year + (add_y or ival), 1, 1)
             return next_jan1 - timedelta(days=1)
         return cand
-
-
 
     # ---- helpers for monthly valid-month gating ----
     def _month_doms(y: int, m: int) -> list[int]:
@@ -4041,18 +4070,18 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
     # ---- guarded iteration ----
     for _ in range(128):
         base = base_next_after_atom(atom, probe)
-        
-        # @bd modifier: weekdays only - skip weekends
+
+        # @bd modifier: weekdays only - skip weekends entirely (move to next bucket)
         if mods.get("bd") and base.weekday() > 4:  # 5=Saturday, 6=Sunday
             probe = base + timedelta(days=1)
             continue
-        
+
         # weekly/yearly gating first
         if typ in ("w", "y") and not _allowed_by_interval(base):
             probe = _advance_probe_to_next_allowed_bucket(base)
             continue
 
-        # monthly special-case: /N by valid months
+        # monthly special-case: /N by *valid months*
         if typ == "m" and ival > 1:
             by, bm = base.year, base.month
 
@@ -4092,17 +4121,28 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
                 doms = _month_doms(ny, nm)
                 base = date(ny, nm, doms[0])
 
-        # apply roll + offsets and return if strictly after ref_d
-        cand = roll_apply(base, mods)
-        cand = apply_day_offset(cand, mods)
-        if cand > ref_d:
-            return cand
+        # --- apply roll + offsets and decide acceptance ---
+        rolled = roll_apply(base, mods)
+        cand = apply_day_offset(rolled, mods)
 
-        # advance probe
+        roll_kind = mods.get("roll")
+        if roll_kind in ("pbd", "nbd", "nw"):
+            # Business-day rolls:
+            #   base must still be strictly after ref_d,
+            #   but the rolled candidate is allowed to land ON ref_d.
+            if base > ref_d and cand >= ref_d:
+                return cand
+        else:
+            # Everything else keeps strict "after ref_d" semantics.
+            if cand > ref_d:
+                return cand
+
+        # advance probe for next iteration
         probe = base + timedelta(days=1)
 
     # fallback
     return ref_d + timedelta(days=365)
+
 
 
 
@@ -4116,21 +4156,42 @@ def atom_matches_on(atom, d: date, default_seed: date) -> bool:
 
 
 def next_after_term(term, ref_d: date, default_seed: date):
-    """Find next date after ref_d that matches all atoms in term."""
+    """Find next date after ref_d that matches all atoms in term.
+
+    Fast path for single-atom terms to avoid unnecessary intersection logic
+    and /N-gating artifacts.
+    """
+    # ---------- Fast path: single atom ----------
+    if len(term) == 1:
+        atom = term[0]
+        nxt = next_after_atom_with_mods(atom, ref_d, default_seed)
+        mods = atom.get("mods") or {}
+        hhmm = mods.get("t")
+        return nxt, hhmm
+
+    # ---------- General case: intersection of multiple atoms ----------
     cur = ref_d
-    # Reduced iteration limit
     for _ in range(min(INTERSECTION_GUARD_STEPS, 100)):
+        # For each atom, find its next candidate >= cur
         cands = [next_after_atom_with_mods(a, cur, default_seed) for a in term]
         nxt = max(cands)
+
+        # Check that all atoms "match" on this day (with roll window, etc.)
         if all(atom_matches_on(a, nxt, default_seed) for a in term):
             hhmm = None
             for a in term:
-                if a["mods"].get("t"):
-                    hhmm = a["mods"]["t"]
+                mods = a.get("mods") or {}
+                if mods.get("t"):
+                    hhmm = mods["t"]
                     break
             return nxt, hhmm
+
+        # Otherwise advance the search window
         cur = nxt
+
+    # Guard-rail fallback to avoid infinite loops on pathological patterns
     return ref_d + timedelta(days=365), None
+
 
 
 def _is_simple_weekly(dnf):
@@ -4162,6 +4223,7 @@ def next_after_expr(dnf, after_date, default_seed=None, seed_base=None):
     Return the next matching *local date* strictly > after_date.
     Uses optimized paths for common cases.
     """
+
     # Fast path for simple weekly expressions
     if _is_simple_weekly(dnf):
         atom = dnf[0][0]

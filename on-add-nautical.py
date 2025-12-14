@@ -5,7 +5,7 @@
 on-add-nautical.py (production)
 
 Features:
-- Reject legacy weekly colon ranges on add (use w:mon-fri).
+- Accept legacy weekly range forms for backward compatibility (preferred: w:mon..fri).
 - Auto-assign due when missing (anchor first, else cp).
 - Panel logic:
     * If user set due -> First due = user's due; Next anchor shown separately.
@@ -477,8 +477,11 @@ def _safe_parse_datetime(s, field_name) -> tuple[datetime | None, str | None]:
 
 def _validate_no_legacy_colon_ranges(expr: str) -> tuple[bool, str | None]:
     """
-    Reject legacy weekly colon ranges (e.g., 'mon:wed:fri').
-    Users should use w:mon-fri instead.
+    Detect legacy weekly colon syntax (e.g., 'mon:wed:fri').
+    V2 delimiter contract prefers '..' for ranges (e.g., 'w:mon..fri').
+    
+    NOTE: For backward compatibility, this validator currently does NOT reject.
+    (A lint warning can be added later.)
     Returns (is_valid, error_msg).
     """
     if not expr:
@@ -502,12 +505,8 @@ def _validate_no_legacy_colon_ranges(expr: str) -> tuple[bool, str | None]:
             # Check if all parts look like day abbreviations
             if len(parts) >= 2 and all(p.lower() in day_names for p in parts):
                 legacy_example = ":".join(parts)
-                new_format = f"w:{parts[0]}-{parts[-1]}"
-                return (
-                    False,
-                    f"Legacy colon range '{legacy_example}' detected. "
-                    f"Use '{new_format}' instead (e.g., '{new_format}' for '{legacy_example}')."
-                )
+                # Backward-compatible: accept (warn later).
+                return (True, None)
     
     return (True, None)
 
@@ -679,12 +678,6 @@ def main():
     # ==================================================================================
     if kind == "anchor":
         # ========== EDGE CASE 5: Invalid anchor expression ==========
-        # ========== EDGE CASE 5a: Check for legacy colon ranges ==========
-        is_valid, err = _validate_no_legacy_colon_ranges(anchor_str)
-        if not is_valid:
-            _error_and_exit([("Invalid anchor", err)])
-        
-        # ========== EDGE CASE 5b: Invalid anchor expression ==========
         is_valid, err = _validate_anchor_syntax_strict(anchor_str)
         if not is_valid:
             _error_and_exit([("Invalid anchor", err)])
@@ -840,8 +833,8 @@ def main():
 
         # Lint for *hints only*; do not fail on linter
         _, warns = core.lint_anchor_expr(anchor_str)
-        for w in warns:
-            _panel("ℹ️  Lint", [("Hint", w)], kind="note")
+        if warns:
+            _panel("ℹ️  Lint", [("Hint", w) for w in warns], kind="note")
 
         # Validator is the single source of truth
         core.validate_anchor_expr_strict(anchor_str)

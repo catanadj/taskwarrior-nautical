@@ -195,6 +195,10 @@ _WEEKDAYS = {
     "sun": 6,
     "sunday": 6,
 }
+
+# Canonical (V2) examples used in error messages / hints.
+_CANON_WEEKLY_RANGE_EX = "w:mon..fri"
+_CANON_WEEKLY_LIST_EX = "w:mon,wed,fri"
 _MONTHS = {
     "jan": 1,
     "feb": 2,
@@ -279,9 +283,10 @@ def _tok(d: int, m: int) -> str:
 
 def _tok_range(d1: int, m1: int, d2: int, m2: int) -> str:
     if _yearfmt() == "DM":
-        return f"{d1:02d}-{m1:02d}:{d2:02d}-{m2:02d}"
+        # V2 delimiter contract: '..' denotes ranges (legacy ':' remains accepted on input).
+        return f"{d1:02d}-{m1:02d}..{d2:02d}-{m2:02d}"
     else:
-        return f"{m1:02d}-{d1:02d}:{m2:02d}-{d2:02d}"
+        return f"{m1:02d}-{d1:02d}..{m2:02d}-{d2:02d}"
 
 
 # -------- Pre-compiled Regex Patterns ----------
@@ -348,11 +353,11 @@ def _month_from_alias(tok: str) -> int | None:
 
 
 def _year_full_months_span_token(m1: int, m2: int) -> str:
-    # Full span across months [m1..m2], respecting ANCHOR_YEAR_FMT
-    if _yearfmt() == "MD":
-        return f"{m1:02d}-01:{m2:02d}-31"
-    else:
-        return f"01-{m1:02d}:31-{m2:02d}"
+    """Full span across months [m1..m2], respecting ANCHOR_YEAR_FMT.
+
+    V2 delimiter contract: use '..' for ranges (legacy ':' remains accepted on input).
+    """
+    return _tok_range(1, int(m1), 31, int(m2))
 
 
 def _rewrite_month_names_to_ranges(spec: str) -> str:
@@ -362,8 +367,10 @@ def _rewrite_month_names_to_ranges(spec: str) -> str:
     out = []
     for raw in [t.strip() for t in str(spec).split(",") if t.strip()]:
         s = raw.lower()
-        if ":" in s:
-            a, b = [x.strip() for x in s.split(":", 1)]
+        # Accept both V2 '..' and legacy ':' for ranges.
+        if ".." in s or ":" in s:
+            sep = ".." if ".." in s else ":"
+            a, b = [x.strip() for x in s.split(sep, 1)]
             if a in _MONTH_ALIAS and b in _MONTH_ALIAS:
                 m1, m2 = _MONTH_ALIAS[a], _MONTH_ALIAS[b]
                 if m1 <= m2:
@@ -454,13 +461,10 @@ def _year_full_month_range_token(mm: int) -> str:
     """
     Return a yearly range token that covers the entire month `mm`
     formatted according to ANCHOR_YEAR_FMT.
-    MD: 'MM-01:MM-31' ; DM: '01-MM:31-MM' (31 will be clamped later)
+    MD: 'MM-01..MM-31' ; DM: '01-MM..31-MM' (31 will be clamped later)
     """
     mm = int(mm)
-    if _yearfmt() == "MD":
-        return f"{mm:02d}-01:{mm:02d}-31"
-    else:
-        return f"01-{mm:02d}:31-{mm:02d}"
+    return _tok_range(1, mm, 31, mm)
 
 def _mon_to_int(tok: str) -> int | None:
     s = (tok or "").strip().lower()
@@ -496,16 +500,16 @@ def _rewrite_year_month_aliases_in_context(dnf: list[list[dict]]) -> list[list[d
             changed = False
             for tok in [t.strip() for t in spec.split(",") if t.strip()]:
 
-                # 'mon1:mon2' or 'MM1:MM2' → full-month range covering both months
-                if ":" in tok and "-" not in tok:
-                    left, right = [x.strip() for x in tok.split(":", 1)]
+                # 'mon1..mon2' / 'mon1:mon2' or 'MM1..MM2' / 'MM1:MM2' → full-month range
+                if (".." in tok or ":" in tok) and "-" not in tok:
+                    if ".." in tok:
+                        left, right = [x.strip() for x in tok.split("..", 1)]
+                    else:
+                        left, right = [x.strip() for x in tok.split(":", 1)]
                     m1, m2 = _mon_to_int(left), _mon_to_int(right)
                     if m1 and m2:
                         # Build a single cross-month range token; downstream clamping handles month-end.
-                        if _yearfmt() == "MD":
-                            new_tokens.append(f"{m1:02d}-01:{m2:02d}-31")
-                        else:
-                            new_tokens.append(f"01-{m1:02d}:31-{m2:02d}")
+                        new_tokens.append(_tok_range(1, m1, 31, m2))
                         changed = True
                         continue  # handled
 
@@ -682,13 +686,22 @@ def _normalize_spec_for_acf(typ: str, spec: str):
             token = token.strip()
             if not token:
                 continue
-            if "-" in token or ":" in token:
-                sep = "-" if "-" in token else ":"
-                start, end = token.split(sep, 1)
+            if ".." in token or "-" in token or ":" in token:
+                if ".." in token:
+                    start, end = token.split("..", 1)
+                elif "-" in token:
+                    start, end = token.split("-", 1)
+                else:
+                    parts = [p.strip() for p in token.split(":") if p.strip()]
+                    if len(parts) >= 2 and all(_normalize_weekday(p) for p in parts):
+                        start, end = parts[0], parts[-1]
+                    else:
+                        start, end = token.split(":", 1)
                 s1 = _normalize_weekday(start)
                 s2 = _normalize_weekday(end)
                 if s1 and s2:
-                    tokens.append(f"{s1}-{s2}")
+                    # Canonicalize all weekly ranges to V2 '..'.
+                    tokens.append(f"{s1}..{s2}")
             else:
                 s = _normalize_weekday(token)
                 if s:
@@ -696,19 +709,37 @@ def _normalize_spec_for_acf(typ: str, spec: str):
         if not tokens:
             return None
         # keep distinct; ranges before singles for stability
-        ranges = sorted([t for t in tokens if "-" in t])
-        singles = sorted([t for t in tokens if "-" not in t])
+        ranges = sorted([t for t in tokens if ".." in t])
+        singles = sorted([t for t in tokens if ".." not in t])
         return ",".join(ranges + singles)
 
     
     elif typ == "m":
-        # Monthly: already normalized by parser
-        return spec
+        # Monthly: canonicalize range delimiter to V2 '..' for cache stability.
+        toks = []
+        for token in spec.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            if ".." in token or ":" in token:
+                sep = ".." if ".." in token else ":"
+                a, b = [x.strip() for x in token.split(sep, 1)]
+                if a and b:
+                    toks.append(f"{a}..{b}")
+                else:
+                    toks.append(token)
+            else:
+                toks.append(token)
+        if not toks:
+            return None
+        ranges = sorted([t for t in toks if ".." in t])
+        singles = sorted([t for t in toks if ".." not in t])
+        return ",".join(ranges + singles)
     
     elif typ == "y":
         out = []
         for token in (t.strip() for t in spec.split(",") if t.strip()):
-            m = re.fullmatch(r"(\d{2})-(\d{2})(?::(\d{2})-(\d{2}))?$", token)
+            m = re.fullmatch(r"(\d{2})-(\d{2})(?:(?:\.\.|:)(\d{2})-(\d{2}))?$", token)
             if not m:
                 # assume already rewritten; if not, keep as string (worst case)
                 out.append(token)
@@ -933,17 +964,97 @@ def _wd_idx(s: str) -> int | None:
         pass
     return None
 
+
+def _wday_idx_any(s: str) -> int | None:
+    """Weekday index for weekly specs.
+
+    Accepts:
+      - abbreviations: mon..sun
+      - full names:    monday..sunday
+      - numeric:       1..7 (Mon=1)
+    """
+    s = (s or "").strip().lower()
+    if not s:
+        return None
+    if s in _WEEKDAYS:
+        return _WEEKDAYS[s]
+    return _wd_idx(s)
+
+
+def _weekly_spec_to_wset(spec: str, mods: dict | None = None) -> set[int]:
+    """Expand a weekly spec into a weekday set {0..6}.
+
+    Supports canonical V2 ranges ("..") and legacy V1 ranges ("-") and legacy
+    colon ranges ("mon:fri" or even "mon:wed:fri" -> interpreted as mon..fri).
+
+    If the spec contains 'rand', treat it as the full weekday pool (or Mon–Fri
+    if @bd/@wd is active). If 'rand' is combined with explicit tokens (should
+    be rejected by strict validation), we return the union for resilience.
+    """
+    spec = (spec or "").strip().lower()
+    if not spec:
+        return set()
+
+    toks = [t.strip().lower() for t in spec.split(",") if t.strip()]
+    out: set[int] = set()
+
+    if any(t == "rand" for t in toks):
+        pool = (
+            {0, 1, 2, 3, 4}
+            if ((mods or {}).get("bd") or (mods or {}).get("wd") is True)
+            else {0, 1, 2, 3, 4, 5, 6}
+        )
+        out |= pool
+
+    for tok in toks:
+        if tok == "rand":
+            continue
+        if ".." in tok or "-" in tok or ":" in tok:
+            if ".." in tok:
+                a, b = tok.split("..", 1)
+            elif "-" in tok:
+                a, b = tok.split("-", 1)
+            else:
+                parts = [p.strip() for p in tok.split(":") if p.strip()]
+                if len(parts) >= 2:
+                    a, b = parts[0], parts[-1]
+                else:
+                    a, b = tok.split(":", 1)
+            ia, ib = _wday_idx_any(a), _wday_idx_any(b)
+            if ia is None or ib is None:
+                continue
+            rng = (
+                list(range(ia, ib + 1))
+                if ia <= ib
+                else (list(range(ia, 7)) + list(range(0, ib + 1)))
+            )
+            out.update(rng)
+        else:
+            i = _wday_idx_any(tok)
+            if i is not None:
+                out.add(i)
+
+    return out
+
 def _doms_for_weekly_spec(spec:str, y:int, m:int) -> set[int]:
-    """Return DOMs in month (y,m) whose weekday matches any in spec (e.g., 'mon,thu' or 'mon-fri')."""
+    """Return DOMs in month (y,m) whose weekday matches any in spec (e.g., 'mon,thu' or 'mon..fri')."""
     spec = (spec or "").strip().lower()
     if not spec: return set()
     allowed: set[int] = set()
     # expand tokens and ranges
     wset: set[int] = set()
     for tok in [t.strip() for t in spec.split(",") if t.strip()]:
-        if "-" in tok or ":" in tok:
-            sep = "-" if "-" in tok else ":"
-            a,b = tok.split(sep,1)
+        if ".." in tok or "-" in tok or ":" in tok:
+            if ".." in tok:
+                a, b = tok.split("..", 1)
+            elif "-" in tok:
+                a, b = tok.split("-", 1)
+            else:
+                parts = [p.strip() for p in tok.split(":") if p.strip()]
+                if len(parts) >= 2 and all(_wd_idx(p) is not None for p in parts):
+                    a, b = parts[0], parts[-1]
+                else:
+                    a, b = tok.split(":", 1)
             ia, ib = _wd_idx(a), _wd_idx(b)
             if ia is None or ib is None: continue
             rng = list(range(ia, ib+1)) if ia <= ib else (list(range(ia,7))+list(range(0,ib+1)))
@@ -959,13 +1070,13 @@ def _doms_for_weekly_spec(spec:str, y:int, m:int) -> set[int]:
     return allowed
 
 def _doms_for_monthly_token(tok: str, y:int, m:int) -> set[int]:
-    """Support: 'rand' -> full month; '10:20'; '31'; '-1'; '2nd-mon'; 'last-fri'."""
+    """Support: 'rand' -> full month; '10..20' (or legacy '10:20'); '31'; '-1'; '2nd-mon'; 'last-fri'."""
     tok = (tok or "").strip().lower()
     dim = _days_in_month(y,m)
     if tok == "rand":
         return set(range(1, dim+1))
-    # range a:b
-    m2 = re.fullmatch(r"(\-?\d{1,2}):(\-?\d{1,2})", tok)
+    # range a..b (V2) or legacy a:b
+    m2 = re.fullmatch(r"(\-?\d{1,2})(?:\.\.|:)(\-?\d{1,2})", tok)
     if m2:
         a, b = int(m2.group(1)), int(m2.group(2))
         if a < 0: a = dim + 1 + a  # -1 -> dim
@@ -1006,7 +1117,7 @@ def _y_ranges_from_spec(spec: str) -> list[tuple[int,int,int,int]]:
                 out.append((mm, 1, mm, 31))  # end will be clamped downstream
             continue
 
-        m = re.fullmatch(r"(\d{2})-(\d{2})(?::(\d{2})-(\d{2}))?$", tok)
+        m = re.fullmatch(r"(\d{2})-(\d{2})(?:(?:\.\.|:)(\d{2})-(\d{2}))?$", tok)
         if not m:
             continue
         a,b = int(m.group(1)), int(m.group(2))
@@ -1405,7 +1516,7 @@ def _rewrite_quarter_spec_mode(spec: str, mode: str) -> str:
                 out.append(_tok_range(1, mm, _static_month_last_day(mm), mm))
             continue
 
-        m = re.fullmatch(r"q([1-4]):q([1-4])", tok)
+        m = re.fullmatch(r"q([1-4])(?:\.\.|:)q([1-4])", tok)
         if m:
             qa, qb = int(m.group(1)), int(m.group(2))
             if qa > qb:
@@ -1487,7 +1598,7 @@ def _rewrite_year_month_aliases_in_dnf(dnf: list[list[dict]]) -> list[list[dict]
 
             for tok in toks_in:
                 # Pass through already-standard forms and rand variants
-                if re.fullmatch(r"\d{2}-\d{2}(?::\d{2}-\d{2})?$", tok) or tok == "rand" or re.fullmatch(r"rand-\d{2}", tok):
+                if re.fullmatch(r"\d{2}-\d{2}(?:(?:\.\.|:)\d{2}-\d{2})?$", tok) or tok == "rand" or re.fullmatch(r"rand-\d{2}", tok):
                     toks_out.append(tok)
                     continue
 
@@ -1498,7 +1609,7 @@ def _rewrite_year_month_aliases_in_dnf(dnf: list[list[dict]]) -> list[list[dict]
                     continue
 
                 # Month:Month range (name/name, name/MM, MM/name, MM/MM)
-                m = re.fullmatch(r"([a-z]{3}|\d{2}):([a-z]{3}|\d{2})", tok)
+                m = re.fullmatch(r"([a-z]{3}|\d{2})(?:\.\.|:)([a-z]{3}|\d{2})", tok)
                 if m:
                     m1 = _month_from_alias(m.group(1))
                     m2 = _month_from_alias(m.group(2))
@@ -1602,29 +1713,19 @@ def _term_collect_mods(term: list) -> dict:
 
 
 def _fmt_hhmm_for_term(term: list, default_due_dt):
+    """Return HH:MM for prose *only* when explicitly set via @t.
+
+    The anchor DSL uses @t=HH:MM to specify an explicit time. Even if the task's
+    due datetime contains a time component (including Taskwarrior defaults or
+    timezone conversions), we do not surface it in the Natural language line
+    unless @t is present.
+    """
     mods = _term_collect_mods(term)
     tmod = mods.get("t")
     if isinstance(tmod, tuple):
         return f"{tmod[0]:02d}:{tmod[1]:02d}"
     if isinstance(tmod, str) and tmod:
         return tmod
-
-    # Only fall back to task due time if it isn't midnight.
-    # Taskwarrior commonly stores date-only due values as 00:00:00Z; converting
-    # that to local time may yield a non-zero hour (e.g., +02:00), so we check the
-    # *UTC* time to avoid accidentally treating "date-only" as an explicit HH:MM.
-    if default_due_dt:
-        dt = default_due_dt
-        if isinstance(dt, str):
-            dt = parse_dt_any(dt)
-        # A plain date carries no explicit time → ignore.
-        if isinstance(dt, date) and not isinstance(dt, datetime):
-            return None
-        if isinstance(dt, datetime):
-            utc = dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-            if utc.hour != 0 or utc.minute != 0:
-                loc = to_local(utc)
-                return f"{loc.hour:02d}:{loc.minute:02d}"
     return None
 
 
@@ -1633,23 +1734,45 @@ def _fmt_weekdays_list(spec: str) -> str:
     tokens = [t.strip().lower() for t in str(spec or "").split(",") if t.strip()]
     if not tokens:
         return ""
-    names = []
+
+    plural = {
+        0: "Mondays",
+        1: "Tuesdays",
+        2: "Wednesdays",
+        3: "Thursdays",
+        4: "Fridays",
+        5: "Saturdays",
+        6: "Sundays",
+    }
+
+    names: list[str] = []
     for t in tokens:
         if t == "rand":
             names.append("one random day each week")
             continue
-        # existing mapping for mon..sun
-        full = {
-            "mon": "Mondays",
-            "tue": "Tuesdays",
-            "wed": "Wednesdays",
-            "thu": "Thursdays",
-            "fri": "Fridays",
-            "sat": "Saturdays",
-            "sun": "Sundays",
-        }.get(t)
-        if full:
-            names.append(full)
+
+        # Range tokens: mon..fri (canonical), mon-fri (legacy), mon:wed:fri (legacy; first..last)
+        if ".." in t or "-" in t or ":" in t:
+            if ".." in t:
+                a, b = t.split("..", 1)
+            elif "-" in t:
+                a, b = t.split("-", 1)
+            else:
+                parts = [p.strip() for p in t.split(":") if p.strip()]
+                a, b = (parts[0], parts[-1]) if len(parts) >= 2 else (t, t)
+            ia, ib = _wday_idx_any(a), _wday_idx_any(b)
+            if ia is None or ib is None:
+                continue
+            if ia == ib:
+                names.append(plural[ia])
+            else:
+                names.append(f"{plural[ia]} through {plural[ib]}")
+            continue
+
+        i = _wday_idx_any(t)
+        if i is not None:
+            names.append(plural[i])
+
     if not names:
         return ""
     if len(names) == 1:
@@ -1681,8 +1804,9 @@ def _fmt_monthly_atom(spec: str) -> str:
         if k > 0:
             return f"the {_ordinal(k)} business day of each month"
         return f"the {_ordinal(abs(k))} last business day of each month"
-    if ":" in s:
-        a, b = s.split(":", 1)
+    if ".." in s or ":" in s:
+        sep = ".." if ".." in s else ":"
+        a, b = s.split(sep, 1)
         try:
             ai = int(a)
             bi = int(b)
@@ -1739,7 +1863,7 @@ def _fmt_yearly_atom(tok: str) -> str:
         # fall through to generic handling if somehow invalid
 
     # Existing numeric handling (single or range), respecting ANCHOR_YEAR_FMT
-    m = re.fullmatch(r"(\d{2})-(\d{2})(?::(\d{2})-(\d{2}))?$", s)
+    m = re.fullmatch(r"(\d{2})-(\d{2})(?:(?:\.\.|:)(\d{2})-(\d{2}))?$", s)
     if not m:
         return tok
 
@@ -1754,7 +1878,7 @@ def _fmt_yearly_atom(tok: str) -> str:
         d2, m2 = _pair(c, d)
         # full-month?
         if m1 == m2 and d1 == 1 and 28 <= d2 <= 31:
-            # Example: '04-01:04-30' (or DM equivalent) → "Apr each year"
+            # Example: '04-01..04-30' (or DM equivalent) → "Apr each year"
             return f"{_MONTH_ABBR[m1-1]} each year"
         if m1 == m2:
             # Same month, day range
@@ -2184,12 +2308,13 @@ def describe_anchor_dnf(dnf: list, task: dict) -> str:
 
 
 def _normalize_range_token(tok: str) -> str | None:
-    """Return 'A–B' for monthly range tokens like '1:7' or '-3:-1'; else None."""
+    """Return 'A–B' for monthly range tokens like '1..7' (or legacy '1:7'); else None."""
     s = (tok or "").strip().lower()
-    m = re.match(r"^-?\d+\s*:\s*-?\d+$", s)
+    m = re.match(r"^-?\d+\s*(?:\.\.|:)\s*-?\d+$", s)
     if not m:
         return None
-    a, b = [int(x) for x in s.split(":")]
+    sep = ".." if ".." in s else ":"
+    a, b = [int(x) for x in s.split(sep)]
     # Keep presentation simple; negatives allowed (already validated upstream)
     return f"{a}–{b}"
 
@@ -2233,7 +2358,7 @@ def _rand_bucket_signature(term: list[dict]) -> tuple | None:
                     time_str = tmod
             bd_flag = bd_flag or bool(mods.get("bd") or (mods.get("wd") is True))
         else:
-            # must be exactly one monthly range token like '1:7'
+            # must be exactly one monthly range token like '1..7' (legacy '1:7' accepted)
             rn = _normalize_range_token(spec)
             if not rn:
                 return None
@@ -2538,15 +2663,12 @@ def _filter_by_w(dt_list: list[_date], term: list[dict]):
         if _atype(a) != "w":
             continue
         spec = (_aspec(a) or "").lower()
-        wset = set()
-        for tok in spec.split(","):
-            tok = tok.strip()
-            if not tok:
-                continue
-            wset.add(_WD[tok])
+        wset = _weekly_spec_to_wset(spec, mods=a.get("mods") or {})
         allowed = wset if allowed is None else (allowed & wset)
     if allowed is None:
         return dt_list
+    if not allowed:
+        return []
     return [d for d in dt_list if d.weekday() in allowed]
 
 
@@ -2594,9 +2716,10 @@ def _month_tokens_for_atom_cached(y: int, m: int, spec: str) -> set[int]:
             out.add(days[k])
         return out
 
-    # range A:B (A or B may be negative)
-    if ":" in spec:
-        a_s, b_s = spec.split(":", 1)
+    # range A..B (V2) or legacy 'A:B' (A or B may be negative)
+    if ".." in spec or ":" in spec:
+        sep = ".." if ".." in spec else ":"
+        a_s, b_s = spec.split(sep, 1)
         try:
             a_i = int(a_s)
             b_i = int(b_s)
@@ -3037,17 +3160,17 @@ def _validate_yearly_token_format(spec: str):
             )
 
         # Accept standard numeric day-month (single or range) — parser ensures order (MD/DM)
-        if re.fullmatch(r"\d{2}-\d{2}(?::\d{2}-\d{2})?", s):
+        if re.fullmatch(r"\d{2}-\d{2}(?:(?:\.\.|:)\d{2}-\d{2})?", s):
             continue
 
-        # Accept month aliases and month:month (they are rewritten to numeric windows downstream)
-        if re.fullmatch(r"(?:[a-z]{3}|\d{2}):(?:[a-z]{3}|\d{2})", s):
+        # Accept month aliases and month..month (legacy ':' accepted); rewritten downstream
+        if re.fullmatch(r"(?:[a-z]{3}|\d{2})(?:\.\.|:)(?:[a-z]{3}|\d{2})", s):
             continue
         if re.fullmatch(r"[a-z]{3}", s):  # 'apr', 'jul'
             continue
 
         # Accept quarters (rewritten earlier)
-        if re.fullmatch(r"q[1-4](?::q[1-4])?", s):
+        if re.fullmatch(r"q[1-4](?:(?:\.\.|:)q[1-4])?", s):
             continue
 
         # Everything else is invalid
@@ -3077,8 +3200,8 @@ def _validate_yearly_token_format(spec: str):
             raise YearTokenFormatError(f"Invalid month in yearly token '{tok}'. Expected 01..12.")
 
 
-        # Proper numeric tokens: DD-MM or MM-DD, with optional :DD-MM / :MM-DD tail
-        m = re.fullmatch(r"(\d{2})-(\d{2})(?::(\d{2})-(\d{2}))?$", s)
+        # Proper numeric tokens: DD-MM or MM-DD, with optional range tail (V2 '..' or legacy ':')
+        m = re.fullmatch(r"(\d{2})-(\d{2})(?:(?:\.\.|:)(\d{2})-(\d{2}))?$", s)
         if m:
             a, b = int(m.group(1)), int(m.group(2))
             d1, m1 = _pair(a, b)
@@ -3104,8 +3227,8 @@ def _validate_yearly_token_format(spec: str):
                 ex = f"{A:02d}-{B:02d}" if fmt == "MD" else f"{B:02d}-{A:02d}"
             else:
                 A, B, C, D = map(int, m_col2.groups())
-                ex = (f"{A:02d}-{B:02d}:{C:02d}-{D:02d}" if fmt == "MD"
-                      else f"{B:02d}-{A:02d}:{D:02d}-{C:02d}")
+                ex = (f"{A:02d}-{B:02d}..{C:02d}-{D:02d}" if fmt == "MD"
+                      else f"{B:02d}-{A:02d}..{D:02d}-{C:02d}")
             raise YearTokenFormatError(
                 f"Yearly token '{tok}' uses ':' between numbers. "
                 f"Use '-' and order per ANCHOR_YEAR_FMT={fmt}. Example: '{ex}'."
@@ -3146,27 +3269,16 @@ _LEAP_YEAR_FOR_CHECKS = 2028
 
 
 def _weekday_set_from_weekly_atom(a) -> set[int]:
-    """Return {0..6} weekday set for a 'w' atom. 'rand' means any weekday (or only business days if @bd)."""
+    """Return {0..6} weekday set for a 'w' atom.
+
+    Handles canonical V2 ranges (..), legacy V1 ranges (-) and legacy ':'
+    ranges (including multi-colon forms interpreted as first..last).
+    """
     if (a.get("typ") or "").lower() != "w":
         return set()
-    spec = (a.get("spec") or "").lower()
+    spec = (a.get("spec") or "")
     mods = a.get("mods") or {}
-    tokens = [t.strip() for t in spec.split(",") if t.strip()]
-    out = set()
-    any_rand = any(t == "rand" for t in tokens)
-    if any_rand:
-        pool = (
-            {0, 1, 2, 3, 4}
-            if (mods.get("bd") or mods.get("wd") is True)
-            else {0, 1, 2, 3, 4, 5, 6}
-        )
-        out |= pool
-    # add normal weekdays
-    map_wd = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
-    for t in tokens:
-        if t in map_wd:
-            out.add(map_wd[t])
-    return out
+    return _weekly_spec_to_wset(spec, mods=mods)
 
 
 def _md_pairs_from_yearly_spec(spec: str) -> set[tuple[int, int]]:
@@ -3267,6 +3379,12 @@ def _validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d: date):
             for a in term:
                 typ = (a.get("typ") or "").lower()
                 spec = (a.get("spec") or "").strip()
+                # For user-facing examples, prefer canonical V2 delimiters where possible.
+                if typ in ("w", "m"):
+                    try:
+                        spec = _normalize_spec_for_acf(typ, spec) or spec
+                    except Exception:
+                        pass
                 if typ:
                     pieces.append(f"{typ}:{spec}" if spec else typ)
             hint = ", ".join(pieces)
@@ -3281,10 +3399,16 @@ def _validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d: date):
 
 
 def _validate_weekly_spec(spec: str):
-    """Validate weekly specification tokens."""
-    toks = [t.strip().lower() for t in spec.split(",") if t.strip()]
+    """Validate weekly specification tokens.
+
+    Canonical (V2) range syntax uses '..' (e.g., w:mon..fri).
+    Legacy '-' and ':' range forms are still accepted for backward compatibility.
+    """
+    toks = [t.strip().lower() for t in str(spec or "").split(",") if t.strip()]
     if not toks:
-        raise ParseError("weekly spec is empty")
+        raise ParseError(
+            f"Weekly spec is empty. Examples: '{_CANON_WEEKLY_RANGE_EX}', '{_CANON_WEEKLY_LIST_EX}'."
+        )
 
     # Special token: 'rand' = one random day per ISO week
     if any(t == "rand" for t in toks):
@@ -3296,21 +3420,39 @@ def _validate_weekly_spec(spec: str):
         return  # valid
 
     for tok in toks:
-        if ":" in tok or "-" in tok:
-            sep = "-" if "-" in tok else ":"
-            a, b = tok.split(sep, 1)
+        # Range forms:
+        #   - V2 (canonical): mon..fri
+        #   - V1 (legacy):    mon-fri
+        #   - Legacy chain:   mon:wed:fri  (interpreted as mon..fri)
+        if ".." in tok or "-" in tok or ":" in tok:
+            if ".." in tok:
+                a, b = tok.split("..", 1)
+            elif "-" in tok:
+                a, b = tok.split("-", 1)
+            else:
+                parts = [p.strip() for p in tok.split(":") if p.strip()]
+                if len(parts) >= 2 and all(p in _WEEKDAYS for p in parts):
+                    a, b = parts[0], parts[-1]
+                else:
+                    a, b = tok.split(":", 1)
             if a not in _WEEKDAYS or b not in _WEEKDAYS:
-                raise ParseError(f"Unknown weekday in range '{tok}'")
+                raise ParseError(
+                    f"Unknown weekday in range '{tok}'. "
+                    f"Preferred range form is '..' (e.g., '{_CANON_WEEKLY_RANGE_EX}')."
+                )
         else:
             if tok not in _WEEKDAYS:
-                raise ParseError(f"Unknown weekday token '{tok}'")
+                raise ParseError(
+                    f"Unknown weekday token '{tok}'. "
+                    f"Use mon..sun (e.g., '{_CANON_WEEKLY_RANGE_EX}' or '{_CANON_WEEKLY_LIST_EX}')."
+                )
 
 
 def _validate_monthly_spec(spec: str):
     """
     Valid monthly tokens (comma-separated):
       - Day of month:           '1'..'31' or negative '-1'..'-31'  (-1 = last day)
-      - Day range:              'A:B' where A,B are +/- integers (e.g., '1:7', '-3:-1')
+      - Day range:              'A..B' where A,B are +/- integers (legacy 'A:B' is accepted), e.g., '1..7', '-3..-1'
       - Nth weekday:            '2nd-mon', 'last-fri', '-2nd-fri' (hyphen optional; st/nd/rd/th allowed)
       - Business-day ordinal:   'kbd' where k is +/- integer (e.g., '5bd', '-1bd')
     Constraints:
@@ -3339,12 +3481,13 @@ def _validate_monthly_spec(spec: str):
                 )
             continue
 
-        # 2) Day range A:B (each side may be negative)
-        if ":" in tok:
-            a_s, b_s = tok.split(":", 1)
+        # 2) Day range A..B (each side may be negative). Accept legacy ':' for backward compatibility.
+        if ".." in tok or ":" in tok:
+            sep = ".." if ".." in tok else ":"
+            a_s, b_s = tok.split(sep, 1)
             if not (_int_like_re.fullmatch(a_s) and _int_like_re.fullmatch(b_s)):
                 raise ParseError(
-                    f"Invalid monthly range '{tok}'. Use integer endpoints, e.g., '1:7' or '-3:-1'."
+                    f"Invalid monthly range '{tok}'. Use integer endpoints, e.g., '1..7' or '-3..-1'."
                 )
             a, b = int(a_s), int(b_s)
             if a == 0 or b == 0:
@@ -3398,7 +3541,7 @@ def _validate_monthly_spec(spec: str):
         # 5) Unknown
         raise ParseError(
             f"Unknown monthly token '{tok}'. Examples: "
-            f"'15', '-1', '1:7', '-3:-1', '2nd-mon', 'last-fri', '5bd'."
+            f"'15', '-1', '1..7' (or legacy '1:7'), '-3..-1', '2nd-mon', 'last-fri', '5bd'."
         )
 
 
@@ -3407,8 +3550,9 @@ def _validate_yearly_token(tok: str):
     tok = tok.strip().lower()
     if tok in _QUARTERS:
         return
-    if ":" in tok:
-        a, b = tok.split(":", 1)
+    if ".." in tok or ":" in tok:
+        sep = ".." if ".." in tok else ":"
+        a, b = tok.split(sep, 1)
         pa = _parse_y_token(a)
         pb = _parse_y_token(b)
         if not pa or not pb:
@@ -3449,7 +3593,7 @@ def _validate_yearly_spec(spec: str):
         12: 31,
     }
     _quarter_re = re.compile(r"^q[1-4]$")
-    _quarter_range_re = re.compile(r"^(q[1-4]):(q[1-4])$")
+    _quarter_range_re = re.compile(r"^(q[1-4])(?:\.\.|:)(q[1-4])$")
 
     def _last_day(mm: int) -> int:
         return MONTH_MAX.get(mm, 31)
@@ -3464,17 +3608,17 @@ def _validate_yearly_spec(spec: str):
             near = maxd if dd > maxd else 1
             hint = f" {month_name[mm]} has {maxd} days."
             sug1 = f"{near:02d}-{mm:02d}"
-            sug2 = f"01-{mm:02d}:{maxd:02d}-{mm:02d}"
+            sug2 = f"01-{mm:02d}..{maxd:02d}-{mm:02d}"
             raise ParseError(
                 f"Invalid day '{dd:02d}' for month '{mm:02d}' in '{tok}' ({label}).{hint} "
                 f"Try '{sug1}' or '{sug2}'."
             )
 
     _month_only = re.compile(r"^\d{1,2}$")  # '3' or '03'
-    _month_range_only = re.compile(r"^\d{1,2}:\d{1,2}$")  # '3:4' or '03:04'
-    _non_padded_dm = re.compile(r"^\d{1,2}-\d{1,2}(?::\d{1,2}-\d{1,2})?$")
+    _month_range_only = re.compile(r"^\d{1,2}(?:\.\.|:)\d{1,2}$")  # '3..4' or legacy '3:4'
+    _non_padded_dm = re.compile(r"^\d{1,2}-\d{1,2}(?:(?:\.\.|:)\d{1,2}-\d{1,2})?$")
     _padded_dm = re.compile(
-        r"^(?P<d1>\d{2})-(?P<m1>\d{2})(?::(?P<d2>\d{2})-(?P<m2>\d{2}))?$"
+        r"^(?P<d1>\d{2})-(?P<m1>\d{2})(?:(?:\.\.|:)(?P<d2>\d{2})-(?P<m2>\d{2}))?$"
     )
 
     for tok in toks:
@@ -3500,37 +3644,38 @@ def _validate_yearly_spec(spec: str):
             if not (1 <= mm <= 12):
                 raise ParseError(
                     f"Invalid month '{tok}'. Months must be 01..12. "
-                    f"Try '{mm:02d}' or the full-month form '01-{mm:02d}:{_last_day(mm):02d}-{mm:02d}'."
+                    f"Try '{mm:02d}' or the full-month form '01-{mm:02d}..{_last_day(mm):02d}-{mm:02d}'."
                 )
             raise ParseError(
                 f"Yearly token '{tok}' is incomplete. Did you mean the full month? "
-                f"Try '01-{mm:02d}:{_last_day(mm):02d}-{mm:02d}'."
+                f"Try '01-{mm:02d}..{_last_day(mm):02d}-{mm:02d}'."
             )
 
-        # --- 'MM:MM' → suggest full multi-month range with proper end day ---
+        # --- 'MM..MM' (legacy ':' accepted) → suggest full multi-month range with proper end day ---
         if _month_range_only.match(tok):
-            m1, m2 = (int(x) for x in tok.split(":"))
+            sep = ".." if ".." in tok else ":"
+            m1, m2 = (int(x) for x in tok.split(sep, 1))
             if not (1 <= m1 <= 12 and 1 <= m2 <= 12):
                 raise ParseError(
                     f"Invalid month range '{tok}'. Months must be 01..12. "
-                    f"Try '01-{m1:02d}:{_last_day(m2):02d}-{m2:02d}'."
+                    f"Try '01-{m1:02d}..{_last_day(m2):02d}-{m2:02d}'."
                 )
             if m2 < m1:
-                left = f"01-{m1:02d}:31-12"
-                right = f"01-01:{_last_day(m2):02d}-{m2:02d}"
+                left = f"01-{m1:02d}..31-12"
+                right = f"01-01..{_last_day(m2):02d}-{m2:02d}"
                 raise ParseError(
                     f"Invalid month range '{tok}': end month is before start month. "
                     f"Split across years, e.g., '{left}, {right}'."
                 )
             raise ParseError(
                 f"Yearly token '{tok}' is incomplete. Did you mean a full multi-month range? "
-                f"Try '01-{m1:02d}:{_last_day(m2):02d}-{m2:02d}'."
+                f"Try '01-{m1:02d}..{_last_day(m2):02d}-{m2:02d}'."
             )
 
         # --- Zero-padding guidance for DM or DM:DM ---
         if _non_padded_dm.match(tok) and not _padded_dm.match(tok):
             pieces = re.split(r"[-:]", tok)
-            padded = ":".join(
+            padded = "..".join(
                 [f"{int(pieces[0]):02d}-{int(pieces[1]):02d}"]
                 + (
                     [f"{int(pieces[2]):02d}-{int(pieces[3]):02d}"]
@@ -3539,7 +3684,7 @@ def _validate_yearly_spec(spec: str):
                 )
             )
             raise ParseError(
-                f"Invalid yearly token '{tok}'. Use zero-padded 'DD-MM' or 'DD-MM:DD-MM'. "
+                f"Invalid yearly token '{tok}'. Use zero-padded 'DD-MM' or 'DD-MM..DD-MM' (legacy ':' accepted). "
                 f"Try '{padded}'."
             )
 
@@ -3655,22 +3800,12 @@ def validate_anchor_expr_strict(expr):
 # -------- Cached Expansion Functions ----------
 @lru_cache(maxsize=128)
 def expand_weekly_cached(spec: str):
-    """Cached expansion of weekly specification to weekday numbers."""
-    days = set()
-    for tok in [t.strip().lower() for t in spec.split(",") if t.strip()]:
-        if ":" in tok or "-" in tok:
-            sep = "-" if "-" in tok else ":"
-            a, b = tok.split(sep, 1)
-            ai, bi = _WEEKDAYS[a], _WEEKDAYS[b]
-            rng = (
-                range(ai, bi + 1)
-                if ai <= bi
-                else list(range(ai, 7)) + list(range(0, bi + 1))
-            )
-            days.update(rng)
-        else:
-            days.add(_WEEKDAYS[tok])
-    return sorted(days)
+    """Cached expansion of weekly specification to weekday numbers.
+
+    Note: This function is used as a performance primitive; keep it tolerant of
+    legacy syntax for backward compatibility.
+    """
+    return sorted(_weekly_spec_to_wset(spec, mods=None))
 
 
 @lru_cache(maxsize=128)
@@ -3716,7 +3851,7 @@ def expand_yearly_cached(spec: str, y: int):
     tokens = [t.strip().lower() for t in str(spec).split(",") if t.strip()]
 
     for tok in tokens:
-        m = re.fullmatch(r"(\d{2})-(\d{2})(?::(\d{2})-(\d{2}))?$", tok)
+        m = re.fullmatch(r"(\d{2})-(\d{2})(?:(?:\.\.|:)(\d{2})-(\d{2}))?$", tok)
         if not m:
             # Quarters and month-name windows should be rewritten earlier; ignore others.
             continue
@@ -3814,8 +3949,9 @@ def expand_monthly_cached(spec: str, y: int, m: int):
             if d0:
                 out.add(d0)
                 continue
-        if ":" in tok:
-            a, b = tok.split(":", 1)
+        if ".." in tok or ":" in tok:
+            sep = ".." if ".." in tok else ":"
+            a, b = tok.split(sep, 1)
             a = int(a)
             b = int(b)
             step = 1 if a <= b else -1
@@ -3923,8 +4059,8 @@ def base_next_after_atom(atom, ref_d: date) -> date:
     # Normal weekly path (non-rand)
     if typ == "w":
         days = expand_weekly_cached(spec)
-        # Filter out weekends if @bd modifier
-        if mods.get("bd"):
+        # Filter out weekends if @bd/@wd (boolean) modifier
+        if mods.get("bd") or (mods.get("wd") is True):
             days = [d for d in days if d < 5]  # 0-4 = Mon-Fri
             if not days:  # No weekdays in spec
                 # Fallback: return far future to avoid infinite loop
@@ -4423,9 +4559,47 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
     warnings: list[str] = []
     
 
-    # 0) missing ':' after type (w/m/y)
-    # if re.search(r'\b(w|m|y)(/\d+)?\b(?!\s*:\s*)', s):
-    #     return ("Expected ':' after anchor type. Examples: 'w:mon', 'm:-1', 'y:06-01'.", [])
+    # ------------------------------------------------------------------
+    # V2 delimiter contract (backward compatible, but loudly deprecated)
+    # ------------------------------------------------------------------
+    dep = []
+
+    # Weekly: legacy '-' range (w:mon-fri)
+    if re.search(r"\bw(?:/\d+)?\s*:\s*(?:mon|tue|wed|thu|fri|sat|sun)\s*-\s*(?:mon|tue|wed|thu|fri|sat|sun)\b", s):
+        dep.append("Deprecated weekly range delimiter '-' detected. Use '..' (e.g., 'w:mon..fri').")
+
+    # Weekly: legacy ':' range (w:mon:fri)
+    if re.search(r"\bw(?:/\d+)?\s*:\s*(?:mon|tue|wed|thu|fri|sat|sun)\s*:\s*(?:mon|tue|wed|thu|fri|sat|sun)\b", s):
+        dep.append("Deprecated weekly range delimiter ':' detected. Use '..' (e.g., 'w:mon..fri').")
+
+    # Weekly: legacy ':' day-list (w:mon:wed:fri)
+    if re.search(r"\bw(?:/\d+)?\s*:\s*(?:mon|tue|wed|thu|fri|sat|sun)(?:\s*:\s*(?:mon|tue|wed|thu|fri|sat|sun)){2,}\b", s):
+        dep.append("Deprecated weekly ':' day-list detected. Use ',' for lists (e.g., 'w:mon,wed,fri') or '..' for ranges (e.g., 'w:mon..fri').")
+
+    # Monthly: legacy ':' numeric range (m:1:7, m:-3:-1)
+    if re.search(r"\bm(?:/\d+)?\s*:\s*-?\d+\s*:\s*-?\d+\b", s):
+        dep.append("Deprecated monthly range delimiter ':' detected. Use '..' (e.g., 'm:1..7', 'm:-3..-1').")
+
+    # Yearly: legacy ':' month span (y:jan:mar, y:04:06)
+    if re.search(r"\by(?:/\d+)?\s*:\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{2})\s*:\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{2})\b", s):
+        dep.append("Deprecated yearly month-span delimiter ':' detected. Use '..' (e.g., 'y:jan..mar', 'y:04..06').")
+
+    # Yearly: legacy ':' day-range (y:07-01:07-31)
+    if re.search(r"\by(?:/\d+)?\s*:\s*\d{2}-\d{2}\s*:\s*\d{2}-\d{2}\b", s):
+        dep.append("Deprecated yearly day-range delimiter ':' detected. Use '..' (e.g., 'y:07-01..07-31').")
+
+    # Yearly: legacy ':' quarter-range (y:q1:q2)
+    if re.search(r"\by(?:/\d+)?\s*:\s*q[1-4]\s*:\s*q[1-4]\b", s):
+        dep.append("Deprecated yearly quarter-range delimiter ':' detected. Use '..' (e.g., 'y:q1..q2').")
+
+    if dep:
+        # de-dupe but keep stable order
+        seen = set()
+        for msg in dep:
+            if msg not in seen:
+                warnings.append(msg)
+                seen.add(msg)
+
 
     # 1) Yearly tokens: check only inside y: segments
     fmt = _yearfmt()  # "MD" or "DM"
@@ -4446,18 +4620,23 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
                     if y > 12 and 1 <= x <= 12:
                         return (f"'{tok}' looks like MM-DD but config expects DD-MM. Try '{y:02d}-{x:02d}'.", [])
                 continue
-            # valid range?
-            if re.fullmatch(r'\d{2}-\d{2}:\d{2}-\d{2}', tok):
-                a, b, c, d = tok[0:2], tok[3:5], tok[6:8], tok[9:11]
+            # valid range? (V2 '..' and legacy ':')
+            if re.fullmatch(r'\d{2}-\d{2}(?::|\.\.)\d{2}-\d{2}', tok):
+                if ".." in tok:
+                    left, right = tok.split("..", 1)
+                else:
+                    left, right = tok.split(":", 1)
+                a, b = left.split("-", 1)
+                c, d = right.split("-", 1)
                 x, y, u, v = int(a), int(b), int(c), int(d)
                 if fmt == "MD":
                     if x > 12 and 1 <= y <= 12:
                         return (f"'{tok}' starts like DD-MM but config expects MM-DD. "
-                                f"Try '{y:02d}-{x:02d}:{v:02d}-{u:02d}'.", [])
+                                f"Try '{y:02d}-{x:02d}..{v:02d}-{u:02d}'.", [])
                 else:
                     if y > 12 and 1 <= x <= 12:
                         return (f"'{tok}' starts like MM-DD but config expects DD-MM. "
-                                f"Try '{y:02d}-{x:02d}:{v:02d}-{u:02d}'.", [])
+                                f"Try '{y:02d}-{x:02d}..{v:02d}-{u:02d}'.", [])
                 continue
 
     # 2) MD/DM confusion (use configured ANCHOR_YEAR_FMT)
@@ -4520,8 +4699,8 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
             return ("These anchors joined with '+' don't share any possible date. "
                     "If you meant 'either/or', join them with ',' or '|'.", [])
 
-    # 6) quarter ranges like "q4:q2" backwards
-    g = re.search(r'\bq([1-4])\s*:\s*q([1-4])\b', s)
+    # 6) quarter ranges like "q4..q2" / "q4:q2" backwards
+    g = re.search(r'\bq([1-4])\s*(?::|\.\.)\s*q([1-4])\b', s)
     if g and int(g.group(2)) < int(g.group(1)):
         return ("Invalid quarter range 'qX:qY': end quarter precedes start quarter. "
                 "Split across the year boundary, e.g., 'q4, q1'.", [])
@@ -4529,6 +4708,74 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
     # 7) gentle tip for legacy multi-@t in one atom
     if re.search(r'y:[^|+)]*@t=\d{2}:\d{2},', s):
         warnings.append("Multiple @t times inside a single 'y:' atom; ensure each spec has its own @t or use '|'.")
+
+    # 8) V2 delimiter contract hints (non-fatal): prefer '..' for ranges
+    try:
+        wds = set(_WD_ABBR)
+
+        def _iter_atom_specs(head: str) -> list[str]:
+            # Capture the spec portion of <head> atoms, stopping before modifiers and top-level operators.
+            # This is intentionally heuristic; strict validation is the source of truth.
+            pat = re.compile(rf'(?:^|(?<=[+|()\s])){head}(?:/\d+)?:([^@+|)]+)')
+            return [m.group(1).strip() for m in pat.finditer(s)]
+
+        # Weekly: warn on legacy '-' and ':' range delimiters
+        for spec in _iter_atom_specs('w'):
+            for tok in [t.strip() for t in spec.split(',') if t.strip()]:
+                if '..' in tok:
+                    continue
+                m1 = re.fullmatch(r'(mon|tue|wed|thu|fri|sat|sun)\s*-\s*(mon|tue|wed|thu|fri|sat|sun)', tok)
+                if m1:
+                    a, b = m1.group(1), m1.group(2)
+                    warnings.append(
+                        f"Legacy weekly range '{tok}' uses '-'. Prefer '..': 'w:{a}..{b}'."
+                    )
+                    continue
+                if ':' in tok:
+                    parts = [p.strip() for p in tok.split(':') if p.strip()]
+                    if len(parts) >= 2 and all(p in wds for p in parts):
+                        a, b = parts[0], parts[-1]
+                        warnings.append(
+                            f"Legacy weekly range '{tok}' uses ':'. Prefer '..': 'w:{a}..{b}'."
+                        )
+
+        # Monthly: warn on legacy ':' ranges like 1:7 or -3:-1
+        for spec in _iter_atom_specs('m'):
+            for tok in [t.strip() for t in spec.split(',') if t.strip()]:
+                if '..' in tok or ':' not in tok:
+                    continue
+                parts = [p.strip() for p in tok.split(':') if p.strip()]
+                if len(parts) == 2 and all(re.fullmatch(r'-?\d{1,2}', p) for p in parts):
+                    warnings.append(
+                        f"Legacy monthly range '{tok}' uses ':'. Prefer '..': 'm:{parts[0]}..{parts[1]}'."
+                    )
+
+        # Yearly: warn on legacy ':' ranges/spans (day ranges, month spans, quarter spans)
+        for spec in _iter_atom_specs('y'):
+            for tok in [t.strip() for t in spec.split(',') if t.strip()]:
+                if '..' in tok or ':' not in tok:
+                    continue
+                # Skip time-like tokens; they are invalid in yearly specs and handled earlier.
+                if re.fullmatch(r'\d{2}:\d{2}', tok):
+                    continue
+                parts = [p.strip() for p in tok.split(':') if p.strip()]
+                if len(parts) < 2:
+                    continue
+                a, b = parts[0], parts[-1]
+                ok = re.fullmatch(r'(?:\d{2}-\d{2}|\d{2}|[a-z]{3}|q[1-4])', a) and re.fullmatch(
+                    r'(?:\d{2}-\d{2}|\d{2}|[a-z]{3}|q[1-4])', b
+                )
+                if ok:
+                    warnings.append(
+                        f"Legacy yearly range '{tok}' uses ':'. Prefer '..': 'y:{a}..{b}'."
+                    )
+
+        # Deduplicate while preserving order
+        if warnings:
+            warnings[:] = list(dict.fromkeys(warnings))
+    except Exception:
+        # Lint must never break core behavior
+        pass
 
     return None, warnings
 

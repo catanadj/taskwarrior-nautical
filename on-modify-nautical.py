@@ -801,13 +801,9 @@ def _validate_anchor_on_modify(expr: str):
     except Exception as e:
         raise ValueError(f"anchor syntax error: {str(e)}")
 
-    # Weekday legacy ':' hint (parity with on-add)
-    for term in dnf_raw:
-        for atom in term:
-            if (atom.get("typ") or atom.get("type")) == "w":
-                spec = (atom.get("spec") or "").lower()
-                if ":" in spec:
-                    raise ValueError("Weekday ranges use '-' not ':'. Example: w:mon-fri")
+
+    # NOTE: legacy weekday ':' syntax is accepted for backward compatibility.
+    # (Lint warnings can be added later.)
 
     # Strict validation
     try:
@@ -1880,8 +1876,8 @@ def main():
             try:
                 # Lint only for non-blocking hints
                 _, warns = core.lint_anchor_expr(new_anchor)
-                for w in warns:
-                    _panel("ℹ️  Lint", [("Hint", w)], kind="note")
+                if warns:
+                    _panel("ℹ️  Lint", [("Hint", w) for w in warns], kind="note")
 
                 anchor_mode = ((new.get("anchor_mode") or old.get("anchor_mode") or "").strip().upper() or "ALL")
                 due_dt = _safe_dt(new.get("due") or old.get("due"))
@@ -1897,7 +1893,7 @@ def main():
                 emsg = str(e)
                 has_type_colon = bool(re.search(r'(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:', anchor_str, re.IGNORECASE))
                 if not has_type_colon:
-                    emsg = "Expected ':' after anchor type. Examples: 'w:mon', 'm:-1', 'y:06-01'."
+                    emsg = "Expected ':' after anchor type. Examples: 'w:mon..fri', 'm:-1', 'y:06-01'."
                 _got_anchor_invalid(emsg)
 
             # Deep checks only if anchor field changed

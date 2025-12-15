@@ -46,6 +46,12 @@ _CHAIN_COLOR_PER_CHAIN = os.environ.get("NAUTICAL_CHAIN_COLOR", "").strip().lowe
 }
 
 # ------------------------------------------------------------------------------
+# Show timeline gaps 
+# ------------------------------------------------------------------------------
+_SHOW_TIMELINE_GAPS = os.environ.get("NAUTICAL_TIMELINE_GAPS", "").strip().lower() not in {
+    "0", "no", "false", "off", "none"
+}
+# ------------------------------------------------------------------------------
 # Locate nautical_core
 # ------------------------------------------------------------------------------
 HOOK_DIR = Path(__file__).resolve().parent
@@ -396,6 +402,57 @@ def _format_next_anchor_rows(
     _add(footer)
 
     return out or rows
+
+def _format_gap(prev_dt: datetime, next_dt: datetime, kind: str = "cp", round_hours: bool = True) -> str:
+    """
+    Format the time gap between two timeline items as a compact inline annotation.
+    Returns a string like " └─ +3d →" or empty string.
+    """
+    if not (prev_dt and next_dt):
+        return ""
+    
+    gap_seconds = (next_dt - prev_dt).total_seconds()
+    
+    # Skip very small gaps
+    if abs(gap_seconds) < 60:
+        return ""
+    
+    # Format based on chain type
+    if kind == "cp":
+        # For CP chains, show days/hours
+        days = gap_seconds / 86400
+        if abs(days) >= 1:
+            if days.is_integer():
+                gap_str = f"{int(days)}d"
+            else:
+                # Show fractional days for non-24h multiples
+                gap_str = f"{days:.1f}d"
+        else:
+            hours = gap_seconds / 3600
+            if abs(hours) >= 1:
+                gap_str = f"{hours:.1f}h"
+            else:
+                minutes = gap_seconds / 60
+                gap_str = f"{int(minutes)}m"
+    else:
+        # For anchor chains, optionally round to nearest day
+        total_hours = gap_seconds / 3600
+        days = total_hours / 24
+        
+        if round_hours and abs(days) >= 0.5:  # Only round if > 12h
+            # Round to nearest day
+            rounded_days = round(days)
+            gap_str = f"{rounded_days}d"
+        else:
+            # Show days with fractional part
+            if abs(days) >= 1:
+                gap_str = f"{days:.1f}d"
+            else:
+                # Show hours for sub-day gaps
+                gap_str = f"{total_hours:.0f}h"
+    
+    return f" [bright white]➔[dark_orange] {gap_str} [/]"
+
 
 
 
@@ -1601,6 +1658,7 @@ def _end_chain_summary(current: dict, reason: str, now_utc) -> None:
 # ------------------------------------------------------------------------------
 # Timeline (capped) — no dependency on core.next_anchor_after
 # ------------------------------------------------------------------------------
+
 def _timeline_lines(
     kind: str,
     task: dict,
@@ -1610,66 +1668,55 @@ def _timeline_lines(
     next_count: int = 3,
     cap_no: int | None = None,
     cur_no: int | None = None,
+    show_gaps: bool = True,
+    round_anchor_gaps: bool = True,  # Round anchor gaps to nearest day
 ) -> list[str]:
+    """
+    Compact timeline with inline gaps.
+    """
     cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
     nxt_no = cur_no + 1
     allowed_future = (
         next_count if cap_no is None else max(0, min(next_count, cap_no - nxt_no))
     )
-    lines: list[str] = []
+    
     if kind == "cp":
         prev_style = "dim green"        
         cur_style = "spring_green1"
         next_style = "bold yellow"
-    else:  # anchor (default)
+    else:
         prev_style = "sky_blue3"
         cur_style = "spring_green1"
         next_style = "bold yellow"
-    # Cheap deterministic "random" for FUTURE links
+    
     future_style = _future_style_for_chain(task, kind)
-
-    # previous two (completed)
+    
+    # Collect items and their dates
+    items = []
+    
+    # Previous tasks
     prevs = _collect_prev_two(task)
     for obj in prevs:
-        no = core.coerce_int(obj.get("link"), None)
-        if no is None:
-            no = cur_no - (len(prevs) - prevs.index(obj))
+        no = core.coerce_int(obj.get("link"), None) or (cur_no - (len(prevs) - prevs.index(obj)))
         end_dt = _dtparse(obj.get("end"))
         due_dt = _dtparse(obj.get("due"))
         delta = _fmt_on_time_delta(due_dt, end_dt)
         end_s = _fmtlocal(end_dt) if end_dt else "(no end)"
         short = _short(obj.get("uuid"))
-        # previous links
-        lines.append(f"[{prev_style}]# {no:>2} {end_s} {delta} {short}[/]")
-
-
-    # current (completed)
+        items.append((no, end_dt, obj, "prev"))
+    
+    # Current task
     cur_end = _dtparse(task.get("end"))
-    cur_due = _dtparse(task.get("due"))
-    cur_delta = _fmt_on_time_delta(cur_due, cur_end)
-    cur_end_s = _fmtlocal(cur_end) if cur_end else "(no end)"
-    lines.append(
-        f"[{cur_style}]# {cur_no:>2} {cur_end_s} {cur_delta} {_short(task.get('uuid'))}[/]"
-    )
-
-
-    # next (upcoming) - bold yellow
-    is_last = cap_no is not None and nxt_no == cap_no
-    next_line = (
-        f"[{next_style}]# {nxt_no:>2} → {core.fmt_dt_local(child_due_utc)} {child_short}[/]"
-    )
-    if is_last:
-        next_line = (
-            f"[{next_style}]# {nxt_no:>2} → {core.fmt_dt_local(child_due_utc)} {child_short}[/] "
-            f"[bold red](last link)[/]"
-        )
-    lines.append(next_line)
-
-    # future (bounded) - cyan, WITH ITERATION GUARD
+    items.append((cur_no, cur_end, task, "current"))
+    
+    # Next task
+    items.append((nxt_no, child_due_utc, {"uuid": child_short}, "next"))
+    
+    # Future tasks
     fut_dt = child_due_utc
     fut_no = nxt_no
     iterations = 0
-
+    
     if allowed_future > 0:
         if kind == "cp":
             td = core.parse_cp_duration(task.get("cp") or "")
@@ -1677,12 +1724,9 @@ def _timeline_lines(
                 secs = int(td.total_seconds())
                 for _ in range(allowed_future):
                     if iterations >= _MAX_ITERATIONS:
-                        lines.append(
-                            f"[red]...(stopped after {_MAX_ITERATIONS} iterations)[/]"
-                        )
                         break
                     iterations += 1
-
+                    
                     fut_no += 1
                     if secs % 86400 == 0:
                         dl = _tolocal(fut_dt)
@@ -1692,29 +1736,21 @@ def _timeline_lines(
                         ).astimezone(timezone.utc)
                     else:
                         fut_dt = fut_dt + td
+                    
                     if cap_no is not None and fut_no > cap_no:
                         break
-                    line = f"[{future_style}]# {fut_no:>2} {core.fmt_dt_local(fut_dt)}[/]"
-                    if cap_no is not None and fut_no == cap_no:
-                        line = (
-                            f"[{future_style}]# {fut_no:>2} {core.fmt_dt_local(fut_dt)}[/] "
-                            f"[bold red](last link)[/]"
-                        )
-                    lines.append(line)
-
+                    
+                    items.append((fut_no, fut_dt, {"is_future": True}, "future"))
         else:
-            # anchor stepping via next_after_expr on LOCAL dates
             seed_base = _root_uuid_from(task) or "preview"
             base_hhmm = (_tolocal(child_due_utc).hour, _tolocal(child_due_utc).minute)
             fut_local_date = _tolocal(child_due_utc).date()
+            
             for _ in range(allowed_future):
                 if iterations >= _MAX_ITERATIONS:
-                    lines.append(
-                        f"[red]...(stopped after {_MAX_ITERATIONS} iterations)[/]"
-                    )
                     break
                 iterations += 1
-
+                
                 fut_no += 1
                 try:
                     fut_local_date, _ = core.next_after_expr(
@@ -1723,24 +1759,66 @@ def _timeline_lines(
                         default_seed=fut_local_date,
                         seed_base=seed_base,
                     )
-                except Exception as e:
-                    lines.append(f"[red]...(anchor stepping failed: {str(e)[:50]})[/]")
+                except Exception:
                     break
-
+                
                 fut_dt = core.build_local_datetime(
                     fut_local_date, base_hhmm
                 ).astimezone(timezone.utc)
+                
                 if cap_no is not None and fut_no > cap_no:
                     break
-                # future (bounded)
-                line = f"[cyan]# {fut_no:>2} {core.fmt_dt_local(fut_dt)}[/]"
-                if cap_no is not None and fut_no == cap_no:
-                    line = (
-                        f"[cyan]# {fut_no:>2} {core.fmt_dt_local(fut_dt)}[/] "
-                        f"[bold red](last link)[/]"
-                    )
-                lines.append(line)
-
+                
+                items.append((fut_no, fut_dt, {"is_future": True}, "future"))
+    
+    # Build lines with inline gaps
+    lines = []
+    for i, (no, dt, obj, item_type) in enumerate(items):
+        # Build the base line
+        if item_type == "prev":
+            end_dt = _dtparse(obj.get("end"))
+            due_dt = _dtparse(obj.get("due"))
+            delta = _fmt_on_time_delta(due_dt, end_dt)
+            end_s = _fmtlocal(end_dt) if end_dt else "(no end)"
+            short = _short(obj.get("uuid"))
+            base_line = f"[{prev_style}]# {no:>2} {end_s} {delta} {short}[/]"
+            
+        elif item_type == "current":
+            cur_end = _dtparse(task.get("end"))
+            cur_due = _dtparse(task.get("due"))
+            cur_delta = _fmt_on_time_delta(cur_due, cur_end)
+            cur_end_s = _fmtlocal(cur_end) if cur_end else "(no end)"
+            base_line = f"[{cur_style}]# {no:>2} {cur_end_s} {cur_delta} {_short(task.get('uuid'))}[/]"
+            
+        elif item_type == "next":
+            is_last = cap_no is not None and no == cap_no
+            next_text = f"# {no:>2} → {core.fmt_dt_local(dt)} {_short(obj.get('uuid'))}"
+            if is_last:
+                base_line = f"[{next_style}]{next_text} [bold red](last link)[/][/]"
+            else:
+                base_line = f"[{next_style}]{next_text}[/]"
+                
+        elif item_type == "future":
+            is_last = cap_no is not None and no == cap_no
+            future_text = f"# {no:>2} {core.fmt_dt_local(dt)}"
+            if is_last:
+                base_line = f"[{future_style}]{future_text} [bold red](last link)[/][/]"
+            else:
+                base_line = f"[{future_style}]{future_text}[/]"
+        
+        # Add gap annotation if applicable
+        full_line = base_line
+        if show_gaps and i < len(items) - 1:
+            next_item = items[i + 1]
+            next_dt = next_item[1]
+            
+            if dt and next_dt:
+                gap_text = _format_gap(dt, next_dt, kind, round_anchor_gaps)
+                if gap_text:
+                    full_line = f"{base_line}{gap_text}"
+        
+        lines.append(full_line)
+    
     return lines
 
 def _got_anchor_invalid(msg: str) -> None:
@@ -2197,6 +2275,9 @@ def main():
             next_count=3,
             cap_no=cap_no,
             cur_no=base_no,
+            show_gaps=_SHOW_TIMELINE_GAPS,
+            round_anchor_gaps=True,  # Round to nearest day
+
         )
         if tl:
             fb.append(("Timeline", "\n".join(tl)))
@@ -2263,6 +2344,9 @@ def main():
             next_count=3,
             cap_no=cap_no,
             cur_no=base_no,
+            show_gaps=_SHOW_TIMELINE_GAPS,
+            round_anchor_gaps=False,  # CP gaps are exact
+
         )
         if tl:
             fb.append(("Timeline", "\n".join(tl)))

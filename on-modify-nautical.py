@@ -2036,9 +2036,21 @@ def main():
                 _ = core.validate_anchor_expr_strict(new_anchor)
             except Exception as e:
                 emsg = str(e)
-                has_type_colon = bool(re.search(r'(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:', anchor_str, re.IGNORECASE))
+                has_type_colon = bool(
+                    re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", new_anchor, re.IGNORECASE)
+                )
                 if not has_type_colon:
-                    emsg = "Expected ':' after anchor type. Examples: 'w:mon..fri', 'm:-1', 'y:06-01'."
+                    # Common pitfall: user typed a weekday pattern without the leading `w:`
+                    if re.match(r"^(mon|tue|wed|thu|fri|sat|sun)\b", new_anchor, re.IGNORECASE):
+                        emsg = (
+                            "Weekly anchors must start with 'w:'. "
+                            "Examples: 'w:mon..fri' or 'w:mon,tue,wed,thu,fri'."
+                        )
+                    else:
+                        emsg = (
+                            "Anchors must start with 'w:', 'm:' or 'y:'. "
+                            "Examples: 'w:mon', 'm:-1', 'y:06-01'."
+                        )
                 _got_anchor_invalid(emsg)
 
             # Deep checks only if anchor field changed

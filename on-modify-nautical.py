@@ -207,8 +207,8 @@ def _panel(
         },
         "preview_cp": {
             "border": "deep_pink1",
-            "title": "green",
-            "label": "medium_violet_red",
+            "title": "deep_pink1",
+            "label": "deep_pink3",
         },
         "summary": {
             "border": "indian_red",
@@ -451,7 +451,7 @@ def _format_gap(prev_dt: datetime, next_dt: datetime, kind: str = "cp", round_ho
                 # Show hours for sub-day gaps
                 gap_str = f"{total_hours:.0f}h"
     
-    return f" [bright white]➔[dark_orange] {gap_str} [/]"
+    return f" ➔ {gap_str}"
 
 
 
@@ -809,6 +809,63 @@ def tw_export_chain_or_fallback(seed_task: dict, env=None) -> list[dict]:
 
     return list(bag.values()) or [seed_task]
 
+# --- Chain analytics (cheap): chain age via one fast `_get` --------------------
+@lru_cache(maxsize=256)
+def _tw_get_cached(ref: str) -> str:
+    """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
+    try:
+        out = _task(["rc.verbose=nothing", "_get", ref], env=None)
+        return (out or "").strip()
+    except Exception:
+        return ""
+
+def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]:
+    """Get chain root (short chainID or UUID) and age in days.
+    Returns (root_short, age_days). age_days is None if unavailable."""
+    try:
+        # Get root short ID (chainID or short UUID)
+        root_short = (task.get("chainID") or "").strip()
+        
+        if not root_short:
+            # Fallback to root UUID from chain
+            root_uuid = _root_uuid_from(task)
+            if root_uuid:
+                root_short = root_uuid[:8]
+            else:
+                root_short = _short(task.get("uuid"))
+        
+        # Get age if we have a root
+        age_days = None
+        if root_short:
+            root_entry = _tw_get_cached(f"{root_short}.entry")
+            entry_dt = _dtparse(root_entry)
+            
+            if entry_dt:
+                entry_local = _tolocal(entry_dt).date()
+                today_local = _tolocal(now_utc).date()
+                age_days = (today_local - entry_local).days
+                
+                if age_days < 0:
+                    age_days = 0
+        
+        return root_short, age_days
+    except Exception:
+        return "—", None
+
+def _format_root_and_age(task: dict, now_utc: datetime) -> str:
+    """Format root and age as a single string.
+    Returns root (age) or just root if age is 0 or unavailable."""
+    root_short, age_days = _chain_root_and_age(task, now_utc)
+    
+    if not root_short or root_short == "—":
+        return "—"
+    
+    # Only show age if it's > 0
+    print (age_days)
+    if age_days is not None and age_days > 0:
+        return f"{root_short} ▻ {age_days}d"
+    
+    return root_short
 
 # ------------------------------------------------------------------------------
 # On modify-without-completion helpers
@@ -1593,6 +1650,16 @@ def _end_chain_summary(current: dict, reason: str, now_utc) -> None:
     rows = []
     rows.append(("Reason", reason))
 
+    # Get root and age
+    root_short, age_str = _chain_root_and_age(current, now_utc)
+    
+    # Show chain info with root and age
+    chain_display = f"{root_short}"
+    if age_str != "—":
+        chain_display += f" ({age_str})"
+    
+    rows.append(("Root", chain_display))
+
     # Show if chain was truncated
     chain_display = f"{root} … {cur_s}  [dim](#{L}, {len(chain)} tasks"
     if len(chain) >= _MAX_CHAIN_WALK:
@@ -2230,6 +2297,7 @@ def main():
         fb.append(("Pattern", f"{expr_str}  {mode_tag}"))
         fb.append(("Natural", core.describe_anchor_dnf(dnf, new)))
         fb.append(("Basis", _pretty_basis_anchor(meta, new)))
+        fb.append(("Root", _format_root_and_age(new, now_utc)))
         if stripped_attrs:
             fb.append(
                 (
@@ -2309,6 +2377,7 @@ def main():
         delta = core.humanize_delta(now_utc, child_due, use_months_days=False)
         fb.append(("Period", new.get("cp")))
         fb.append(("Basis", _pretty_basis_cp(new, meta)))
+        fb.append(("Root", _format_root_and_age(new, now_utc)))
         fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
 
         if cap_no:

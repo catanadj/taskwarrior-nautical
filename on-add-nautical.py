@@ -747,12 +747,101 @@ def main():
                 ]
             )
 
-        first_hhmm = core.pick_hhmm_from_dnf_for_date(
-            dnf, first_date_local, first_date_local
-        ) or (due_hhmm if user_provided_due else (9, 0))
-        first_due_local_dt = core.build_local_datetime(first_date_local, first_hhmm)
-        first_due_utc = first_due_local_dt.astimezone(timezone.utc)
 
+        fallback_hhmm = (due_hhmm if user_provided_due else (9, 0))
+
+        def _norm_t_mod_early(v):
+            if v is None:
+                return []
+            if isinstance(v, tuple) and len(v) == 2:
+                return [v]
+            if isinstance(v, list):
+                out = []
+                for it in v:
+                    if isinstance(it, tuple) and len(it) == 2:
+                        out.append(it)
+                    elif isinstance(it, list) and len(it) == 2:
+                        out.append((int(it[0]), int(it[1])))
+                return out
+            if isinstance(v, str):
+                out = []
+                for part in [p.strip() for p in v.split(",") if p.strip()]:
+                    if len(part) == 5 and part[2] == ":" and part[:2].isdigit() and part[3:].isdigit():
+                        out.append((int(part[:2]), int(part[3:])))
+                return out
+            return []
+
+        def _term_fires_on_date_early(term, d):
+            try:
+                nxt, _ = core.next_after_expr(
+                    [term],
+                    d - timedelta(days=1),
+                    default_seed=interval_seed,
+                    seed_base=seed_base,
+                )
+                return nxt == d
+            except Exception:
+                return False
+
+        def _expr_fires_on_date_early(d):
+            try:
+                nxt, _ = core.next_after_expr(
+                    dnf,
+                    d - timedelta(days=1),
+                    default_seed=interval_seed,
+                    seed_base=seed_base,
+                )
+                return nxt == d
+            except Exception:
+                return False
+
+        def _times_for_date_early(d):
+            times = set()
+            for term in dnf:
+                if _term_fires_on_date_early(term, d):
+                    for atom in term:
+                        mods = atom.get("mods") or {}
+                        for hhmm in _norm_t_mod_early(mods.get("t")):
+                            times.add(hhmm)
+            return sorted(times)
+
+        def _pick_occurrence_local(ref_dt_local, inclusive: bool):
+            d0 = ref_dt_local.date()
+
+            # Same-day: if expression fires today, try to pick a slot on the same day.
+            if _expr_fires_on_date_early(d0):
+                tlist = _times_for_date_early(d0) or [fallback_hhmm]
+                for hhmm in tlist:
+                    cand = core.build_local_datetime(d0, hhmm)
+                    if (cand >= ref_dt_local) if inclusive else (cand > ref_dt_local):
+                        return cand
+
+            # Next matching date (strictly after d0)
+            try:
+                nxt_d, _ = core.next_after_expr(
+                    dnf,
+                    d0,
+                    default_seed=interval_seed,
+                    seed_base=seed_base,
+                )
+            except Exception:
+                return None
+            tlist = _times_for_date_early(nxt_d) or [fallback_hhmm]
+            return core.build_local_datetime(nxt_d, tlist[0])
+
+        if user_provided_due:
+            due_local_dt = _to_local_cached(due_dt)
+            first_due_local_dt = _pick_occurrence_local(due_local_dt, inclusive=False)
+            if not first_due_local_dt:
+                _error_and_exit([("anchor pattern", "No matching anchor occurrences found after the provided due.")])
+        else:
+            first_due_local_dt = _pick_occurrence_local(now_local, inclusive=True)
+            if not first_due_local_dt:
+                _error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])
+
+        first_hhmm = (first_due_local_dt.hour, first_due_local_dt.minute)
+        first_date_local = first_due_local_dt.date()
+        first_due_utc = first_due_local_dt.astimezone(timezone.utc)
         if user_provided_due:
             display_first_due_utc = due_dt
             rows.append(
@@ -845,33 +934,90 @@ def main():
 
         preview = []
         colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
-        cur_date = first_date_local
-        last_date = None
+
+        fallback_hhmm = first_hhmm
+
+        def _norm_t_mod(v):
+            if v is None:
+                return []
+            if isinstance(v, tuple) and len(v) == 2:
+                return [v]
+            if isinstance(v, list):
+                out = []
+                for it in v:
+                    if isinstance(it, tuple) and len(it) == 2:
+                        out.append(it)
+                    elif isinstance(it, list) and len(it) == 2:
+                        out.append((int(it[0]), int(it[1])))
+                return out
+            if isinstance(v, str):
+                out = []
+                for part in [p.strip() for p in v.split(",") if p.strip()]:
+                    if len(part) == 5 and part[2] == ":" and part[:2].isdigit() and part[3:].isdigit():
+                        out.append((int(part[:2]), int(part[3:])))
+                return out
+            return []
+
+        def _term_fires_on_date(term, d):
+            try:
+                nxt, _ = core.next_after_expr(
+                    [term],
+                    d - timedelta(days=1),
+                    default_seed=interval_seed,
+                    seed_base=seed_base,
+                )
+                return nxt == d
+            except Exception:
+                return False
+
+        def _times_for_date(d):
+            times = set()
+            for term in dnf:
+                if _term_fires_on_date(term, d):
+                    for atom in term:
+                        mods = atom.get("mods") or {}
+                        for hhmm in _norm_t_mod(mods.get("t")):
+                            times.add(hhmm)
+            return sorted(times)
+
+        def _next_occurrence_after_local_dt(after_dt_local):
+            d0 = after_dt_local.date()
+
+            # Same-day: if expression fires today, try the next time slot today.
+            try:
+                nxt_date, _ = core.next_after_expr(
+                    dnf,
+                    d0 - timedelta(days=1),
+                    default_seed=interval_seed,
+                    seed_base=seed_base,
+                )
+                if nxt_date == d0:
+                    tlist = _times_for_date(d0) or [fallback_hhmm]
+                    for hhmm in tlist:
+                        cand = core.build_local_datetime(d0, hhmm)
+                        if cand > after_dt_local:
+                            return cand
+            except Exception:
+                pass
+
+            # Next matching date (strictly after d0)
+            nxt_d = step_once(d0)
+            if not nxt_d:
+                return None
+            tlist = _times_for_date(nxt_d) or [fallback_hhmm]
+            return core.build_local_datetime(nxt_d, tlist[0])
+
+        cur_dt = first_due_local_dt
         for i in range(preview_limit):
-            nxt_date = step_once(cur_date)
-            if not nxt_date:
+            nxt_dt = _next_occurrence_after_local_dt(cur_dt)
+            if not nxt_dt:
                 break
-            if last_date is not None and nxt_date <= last_date:
-                cur_date = last_date + timedelta(days=1)
-                continue
-
-            this_hhmm = (
-                core.pick_hhmm_from_dnf_for_date(dnf, nxt_date, first_date_local)
-                or first_hhmm
-            )
-            dt_local = core.build_local_datetime(nxt_date, this_hhmm)
-            dt_utc = dt_local.astimezone(timezone.utc)
-
+            dt_utc = nxt_dt.astimezone(timezone.utc)
             if until_dt and dt_utc > until_dt:
                 break
-
             color = colors[min(i, len(colors) - 1)]
-            preview.append(
-                f"[{color}]{dt_local.strftime('%a %Y-%m-%d %H:%M %Z')}[/{color}]"
-            )
-            last_date = nxt_date
-            cur_date = nxt_date
-
+            preview.append(f"[{color}]{nxt_dt.strftime('%a %Y-%m-%d %H:%M %Z')}[/{color}]")
+            cur_dt = nxt_dt
         rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
         rows.append(
             (

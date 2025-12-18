@@ -11,11 +11,124 @@ Chained next-link spawner for Taskwarrior.
 
 import sys, json, os, uuid, subprocess, importlib
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache
 import re
 from decimal import Decimal, InvalidOperation
 import shlex
+
+
+# ------------------------------------------------------------------------------
+# Multi-time (@t=HH:MM,HH:MM,...) occurrence helpers (on-modify)
+# ------------------------------------------------------------------------------
+
+_MT_CACHE_MAX = 4096
+_MT_CACHE_TIMES: dict[tuple[int, date, date, str], tuple[tuple[int, int], ...]] = {}
+_MT_CACHE_FIRES: dict[tuple[int, date, date, str], bool] = {}
+
+def _mt_cache_put(cache: dict, k, v):
+    if len(cache) > _MT_CACHE_MAX:
+        cache.clear()
+    cache[k] = v
+
+def _mt_norm_t_list(v) -> list[tuple[int, int]]:
+    """Normalize mods['t'] to a sorted list of (hh,mm)."""
+    if not v:
+        return []
+    if isinstance(v, tuple) and len(v) == 2:
+        return sorted({(int(v[0]), int(v[1]))})
+    if isinstance(v, list):
+        acc = set()
+        for x in v:
+            if isinstance(x, tuple) and len(x) == 2:
+                acc.add((int(x[0]), int(x[1])))
+        return sorted(acc)
+    if isinstance(v, str):
+        parts = [p.strip() for p in v.split(",") if p.strip()]
+        acc = set()
+        for p in parts:
+            if ":" not in p:
+                continue
+            hh, mm = p.split(":", 1)
+            acc.add((int(hh), int(mm)))
+        return sorted(acc)
+    return []
+
+
+def _mt_term_fires_on_date(term, d, default_seed, seed_base) -> bool:
+    """Robust for rand terms: ask core for next date from d-1 on a 1-term DNF."""
+    try:
+        nxt, _ = core.next_after_expr([term], d - timedelta(days=1), default_seed=default_seed, seed_base=seed_base)
+        return nxt == d
+    except Exception:
+        return False
+
+
+def _mt_times_for_date(dnf, d, default_seed, seed_base) -> list[tuple[int, int]]:
+    """Union of explicit @t times from terms that fire on date d."""
+    k = (id(dnf), d, default_seed, str(seed_base))
+    if k in _MT_CACHE_TIMES:
+        return list(_MT_CACHE_TIMES[k])
+
+    acc = set()
+    for term in (dnf or []):
+        if not _mt_term_fires_on_date(term, d, default_seed, seed_base):
+            continue
+        for a in term:
+            mods = a.get("mods") or {}
+            for t in _mt_norm_t_list(mods.get("t")):
+                acc.add(t)
+    res = sorted(acc)
+    _mt_cache_put(_MT_CACHE_TIMES, k, tuple(res))
+    return res
+
+
+def _mt_expr_fires_on_date(dnf, d, default_seed, seed_base) -> bool:
+    k = (id(dnf), d, default_seed, str(seed_base))
+    if k in _MT_CACHE_FIRES:
+        return _MT_CACHE_FIRES[k]
+    try:
+        nxt, _ = core.next_after_expr(dnf, d - timedelta(days=1), default_seed=default_seed, seed_base=seed_base)
+        res = (nxt == d)
+    except Exception:
+        res = False
+    _mt_cache_put(_MT_CACHE_FIRES, k, res)
+    return res
+
+def _mt_next_occurrence_after_local(dnf, after_local_dt, default_seed, seed_base, fallback_hhmm):
+    """Next scheduled occurrence strictly after after_local_dt (local tz)."""
+    d0 = after_local_dt.date()
+
+    if _mt_expr_fires_on_date(dnf, d0, default_seed, seed_base):
+        tlist = _mt_times_for_date(dnf, d0, default_seed, seed_base) or [fallback_hhmm]
+        for hhmm in tlist:
+            cand = core.build_local_datetime(d0, hhmm)
+            if cand > after_local_dt:
+                return cand
+
+    nd, _ = core.next_after_expr(dnf, d0, default_seed=default_seed, seed_base=seed_base)
+    if not nd:
+        return None
+    tlist2 = _mt_times_for_date(dnf, nd, default_seed, seed_base)
+    hhmm2 = (tlist2[0] if tlist2 else fallback_hhmm)
+    return core.build_local_datetime(nd, hhmm2)
+
+
+def _mt_missed_occurrences_between_local(dnf, due_local_dt, end_local_dt, default_seed, seed_base, fallback_hhmm, cap=5000):
+    """Occurrences in (due_local_dt, end_local_dt] as local datetimes."""
+    if not due_local_dt or not end_local_dt or end_local_dt <= due_local_dt:
+        return []
+    out = []
+    cur = due_local_dt
+    while True:
+        nxt = _mt_next_occurrence_after_local(dnf, cur, default_seed, seed_base, fallback_hhmm)
+        if not nxt or nxt > end_local_dt:
+            break
+        out.append(nxt)
+        if len(out) >= cap:
+            break
+        cur = nxt
+    return out
 
 
 # ------------------------------------------------------------------------------
@@ -1235,76 +1348,63 @@ def _compute_anchor_child_due(parent: dict):
     if not end_dt:
         return (None, None, None)
 
-    end_d = _tolocal(end_dt).date()
-
     due_dt0, err = _safe_parse_datetime(parent.get("due"))
     if err:
         raise ValueError(f"due field: {err}")
 
-    due_d_local = _tolocal(due_dt0).date() if due_dt0 else end_d
-    default_seed = due_d_local
+    end_local = _tolocal(end_dt)
+    due_local = _tolocal(due_dt0) if due_dt0 else None
+
+    # stable seed for /N and rand selection
+    default_seed = (due_local.date() if due_local else end_local.date())
     seed_base = _root_uuid_from(parent) or "preview"
 
+    # fallback time if no @t applies
+    if due_local:
+        fallback_hhmm = (due_local.hour, due_local.minute)
+    else:
+        fallback_hhmm = (end_local.hour, end_local.minute)
 
     info = {"mode": mode, "basis": None, "missed_count": 0, "missed_preview": []}
 
-    if mode == "all":
-        if end_d > due_d_local:
-            missed = core.anchors_between_expr(
-                dnf, due_d_local, end_d, default_seed, seed_base=seed_base
+    if mode in ("skip", "flex"):
+        # advance strictly after completion time, but never before original due (early completions)
+        ref_local = end_local
+        if due_local and due_local > ref_local:
+            ref_local = due_local
+
+        if mode == "flex" and due_local and end_local > due_local:
+            missed = _mt_missed_occurrences_between_local(
+                dnf, due_local, end_local, default_seed, seed_base, fallback_hhmm, cap=5000
+            )
+            info["missed_count"] = len(missed)
+            info["missed_preview"] = [x.isoformat() for x in missed[:5]]
+
+        nxt_local = _mt_next_occurrence_after_local(dnf, ref_local, default_seed, seed_base, fallback_hhmm)
+        info["basis"] = "after_end" if mode == "skip" else "flex"
+
+    else:  # mode == "all"
+        if due_local and end_local > due_local:
+            missed = _mt_missed_occurrences_between_local(
+                dnf, due_local, end_local, default_seed, seed_base, fallback_hhmm, cap=5000
             )
             if missed:
-                target = missed[0]
-                info.update(
-                    basis="missed",
-                    missed_count=len(missed),
-                    missed_preview=[x.isoformat() for x in missed[:5]],
-                )
+                nxt_local = missed[0]
+                info["basis"] = "missed"
+                info["missed_count"] = len(missed)
+                info["missed_preview"] = [x.isoformat() for x in missed[:5]]
             else:
-                target, _ = core.next_after_expr(
-                    dnf, due_d_local, default_seed, seed_base=seed_base
-                )
+                nxt_local = _mt_next_occurrence_after_local(dnf, due_local, default_seed, seed_base, fallback_hhmm)
                 info["basis"] = "after_due"
         else:
-            target, _ = core.next_after_expr(
-                dnf, due_d_local, default_seed, seed_base=seed_base
-            )
+            ref_local = due_local if due_local else end_local
+            nxt_local = _mt_next_occurrence_after_local(dnf, ref_local, default_seed, seed_base, fallback_hhmm)
             info["basis"] = "after_due"
-    elif mode == "flex":
-        target, _ = core.next_after_expr(dnf, end_d, default_seed, seed_base=seed_base)
-        info["basis"] = "flex"
-        if due_dt0 and end_d > due_d_local:
-            missed = core.anchors_between_expr(
-                dnf, due_d_local, end_d, default_seed, seed_base=seed_base
-            )
-            info.update(
-                missed_count=len(missed),
-                missed_preview=[x.isoformat() for x in missed[:5]],
-            )
-    else:
-        target, _ = core.next_after_expr(dnf, end_d, default_seed, seed_base=seed_base)
-        info["basis"] = "after_end"
 
-    # Validate target date is not unreasonably far
-    if not target:
-        raise ValueError(
-            "Could not compute next anchor date (pattern may not match future)"
-        )
+    if not nxt_local:
+        raise ValueError("Could not compute next due (pattern may not match future)")
 
-    # hh:mm strategy: pattern time > parent.due time > parent.end time
-    hhmm = core.pick_hhmm_from_dnf_for_date(dnf, target, default_seed)
-    if hhmm:
-        hh, mm = hhmm
-    elif due_dt0:
-        dl = _tolocal(due_dt0)
-        hh, mm = dl.hour, dl.minute
-    else:
-        el = _tolocal(end_dt)
-        hh, mm = el.hour, el.minute
-
-    due_local = core.build_local_datetime(target, (hh, mm))
-    return due_local.astimezone(timezone.utc), info, dnf
-
+    return nxt_local.astimezone(timezone.utc), info, dnf
 
 def _estimate_cp_final_by_max(task: dict, next_due_utc):
     """
@@ -1345,6 +1445,8 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
     """
     Estimate the final due date when chainMax cap is reached for anchors.
     Returns the due datetime of link #chainMax.
+
+    For multi-time anchors, chainMax counts occurrences (not days).
     """
     cpmax = core.coerce_int(task.get("chainMax"), 0)
     if not cpmax:
@@ -1354,23 +1456,28 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
     if cur_no >= cpmax:
         return None
 
-    seed = _root_uuid_from(task) or "preview"
-    nxt_local = _to_local_cached(next_due_utc)
-    hhmm = (nxt_local.hour, nxt_local.minute)
-    fut_local_date = nxt_local.date()
+    if not next_due_utc:
+        return None
 
-    fut_no = cur_no + 1
-    while fut_no < cpmax:
-        fut_no += 1
-        fut_local_date, _ = core.next_after_expr(
-            dnf, fut_local_date, default_seed=fut_local_date, seed_base=seed
-        )
+    seed_base = _root_uuid_from(task) or "preview"
+    cur_local = _to_local_cached(next_due_utc)
 
-    fut_dt = core.build_local_datetime(fut_local_date, hhmm).astimezone(timezone.utc)
-    return fut_dt
+    # Stable default seed: prefer current task due day (if present), else next_due day
+    due0 = _dtparse(task.get("due"))
+    default_seed = (_to_local_cached(due0).date() if due0 else cur_local.date())
 
+    fallback_hhmm = (cur_local.hour, cur_local.minute)
 
-# Helper to validate chainUntil is in the future
+    # next_due_utc corresponds to link #(cur_no+1)
+    steps = max(0, cpmax - (cur_no + 1))
+    for _ in range(steps):
+        nxt_local = _mt_next_occurrence_after_local(dnf, cur_local, default_seed, seed_base, fallback_hhmm)
+        if not nxt_local:
+            break
+        cur_local = nxt_local
+
+    return cur_local.astimezone(timezone.utc)
+
 def _validate_until_not_past(
     until_dt: datetime, now_utc: datetime
 ) -> tuple[bool, str | None]:
@@ -1809,34 +1916,34 @@ def _timeline_lines(
                     
                     items.append((fut_no, fut_dt, {"is_future": True}, "future"))
         else:
+            # Anchor futures — occurrence-level stepping (supports @t=HH:MM,HH:MM,...)
             seed_base = _root_uuid_from(task) or "preview"
-            base_hhmm = (_tolocal(child_due_utc).hour, _tolocal(child_due_utc).minute)
-            fut_local_date = _tolocal(child_due_utc).date()
-            
+            start_local = _tolocal(child_due_utc)
+            default_seed = start_local.date()
+            fallback_hhmm = (start_local.hour, start_local.minute)
+
+            fut_no = nxt_no
+            cur_local = start_local
+
             for _ in range(allowed_future):
                 if iterations >= _MAX_ITERATIONS:
                     break
                 iterations += 1
-                
+
                 fut_no += 1
-                try:
-                    fut_local_date, _ = core.next_after_expr(
-                        dnf,
-                        fut_local_date,
-                        default_seed=fut_local_date,
-                        seed_base=seed_base,
-                    )
-                except Exception:
+                cur_local = _mt_next_occurrence_after_local(
+                    dnf, cur_local, default_seed, seed_base, fallback_hhmm
+                )
+                if not cur_local:
                     break
-                
-                fut_dt = core.build_local_datetime(
-                    fut_local_date, base_hhmm
-                ).astimezone(timezone.utc)
-                
+
+                fut_dt = cur_local.astimezone(timezone.utc)
+
                 if cap_no is not None and fut_no > cap_no:
                     break
-                
+
                 items.append((fut_no, fut_dt, {"is_future": True}, "future"))
+
     
     # Build lines with inline gaps
     lines = []
@@ -1928,45 +2035,45 @@ def _cap_from_until_cp(task, next_due_utc):
 def _cap_from_until_anchor(task, next_due_utc, dnf):
     """
     Return (final_no, final_dt) for anchors limited by chainUntil.
-    WITH iteration guard to prevent infinite loops.
+
+    For multi-time anchors, counts occurrences (not just days): an occurrence is a matching date
+    combined with each explicit @t slot (or fallback time if none).
     """
     until = _dtparse(task.get("chainUntil"))
     if not until:
         return (None, None)
 
+    if not next_due_utc:
+        return (None, None)
+
+    until_local = _to_local_cached(until)
     cur_no = core.coerce_int(task.get("link"), 1)
-    seed = _root_uuid_from(task) or "preview"
+    seed_base = _root_uuid_from(task) or "preview"
 
-    nxt_local = _to_local_cached(next_due_utc)
-    hhmm = (nxt_local.hour, nxt_local.minute)
-    start_day = nxt_local.date() - timedelta(days=1)
-    end_day = _to_local_cached(until).date()
+    start_local = _to_local_cached(next_due_utc)
+    if start_local > until_local:
+        return (None, None)
 
-    count = 0
-    prev = start_day
-    last_hit = None
+    # Stable default seed: prefer current task due day (if present), else next_due day
+    due0 = _dtparse(task.get("due"))
+    default_seed = (_to_local_cached(due0).date() if due0 else start_local.date())
+
+    fallback_hhmm = (start_local.hour, start_local.minute)
+
+    count = 1
+    last = start_local
     iterations = 0
 
     while iterations < _MAX_ITERATIONS:
         iterations += 1
-        try:
-            nxt_day, _ = core.next_after_expr(
-                dnf, prev, default_seed=prev, seed_base=seed
-            )
-        except Exception:
-            break
-
-        if not nxt_day or nxt_day > end_day:
+        nxt = _mt_next_occurrence_after_local(dnf, last, default_seed, seed_base, fallback_hhmm)
+        if not nxt or nxt > until_local:
             break
         count += 1
-        last_hit = nxt_day
-        prev = nxt_day
-
-    if count == 0 or not last_hit:
-        return (None, None)
+        last = nxt
 
     final_no = cur_no + count
-    final_dt = core.build_local_datetime(last_hit, hhmm).astimezone(timezone.utc)
+    final_dt = last.astimezone(timezone.utc)
     return (final_no, final_dt)
 
 def _ensure_acf(task: dict) -> None:

@@ -1713,21 +1713,20 @@ def _term_collect_mods(term: list) -> dict:
 
 
 def _fmt_hhmm_for_term(term: list, default_due_dt):
-    """Return HH:MM for prose *only* when explicitly set via @t.
-
-    The anchor DSL uses @t=HH:MM to specify an explicit time. Even if the task's
-    due datetime contains a time component (including Taskwarrior defaults or
-    timezone conversions), we do not surface it in the Natural language line
-    unless @t is present.
-    """
+    """Return HH:MM (or 'HH:MM, HH:MM, ...') for prose only when explicitly set via @t."""
     mods = _term_collect_mods(term)
     tmod = mods.get("t")
     if isinstance(tmod, tuple):
         return f"{tmod[0]:02d}:{tmod[1]:02d}"
+    if isinstance(tmod, list):
+        parts = []
+        for x in tmod:
+            if isinstance(x, tuple) and len(x) == 2:
+                parts.append(f"{x[0]:02d}:{x[1]:02d}")
+        return ", ".join(parts) if parts else None
     if isinstance(tmod, str) and tmod:
         return tmod
     return None
-
 
 
 def _fmt_weekdays_list(spec: str) -> str:
@@ -2434,45 +2433,113 @@ def _try_bucket_rand_monthly(dnf: list[list[dict]], task: dict) -> str | None:
 # -------- ----------
 
 
+def _split_inline_items_respecting_t_lists(s: str) -> list[str]:
+    """Split comma-list items, but keep commas inside '@t=HH:MM,HH:MM' values."""
+    if not s:
+        return []
+    out = []
+    buf = []
+    in_t_value = False
+    i, n = 0, len(s)
+
+    def flush():
+        tok = "".join(buf).strip()
+        if tok:
+            out.append(tok)
+        buf.clear()
+
+    while i < n:
+        ch = s[i]
+
+        if ch == "@":
+            if s[i:i+3].lower() == "@t=":
+                in_t_value = True
+            else:
+                in_t_value = False
+            buf.append(ch)
+            i += 1
+            continue
+
+        if ch == ",":
+            if in_t_value:
+                # If next non-space token looks like HH:MM, keep comma inside the @t list.
+                j = i + 1
+                while j < n and s[j].isspace():
+                    j += 1
+                looks_like_time = (
+                    j + 4 < n
+                    and s[j:j+2].isdigit()
+                    and s[j+2] == ":"
+                    and s[j+3:j+5].isdigit()
+                )
+                if looks_like_time:
+                    buf.append(ch)
+                    i += 1
+                    continue
+                # Otherwise comma ends this item
+                flush()
+                in_t_value = False
+                i += 1
+                continue
+
+            # Normal separator (not inside @t list)
+            flush()
+            i += 1
+            continue
+
+        buf.append(ch)
+        i += 1
+
+    flush()
+    return out
+
+
 def _parse_group_with_inline_mods(typ: str, ival: int, spec: str, outer_mods_str: str):
     """
     If 'spec' is a comma-list where any item contains an inline '@...' modifier,
     rewrite it into a DNF OR list:  [ [atom1], [atom2], ... ]  (each item its own atom).
     Returns None if no rewrite is needed.
-    Rules:
-      - Items must all be of the same type 'typ' (no 'w:'/'m:'/'y:' prefixes inside).
-      - If outer_mods_str is non-empty and any item has inline '@', we reject with a
-        friendly message (no mixing group-level mods with per-item mods).
+
+    Critical disambiguation:
+      - If only the LAST item contains '@...', treat it as group-level mods
+        (e.g. 'w:mon,tue,wed@t=09:00,12:00'), so we return None and let the normal
+        'spec/mods' split handle it.
     """
-    toks = [t.strip() for t in str(spec or "").split(",") if t.strip()]
-    if not toks or not any("@" in t for t in toks):
+    toks = [t.strip() for t in _split_inline_items_respecting_t_lists(str(spec or "")) if t.strip()]
+    if len(toks) < 2 or not any("@" in t for t in toks):
         return None  # nothing to do
 
     if outer_mods_str.strip():
         raise ParseError(
             "Cannot mix group-level modifiers (after ':') with per-item modifiers in the same list. "
-            "Put @-modifiers on each item, or split items with '|' (OR)."
+            "Choose one style: either 'w:mon@t=09:00,fri@t=15:00' (per-item) "
+            "or 'w:mon,fri@t=09:00,15:00' (group)."
         )
 
-    # Disallow type prefixes inside the list (e.g., 'w:'/'m:'/'y:' tokens)
-    if any(re.match(r"^\s*(w|m|y)\s*:", tok, flags=re.IGNORECASE) for tok in toks):
-        raise ParseError(
-            "Mixed types inside a single list are not allowed. "
-            "Join different types with '|' (OR) or '+' (AND)."
-        )
+    at_idxs = [i for i, t in enumerate(toks) if "@" in t]
+    if len(at_idxs) == 1 and at_idxs[0] == (len(toks) - 1):
+        return None
 
-    # Build OR-of-singletons DNF: [ [ {typ,spec,mods} ], [ ... ], ... ]
+    # Build OR-of-singletons DNF
     or_terms = []
     for tok in toks:
         if "@" in tok:
             item_spec, item_mods_str = tok.split("@", 1)
         else:
-            item_spec, item_mods_str = tok, ""  # no per-item mods
+            item_spec, item_mods_str = tok, ""
         item_spec = item_spec.strip().lower()
         item_mods = _parse_atom_mods(item_mods_str.strip())
-        or_terms.append(
-            [{"typ": typ, "spec": item_spec, "ival": ival, "mods": item_mods}]
-        )
+        # Inline per-item modifier lists are intended only for per-item time selection.
+        # To keep the grammar resilient and avoid ambiguous "trailing mods", we disallow
+        # any non-time modifiers inside an inline item (e.g. '@bd', '@next-mon', '@+1d').
+        if item_mods_str.strip():
+            if item_mods.get("roll") or item_mods.get("wd") is not None or item_mods.get("bd") or (item_mods.get("day_offset") or 0) != 0:
+                raise ParseError(
+                    "Inline per-item modifiers in comma-lists only support '@t=HH:MM[,HH:MM...]'. "
+                    "For other modifiers (e.g. '@bd'), use group style like 'w:mon,tue@bd@t=09:00,12:00' "
+                    "or explicit OR terms with '|', e.g. '(w:mon@t=09:00) | (w:tue@bd@t=12:00)'."
+                )
+        or_terms.append([{"typ": typ, "spec": item_spec, "ival": ival, "mods": item_mods}])
 
     return or_terms
 
@@ -2858,37 +2925,64 @@ def _parse_atom_head(head: str) -> tuple[str, int]:
 
 
 def _parse_atom_mods(mods_str: str):
-    """Parse atom modifiers (e.g., @t=09:00@+1d)."""
+    """Parse atom modifiers (e.g., @t=09:00 or @t=09:00,12:00,18:00, @+1d)."""
     mods = {"t": None, "roll": None, "wd": None, "bd": False, "day_offset": 0}
     if not mods_str:
         return mods
+
+    def _parse_time_list(v: str):
+        parts = [p.strip() for p in v.split(",") if p.strip()]
+        if not parts:
+            return None
+        out = []
+        seen = set()
+        for p in parts:
+            hhmm = _parse_hhmm(p)
+            if not hhmm:
+                raise ParseError(f"Invalid time in @t=HH:MM[,HH:MM...]: '{p}'")
+            if hhmm not in seen:
+                out.append(hhmm)
+                seen.add(hhmm)
+        return out
+
     for raw in mods_str.split("@"):
         tok = raw.strip().lower()
         if not tok:
             continue
+
         if tok in ("nw", "pbd", "nbd"):
             mods["roll"] = tok
             continue
+
         if tok == "bd":
             # business day filter (weekdays only) — distinct from wd=int
             mods["bd"] = True
             continue
+
         m = _next_prev_wd_re.match(tok)
         if m:
             mods["roll"] = f"{m.group(1)}-wd"
             mods["wd"] = _WEEKDAYS[m.group(2)]  # 0..6 target weekday
             continue
-        m = _time_mod_re.match(tok)
-        if m:
-            hhmm = _parse_hhmm(m.group(1))
-            if not hhmm:
-                raise ParseError(f"Invalid time in @t=HH:MM: '{tok}'")
-            mods["t"] = hhmm
+
+        # Time modifier: support a single @t=... per atom, with comma-separated HH:MM list.
+        if tok.startswith("t="):
+            if mods["t"] is not None:
+                raise ParseError(
+                    "Duplicate '@t=' modifier. Use a single '@t=HH:MM,HH:MM,...' list."
+                )
+            tval = tok.split("=", 1)[1].strip()
+            tlist = _parse_time_list(tval)
+            if not tlist:
+                raise ParseError(f"Invalid time in @t=HH:MM[,HH:MM...]: '{tok}'")
+            mods["t"] = tlist[0] if len(tlist) == 1 else tlist
             continue
+
         m = _day_offset_re.match(tok)
         if m:
             mods["day_offset"] += int(m.group(1))
             continue
+
         raise ParseError(f"Unknown modifier '@{tok}'")
     return mods
 
@@ -3951,14 +4045,16 @@ def expand_monthly_cached(spec: str, y: int, m: int):
                 continue
         if ".." in tok or ":" in tok:
             sep = ".." if ".." in tok else ":"
-            a, b = tok.split(sep, 1)
-            a = int(a)
-            b = int(b)
+            a_raw, b_raw = tok.split(sep, 1)
+            a_raw = int(a_raw)
+            b_raw = int(b_raw)
+            a = resolve_num(a_raw)
+            b = resolve_num(b_raw)
+            if a is None or b is None:
+                continue
             step = 1 if a <= b else -1
-            for raw in range(a, b + step, step):
-                r = resolve_num(raw)
-                if r:
-                    out.add(r)
+            for r in range(a, b + step, step):
+                out.add(r)
         else:
             try:
                 n = int(tok)
@@ -4318,7 +4414,11 @@ def next_after_term(term, ref_d: date, default_seed: date):
             for a in term:
                 mods = a.get("mods") or {}
                 if mods.get("t"):
-                    hhmm = mods["t"]
+                    tval = mods["t"]
+                    if isinstance(tval, list):
+                        hhmm = tval[0] if tval else None
+                    else:
+                        hhmm = tval
                     break
             return nxt, hhmm
 
@@ -4512,12 +4612,19 @@ def expr_has_m_or_y(dnf) -> bool:
 
 
 def pick_hhmm_from_dnf_for_date(dnf, target: date, default_seed: date):
-    """Extract HH:MM time from DNF for given date."""
+    """Extract HH:MM time from DNF for given date.
+
+    If @t contains multiple times, returns the earliest-listed time.
+    """
     for term in dnf:
         if all(atom_matches_on(a, target, default_seed) for a in term):
             for a in term:
-                if a["mods"].get("t"):
-                    return a["mods"]["t"]
+                tval = a["mods"].get("t")
+                if not tval:
+                    continue
+                if isinstance(tval, list):
+                    return tval[0] if tval else None
+                return tval
     return None
 
 

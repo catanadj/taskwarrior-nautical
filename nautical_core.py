@@ -2462,17 +2462,18 @@ def _split_inline_items_respecting_t_lists(s: str) -> list[str]:
 
         if ch == ",":
             if in_t_value:
-                # If next non-space token looks like HH:MM, keep comma inside the @t list.
+                # If the comma separates times inside @t=..., keep it.
+                # Heuristic: if the next token looks like a new list item (has '@' or starts with alpha / '-' / '(' / '|' / '&'),
+                # treat comma as an item separator; otherwise treat it as part of the @t list (even if the token is invalid,
+                # so @t validation can emit the correct error).
                 j = i + 1
                 while j < n and s[j].isspace():
                     j += 1
-                looks_like_time = (
-                    j + 4 < n
-                    and s[j:j+2].isdigit()
-                    and s[j+2] == ":"
-                    and s[j+3:j+5].isdigit()
-                )
-                if looks_like_time:
+                k = j
+                while k < n and s[k] != ",":
+                    k += 1
+                nxt = s[j:k].strip()
+                if nxt and ("@" not in nxt) and (not nxt[0].isalpha()) and (nxt[0] not in "-(|&"):
                     buf.append(ch)
                     i += 1
                     continue

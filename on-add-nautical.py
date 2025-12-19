@@ -17,11 +17,17 @@ Features:
 
 from __future__ import annotations
 
-import sys, json, os, importlib
+import sys, json, os, importlib, time, atexit
+import re
 from pathlib import Path
 from datetime import timedelta, timezone, datetime
 from functools import lru_cache
+from contextlib import contextmanager
 import shlex, subprocess
+import pickle
+import shutil
+import textwrap
+from collections import OrderedDict
 
 # ========= User-togglable constants =========================================
 ANCHOR_WARN = True  # If True, warn when a user-provided due is not on an anchor day
@@ -39,6 +45,9 @@ TW_DIR = HOOK_DIR.parent
 
 _candidates: list[Path] = []
 
+# --- Optional micro-profiler (stderr-only; enable with NAUTICAL_PROFILE=1 or 2)
+_PROFILE_LEVEL = int(os.environ.get('NAUTICAL_PROFILE', '0') or '0')
+_IMPORT_T0 = time.perf_counter()
 
 def _add(p):
     if not p:
@@ -75,6 +84,49 @@ if core is None:
     )
     raise ModuleNotFoundError(msg)
 
+_IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
+
+class _Profiler:
+    """Minimal, low-risk profiler for hook execution (stderr-only)."""
+
+    def __init__(self, level: int = 0, import_ms: float | None = None):
+        self.level = int(level or 0)
+        self.enabled = self.level > 0
+        self.import_ms = float(import_ms) if import_ms is not None else None
+        self._t0 = time.perf_counter()
+        self._events: list[tuple[str, float]] = []
+
+    @contextmanager
+    def section(self, name: str):
+        if not self.enabled:
+            yield
+            return
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._events.append((name, (time.perf_counter() - t0) * 1000.0))
+
+    def add_ms(self, name: str, ms: float) -> None:
+        if self.enabled:
+            self._events.append((name, float(ms)))
+
+    def emit(self) -> None:
+        if not self.enabled:
+            return
+        total_ms = (time.perf_counter() - self._t0) * 1000.0
+        lines = []
+        lines.append(f"[NAUTICAL_PROFILE] total={total_ms:.1f}ms")
+        if self.import_ms is not None:
+            lines.append(f"  import_core={self.import_ms:.1f}ms")
+        for name, ms in self._events:
+            lines.append(f"  {name}={ms:.1f}ms")
+        if self.level >= 2 and self._events:
+            lines.append("  -- slowest --")
+            for name, ms in sorted(self._events, key=lambda x: x[1], reverse=True)[:8]:
+                lines.append(f"  {name}={ms:.1f}ms")
+        sys.stderr.write("\n".join(lines) + "\n")
+
 
 # --------------------------------------------------------------------------------------
 # Helpers
@@ -94,9 +146,92 @@ def _to_local_cached(dt):
     return core.to_local(dt)
 
 
+# ---- Optional cross-invocation disk cache for expensive anchor parsing (Termux-friendly) ----
+_DNF_DISK_CACHE_ENABLED = (os.getenv("NAUTICAL_DNF_DISK_CACHE") or "").strip().lower() in ("1", "true", "yes", "on")
+_DNF_DISK_CACHE_PATH = HOOK_DIR / ".nautical_cache" / "dnf_cache.pkl"
+_DNF_DISK_CACHE = None  # OrderedDict[str, object]
+_DNF_DISK_CACHE_DIRTY = False
+_DNF_DISK_CACHE_MAX = 256
+
+def _core_sig() -> str:
+    try:
+        st = Path(core.__file__).stat()
+        return f"{st.st_mtime_ns}:{st.st_size}"
+    except Exception:
+        return "unknown"
+
+_CORE_SIG = _core_sig()
+
+def _dnf_cache_key(expr: str) -> str:
+    # tie cache entries to the current core build
+    return f"{_CORE_SIG}|{expr}"
+
+def _load_dnf_disk_cache() -> OrderedDict:
+    global _DNF_DISK_CACHE
+    if _DNF_DISK_CACHE is not None:
+        return _DNF_DISK_CACHE
+    _DNF_DISK_CACHE = OrderedDict()
+    if not _DNF_DISK_CACHE_ENABLED:
+        return _DNF_DISK_CACHE
+    try:
+        _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if _DNF_DISK_CACHE_PATH.exists():
+            with open(_DNF_DISK_CACHE_PATH, "rb") as f:
+                obj = pickle.load(f)
+            if isinstance(obj, dict):
+                # preserve insertion order best-effort
+                _DNF_DISK_CACHE = OrderedDict(obj.items())
+    except Exception:
+        _DNF_DISK_CACHE = OrderedDict()
+    return _DNF_DISK_CACHE
+
+def _save_dnf_disk_cache() -> None:
+    global _DNF_DISK_CACHE_DIRTY
+    if not (_DNF_DISK_CACHE_ENABLED and _DNF_DISK_CACHE_DIRTY and isinstance(_DNF_DISK_CACHE, OrderedDict)):
+        return
+    try:
+        _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # trim oldest
+        while len(_DNF_DISK_CACHE) > _DNF_DISK_CACHE_MAX:
+            _DNF_DISK_CACHE.popitem(last=False)
+        tmp = _DNF_DISK_CACHE_PATH.with_suffix(".tmp")
+        with open(tmp, "wb") as f:
+            pickle.dump(_DNF_DISK_CACHE, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, _DNF_DISK_CACHE_PATH)
+        _DNF_DISK_CACHE_DIRTY = False
+    except Exception:
+        # cache write failures must never affect hook correctness
+        pass
+
+if _DNF_DISK_CACHE_ENABLED:
+    atexit.register(_save_dnf_disk_cache)
+
 @lru_cache(maxsize=256)
 def _validate_anchor_expr_cached(expr: str):
-    return core.validate_anchor_expr_strict(expr)
+    """
+    Validate + parse anchor expression to DNF.
+
+    Always caches in-memory (per invocation). Optionally caches across invocations
+    when NAUTICAL_DNF_DISK_CACHE=1.
+    """
+    global _DNF_DISK_CACHE_DIRTY
+    if _DNF_DISK_CACHE_ENABLED:
+        cache = _load_dnf_disk_cache()
+        k = _dnf_cache_key(expr)
+        if k in cache:
+            cache.move_to_end(k)
+            return cache[k]
+
+    dnf = core.validate_anchor_expr_strict(expr)
+
+    if _DNF_DISK_CACHE_ENABLED:
+        cache = _load_dnf_disk_cache()
+        k = _dnf_cache_key(expr)
+        cache[k] = dnf
+        cache.move_to_end(k)
+        _DNF_DISK_CACHE_DIRTY = True
+
+    return dnf
 
 
 def _human_delta(a, b, use_months_days=True):
@@ -122,27 +257,112 @@ def _strip_quotes(s: str) -> str:
 
 def _panel(title, rows, kind: str = "info"):
     """
-    Small Rich helper to render 2-column panels in a consistent style.
+    Render a 2-column panel.
 
-    `rows` is a list of (label, value) pairs.
-    - label can be `None` to create a spacer row.
-    - Some labels like "Warning", "Note", "Error" get stronger styling automatically.
-    - `kind` selects a colour theme (preview_anchor, preview_cp, error, warning, info).
+    Default renderer uses Rich for coloured borders and compact layout.
+    For performance-sensitive environments (e.g., Termux), you can force the fast renderer:
+        NAUTICAL_PANEL=fast   -> plain, aligned text output (no Rich import)
+
+    (NAUTICAL_PANEL=plain is accepted as a legacy alias.)
     """
-    try:
-        from rich.console import Console
-        from rich.panel import Panel
-        from rich.table import Table
-        from rich.text import Text
-    except Exception:
-        # Fallback: plain text on stderr
-        sys.stderr.write(title + "\n")
+    panel_mode = (os.getenv("NAUTICAL_PANEL") or "").strip().lower()
+    if panel_mode == "plain":
+        panel_mode = "fast"
+    if panel_mode == "fast" or os.getenv("NAUTICAL_PLAIN") == "1":
+        # ---- fast renderer (no Rich) ----
+        def _strip_rich(s: str) -> str:
+            # remove Rich markup tags like [bold], [/], [cyan], etc.
+            return re.sub(r"\[[^\]]+\]", "", s)
+
+        clean_rows = []
         for k, v in rows:
             if k is None:
-                sys.stderr.write(f"{v}\n")
+                clean_rows.append((None, None))
             else:
-                sys.stderr.write(f"{k}: {v}\n")
+                clean_rows.append((str(k), _strip_rich(str(v))))
+
+        # Fast renderer: aligned labels + wrapping to terminal width (no Rich).
+        try:
+            term_w = int(os.getenv("COLUMNS", "0") or 0)
+        except Exception:
+            term_w = 0
+        if not term_w:
+            try:
+                term_w = shutil.get_terminal_size((110, 24)).columns
+            except Exception:
+                term_w = 110
+        term_w = max(40, min(200, term_w))
+
+        label_w = 0
+        for k, _v in clean_rows:
+            if k is None:
+                continue
+            label_w = max(label_w, len(k))
+        label_w = min(label_w, 28)
+
+        def _emit_wrapped(prefix0: str, indent: str, text: str) -> None:
+            s = "" if text is None else str(text)
+            if not s:
+                sys.stderr.write(prefix0 + "\n")
+                return
+            avail = max(16, term_w - len(prefix0))
+            first_line = True
+            for raw_line in s.splitlines() or [""]:
+                parts = textwrap.wrap(raw_line, width=avail) or [""]
+                for i, p in enumerate(parts):
+                    sys.stderr.write((prefix0 if first_line and i == 0 else indent) + p + "\n")
+                first_line = False
+
+        sys.stderr.write(f"{title}\n")
+        for k, v in clean_rows:
+            if k is None:
+                sys.stderr.write("\n")
+                continue
+            label = f"{k:<{label_w}}"
+            prefix0 = f"{label}  "
+            indent = " " * len(prefix0)
+            _emit_wrapped(prefix0, indent, v)
         return
+
+    # ---- Rich renderer (default) ----
+    # Cache heavy Rich objects across calls in a single invocation.
+    global _RICH_CACHE
+    try:
+        _RICH_CACHE
+    except NameError:
+        _RICH_CACHE = {"loaded": False}
+
+    if not _RICH_CACHE.get("loaded"):
+        try:
+            from rich.console import Console
+            from rich.panel import Panel
+            from rich.table import Table
+            from rich.text import Text
+        except Exception:
+            # fallback if Rich is unavailable
+            sys.stderr.write(f"{title}\n")
+            for k, v in rows:
+                if k is None:
+                    sys.stderr.write("\n")
+                else:
+                    sys.stderr.write(f"{k}: {v}\n")
+            return
+        _RICH_CACHE.update(
+            {
+                "loaded": True,
+                "Console": Console,
+                "Panel": Panel,
+                "Table": Table,
+                "Text": Text,
+                "console": Console(file=sys.stderr, force_terminal=True, highlight=False),
+            }
+        )
+
+    Console = _RICH_CACHE["Console"]
+    Panel = _RICH_CACHE["Panel"]
+    Table = _RICH_CACHE["Table"]
+    Text = _RICH_CACHE["Text"]
+    console = _RICH_CACHE["console"]
 
     THEMES = {
         "preview_anchor": {
@@ -157,42 +377,30 @@ def _panel(title, rows, kind: str = "info"):
         },
         "error": {"border": "red", "title": "red", "label": "red"},
         "warning": {"border": "yellow", "title": "yellow", "label": "yellow"},
-        "info": {"border": "blue", "title": "cyan", "label": "cyan"},
+        "info": {"border": "white", "title": "white", "label": "white"},
     }
     theme = THEMES.get(kind, THEMES["info"])
 
-    console = Console(file=sys.stderr, force_terminal=True)
-    t = Table.grid(padding=(0, 1), expand=False)
-    t.add_column(style=f"bold {theme['label']}", no_wrap=True, justify="right")
-    t.add_column(style="white")
+    table = Table.grid(padding=(0, 1))
+    table.expand = True
+    table.add_column(justify="right", style=theme["label"], no_wrap=True)
+    table.add_column(justify="left")
 
     for k, v in rows:
         if k is None:
-            # spacer / section-break line
-            t.add_row("", v or "")
+            table.add_row("", "")
             continue
+        label = Text(str(k))
+        value = Text.from_markup(str(v), style="white")
+        table.add_row(label, value)
 
-        label_text = Text(str(k))
-        lk = str(k).lower()
-        if "warning" in lk:
-            label_text.stylize("bold yellow")
-        elif "error" in lk:
-            label_text.stylize("bold red")
-        elif "note" in lk:
-            label_text.stylize("italic cyan")
-
-        t.add_row(label_text, v)
-
-    console.print(
-        Panel(
-            t,
-            title=Text(title, style=f"bold {theme['title']}"),
-            border_style=theme["border"],
-            expand=False,
-            padding=(0, 1),
-        )
+    panel = Panel(
+        table,
+        title=Text(title, style=theme["title"]),
+        border_style=theme["border"],
+        padding=(0, 1),
     )
-
+    console.print(panel)
 
 def _format_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
     """Compact layout for anchor preview .
@@ -577,17 +785,23 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
 # Main
 # --------------------------------------------------------------------------------------
 def main():
-    raw = sys.stdin.read().strip()
+    prof = _Profiler(level=_PROFILE_LEVEL, import_ms=_IMPORT_MS)
+    if prof.enabled:
+        atexit.register(prof.emit)
+    with prof.section('read:stdin'):
+        raw = sys.stdin.read().strip()
     if not raw:
         print("", end="")
         return
     try:
-        task = json.loads(raw)
+        with prof.section('parse:json'):
+            task = json.loads(raw)
     except Exception:
         _error_and_exit([("Invalid input", "on-add must receive a single JSON task")])
 
-    now_utc = core.now_utc()
-    now_local = core.to_local(now_utc)
+    with prof.section('clock:now'):
+        now_utc = core.now_utc()
+        now_local = core.to_local(now_utc)
 
     def _fmt(dt):
         return core.fmt_dt_local(dt)
@@ -604,7 +818,9 @@ def main():
     # ========== EDGE CASE 1: Both cp and anchor set ==========
     cp_str = (task.get("cp") or "").strip()
     anchor_str = (task.get("anchor") or "").strip()
+    _t_conf = time.perf_counter()
     is_valid, err = _validate_kind_not_conflicting(cp_str, anchor_str)
+    prof.add_ms('validate:cp_vs_anchor', (time.perf_counter() - _t_conf) * 1000.0)
     if not is_valid:
         _error_and_exit([("Invalid chain config", err)])
 
@@ -623,7 +839,9 @@ def main():
 
     # If nothing chain-related, just pass through
     if not kind:
+        _t_out = time.perf_counter()
         print(json.dumps(task), end="")
+        prof.add_ms('stdout:emit', (time.perf_counter() - _t_out) * 1000.0)
         return
 
     # ========== EDGE CASE 2: chainMax validation ==========
@@ -683,6 +901,7 @@ def main():
             _error_and_exit([("Invalid anchor", err)])
 
         anchor_mode = ((task.get("anchor_mode") or "").strip().upper() or "ALL")
+        _t0 = time.perf_counter()
         if core.ENABLE_ANCHOR_CACHE:
             pkg = core.build_and_cache_hints(anchor_str, anchor_mode, default_due_dt=due_dt)
             natural = pkg.get("natural") or core.describe_anchor_expr(anchor_str, default_due_dt=due_dt)
@@ -702,6 +921,7 @@ def main():
             dnf = _validate_anchor_expr_cached(anchor_str)
         except Exception as e:
             _fail_and_exit("Invalid anchor", f"anchor syntax error: {e}")
+        prof.add_ms('anchor:dnf', (time.perf_counter() - _t0) * 1000.0)
 
 
         tag = {
@@ -829,6 +1049,7 @@ def main():
             tlist = _times_for_date_early(nxt_d) or [fallback_hhmm]
             return core.build_local_datetime(nxt_d, tlist[0])
 
+        _t_first = time.perf_counter()
         if user_provided_due:
             due_local_dt = _to_local_cached(due_dt)
             first_due_local_dt = _pick_occurrence_local(due_local_dt, inclusive=False)
@@ -838,6 +1059,7 @@ def main():
             first_due_local_dt = _pick_occurrence_local(now_local, inclusive=True)
             if not first_due_local_dt:
                 _error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])
+        prof.add_ms('anchor:first_occurrence', (time.perf_counter() - _t_first) * 1000.0)
 
         first_hhmm = (first_due_local_dt.hour, first_due_local_dt.minute)
         first_date_local = first_due_local_dt.date()
@@ -921,13 +1143,16 @@ def main():
         allow_by_until = exact_until_count if exact_until_count is not None else 10**9
 
         # Lint for *hints only*; do not fail on linter
+        _t_lint = time.perf_counter()
         _, warns = core.lint_anchor_expr(anchor_str)
+        prof.add_ms('anchor:lint', (time.perf_counter() - _t_lint) * 1000.0)
         if warns:
             _panel("ℹ️  Lint", [("Hint", w) for w in warns], kind="note")
 
         # Validator is the single source of truth
+        _t_val = time.perf_counter()
         core.validate_anchor_expr_strict(anchor_str)
-
+        prof.add_ms('anchor:validate_strict', (time.perf_counter() - _t_val) * 1000.0)
 
 
         preview_limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until))
@@ -1007,6 +1232,7 @@ def main():
             tlist = _times_for_date(nxt_d) or [fallback_hhmm]
             return core.build_local_datetime(nxt_d, tlist[0])
 
+        _t_prev = time.perf_counter()
         cur_dt = first_due_local_dt
         for i in range(preview_limit):
             nxt_dt = _next_occurrence_after_local_dt(cur_dt)
@@ -1018,6 +1244,7 @@ def main():
             color = colors[min(i, len(colors) - 1)]
             preview.append(f"[{color}]{nxt_dt.strftime('%a %Y-%m-%d %H:%M %Z')}[/{color}]")
             cur_dt = nxt_dt
+        prof.add_ms('anchor:preview_occurrences', (time.perf_counter() - _t_prev) * 1000.0)
         rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
         rows.append(
             (
@@ -1059,13 +1286,17 @@ def main():
             )
         )
         rows = _format_anchor_rows(rows)
+        _t_panel = time.perf_counter()
         _panel(
             "⚓︎ Anchor Preview",
             rows,
             kind="preview_anchor",
         )
+        prof.add_ms('render:anchor_panel', (time.perf_counter() - _t_panel) * 1000.0)
 
+        _t_out = time.perf_counter()
         print(json.dumps(task), end="")
+        prof.add_ms('stdout:emit', (time.perf_counter() - _t_out) * 1000.0)
         return
 
 

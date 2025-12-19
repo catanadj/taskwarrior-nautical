@@ -271,8 +271,34 @@ def _panel(title, rows, kind: str = "info"):
     if panel_mode == "fast" or os.getenv("NAUTICAL_PLAIN") == "1":
         # ---- fast renderer (no Rich) ----
         def _strip_rich(s: str) -> str:
-            # remove Rich markup tags like [bold], [/], [cyan], etc.
-            return re.sub(r"\[[^\]]+\]", "", s)
+            # Remove Rich markup tags like [bold], [/], [cyan], etc.,
+            # but keep bracketed literals such as [auto-due].
+            # NOTE: Rich uses a bare closing tag "[/]" to reset style.
+            # That tag can leak into our strings if upstream produced markup.
+            s = s.replace("[/]", "")
+            return re.sub(r"\[/?[A-Za-z0-9_ ]+\]", "", s)
+
+        def _ansi_enabled() -> bool:
+            # ANSI colours are enabled by default in fast mode when stderr is a TTY.
+            # Disable with NO_COLOR=1 or NAUTICAL_FAST_COLOR=0.
+            if not sys.stderr.isatty():
+                return False
+            if os.getenv("NO_COLOR") is not None:
+                return False
+            v = (os.getenv("NAUTICAL_FAST_COLOR") or "").strip().lower()
+            if not v:
+                return True
+            return v not in {"0", "false", "no", "off"}
+
+        _ANSI = _ansi_enabled()
+        _RST = "\x1b[0m" if _ANSI else ""
+        _C_TITLE = "\x1b[1;36m" if _ANSI else ""
+        _C_CYAN = "\x1b[36m" if _ANSI else ""
+        _C_DIM = "\x1b[2m" if _ANSI else ""
+        _C_GREEN = "\x1b[32m" if _ANSI else ""
+        _C_RED = "\x1b[31m" if _ANSI else ""
+        _C_YELLOW = "\x1b[33m" if _ANSI else ""
+        _C_BOLD = "\x1b[1m" if _ANSI else ""
 
         clean_rows = []
         for k, v in rows:
@@ -291,7 +317,7 @@ def _panel(title, rows, kind: str = "info"):
                 term_w = shutil.get_terminal_size((110, 24)).columns
             except Exception:
                 term_w = 110
-        term_w = max(40, min(200, term_w))
+        term_w = max(40, min(70, term_w))
 
         label_w = 0
         for k, _v in clean_rows:
@@ -300,7 +326,31 @@ def _panel(title, rows, kind: str = "info"):
             label_w = max(label_w, len(k))
         label_w = min(label_w, 28)
 
-        def _emit_wrapped(prefix0: str, indent: str, text: str) -> None:
+        def _value_style(label: str, value: str) -> str:
+            lk = (label or "").strip().lower()
+            lv = (value or "").strip().lower()
+
+            if lk == "pattern":
+                return _C_CYAN
+            if lk == "natural":
+                return _C_DIM
+            if lk in {"first due", "next due"}:
+                if "overdue" in lv:
+                    return _C_BOLD + _C_RED
+                return _C_BOLD + _C_GREEN
+            if lk.startswith("[") or "warning" in lk or "invalid" in lk or "error" in lk:
+                return _C_YELLOW
+            if lk == "upcoming":
+                return _C_DIM
+            if lk == "chain":
+                if "enabled" in lv:
+                    return _C_DIM + _C_GREEN
+                if "disabled" in lv:
+                    return _C_DIM + _C_RED
+                return _C_DIM
+            return ""
+
+        def _emit_wrapped(prefix0: str, indent: str, text: str, style: str = "") -> None:
             s = "" if text is None else str(text)
             if not s:
                 sys.stderr.write(prefix0 + "\n")
@@ -308,12 +358,29 @@ def _panel(title, rows, kind: str = "info"):
             avail = max(16, term_w - len(prefix0))
             first_line = True
             for raw_line in s.splitlines() or [""]:
-                parts = textwrap.wrap(raw_line, width=avail) or [""]
+                parts = textwrap.wrap(
+                    raw_line,
+                    width=avail,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                ) or [""]
                 for i, p in enumerate(parts):
-                    sys.stderr.write((prefix0 if first_line and i == 0 else indent) + p + "\n")
+                    pref = prefix0 if first_line and i == 0 else indent
+                    if style and _ANSI:
+                        sys.stderr.write(pref + style + p + _RST + "\n")
+                    else:
+                        sys.stderr.write(pref + p + "\n")
                 first_line = False
 
-        sys.stderr.write(f"{title}\n")
+        # Panel delimiters (helps visually bracket the fast output)
+        delim = "─" * term_w
+        if _ANSI:
+            sys.stderr.write(_C_DIM + delim + _RST + "\n")
+            sys.stderr.write(_C_TITLE + _strip_rich(str(title)) + _RST + "\n")
+        else:
+            sys.stderr.write(delim + "\n")
+            sys.stderr.write(_strip_rich(str(title)) + "\n")
+
         for k, v in clean_rows:
             if k is None:
                 sys.stderr.write("\n")
@@ -321,8 +388,16 @@ def _panel(title, rows, kind: str = "info"):
             label = f"{k:<{label_w}}"
             prefix0 = f"{label}  "
             indent = " " * len(prefix0)
-            _emit_wrapped(prefix0, indent, v)
+            style = _value_style(k, v)
+            _emit_wrapped(prefix0, indent, v, style=style)
+
+        # Bottom delimiter
+        if _ANSI:
+            sys.stderr.write(_C_DIM + delim + _RST + "\n")
+        else:
+            sys.stderr.write(delim + "\n")
         return
+
 
     # ---- Rich renderer (default) ----
     # Cache heavy Rich objects across calls in a single invocation.

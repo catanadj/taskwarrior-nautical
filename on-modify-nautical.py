@@ -177,17 +177,48 @@ def _panel(
 
     def _panel_fast(_title, _rows):
         """
-        Fast plain renderer: aligned labels + sane wrapping.
+        Fast plain renderer (NAUTICAL_PANEL=fast):
         - No Rich import.
-        - Strips Rich markup tags (including bare "[/]" closers).
+        - Minimal ANSI colour to guide the eye (TTY-only, can be disabled via NO_COLOR=1 or NAUTICAL_FAST_COLOR=0).
+        - Strips Rich markup tags (including bare "[/]" closers) while preserving bracketed literals like "[auto-due]" or "[123]".
         - Preserves row spacers (k is None).
+        - Wraps to terminal width (capped to avoid overflow on narrow/mobile terminals).
+        - Timeline is exploded into one entry per line (kept uncoloured).
         """
         def _strip_rich(s: str) -> str:
-            # Remove any Rich-style markup tags like [bold], [cyan], [/], etc.
-            # (This also removes bracketed styles embedded in values.)
-            return re.sub(r"\[[^\]]*\]", "", s)
+            if not s:
+                return ""
+            # Remove bare Rich reset tag.
+            s = s.replace("[/]", "")
+            # Remove Rich-style tags like [bold], [cyan], [/bold], [turquoise2], etc.
+            # Keep bracketed literals that start with digits or contain '-' (e.g., [auto-due], [192]).
+            s = re.sub(r"\[(\/?[A-Za-z_][A-Za-z0-9_ ]*)\]", "", s)
+            return s
 
-        # Terminal width (best-effort)
+        # Colour control
+        enable_color = bool(sys.stderr.isatty())
+        if os.getenv("NO_COLOR") == "1":
+            enable_color = False
+        if (os.getenv("NAUTICAL_FAST_COLOR") or "").strip() == "0":
+            enable_color = False
+
+        ANSI = {
+            "reset": "\x1b[0m",
+            "bold": "\x1b[1m",
+            "dim": "\x1b[2m",
+            "cyan": "\x1b[36m",
+            "green": "\x1b[32m",
+            "red": "\x1b[31m",
+            "yellow": "\x1b[33m",
+        }
+
+        def _c(txt: str, *styles: str) -> str:
+            if not enable_color or not styles:
+                return txt
+            codes = "".join(ANSI[s] for s in styles if s in ANSI)
+            return f"{codes}{txt}{ANSI['reset']}"
+
+        # Terminal width (best-effort) + mobile-safe cap
         term_w = 0
         try:
             term_w = int(os.getenv("COLUMNS", "0") or 0)
@@ -198,7 +229,7 @@ def _panel(
                 term_w = shutil.get_terminal_size(fallback=(100, 24)).columns
             except Exception:
                 term_w = 100
-        term_w = max(50, min(240, term_w))
+        term_w = max(40, min(70, term_w))  # mobile-safe cap (prevents delimiter overflow)
 
         # Normalize rows and compute label width
         norm = []
@@ -207,41 +238,18 @@ def _panel(
             if k is None:
                 norm.append((None, None))
                 continue
-            ks = _strip_rich(str(k)).strip()
-            if ks.endswith(":"):
-                ks = ks[:-1].rstrip()
-            vs = "" if v is None else _strip_rich(str(v)).rstrip()
+            ks = "" if k is None else _strip_rich(str(k)).strip()
+            vs = "" if v is None else _strip_rich(str(v)).strip()
             norm.append((ks, vs))
-            if ks:
+            if ks.strip():
                 label_w = max(label_w, len(ks))
-        label_w = min(max(label_w, 8), 18)
+        label_w = min(label_w, 22)
 
-        def _wrap_line(prefix: str, line: str):
-            avail = max(10, term_w - len(prefix))
-            chunks = textwrap.wrap(
-                line,
-                width=avail,
-                break_long_words=False,
-                break_on_hyphens=False,
-            ) or [""]
-            indent = " " * len(prefix)
-            for i, ch in enumerate(chunks):
-                sys.stderr.write((prefix if i == 0 else indent) + ch + "\n")
-
-        def _emit_value(prefix_first: str, prefix_next: str, text: str):
-            # Preserve embedded newlines (wrap each physical line separately)
-            parts = (text.splitlines() if text else [""])
-            for i, p in enumerate(parts):
-                _wrap_line(prefix_first if i == 0 else prefix_next, p)
-
-        def _explode_timeline(t: str) -> list[str]:
+        # Timeline explode: split on "# N" boundaries.
+        def _explode_timeline(t: str):
             t = (t or "").strip()
             if not t:
-                return [""]
-            # If already multiline, keep as-is.
-            if "\n" in t:
-                return [ln.strip() for ln in t.splitlines() if ln.strip()]
-            # Split packed timeline like: "#  1 ... #  2 ... #  3 ..."
+                return []
             hits = [m.start() for m in re.finditer(r"#\s*\d+", t)]
             if len(hits) <= 1:
                 return [t]
@@ -252,8 +260,47 @@ def _panel(
                     out.append(seg)
             return out or [t]
 
-        # Title
-        sys.stderr.write(_strip_rich(str(_title)).rstrip() + "\n")
+        def _wrap_chunks(text: str, width: int):
+            return textwrap.wrap(
+                text,
+                width=width,
+                break_long_words=False,
+                break_on_hyphens=False,
+            ) or [""]
+
+        def _write_wrapped(prefix: str, text: str, value_style: str | None = None):
+            # value_style is an ANSI-wrapped style key for the value part only
+            avail = max(10, term_w - len(prefix))
+            chunks = _wrap_chunks(text, avail)
+            indent = " " * len(prefix)
+            for i, ch in enumerate(chunks):
+                pfx = prefix if i == 0 else indent
+                if value_style:
+                    sys.stderr.write(pfx + _c(ch, value_style) + "\n")
+                else:
+                    sys.stderr.write(pfx + ch + "\n")
+
+        def _value_style_for(label: str, value: str):
+            lk = (label or "").strip().lower()
+            vlow = (value or "").lower()
+            if lk in ("pattern",):
+                return "cyan"
+            if lk in ("natural", "basis", "root", "chain"):
+                return "dim"
+            if lk in ("next due", "first due"):
+                if "overdue" in vlow:
+                    return "red"
+                if " in " in vlow or "Δ in" in vlow or "(in" in vlow:
+                    return "green"
+                return None
+            # keep timeline uncoloured
+            return None
+
+        # Delimiters + title
+        delim = "─" * term_w
+        sys.stderr.write(_c(delim, "dim") + "\n")
+        sys.stderr.write(_c(_strip_rich(str(_title)).rstrip(), "bold", "cyan") + "\n")
+        sys.stderr.write(_c(delim, "dim") + "\n")
 
         # Rows
         for k, v in norm:
@@ -263,7 +310,7 @@ def _panel(
 
             if not k:
                 # continuation-only row
-                _emit_value(" " * (label_w + 2), " " * (label_w + 2), v)
+                _write_wrapped(" " * (label_w + 2), v, None)
                 continue
 
             label_prefix = f"{k.ljust(label_w)}: "
@@ -272,14 +319,18 @@ def _panel(
             if k.lower() == "timeline":
                 entries = _explode_timeline(v)
                 if entries:
-                    _wrap_line(label_prefix, entries[0])
+                    _write_wrapped(label_prefix, entries[0], None)
                     for ent in entries[1:]:
-                        _wrap_line(cont_prefix, ent)
+                        _write_wrapped(cont_prefix, ent, None)
                 else:
                     sys.stderr.write(label_prefix + "\n")
                 continue
 
-            _emit_value(label_prefix, cont_prefix, v)
+            style = _value_style_for(k, v)
+            _write_wrapped(label_prefix, v, style)
+
+        sys.stderr.write(_c(delim, "dim") + "\n")
+
     panel_mode = (os.getenv("NAUTICAL_PANEL") or "").strip().lower()
     if panel_mode == "plain":
         panel_mode = "fast"

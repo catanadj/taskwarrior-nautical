@@ -855,6 +855,88 @@ def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
     return ("unknown", True)
 
 
+def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tuple[str, set[str]]:
+    """
+    Atomically import BOTH the spawned child and the updated parent task in a single
+    `task import -` call (multi-line JSON). This prevents chain forks if execution
+    is interrupted between child creation and parent update.
+
+    Returns (child_short_uuid, stripped_attrs).
+    """
+    env = os.environ.copy()
+
+    if not parent_task_with_nextlink.get("uuid"):
+        raise RuntimeError("Parent task missing uuid (cannot atomic import).")
+
+    # Prepare child (new uuid) and a parent copy that points to it
+    child_uuid = str(uuid.uuid4())
+    child_obj = dict(child_task)
+    child_obj["uuid"] = child_uuid
+    if "entry" not in child_obj:
+        child_obj["entry"] = core.fmt_isoz(core.now_utc())
+    if "modified" not in child_obj:
+        child_obj["modified"] = child_obj["entry"]
+
+    child_short = child_uuid[:8]
+
+    parent_obj = dict(parent_task_with_nextlink)
+    parent_obj["nextLink"] = child_short
+
+    # Normalise
+    child_obj = _strip_none_and_cast(child_obj)
+    parent_obj = _strip_none_and_cast(parent_obj)
+    _normalise_datetime_fields(child_obj)
+    _normalise_datetime_fields(parent_obj)
+
+    stripped_attrs: set[str] = set()
+    last_stderr = ""
+    last_category = "unknown"
+
+    for attempt in range(1, _MAX_SPAWN_ATTEMPTS + 1):
+        payload = json.dumps(child_obj) + "\n" + json.dumps(parent_obj) + "\n"
+
+        try:
+            r = subprocess.run(
+                ["task", "rc.hooks=off", "import", "-"],
+                input=payload,
+                text=True,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            last_stderr = "Task import timed out"
+            last_category = "timeout"
+            continue
+
+        last_stderr = r.stderr or ""
+        if r.returncode == 0:
+            # Confirm the child landed; parent is updated in the same atomic import.
+            if _task_exists_by_uuid(child_uuid, env):
+                return (child_short, stripped_attrs)
+            last_category = "verify"
+            continue
+
+        # Strip unrecognized attributes and retry (best-effort resilience).
+        if "Unrecognized attribute" in last_stderr:
+            stripped_attrs |= _sanitize_unknown_attrs(last_stderr, child_obj)
+            stripped_attrs |= _sanitize_unknown_attrs(last_stderr, parent_obj)
+            last_category = "attribute"
+            continue
+
+        category, is_retryable = _categorize_spawn_error(r.returncode, last_stderr)
+        last_category = category
+        if not is_retryable:
+            break
+
+    raise RuntimeError(
+        f"Atomic import failed after {_MAX_SPAWN_ATTEMPTS} attempts "
+        f"(category={last_category}): {last_stderr.strip()}"
+    )
+
+
+
 def _root_uuid_from(task: dict) -> str:
     """Return the stable chain seed.
 
@@ -2582,7 +2664,7 @@ def main():
         return
 
     try:
-        child_short, stripped_attrs = _spawn_child(child)
+        child_short, stripped_attrs = _spawn_child_atomic(child, new)
     except Exception as e:
         _panel(
             "⛓ Chain error",

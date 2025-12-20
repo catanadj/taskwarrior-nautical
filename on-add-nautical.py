@@ -33,7 +33,7 @@ from collections import OrderedDict
 ANCHOR_WARN = True  # If True, warn when a user-provided due is not on an anchor day
 UPCOMING_PREVIEW = 5  # How many future dates to preview.
 _MAX_ITERATIONS = 2000
-_MAX_PREVIEW_ITERATIONS = 2000
+_MAX_PREVIEW_ITERATIONS = 750
 _MAX_CHAIN_DURATION_YEARS = 5  # warn if chain extends this far
 # ============================================================================
 

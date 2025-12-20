@@ -11,12 +11,11 @@ Chained next-link spawner for Taskwarrior.
 
 import sys, json, os, uuid, subprocess, importlib
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 import re
 from decimal import Decimal, InvalidOperation
 import shlex
-import textwrap, shutil
 
 
 # ------------------------------------------------------------------------------
@@ -112,6 +111,11 @@ def _fmt_dt_local_cached(dt):
 
 @lru_cache(maxsize=512)
 def _to_local_cached(dt):
+    # Accept either datetime or (datetime, meta) tuples from helper parsers.
+    if isinstance(dt, (tuple, list)) and dt:
+        dt0 = dt[0]
+        if isinstance(dt0, datetime):
+            dt = dt0
     return core.to_local(dt)
 
 
@@ -158,6 +162,79 @@ def _print_task(task):
     print(json.dumps(task), end="")
 
 
+_RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
+
+
+def _strip_rich_markup(s: str) -> str:
+    # Strip simple Rich tags like [cyan], [/cyan], [bold], [dim], and the bare [/].
+    # Preserve bracketed literals like [auto-due] (contains '-').
+    if not s:
+        return s
+    return _RICH_TAG_RE.sub("", s)
+
+
+def _term_width_stderr(default: int = 80) -> int:
+    try:
+        w = os.get_terminal_size(sys.stderr.fileno()).columns
+    except Exception:
+        w = default
+    # Termux can have narrow+wrapped terminals; keep delimiters within a safe band.
+    return max(40, min(70, int(w)))
+
+
+def _fast_color_enabled() -> bool:
+    if not sys.stderr.isatty():
+        return False
+    if os.environ.get("NO_COLOR"):
+        return False
+    v = os.environ.get("NAUTICAL_FAST_COLOR", "1").strip().lower()
+    return v not in {"0", "no", "false", "off"}
+
+
+def _ansi(code: str) -> str:
+    return f"\x1b[{code}m"
+
+
+def _emit_wrapped(prefix: str, text: str, width: int, style: str | None = None) -> None:
+    if text is None:
+        text = ""
+    text = str(text)
+    text = _strip_rich_markup(text)
+
+    avail = max(10, width - len(prefix))
+    parts = text.splitlines() if "\n" in text else [text]
+
+    for pi, raw_line in enumerate(parts):
+        line = raw_line.rstrip("\n")
+        if not line:
+            sys.stderr.write((prefix.rstrip() if pi == 0 else (" " * len(prefix))) + "\n")
+            continue
+
+        cur = ""
+        for token in line.split(" "):
+            if not cur:
+                cur = token
+            elif len(cur) + 1 + len(token) <= avail:
+                cur += " " + token
+            else:
+                out = cur
+                if style:
+                    sys.stderr.write(prefix + style + out + _ansi("0") + "\n")
+                else:
+                    sys.stderr.write(prefix + out + "\n")
+                prefix = " " * len(prefix)
+                avail = max(10, width - len(prefix))
+                cur = token
+
+        if cur:
+            if style:
+                sys.stderr.write(prefix + style + cur + _ansi("0") + "\n")
+            else:
+                sys.stderr.write(prefix + cur + "\n")
+        prefix = " " * len(prefix)
+        avail = max(10, width - len(prefix))
+
+
 def _panel(
     title,
     rows,
@@ -167,177 +244,90 @@ def _panel(
     label_style: str | None = None,
 ):
     """
-    Render a 2-column panel.
+    Render a panel.
 
     Modes:
-      - NAUTICAL_PANEL=rich (default): Rich bordered panel (color + compact).
-      - NAUTICAL_PANEL=fast: plain aligned text (no Rich import; best for Termux).
-      - NAUTICAL_PANEL=plain: legacy alias for "fast".
+      - default / NAUTICAL_PANEL=rich : Rich panel (colors + borders)
+      - NAUTICAL_PANEL=fast           : plain/ANSI panel (fast, Termux-friendly)
+
+    The fast panel is designed to be stable, minimal, and easy to scan.
     """
+    mode = os.environ.get("NAUTICAL_PANEL", "").strip().lower()
+    if mode in {"plain"}:
+        mode = "fast"
 
-    def _panel_fast(_title, _rows):
-        """
-        Fast plain renderer (NAUTICAL_PANEL=fast):
-        - No Rich import.
-        - Minimal ANSI colour to guide the eye (TTY-only, can be disabled via NO_COLOR=1 or NAUTICAL_FAST_COLOR=0).
-        - Strips Rich markup tags (including bare "[/]" closers) while preserving bracketed literals like "[auto-due]" or "[123]".
-        - Preserves row spacers (k is None).
-        - Wraps to terminal width (capped to avoid overflow on narrow/mobile terminals).
-        - Timeline is exploded into one entry per line (kept uncoloured).
-        """
-        def _strip_rich(s: str) -> str:
-            if not s:
-                return ""
-            # Remove bare Rich reset tag.
-            s = s.replace("[/]", "")
-            # Remove Rich-style tags like [bold], [cyan], [/bold], [turquoise2], etc.
-            # Keep bracketed literals that start with digits or contain '-' (e.g., [auto-due], [192]).
-            s = re.sub(r"\[(\/?[A-Za-z_][A-Za-z0-9_ ]*)\]", "", s)
-            return s
+    if mode == "fast":
+        width = _term_width_stderr()
 
-        # Colour control
-        enable_color = bool(sys.stderr.isatty())
-        if os.getenv("NO_COLOR") == "1":
-            enable_color = False
-        if (os.getenv("NAUTICAL_FAST_COLOR") or "").strip() == "0":
-            enable_color = False
+        use_color = _fast_color_enabled()
+        RESET = _ansi("0")
+        BOLD = _ansi("1") if use_color else ""
+        DIM = _ansi("2") if use_color else ""
+        CYAN = _ansi("36") if use_color else ""
+        GREEN = _ansi("32") if use_color else ""
+        RED = _ansi("31") if use_color else ""
+        YELLOW = _ansi("33") if use_color else ""
 
-        ANSI = {
-            "reset": "\x1b[0m",
-            "bold": "\x1b[1m",
-            "dim": "\x1b[2m",
-            "cyan": "\x1b[36m",
-            "green": "\x1b[32m",
-            "red": "\x1b[31m",
-            "yellow": "\x1b[33m",
-        }
+        delim = "─" * width
+        sys.stderr.write(delim + "\n")
+        sys.stderr.write((BOLD + CYAN + _strip_rich_markup(str(title)) + RESET) + "\n")
 
-        def _c(txt: str, *styles: str) -> str:
-            if not enable_color or not styles:
-                return txt
-            codes = "".join(ANSI[s] for s in styles if s in ANSI)
-            return f"{codes}{txt}{ANSI['reset']}"
-
-        # Terminal width (best-effort) + mobile-safe cap
-        term_w = 0
-        try:
-            term_w = int(os.getenv("COLUMNS", "0") or 0)
-        except Exception:
-            term_w = 0
-        if term_w <= 0:
-            try:
-                term_w = shutil.get_terminal_size(fallback=(100, 24)).columns
-            except Exception:
-                term_w = 100
-        term_w = max(40, min(70, term_w))  # mobile-safe cap (prevents delimiter overflow)
-
-        # Normalize rows and compute label width
-        norm = []
+        keys = [str(k) for (k, _v) in rows if k is not None]
         label_w = 0
-        for k, v in _rows:
-            if k is None:
-                norm.append((None, None))
-                continue
-            ks = "" if k is None else _strip_rich(str(k)).strip()
-            vs = "" if v is None else _strip_rich(str(v)).strip()
-            norm.append((ks, vs))
-            if ks.strip():
-                label_w = max(label_w, len(ks))
-        label_w = min(label_w, 22)
+        for k in keys:
+            if len(k) > label_w:
+                label_w = len(k)
+        label_w = min(14, max(6, label_w))
 
-        # Timeline explode: split on "# N" boundaries.
-        def _explode_timeline(t: str):
-            t = (t or "").strip()
-            if not t:
-                return []
-            hits = [m.start() for m in re.finditer(r"#\s*\d+", t)]
-            if len(hits) <= 1:
-                return [t]
-            out = []
-            for a, b in zip(hits, hits[1:] + [None]):
-                seg = t[a:b].strip()
-                if seg:
-                    out.append(seg)
-            return out or [t]
-
-        def _wrap_chunks(text: str, width: int):
-            return textwrap.wrap(
-                text,
-                width=width,
-                break_long_words=False,
-                break_on_hyphens=False,
-            ) or [""]
-
-        def _write_wrapped(prefix: str, text: str, value_style: str | None = None):
-            # value_style is an ANSI-wrapped style key for the value part only
-            avail = max(10, term_w - len(prefix))
-            chunks = _wrap_chunks(text, avail)
-            indent = " " * len(prefix)
-            for i, ch in enumerate(chunks):
-                pfx = prefix if i == 0 else indent
-                if value_style:
-                    sys.stderr.write(pfx + _c(ch, value_style) + "\n")
-                else:
-                    sys.stderr.write(pfx + ch + "\n")
-
-        def _value_style_for(label: str, value: str):
-            lk = (label or "").strip().lower()
-            vlow = (value or "").lower()
-            if lk in ("pattern",):
-                return "cyan"
-            if lk in ("natural", "basis", "root", "chain"):
-                return "dim"
-            if lk in ("next due", "first due"):
-                if "overdue" in vlow:
-                    return "red"
-                if " in " in vlow or "Δ in" in vlow or "(in" in vlow:
-                    return "green"
-                return None
-            # keep timeline uncoloured
+        def _style_for_row(k: str, v: str) -> str | None:
+            lk = k.lower()
+            sv = (v or "")
+            lsv = sv.lower()
+            if k.strip().lower() == "pattern":
+                return CYAN
+            if "natural" in lk:
+                return DIM
+            if k.strip().lower() in {"basis", "root"}:
+                return DIM
+            if k.strip().lower() in {"first due", "next due"}:
+                if "overdue" in lsv or "late" in lsv:
+                    return RED
+                return GREEN
+            if "warning" in lk:
+                return YELLOW
+            if "error" in lk:
+                return RED
+            if lk.startswith("chain"):
+                return DIM + GREEN
             return None
 
-        # Delimiters + title
-        delim = "─" * term_w
-        sys.stderr.write(_c(delim, "dim") + "\n")
-        sys.stderr.write(_c(_strip_rich(str(_title)).rstrip(), "bold", "cyan") + "\n")
-        sys.stderr.write(_c(delim, "dim") + "\n")
-
-        # Rows
-        for k, v in norm:
+        for k, v in rows:
             if k is None:
                 sys.stderr.write("\n")
                 continue
 
-            if not k:
-                # continuation-only row
-                _write_wrapped(" " * (label_w + 2), v, None)
-                continue
+            k = _strip_rich_markup(str(k))
+            v = "" if v is None else _strip_rich_markup(str(v))
 
-            label_prefix = f"{k.ljust(label_w)}: "
-            cont_prefix = " " * (label_w + 2)
-
-            if k.lower() == "timeline":
-                entries = _explode_timeline(v)
-                if entries:
-                    _write_wrapped(label_prefix, entries[0], None)
-                    for ent in entries[1:]:
-                        _write_wrapped(cont_prefix, ent, None)
+            if k.lower().startswith("timeline"):
+                prefix0 = f"{k:<{label_w}} "
+                lines = [ln for ln in v.splitlines() if ln.strip() != ""] if "\n" in v else ([v] if v else [])
+                if lines:
+                    _emit_wrapped(prefix0, lines[0], width, style=None)
+                    for ln in lines[1:]:
+                        _emit_wrapped(" " * len(prefix0), ln, width, style=None)
                 else:
-                    sys.stderr.write(label_prefix + "\n")
+                    _emit_wrapped(prefix0, "", width, style=None)
                 continue
 
-            style = _value_style_for(k, v)
-            _write_wrapped(label_prefix, v, style)
+            prefix = f"{k:<{label_w}} "
+            style = _style_for_row(k, v)
+            _emit_wrapped(prefix, v, width, style=style)
 
-        sys.stderr.write(_c(delim, "dim") + "\n")
+        sys.stderr.write(delim + "\n")
+        return
 
-    panel_mode = (os.getenv("NAUTICAL_PANEL") or "").strip().lower()
-    if panel_mode == "plain":
-        panel_mode = "fast"
-    if panel_mode == "fast" or os.getenv("NAUTICAL_PLAIN") == "1":
-        return _panel_fast(title, rows)
-
-    # ---- rich renderer ----
+    # Rich mode (default)
     try:
         if not sys.stderr.isatty():
             raise RuntimeError("no tty")
@@ -346,15 +336,18 @@ def _panel(
         from rich.table import Table
         from rich.text import Text
     except Exception:
-        return _panel_fast(title, rows)
+        # If Rich is unavailable, fall back to fast mode without ANSI.
+        os.environ.setdefault("NAUTICAL_PANEL", "fast")
+        os.environ.setdefault("NAUTICAL_FAST_COLOR", "0")
+        return _panel(title, rows, kind=kind, border_style=border_style, title_style=title_style, label_style=label_style)
 
     THEMES = {
         "preview_anchor": {"border": "turquoise2", "title": "bright_cyan", "label": "light_sea_green"},
         "preview_cp": {"border": "deep_pink1", "title": "deep_pink1", "label": "deep_pink3"},
         "summary": {"border": "indian_red", "title": "indian_red", "label": "red"},
-        "good": {"border": "green", "title": "green", "label": "green"},
-        "warning": {"border": "yellow", "title": "yellow", "label": "yellow"},
+        "disabled": {"border": "yellow", "title": "yellow", "label": "yellow"},
         "error": {"border": "red", "title": "red", "label": "red"},
+        "warning": {"border": "yellow", "title": "yellow", "label": "yellow"},
         "info": {"border": "blue", "title": "cyan", "label": "cyan"},
     }
     theme = THEMES.get(kind, THEMES["info"])
@@ -363,14 +356,14 @@ def _panel(
     tstyle = title_style or theme["title"]
     lstyle = label_style or theme["label"]
 
-    console = Console(file=sys.stderr, force_terminal=True, highlight=False)
+    console = Console(file=sys.stderr, force_terminal=True)
     t = Table.grid(padding=(0, 1), expand=False)
     t.add_column(style=f"bold {lstyle}", no_wrap=True, justify="right")
     t.add_column(style="white")
 
     for k, v in rows:
         if k is None:
-            t.add_row("", "" if v is None else str(v))
+            t.add_row("", v or "")
             continue
 
         label_text = Text(str(k))
@@ -387,13 +380,12 @@ def _panel(
     console.print(
         Panel(
             t,
-            title=Text(str(title), style=f"bold {tstyle}"),
+            title=Text(title, style=f"bold {tstyle}"),
             border_style=border,
             expand=False,
             padding=(0, 1),
         )
     )
-
 
 def _strip_quotes(s: str) -> str:
     s = (s or "").strip()
@@ -864,20 +856,16 @@ def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
 
 
 def _root_uuid_from(task: dict) -> str:
-    cur = task
-    seen = set()
-    lookups = 0
-    u = task.get("uuid")
-    prev = task.get("prevLink")
-    while prev and prev not in seen and lookups < _MAX_UUID_LOOKUPS:
-        seen.add(prev)
-        lookups += 1
-        obj = _export_uuid_short_cached(prev)
-        if not obj:
-            break
-        u = obj.get("uuid") or u
-        prev = obj.get("prevLink")
-    return u
+    """Return the stable chain seed.
+
+    New releases are chainID-first: we do not walk legacy prevLink chains.
+    If chainID is missing we fall back to this task's UUID.
+    """
+
+    cid = (task.get("chainID") or "").strip()
+    if cid:
+        return cid
+    return (task.get("uuid") or "").strip()
 
 # --- Chain export: prefer chainID, else walk the legacy links -----------------
 def _task(args, env=None) -> str:
@@ -904,46 +892,15 @@ def _export_uuid_full(u: str, env=None) -> dict | None:
     except Exception:
         return None
 
-def tw_export_chain_or_fallback(seed_task: dict, env=None) -> list[dict]:
+def tw_export_chain_or_fallback(seed_task, env=None):
+    """Return full chain export for a task.
+
+    Policy: chainID is mandatory (legacy link-walk fallback removed).
     """
-    Fast path: export by chainID (new chains).
-    Fallback: walk legacy chain via prevLink/nextLink starting from the root UUID.
-    """
-    # 1) Prefer chainID short token, if present
-    short = (seed_task.get("chainID") or core.short_uuid(seed_task.get("uuid")) or "").strip()
-    if short:
-        try:
-            out = _task(["rc.json.array=1", f"export chainID:{short}"], env=env)
-            arr = json.loads(out) if out and out.strip().startswith("[") else []
-            if arr:
-                return arr
-        except Exception:
-            pass
-
-    # 2) Fallback: legacy chain (no chainID) — BFS from root via prevLink/nextLink
-    root_u = _root_uuid_from(seed_task) or seed_task.get("uuid")
-    if not root_u:
-        return [seed_task]
-
-    seen, queue, bag = set(), [root_u], {}
-    while queue and len(seen) < _MAX_CHAIN_WALK:
-        u = queue.pop(0)
-        if u in seen:
-            continue
-        seen.add(u)
-        obj = _export_uuid_full(u, env=env)
-        if not obj:
-            continue
-        bag[u] = obj
-        for k in ("prevLink", "nextLink"):
-            s = (obj.get(k) or "").strip()
-            if s and s not in seen:
-                queue.append(s)
-
-    return list(bag.values()) or [seed_task]
-
-# --- Chain analytics (cheap): chain age via one fast `_get` --------------------
-@lru_cache(maxsize=256)
+    chain_id = seed_task.get('chainID') or seed_task.get('chainid')
+    if not chain_id:
+        raise RuntimeError('ChainID is required (legacy chain traversal removed). Run your chainID backfill tool, then retry.')
+    return tw_export_chain(chain_id, env=env)
 def _tw_get_cached(ref: str) -> str:
     """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
     try:
@@ -1190,23 +1147,46 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
 
 
 def _collect_prev_two(current_task: dict) -> list[dict]:
-    """
-    Return up to two *previous* tasks in chronological order (older first).
-    """
-    chain = []
-    prev = current_task.get("prevLink")
-    steps = 0
-    lookups = 0
-    while prev and len(chain) < 2 and steps < 6 and lookups < _MAX_UUID_LOOKUPS:
-        obj = _export_uuid_short_cached(prev)
-        if not obj:
-            break
-        chain.append(obj)
-        prev = obj.get("prevLink")
-        steps += 1
-        lookups += 1
-    # built newest→older; reverse to older→newer for display
-    return list(reversed(chain))
+    """Return up to two previous tasks (older first) using chainID export only."""
+
+    chain_id = (current_task.get("chainID") or "").strip()
+    if not chain_id:
+        return []
+
+    cur_no = core.coerce_int(current_task.get("link"), None)
+    if not cur_no or cur_no <= 1:
+        return []
+
+    try:
+        chain = tw_export_chain(chain_id)
+    except Exception:
+        return []
+
+    # Choose tasks by link index. In the unlikely event of duplicates, prefer non-deleted tasks.
+    def _pick_best(candidates: list[dict]) -> dict | None:
+        if not candidates:
+            return None
+        for st in ("pending", "completed", "deleted"):
+            for t in candidates:
+                if (t.get("status") or "").strip().lower() == st:
+                    return t
+        return candidates[0]
+
+    by_link: dict[int, list[dict]] = {}
+    for t in chain:
+        ln = core.coerce_int(t.get("link"), None)
+        if ln is None:
+            continue
+        by_link.setdefault(ln, []).append(t)
+
+    prevs: list[dict] = []
+    for want in (cur_no - 2, cur_no - 1):
+        if want < 1:
+            continue
+        obj = _pick_best(by_link.get(want, []))
+        if obj:
+            prevs.append(obj)
+    return prevs
 
 
 def _pretty_basis_cp(task: dict, meta: dict) -> str:
@@ -1244,6 +1224,156 @@ def _pretty_basis_anchor(meta: dict, task: dict) -> str:
         return "ALL (no missed) — Next anchor after original due"
     return "ALL — Next anchor after completion"
 
+
+# ------------------------------------------------------------------------------
+# Multi-time occurrence helpers (hook-level)
+# ------------------------------------------------------------------------------
+
+_HHMM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+def _parse_hhmm_token(tok: str) -> tuple[int, int] | None:
+    tok = (tok or "").strip()
+    if not tok or not _HHMM_RE.match(tok):
+        return None
+    hh, mm = tok.split(":", 1)
+    return (int(hh), int(mm))
+
+
+def _norm_hhmm_list(v) -> list[tuple[int, int]]:
+    """Normalize various core representations of @t into a sorted list of (hh, mm)."""
+    if v is None:
+        return []
+    if isinstance(v, tuple) and len(v) == 2 and all(isinstance(x, int) for x in v):
+        hh, mm = v
+        return [(hh, mm)]
+    if isinstance(v, str):
+        out: list[tuple[int, int]] = []
+        for part in v.split(","):
+            t = _parse_hhmm_token(part)
+            if t is not None:
+                out.append(t)
+        return out
+    if isinstance(v, list):
+        out: list[tuple[int, int]] = []
+        for it in v:
+            out.extend(_norm_hhmm_list(it))
+        return out
+    return []
+
+
+def _extract_time_slots_from_dnf(dnf) -> list[tuple[int, int]]:
+    """Extract a unique, sorted list of time slots from a parsed anchor DNF."""
+    out: set[tuple[int, int]] = set()
+    try:
+        for term in dnf:
+            for atom in term:
+                mods = atom.get("mods") or {}
+                for hhmm in _norm_hhmm_list(mods.get("t")):
+                    out.add(hhmm)
+    except Exception:
+        return []
+    return sorted(out)
+
+
+def _as_local_dt(d: datetime | None) -> datetime | None:
+    if d is None:
+        return None
+    if d.tzinfo is None:
+        return d.replace(tzinfo=timezone.utc).astimezone(_local_tz())
+    return d.astimezone(_local_tz())
+
+
+def _next_occurrence_after_local_dt(
+    dnf,
+    after_local_dt: datetime,
+    default_seed_date,
+    seed_base: str,
+    fallback_hhmm: tuple[int, int] | None = None,
+):
+    """Return the next occurrence strictly after `after_local_dt`.
+
+    This is hook-level logic because core recurrence is date-based.
+    """
+    tz = after_local_dt.tzinfo or _local_tz()
+    slots = _extract_time_slots_from_dnf(dnf)
+    if not slots:
+        slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
+
+    # same-day: only if the expression hits on that date
+    adate = after_local_dt.date()
+    try:
+        prev = adate - timedelta(days=1)
+        nxt_date, _ = core.next_after_expr(dnf, prev, default_seed_date, seed_base=seed_base)
+    except Exception:
+        nxt_date = None
+
+    if nxt_date == adate:
+        for hh, mm in slots:
+            cand = datetime.combine(adate, time(hh, mm), tzinfo=tz)
+            if cand > after_local_dt:
+                return cand
+
+    # otherwise, find the next matching date strictly after adate
+    nxt_date, _ = core.next_after_expr(dnf, adate, default_seed_date, seed_base=seed_base)
+    hh, mm = slots[0]
+    return datetime.combine(nxt_date, time(hh, mm), tzinfo=tz)
+
+
+def _missed_occurrences_between_local(
+    dnf,
+    due_local_dt: datetime,
+    end_local_dt: datetime,
+    default_seed_date,
+    seed_base: str,
+    fallback_hhmm: tuple[int, int] | None = None,
+    guard: int = 512,
+):
+    """Return occurrences strictly after due and <= end."""
+    if end_local_dt <= due_local_dt:
+        return []
+    missed: list[datetime] = []
+    probe = due_local_dt
+    for _ in range(guard):
+        nxt = _next_occurrence_after_local_dt(
+            dnf,
+            probe,
+            default_seed_date,
+            seed_base,
+            fallback_hhmm=fallback_hhmm,
+        )
+        if nxt is None or nxt > end_local_dt:
+            break
+        missed.append(nxt)
+        probe = nxt
+    return missed
+
+
+def _collect_missed_occurrences(
+    dnf,
+    after_local_dt: datetime,
+    until_local_dt: datetime,
+    default_seed_date,
+    seed_base: str,
+    fallback_hhmm: tuple[int, int] | None = None,
+    limit: int = 25,
+) -> list[datetime]:
+    """Collect missed *datetime* occurrences in (after_local_dt, until_local_dt].
+
+    This is a hook-level helper: core recurrence operates on dates, while Nautical
+    multi-time anchors (@t=...) need occurrence-level stepping.
+    """
+    if limit is None or limit <= 0:
+        limit = 25
+    return _missed_occurrences_between_local(
+        dnf,
+        due_local_dt=after_local_dt,
+        end_local_dt=until_local_dt,
+        default_seed_date=default_seed_date,
+        seed_base=seed_base,
+        fallback_hhmm=fallback_hhmm,
+        guard=int(limit),
+    )
 
 def _human_delta(a, b, prefer_months=True):
     try:
@@ -1347,200 +1477,113 @@ def _safe_parse_cp_duration(duration_str: str) -> tuple[timedelta | None, str | 
         return (None, f"Unexpected error parsing duration '{duration_str}': {str(e)}")
 
 
-
-
-# ------------------------------------------------------------------------------
-# Anchor occurrence stepping (multi-time @t)
-# ------------------------------------------------------------------------------
-
-def _norm_t_mod(v):
-    """Normalize an atom 't' modifier to a list of (HH,MM) tuples.
-
-    Accepts:
-      - (H,M) tuple
-      - [(H,M), ...] or [[H,M], ...]
-      - "HH:MM" or "HH:MM,HH:MM,..."
-    """
-    if v is None:
-        return []
-
-    if isinstance(v, tuple) and len(v) == 2:
-        try:
-            h, m = int(v[0]), int(v[1])
-            return [(h, m)] if 0 <= h <= 23 and 0 <= m <= 59 else []
-        except Exception:
-            return []
-
-    if isinstance(v, list):
-        out = []
-        for it in v:
-            if isinstance(it, tuple) and len(it) == 2:
-                try:
-                    out.append((int(it[0]), int(it[1])))
-                except Exception:
-                    pass
-            elif isinstance(it, list) and len(it) == 2:
-                try:
-                    out.append((int(it[0]), int(it[1])))
-                except Exception:
-                    pass
-        return sorted({(h, m) for (h, m) in out if 0 <= h <= 23 and 0 <= m <= 59})
-
-    if isinstance(v, str):
-        s = v.strip()
-        if not s:
-            return []
-        out = []
-        for part in s.split(","):
-            tok = part.strip()
-            if not tok:
-                continue
-            if not re.match(r"^\d{2}:\d{2}$", tok):
-                continue
-            h = int(tok[:2]); m = int(tok[3:5])
-            if 0 <= h <= 23 and 0 <= m <= 59:
-                out.append((h, m))
-        return sorted(set(out))
-
-    return []
-
-
-def _term_fires_on_date(term, d, interval_seed, seed_base):
-    """Return True if the DNF term (list of atoms) matches date d."""
-    try:
-        nxt, _ = core.next_after_expr([term], d - timedelta(days=1), default_seed=interval_seed, seed_base=seed_base)
-        return nxt == d
-    except Exception:
-        return False
-
-
-def _times_for_date(dnf, d, interval_seed, seed_base):
-    """Collect all @t times contributed by matching atoms on date d."""
-    out = set()
-    for term in dnf:
-        if _term_fires_on_date(term, d, interval_seed, seed_base):
-            for atom in term:
-                mods = atom.get('mods') or {}
-                for hhmm in _norm_t_mod(mods.get('t')):
-                    out.add(hhmm)
-    return sorted(out)
-
-
-def _next_occurrence_after_local_dt(dnf, after_dt_local, interval_seed, seed_base, fallback_hhmm):
-    """Return next occurrence datetime strictly AFTER after_dt_local, respecting @t lists."""
-    d0 = after_dt_local.date()
-    t0 = (after_dt_local.hour, after_dt_local.minute)
-
-    # If expression hits today, consume remaining intra-day slots.
-    tlist0 = _times_for_date(dnf, d0, interval_seed, seed_base)
-    if tlist0:
-        for hhmm in tlist0:
-            if hhmm > t0:
-                return core.build_local_datetime(d0, hhmm)
-
-    # Otherwise, advance to the next matching date.
-    prev_d = d0
-    for _ in range(0, 3660):
-        nxt_d, hhmm = core.next_after_expr(dnf, prev_d, default_seed=interval_seed, seed_base=seed_base)
-        if nxt_d is None:
-            break
-        tlist = _times_for_date(dnf, nxt_d, interval_seed, seed_base)
-        if tlist:
-            use_hhmm = tlist[0]
-        else:
-            # For single-time anchors, next_after_expr already returns the effective hhmm.
-            use_hhmm = hhmm if isinstance(hhmm, tuple) and len(hhmm) == 2 else fallback_hhmm
-        return core.build_local_datetime(nxt_d, use_hhmm)
-
-    # Fallback: prevent infinite loops.
-    return core.build_local_datetime(d0 + timedelta(days=365), fallback_hhmm)
-
-
-
-
 def _compute_anchor_child_due(parent: dict):
-    # Determine reference points
-    end_dt = _dtparse(parent.get('end') or parent.get('modified') or parent.get('entry'))
-    if end_dt is None:
-        end_dt = datetime.now(timezone.utc)
+    """Return (next_due_utc, meta, dnf).
 
-    due_dt0 = _dtparse(parent.get('due'))
-    end_local = _to_local_cached(end_dt)
+    The core recurrence engine computes *dates*; the hook expands into *datetimes* to
+    respect multi-time lists: @t=HH:MM[,HH:MM...].
+    """
 
-    # Parse + validate anchor
-    anchor_str = (parent.get('anchor') or '').strip()
-    if not anchor_str:
-        raise ValueError('missing anchor')
+    expr_str = (parent.get("anchor") or "").strip()
+    if not expr_str:
+        return (None, None, None)
 
-    dnf = _validate_anchor_expr_cached(anchor_str)
-    seed_base = _root_uuid_from(parent) or _uuid_from(parent) or 'preview'
+    mode = (parent.get("anchor_mode") or "skip").strip().lower()
+    if mode not in ("skip", "all", "flex"):
+        raise ValueError(
+            f"anchor_mode must be 'skip', 'all', or 'flex', got '{mode}'"
+        )
 
-    # Stable seed: use the original due date if present, otherwise completion date.
-    interval_seed = _to_local_cached(due_dt0).date() if due_dt0 else end_local.date()
+    try:
+        dnf = _validate_anchor_expr_cached(expr_str)
+    except Exception as e:
+        raise ValueError(f"Invalid anchor expression '{expr_str}': {str(e)}")
 
-    # Fallback time used when the expression has no @t.
-    if due_dt0:
-        due_local = _to_local_cached(due_dt0)
-        fallback_hhmm = (due_local.hour, due_local.minute)
-    else:
-        fallback_hhmm = (end_local.hour, end_local.minute)
+    end_dt_utc, err = _safe_parse_datetime(parent.get("end"))
+    if err:
+        raise ValueError(f"end field: {err}")
+    if not end_dt_utc:
+        return (None, None, None)
 
-    mode = (parent.get('anchor_mode') or 'skip').strip().lower()
+    due_dt_utc, err = _safe_parse_datetime(parent.get("due"))
+    if err:
+        raise ValueError(f"due field: {err}")
 
-    info = {
-        'mode': mode,
-        'basis': None,
-        'root': seed_base,
-    }
+    end_local = _tolocal(end_dt_utc)
+    due_local = _tolocal(due_dt_utc) if due_dt_utc else end_local
 
-    # Missed detection is intentionally date-granular (fast + backwards compatible).
-    due_d_local = _to_local_cached(due_dt0).date() if due_dt0 else None
-    end_d_local = end_local.date()
+    default_seed = due_local.date()
+    seed_base = (parent.get("chainID") or "").strip() or (_root_uuid_from(parent) or "preview")
 
-    missed = []
-    if mode == 'all' and due_d_local and end_d_local > due_d_local:
-        try:
-            missed = core.anchors_between_expr(dnf, due_d_local, end_d_local, default_seed=interval_seed, seed_base=seed_base)
-        except Exception:
-            missed = []
+    # Fallback time if the pattern carries no explicit @t
+    fallback_hhmm = (due_local.hour, due_local.minute)
 
-    if mode == 'all' and missed:
-        # Backfill earliest missed DATE (time uses earliest slot on that date).
-        tgt_d = missed[0]
-        tlist = _times_for_date(dnf, tgt_d, interval_seed, seed_base)
-        hhmm = tlist[0] if tlist else core.pick_hhmm_from_dnf_for_date(dnf, tgt_d, interval_seed)
-        if not isinstance(hhmm, tuple) or len(hhmm) != 2:
-            hhmm = fallback_hhmm
-        due_local_dt = core.build_local_datetime(tgt_d, hhmm)
-        info['basis'] = 'missed'
-    else:
-        if mode == 'all' and due_dt0:
-            # ALL (no missed): progress from the original due (keeps intra-day slots).
-            after_local = _to_local_cached(due_dt0)
-            info['basis'] = 'after_due'
-        elif mode == 'flex':
-            after_local = end_local
-            info['basis'] = 'after_end'
-        else:
-            # SKIP: if completed early, clamp to original due so we don't reschedule the same slot.
-            after_local = end_local
-            if due_dt0:
-                due_local = _to_local_cached(due_dt0)
-                if after_local < due_local:
-                    info['clamped_to_due'] = True
-                    after_local = due_local
-            info['basis'] = 'after_end'
+    info = {"mode": mode, "basis": None, "missed_count": 0, "missed_preview": []}
 
-        due_local_dt = _next_occurrence_after_local_dt(
+    if mode == "all":
+        missed_dts = _collect_missed_occurrences(
             dnf,
-            after_local,
-            interval_seed=interval_seed,
+            after_local_dt=due_local,
+            until_local_dt=end_local,
+            default_seed_date=default_seed,
+            seed_base=seed_base,
+            fallback_hhmm=fallback_hhmm,
+            limit=25,
+        )
+        if missed_dts:
+            nxt_local = missed_dts[0]
+            info.update(
+                basis="missed",
+                missed_count=len(missed_dts),
+                missed_preview=[x.isoformat() for x in missed_dts[:5]],
+            )
+        else:
+            nxt_local = _next_occurrence_after_local_dt(
+                dnf,
+                after_local_dt=due_local,
+                default_seed_date=default_seed,
+                seed_base=seed_base,
+                fallback_hhmm=fallback_hhmm,
+            )
+            info["basis"] = "after_due"
+    elif mode == "flex":
+        missed_dts = []
+        if due_dt_utc and end_local > due_local:
+            missed_dts = _collect_missed_occurrences(
+                dnf,
+                after_local_dt=due_local,
+                until_local_dt=end_local,
+                default_seed_date=default_seed,
+                seed_base=seed_base,
+                fallback_hhmm=fallback_hhmm,
+                limit=25,
+            )
+        nxt_local = _next_occurrence_after_local_dt(
+            dnf,
+            after_local_dt=end_local,
+            default_seed_date=default_seed,
             seed_base=seed_base,
             fallback_hhmm=fallback_hhmm,
         )
+        info.update(
+            basis="flex",
+            missed_count=len(missed_dts),
+            missed_preview=[x.isoformat() for x in missed_dts[:5]],
+        )
+    else:
+        nxt_local = _next_occurrence_after_local_dt(
+            dnf,
+            after_local_dt=(max(end_local, due_local) if due_local else end_local),
+            default_seed_date=default_seed,
+            seed_base=seed_base,
+            fallback_hhmm=fallback_hhmm,
+        )
+        info["basis"] = "after_end"
 
-    due_utc = due_local_dt.astimezone(timezone.utc)
-    return due_utc, info, dnf
+    if not nxt_local:
+        raise ValueError("Could not compute next anchor occurrence")
+
+    return nxt_local.astimezone(timezone.utc), info, dnf
 
 
 def _estimate_cp_final_by_max(task: dict, next_due_utc):
@@ -1591,20 +1634,28 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
     if cur_no >= cpmax:
         return None
 
-    seed = _root_uuid_from(task) or "preview"
+    seed_base = (task.get("chainID") or "").strip() or (_root_uuid_from(task) or "preview")
     nxt_local = _to_local_cached(next_due_utc)
-    hhmm = (nxt_local.hour, nxt_local.minute)
-    fut_local_date = nxt_local.date()
+
+    # Use a stable default seed (prefer the original due date).
+    due0, _ = _safe_parse_datetime(task.get("due"))
+    default_seed = _to_local_cached(due0 or next_due_utc).date()
+
+    fallback_hhmm = (nxt_local.hour, nxt_local.minute)
 
     fut_no = cur_no + 1
+    fut_local = nxt_local
     while fut_no < cpmax:
-        fut_no += 1
-        fut_local_date, _ = core.next_after_expr(
-            dnf, fut_local_date, default_seed=fut_local_date, seed_base=seed
+        fut_local = _next_occurrence_after_local_dt(
+            dnf,
+            fut_local,
+            default_seed_date=default_seed,
+            seed_base=seed_base,
+            fallback_hhmm=fallback_hhmm,
         )
+        fut_no += 1
 
-    fut_dt = core.build_local_datetime(fut_local_date, hhmm).astimezone(timezone.utc)
-    return fut_dt
+    return fut_local.astimezone(timezone.utc)
 
 
 # Helper to validate chainUntil is in the future
@@ -1997,7 +2048,6 @@ def _timeline_lines(
     
     # Collect items and their dates
     items = []
-    until_utc = _dtparse(task.get("chainUntil"))
     
     # Previous tasks
     prevs = _collect_prev_two(task)
@@ -2047,36 +2097,41 @@ def _timeline_lines(
                     
                     items.append((fut_no, fut_dt, {"is_future": True}, "future"))
         else:
+            # Anchor patterns are date-based in the core; multi-time @t=HH:MM,HH:MM,...
+            # expansion is performed here at the hook level.
+            seed_base = (task.get("chainID") or _root_uuid_from(task) or "preview")
 
-            seed_base = _root_uuid_from(task) or "preview"
-            seed_local = _to_local_cached(_dtparse(task.get('due')) or child_due_utc).date()
-            fallback_hhmm = (_to_local_cached(child_due_utc).hour, _to_local_cached(child_due_utc).minute)
+            nxt_local = _to_local_cached(child_due_utc)
+            fallback_hhmm = (nxt_local.hour, nxt_local.minute)
 
+            due0, _ = _safe_parse_datetime(task.get("due"))
+            default_seed = _to_local_cached(due0 or child_due_utc).date()
 
-            # For anchor timelines we must step occurrence-by-occurrence (date+time),
-            # not date-by-date. We already emitted the immediate next task as (nxt_no,
-            # child_due_utc). Everything from here advances strictly after that.
-            fut_local_dt = _to_local_cached(child_due_utc)
-            fut_no = nxt_no
+            after_local = nxt_local
             for _ in range(allowed_future):
                 if iterations >= _MAX_ITERATIONS:
                     break
                 iterations += 1
 
                 fut_no += 1
-                if cap_no is not None and fut_no > cap_no:
+                try:
+                    next_local = _next_occurrence_after_local_dt(
+                        dnf,
+                        after_local,
+                        default_seed_date=default_seed,
+                        seed_base=seed_base,
+                        fallback_hhmm=fallback_hhmm,
+                    )
+                except Exception:
                     break
 
-                fut_local_dt = _next_occurrence_after_local_dt(
-                    dnf,
-                    fut_local_dt,
-                    interval_seed=seed_local,
-                    seed_base=seed_base,
-                    fallback_hhmm=fallback_hhmm,
-                )
-                fut_dt = fut_local_dt.astimezone(timezone.utc)
+                if not next_local:
+                    break
 
-                if until_utc and fut_dt > until_utc:
+                fut_dt = next_local.astimezone(timezone.utc)
+                after_local = next_local
+
+                if cap_no is not None and fut_no > cap_no:
                     break
 
                 items.append((fut_no, fut_dt, {"is_future": True}, "future"))
@@ -2173,43 +2228,44 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
     Return (final_no, final_dt) for anchors limited by chainUntil.
     WITH iteration guard to prevent infinite loops.
     """
-    until = _dtparse(task.get("chainUntil"))
-    if not until:
+    until_utc = _dtparse(task.get("chainUntil"))
+    if not until_utc:
         return (None, None)
 
     cur_no = core.coerce_int(task.get("link"), 1)
-    seed = _root_uuid_from(task) or "preview"
+    seed_base = task.get("chainID") or _root_uuid_from(task) or "preview"
 
     nxt_local = _to_local_cached(next_due_utc)
-    hhmm = (nxt_local.hour, nxt_local.minute)
-    start_day = nxt_local.date() - timedelta(days=1)
-    end_day = _to_local_cached(until).date()
+    until_local = _to_local_cached(until_utc)
+    fallback_hhmm = (nxt_local.hour, nxt_local.minute)
+    due0, _ = _safe_parse_datetime(task.get("due"))
+    default_seed = _to_local_cached(due0 or next_due_utc).date()
 
     count = 0
-    prev = start_day
     last_hit = None
+    cursor = nxt_local
     iterations = 0
 
-    while iterations < _MAX_ITERATIONS:
+    # Count occurrences starting with the already-computed next due.
+    while iterations < _MAX_ITERATIONS and cursor <= until_local:
         iterations += 1
-        try:
-            nxt_day, _ = core.next_after_expr(
-                dnf, prev, default_seed=prev, seed_base=seed
-            )
-        except Exception:
-            break
-
-        if not nxt_day or nxt_day > end_day:
-            break
         count += 1
-        last_hit = nxt_day
-        prev = nxt_day
+        last_hit = cursor
+        cursor = _next_occurrence_after_local_dt(
+            dnf,
+            cursor,
+            default_seed=default_seed,
+            seed_base=seed_base,
+            fallback_hhmm=fallback_hhmm,
+        )
+        if cursor is None:
+            break
 
-    if count == 0 or not last_hit:
+    if count == 0 or last_hit is None:
         return (None, None)
 
     final_no = cur_no + count
-    final_dt = core.build_local_datetime(last_hit, hhmm).astimezone(timezone.utc)
+    final_dt = last_hit.astimezone(timezone.utc)
     return (final_no, final_dt)
 
 def _ensure_acf(task: dict) -> None:
@@ -2225,7 +2281,7 @@ def _safe_dt(v):
     except Exception:
         return None
 
-def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None) -> list[dict]:
+def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
     if not chain_id:
         return []
     args = ["task", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
@@ -2235,7 +2291,7 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
         args += shlex.split(extra)
     args.append("export")
     try:
-        out = subprocess.check_output(args, text=True)
+        out = subprocess.check_output(args, text=True, env=env)
         data = json.loads(out.strip() or "[]")
         return data if isinstance(data, list) else [data]
     except Exception:

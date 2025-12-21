@@ -1,3 +1,6 @@
+
+<img width="1536" height="1024" alt="nautical banner" src="https://github.com/user-attachments/assets/dbb9a93e-f0b9-4b7a-bd1c-6de6e50cb8c8" />
+
 # Taskwarrior Nautical ⚓︎⛓
 
 **Chains and Anchors for Taskwarrior** -- The missing layer between what your task manager can do and what your actual life requires.

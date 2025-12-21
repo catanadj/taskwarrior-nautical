@@ -88,11 +88,6 @@ Feature matrix (✓ = first-class, ◐ = partial, ✗ = missing)
 | **Hook ecosystem** (user code on add/modify/done)                      | ✓           | ✗                  | ✗        | ✗      | ✗               | ✗       |
 | **Speed** (add task ≤ 50 ms)                                           | ✓           | ✓                  | ✓        | ◐      | ✓               | ✓       |
 
-### Bottom line 
-If you want open source, offline, scriptable, infinitely expressive recurrence, Taskwarrior + Nautical is unchallenged today (as of Dec 2025).
-
-If you need a **pixel-perfect native GUI** or **built-in review workflows**, you currently have to accept a closed, sync-only product—but you will lose the unique DNF/multi-time/caps feature set.
-
 ---
 
 ## Anchors (calendar logic)

@@ -1,3 +1,4 @@
+![Nautical Banner](./nautical-banner.svg)
 
 # Taskwarrior-Nautical ⚓︎⛓
 **Real-world recurrence for Taskwarrior** – without cloud lock-in or drift.

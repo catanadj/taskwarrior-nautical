@@ -90,7 +90,7 @@ Done – you're ready for the next section.
 | `@t=09:00,17:00` | multi-time per day |
 | `&` / `,` | AND / OR (parentheses allowed) |
 
-Full grammar & more examples → [Nautical-Manual.pdf](https://github.com/catanadj/taskwarrior-nautical/blob/main/Nautical-Manual.pdf)
+Full grammar & more examples → [Nautical-Manual.pdf](https://github.com/catanadj/taskwarrior-nautical/blob/main/TW-Nautical-Manual.pdf)
 </details>
 
 ---
@@ -157,7 +157,7 @@ Links left: 8 left (cap #10)
 
 ## Links
 
-| [Full Manual (PDF)](https://github.com/catanadj/taskwarrior-nautical/blob/main/Nautical-Manual.pdf) | [Examples Gallery](https://github.com/catanadj/taskwarrior-nautical/wiki/Pattern-Gallery) | [Report Bug](https://github.com/catanadj/taskwarrior-nautical/issues) |
+| [Full Manual (PDF)](https://github.com/catanadj/taskwarrior-nautical/blob/main/TW-Nautical-Manual.pdf) | [Examples Gallery](https://github.com/catanadj/taskwarrior-nautical/wiki/Pattern-Gallery) | [Report Bug](https://github.com/catanadj/taskwarrior-nautical/issues) |
 |---|---|---|
 
 ---

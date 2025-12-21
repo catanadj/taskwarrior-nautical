@@ -249,7 +249,7 @@ wget https://github.com/catanadj/taskwarrior-nautical/raw/main/on-modify-nautica
 wget https://github.com/catanadj/taskwarrior-nautical/raw/main/on-add-nautical.py
 chmod +x on-*-nautical.py
 cd ..
-wget https://github.com/catanadj/taskwarrior-nautical/raw/main/on-modify-nautical.py
+wget https://github.com/catanadj/taskwarrior-nautical/raw/main/nautical_core.py
 
 
 # 2. Add to your ~/.taskrc

@@ -287,13 +287,15 @@ uda.nextLink.type=string # in Taskwarrior 3.4.2+ you can change this to type=UUI
 uda.nextLink.label=Next Link
 uda.link.type=numeric
 uda.link.label=Link Number
+uda.chainID.type=string
+uda.chainID.label=ChainID
 #
 " >> ~/.taskrc
 
 # 3. Install Rich if you don't have it already
 pip install rich
 
-# 4. Set the NAUTICAL_TZ env variable to your own timezone, the default is set to Australia/Sydney. You can also set this by modifying line 19 in nautical_core.py
+# 4. Set the NAUTICAL_TZ env variable to your own timezone, the default is set to Australia/Sydney. 
 export NAUTICAL_TZ=Continent/City # run for current session only; add it to your .bashrc/.zshrc file for permanence.
  
 # 5. Test with a sophisticated pattern

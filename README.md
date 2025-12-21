@@ -1,7 +1,7 @@
 ![Nautical Banner](./nautical-banner.svg)
 
 # Taskwarrior-Nautical ⚓︎⛓
-**Real-world recurrence for Taskwarrior** – without cloud lock-in or drift.
+**Real-world recurrence for Taskwarrior** - without cloud lock-in or drift.
 
 ``` bash
 # Last Friday of every month
@@ -56,7 +56,7 @@ task add "System test" anchor:"m:2mon" due:today
 ```
 
 You should see a colour panel showing the next occurrences.
-Done – you're ready for the next section.
+Done - you're ready for the next section.
 
 ---
 
@@ -116,9 +116,9 @@ task add "calibrate" cp:3d chainMax:5 due:today
 
 ## Anchor Modes
 
-- **skip** (default) – missed? move on
-- **all** – back-fill every missed slot
-- **flex** – skip past, anchor future
+- **skip** (default) - missed? move on
+- **all** - back-fill every missed slot
+- **flex** - skip past, anchor future
 
 ---
 
@@ -141,9 +141,9 @@ Links left: 8 left (cap #10)
 
 - **≤ 50 ms** on Termux / old phones
 - No network, no cloud, 100 % local JSON
-- Atomic import – never orphans a task
+- Atomic import - never orphans a task
 - DST-safe, leap-second-safe, 64-bit time
-- Plain-text backup – grep your rules!
+- Plain-text backup - grep your rules!
 
 ---
 
@@ -169,5 +169,5 @@ You can do so [here](https://buymeacoffee.com/catanadj). Thank you.
 
 ---
 
-**Stop thinking about scheduling – start doing.**
+**Stop thinking about scheduling - start doing.**
 ⚓︎ *Deus vult.*

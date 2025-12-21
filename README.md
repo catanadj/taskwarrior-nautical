@@ -84,7 +84,7 @@ Done – you're ready for the next section.
 | `m:3wed` | 3rd Wednesday |
 | `m:1@nw` | 1st, roll to nearest weekday |
 | `m:1@pbd` | 1st, roll to **prev** business day |
-| `m:1:7@bd` | bucket 1-7, business day only |
+| `m:1..7@bd` | bucket 1-7, business day only |
 | `m:rand` | one random day/month (seeded) |
 | `@t=09:00,17:00` | multi-time per day |
 | `&` / `,` | AND / OR (parentheses allowed) |

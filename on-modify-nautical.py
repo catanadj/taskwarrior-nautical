@@ -1938,12 +1938,99 @@ def _fmt_secs_delta(now_ref, secs: float | None) -> str:
 def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
     if not chain:
         return []
-    tail = chain[-n:]
-    base_no = core.coerce_int(tail[-1].get("link"), len(chain))
+    
+    # Get link number for sorting - handle tasks without link numbers
+    def get_link(obj):
+        link = obj.get("link")
+        if link is None or link == "":
+            return -1  # Put tasks without links at the beginning
+        return core.coerce_int(link, 999999)
+    
+    # Sort by link number descending (most recent first)
+    # But tasks without links (link=-1) should go at the end (oldest)
+    chain_sorted = sorted(chain, key=get_link, reverse=True)
+    
+    # Filter out tasks without link numbers for display (they're usually root tasks)
+    chain_with_links = [t for t in chain_sorted if get_link(t) > 0]
+    
+    # Determine max link number for formatting (only from tasks with links)
+    if chain_with_links:
+        max_link = max(get_link(obj) for obj in chain_with_links)
+        label_width = len(str(max_link)) + 1  # +1 for the # symbol
+    else:
+        label_width = 4  # default width
+    
+    # If chain has more than 10 tasks, show top 3 (most recent) and bottom 3 (oldest)
+    if len(chain_with_links) > 10:
+        # Top 3: most recent tasks (highest link numbers)
+        top_tasks = chain_with_links[:3]
+        
+        # Bottom 3: oldest tasks (lowest link numbers)
+        bottom_tasks = chain_with_links[-3:]  # Already in descending order (e.g., [3, 2, 1])
+        
+        # Create lines for top tasks (most recent)
+        top_lines = []
+        for obj in top_tasks:
+            no = get_link(obj)
+            end = _dtparse(obj.get("end"))
+            due = _dtparse(obj.get("due"))
+            end_s = _fmtlocal(end) if end else "(no end)"
+            delta = _fmt_on_time_delta(due, end)
+            short = _short(obj.get("uuid"))
+            lab = f"[bold]#{no:<{label_width}}[/]"
+            line = f"{lab} {end_s} {delta} [dim]{short}[/]"
+            # Highlight the most recent task
+            if no == get_link(chain_with_links[0]):
+                line = f"[green]{line}[/]"
+            top_lines.append(line)
+        
+        # Add ellipsis
+        ellipsis_line = f"[dim]{' ' * label_width}... ({len(chain_with_links) - 6} more tasks) ...[/dim]"
+        
+        # Create lines for bottom tasks (oldest) - also in descending order
+        bottom_lines = []
+        for obj in bottom_tasks:  # Already in descending order (e.g., 3, 2, 1)
+            no = get_link(obj)
+            end = _dtparse(obj.get("end"))
+            due = _dtparse(obj.get("due"))
+            end_s = _fmtlocal(end) if end else "(no end)"
+            delta = _fmt_on_time_delta(due, end)
+            short = _short(obj.get("uuid"))
+            lab = f"[bold]#{no:<{label_width}}[/]"
+            line = f"{lab} {end_s} {delta} [dim]{short}[/]"
+            bottom_lines.append(line)
+        
+        return top_lines + [ellipsis_line] + bottom_lines
+    
+    # For chains with <= 10 tasks, show all in reverse order (most recent at top)
+    lines = []
+    for obj in chain_with_links[:n]:
+        no = get_link(obj)
+        end = _dtparse(obj.get("end"))
+        due = _dtparse(obj.get("due"))
+        end_s = _fmtlocal(end) if end else "(no end)"
+        delta = _fmt_on_time_delta(due, end)
+        short = _short(obj.get("uuid"))
+        lab = f"[bold]#{no:<{label_width}}[/]"
+        line = f"{lab} {end_s} {delta} [dim]{short}[/]"
+        # Highlight the most recent task
+        if no == get_link(chain_with_links[0]):
+            line = f"[green]{line}[/]"
+        lines.append(line)
+    
+    return lines
+
+def _create_timeline_segment(tasks: list[dict], last_link_num) -> list[str]:
+    """Helper to create timeline lines for a segment of tasks."""
+    if not tasks:
+        return []
+    
+    base_no = core.coerce_int(last_link_num, len(tasks))
     labelw = max(4, len(f"#{base_no}"))
     lines = []
-    start_no = base_no - (len(tail) - 1)
-    for i, obj in enumerate(tail):
+    start_no = base_no - (len(tasks) - 1)
+    
+    for i, obj in enumerate(tasks):
         no = start_no + i
         end = _dtparse(obj.get("end"))
         due = _dtparse(obj.get("due"))
@@ -1952,9 +2039,10 @@ def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
         short = _short(obj.get("uuid"))
         lab = f"[bold]#{no:<{labelw-1}}[/]"
         line = f"{lab} {end_s} {delta} [dim]{short}[/]"
-        if i == len(tail) - 1:
+        if i == len(tasks) - 1:
             line = f"[green]{line}[/]"
         lines.append(line)
+    
     return lines
 
 
@@ -1983,12 +2071,25 @@ def _chain_length_cached(u_short: str):
     return count
 
 
-def _end_chain_summary(current: dict, reason: str, now_utc) -> None:
-    kind_anchor = bool((current.get("anchor") or "").strip())
+def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict = None) -> None:
+    # Use the passed current_task if provided, otherwise use current
+    actual_current = current_task if current_task else current
+    
+    kind_anchor = bool((actual_current.get("anchor") or "").strip())
     kind = "anchor" if kind_anchor else "cp"
-
+    
     # Prefer chainID export; fallback to legacy prev/next traversal
-    chain = tw_export_chain_or_fallback(current)
+    chain = tw_export_chain_or_fallback(actual_current)
+    
+    # Replace the last task in chain with the actual_current if it's more up-to-date
+    if actual_current and chain:
+        last_idx = -1
+        for i, task in enumerate(chain):
+            if task.get("uuid") == actual_current.get("uuid"):
+                last_idx = i
+                break
+        if last_idx >= 0:
+            chain[last_idx] = actual_current
 
     # Sort chronologically by link number (falls back to due date when link missing)
     def _link_sort_key(obj):
@@ -2644,7 +2745,7 @@ def main():
 
     # Stop if next would exceed cap
     if cap_no and next_no > cap_no:
-        _end_chain_summary(new, f"Reached cap #{cap_no}", now_utc)
+        _end_chain_summary(new, f"Reached cap #{cap_no}", now_utc, current_task=new)
         new["chain"] = "off"
         _print_task(new)
         return

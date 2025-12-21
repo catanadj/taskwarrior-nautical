@@ -912,6 +912,18 @@ def main():
         # Transparent notice to the user about the auto-enable:
         # _panel("Enabled chain", [("Reason", "cp/anchor present on add → set chain:on")], style="yellow")
 
+    # Default link index for new Nautical roots.
+    # Users rarely set this manually; it's Nautical bookkeeping.
+    # Only set when missing/invalid AND task isn't already linked into a chain.
+    if has_cp or has_anchor:
+        linked_already = bool((task.get("prevLink") or "").strip() or (task.get("nextLink") or "").strip())
+        if not linked_already:
+            link_no = core.coerce_int(task.get("link"), 0)
+            if link_no <= 0:
+                task["link"] = 1
+        # Transparent notice to the user about the auto-enable:
+        # _panel("Enabled chain", [("Reason", "cp/anchor present on add → set chain:on")], style="yellow")
+
     # If nothing chain-related, just pass through
     if not kind:
         _t_out = time.perf_counter()

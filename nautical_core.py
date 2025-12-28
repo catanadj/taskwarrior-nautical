@@ -1492,88 +1492,205 @@ def _format_quarter_set(qs):
     return ", ".join(f"Q{x}" for x in qs[:-1]) + f" and Q{qs[-1]}"
 
 
-def _rewrite_quarter_spec_mode(spec: str, mode: str) -> str:
+def _rewrite_quarter_spec_mode(spec: str, mode: str, meta_out: dict | None = None) -> str:
+    """
+    Rewrite q1..q4 tokens in a yearly spec into concrete y:* tokens.
+
+    Important:
+      - quarter_start / first_month rewrite to the *first month window* (Jan/Apr/Jul/Oct)
+      - quarter_end rewrites to the *last month window* (Mar/Jun/Sep/Dec)
+
+    Rationale: quarter_end MUST be a month-window (not a fixed day like 31-12),
+    otherwise selectors like m:-1bd cannot express "last business day of the quarter".
+
+    If meta_out is provided, it is filled with { rewritten_token -> quarter_note } so
+    the Natural layer can disclose interpretation (e.g. "Oct each year (Q4 start month)").
+    """
     if not spec:
         return spec
 
+    qmap: dict[str, str] = {}
+
+    def _first_month_window(q: int) -> str:
+        mm = {1: 1, 2: 4, 3: 7, 4: 10}[q]
+        return _tok_range(1, mm, _static_month_last_day(mm), mm)
+
+    def _last_month_window(q: int) -> str:
+        mm = {1: 3, 2: 6, 3: 9, 4: 12}[q]
+        return _tok_range(1, mm, _static_month_last_day(mm), mm)
+
+    def _emit(q: int) -> str:
+        if mode == "quarter_end":
+            return _last_month_window(q)
+        # quarter_start and first_month both select the quarter's first month window
+        return _first_month_window(q)
+
+    def _note(q: int) -> str:
+        if mode == "quarter_end":
+            return f"Q{q} end month"
+        if mode == "quarter_start":
+            return f"Q{q} start month"
+        # default (no monthly disambiguator present)
+        return f"Q{q} first month"
+
     out = []
     toks = [t.strip().lower() for t in spec.split(",") if t.strip()]
+
     for tok in toks:
         m = re.fullmatch(r"q([1-4])", tok)
         if m:
             q = int(m.group(1))
-            if mode == "quarter_end":
-                # Q1..Q4 ends: 31-03, 30-06, 30-09, 31-12
-                d, mm = [(31, 3), (30, 6), (30, 9), (31, 12)][q - 1]
-                out.append(_tok(d, mm))
-            elif mode == "quarter_start":
-                # Q1..Q4 starts: 01-01, 01-04, 01-07, 01-10
-                d, mm = (1, {1: 1, 2: 4, 3: 7, 4: 10}[q])
-                out.append(_tok(d, mm))
-            else:
-                # 'first_month' window: Jan, Apr, Jul, Oct
-                mm = {1: 1, 2: 4, 3: 7, 4: 10}[q]
-                out.append(_tok_range(1, mm, _static_month_last_day(mm), mm))
+            w = _emit(q)
+            out.append(w)
+            qmap[w] = _note(q)
             continue
 
         m = re.fullmatch(r"q([1-4])(?:\.\.|:)q([1-4])", tok)
         if m:
             qa, qb = int(m.group(1)), int(m.group(2))
             if qa > qb:
-                out.append(tok)  # keep for validator to error nicely
+                out.append(tok)  # leave as-is so the validator can raise nicely elsewhere
             else:
                 for q in range(qa, qb + 1):
-                    if mode == "quarter_end":
-                        d, mm = [(31, 3), (30, 6), (30, 9), (31, 12)][q - 1]
-                        out.append(_tok(d, mm))
-                    elif mode == "quarter_start":
-                        d, mm = (1, {1: 1, 2: 4, 3: 7, 4: 10}[q])
-                        out.append(_tok(d, mm))
-                    else:
-                        mm = {1: 1, 2: 4, 3: 7, 4: 10}[q]
-                        out.append(_tok_range(1, mm, _static_month_last_day(mm), mm))
+                    w = _emit(q)
+                    out.append(w)
+                    qmap[w] = _note(q)
             continue
 
         out.append(tok)
 
+    # De-dup while preserving order
     seen, dedup = set(), []
     for t in out:
         if t not in seen:
             dedup.append(t)
             seen.add(t)
+
+    if meta_out is not None and qmap:
+        meta_out.update(qmap)
+
     return ",".join(dedup)
+
 
 
 def _rewrite_quarters_in_context(dnf):
     """
     Walk DNF (list of AND-terms). For each term:
-      - if it has at least one 'y' atom with q-tokens,
-      - choose a rewrite mode based on the monthly context:
-          * exactly one monthly DOM token '1'  -> quarter_start
-          * exactly one monthly DOM token '-1' -> quarter_end
-          * otherwise                           -> first_month (default)
-      - then rewrite the 'y' atom specs accordingly.
+      - if it contains quarter aliases in a y:* atom (q1..q4, q1..q4 ranges),
+      - choose rewrite mode based on monthly context,
+      - enforce strict rules to prevent ambiguous quarter meaning,
+      - rewrite y:* and attach a per-atom _qmap (rewritten_token -> note) for Natural output.
+
+    Strict rule:
+      If a term uses y:q* together with m:* then m:* must be a SINGLE token that
+      unambiguously indicates *quarter start month* or *quarter end month*.
+
+      Start-month selectors (allowed):
+        - 1
+        - 1bd
+        - 1mon / 1st-mon (first weekday-of-month)
+
+      End-month selectors (allowed):
+        - -N or -Nbd (e.g. -1, -1bd, -2bd)
+        - last-fri (or last<weekday>)
+        - -Nfri (or -N<weekday>)
+
+      Anything else (e.g. m:15, m:2bd, m:rand, m:1,15, multiple m atoms) is rejected.
+      For mid-month semantics inside a quarter, use explicit months (e.g. y:dec).
     """
+
+    def _has_quarter_tokens(spec: str) -> bool:
+        for t in [x.strip().lower() for x in (spec or "").split(",") if x.strip()]:
+            if re.fullmatch(r"q[1-4](?:(?:\.\.|:)q[1-4])?", t):
+                return True
+        return False
+
+    def _is_start_month_selector(tok: str) -> bool:
+        t = (tok or "").strip().lower()
+        if t in ("1", "1bd"):
+            return True
+        m = _nth_weekday_re.match(t)
+        if m:
+            n_raw = (m.group(1) or "").lower()
+            return n_raw in ("1", "1st")
+        return False
+
+    def _is_end_month_selector(tok: str) -> bool:
+        t = (tok or "").strip().lower()
+        # -N
+        if re.fullmatch(r"-\d+", t):
+            return True
+        # -Nbd
+        m_bd = _bd_re.match(t)
+        if m_bd and int(m_bd.group(1)) < 0:
+            return True
+        # last-fri / -Nfri
+        m = _nth_weekday_re.match(t)
+        if m:
+            n_raw = (m.group(1) or "").lower()
+            return n_raw == "last" or n_raw.startswith("-")
+        return False
+
     for term in dnf:
-        y_atoms = [a for a in term if (a.get("typ") or "").lower() == "y"]
+        y_atoms = [a for a in term if (a.get("typ") or a.get("type") or "").lower() == "y"]
         if not y_atoms:
             continue
 
-        # Decide mode from monthly context
-        mode = "first_month"
-        m_atoms = [a for a in term if (a.get("typ") or "").lower() == "m"]
-        if len(m_atoms) == 1:
-            mspec = (m_atoms[0].get("spec") or "").strip().lower()
-            mtoks = [t for t in (x.strip() for x in mspec.split(",")) if t]
-            # EXACTLY one DOM token of '1' or '-1'
-            if len(mtoks) == 1 and mtoks[0] in ("1", "-1"):
-                mode = "quarter_start" if mtoks[0] == "1" else "quarter_end"
+        # Only engage quarter logic if at least one yearly atom actually contains q-tokens
+        if not any(_has_quarter_tokens((a.get("spec") or a.get("value") or "").lower()) for a in y_atoms):
+            continue
 
-        # Rewrite each yearly atom
+        mode = "first_month"  # default when no monthly disambiguator is present
+
+        m_atoms = [a for a in term if (a.get("typ") or a.get("type") or "").lower() == "m"]
+        if m_atoms:
+            if len(m_atoms) != 1:
+                raise ParseError(
+                    "Quarter aliases (y:q1..q4) cannot be combined with multiple monthly atoms in the same term. "
+                    "Use a single m:* selector or replace y:q* with explicit months (e.g. y:oct..dec)."
+                )
+
+            mspec = (m_atoms[0].get("spec") or m_atoms[0].get("value") or "").strip().lower()
+            if mspec == "rand":
+                raise ParseError(
+                    "Quarter aliases (y:q1..q4) cannot be combined with m:rand. "
+                    "Use explicit months if you need randomness within a quarter-like window."
+                )
+
+            mtoks = [t for t in (x.strip() for x in mspec.split(",")) if t]
+            if len(mtoks) != 1:
+                raise ParseError(
+                    "Quarter aliases (y:q1..q4) require a single monthly selector token when used with m:*. "
+                    "Examples: m:1bd + y:q4 (start month) OR m:-1bd + y:q4 (end month). "
+                    "For mid-month semantics, replace y:q* with explicit months (e.g. y:dec)."
+                )
+
+            mt = mtoks[0]
+            if _is_end_month_selector(mt):
+                mode = "quarter_end"
+            elif _is_start_month_selector(mt):
+                mode = "quarter_start"
+            else:
+                raise ParseError(
+                    f"Ambiguous quarter usage: y:q* combined with m:{mspec}. "
+                    "When using y:q* with m:*, the monthly selector must clearly indicate quarter start-month or end-month. "
+                    "Use m:1 / m:1bd / m:1mon (start month) OR m:-1 / m:-1bd / m:last-fri / m:-2bd (end month). "
+                    "Otherwise use explicit months (e.g. y:oct or y:dec)."
+                )
+
+        # Rewrite each yearly atom; attach metadata so Natural can disclose interpretation
         for ya in y_atoms:
-            spec = ya.get("spec") or ""
-            ya["spec"] = _rewrite_quarter_spec_mode(spec, mode)
+            spec = (ya.get("spec") or ya.get("value") or "").lower()
+            if not _has_quarter_tokens(spec):
+                continue
+
+            qmeta: dict[str, str] = {}
+            ya["spec"] = _rewrite_quarter_spec_mode(spec, mode, meta_out=qmeta)
+            if qmeta:
+                ya["_qmap"] = qmeta
+
     return dnf
+
 
 def _rewrite_year_month_aliases_in_dnf(dnf: list[list[dict]]) -> list[list[dict]]:
     """
@@ -2065,9 +2182,15 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
         elif typ == "y":
             yr_ival = max(yr_ival, ival)
             yearly_specs.append(spec)
-            # Ensure per-token formatting:
-            for tok in [t.strip() for t in spec.split(",") if t.strip()]:
-                y_parts.append(_fmt_yearly_atom(tok))
+
+            qmap = a.get("_qmap") or {}
+
+            for tok in [t.strip().lower() for t in spec.split(",") if t.strip()]:
+                phr = _fmt_yearly_atom(tok)
+                if phr and qmap and tok in qmap and not phr.startswith("one random day"):
+                    phr = f"{phr} ({qmap[tok]})"
+                y_parts.append(phr)
+
 
         mods = a.get("mods") or {}
         bd_filter = bd_filter or bool(mods.get("bd") or (mods.get("wd") is True))

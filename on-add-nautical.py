@@ -29,6 +29,19 @@ import shutil
 import textwrap
 from collections import OrderedDict
 
+
+ # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
+ # Python's json.dumps() defaults to ensure_ascii=True, which escapes non-ASCII
+ # as "\\uXXXX". We prefer human-readable UTF-8 JSON for hook passthrough.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+try:
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 # ========= User-togglable constants =========================================
 ANCHOR_WARN = True  # If True, warn when a user-provided due is not on an anchor day
 UPCOMING_PREVIEW = 5  # How many future dates to preview.
@@ -495,7 +508,7 @@ def _format_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, s
             break
 
     config_keys = {"Pattern", "Natural"}
-    schedule_keys = {"First due", "Next anchor", "[auto-due]", "Upcoming"}
+    schedule_keys = {"First due", "Next anchor", "Scheduled", "Wait", "[auto-due]", "Upcoming"}
     limits_keys = {"Limits", "Final (until)"}
 
     config: list[tuple[str, str]] = []
@@ -579,7 +592,7 @@ def _format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]
             break
 
     config_keys = {"Period"}
-    schedule_keys = {"First due", "[auto-due]", "Upcoming"}
+    schedule_keys = {"First due", "Scheduled", "Wait", "[auto-due]", "Upcoming"}
     limits_keys = {"Limits", "Final (max)", "Final (until)"}
 
     config: list[tuple[str, str]] = []
@@ -658,6 +671,72 @@ def _error_and_exit(msg_tuples):
 def _fmt_local_for_task(dt_utc):
     dl = core.to_local(dt_utc)
     return dl.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+# ------------------------------------------------------------------------------
+# wait/scheduled preview helpers (panel only; no mutation on add)
+# ------------------------------------------------------------------------------
+def _fmt_td_no_seconds(td: timedelta) -> str:
+    """Format timedelta as ±Dd HHh:MMm (seconds omitted)."""
+    if not isinstance(td, timedelta):
+        return "—"
+    total_sec = int(td.total_seconds())
+    sign = "-" if total_sec < 0 else "+"
+    total_min = abs(total_sec) // 60
+    days, rem = divmod(total_min, 60 * 24)
+    hours, minutes = divmod(rem, 60)
+    return f"{sign}{days}d {hours:02d}h:{minutes:02d}m"
+
+
+def _append_wait_sched_rows(rows: list, task: dict, due_utc: datetime, auto_due: bool) -> None:
+    """
+    Append Scheduled/Wait lines to panel using LOCAL display, with UTC deltas to due.
+    Also emit warnings when order due > scheduled > wait is violated.
+    """
+    if not (isinstance(rows, list) and isinstance(task, dict) and isinstance(due_utc, datetime)):
+        return
+
+    def _p(field: str) -> datetime | None:
+        v = task.get(field)
+        if not v:
+            return None
+        try:
+            return core.parse_dt_any(v)
+        except Exception:
+            return None
+
+    sched_dt = _p("scheduled")
+    wait_dt = _p("wait")
+
+    if sched_dt:
+        rows.append((
+            "Scheduled",
+            f"[white]{core.fmt_dt_local(sched_dt)}[/]  [dim](Δ {_fmt_td_no_seconds(sched_dt - due_utc)})[/]"
+        ))
+    if wait_dt:
+        rows.append((
+            "Wait",
+            f"[white]{core.fmt_dt_local(wait_dt)}[/]  [dim](Δ {_fmt_td_no_seconds(wait_dt - due_utc)})[/]"
+        ))
+
+    issues: list[str] = []
+    if sched_dt and sched_dt > due_utc:
+        issues.append(f"scheduled is after due by {_fmt_td_no_seconds(sched_dt - due_utc)}")
+    if wait_dt and wait_dt > due_utc:
+        issues.append(f"wait is after due by {_fmt_td_no_seconds(wait_dt - due_utc)}")
+    if wait_dt and sched_dt and wait_dt > sched_dt:
+        issues.append(f"wait is after scheduled by {_fmt_td_no_seconds(wait_dt - sched_dt)}")
+
+    if issues:
+        rows.append((
+            "Warning",
+            "[yellow]Wait/Sched: expected order due > scheduled > wait. " + "; ".join(issues) + ".[/]"
+        ))
+        if auto_due:
+            rows.append((
+                "Note",
+                "[dim]This can happen when due is auto-assigned; adjust scheduled/wait if undesired.[/]"
+            ))
 
 
 # Helper to validate chainUntil is in the future
@@ -927,7 +1006,7 @@ def main():
     # If nothing chain-related, just pass through
     if not kind:
         _t_out = time.perf_counter()
-        print(json.dumps(task), end="")
+        print(json.dumps(task, ensure_ascii=False), end="")
         prof.add_ms('stdout:emit', (time.perf_counter() - _t_out) * 1000.0)
         return
 
@@ -1170,6 +1249,9 @@ def main():
                 )
             )
 
+        # Scheduled/Wait preview (relative to First due)
+        _append_wait_sched_rows(rows, task, display_first_due_utc, auto_due=(not user_provided_due))
+
         # Show past due warning if applicable
         if past_due_warning:
             rows.append(("Warning", f"[yellow]{past_due_warning}[/]"))
@@ -1382,7 +1464,7 @@ def main():
         prof.add_ms('render:anchor_panel', (time.perf_counter() - _t_panel) * 1000.0)
 
         _t_out = time.perf_counter()
-        print(json.dumps(task), end="")
+        print(json.dumps(task, ensure_ascii=False), end="")
         prof.add_ms('stdout:emit', (time.perf_counter() - _t_out) * 1000.0)
         return
 
@@ -1428,6 +1510,9 @@ def main():
 
     rows.append(("Period", f"[bold white]{cp_str}[/]"))
     rows.append(("First due", f"[bold bright_green]{_fmt(due_dt)}[/]"))
+
+    # Scheduled/Wait preview (relative to First due)
+    _append_wait_sched_rows(rows, task, due_dt, auto_due=(not user_provided_due))
 
     cpmax = core.coerce_int(task.get("chainMax"), 0)
 
@@ -1506,7 +1591,7 @@ def main():
         rows,
         kind="preview_cp",
     )
-    print(json.dumps(task), end="")
+    print(json.dumps(task, ensure_ascii=False), end="")
 
 
 

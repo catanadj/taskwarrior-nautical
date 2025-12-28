@@ -22,6 +22,12 @@ try:
 except Exception:
     fcntl = None
 
+# Optional: DST-aware local TZ helpers (used by some carry-forward variants)
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover
+    ZoneInfo = None
+
 
 
  # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
@@ -68,6 +74,73 @@ _CHAIN_COLOR_PER_CHAIN = os.environ.get("NAUTICAL_CHAIN_COLOR", "").strip().lowe
 _SHOW_TIMELINE_GAPS = os.environ.get("NAUTICAL_TIMELINE_GAPS", "").strip().lower() not in {
     "0", "no", "false", "off", "none"
 }
+
+# ------------------------------------------------------------------------------
+# Debug: wait/scheduled carry-forward
+# Set NAUTICAL_DEBUG_WAIT_SCHED=1 to include carry computations in the feedback panel.
+# ------------------------------------------------------------------------------
+_DEBUG_WAIT_SCHED = os.environ.get("NAUTICAL_DEBUG_WAIT_SCHED", "").strip().lower() in {
+    "1", "yes", "true", "on"
+}
+_LAST_WAIT_SCHED_DEBUG: dict[str, dict] = {}
+
+
+def _fmt_td_dd_hhmm(delta: timedelta) -> str:
+    """Format a timedelta as ±Dd HHh:MMm (UTC-seconds based; seconds omitted)."""
+    try:
+        total = int(delta.total_seconds())
+    except Exception:
+        return str(delta)
+    sign = "-" if total < 0 else "+"
+    total = abs(total)
+    # truncate seconds
+    total_minutes = total // 60
+    dd, rem_m = divmod(total_minutes, 1440)  # 24*60
+    hh, mm = divmod(rem_m, 60)
+    return f"{sign}{dd}d {hh:02}h:{mm:02}m"
+
+
+def _append_next_wait_sched_rows(
+    fb: list[tuple[str, str]],
+    nxt: dict,
+    nxt_due_utc: datetime,
+) -> None:
+    """Append Scheduled/Wait lines for the next link showing local time and Δ to due."""
+    if not (isinstance(nxt_due_utc, datetime) and nxt_due_utc):
+        return
+
+    dt_s = _dtparse(nxt.get("scheduled"))
+    dt_w = _dtparse(nxt.get("wait"))
+
+    for fld, label, dt in (
+        ("scheduled", "Scheduled", dt_s),
+        ("wait", "Wait", dt_w),
+    ):
+        if not isinstance(dt, datetime):
+            continue
+        delta_s = _fmt_td_dd_hhmm(dt - nxt_due_utc)
+        fb.append((label, f"{core.fmt_dt_local(dt)}  (Δ {delta_s})"))
+
+    # Informative order validation: due > scheduled > wait
+    # This can be violated when due is auto-assigned but scheduled/wait are user-specified.
+    issues: list[str] = []
+    if isinstance(dt_s, datetime) and dt_s > nxt_due_utc:
+        issues.append(f"scheduled is after due by {_fmt_td_dd_hhmm(dt_s - nxt_due_utc)}")
+    if isinstance(dt_w, datetime) and dt_w > nxt_due_utc:
+        issues.append(f"wait is after due by {_fmt_td_dd_hhmm(dt_w - nxt_due_utc)}")
+    if isinstance(dt_s, datetime) and isinstance(dt_w, datetime) and dt_w > dt_s:
+        issues.append(f"wait is after scheduled by {_fmt_td_dd_hhmm(dt_w - dt_s)}")
+
+    if issues:
+        fb.append((
+            "⚠ Wait/Sched",
+            "Expected order: due > scheduled > wait. " + "; ".join(issues),
+        ))
+        fb.append((
+            "⚠ Wait/Sched",
+            "This can happen when due is auto-assigned; adjust scheduled/wait if undesired.",
+        ))
+
 # ------------------------------------------------------------------------------
 # Locate nautical_core
 # ------------------------------------------------------------------------------
@@ -512,7 +585,7 @@ def _format_next_anchor_rows(
       Rand
     """
     chain_keys = {"Pattern", "Natural", "Basis", "Sanitised"}
-    next_keys = {"Next Due", "Link status", "Links left", "Limits"}
+    next_keys = {"Next Due", "Scheduled", "Wait", "Link status", "Links left", "Limits"}
     timeline_keys = {"Timeline"}
     footer_keys = {"Rand"}
 
@@ -626,7 +699,7 @@ def _format_next_cp_rows(
       Timeline
     """
     chain_keys = {"Period", "Basis"}
-    next_keys = {"Next Due", "Link status", "Links left", "Limits"}
+    next_keys = {"Next Due", "Scheduled", "Wait", "Link status", "Links left", "Limits"}
     timeline_keys = {"Timeline"}
 
     chain: list[tuple[str, str]] = []
@@ -2071,8 +2144,81 @@ _RESERVED_DROP = {
     "rc",
     "nextLink",  # set on parent, not copied
 }
+
 _RESERVED_OVERRIDE = {"due", "entry", "status", "chain", "prevLink", "link"}
 
+
+
+
+# ------------------------------------------------------------------------------
+# wait/scheduled carry-forward (relative to due)
+# ------------------------------------------------------------------------------
+@lru_cache(maxsize=1)
+def _nautical_local_tz():
+    """Return ZoneInfo for configured local TZ (or None if unavailable)."""
+    if ZoneInfo is None:
+        return None
+    try:
+        name = getattr(core, "LOCAL_TZ_NAME", "") or "UTC"
+        return ZoneInfo(name)
+    except Exception:
+        return None
+
+
+def _utc_to_local_naive(dt_utc: datetime) -> datetime:
+    """UTC -> local naive (wall-clock)."""
+    if not isinstance(dt_utc, datetime):
+        raise TypeError("dt_utc must be datetime")
+    # Prefer core.to_local to honor any future core logic.
+    try:
+        dloc = core.to_local(dt_utc)
+    except Exception:
+        tz = _nautical_local_tz()
+        if dt_utc.tzinfo is None:
+            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+        dloc = dt_utc.astimezone(tz) if tz else dt_utc
+    return dloc.replace(tzinfo=None)
+
+
+def _local_naive_to_utc(dt_local_naive: datetime) -> datetime:
+    """Local naive (wall-clock) -> UTC, best-effort DST aware."""
+    if not isinstance(dt_local_naive, datetime):
+        raise TypeError("dt_local_naive must be datetime")
+    tz = _nautical_local_tz()
+    if tz:
+        aware = dt_local_naive.replace(tzinfo=tz)
+        return aware.astimezone(timezone.utc).replace(microsecond=0)
+    return dt_local_naive.replace(tzinfo=timezone.utc).replace(microsecond=0)
+
+
+def _carry_relative_datetime(parent: dict, child: dict, child_due_utc: datetime, field: str) -> None:
+    """Carry wait/scheduled forward relative to due, preserving local wall-clock offset.
+
+    offset := (parent[field] - parent[due]) computed in local wall-clock space
+    child[field] := child_due + offset (also in local wall-clock space)
+    """
+    if not isinstance(parent, dict) or not isinstance(child, dict):
+        return
+    if not (parent.get(field) and parent.get("due")):
+        return
+
+    # Do not carry absolute timestamps forward.
+    child.pop(field, None)
+
+    p_due = core.parse_dt_any(parent.get("due"))
+    p_val = core.parse_dt_any(parent.get(field))
+    if not (p_due and p_val and isinstance(child_due_utc, datetime)):
+        return
+
+    try:
+        delta = _utc_to_local_naive(p_val) - _utc_to_local_naive(p_due)
+        c_due_local = _utc_to_local_naive(child_due_utc)
+        c_val_local = c_due_local + delta
+        c_val_utc = _local_naive_to_utc(c_val_local)
+        child[field] = core.fmt_isoz(c_val_utc)
+    except Exception:
+        # If anything goes wrong, do not mutate the child's field (leave inherited value).
+        return
 
 def _build_child_from_parent(
     parent: dict,
@@ -2084,6 +2230,8 @@ def _build_child_from_parent(
     until_dt,
 ):
     child = {k: v for k, v in parent.items() if k not in _RESERVED_DROP}
+    if _DEBUG_WAIT_SCHED:
+        _LAST_WAIT_SCHED_DEBUG.clear()
     for k in _RESERVED_OVERRIDE:
         child.pop(k, None)
     child.update(
@@ -2105,6 +2253,11 @@ def _build_child_from_parent(
         child.pop("anchor", None)
         child.pop("anchor_mode", None)
 
+
+    # Carry wait/scheduled forward relative to due (if present on parent)
+    _carry_rel_dt_utc(parent, child, child_due_utc, "wait")
+    _carry_rel_dt_utc(parent, child, child_due_utc, "scheduled")
+
     if cpmax:
         child["chainMax"] = int(cpmax)
     if until_dt:
@@ -2122,6 +2275,53 @@ def _build_child_from_parent(
 
     return child
 
+def _carry_rel_dt_utc(parent: dict, child: dict, child_due_utc: datetime, field: str) -> None:
+    """Carry a datetime field forward relative to due using a UTC timedelta.
+
+    offset := parent[field] - parent[due]
+    child[field] := child_due + offset
+
+    Notes:
+      - This is intentionally UTC-timedelta based (seconds-accurate).
+      - We always remove any inherited absolute value first to avoid 'sticky' wait/scheduled.
+      - When NAUTICAL_DEBUG_WAIT_SCHED=1, we stash a short debug payload for the feedback panel.
+    """
+    if not isinstance(parent, dict) or not isinstance(child, dict):
+        return
+    if not (parent.get("due") and parent.get(field)):
+        return
+
+    # Never carry absolute timestamps forward.
+    child.pop(field, None)
+
+    p_due = _dtparse(parent.get("due"))
+    p_val = _dtparse(parent.get(field))
+    if not (isinstance(p_due, datetime) and isinstance(p_val, datetime) and isinstance(child_due_utc, datetime)):
+        if _DEBUG_WAIT_SCHED:
+            _LAST_WAIT_SCHED_DEBUG[field] = {
+                "ok": False,
+                "reason": "parse-failed",
+                "parent_due": parent.get("due"),
+                "parent_val": parent.get(field),
+                "child_due": child.get("due") or (core.fmt_isoz(child_due_utc) if isinstance(child_due_utc, datetime) else None),
+            }
+        return
+
+    delta = (p_val - p_due)
+    c_val = (child_due_utc + delta).replace(microsecond=0)
+    child[field] = core.fmt_isoz(c_val)
+
+    if _DEBUG_WAIT_SCHED:
+        delta_s = _fmt_td_dd_hhmm(delta)
+
+        _LAST_WAIT_SCHED_DEBUG[field] = {
+            "ok": True,
+            "parent_due": parent.get("due"),
+            "parent_val": parent.get(field),
+            "delta": delta_s,
+            "child_due": child.get("due"),
+            "child_val": child.get(field),
+        }
 
 # ------------------------------------------------------------------------------
 # End-of-chain summary + stats
@@ -3072,6 +3272,22 @@ def main():
         fb.append(("Natural", core.describe_anchor_dnf(dnf, new)))
         fb.append(("Basis", _pretty_basis_anchor(meta, new)))
         fb.append(("Root", _format_root_and_age(new, now_utc)))
+
+        if _DEBUG_WAIT_SCHED and _LAST_WAIT_SCHED_DEBUG:
+            for _fld in ("scheduled", "wait"):
+                d = _LAST_WAIT_SCHED_DEBUG.get(_fld)
+                if not d:
+                    continue
+                if d.get("ok"):
+                    fb.append((
+                        f"{_fld} carry",
+                        f"Δ {d.get('delta')}  parent {d.get('parent_val')} vs {d.get('parent_due')}  →  child {d.get('child_val')}"
+                    ))
+                else:
+                    fb.append((
+                        f"{_fld} carry",
+                        f"[yellow]skip[/] ({d.get('reason')})  parent {d.get('parent_val')} vs {d.get('parent_due')}"
+                    ))
         if stripped_attrs:
             fb.append(
                 (
@@ -3084,6 +3300,7 @@ def main():
             now_utc, child_due, use_months_days=core.expr_has_m_or_y(dnf)
         )
         fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
+        _append_next_wait_sched_rows(fb, child, child_due)
 
         if cap_no:
             if base_no >= cap_no:
@@ -3159,6 +3376,7 @@ def main():
         fb.append(("Basis", _pretty_basis_cp(new, meta)))
         fb.append(("Root", _format_root_and_age(new, now_utc)))
         fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
+        _append_next_wait_sched_rows(fb, child, child_due)
 
         if cap_no:
             if base_no >= cap_no:

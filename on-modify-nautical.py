@@ -16,8 +16,25 @@ from functools import lru_cache
 import re
 from decimal import Decimal, InvalidOperation
 import shlex
+import time as _time
+try:
+    import fcntl  # POSIX advisory lock
+except Exception:
+    fcntl = None
 
 
+
+ # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
+ # Python's json.dumps() defaults to ensure_ascii=True, which escapes non-ASCII
+ # as "\\uXXXX". Prefer human-readable UTF-8 JSON for hook passthrough.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+try:
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 # ------------------------------------------------------------------------------
 # Constants
 # ------------------------------------------------------------------------------
@@ -56,6 +73,18 @@ _SHOW_TIMELINE_GAPS = os.environ.get("NAUTICAL_TIMELINE_GAPS", "").strip().lower
 # ------------------------------------------------------------------------------
 HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
+
+TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
+
+# ------------------------------------------------------------------------------
+# Deferred next-link spawn queue (used when nested `task import` times out due to TW lock)
+# ------------------------------------------------------------------------------
+_SPAWN_QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
+_SPAWN_QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
+_SPAWN_QUEUE_KICK = TW_DATA_DIR / ".nautical_spawn_queue.kick"
+_SPAWN_DRAIN_SLEEP_SECS = 0.25
+_SPAWN_DRAIN_THROTTLE_SECS = 1.0
+
 
 _candidates = []
 
@@ -159,7 +188,7 @@ def _read_two():
 
 
 def _print_task(task):
-    print(json.dumps(task), end="")
+    print(json.dumps(task, ensure_ascii=False), end="")
 
 
 _RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
@@ -647,6 +676,252 @@ _TW_JISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
 
 
+
+class _SpawnDeferred(RuntimeError):
+    """Raised when inline spawn is deferred due to Taskwarrior lock contention."""
+
+    def __init__(self, *, child_short: str, stripped_attrs: set[str] | None = None, reason: str = ""):
+        super().__init__(reason or "Deferred spawn")
+        self.child_short = child_short
+        self.stripped_attrs = stripped_attrs or set()
+        self.reason = reason or "Deferred spawn"
+
+
+def _queue_locked(fn):
+    """Run `fn()` under an advisory file lock (best-effort)."""
+    if fcntl is None:
+        return fn()
+    try:
+        _SPAWN_QUEUE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    lf = None
+    try:
+        lf = open(_SPAWN_QUEUE_LOCK, "a", encoding="utf-8")
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        return fn()
+    finally:
+        try:
+            if lf is not None:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            if lf is not None:
+                lf.close()
+        except Exception:
+            pass
+
+
+def _requeue_deferred_spawn_payload(payload: str) -> None:
+    if not payload:
+        return
+
+    def _put():
+        try:
+            _SPAWN_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            with open(_SPAWN_QUEUE_PATH, "a", encoding="utf-8") as f:
+                f.write(payload)
+        except Exception:
+            # Best-effort; if we cannot persist, we simply drop (but keep hook alive).
+            pass
+
+    _queue_locked(_put)
+
+
+def _enqueue_deferred_spawn(task_obj: dict) -> None:
+    """Append one task JSON object to the deferred spawn queue (JSONL, UTF-8)."""
+    try:
+        line = json.dumps(task_obj, ensure_ascii=False, separators=(",", ":")) + "\n"
+    except Exception:
+        # As a last resort, fall back to default encoding.
+        line = json.dumps(task_obj) + "\n"
+    _requeue_deferred_spawn_payload(line)
+
+
+def _iter_json_objects_from_mixed_text(raw: str):
+    """Yield JSON objects from a text stream that may contain whitespace and literal '\\n' separators.
+
+    This is intentionally tolerant: earlier Nautical builds mistakenly wrote the literal two
+    characters '\\n' between JSON objects. This parser treats those sequences as separators
+    *only when they occur between objects* (i.e., outside of decoded JSON strings).
+    """
+    dec = json.JSONDecoder()
+    i = 0
+    n = len(raw)
+    while i < n:
+        # Skip whitespace and literal "\n" separators between objects.
+        while i < n:
+            ch = raw[i]
+            if ch.isspace():
+                i += 1
+                continue
+            if raw.startswith("\\n", i):
+                i += 2
+                continue
+            break
+        if i >= n:
+            break
+
+        try:
+            obj, j = dec.raw_decode(raw, i)
+        except Exception:
+            # Resync: jump to next object start if possible.
+            nxt = raw.find("{", i + 1)
+            if nxt == -1:
+                break
+            i = nxt
+            continue
+
+        if isinstance(obj, dict):
+            yield obj
+        i = j
+
+
+def _take_deferred_spawn_payload() -> str:
+    """Take (and truncate) the queue, returning normalized JSONL payload (one object per line)."""
+
+    def _take():
+        try:
+            if not _SPAWN_QUEUE_PATH.exists():
+                return ""
+        except Exception:
+            return ""
+
+        try:
+            raw = _SPAWN_QUEUE_PATH.read_text(encoding="utf-8")
+        except Exception:
+            raw = ""
+
+        if not (raw or "").strip():
+            try:
+                _SPAWN_QUEUE_PATH.unlink()
+            except Exception:
+                pass
+            return ""
+
+        objs = list(_iter_json_objects_from_mixed_text(raw))
+        if not objs:
+            # Do not truncate if we couldn't parse anything (avoid data loss).
+            return ""
+
+        # Truncate while under lock; import happens after lock is released.
+        try:
+            _SPAWN_QUEUE_PATH.write_text("", encoding="utf-8")
+        except Exception:
+            pass
+
+        return "\n".join(json.dumps(o, ensure_ascii=False, separators=(",", ":")) for o in objs) + "\n"
+
+    return _queue_locked(_take) or ""
+
+
+
+def _drain_deferred_spawn_queue() -> int:
+    """Drain queued spawns (best-effort). Returns 0 on success/empty, non-zero on failure."""
+    payload = _take_deferred_spawn_payload()
+    if not (payload or "").strip():
+        return 0
+
+    env = os.environ.copy()
+    last_err = ""
+
+    for attempt in range(1, 8):
+        try:
+            r = subprocess.run(
+                ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.verbose=nothing", "import", "-"],
+                input=payload,
+                text=True,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+            )
+            if r.returncode == 0:
+                return 0
+
+            last_err = (r.stderr or "").strip()
+
+            # If the only issue is schema drift (unknown attrs), sanitise and retry.
+            if "Unrecognized attribute" in last_err:
+                objs = []
+                for ln in (payload or "").splitlines():
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    try:
+                        obj = json.loads(ln)
+                    except Exception:
+                        continue
+                    _sanitize_unknown_attrs(last_err, obj)
+                    objs.append(obj)
+
+                if objs:
+                    payload = "\n".join(json.dumps(o, ensure_ascii=False, separators=(",", ":")) for o in objs) + "\n"
+                    continue
+
+        except subprocess.TimeoutExpired:
+            last_err = "task import timed out"
+        except Exception as e:
+            last_err = str(e)
+
+        # Backoff: the parent command should have released the lock by now, but be defensive.
+        _time.sleep(0.15 * attempt)
+
+    # Put the payload back so it can be retried later (keep the most recent sanitised payload).
+    _requeue_deferred_spawn_payload(payload)
+    return 1
+
+
+def _kick_deferred_spawn_drain_async() -> None:
+    """Start a detached drain run (throttled, best-effort).
+
+    This must *not* block the hook. It schedules a short delayed drain in a
+    detached process so the parent Taskwarrior command can release its lock first.
+    """
+    try:
+        if not _SPAWN_QUEUE_PATH.exists() or _SPAWN_QUEUE_PATH.stat().st_size <= 0:
+            return
+    except Exception:
+        # If we cannot stat, still attempt a kick.
+        pass
+
+    # Throttle kicks (avoid spawning many drainers in bursts).
+    try:
+        now = _time.time()
+        last = _SPAWN_QUEUE_KICK.stat().st_mtime if _SPAWN_QUEUE_KICK.exists() else 0.0
+        if (now - last) < float(_SPAWN_DRAIN_THROTTLE_SECS):
+            return
+        _SPAWN_QUEUE_KICK.write_text("", encoding="utf-8")
+    except Exception:
+        pass
+
+    script = str(Path(__file__).resolve())
+    py = sys.executable or "python3"
+
+    # Avoid shell dependencies. Use Python to sleep, then drain.
+    cmd_list = [py, script, "--drain-spawn-queue"]
+    code = (
+        "import time,subprocess; "
+        f"time.sleep({_SPAWN_DRAIN_SLEEP_SECS}); "
+        f"subprocess.run({repr(cmd_list)}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
+    )
+    try:
+        subprocess.Popen(
+            [py, "-c", code],
+            start_new_session=True,
+            close_fds=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        # If cannot kick, the queue remains and can be drained manually.
+        pass
+
 def _short(u):
     return (u or "")[:8]
 
@@ -748,7 +1023,7 @@ def _spawn_child(child_task: dict) -> tuple[str, set[str]]:
 
         try:
             r = subprocess.run(
-                ["task", "rc.hooks=off", "import", "-"],
+                ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "import", "-"],
                 input=payload,
                 text=True,
                 env=env,
@@ -857,18 +1132,19 @@ def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
 
 def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tuple[str, set[str]]:
     """
-    Atomically import BOTH the spawned child and the updated parent task in a single
-    `task import -` call (multi-line JSON). This prevents chain forks if execution
-    is interrupted between child creation and parent update.
+    Spawn a child via `task import -`.
 
-    Returns (child_short_uuid, stripped_attrs).
+    Important: The parent update is applied by Taskwarrior using this hook's stdout.
+    We intentionally avoid importing the parent from inside the hook to reduce the
+    risk of re-entering Taskwarrior while it is holding the datastore lock.
+
+    If the nested import times out (typically lock contention during `task done`),
+    we enqueue the child for a deferred drain after the main command returns and
+    raise `_SpawnDeferred` (callers should keep the returned nextLink value).
     """
     env = os.environ.copy()
 
-    if not parent_task_with_nextlink.get("uuid"):
-        raise RuntimeError("Parent task missing uuid (cannot atomic import).")
-
-    # Prepare child (new uuid) and a parent copy that points to it
+    # Prepare child with a stable UUID (so retries / deferred drain cannot fork).
     child_uuid = str(uuid.uuid4())
     child_obj = dict(child_task)
     child_obj["uuid"] = child_uuid
@@ -879,49 +1155,43 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
 
     child_short = child_uuid[:8]
 
-    parent_obj = dict(parent_task_with_nextlink)
-    parent_obj["nextLink"] = child_short
-
     # Normalise
     child_obj = _strip_none_and_cast(child_obj)
-    parent_obj = _strip_none_and_cast(parent_obj)
     _normalise_datetime_fields(child_obj)
-    _normalise_datetime_fields(parent_obj)
 
     stripped_attrs: set[str] = set()
     last_stderr = ""
     last_category = "unknown"
 
     for attempt in range(1, _MAX_SPAWN_ATTEMPTS + 1):
-        payload = json.dumps(child_obj) + "\n" + json.dumps(parent_obj) + "\n"
+        payload = json.dumps(child_obj, ensure_ascii=False) + "\n"
 
         try:
             r = subprocess.run(
-                ["task", "rc.hooks=off", "import", "-"],
+                ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "import", "-"],
                 input=payload,
                 text=True,
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=10,
+                timeout=2,
             )
         except subprocess.TimeoutExpired:
-            last_stderr = "Task import timed out"
-            last_category = "timeout"
-            continue
+            # Likely Taskwarrior datastore lock contention (re-entrance from hook).
+            _enqueue_deferred_spawn(child_obj)
+            raise _SpawnDeferred(
+                child_short=child_short,
+                stripped_attrs=stripped_attrs,
+                reason="Task import timed out (likely lock contention); queued for deferred drain",
+            )
 
         last_stderr = r.stderr or ""
         if r.returncode == 0:
-            # Confirm the child landed; parent is updated in the same atomic import.
-            if _task_exists_by_uuid(child_uuid, env):
-                return (child_short, stripped_attrs)
-            last_category = "verify"
-            continue
+            return (child_short, stripped_attrs)
 
         # Strip unrecognized attributes and retry (best-effort resilience).
         if "Unrecognized attribute" in last_stderr:
             stripped_attrs |= _sanitize_unknown_attrs(last_stderr, child_obj)
-            stripped_attrs |= _sanitize_unknown_attrs(last_stderr, parent_obj)
             last_category = "attribute"
             continue
 
@@ -931,7 +1201,7 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
             break
 
     raise RuntimeError(
-        f"Atomic import failed after {_MAX_SPAWN_ATTEMPTS} attempts "
+        f"Child import failed after {_MAX_SPAWN_ATTEMPTS} attempts "
         f"(category={last_category}): {last_stderr.strip()}"
     )
 
@@ -1033,7 +1303,6 @@ def _format_root_and_age(task: dict, now_utc: datetime) -> str:
         return "—"
     
     # Only show age if it's > 0
-    print (age_days)
     if age_days is not None and age_days > 0:
         return f"{root_short} ▻ {age_days}d"
     
@@ -1089,7 +1358,6 @@ def _validate_anchor_on_modify(expr: str):
 
 
     # NOTE: legacy weekday ':' syntax is accepted for backward compatibility.
-    # (Lint warnings can be added later.)
 
     # Strict validation
     try:
@@ -2371,7 +2639,7 @@ def _timeline_lines(
 
 def _got_anchor_invalid(msg: str) -> None:
     _panel("❌ Invalid anchor", [("Validation", msg)], kind="error")
-    print(json.dumps({"error": "Invalid anchor", "message": msg}))
+    print(json.dumps({"error": "Invalid anchor", "message": msg}, ensure_ascii=False))
     sys.exit(1)
 
 
@@ -2488,7 +2756,7 @@ def main():
 
     # Skip all Nautical logic when task is being deleted
     if (new.get("status") or "").lower() == "deleted":
-        print(json.dumps(new))
+        print(json.dumps(new, ensure_ascii=False))
         return
 
 
@@ -2570,11 +2838,11 @@ def main():
                 raise ValueError(f"Invalid duration format '{new_cp}'")
         except ValueError as e:
             _panel("❌ Invalid CP", [("Validation", str(e))], kind="error")
-            print(json.dumps({"error": "Invalid CP", "message": str(e)}))
+            print(json.dumps({"error": "Invalid CP", "message": str(e)}, ensure_ascii=False))
             sys.exit(1)
         except Exception as e:
             _panel("❌ CP Error", [("Validation", f"Unexpected error: {str(e)}")], kind="error")
-            print(json.dumps({"error": "CP parsing error", "message": str(e)}))
+            print(json.dumps({"error": "CP parsing error", "message": str(e)}, ensure_ascii=False))
             sys.exit(1)
 
             # Deep checks only if fields changed
@@ -2764,8 +3032,18 @@ def main():
         _print_task(new)
         return
 
+    deferred_spawn = False
+    spawn_note = None
     try:
         child_short, stripped_attrs = _spawn_child_atomic(child, new)
+    except _SpawnDeferred as sd:
+        # Parent update (nextLink) is still applied by the outer TW command.
+        # We keep the chosen UUID and defer the child import until after the lock is released.
+        child_short = sd.child_short
+        stripped_attrs = sd.stripped_attrs
+        deferred_spawn = True
+        spawn_note = "[yellow]Queued[/] (Taskwarrior lock active; will import after this command finishes)"
+        _kick_deferred_spawn_drain_async()
     except Exception as e:
         _panel(
             "⛓ Chain error",
@@ -2775,11 +3053,13 @@ def main():
         _print_task(new)
         return
 
-    # Reflect link on parent for nice UX
+    # Reflect link on parent for nice UX (even if the child is queued)
     new["nextLink"] = child_short
 
     # Feedback panel
     fb = []
+    if spawn_note:
+        fb.append(("Spawn", spawn_note))
     if kind == "anchor":
         anchor_raw = (new.get("anchor") or "").strip()
         expr_str = _strip_quotes(anchor_raw) 
@@ -2825,9 +3105,15 @@ def main():
             )
 
 
-        child_obj = _export_uuid_short_cached(child_short)
-        child_id = child_obj.get("id", "") if child_obj else ""
-        title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short} [{child_id}]"
+        child_id = ""
+        if not deferred_spawn:
+            child_obj = _export_uuid_short_cached(child_short)
+            child_id = child_obj.get("id", "") if child_obj else ""
+
+        if deferred_spawn:
+            title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short} [queued]"
+        else:
+            title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short} [{child_id}]"
         tl = _timeline_lines(
             "anchor",
             new,
@@ -2895,9 +3181,15 @@ def main():
                 )
             )
 
-        child_obj = _export_uuid_short_cached(child_short)
-        child_id = child_obj.get("id", "") if child_obj else ""
-        title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short} [{child_id}]"
+        child_id = ""
+        if not deferred_spawn:
+            child_obj = _export_uuid_short_cached(child_short)
+            child_id = child_obj.get("id", "") if child_obj else ""
+
+        if deferred_spawn:
+            title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short} [queued]"
+        else:
+            title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short} [{child_id}]"
         tl = _timeline_lines(
             "cp",
             new,
@@ -2936,4 +3228,6 @@ def main():
 
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
+    if "--drain-spawn-queue" in sys.argv[1:]:
+        raise SystemExit(_drain_deferred_spawn_queue())
     main()

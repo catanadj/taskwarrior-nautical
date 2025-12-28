@@ -287,7 +287,6 @@ def _panel(title, rows, kind: str = "info"):
             # Remove Rich markup tags like [bold], [/], [cyan], etc.,
             # but keep bracketed literals such as [auto-due].
             # NOTE: Rich uses a bare closing tag "[/]" to reset style.
-            # That tag can leak into our strings if upstream produced markup.
             s = s.replace("[/]", "")
             return re.sub(r"\[/?[A-Za-z0-9_ ]+\]", "", s)
 

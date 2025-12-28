@@ -71,6 +71,24 @@ Done - you're ready for the next section.
 | Quarterly on 15-Jan,15-Apr…                       | `anchor:"y:01-15,04-15,07-15,10-15"` |
 
 ---
+## What you get (and what you don’t)
+
+Feature matrix (✓ = first-class, ◐ = partial, ✗ = missing)
+| Capability                                                             | TW+Nautical | Todoist            | TickTick | Notion | OmniFocus       | Things  |
+| ---------------------------------------------------------------------- | ----------- | ------------------ | -------- | ------ | --------------- | ------- |
+| **Open source & self-host**                                            | ✓           | ✗                  | ✗        | ✗      | ✗               | ✗       |
+| Plain-text storage                                                     | ✓           | ✗                  | ✗        | ✗      | ✗               | ✗       |
+| Off-line first                                                         | ✓           | ◐                  | ◐        | ◐      | ✓               | ✓       |
+| **Arbitrary date DNF** (last Mon of quarter, every 3rd Tue except Dec) | ✓           | ✗                  | ✗        | ✗      | ◐ (Defer)       | ✗       |
+| **Multi-time per day** (`@t=09:00,17:30`)                              | ✓           | ✗                  | ✗        | ✗      | ✗               | ✗       |
+| **Skip / Flex / Back-fill modes**                                      | ✓           | ✗                  | ✗        | ✗      | ✓ (FIFO)        | ✗       |
+| **Chain caps** (max N or until-date)                                   | ✓           | ◐ (only “N times”) | ◐        | ◐      | ✓               | ✓       |
+| **Sub-day periods** (`cp=6h30m`)                                       | ✓           | ✗                  | ✗        | ✗      | ✗               | ✗       |
+| **Scriptable / CLI**                                                   | ✓           | ◐ (REST)           | ◐        | ◐      | ◐ (AppleScript) | ◐ (URL) |
+| **Hook ecosystem** (user code on add/modify/done)                      | ✓           | ✗                  | ✗        | ✗      | ✗               | ✗       |
+| **Speed** (add task ≤ 50 ms)                                           | ✓           | ✓                  | ✓        | ◐      | ✓               | ✓       |
+
+---
 
 ## Anchors (calendar logic)
 

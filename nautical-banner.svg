@@ -180,12 +180,12 @@
   <!-- Subtle labels -->
   <text x="280" y="370" text-anchor="middle"
         font-family="system-ui" font-size="16" font-weight="600"
-        fill="#7a8d9a" opacity="0.8">
+        fill="#FFFFFF" opacity="0.8">
     Calendar Logic
   </text>
   <text x="1000" y="370" text-anchor="middle"
         font-family="system-ui" font-size="16" font-weight="600"
-        fill="#7a8d9a" opacity="0.8">
+        fill="#FFFFFF" opacity="0.8">
     Completion-Based
   </text>
 </svg>

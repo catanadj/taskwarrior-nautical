@@ -10,8 +10,8 @@ task add "Monthly review" anchor:"m:last-fri"
 # Every 33 h, wall-clock preserved
 task add "Take Vitamin" cp:33h due:now+12h
 
-# 2nd Mon + first working day before 15th
-task add "Board prep" anchor:"m:2mon,m:15@pbd"
+# 2nd Mon or first working day before 15th
+task add "Board prep" anchor:"m:2mon | m:15@pbd"
 ```
 
 <p align="center">

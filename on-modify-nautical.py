@@ -22,6 +22,9 @@ try:
 except Exception:
     fcntl = None
 
+from typing import Optional
+
+
 # Optional: DST-aware local TZ helpers (used by some carry-forward variants)
 try:
     from zoneinfo import ZoneInfo
@@ -1638,7 +1641,7 @@ def _pretty_basis_anchor(meta: dict, task: dict) -> str:
     due0 = core.parse_dt_any(task.get("due"))
     due_s = core.fmt_dt_local(due0) if due0 else "(no due)"
     if mode == "skip":
-        return "SKIP — Next anchor after completion time"
+        return "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)"
     if mode == "flex":
         return f"FLEX — Skip missed up to now; next after completion ({missed} missed since {due_s})"
     if basis == "missed":
@@ -1698,6 +1701,47 @@ def _extract_time_slots_from_dnf(dnf) -> list[tuple[int, int]]:
         return []
     return sorted(out)
 
+def _skip_reference_dt_local(
+    dnf,
+    end_local: "datetime",
+    due_local: Optional["datetime"],
+) -> "datetime":
+    """Choose the reference datetime for SKIP mode.
+
+    For multi-time anchors, completing *between* scheduled slots should advance to the *next* slot
+    (e.g. 09→12) rather than skipping it (09→18) due to a future due timestamp.
+
+    Rules:
+      - If there is no due: advance from completion time.
+      - If completion is on/after due: advance from completion time.
+      - If completion is before due:
+          * Single-slot anchors: treat completion as fulfilling the due slot (advance from due)
+            to avoid respawning the same slot.
+          * Multi-slot anchors (same day): if completion time is after an earlier slot on that day,
+            treat completion as fulfilling the latest earlier slot; otherwise, treat as fulfilling
+            the due slot.
+    """
+    if due_local is None:
+        return end_local
+
+    if end_local >= due_local:
+        return end_local
+
+    slots = _extract_time_slots_from_dnf(dnf)
+    if len(slots) <= 1:
+        return due_local
+
+    if end_local.date() != due_local.date():
+        return due_local
+
+    end_hhmm = (end_local.hour, end_local.minute)
+    prev_slots = [s for s in slots if s <= end_hhmm]
+    if not prev_slots:
+        return due_local
+
+    hh, mm = prev_slots[-1]
+    tz = end_local.tzinfo or _local_tz()
+    return datetime.combine(end_local.date(), time(hh, mm), tzinfo=tz)
 
 def _as_local_dt(d: datetime | None) -> datetime | None:
     if d is None:
@@ -1961,9 +2005,14 @@ def _compute_anchor_child_due(parent: dict):
                 missed_preview=[x.isoformat() for x in missed_dts[:5]],
             )
         else:
+            ref_local = _skip_reference_dt_local(
+                dnf,
+                end_local=end_local,
+                due_local=(due_local if due_dt_utc else None),
+            )
             nxt_local = _next_occurrence_after_local_dt(
                 dnf,
-                after_local_dt=due_local,
+                after_local_dt=ref_local,
                 default_seed_date=default_seed,
                 seed_base=seed_base,
                 fallback_hhmm=fallback_hhmm,

@@ -5,7 +5,7 @@ Shared core for Taskwarrior Nautical hooks.
 
 """
 from __future__ import annotations
-import os, re
+import os, re, sys
 from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache
 from calendar import month_name
@@ -21,7 +21,11 @@ import difflib
 try:
     import tomllib  # Python 3.11+
 except Exception:
-    tomllib = None  # config file remains optional
+    try:
+        import tomli as tomllib  # Python 3.10 and earlier (pip install tomli)
+    except Exception:
+        tomllib = None
+
 
 # Defaults 
 _DEFAULTS = {
@@ -35,44 +39,110 @@ _DEFAULTS = {
 _CONF_CACHE = None
 
 def _read_toml(path: str) -> dict:
-    if not tomllib:
+    # Fast path: missing file => no config here
+    try:
+        if not path or not os.path.exists(path):
+            return {}
+    except Exception:
         return {}
+
+    # File exists, but we cannot parse TOML (Python < 3.11 and no tomli)
+    if tomllib is None:
+        _warn_missing_toml_parser(path)
+        return {}
+
     try:
         with open(path, "rb") as f:
             return tomllib.load(f) or {}
-    except FileNotFoundError:
+    except Exception as e:
+        # Either show full details in explicit diagnostic mode
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            print(f"[nautical] Failed to parse TOML: {path}: {e}", file=sys.stderr)
+        else:
+            _warn_toml_parse_error(path, e)
         return {}
-    except Exception:
-        # swallow parse errors → fall back to defaults
-        return {}
+
 
 def _config_paths() -> list[str]:
-    # 1) Explicit env override always wins
     env_path = os.environ.get("NAUTICAL_CONFIG")
     if env_path:
-        return [env_path]
+        ap = os.path.abspath(os.path.expanduser(env_path))
+        if (not os.path.exists(ap)) or os.path.isdir(ap):
+            _warn_env_config_missing(env_path)
+        return [ap]
 
-    # 2) Local file next to this core module
+    def _dedup(paths: list[str]) -> list[str]:
+        seen = set()
+        out = []
+        for p in paths:
+            if not p:
+                continue
+            ap = os.path.abspath(os.path.expanduser(p))
+            if ap in seen:
+                continue
+            seen.add(ap)
+            out.append(ap)
+        return out
+
+    def _candidates_in_dir(d: str) -> list[str]:
+        d = os.path.abspath(os.path.expanduser(d))
+        return [
+            os.path.join(d, "config-nautical.toml"),
+            os.path.join(d, "nautical.toml"),
+        ]
+
+    paths: list[str] = []
+
+    # TASKRC contexts
+    trc = os.environ.get("TASKRC")
+    if trc:
+        trc_abs = os.path.abspath(os.path.expanduser(trc))
+        trc_dir = os.path.dirname(trc_abs)
+
+        # next to TASKRC
+        paths.extend(_candidates_in_dir(trc_dir))
+
+        # sibling ".task" next to TASKRC directory (portable layouts)
+        paths.extend(_candidates_in_dir(os.path.join(trc_dir, ".task")))
+
+        # if TASKRC directory itself is ".task"
+        if os.path.basename(trc_dir) == ".task":
+            paths.extend(_candidates_in_dir(trc_dir))
+
+    # module-adjacent
     moddir = os.path.dirname(os.path.abspath(__file__))
-    local_candidates = [
-        os.path.join(moddir, "nautical.toml"),
-        os.path.join(moddir, "config.toml"),
-        os.path.join(moddir, "config-nautical.toml"),
-        os.path.join(moddir, ".nautical.toml"),
-    ]
+    paths.extend(_candidates_in_dir(moddir))
 
-    # 3) XDG-style path (if set)
+    # XDG config (explicit, then default)
     xdg = os.environ.get("XDG_CONFIG_HOME")
-    xdg_candidate = [os.path.join(xdg, "nautical", "config.toml", "config-nautical")] if xdg else []
+    if xdg:
+        paths.extend(_candidates_in_dir(os.path.join(xdg, "nautical")))
+    paths.extend(_candidates_in_dir(os.path.expanduser("~/.config/nautical")))
 
-    # 4) Home fallbacks
-    home_candidates = [
-        os.path.expanduser("~/.config/nautical/config-nautical.toml"),
-        os.path.expanduser("~/.nautical.toml"),
-    ]
+    # Taskwarrior-centric placement
+    paths.extend(_candidates_in_dir(os.path.expanduser("~/.task")))
 
-    # Returned in priority order; the loader will use the first that exists & parses
-    return local_candidates + xdg_candidate + home_candidates
+    out = _dedup(paths)
+
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        try:
+            print("[nautical] Config search order:", file=sys.stderr)
+            for p in out:
+                print(f"  - {p}", file=sys.stderr)
+        except Exception:
+            pass
+
+    return out
+
+def _warn_env_config_missing(env_path: str) -> None:
+    ap = os.path.abspath(os.path.expanduser(env_path))
+    print(
+        "[nautical] NAUTICAL_CONFIG is set but the file is missing or invalid; defaults will be used.\n"
+        f"          NAUTICAL_CONFIG={env_path}\n"
+        f"          Resolved path: {ap}\n"
+        "          Fix: create the file at that path or update NAUTICAL_CONFIG.\n",
+        file=sys.stdout,
+    )
 
 
 def _normalize_keys(d: dict) -> dict:
@@ -85,19 +155,92 @@ def _normalize_keys(d: dict) -> dict:
 
 def _load_config() -> dict:
     cfg = dict(_DEFAULTS)
-    for p in _config_paths():
+    chosen = None
+
+    paths = _config_paths()
+    for p in paths:
         data = _read_toml(p)
         if data:
             cfg.update(_normalize_keys(data))
+            chosen = p
             break
+
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        try:
+            if chosen:
+                print(f"[nautical] Using config: {chosen}", file=sys.stderr)
+            else:
+                print("[nautical] No config file found; using defaults.", file=sys.stderr)
+                print("[nautical] Search order:", file=sys.stderr)
+                for p in paths:
+                    print(f"  - {p}", file=sys.stderr)
+        except Exception:
+            pass
 
     # normalize values
     ayf = str(cfg.get("anchor_year_fmt") or "").strip().upper()
-    cfg["anchor_year_fmt"] = "MD" if ayf == "MD" else "DM"  # only two modes
+    cfg["anchor_year_fmt"] = "MD" if ayf == "MD" else "DM"
     cfg["wrand_salt"]      = str(cfg.get("wrand_salt") or _DEFAULTS["wrand_salt"])
     cfg["tz"]              = str(cfg.get("tz") or _DEFAULTS["tz"])
     cfg["holiday_region"]  = str(cfg.get("holiday_region") or "")
     return cfg
+
+
+
+def _nautical_cache_dir() -> str:
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "nautical")
+
+
+def _warn_once_per_day(key: str, message: str) -> None:
+    """Persist a tiny sentinel so we do not spam hook output."""
+    try:
+        d = _nautical_cache_dir()
+        os.makedirs(d, exist_ok=True)
+        stamp_path = os.path.join(d, f".diag_{key}.stamp")
+
+        today = datetime.date.today().isoformat()
+        if os.path.exists(stamp_path):
+            try:
+                with open(stamp_path, "r", encoding="utf-8") as f:
+                    if f.read().strip() == today:
+                        return
+            except Exception:
+                pass
+
+        with open(stamp_path, "w", encoding="utf-8") as f:
+            f.write(today)
+
+        stream = sys.stderr if os.environ.get("NAUTICAL_DIAG") == "1" else sys.stdout
+        print(message.rstrip(), file=stream)
+    except Exception:
+        # Diagnostics must never break the hook.
+        pass
+
+
+
+def _warn_missing_toml_parser(config_path: str) -> None:
+    pyver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    msg = (
+        "[nautical] Config detected but not loaded: TOML parser unavailable.\n"
+        f"          Path: {config_path}\n"
+        f"          Python: {pyver}\n"
+        "          Fix: upgrade to Python 3.11+ (tomllib built-in) OR install tomli:\n"
+        "               python3 -m pip install --user tomli\n"
+        "          Tip: set NAUTICAL_DIAG=1 to print config search paths.\n"
+    )
+    _warn_once_per_day("missing_toml_parser", msg)
+
+
+def _warn_toml_parse_error(config_path: str, err: Exception) -> None:
+    msg = (
+        "[nautical] Config file found but could not be parsed; defaults will be used.\n"
+        f"          Path: {config_path}\n"
+        f"          Error: {err}\n"
+        "          Fix: validate TOML syntax, or run with NAUTICAL_DIAG=1 for more context.\n"
+    )
+    _warn_once_per_day("toml_parse_error", msg)
+
 
 def _get_config() -> dict:
     global _CONF_CACHE
@@ -105,12 +248,13 @@ def _get_config() -> dict:
         _CONF_CACHE = _load_config()
     return _CONF_CACHE
 
+_CONF = _get_config()
 ANCHOR_YEAR_FMT = _get_config()["anchor_year_fmt"]  # "DM" or "MD"
 WRAND_SALT      = _get_config()["wrand_salt"]
 LOCAL_TZ_NAME     = _get_config()["tz"]
 HOLIDAY_REGION  = _get_config()["holiday_region"]
 
-_CONF = _get_config()
+
 
 ENABLE_ANCHOR_CACHE = str(_CONF.get("enable_anchor_cache", "false")).lower() in ("1","true","yes")
 ANCHOR_CACHE_DIR_OVERRIDE = _CONF.get("anchor_cache_dir") or ""   # optional custom path

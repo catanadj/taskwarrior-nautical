@@ -1,5 +1,4 @@
 # Nautical config
-anchor_year_fmt = "MD"              # or "DM" (DD-MM or MM-DD preference)
 wrand_salt      = "nautical|wrand|v2"
 tz              = "Australia/Sydney"
 holiday_region  = "" 				# not implemented yet

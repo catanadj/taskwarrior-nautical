@@ -1101,7 +1101,7 @@ def main():
             pass
 
         base_local_date = due_day if user_provided_due else now_local.date()
-        seed_base = _root_uuid_from(task) or "preview"
+        seed_base = (task.get("chainID") or "").strip() or _root_uuid_from(task) or "preview"
 
         # Fix: use a stable default_seed for /N gating
         interval_seed = base_local_date  # or first anchor day if you prefer

@@ -86,6 +86,9 @@ _SHOW_TIMELINE_GAPS = os.environ.get("NAUTICAL_TIMELINE_GAPS", "").strip().lower
 _SHOW_ANALYTICS = True
 _ANALYTICS_STYLE = "coach"  # "coach" or "clinical"
 _ANALYTICS_ONTIME_TOL_SECS = 4 * 60 * 60  # "on time" within a few hours
+
+# Panel chain index for fast timeline lookups (set per hook run)
+_PANEL_CHAIN_BY_LINK = None
 # ------------------------------------------------------------------------------
 # Debug: wait/scheduled carry-forward
 # Set NAUTICAL_DEBUG_WAIT_SCHED=1 to include carry computations in the feedback panel.
@@ -1604,11 +1607,15 @@ def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] |
         return candidates[0]
 
     if chain_by_link is None:
+        if _PANEL_CHAIN_BY_LINK:
+            chain_by_link = _PANEL_CHAIN_BY_LINK
+        else:
+            chain_by_link = {}
+    if not chain_by_link:
         try:
             chain = _get_chain_export(chain_id)
         except Exception:
             return []
-        chain_by_link = {}
         for t in chain:
             ln = core.coerce_int(t.get("link"), None)
             if ln is None:
@@ -2925,7 +2932,6 @@ def _timeline_lines(
     cur_no: int | None = None,
     show_gaps: bool = True,
     round_anchor_gaps: bool = True,  # Round anchor gaps to nearest day
-    chain_by_link: dict[int, list[dict]] | None = None,
 ) -> list[str]:
     """
     Compact timeline with inline gaps.
@@ -2951,7 +2957,7 @@ def _timeline_lines(
     items = []
     
     # Previous tasks
-    prevs = _collect_prev_two(task, chain_by_link=chain_by_link)
+    prevs = _collect_prev_two(task)
     for obj in prevs:
         no = core.coerce_int(obj.get("link"), None) or (cur_no - (len(prevs) - prevs.index(obj)))
         end_dt = _dtparse(obj.get("end"))
@@ -3518,6 +3524,8 @@ def main():
                 chain_by_link, chain_by_short = _build_chain_indexes(chain)
         except Exception:
             pass
+    global _PANEL_CHAIN_BY_LINK
+    _PANEL_CHAIN_BY_LINK = chain_by_link
     analytics_advice = None
     if _SHOW_ANALYTICS and chain:
         try:
@@ -3615,7 +3623,6 @@ def main():
             cur_no=base_no,
             show_gaps=_SHOW_TIMELINE_GAPS,
             round_anchor_gaps=True,  # Round to nearest day
-            chain_by_link=chain_by_link,
 
         )
         if tl:
@@ -3697,7 +3704,6 @@ def main():
             cur_no=base_no,
             show_gaps=_SHOW_TIMELINE_GAPS,
             round_anchor_gaps=False,  # CP gaps are exact
-            chain_by_link=chain_by_link,
 
         )
         if tl:

@@ -833,8 +833,8 @@ def build_acf(expr: str) -> str:
     
     return f"{checksum}:{packed}"
 
-def _normalize_spec_for_acf(typ: str, spec: str):
-    """Comprehensive spec normalization."""
+def _normalize_spec_for_acf_uncached(typ: str, spec: str):
+    """Comprehensive spec normalization (uncached)."""
     spec = (spec or "").strip().lower()
     
     if typ == "w":
@@ -908,6 +908,19 @@ def _normalize_spec_for_acf(typ: str, spec: str):
             else:
                 out.append({"m": m1, "d": d1})
         return out
+
+
+@lru_cache(maxsize=512)
+def _normalize_spec_for_acf_cached(typ: str, spec: str, fmt: str):
+    return _normalize_spec_for_acf_uncached(typ, spec)
+
+
+def _normalize_spec_for_acf(typ: str, spec: str):
+    """Comprehensive spec normalization (cached)."""
+    res = _normalize_spec_for_acf_cached((typ or "").lower(), spec or "", _yearfmt())
+    if isinstance(res, (list, dict)):
+        return copy.deepcopy(res)
+    return res
 
     
     return spec
@@ -983,9 +996,14 @@ def acf_to_original_format(acf_str: str) -> str:
     return " | ".join(sorted(terms_str))
 
 
-def _year_pair(a: int, b: int) -> tuple[int, int]:
+@lru_cache(maxsize=512)
+def _year_pair_cached(a: int, b: int, fmt: str) -> tuple[int, int]:
     """Interpret (a,b) according to ANCHOR_YEAR_FMT; return (day, month)."""
-    return (b, a) if _yearfmt() == "MD" else (a, b)
+    return (b, a) if fmt == "MD" else (a, b)
+
+
+def _year_pair(a: int, b: int) -> tuple[int, int]:
+    return _year_pair_cached(a, b, _yearfmt())
 
 def _mods_to_acf(mods: dict) -> dict:
     """Keep only active modifiers in a compact, stable shape for ACF."""
@@ -3305,7 +3323,7 @@ def _parse_atom_mods(mods_str: str):
 
 
 @lru_cache(maxsize=512)
-def _parse_y_token(tok: str):
+def _parse_y_token_cached(tok: str, fmt: str):
     """Parse yearly token (e.g., '15-02' or 'q1')."""
     tok = tok.strip().lower()
     if tok in _QUARTERS:
@@ -3321,7 +3339,7 @@ def _parse_y_token(tok: str):
     else:
         b = int(b)
     a = int(a)
-    if ANCHOR_YEAR_FMT == "DM":
+    if fmt == "DM":
         d, mn = a, b
     else:
         mn, d = a, b
@@ -3334,6 +3352,10 @@ def _parse_y_token(tok: str):
     if not (1 <= d <= 31):
         return None
     return ("day", (mn, d))
+
+
+def _parse_y_token(tok: str):
+    return _parse_y_token_cached(tok, _yearfmt())
 
 
 def parse_anchor_expr_to_dnf(s: str):
@@ -3540,7 +3562,7 @@ def parse_anchor_expr_to_dnf(s: str):
 
 
 @lru_cache(maxsize=256)
-def _parse_anchor_expr_to_dnf_cached_obj(s: str):
+def _parse_anchor_expr_to_dnf_cached_obj(s: str, fmt: str):
     return parse_anchor_expr_to_dnf(s)
 
 
@@ -3551,7 +3573,7 @@ def parse_anchor_expr_to_dnf_cached(s: str):
     key = _unwrap_quotes(s or "").strip()
     if not key:
         return []
-    return copy.deepcopy(_parse_anchor_expr_to_dnf_cached_obj(key))
+    return copy.deepcopy(_parse_anchor_expr_to_dnf_cached_obj(key, _yearfmt()))
 
 
 
@@ -4186,6 +4208,7 @@ def validate_anchor_expr_strict(expr):
             spec = (a.get("spec") or a.get("value") or "").lower()
             ival = int(a.get("ival") or a.get("intv") or 1)
             mods = a.get("mods") or {}
+            active = None
 
             if typ == "w":
                 _validate_weekly_spec(spec)
@@ -4211,7 +4234,8 @@ def validate_anchor_expr_strict(expr):
                             raise ParseError(f"Invalid token 'y:{spec}'")
                         if not (1 <= mm <= 12):
                             raise ParseError(f"Invalid month in y:{spec}")
-                    active = _active_mod_keys(mods)
+                    if active is None:
+                        active = _active_mod_keys(mods)
                     bad = [k for k in active if k not in ("t", "bd", "wd")]
                     if bad:
                         raise ParseError(f"y:{spec} does not support @{', '.join(bad)}")

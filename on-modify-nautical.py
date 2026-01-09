@@ -10,6 +10,7 @@ Chained next-link spawner for Taskwarrior.
 """
 
 import sys, json, os, uuid, subprocess, importlib
+import statistics
 from pathlib import Path
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
@@ -32,6 +33,7 @@ except Exception:  # pragma: no cover
     ZoneInfo = None
 
 
+# set env NAUTICAL_ANALYTICS=0 to disable analytics panel entry. 
 
  # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
  # Python's json.dumps() defaults to ensure_ascii=True, which escapes non-ASCII
@@ -78,6 +80,12 @@ _SHOW_TIMELINE_GAPS = os.environ.get("NAUTICAL_TIMELINE_GAPS", "").strip().lower
     "0", "no", "false", "off", "none"
 }
 
+# ------------------------------------------------------------------------------
+# Analytics panel settings (local constants)
+# ------------------------------------------------------------------------------
+_SHOW_ANALYTICS = True
+_ANALYTICS_STYLE = "coach"  # "coach" or "clinical"
+_ANALYTICS_ONTIME_TOL_SECS = 4 * 60 * 60  # "on time" within a few hours
 # ------------------------------------------------------------------------------
 # Debug: wait/scheduled carry-forward
 # Set NAUTICAL_DEBUG_WAIT_SCHED=1 to include carry computations in the feedback panel.
@@ -1328,6 +1336,8 @@ def tw_export_chain_or_fallback(seed_task, env=None):
     chain_id = seed_task.get('chainID') or seed_task.get('chainid')
     if not chain_id:
         raise RuntimeError('ChainID is required (legacy chain traversal removed). Run your chainID backfill tool, then retry.')
+    if env is None:
+        return _get_chain_export(chain_id)
     return tw_export_chain(chain_id, env=env)
 def _tw_get_cached(ref: str) -> str:
     """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
@@ -1572,7 +1582,7 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
     return "[green](on time)[/]"
 
 
-def _collect_prev_two(current_task: dict) -> list[dict]:
+def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] | None = None) -> list[dict]:
     """Return up to two previous tasks (older first) using chainID export only."""
 
     chain_id = (current_task.get("chainID") or "").strip()
@@ -1581,11 +1591,6 @@ def _collect_prev_two(current_task: dict) -> list[dict]:
 
     cur_no = core.coerce_int(current_task.get("link"), None)
     if not cur_no or cur_no <= 1:
-        return []
-
-    try:
-        chain = tw_export_chain(chain_id)
-    except Exception:
         return []
 
     # Choose tasks by link index. In the unlikely event of duplicates, prefer non-deleted tasks.
@@ -1598,21 +1603,56 @@ def _collect_prev_two(current_task: dict) -> list[dict]:
                     return t
         return candidates[0]
 
-    by_link: dict[int, list[dict]] = {}
-    for t in chain:
-        ln = core.coerce_int(t.get("link"), None)
-        if ln is None:
-            continue
-        by_link.setdefault(ln, []).append(t)
+    if chain_by_link is None:
+        try:
+            chain = _get_chain_export(chain_id)
+        except Exception:
+            return []
+        chain_by_link = {}
+        for t in chain:
+            ln = core.coerce_int(t.get("link"), None)
+            if ln is None:
+                continue
+            chain_by_link.setdefault(ln, []).append(t)
 
     prevs: list[dict] = []
     for want in (cur_no - 2, cur_no - 1):
         if want < 1:
             continue
-        obj = _pick_best(by_link.get(want, []))
+        obj = _pick_best(chain_by_link.get(want, []))
         if obj:
             prevs.append(obj)
     return prevs
+
+
+@lru_cache(maxsize=32)
+def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None) -> tuple[dict, ...]:
+    """Cached chain export; returns an immutable tuple to avoid accidental mutation."""
+    return tuple(tw_export_chain(chain_id, since=since, extra=extra, env=None) or [])
+
+
+def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
+    """Return a safe list copy of a chain export (cached when env is None)."""
+    if not chain_id:
+        return []
+    if env is not None:
+        return tw_export_chain(chain_id, since=since, extra=extra, env=env)
+    cached = _tw_export_chain_cached(chain_id, since, extra)
+    return list(cached)
+
+
+def _build_chain_indexes(chain: list[dict]) -> tuple[dict[int, list[dict]], dict[str, dict]]:
+    """Build link-index and short-uuid index for quick in-memory lookups."""
+    by_link: dict[int, list[dict]] = {}
+    by_short: dict[str, dict] = {}
+    for t in chain:
+        ln = core.coerce_int(t.get("link"), None)
+        if ln is not None:
+            by_link.setdefault(ln, []).append(t)
+        u = t.get("uuid")
+        if isinstance(u, str) and u:
+            by_short[u[:8]] = t
+    return by_link, by_short
 
 
 def _pretty_basis_cp(task: dict, meta: dict) -> str:
@@ -2435,6 +2475,166 @@ def _lateness_stats(chain: list[dict], tol_secs: int = 60) -> dict:
     }
 
 
+def _fmt_td_compact_abs(delta: timedelta) -> str:
+    s = _fmt_td_dd_hhmm(delta)
+    return s[1:] if s and s[0] in "+-" else s
+
+
+def _sort_chain_for_analytics(chain: list[dict]) -> list[dict]:
+    def _link_sort_key(obj):
+        ln = core.coerce_int(obj.get("link"), None)
+        if ln is not None:
+            return (0, ln)
+        due = _dtparse(obj.get("due")) or datetime.max.replace(tzinfo=timezone.utc)
+        return (1, due)
+    try:
+        return sorted(chain, key=_link_sort_key)
+    except Exception:
+        return chain[:]
+
+
+def _chain_health_advice(
+    chain: list[dict],
+    kind: str,
+    task: dict,
+    tol_secs: int = _ANALYTICS_ONTIME_TOL_SECS,
+    style: str = _ANALYTICS_STYLE,
+) -> str | None:
+    if not chain:
+        return None
+
+    ordered = _sort_chain_for_analytics(chain)
+    completed = [
+        t for t in ordered
+        if (t.get("status") or "").strip().lower() == "completed"
+    ]
+
+    completed_with_dates = []
+    deltas = []
+    for t in completed:
+        due = _dtparse(t.get("due"))
+        end = _dtparse(t.get("end"))
+        if due and end:
+            completed_with_dates.append(t)
+            deltas.append((end - due).total_seconds())
+
+    on_time_rate = None
+    streak = 0
+    vol = None
+    if deltas:
+        stats = _lateness_stats(completed_with_dates, tol_secs=tol_secs)
+        on_time_rate = stats["on_time"] / max(1, stats["count"])
+
+        if len(deltas) >= 2:
+            try:
+                vol = statistics.pstdev(deltas)
+            except Exception:
+                vol = None
+
+        for t in reversed(completed_with_dates):
+            due = _dtparse(t.get("due"))
+            end = _dtparse(t.get("end"))
+            if not (due and end):
+                continue
+            diff = abs((end - due).total_seconds())
+            if diff <= tol_secs:
+                streak += 1
+            else:
+                break
+
+    drift_secs = None
+    median_gap = None
+    due_list = []
+    for t in ordered:
+        due = _dtparse(t.get("due"))
+        if due:
+            due_list.append(due)
+    if len(due_list) >= 2:
+        gaps = [
+            (due_list[i] - due_list[i - 1]).total_seconds()
+            for i in range(1, len(due_list))
+            if due_list[i] and due_list[i - 1]
+        ]
+        gaps = [g for g in gaps if g > 0]
+        if gaps:
+            median_gap = _median(gaps)
+            if kind == "cp":
+                td = core.parse_cp_duration(task.get("cp") or "")
+                if td:
+                    drift_secs = median_gap - td.total_seconds()
+            else:
+                if len(gaps) >= 2:
+                    drift_secs = gaps[-1] - median_gap
+
+    style = (style or "coach").strip().lower()
+    issues = []
+    tips = []
+    positives = []
+
+    if style == "clinical":
+        parts = []
+        if on_time_rate is not None:
+            parts.append(f"OT {int(round(100.0 * on_time_rate))}%")
+        if drift_secs is not None:
+            parts.append(f"Drift {_fmt_td_dd_hhmm(timedelta(seconds=drift_secs))}")
+        if streak:
+            parts.append(f"Streak {streak}")
+        if isinstance(vol, (int, float)):
+            parts.append(f"Vol {_fmt_td_compact_abs(timedelta(seconds=abs(vol)))}")
+        return " | ".join(parts) if parts else None
+
+    if on_time_rate is not None:
+        if on_time_rate < 0.6:
+            issues.append("on-time rate is low")
+            tips.append("try smaller scopes or later due times")
+        elif on_time_rate < 0.8:
+            issues.append("on-time is inconsistent")
+            tips.append("adding a small buffer could help")
+        else:
+            positives.append("on-time is steady")
+
+    if drift_secs is not None:
+        base = None
+        if kind == "cp":
+            td = core.parse_cp_duration(task.get("cp") or "")
+            base = td.total_seconds() if td else None
+        else:
+            base = median_gap
+        if base:
+            drift_warn = max(0.35 * base, 6 * 60 * 60)
+            if abs(drift_secs) > drift_warn:
+                issues.append("cadence is drifting")
+                tips.append("review cp/anchors for a better fit")
+            else:
+                positives.append("cadence is stable")
+
+    if isinstance(vol, (int, float)):
+        if vol > 24 * 60 * 60:
+            issues.append("timing is noisy")
+            tips.append("add buffer or split tasks")
+        elif vol < 6 * 60 * 60:
+            positives.append("timing is consistent")
+
+    if not issues:
+        if streak >= 3:
+            return (
+                f"Chain looks healthy with a {streak}-link on-time streak; "
+                "keep the current cadence."
+            )
+        if positives:
+            return "Chain looks healthy; keep the current cadence."
+        return None
+
+    issue_txt = ", ".join(issues)
+    tip_txt = "; ".join(tips[:2]) if tips else "keep an eye on due time fit"
+    if streak >= 3:
+        return (
+            f"Chain needs attention ({issue_txt}); {tip_txt}, and keep the "
+            f"{streak}-link on-time streak going."
+        )
+    return f"Chain needs attention ({issue_txt}); {tip_txt}."
+
+
 def _fmt_secs_delta(now_ref, secs: float | None) -> str:
     if secs is None:
         return "—"
@@ -2725,6 +2925,7 @@ def _timeline_lines(
     cur_no: int | None = None,
     show_gaps: bool = True,
     round_anchor_gaps: bool = True,  # Round anchor gaps to nearest day
+    chain_by_link: dict[int, list[dict]] | None = None,
 ) -> list[str]:
     """
     Compact timeline with inline gaps.
@@ -2750,7 +2951,7 @@ def _timeline_lines(
     items = []
     
     # Previous tasks
-    prevs = _collect_prev_two(task)
+    prevs = _collect_prev_two(task, chain_by_link=chain_by_link)
     for obj in prevs:
         no = core.coerce_int(obj.get("link"), None) or (cur_no - (len(prevs) - prevs.index(obj)))
         end_dt = _dtparse(obj.get("end"))
@@ -3305,6 +3506,25 @@ def main():
     # Reflect link on parent for nice UX (even if the child is queued)
     new["nextLink"] = child_short
 
+    # Build an in-memory chain index once for panel/timeline lookups.
+    chain = []
+    chain_by_link = None
+    chain_by_short = None
+    chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
+    if chain_id:
+        try:
+            chain = _get_chain_export(chain_id)
+            if chain:
+                chain_by_link, chain_by_short = _build_chain_indexes(chain)
+        except Exception:
+            pass
+    analytics_advice = None
+    if _SHOW_ANALYTICS and chain:
+        try:
+            analytics_advice = _chain_health_advice(chain, kind, new, style=_ANALYTICS_STYLE)
+        except Exception:
+            analytics_advice = None
+
     # Feedback panel
     fb = []
     if spawn_note:
@@ -3349,6 +3569,8 @@ def main():
             now_utc, child_due, use_months_days=core.expr_has_m_or_y(dnf)
         )
         fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
+        if analytics_advice:
+            fb.append(("Analytics", analytics_advice))
         _append_next_wait_sched_rows(fb, child, child_due)
 
         if cap_no:
@@ -3372,7 +3594,9 @@ def main():
 
 
         child_id = ""
-        if not deferred_spawn:
+        if not deferred_spawn and chain_by_short:
+            child_id = str(chain_by_short.get(child_short, {}).get("id", "") or "")
+        if not deferred_spawn and not child_id:
             child_obj = _export_uuid_short_cached(child_short)
             child_id = child_obj.get("id", "") if child_obj else ""
 
@@ -3391,6 +3615,7 @@ def main():
             cur_no=base_no,
             show_gaps=_SHOW_TIMELINE_GAPS,
             round_anchor_gaps=True,  # Round to nearest day
+            chain_by_link=chain_by_link,
 
         )
         if tl:
@@ -3425,6 +3650,8 @@ def main():
         fb.append(("Basis", _pretty_basis_cp(new, meta)))
         fb.append(("Root", _format_root_and_age(new, now_utc)))
         fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
+        if analytics_advice:
+            fb.append(("Analytics", analytics_advice))
         _append_next_wait_sched_rows(fb, child, child_due)
 
         if cap_no:
@@ -3449,7 +3676,9 @@ def main():
             )
 
         child_id = ""
-        if not deferred_spawn:
+        if not deferred_spawn and chain_by_short:
+            child_id = str(chain_by_short.get(child_short, {}).get("id", "") or "")
+        if not deferred_spawn and not child_id:
             child_obj = _export_uuid_short_cached(child_short)
             child_id = child_obj.get("id", "") if child_obj else ""
 
@@ -3468,6 +3697,7 @@ def main():
             cur_no=base_no,
             show_gaps=_SHOW_TIMELINE_GAPS,
             round_anchor_gaps=False,  # CP gaps are exact
+            chain_by_link=chain_by_link,
 
         )
         if tl:

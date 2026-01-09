@@ -6,6 +6,7 @@ Shared core for Taskwarrior Nautical hooks.
 """
 from __future__ import annotations
 import os, re, sys
+import copy
 from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache
 from calendar import month_name
@@ -249,10 +250,10 @@ def _get_config() -> dict:
     return _CONF_CACHE
 
 _CONF = _get_config()
-ANCHOR_YEAR_FMT = _get_config()["anchor_year_fmt"]  # "DM" or "MD"
-WRAND_SALT      = _get_config()["wrand_salt"]
-LOCAL_TZ_NAME     = _get_config()["tz"]
-HOLIDAY_REGION  = _get_config()["holiday_region"]
+ANCHOR_YEAR_FMT = _CONF["anchor_year_fmt"]  # "DM" or "MD"
+WRAND_SALT      = _CONF["wrand_salt"]
+LOCAL_TZ_NAME   = _CONF["tz"]
+HOLIDAY_REGION  = _CONF["holiday_region"]
 
 
 
@@ -453,6 +454,18 @@ _day_offset_re = re.compile(r"^([+-]\d+)d$")
 _nth_wd_re = re.compile(
     r"^(last|(?:-?\d+)(?:st|nd|rd|th)?)-?(mon|tue|wed|thu|fri|sat|sun)$"
 )
+_md_range_re = re.compile(r"(\d{2})-(\d{2})(?:(?:\.\.|:)(\d{2})-(\d{2}))?$")
+_rand_mm_re = re.compile(r"^rand-(\d{2})$")
+_year_range_colon_re = re.compile(r"^(\d{2})-(\d{2}):(\d{2})-(\d{2})$")
+_int_range_re = re.compile(r"^-?\d+\s*(?:\.\.|:)\s*-?\d+$")
+
+
+def _split_csv_tokens(spec: str) -> list[str]:
+    return [t.strip() for t in str(spec or "").split(",") if t.strip()]
+
+
+def _split_csv_lower(spec: str) -> list[str]:
+    return [t.lower() for t in _split_csv_tokens(spec)]
 
 
 # --- Interval bucket ---
@@ -509,7 +522,7 @@ def _rewrite_month_names_to_ranges(spec: str) -> str:
         return spec
 
     out = []
-    for raw in [t.strip() for t in str(spec).split(",") if t.strip()]:
+    for raw in _split_csv_tokens(spec):
         s = raw.lower()
         # Accept both V2 '..' and legacy ':' for ranges.
         if ".." in s or ":" in s:
@@ -540,7 +553,7 @@ def _rewrite_month_names_to_ranges(spec: str) -> str:
 def _parse_nth_wd_tokens(spec: str):
     """Return list of (k, wd) for pure nth-weekday spec, else None.
     k is int in [-5..-1] ∪ [1..5], or -1 for 'last'."""
-    toks = [t.strip().lower() for t in spec.split(",") if t.strip()]
+    toks = _split_csv_lower(spec)
     out = []
     for tok in toks:
         m = _nth_weekday_re.match(tok)
@@ -642,7 +655,7 @@ def _rewrite_year_month_aliases_in_context(dnf: list[list[dict]]) -> list[list[d
 
             new_tokens: list[str] = []
             changed = False
-            for tok in [t.strip() for t in spec.split(",") if t.strip()]:
+            for tok in _split_csv_tokens(spec):
 
                 # 'mon1..mon2' / 'mon1:mon2' or 'MM1..MM2' / 'MM1:MM2' → full-month range
                 if (".." in tok or ":" in tok) and "-" not in tok:
@@ -766,7 +779,7 @@ def build_acf(expr: str) -> str:
         return ""
     
     try:
-        dnf = parse_anchor_expr_to_dnf(expr)
+        dnf = parse_anchor_expr_to_dnf_cached(expr)
     except Exception:
         # Parse failed - return sentinel
         return "!PARSE_ERROR"
@@ -826,8 +839,7 @@ def _normalize_spec_for_acf(typ: str, spec: str):
     
     if typ == "w":
         tokens = []
-        for token in spec.split(","):
-            token = token.strip()
+        for token in _split_csv_tokens(spec):
             if not token:
                 continue
             if ".." in token or "-" in token or ":" in token:
@@ -861,8 +873,7 @@ def _normalize_spec_for_acf(typ: str, spec: str):
     elif typ == "m":
         # Monthly: canonicalize range delimiter to V2 '..' for cache stability.
         toks = []
-        for token in spec.split(","):
-            token = token.strip()
+        for token in _split_csv_tokens(spec):
             if not token:
                 continue
             if ".." in token or ":" in token:
@@ -882,7 +893,7 @@ def _normalize_spec_for_acf(typ: str, spec: str):
     
     elif typ == "y":
         out = []
-        for token in (t.strip() for t in spec.split(",") if t.strip()):
+        for token in _split_csv_tokens(spec):
             m = re.fullmatch(r"(\d{2})-(\d{2})(?:(?:\.\.|:)(\d{2})-(\d{2}))?$", token)
             if not m:
                 # assume already rewritten; if not, keep as string (worst case)
@@ -1052,6 +1063,31 @@ def _cache_key(acf: str, anchor_mode: str) -> str:
 def _cache_path(key: str) -> str:
     return os.path.join(_cache_dir(), f"{key}.jsonz")
 
+
+def _normalize_dnf_cached(dnf):
+    """Normalize cached DNF to match parser types (tuple for single time)."""
+    if not isinstance(dnf, (list, tuple)):
+        return dnf
+    for term in dnf:
+        if not isinstance(term, (list, tuple)):
+            continue
+        for atom in term:
+            if not isinstance(atom, dict):
+                continue
+            mods = atom.get("mods")
+            if not isinstance(mods, dict):
+                continue
+            tval = mods.get("t")
+            if isinstance(tval, list):
+                if len(tval) == 2 and all(isinstance(x, int) for x in tval):
+                    mods["t"] = (tval[0], tval[1])
+                elif tval and all(
+                    isinstance(x, list) and len(x) == 2 and all(isinstance(y, int) for y in x)
+                    for x in tval
+                ):
+                    mods["t"] = [(x[0], x[1]) for x in tval]
+    return dnf
+
 def cache_load(key: str) -> dict | None:
     if not ENABLE_ANCHOR_CACHE:
         return None
@@ -1063,7 +1099,10 @@ def cache_load(key: str) -> dict | None:
         with open(path, "rb") as f:
             blob = f.read()
         data = zlib.decompress(base64.b85decode(blob))
-        return json.loads(data.decode("utf-8"))
+        obj = json.loads(data.decode("utf-8"))
+        if isinstance(obj, dict) and "dnf" in obj:
+            obj["dnf"] = _normalize_dnf_cached(obj.get("dnf"))
+        return obj
     except Exception:
         return None
 
@@ -1139,7 +1178,7 @@ def _weekly_spec_to_wset(spec: str, mods: dict | None = None) -> set[int]:
     if not spec:
         return set()
 
-    toks = [t.strip().lower() for t in spec.split(",") if t.strip()]
+    toks = _split_csv_lower(spec)
     out: set[int] = set()
 
     if any(t == "rand" for t in toks):
@@ -1187,7 +1226,7 @@ def _doms_for_weekly_spec(spec:str, y:int, m:int) -> set[int]:
     allowed: set[int] = set()
     # expand tokens and ranges
     wset: set[int] = set()
-    for tok in [t.strip() for t in spec.split(",") if t.strip()]:
+    for tok in _split_csv_tokens(spec):
         if ".." in tok or "-" in tok or ":" in tok:
             if ".." in tok:
                 a, b = tok.split("..", 1)
@@ -1251,7 +1290,7 @@ def _doms_for_monthly_token(tok: str, y:int, m:int) -> set[int]:
 
 def _y_ranges_from_spec(spec: str) -> list[tuple[int,int,int,int]]:
     out = []
-    for tok in [t.strip().lower() for t in (spec or "").split(",") if t.strip()]:
+    for tok in _split_csv_lower(spec):
 
         # NEW: support 'rand-MM' → entire month (clamped later)
         m_randm = re.fullmatch(r"rand-(\d{2})", tok)
@@ -1354,7 +1393,7 @@ def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
                 spec = str(a.get("spec") or "")
                 if typ != "m":
                     continue
-                toks = [t.strip().lower() for t in spec.split(",") if t.strip()]
+                toks = _split_csv_lower(spec)
                 if not toks:
                     continue
                 # union across tokens in this atom, then intersect across atoms
@@ -1514,6 +1553,8 @@ def build_and_cache_hints(anchor_expr: str,
     key = cache_key_for_task(anchor_expr, anchor_mode)
     cached = cache_load(key)
     if cached:
+        if "dnf" in cached:
+            cached["dnf"] = _normalize_dnf_cached(cached.get("dnf"))
         return cached
 
     dnf = validate_anchor_expr_strict(anchor_expr)
@@ -1557,7 +1598,7 @@ def _yearly_tokens(term):
     for a in term:
         if (a.get("typ") or a.get("type") or "").lower() == "y":
             spec = (a.get("spec") or a.get("value") or "").lower()
-            out.extend(t.strip() for t in spec.split(",") if t.strip())
+            out.extend(_split_csv_tokens(spec))
     return out
 
 
@@ -1566,7 +1607,7 @@ def _monthly_tokens(term):
     for a in term:
         if (a.get("typ") or a.get("type") or "").lower() == "m":
             spec = (a.get("spec") or a.get("value") or "").lower()
-            out.extend(t.strip() for t in spec.split(",") if t.strip())
+            out.extend(_split_csv_tokens(spec))
     return out
 
 
@@ -1666,6 +1707,10 @@ def _rewrite_quarter_spec_mode(spec: str, mode: str, meta_out: dict | None = Non
     def _emit(q: int) -> str:
         if mode == "quarter_end":
             return _last_month_window(q)
+        if mode == "quarter_window":
+            start = {1: 1, 2: 4, 3: 7, 4: 10}[q]
+            end = {1: 3, 2: 6, 3: 9, 4: 12}[q]
+            return _tok_range(1, start, 31, end)
         # quarter_start and first_month both select the quarter's first month window
         return _first_month_window(q)
 
@@ -1674,11 +1719,13 @@ def _rewrite_quarter_spec_mode(spec: str, mode: str, meta_out: dict | None = Non
             return f"Q{q} end month"
         if mode == "quarter_start":
             return f"Q{q} start month"
+        if mode == "quarter_window":
+            return f"Q{q} window"
         # default (no monthly disambiguator present)
         return f"Q{q} first month"
 
     out = []
-    toks = [t.strip().lower() for t in spec.split(",") if t.strip()]
+    toks = _split_csv_lower(spec)
 
     for tok in toks:
         m = re.fullmatch(r"q([1-4])", tok)
@@ -1744,7 +1791,7 @@ def _rewrite_quarters_in_context(dnf):
     """
 
     def _has_quarter_tokens(spec: str) -> bool:
-        for t in [x.strip().lower() for x in (spec or "").split(",") if x.strip()]:
+        for t in _split_csv_lower(spec):
             if re.fullmatch(r"q[1-4](?:(?:\.\.|:)q[1-4])?", t):
                 return True
         return False
@@ -1801,7 +1848,7 @@ def _rewrite_quarters_in_context(dnf):
                     "Use explicit months if you need randomness within a quarter-like window."
                 )
 
-            mtoks = [t for t in (x.strip() for x in mspec.split(",")) if t]
+            mtoks = _split_csv_tokens(mspec)
             if len(mtoks) != 1:
                 raise ParseError(
                     "Quarter aliases (y:q1..q4) require a single monthly selector token when used with m:*. "
@@ -1815,12 +1862,7 @@ def _rewrite_quarters_in_context(dnf):
             elif _is_start_month_selector(mt):
                 mode = "quarter_start"
             else:
-                raise ParseError(
-                    f"Ambiguous quarter usage: y:q* combined with m:{mspec}. "
-                    "When using y:q* with m:*, the monthly selector must clearly indicate quarter start-month or end-month. "
-                    "Use m:1 / m:1bd / m:1mon (start month) OR m:-1 / m:-1bd / m:last-fri / m:-2bd (end month). "
-                    "Otherwise use explicit months (e.g. y:oct or y:dec)."
-                )
+                mode = "quarter_window"
 
         # Rewrite each yearly atom; attach metadata so Natural can disclose interpretation
         for ya in y_atoms:
@@ -1854,7 +1896,7 @@ def _rewrite_year_month_aliases_in_dnf(dnf: list[list[dict]]) -> list[list[dict]
             if not spec:
                 continue
 
-            toks_in  = [t.strip() for t in spec.split(",") if t.strip()]
+            toks_in = _split_csv_tokens(spec)
             toks_out = []
 
             for tok in toks_in:
@@ -1942,6 +1984,7 @@ _MONTH_ABBR = [
     "Nov",
     "Dec",
 ]
+_MONTH_FULL = list(month_name)
 _WD_INDEX = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 _WD_FULL = {
     "mon": "Monday",
@@ -1991,7 +2034,7 @@ def _fmt_hhmm_for_term(term: list, default_due_dt):
 
 
 def _fmt_weekdays_list(spec: str) -> str:
-    tokens = [t.strip().lower() for t in str(spec or "").split(",") if t.strip()]
+    tokens = _split_csv_lower(spec)
     if not tokens:
         return ""
 
@@ -2044,11 +2087,8 @@ def _fmt_monthly_atom(spec: str) -> str:
     s = (spec or "").lower().strip()
     if s == "rand":
         return "one random day each month"
-    import re
 
-    m = re.match(
-        r"^(last|(?:-?\d+)(?:st|nd|rd|th)?)-?(mon|tue|wed|thu|fri|sat|sun)$", s
-    )
+    m = _nth_wd_re.match(s)
     if m:
         idx, wd = m.group(1), m.group(2)
         name = _WDNAME[_WD_INDEX[wd]]  # Title Case (Monday, Friday…)
@@ -2058,7 +2098,7 @@ def _fmt_monthly_atom(spec: str) -> str:
         if k < 0:
             return f"the {_ordinal(abs(k))} last {name} of each month"
         return f"the {_ordinal(k)} {name} of each month"
-    m = re.match(r"^(-?\d+)bd$", s)
+    m = _bd_re.match(s)
     if m:
         k = int(m.group(1))
         if k > 0:
@@ -2115,7 +2155,7 @@ def _fmt_yearly_atom(tok: str) -> str:
     if s == "rand":
         return "one random day each year"
 
-    m_randm = re.fullmatch(r"rand-(\d{2})", s)
+    m_randm = _rand_mm_re.fullmatch(s)
     if m_randm:
         mm = int(m_randm.group(1))
         if 1 <= mm <= 12:
@@ -2123,7 +2163,7 @@ def _fmt_yearly_atom(tok: str) -> str:
         # fall through to generic handling if somehow invalid
 
     # Existing numeric handling (single or range), respecting ANCHOR_YEAR_FMT
-    m = re.fullmatch(r"(\d{2})-(\d{2})(?:(?:\.\.|:)(\d{2})-(\d{2}))?$", s)
+    m = _md_range_re.fullmatch(s)
     if not m:
         return tok
 
@@ -2182,7 +2222,7 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
         return f"{n}{suf}"
 
     def _parse_monthly_tokens(spec: str):
-        return [t.strip().lower() for t in str(spec or "").split(",") if t.strip()]
+        return _split_csv_lower(spec)
 
     def _is_pure_nth_weekday_spec(spec: str):
         toks = _parse_monthly_tokens(spec)
@@ -2216,7 +2256,7 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
         return True, out
 
     def _single_full_month_from_yearly_spec(spec: str):
-        m = re.match(r"^(\d{2})-(\d{2}):(\d{2})-(\d{2})$", str(spec or "").strip())
+        m = _year_range_colon_re.match(str(spec or "").strip())
         if not m:
             return None
         d1, m1, d2, m2 = map(int, m.groups())
@@ -2306,20 +2346,20 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
 
     for a in term:
         typ = (a.get("typ") or a.get("type") or "").lower()
-        spec = str(a.get("spec") or a.get("value") or "").lower()
+        spec = str(a.get("spec") or a.get("value") or "").strip().lower()
         ival = int(a.get("ival") or a.get("intv") or 1)
 
         if typ == "w":
             wk_ival = max(wk_ival, ival)
             w_phrase = _fmt_weekdays_list(spec)
-            if wk_ival > 1 and (spec or "").strip().lower() == "rand":
+            if wk_ival > 1 and spec == "rand":
                 # Prefer: "one random day every 4 weeks"
                 w_phrase = f"one random day every {wk_ival} weeks"
 
         elif typ == "m":
             mo_ival = max(mo_ival, ival)
             monthly_specs.append(spec)
-            tokens = [t.strip() for t in spec.split(",") if t.strip()]
+            tokens = _split_csv_tokens(spec)
             for tok in tokens:
                 m_parts.append(_fmt_monthly_atom(tok))
 
@@ -2329,7 +2369,7 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
 
             qmap = a.get("_qmap") or {}
 
-            for tok in [t.strip().lower() for t in spec.split(",") if t.strip()]:
+            for tok in _split_csv_tokens(spec):
                 phr = _fmt_yearly_atom(tok)
                 if phr and qmap and tok in qmap and not phr.startswith("one random day"):
                     phr = f"{phr} ({qmap[tok]})"
@@ -2351,7 +2391,7 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
                 k_txt = "last" if k == -1 else f"{_ordinal(abs(k))} last"
             else:
                 k_txt = _ordinal(k)
-            main = f"the {k_txt} {_WD_FULL[wd]} of {month_name[fuse_month]}"
+            main = f"the {k_txt} {_WD_FULL[wd]} of {_MONTH_FULL[fuse_month]}"
             hhmm = _fmt_hhmm_for_term(term, default_due_dt)
             if yr_ival > 1:
                 main = f"{main} every {yr_ival} years"
@@ -2460,7 +2500,7 @@ def describe_anchor_expr(anchor_expr: str, default_due_dt=None) -> str:
     if not anchor_expr or not str(anchor_expr).strip():
         return ""
     try:
-        dnf = parse_anchor_expr_to_dnf(anchor_expr)
+        dnf = parse_anchor_expr_to_dnf_cached(anchor_expr)
     except Exception:
         return ""
 
@@ -2545,38 +2585,46 @@ def describe_anchor_dnf(dnf: list, task: dict) -> str:
     Render the whole expression (OR of AND-terms) into one sentence and append mode.
     First, try special compressions (bucketed monthly rand), else fall back.
     """
+    def _mode_tail(mode: str) -> str:
+        if mode == "all":
+            return "backfill all missed anchors"
+        if mode == "flex":
+            return "skip past anchors; respect future anchors"
+        if mode == "skip":
+            return "skip missed anchors"
+        return ""
+
+    def _join_terms(terms: list[str]) -> str:
+        if not terms:
+            return ""
+        if len(terms) == 1:
+            return terms[0]
+        if len(terms) == 2:
+            return f"either {terms[0]} or {terms[1]}"
+        return "either " + ", ".join(terms[:-1]) + ", or " + terms[-1]
+
     # Special-case compression
     bucket = _try_bucket_rand_monthly(dnf, task)
     if bucket:
         mode = (task.get("anchor_mode") or "skip").lower()
-        if mode == "all":
-            tail = "backfill all missed"
-        elif mode == "flex":
-            tail = "skip past but respect anchors going forward"
-        else:
-            tail = "skip missed"
-        return f"{bucket}; {tail}"
+        tail = _mode_tail(mode)
+        return f"{bucket}; {tail}" if tail else bucket
 
     # Fallback: per-term descriptions OR-joined
     due_dt = parse_dt_any(task.get("due")) if task else None
     terms = [describe_anchor_term(term, due_dt) for term in (dnf or [])]
     if not terms:
         return ""
-    sentence = terms[0] if len(terms) == 1 else " or ".join(terms)
+    sentence = _join_terms(terms)
     mode = (task.get("anchor_mode") or "skip").lower()
-    if mode == "all":
-        tail = "backfill all missed"
-    elif mode == "flex":
-        tail = "skip past but respect anchors going forward"
-    else:
-        tail = "skip missed"
-    return f"{sentence}; {tail}"
+    tail = _mode_tail(mode)
+    return f"{sentence}; {tail}" if tail else sentence
 
 
 def _normalize_range_token(tok: str) -> str | None:
     """Return 'A–B' for monthly range tokens like '1..7' (or legacy '1:7'); else None."""
     s = (tok or "").strip().lower()
-    m = re.match(r"^-?\d+\s*(?:\.\.|:)\s*-?\d+$", s)
+    m = _int_range_re.match(s)
     if not m:
         return None
     sep = ".." if ".." in s else ":"
@@ -3199,7 +3247,7 @@ def _parse_atom_mods(mods_str: str):
         return mods
 
     def _parse_time_list(v: str):
-        parts = [p.strip() for p in v.split(",") if p.strip()]
+        parts = _split_csv_tokens(v)
         if not parts:
             return None
         out = []
@@ -3301,7 +3349,7 @@ def parse_anchor_expr_to_dnf(s: str):
     # '05:01:06:30'. Month-name forms ('jan:jun') are allowed and rewritten later.
     def _fatal_bad_colon_in_year_tail(tail: str) -> str | None:
         head = tail.split("@", 1)[0]  # strip modifiers
-        for tok in [t.strip() for t in head.split(",") if t.strip()]:
+        for tok in _split_csv_tokens(head):
             # numeric with ':'  → fatal (e.g., '05:15' or '05:01:06:30')
             if re.fullmatch(r"\d{2}:\d{2}(?::\d{2}:\d{2})?", tok):
                 fmt = (globals().get("ANCHOR_YEAR_FMT") or "DM").upper()
@@ -3419,7 +3467,7 @@ def parse_anchor_expr_to_dnf(s: str):
 
         # Special-case: w:rand,mon → OR of singletons so 'rand' doesn't mingle with fixed dows
         if tlo == "w":
-            toks = [t.strip().lower() for t in spec.split(",") if t.strip()]
+            toks = _split_csv_lower(spec)
             if "rand" in toks and len(toks) > 1:
                 mods = _parse_atom_mods(mods_str)
                 return [
@@ -3489,6 +3537,21 @@ def parse_anchor_expr_to_dnf(s: str):
     return dnf
 
 
+@lru_cache(maxsize=256)
+def _parse_anchor_expr_to_dnf_cached_obj(s: str):
+    return parse_anchor_expr_to_dnf(s)
+
+
+def parse_anchor_expr_to_dnf_cached(s: str):
+    """Cached parse returning a fresh object (avoid shared mutable structures)."""
+    if not s:
+        return []
+    key = _unwrap_quotes(s or "").strip()
+    if not key:
+        return []
+    return copy.deepcopy(_parse_anchor_expr_to_dnf_cached_obj(key))
+
+
 
 # ---- Yearly token format validator (that honors ANCHOR_YEAR_FMT) -----------------
 class YearTokenFormatError(ParseError):
@@ -3504,7 +3567,7 @@ def _validate_yearly_token_format(spec: str):
     if not spec:
         return
 
-    tokens = [t.strip().lower() for t in spec.split(",") if t.strip()]
+    tokens = _split_csv_lower(spec)
 
     for tok in tokens:
         s = tok
@@ -3766,7 +3829,7 @@ def _validate_weekly_spec(spec: str):
     Canonical (V2) range syntax uses '..' (e.g., w:mon..fri).
     Legacy '-' and ':' range forms are still accepted for backward compatibility.
     """
-    toks = [t.strip().lower() for t in str(spec or "").split(",") if t.strip()]
+    toks = _split_csv_lower(spec)
     if not toks:
         raise ParseError(
             f"Weekly spec is empty. Examples: '{_CANON_WEEKLY_RANGE_EX}', '{_CANON_WEEKLY_LIST_EX}'."
@@ -3822,7 +3885,7 @@ def _validate_monthly_spec(spec: str):
       - |A|,|B|,|k| ≤ 31 (upper bound for validation; actual month length is handled at expansion)
       - nth-weekday number must be 1..5 (or negative -1..-5), or 'last' (≡ -1)
     """
-    toks = [t.strip().lower() for t in str(spec or "").split(",") if t.strip()]
+    toks = _split_csv_lower(spec)
     if not toks:
         raise ParseError("Empty monthly spec")
 
@@ -3936,7 +3999,7 @@ def _validate_yearly_spec(spec: str):
     Friendly suggestions are provided for common mistakes (non-padded, month-only, cross-year, etc).
     """
 
-    toks = [t.strip().lower() for t in str(spec or "").split(",") if t.strip()]
+    toks = _split_csv_lower(spec)
     if not toks:
         raise ParseError("Empty yearly spec")
 
@@ -3968,7 +4031,7 @@ def _validate_yearly_spec(spec: str):
         maxd = _last_day(mm)
         if dd < 1 or dd > maxd:
             near = maxd if dd > maxd else 1
-            hint = f" {month_name[mm]} has {maxd} days."
+            hint = f" {_MONTH_FULL[mm]} has {maxd} days."
             sug1 = f"{near:02d}-{mm:02d}"
             sug2 = f"01-{mm:02d}..{maxd:02d}-{mm:02d}"
             raise ParseError(
@@ -4093,7 +4156,7 @@ def validate_anchor_expr_strict(expr):
         s = (expr or "").strip()
         if not s:
             raise ParseError("Empty anchor expression.")
-        dnf = parse_anchor_expr_to_dnf(s)
+        dnf = parse_anchor_expr_to_dnf_cached(s)
     elif isinstance(expr, (list, tuple)):
         dnf = expr
     else:
@@ -4210,7 +4273,7 @@ def expand_yearly_cached(spec: str, y: int):
         return (b, a) if _yearfmt() == "MD" else (a, b)
 
     days = []
-    tokens = [t.strip().lower() for t in str(spec).split(",") if t.strip()]
+    tokens = _split_csv_lower(spec)
 
     for tok in tokens:
         m = re.fullmatch(r"(\d{2})-(\d{2})(?:(?:\.\.|:)(\d{2})-(\d{2}))?$", tok)
@@ -4291,7 +4354,7 @@ def expand_monthly_cached(spec: str, y: int, m: int):
             d = d - timedelta(days=1)
         return None
 
-    for tok in [t.strip().lower() for t in spec.split(",") if t.strip()]:
+    for tok in _split_csv_lower(spec):
         m1 = _nth_weekday_re.match(tok)
         if m1:
             n_raw, wd_s = m1.group(1), m1.group(2)
@@ -4439,7 +4502,7 @@ def base_next_after_atom(atom, ref_d: date) -> date:
     if typ == "m":
         y, m = ref_d.year, ref_d.month
         # Union across comma-separated monthly tokens (each token → a set of DOMs)
-        tokens = [t.strip() for t in str(spec or "").split(",") if t.strip()]
+        tokens = _split_csv_tokens(spec)
         for _ in range(24):  # scan up to 24 months out
             doms_union = set()
             for tok in tokens:
@@ -4980,7 +5043,7 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
     fmt = _yearfmt()  # "MD" or "DM"
     for seg in _iter_y_segments(s):
         # split on commas (multiple y tokens)
-        for tok in [t.strip() for t in seg.split(",") if t.strip()]:
+        for tok in _split_csv_tokens(seg):
             # bare dd:mm (no hyphens anywhere) → definitely wrong (and not a range)
             if re.fullmatch(r'\d{2}:\d{2}', tok):
                 return ("Yearly day/month must use '-', not ':'. Try '05-15' (not '05:15').", [])
@@ -5058,8 +5121,7 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
             spec = m.group(2)
             ws = set()
             simple = True
-            for tok in spec.split(","):
-                tok = tok.strip()
+            for tok in _split_csv_tokens(spec):
                 if "-" in tok or ":" in tok:
                     simple = False
                     break
@@ -5096,7 +5158,7 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
 
         # Weekly: warn on legacy '-' and ':' range delimiters
         for spec in _iter_atom_specs('w'):
-            for tok in [t.strip() for t in spec.split(',') if t.strip()]:
+            for tok in _split_csv_tokens(spec):
                 if '..' in tok:
                     continue
                 m1 = re.fullmatch(r'(mon|tue|wed|thu|fri|sat|sun)\s*-\s*(mon|tue|wed|thu|fri|sat|sun)', tok)
@@ -5116,7 +5178,7 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
 
         # Monthly: warn on legacy ':' ranges like 1:7 or -3:-1
         for spec in _iter_atom_specs('m'):
-            for tok in [t.strip() for t in spec.split(',') if t.strip()]:
+            for tok in _split_csv_tokens(spec):
                 if '..' in tok or ':' not in tok:
                     continue
                 parts = [p.strip() for p in tok.split(':') if p.strip()]
@@ -5127,7 +5189,7 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
 
         # Yearly: warn on legacy ':' ranges/spans (day ranges, month spans, quarter spans)
         for spec in _iter_atom_specs('y'):
-            for tok in [t.strip() for t in spec.split(',') if t.strip()]:
+            for tok in _split_csv_tokens(spec):
                 if '..' in tok or ':' not in tok:
                     continue
                 # Skip time-like tokens; they are invalid in yearly specs and handled earlier.
@@ -5173,7 +5235,7 @@ def _rewrite_weekly_multi_time_atoms(s: str) -> str:
 
     def flush_atom(prefix: str, body: str):
         # body like "mon@t=09:00,fri@t=15:00"
-        parts = [p.strip() for p in body.split(",") if p.strip()]
+        parts = _split_csv_tokens(body)
         if len(parts) <= 1:
             out.append(prefix + body)
             return

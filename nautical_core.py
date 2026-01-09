@@ -1148,6 +1148,7 @@ def _wd_idx(s: str) -> int | None:
     return None
 
 
+@lru_cache(maxsize=128)
 def _wday_idx_any(s: str) -> int | None:
     """Weekday index for weekly specs.
 
@@ -3303,6 +3304,7 @@ def _parse_atom_mods(mods_str: str):
     return mods
 
 
+@lru_cache(maxsize=512)
 def _parse_y_token(tok: str):
     """Parse yearly token (e.g., '15-02' or 'q1')."""
     tok = tok.strip().lower()
@@ -4234,6 +4236,15 @@ def expand_weekly_cached(spec: str):
 
 
 @lru_cache(maxsize=128)
+def expand_weekly_cached_mods(spec: str, bd_only: bool):
+    """Cached expansion of weekly specification with bd/wd filtering applied."""
+    days = expand_weekly_cached(spec)
+    if bd_only:
+        days = [d for d in days if d < 5]
+    return days
+
+
+@lru_cache(maxsize=128)
 def expand_yearly_cached(spec: str, y: int):
     """
     Expand yearly tokens into concrete dates for year y.
@@ -4485,13 +4496,11 @@ def base_next_after_atom(atom, ref_d: date) -> date:
 
     # Normal weekly path (non-rand)
     if typ == "w":
-        days = expand_weekly_cached(spec)
-        # Filter out weekends if @bd/@wd (boolean) modifier
-        if mods.get("bd") or (mods.get("wd") is True):
-            days = [d for d in days if d < 5]  # 0-4 = Mon-Fri
-            if not days:  # No weekdays in spec
-                # Fallback: return far future to avoid infinite loop
-                return ref_d + timedelta(days=365)
+        bd_only = bool(mods.get("bd") or (mods.get("wd") is True))
+        days = expand_weekly_cached_mods(spec, bd_only)
+        if not days:  # No weekdays in spec
+            # Fallback: return far future to avoid infinite loop
+            return ref_d + timedelta(days=365)
         
         for i in range(1, 15):  # next 2 weeks is plenty
             cand = ref_d + timedelta(days=i)

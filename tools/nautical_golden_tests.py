@@ -1192,6 +1192,38 @@ def test_on_modify_spawn_deferred_then_drain():
         if mod._SPAWN_QUEUE_PATH.exists():
             txt = mod._SPAWN_QUEUE_PATH.read_text(encoding="utf-8").strip()
             expect(txt == "", "Drain should empty the deferred spawn queue")
+
+
+def test_on_modify_spawn_queue_batch_limit():
+    """on-modify queue drain batches when the queue is large."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_queue_batch_test")
+    if not hasattr(mod, "_take_deferred_spawn_payload"):
+        raise AssertionError("on-modify hook does not expose _take_deferred_spawn_payload")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod._SPAWN_QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._SPAWN_QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+
+        mod._SPAWN_QUEUE_MAX_BYTES = 1
+        mod._SPAWN_QUEUE_DRAIN_MAX_ITEMS = 2
+
+        items = [{"uuid": f"{i:08d}"} for i in range(5)]
+        mod._SPAWN_QUEUE_PATH.write_text(
+            "\n".join(json.dumps(o) for o in items) + "\n",
+            encoding="utf-8",
+        )
+
+        payload = mod._take_deferred_spawn_payload()
+        taken = [ln for ln in payload.splitlines() if ln.strip()]
+        expect(len(taken) == 2, f"Expected 2 items taken, got {len(taken)}")
+
+        remaining = mod._SPAWN_QUEUE_PATH.read_text(encoding="utf-8").strip().splitlines()
+        remaining = [ln for ln in remaining if ln.strip()]
+        expect(len(remaining) == 3, f"Expected 3 items remaining, got {len(remaining)}")
 TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
@@ -1241,6 +1273,7 @@ TESTS = [
     test_on_add_dnf_cache_quarantines_invalid_jsonl,
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_modify_spawn_deferred_then_drain,
+    test_on_modify_spawn_queue_batch_limit,
 
 ]
 

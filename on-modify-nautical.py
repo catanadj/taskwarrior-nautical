@@ -58,6 +58,11 @@ _MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
 
 _MAX_SPAWN_ATTEMPTS = 3
 _SPAWN_RETRY_DELAY = 0.1  # seconds between retries
+# Deferred spawn queue guards (override via env for heavy workloads).
+# NAUTICAL_SPAWN_QUEUE_MAX_BYTES: skip full-load parsing if queue exceeds this size.
+# NAUTICAL_SPAWN_DRAIN_MAX_ITEMS: cap items drained in one batch for large queues.
+_SPAWN_QUEUE_MAX_BYTES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_BYTES", "524288") or "524288")
+_SPAWN_QUEUE_DRAIN_MAX_ITEMS = int(os.environ.get("NAUTICAL_SPAWN_DRAIN_MAX_ITEMS", "200") or "200")
 
 # ------------------------------------------------------------------------------
 # Colour per chain toggle - performance in termux has a significative reduction. 
@@ -886,27 +891,98 @@ def _take_deferred_spawn_payload() -> str:
                 return ""
         except Exception:
             return ""
-
         try:
-            raw = _SPAWN_QUEUE_PATH.read_text(encoding="utf-8")
+            st = _SPAWN_QUEUE_PATH.stat()
+            size = st.st_size
         except Exception:
-            raw = ""
+            size = 0
 
-        if not (raw or "").strip():
+        if size <= 0:
             try:
                 _SPAWN_QUEUE_PATH.unlink()
             except Exception:
                 pass
             return ""
 
-        objs = list(_iter_json_objects_from_mixed_text(raw))
-        if not objs:
-            # Do not truncate if we couldn't parse anything (avoid data loss).
+        if size <= _SPAWN_QUEUE_MAX_BYTES:
+            try:
+                raw = _SPAWN_QUEUE_PATH.read_text(encoding="utf-8")
+            except Exception:
+                raw = ""
+
+            if not (raw or "").strip():
+                try:
+                    _SPAWN_QUEUE_PATH.unlink()
+                except Exception:
+                    pass
+                return ""
+
+            objs = list(_iter_json_objects_from_mixed_text(raw))
+            if not objs:
+                # Do not truncate if we couldn't parse anything (avoid data loss).
+                return ""
+
+            # Truncate while under lock; import happens after lock is released.
+            try:
+                _SPAWN_QUEUE_PATH.write_text("", encoding="utf-8")
+            except Exception:
+                pass
+
+            return "\n".join(json.dumps(o, ensure_ascii=False, separators=(",", ":")) for o in objs) + "\n"
+
+        # Large queue: stream a bounded batch to avoid memory spikes.
+        objs = []
+        taken = 0
+        tmp = _SPAWN_QUEUE_PATH.with_suffix(".tmp")
+        wrote_remainder = False
+        try:
+            with open(_SPAWN_QUEUE_PATH, "r", encoding="utf-8") as src, open(tmp, "w", encoding="utf-8") as dst:
+                for line in src:
+                    if taken >= _SPAWN_QUEUE_DRAIN_MAX_ITEMS:
+                        dst.write(line)
+                        wrote_remainder = True
+                        continue
+                    ln = line.strip()
+                    if not ln:
+                        dst.write(line)
+                        wrote_remainder = True
+                        continue
+                    try:
+                        obj = json.loads(ln)
+                    except Exception:
+                        dst.write(line)
+                        wrote_remainder = True
+                        continue
+                    if isinstance(obj, dict):
+                        objs.append(obj)
+                        taken += 1
+                    else:
+                        dst.write(line)
+                        wrote_remainder = True
+        except Exception:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
             return ""
 
-        # Truncate while under lock; import happens after lock is released.
+        if not objs:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+            return ""
+
+        # Replace queue with remainder (if any).
         try:
-            _SPAWN_QUEUE_PATH.write_text("", encoding="utf-8")
+            if wrote_remainder:
+                os.replace(tmp, _SPAWN_QUEUE_PATH)
+            else:
+                _SPAWN_QUEUE_PATH.write_text("", encoding="utf-8")
+                if tmp.exists():
+                    tmp.unlink()
         except Exception:
             pass
 

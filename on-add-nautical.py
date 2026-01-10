@@ -164,7 +164,8 @@ def _to_local_cached(dt):
 
 
 # ---- Optional cross-invocation disk cache for expensive anchor parsing (Termux-friendly) ----
-_DNF_DISK_CACHE_ENABLED = (os.getenv("NAUTICAL_DNF_DISK_CACHE") or "").strip().lower() in ("1", "true", "yes", "on")
+# Default on; set NAUTICAL_DNF_DISK_CACHE=0 to disable.
+_DNF_DISK_CACHE_ENABLED = (os.getenv("NAUTICAL_DNF_DISK_CACHE") or "1").strip().lower() in ("1", "true", "yes", "on")
 _DNF_DISK_CACHE_PATH = HOOK_DIR / ".nautical_cache" / "dnf_cache.jsonl"
 _DNF_DISK_CACHE_PATH_LEGACY = HOOK_DIR / ".nautical_cache" / "dnf_cache.pkl"
 _DNF_DISK_CACHE = None  # OrderedDict[str, object]

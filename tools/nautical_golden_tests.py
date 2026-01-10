@@ -16,7 +16,9 @@ Optional:
 
 import importlib
 import sys, os, re, json
+from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
+from collections import OrderedDict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -150,8 +152,92 @@ def _must_natural(expr):
     raise AssertionError(f"No natural language for '{expr}'")
 
 # -------- Test cases ----------------------------------------------------------
+# -------- Hook checks ---------------------------------------------------------
+# These tests validate the shipped hook scripts (on-add / on-modify) at a high
+# level, to catch regressions that can slip through core-only tests.
+
+import subprocess
+import importlib.util
+import importlib.machinery
+import inspect
+import time as _time
+
+def _force_tz_utc():
+    # Make hook output deterministic across machines.
+    os.environ["TZ"] = "UTC"
+    try:
+        _time.tzset()
+    except Exception:
+        pass
+
+def _find_hook_file(name: str) -> str:
+    # Per project convention: hooks live either next to core/tests, or under ./hooks/
+    candidates = [
+        os.path.join(HERE, name),
+        os.path.join(HERE, "hooks", name),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    raise AssertionError(
+        f"Hook script '{name}' not found. Expected at '{candidates[0]}' or '{candidates[1]}'."
+    )
+
+def _run_hook_script(path: str, task_obj: dict, env_extra: dict | None = None, timeout_s: float = 8.0):
+    _force_tz_utc()
+    env = os.environ.copy()
+    # Ensure the hook can import local nautical_core.py
+    env["PYTHONPATH"] = HERE + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env.setdefault("TZ", "UTC")
+    if env_extra:
+        env.update({k: str(v) for k, v in env_extra.items()})
+    p = subprocess.run(
+        [sys.executable, path],
+        input=json.dumps(task_obj),
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=timeout_s,
+    )
+    return p
+
+def _extract_last_json(stdout_text: str) -> dict:
+    s = (stdout_text or "").strip()
+    if not s:
+        raise AssertionError("Hook produced no stdout JSON.")
+    # Many hooks emit exactly one JSON object. If extra text exists, take the last {...}.
+    candidates = re.findall(r"\{[\s\S]*\}", s)
+    if not candidates:
+        raise AssertionError(f"Could not locate JSON in hook stdout. stdout={s[:200]!r}")
+    try:
+        return json.loads(candidates[-1])
+    except Exception as e:
+        raise AssertionError(f"Invalid JSON from hook stdout: {e}. stdout_tail={candidates[-1][-200:]!r}")
+
+def _load_hook_module(path: str, module_name: str):
+    _force_tz_utc()
+    loader = importlib.machinery.SourceFileLoader(module_name, path)
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    # Ensure local imports work
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    loader.exec_module(mod)
+    return mod
+
+def _call_with_supported_kwargs(fn, **kwargs):
+    sig = inspect.signature(fn)
+    filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return fn(**filtered)
+
+def _strip_markup(s: str) -> str:
+    # Remove Rich markup tags such as [bold red], [/], [cyan], etc.
+    return re.sub(r"\[[^\]]*\]", "", s or "")
+
+
 
 def test_lint_formats():
+    """Test validator rejects malformed yearly tokens (':' instead of '-')"""
     # Instead of relying on linter fatals, assert the validator rejects bad yearly tokens
     try:
         core.validate_anchor_expr_strict("y:05:15")
@@ -161,24 +247,28 @@ def test_lint_formats():
         expect(("uses ':'" in low) or ("example" in low) or ("anchor_year_fmt" in low),
                f"Unexpected validator message: {e}")
 
-
 def test_weekly_and_unsat():
+    """Test weekly AND (Sat AND Mon) must be unsatisfiable"""
     fatal, _ = core.lint_anchor_expr("w:sat + w:mon")
     expect(bool(fatal), "Weekly A+B must be unsatisfiable (Sat AND Mon)")
 
 def test_nth_weekday_range():
+    """Test nth weekday range validation (1..5 or last)"""
     fatal, _ = core.lint_anchor_expr("m:6th-mon")
     expect(bool(fatal), "6th-mon must fatal (nth in 1..5 or last)")
 
 def test_last_weekday():
+    """Test last weekday of month pattern"""
+    # Verify natural language mentions "last"
     p = build_preview("m:last-fri")
     expect("last" in p["natural"].lower(), "Natural should mention last Friday")
-    # Next few should all be Fridays
+    # Verify all upcoming dates are Fridays
     for d in p["upcoming"][:5]:
         dow = datetime.fromisoformat(d).weekday()  # 0=Mon
         expect(dow == 4, f"{d} must be Friday")
 
 def test_monthly_valid_months_m2_5th_mon():
+    """Test monthly pattern with interval (/2) and 5th Monday constraint"""
     # /2:5th-mon must count only months that HAVE the 5th Monday
     p = build_preview("m/2:5th-mon")
     expect(p["upcoming"], "Should produce upcoming dates")
@@ -187,6 +277,7 @@ def test_monthly_valid_months_m2_5th_mon():
         expect(datetime.fromisoformat(d).weekday() == 0, f"{d} must be Monday")
 
 def test_leap_year_29feb():
+    """Test leap year handling for Feb 29"""
     p = build_preview("y:02-29")
     dates = p["upcoming"][:8]
     expect(dates, "Need some upcoming for leap-day")
@@ -197,6 +288,7 @@ def test_leap_year_29feb():
     expect(any(datetime.fromisoformat(d).day == 29 for d in dates), "Must include a Feb 29 occurrence")
 
 def test_quarters_window():
+    """Test quarter window constraints (Q1-Q2)"""
     # Second Monday only within H1
     p = build_preview("m:2nd-mon + y:q1:q2")
     # All months must be in 1..6
@@ -205,6 +297,7 @@ def test_quarters_window():
         expect(1 <= m <= 6, f"{d} must be within Q1–Q2")
 
 def test_yearly_month_names():
+    """Test month name constraints (Mar..Sep)"""
     # y:mar:sep must constrain to Mar..Sep
     p = build_preview("m:1st-mon + y:mar:sep")
     for d in p["upcoming"][:6]:
@@ -212,6 +305,7 @@ def test_yearly_month_names():
         expect(3 <= m <= 9, f"{d} must be Mar..Sep")
 
 def test_rand_with_year_window():
+    """Test random pattern with yearly window constraint"""
     # Only inside Apr 20 – May 15
     p = build_preview("y:04-20:05-15 + m:rand")
     expect(p["upcoming"], "Rand with window should produce dates")
@@ -221,6 +315,7 @@ def test_rand_with_year_window():
         expect("04-20" <= mmdd <= "05-15", f"{d} must be within Apr 20–May 15")
 
 def test_weekly_rand_N_gate():
+    """Test weekly random with /N gating (ISO week modulo)"""
     # /4:rand → ISO week index % 4 == constant (deterministic buckets)
     p = build_preview("w/4:rand")
     expect(p["upcoming"], "Need dates for w/4:rand")
@@ -236,6 +331,7 @@ def test_weekly_rand_N_gate():
         expect(wk == mod, f"{d} must satisfy /4 gating (got {wk}, want {mod})")
 
 def test_business_day_nbd_pbd_nw_natural():
+    """Test business day modifier natural language generation"""
     # Natural must reflect rolls; dates must obey
     cases = [
         ("m:-1@nbd", ("next", "business")),
@@ -249,8 +345,8 @@ def test_business_day_nbd_pbd_nw_natural():
         # require both keywords in any order
         expect(all(w in low for w in want), f"Natural for {expr} must mention {' & '.join(want)}")
 
-
 def test_time_splitting_per_atom():
+    """Test time splitting within weekly atoms"""
     # w:mon@t=09:00,fri@t=15:00 (comma in same weekly atom)
     # Requirement: no fatal; preview pathway should produce something.
     p = build_preview("w:mon@t=09:00,fri@t=15:00")
@@ -260,6 +356,7 @@ def test_time_splitting_per_atom():
            "Multi-@t weekly should be accepted and produce output")
 
 def test_year_fmt_md_dm_switch():
+    """Test MD vs DM format switching"""
     # Temporarily flip format and re-lint
     orig = getattr(core, "ANCHOR_YEAR_FMT", "MD")
     try:
@@ -274,6 +371,7 @@ def test_year_fmt_md_dm_switch():
         core.ANCHOR_YEAR_FMT = orig
 
 def test_weekly_multi_days_and_every_2weeks():
+    """Test weekly pattern with multiple days and interval"""
     p = build_preview("w/2:mon-tue,thu-sat")
     expect(p["upcoming"], "weekly /2 preview must produce dates")
     # all days are in allowed set
@@ -283,7 +381,7 @@ def test_weekly_multi_days_and_every_2weeks():
         expect(wd in allowed, f"{d} not in allowed weekdays")
 
 def test_performance_large_expressions():
-    """Test performance with large/complex expressions."""
+    """Test performance with large/complex expressions"""
     import time
     
     complex_expr = " | ".join([f"w:{dow}" for dow in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]])
@@ -303,7 +401,7 @@ def test_performance_large_expressions():
     assert calc_time < 0.05, f"Date calculation took {calc_time:.3f}s, should be < 0.05s"
 
 def test_cache_consistency():
-    """Test that cached and uncached results are identical."""
+    """Test that cached and uncached results are identical"""
     test_expressions = [
         "w:mon",
         "m:15",
@@ -332,7 +430,7 @@ def test_cache_consistency():
             assert cached_natural == natural_uncached, f"{expr}: cached natural doesn't match"
 
 def test_parser_validation():
-    """Test parser validation and error messages."""
+    """Test parser validation and error messages"""
     # Valid expressions that should parse
     valid_expressions = [
         "w:mon",
@@ -363,11 +461,11 @@ def test_parser_validation():
     # Invalid expressions that should fail
     invalid_expressions = [
         ("w:invalid", "Unknown weekday"),
-        ("m:32", "Day out of range"),
-        ("m:6th-mon", "6th weekday not allowed"),
-        ("y:13-01", "Invalid month"),
-        ("y:01-32", "Invalid day"),
-        ("w:mon + w:sun", "Unsatisfiable AND"),
+        ("m:32", "Day-of-month '32' out of range. Use 1..31 or -1..-31"),
+        ("m:6th-mon", "nth-weekday must be between 1 and 5 (or 'last'). Did you mean 'last-mon'? Offending token: '6th-mon'"),
+        ("y:13-01", "Yearly token '13-01' doesn’t match ANCHOR_YEAR_FMT=MD. month '13' is invalid. Did you mean MM-DD? e.g., '04-20'"),
+        ("y:01-32", "Yearly token '01-32' doesn’t match ANCHOR_YEAR_FMT=MD. day '32' is invalid. Did you mean MM-DD? e.g., '04-20'"),
+        ("w:mon + w:sun", "Weekly anchors joined with '+' never coincide (e.g., Saturday AND Monday). Use ',' (OR) or '|' instead"),
     ]
     
     for expr, expected_error in invalid_expressions:
@@ -379,17 +477,17 @@ def test_parser_validation():
                 f"{expr}: wrong error message. Got: {e}"
 
 def test_natural_language_comprehensive():
-    """Test natural language generation for various patterns."""
+    """Test natural language generation for various patterns"""
     test_cases = [
         ("w:mon", "Mondays"),
-        ("w:mon,tue,fri", "Mondays, Tuesdays or Fridays"),
+        ("w:mon,tue,fri", "Mondays or Tuesdays or Fridays"),
         ("w/2:mon", "every 2 weeks: Mondays"),
         ("m:15", "the 15th day of each month"),
         ("m:-1", "the last day of each month"),
         ("m:2nd-mon", "the 2nd Monday of each month"),
         ("m:last-fri", "the last Friday of each month"),
         ("m:5bd", "the 5th business day of each month"),
-        ("y:12-25", "25 Dec each year"),
+        ("y:12-25", "Dec 25 each year"),
         ("y:01-01:01-31", "Jan each year"),
         ("m:15@t=09:00", "the 15th day of each month at 09:00"),
         ("m:-1@nbd", "the last day of each month if business day; otherwise the next business day"),
@@ -402,9 +500,8 @@ def test_natural_language_comprehensive():
         assert expected_phrase.lower() in natural.lower(), \
             f"{anchor}: expected '{expected_phrase}' in '{natural}'"
 
-
 def test_edge_cases():
-    """Test edge cases and boundary conditions."""
+    """Test edge cases and boundary conditions"""
     test_cases = [
         # Leap year handling
         ("y:02-29", "2023-01-01", "2024-02-29"),  # Non-leap -> leap year
@@ -412,7 +509,7 @@ def test_edge_cases():
         
         # Month boundaries
         ("m:31", "2024-02-01", "2024-03-31"),  # Feb doesn't have 31st
-        ("m:-31", "2024-02-01", "2024-01-01"),  # -31 means 1st (31 days before end)
+        ("m:-31", "2024-02-01", "2024-03-01"),  # -31 means 1st (31 days before end; that is months that have 31 days, the other are skiped)
         
         # Year boundaries
         ("y:12-31", "2024-12-31", "2025-12-31"),  # Year rollover
@@ -433,7 +530,7 @@ def test_edge_cases():
 
 def test_heads_with_slashN_parse_ok():
     """
-    Ensure '/N' on heads parses cleanly across w/m/y.
+    Ensure '/N' on heads parses cleanly across w/m/y
     """
     ok = [
         "w/2:sun",
@@ -471,7 +568,7 @@ def test_monthly_valid_months_m2_5th_mon_upcoming_within_valid_months():
 
 def test_leap_year_29feb_upcoming_only_on_leap_year():
     """
-    'y:02-29' must produce dates only on leap years (i.e., exactly Feb 29).
+    'y:02-29' must produce dates only on leap years (i.e., exactly Feb 29)
     """
     preview = _must_preview("y:02-29")
     dates = preview["next_dates"]
@@ -481,7 +578,7 @@ def test_leap_year_29feb_upcoming_only_on_leap_year():
 
 def test_rand_with_year_window_filtering():
     """
-    'y:04-20:05-15+ m:rand' must produce all dates within the yearly window.
+    'y:04-20:05-15+ m:rand' must produce all dates within the yearly window
     """
     preview = _must_preview("y:04-20:05-15+ m:rand")
     dates = preview["next_dates"]
@@ -497,7 +594,7 @@ def test_rand_with_year_window_filtering():
 
 def test_weekly_rand_N_gate_spacing():
     """
-    'w/4:rand' should respect 4-week ISO‐week gating between picks.
+    'w/4:rand' should respect 4-week ISO‐week gating between picks
     """
     preview = _must_preview("w/4:rand")
     dates = preview["next_dates"]
@@ -516,7 +613,7 @@ def test_weekly_rand_N_gate_spacing():
 
 def test_prev_weekday_natural_text():
     """
-    Natural for 'm:-1@prev-fri' should mention 'previous Friday before the last day of the month'.
+    Natural for 'm:-1@prev-fri' should mention 'previous Friday before the last day of the month'
     """
     nat = _must_natural("m:-1@prev-fri")
     want_any = [
@@ -528,7 +625,7 @@ def test_prev_weekday_natural_text():
 
 def test_year_fmt_md_dm_switch_minimal():
     """
-    Toggle ANCHOR_YEAR_FMT and assert 06-01 is MM-DD vs DD-MM appropriately.
+    Toggle ANCHOR_YEAR_FMT and assert 06-01 is MM-DD vs DD-MM appropriately
     """
     # Use the global core module, don't re-import
     saved = core.ANCHOR_YEAR_FMT
@@ -569,7 +666,7 @@ def test_year_fmt_md_dm_switch_minimal():
 def test_weekly_multi_days_every_2weeks_spacing_and_days():
     """
     'w/2:mon,thu' must parse and produce dates only on Mon/Thu,
-    with ISO week gaps respecting /2 gating.
+    with ISO week gaps respecting /2 gating
     """
     preview = _must_preview("w/2:mon,thu")
     dates = preview["next_dates"]
@@ -590,7 +687,7 @@ def test_weekly_multi_days_every_2weeks_spacing_and_days():
 
 def test_inline_time_mods_split_ok():
     """
-    'w:mon@t=09:00,fri@t=15:00' should be accepted (rewritten to OR of singletons).
+    'w:mon@t=09:00,fri@t=15:00' should be accepted (rewritten to OR of singletons)
     """
     # Linter must not fatal, and strict-validate must pass
     fatal, warns = core.lint_anchor_expr("w:mon@t=09:00,fri@t=15:00")
@@ -598,7 +695,7 @@ def test_inline_time_mods_split_ok():
     _must_parse("w:mon@t=09:00,fri@t=15:00")
 
 def test_deterministic_randomness():
-    """Test that random patterns are deterministic with same seed."""
+    """Test that random patterns are deterministic with same seed"""
     # Only valid random patterns
     test_cases = [
         "w:rand",      # Random weekday - valid
@@ -636,7 +733,7 @@ def test_deterministic_randomness():
         assert dates1 == dates2, f"{anchor}: random dates not deterministic"
 
 def test_business_day_modifiers():
-    """Test business day modifiers thoroughly."""
+    """Test business day modifiers thoroughly"""
     test_cases = [
         # @bd - weekdays only (skip if weekend)
         ("m:15@bd", "2024-01-14", "2024-01-15"),  # 15th is Monday (weekday)
@@ -653,9 +750,18 @@ def test_business_day_modifiers():
         ("m:15@nw", "2024-06-14", "2024-06-14"),  # June 15 is Saturday -> June 14 (Friday)
         ("m:15@nw", "2024-09-14", "2024-09-16"),  # Sep 15 is Sunday -> Sep 16 (Monday)
     ]
+    
+    for anchor, start_str, expected_str in test_cases:
+        start = date.fromisoformat(start_str)
+        expected = date.fromisoformat(expected_str)
+        
+        dnf = core.validate_anchor_expr_strict(anchor)
+        next_date, _ = core.next_after_expr(dnf, start)
+        
+        assert next_date == expected, f"{anchor}: got {next_date}, expected {expected}"
 
 def test_complex_dnf_expressions():
-    """Test complex DNF expressions with OR and AND."""
+    """Test complex DNF expressions with OR and AND"""
     test_cases = [
         # OR expressions
         ("w:mon | w:fri", "2024-12-11", "2024-12-13"),  # Wed -> Fri (closer than Mon)
@@ -680,7 +786,7 @@ def test_complex_dnf_expressions():
         assert next_date == expected, f"{anchor}: got {next_date}, expected {expected}"
 
 def test_interval_patterns():
-    """Test /N intervals with different anchor types."""
+    """Test /N intervals with different anchor types"""
     test_cases = [
         # w/2:mon - fixed: every 2 weeks on Monday
         ("w/2:mon", "2024-12-09", ["2024-12-23", "2025-01-06", "2025-01-20"]),
@@ -708,7 +814,7 @@ def test_interval_patterns():
             current = next_date + timedelta(days=1)
 
 def test_anchor_date_calculations():
-    """Test specific date calculations for various anchor patterns."""
+    """Test specific date calculations for various anchor patterns"""
     test_cases = [
         # (anchor, start_date, expected_next_date)
         ("w:mon", "2024-12-11", "2024-12-16"),  # Wednesday -> Next Monday
@@ -729,10 +835,9 @@ def test_anchor_date_calculations():
         next_date, _ = core.next_after_expr(dnf, start)
         
         assert next_date == expected, f"{anchor} from {start_str}: got {next_date}, expected {expected}"
-                               
-
 
 def test_yearly_rand_natural_and_bounds():
+    """Test yearly random patterns natural language and constraints"""
     # Natural for y:rand must mention random + each year
     nat = _must_natural("y:rand")
     low = nat.lower()
@@ -751,6 +856,7 @@ def test_yearly_rand_natural_and_bounds():
         expect(datetime.fromisoformat(d).month == 7, f"{d} must be in July")
 
 def test_yearly_month_aliases_and_ranges():
+    """Test month name aliases and numeric shorthands"""
     # Single month by name or numeric shorthand
     for expr in ("y:apr", "y:04"):
         p = build_preview(expr)
@@ -766,7 +872,8 @@ def test_yearly_month_aliases_and_ranges():
         expect(1 <= m <= 6, f"{d} must be within Jan..Jun")
 
 def test_business_day_bd_skip_semantics():
-    # @bd = only if business day else skip to next month’s matching day (not roll)
+    """Test @bd skip semantics (skip to next month if not business day)"""
+    # @bd = only if business day else skip to next month's matching day (not roll)
     # 2026-01-03 is Saturday → skip to 2026-02-03 (Tuesday)
     start = date(2026, 1, 1)
     dnf = core.validate_anchor_expr_strict("m:3@bd")
@@ -774,6 +881,7 @@ def test_business_day_bd_skip_semantics():
     expect(nxt == date(2026, 2, 3), f"@bd should skip Jan (Sat) → 2026-02-03, got {nxt}")
 
 def test_inline_time_mods_natural_contains_both_times():
+    """Test inline time modifiers show both times in natural language"""
     expr = "w:mon@t=09:00,fri@t=15:00"
     nat = _must_natural(expr)
     low = nat.lower()
@@ -782,6 +890,7 @@ def test_inline_time_mods_natural_contains_both_times():
     _must_parse(expr)  # ensure strict parser accepts the inline split
 
 def test_guard_commas_between_atoms_after_mods_fatal():
+    """Test comma between atoms after modifiers is fatal"""
     bad = "m:31@t=14:00,w:sun@t=22:00"
     try:
         core.validate_anchor_expr_strict(bad)
@@ -792,11 +901,13 @@ def test_guard_commas_between_atoms_after_mods_fatal():
                f"Unexpected error message for bad comma join: {msg}")
 
 def test_heads_with_slashN_parse_ok_again():
+    """Regression guard: '/N' heads must parse across w/m/y"""
     # Regression guard: '/N' heads must parse across w/m/y
     for expr in ("w/2:sun", "m/3:1st-mon", "y/4:06-01"):
         _must_parse(expr)
 
 def test_monthname_and_numeric_equivalence():
+    """Test month name and numeric month equivalence"""
     # y:jul should behave like a July window; y:07 numeric should match too (for month-only)
     for expr in ("y:jul",):
         p = build_preview(expr)
@@ -804,10 +915,283 @@ def test_monthname_and_numeric_equivalence():
         for d in p["upcoming"][:6]:
             expect(datetime.fromisoformat(d).month == 7, f"{d} must be in July")
 
+def test_cp_duration_parser_and_dst_preserve_whole_days():
+    """CP branch: duration parsing + DST-safe whole-day stepping keeps wall-clock time stable."""
 
+    # --- 1) Duration parsing (core responsibility) ---
+    td = core.parse_cp_duration("P1DT2H30M")
+    assert td == timedelta(days=1, hours=2, minutes=30), f"Unexpected td for P1DT2H30M: {td}"
+    td_day = core.parse_cp_duration("P1D")
+    assert td_day == timedelta(days=1), f"Unexpected td for P1D: {td_day}"
+
+    # --- 2) DST-safe stepping semantics used by CP preview (hook responsibility) ---
+    # If ZoneInfo isn't available, core runs in "UTC-only" mode; skip DST assertions.
+    if getattr(core, "_LOCAL_TZ", None) is None:
+        return
+
+    # Pick a date that crosses DST start for Europe/Bucharest (default config).
+    start_local = core.build_local_datetime(date(2026, 3, 28), (10, 0))
+    start_utc = start_local.astimezone(timezone.utc).replace(microsecond=0)
+
+    naive_next_utc = (start_utc + td_day).replace(microsecond=0)
+
+    # Hook-style “preserve local HH:MM” for whole-day steps:
+    dl = core.to_local(start_utc)
+    preserved_local = core.build_local_datetime(
+        (dl + timedelta(days=1)).date(), (dl.hour, dl.minute)
+    )
+    preserved_next_utc = preserved_local.astimezone(timezone.utc).replace(microsecond=0)
+
+    # Preserved step must keep local HH:MM stable.
+    pl = core.to_local(preserved_next_utc)
+    assert (pl.hour, pl.minute) == (dl.hour, dl.minute), (
+        f"Preserved CP step should keep local HH:MM stable: start={dl} -> preserved={pl}"
+    )
+
+    # If DST offset changed across the step, naive timedelta arithmetic will drift in wall-clock time.
+    nl = core.to_local(naive_next_utc)
+    if dl.utcoffset() != nl.utcoffset():
+        assert (nl.hour, nl.minute) != (dl.hour, dl.minute), (
+            f"Naive UTC+timedelta should drift across DST: start={dl} -> naive={nl}"
+        )            
 
 # -------- Runner --------------------------------------------------------------
 
+def test_hook_on_add_multitime_preview_emits_all_slots():
+    """on-add must accept @t=HH:MM list and preview intra-day slots when due is explicit."""
+    hook = _find_hook_file("on-add-nautical.py")
+    # Force deterministic plain output for parsing and disable ANSI colors.
+    env = {"NAUTICAL_PANEL": "fast", "NO_COLOR": "1"}
+    expr = "w:wed@t=06:00,12:00,22:00"
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000111",
+        "description": "hook test on-add multitime",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20251217T000000Z",
+        "anchor": expr,
+        "anchor_mode": "skip",
+        # Explicit due so the preview is deterministic independent of 'now'
+        "due": "20251217T060000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    if p.returncode != 0:
+        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+    out_task = _extract_last_json(p.stdout)
+    # The hook should not override an explicit due.
+    if out_task.get("due") != task["due"]:
+        raise AssertionError(f"on-add changed explicit due: got {out_task.get('due')!r}, want {task['due']!r}")
+    # Preview should show other intra-day slots (12:00 and 22:00) on the same date.
+    stderr_txt = _strip_markup(p.stderr)
+    if "12:00" not in stderr_txt or "22:00" not in stderr_txt:
+        raise AssertionError(f"on-add preview missing expected intra-day times. stderr={stderr_txt[:500]!r}")
+
+def test_hook_on_modify_timeline_multitime_includes_all_slots():
+    """on-modify timeline generator must step occurrences (date+time), not only dates."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_test")
+    if not hasattr(mod, "_timeline_lines"):
+        raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate timeline stepping.")
+    # Avoid external calls for prev collection in unit context.
+    if hasattr(mod, "_collect_prev_two"):
+        setattr(mod, "_collect_prev_two", lambda _task: [])
+    expr = "w:mon..sun@t=06:00,12:00,22:00"
+    dnf = core.validate_anchor_expr_strict(expr)
+    # Simulate a chain where the next due is at 22:00 on a given day.
+    child_due_utc = datetime(2025, 12, 20, 22, 0, tzinfo=timezone.utc)
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000222",
+        "description": "hook test on-modify multitime",
+        "anchor": expr,
+        "anchor_mode": "skip",
+        "link": 1,
+        # completed earlier in the day
+        "end": "20251220T090000Z",
+        # due is not required by _timeline_lines, but helpful for formatting.
+        "due": "20251220T120000Z",
+    }
+    lines = _call_with_supported_kwargs(
+        mod._timeline_lines,
+        kind="anchor",
+        task=task,
+        child_due_utc=child_due_utc,
+        child_short="0000abcd",
+        dnf=dnf,
+        next_count=8,
+        cap_no=None,
+        cur_no=1,
+    )
+    txt = _strip_markup("\n".join(lines))
+    times = sorted(set(re.findall(r"\b\d{2}:\d{2}\b", txt)))
+    # Expect to see at least the three slots across the timeline.
+    for t in ("06:00", "12:00", "22:00"):
+        if t not in times:
+            raise AssertionError(f"on-modify timeline missing time {t}. found={times}. text={txt[:500]!r}")
+    # Also ensure it isn't collapsing to a single daily time.
+    if len(times) < 3:
+        raise AssertionError(f"on-modify timeline collapsed times unexpectedly: {times}. text={txt[:500]!r}")
+
+
+def test_hook_task_runner_handles_nonzero():
+    """Hook _run_task handles success and non-zero exit codes."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_run_task_test")
+    if not hasattr(mod, "_run_task"):
+        raise AssertionError("on-modify hook does not expose _run_task")
+
+    ok, out, _err = mod._run_task([sys.executable, "-c", "print('ok')"], timeout=2, retries=1)
+    expect(ok and out.strip() == "ok", f"_run_task expected success, got ok={ok}, out={out!r}")
+
+    ok2, _out2, _err2 = mod._run_task(
+        [sys.executable, "-c", "import sys; sys.exit(2)"],
+        timeout=2,
+        retries=1,
+    )
+    expect(not ok2, "_run_task expected non-zero exit to return ok=False")
+
+
+def test_on_add_dnf_cache_versioned_payload():
+    """on-add DNF cache uses versioned payload and can round-trip."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_cache_test")
+    if not hasattr(mod, "_save_dnf_disk_cache") or not hasattr(mod, "_load_dnf_disk_cache"):
+        raise AssertionError("on-add hook does not expose DNF cache helpers")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        cache_path = os.path.join(td, "dnf_cache.jsonl")
+        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
+        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
+        mod._DNF_DISK_CACHE_PATH_LEGACY = Path(os.path.join(td, "dnf_cache.pkl"))
+        mod._DNF_DISK_CACHE_ENABLED = True
+        mod._DNF_DISK_CACHE = OrderedDict([("k1", {"v": 1})])
+        mod._DNF_DISK_CACHE_DIRTY = True
+
+        mod._save_dnf_disk_cache()
+
+        mod._DNF_DISK_CACHE = None
+        loaded = mod._load_dnf_disk_cache()
+        expect(isinstance(loaded, OrderedDict), "DNF cache load should return OrderedDict")
+        expect("k1" in loaded, "DNF cache did not round-trip expected key")
+
+
+def test_on_add_dnf_cache_corrupt_payload_recovers():
+    """on-add DNF cache load recovers from corrupt pickle without raising."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_cache_corrupt_test")
+    if not hasattr(mod, "_load_dnf_disk_cache"):
+        raise AssertionError("on-add hook does not expose DNF cache helpers")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        cache_path = os.path.join(td, "dnf_cache.jsonl")
+        with open(cache_path, "wb") as f:
+            f.write(b"not a pickle")
+
+        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
+        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
+        mod._DNF_DISK_CACHE_PATH_LEGACY = Path(os.path.join(td, "dnf_cache.pkl"))
+        mod._DNF_DISK_CACHE_ENABLED = True
+        mod._DNF_DISK_CACHE = None
+
+        loaded = mod._load_dnf_disk_cache()
+        expect(isinstance(loaded, OrderedDict), "DNF cache corrupt load should return OrderedDict")
+        expect(len(loaded) == 0, "DNF cache corrupt load should return empty cache")
+
+
+def test_on_add_dnf_cache_quarantines_invalid_jsonl():
+    """on-add DNF cache quarantines JSONL files with no valid JSON objects."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_cache_quarantine_test")
+    if not hasattr(mod, "_load_dnf_disk_cache"):
+        raise AssertionError("on-add hook does not expose DNF cache helpers")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        cache_path = os.path.join(td, "dnf_cache.jsonl")
+        with open(cache_path, "w", encoding="utf-8") as f:
+            f.write("nope\nstill nope\n")
+
+        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
+        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
+        mod._DNF_DISK_CACHE_PATH_LEGACY = Path(os.path.join(td, "dnf_cache.pkl"))
+        mod._DNF_DISK_CACHE_ENABLED = True
+        mod._DNF_DISK_CACHE = None
+
+        _ = mod._load_dnf_disk_cache()
+        quarantined = [p for p in os.listdir(td) if p.startswith("dnf_cache.corrupt.") and p.endswith(".jsonl")]
+        expect(quarantined, "DNF cache should quarantine invalid JSONL")
+
+
+def test_on_add_dnf_cache_size_guard_skips_load():
+    """on-add DNF cache skips load when file is too large."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_cache_size_guard_test")
+    if not hasattr(mod, "_load_dnf_disk_cache"):
+        raise AssertionError("on-add hook does not expose DNF cache helpers")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        cache_path = os.path.join(td, "dnf_cache.jsonl")
+        # 300 KB of garbage (over the 256 KB limit).
+        with open(cache_path, "wb") as f:
+            f.write(b"x" * (300 * 1024))
+
+        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
+        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
+        mod._DNF_DISK_CACHE_PATH_LEGACY = Path(os.path.join(td, "dnf_cache.pkl"))
+        mod._DNF_DISK_CACHE_ENABLED = True
+        mod._DNF_DISK_CACHE = None
+
+        loaded = mod._load_dnf_disk_cache()
+        expect(isinstance(loaded, OrderedDict), "DNF cache size-guard load should return OrderedDict")
+        expect(len(loaded) == 0, "DNF cache size-guard load should return empty cache")
+
+
+def test_on_modify_spawn_deferred_then_drain():
+    """on-modify deferred spawn drains queue after lock-style timeout."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_defer_drain_test")
+    if not hasattr(mod, "_spawn_child_atomic") or not hasattr(mod, "_drain_deferred_spawn_queue"):
+        raise AssertionError("on-modify hook does not expose spawn/defer helpers")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._SPAWN_QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._SPAWN_QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._SPAWN_QUEUE_KICK = td_path / ".nautical_spawn_queue.kick"
+
+        def _run_task_timeout(cmd, **kwargs):
+            return False, "", "timeout"
+
+        mod._run_task = _run_task_timeout
+
+        try:
+            mod._spawn_child_atomic({"description": "test"}, {"uuid": "parent"})
+            raise AssertionError("Expected _SpawnDeferred due to timeout")
+        except Exception as e:
+            if not isinstance(e, mod._SpawnDeferred):
+                raise
+
+        expect(mod._SPAWN_QUEUE_PATH.exists(), "Deferred spawn queue file missing")
+
+        def _run_task_ok(cmd, **kwargs):
+            return True, "", ""
+
+        mod._run_task = _run_task_ok
+        rc = mod._drain_deferred_spawn_queue()
+        expect(rc == 0, f"Drain should succeed, got rc={rc}")
+
+        if mod._SPAWN_QUEUE_PATH.exists():
+            txt = mod._SPAWN_QUEUE_PATH.read_text(encoding="utf-8").strip()
+            expect(txt == "", "Drain should empty the deferred spawn queue")
 TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
@@ -847,7 +1231,17 @@ TESTS = [
     test_inline_time_mods_natural_contains_both_times,
     test_guard_commas_between_atoms_after_mods_fatal,
     test_heads_with_slashN_parse_ok_again,
-    test_monthname_and_numeric_equivalence
+    test_monthname_and_numeric_equivalence,
+    test_cp_duration_parser_and_dst_preserve_whole_days,
+    test_hook_on_add_multitime_preview_emits_all_slots,
+    test_hook_on_modify_timeline_multitime_includes_all_slots,
+    test_hook_task_runner_handles_nonzero,
+    test_on_add_dnf_cache_versioned_payload,
+    test_on_add_dnf_cache_corrupt_payload_recovers,
+    test_on_add_dnf_cache_quarantines_invalid_jsonl,
+    test_on_add_dnf_cache_size_guard_skips_load,
+    test_on_modify_spawn_deferred_then_drain,
+
 ]
 
 DEEP_TESTS = [
@@ -858,7 +1252,7 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", help="substring filter for test names")
-    ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--verbose", action="store_true", help="show detailed test information")
     args = ap.parse_args()
 
     selected = TESTS
@@ -870,22 +1264,49 @@ def main():
         selected = sel
 
     fails = 0
+    total_tests = 0
+    
     for fn in selected:
+        total_tests += 1
         try:
             fn()
             if args.verbose:
-                print(f"✓ {fn.__name__}")
+                # Extract docstring and print test description
+                docstring = fn.__doc__ or "No description available"
+                # Get first line of docstring
+                description = docstring.strip().split('\n')[0] if docstring else fn.__name__
+                print(f"✓ {fn.__name__}: {description}")
         except AssertionError as e:
             fails += 1
-            print(f"✗ {fn.__name__}: {e}")
+            if args.verbose:
+                docstring = fn.__doc__ or "No description available"
+                description = docstring.strip().split('\n')[0] if docstring else fn.__name__
+                print(f"✗ {fn.__name__}: {description}")
+                print(f"  ERROR: {e}")
+            else:
+                print(f"✗ {fn.__name__}: {e}")
         except Exception as e:
             fails += 1
-            print(f"✗ {fn.__name__}: unexpected error {e}")
+            if args.verbose:
+                docstring = fn.__doc__ or "No description available"
+                description = docstring.strip().split('\n')[0] if docstring else fn.__name__
+                print(f"✗ {fn.__name__}: {description}")
+                print(f"  UNEXPECTED ERROR: {e}")
+                import traceback
+                traceback.print_exc()
+            else:
+                print(f"✗ {fn.__name__}: unexpected error {e}")
 
-    total = len(selected)
-    print(f"\nDone: {total - fails}/{total} passing")
+    print(f"\n{'='*60}")
+    print(f"TEST SUMMARY")
+    print(f"{'='*60}")
+    print(f"Total tests run: {total_tests}")
+    print(f"Passed: {total_tests - fails}")
+    print(f"Failed: {fails}")
+    print(f"Success rate: {((total_tests - fails) / total_tests * 100):.1f}%")
+    print(f"{'='*60}")
+    
     sys.exit(1 if fails else 0)
 
 if __name__ == "__main__":
     main()
-

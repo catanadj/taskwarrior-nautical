@@ -1082,6 +1082,19 @@ def _cache_path(key: str) -> str:
     return os.path.join(_cache_dir(), f"{key}.jsonz")
 
 
+def _is_dnf_like(dnf) -> bool:
+    """Defensive: ensure DNF looks like list[list[dict]]."""
+    if not isinstance(dnf, (list, tuple)):
+        return False
+    for term in dnf:
+        if not isinstance(term, (list, tuple)):
+            return False
+        for atom in term:
+            if not isinstance(atom, dict):
+                return False
+    return True
+
+
 def _normalize_dnf_cached(dnf):
     """Normalize cached DNF to match parser types (tuple for single time)."""
     if not isinstance(dnf, (list, tuple)):
@@ -1120,6 +1133,8 @@ def cache_load(key: str) -> dict | None:
         obj = json.loads(data.decode("utf-8"))
         if isinstance(obj, dict) and "dnf" in obj:
             obj["dnf"] = _normalize_dnf_cached(obj.get("dnf"))
+            if not _is_dnf_like(obj.get("dnf")):
+                return None
         return obj
     except Exception:
         return None
@@ -1574,6 +1589,8 @@ def build_and_cache_hints(anchor_expr: str,
     if cached:
         if "dnf" in cached:
             cached["dnf"] = _normalize_dnf_cached(cached.get("dnf"))
+            if not _is_dnf_like(cached.get("dnf")):
+                cached = None
         return cached
 
     dnf = validate_anchor_expr_strict(anchor_expr)
@@ -4180,7 +4197,10 @@ def validate_anchor_expr_strict(expr):
         s = (expr or "").strip()
         if not s:
             raise ParseError("Empty anchor expression.")
-        dnf = parse_anchor_expr_to_dnf_cached(s)
+        try:
+            dnf = parse_anchor_expr_to_dnf_cached(s)
+        except ParseError as e:
+            raise ParseError(f"{e} (expr: {s})")
     elif isinstance(expr, (list, tuple)):
         dnf = expr
     else:

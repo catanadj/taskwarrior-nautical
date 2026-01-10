@@ -99,6 +99,14 @@ _DEBUG_WAIT_SCHED = os.environ.get("NAUTICAL_DEBUG_WAIT_SCHED", "").strip().lowe
 _LAST_WAIT_SCHED_DEBUG: dict[str, dict] = {}
 
 
+def _diag(msg: str) -> None:
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        try:
+            sys.stderr.write(f"[nautical] {msg}\n")
+        except Exception:
+            pass
+
+
 def _fmt_td_dd_hhmm(delta: timedelta) -> str:
     """Format a timedelta as ±Dd HHh:MMm (UTC-seconds based; seconds omitted)."""
     try:
@@ -918,43 +926,35 @@ def _drain_deferred_spawn_queue() -> int:
     last_err = ""
 
     for attempt in range(1, 8):
-        try:
-            r = subprocess.run(
-                ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.verbose=nothing", "import", "-"],
-                input=payload,
-                text=True,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=20,
-            )
-            if r.returncode == 0:
-                return 0
+        ok, _out, err = _run_task(
+            ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.verbose=nothing", "import", "-"],
+            input_text=payload,
+            env=env,
+            timeout=20,
+            retries=1,
+        )
+        if ok:
+            return 0
 
-            last_err = (r.stderr or "").strip()
+        last_err = (err or "").strip()
 
-            # If the only issue is schema drift (unknown attrs), sanitise and retry.
-            if "Unrecognized attribute" in last_err:
-                objs = []
-                for ln in (payload or "").splitlines():
-                    ln = ln.strip()
-                    if not ln:
-                        continue
-                    try:
-                        obj = json.loads(ln)
-                    except Exception:
-                        continue
-                    _sanitize_unknown_attrs(last_err, obj)
-                    objs.append(obj)
-
-                if objs:
-                    payload = "\n".join(json.dumps(o, ensure_ascii=False, separators=(",", ":")) for o in objs) + "\n"
+        # If the only issue is schema drift (unknown attrs), sanitise and retry.
+        if "Unrecognized attribute" in last_err:
+            objs = []
+            for ln in (payload or "").splitlines():
+                ln = ln.strip()
+                if not ln:
                     continue
+                try:
+                    obj = json.loads(ln)
+                except Exception:
+                    continue
+                _sanitize_unknown_attrs(last_err, obj)
+                objs.append(obj)
 
-        except subprocess.TimeoutExpired:
-            last_err = "task import timed out"
-        except Exception as e:
-            last_err = str(e)
+            if objs:
+                payload = "\n".join(json.dumps(o, ensure_ascii=False, separators=(",", ":")) for o in objs) + "\n"
+                continue
 
         # Backoff: the parent command should have released the lock by now, but be defensive.
         _time.sleep(0.15 * attempt)
@@ -1013,17 +1013,66 @@ def _short(u):
     return (u or "")[:8]
 
 
+def _run_task(
+    cmd: list[str],
+    *,
+    env: dict | None = None,
+    input_text: str | None = None,
+    timeout: float = 3.0,
+    retries: int = 2,
+    retry_delay: float = 0.15,
+) -> tuple[bool, str, str]:
+    env = env or os.environ.copy()
+    last_out = ""
+    last_err = ""
+    attempts = max(1, int(retries))
+    for attempt in range(1, attempts + 1):
+        try:
+            r = subprocess.run(
+                cmd,
+                input=input_text,
+                text=True,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+            )
+            last_out = r.stdout or ""
+            last_err = r.stderr or ""
+            if r.returncode == 0:
+                return True, last_out, last_err
+            if attempt < retries:
+                _time.sleep(retry_delay * attempt)
+                continue
+            return False, last_out, last_err
+        except subprocess.TimeoutExpired:
+            last_err = "timeout"
+            if attempt < retries:
+                _time.sleep(retry_delay * attempt)
+                continue
+            return False, last_out, last_err
+        except Exception as e:
+            last_err = str(e)
+            if attempt < retries:
+                _time.sleep(retry_delay * attempt)
+                continue
+            return False, last_out, last_err
+    return False, last_out, last_err
+
+
 def _export_uuid_short(u_short: str, env=None):
     env = env or os.environ.copy()
-    r = subprocess.run(
+    ok, out, err = _run_task(
         ["task", "rc.hooks=off", "rc.json.array=off", f"uuid:{u_short}", "export"],
-        text=True,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        timeout=2.5,
+        retries=2,
     )
+    if not ok:
+        _diag(f"export uuid:{u_short} failed: {err.strip()}")
+        return None
     try:
-        obj = json.loads(r.stdout.strip() or "{}")
+        obj = json.loads(out.strip() or "{}")
         return obj if obj.get("uuid") else None
     except Exception:
         return None
@@ -1031,11 +1080,12 @@ def _export_uuid_short(u_short: str, env=None):
 
 def _task_exists_by_uuid(u: str, env: dict) -> bool:
     q = ["task", "rc.hooks=off", "rc.json.array=off", f"uuid:{u}", "export"]
-    vr = subprocess.run(
-        q, text=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+    ok, out, err = _run_task(q, env=env, timeout=2.5, retries=2)
+    if not ok:
+        _diag(f"task exists check failed (uuid={u[:8]}): {err.strip()}")
+        return False
     try:
-        data = json.loads(vr.stdout.strip() or "{}")
+        data = json.loads(out.strip() or "{}")
     except Exception:
         data = {}
     return bool(data.get("uuid"))
@@ -1108,30 +1158,23 @@ def _spawn_child(child_task: dict) -> tuple[str, set[str]]:
         attempts += 1
         payload = json.dumps(obj) + "\n"
 
-        try:
-            r = subprocess.run(
-                ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "import", "-"],
-                input=payload,
-                text=True,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=10,  # prevent hanging
-            )
-        except subprocess.TimeoutExpired:
+        ok, _out, err = _run_task(
+            ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "import", "-"],
+            input_text=payload,
+            env=env,
+            timeout=10,  # prevent hanging
+            retries=1,
+        )
+        if not ok and err == "timeout":
             last_stderr = "Task import timed out (>10s)"
             last_category = "taskwarrior"
             continue
-        except Exception as e:
-            last_stderr = f"Subprocess error: {str(e)}"
-            last_category = "taskwarrior"
-            continue
 
-        if r.returncode == 0 and _task_exists_by_uuid(child_uuid, env):
+        if ok and _task_exists_by_uuid(child_uuid, env):
             return child_uuid[:8], stripped_accum
 
-        last_stderr = r.stderr or ""
-        category, is_retryable = _categorize_spawn_error(r.returncode, last_stderr)
+        last_stderr = err or ""
+        category, is_retryable = _categorize_spawn_error(0 if ok else 1, last_stderr)
         last_category = category
 
         if category == "attribute":
@@ -1253,17 +1296,14 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
     for attempt in range(1, _MAX_SPAWN_ATTEMPTS + 1):
         payload = json.dumps(child_obj, ensure_ascii=False) + "\n"
 
-        try:
-            r = subprocess.run(
-                ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "import", "-"],
-                input=payload,
-                text=True,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=2,
-            )
-        except subprocess.TimeoutExpired:
+        ok, _out, err = _run_task(
+            ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "import", "-"],
+            input_text=payload,
+            env=env,
+            timeout=2,
+            retries=1,
+        )
+        if not ok and err == "timeout":
             # Likely Taskwarrior datastore lock contention (re-entrance from hook).
             _enqueue_deferred_spawn(child_obj)
             raise _SpawnDeferred(
@@ -1272,8 +1312,8 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
                 reason="Task import timed out (likely lock contention); queued for deferred drain",
             )
 
-        last_stderr = r.stderr or ""
-        if r.returncode == 0:
+        last_stderr = err or ""
+        if ok:
             return (child_short, stripped_attrs)
 
         # Strip unrecognized attributes and retry (best-effort resilience).
@@ -1282,7 +1322,7 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
             last_category = "attribute"
             continue
 
-        category, is_retryable = _categorize_spawn_error(r.returncode, last_stderr)
+        category, is_retryable = _categorize_spawn_error(0 if ok else 1, last_stderr)
         last_category = category
         if not is_retryable:
             break
@@ -1313,14 +1353,15 @@ def _task(args, env=None) -> str:
     Always disables hooks; caller should provide rc.json.array flag when needed.
     """
     env = env or os.environ.copy()
-    r = subprocess.run(
+    ok, out, err = _run_task(
         ["task", "rc.hooks=off"] + list(args),
-        text=True,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        timeout=3.0,
+        retries=2,
     )
-    return r.stdout or ""
+    if not ok:
+        _diag(f"task {' '.join(args)} failed: {err.strip()}")
+    return out or ""
 
 def _export_uuid_full(u: str, env=None) -> dict | None:
     """Export a single task by full UUID."""

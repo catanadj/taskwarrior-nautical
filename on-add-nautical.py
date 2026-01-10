@@ -28,6 +28,10 @@ import pickle
 import shutil
 import textwrap
 from collections import OrderedDict
+try:
+    import fcntl  # POSIX advisory lock
+except Exception:
+    fcntl = None
 
 
  # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
@@ -161,10 +165,14 @@ def _to_local_cached(dt):
 
 # ---- Optional cross-invocation disk cache for expensive anchor parsing (Termux-friendly) ----
 _DNF_DISK_CACHE_ENABLED = (os.getenv("NAUTICAL_DNF_DISK_CACHE") or "").strip().lower() in ("1", "true", "yes", "on")
-_DNF_DISK_CACHE_PATH = HOOK_DIR / ".nautical_cache" / "dnf_cache.pkl"
+_DNF_DISK_CACHE_PATH = HOOK_DIR / ".nautical_cache" / "dnf_cache.jsonl"
+_DNF_DISK_CACHE_PATH_LEGACY = HOOK_DIR / ".nautical_cache" / "dnf_cache.pkl"
 _DNF_DISK_CACHE = None  # OrderedDict[str, object]
 _DNF_DISK_CACHE_DIRTY = False
 _DNF_DISK_CACHE_MAX = 256
+_DNF_DISK_CACHE_LOCK = _DNF_DISK_CACHE_PATH.with_suffix(".lock")
+_DNF_DISK_CACHE_VERSION = 1
+_DNF_DISK_CACHE_MAX_BYTES = 256 * 1024
 
 def _core_sig() -> str:
     try:
@@ -179,21 +187,124 @@ def _dnf_cache_key(expr: str) -> str:
     # tie cache entries to the current core build
     return f"{_CORE_SIG}|{expr}"
 
+@contextmanager
+def _dnf_cache_lock():
+    """Best-effort lock for disk cache access."""
+    if fcntl is not None:
+        lf = None
+        try:
+            _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            lf = open(_DNF_DISK_CACHE_LOCK, "a", encoding="utf-8")
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        except Exception:
+            lf = None
+        try:
+            yield
+        finally:
+            try:
+                if lf is not None:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                if lf is not None:
+                    lf.close()
+            except Exception:
+                pass
+        return
+
+    # Fallback: lockfile via O_EXCL (best-effort, short spin).
+    fd = None
+    for _ in range(6):
+        try:
+            _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            fd = os.open(str(_DNF_DISK_CACHE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+        except Exception:
+            break
+    try:
+        yield
+    finally:
+        try:
+            if fd is not None:
+                os.close(fd)
+        except Exception:
+            pass
+        try:
+            if fd is not None:
+                os.unlink(_DNF_DISK_CACHE_LOCK)
+        except Exception:
+            pass
+
 def _load_dnf_disk_cache() -> OrderedDict:
-    global _DNF_DISK_CACHE
+    global _DNF_DISK_CACHE, _DNF_DISK_CACHE_DIRTY
     if _DNF_DISK_CACHE is not None:
         return _DNF_DISK_CACHE
     _DNF_DISK_CACHE = OrderedDict()
     if not _DNF_DISK_CACHE_ENABLED:
         return _DNF_DISK_CACHE
     try:
-        _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        if _DNF_DISK_CACHE_PATH.exists():
-            with open(_DNF_DISK_CACHE_PATH, "rb") as f:
-                obj = pickle.load(f)
-            if isinstance(obj, dict):
-                # preserve insertion order best-effort
-                _DNF_DISK_CACHE = OrderedDict(obj.items())
+        with _dnf_cache_lock():
+            _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            if _DNF_DISK_CACHE_PATH.exists():
+                try:
+                    if _DNF_DISK_CACHE_PATH.stat().st_size > _DNF_DISK_CACHE_MAX_BYTES:
+                        _diag(f"DNF cache too large; skipping load: {_DNF_DISK_CACHE_PATH}")
+                        return _DNF_DISK_CACHE
+                except Exception:
+                    pass
+                with open(_DNF_DISK_CACHE_PATH, "r", encoding="utf-8") as f:
+                    parsed_any = False
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+                        parsed_any = True
+                        if isinstance(obj, dict) and "version" in obj:
+                            continue
+                        key = None
+                        val = None
+                        if isinstance(obj, dict):
+                            if "key" in obj and "value" in obj:
+                                key = obj.get("key")
+                                val = obj.get("value")
+                            elif "k" in obj and "v" in obj:
+                                key = obj.get("k")
+                                val = obj.get("v")
+                        if key is not None:
+                            _DNF_DISK_CACHE[str(key)] = val
+                    if not parsed_any:
+                        try:
+                            ts = int(time.time())
+                            bad = _DNF_DISK_CACHE_PATH.with_suffix(f".corrupt.{ts}.jsonl")
+                            os.replace(_DNF_DISK_CACHE_PATH, bad)
+                            _diag(f"DNF cache quarantined: {bad}")
+                        except Exception:
+                            pass
+            elif _DNF_DISK_CACHE_PATH_LEGACY.exists():
+                # Legacy pickle format: raw dict or versioned dict.
+                with open(_DNF_DISK_CACHE_PATH_LEGACY, "rb") as f:
+                    obj = pickle.load(f)
+                if isinstance(obj, dict) and "data" in obj:
+                    data = obj.get("data")
+                    if isinstance(data, dict):
+                        _DNF_DISK_CACHE = OrderedDict(data.items())
+                elif isinstance(obj, dict):
+                    _DNF_DISK_CACHE = OrderedDict(obj.items())
+                if _DNF_DISK_CACHE:
+                    _DNF_DISK_CACHE_DIRTY = True
     except Exception:
         _DNF_DISK_CACHE = OrderedDict()
     return _DNF_DISK_CACHE
@@ -203,15 +314,25 @@ def _save_dnf_disk_cache() -> None:
     if not (_DNF_DISK_CACHE_ENABLED and _DNF_DISK_CACHE_DIRTY and isinstance(_DNF_DISK_CACHE, OrderedDict)):
         return
     try:
-        _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        # trim oldest
-        while len(_DNF_DISK_CACHE) > _DNF_DISK_CACHE_MAX:
-            _DNF_DISK_CACHE.popitem(last=False)
-        tmp = _DNF_DISK_CACHE_PATH.with_suffix(".tmp")
-        with open(tmp, "wb") as f:
-            pickle.dump(_DNF_DISK_CACHE, f, protocol=pickle.HIGHEST_PROTOCOL)
-        os.replace(tmp, _DNF_DISK_CACHE_PATH)
-        _DNF_DISK_CACHE_DIRTY = False
+        with _dnf_cache_lock():
+            _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            # trim oldest
+            while len(_DNF_DISK_CACHE) > _DNF_DISK_CACHE_MAX:
+                _DNF_DISK_CACHE.popitem(last=False)
+            tmp = _DNF_DISK_CACHE_PATH.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                header = {"version": _DNF_DISK_CACHE_VERSION}
+                f.write(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n")
+                for k, v in _DNF_DISK_CACHE.items():
+                    rec = {"key": k, "value": v}
+                    f.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
+            os.replace(tmp, _DNF_DISK_CACHE_PATH)
+            try:
+                if _DNF_DISK_CACHE_PATH_LEGACY.exists():
+                    _DNF_DISK_CACHE_PATH_LEGACY.unlink()
+            except Exception:
+                pass
+            _DNF_DISK_CACHE_DIRTY = False
     except Exception:
         # cache write failures must never affect hook correctness
         pass
@@ -575,6 +696,60 @@ def _format_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, s
     return out or rows
 
 
+def _diag(msg: str) -> None:
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        try:
+            sys.stderr.write(f"[nautical] {msg}\n")
+        except Exception:
+            pass
+
+
+def _run_task(
+    cmd: list[str],
+    *,
+    env: dict | None = None,
+    input_text: str | None = None,
+    timeout: float = 3.0,
+    retries: int = 2,
+    retry_delay: float = 0.15,
+) -> tuple[bool, str, str]:
+    env = env or os.environ.copy()
+    last_out = ""
+    last_err = ""
+    attempts = max(1, int(retries))
+    for attempt in range(1, attempts + 1):
+        try:
+            r = subprocess.run(
+                cmd,
+                input=input_text,
+                text=True,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+            )
+            last_out = r.stdout or ""
+            last_err = r.stderr or ""
+            if r.returncode == 0:
+                return True, last_out, last_err
+            if attempt < retries:
+                time.sleep(retry_delay * attempt)
+                continue
+            return False, last_out, last_err
+        except subprocess.TimeoutExpired:
+            last_err = "timeout"
+            if attempt < retries:
+                time.sleep(retry_delay * attempt)
+                continue
+            return False, last_out, last_err
+        except Exception as e:
+            last_err = str(e)
+            if attempt < retries:
+                time.sleep(retry_delay * attempt)
+                continue
+            return False, last_out, last_err
+    return False, last_out, last_err
+
 
 
 def _format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
@@ -928,11 +1103,15 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     if extra:
         args += shlex.split(extra)
     args.append("export")
+    ok, out, err = _run_task(args, timeout=3.0, retries=2)
+    if not ok:
+        _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
+        return []
     try:
-        out = subprocess.check_output(args, text=True)
         data = json.loads(out.strip() or "[]")
         return data if isinstance(data, list) else [data]
-    except Exception:
+    except Exception as e:
+        _diag(f"tw_export_chain JSON parse failed: {e}")
         return []
 # --------------------------------------------------------------------------------------
 # Main

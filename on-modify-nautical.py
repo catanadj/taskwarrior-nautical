@@ -102,6 +102,7 @@ _DEBUG_WAIT_SCHED = os.environ.get("NAUTICAL_DEBUG_WAIT_SCHED", "").strip().lowe
     "1", "yes", "true", "on"
 }
 _LAST_WAIT_SCHED_DEBUG: dict[str, dict] = {}
+_WARNED_CHAIN_EXPORT: set[str] = set()
 
 
 def _diag(msg: str) -> None:
@@ -274,17 +275,44 @@ def _tolocal(dt):
 # Basic IO and panel
 # ------------------------------------------------------------------------------
 def _read_two():
-    raw = sys.stdin.read().strip()
+    raw = sys.stdin.read()
+    raw = raw.strip()
     if not raw:
         print("", end="")
         sys.exit(0)
     parts = [p for p in raw.split("\n") if p.strip()]
-    if len(parts) < 2:
-        obj = json.loads(parts[0])
-        return obj, obj
-    old = json.loads(parts[0])
-    new = json.loads(parts[-1])
-    return old, new
+
+    def _try_parse(s: str):
+        try:
+            return json.loads(s)
+        except Exception:
+            return None
+
+    objs = []
+    for line in parts:
+        obj = _try_parse(line.strip())
+        if obj is not None:
+            objs.append(obj)
+
+    if len(objs) >= 2:
+        return objs[0], objs[-1]
+    if len(objs) == 1:
+        return objs[0], objs[0]
+
+    # Fallback: attempt to extract JSON objects from mixed input.
+    candidates = re.findall(r"\{[\s\S]*?\}", raw)
+    for c in candidates:
+        obj = _try_parse(c)
+        if obj is not None:
+            objs.append(obj)
+    if len(objs) >= 2:
+        return objs[0], objs[-1]
+    if len(objs) == 1:
+        return objs[0], objs[0]
+
+    _diag("Invalid JSON input to on-modify; passing through raw input.")
+    print(raw, end="")
+    sys.exit(0)
 
 
 def _print_task(task):
@@ -2083,6 +2111,22 @@ def _safe_parse_datetime(dt_str: str) -> tuple[datetime | None, str | None]:
         return (None, f"Unexpected error parsing datetime '{dt_str}': {str(e)}")
 
 
+def _validate_anchor_mode(mode_str: str) -> tuple[str, str | None]:
+    """
+    Validate and normalize anchor_mode. Returns (normalized_mode, error_msg).
+    """
+    raw = (mode_str or "").strip()
+    if not raw:
+        return ("", None)
+    mode = raw.lower()
+    if mode not in ("skip", "all", "flex"):
+        return (
+            "skip",
+            f"anchor_mode must be 'skip', 'all', or 'flex' (got '{raw}'). Defaulting to 'skip'.",
+        )
+    return (mode, None)
+
+
 def _safe_parse_cp_duration(duration_str: str) -> tuple[timedelta | None, str | None]:
     """
     Parse cp duration safely.
@@ -3314,11 +3358,19 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     if extra:
         args += shlex.split(extra)
     args.append("export")
+    ok, out, err = _run_task(args, env=env, timeout=3.0, retries=2)
+    if not ok:
+        _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
+        if chain_id and chain_id not in _WARNED_CHAIN_EXPORT:
+            _WARNED_CHAIN_EXPORT.add(chain_id)
+            reason = (err or "").strip() or "task export failed"
+            _panel("⚠ Chain export failed", [("ChainID", chain_id), ("Reason", reason)], kind="warning")
+        return []
     try:
-        out = subprocess.check_output(args, text=True, env=env)
         data = json.loads(out.strip() or "[]")
         return data if isinstance(data, list) else [data]
-    except Exception:
+    except Exception as e:
+        _diag(f"tw_export_chain JSON parse failed: {e}")
         return []
 
 # ------------------------------------------------------------------------------
@@ -3347,7 +3399,14 @@ def main():
                 if warns:
                     _panel("ℹ️  Lint", [("Hint", w) for w in warns], kind="note")
 
-                anchor_mode = ((new.get("anchor_mode") or old.get("anchor_mode") or "").strip().upper() or "ALL")
+                anchor_mode_raw = (new.get("anchor_mode") or old.get("anchor_mode") or "").strip()
+                mode_norm, warn_msg = _validate_anchor_mode(anchor_mode_raw)
+                if warn_msg:
+                    _panel("⚠ Anchor mode", [("Warning", warn_msg)], kind="warning")
+                    new["anchor_mode"] = mode_norm
+                elif (new.get("anchor_mode") or "").strip():
+                    new["anchor_mode"] = mode_norm
+                anchor_mode = ((mode_norm or anchor_mode_raw or "").strip().upper() or "ALL")
                 due_dt = _safe_dt(new.get("due") or old.get("due"))
 
                 if core.ENABLE_ANCHOR_CACHE:

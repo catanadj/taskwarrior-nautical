@@ -200,7 +200,7 @@ def _warn_once_per_day(key: str, message: str) -> None:
         os.makedirs(d, exist_ok=True)
         stamp_path = os.path.join(d, f".diag_{key}.stamp")
 
-        today = datetime.date.today().isoformat()
+        today = date.today().isoformat()
         if os.path.exists(stamp_path):
             try:
                 with open(stamp_path, "r", encoding="utf-8") as f:

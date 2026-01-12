@@ -413,6 +413,12 @@ _QUARTERS = {
     "q3": ((7, 1), (9, 30)),
     "q4": ((10, 1), (12, 31)),
 }
+_QUARTER_POS_MONTH = {
+    1: {"s": 1, "m": 2, "e": 3},
+    2: {"s": 4, "m": 5, "e": 6},
+    3: {"s": 7, "m": 8, "e": 9},
+    4: {"s": 10, "m": 11, "e": 12},
+}
 
 
 # Input/Output preference: "DM" (default) or "MD"
@@ -742,6 +748,43 @@ ACF_CHECKSUM_LEN = 8   # 8 chars = 32 bits of entropy
 
 # Weekday normalize, with rand / rand*
 _WD_ABBR = ["mon","tue","wed","thu","fri","sat","sun"]
+_WEEKLY_ALIAS = {
+    "wk": "mon..fri",
+    "we": "sat..sun",
+}
+_MONTHLY_ALIAS = {
+    "ld": "-1",
+    "lbd": "-1bd",
+}
+
+def _expand_weekly_aliases(spec: str) -> str:
+    spec = (spec or "").strip().lower()
+    if not spec:
+        return spec
+    toks = _split_csv_tokens(spec)
+    out = []
+    for tok in toks:
+        t = (tok or "").strip().lower()
+        if t in _WEEKLY_ALIAS:
+            out.append(_WEEKLY_ALIAS[t])
+        else:
+            out.append(t)
+    return ",".join([t for t in out if t])
+
+
+def _expand_monthly_aliases(spec: str) -> str:
+    spec = (spec or "").strip().lower()
+    if not spec:
+        return spec
+    toks = _split_csv_tokens(spec)
+    out = []
+    for tok in toks:
+        t = (tok or "").strip().lower()
+        if t in _MONTHLY_ALIAS:
+            out.append(_MONTHLY_ALIAS[t])
+        else:
+            out.append(t)
+    return ",".join([t for t in out if t])
 def _normalize_weekday(s: str) -> str | None:
     s = (s or "").strip().lower()
     if not s:
@@ -838,6 +881,7 @@ def _normalize_spec_for_acf_uncached(typ: str, spec: str):
     spec = (spec or "").strip().lower()
     
     if typ == "w":
+        spec = _expand_weekly_aliases(spec)
         tokens = []
         for token in _split_csv_tokens(spec):
             if not token:
@@ -872,6 +916,7 @@ def _normalize_spec_for_acf_uncached(typ: str, spec: str):
     
     elif typ == "m":
         # Monthly: canonicalize range delimiter to V2 '..' for cache stability.
+        spec = _expand_monthly_aliases(spec)
         toks = []
         for token in _split_csv_tokens(spec):
             if not token:
@@ -1208,7 +1253,7 @@ def _weekly_spec_to_wset(spec: str, mods: dict | None = None) -> set[int]:
     if @bd/@wd is active). If 'rand' is combined with explicit tokens (should
     be rejected by strict validation), we return the union for resilience.
     """
-    spec = (spec or "").strip().lower()
+    spec = _expand_weekly_aliases(spec)
     if not spec:
         return set()
 
@@ -1255,7 +1300,7 @@ def _weekly_spec_to_wset(spec: str, mods: dict | None = None) -> set[int]:
 
 def _doms_for_weekly_spec(spec:str, y:int, m:int) -> set[int]:
     """Return DOMs in month (y,m) whose weekday matches any in spec (e.g., 'mon,thu' or 'mon..fri')."""
-    spec = (spec or "").strip().lower()
+    spec = _expand_weekly_aliases(spec)
     if not spec: return set()
     allowed: set[int] = set()
     # expand tokens and ranges
@@ -1289,6 +1334,8 @@ def _doms_for_weekly_spec(spec:str, y:int, m:int) -> set[int]:
 def _doms_for_monthly_token(tok: str, y:int, m:int) -> set[int]:
     """Support: 'rand' -> full month; '10..20' (or legacy '10:20'); '31'; '-1'; '2nd-mon'; 'last-fri'."""
     tok = (tok or "").strip().lower()
+    if tok in _MONTHLY_ALIAS:
+        tok = _MONTHLY_ALIAS[tok]
     dim = _days_in_month(y,m)
     if tok == "rand":
         return set(range(1, dim+1))
@@ -1740,9 +1787,21 @@ def _rewrite_quarter_spec_mode(spec: str, mode: str, meta_out: dict | None = Non
         mm = {1: 3, 2: 6, 3: 9, 4: 12}[q]
         return _tok_range(1, mm, _static_month_last_day(mm), mm)
 
+    def _mid_month_window(q: int) -> str:
+        mm = {1: 2, 2: 5, 3: 8, 4: 11}[q]
+        return _tok_range(1, mm, _static_month_last_day(mm), mm)
+
+    def _pos_month_window(q: int, pos: str) -> str | None:
+        mm = _QUARTER_POS_MONTH.get(q, {}).get(pos)
+        if not mm:
+            return None
+        return _tok_range(1, mm, _static_month_last_day(mm), mm)
+
     def _emit(q: int) -> str:
         if mode == "quarter_end":
             return _last_month_window(q)
+        if mode == "quarter_mid":
+            return _mid_month_window(q)
         if mode == "quarter_window":
             start = {1: 1, 2: 4, 3: 7, 4: 10}[q]
             end = {1: 3, 2: 6, 3: 9, 4: 12}[q]
@@ -1753,6 +1812,8 @@ def _rewrite_quarter_spec_mode(spec: str, mode: str, meta_out: dict | None = Non
     def _note(q: int) -> str:
         if mode == "quarter_end":
             return f"Q{q} end month"
+        if mode == "quarter_mid":
+            return f"Q{q} mid month"
         if mode == "quarter_start":
             return f"Q{q} start month"
         if mode == "quarter_window":
@@ -1764,6 +1825,35 @@ def _rewrite_quarter_spec_mode(spec: str, mode: str, meta_out: dict | None = Non
     toks = _split_csv_lower(spec)
 
     for tok in toks:
+        m = re.fullmatch(r"q([1-4])([sme])", tok)
+        if m:
+            q = int(m.group(1))
+            pos = m.group(2)
+            w = _pos_month_window(q, pos)
+            if w:
+                out.append(w)
+                pos_note = {"s": "start", "m": "mid", "e": "end"}[pos]
+                qmap[w] = f"Q{q} {pos_note} month"
+            continue
+
+        m = re.fullmatch(r"q([1-4])([sme])(?:\.\.|:)q([1-4])([sme])", tok)
+        if m:
+            qa, qb = int(m.group(1)), int(m.group(3))
+            posa, posb = m.group(2), m.group(4)
+            if posa != posb:
+                out.append(tok)
+                continue
+            if qa > qb:
+                out.append(tok)  # leave as-is so the validator can raise nicely elsewhere
+            else:
+                for q in range(qa, qb + 1):
+                    w = _pos_month_window(q, posa)
+                    if w:
+                        out.append(w)
+                        pos_note = {"s": "start", "m": "mid", "e": "end"}[posa]
+                        qmap[w] = f"Q{q} {pos_note} month"
+            continue
+
         m = re.fullmatch(r"q([1-4])", tok)
         if m:
             q = int(m.group(1))
@@ -1828,6 +1918,12 @@ def _rewrite_quarters_in_context(dnf):
 
     def _has_quarter_tokens(spec: str) -> bool:
         for t in _split_csv_lower(spec):
+            if re.fullmatch(r"q[1-4][sme]?(?:(?:\.\.|:)q[1-4][sme]?)?", t):
+                return True
+        return False
+
+    def _has_plain_quarter_tokens(spec: str) -> bool:
+        for t in _split_csv_lower(spec):
             if re.fullmatch(r"q[1-4](?:(?:\.\.|:)q[1-4])?", t):
                 return True
         return False
@@ -1870,7 +1966,11 @@ def _rewrite_quarters_in_context(dnf):
         mode = "first_month"  # default when no monthly disambiguator is present
 
         m_atoms = [a for a in term if (a.get("typ") or a.get("type") or "").lower() == "m"]
-        if m_atoms:
+        has_plain_quarters = any(
+            _has_plain_quarter_tokens((a.get("spec") or a.get("value") or "").lower())
+            for a in y_atoms
+        )
+        if m_atoms and has_plain_quarters:
             if len(m_atoms) != 1:
                 raise ParseError(
                     "Quarter aliases (y:q1..q4) cannot be combined with multiple monthly atoms in the same term. "
@@ -1878,6 +1978,7 @@ def _rewrite_quarters_in_context(dnf):
                 )
 
             mspec = (m_atoms[0].get("spec") or m_atoms[0].get("value") or "").strip().lower()
+            mspec = _expand_monthly_aliases(mspec)
             if mspec == "rand":
                 raise ParseError(
                     "Quarter aliases (y:q1..q4) cannot be combined with m:rand. "
@@ -2070,6 +2171,7 @@ def _fmt_hhmm_for_term(term: list, default_due_dt):
 
 
 def _fmt_weekdays_list(spec: str) -> str:
+    spec = _expand_weekly_aliases(spec)
     tokens = _split_csv_lower(spec)
     if not tokens:
         return ""
@@ -2121,6 +2223,8 @@ def _fmt_weekdays_list(spec: str) -> str:
 
 def _fmt_monthly_atom(spec: str) -> str:
     s = (spec or "").lower().strip()
+    if s in _MONTHLY_ALIAS:
+        s = _MONTHLY_ALIAS[s]
     if s == "rand":
         return "one random day each month"
 
@@ -2139,6 +2243,8 @@ def _fmt_monthly_atom(spec: str) -> str:
         k = int(m.group(1))
         if k > 0:
             return f"the {_ordinal(k)} business day of each month"
+        if k == -1:
+            return "the last business day of each month"
         return f"the {_ordinal(abs(k))} last business day of each month"
     if ".." in s or ":" in s:
         sep = ".." if ".." in s else ":"
@@ -3097,6 +3203,7 @@ def _month_tokens_for_atom_cached(y: int, m: int, spec: str) -> set[int]:
     Cached version of month token expansion.
     For a monthly atom, return set of day numbers in (y,m) that match the spec.
     """
+    spec = _expand_monthly_aliases(spec)
     ndays = _days_in_month(y, m)
     out = set()
 
@@ -3344,6 +3451,9 @@ def _parse_y_token_cached(tok: str, fmt: str):
     """Parse yearly token (e.g., '15-02' or 'q1')."""
     tok = tok.strip().lower()
     if tok in _QUARTERS:
+        return ("quarter", tok)
+    m = re.fullmatch(r"q([1-4])([sme])", tok)
+    if m:
         return ("quarter", tok)
     m = _y_token_re.match(tok)
     if not m:
@@ -3870,6 +3980,7 @@ def _validate_weekly_spec(spec: str):
     Canonical (V2) range syntax uses '..' (e.g., w:mon..fri).
     Legacy '-' and ':' range forms are still accepted for backward compatibility.
     """
+    spec = _expand_weekly_aliases(spec)
     toks = _split_csv_lower(spec)
     if not toks:
         raise ParseError(
@@ -3926,6 +4037,7 @@ def _validate_monthly_spec(spec: str):
       - |A|,|B|,|k| ≤ 31 (upper bound for validation; actual month length is handled at expansion)
       - nth-weekday number must be 1..5 (or negative -1..-5), or 'last' (≡ -1)
     """
+    spec = _expand_monthly_aliases(spec)
     toks = _split_csv_lower(spec)
     if not toks:
         raise ParseError("Empty monthly spec")
@@ -4014,7 +4126,7 @@ def _validate_monthly_spec(spec: str):
 def _validate_yearly_token(tok: str):
     """Validate individual yearly token."""
     tok = tok.strip().lower()
-    if tok in _QUARTERS:
+    if tok in _QUARTERS or re.fullmatch(r"q[1-4][sme]", tok):
         return
     if ".." in tok or ":" in tok:
         sep = ".." if ".." in tok else ":"
@@ -4034,8 +4146,9 @@ def _validate_yearly_spec(spec: str):
     Valid yearly tokens (comma-separated):
       - Single day:        'DD-MM'                     (e.g., '25-12')
       - Day range:         'DD-MM:DD-MM'               (inclusive; e.g., '01-03:31-03')
-      - Quarter alias:     'q1'..'q4'                  (Jan–Mar, Apr–Jun, Jul–Sep, Oct–Dec)
+      - Quarter alias:     'q1'..'q4', 'q1s/q1m/q1e'    (quarter window or start/mid/end month)
       - Quarter range:     'qX:qY' (X<=Y)              (e.g., 'q1:q2' → Jan–Jun)
+      - Quarter range:     'qXs:qYs' (suffix must match)
 
     Friendly suggestions are provided for common mistakes (non-padded, month-only, cross-year, etc).
     """
@@ -4058,8 +4171,8 @@ def _validate_yearly_spec(spec: str):
         11: 30,
         12: 31,
     }
-    _quarter_re = re.compile(r"^q[1-4]$")
-    _quarter_range_re = re.compile(r"^(q[1-4])(?:\.\.|:)(q[1-4])$")
+    _quarter_re = re.compile(r"^q[1-4][sme]?$")
+    _quarter_range_re = re.compile(r"^(q[1-4])([sme])?(?:\.\.|:)(q[1-4])([sme])?$")
 
     def _last_day(mm: int) -> int:
         return MONTH_MAX.get(mm, 31)
@@ -4096,7 +4209,14 @@ def _validate_yearly_spec(spec: str):
         m = _quarter_range_re.fullmatch(tok)
         if m:
             q_from = int(m.group(1)[1])
-            q_to = int(m.group(2)[1])
+            q_to = int(m.group(3)[1])
+            suf_from = m.group(2) or ""
+            suf_to = m.group(4) or ""
+            if suf_from != suf_to:
+                raise ParseError(
+                    f"Invalid quarter range '{tok}': suffixes must match "
+                    "(use q1s..q2s or q1..q2)."
+                )
             if q_to < q_from:
                 raise ParseError(
                     f"Invalid quarter range '{tok}': end quarter precedes start quarter. "
@@ -4159,7 +4279,7 @@ def _validate_yearly_spec(spec: str):
         if not m:
             raise ParseError(
                 f"Unknown yearly token '{tok}'. Expected 'DD-MM', 'DD-MM:DD-MM', "
-                f"or quarter aliases 'q1..q4' (e.g., 'q1' or 'q1:q2')."
+                f"or quarter aliases 'q1..q4'/'q1s/q1m/q1e' (e.g., 'q1', 'q1s', 'q1:q2')."
             )
 
         d1 = int(m.group("d1"))
@@ -4366,6 +4486,7 @@ def expand_monthly_cached(spec: str, y: int, m: int):
     """Cached expansion of monthly specification for given month."""
     out = set()
     last = month_len(y, m)
+    spec = _expand_monthly_aliases(spec)
 
     def resolve_num(n):
         if n < 0:

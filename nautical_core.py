@@ -751,6 +751,7 @@ _WD_ABBR = ["mon","tue","wed","thu","fri","sat","sun"]
 _WEEKLY_ALIAS = {
     "wk": "mon..fri",
     "we": "sat..sun",
+    "wd": "mon..fri",
 }
 _MONTHLY_ALIAS = {
     "ld": "-1",
@@ -1990,7 +1991,7 @@ def _rewrite_quarters_in_context(dnf):
                 raise ParseError(
                     "Quarter aliases (y:q1..q4) require a single monthly selector token when used with m:*. "
                     "Examples: m:1bd + y:q4 (start month) OR m:-1bd + y:q4 (end month). "
-                    "For mid-month semantics, replace y:q* with explicit months (e.g. y:dec)."
+                    "If you meant a specific month of the quarter, use y:q4s/y:q4m/y:q4e."
                 )
 
             mt = mtoks[0]
@@ -2000,6 +2001,10 @@ def _rewrite_quarters_in_context(dnf):
                 mode = "quarter_start"
             else:
                 mode = "quarter_window"
+                raise ParseError(
+                    "Quarter aliases (y:q1..q4) paired with m:* are ambiguous here. "
+                    "Use y:qNs/y:qNm/y:qNe to target start/mid/end month, or use explicit months (e.g. y:oct..dec)."
+                )
 
         # Rewrite each yearly atom; attach metadata so Natural can disclose interpretation
         for ya in y_atoms:

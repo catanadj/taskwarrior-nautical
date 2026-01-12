@@ -10,6 +10,8 @@ Chained next-link spawner for Taskwarrior.
 """
 
 import sys, json, os, uuid, subprocess, importlib
+import atexit
+import time as _ptime
 import statistics
 from pathlib import Path
 from datetime import datetime, timedelta, timezone, time
@@ -89,11 +91,35 @@ _SHOW_TIMELINE_GAPS = os.environ.get("NAUTICAL_TIMELINE_GAPS", "").strip().lower
 # Analytics panel settings (local constants)
 # ------------------------------------------------------------------------------
 _SHOW_ANALYTICS = True
-_ANALYTICS_STYLE = "coach"  # "coach" or "clinical"
+_ANALYTICS_STYLE = "clinical"  # "coach" or "clinical"
 _ANALYTICS_ONTIME_TOL_SECS = 4 * 60 * 60  # "on time" within a few hours
+
+# Verify child import with a follow-up export (safety-first).
+# Perf: adds one Taskwarrior subprocess per completion; at high concurrency this
+# can add ~0.05–0.1s to p95 completion latency. Downside: more load/lock contention.
+_VERIFY_IMPORT = True
 
 # Panel chain index for fast timeline lookups (set per hook run)
 _PANEL_CHAIN_BY_LINK = None
+_PANEL_CHAIN_BY_SHORT = None
+_CHAIN_CACHE_CHAIN_ID = ""
+_CHAIN_CACHE = []
+_CHAIN_BY_SHORT = {}
+_CHAIN_BY_UUID = {}
+_DIAG_STATS = {
+    "run_task_calls": 0,
+    "run_task_failures": 0,
+    "export_uuid_cache_hits": 0,
+    "export_uuid_cache_misses": 0,
+    "export_full_cache_hits": 0,
+    "export_full_cache_misses": 0,
+    "tw_get_cache_hits": 0,
+    "unexpected_cache_misses": 0,
+    "chain_cache_seeded": 0,
+    "run_task_seconds": 0.0,
+}
+
+_DIAG_START_TS = _ptime.perf_counter()
 # ------------------------------------------------------------------------------
 # Debug: wait/scheduled carry-forward
 # Set NAUTICAL_DEBUG_WAIT_SCHED=1 to include carry computations in the feedback panel.
@@ -111,6 +137,28 @@ def _diag(msg: str) -> None:
             sys.stderr.write(f"[nautical] {msg}\n")
         except Exception:
             pass
+
+
+def _diag_count(key: str, inc: int = 1) -> None:
+    try:
+        _DIAG_STATS[key] = _DIAG_STATS.get(key, 0) + inc
+    except Exception:
+        pass
+
+
+def _dump_diag_stats() -> None:
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        try:
+            elapsed = _ptime.perf_counter() - _DIAG_START_TS
+            _DIAG_STATS["hook_seconds"] = round(elapsed, 4)
+            _DIAG_STATS["run_task_seconds"] = round(_DIAG_STATS.get("run_task_seconds", 0.0), 4)
+            parts = [f"{k}={v}" for k, v in _DIAG_STATS.items()]
+            sys.stderr.write("[nautical] diag stats: " + ", ".join(parts) + "\n")
+        except Exception:
+            pass
+
+
+atexit.register(_dump_diag_stats)
 
 
 def _fmt_td_dd_hhmm(delta: timedelta) -> str:
@@ -1126,12 +1174,14 @@ def _run_task(
     retries: int = 2,
     retry_delay: float = 0.15,
 ) -> tuple[bool, str, str]:
+    _diag_count("run_task_calls")
     env = env or os.environ.copy()
     last_out = ""
     last_err = ""
     attempts = max(1, int(retries))
     for attempt in range(1, attempts + 1):
         try:
+            t0 = _ptime.perf_counter()
             r = subprocess.run(
                 cmd,
                 input=input_text,
@@ -1141,21 +1191,25 @@ def _run_task(
                 stderr=subprocess.PIPE,
                 timeout=timeout,
             )
+            _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
             last_out = r.stdout or ""
             last_err = r.stderr or ""
             if r.returncode == 0:
                 return True, last_out, last_err
+            _diag_count("run_task_failures")
             if attempt < retries:
                 _time.sleep(retry_delay * attempt)
                 continue
             return False, last_out, last_err
         except subprocess.TimeoutExpired:
+            _diag_count("run_task_failures")
             last_err = "timeout"
             if attempt < retries:
                 _time.sleep(retry_delay * attempt)
                 continue
             return False, last_out, last_err
         except Exception as e:
+            _diag_count("run_task_failures")
             last_err = str(e)
             if attempt < retries:
                 _time.sleep(retry_delay * attempt)
@@ -1165,6 +1219,16 @@ def _run_task(
 
 
 def _export_uuid_short(u_short: str, env=None):
+    if env is None and u_short and u_short in _CHAIN_BY_SHORT:
+        # Return a shallow copy to avoid accidental mutation of cache.
+        _diag_count("export_uuid_cache_hits")
+        return dict(_CHAIN_BY_SHORT[u_short])
+    if env is None:
+        if _CHAIN_CACHE_CHAIN_ID:
+            _diag_count("unexpected_cache_misses")
+            _diag(f"cache miss: short uuid {u_short} (chainID={_CHAIN_CACHE_CHAIN_ID})")
+        else:
+            _diag_count("export_uuid_cache_misses")
     env = env or os.environ.copy()
     ok, out, err = _run_task(
         ["task", "rc.hooks=off", "rc.json.array=off", f"uuid:{u_short}", "export"],
@@ -1274,8 +1338,11 @@ def _spawn_child(child_task: dict) -> tuple[str, set[str]]:
             last_category = "taskwarrior"
             continue
 
-        if ok and _task_exists_by_uuid(child_uuid, env):
-            return child_uuid[:8], stripped_accum
+        if ok:
+            if not _VERIFY_IMPORT:
+                return child_uuid[:8], stripped_accum
+            if _task_exists_by_uuid(child_uuid, env):
+                return child_uuid[:8], stripped_accum
 
         last_stderr = err or ""
         category, is_retryable = _categorize_spawn_error(0 if ok else 1, last_stderr)
@@ -1469,6 +1536,16 @@ def _task(args, env=None) -> str:
 
 def _export_uuid_full(u: str, env=None) -> dict | None:
     """Export a single task by full UUID."""
+    if env is None and u and u in _CHAIN_BY_UUID:
+        # Return a shallow copy to avoid accidental mutation of cache.
+        _diag_count("export_full_cache_hits")
+        return dict(_CHAIN_BY_UUID[u])
+    if env is None:
+        if _CHAIN_CACHE_CHAIN_ID:
+            _diag_count("unexpected_cache_misses")
+            _diag(f"cache miss: full uuid {u} (chainID={_CHAIN_CACHE_CHAIN_ID})")
+        else:
+            _diag_count("export_full_cache_misses")
     try:
         out = _task(["rc.json.array=1", f"export uuid:{u}"], env=env)  # uses existing _task()
         arr = json.loads(out) if out and out.strip().startswith("[") else []
@@ -1490,6 +1567,14 @@ def tw_export_chain_or_fallback(seed_task, env=None):
 def _tw_get_cached(ref: str) -> str:
     """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
     try:
+        if ref.endswith(".entry"):
+            short = ref[:-6].strip()
+            if short and short in _CHAIN_BY_SHORT:
+                _diag_count("tw_get_cache_hits")
+                return (str(_CHAIN_BY_SHORT[short].get("entry") or "")).strip()
+            if short and _CHAIN_CACHE_CHAIN_ID:
+                _diag_count("unexpected_cache_misses")
+                _diag(f"cache miss: _get {ref} (chainID={_CHAIN_CACHE_CHAIN_ID})")
         out = _task(["rc.verbose=nothing", "_get", ref], env=None)
         return (out or "").strip()
     except Exception:
@@ -1780,6 +1865,8 @@ def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] |
 @lru_cache(maxsize=32)
 def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None) -> tuple[dict, ...]:
     """Cached chain export; returns an immutable tuple to avoid accidental mutation."""
+    if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
+        return tuple(_CHAIN_CACHE or [])
     return tuple(tw_export_chain(chain_id, since=since, extra=extra, env=None) or [])
 
 
@@ -1789,6 +1876,8 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
         return []
     if env is not None:
         return tw_export_chain(chain_id, since=since, extra=extra, env=env)
+    if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
+        return list(_CHAIN_CACHE)
     cached = _tw_export_chain_cached(chain_id, since, extra)
     return list(cached)
 
@@ -1805,6 +1894,19 @@ def _build_chain_indexes(chain: list[dict]) -> tuple[dict[int, list[dict]], dict
         if isinstance(u, str) and u:
             by_short[u[:8]] = t
     return by_link, by_short
+
+
+def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
+    """Set per-run chain cache to avoid repeated task exports."""
+    global _CHAIN_CACHE_CHAIN_ID, _CHAIN_CACHE, _CHAIN_BY_SHORT, _CHAIN_BY_UUID
+    _CHAIN_CACHE_CHAIN_ID = chain_id or ""
+    _CHAIN_CACHE = list(chain or [])
+    _, by_short = _build_chain_indexes(_CHAIN_CACHE)
+    _CHAIN_BY_SHORT = by_short
+    _CHAIN_BY_UUID = {
+        t.get("uuid"): t for t in _CHAIN_CACHE if isinstance(t.get("uuid"), str) and t.get("uuid")
+    }
+    _diag_count("chain_cache_seeded")
 
 
 def _pretty_basis_cp(task: dict, meta: dict) -> str:
@@ -2863,14 +2965,15 @@ def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
             delta = _fmt_on_time_delta(due, end)
             short = _short(obj.get("uuid"))
             lab = f"[bold]#{no:<{label_width}}[/]"
-            line = f"{lab} {end_s} {delta} [dim]{short}[/]"
+            marker = "✓"
+            line = f"{lab} {marker:<2} {end_s} {delta} [dim]{short}[/]"
             # Highlight the most recent task
             if no == get_link(chain_with_links[0]):
                 line = f"[green]{line}[/]"
             top_lines.append(line)
         
         # Add ellipsis
-        ellipsis_line = f"[dim]{' ' * label_width}... ({len(chain_with_links) - 6} more tasks) ...[/dim]"
+        ellipsis_line = f"[dim]{' ' * (label_width + 4)}... ({len(chain_with_links) - 6} more tasks) ...[/dim]"
         
         # Create lines for bottom tasks (oldest) - also in descending order
         bottom_lines = []
@@ -2882,7 +2985,8 @@ def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
             delta = _fmt_on_time_delta(due, end)
             short = _short(obj.get("uuid"))
             lab = f"[bold]#{no:<{label_width}}[/]"
-            line = f"{lab} {end_s} {delta} [dim]{short}[/]"
+            marker = "✓"
+            line = f"{lab} {marker:<2} {end_s} {delta} [dim]{short}[/]"
             bottom_lines.append(line)
         
         return top_lines + [ellipsis_line] + bottom_lines
@@ -2897,7 +3001,8 @@ def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
         delta = _fmt_on_time_delta(due, end)
         short = _short(obj.get("uuid"))
         lab = f"[bold]#{no:<{label_width}}[/]"
-        line = f"{lab} {end_s} {delta} [dim]{short}[/]"
+        marker = "✓"
+        line = f"{lab} {marker:<2} {end_s} {delta} [dim]{short}[/]"
         # Highlight the most recent task
         if no == get_link(chain_with_links[0]):
             line = f"[green]{line}[/]"
@@ -3214,18 +3319,21 @@ def _timeline_lines(
             delta = _fmt_on_time_delta(due_dt, end_dt)
             end_s = _fmtlocal(end_dt) if end_dt else "(no end)"
             short = _short(obj.get("uuid"))
-            base_line = f"[{prev_style}]# {no:>2} {end_s} {delta} {short}[/]"
+            marker = "✓"
+            base_line = f"[{prev_style}]#{no:>2} {marker:<2}{end_s} {delta} {short}[/]"
             
         elif item_type == "current":
             cur_end = _dtparse(task.get("end"))
             cur_due = _dtparse(task.get("due"))
             cur_delta = _fmt_on_time_delta(cur_due, cur_end)
             cur_end_s = _fmtlocal(cur_end) if cur_end else "(no end)"
-            base_line = f"[{cur_style}]# {no:>2} {cur_end_s} {cur_delta} {_short(task.get('uuid'))}[/]"
+            marker = "✓"
+            base_line = f"[{cur_style}]#{no:>2} {marker:<2}{cur_end_s} {cur_delta} {_short(task.get('uuid'))}[/]"
             
         elif item_type == "next":
             is_last = cap_no is not None and no == cap_no
-            next_text = f"# {no:>2} → {core.fmt_dt_local(dt)} {_short(obj.get('uuid'))}"
+            marker = "►"
+            next_text = f"#{no:>2} {marker:<2}{core.fmt_dt_local(dt)} {_short(obj.get('uuid'))}"
             if is_last:
                 base_line = f"[{next_style}]{next_text} [bold red](last link)[/][/]"
             else:
@@ -3233,7 +3341,8 @@ def _timeline_lines(
                 
         elif item_type == "future":
             is_last = cap_no is not None and no == cap_no
-            future_text = f"# {no:>2} {core.fmt_dt_local(dt)}"
+            marker = "»"
+            future_text = f"#{no:>2} {marker:<2}{core.fmt_dt_local(dt)}"
             if is_last:
                 base_line = f"[{future_style}]{future_text} [bold red](last link)[/][/]"
             else:
@@ -3693,15 +3802,20 @@ def main():
     chain_by_link = None
     chain_by_short = None
     chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
-    if chain_id:
+    need_chain = _SHOW_ANALYTICS or _SHOW_TIMELINE_GAPS
+    if chain_id and need_chain:
         try:
             chain = _get_chain_export(chain_id)
             if chain:
                 chain_by_link, chain_by_short = _build_chain_indexes(chain)
+                _set_chain_cache(chain_id, chain)
+                _export_uuid_short_cached.cache_clear()
         except Exception:
             pass
     global _PANEL_CHAIN_BY_LINK
     _PANEL_CHAIN_BY_LINK = chain_by_link
+    global _PANEL_CHAIN_BY_SHORT
+    _PANEL_CHAIN_BY_SHORT = chain_by_short
     analytics_advice = None
     if _SHOW_ANALYTICS and chain:
         try:

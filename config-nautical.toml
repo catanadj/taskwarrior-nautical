@@ -3,11 +3,26 @@ wrand_salt      = "nautical|wrand|v2"
 tz              = "Australia/Sydney"
 holiday_region  = "" 				# not implemented yet
 
+# Config precedence: this file overrides built-in defaults.
+
 
 # Toggle file cache
 enable_anchor_cache = true
 anchor_cache_dir = ""  # optional; defaults beside core
 anchor_cache_ttl = 0                               # optional; 0 = never expires
 
-# ChainID toggle
-enable_chain_id = true
+# ChainID is always enabled in v3+; legacy chains can be upgraded with tools/nautical_backfill_chainid.py.
+
+# Hook toggles (on-modify)
+chain_color_per_chain = false        # color timeline per chain (perf hit on slow terminals)
+show_timeline_gaps = true            # include gap rows in timeline
+show_analytics = true                # show analytics panel
+analytics_style = "clinical"         # "coach" or "clinical"
+analytics_ontime_tol_secs = 14400    # "on time" window in seconds
+verify_import = true                 # verify child import via export
+debug_wait_sched = false             # include wait/scheduled debug rows
+panel_mode = "rich"                  # "rich", "fast" (aka "plain"), or "line"
+fast_color = true                    # allow ANSI color in fast mode
+spawn_queue_max_bytes = 524288       # max queued JSONL bytes before fast-drain
+spawn_queue_drain_max_items = 200    # max items drained per pass
+max_chain_walk = 500                 # cap for chain summaries/analytics

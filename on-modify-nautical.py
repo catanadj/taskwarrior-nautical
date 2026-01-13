@@ -3320,7 +3320,7 @@ def _timeline_lines(
             end_s = _fmtlocal(end_dt) if end_dt else "(no end)"
             short = _short(obj.get("uuid"))
             marker = "✓"
-            base_line = f"[{prev_style}]#{no:>2} {marker:<2}{end_s} {delta} {short}[/]"
+            base_line = f"[{prev_style}]{no:>2} {marker:<2}{end_s} {delta} {short}[/]"
             
         elif item_type == "current":
             cur_end = _dtparse(task.get("end"))
@@ -3328,12 +3328,12 @@ def _timeline_lines(
             cur_delta = _fmt_on_time_delta(cur_due, cur_end)
             cur_end_s = _fmtlocal(cur_end) if cur_end else "(no end)"
             marker = "✓"
-            base_line = f"[{cur_style}]#{no:>2} {marker:<2}{cur_end_s} {cur_delta} {_short(task.get('uuid'))}[/]"
+            base_line = f"[{cur_style}]{no:>2} {marker:<2}{cur_end_s} {cur_delta} {_short(task.get('uuid'))}[/]"
             
         elif item_type == "next":
             is_last = cap_no is not None and no == cap_no
             marker = "►"
-            next_text = f"#{no:>2} {marker:<2}{core.fmt_dt_local(dt)} {_short(obj.get('uuid'))}"
+            next_text = f"{no:>2} {marker:<2}{core.fmt_dt_local(dt)} {_short(obj.get('uuid'))}"
             if is_last:
                 base_line = f"[{next_style}]{next_text} [bold red](last link)[/][/]"
             else:
@@ -3342,7 +3342,7 @@ def _timeline_lines(
         elif item_type == "future":
             is_last = cap_no is not None and no == cap_no
             marker = "»"
-            future_text = f"#{no:>2} {marker:<2}{core.fmt_dt_local(dt)}"
+            future_text = f"{no:>2} {marker:<2}{core.fmt_dt_local(dt)}"
             if is_last:
                 base_line = f"[{future_style}]{future_text} [bold red](last link)[/][/]"
             else:

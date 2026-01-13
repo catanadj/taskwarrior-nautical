@@ -35,7 +35,7 @@ except Exception:  # pragma: no cover
     ZoneInfo = None
 
 
-# set env NAUTICAL_ANALYTICS=0 to disable analytics panel entry. 
+# set config show_analytics=false to disable analytics panel entry.
 
  # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
  # Python's json.dumps() defaults to ensure_ascii=True, which escapes non-ASCII
@@ -52,7 +52,7 @@ except Exception:
 # Constants
 # ------------------------------------------------------------------------------
 
-_MAX_CHAIN_WALK = 500  # max tasks to walk backwards in chain
+_MAX_CHAIN_WALK = 500  # cap for chain summaries/analytics
 _MAX_UUID_LOOKUPS = 50  # max individual UUID exports before giving up
 _MAX_ITERATIONS = 2000  # prevent infinite loops in stepping functions
 _MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
@@ -61,43 +61,10 @@ _MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
 _MAX_SPAWN_ATTEMPTS = 3
 _SPAWN_RETRY_DELAY = 0.1  # seconds between retries
 # Deferred spawn queue guards (override via env for heavy workloads).
-# NAUTICAL_SPAWN_QUEUE_MAX_BYTES: skip full-load parsing if queue exceeds this size.
-# NAUTICAL_SPAWN_DRAIN_MAX_ITEMS: cap items drained in one batch for large queues.
-_SPAWN_QUEUE_MAX_BYTES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_BYTES", "524288") or "524288")
-_SPAWN_QUEUE_DRAIN_MAX_ITEMS = int(os.environ.get("NAUTICAL_SPAWN_DRAIN_MAX_ITEMS", "200") or "200")
-
-# ------------------------------------------------------------------------------
-# Colour per chain toggle - performance in termux has a significative reduction. 
-# ------------------------------------------------------------------------------
-
-_CHAIN_COLOR_PER_CHAIN = os.environ.get("NAUTICAL_CHAIN_COLOR", "").strip().lower() in {
-    "chain",
-    "per-chain",
-    "per",
-    "1",
-    "yes",
-    "true",
-    "on",
-}
-
-# ------------------------------------------------------------------------------
-# Show timeline gaps 
-# ------------------------------------------------------------------------------
-_SHOW_TIMELINE_GAPS = os.environ.get("NAUTICAL_TIMELINE_GAPS", "").strip().lower() not in {
-    "0", "no", "false", "off", "none"
-}
-
-# ------------------------------------------------------------------------------
-# Analytics panel settings (local constants)
-# ------------------------------------------------------------------------------
-_SHOW_ANALYTICS = True
-_ANALYTICS_STYLE = "clinical"  # "coach" or "clinical"
-_ANALYTICS_ONTIME_TOL_SECS = 4 * 60 * 60  # "on time" within a few hours
-
-# Verify child import with a follow-up export (safety-first).
-# Perf: adds one Taskwarrior subprocess per completion; at high concurrency this
-# can add ~0.05–0.1s to p95 completion latency. Downside: more load/lock contention.
-_VERIFY_IMPORT = True
+# spawn_queue_max_bytes: skip full-load parsing if queue exceeds this size.
+# spawn_queue_drain_max_items: cap items drained in one batch for large queues.
+_SPAWN_QUEUE_MAX_BYTES = 524288
+_SPAWN_QUEUE_DRAIN_MAX_ITEMS = 200
 
 # Panel chain index for fast timeline lookups (set per hook run)
 _PANEL_CHAIN_BY_LINK = None
@@ -122,11 +89,9 @@ _DIAG_STATS = {
 _DIAG_START_TS = _ptime.perf_counter()
 # ------------------------------------------------------------------------------
 # Debug: wait/scheduled carry-forward
-# Set NAUTICAL_DEBUG_WAIT_SCHED=1 to include carry computations in the feedback panel.
+# Set debug_wait_sched=true to include carry computations in the feedback panel.
 # ------------------------------------------------------------------------------
-_DEBUG_WAIT_SCHED = os.environ.get("NAUTICAL_DEBUG_WAIT_SCHED", "").strip().lower() in {
-    "1", "yes", "true", "on"
-}
+_DEBUG_WAIT_SCHED = False
 _LAST_WAIT_SCHED_DEBUG: dict[str, dict] = {}
 _WARNED_CHAIN_EXPORT: set[str] = set()
 
@@ -273,6 +238,20 @@ if core is None:
     )
     raise ModuleNotFoundError(msg)
 
+# ------------------------------------------------------------------------------
+# Config-driven toggles (env overrides still supported via core config helpers)
+# ------------------------------------------------------------------------------
+_CHAIN_COLOR_PER_CHAIN = core.CHAIN_COLOR_PER_CHAIN
+_SHOW_TIMELINE_GAPS = core.SHOW_TIMELINE_GAPS
+_SHOW_ANALYTICS = core.SHOW_ANALYTICS
+_ANALYTICS_STYLE = core.ANALYTICS_STYLE
+_ANALYTICS_ONTIME_TOL_SECS = core.ANALYTICS_ONTIME_TOL_SECS
+_VERIFY_IMPORT = core.VERIFY_IMPORT
+_DEBUG_WAIT_SCHED = core.DEBUG_WAIT_SCHED
+_SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES
+_SPAWN_QUEUE_DRAIN_MAX_ITEMS = core.SPAWN_QUEUE_DRAIN_MAX_ITEMS
+_MAX_CHAIN_WALK = core.MAX_CHAIN_WALK
+
 
 # ------------------------------------------------------------------------------
 # Small cached helpers for speed + consistency
@@ -387,13 +366,14 @@ def _term_width_stderr(default: int = 80) -> int:
     return max(40, min(70, int(w)))
 
 
-def _fast_color_enabled() -> bool:
+def _fast_color_enabled(force: bool | None = None) -> bool:
     if not sys.stderr.isatty():
         return False
     if os.environ.get("NO_COLOR"):
         return False
-    v = os.environ.get("NAUTICAL_FAST_COLOR", "1").strip().lower()
-    return v not in {"0", "no", "false", "off"}
+    if force is not None:
+        return bool(force)
+    return bool(core.FAST_COLOR)
 
 
 def _ansi(code: str) -> str:
@@ -452,19 +432,26 @@ def _panel(
     Render a panel.
 
     Modes:
-      - default / NAUTICAL_PANEL=rich : Rich panel (colors + borders)
-      - NAUTICAL_PANEL=fast           : plain/ANSI panel (fast, Termux-friendly)
+      - default / panel_mode="rich" : Rich panel (colors + borders)
+      - panel_mode="fast"           : plain/ANSI panel (fast, Termux-friendly)
 
     The fast panel is designed to be stable, minimal, and easy to scan.
     """
-    mode = os.environ.get("NAUTICAL_PANEL", "").strip().lower()
+    mode = str(core.PANEL_MODE or "").strip().lower()
     if mode in {"plain"}:
         mode = "fast"
 
+    if mode == "line":
+        line = _panel_line_from_rows(title, rows)
+        if line:
+            _panel_line(title, line, kind=kind, border_style=border_style, title_style=title_style)
+        return
+
+    force_color = None
     if mode == "fast":
         width = _term_width_stderr()
 
-        use_color = _fast_color_enabled()
+        use_color = _fast_color_enabled(force=force_color)
         RESET = _ansi("0")
         BOLD = _ansi("1") if use_color else ""
         DIM = _ansi("2") if use_color else ""
@@ -542,9 +529,76 @@ def _panel(
         from rich.text import Text
     except Exception:
         # If Rich is unavailable, fall back to fast mode without ANSI.
-        os.environ.setdefault("NAUTICAL_PANEL", "fast")
-        os.environ.setdefault("NAUTICAL_FAST_COLOR", "0")
-        return _panel(title, rows, kind=kind, border_style=border_style, title_style=title_style, label_style=label_style)
+        width = _term_width_stderr()
+        force_color = False
+        mode = "fast"
+        use_color = _fast_color_enabled(force=force_color)
+        RESET = _ansi("0")
+        BOLD = _ansi("1") if use_color else ""
+        DIM = _ansi("2") if use_color else ""
+        CYAN = _ansi("36") if use_color else ""
+        GREEN = _ansi("32") if use_color else ""
+        RED = _ansi("31") if use_color else ""
+        YELLOW = _ansi("33") if use_color else ""
+
+        delim = "─" * width
+        sys.stderr.write(delim + "\n")
+        sys.stderr.write((BOLD + CYAN + _strip_rich_markup(str(title)) + RESET) + "\n")
+
+        keys = [str(k) for (k, _v) in rows if k is not None]
+        label_w = 0
+        for k in keys:
+            if len(k) > label_w:
+                label_w = len(k)
+        label_w = min(14, max(6, label_w))
+
+        def _style_for_row(k: str, v: str) -> str | None:
+            lk = k.lower()
+            sv = (v or "")
+            lsv = sv.lower()
+            if k.strip().lower() == "pattern":
+                return CYAN
+            if "natural" in lk:
+                return DIM
+            if k.strip().lower() in {"basis", "root"}:
+                return DIM
+            if k.strip().lower() in {"first due", "next due"}:
+                if "overdue" in lsv or "late" in lsv:
+                    return RED
+                return GREEN
+            if "warning" in lk:
+                return YELLOW
+            if "error" in lk:
+                return RED
+            if lk.startswith("chain"):
+                return DIM + GREEN
+            return None
+
+        for k, v in rows:
+            if k is None:
+                sys.stderr.write("\n")
+                continue
+
+            k = _strip_rich_markup(str(k))
+            v = "" if v is None else _strip_rich_markup(str(v))
+
+            if k.lower().startswith("timeline"):
+                prefix0 = f"{k:<{label_w}} "
+                lines = [ln for ln in v.splitlines() if ln.strip() != ""] if "\n" in v else ([v] if v else [])
+                if lines:
+                    _emit_wrapped(prefix0, lines[0], width, style=None)
+                    for ln in lines[1:]:
+                        _emit_wrapped(" " * len(prefix0), ln, width, style=None)
+                else:
+                    _emit_wrapped(prefix0, "", width, style=None)
+                continue
+
+            prefix = f"{k:<{label_w}} "
+            style = _style_for_row(k, v)
+            _emit_wrapped(prefix, v, width, style=style)
+
+        sys.stderr.write(delim + "\n")
+        return
 
     THEMES = {
         "preview_anchor": {"border": "turquoise2", "title": "bright_cyan", "label": "light_sea_green"},
@@ -586,6 +640,63 @@ def _panel(
         Panel(
             t,
             title=Text(title, style=f"bold {tstyle}"),
+            border_style=border,
+            expand=False,
+            padding=(0, 1),
+        )
+    )
+
+def _panel_line_from_rows(title, rows) -> str:
+    title_txt = _strip_rich_markup(str(title))
+    if not rows:
+        return title_txt
+    for k, v in rows:
+        if k is None:
+            continue
+        ktxt = _strip_rich_markup(str(k))
+        vtxt = _strip_rich_markup(str(v)) if v is not None else ""
+        if not vtxt:
+            continue
+        return f"{title_txt} — {ktxt}: {vtxt}"
+    return title_txt
+
+def _panel_line(
+    title: str,
+    line: str,
+    *,
+    kind: str = "info",
+    border_style: str | None = None,
+    title_style: str | None = None,
+) -> None:
+    try:
+        if not sys.stderr.isatty():
+            raise RuntimeError("no tty")
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.text import Text
+    except Exception:
+        _emit_line(line)
+        return
+
+    THEMES = {
+        "preview_anchor": {"border": "turquoise2", "title": "bright_cyan"},
+        "preview_cp": {"border": "deep_pink1", "title": "deep_pink1"},
+        "summary": {"border": "indian_red", "title": "indian_red"},
+        "disabled": {"border": "yellow", "title": "yellow"},
+        "error": {"border": "red", "title": "red"},
+        "warning": {"border": "yellow", "title": "yellow"},
+        "info": {"border": "blue", "title": "cyan"},
+    }
+    theme = THEMES.get(kind, THEMES["info"])
+    border = border_style or theme["border"]
+    tstyle = title_style or theme["title"]
+
+    console = Console(file=sys.stderr, force_terminal=True)
+    body = Text(line)
+    console.print(
+        Panel(
+            body,
+            title=Text(str(title), style=f"bold {tstyle}"),
             border_style=border,
             expand=False,
             padding=(0, 1),
@@ -1297,6 +1408,63 @@ def _strip_none_and_cast(obj: dict):
         out[k] = v
     return out
 
+def _emit_line(msg: str) -> None:
+    if not msg:
+        return
+    try:
+        sys.stderr.write(msg + "\n")
+    except Exception:
+        pass
+
+def _format_line_cap(base_no: int, cap_no: int | None, until_dt: datetime | None, until_no: int | None) -> str:
+    parts = []
+    if cap_no:
+        left = max(0, cap_no - base_no)
+        parts.append(f"cap {cap_no}, left {left}")
+    if until_dt:
+        until_txt = core.fmt_dt_local(until_dt)
+        parts.append(f"until {until_txt}")
+    return f" ({'; '.join(parts)})" if parts else ""
+
+def _format_line_preview(
+    link_no: int,
+    task: dict,
+    child_due_utc: datetime,
+    child_short: str,
+    now_utc: datetime,
+    cap_no: int | None = None,
+    until_dt: datetime | None = None,
+    until_no: int | None = None,
+) -> str:
+    cur_due = _dtparse(task.get("due"))
+    cur_end = _dtparse(task.get("end"))
+    delta_txt = _strip_rich_markup(_fmt_on_time_delta(cur_due, cur_end) or "").strip()
+    if delta_txt.startswith("(") and delta_txt.endswith(")"):
+        delta_txt = delta_txt[1:-1].strip()
+    if delta_txt:
+        if not delta_txt.endswith(","):
+            delta_txt = f"{delta_txt},"
+    due_local = core.fmt_dt_local(child_due_utc) if child_due_utc else "—"
+    due_delta = _human_delta(now_utc, child_due_utc, False)
+    if due_delta.startswith("in "):
+        due_delta = "due " + due_delta
+    elif due_delta.startswith("overdue by "):
+        due_delta = due_delta
+    else:
+        due_delta = "due " + due_delta
+    cap_txt = _format_line_cap(link_no, cap_no, until_dt, until_no)
+    parts = [str(link_no), "✓"]
+    if delta_txt:
+        parts.append(delta_txt)
+    parts.append("next")
+    parts.append("►")
+    parts.append(due_local)
+    parts.append(due_delta)
+    line = " ".join(p for p in parts if p)
+    if cap_txt:
+        line = line + cap_txt
+    return line.strip()
+
 
 def _spawn_child(child_task: dict) -> tuple[str, set[str]]:
     """
@@ -1508,16 +1676,11 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
 def _root_uuid_from(task: dict) -> str:
     """Return the stable chain seed.
 
-    New releases are chainID-first: we do not walk legacy prevLink chains.
-    If chainID is missing we fall back to this task's UUID.
+    ChainID is the only source of truth.
     """
+    return (task.get("chainID") or task.get("chainid") or "").strip()
 
-    cid = (task.get("chainID") or "").strip()
-    if cid:
-        return cid
-    return (task.get("uuid") or "").strip()
-
-# --- Chain export: prefer chainID, else walk the legacy links -----------------
+# --- Chain export: chainID is mandatory --------------------------------------
 def _task(args, env=None) -> str:
     """
     Thin wrapper around 'task' returning stdout as text.
@@ -1553,14 +1716,17 @@ def _export_uuid_full(u: str, env=None) -> dict | None:
     except Exception:
         return None
 
-def tw_export_chain_or_fallback(seed_task, env=None):
+def tw_export_chain_required(seed_task, env=None):
     """Return full chain export for a task.
 
-    Policy: chainID is mandatory (legacy link-walk fallback removed).
+    Policy: chainID is mandatory.
     """
     chain_id = seed_task.get('chainID') or seed_task.get('chainid')
     if not chain_id:
-        raise RuntimeError('ChainID is required (legacy chain traversal removed). Run your chainID backfill tool, then retry.')
+        raise RuntimeError(
+            "ChainID is required (legacy chain traversal removed). "
+            "Run tools/nautical_backfill_chainid.py, then retry."
+        )
     if env is None:
         return _get_chain_export(chain_id)
     return tw_export_chain(chain_id, env=env)
@@ -1581,19 +1747,11 @@ def _tw_get_cached(ref: str) -> str:
         return ""
 
 def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]:
-    """Get chain root (short chainID or UUID) and age in days.
+    """Get chain root (chainID) and age in days.
     Returns (root_short, age_days). age_days is None if unavailable."""
     try:
-        # Get root short ID (chainID or short UUID)
-        root_short = (task.get("chainID") or "").strip()
-        
-        if not root_short:
-            # Fallback to root UUID from chain
-            root_uuid = _root_uuid_from(task)
-            if root_uuid:
-                root_short = root_uuid[:8]
-            else:
-                root_short = _short(task.get("uuid"))
+        # Get root short ID (chainID)
+        root_short = _root_uuid_from(task)
         
         # Get age if we have a root
         age_days = None
@@ -1609,7 +1767,7 @@ def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]
                 if age_days < 0:
                     age_days = 0
         
-        return root_short, age_days
+        return root_short or "—", age_days
     except Exception:
         return "—", None
 
@@ -1783,7 +1941,7 @@ def _chain_colour_for_task(task: dict, kind: str) -> str:
     """
     Get the chain colour for this task (uses root uuid, cached).
     """
-    root = (_root_uuid_from(task) or task.get("uuid") or "").strip()
+    root = _root_uuid_from(task)
     return _chain_colour_root(kind, root)
 
 
@@ -2290,7 +2448,7 @@ def _compute_anchor_child_due(parent: dict):
     due_local = _tolocal(due_dt_utc) if due_dt_utc else end_local
 
     default_seed = due_local.date()
-    seed_base = (parent.get("chainID") or "").strip() or (_root_uuid_from(parent) or "preview")
+    seed_base = (parent.get("chainID") or "").strip() or "preview"
 
     # Fallback time if the pattern carries no explicit @t
     fallback_hhmm = (due_local.hour, due_local.minute)
@@ -2416,7 +2574,7 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
     if cur_no >= cpmax:
         return None
 
-    seed_base = (task.get("chainID") or "").strip() or (_root_uuid_from(task) or "preview")
+    seed_base = (task.get("chainID") or "").strip() or "preview"
     nxt_local = _to_local_cached(next_due_utc)
 
     # Use a stable default seed (prefer the original due date).
@@ -2624,11 +2782,10 @@ def _build_child_from_parent(
 
     # [CHAINID] Inherit parent chainID (fallback to parent's short uuid)
     try:
-        if core.ENABLE_CHAIN_ID:
-            parent_chain = (parent.get("chainID") or "").strip()
-            if not parent_chain:
-                parent_chain = core.short_uuid(parent.get("uuid"))
-            child["chainID"] = parent_chain
+        parent_chain = (parent.get("chainID") or "").strip()
+        if not parent_chain:
+            parent_chain = core.short_uuid(parent.get("uuid"))
+        child["chainID"] = parent_chain
     except Exception:
         pass
 
@@ -2643,7 +2800,7 @@ def _carry_rel_dt_utc(parent: dict, child: dict, child_due_utc: datetime, field:
     Notes:
       - This is intentionally UTC-timedelta based (seconds-accurate).
       - We always remove any inherited absolute value first to avoid 'sticky' wait/scheduled.
-      - When NAUTICAL_DEBUG_WAIT_SCHED=1, we stash a short debug payload for the feedback panel.
+      - When debug_wait_sched=true, we stash a short debug payload for the feedback panel.
     """
     if not isinstance(parent, dict) or not isinstance(child, dict):
         return
@@ -2685,23 +2842,6 @@ def _carry_rel_dt_utc(parent: dict, child: dict, child_due_utc: datetime, field:
 # ------------------------------------------------------------------------------
 # End-of-chain summary + stats
 # ------------------------------------------------------------------------------
-def _walk_chain_all(cur: dict, cap: int = None) -> list[dict]:
-    cap = cap or _MAX_CHAIN_WALK
-    seq = []
-    node = cur
-    steps = 0
-    while node and steps < cap:
-        seq.append(node)
-        prev = node.get("prevLink")
-        if not prev:
-            break
-        node = _export_uuid_short_cached(prev)
-        if not node:
-            break
-        steps += 1
-    return list(reversed(seq))
-
-
 def _median(nums: list[float]) -> float | None:
     if not nums:
         return None
@@ -3036,31 +3176,6 @@ def _create_timeline_segment(tasks: list[dict], last_link_num) -> list[str]:
     return lines
 
 
-@lru_cache(maxsize=256)
-def _chain_length_cached(u_short: str):
-    """
-    Estimate chain length by walking backwards with a limit.
-    Useful for display without full chain traversal.
-    """
-    obj = _export_uuid_short_cached(u_short)
-    if not obj:
-        return 1
-
-    count = 1
-    prev = obj.get("prevLink")
-    steps = 0
-
-    while prev and steps < _MAX_CHAIN_WALK:
-        prev_obj = _export_uuid_short_cached(prev)
-        if not prev_obj:
-            break
-        count += 1
-        prev = prev_obj.get("prevLink")
-        steps += 1
-
-    return count
-
-
 def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict = None) -> None:
     # Use the passed current_task if provided, otherwise use current
     actual_current = current_task if current_task else current
@@ -3068,8 +3183,20 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
     kind_anchor = bool((actual_current.get("anchor") or "").strip())
     kind = "anchor" if kind_anchor else "cp"
     
-    # Prefer chainID export; fallback to legacy prev/next traversal
-    chain = tw_export_chain_or_fallback(actual_current)
+    chain_id = (actual_current.get("chainID") or actual_current.get("chainid") or "").strip()
+    if not chain_id:
+        _panel(
+            "⚠ Chain summary skipped",
+            [
+                ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
+                ("Fix", "Run tools/nautical_backfill_chainid.py."),
+            ],
+            kind="warning",
+        )
+        return
+
+    # Chain export (chainID required)
+    chain = tw_export_chain_required(actual_current)
     
     # Replace the last task in chain with the actual_current if it's more up-to-date
     if actual_current and chain:
@@ -3095,7 +3222,7 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
         pass
 
     L = core.coerce_int(current.get("link"), len(chain))
-    root = _short(chain[0].get("uuid") if chain else _root_uuid_from(current))
+    root = _short(_root_uuid_from(current))
 
     cur_s = _short(current.get("uuid"))
     first = _dtparse(chain[0].get("due")) if chain else None
@@ -3272,7 +3399,7 @@ def _timeline_lines(
         else:
             # Anchor patterns are date-based in the core; multi-time @t=HH:MM,HH:MM,...
             # expansion is performed here at the hook level.
-            seed_base = (task.get("chainID") or _root_uuid_from(task) or "preview")
+            seed_base = (task.get("chainID") or "").strip() or "preview"
 
             nxt_local = _to_local_cached(child_due_utc)
             fallback_hhmm = (nxt_local.hour, nxt_local.minute)
@@ -3410,7 +3537,7 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
         return (None, None)
 
     cur_no = core.coerce_int(task.get("link"), 1)
-    seed_base = task.get("chainID") or _root_uuid_from(task) or "preview"
+    seed_base = (task.get("chainID") or "").strip() or "preview"
 
     nxt_local = _to_local_cached(next_due_utc)
     until_local = _to_local_cached(until_utc)
@@ -3558,7 +3685,7 @@ def main():
             became_cp     = (not (old.get("cp")     or "").strip()) and ((new.get("cp")     or "").strip())
             already_chain = bool((new.get("chainID") or "").strip())
             linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
-            if core.ENABLE_CHAIN_ID and (became_anchor or became_cp) and not already_chain and not linked_already:
+            if (became_anchor or became_cp) and not already_chain and not linked_already:
                 new["chainID"] = core.short_uuid(new.get("uuid"))
         except Exception:
             pass
@@ -3603,7 +3730,7 @@ def main():
                 became_cp     = (not (old.get("cp")     or "").strip()) and ((new.get("cp")     or "").strip())
                 already_chain = bool((new.get("chainID") or "").strip())
                 linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
-                if core.ENABLE_CHAIN_ID and (became_anchor or became_cp) and not already_chain and not linked_already:
+                if (became_anchor or became_cp) and not already_chain and not linked_already:
                     new["chainID"] = core.short_uuid(new.get("uuid"))
             except Exception:
                 pass
@@ -3645,6 +3772,19 @@ def main():
     has_cp = bool((new.get("cp") or "").strip())
     kind = "anchor" if has_anchor else ("cp" if has_cp else None)
     if not kind:
+        _print_task(new)
+        return
+
+    chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
+    if not chain_id:
+        _panel(
+            "⛔ ChainID missing",
+            [
+                ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
+                ("Fix", "Run tools/nautical_backfill_chainid.py, then retry."),
+            ],
+            kind="error",
+        )
         _print_task(new)
         return
 
@@ -3742,12 +3882,14 @@ def main():
         except Exception:
             pass
 
+    until_cap_no = None
     if until_dt:
         if kind == "cp":
             u_no, u_dt = _cap_from_until_cp(new, child_due)
         else:
             u_no, u_dt = _cap_from_until_anchor(new, child_due, dnf)
         if u_no:
+            until_cap_no = u_no
             cap_no = min(cap_no, u_no) if cap_no else u_no
         if u_dt:
             finals.append(("until", u_dt))
@@ -3927,7 +4069,19 @@ def main():
 
         fb = _format_next_anchor_rows(fb)
 
-        if _CHAIN_COLOR_PER_CHAIN:
+        if (core.PANEL_MODE or "").strip().lower() == "line":
+            line = _format_line_preview(
+                base_no,
+                new,
+                child_due,
+                child_short,
+                now_utc,
+                cap_no=cap_no,
+                until_dt=until_dt,
+                until_no=until_cap_no,
+            )
+            _panel_line(title, line, kind="preview_anchor")
+        elif _CHAIN_COLOR_PER_CHAIN:
             chain_colour = _chain_colour_for_task(new, "anchor")
             _panel(
                 title,
@@ -4001,7 +4155,19 @@ def main():
 
         fb = _format_next_cp_rows(fb)
 
-        if _CHAIN_COLOR_PER_CHAIN:
+        if (core.PANEL_MODE or "").strip().lower() == "line":
+            line = _format_line_preview(
+                base_no,
+                new,
+                child_due,
+                child_short,
+                now_utc,
+                cap_no=cap_no,
+                until_dt=until_dt,
+                until_no=until_cap_no,
+            )
+            _panel_line(title, line, kind="preview_cp")
+        elif _CHAIN_COLOR_PER_CHAIN:
             chain_colour = _chain_colour_for_task(new, "cp")
             _panel(
                 title,

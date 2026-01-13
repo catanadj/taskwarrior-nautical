@@ -30,7 +30,6 @@ except Exception:
 
 # Defaults 
 _DEFAULTS = {
-    "anchor_year_fmt": "MD",            # "DM" or "MD"
     "wrand_salt": "nautical|wrand|v1",  # change to reshuffle weekly-rand streams
     "tz": "Europe/Bucharest",           # reserved for future DST/zone features
     "holiday_region": "",               # reserved for future holiday features
@@ -147,7 +146,7 @@ def _warn_env_config_missing(env_path: str) -> None:
 
 
 def _normalize_keys(d: dict) -> dict:
-    # allow users to write either `anchor_year_fmt` or `ANCHOR_YEAR_FMT`
+    # allow users to write keys in any case
     out = {}
     for k, v in (d or {}).items():
         kk = str(k).strip().lower()
@@ -179,8 +178,6 @@ def _load_config() -> dict:
             pass
 
     # normalize values
-    ayf = str(cfg.get("anchor_year_fmt") or "").strip().upper()
-    cfg["anchor_year_fmt"] = "MD" if ayf == "MD" else "DM"
     cfg["wrand_salt"]      = str(cfg.get("wrand_salt") or _DEFAULTS["wrand_salt"])
     cfg["tz"]              = str(cfg.get("tz") or _DEFAULTS["tz"])
     cfg["holiday_region"]  = str(cfg.get("holiday_region") or "")
@@ -250,28 +247,104 @@ def _get_config() -> dict:
     return _CONF_CACHE
 
 _CONF = _get_config()
-ANCHOR_YEAR_FMT = _CONF["anchor_year_fmt"]  # "DM" or "MD"
+
+def _conf_raw(key: str):
+    return _CONF.get(key)
+
+def _conf_str(key: str, default: str) -> str:
+    v = _conf_raw(key)
+    if v is None:
+        return str(default)
+    s = str(v).strip()
+    return s if s else str(default)
+
+def _conf_int(
+    key: str,
+    default: int,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> int:
+    v = _conf_raw(key)
+    try:
+        out = int(str(v).strip())
+    except Exception:
+        out = int(default)
+    if min_value is not None and out < min_value:
+        out = int(min_value)
+    if max_value is not None and out > max_value:
+        out = int(max_value)
+    return out
+
+def _conf_bool(
+    key: str,
+    default: bool = False,
+    true_values: set[str] | None = None,
+    false_values: set[str] | None = None,
+) -> bool:
+    v = _conf_raw(key)
+    if v is None:
+        return bool(default)
+    s = str(v).strip().lower()
+    if not s:
+        return bool(default)
+    if true_values and s in true_values:
+        return True
+    if false_values and s in false_values:
+        return False
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off", "none"):
+        return False
+    return bool(default)
+
+def _trueish(v, default=False):
+    if v is None:
+        return default
+    s = str(v).strip().lower()
+    return s in ("1", "true", "yes", "on")
+
+ANCHOR_YEAR_FMT = "MD"
 WRAND_SALT      = _CONF["wrand_salt"]
 LOCAL_TZ_NAME   = _CONF["tz"]
 HOLIDAY_REGION  = _CONF["holiday_region"]
 
-
-
-ENABLE_ANCHOR_CACHE = str(_CONF.get("enable_anchor_cache", "false")).lower() in ("1","true","yes")
-ANCHOR_CACHE_DIR_OVERRIDE = _CONF.get("anchor_cache_dir") or ""   # optional custom path
+ENABLE_ANCHOR_CACHE = _conf_bool("enable_anchor_cache", False)
+ANCHOR_CACHE_DIR_OVERRIDE = _conf_str("anchor_cache_dir", "")   # optional custom path
 
 # TTL is optional; 0 = no TTL
-try:
-    ANCHOR_CACHE_TTL = int(_CONF.get("anchor_cache_ttl", "0"))
-except Exception:
-    ANCHOR_CACHE_TTL = 0
+ANCHOR_CACHE_TTL = _conf_int("anchor_cache_ttl", 0, min_value=0)
 
-# --- ChainID config ----------------------------------------------------------
-def _trueish(v, default=False):
-    if v is None: return default
-    s = str(v).strip().lower()
-    return s in ("1","true","yes","on")
-ENABLE_CHAIN_ID = _trueish(_CONF.get("enable_chain_id", "true"), default=True)
+# --- Hook-level toggles (shared config) -------------------------------------
+CHAIN_COLOR_PER_CHAIN = _conf_bool(
+    "chain_color_per_chain",
+    False,
+    true_values={"chain", "per-chain", "per"},
+)
+SHOW_TIMELINE_GAPS = _conf_bool(
+    "show_timeline_gaps",
+    True,
+    false_values={"0", "no", "false", "off", "none"},
+)
+SHOW_ANALYTICS = _conf_bool(
+    "show_analytics",
+    True,
+    false_values={"0", "no", "false", "off", "none"},
+)
+ANALYTICS_STYLE = _conf_str("analytics_style", "clinical").lower()
+if ANALYTICS_STYLE not in ("coach", "clinical"):
+    ANALYTICS_STYLE = "clinical"
+ANALYTICS_ONTIME_TOL_SECS = _conf_int("analytics_ontime_tol_secs", 4 * 60 * 60, min_value=0)
+VERIFY_IMPORT = _conf_bool("verify_import", True)
+DEBUG_WAIT_SCHED = _conf_bool(
+    "debug_wait_sched",
+    False,
+    true_values={"1", "yes", "true", "on"},
+)
+PANEL_MODE = _conf_str("panel_mode", "rich").lower()
+FAST_COLOR = _conf_bool("fast_color", True)
+SPAWN_QUEUE_MAX_BYTES = _conf_int("spawn_queue_max_bytes", 524288, min_value=0)
+SPAWN_QUEUE_DRAIN_MAX_ITEMS = _conf_int("spawn_queue_drain_max_items", 200, min_value=0)
+MAX_CHAIN_WALK = _conf_int("max_chain_walk", 500, min_value=1)
 
 def short_uuid(u: str | None) -> str:
     """Taskwarrior-style short uuid (first 8 hex)."""
@@ -280,7 +353,6 @@ def short_uuid(u: str | None) -> str:
 
 def should_stamp_chain_id(task: dict) -> bool:
     """We stamp a chainID when task becomes/starts a nautical chain."""
-    if not ENABLE_CHAIN_ID: return False
     if not isinstance(task, dict): return False
     has_anchor = bool((task.get("anchor") or "").strip())
     has_cp     = bool((task.get("cp") or "").strip())

@@ -390,20 +390,24 @@ def _strip_quotes(s: str) -> str:
     s = (s or "").strip()
     return s[1:-1] if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"') else s
 
+def _strip_rich_markup(s: str) -> str:
+    # Remove simple Rich markup tags like [bold] or [/].
+    return re.sub(r"\[[^\]]*\]", "", s or "")
+
 def _panel(title, rows, kind: str = "info"):
     """
     Render a 2-column panel.
 
     Default renderer uses Rich for coloured borders and compact layout.
-    For performance-sensitive environments (e.g., Termux), you can force the fast renderer:
-        NAUTICAL_PANEL=fast   -> plain, aligned text output (no Rich import)
-
-    (NAUTICAL_PANEL=plain is accepted as a legacy alias.)
+    For performance-sensitive environments (e.g., Termux), set:
+        panel_mode="fast"   -> plain, aligned text output (no Rich import)
     """
-    panel_mode = (os.getenv("NAUTICAL_PANEL") or "").strip().lower()
+    panel_mode = (core.PANEL_MODE or "").strip().lower()
     if panel_mode == "plain":
         panel_mode = "fast"
-    if panel_mode == "fast" or os.getenv("NAUTICAL_PLAIN") == "1":
+    if panel_mode == "line":
+        panel_mode = "rich"
+    if panel_mode == "fast":
         # ---- fast renderer (no Rich) ----
         def _strip_rich(s: str) -> str:
             # Remove Rich markup tags like [bold], [/], [cyan], etc.,
@@ -414,15 +418,12 @@ def _panel(title, rows, kind: str = "info"):
 
         def _ansi_enabled() -> bool:
             # ANSI colours are enabled by default in fast mode when stderr is a TTY.
-            # Disable with NO_COLOR=1 or NAUTICAL_FAST_COLOR=0.
+            # Disable with NO_COLOR=1 or fast_color=false in config.
             if not sys.stderr.isatty():
                 return False
             if os.getenv("NO_COLOR") is not None:
                 return False
-            v = (os.getenv("NAUTICAL_FAST_COLOR") or "").strip().lower()
-            if not v:
-                return True
-            return v not in {"0", "false", "no", "off"}
+            return bool(core.FAST_COLOR)
 
         _ANSI = _ansi_enabled()
         _RST = "\x1b[0m" if _ANSI else ""
@@ -1231,7 +1232,7 @@ def main():
 
     # [CHAINID] Stamp short root id on new chains (anchor/cp present, no existing chainID)
     try:
-        if core.ENABLE_CHAIN_ID and ((task.get("anchor") or task.get("cp")) and not (task.get("chainID") or "").strip()):
+        if (task.get("anchor") or task.get("cp")) and not (task.get("chainID") or "").strip():
             task["chainID"] = core.short_uuid(task.get("uuid"))
     except Exception:
         # Never block task creation on bookkeeping

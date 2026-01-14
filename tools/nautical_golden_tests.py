@@ -16,6 +16,7 @@ Optional:
 
 import importlib
 import sys, os, re, json
+import tempfile
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from collections import OrderedDict
@@ -24,6 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 core = importlib.import_module("nautical_core")
+_hook = importlib.import_module("on-modify-nautical")
 
 # -------- Helpers -------------------------------------------------------------
 
@@ -201,6 +203,24 @@ def _run_hook_script(path: str, task_obj: dict, env_extra: dict | None = None, t
     )
     return p
 
+def _run_hook_script_raw(path: str, raw_input: str, env_extra: dict | None = None, timeout_s: float = 8.0):
+    _force_tz_utc()
+    env = os.environ.copy()
+    # Ensure the hook can import local nautical_core.py
+    env["PYTHONPATH"] = HERE + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env.setdefault("TZ", "UTC")
+    if env_extra:
+        env.update({k: str(v) for k, v in env_extra.items()})
+    p = subprocess.run(
+        [sys.executable, path],
+        input=raw_input,
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=timeout_s,
+    )
+    return p
+
 def _extract_last_json(stdout_text: str) -> dict:
     s = (stdout_text or "").strip()
     if not s:
@@ -244,8 +264,34 @@ def test_lint_formats():
         assert False, "Validator must fatal on 'y:05:15' (':' instead of '-')"
     except core.ParseError as e:
         low = str(e).lower()
-        expect(("uses ':'" in low) or ("example" in low) or ("anchor_year_fmt" in low),
+        expect(("uses ':'" in low) or ("example" in low),
                f"Unexpected validator message: {e}")
+
+def test_warn_once_per_day_stamp_written():
+    """Ensure diagnostic stamp creation works without crashing."""
+    with tempfile.TemporaryDirectory() as td:
+        prev = os.environ.get("XDG_CACHE_HOME")
+        os.environ["XDG_CACHE_HOME"] = td
+        try:
+            core._warn_once_per_day("golden_test", "golden test message")
+            stamp = os.path.join(td, "nautical", ".diag_golden_test.stamp")
+            expect(os.path.exists(stamp), f"stamp not created: {stamp}")
+            with open(stamp, "r", encoding="utf-8") as f:
+                val = f.read().strip()
+            expect(val == date.today().isoformat(), f"stamp has unexpected value: {val}")
+        finally:
+            if prev is None:
+                os.environ.pop("XDG_CACHE_HOME", None)
+            else:
+                os.environ["XDG_CACHE_HOME"] = prev
+
+def test_on_modify_invalid_json_passthrough():
+    """Malformed JSON should not crash on-modify; it should pass through raw input."""
+    path = _find_hook_file("on-modify-nautical.py")
+    raw = "{not-json}"
+    p = _run_hook_script_raw(path, raw)
+    expect(p.returncode == 0, f"on-modify returned {p.returncode}")
+    expect((p.stdout or "").strip() == raw.strip(), "on-modify did not pass through raw input")
 
 def test_weekly_and_unsat():
     """Test weekly AND (Sat AND Mon) must be unsatisfiable"""
@@ -289,25 +335,49 @@ def test_leap_year_29feb():
 
 def test_quarters_window():
     """Test quarter window constraints (Q1-Q2)"""
-    # Second Monday only within H1
-    p = build_preview("m:2nd-mon + y:q1:q2")
-    # All months must be in 1..6
-    for d in p["upcoming"][:6]:
-        m = datetime.fromisoformat(d).month
-        expect(1 <= m <= 6, f"{d} must be within Q1–Q2")
+    # Quarter aliases paired with m:* are now rejected (ambiguous).
+    expr = "m:2nd-mon + y:q1..q2"
+    try:
+        build_preview(expr)
+        assert False, "Expected ParseError for quarter alias with m:*"
+    except core.ParseError as e:
+        msg = str(e).lower()
+        expect("ambiguous" in msg and "quarter" in msg, f"Unexpected error: {e}")
 
 def test_yearly_month_names():
     """Test month name constraints (Mar..Sep)"""
-    # y:mar:sep must constrain to Mar..Sep
-    p = build_preview("m:1st-mon + y:mar:sep")
+    # y:mar..sep must constrain to Mar..Sep
+    p = build_preview("m:1st-mon + y:mar..sep")
     for d in p["upcoming"][:6]:
         m = datetime.fromisoformat(d).month
         expect(3 <= m <= 9, f"{d} must be Mar..Sep")
 
+def test_weekday_weekend_single_time():
+    """Weekday vs weekend @t should not merge into same-day multi-times."""
+    expr = "w:wd@t=09:00 | w:we@t=11:00"
+    dnf = core.validate_anchor_expr_strict(expr)
+    dates = core.anchors_between_expr(
+        dnf,
+        start_excl=date(2026, 1, 4),
+        end_excl=date(2026, 1, 20),
+        default_seed=date(2026, 1, 5),
+        seed_base="test",
+    )
+    seen = set()
+    for d in dates[:8]:
+        slots = _hook._extract_time_slots_for_date(dnf, d, date(2026, 1, 5))
+        if d.weekday() < 5:
+            expect(slots == [(9, 0)], f"{d} should use 09:00, got {slots}")
+        else:
+            expect(slots == [(11, 0)], f"{d} should use 11:00, got {slots}")
+        key = (d.year, d.month, d.day)
+        expect(key not in seen, f"Duplicate date produced: {d}")
+        seen.add(key)
+
 def test_rand_with_year_window():
     """Test random pattern with yearly window constraint"""
     # Only inside Apr 20 – May 15
-    p = build_preview("y:04-20:05-15 + m:rand")
+    p = build_preview("y:04-20..05-15 + m:rand")
     expect(p["upcoming"], "Rand with window should produce dates")
     for d in p["upcoming"][:8]:
         dt = datetime.fromisoformat(d)
@@ -355,24 +425,9 @@ def test_time_splitting_per_atom():
     expect(bool(p["natural"]) or bool(p["upcoming"]),
            "Multi-@t weekly should be accepted and produce output")
 
-def test_year_fmt_md_dm_switch():
-    """Test MD vs DM format switching"""
-    # Temporarily flip format and re-lint
-    orig = getattr(core, "ANCHOR_YEAR_FMT", "MD")
-    try:
-        core.ANCHOR_YEAR_FMT = "DM"
-        # With DM format: 01-13 means day=01, month=13 (invalid month)
-        fatal, _ = core.lint_anchor_expr("y:01-13")
-        expect(bool(fatal), "Under DM, 01-13 should be fatal (month 13 is invalid)")
-        # With DM format: 13-01 means day=13, month=01 (valid)
-        fatal, _ = core.lint_anchor_expr("y:13-01")
-        expect(not fatal, "Under DM, 13-01 is valid (13th of January)")
-    finally:
-        core.ANCHOR_YEAR_FMT = orig
-
 def test_weekly_multi_days_and_every_2weeks():
     """Test weekly pattern with multiple days and interval"""
-    p = build_preview("w/2:mon-tue,thu-sat")
+    p = build_preview("w/2:mon..tue,thu..sat")
     expect(p["upcoming"], "weekly /2 preview must produce dates")
     # all days are in allowed set
     allowed = {0,1,3,4,5}  # mon,tue,thu,fri,sat
@@ -435,17 +490,16 @@ def test_parser_validation():
     valid_expressions = [
         "w:mon",
         "w:mon,tue",
-        "w:mon-fri",
         "m:1",
         "m:1,15,31",
-        "m:1:15",
+        "m:1..15",
         "m:2nd-mon",
         "m:last-fri",
         "m:5bd",
         "y:01-01",
-        "y:01-01:12-31",
+        "y:01-01..12-31",
         "y:q1",
-        "y:q1:q2",
+        "y:q1..q2",
         "w:mon@t=09:00",
         "m:15@t=09:00@+1d",
         "(w:mon + m:1) | (w:fri + m:15)",
@@ -460,6 +514,9 @@ def test_parser_validation():
     
     # Invalid expressions that should fail
     invalid_expressions = [
+        ("w:mon-fri", "Invalid weekly range"),
+        ("m:1:15", "Invalid monthly range '1:15'. Use '..'"),
+        ("y:01-01:12-31", "Yearly ranges must use '..'"),
         ("w:invalid", "Unknown weekday"),
         ("m:32", "Day-of-month '32' out of range. Use 1..31 or -1..-31"),
         ("m:6th-mon", "nth-weekday must be between 1 and 5 (or 'last'). Did you mean 'last-mon'? Offending token: '6th-mon'"),
@@ -488,7 +545,7 @@ def test_natural_language_comprehensive():
         ("m:last-fri", "the last Friday of each month"),
         ("m:5bd", "the 5th business day of each month"),
         ("y:12-25", "Dec 25 each year"),
-        ("y:01-01:01-31", "Jan each year"),
+        ("y:01-01..01-31", "Jan each year"),
         ("m:15@t=09:00", "the 15th day of each month at 09:00"),
         ("m:-1@nbd", "the last day of each month if business day; otherwise the next business day"),
     ]
@@ -578,9 +635,9 @@ def test_leap_year_29feb_upcoming_only_on_leap_year():
 
 def test_rand_with_year_window_filtering():
     """
-    'y:04-20:05-15+ m:rand' must produce all dates within the yearly window
+    'y:04-20..05-15+ m:rand' must produce all dates within the yearly window
     """
-    preview = _must_preview("y:04-20:05-15+ m:rand")
+    preview = _must_preview("y:04-20..05-15+ m:rand")
     dates = preview["next_dates"]
     assert dates, "No upcoming dates for window+ m:rand"
     import datetime as _dt
@@ -623,46 +680,6 @@ def test_prev_weekday_natural_text():
     ]
     assert any(w in nat for w in want_any), f"Natural missing expected phrasing: {nat!r}"
 
-def test_year_fmt_md_dm_switch_minimal():
-    """
-    Toggle ANCHOR_YEAR_FMT and assert 06-01 is MM-DD vs DD-MM appropriately
-    """
-    # Use the global core module, don't re-import
-    saved = core.ANCHOR_YEAR_FMT
-    
-    try:
-        # Clear cache to force fresh computation
-        if hasattr(core, '_hint_cache'):
-            core._hint_cache.clear()
-        elif hasattr(core, '_anchor_hint_cache'):
-            core._anchor_hint_cache.clear()
-        
-        # Test DM format: 06-01 = day=06, month=01 = January 6th
-        core.ANCHOR_YEAR_FMT = "DM"
-        # Parse fresh to avoid cached DNF
-        dnf_dm = core.validate_anchor_expr_strict("y:06-01")
-        nat_dm = core.describe_anchor_expr("y:06-01")
-        # Check for either "6 Jan" or "Jan 6"
-        assert any(phrase in nat_dm.lower() for phrase in ["6 jan", "jan 6"]), \
-            f"DM format (06-01 = Jan 6): got '{nat_dm}'"
-
-        # Clear cache again
-        if hasattr(core, '_hint_cache'):
-            core._hint_cache.clear()
-        elif hasattr(core, '_anchor_hint_cache'):
-            core._anchor_hint_cache.clear()
-        
-        # Test MD format: 06-01 = month=06, day=01 = June 1st
-        core.ANCHOR_YEAR_FMT = "MD"
-        # Parse fresh
-        dnf_md = core.validate_anchor_expr_strict("y:06-01")
-        nat_md = core.describe_anchor_expr("y:06-01")
-        # Check for either "1 Jun" or "Jun 1"
-        assert any(phrase in nat_md.lower() for phrase in ["1 jun", "jun 1"]), \
-            f"MD format (06-01 = June 1): got '{nat_md}'"
-    finally:
-        core.ANCHOR_YEAR_FMT = saved
-
 def test_weekly_multi_days_every_2weeks_spacing_and_days():
     """
     'w/2:mon,thu' must parse and produce dates only on Mon/Thu,
@@ -701,7 +718,7 @@ def test_deterministic_randomness():
         "w:rand",      # Random weekday - valid
         "m:rand",      # Random day of month - valid
         "m:rand@bd",   # Random business day of month - valid
-        "m:1:10 + m:rand",  # Random day in first 10 days - valid
+        "m:1..10 + m:rand",  # Random day in first 10 days - valid
         "y:07-rand", # random day in July
         "y:rand-07", # random day in July
         "y:rand" # random day in year
@@ -773,7 +790,7 @@ def test_complex_dnf_expressions():
         
         # Complex: (Monday in Jan) OR (Friday in Feb)
         # From 2024-01-01, next is 2024-01-08 (Monday in Jan), not 2024-01-01 itself
-        ("(w:mon + y:01-01:01-31) | (w:fri + y:02-01:02-28)", "2024-01-01", "2024-01-08"),
+        ("(w:mon + y:01-01..01-31) | (w:fri + y:02-01..02-28)", "2024-01-01", "2024-01-08"),
     ]
     
     for anchor, start_str, expected_str in test_cases:
@@ -865,8 +882,8 @@ def test_yearly_month_aliases_and_ranges():
             expect(datetime.fromisoformat(d).month == 4, f"{d} must be in April for {expr}")
 
     # Month-name window (Jan..Jun) constrains outputs
-    p = build_preview("y:jan:jun + m:rand")
-    expect(p["upcoming"], "y:jan:jun + m:rand should produce upcoming dates")
+    p = build_preview("y:jan..jun + m:rand")
+    expect(p["upcoming"], "y:jan..jun + m:rand should produce upcoming dates")
     for d in p["upcoming"][:8]:
         m = datetime.fromisoformat(d).month
         expect(1 <= m <= 6, f"{d} must be within Jan..Jun")
@@ -960,8 +977,8 @@ def test_cp_duration_parser_and_dst_preserve_whole_days():
 def test_hook_on_add_multitime_preview_emits_all_slots():
     """on-add must accept @t=HH:MM list and preview intra-day slots when due is explicit."""
     hook = _find_hook_file("on-add-nautical.py")
-    # Force deterministic plain output for parsing and disable ANSI colors.
-    env = {"NAUTICAL_PANEL": "fast", "NO_COLOR": "1"}
+    # Disable ANSI colors for deterministic output.
+    env = {"NO_COLOR": "1"}
     expr = "w:wed@t=06:00,12:00,22:00"
     task = {
         "uuid": "00000000-0000-0000-0000-000000000111",
@@ -1224,6 +1241,125 @@ def test_on_modify_spawn_queue_batch_limit():
         remaining = mod._SPAWN_QUEUE_PATH.read_text(encoding="utf-8").strip().splitlines()
         remaining = [ln for ln in remaining if ln.strip()]
         expect(len(remaining) == 3, f"Expected 3 items remaining, got {len(remaining)}")
+
+
+def test_on_add_run_task_timeout():
+    """on-add _run_task returns timeout on subprocess timeouts."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_run_task_timeout_test")
+    if not hasattr(mod, "_run_task"):
+        raise AssertionError("on-add hook does not expose _run_task")
+
+    def _raise_timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="task", timeout=1)
+
+    orig = mod.subprocess.run
+    mod.subprocess.run = _raise_timeout
+    try:
+        ok, _out, err = mod._run_task(["task", "export"], timeout=0.1, retries=1)
+    finally:
+        mod.subprocess.run = orig
+
+    expect(not ok, "_run_task should return ok=False on timeout")
+    expect(err == "timeout", f"_run_task should report timeout, got {err!r}")
+
+
+def test_on_modify_run_task_timeout():
+    """on-modify _run_task returns timeout on subprocess timeouts."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_run_task_timeout_test")
+    if not hasattr(mod, "_run_task"):
+        raise AssertionError("on-modify hook does not expose _run_task")
+
+    def _raise_timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="task", timeout=1)
+
+    orig = mod.subprocess.run
+    mod.subprocess.run = _raise_timeout
+    try:
+        ok, _out, err = mod._run_task(["task", "export"], timeout=0.1, retries=1)
+    finally:
+        mod.subprocess.run = orig
+
+    expect(not ok, "_run_task should return ok=False on timeout")
+    expect(err == "timeout", f"_run_task should report timeout, got {err!r}")
+
+
+def test_on_modify_export_uuid_short_invalid_json():
+    """on-modify _export_uuid_short returns None on invalid JSON."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_export_uuid_invalid_json_test")
+    if not hasattr(mod, "_export_uuid_short"):
+        raise AssertionError("on-modify hook does not expose _export_uuid_short")
+
+    def _run_task_bad(*_args, **_kwargs):
+        return True, "not-json", ""
+
+    orig = mod._run_task
+    mod._run_task = _run_task_bad
+    try:
+        obj = mod._export_uuid_short("deadbeef")
+    finally:
+        mod._run_task = orig
+
+    expect(obj is None, "Invalid JSON should yield None from _export_uuid_short")
+
+
+def test_on_modify_missing_taskdata_uses_tw_dir():
+    """on-modify uses TW_DIR when TASKDATA is missing."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    orig = os.environ.get("TASKDATA")
+    if "TASKDATA" in os.environ:
+        del os.environ["TASKDATA"]
+    try:
+        mod = _load_hook_module(hook, "_nautical_on_modify_no_taskdata_test")
+    finally:
+        if orig is not None:
+            os.environ["TASKDATA"] = orig
+
+    expect(
+        str(getattr(mod, "TW_DATA_DIR", "")) == str(getattr(mod, "TW_DIR", "")),
+        "TW_DATA_DIR should fall back to TW_DIR when TASKDATA is unset",
+    )
+
+
+def test_hooks_no_direct_subprocess_run():
+    """Hooks should not call subprocess.run outside _run_task."""
+    import ast
+
+    def _bad_calls(path: str) -> list[tuple[int, str]]:
+        src = Path(path).read_text(encoding="utf-8")
+        tree = ast.parse(src, filename=path)
+        bad = []
+        stack = []
+
+        class Visitor(ast.NodeVisitor):
+            def visit_FunctionDef(self, node):
+                stack.append(node.name)
+                self.generic_visit(node)
+                stack.pop()
+
+            def visit_AsyncFunctionDef(self, node):
+                stack.append(node.name)
+                self.generic_visit(node)
+                stack.pop()
+
+            def visit_Call(self, node):
+                func = node.func
+                if isinstance(func, ast.Attribute) and func.attr == "run":
+                    if isinstance(func.value, ast.Name) and func.value.id == "subprocess":
+                        current_fn = stack[-1] if stack else ""
+                        if current_fn != "_run_task":
+                            bad.append((node.lineno, current_fn or "<module>"))
+                self.generic_visit(node)
+
+        Visitor().visit(tree)
+        return bad
+
+    for hook_name in ("on-add-nautical.py", "on-modify-nautical.py"):
+        path = _find_hook_file(hook_name)
+        bad = _bad_calls(path)
+        expect(not bad, f"Direct subprocess.run found in {hook_name}: {bad}")
 TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
@@ -1237,7 +1373,6 @@ TESTS = [
     test_weekly_rand_N_gate,
     test_business_day_nbd_pbd_nw_natural,
     test_time_splitting_per_atom,
-    test_year_fmt_md_dm_switch,
     test_weekly_multi_days_and_every_2weeks,
     test_heads_with_slashN_parse_ok,
     test_monthly_valid_months_m2_5th_mon_upcoming_within_valid_months,
@@ -1245,7 +1380,6 @@ TESTS = [
     test_rand_with_year_window_filtering,
     test_weekly_rand_N_gate_spacing,
     test_prev_weekday_natural_text,
-    test_year_fmt_md_dm_switch_minimal,
     test_weekly_multi_days_every_2weeks_spacing_and_days,
     test_inline_time_mods_split_ok,
     test_anchor_date_calculations,
@@ -1268,12 +1402,19 @@ TESTS = [
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_task_runner_handles_nonzero,
+    test_warn_once_per_day_stamp_written,
+    test_on_modify_invalid_json_passthrough,
     test_on_add_dnf_cache_versioned_payload,
     test_on_add_dnf_cache_corrupt_payload_recovers,
     test_on_add_dnf_cache_quarantines_invalid_jsonl,
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_modify_spawn_deferred_then_drain,
     test_on_modify_spawn_queue_batch_limit,
+    test_on_add_run_task_timeout,
+    test_on_modify_run_task_timeout,
+    test_on_modify_export_uuid_short_invalid_json,
+    test_on_modify_missing_taskdata_uses_tw_dir,
+    test_hooks_no_direct_subprocess_run,
 
 ]
 

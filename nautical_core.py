@@ -1183,21 +1183,55 @@ def _acf_spec_to_string(typ: str, spec) -> str:
     return str(spec)
 
 
+_CACHE_DIR = None
+
 def _cache_dir() -> str:
+    global _CACHE_DIR
+    if _CACHE_DIR is not None:
+        return _CACHE_DIR
+
+    candidates = []
     if ANCHOR_CACHE_DIR_OVERRIDE:
-        p = os.path.expanduser(ANCHOR_CACHE_DIR_OVERRIDE)
-    else:
-        here = os.path.dirname(os.path.abspath(__file__))
-        p = os.path.join(here, ".nautical-cache")
-    os.makedirs(p, exist_ok=True)
-    return p
+        candidates.append(os.path.expanduser(ANCHOR_CACHE_DIR_OVERRIDE))
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(os.path.join(here, ".nautical-cache"))
+
+    taskdata = os.environ.get("TASKDATA")
+    if taskdata:
+        candidates.append(os.path.join(os.path.expanduser(taskdata), ".nautical-cache"))
+
+    candidates.append(_nautical_cache_dir())
+    candidates.append(os.path.join(tempfile.gettempdir(), "nautical-cache"))
+
+    for p in candidates:
+        if not p:
+            continue
+        try:
+            os.makedirs(p, exist_ok=True)
+            if os.path.isdir(p) and os.access(p, os.W_OK):
+                _CACHE_DIR = p
+                return p
+        except Exception:
+            continue
+
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        try:
+            print("[nautical] Anchor cache disabled: no writable cache dir found.", file=sys.stderr)
+        except Exception:
+            pass
+    _CACHE_DIR = ""
+    return ""
 
 def _cache_key(acf: str, anchor_mode: str) -> str:
     payload = "|".join([acf, anchor_mode or "", ANCHOR_YEAR_FMT, WRAND_SALT, LOCAL_TZ_NAME, HOLIDAY_REGION, "nautical-cache|v1"])
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 def _cache_path(key: str) -> str:
-    return os.path.join(_cache_dir(), f"{key}.jsonz")
+    base = _cache_dir()
+    if not base:
+        return ""
+    return os.path.join(base, f"{key}.jsonz")
 
 
 def _is_dnf_like(dnf) -> bool:
@@ -1241,6 +1275,8 @@ def cache_load(key: str) -> dict | None:
     if not ENABLE_ANCHOR_CACHE:
         return None
     path = _cache_path(key)
+    if not path:
+        return None
     try:
         st = os.stat(path)
         if ANCHOR_CACHE_TTL and (time.time() - st.st_mtime) > ANCHOR_CACHE_TTL:
@@ -1263,9 +1299,14 @@ def cache_save(key: str, obj: dict) -> None:
     data = json.dumps(obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
     blob = base64.b85encode(zlib.compress(data, 9))
     path = _cache_path(key)
+    if not path:
+        return
     tmpf = None
     try:
-        fd, tmpf = tempfile.mkstemp(dir=_cache_dir(), prefix=f".{key}.", suffix=".tmp")
+        base = _cache_dir()
+        if not base:
+            return
+        fd, tmpf = tempfile.mkstemp(dir=base, prefix=f".{key}.", suffix=".tmp")
         os.write(fd, blob); os.close(fd)
         os.replace(tmpf, path)
     finally:

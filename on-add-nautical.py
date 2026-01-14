@@ -5,7 +5,7 @@
 on-add-nautical.py (production)
 
 Features:
-- Accept legacy weekly range forms for backward compatibility (preferred: w:mon..fri).
+- Weekly ranges require '..' (e.g., w:mon..fri).
 - Auto-assign due when missing (anchor first, else cp).
 - Panel logic:
     * If user set due -> First due = user's due; Next anchor shown separately.
@@ -1015,11 +1015,8 @@ def _safe_parse_datetime(s, field_name) -> tuple[datetime | None, str | None]:
 
 def _validate_no_legacy_colon_ranges(expr: str) -> tuple[bool, str | None]:
     """
-    Detect legacy weekly colon syntax (e.g., 'mon:wed:fri').
-    V2 delimiter contract prefers '..' for ranges (e.g., 'w:mon..fri').
-    
-    NOTE: For backward compatibility, this validator currently does NOT reject.
-    (A lint warning can be added later.)
+    Detect legacy weekly range syntax and reject it.
+    V2 delimiter contract requires '..' for ranges (e.g., 'w:mon..fri').
     Returns (is_valid, error_msg).
     """
     if not expr:
@@ -1037,14 +1034,16 @@ def _validate_no_legacy_colon_ranges(expr: str) -> tuple[bool, str | None]:
         # Remove optional parentheses for DNF
         clean_term = term.strip("()")
         
-        # Check if this looks like a colon-separated day list
-        if ":" in clean_term:
-            parts = clean_term.split(":")
+        # Check if this looks like a legacy range/day list
+        if ":" in clean_term or "-" in clean_term:
+            parts = re.split(r"[:\-]", clean_term)
             # Check if all parts look like day abbreviations
             if len(parts) >= 2 and all(p.lower() in day_names for p in parts):
-                legacy_example = ":".join(parts)
-                # Backward-compatible: accept (warn later).
-                return (True, None)
+                legacy_example = clean_term
+                return (
+                    False,
+                    f"Legacy weekly range '{legacy_example}' is not supported. Use '..' (e.g., 'w:mon..fri').",
+                )
     
     return (True, None)
 

@@ -1456,6 +1456,60 @@ def test_on_modify_spawn_queue_batch_limit():
         expect(len(remaining) == 3, f"Expected 3 items remaining, got {len(remaining)}")
 
 
+def test_on_modify_cp_completion_spawns_next_link():
+    """on-modify should spawn the next CP link on completion."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_spawn_test")
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._SHOW_ANALYTICS = False
+    mod._CHECK_CHAIN_INTEGRITY = False
+
+    spawned = {}
+
+    def _spawn_child_atomic_stub(child, parent):
+        spawned["child"] = child
+        return ("deadbeef", set())
+
+    mod._spawn_child_atomic = _spawn_child_atomic_stub
+    mod._export_uuid_short_cached = lambda _short: {}
+
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000111",
+        "status": "pending",
+        "description": "cp spawn test",
+        "cp": "P1D",
+        "chainID": "abcd1234",
+        "link": 1,
+        "due": "20250101T090000Z",
+    }
+    new = dict(old)
+    new.update(
+        {
+            "status": "completed",
+            "end": "20250102T090000Z",
+        }
+    )
+
+    raw = json.dumps(old) + "\n" + json.dumps(new) + "\n"
+    buf_out = io.StringIO()
+    buf_err = io.StringIO()
+    buf_in = io.StringIO(raw)
+    prev_stdin = sys.stdin
+    try:
+        sys.stdin = buf_in
+        with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
+            try:
+                mod.main()
+            except SystemExit as e:
+                raise AssertionError(f"on-modify exited unexpectedly (code={e.code})")
+    finally:
+        sys.stdin = prev_stdin
+
+    out_task = _extract_last_json(buf_out.getvalue())
+    expect("child" in spawned, "CP completion did not trigger spawn")
+    expect(out_task.get("nextLink") == "deadbeef", "CP completion did not set nextLink")
+
+
 def test_on_add_run_task_timeout():
     """on-add _run_task returns timeout on subprocess timeouts."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -1628,6 +1682,7 @@ TESTS = [
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_modify_spawn_deferred_then_drain,
     test_on_modify_spawn_queue_batch_limit,
+    test_on_modify_cp_completion_spawns_next_link,
     test_spawn_queue_recovers_partial_payload,
     test_spawn_queue_invalid_payload_preserved,
     test_on_add_run_task_timeout,

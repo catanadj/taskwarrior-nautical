@@ -3824,6 +3824,8 @@ def main():
             sys.exit(1)
 
         # Deep checks only if fields changed
+        anchor_raw = (new.get("anchor") or "").strip()
+        new_anchor = _strip_quotes(anchor_raw)
         if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
             if new_anchor:
                 _validate_anchor_on_modify(new_anchor)
@@ -3844,11 +3846,6 @@ def main():
                 new["chainID"] = core.short_uuid(new.get("uuid"))
         except Exception:
             pass
-
-        _print_task(new)
-        return
-
-
 
     now_utc = core.now_utc()
     parent_short = _short(new.get("uuid"))

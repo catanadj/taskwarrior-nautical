@@ -441,6 +441,9 @@ def _panel(
     if mode in {"plain"}:
         mode = "fast"
 
+    if mode == "line" and kind == "summary":
+        mode = "rich"
+
     if mode == "line":
         line = _panel_line_from_rows(title, rows)
         if line:

@@ -135,13 +135,15 @@ def _config_paths() -> list[str]:
     return out
 
 def _warn_env_config_missing(env_path: str) -> None:
+    if os.environ.get("NAUTICAL_DIAG") != "1":
+        return
     ap = os.path.abspath(os.path.expanduser(env_path))
     print(
         "[nautical] NAUTICAL_CONFIG is set but the file is missing or invalid; defaults will be used.\n"
         f"          NAUTICAL_CONFIG={env_path}\n"
         f"          Resolved path: {ap}\n"
         "          Fix: create the file at that path or update NAUTICAL_CONFIG.\n",
-        file=sys.stdout,
+        file=sys.stderr,
     )
 
 
@@ -192,6 +194,8 @@ def _nautical_cache_dir() -> str:
 
 def _warn_once_per_day(key: str, message: str) -> None:
     """Persist a tiny sentinel so we do not spam hook output."""
+    if os.environ.get("NAUTICAL_DIAG") != "1":
+        return
     try:
         d = _nautical_cache_dir()
         os.makedirs(d, exist_ok=True)
@@ -209,8 +213,7 @@ def _warn_once_per_day(key: str, message: str) -> None:
         with open(stamp_path, "w", encoding="utf-8") as f:
             f.write(today)
 
-        stream = sys.stderr if os.environ.get("NAUTICAL_DIAG") == "1" else sys.stdout
-        print(message.rstrip(), file=stream)
+        print(message.rstrip(), file=sys.stderr)
     except Exception:
         # Diagnostics must never break the hook.
         pass
@@ -337,6 +340,11 @@ ANALYTICS_ONTIME_TOL_SECS = _conf_int("analytics_ontime_tol_secs", 4 * 60 * 60, 
 VERIFY_IMPORT = _conf_bool("verify_import", True)
 DEBUG_WAIT_SCHED = _conf_bool(
     "debug_wait_sched",
+    False,
+    true_values={"1", "yes", "true", "on"},
+)
+CHECK_CHAIN_INTEGRITY = _conf_bool(
+    "check_chain_integrity",
     False,
     true_values={"1", "yes", "true", "on"},
 )

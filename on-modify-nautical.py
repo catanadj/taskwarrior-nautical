@@ -246,6 +246,7 @@ _SHOW_TIMELINE_GAPS = core.SHOW_TIMELINE_GAPS
 _SHOW_ANALYTICS = core.SHOW_ANALYTICS
 _ANALYTICS_STYLE = core.ANALYTICS_STYLE
 _ANALYTICS_ONTIME_TOL_SECS = core.ANALYTICS_ONTIME_TOL_SECS
+_CHECK_CHAIN_INTEGRITY = core.CHECK_CHAIN_INTEGRITY
 _VERIFY_IMPORT = core.VERIFY_IMPORT
 _DEBUG_WAIT_SCHED = core.DEBUG_WAIT_SCHED
 _SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES
@@ -3072,6 +3073,88 @@ def _chain_health_advice(
     return f"Chain needs attention ({issue_txt}); {tip_txt}."
 
 
+def _chain_integrity_warnings(chain: list[dict], expected_chain_id: str | None = None) -> list[str]:
+    warnings: list[str] = []
+    if not isinstance(chain, list) or not chain:
+        return warnings
+
+    short_map: dict[str, dict] = {}
+    link_map: dict[int, dict] = {}
+    missing_link: list[str] = []
+
+    for t in chain:
+        if not isinstance(t, dict):
+            continue
+        uid = t.get("uuid")
+        if uid:
+            short_map[_short(uid)] = t
+
+        link = core.coerce_int(t.get("link"), None)
+        if link:
+            if link in link_map:
+                warnings.append(
+                    f"duplicate link #{link} ({_short(link_map[link].get('uuid'))} vs {_short(uid)})"
+                )
+            else:
+                link_map[link] = t
+        else:
+            if uid:
+                missing_link.append(_short(uid))
+
+        if expected_chain_id is not None:
+            cid = (t.get("chainID") or t.get("chainid") or "").strip()
+            if not cid:
+                warnings.append(f"missing chainID on {_short(uid)}")
+            elif cid != expected_chain_id:
+                warnings.append(f"chainID mismatch on {_short(uid)}")
+
+    if missing_link:
+        sample = ", ".join(missing_link[:3])
+        tail = "…" if len(missing_link) > 3 else ""
+        warnings.append(f"missing link number on {sample}{tail}")
+
+    if link_map:
+        links_sorted = sorted(link_map.keys())
+        if links_sorted[0] != 1:
+            warnings.append(f"chain starts at link #{links_sorted[0]} (expected #1)")
+        expected = set(range(links_sorted[0], links_sorted[-1] + 1))
+        gaps = sorted(expected - set(links_sorted))
+        if gaps:
+            gap_list = ", ".join(str(g) for g in gaps[:5])
+            tail = "…" if len(gaps) > 5 else ""
+            warnings.append(f"missing link(s): {gap_list}{tail}")
+
+    for t in chain:
+        if not isinstance(t, dict):
+            continue
+        cur_short = _short(t.get("uuid"))
+        prev_link = (t.get("prevLink") or "").strip()
+        if prev_link:
+            prev_task = short_map.get(prev_link)
+            if not prev_task:
+                warnings.append(f"{cur_short} prevLink {prev_link} not found")
+            else:
+                if (prev_task.get("nextLink") or "").strip() != cur_short:
+                    warnings.append(f"{cur_short} prevLink {prev_link} not reciprocal")
+
+        next_link = (t.get("nextLink") or "").strip()
+        if next_link:
+            next_task = short_map.get(next_link)
+            if not next_task:
+                warnings.append(f"{cur_short} nextLink {next_link} not found")
+            else:
+                if (next_task.get("prevLink") or "").strip() != cur_short:
+                    warnings.append(f"{cur_short} nextLink {next_link} not reciprocal")
+
+    deduped: list[str] = []
+    seen = set()
+    for w in warnings:
+        if w not in seen:
+            seen.add(w)
+            deduped.append(w)
+    return deduped
+
+
 def _fmt_secs_delta(now_ref, secs: float | None) -> str:
     if secs is None:
         return "—"
@@ -3740,30 +3823,30 @@ def main():
             print(json.dumps({"error": "CP parsing error", "message": str(e)}, ensure_ascii=False))
             sys.exit(1)
 
-            # Deep checks only if fields changed
-            if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
-                if new_anchor:
-                    _validate_anchor_on_modify(new_anchor)
-                # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
+        # Deep checks only if fields changed
+        if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
+            if new_anchor:
+                _validate_anchor_on_modify(new_anchor)
+            # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
 
-            if (_field_changed(old, new, "cp")
-                or _field_changed(old, new, "chainMax")
-                or _field_changed(old, new, "chainUntil")) and new_cp:
-                _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
+        if (_field_changed(old, new, "cp")
+            or _field_changed(old, new, "chainMax")
+            or _field_changed(old, new, "chainUntil")) and new_cp:
+            _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
 
-            # [CHAINID] stamp only when task just became nautical and has no chainID/links
-            try:
-                became_anchor = (not (old.get("anchor") or "").strip()) and ((new.get("anchor") or "").strip())
-                became_cp     = (not (old.get("cp")     or "").strip()) and ((new.get("cp")     or "").strip())
-                already_chain = bool((new.get("chainID") or "").strip())
-                linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
-                if (became_anchor or became_cp) and not already_chain and not linked_already:
-                    new["chainID"] = core.short_uuid(new.get("uuid"))
-            except Exception:
-                pass
+        # [CHAINID] stamp only when task just became nautical and has no chainID/links
+        try:
+            became_anchor = (not (old.get("anchor") or "").strip()) and ((new.get("anchor") or "").strip())
+            became_cp     = (not (old.get("cp")     or "").strip()) and ((new.get("cp")     or "").strip())
+            already_chain = bool((new.get("chainID") or "").strip())
+            linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
+            if (became_anchor or became_cp) and not already_chain and not linked_already:
+                new["chainID"] = core.short_uuid(new.get("uuid"))
+        except Exception:
+            pass
 
-            _print_task(new)
-            return
+        _print_task(new)
+        return
 
 
 
@@ -3844,7 +3927,7 @@ def main():
     until_dt, err = _safe_parse_datetime(new.get("chainUntil"))
     if err:
         _panel(
-            "⛔ Chain error", [("Reason", f"Invalid chainUntil: {err}")], style="red"
+            "⛔ Chain error", [("Reason", f"Invalid chainUntil: {err}")], kind="error"
         )
         _print_task(new)
         return
@@ -3971,7 +4054,7 @@ def main():
     chain_by_link = None
     chain_by_short = None
     chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
-    need_chain = _SHOW_ANALYTICS or _SHOW_TIMELINE_GAPS
+    need_chain = _SHOW_ANALYTICS or _SHOW_TIMELINE_GAPS or _CHECK_CHAIN_INTEGRITY
     if chain_id and need_chain:
         try:
             chain = _get_chain_export(chain_id)
@@ -3986,11 +4069,17 @@ def main():
     global _PANEL_CHAIN_BY_SHORT
     _PANEL_CHAIN_BY_SHORT = chain_by_short
     analytics_advice = None
+    integrity_warnings = None
     if _SHOW_ANALYTICS and chain:
         try:
             analytics_advice = _chain_health_advice(chain, kind, new, style=_ANALYTICS_STYLE)
         except Exception:
             analytics_advice = None
+    if _CHECK_CHAIN_INTEGRITY and chain:
+        try:
+            integrity_warnings = _chain_integrity_warnings(chain, expected_chain_id=chain_id)
+        except Exception:
+            integrity_warnings = None
 
     # Feedback panel
     fb = []
@@ -4038,6 +4127,11 @@ def main():
         fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
         if analytics_advice:
             fb.append(("Analytics", analytics_advice))
+        if integrity_warnings:
+            warn_list = integrity_warnings[:4]
+            if len(integrity_warnings) > 4:
+                warn_list.append(f"...and {len(integrity_warnings) - 4} more")
+            fb.append(("Integrity", "\n".join(warn_list)))
         _append_next_wait_sched_rows(fb, child, child_due)
 
         if cap_no:
@@ -4130,6 +4224,11 @@ def main():
         fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
         if analytics_advice:
             fb.append(("Analytics", analytics_advice))
+        if integrity_warnings:
+            warn_list = integrity_warnings[:4]
+            if len(integrity_warnings) > 4:
+                warn_list.append(f"...and {len(integrity_warnings) - 4} more")
+            fb.append(("Integrity", "\n".join(warn_list)))
         _append_next_wait_sched_rows(fb, child, child_due)
 
         if cap_no:

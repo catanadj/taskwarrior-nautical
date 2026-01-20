@@ -833,7 +833,7 @@ def _fail_and_exit(title: str, msg: str) -> None:
     # Pretty panel -> stderr
     _panel(f"❌ {title}", [("Message", msg)], kind="error")
     # Minimal feedback -> stdout (what Task expects when a hook fails)
-    print(f"{title}: {msg}")
+    print(json.dumps({"error": title, "message": msg}, ensure_ascii=False))
     sys.exit(1)
 
 

@@ -15,13 +15,15 @@ Optional:
 """
 
 import importlib
-import sys, os, re, json
+import sys, os, re, json, io, contextlib
 import tempfile
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from collections import OrderedDict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 core = importlib.import_module("nautical_core")
@@ -175,8 +177,8 @@ def _force_tz_utc():
 def _find_hook_file(name: str) -> str:
     # Per project convention: hooks live either next to core/tests, or under ./hooks/
     candidates = [
-        os.path.join(HERE, name),
-        os.path.join(HERE, "hooks", name),
+        os.path.join(ROOT, name),
+        os.path.join(ROOT, "hooks", name),
     ]
     for p in candidates:
         if os.path.isfile(p):
@@ -245,6 +247,34 @@ def _load_hook_module(path: str, module_name: str):
     loader.exec_module(mod)
     return mod
 
+def _load_core_module(path: str, module_name: str, config_path: str):
+    prev_conf = os.environ.get("NAUTICAL_CONFIG")
+    os.environ["NAUTICAL_CONFIG"] = config_path
+    try:
+        loader = importlib.machinery.SourceFileLoader(module_name, path)
+        spec = importlib.util.spec_from_loader(module_name, loader)
+        mod = importlib.util.module_from_spec(spec)
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        loader.exec_module(mod)
+        return mod
+    finally:
+        if prev_conf is None:
+            os.environ.pop("NAUTICAL_CONFIG", None)
+        else:
+            os.environ["NAUTICAL_CONFIG"] = prev_conf
+
+def _assert_stdout_json_only(stdout_text: str) -> dict:
+    s = (stdout_text or "").strip()
+    if not s:
+        raise AssertionError("Hook produced no stdout JSON.")
+    dec = json.JSONDecoder()
+    obj, idx = dec.raw_decode(s)
+    if s[idx:].strip():
+        raise AssertionError("Hook stdout contains non-JSON content.")
+    if not isinstance(obj, dict):
+        raise AssertionError(f"Hook stdout JSON is not an object: {type(obj).__name__}")
+    return obj
 def _call_with_supported_kwargs(fn, **kwargs):
     sig = inspect.signature(fn)
     filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
@@ -271,7 +301,9 @@ def test_warn_once_per_day_stamp_written():
     """Ensure diagnostic stamp creation works without crashing."""
     with tempfile.TemporaryDirectory() as td:
         prev = os.environ.get("XDG_CACHE_HOME")
+        prev_diag = os.environ.get("NAUTICAL_DIAG")
         os.environ["XDG_CACHE_HOME"] = td
+        os.environ["NAUTICAL_DIAG"] = "1"
         try:
             core._warn_once_per_day("golden_test", "golden test message")
             stamp = os.path.join(td, "nautical", ".diag_golden_test.stamp")
@@ -284,6 +316,187 @@ def test_warn_once_per_day_stamp_written():
                 os.environ.pop("XDG_CACHE_HOME", None)
             else:
                 os.environ["XDG_CACHE_HOME"] = prev
+            if prev_diag is None:
+                os.environ.pop("NAUTICAL_DIAG", None)
+            else:
+                os.environ["NAUTICAL_DIAG"] = prev_diag
+
+def test_warn_once_per_day_no_diag_silent():
+    """Ensure diagnostics are silent (no stamp) when NAUTICAL_DIAG is unset."""
+    with tempfile.TemporaryDirectory() as td:
+        prev = os.environ.get("XDG_CACHE_HOME")
+        prev_diag = os.environ.get("NAUTICAL_DIAG")
+        os.environ["XDG_CACHE_HOME"] = td
+        if "NAUTICAL_DIAG" in os.environ:
+            os.environ.pop("NAUTICAL_DIAG", None)
+        try:
+            core._warn_once_per_day("golden_test_silent", "golden test message")
+            stamp = os.path.join(td, "nautical", ".diag_golden_test_silent.stamp")
+            expect(not os.path.exists(stamp), f"stamp should not be created: {stamp}")
+        finally:
+            if prev is None:
+                os.environ.pop("XDG_CACHE_HOME", None)
+            else:
+                os.environ["XDG_CACHE_HOME"] = prev
+            if prev_diag is None:
+                os.environ.pop("NAUTICAL_DIAG", None)
+            else:
+                os.environ["NAUTICAL_DIAG"] = prev_diag
+
+def test_on_add_fail_and_exit_emits_json():
+    """_fail_and_exit should emit JSON to stdout for hook error paths."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_fail_test")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        try:
+            mod._fail_and_exit("Invalid anchor", "anchor syntax error: bad")
+        except SystemExit as e:
+            expect(e.code == 1, f"unexpected exit code: {e.code}")
+        else:
+            raise AssertionError("_fail_and_exit did not exit")
+    out = buf.getvalue().strip()
+    obj = json.loads(out)
+    expect(obj.get("error") == "Invalid anchor", f"unexpected error field: {obj!r}")
+    expect("anchor syntax error" in (obj.get("message") or ""), f"unexpected message field: {obj!r}")
+
+def test_hook_stdout_strict_json_with_diag_on_add():
+    """on-add must keep stdout JSON-only even when diagnostics are enabled."""
+    hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        env = {
+            "NAUTICAL_DIAG": "1",
+            "NAUTICAL_CONFIG": os.path.join(td, "missing.toml"),
+        }
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000333",
+            "description": "hook test on-add strict stdout",
+            "status": "pending",
+            "entry": "20250101T000000Z",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        expect(p.returncode == 0, f"on-add returned {p.returncode}")
+        _assert_stdout_json_only(p.stdout)
+
+def test_hook_stdout_strict_json_with_diag_on_modify():
+    """on-modify must keep stdout JSON-only even when diagnostics are enabled."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        env = {
+            "NAUTICAL_DIAG": "1",
+            "NAUTICAL_CONFIG": os.path.join(td, "missing.toml"),
+        }
+        raw = json.dumps({"uuid": "00000000-0000-0000-0000-000000000444", "status": "pending"})
+        p = _run_hook_script_raw(hook, raw, env_extra=env)
+        expect(p.returncode == 0, f"on-modify returned {p.returncode}")
+        _assert_stdout_json_only(p.stdout)
+
+def test_on_modify_read_two_fuzz_inputs():
+    """on-modify input parsing should be tolerant and never crash."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    cases = [
+        ("", "empty"),
+        ("{not-json}", "passthrough"),
+        (json.dumps({"status": "pending"}), "json"),
+        (json.dumps({"status": "pending"}) + "\n" + json.dumps({"status": "pending"}), "json"),
+        ("  \n" + json.dumps({"status": "pending"}) + "\n", "json"),
+    ]
+    for raw, mode in cases:
+        p = _run_hook_script_raw(hook, raw)
+        expect(p.returncode == 0, f"on-modify returned {p.returncode} for case {mode}")
+        if mode == "empty":
+            expect((p.stdout or "") == "", "empty input should return empty stdout")
+        elif mode == "passthrough":
+            expect((p.stdout or "").strip() == raw.strip(), "invalid input should pass through raw")
+        else:
+            _assert_stdout_json_only(p.stdout)
+
+def test_spawn_queue_recovers_partial_payload():
+    """Deferred spawn queue should recover valid JSON objects from mixed/partial payloads."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_modify_queue_test")
+            qpath = mod._SPAWN_QUEUE_PATH
+            payload = '{"uuid":"aaaaaaaa"}\\n{bad\\n{"uuid":"bbbbbbbb"}'
+            qpath.write_text(payload, encoding="utf-8")
+            out = mod._take_deferred_spawn_payload()
+            objs = [json.loads(ln) for ln in (out or "").splitlines() if ln.strip()]
+            uuids = {o.get("uuid") for o in objs}
+            expect("aaaaaaaa" in uuids and "bbbbbbbb" in uuids, f"unexpected queue uuids: {uuids}")
+            expect(qpath.read_text(encoding="utf-8") == "", "queue should be truncated after recovery")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+
+def test_spawn_queue_invalid_payload_preserved():
+    """Deferred spawn queue should avoid truncation if nothing parses."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_modify_queue_test2")
+            qpath = mod._SPAWN_QUEUE_PATH
+            payload = "not-json\n"
+            qpath.write_text(payload, encoding="utf-8")
+            out = mod._take_deferred_spawn_payload()
+            expect((out or "").strip() == "", "queue should return empty payload for invalid data")
+            expect(qpath.read_text(encoding="utf-8") == payload, "queue should be preserved on parse failure")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+
+def test_chain_integrity_warnings_detects_issues():
+    """Chain integrity checker should flag gaps and link inconsistencies."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_integrity_test")
+    chain = [
+        {
+            "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "link": 1,
+            "nextLink": "bbbbbbbb",
+            "chainID": "cid",
+        },
+        {
+            "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "link": 3,
+            "prevLink": "aaaaaaaa",
+            "chainID": "",
+        },
+    ]
+    warnings = mod._chain_integrity_warnings(chain, expected_chain_id="cid")
+    expect(any("missing link(s): 2" in w for w in warnings), f"expected link gap warning, got {warnings}")
+    expect(any("missing chainID" in w for w in warnings), f"expected chainID warning, got {warnings}")
+
+def test_dst_round_trip_noon_preserves_local_date():
+    """Local date+time should round-trip through UTC across DST boundaries."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    with tempfile.TemporaryDirectory() as td:
+        cfg = os.path.join(td, "nautical.toml")
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write('tz = "America/New_York"\n')
+        mod = _load_core_module(core_path, "_nautical_core_dst_test", cfg)
+        dates = [
+            date(2025, 3, 8),
+            date(2025, 3, 9),
+            date(2025, 3, 10),
+            date(2025, 11, 1),
+            date(2025, 11, 2),
+            date(2025, 11, 3),
+        ]
+        for d in dates:
+            dt_local = mod.build_local_datetime(d, (12, 0))
+            dt_utc = dt_local.astimezone(timezone.utc)
+            back = mod.to_local(dt_utc)
+            expect(back.date() == d, f"DST round-trip date mismatch: {d} -> {back.date()}")
+            expect(back.hour == 12 and back.minute == 0, f"DST round-trip time mismatch: {back}")
 
 def test_on_modify_invalid_json_passthrough():
     """Malformed JSON should not crash on-modify; it should pass through raw input."""
@@ -1403,18 +1616,27 @@ TESTS = [
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_task_runner_handles_nonzero,
     test_warn_once_per_day_stamp_written,
+    test_warn_once_per_day_no_diag_silent,
+    test_hook_stdout_strict_json_with_diag_on_add,
+    test_hook_stdout_strict_json_with_diag_on_modify,
     test_on_modify_invalid_json_passthrough,
+    test_on_add_fail_and_exit_emits_json,
+    test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_versioned_payload,
     test_on_add_dnf_cache_corrupt_payload_recovers,
     test_on_add_dnf_cache_quarantines_invalid_jsonl,
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_modify_spawn_deferred_then_drain,
     test_on_modify_spawn_queue_batch_limit,
+    test_spawn_queue_recovers_partial_payload,
+    test_spawn_queue_invalid_payload_preserved,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,
     test_on_modify_export_uuid_short_invalid_json,
     test_on_modify_missing_taskdata_uses_tw_dir,
     test_hooks_no_direct_subprocess_run,
+    test_chain_integrity_warnings_detects_issues,
+    test_dst_round_trip_noon_preserves_local_date,
 
 ]
 

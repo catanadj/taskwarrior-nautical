@@ -19,6 +19,7 @@ show_timeline_gaps = true            # include gap rows in timeline
 show_analytics = true                # show analytics panel
 analytics_style = "clinical"         # "coach" or "clinical"
 analytics_ontime_tol_secs = 14400    # "on time" window in seconds
+check_chain_integrity = true         # warn on gaps/mismatched links/chainID inconsistencies
 verify_import = true                 # verify child import via export
 debug_wait_sched = false             # include wait/scheduled debug rows
 panel_mode = "rich"                  # "rich", "fast" (aka "plain"), or "line"

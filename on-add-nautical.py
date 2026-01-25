@@ -297,6 +297,7 @@ def _load_dnf_disk_cache() -> OrderedDict:
                 with open(_DNF_DISK_CACHE_PATH, "r", encoding="utf-8") as f:
                     parsed_any = False
                     parse_error = None
+                    header_checked = False
                     for line in f:
                         line = line.strip()
                         if not line:
@@ -307,7 +308,11 @@ def _load_dnf_disk_cache() -> OrderedDict:
                             parse_error = "DNF cache JSONL parse failure"
                             break
                         parsed_any = True
-                        if isinstance(obj, dict) and "version" in obj:
+                        if not header_checked and isinstance(obj, dict) and "version" in obj:
+                            header_checked = True
+                            if int(obj.get("version") or 0) != _DNF_DISK_CACHE_VERSION:
+                                parse_error = "DNF cache version mismatch"
+                                break
                             continue
                         key = None
                         val = None

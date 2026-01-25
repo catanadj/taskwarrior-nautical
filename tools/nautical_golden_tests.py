@@ -2065,6 +2065,28 @@ def test_on_exit_dead_letter_rotation():
         expect(rotated, "dead-letter should rotate when size exceeds cap")
 
 
+def test_queue_json_parse_dead_letter():
+    """Invalid queue JSON should go to dead-letter and be removed from queue."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_queue_json_dead_letter_test")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        mod._QUEUE_PATH.write_text("{bad\n", encoding="utf-8")
+        entries = mod._take_queue_entries()
+        expect(entries == [], "bad JSON should not yield entries")
+        expect(mod._DEAD_LETTER_PATH.exists(), "dead-letter should be created")
+        remaining = mod._QUEUE_PATH.read_text(encoding="utf-8").strip()
+        expect(remaining == "", "queue should be cleared of bad line")
+
 
 def test_on_modify_cp_completion_spawns_next_link():
     """on-modify should spawn the next CP link on completion."""
@@ -2340,6 +2362,7 @@ TESTS = [
     test_on_exit_lock_failure_keeps_queue,
     test_on_exit_queue_streaming_line_cap,
     test_on_exit_dead_letter_rotation,
+    test_queue_json_parse_dead_letter,
     test_core_import_deterministic,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_add_run_task_timeout,

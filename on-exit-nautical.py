@@ -278,7 +278,7 @@ def _take_queue_entries() -> list[dict]:
                     try:
                         obj = json.loads(ln)
                     except Exception:
-                        f_out.write(line)
+                        _write_dead_letter({"raw": line}, "queue json parse")
                         continue
                     if isinstance(obj, dict):
                         entries.append(obj)

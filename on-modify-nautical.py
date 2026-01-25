@@ -168,6 +168,19 @@ def _dump_diag_stats() -> None:
             pass
 
 
+def _diag_summary() -> None:
+    if os.environ.get("NAUTICAL_DIAG") != "1":
+        return
+    try:
+        parts = [
+            f"spawn_deferred={_DIAG_STATS.get('spawn_deferred', 0)}",
+            f"queue_lock_failures={_DIAG_STATS.get('queue_lock_failures', 0)}",
+        ]
+        sys.stderr.write("[nautical] diag summary: " + ", ".join(parts) + "\n")
+    except Exception:
+        pass
+
+
 atexit.register(_dump_diag_stats)
 
 
@@ -827,6 +840,7 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
 
     ok = _queue_locked(_put)
     if not ok:
+        _diag_count("queue_lock_failures")
         global _WARNED_SPAWN_QUEUE_LOCK
         if not _WARNED_SPAWN_QUEUE_LOCK:
             _WARNED_SPAWN_QUEUE_LOCK = True
@@ -1240,6 +1254,7 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
     # Decision-only mode: enqueue for on-exit spawn and return unverified.
     entry = _spawn_intent_entry(parent_task_with_nextlink.get("uuid") or "", child_obj, child_short)
     _enqueue_spawn_intent(entry)
+    _diag_count("spawn_deferred")
     return (child_short, stripped_attrs, False, True, "Spawn intent queued for on-exit processing")
 
 
@@ -3938,6 +3953,7 @@ def main():
 
 
     _print_task(new)
+    _diag_summary()
 
 
 # ------------------------------------------------------------------------------

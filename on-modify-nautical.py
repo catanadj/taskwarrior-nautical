@@ -302,45 +302,41 @@ def _tolocal(dt):
 # ------------------------------------------------------------------------------
 # Basic IO and panel
 # ------------------------------------------------------------------------------
+def _fail_and_exit(title: str, msg: str) -> None:
+    _panel(f"❌ {title}", [("Message", msg)], kind="error")
+    print(json.dumps({"error": title, "message": msg}, ensure_ascii=False))
+    sys.exit(1)
+
+
 def _read_two():
     raw = sys.stdin.read()
-    raw = raw.strip()
-    if not raw:
-        print("", end="")
-        sys.exit(0)
-    parts = [p for p in raw.split("\n") if p.strip()]
+    if not raw or not raw.strip():
+        _fail_and_exit("Invalid input", "on-modify must receive two JSON tasks")
 
-    def _try_parse(s: str):
-        try:
-            return json.loads(s)
-        except Exception:
-            return None
-
+    decoder = json.JSONDecoder()
+    idx = 0
     objs = []
-    for line in parts:
-        obj = _try_parse(line.strip())
-        if obj is not None:
-            objs.append(obj)
+    n = len(raw)
 
+    while idx < n:
+        while idx < n and raw[idx].isspace():
+            idx += 1
+        if idx >= n:
+            break
+        try:
+            obj, end = decoder.raw_decode(raw, idx)
+        except Exception:
+            break
+        objs.append(obj)
+        idx = end
+
+    objs = [o for o in objs if isinstance(o, dict)]
     if len(objs) >= 2:
         return objs[0], objs[-1]
     if len(objs) == 1:
         return objs[0], objs[0]
 
-    # Fallback: attempt to extract JSON objects from mixed input.
-    candidates = re.findall(r"\{[\s\S]*?\}", raw)
-    for c in candidates:
-        obj = _try_parse(c)
-        if obj is not None:
-            objs.append(obj)
-    if len(objs) >= 2:
-        return objs[0], objs[-1]
-    if len(objs) == 1:
-        return objs[0], objs[0]
-
-    _diag("Invalid JSON input to on-modify; passing through raw input.")
-    print(raw, end="")
-    sys.exit(0)
+    _fail_and_exit("Invalid input", "on-modify must receive two JSON tasks")
 
 
 def _print_task(task):

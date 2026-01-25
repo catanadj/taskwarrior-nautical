@@ -839,6 +839,19 @@ def _fail_and_exit(title: str, msg: str) -> None:
 
 def _error_and_exit(msg_tuples):
     _panel("❌ Invalid Chain", msg_tuples, kind="error")
+    err = "Invalid chain"
+    msg_parts = []
+    for k, v in msg_tuples or []:
+        if k:
+            err = str(k)
+            if v:
+                msg_parts.append(f"{k}: {v}")
+            else:
+                msg_parts.append(str(k))
+        elif v:
+            msg_parts.append(str(v))
+    msg = "; ".join(msg_parts) if msg_parts else "Invalid chain configuration."
+    print(json.dumps({"error": err, "message": msg}, ensure_ascii=False))
     sys.exit(1)
 
 
@@ -1124,13 +1137,12 @@ def main():
     with prof.section('read:stdin'):
         raw = sys.stdin.read().strip()
     if not raw:
-        print("", end="")
-        return
+        _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
     try:
         with prof.section('parse:json'):
             task = json.loads(raw)
     except Exception:
-        _error_and_exit([("Invalid input", "on-add must receive a single JSON task")])
+        _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
 
     with prof.section('clock:now'):
         now_utc = core.now_utc()

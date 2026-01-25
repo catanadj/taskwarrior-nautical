@@ -104,6 +104,19 @@ def _diag(msg: str) -> None:
             pass
 
 
+def _is_lock_error(stderr: str) -> bool:
+    s = (stderr or "").lower()
+    return (
+        "database is locked" in s
+        or "unable to lock" in s
+        or "resource temporarily unavailable" in s
+        or "another task is running" in s
+        or "lock file" in s
+        or "lockfile" in s
+        or "locked by" in s
+    )
+
+
 def _diag_count(key: str, inc: int = 1) -> None:
     try:
         _DIAG_STATS[key] = _DIAG_STATS.get(key, 0) + inc
@@ -330,6 +343,12 @@ def _read_two():
         objs.append(obj)
         idx = end
 
+    if len(objs) == 1 and isinstance(objs[0], list):
+        arr = [o for o in objs[0] if isinstance(o, dict)]
+        if len(arr) >= 2:
+            return arr[0], arr[-1]
+        if len(arr) == 1:
+            return arr[0], arr[0]
     objs = [o for o in objs if isinstance(o, dict)]
     if len(objs) >= 2:
         return objs[0], objs[-1]
@@ -1642,13 +1661,13 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
             timeout=2,
             retries=1,
         )
-        if not ok and err == "timeout":
+        if not ok and (err == "timeout" or _is_lock_error(err)):
             # Likely Taskwarrior datastore lock contention (re-entrance from hook).
             _enqueue_deferred_spawn(child_obj)
             raise _SpawnDeferred(
                 child_short=child_short,
                 stripped_attrs=stripped_attrs,
-                reason="Task import timed out (likely lock contention); queued for deferred drain",
+                reason="Task import blocked (lock contention); queued for deferred drain",
             )
 
         last_stderr = err or ""

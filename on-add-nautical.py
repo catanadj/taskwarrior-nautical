@@ -190,9 +190,10 @@ def _dnf_cache_key(expr: str) -> str:
 
 @contextmanager
 def _dnf_cache_lock():
-    """Best-effort lock for disk cache access."""
+    """Best-effort lock for disk cache access. Yields True if acquired."""
     if fcntl is not None:
         lf = None
+        acquired = False
         try:
             _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -200,13 +201,14 @@ def _dnf_cache_lock():
         try:
             lf = open(_DNF_DISK_CACHE_LOCK, "a", encoding="utf-8")
             fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            acquired = True
         except Exception:
             lf = None
         try:
-            yield
+            yield acquired
         finally:
             try:
-                if lf is not None:
+                if acquired and lf is not None:
                     fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
             except Exception:
                 pass
@@ -219,6 +221,7 @@ def _dnf_cache_lock():
 
     # Fallback: lockfile via O_EXCL (best-effort, short spin).
     fd = None
+    acquired = False
     for _ in range(6):
         try:
             _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -226,21 +229,22 @@ def _dnf_cache_lock():
             pass
         try:
             fd = os.open(str(_DNF_DISK_CACHE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            acquired = True
             break
         except FileExistsError:
             time.sleep(0.05)
         except Exception:
             break
     try:
-        yield
+        yield acquired
     finally:
         try:
-            if fd is not None:
+            if acquired and fd is not None:
                 os.close(fd)
         except Exception:
             pass
         try:
-            if fd is not None:
+            if acquired and fd is not None:
                 os.unlink(_DNF_DISK_CACHE_LOCK)
         except Exception:
             pass
@@ -253,7 +257,9 @@ def _load_dnf_disk_cache() -> OrderedDict:
     if not _DNF_DISK_CACHE_ENABLED:
         return _DNF_DISK_CACHE
     try:
-        with _dnf_cache_lock():
+        with _dnf_cache_lock() as locked:
+            if not locked:
+                return _DNF_DISK_CACHE
             _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
             if _DNF_DISK_CACHE_PATH.exists():
                 try:
@@ -315,7 +321,9 @@ def _save_dnf_disk_cache() -> None:
     if not (_DNF_DISK_CACHE_ENABLED and _DNF_DISK_CACHE_DIRTY and isinstance(_DNF_DISK_CACHE, OrderedDict)):
         return
     try:
-        with _dnf_cache_lock():
+        with _dnf_cache_lock() as locked:
+            if not locked:
+                return
             _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
             # trim oldest
             while len(_DNF_DISK_CACHE) > _DNF_DISK_CACHE_MAX:

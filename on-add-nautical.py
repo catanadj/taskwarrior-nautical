@@ -1644,7 +1644,7 @@ def main():
             if until_dt and dt_utc > until_dt:
                 break
             color = colors[min(i, len(colors) - 1)]
-            preview.append(f"[{color}]{nxt_dt.strftime('%a %Y-%m-%d %H:%M %Z')}[/{color}]")
+            preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
             cur_dt = nxt_dt
         prof.add_ms('anchor:preview_occurrences', (time.perf_counter() - _t_prev) * 1000.0)
         rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))

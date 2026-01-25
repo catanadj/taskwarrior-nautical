@@ -63,8 +63,9 @@ _MAX_SPAWN_ATTEMPTS = 3
 _SPAWN_RETRY_DELAY = 0.1  # seconds between retries
 # Deferred spawn queue guards (override via env for heavy workloads).
 # spawn_queue_max_bytes: skip full-load parsing if queue exceeds this size.
-# spawn_queue_drain_max_items: cap items drained in one batch for large queues.
+# spawn_queue_drain_max_items is unused in on-modify (on-exit handles draining).
 _SPAWN_QUEUE_MAX_BYTES = 524288
+# spawn_queue_drain_max_items remains in config for legacy docs, but is unused here.
 _SPAWN_QUEUE_DRAIN_MAX_ITEMS = 200
 
 # Panel chain index for fast timeline lookups (set per hook run)
@@ -237,9 +238,6 @@ TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
 # ------------------------------------------------------------------------------
 _SPAWN_QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _SPAWN_QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
-_SPAWN_QUEUE_KICK = TW_DATA_DIR / ".nautical_spawn_queue.kick"
-_SPAWN_DRAIN_SLEEP_SECS = 0.25
-_SPAWN_DRAIN_THROTTLE_SECS = 1.0
 
 
 _candidates = []
@@ -1012,16 +1010,6 @@ _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
 
 
 
-class _SpawnDeferred(RuntimeError):
-    """Raised when inline spawn is deferred due to Taskwarrior lock contention."""
-
-    def __init__(self, *, child_short: str, stripped_attrs: set[str] | None = None, reason: str = ""):
-        super().__init__(reason or "Deferred spawn")
-        self.child_short = child_short
-        self.stripped_attrs = stripped_attrs or set()
-        self.reason = reason or "Deferred spawn"
-
-
 def _queue_locked(fn):
     """Run `fn()` under an advisory file lock (best-effort)."""
     if fcntl is None:
@@ -1049,9 +1037,12 @@ def _queue_locked(fn):
             pass
 
 
-def _requeue_deferred_spawn_payload(payload: str) -> None:
-    if not payload:
-        return
+def _enqueue_deferred_spawn(task_obj: dict) -> None:
+    """Append one task JSON object to the spawn intent queue (JSONL, UTF-8)."""
+    try:
+        line = json.dumps(task_obj, ensure_ascii=False, separators=(",", ":")) + "\n"
+    except Exception:
+        line = json.dumps(task_obj) + "\n"
 
     def _put():
         try:
@@ -1060,22 +1051,11 @@ def _requeue_deferred_spawn_payload(payload: str) -> None:
             pass
         try:
             with open(_SPAWN_QUEUE_PATH, "a", encoding="utf-8") as f:
-                f.write(payload)
+                f.write(line)
         except Exception:
-            # Best-effort; if we cannot persist, we simply drop (but keep hook alive).
             pass
 
     _queue_locked(_put)
-
-
-def _enqueue_deferred_spawn(task_obj: dict) -> None:
-    """Append one task JSON object to the deferred spawn queue (JSONL, UTF-8)."""
-    try:
-        line = json.dumps(task_obj, ensure_ascii=False, separators=(",", ":")) + "\n"
-    except Exception:
-        # As a last resort, fall back to default encoding.
-        line = json.dumps(task_obj) + "\n"
-    _requeue_deferred_spawn_payload(line)
     global _WARNED_SPAWN_QUEUE_GROWTH
     try:
         if not _WARNED_SPAWN_QUEUE_GROWTH and _SPAWN_QUEUE_PATH.exists():
@@ -1088,7 +1068,7 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
                         ("Queue", str(_SPAWN_QUEUE_PATH)),
                         ("Size", f"{size} bytes"),
                         ("Limit", f"{_SPAWN_QUEUE_MAX_BYTES} bytes"),
-                        ("Hint", "Run the drain command or reduce load."),
+                        ("Hint", "Run the on-exit hook or reduce load."),
                     ],
                     kind="warning",
                 )
@@ -1096,247 +1076,6 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
         pass
 
 
-def _iter_json_objects_from_mixed_text(raw: str):
-    """Yield JSON objects from a text stream that may contain whitespace and literal '\\n' separators.
-
-    This is intentionally tolerant: earlier Nautical builds mistakenly wrote the literal two
-    characters '\\n' between JSON objects. This parser treats those sequences as separators
-    *only when they occur between objects* (i.e., outside of decoded JSON strings).
-    """
-    dec = json.JSONDecoder()
-    i = 0
-    n = len(raw)
-    while i < n:
-        # Skip whitespace and literal "\n" separators between objects.
-        while i < n:
-            ch = raw[i]
-            if ch.isspace():
-                i += 1
-                continue
-            if raw.startswith("\\n", i):
-                i += 2
-                continue
-            break
-        if i >= n:
-            break
-
-        try:
-            obj, j = dec.raw_decode(raw, i)
-        except Exception:
-            # Resync: jump to next object start if possible.
-            nxt = raw.find("{", i + 1)
-            if nxt == -1:
-                break
-            i = nxt
-            continue
-
-        if isinstance(obj, dict):
-            yield obj
-        i = j
-
-
-def _take_deferred_spawn_payload() -> str:
-    """Take (and truncate) the queue, returning normalized JSONL payload (one object per line)."""
-
-    def _take():
-        try:
-            if not _SPAWN_QUEUE_PATH.exists():
-                return ""
-        except Exception:
-            return ""
-        try:
-            st = _SPAWN_QUEUE_PATH.stat()
-            size = st.st_size
-        except Exception:
-            size = 0
-
-        if size <= 0:
-            try:
-                _SPAWN_QUEUE_PATH.unlink()
-            except Exception:
-                pass
-            return ""
-
-        if size <= _SPAWN_QUEUE_MAX_BYTES:
-            try:
-                raw = _SPAWN_QUEUE_PATH.read_text(encoding="utf-8")
-            except Exception:
-                raw = ""
-
-            if not (raw or "").strip():
-                try:
-                    _SPAWN_QUEUE_PATH.unlink()
-                except Exception:
-                    pass
-                return ""
-
-            objs = list(_iter_json_objects_from_mixed_text(raw))
-            if not objs:
-                # Do not truncate if we couldn't parse anything (avoid data loss).
-                return ""
-
-            # Truncate while under lock; import happens after lock is released.
-            try:
-                _SPAWN_QUEUE_PATH.write_text("", encoding="utf-8")
-            except Exception:
-                pass
-
-            return "\n".join(json.dumps(o, ensure_ascii=False, separators=(",", ":")) for o in objs) + "\n"
-
-        # Large queue: stream a bounded batch to avoid memory spikes.
-        objs = []
-        taken = 0
-        tmp = _SPAWN_QUEUE_PATH.with_suffix(".tmp")
-        wrote_remainder = False
-        try:
-            with open(_SPAWN_QUEUE_PATH, "r", encoding="utf-8") as src, open(tmp, "w", encoding="utf-8") as dst:
-                for line in src:
-                    if taken >= _SPAWN_QUEUE_DRAIN_MAX_ITEMS:
-                        dst.write(line)
-                        wrote_remainder = True
-                        continue
-                    ln = line.strip()
-                    if not ln:
-                        dst.write(line)
-                        wrote_remainder = True
-                        continue
-                    try:
-                        obj = json.loads(ln)
-                    except Exception:
-                        dst.write(line)
-                        wrote_remainder = True
-                        continue
-                    if isinstance(obj, dict):
-                        objs.append(obj)
-                        taken += 1
-                    else:
-                        dst.write(line)
-                        wrote_remainder = True
-        except Exception:
-            try:
-                if tmp.exists():
-                    tmp.unlink()
-            except Exception:
-                pass
-            return ""
-
-        if not objs:
-            try:
-                if tmp.exists():
-                    tmp.unlink()
-            except Exception:
-                pass
-            return ""
-
-        # Replace queue with remainder (if any).
-        try:
-            if wrote_remainder:
-                os.replace(tmp, _SPAWN_QUEUE_PATH)
-            else:
-                _SPAWN_QUEUE_PATH.write_text("", encoding="utf-8")
-                if tmp.exists():
-                    tmp.unlink()
-        except Exception:
-            pass
-
-        return "\n".join(json.dumps(o, ensure_ascii=False, separators=(",", ":")) for o in objs) + "\n"
-
-    return _queue_locked(_take) or ""
-
-
-
-def _drain_deferred_spawn_queue() -> int:
-    """Drain queued spawns (best-effort). Returns 0 on success/empty, non-zero on failure."""
-    payload = _take_deferred_spawn_payload()
-    if not (payload or "").strip():
-        return 0
-
-    env = os.environ.copy()
-    last_err = ""
-
-    for attempt in range(1, 8):
-        ok, _out, err = _run_task(
-            ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.verbose=nothing", "import", "-"],
-            input_text=payload,
-            env=env,
-            timeout=20,
-            retries=1,
-        )
-        if ok:
-            return 0
-
-        last_err = (err or "").strip()
-
-        # If the only issue is schema drift (unknown attrs), sanitise and retry.
-        if "Unrecognized attribute" in last_err:
-            objs = []
-            for ln in (payload or "").splitlines():
-                ln = ln.strip()
-                if not ln:
-                    continue
-                try:
-                    obj = json.loads(ln)
-                except Exception:
-                    continue
-                _sanitize_unknown_attrs(last_err, obj)
-                objs.append(obj)
-
-            if objs:
-                payload = "\n".join(json.dumps(o, ensure_ascii=False, separators=(",", ":")) for o in objs) + "\n"
-                continue
-
-        # Backoff: the parent command should have released the lock by now, but be defensive.
-        _time.sleep(0.15 * attempt)
-
-    # Put the payload back so it can be retried later (keep the most recent sanitised payload).
-    _requeue_deferred_spawn_payload(payload)
-    return 1
-
-
-def _kick_deferred_spawn_drain_async() -> None:
-    """Start a detached drain run (throttled, best-effort).
-
-    This must *not* block the hook. It schedules a short delayed drain in a
-    detached process so the parent Taskwarrior command can release its lock first.
-    """
-    try:
-        if not _SPAWN_QUEUE_PATH.exists() or _SPAWN_QUEUE_PATH.stat().st_size <= 0:
-            return
-    except Exception:
-        # If we cannot stat, still attempt a kick.
-        pass
-
-    # Throttle kicks (avoid spawning many drainers in bursts).
-    try:
-        now = _time.time()
-        last = _SPAWN_QUEUE_KICK.stat().st_mtime if _SPAWN_QUEUE_KICK.exists() else 0.0
-        if (now - last) < float(_SPAWN_DRAIN_THROTTLE_SECS):
-            return
-        _SPAWN_QUEUE_KICK.write_text("", encoding="utf-8")
-    except Exception:
-        pass
-
-    script = str(Path(__file__).resolve())
-    py = sys.executable or "python3"
-
-    # Avoid shell dependencies. Use Python to sleep, then drain.
-    cmd_list = [py, script, "--drain-spawn-queue"]
-    code = (
-        "import time,subprocess; "
-        f"time.sleep({_SPAWN_DRAIN_SLEEP_SECS}); "
-        f"subprocess.run({repr(cmd_list)}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
-    )
-    try:
-        subprocess.Popen(
-            [py, "-c", code],
-            start_new_session=True,
-            close_fds=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        # If cannot kick, the queue remains and can be drained manually.
-        pass
 
 def _short(u):
     return (u or "")[:8]
@@ -4371,6 +4110,4 @@ def main():
 
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    if "--drain-spawn-queue" in sys.argv[1:]:
-        raise SystemExit(_drain_deferred_spawn_queue())
     main()

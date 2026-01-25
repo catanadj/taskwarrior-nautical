@@ -411,48 +411,6 @@ def test_on_modify_read_two_fuzz_inputs():
             expect(p.returncode == 0, f"on-modify returned {p.returncode} for case {mode}")
             _assert_stdout_json_only(p.stdout)
 
-def test_spawn_queue_recovers_partial_payload():
-    """Deferred spawn queue should recover valid JSON objects from mixed/partial payloads."""
-    hook = _find_hook_file("on-modify-nautical.py")
-    with tempfile.TemporaryDirectory() as td:
-        prev_taskdata = os.environ.get("TASKDATA")
-        os.environ["TASKDATA"] = td
-        try:
-            mod = _load_hook_module(hook, "_nautical_on_modify_queue_test")
-            qpath = mod._SPAWN_QUEUE_PATH
-            payload = '{"uuid":"aaaaaaaa"}\\n{bad\\n{"uuid":"bbbbbbbb"}'
-            qpath.write_text(payload, encoding="utf-8")
-            out = mod._take_deferred_spawn_payload()
-            objs = [json.loads(ln) for ln in (out or "").splitlines() if ln.strip()]
-            uuids = {o.get("uuid") for o in objs}
-            expect("aaaaaaaa" in uuids and "bbbbbbbb" in uuids, f"unexpected queue uuids: {uuids}")
-            expect(qpath.read_text(encoding="utf-8") == "", "queue should be truncated after recovery")
-        finally:
-            if prev_taskdata is None:
-                os.environ.pop("TASKDATA", None)
-            else:
-                os.environ["TASKDATA"] = prev_taskdata
-
-def test_spawn_queue_invalid_payload_preserved():
-    """Deferred spawn queue should avoid truncation if nothing parses."""
-    hook = _find_hook_file("on-modify-nautical.py")
-    with tempfile.TemporaryDirectory() as td:
-        prev_taskdata = os.environ.get("TASKDATA")
-        os.environ["TASKDATA"] = td
-        try:
-            mod = _load_hook_module(hook, "_nautical_on_modify_queue_test2")
-            qpath = mod._SPAWN_QUEUE_PATH
-            payload = "not-json\n"
-            qpath.write_text(payload, encoding="utf-8")
-            out = mod._take_deferred_spawn_payload()
-            expect((out or "").strip() == "", "queue should return empty payload for invalid data")
-            expect(qpath.read_text(encoding="utf-8") == payload, "queue should be preserved on parse failure")
-        finally:
-            if prev_taskdata is None:
-                os.environ.pop("TASKDATA", None)
-            else:
-                os.environ["TASKDATA"] = prev_taskdata
-
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -1572,37 +1530,6 @@ def test_on_exit_spawn_intents_drain():
         expect(parent_updated["ok"], "parent update did not run")
 
 
-def test_on_modify_spawn_queue_batch_limit():
-    """on-modify queue drain batches when the queue is large."""
-    hook = _find_hook_file("on-modify-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_modify_queue_batch_test")
-    if not hasattr(mod, "_take_deferred_spawn_payload"):
-        raise AssertionError("on-modify hook does not expose _take_deferred_spawn_payload")
-
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        mod._SPAWN_QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._SPAWN_QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
-
-        mod._SPAWN_QUEUE_MAX_BYTES = 1
-        mod._SPAWN_QUEUE_DRAIN_MAX_ITEMS = 2
-
-        items = [{"uuid": f"{i:08d}"} for i in range(5)]
-        mod._SPAWN_QUEUE_PATH.write_text(
-            "\n".join(json.dumps(o) for o in items) + "\n",
-            encoding="utf-8",
-        )
-
-        payload = mod._take_deferred_spawn_payload()
-        taken = [ln for ln in payload.splitlines() if ln.strip()]
-        expect(len(taken) == 2, f"Expected 2 items taken, got {len(taken)}")
-
-        remaining = mod._SPAWN_QUEUE_PATH.read_text(encoding="utf-8").strip().splitlines()
-        remaining = [ln for ln in remaining if ln.strip()]
-        expect(len(remaining) == 3, f"Expected 3 items remaining, got {len(remaining)}")
-
 
 def test_on_modify_cp_completion_spawns_next_link():
     """on-modify should spawn the next CP link on completion."""
@@ -1838,10 +1765,7 @@ TESTS = [
     test_on_add_dnf_cache_quarantines_invalid_jsonl,
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_exit_spawn_intents_drain,
-    test_on_modify_spawn_queue_batch_limit,
     test_on_modify_cp_completion_spawns_next_link,
-    test_spawn_queue_recovers_partial_payload,
-    test_spawn_queue_invalid_payload_preserved,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,
     test_on_modify_export_uuid_short_invalid_json,

@@ -5,7 +5,7 @@ Chained next-link spawner for Taskwarrior.
 
 - Works for classic cp (cp/chainMax/chainUntil) and anchors (anchor/anchor_mode).
 - Cap logic unified (chainMax, chainUntil -> numeric cap_no).
-- Spawns child with `task import -` (preserves annotation timestamps).
+- Queues child spawn intent; on-exit hook performs `task import -`.
 - Timeline is capped and marks (last link).
 """
 
@@ -118,6 +118,21 @@ def _is_lock_error(stderr: str) -> bool:
         or "lockfile" in s
         or "locked by" in s
     )
+
+
+def _tw_lock_path() -> Path:
+    return TW_DATA_DIR / "lock"
+
+
+def _tw_lock_recent(max_age_s: float = 5.0) -> bool:
+    try:
+        p = _tw_lock_path()
+        if not p.exists():
+            return False
+        age = _time.time() - p.stat().st_mtime
+        return age >= 0 and age <= max_age_s
+    except Exception:
+        return False
 
 
 def _set_wait_sched_debug(field: str, payload: dict) -> None:
@@ -1650,7 +1665,21 @@ def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
     return ("unknown", True)
 
 
-def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tuple[str, set[str]]:
+def _spawn_intent_entry(parent_uuid: str, child_obj: dict, child_short: str) -> dict:
+    return {
+        "parent_uuid": parent_uuid,
+        "child_short": child_short,
+        "child": child_obj,
+    }
+
+
+def _enqueue_spawn_intent(entry: dict) -> None:
+    if not isinstance(entry, dict):
+        return
+    _enqueue_deferred_spawn(entry)
+
+
+def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tuple[str, set[str], bool, bool, str | None]:
     """
     Spawn a child via `task import -`.
 
@@ -1660,7 +1689,7 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
 
     If the nested import times out (typically lock contention during `task done`),
     we enqueue the child for a deferred drain after the main command returns and
-    raise `_SpawnDeferred` (callers should keep the returned nextLink value).
+    return `verified=False` to prevent parent updates until the child is confirmed.
     """
     env = os.environ.copy()
 
@@ -1683,44 +1712,10 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
     last_stderr = ""
     last_category = "unknown"
 
-    for attempt in range(1, _MAX_SPAWN_ATTEMPTS + 1):
-        payload = json.dumps(child_obj, ensure_ascii=False) + "\n"
-
-        ok, _out, err = _run_task(
-            ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "import", "-"],
-            input_text=payload,
-            env=env,
-            timeout=5,
-            retries=1,
-        )
-        if not ok and (err == "timeout" or _is_lock_error(err)):
-            # Likely Taskwarrior datastore lock contention (re-entrance from hook).
-            _enqueue_deferred_spawn(child_obj)
-            raise _SpawnDeferred(
-                child_short=child_short,
-                stripped_attrs=stripped_attrs,
-                reason="Task import blocked (lock contention); queued for deferred drain",
-            )
-
-        last_stderr = err or ""
-        if ok:
-            return (child_short, stripped_attrs)
-
-        # Strip unrecognized attributes and retry (best-effort resilience).
-        if "Unrecognized attribute" in last_stderr:
-            stripped_attrs |= _sanitize_unknown_attrs(last_stderr, child_obj)
-            last_category = "attribute"
-            continue
-
-        category, is_retryable = _categorize_spawn_error(0 if ok else 1, last_stderr)
-        last_category = category
-        if not is_retryable:
-            break
-
-    raise RuntimeError(
-        f"Child import failed after {_MAX_SPAWN_ATTEMPTS} attempts "
-        f"(category={last_category}): {last_stderr.strip()}"
-    )
+    # Decision-only mode: enqueue for on-exit spawn and return unverified.
+    entry = _spawn_intent_entry(parent_task_with_nextlink.get("uuid") or "", child_obj, child_short)
+    _enqueue_spawn_intent(entry)
+    return (child_short, stripped_attrs, False, True, "Spawn intent queued for on-exit processing")
 
 
 
@@ -3753,6 +3748,15 @@ def _safe_dt(v):
 def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
     if not chain_id:
         return []
+    if _tw_lock_recent():
+        if chain_id and chain_id not in _WARNED_CHAIN_EXPORT:
+            _WARNED_CHAIN_EXPORT.add(chain_id)
+            _panel(
+                "⚠ Chain export skipped",
+                [("ChainID", chain_id), ("Reason", "Taskwarrior lock active")],
+                kind="warning",
+            )
+        return []
     args = ["task", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
     if since:
         args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
@@ -4080,15 +4084,17 @@ def main():
     deferred_spawn = False
     spawn_note = None
     try:
-        child_short, stripped_attrs = _spawn_child_atomic(child, new)
-    except _SpawnDeferred as sd:
-        # Parent update (nextLink) is still applied by the outer TW command.
-        # We keep the chosen UUID and defer the child import until after the lock is released.
-        child_short = sd.child_short
-        stripped_attrs = sd.stripped_attrs
-        deferred_spawn = True
-        spawn_note = "[yellow]Queued[/] (Taskwarrior lock active; will import after this command finishes)"
-        _kick_deferred_spawn_drain_async()
+        child_short, stripped_attrs, verified, deferred_spawn, defer_reason = _spawn_child_atomic(child, new)
+        if deferred_spawn:
+            spawn_note = "[yellow]Queued[/] (will import after this command finishes)"
+        if not verified:
+            _panel(
+                "⛓ Chain warning",
+                [("Reason", defer_reason or "Child spawn could not be verified; parent not updated")],
+                kind="warning",
+            )
+            _print_task(new)
+            return
     except Exception as e:
         _panel(
             "⛓ Chain error",
@@ -4098,7 +4104,7 @@ def main():
         _print_task(new)
         return
 
-    # Reflect link on parent for nice UX (even if the child is queued)
+    # Reflect link on parent only when child is confirmed.
     new["nextLink"] = child_short
 
     # Build an in-memory chain index once for panel/timeline lookups.

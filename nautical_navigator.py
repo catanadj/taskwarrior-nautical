@@ -344,9 +344,9 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
             if not nxt:
                 break
             hhmm = core.pick_hhmm_from_dnf_for_date(dnf, nxt, seed)
-            if hhmm:
-                dt = core.build_local_datetime(nxt, hhmm)
-                next_dates.append(core.fmt_dt_local(dt))
+                if hhmm:
+                    dt_utc = core.build_local_datetime(nxt, hhmm)
+                    next_dates.append(core.fmt_dt_local(dt_utc))
             else:
                 next_dates.append(str(nxt))
             after_date = nxt
@@ -581,8 +581,8 @@ class TaskAnalyzer:
                     break
                 # chainUntil check
                 if until_utc:
-                    dt_local = core.build_local_datetime(nxt, clock)
-                    if dt_local.astimezone(datetime.timezone.utc) > until_utc:
+                    dt_utc = core.build_local_datetime(nxt, clock)
+                    if dt_utc > until_utc:
                         break
                 # chainMax enforcement only for future occurrences
                 if left is not None and nxt >= now_local:
@@ -1831,8 +1831,8 @@ class TaskAnalyzer:
         out = []
         cur_date, cur_hhmm = first_date, first_hhmm
         for _ in range(limit):
-            dt_local = core.build_local_datetime(cur_date, cur_hhmm)
-            out.append(dt_local)
+            dt_utc = core.build_local_datetime(cur_date, cur_hhmm)
+            out.append(core.to_local(dt_utc))
 
             # next anchor
             nxt_date = step(cur_date)

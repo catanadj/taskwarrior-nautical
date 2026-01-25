@@ -621,6 +621,28 @@ def test_on_modify_chain_export_cache_key_includes_params():
     _ = mod._get_chain_export("abc", since=since, extra="status:completed")
     expect(len(calls) == 2, f"cache key ignored params, calls={calls}")
 
+def test_on_modify_chain_export_skips_when_locked():
+    """tw_export_chain should skip when Taskwarrior lock is active."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_lock_skip_test")
+    if not hasattr(mod, "tw_export_chain"):
+        raise AssertionError("on-modify hook does not expose tw_export_chain")
+    calls = []
+
+    def _fake_run_task(*_args, **_kwargs):
+        calls.append(True)
+        return False, "", "should not be called"
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        lock_path = td_path / "lock"
+        lock_path.write_text("lock", encoding="utf-8")
+        mod._run_task = _fake_run_task
+        out = mod.tw_export_chain("abc")
+        expect(out == [], "expected empty export when lock is active")
+        expect(len(calls) == 0, "tw_export_chain should not call task when locked")
+
 def test_weekly_and_unsat():
     """Test weekly AND (Sat AND Mon) must be unsatisfiable"""
     fatal, _ = core.lint_anchor_expr("w:sat + w:mon")
@@ -1502,46 +1524,52 @@ def test_on_add_dnf_cache_size_guard_skips_load():
         expect(len(loaded) == 0, "DNF cache size-guard load should return empty cache")
 
 
-def test_on_modify_spawn_deferred_then_drain():
-    """on-modify deferred spawn drains queue after lock-style timeout."""
-    hook = _find_hook_file("on-modify-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_modify_defer_drain_test")
-    if not hasattr(mod, "_spawn_child_atomic") or not hasattr(mod, "_drain_deferred_spawn_queue"):
-        raise AssertionError("on-modify hook does not expose spawn/defer helpers")
+def test_on_exit_spawn_intents_drain():
+    """on-exit should import child and update parent from spawn intents."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_drain_test")
+    if not hasattr(mod, "_drain_queue"):
+        raise AssertionError("on-exit hook does not expose drain helper")
 
     import tempfile
 
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         mod.TW_DATA_DIR = td_path
-        mod._SPAWN_QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._SPAWN_QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
-        mod._SPAWN_QUEUE_KICK = td_path / ".nautical_spawn_queue.kick"
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
 
-        def _run_task_timeout(cmd, **kwargs):
-            return False, "", "timeout"
+        child_uuid = "00000000-0000-0000-0000-000000000999"
+        entry = {
+            "parent_uuid": "00000000-0000-0000-0000-000000000111",
+            "child_short": "deadbeef",
+            "child": {"uuid": child_uuid, "description": "test"},
+        }
+        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
-        mod._run_task = _run_task_timeout
+        imported = {"ok": False}
+        parent_updated = {"ok": False}
 
-        try:
-            mod._spawn_child_atomic({"description": "test"}, {"uuid": "parent"})
-            raise AssertionError("Expected _SpawnDeferred due to timeout")
-        except Exception as e:
-            if not isinstance(e, mod._SpawnDeferred):
-                raise
+        def _run_task_stub(cmd, **_kwargs):
+            cmd_s = " ".join(cmd)
+            if "export" in cmd_s and f"uuid:{child_uuid}" in cmd_s:
+                if imported["ok"]:
+                    return True, json.dumps({"uuid": child_uuid}), ""
+                return True, "{}", ""
+            if "import" in cmd_s:
+                imported["ok"] = True
+                return True, "", ""
+            if "modify" in cmd_s and "uuid:00000000-0000-0000-0000-000000000111" in cmd_s:
+                parent_updated["ok"] = True
+                return True, "", ""
+            return False, "", "unexpected"
 
-        expect(mod._SPAWN_QUEUE_PATH.exists(), "Deferred spawn queue file missing")
-
-        def _run_task_ok(cmd, **kwargs):
-            return True, "", ""
-
-        mod._run_task = _run_task_ok
-        rc = mod._drain_deferred_spawn_queue()
-        expect(rc == 0, f"Drain should succeed, got rc={rc}")
-
-        if mod._SPAWN_QUEUE_PATH.exists():
-            txt = mod._SPAWN_QUEUE_PATH.read_text(encoding="utf-8").strip()
-            expect(txt == "", "Drain should empty the deferred spawn queue")
+        mod._run_task = _run_task_stub
+        stats = mod._drain_queue()
+        expect(stats.get("errors") == 0, f"drain errors: {stats}")
+        expect(stats.get("processed") == 1, f"unexpected drain processed: {stats}")
+        expect(imported["ok"], "child import did not run")
+        expect(parent_updated["ok"], "parent update did not run")
 
 
 def test_on_modify_spawn_queue_batch_limit():
@@ -1588,7 +1616,7 @@ def test_on_modify_cp_completion_spawns_next_link():
 
     def _spawn_child_atomic_stub(child, parent):
         spawned["child"] = child
-        return ("deadbeef", set())
+        return ("deadbeef", set(), False, True, "queued")
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
     mod._export_uuid_short_cached = lambda _short: {}
@@ -1627,7 +1655,7 @@ def test_on_modify_cp_completion_spawns_next_link():
 
     out_task = _extract_last_json(buf_out.getvalue())
     expect("child" in spawned, "CP completion did not trigger spawn")
-    expect(out_task.get("nextLink") == "deadbeef", "CP completion did not set nextLink")
+    expect(out_task.get("nextLink") in (None, ""), "CP completion should not set nextLink in decision-only mode")
 
 
 def test_on_add_run_task_timeout():
@@ -1801,6 +1829,7 @@ TESTS = [
     test_anchor_expr_length_limit,
     test_build_local_datetime_dst_gap_and_ambiguous,
     test_on_modify_chain_export_cache_key_includes_params,
+    test_on_modify_chain_export_skips_when_locked,
     test_coerce_int_bounds,
     test_on_add_fail_and_exit_emits_json,
     test_on_modify_read_two_fuzz_inputs,
@@ -1808,7 +1837,7 @@ TESTS = [
     test_on_add_dnf_cache_corrupt_payload_recovers,
     test_on_add_dnf_cache_quarantines_invalid_jsonl,
     test_on_add_dnf_cache_size_guard_skips_load,
-    test_on_modify_spawn_deferred_then_drain,
+    test_on_exit_spawn_intents_drain,
     test_on_modify_spawn_queue_batch_limit,
     test_on_modify_cp_completion_spawns_next_link,
     test_spawn_queue_recovers_partial_payload,

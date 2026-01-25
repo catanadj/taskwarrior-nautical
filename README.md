@@ -40,7 +40,7 @@ Nautical gives you a **single line that just works**, keeps your data **local**,
 ```bash
 # 1. Drop the hooks in place
 cd ~/.task/hooks
-curl -LO https://github.com/catanadj/taskwarrior-nautical/raw/main/on-{add,modify}-nautical.py
+curl -LO https://github.com/catanadj/taskwarrior-nautical/raw/main/on-{add,modify,exit}-nautical.py
 chmod +x on-*.py
 cd ..
 curl -LO https://github.com/catanadj/taskwarrior-nautical/raw/main/nautical_core.py
@@ -164,6 +164,55 @@ Links left: 8 left (cap #10)
 - Plain-text backup - grep your rules!
 
 ---
+
+## Operational Knobs
+
+Common knobs:
+
+- `NAUTICAL_DNF_DISK_CACHE=0` disables the on-add JSONL cache (default: enabled).
+- `NAUTICAL_DIAG=1` prints diagnostics and config search paths.
+- `NAUTICAL_PROFILE=1` emits lightweight timing (stderr).
+- `panel_mode="fast"` forces plain panel rendering (skip Rich).
+- `panel_mode="line"` shows a single summary line inside a compact panel.
+- `fast_color=false` disables ANSI in fast panels.
+- `spawn_queue_max_bytes` caps deferred spawn queue size.
+- `spawn_queue_drain_max_items` caps items drained per batch.
+
+Self-check:
+
+```
+python3 nautical_navigator.py --self-check
+NAUTICAL_DIAG=1 python3 nautical_navigator.py --self-check
+```
+
+---
+
+## Performance Checklist
+
+- Enable disk cache: default on (disable only if debugging).
+- Use `panel_mode="fast"` on slow terminals or mobile.
+- If you see slowdowns, run `NAUTICAL_PROFILE=1` for a short session.
+- For heavy workloads, raise `spawn_queue_max_bytes` and `spawn_queue_drain_max_items`.
+
+---
+
+## Load Testing
+
+Use `tools/load_test_nautical.py` to measure performance on your machine:
+
+```
+python3 tools/load_test_nautical.py --tasks 2000 --concurrency 4
+python3 tools/load_test_nautical.py --ramp --ramp-start 200 --ramp-step 500 --ramp-max 10000 --concurrency 16
+python3 tools/load_test_nautical.py --ramp --done-only --ramp-start 200 --ramp-step 500 --ramp-max 10000 --concurrency 16
+python3 tools/load_test_nautical.py --rate-ramp --rate-secs 30 --rate-start 5 --rate-step 5 --rate-max 100
+```
+
+What each mode does:
+
+- Batch: fixed number of adds (and optional dones), report latency stats.
+- Ramp: increase task count per stage until thresholds are hit.
+- Done-only: measure on-modify performance by completing tasks created in the stage.
+- Rate-ramp: increase target ops/sec and report throughput and latency limits.
 
 ## Requirements
 

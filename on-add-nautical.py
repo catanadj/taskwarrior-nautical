@@ -26,6 +26,7 @@ from contextlib import contextmanager
 import shlex, subprocess
 import pickle
 import shutil
+import tempfile
 import textwrap
 from collections import OrderedDict
 try:
@@ -175,6 +176,9 @@ _DNF_DISK_CACHE_LOCK = _DNF_DISK_CACHE_PATH.with_suffix(".lock")
 _DNF_DISK_CACHE_VERSION = 1
 _DNF_DISK_CACHE_MAX_BYTES = 256 * 1024
 
+class _DNFCacheError(Exception):
+    pass
+
 def _core_sig() -> str:
     try:
         st = Path(core.__file__).stat()
@@ -263,13 +267,17 @@ def _load_dnf_disk_cache() -> OrderedDict:
             _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
             if _DNF_DISK_CACHE_PATH.exists():
                 try:
-                    if _DNF_DISK_CACHE_PATH.stat().st_size > _DNF_DISK_CACHE_MAX_BYTES:
+                    st = _DNF_DISK_CACHE_PATH.stat()
+                    if st.st_size > _DNF_DISK_CACHE_MAX_BYTES:
                         _diag(f"DNF cache too large; skipping load: {_DNF_DISK_CACHE_PATH}")
                         return _DNF_DISK_CACHE
+                    file_size = st.st_size
                 except Exception:
+                    file_size = None
                     pass
                 with open(_DNF_DISK_CACHE_PATH, "r", encoding="utf-8") as f:
                     parsed_any = False
+                    parse_error = None
                     for line in f:
                         line = line.strip()
                         if not line:
@@ -277,7 +285,8 @@ def _load_dnf_disk_cache() -> OrderedDict:
                         try:
                             obj = json.loads(line)
                         except Exception:
-                            continue
+                            parse_error = "DNF cache JSONL parse failure"
+                            break
                         parsed_any = True
                         if isinstance(obj, dict) and "version" in obj:
                             continue
@@ -292,7 +301,7 @@ def _load_dnf_disk_cache() -> OrderedDict:
                                 val = obj.get("v")
                         if key is not None:
                             _DNF_DISK_CACHE[str(key)] = val
-                    if not parsed_any:
+                    if parse_error:
                         try:
                             ts = int(time.time())
                             bad = _DNF_DISK_CACHE_PATH.with_suffix(f".corrupt.{ts}.jsonl")
@@ -300,6 +309,16 @@ def _load_dnf_disk_cache() -> OrderedDict:
                             _diag(f"DNF cache quarantined: {bad}")
                         except Exception:
                             pass
+                        raise _DNFCacheError(parse_error)
+                    if not parsed_any and (file_size or 0) > 0:
+                        try:
+                            ts = int(time.time())
+                            bad = _DNF_DISK_CACHE_PATH.with_suffix(f".corrupt.{ts}.jsonl")
+                            os.replace(_DNF_DISK_CACHE_PATH, bad)
+                            _diag(f"DNF cache quarantined: {bad}")
+                        except Exception:
+                            pass
+                        raise _DNFCacheError("DNF cache JSONL contains no valid entries")
             elif _DNF_DISK_CACHE_PATH_LEGACY.exists():
                 # Legacy pickle format: raw dict or versioned dict.
                 with open(_DNF_DISK_CACHE_PATH_LEGACY, "rb") as f:
@@ -312,7 +331,9 @@ def _load_dnf_disk_cache() -> OrderedDict:
                     _DNF_DISK_CACHE = OrderedDict(obj.items())
                 if _DNF_DISK_CACHE:
                     _DNF_DISK_CACHE_DIRTY = True
-    except Exception:
+    except Exception as e:
+        if isinstance(e, _DNFCacheError):
+            raise
         _DNF_DISK_CACHE = OrderedDict()
     return _DNF_DISK_CACHE
 
@@ -320,6 +341,7 @@ def _save_dnf_disk_cache() -> None:
     global _DNF_DISK_CACHE_DIRTY
     if not (_DNF_DISK_CACHE_ENABLED and _DNF_DISK_CACHE_DIRTY and isinstance(_DNF_DISK_CACHE, OrderedDict)):
         return
+    tmp = None
     try:
         with _dnf_cache_lock() as locked:
             if not locked:
@@ -328,8 +350,12 @@ def _save_dnf_disk_cache() -> None:
             # trim oldest
             while len(_DNF_DISK_CACHE) > _DNF_DISK_CACHE_MAX:
                 _DNF_DISK_CACHE.popitem(last=False)
-            tmp = _DNF_DISK_CACHE_PATH.with_suffix(".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
+            fd, tmp = tempfile.mkstemp(
+                dir=str(_DNF_DISK_CACHE_PATH.parent),
+                prefix=".dnf_cache.",
+                suffix=".tmp",
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 header = {"version": _DNF_DISK_CACHE_VERSION}
                 f.write(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n")
                 for k, v in _DNF_DISK_CACHE.items():
@@ -345,6 +371,12 @@ def _save_dnf_disk_cache() -> None:
     except Exception:
         # cache write failures must never affect hook correctness
         pass
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
 
 if _DNF_DISK_CACHE_ENABLED:
     atexit.register(_save_dnf_disk_cache)

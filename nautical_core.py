@@ -7,6 +7,7 @@ Shared core for Taskwarrior Nautical hooks.
 from __future__ import annotations
 import os, re, sys
 import copy
+import math
 from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache
 from calendar import month_name
@@ -3187,13 +3188,18 @@ def coerce_int(v, default=None):
         if isinstance(v, bool):
             return int(v)
         if isinstance(v, int):
-            return v
+            return v if abs(v) <= (2**63 - 1) else default
         if isinstance(v, float):
-            return int(round(v))
+            if not math.isfinite(v):
+                return default
+            iv = int(round(v))
+            return iv if abs(iv) <= (2**63 - 1) else default
         s = str(v).strip()
         if _int_floatish_re.fullmatch(s):
-            return int(float(s))
-        return int(s)
+            iv = int(float(s))
+            return iv if abs(iv) <= (2**63 - 1) else default
+        iv = int(s)
+        return iv if abs(iv) <= (2**63 - 1) else default
     except Exception:
         return default
 

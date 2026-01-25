@@ -572,6 +572,12 @@ def test_anchor_expr_length_limit():
     except core.ParseError:
         pass
 
+def test_coerce_int_bounds():
+    """coerce_int should return default for out-of-bounds values."""
+    big = 2**63
+    expect(core.coerce_int(big, default=7) == 7, "coerce_int should reject too-large int")
+    expect(core.coerce_int(float(big), default=7) == 7, "coerce_int should reject too-large float")
+
 def test_build_local_datetime_dst_gap_and_ambiguous():
     """build_local_datetime should handle DST gaps and ambiguities deterministically."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
@@ -1393,7 +1399,7 @@ def test_on_add_dnf_cache_versioned_payload():
 
 
 def test_on_add_dnf_cache_corrupt_payload_recovers():
-    """on-add DNF cache load recovers from corrupt pickle without raising."""
+    """on-add DNF cache load should fail on invalid JSONL payloads."""
     hook = _find_hook_file("on-add-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_add_cache_corrupt_test")
     if not hasattr(mod, "_load_dnf_disk_cache"):
@@ -1412,9 +1418,11 @@ def test_on_add_dnf_cache_corrupt_payload_recovers():
         mod._DNF_DISK_CACHE_ENABLED = True
         mod._DNF_DISK_CACHE = None
 
-        loaded = mod._load_dnf_disk_cache()
-        expect(isinstance(loaded, OrderedDict), "DNF cache corrupt load should return OrderedDict")
-        expect(len(loaded) == 0, "DNF cache corrupt load should return empty cache")
+        try:
+            mod._load_dnf_disk_cache()
+            expect(False, "DNF cache corrupt JSONL should raise")
+        except Exception:
+            pass
 
 
 def test_on_add_dnf_cache_quarantines_invalid_jsonl():
@@ -1437,7 +1445,10 @@ def test_on_add_dnf_cache_quarantines_invalid_jsonl():
         mod._DNF_DISK_CACHE_ENABLED = True
         mod._DNF_DISK_CACHE = None
 
-        _ = mod._load_dnf_disk_cache()
+        try:
+            _ = mod._load_dnf_disk_cache()
+        except Exception:
+            pass
         quarantined = [p for p in os.listdir(td) if p.startswith("dnf_cache.corrupt.") and p.endswith(".jsonl")]
         expect(quarantined, "DNF cache should quarantine invalid JSONL")
 
@@ -1766,6 +1777,7 @@ TESTS = [
     test_weeks_between_iso_boundary,
     test_anchor_expr_length_limit,
     test_build_local_datetime_dst_gap_and_ambiguous,
+    test_coerce_int_bounds,
     test_on_add_fail_and_exit_emits_json,
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_versioned_payload,

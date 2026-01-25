@@ -66,7 +66,7 @@ _MAX_SPAWN_ATTEMPTS = 3
 _SPAWN_RETRY_DELAY = 0.1  # seconds between retries
 # Spawn intent queue guards (override via env for heavy workloads).
 # spawn_queue_max_bytes: warn when queue exceeds this size (on-exit drains).
-_SPAWN_QUEUE_MAX_BYTES = 524288
+_DEFAULT_SPAWN_QUEUE_MAX_BYTES = 524288
 # spawn_queue_drain_max_items remains in config for legacy docs, but is unused here.
 _SPAWN_QUEUE_DRAIN_MAX_ITEMS = 200
 
@@ -95,7 +95,7 @@ _DIAG_START_TS = _ptime.perf_counter()
 # Debug: wait/scheduled carry-forward
 # Set debug_wait_sched=true to include carry computations in the feedback panel.
 # ------------------------------------------------------------------------------
-_DEBUG_WAIT_SCHED = False
+_DEFAULT_DEBUG_WAIT_SCHED = False
 _LAST_WAIT_SCHED_DEBUG = OrderedDict()
 _MAX_WAIT_SCHED_DEBUG = 32
 _WARNED_SPAWN_QUEUE_GROWTH = False
@@ -258,11 +258,12 @@ def _add(p):
 
 _add(HOOK_DIR)
 _add(TW_DIR)
-if os.environ.get("TASKDATA"):
-    _add(os.environ["TASKDATA"])
-if os.environ.get("TASKRC"):
-    _add(Path(os.environ["TASKRC"]).parent)
-_add(Path.home() / ".task")
+if os.environ.get("NAUTICAL_DEV") == "1":
+    if os.environ.get("TASKDATA"):
+        _add(os.environ["TASKDATA"])
+    if os.environ.get("TASKRC"):
+        _add(Path(os.environ["TASKRC"]).parent)
+    _add(Path.home() / ".task")
 
 core = None
 for base in _candidates:
@@ -303,8 +304,8 @@ _ANALYTICS_STYLE = core.ANALYTICS_STYLE
 _ANALYTICS_ONTIME_TOL_SECS = core.ANALYTICS_ONTIME_TOL_SECS
 _CHECK_CHAIN_INTEGRITY = core.CHECK_CHAIN_INTEGRITY
 _VERIFY_IMPORT = core.VERIFY_IMPORT
-_DEBUG_WAIT_SCHED = core.DEBUG_WAIT_SCHED
-_SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES
+_DEBUG_WAIT_SCHED = core.DEBUG_WAIT_SCHED if hasattr(core, "DEBUG_WAIT_SCHED") else _DEFAULT_DEBUG_WAIT_SCHED
+_SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES if hasattr(core, "SPAWN_QUEUE_MAX_BYTES") else _DEFAULT_SPAWN_QUEUE_MAX_BYTES
 _SPAWN_QUEUE_DRAIN_MAX_ITEMS = core.SPAWN_QUEUE_DRAIN_MAX_ITEMS
 _MAX_CHAIN_WALK = core.MAX_CHAIN_WALK
 
@@ -473,9 +474,6 @@ def _panel_line(
         border_style=border_style,
         title_style=title_style,
     )
-
-def _panel_line_from_rows(title, rows) -> str:
-    return core.panel_line_from_rows(title, rows)
 
 def _strip_quotes(s: str) -> str:
     s = (s or "").strip()
@@ -3944,4 +3942,45 @@ def main():
 
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    main()
+    import io
+    raw = sys.stdin.read()
+    try:
+        sys.stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                sys.stderr.write(f"[nautical] on-modify unexpected error: {e}\n")
+            except Exception:
+                pass
+        new_obj = None
+        try:
+            decoder = json.JSONDecoder()
+            idx = 0
+            objs = []
+            n = len(raw)
+            while idx < n:
+                while idx < n and raw[idx].isspace():
+                    idx += 1
+                if idx >= n:
+                    break
+                obj, end = decoder.raw_decode(raw, idx)
+                objs.append(obj)
+                idx = end
+            if len(objs) == 1 and isinstance(objs[0], list):
+                arr = [o for o in objs[0] if isinstance(o, dict)]
+                if arr:
+                    new_obj = arr[-1]
+            else:
+                arr = [o for o in objs if isinstance(o, dict)]
+                if arr:
+                    new_obj = arr[-1]
+        except Exception:
+            new_obj = None
+        if new_obj is None:
+            new_obj = {}
+        print(json.dumps(new_obj, ensure_ascii=False), end="")
+        sys.stdout.flush()
+        raise SystemExit(0)

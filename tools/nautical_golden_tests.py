@@ -1475,6 +1475,21 @@ def test_on_add_dnf_cache_size_guard_skips_load():
         expect(len(loaded) == 0, "DNF cache size-guard load should return empty cache")
 
 
+def test_core_import_deterministic():
+    """Hooks should ignore TASKDATA unless NAUTICAL_DEV=1."""
+    with tempfile.TemporaryDirectory() as td:
+        bad_core = Path(td) / "nautical_core.py"
+        bad_core.write_text("raise RuntimeError('bad core')\n", encoding="utf-8")
+        os.environ["TASKDATA"] = td
+        os.environ.pop("NAUTICAL_DEV", None)
+        try:
+            hook = _find_hook_file("on-add-nautical.py")
+            _ = _load_hook_module(hook, "_nautical_on_add_import_deterministic_test").core
+        finally:
+            os.environ.pop("TASKDATA", None)
+
+    expect(True, "core import should ignore TASKDATA when NAUTICAL_DEV is not set")
+
 def test_on_exit_spawn_intents_drain():
     """on-exit should import child and update parent from spawn intents."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -2325,6 +2340,7 @@ TESTS = [
     test_on_exit_lock_failure_keeps_queue,
     test_on_exit_queue_streaming_line_cap,
     test_on_exit_dead_letter_rotation,
+    test_core_import_deterministic,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,

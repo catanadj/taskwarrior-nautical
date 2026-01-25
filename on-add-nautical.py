@@ -79,11 +79,12 @@ def _add(p):
 
 _add(HOOK_DIR)  # dev copy next to hook
 _add(TW_DIR)  # ~/.task
-if os.environ.get("TASKDATA"):
-    _add(os.environ["TASKDATA"])
-if os.environ.get("TASKRC"):
-    _add(Path(os.environ["TASKRC"]).parent)
-_add(Path.home() / ".task")
+if os.environ.get("NAUTICAL_DEV") == "1":
+    if os.environ.get("TASKDATA"):
+        _add(os.environ["TASKDATA"])
+    if os.environ.get("TASKRC"):
+        _add(Path(os.environ["TASKRC"]).parent)
+    _add(Path.home() / ".task")
 
 core = None
 for base in _candidates:
@@ -213,7 +214,8 @@ def _dnf_cache_lock():
         except Exception:
             pass
         try:
-            lf = open(_DNF_DISK_CACHE_LOCK, "a", encoding="utf-8")
+            fd = os.open(str(_DNF_DISK_CACHE_LOCK), os.O_CREAT | os.O_RDWR, 0o600)
+            lf = os.fdopen(fd, "a", encoding="utf-8")
             for attempt in range(_DNF_LOCK_RETRIES):
                 try:
                     fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1660,4 +1662,28 @@ def main():
 
 # --------------------------------------------------------------------------------------
 if __name__ == "__main__":
-    main()
+    import io
+    raw = sys.stdin.read()
+    try:
+        sys.stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                sys.stderr.write(f"[nautical] on-add unexpected error: {e}\n")
+            except Exception:
+                pass
+        out = (raw or "").strip()
+        if out:
+            try:
+                obj = json.loads(out)
+                print(json.dumps(obj, ensure_ascii=False), end="")
+                sys.stdout.flush()
+                raise SystemExit(0)
+            except Exception:
+                pass
+        print("{}", end="")
+        sys.stdout.flush()
+        raise SystemExit(0)

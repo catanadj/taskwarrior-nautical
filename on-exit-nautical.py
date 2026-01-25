@@ -88,7 +88,8 @@ def _lock_queue():
         except Exception:
             pass
         try:
-            lf = open(_QUEUE_LOCK, "a", encoding="utf-8")
+            fd = os.open(str(_QUEUE_LOCK), os.O_CREAT | os.O_RDWR, 0o600)
+            lf = os.fdopen(fd, "a", encoding="utf-8")
             for _ in range(6):
                 try:
                     fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -153,7 +154,8 @@ def _lock_dead_letter():
         except Exception:
             pass
         try:
-            lf = open(_DEAD_LETTER_LOCK, "a", encoding="utf-8")
+            fd = os.open(str(_DEAD_LETTER_LOCK), os.O_CREAT | os.O_RDWR, 0o600)
+            lf = os.fdopen(fd, "a", encoding="utf-8")
             for _ in range(6):
                 try:
                     fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -421,4 +423,15 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as e:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            _diag(f"on-exit unexpected error: {e}")
+        try:
+            _write_dead_letter({"error": str(e)}, "on-exit exception")
+        except Exception:
+            pass
+        raise SystemExit(0)

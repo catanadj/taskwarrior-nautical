@@ -544,12 +544,53 @@ def test_anchor_cache_cleans_stale_tmp_files():
             f.write('enable_anchor_cache = true\n')
             f.write('anchor_cache_dir = "' + td.replace("\\\\", "/") + '"\\n')
         mod = _load_core_module(core_path, "_nautical_core_cache_tmp_test", cfg)
+        mod.ENABLE_ANCHOR_CACHE = True
+        mod.ANCHOR_CACHE_DIR_OVERRIDE = td
+        mod._CACHE_DIR = None
         key = "deadbeef"
         stale = os.path.join(td, f".{key}.stale.tmp")
         with open(stale, "w", encoding="utf-8") as f:
             f.write("stale")
         mod.cache_save(key, {"dnf": []})
-        expect(not os.path.exists(stale), "stale cache tmp file should be cleaned")
+    expect(not os.path.exists(stale), "stale cache tmp file should be cleaned")
+
+def test_weeks_between_iso_boundary():
+    """_weeks_between should honor ISO week boundaries across years."""
+    d1 = date(2024, 12, 31)  # ISO week 2025-W01
+    d2 = date(2025, 1, 1)    # ISO week 2025-W01
+    expect(core._weeks_between(d1, d2) == 0, "same ISO week across year should be 0")
+    d3 = date(2024, 12, 29)  # ISO week 2024-W52
+    d4 = date(2024, 12, 30)  # ISO week 2025-W01
+    expect(core._weeks_between(d3, d4) == 1, "ISO week boundary should be 1")
+
+def test_anchor_expr_length_limit():
+    """Anchor expressions over 1024 chars should fail fast."""
+    s = "w:mon" + ("+w:mon" * 300)
+    try:
+        core.parse_anchor_expr_to_dnf(s)
+        expect(False, "long anchor should raise ParseError")
+    except core.ParseError:
+        pass
+
+def test_build_local_datetime_dst_gap_and_ambiguous():
+    """build_local_datetime should handle DST gaps and ambiguities deterministically."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    with tempfile.TemporaryDirectory() as td:
+        cfg = os.path.join(td, "nautical.toml")
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write('tz = "America/New_York"\n')
+        mod = _load_core_module(core_path, "_nautical_core_dst_policy_test", cfg)
+
+        # Spring forward: 2025-03-09 02:30 does not exist -> shift forward.
+        dt_utc = mod.build_local_datetime(date(2025, 3, 9), (2, 30))
+        back = mod.to_local(dt_utc)
+        expect(back.hour == 3 and back.minute == 30, f"DST gap should shift forward: {back}")
+
+        # Fall back: 2025-11-02 01:30 is ambiguous -> choose earlier (EDT, UTC-4).
+        dt_utc = mod.build_local_datetime(date(2025, 11, 2), (1, 30))
+        back = mod.to_local(dt_utc)
+        offset = back.utcoffset()
+        expect(offset is not None and offset.total_seconds() == -4 * 3600, f"DST fall back should choose earlier: {back}")
 
 def test_weekly_and_unsat():
     """Test weekly AND (Sat AND Mon) must be unsatisfiable"""
@@ -1722,6 +1763,9 @@ TESTS = [
     test_next_for_and_no_progress_fails_fast,
     test_roll_apply_has_guard,
     test_anchor_cache_cleans_stale_tmp_files,
+    test_weeks_between_iso_boundary,
+    test_anchor_expr_length_limit,
+    test_build_local_datetime_dst_gap_and_ambiguous,
     test_on_add_fail_and_exit_emits_json,
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_versioned_payload,

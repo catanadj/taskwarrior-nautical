@@ -3665,6 +3665,8 @@ def parse_anchor_expr_to_dnf(s: str):
     """Parse anchor expression into Disjunctive Normal Form."""
     # Accept anchors wrapped in quotes from the CLI; normalize rand-month alias.
     s = _unwrap_quotes(s or "").strip()
+    if len(s) > 1024:
+        raise ParseError("Anchor expression too long (max 1024 characters).")
     s = re.sub(r'\b(\d{2})-rand\b', r'rand-\1', s)
     s = _rewrite_weekly_multi_time_atoms(s)
     i = 0
@@ -4832,8 +4834,10 @@ def roll_apply(dt: date, mods: dict) -> date:
 def _weeks_between(d1: date, d2: date) -> int:
     """Return number of ISO weeks between two dates (d2 - d1)."""
     # Convert both dates to Monday of their ISO week
-    mon1 = d1 - timedelta(days=d1.weekday())
-    mon2 = d2 - timedelta(days=d2.weekday())
+    iso1 = d1.isocalendar()
+    iso2 = d2.isocalendar()
+    mon1 = date.fromisocalendar(iso1.year, iso1.week, 1)
+    mon2 = date.fromisocalendar(iso2.year, iso2.week, 1)
     # Compute difference in weeks
     return (mon2 - mon1).days // 7
 
@@ -5339,11 +5343,32 @@ def pick_hhmm_from_dnf_for_date(dnf, target: date, default_seed: date):
 
 
 def build_local_datetime(d: date, hhmm=(DEFAULT_DUE_HOUR, 0)) -> datetime:
-    """Build datetime from date and time in local timezone."""
+    """Build a UTC datetime from local wall-clock date+time with DST handling."""
     hh, mm = hhmm
-    if _LOCAL_TZ:
-        return datetime(d.year, d.month, d.day, hh, mm, 0, tzinfo=_LOCAL_TZ)
-    return datetime(d.year, d.month, d.day, hh, mm, 0, tzinfo=timezone.utc)
+    naive = datetime(d.year, d.month, d.day, hh, mm, 0)
+    if not _LOCAL_TZ:
+        return naive.replace(tzinfo=timezone.utc)
+
+    aware0 = naive.replace(tzinfo=_LOCAL_TZ, fold=0)
+    aware1 = naive.replace(tzinfo=_LOCAL_TZ, fold=1)
+
+    # Ambiguous time (fall back): choose earlier instance (fold=0).
+    if aware0.utcoffset() != aware1.utcoffset():
+        return aware0.astimezone(timezone.utc)
+
+    # Non-existent time (spring forward): shift forward to next valid minute.
+    back = aware0.astimezone(timezone.utc).astimezone(_LOCAL_TZ)
+    if back.replace(tzinfo=None) != naive:
+        cand = naive
+        for _ in range(180):
+            cand += timedelta(minutes=1)
+            aware = cand.replace(tzinfo=_LOCAL_TZ, fold=0)
+            back = aware.astimezone(timezone.utc).astimezone(_LOCAL_TZ)
+            if back.replace(tzinfo=None) == cand:
+                return aware.astimezone(timezone.utc)
+        return aware0.astimezone(timezone.utc)
+
+    return aware0.astimezone(timezone.utc)
 
 
 

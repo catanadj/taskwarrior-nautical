@@ -359,6 +359,8 @@ FAST_COLOR = _conf_bool("fast_color", True)
 SPAWN_QUEUE_MAX_BYTES = _conf_int("spawn_queue_max_bytes", 524288, min_value=0)
 SPAWN_QUEUE_DRAIN_MAX_ITEMS = _conf_int("spawn_queue_drain_max_items", 200, min_value=0)
 MAX_CHAIN_WALK = _conf_int("max_chain_walk", 500, min_value=1)
+MAX_ANCHOR_ITER = _conf_int("max_anchor_iterations", 128, min_value=32, max_value=1024)
+MAX_LINK_NUMBER = _conf_int("max_link_number", 10000, min_value=1)
 
 def short_uuid(u: str | None) -> str:
     """Taskwarrior-style short uuid (first 8 hex)."""
@@ -550,6 +552,14 @@ _md_range_re = re.compile(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$")
 _rand_mm_re = re.compile(r"^rand-(\d{2})$")
 _year_range_colon_re = re.compile(r"^(\d{2})-(\d{2})\.\.(\d{2})-(\d{2})$")
 _int_range_re = re.compile(r"^-?\d+\s*\.\.\s*-?\d+$")
+
+def _safe_match(pattern: re.Pattern, text: str, max_len: int = 256):
+    """Defensive regex match to avoid pathological backtracking."""
+    if text is None:
+        return None
+    if len(text) > max_len:
+        raise ParseError("Expression too complex")
+    return pattern.match(text)
 
 
 def _split_csv_tokens(spec: str) -> list[str]:
@@ -1029,6 +1039,11 @@ def _normalize_spec_for_acf_uncached(typ: str, spec: str):
 
 @lru_cache(maxsize=512)
 def _normalize_spec_for_acf_cached(typ: str, spec: str, fmt: str):
+    typ = (typ or "").strip().lower()[:1]
+    if typ not in ("w", "m", "y"):
+        return None
+    spec = (spec or "").strip().lower()[:256]
+    fmt = "DM" if (fmt or "").upper() == "DM" else "MD"
     return _normalize_spec_for_acf_uncached(typ, spec)
 
 
@@ -1700,7 +1715,7 @@ def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
 
     # -------- Fast path (no rand+yearly combo) ----------
     probe = ref_d
-    for _ in range(128):
+    for _ in range(MAX_ANCHOR_ITER):
         cands = [next_after_atom_with_mods(atom, probe, seed) for atom in term]
         target = max(cands)
         if target <= probe:
@@ -1714,6 +1729,11 @@ def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
         if all(atom_matches_on(atom, target, seed) for atom in term):
             return target
         probe = target
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        _warn_once_per_day(
+            "next_for_and_fallback",
+            f"[nautical] _next_for_and fallback after {MAX_ANCHOR_ITER} iterations.",
+        )
     return ref_d + timedelta(days=365)
 
 
@@ -2408,7 +2428,7 @@ def _fmt_monthly_atom(spec: str) -> str:
     if s == "rand":
         return "one random day each month"
 
-    m = _nth_wd_re.match(s)
+    m = _safe_match(_nth_wd_re, s)
     if m:
         idx, wd = m.group(1), m.group(2)
         name = _WDNAME[_WD_INDEX[wd]]  # Title Case (Monday, Friday…)
@@ -2551,7 +2571,7 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
             return False, []
         out = []
         for t in toks:
-            m = _nth_wd_re.match(t)
+            m = _safe_match(_nth_wd_re, t)
             if not m:
                 return False, []
             n_raw, wd = m.group(1), m.group(2)
@@ -2945,7 +2965,7 @@ def describe_anchor_dnf(dnf: list, task: dict) -> str:
 def _normalize_range_token(tok: str) -> str | None:
     """Return 'A–B' for monthly range tokens like '1..7'; else None."""
     s = (tok or "").strip().lower()
-    m = _int_range_re.match(s)
+    m = _safe_match(_int_range_re, s)
     if not m:
         return None
     a, b = [int(x) for x in s.split("..")]
@@ -5020,7 +5040,7 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
         return yy, mm
 
     # ---- guarded iteration ----
-    for _ in range(128):
+    for _ in range(MAX_ANCHOR_ITER):
         base = base_next_after_atom(atom, probe)
 
         # @bd modifier: weekdays only - skip weekends entirely (move to next bucket)
@@ -5093,6 +5113,11 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
         probe = base + timedelta(days=1)
 
     # fallback
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        _warn_once_per_day(
+            "next_after_atom_fallback",
+            f"[nautical] next_after_atom_with_mods fallback after {MAX_ANCHOR_ITER} iterations.",
+        )
     return ref_d + timedelta(days=365)
 
 

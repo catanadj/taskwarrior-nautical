@@ -61,9 +61,8 @@ _MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
 
 _MAX_SPAWN_ATTEMPTS = 3
 _SPAWN_RETRY_DELAY = 0.1  # seconds between retries
-# Deferred spawn queue guards (override via env for heavy workloads).
-# spawn_queue_max_bytes: skip full-load parsing if queue exceeds this size.
-# spawn_queue_drain_max_items is unused in on-modify (on-exit handles draining).
+# Spawn intent queue guards (override via env for heavy workloads).
+# spawn_queue_max_bytes: warn when queue exceeds this size (on-exit drains).
 _SPAWN_QUEUE_MAX_BYTES = 524288
 # spawn_queue_drain_max_items remains in config for legacy docs, but is unused here.
 _SPAWN_QUEUE_DRAIN_MAX_ITEMS = 200
@@ -1157,7 +1156,12 @@ def _export_uuid_short(u_short: str, env=None):
         return None
     try:
         obj = json.loads(out.strip() or "{}")
-        return obj if obj.get("uuid") else None
+        if not obj.get("uuid"):
+            return None
+        if not str(obj.get("uuid") or "").lower().startswith((u_short or "").lower()):
+            _diag(f"uuid prefix mismatch for {u_short}")
+            return None
+        return obj
     except Exception:
         return None
 
@@ -1420,19 +1424,17 @@ def _enqueue_spawn_intent(entry: dict) -> None:
 
 def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tuple[str, set[str], bool, bool, str | None]:
     """
-    Spawn a child via `task import -`.
+    Queue a child spawn intent for the on-exit hook.
 
     Important: The parent update is applied by Taskwarrior using this hook's stdout.
     We intentionally avoid importing the parent from inside the hook to reduce the
     risk of re-entering Taskwarrior while it is holding the datastore lock.
 
-    If the nested import times out (typically lock contention during `task done`),
-    we enqueue the child for a deferred drain after the main command returns and
-    return `verified=False` to prevent parent updates until the child is confirmed.
+    We enqueue the child for the on-exit hook to import and link after the main command returns.
     """
     env = os.environ.copy()
 
-    # Prepare child with a stable UUID (so retries / deferred drain cannot fork).
+    # Prepare child with a stable UUID (so retries cannot fork).
     child_uuid = str(uuid.uuid4())
     child_obj = dict(child_task)
     child_obj["uuid"] = child_uuid
@@ -2520,8 +2522,27 @@ def _local_naive_to_utc(dt_local_naive: datetime) -> datetime:
         raise TypeError("dt_local_naive must be datetime")
     tz = _nautical_local_tz()
     if tz:
-        aware = dt_local_naive.replace(tzinfo=tz)
-        return aware.astimezone(timezone.utc).replace(microsecond=0)
+        naive = dt_local_naive.replace(microsecond=0)
+        aware0 = naive.replace(tzinfo=tz, fold=0)
+        aware1 = naive.replace(tzinfo=tz, fold=1)
+
+        # Ambiguous time (fall back): choose earlier instance (fold=0).
+        if aware0.utcoffset() != aware1.utcoffset():
+            return aware0.astimezone(timezone.utc)
+
+        # Non-existent time (spring forward): shift forward to next valid minute.
+        back = aware0.astimezone(timezone.utc).astimezone(tz)
+        if back.replace(tzinfo=None) != naive:
+            cand = naive
+            for _ in range(180):
+                cand += timedelta(minutes=1)
+                aware = cand.replace(tzinfo=tz, fold=0)
+                back = aware.astimezone(timezone.utc).astimezone(tz)
+                if back.replace(tzinfo=None) == cand:
+                    return aware.astimezone(timezone.utc)
+            return aware0.astimezone(timezone.utc)
+
+        return aware0.astimezone(timezone.utc)
     return dt_local_naive.replace(tzinfo=timezone.utc).replace(microsecond=0)
 
 
@@ -2536,20 +2557,36 @@ def _carry_relative_datetime(parent: dict, child: dict, child_due_utc: datetime,
     if not (parent.get(field) and parent.get("due")):
         return
 
-    # Do not carry absolute timestamps forward.
-    child.pop(field, None)
-
     p_due = core.parse_dt_any(parent.get("due"))
     p_val = core.parse_dt_any(parent.get(field))
     if not (p_due and p_val and isinstance(child_due_utc, datetime)):
+        if _DEBUG_WAIT_SCHED:
+            _set_wait_sched_debug(field, {
+                "ok": False,
+                "reason": "parse-failed",
+                "parent_due": parent.get("due"),
+                "parent_val": parent.get(field),
+                "child_due": child.get("due") or (core.fmt_isoz(child_due_utc) if isinstance(child_due_utc, datetime) else None),
+            })
         return
 
     try:
+        # Do not carry absolute timestamps forward.
+        child.pop(field, None)
         delta = _utc_to_local_naive(p_val) - _utc_to_local_naive(p_due)
         c_due_local = _utc_to_local_naive(child_due_utc)
         c_val_local = c_due_local + delta
         c_val_utc = _local_naive_to_utc(c_val_local)
         child[field] = core.fmt_isoz(c_val_utc)
+        if _DEBUG_WAIT_SCHED:
+            _set_wait_sched_debug(field, {
+                "ok": True,
+                "parent_due": parent.get("due"),
+                "parent_val": parent.get(field),
+                "delta": _fmt_td_dd_hhmm(delta),
+                "child_due": child.get("due"),
+                "child_val": child.get(field),
+            })
     except Exception:
         # If anything goes wrong, do not mutate the child's field (leave inherited value).
         return
@@ -2589,8 +2626,8 @@ def _build_child_from_parent(
 
 
     # Carry wait/scheduled forward relative to due (if present on parent)
-    _carry_rel_dt_utc(parent, child, child_due_utc, "wait")
-    _carry_rel_dt_utc(parent, child, child_due_utc, "scheduled")
+    _carry_relative_datetime(parent, child, child_due_utc, "wait")
+    _carry_relative_datetime(parent, child, child_due_utc, "scheduled")
 
     if cpmax:
         child["chainMax"] = int(cpmax)
@@ -3649,6 +3686,16 @@ def main():
     parent_short = _short(new.get("uuid"))
     base_no = core.coerce_int(new.get("link"), 1)
     next_no = base_no + 1
+    if next_no > core.MAX_LINK_NUMBER:
+        _panel(
+            "⛔ Link limit exceeded",
+            [
+                ("Reason", f"Link number {next_no} exceeds max_link_number={core.MAX_LINK_NUMBER}."),
+            ],
+            kind="error",
+        )
+        _print_task(new)
+        return
 
     # Determine whether chaining is effectively enabled
     raw_ch = (new.get("chain") or "").strip().lower()
@@ -3844,7 +3891,8 @@ def main():
         return
 
     # Reflect link on parent only when child is confirmed.
-    new["nextLink"] = child_short
+    if verified:
+        new["nextLink"] = child_short
 
     # Build an in-memory chain index once for panel/timeline lookups.
     chain = []

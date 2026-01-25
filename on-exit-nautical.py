@@ -14,6 +14,7 @@ import os
 import json
 import time
 import subprocess
+import random
 from pathlib import Path
 from contextlib import contextmanager
 try:
@@ -30,10 +31,6 @@ try:
     sys.stderr.reconfigure(encoding="utf-8")
 except Exception:
     pass
-try:
-    sys.stdout = open(os.devnull, "w", encoding="utf-8")
-except Exception:
-    pass
 
 
 HOOK_DIR = Path(__file__).resolve().parent
@@ -42,6 +39,8 @@ TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
 
 _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
+_DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical_dead_letter.jsonl"
+_DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
 
 
 def _diag(msg: str) -> None:
@@ -67,6 +66,13 @@ def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float =
         return (False, "", "timeout")
     except Exception as e:
         return (False, "", str(e))
+
+def _is_lock_error(err: str) -> bool:
+    e = (err or "").lower()
+    return "lock" in e or "locked" in e or "database is locked" in e
+
+def _sleep(secs: float) -> None:
+    time.sleep(secs)
 
 
 @contextmanager
@@ -134,6 +140,89 @@ def _lock_queue():
             pass
 
 
+@contextmanager
+def _lock_dead_letter():
+    if fcntl is not None:
+        lf = None
+        acquired = False
+        try:
+            _DEAD_LETTER_PATH.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            lf = open(_DEAD_LETTER_LOCK, "a", encoding="utf-8")
+            for _ in range(6):
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except Exception:
+                    time.sleep(0.05)
+        except Exception:
+            lf = None
+        try:
+            yield acquired
+        finally:
+            try:
+                if acquired and lf is not None:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                if lf is not None:
+                    lf.close()
+            except Exception:
+                pass
+        return
+
+    fd = None
+    acquired = False
+    for _ in range(6):
+        try:
+            _DEAD_LETTER_PATH.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            fd = os.open(str(_DEAD_LETTER_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            acquired = True
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+        except Exception:
+            break
+    try:
+        yield acquired
+    finally:
+        try:
+            if acquired and fd is not None:
+                os.close(fd)
+        except Exception:
+            pass
+        try:
+            if acquired and fd is not None:
+                os.unlink(_DEAD_LETTER_LOCK)
+        except Exception:
+            pass
+
+
+def _write_dead_letter(entry: dict, reason: str) -> None:
+    payload = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "reason": reason,
+        "parent_uuid": (entry.get("parent_uuid") or "").strip(),
+        "child_short": (entry.get("child_short") or "").strip(),
+        "child_uuid": ((entry.get("child") or {}).get("uuid") or "").strip(),
+        "entry": entry,
+    }
+    with _lock_dead_letter() as locked:
+        if not locked:
+            return
+        try:
+            with open(_DEAD_LETTER_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except Exception:
+            pass
+
 def _take_queue_entries() -> list[dict]:
     entries: list[dict] = []
     with _lock_queue() as locked:
@@ -170,13 +259,19 @@ def _take_queue_entries() -> list[dict]:
             else:
                 remainder.append(line)
 
+        tmp_path = _QUEUE_PATH.with_suffix(".staging")
         try:
             if remainder:
-                _QUEUE_PATH.write_text("\n".join(remainder) + "\n", encoding="utf-8")
+                tmp_path.write_text("\n".join(remainder) + "\n", encoding="utf-8")
             else:
-                _QUEUE_PATH.write_text("", encoding="utf-8")
+                tmp_path.write_text("", encoding="utf-8")
+            os.replace(tmp_path, _QUEUE_PATH)
         except Exception:
-            pass
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except Exception:
+                pass
     return entries
 
 
@@ -212,22 +307,34 @@ def _export_uuid(uuid_str: str) -> dict | None:
 
 def _import_child(obj: dict) -> tuple[bool, str]:
     payload = json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n"
-    ok, _out, err = _run_task(
-        ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.verbose=nothing", "import", "-"],
-        input_text=payload,
-        timeout=8.0,
-    )
-    return ok, err or ""
+    max_retries = 4
+    last_err = ""
+    for attempt in range(max_retries):
+        ok, _out, err = _run_task(
+            ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.verbose=nothing", "import", "-"],
+            input_text=payload,
+            timeout=8.0,
+        )
+        if ok:
+            return True, ""
+        last_err = err or ""
+        if not _is_lock_error(last_err):
+            return False, last_err
+        if attempt < max_retries - 1:
+            base = 0.2 * (2 ** attempt)
+            jitter = random.uniform(0.0, 0.1)
+            _sleep(base + jitter)
+    return False, last_err
 
 
-def _update_parent_nextlink(parent_uuid: str, child_short: str) -> bool:
+def _update_parent_nextlink(parent_uuid: str, child_short: str) -> tuple[bool, str]:
     if not parent_uuid or not child_short:
-        return False
-    ok, _out, _err = _run_task(
+        return False, "missing parent or child"
+    ok, _out, err = _run_task(
         ["task", "rc.hooks=off", "rc.verbose=nothing", f"uuid:{parent_uuid}", "modify", f"nextLink:{child_short}"],
         timeout=4.0,
     )
-    return ok
+    return ok, err or ""
 
 
 def _drain_queue() -> dict:
@@ -242,6 +349,7 @@ def _drain_queue() -> dict:
         child_uuid = (child.get("uuid") or "").strip()
 
         if not child_uuid:
+            _write_dead_letter(entry, "missing child uuid")
             errors += 1
             continue
 
@@ -251,20 +359,24 @@ def _drain_queue() -> dict:
             if not ok:
                 # Keep for retry unless it is a hard error.
                 _diag(f"child import failed: {err}")
-                requeue.append(entry)
+                _write_dead_letter(entry, f"child import failed: {err}")
                 errors += 1
                 continue
 
         # Confirm child exists before touching parent.
         if not _export_uuid(child_uuid):
-            requeue.append(entry)
+            _write_dead_letter(entry, "child missing after import")
             errors += 1
             continue
 
         if parent_uuid and child_short:
-            if not _update_parent_nextlink(parent_uuid, child_short):
+            ok, err = _update_parent_nextlink(parent_uuid, child_short)
+            if not ok:
                 _diag(f"parent update failed: {parent_uuid}")
-                requeue.append(entry)
+                if _is_lock_error(err):
+                    requeue.append(entry)
+                else:
+                    _write_dead_letter(entry, f"parent update failed: {err}")
                 errors += 1
                 continue
 
@@ -277,6 +389,10 @@ def _drain_queue() -> dict:
 
 
 def main() -> int:
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
     stats = _drain_queue()
     if os.environ.get("NAUTICAL_DIAG") == "1":
         _diag(f"on-exit drain: processed={stats.get('processed', 0)} errors={stats.get('errors', 0)} requeued={stats.get('requeued', 0)}")

@@ -1530,6 +1530,200 @@ def test_on_exit_spawn_intents_drain():
         expect(parent_updated["ok"], "parent update did not run")
 
 
+def test_on_exit_queue_drain_is_transactional():
+    """on-exit should not truncate queue if staging replace fails."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_queue_txn_test")
+    if not hasattr(mod, "_take_queue_entries"):
+        raise AssertionError("on-exit hook does not expose queue helper")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+
+        child_uuid = "00000000-0000-0000-0000-000000000123"
+        valid = json.dumps({"child": {"uuid": child_uuid}})
+        invalid = "{bad-json"
+        original = valid + "\n" + invalid + "\n"
+        mod._QUEUE_PATH.write_text(original, encoding="utf-8")
+
+        orig_replace = mod.os.replace
+
+        def _replace_fail(*_args, **_kwargs):
+            raise OSError("replace failed")
+
+        mod.os.replace = _replace_fail
+        try:
+            entries = mod._take_queue_entries()
+        finally:
+            mod.os.replace = orig_replace
+
+        expect(len(entries) == 1, f"unexpected entries: {entries}")
+        after = mod._QUEUE_PATH.read_text(encoding="utf-8")
+        expect(after == original, "queue should remain unchanged on replace failure")
+
+
+def test_on_exit_import_child_retries_on_lock():
+    """on-exit should retry child import on lock errors with backoff."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_retry_test")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        mod.TW_DATA_DIR = Path(td)
+        calls = {"count": 0}
+        sleeps: list[float] = []
+
+        def _run_task_stub(_cmd, **_kwargs):
+            calls["count"] += 1
+            if calls["count"] < 3:
+                return False, "", "database is locked"
+            return True, "", ""
+
+        mod._run_task = _run_task_stub
+        mod._sleep = lambda secs: sleeps.append(secs)
+        mod.random.uniform = lambda _a, _b: 0.0
+
+        ok, err = mod._import_child({"uuid": "00000000-0000-0000-0000-000000000abc"})
+        expect(ok, f"import should succeed after retries, err={err}")
+        expect(calls["count"] == 3, f"unexpected retry count: {calls['count']}")
+        expect(len(sleeps) == 2, f"unexpected sleep calls: {sleeps}")
+
+
+def test_on_exit_dead_letter_on_import_failure():
+    """on-exit should dead-letter entries that fail to import."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_dead_letter_test")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        child_uuid = "00000000-0000-0000-0000-000000000777"
+        entry = {
+            "parent_uuid": "00000000-0000-0000-0000-000000000888",
+            "child_short": "c0ffee12",
+            "child": {"uuid": child_uuid, "description": "test"},
+        }
+        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        def _run_task_stub(cmd, **_kwargs):
+            cmd_s = " ".join(cmd)
+            if "export" in cmd_s and f"uuid:{child_uuid}" in cmd_s:
+                return True, "{}", ""
+            if "import" in cmd_s:
+                return False, "", "invalid task"
+            return False, "", "unexpected"
+
+        mod._run_task = _run_task_stub
+        stats = mod._drain_queue()
+        expect(stats.get("processed") == 0, f"unexpected processed: {stats}")
+        expect(stats.get("errors") == 1, f"unexpected errors: {stats}")
+
+        dead = mod._DEAD_LETTER_PATH.read_text(encoding="utf-8")
+        expect("child import failed" in dead, "dead letter should capture import failure")
+
+
+def test_on_modify_carry_wall_clock_across_dst():
+    """carry-forward should preserve local wall-clock offset across DST."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_carry_dst_test")
+
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:
+        return
+
+    mod.core.LOCAL_TZ_NAME = "America/New_York"
+    mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+
+    due_local = date(2025, 3, 9)
+    due_utc = mod.core.build_local_datetime(due_local, (1, 30))
+    wait_utc = mod.core.build_local_datetime(due_local, (3, 30))
+
+    child_due_utc = mod.core.build_local_datetime(date(2025, 3, 10), (1, 30))
+
+    parent = {
+        "due": mod.core.fmt_isoz(due_utc),
+        "wait": mod.core.fmt_isoz(wait_utc),
+    }
+    child = {"due": mod.core.fmt_isoz(child_due_utc)}
+
+    mod._carry_relative_datetime(parent, child, child_due_utc, "wait")
+    wait_child = mod.core.parse_dt_any(child.get("wait"))
+    wait_local = mod.core.to_local(wait_child)
+
+    expect(wait_local.hour == 3 and wait_local.minute == 30, f"unexpected local wait: {wait_local}")
+
+
+def test_normalize_spec_for_acf_cache_guards():
+    """normalize spec cache should bound inputs before caching."""
+    import nautical_core as core
+
+    res = core._normalize_spec_for_acf_cached("w", "mon", "MD")
+    expect(res == "mon", f"unexpected normalize result: {res}")
+
+    long_spec = "x" * 300
+    res = core._normalize_spec_for_acf_cached("w", long_spec, "MD")
+    expect(res is None, "expected None for overly long spec")
+
+    res = core._normalize_spec_for_acf_cached("q", "mon", "MD")
+    expect(res is None, "expected None for invalid typ")
+
+
+def test_on_modify_link_limit():
+    """on-modify should block spawns when link exceeds max."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_link_limit_test")
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._SHOW_ANALYTICS = False
+    mod._CHECK_CHAIN_INTEGRITY = False
+    mod.core.MAX_LINK_NUMBER = 3
+
+    mod._spawn_child_atomic = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should not spawn"))
+
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000111",
+        "status": "pending",
+        "description": "limit test",
+        "anchor": "w:mon",
+        "chainID": "abcd1234",
+        "link": 3,
+        "due": "20250101T090000Z",
+    }
+    new = dict(old)
+    new.update({"status": "completed", "end": "20250102T090000Z"})
+
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
+
+    raw = json.dumps(old) + "\n" + json.dumps(new)
+    stdin = io.StringIO(raw)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    orig_stdin = sys.stdin
+    try:
+        sys.stdin = stdin
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            mod.main()
+    finally:
+        sys.stdin = orig_stdin
+
+    out = json.loads((stdout.getvalue() or "{}").strip() or "{}")
+    expect(out.get("link") == 3, "should pass task through unchanged")
+
+
 
 def test_on_modify_cp_completion_spawns_next_link():
     """on-modify should spawn the next CP link on completion."""
@@ -1645,6 +1839,26 @@ def test_on_modify_export_uuid_short_invalid_json():
         mod._run_task = orig
 
     expect(obj is None, "Invalid JSON should yield None from _export_uuid_short")
+
+
+def test_on_modify_export_uuid_short_prefix_mismatch():
+    """on-modify _export_uuid_short returns None on prefix mismatch."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_export_uuid_prefix_mismatch_test")
+    if not hasattr(mod, "_export_uuid_short"):
+        raise AssertionError("on-modify hook does not expose _export_uuid_short")
+
+    def _run_task_ok(*_args, **_kwargs):
+        return True, json.dumps({"uuid": "00000000-0000-0000-0000-000000000001"}), ""
+
+    orig = mod._run_task
+    mod._run_task = _run_task_ok
+    try:
+        obj = mod._export_uuid_short("deadbeef")
+    finally:
+        mod._run_task = orig
+
+    expect(obj is None, "Prefix mismatch should yield None from _export_uuid_short")
 
 
 def test_on_modify_missing_taskdata_uses_tw_dir():
@@ -1765,10 +1979,17 @@ TESTS = [
     test_on_add_dnf_cache_quarantines_invalid_jsonl,
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_exit_spawn_intents_drain,
+    test_on_exit_queue_drain_is_transactional,
+    test_on_exit_import_child_retries_on_lock,
+    test_on_exit_dead_letter_on_import_failure,
+    test_on_modify_carry_wall_clock_across_dst,
+    test_normalize_spec_for_acf_cache_guards,
+    test_on_modify_link_limit,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,
     test_on_modify_export_uuid_short_invalid_json,
+    test_on_modify_export_uuid_short_prefix_mismatch,
     test_on_modify_missing_taskdata_uses_tw_dir,
     test_hooks_no_direct_subprocess_run,
     test_chain_integrity_warnings_detects_issues,

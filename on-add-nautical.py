@@ -1429,9 +1429,10 @@ def main():
             if _expr_fires_on_date_early(d0):
                 tlist = _times_for_date_early(d0) or [fallback_hhmm]
                 for hhmm in tlist:
-                    cand = core.build_local_datetime(d0, hhmm)
-                    if (cand >= ref_dt_local) if inclusive else (cand > ref_dt_local):
-                        return cand
+                    cand_utc = core.build_local_datetime(d0, hhmm)
+                    cand_local = core.to_local(cand_utc)
+                    if (cand_local >= ref_dt_local) if inclusive else (cand_local > ref_dt_local):
+                        return cand_local
 
             # Next matching date (strictly after d0)
             try:
@@ -1444,7 +1445,7 @@ def main():
             except Exception:
                 return None
             tlist = _times_for_date_early(nxt_d) or [fallback_hhmm]
-            return core.build_local_datetime(nxt_d, tlist[0])
+            return core.to_local(core.build_local_datetime(nxt_d, tlist[0]))
 
         _t_first = time.perf_counter()
         if user_provided_due:
@@ -1619,9 +1620,10 @@ def main():
                 if nxt_date == d0:
                     tlist = _times_for_date(d0) or [fallback_hhmm]
                     for hhmm in tlist:
-                        cand = core.build_local_datetime(d0, hhmm)
-                        if cand > after_dt_local:
-                            return cand
+                        cand_utc = core.build_local_datetime(d0, hhmm)
+                        cand_local = core.to_local(cand_utc)
+                        if cand_local > after_dt_local:
+                            return cand_local
             except Exception:
                 pass
 
@@ -1630,7 +1632,7 @@ def main():
             if not nxt_d:
                 return None
             tlist = _times_for_date(nxt_d) or [fallback_hhmm]
-            return core.build_local_datetime(nxt_d, tlist[0])
+            return core.to_local(core.build_local_datetime(nxt_d, tlist[0]))
 
         _t_prev = time.perf_counter()
         cur_dt = first_due_local_dt

@@ -3826,7 +3826,7 @@ def main():
         child_short, stripped_attrs, verified, deferred_spawn, defer_reason = _spawn_child_atomic(child, new)
         if deferred_spawn:
             spawn_note = "[yellow]Queued[/] (will import after this command finishes)"
-        if not verified:
+        if not verified and not deferred_spawn:
             _panel(
                 "⛓ Chain warning",
                 [("Reason", defer_reason or "Child spawn could not be verified; parent not updated")],

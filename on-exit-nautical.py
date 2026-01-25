@@ -30,6 +30,10 @@ try:
     sys.stderr.reconfigure(encoding="utf-8")
 except Exception:
     pass
+try:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+except Exception:
+    pass
 
 
 HOOK_DIR = Path(__file__).resolve().parent

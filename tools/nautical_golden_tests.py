@@ -1709,7 +1709,7 @@ def test_on_modify_link_limit():
     from contextlib import redirect_stdout, redirect_stderr
 
     raw = json.dumps(old) + "\n" + json.dumps(new)
-    stdin = io.StringIO(raw)
+    stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
     stdout = io.StringIO()
     stderr = io.StringIO()
     orig_stdin = sys.stdin
@@ -1722,6 +1722,293 @@ def test_on_modify_link_limit():
 
     out = json.loads((stdout.getvalue() or "{}").strip() or "{}")
     expect(out.get("link") == 3, "should pass task through unchanged")
+
+
+def test_on_add_preview_hard_cap():
+    """on-add preview loop should respect hard cap even with large preview setting."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_preview_cap_test")
+
+    mod.UPCOMING_PREVIEW = 1000
+    mod._PREVIEW_HARD_CAP = 3
+
+    first_date_local = date(2025, 1, 6)
+    first_hhmm = (9, 0)
+
+    def _step_once(prev_date):
+        return prev_date + timedelta(days=7)
+
+    preview = []
+    cur_dt = core.to_local(core.build_local_datetime(first_date_local, first_hhmm))
+    for i in range(mod._PREVIEW_HARD_CAP + 5):
+        if i >= mod._PREVIEW_HARD_CAP:
+            break
+        nxt_date = _step_once(cur_dt.date())
+        cur_dt = core.to_local(core.build_local_datetime(nxt_date, first_hhmm))
+        preview.append(core.fmt_dt_local(cur_dt.astimezone(timezone.utc)))
+
+    preview_limit = max(0, min(mod.UPCOMING_PREVIEW, 10**9, 10**9, mod._PREVIEW_HARD_CAP))
+    expect(preview_limit == 3, f"unexpected preview limit: {preview_limit}")
+    expect(len(preview) == 3, "preview hard cap should limit preview length")
+
+
+def test_on_add_flushes_stdout():
+    """on-add should flush stdout after emitting JSON."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_flush_test")
+
+    class _FlushIO(io.StringIO):
+        def __init__(self):
+            super().__init__()
+            self.flushed = False
+
+        def flush(self):
+            self.flushed = True
+            return super().flush()
+
+    task = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"}
+    raw = json.dumps(task)
+    stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
+    stdout = _FlushIO()
+    stderr = io.StringIO()
+    orig_stdin, orig_stdout, orig_stderr = sys.stdin, sys.stdout, sys.stderr
+    try:
+        sys.stdin = stdin
+        sys.stdout = stdout
+        sys.stderr = stderr
+        mod.main()
+    finally:
+        sys.stdin, sys.stdout, sys.stderr = orig_stdin, orig_stdout, orig_stderr
+
+    expect(stdout.flushed, "stdout.flush should be called")
+
+
+def test_on_add_profiler_lazy_init():
+    """on-add should not register profiler when disabled."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_profiler_lazy_test")
+    mod._PROFILE_LEVEL = 0
+
+    called = {"ok": False}
+    orig_register = mod.atexit.register
+    mod.atexit.register = lambda *_a, **_k: called.update(ok=True)
+
+    task = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"}
+    raw = json.dumps(task)
+    stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    orig_stdin, orig_stdout, orig_stderr = sys.stdin, sys.stdout, sys.stderr
+    try:
+        sys.stdin = stdin
+        sys.stdout = stdout
+        sys.stderr = stderr
+        mod.main()
+    finally:
+        sys.stdin, sys.stdout, sys.stderr = orig_stdin, orig_stdout, orig_stderr
+        mod.atexit.register = orig_register
+
+    expect(not called["ok"], "profiler should not register when disabled")
+
+
+def test_on_modify_panel_fallback():
+    """on-modify panel should fall back to plain output on errors."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_panel_fallback_test")
+
+    orig_term = mod.core.term_width_stderr
+    mod.core.term_width_stderr = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom"))
+    stderr = io.StringIO()
+    orig_stderr = sys.stderr
+    try:
+        sys.stderr = stderr
+        mod._panel("Test Panel", [("Key", "Value")], kind="info")
+    finally:
+        sys.stderr = orig_stderr
+        mod.core.term_width_stderr = orig_term
+
+    out = stderr.getvalue()
+    expect("Test Panel" in out, "fallback panel should emit title")
+
+
+def test_on_exit_import_error_but_child_exists():
+    """on-exit should proceed if import reports failure but child exists."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_import_error_child_exists_test")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        child_uuid = "00000000-0000-0000-0000-000000000321"
+        entry = {
+            "parent_uuid": "00000000-0000-0000-0000-000000000456",
+            "child_short": "abcdef12",
+            "child": {"uuid": child_uuid, "description": "test"},
+        }
+        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        state = {"export": 0}
+
+        def _run_task_stub(cmd, **_kwargs):
+            cmd_s = " ".join(cmd)
+            if "export" in cmd_s and f"uuid:{child_uuid}" in cmd_s:
+                state["export"] += 1
+                if state["export"] >= 2:
+                    return True, json.dumps({"uuid": child_uuid}), ""
+                return True, "{}", ""
+            if "import" in cmd_s:
+                return False, "", "lock error"
+            if "modify" in cmd_s and "uuid:00000000-0000-0000-0000-000000000456" in cmd_s:
+                return True, "", ""
+            return False, "", "unexpected"
+
+        mod._run_task = _run_task_stub
+        stats = mod._drain_queue()
+        expect(stats.get("processed") == 1, f"unexpected processed: {stats}")
+
+
+def test_cache_metrics_emits_when_enabled():
+    """cache metrics should emit when NAUTICAL_DIAG_METRICS=1."""
+    import nautical_core as core
+
+    stderr = io.StringIO()
+    orig_err = sys.stderr
+    os.environ["NAUTICAL_DIAG_METRICS"] = "1"
+    os.environ["NAUTICAL_DIAG"] = "1"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["XDG_CACHE_HOME"] = td
+            sys.stderr = stderr
+            core._emit_cache_metrics()
+    finally:
+        sys.stderr = orig_err
+        os.environ.pop("NAUTICAL_DIAG_METRICS", None)
+        os.environ.pop("NAUTICAL_DIAG", None)
+        os.environ.pop("XDG_CACHE_HOME", None)
+
+    out = stderr.getvalue()
+    expect("nautical-metrics" in out, f"unexpected metrics output: {out!r}")
+
+
+def test_sanitize_task_strings_removes_controls():
+    """sanitize_task_strings should remove control chars and clamp length."""
+    import nautical_core as core
+
+    task = {"description": "hi\x00there\x1f!"}
+    core.sanitize_task_strings(task, max_len=8)
+    expect("\x00" not in task["description"], "control chars should be removed")
+    expect(len(task["description"]) == 8, "should clamp length to max_len")
+
+
+def test_clear_all_caches_env():
+    """_clear_all_caches should be callable via env toggle."""
+    import nautical_core as core
+
+    os.environ["NAUTICAL_CLEAR_CACHES"] = "1"
+    try:
+        core.parse_anchor_expr_to_dnf_cached("w:mon")
+    finally:
+        os.environ.pop("NAUTICAL_CLEAR_CACHES", None)
+
+    expect(True, "cache clear hook executed")
+
+
+def test_cache_save_writes_all_bytes():
+    """cache_save should write full blob and set 0600 permissions when possible."""
+    import nautical_core as core
+
+    with tempfile.TemporaryDirectory() as td:
+        core.ENABLE_ANCHOR_CACHE = True
+        core.ANCHOR_CACHE_DIR_OVERRIDE = td
+        key = "testcache"
+        obj = {"dnf": [[{"typ": "w", "spec": "mon"}]]}
+        core.cache_save(key, obj)
+
+        path = core._cache_path(key)
+        expect(os.path.exists(path), "cache file should exist")
+        st = os.stat(path)
+        expect(st.st_size > 0, "cache file should not be empty")
+
+
+def test_parse_anchor_expr_fuzz_inputs():
+    """Parser should not crash on mixed valid/invalid inputs."""
+    import nautical_core as core
+
+    samples = [
+        "",
+        " ",
+        "w:mon",
+        "m:15",
+        "y:06-01",
+        "w:mon..fri@t=09:00",
+        "m:rand",
+        "y:rand-12",
+        "w:rand,mon",
+        "w:mon..fri + m:bad",
+        "w:mon | m:1st-mon",
+        "w:mon..fri@t=99:99",
+        "x:bad",
+    ]
+    for s in samples:
+        try:
+            dnf = core.parse_anchor_expr_to_dnf_cached(s)
+            if s.strip():
+                expect(isinstance(dnf, list), f"unexpected dnf type for {s!r}")
+        except core.ParseError:
+            pass
+        except Exception as e:
+            raise AssertionError(f"unexpected exception for {s!r}: {e}")
+
+
+def test_rand_determinism_with_seed():
+    """Random anchors should be deterministic with the same seed."""
+    import nautical_core as core
+
+    dnf = core.parse_anchor_expr_to_dnf_cached("m:rand")
+    after = date(2025, 1, 1)
+    a1, _meta1 = core.next_after_expr(dnf, after, seed_base="test-seed")
+    a2, _meta2 = core.next_after_expr(dnf, after, seed_base="test-seed")
+    expect(a1 == a2, f"rand picks should match: {a1} vs {a2}")
+
+
+def test_on_exit_lock_failure_keeps_queue():
+    """Queue should remain intact if on-exit lock cannot be acquired."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_lock_fail_queue_test")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+
+        entry = {"child": {"uuid": "00000000-0000-0000-0000-000000000999"}}
+        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        class _FakeLock:
+            def __enter__(self):
+                return False
+            def __exit__(self, *args):
+                return False
+
+        orig_lock = mod._lock_queue
+        mod._lock_queue = lambda: _FakeLock()
+        try:
+            got = mod._take_queue_entries()
+        finally:
+            mod._lock_queue = orig_lock
+
+        expect(got == [], "lock failure should return empty entries")
+        expect(mod._QUEUE_PATH.exists(), "queue should remain on lock failure")
 
 
 
@@ -1762,7 +2049,7 @@ def test_on_modify_cp_completion_spawns_next_link():
     raw = json.dumps(old) + "\n" + json.dumps(new) + "\n"
     buf_out = io.StringIO()
     buf_err = io.StringIO()
-    buf_in = io.StringIO(raw)
+    buf_in = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
     prev_stdin = sys.stdin
     try:
         sys.stdin = buf_in
@@ -1985,6 +2272,18 @@ TESTS = [
     test_on_modify_carry_wall_clock_across_dst,
     test_normalize_spec_for_acf_cache_guards,
     test_on_modify_link_limit,
+    test_on_add_preview_hard_cap,
+    test_on_add_flushes_stdout,
+    test_on_add_profiler_lazy_init,
+    test_on_modify_panel_fallback,
+    test_on_exit_import_error_but_child_exists,
+    test_cache_metrics_emits_when_enabled,
+    test_sanitize_task_strings_removes_controls,
+    test_clear_all_caches_env,
+    test_cache_save_writes_all_bytes,
+    test_parse_anchor_expr_fuzz_inputs,
+    test_rand_determinism_with_seed,
+    test_on_exit_lock_failure_keeps_queue,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,

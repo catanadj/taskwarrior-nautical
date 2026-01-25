@@ -50,9 +50,11 @@ except Exception:
 # ========= User-togglable constants =========================================
 ANCHOR_WARN = True  # If True, warn when a user-provided due is not on an anchor day
 UPCOMING_PREVIEW = 5  # How many future dates to preview.
+_PREVIEW_HARD_CAP = 100
 _MAX_ITERATIONS = 2000
 _MAX_PREVIEW_ITERATIONS = 750
 _MAX_CHAIN_DURATION_YEARS = 5  # warn if chain extends this far
+_MAX_JSON_BYTES = 10 * 1024 * 1024
 # ============================================================================
 
 # --------------------------------------------------------------------------------------
@@ -101,6 +103,11 @@ if core is None:
         str(p) for p in _candidates
     )
     raise ModuleNotFoundError(msg)
+
+try:
+    _MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", _MAX_JSON_BYTES))
+except Exception:
+    pass
 
 _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
 
@@ -430,227 +437,27 @@ def _strip_quotes(s: str) -> str:
     s = (s or "").strip()
     return s[1:-1] if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"') else s
 
-def _strip_rich_markup(s: str) -> str:
-    # Remove simple Rich markup tags like [bold] or [/].
-    return re.sub(r"\[[^\]]*\]", "", s or "")
+_PANEL_THEMES = {
+    "preview_anchor": {"border": "light_sea_green", "title": "light_sea_green", "label": "cyan"},
+    "preview_cp": {"border": "hot_pink", "title": "bright_green", "label": "green"},
+    "error": {"border": "red", "title": "red", "label": "red"},
+    "warning": {"border": "yellow", "title": "yellow", "label": "yellow"},
+    "info": {"border": "white", "title": "white", "label": "white"},
+}
+
 
 def _panel(title, rows, kind: str = "info"):
-    """
-    Render a 2-column panel.
-
-    Default renderer uses Rich for coloured borders and compact layout.
-    For performance-sensitive environments (e.g., Termux), set:
-        panel_mode="fast"   -> plain, aligned text output (no Rich import)
-    """
-    panel_mode = (core.PANEL_MODE or "").strip().lower()
-    if panel_mode == "plain":
-        panel_mode = "fast"
-    if panel_mode == "line":
-        panel_mode = "rich"
-    if panel_mode == "fast":
-        # ---- fast renderer (no Rich) ----
-        def _strip_rich(s: str) -> str:
-            # Remove Rich markup tags like [bold], [/], [cyan], etc.,
-            # but keep bracketed literals such as [auto-due].
-            # NOTE: Rich uses a bare closing tag "[/]" to reset style.
-            s = s.replace("[/]", "")
-            return re.sub(r"\[/?[A-Za-z0-9_ ]+\]", "", s)
-
-        def _ansi_enabled() -> bool:
-            # ANSI colours are enabled by default in fast mode when stderr is a TTY.
-            # Disable with NO_COLOR=1 or fast_color=false in config.
-            if not sys.stderr.isatty():
-                return False
-            if os.getenv("NO_COLOR") is not None:
-                return False
-            return bool(core.FAST_COLOR)
-
-        _ANSI = _ansi_enabled()
-        _RST = "\x1b[0m" if _ANSI else ""
-        _C_TITLE = "\x1b[1;36m" if _ANSI else ""
-        _C_CYAN = "\x1b[36m" if _ANSI else ""
-        _C_DIM = "\x1b[2m" if _ANSI else ""
-        _C_GREEN = "\x1b[32m" if _ANSI else ""
-        _C_RED = "\x1b[31m" if _ANSI else ""
-        _C_YELLOW = "\x1b[33m" if _ANSI else ""
-        _C_BOLD = "\x1b[1m" if _ANSI else ""
-
-        clean_rows = []
-        for k, v in rows:
-            if k is None:
-                clean_rows.append((None, None))
-            else:
-                clean_rows.append((str(k), _strip_rich(str(v))))
-
-        # Fast renderer: aligned labels + wrapping to terminal width (no Rich).
-        try:
-            term_w = int(os.getenv("COLUMNS", "0") or 0)
-        except Exception:
-            term_w = 0
-        if not term_w:
-            try:
-                term_w = shutil.get_terminal_size((110, 24)).columns
-            except Exception:
-                term_w = 110
-        term_w = max(40, min(70, term_w))
-
-        label_w = 0
-        for k, _v in clean_rows:
-            if k is None:
-                continue
-            label_w = max(label_w, len(k))
-        label_w = min(label_w, 28)
-
-        def _value_style(label: str, value: str) -> str:
-            lk = (label or "").strip().lower()
-            lv = (value or "").strip().lower()
-
-            if lk == "pattern":
-                return _C_CYAN
-            if lk == "natural":
-                return _C_DIM
-            if lk in {"first due", "next due"}:
-                if "overdue" in lv:
-                    return _C_BOLD + _C_RED
-                return _C_BOLD + _C_GREEN
-            if lk.startswith("[") or "warning" in lk or "invalid" in lk or "error" in lk:
-                return _C_YELLOW
-            if lk == "upcoming":
-                return _C_DIM
-            if lk == "chain":
-                if "enabled" in lv:
-                    return _C_DIM + _C_GREEN
-                if "disabled" in lv:
-                    return _C_DIM + _C_RED
-                return _C_DIM
-            return ""
-
-        def _emit_wrapped(prefix0: str, indent: str, text: str, style: str = "") -> None:
-            s = "" if text is None else str(text)
-            if not s:
-                sys.stderr.write(prefix0 + "\n")
-                return
-            avail = max(16, term_w - len(prefix0))
-            first_line = True
-            for raw_line in s.splitlines() or [""]:
-                parts = textwrap.wrap(
-                    raw_line,
-                    width=avail,
-                    break_long_words=False,
-                    break_on_hyphens=False,
-                ) or [""]
-                for i, p in enumerate(parts):
-                    pref = prefix0 if first_line and i == 0 else indent
-                    if style and _ANSI:
-                        sys.stderr.write(pref + style + p + _RST + "\n")
-                    else:
-                        sys.stderr.write(pref + p + "\n")
-                first_line = False
-
-        # Panel delimiters (helps visually bracket the fast output)
-        delim = "─" * term_w
-        if _ANSI:
-            sys.stderr.write(_C_DIM + delim + _RST + "\n")
-            sys.stderr.write(_C_TITLE + _strip_rich(str(title)) + _RST + "\n")
-        else:
-            sys.stderr.write(delim + "\n")
-            sys.stderr.write(_strip_rich(str(title)) + "\n")
-
-        for k, v in clean_rows:
-            if k is None:
-                sys.stderr.write("\n")
-                continue
-            label = f"{k:<{label_w}}"
-            prefix0 = f"{label}  "
-            indent = " " * len(prefix0)
-            style = _value_style(k, v)
-            _emit_wrapped(prefix0, indent, v, style=style)
-
-        # Bottom delimiter
-        if _ANSI:
-            sys.stderr.write(_C_DIM + delim + _RST + "\n")
-        else:
-            sys.stderr.write(delim + "\n")
-        return
-
-
-    # ---- Rich renderer (default) ----
-    # Cache heavy Rich objects across calls in a single invocation.
-    global _RICH_CACHE
-    try:
-        _RICH_CACHE
-    except NameError:
-        _RICH_CACHE = {"loaded": False}
-
-    if not _RICH_CACHE.get("loaded"):
-        try:
-            from rich.console import Console
-            from rich.panel import Panel
-            from rich.table import Table
-            from rich.text import Text
-        except Exception:
-            # fallback if Rich is unavailable
-            sys.stderr.write(f"{title}\n")
-            for k, v in rows:
-                if k is None:
-                    sys.stderr.write("\n")
-                else:
-                    sys.stderr.write(f"{k}: {v}\n")
-            return
-        _RICH_CACHE.update(
-            {
-                "loaded": True,
-                "Console": Console,
-                "Panel": Panel,
-                "Table": Table,
-                "Text": Text,
-                "console": Console(file=sys.stderr, force_terminal=True, highlight=False),
-            }
-        )
-
-    Console = _RICH_CACHE["Console"]
-    Panel = _RICH_CACHE["Panel"]
-    Table = _RICH_CACHE["Table"]
-    Text = _RICH_CACHE["Text"]
-    console = _RICH_CACHE["console"]
-
-    THEMES = {
-        "preview_anchor": {
-            "border": "light_sea_green",
-            "title": "light_sea_green",
-            "label": "cyan",
-        },
-        "preview_cp": {
-            "border": "hot_pink",
-            "title": "bright_green",
-            "label": "green",
-        },
-        "error": {"border": "red", "title": "red", "label": "red"},
-        "warning": {"border": "yellow", "title": "yellow", "label": "yellow"},
-        "info": {"border": "white", "title": "white", "label": "white"},
-    }
-    theme = THEMES.get(kind, THEMES["info"])
-
-    table = Table.grid(padding=(0, 1))
-    table.expand = True
-    table.add_column(justify="right", style=theme["label"], no_wrap=True)
-    table.add_column(justify="left")
-
-    for k, v in rows:
-        if k is None:
-            table.add_row("", "")
-            continue
-        label = Text(str(k))
-        value = Text.from_markup(str(v), style="white")
-        table.add_row(label, value)
-
-    panel = Panel(
-        table,
-        title=Text(title, style=theme["title"]),
-        border_style=theme["border"],
-        padding=(0, 1),
+    core.render_panel(
+        title,
+        rows,
+        kind=kind,
+        panel_mode=core.PANEL_MODE,
+        fast_color=core.FAST_COLOR,
+        themes=_PANEL_THEMES,
+        allow_line=False,
+        label_width_min=6,
+        label_width_max=28,
     )
-    console.print(panel)
 
 def _format_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
     """Compact layout for anchor preview .
@@ -874,6 +681,7 @@ def _fail_and_exit(title: str, msg: str) -> None:
     _panel(f"❌ {title}", [("Message", msg)], kind="error")
     # Minimal feedback -> stdout (what Task expects when a hook fails)
     print(json.dumps({"error": title, "message": msg}, ensure_ascii=False))
+    sys.stdout.flush()
     sys.exit(1)
 
 
@@ -892,6 +700,7 @@ def _error_and_exit(msg_tuples):
             msg_parts.append(str(v))
     msg = "; ".join(msg_parts) if msg_parts else "Invalid chain configuration."
     print(json.dumps({"error": err, "message": msg}, ensure_ascii=False))
+    sys.stdout.flush()
     sys.exit(1)
 
 
@@ -1171,11 +980,26 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
 # Main
 # --------------------------------------------------------------------------------------
 def main():
-    prof = _Profiler(level=_PROFILE_LEVEL, import_ms=_IMPORT_MS)
-    if prof.enabled:
-        atexit.register(prof.emit)
+    class _NoopProfiler:
+        enabled = False
+        @contextmanager
+        def section(self, _name):
+            yield
+        def add_ms(self, _name, _ms):
+            return None
+        def emit(self):
+            return None
+
+    prof = _NoopProfiler()
+    if _PROFILE_LEVEL > 0:
+        prof = _Profiler(level=_PROFILE_LEVEL, import_ms=_IMPORT_MS)
+        if prof.enabled:
+            atexit.register(prof.emit)
     with prof.section('read:stdin'):
-        raw = sys.stdin.read().strip()
+        raw_bytes = sys.stdin.buffer.read(_MAX_JSON_BYTES + 1)
+        if len(raw_bytes) > _MAX_JSON_BYTES:
+            _fail_and_exit("Invalid input", f"on-add input exceeds {_MAX_JSON_BYTES} bytes")
+        raw = raw_bytes.decode("utf-8", errors="replace").strip()
     if not raw:
         _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
     try:
@@ -1237,7 +1061,10 @@ def main():
     # If nothing chain-related, just pass through
     if not kind:
         _t_out = time.perf_counter()
+        if core.SANITIZE_UDA:
+            core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
         print(json.dumps(task, ensure_ascii=False), end="")
+        sys.stdout.flush()
         prof.add_ms('stdout:emit', (time.perf_counter() - _t_out) * 1000.0)
         return
 
@@ -1556,7 +1383,7 @@ def main():
         prof.add_ms('anchor:validate_strict', (time.perf_counter() - _t_val) * 1000.0)
 
 
-        preview_limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until))
+        preview_limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until, _PREVIEW_HARD_CAP))
 
         preview = []
         colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
@@ -1697,7 +1524,10 @@ def main():
         prof.add_ms('render:anchor_panel', (time.perf_counter() - _t_panel) * 1000.0)
 
         _t_out = time.perf_counter()
+        if core.SANITIZE_UDA:
+            core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
         print(json.dumps(task, ensure_ascii=False), end="")
+        sys.stdout.flush()
         prof.add_ms('stdout:emit', (time.perf_counter() - _t_out) * 1000.0)
         return
 
@@ -1772,7 +1602,7 @@ def main():
 
     allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
     allow_by_until = exact_until_count if exact_until_count is not None else 10**9
-    limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until))
+    limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until, _PREVIEW_HARD_CAP))
 
     preview, nxt = [], due_dt
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
@@ -1824,7 +1654,10 @@ def main():
         rows,
         kind="preview_cp",
     )
+    if core.SANITIZE_UDA:
+        core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
     print(json.dumps(task, ensure_ascii=False), end="")
+    sys.stdout.flush()
 
 
 

@@ -277,6 +277,11 @@ if core is None:
     )
     raise ModuleNotFoundError(msg)
 
+try:
+    _MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", _MAX_JSON_BYTES))
+except Exception:
+    pass
+
 # ------------------------------------------------------------------------------
 # Config-driven toggles (env overrides still supported via core config helpers)
 # ------------------------------------------------------------------------------
@@ -348,7 +353,10 @@ def _fail_and_exit(title: str, msg: str) -> None:
 
 
 def _read_two():
-    raw = sys.stdin.read()
+    raw_bytes = sys.stdin.buffer.read(_MAX_JSON_BYTES + 1)
+    if len(raw_bytes) > _MAX_JSON_BYTES:
+        _fail_and_exit("Invalid input", f"on-modify input exceeds {_MAX_JSON_BYTES} bytes")
+    raw = raw_bytes.decode("utf-8", errors="replace")
     if not raw or not raw.strip():
         _fail_and_exit("Invalid input", "on-modify must receive two JSON tasks")
 
@@ -385,81 +393,23 @@ def _read_two():
 
 
 def _print_task(task):
+    if core.SANITIZE_UDA:
+        core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
     print(json.dumps(task, ensure_ascii=False), end="")
 
 
-_RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
+_MAX_JSON_BYTES = 10 * 1024 * 1024
 
 
-def _strip_rich_markup(s: str) -> str:
-    # Strip simple Rich tags like [cyan], [/cyan], [bold], [dim], and the bare [/].
-    # Preserve bracketed literals like [auto-due] (contains '-').
-    if not s:
-        return s
-    return _RICH_TAG_RE.sub("", s)
-
-
-def _term_width_stderr(default: int = 80) -> int:
-    try:
-        w = os.get_terminal_size(sys.stderr.fileno()).columns
-    except Exception:
-        w = default
-    # Termux can have narrow+wrapped terminals; keep delimiters within a safe band.
-    return max(40, min(70, int(w)))
-
-
-def _fast_color_enabled(force: bool | None = None) -> bool:
-    if not sys.stderr.isatty():
-        return False
-    if os.environ.get("NO_COLOR"):
-        return False
-    if force is not None:
-        return bool(force)
-    return bool(core.FAST_COLOR)
-
-
-def _ansi(code: str) -> str:
-    return f"\x1b[{code}m"
-
-
-def _emit_wrapped(prefix: str, text: str, width: int, style: str | None = None) -> None:
-    if text is None:
-        text = ""
-    text = str(text)
-    text = _strip_rich_markup(text)
-
-    avail = max(10, width - len(prefix))
-    parts = text.splitlines() if "\n" in text else [text]
-
-    for pi, raw_line in enumerate(parts):
-        line = raw_line.rstrip("\n")
-        if not line:
-            sys.stderr.write((prefix.rstrip() if pi == 0 else (" " * len(prefix))) + "\n")
-            continue
-
-        cur = ""
-        for token in line.split(" "):
-            if not cur:
-                cur = token
-            elif len(cur) + 1 + len(token) <= avail:
-                cur += " " + token
-            else:
-                out = cur
-                if style:
-                    sys.stderr.write(prefix + style + out + _ansi("0") + "\n")
-                else:
-                    sys.stderr.write(prefix + out + "\n")
-                prefix = " " * len(prefix)
-                avail = max(10, width - len(prefix))
-                cur = token
-
-        if cur:
-            if style:
-                sys.stderr.write(prefix + style + cur + _ansi("0") + "\n")
-            else:
-                sys.stderr.write(prefix + cur + "\n")
-        prefix = " " * len(prefix)
-        avail = max(10, width - len(prefix))
+_PANEL_THEMES = {
+    "preview_anchor": {"border": "turquoise2", "title": "bright_cyan", "label": "light_sea_green"},
+    "preview_cp": {"border": "deep_pink1", "title": "deep_pink1", "label": "deep_pink3"},
+    "summary": {"border": "indian_red", "title": "indian_red", "label": "red"},
+    "disabled": {"border": "yellow", "title": "yellow", "label": "yellow"},
+    "error": {"border": "red", "title": "red", "label": "red"},
+    "warning": {"border": "yellow", "title": "yellow", "label": "yellow"},
+    "info": {"border": "blue", "title": "cyan", "label": "cyan"},
+}
 
 
 def _panel(
@@ -470,240 +420,32 @@ def _panel(
     title_style: str | None = None,
     label_style: str | None = None,
 ):
-    """
-    Render a panel.
-
-    Modes:
-      - default / panel_mode="rich" : Rich panel (colors + borders)
-      - panel_mode="fast"           : plain/ANSI panel (fast, Termux-friendly)
-
-    The fast panel is designed to be stable, minimal, and easy to scan.
-    """
-    mode = str(core.PANEL_MODE or "").strip().lower()
-    if mode in {"plain"}:
-        mode = "fast"
-
-    if mode == "line" and kind == "summary":
-        mode = "rich"
-
-    if mode == "line":
-        line = _panel_line_from_rows(title, rows)
-        if line:
-            _panel_line(title, line, kind=kind, border_style=border_style, title_style=title_style)
-        return
-
-    force_color = None
-    if mode == "fast":
-        width = _term_width_stderr()
-
-        use_color = _fast_color_enabled(force=force_color)
-        RESET = _ansi("0")
-        BOLD = _ansi("1") if use_color else ""
-        DIM = _ansi("2") if use_color else ""
-        CYAN = _ansi("36") if use_color else ""
-        GREEN = _ansi("32") if use_color else ""
-        RED = _ansi("31") if use_color else ""
-        YELLOW = _ansi("33") if use_color else ""
-
-        delim = "─" * width
-        sys.stderr.write(delim + "\n")
-        sys.stderr.write((BOLD + CYAN + _strip_rich_markup(str(title)) + RESET) + "\n")
-
-        keys = [str(k) for (k, _v) in rows if k is not None]
-        label_w = 0
-        for k in keys:
-            if len(k) > label_w:
-                label_w = len(k)
-        label_w = min(14, max(6, label_w))
-
-        def _style_for_row(k: str, v: str) -> str | None:
-            lk = k.lower()
-            sv = (v or "")
-            lsv = sv.lower()
-            if k.strip().lower() == "pattern":
-                return CYAN
-            if "natural" in lk:
-                return DIM
-            if k.strip().lower() in {"basis", "root"}:
-                return DIM
-            if k.strip().lower() in {"first due", "next due"}:
-                if "overdue" in lsv or "late" in lsv:
-                    return RED
-                return GREEN
-            if "warning" in lk:
-                return YELLOW
-            if "error" in lk:
-                return RED
-            if lk.startswith("chain"):
-                return DIM + GREEN
-            return None
-
-        for k, v in rows:
-            if k is None:
-                sys.stderr.write("\n")
-                continue
-
-            k = _strip_rich_markup(str(k))
-            v = "" if v is None else _strip_rich_markup(str(v))
-
-            if k.lower().startswith("timeline"):
-                prefix0 = f"{k:<{label_w}} "
-                lines = [ln for ln in v.splitlines() if ln.strip() != ""] if "\n" in v else ([v] if v else [])
-                if lines:
-                    _emit_wrapped(prefix0, lines[0], width, style=None)
-                    for ln in lines[1:]:
-                        _emit_wrapped(" " * len(prefix0), ln, width, style=None)
-                else:
-                    _emit_wrapped(prefix0, "", width, style=None)
-                continue
-
-            prefix = f"{k:<{label_w}} "
-            style = _style_for_row(k, v)
-            _emit_wrapped(prefix, v, width, style=style)
-
-        sys.stderr.write(delim + "\n")
-        return
-
-    # Rich mode (default)
-    try:
-        if not sys.stderr.isatty():
-            raise RuntimeError("no tty")
-        from rich.console import Console
-        from rich.panel import Panel
-        from rich.table import Table
-        from rich.text import Text
-    except Exception:
-        # If Rich is unavailable, fall back to fast mode without ANSI.
-        width = _term_width_stderr()
-        force_color = False
-        mode = "fast"
-        use_color = _fast_color_enabled(force=force_color)
-        RESET = _ansi("0")
-        BOLD = _ansi("1") if use_color else ""
-        DIM = _ansi("2") if use_color else ""
-        CYAN = _ansi("36") if use_color else ""
-        GREEN = _ansi("32") if use_color else ""
-        RED = _ansi("31") if use_color else ""
-        YELLOW = _ansi("33") if use_color else ""
-
-        delim = "─" * width
-        sys.stderr.write(delim + "\n")
-        sys.stderr.write((BOLD + CYAN + _strip_rich_markup(str(title)) + RESET) + "\n")
-
-        keys = [str(k) for (k, _v) in rows if k is not None]
-        label_w = 0
-        for k in keys:
-            if len(k) > label_w:
-                label_w = len(k)
-        label_w = min(14, max(6, label_w))
-
-        def _style_for_row(k: str, v: str) -> str | None:
-            lk = k.lower()
-            sv = (v or "")
-            lsv = sv.lower()
-            if k.strip().lower() == "pattern":
-                return CYAN
-            if "natural" in lk:
-                return DIM
-            if k.strip().lower() in {"basis", "root"}:
-                return DIM
-            if k.strip().lower() in {"first due", "next due"}:
-                if "overdue" in lsv or "late" in lsv:
-                    return RED
-                return GREEN
-            if "warning" in lk:
-                return YELLOW
-            if "error" in lk:
-                return RED
-            if lk.startswith("chain"):
-                return DIM + GREEN
-            return None
-
-        for k, v in rows:
-            if k is None:
-                sys.stderr.write("\n")
-                continue
-
-            k = _strip_rich_markup(str(k))
-            v = "" if v is None else _strip_rich_markup(str(v))
-
-            if k.lower().startswith("timeline"):
-                prefix0 = f"{k:<{label_w}} "
-                lines = [ln for ln in v.splitlines() if ln.strip() != ""] if "\n" in v else ([v] if v else [])
-                if lines:
-                    _emit_wrapped(prefix0, lines[0], width, style=None)
-                    for ln in lines[1:]:
-                        _emit_wrapped(" " * len(prefix0), ln, width, style=None)
-                else:
-                    _emit_wrapped(prefix0, "", width, style=None)
-                continue
-
-            prefix = f"{k:<{label_w}} "
-            style = _style_for_row(k, v)
-            _emit_wrapped(prefix, v, width, style=style)
-
-        sys.stderr.write(delim + "\n")
-        return
-
-    THEMES = {
-        "preview_anchor": {"border": "turquoise2", "title": "bright_cyan", "label": "light_sea_green"},
-        "preview_cp": {"border": "deep_pink1", "title": "deep_pink1", "label": "deep_pink3"},
-        "summary": {"border": "indian_red", "title": "indian_red", "label": "red"},
-        "disabled": {"border": "yellow", "title": "yellow", "label": "yellow"},
-        "error": {"border": "red", "title": "red", "label": "red"},
-        "warning": {"border": "yellow", "title": "yellow", "label": "yellow"},
-        "info": {"border": "blue", "title": "cyan", "label": "cyan"},
-    }
-    theme = THEMES.get(kind, THEMES["info"])
-
-    border = border_style or theme["border"]
-    tstyle = title_style or theme["title"]
-    lstyle = label_style or theme["label"]
-
-    console = Console(file=sys.stderr, force_terminal=True)
-    t = Table.grid(padding=(0, 1), expand=False)
-    t.add_column(style=f"bold {lstyle}", no_wrap=True, justify="right")
-    t.add_column(style="white")
-
-    for k, v in rows:
-        if k is None:
-            t.add_row("", v or "")
-            continue
-
-        label_text = Text(str(k))
-        lk = str(k).lower()
-        if "warning" in lk:
-            label_text.stylize("bold yellow")
-        elif "error" in lk:
-            label_text.stylize("bold red")
-        elif "note" in lk:
-            label_text.stylize("italic cyan")
-
-        t.add_row(label_text, "" if v is None else str(v))
-
-    console.print(
-        Panel(
-            t,
-            title=Text(title, style=f"bold {tstyle}"),
-            border_style=border,
-            expand=False,
-            padding=(0, 1),
-        )
+    themes = dict(_PANEL_THEMES)
+    theme = dict(themes.get(kind, themes.get("info", {})))
+    if border_style:
+        theme["border"] = border_style
+    if title_style:
+        theme["title"] = title_style
+    if label_style:
+        theme["label"] = label_style
+    themes[kind] = theme
+    core.render_panel(
+        title,
+        rows,
+        kind=kind,
+        panel_mode=core.PANEL_MODE,
+        fast_color=core.FAST_COLOR,
+        themes=themes,
+        allow_line=True,
+        line_force_rich_kinds={"summary"},
+        label_width_min=6,
+        label_width_max=14,
     )
 
+
 def _panel_line_from_rows(title, rows) -> str:
-    title_txt = _strip_rich_markup(str(title))
-    if not rows:
-        return title_txt
-    for k, v in rows:
-        if k is None:
-            continue
-        ktxt = _strip_rich_markup(str(k))
-        vtxt = _strip_rich_markup(str(v)) if v is not None else ""
-        if not vtxt:
-            continue
-        return f"{title_txt} — {ktxt}: {vtxt}"
-    return title_txt
+    return core.panel_line_from_rows(title, rows)
+
 
 def _panel_line(
     title: str,
@@ -713,40 +455,17 @@ def _panel_line(
     border_style: str | None = None,
     title_style: str | None = None,
 ) -> None:
-    try:
-        if not sys.stderr.isatty():
-            raise RuntimeError("no tty")
-        from rich.console import Console
-        from rich.panel import Panel
-        from rich.text import Text
-    except Exception:
-        _emit_line(line)
-        return
-
-    THEMES = {
-        "preview_anchor": {"border": "turquoise2", "title": "bright_cyan"},
-        "preview_cp": {"border": "deep_pink1", "title": "deep_pink1"},
-        "summary": {"border": "indian_red", "title": "indian_red"},
-        "disabled": {"border": "yellow", "title": "yellow"},
-        "error": {"border": "red", "title": "red"},
-        "warning": {"border": "yellow", "title": "yellow"},
-        "info": {"border": "blue", "title": "cyan"},
-    }
-    theme = THEMES.get(kind, THEMES["info"])
-    border = border_style or theme["border"]
-    tstyle = title_style or theme["title"]
-
-    console = Console(file=sys.stderr, force_terminal=True)
-    body = Text(line)
-    console.print(
-        Panel(
-            body,
-            title=Text(str(title), style=f"bold {tstyle}"),
-            border_style=border,
-            expand=False,
-            padding=(0, 1),
-        )
+    core.panel_line(
+        title,
+        line,
+        kind=kind,
+        themes=_PANEL_THEMES,
+        border_style=border_style,
+        title_style=title_style,
     )
+
+def _panel_line_from_rows(title, rows) -> str:
+    return core.panel_line_from_rows(title, rows)
 
 def _strip_quotes(s: str) -> str:
     s = (s or "").strip()
@@ -1247,7 +966,7 @@ def _format_line_preview(
 ) -> str:
     cur_due = _dtparse(task.get("due"))
     cur_end = _dtparse(task.get("end"))
-    delta_txt = _strip_rich_markup(_fmt_on_time_delta(cur_due, cur_end) or "").strip()
+    delta_txt = core.strip_rich_markup(_fmt_on_time_delta(cur_due, cur_end) or "").strip()
     if delta_txt.startswith("(") and delta_txt.endswith(")"):
         delta_txt = delta_txt[1:-1].strip()
     if delta_txt:

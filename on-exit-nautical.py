@@ -227,6 +227,7 @@ def _take_queue_entries() -> list[dict]:
     entries: list[dict] = []
     with _lock_queue() as locked:
         if not locked:
+            _diag("queue lock not acquired; drain deferred")
             return entries
         try:
             if not _QUEUE_PATH.exists():
@@ -357,11 +358,14 @@ def _drain_queue() -> dict:
         if not exists:
             ok, err = _import_child(child)
             if not ok:
-                # Keep for retry unless it is a hard error.
-                _diag(f"child import failed: {err}")
-                _write_dead_letter(entry, f"child import failed: {err}")
-                errors += 1
-                continue
+                # If import reported failure but the child exists, continue.
+                if _export_uuid(child_uuid):
+                    exists = True
+                else:
+                    _diag(f"child import failed: {err}")
+                    _write_dead_letter(entry, f"child import failed: {err}")
+                    errors += 1
+                    continue
 
         # Confirm child exists before touching parent.
         if not _export_uuid(child_uuid):

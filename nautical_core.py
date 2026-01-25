@@ -218,11 +218,427 @@ def _warn_once_per_day(key: str, message: str) -> None:
 
         with open(stamp_path, "w", encoding="utf-8") as f:
             f.write(today)
-
-        print(message.rstrip(), file=sys.stderr)
+        try:
+            print(message, file=sys.stderr)
+        except Exception:
+            pass
     except Exception:
-        # Diagnostics must never break the hook.
         pass
+
+
+def _emit_cache_metrics() -> None:
+    """Emit lru_cache metrics when NAUTICAL_DIAG_METRICS=1."""
+    if os.environ.get("NAUTICAL_DIAG_METRICS") != "1":
+        return
+    lines = []
+    try:
+        lines.append(f"normalize_acf: {_normalize_spec_for_acf_cached.cache_info()}")
+    except Exception:
+        pass
+    try:
+        lines.append(f"year_pair: {_year_pair_cached.cache_info()}")
+    except Exception:
+        pass
+    try:
+        lines.append(f"parse_y_token: {_parse_y_token_cached.cache_info()}")
+    except Exception:
+        pass
+    try:
+        lines.append(f"expand_monthly: {expand_monthly_cached.cache_info()}")
+    except Exception:
+        pass
+    try:
+        lines.append(f"expand_weekly: {expand_weekly_cached.cache_info()}")
+    except Exception:
+        pass
+    if not lines:
+        return
+    msg = "[nautical-metrics] " + " | ".join(lines)
+    _warn_once_per_day("cache_metrics", msg)
+
+
+def _clear_all_caches() -> None:
+    """Clear all LRU caches (for long-running contexts)."""
+    try:
+        _normalize_spec_for_acf_cached.cache_clear()
+    except Exception:
+        pass
+    try:
+        _year_pair_cached.cache_clear()
+    except Exception:
+        pass
+    try:
+        _parse_y_token_cached.cache_clear()
+    except Exception:
+        pass
+    try:
+        expand_monthly_cached.cache_clear()
+    except Exception:
+        pass
+    try:
+        expand_weekly_cached.cache_clear()
+    except Exception:
+        pass
+
+
+# -------- UI helpers ----------------------------------------------------------
+_RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
+
+
+def strip_rich_markup(s: str) -> str:
+    # Strip simple Rich tags; preserve bracketed literals with non-word chars.
+    if not s:
+        return s
+    return _RICH_TAG_RE.sub("", s)
+
+
+def term_width_stderr(default: int = 80) -> int:
+    try:
+        w = os.get_terminal_size(sys.stderr.fileno()).columns
+    except Exception:
+        w = default
+    return max(40, min(70, int(w)))
+
+
+def fast_color_enabled(force: bool | None = None, fast_color: bool = True) -> bool:
+    if not sys.stderr.isatty():
+        return False
+    if os.environ.get("NO_COLOR"):
+        return False
+    if force is not None:
+        return bool(force)
+    return bool(fast_color)
+
+
+def ansi(code: str) -> str:
+    return f"\x1b[{code}m"
+
+
+def emit_wrapped(prefix: str, text: str, width: int, style: str | None = None) -> None:
+    if text is None:
+        text = ""
+    text = str(text)
+    text = strip_rich_markup(text)
+
+    avail = max(10, width - len(prefix))
+    parts = text.splitlines() if "\n" in text else [text]
+
+    for pi, raw_line in enumerate(parts):
+        line = raw_line.rstrip("\n")
+        if not line:
+            sys.stderr.write((prefix.rstrip() if pi == 0 else (" " * len(prefix))) + "\n")
+            continue
+
+        cur = ""
+        for token in line.split(" "):
+            if not cur:
+                cur = token
+            elif len(cur) + 1 + len(token) <= avail:
+                cur += " " + token
+            else:
+                out = cur
+                if style:
+                    sys.stderr.write(prefix + style + out + ansi("0") + "\n")
+                else:
+                    sys.stderr.write(prefix + out + "\n")
+                prefix = " " * len(prefix)
+                avail = max(10, width - len(prefix))
+                cur = token
+
+        if cur:
+            if style:
+                sys.stderr.write(prefix + style + cur + ansi("0") + "\n")
+            else:
+                sys.stderr.write(prefix + cur + "\n")
+        prefix = " " * len(prefix)
+        avail = max(10, width - len(prefix))
+
+
+def emit_line(msg: str) -> None:
+    if not msg:
+        return
+    try:
+        sys.stderr.write(msg + "\n")
+    except Exception:
+        pass
+
+
+def panel_line_from_rows(title, rows) -> str:
+    title_txt = strip_rich_markup(str(title))
+    if not rows:
+        return title_txt
+    for k, v in rows:
+        if k is None:
+            continue
+        ktxt = strip_rich_markup(str(k))
+        vtxt = strip_rich_markup(str(v)) if v is not None else ""
+        if not vtxt:
+            continue
+        return f"{title_txt} — {ktxt}: {vtxt}"
+    return title_txt
+
+
+def panel_line(
+    title: str,
+    line: str,
+    *,
+    kind: str = "info",
+    themes: dict | None = None,
+    border_style: str | None = None,
+    title_style: str | None = None,
+) -> None:
+    try:
+        if not sys.stderr.isatty():
+            raise RuntimeError("no tty")
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.text import Text
+    except Exception:
+        emit_line(line)
+        return
+
+    theme = (themes or {}).get(kind) or (themes or {}).get("info") or {}
+    border = border_style or theme.get("border", "blue")
+    tstyle = title_style or theme.get("title", "cyan")
+
+    console = Console(file=sys.stderr, force_terminal=True)
+    body = Text(line)
+    console.print(
+        Panel(
+            body,
+            title=Text(str(title), style=f"bold {tstyle}"),
+            border_style=border,
+            expand=False,
+            padding=(0, 1),
+        )
+    )
+
+
+def render_panel(
+    title,
+    rows,
+    *,
+    kind: str = "info",
+    panel_mode: str = "rich",
+    fast_color: bool = True,
+    themes: dict | None = None,
+    allow_line: bool = True,
+    line_force_rich_kinds: set[str] | None = None,
+    label_width_min: int = 6,
+    label_width_max: int = 14,
+):
+    """
+    Render a panel using Rich or a fast fallback.
+    """
+    try:
+        mode = str(panel_mode or "").strip().lower()
+        if mode in {"plain"}:
+            mode = "fast"
+        if mode == "line" and not allow_line:
+            mode = "rich"
+        if mode == "line" and line_force_rich_kinds and kind in line_force_rich_kinds:
+            mode = "rich"
+
+        if mode == "line":
+            line = panel_line_from_rows(title, rows)
+            if line:
+                panel_line(title, line, kind=kind, themes=themes)
+            return
+
+        if mode == "fast":
+            width = term_width_stderr()
+            use_color = fast_color_enabled(fast_color=fast_color)
+            RESET = ansi("0")
+            BOLD = ansi("1") if use_color else ""
+            DIM = ansi("2") if use_color else ""
+            CYAN = ansi("36") if use_color else ""
+            GREEN = ansi("32") if use_color else ""
+            RED = ansi("31") if use_color else ""
+            YELLOW = ansi("33") if use_color else ""
+
+            delim = "─" * width
+            sys.stderr.write(delim + "\n")
+            sys.stderr.write((BOLD + CYAN + strip_rich_markup(str(title)) + RESET) + "\n")
+
+            keys = [str(k) for (k, _v) in rows if k is not None]
+            label_w = 0
+            for k in keys:
+                if len(k) > label_w:
+                    label_w = len(k)
+            label_w = min(label_width_max, max(label_width_min, label_w))
+
+            def _style_for_row(k: str, v: str) -> str | None:
+                lk = k.lower()
+                sv = (v or "")
+                lsv = sv.lower()
+                if k.strip().lower() == "pattern":
+                    return CYAN
+                if "natural" in lk:
+                    return DIM
+                if k.strip().lower() in {"basis", "root"}:
+                    return DIM
+                if k.strip().lower() in {"first due", "next due"}:
+                    if "overdue" in lsv or "late" in lsv:
+                        return RED
+                    return GREEN
+                if "warning" in lk:
+                    return YELLOW
+                if "error" in lk:
+                    return RED
+                if lk.startswith("chain"):
+                    return DIM + GREEN
+                return None
+
+            for k, v in rows:
+                if k is None:
+                    sys.stderr.write("\n")
+                    continue
+
+                k = strip_rich_markup(str(k))
+                v = "" if v is None else strip_rich_markup(str(v))
+
+                if k.lower().startswith("timeline"):
+                    prefix0 = f"{k:<{label_w}} "
+                    lines = [ln for ln in v.splitlines() if ln.strip() != ""] if "\n" in v else ([v] if v else [])
+                    if lines:
+                        emit_wrapped(prefix0, lines[0], width, style=None)
+                        for ln in lines[1:]:
+                            emit_wrapped(" " * len(prefix0), ln, width, style=None)
+                    else:
+                        emit_wrapped(prefix0, "", width, style=None)
+                    continue
+
+                prefix = f"{k:<{label_w}} "
+                style = _style_for_row(k, v)
+                emit_wrapped(prefix, v, width, style=style)
+
+            sys.stderr.write(delim + "\n")
+            return
+
+        # Rich mode (default)
+        try:
+            if not sys.stderr.isatty():
+                raise RuntimeError("no tty")
+            from rich.console import Console
+            from rich.panel import Panel
+            from rich.table import Table
+            from rich.text import Text
+        except Exception:
+            width = term_width_stderr()
+            use_color = fast_color_enabled(force=False, fast_color=fast_color)
+            RESET = ansi("0")
+            BOLD = ansi("1") if use_color else ""
+            DIM = ansi("2") if use_color else ""
+            CYAN = ansi("36") if use_color else ""
+            GREEN = ansi("32") if use_color else ""
+            RED = ansi("31") if use_color else ""
+            YELLOW = ansi("33") if use_color else ""
+
+            delim = "─" * width
+            sys.stderr.write(delim + "\n")
+            sys.stderr.write((BOLD + CYAN + strip_rich_markup(str(title)) + RESET) + "\n")
+
+            keys = [str(k) for (k, _v) in rows if k is not None]
+            label_w = 0
+            for k in keys:
+                if len(k) > label_w:
+                    label_w = len(k)
+            label_w = min(label_width_max, max(label_width_min, label_w))
+
+            def _style_for_row(k: str, v: str) -> str | None:
+                lk = k.lower()
+                sv = (v or "")
+                lsv = sv.lower()
+                if k.strip().lower() == "pattern":
+                    return CYAN
+                if "natural" in lk:
+                    return DIM
+                if k.strip().lower() in {"basis", "root"}:
+                    return DIM
+                if k.strip().lower() in {"first due", "next due"}:
+                    if "overdue" in lsv or "late" in lsv:
+                        return RED
+                    return GREEN
+                if "warning" in lk:
+                    return YELLOW
+                if "error" in lk:
+                    return RED
+                if lk.startswith("chain"):
+                    return DIM + GREEN
+                return None
+
+            for k, v in rows:
+                if k is None:
+                    sys.stderr.write("\n")
+                    continue
+
+                k = strip_rich_markup(str(k))
+                v = "" if v is None else strip_rich_markup(str(v))
+
+                if k.lower().startswith("timeline"):
+                    prefix0 = f"{k:<{label_w}} "
+                    lines = [ln for ln in v.splitlines() if ln.strip() != ""] if "\n" in v else ([v] if v else [])
+                    if lines:
+                        emit_wrapped(prefix0, lines[0], width, style=None)
+                        for ln in lines[1:]:
+                            emit_wrapped(" " * len(prefix0), ln, width, style=None)
+                    else:
+                        emit_wrapped(prefix0, "", width, style=None)
+                    continue
+
+                prefix = f"{k:<{label_w}} "
+                style = _style_for_row(k, v)
+                emit_wrapped(prefix, v, width, style=style)
+
+            sys.stderr.write(delim + "\n")
+            return
+
+        theme = (themes or {}).get(kind) or (themes or {}).get("info") or {}
+        border = theme.get("border", "blue")
+        tstyle = theme.get("title", "cyan")
+        lstyle = theme.get("label", "cyan")
+
+        console = Console(file=sys.stderr, force_terminal=True)
+        t = Table.grid(padding=(0, 1), expand=False)
+        t.add_column(style=f"bold {lstyle}", no_wrap=True, justify="right")
+        t.add_column(style="white")
+
+        for k, v in rows:
+            if k is None:
+                t.add_row("", v or "")
+                continue
+
+            label_text = Text(str(k))
+            lk = str(k).lower()
+            if "warning" in lk:
+                label_text.stylize("bold yellow")
+            elif "error" in lk:
+                label_text.stylize("bold red")
+            elif "note" in lk:
+                label_text.stylize("italic cyan")
+
+            t.add_row(label_text, "" if v is None else str(v))
+
+        console.print(
+            Panel(
+                t,
+                title=Text(title, style=f"bold {tstyle}"),
+                border_style=border,
+                expand=False,
+                padding=(0, 1),
+            )
+        )
+    except Exception as e:
+        try:
+            sys.stderr.write(f"[{strip_rich_markup(str(title))}]\n")
+            for k, v in rows or []:
+                if k is None:
+                    continue
+                sys.stderr.write(f"  {strip_rich_markup(str(k))}: {strip_rich_markup(str(v))}\n")
+            if os.environ.get("NAUTICAL_DIAG") == "1":
+                sys.stderr.write(f"[nautical] panel error: {e}\n")
+        except Exception:
+            pass
 
 
 
@@ -361,6 +777,9 @@ SPAWN_QUEUE_DRAIN_MAX_ITEMS = _conf_int("spawn_queue_drain_max_items", 200, min_
 MAX_CHAIN_WALK = _conf_int("max_chain_walk", 500, min_value=1)
 MAX_ANCHOR_ITER = _conf_int("max_anchor_iterations", 128, min_value=32, max_value=1024)
 MAX_LINK_NUMBER = _conf_int("max_link_number", 10000, min_value=1)
+SANITIZE_UDA = _conf_bool("sanitize_uda", False, true_values={"1", "yes", "true", "on"})
+SANITIZE_UDA_MAX_LEN = _conf_int("sanitize_uda_max_len", 1024, min_value=64, max_value=4096)
+MAX_JSON_BYTES = _conf_int("max_json_bytes", 10 * 1024 * 1024, min_value=1024, max_value=100 * 1024 * 1024)
 
 def short_uuid(u: str | None) -> str:
     """Taskwarrior-style short uuid (first 8 hex)."""
@@ -552,6 +971,7 @@ _md_range_re = re.compile(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$")
 _rand_mm_re = re.compile(r"^rand-(\d{2})$")
 _year_range_colon_re = re.compile(r"^(\d{2})-(\d{2})\.\.(\d{2})-(\d{2})$")
 _int_range_re = re.compile(r"^-?\d+\s*\.\.\s*-?\d+$")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 def _safe_match(pattern: re.Pattern, text: str, max_len: int = 256):
     """Defensive regex match to avoid pathological backtracking."""
@@ -560,6 +980,25 @@ def _safe_match(pattern: re.Pattern, text: str, max_len: int = 256):
     if len(text) > max_len:
         raise ParseError("Expression too complex")
     return pattern.match(text)
+
+
+def sanitize_text(v: str, max_len: int = 1024) -> str:
+    """Remove control chars and clamp length for UDA safety."""
+    if not isinstance(v, str):
+        return v
+    s = _CONTROL_CHARS_RE.sub("", v)
+    if max_len > 0 and len(s) > max_len:
+        s = s[:max_len]
+    return s
+
+
+def sanitize_task_strings(task: dict, max_len: int = 1024) -> None:
+    """In-place sanitize of string values in a task payload."""
+    if not isinstance(task, dict):
+        return
+    for k, v in list(task.items()):
+        if isinstance(v, str):
+            task[k] = sanitize_text(v, max_len=max_len)
 
 
 def _split_csv_tokens(spec: str) -> list[str]:
@@ -1036,6 +1475,8 @@ def _normalize_spec_for_acf_uncached(typ: str, spec: str):
                 out.append({"m": m1, "d": d1})
         return out
 
+    return None
+
 
 @lru_cache(maxsize=512)
 def _normalize_spec_for_acf_cached(typ: str, spec: str, fmt: str):
@@ -1053,9 +1494,6 @@ def _normalize_spec_for_acf(typ: str, spec: str):
     if isinstance(res, (list, dict)):
         return copy.deepcopy(res)
     return res
-
-    
-    return spec
 
 def is_valid_acf(acf_str: str) -> bool:
     if not acf_str:
@@ -1400,7 +1838,22 @@ def cache_save(key: str, obj: dict) -> None:
             except Exception:
                 pass
             fd, tmpf = tempfile.mkstemp(dir=base, prefix=f".{key}.", suffix=".tmp")
-            os.write(fd, blob); os.close(fd)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
+            try:
+                written = 0
+                while written < len(blob):
+                    n = os.write(fd, blob[written:])
+                    if n == 0:
+                        raise OSError("write returned 0")
+                    written += n
+            finally:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
             os.replace(tmpf, path)
     finally:
         if tmpf and os.path.exists(tmpf):
@@ -3906,7 +4359,11 @@ def parse_anchor_expr_to_dnf_cached(s: str):
     key = _unwrap_quotes(s or "").strip()
     if not key:
         return []
-    return copy.deepcopy(_parse_anchor_expr_to_dnf_cached_obj(key, _yearfmt()))
+    res = copy.deepcopy(_parse_anchor_expr_to_dnf_cached_obj(key, _yearfmt()))
+    _emit_cache_metrics()
+    if os.environ.get("NAUTICAL_CLEAR_CACHES") == "1":
+        _clear_all_caches()
+    return res
 
 
 
@@ -4569,7 +5026,7 @@ def validate_anchor_expr_strict(expr):
                     bad = [k for k in active if k not in ("t", "bd", "wd")]
                     if bad:
                         raise ParseError(f"m:rand does not support @{', '.join(bad)}")
-                    ival = int(atom.get("ival") or atom.get("intv") or 1)
+                    ival = int(a.get("ival") or a.get("intv") or 1)
                     if ival < 1:
                         raise ParseError("Monthly interval (/N) must be >= 1")
                 else:

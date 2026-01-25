@@ -122,7 +122,11 @@ def _lock_queue():
         except Exception:
             pass
         try:
-            fd = os.open(str(_QUEUE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(str(_QUEUE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
             acquired = True
             break
         except FileExistsError:
@@ -188,7 +192,11 @@ def _lock_dead_letter():
         except Exception:
             pass
         try:
-            fd = os.open(str(_DEAD_LETTER_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(str(_DEAD_LETTER_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
             acquired = True
             break
         except FileExistsError:
@@ -214,6 +222,7 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
     payload = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "reason": reason,
+        "spawn_intent_id": (entry.get("spawn_intent_id") or "").strip(),
         "parent_uuid": (entry.get("parent_uuid") or "").strip(),
         "child_short": (entry.get("child_short") or "").strip(),
         "child_uuid": ((entry.get("child") or {}).get("uuid") or "").strip(),
@@ -252,22 +261,23 @@ def _take_queue_entries() -> list[dict]:
             return entries
         try:
             st = _QUEUE_PATH.stat()
+            overflow_path = None
             if _QUEUE_MAX_BYTES > 0 and st.st_size > _QUEUE_MAX_BYTES:
                 try:
                     ts = int(time.time())
-                    overflow = _QUEUE_PATH.with_suffix(f".overflow.{ts}.jsonl")
-                    os.replace(_QUEUE_PATH, overflow)
-                    _diag(f"queue rotated: {overflow}")
+                    overflow_path = _QUEUE_PATH.with_suffix(f".overflow.{ts}.jsonl")
+                    os.replace(_QUEUE_PATH, overflow_path)
+                    _diag(f"queue rotated: {overflow_path}")
                 except Exception:
                     pass
-                return entries
         except Exception:
             pass
 
+        src_path = overflow_path or _QUEUE_PATH
         tmp_path = _QUEUE_PATH.with_suffix(".staging")
         try:
             fd_out = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-            with open(_QUEUE_PATH, "r", encoding="utf-8") as f_in, os.fdopen(fd_out, "w", encoding="utf-8") as f_out:
+            with open(src_path, "r", encoding="utf-8") as f_in, os.fdopen(fd_out, "w", encoding="utf-8") as f_out:
                 for line in f_in:
                     ln = line.strip()
                     if not ln:
@@ -285,6 +295,11 @@ def _take_queue_entries() -> list[dict]:
                     else:
                         f_out.write(line)
             os.replace(tmp_path, _QUEUE_PATH)
+            if overflow_path:
+                try:
+                    overflow_path.unlink()
+                except Exception:
+                    pass
         except Exception:
             try:
                 if tmp_path.exists():
@@ -313,7 +328,7 @@ def _export_uuid(uuid_str: str) -> dict | None:
     if not uuid_str:
         return None
     ok, out, _err = _run_task(
-        ["task", "rc.hooks=off", "rc.json.array=off", f"uuid:{uuid_str}", "export"],
+        ["task", "rc.hooks=off", "rc.json.array=off", "rc.verbose=nothing", "rc.color=off", f"uuid:{uuid_str}", "export"],
         timeout=3.0,
     )
     if not ok:
@@ -322,6 +337,8 @@ def _export_uuid(uuid_str: str) -> dict | None:
         obj = json.loads(out.strip() or "{}")
         return obj if obj.get("uuid") else None
     except Exception:
+        if uuid_str in out:
+            return {"uuid": uuid_str}
         return None
 
 
@@ -363,12 +380,15 @@ def _drain_queue() -> dict:
     requeue: list[dict] = []
 
     for entry in _take_queue_entries():
+        spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
         parent_uuid = (entry.get("parent_uuid") or "").strip()
         child = entry.get("child") or {}
         child_short = (entry.get("child_short") or "").strip()
         child_uuid = (child.get("uuid") or "").strip()
 
         if not child_uuid:
+            if spawn_intent_id:
+                _diag(f"missing child uuid (intent={spawn_intent_id})")
             _write_dead_letter(entry, "missing child uuid")
             errors += 1
             continue
@@ -381,13 +401,18 @@ def _drain_queue() -> dict:
                 if _export_uuid(child_uuid):
                     exists = True
                 else:
-                    _diag(f"child import failed: {err}")
+                    if spawn_intent_id:
+                        _diag(f"child import failed (intent={spawn_intent_id}): {err}")
+                    else:
+                        _diag(f"child import failed: {err}")
                     _write_dead_letter(entry, f"child import failed: {err}")
                     errors += 1
                     continue
 
         # Confirm child exists before touching parent.
         if not _export_uuid(child_uuid):
+            if spawn_intent_id:
+                _diag(f"child missing after import (intent={spawn_intent_id})")
             _write_dead_letter(entry, "child missing after import")
             errors += 1
             continue
@@ -395,7 +420,10 @@ def _drain_queue() -> dict:
         if parent_uuid and child_short:
             ok, err = _update_parent_nextlink(parent_uuid, child_short)
             if not ok:
-                _diag(f"parent update failed: {parent_uuid}")
+                if spawn_intent_id:
+                    _diag(f"parent update failed (intent={spawn_intent_id}): {parent_uuid}")
+                else:
+                    _diag(f"parent update failed: {parent_uuid}")
                 if _is_lock_error(err):
                     requeue.append(entry)
                 else:

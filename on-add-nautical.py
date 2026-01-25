@@ -250,7 +250,11 @@ def _dnf_cache_lock():
         except Exception:
             pass
         try:
-            fd = os.open(str(_DNF_DISK_CACHE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(str(_DNF_DISK_CACHE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
             acquired = True
             break
         except FileExistsError:
@@ -413,6 +417,11 @@ def _validate_anchor_expr_cached(expr: str):
     if _DNF_DISK_CACHE_ENABLED:
         cache = _load_dnf_disk_cache()
         k = _dnf_cache_key(expr)
+        try:
+            json.dumps(dnf, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            _diag("DNF cache skip: value not JSON-serializable")
+            return dnf
         cache[k] = dnf
         cache.move_to_end(k)
         _DNF_DISK_CACHE_DIRTY = True

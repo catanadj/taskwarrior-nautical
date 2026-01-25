@@ -760,7 +760,11 @@ def _queue_locked(fn):
             except Exception:
                 pass
             try:
-                fd = os.open(str(_SPAWN_QUEUE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                fd = os.open(str(_SPAWN_QUEUE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                try:
+                    os.fchmod(fd, 0o600)
+                except Exception:
+                    pass
                 acquired = True
                 break
             except FileExistsError:
@@ -793,7 +797,12 @@ def _queue_locked(fn):
     lf = None
     acquired = False
     try:
-        lf = open(_SPAWN_QUEUE_LOCK, "a", encoding="utf-8")
+        fd = os.open(str(_SPAWN_QUEUE_LOCK), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        lf = os.fdopen(fd, "a", encoding="utf-8")
         for _ in range(_SPAWN_LOCK_RETRIES):
             try:
                 fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1206,11 +1215,20 @@ def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
     return ("unknown", True)
 
 
-def _spawn_intent_entry(parent_uuid: str, child_obj: dict, child_short: str) -> dict:
+def _spawn_intent_entry(
+    parent_uuid: str,
+    child_obj: dict,
+    child_short: str,
+    spawn_intent_id: str | None = None,
+) -> dict:
+    intent_id = (spawn_intent_id or "").strip()
+    if not intent_id:
+        intent_id = f"si_{uuid.uuid4().hex[:12]}"
     return {
         "parent_uuid": parent_uuid,
         "child_short": child_short,
         "child": child_obj,
+        "spawn_intent_id": intent_id,
     }
 
 
@@ -1220,7 +1238,10 @@ def _enqueue_spawn_intent(entry: dict) -> None:
     _enqueue_deferred_spawn(entry)
 
 
-def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tuple[str, set[str], bool, bool, str | None]:
+def _spawn_child_atomic(
+    child_task: dict,
+    parent_task_with_nextlink: dict,
+) -> tuple[str, set[str], bool, bool, str | None, str | None]:
     """
     Queue a child spawn intent for the on-exit hook.
 
@@ -1234,6 +1255,7 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
 
     # Prepare child with a stable UUID (so retries cannot fork).
     child_uuid = str(uuid.uuid4())
+    spawn_intent_id = f"si_{uuid.uuid4().hex[:12]}"
     child_obj = dict(child_task)
     child_obj["uuid"] = child_uuid
     if "entry" not in child_obj:
@@ -1252,10 +1274,22 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
     last_category = "unknown"
 
     # Decision-only mode: enqueue for on-exit spawn and return unverified.
-    entry = _spawn_intent_entry(parent_task_with_nextlink.get("uuid") or "", child_obj, child_short)
+    entry = _spawn_intent_entry(
+        parent_task_with_nextlink.get("uuid") or "",
+        child_obj,
+        child_short,
+        spawn_intent_id,
+    )
     _enqueue_spawn_intent(entry)
     _diag_count("spawn_deferred")
-    return (child_short, stripped_attrs, False, True, "Spawn intent queued for on-exit processing")
+    return (
+        child_short,
+        stripped_attrs,
+        False,
+        True,
+        "Spawn intent queued for on-exit processing",
+        spawn_intent_id,
+    )
 
 
 
@@ -3668,8 +3702,16 @@ def main():
 
     deferred_spawn = False
     spawn_note = None
+    spawn_intent_id = None
     try:
-        child_short, stripped_attrs, verified, deferred_spawn, defer_reason = _spawn_child_atomic(child, new)
+        (
+            child_short,
+            stripped_attrs,
+            verified,
+            deferred_spawn,
+            defer_reason,
+            spawn_intent_id,
+        ) = _spawn_child_atomic(child, new)
         if deferred_spawn:
             spawn_note = "[yellow]Queued[/] (will import after this command finishes)"
         if not verified and not deferred_spawn:
@@ -3805,6 +3847,9 @@ def main():
             child_obj = _export_uuid_short_cached(child_short)
             child_id = child_obj.get("id", "") if child_obj else ""
 
+        if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
+            fb.append(("Intent", spawn_intent_id))
+
         if deferred_spawn:
             title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short} [queued]"
         else:
@@ -3902,6 +3947,9 @@ def main():
         if not deferred_spawn and not child_id:
             child_obj = _export_uuid_short_cached(child_short)
             child_id = child_obj.get("id", "") if child_obj else ""
+
+        if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
+            fb.append(("Intent", spawn_intent_id))
 
         if deferred_spawn:
             title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short} [queued]"

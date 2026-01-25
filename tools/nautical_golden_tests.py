@@ -1475,6 +1475,36 @@ def test_on_add_dnf_cache_size_guard_skips_load():
         expect(len(loaded) == 0, "DNF cache size-guard load should return empty cache")
 
 
+def test_on_add_dnf_cache_skips_non_jsonable_values():
+    """on-add DNF cache should skip non-JSON-serializable values."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_cache_non_jsonable_test")
+    if not hasattr(mod, "_validate_anchor_expr_cached"):
+        raise AssertionError("on-add hook does not expose DNF cache helpers")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        cache_path = os.path.join(td, "dnf_cache.jsonl")
+        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
+        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
+        mod._DNF_DISK_CACHE_ENABLED = True
+        mod._DNF_DISK_CACHE = OrderedDict()
+        mod._DNF_DISK_CACHE_DIRTY = False
+        mod._validate_anchor_expr_cached.cache_clear()
+
+        orig = mod.core.validate_anchor_expr_strict
+        try:
+            mod.core.validate_anchor_expr_strict = lambda _expr: {"bad": set([1, 2])}
+            dnf = mod._validate_anchor_expr_cached("w:mon")
+        finally:
+            mod.core.validate_anchor_expr_strict = orig
+
+        expect(isinstance(dnf, dict), "DNF should be returned even when not cacheable")
+        expect(not mod._DNF_DISK_CACHE_DIRTY, "DNF cache should not be marked dirty on non-serializable values")
+        expect(len(mod._DNF_DISK_CACHE) == 0, "DNF cache should not store non-serializable values")
+
+
 def test_core_import_deterministic():
     """Hooks should ignore TASKDATA unless NAUTICAL_DEV=1."""
     with tempfile.TemporaryDirectory() as td:
@@ -1489,6 +1519,16 @@ def test_core_import_deterministic():
             os.environ.pop("TASKDATA", None)
 
     expect(True, "core import should ignore TASKDATA when NAUTICAL_DEV is not set")
+
+def test_on_modify_spawn_intent_id_in_entry():
+    """on-modify spawn intent entries should include a correlation id."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_spawn_intent_id_test")
+    if not hasattr(mod, "_spawn_intent_entry"):
+        raise AssertionError("on-modify hook does not expose spawn intent helper")
+
+    entry = mod._spawn_intent_entry("parent", {"uuid": "child"}, "deadbeef", "si_test")
+    expect(entry.get("spawn_intent_id") == "si_test", "spawn_intent_id should be preserved in queue entry")
 
 def test_on_exit_spawn_intents_drain():
     """on-exit should import child and update parent from spawn intents."""
@@ -2043,6 +2083,29 @@ def test_on_exit_queue_streaming_line_cap():
         expect(len(remaining) == 1, "queue should keep remainder lines")
 
 
+def test_on_exit_queue_rotate_then_drain():
+    """on-exit should drain overflow queue after rotation."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_queue_rotate_drain_test")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_MAX_BYTES = 1
+        mod._QUEUE_MAX_LINES = 10
+
+        entry = {"child": {"uuid": "00000000-0000-0000-0000-000000000999"}}
+        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        entries = mod._take_queue_entries()
+        expect(len(entries) == 1, f"unexpected entries after rotate: {entries}")
+        expect(mod._QUEUE_PATH.exists(), "queue path should remain")
+
+
 def test_on_exit_dead_letter_rotation():
     """dead-letter should rotate when exceeding size cap."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -2063,6 +2126,32 @@ def test_on_exit_dead_letter_rotation():
 
         rotated = [p for p in os.listdir(td) if p.startswith(".nautical_dead_letter.overflow.")]
         expect(rotated, "dead-letter should rotate when size exceeds cap")
+
+
+def test_on_exit_dead_letter_carries_spawn_intent_id():
+    """dead-letter should include spawn_intent_id when present."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_dead_letter_spawn_id_test")
+    if not hasattr(mod, "_write_dead_letter"):
+        raise AssertionError("on-exit hook does not expose dead-letter helper")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_spawn_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_spawn_dead_letter.lock"
+        mod._DEAD_LETTER_MAX_BYTES = 0
+
+        entry = {
+            "spawn_intent_id": "si_test",
+            "parent_uuid": "parent",
+            "child_short": "deadbeef",
+            "child": {"uuid": "child"},
+        }
+        mod._write_dead_letter(entry, "reason")
+        payload = json.loads(mod._DEAD_LETTER_PATH.read_text(encoding="utf-8").strip())
+        expect(payload.get("spawn_intent_id") == "si_test", "dead-letter should carry spawn_intent_id")
 
 
 def test_queue_json_parse_dead_letter():
@@ -2086,6 +2175,19 @@ def test_queue_json_parse_dead_letter():
         expect(mod._DEAD_LETTER_PATH.exists(), "dead-letter should be created")
         remaining = mod._QUEUE_PATH.read_text(encoding="utf-8").strip()
         expect(remaining == "", "queue should be cleared of bad line")
+
+
+def test_on_exit_export_uuid_noisy_stdout():
+    """on-exit export should tolerate noisy stdout when UUID present."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_export_uuid_noisy_test")
+
+    def _run_task_noisy(*_a, **_k):
+        return True, "WARN something\n00000000-0000-0000-0000-000000000111\n", ""
+
+    mod._run_task = _run_task_noisy
+    obj = mod._export_uuid("00000000-0000-0000-0000-000000000111")
+    expect(obj and obj.get("uuid"), "noisy stdout should still be treated as exists")
 
 
 def test_on_modify_cp_completion_spawns_next_link():
@@ -2341,6 +2443,7 @@ TESTS = [
     test_on_add_dnf_cache_corrupt_payload_recovers,
     test_on_add_dnf_cache_quarantines_invalid_jsonl,
     test_on_add_dnf_cache_size_guard_skips_load,
+    test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,
     test_on_exit_queue_drain_is_transactional,
     test_on_exit_import_child_retries_on_lock,
@@ -2361,9 +2464,13 @@ TESTS = [
     test_rand_determinism_with_seed,
     test_on_exit_lock_failure_keeps_queue,
     test_on_exit_queue_streaming_line_cap,
+    test_on_exit_queue_rotate_then_drain,
     test_on_exit_dead_letter_rotation,
     test_queue_json_parse_dead_letter,
+    test_on_exit_dead_letter_carries_spawn_intent_id,
+    test_on_exit_export_uuid_noisy_stdout,
     test_core_import_deterministic,
+    test_on_modify_spawn_intent_id_in_entry,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,

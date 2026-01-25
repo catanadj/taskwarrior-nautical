@@ -392,23 +392,23 @@ def test_hook_stdout_strict_json_with_diag_on_modify():
         _assert_stdout_json_only(p.stdout)
 
 def test_on_modify_read_two_fuzz_inputs():
-    """on-modify input parsing should be tolerant and never crash."""
+    """on-modify input parsing should be strict and return JSON errors on bad input."""
     hook = _find_hook_file("on-modify-nautical.py")
     cases = [
         ("", "empty"),
-        ("{not-json}", "passthrough"),
+        ("{not-json}", "invalid"),
         (json.dumps({"status": "pending"}), "json"),
         (json.dumps({"status": "pending"}) + "\n" + json.dumps({"status": "pending"}), "json"),
         ("  \n" + json.dumps({"status": "pending"}) + "\n", "json"),
     ]
     for raw, mode in cases:
         p = _run_hook_script_raw(hook, raw)
-        expect(p.returncode == 0, f"on-modify returned {p.returncode} for case {mode}")
-        if mode == "empty":
-            expect((p.stdout or "") == "", "empty input should return empty stdout")
-        elif mode == "passthrough":
-            expect((p.stdout or "").strip() == raw.strip(), "invalid input should pass through raw")
+        if mode in {"empty", "invalid"}:
+            expect(p.returncode != 0, f"on-modify should fail for case {mode}")
+            payload = _extract_last_json(p.stdout or "")
+            expect("error" in payload and "message" in payload, "on-modify error response missing fields")
         else:
+            expect(p.returncode == 0, f"on-modify returned {p.returncode} for case {mode}")
             _assert_stdout_json_only(p.stdout)
 
 def test_spawn_queue_recovers_partial_payload():
@@ -499,12 +499,57 @@ def test_dst_round_trip_noon_preserves_local_date():
             expect(back.hour == 12 and back.minute == 0, f"DST round-trip time mismatch: {back}")
 
 def test_on_modify_invalid_json_passthrough():
-    """Malformed JSON should not crash on-modify; it should pass through raw input."""
+    """Malformed JSON should fail fast and return a JSON error object."""
     path = _find_hook_file("on-modify-nautical.py")
     raw = "{not-json}"
     p = _run_hook_script_raw(path, raw)
-    expect(p.returncode == 0, f"on-modify returned {p.returncode}")
-    expect((p.stdout or "").strip() == raw.strip(), "on-modify did not pass through raw input")
+    expect(p.returncode != 0, "on-modify should fail on invalid JSON input")
+    payload = _extract_last_json(p.stdout or "")
+    expect("error" in payload and "message" in payload, "on-modify error response missing fields")
+
+def test_next_for_and_no_progress_fails_fast():
+    """_next_for_and should fail fast when a term makes no forward progress."""
+    saved = core.next_after_atom_with_mods
+    try:
+        def _stub(_atom, ref_d, _seed):
+            return ref_d
+        core.next_after_atom_with_mods = _stub
+        term = [{"typ": "w", "spec": "mon"}]
+        try:
+            core._next_for_and(term, date(2025, 1, 1), date(2025, 1, 1))
+            expect(False, "_next_for_and should raise ParseError on no-progress")
+        except core.ParseError:
+            pass
+    finally:
+        core.next_after_atom_with_mods = saved
+
+def test_roll_apply_has_guard():
+    """roll_apply should fail fast if weekday never converges."""
+    class WeirdDate(date):
+        def weekday(self):
+            return 9
+
+    try:
+        core.roll_apply(WeirdDate(2025, 1, 1), {"roll": "pbd"})
+        expect(False, "roll_apply should raise ParseError when weekday never converges")
+    except core.ParseError:
+        pass
+
+def test_anchor_cache_cleans_stale_tmp_files():
+    """cache_save should remove stale temp files for the same key."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    with tempfile.TemporaryDirectory() as td:
+        cfg = os.path.join(td, "nautical.toml")
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write('enable_anchor_cache = true\n')
+            f.write('anchor_cache_dir = "' + td.replace("\\\\", "/") + '"\\n')
+        mod = _load_core_module(core_path, "_nautical_core_cache_tmp_test", cfg)
+        key = "deadbeef"
+        stale = os.path.join(td, f".{key}.stale.tmp")
+        with open(stale, "w", encoding="utf-8") as f:
+            f.write("stale")
+        mod.cache_save(key, {"dnf": []})
+        expect(not os.path.exists(stale), "stale cache tmp file should be cleaned")
 
 def test_weekly_and_unsat():
     """Test weekly AND (Sat AND Mon) must be unsatisfiable"""
@@ -1674,6 +1719,9 @@ TESTS = [
     test_hook_stdout_strict_json_with_diag_on_add,
     test_hook_stdout_strict_json_with_diag_on_modify,
     test_on_modify_invalid_json_passthrough,
+    test_next_for_and_no_progress_fails_fast,
+    test_roll_apply_has_guard,
+    test_anchor_cache_cleans_stale_tmp_files,
     test_on_add_fail_and_exit_emits_json,
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_versioned_payload,

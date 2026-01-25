@@ -13,6 +13,11 @@ from calendar import month_name
 from datetime import date as _date
 import json, zlib, base64, hashlib, tempfile, time
 import difflib
+from contextlib import contextmanager
+try:
+    import fcntl  # POSIX advisory lock
+except Exception:
+    fcntl = None
 
 
 
@@ -1226,6 +1231,73 @@ def _cache_path(key: str) -> str:
         return ""
     return os.path.join(base, f"{key}.jsonz")
 
+def _cache_lock_path(key: str) -> str:
+    base = _cache_dir()
+    if not base:
+        return ""
+    return os.path.join(base, f".{key}.lock")
+
+@contextmanager
+def _cache_lock(key: str):
+    """Best-effort per-key lock for cache writes. Yields True if acquired."""
+    lock_path = _cache_lock_path(key)
+    if not lock_path:
+        yield False
+        return
+    if fcntl is not None:
+        lf = None
+        acquired = False
+        try:
+            lf = open(lock_path, "a", encoding="utf-8")
+            for _ in range(6):
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except Exception:
+                    time.sleep(0.05)
+        except Exception:
+            lf = None
+        try:
+            yield acquired
+        finally:
+            try:
+                if acquired and lf is not None:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                if lf is not None:
+                    lf.close()
+            except Exception:
+                pass
+        return
+
+    fd = None
+    acquired = False
+    for _ in range(6):
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            acquired = True
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+        except Exception:
+            break
+    try:
+        yield acquired
+    finally:
+        try:
+            if acquired and fd is not None:
+                os.close(fd)
+        except Exception:
+            pass
+        try:
+            if acquired and fd is not None:
+                os.unlink(lock_path)
+        except Exception:
+            pass
+
 
 def _is_dnf_like(dnf) -> bool:
     """Defensive: ensure DNF looks like list[list[dict]]."""
@@ -1299,13 +1371,27 @@ def cache_save(key: str, obj: dict) -> None:
         base = _cache_dir()
         if not base:
             return
-        fd, tmpf = tempfile.mkstemp(dir=base, prefix=f".{key}.", suffix=".tmp")
-        os.write(fd, blob); os.close(fd)
-        os.replace(tmpf, path)
+        with _cache_lock(key) as locked:
+            if not locked:
+                return
+            try:
+                for name in os.listdir(base):
+                    if name.startswith(f".{key}.") and name.endswith(".tmp"):
+                        try:
+                            os.unlink(os.path.join(base, name))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            fd, tmpf = tempfile.mkstemp(dir=base, prefix=f".{key}.", suffix=".tmp")
+            os.write(fd, blob); os.close(fd)
+            os.replace(tmpf, path)
     finally:
         if tmpf and os.path.exists(tmpf):
-            try: os.unlink(tmpf)
-            except Exception: pass
+            try:
+                os.unlink(tmpf)
+            except Exception:
+                pass
 
 def cache_key_for_task(anchor_expr: str, anchor_mode: str) -> str:
     # Ephemeral canonical: never stored on the task, used only to build a stable key
@@ -1616,6 +1702,13 @@ def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
     for _ in range(128):
         cands = [next_after_atom_with_mods(atom, probe, seed) for atom in term]
         target = max(cands)
+        if target <= probe:
+            if os.environ.get("NAUTICAL_DIAG") == "1":
+                _warn_once_per_day(
+                    "next_for_and_no_progress",
+                    "[nautical] _next_for_and made no progress; failing fast. Check anchor spec.",
+                )
+            raise ParseError("Anchor evaluation made no forward progress; check anchor spec.")
         # Verify target matches all atoms (handles modifiers like @bd)
         if all(atom_matches_on(atom, target, seed) for atom in term):
             return target
@@ -4683,18 +4776,34 @@ def roll_apply(dt: date, mods: dict) -> date:
     if roll in ("pbd", "nbd", "nw"):
         if dt.weekday() > 4:  # weekend
             if roll == "pbd":
-                while dt.weekday() > 4:
+                for _ in range(8):
+                    if dt.weekday() <= 4:
+                        break
                     dt -= timedelta(days=1)
+                else:
+                    raise ParseError("roll_apply: failed to reach business day (pbd)")
             elif roll == "nbd":
-                while dt.weekday() > 4:
+                for _ in range(8):
+                    if dt.weekday() <= 4:
+                        break
                     dt += timedelta(days=1)
+                else:
+                    raise ParseError("roll_apply: failed to reach business day (nbd)")
             else:  # 'nw'
                 prev_dt = dt
                 next_dt = dt
-                while prev_dt.weekday() > 4:
+                for _ in range(8):
+                    if prev_dt.weekday() <= 4:
+                        break
                     prev_dt -= timedelta(days=1)
-                while next_dt.weekday() > 4:
+                else:
+                    raise ParseError("roll_apply: failed to reach business day (nw prev)")
+                for _ in range(8):
+                    if next_dt.weekday() <= 4:
+                        break
                     next_dt += timedelta(days=1)
+                else:
+                    raise ParseError("roll_apply: failed to reach business day (nw next)")
                 if (dt - prev_dt) <= (next_dt - dt):
                     dt = prev_dt
                 else:
@@ -4704,11 +4813,19 @@ def roll_apply(dt: date, mods: dict) -> date:
         tgt = mods.get("wd")
         if tgt is not None:
             if roll == "next-wd":
-                while dt.weekday() != tgt:
+                for _ in range(8):
+                    if dt.weekday() == tgt:
+                        break
                     dt += timedelta(days=1)
+                else:
+                    raise ParseError("roll_apply: failed to reach target weekday (next-wd)")
             else:  # 'prev-wd'
-                while dt.weekday() != tgt:
+                for _ in range(8):
+                    if dt.weekday() == tgt:
+                        break
                     dt -= timedelta(days=1)
+                else:
+                    raise ParseError("roll_apply: failed to reach target weekday (prev-wd)")
 
     return dt
 

@@ -598,6 +598,29 @@ def test_build_local_datetime_dst_gap_and_ambiguous():
         offset = back.utcoffset()
         expect(offset is not None and offset.total_seconds() == -4 * 3600, f"DST fall back should choose earlier: {back}")
 
+def test_on_modify_chain_export_cache_key_includes_params():
+    """Chain export cache should include since/extra in its key."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cache_key_test")
+    if not hasattr(mod, "_tw_export_chain_cached_key"):
+        raise AssertionError("on-modify hook does not expose chain cache helper")
+    calls = []
+
+    def _fake(chain_id: str, since=None, extra=None, env=None):
+        calls.append((chain_id, since, extra))
+        return [{"uuid": "x"}]
+
+    mod.tw_export_chain = _fake
+    mod._tw_export_chain_cached_key.cache_clear()
+    mod._CHAIN_CACHE_CHAIN_ID = ""
+    mod._CHAIN_CACHE = []
+
+    since = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    _ = mod._get_chain_export("abc", since=since, extra="status:pending")
+    _ = mod._get_chain_export("abc", since=since, extra="status:pending")
+    _ = mod._get_chain_export("abc", since=since, extra="status:completed")
+    expect(len(calls) == 2, f"cache key ignored params, calls={calls}")
+
 def test_weekly_and_unsat():
     """Test weekly AND (Sat AND Mon) must be unsatisfiable"""
     fatal, _ = core.lint_anchor_expr("w:sat + w:mon")
@@ -1777,6 +1800,7 @@ TESTS = [
     test_weeks_between_iso_boundary,
     test_anchor_expr_length_limit,
     test_build_local_datetime_dst_gap_and_ambiguous,
+    test_on_modify_chain_export_cache_key_includes_params,
     test_coerce_int_bounds,
     test_on_add_fail_and_exit_emits_json,
     test_on_modify_read_two_fuzz_inputs,

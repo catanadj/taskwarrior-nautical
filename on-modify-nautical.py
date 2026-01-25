@@ -13,6 +13,7 @@ import sys, json, os, uuid, subprocess, importlib
 import atexit
 import time as _ptime
 import statistics
+from collections import OrderedDict
 from pathlib import Path
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
@@ -92,7 +93,9 @@ _DIAG_START_TS = _ptime.perf_counter()
 # Set debug_wait_sched=true to include carry computations in the feedback panel.
 # ------------------------------------------------------------------------------
 _DEBUG_WAIT_SCHED = False
-_LAST_WAIT_SCHED_DEBUG: dict[str, dict] = {}
+_LAST_WAIT_SCHED_DEBUG = OrderedDict()
+_MAX_WAIT_SCHED_DEBUG = 32
+_WARNED_SPAWN_QUEUE_GROWTH = False
 _WARNED_CHAIN_EXPORT: set[str] = set()
 
 
@@ -115,6 +118,17 @@ def _is_lock_error(stderr: str) -> bool:
         or "lockfile" in s
         or "locked by" in s
     )
+
+
+def _set_wait_sched_debug(field: str, payload: dict) -> None:
+    try:
+        if field in _LAST_WAIT_SCHED_DEBUG:
+            _LAST_WAIT_SCHED_DEBUG.pop(field, None)
+        _LAST_WAIT_SCHED_DEBUG[field] = payload
+        while len(_LAST_WAIT_SCHED_DEBUG) > _MAX_WAIT_SCHED_DEBUG:
+            _LAST_WAIT_SCHED_DEBUG.popitem(last=False)
+    except Exception:
+        pass
 
 
 def _diag_count(key: str, inc: int = 1) -> None:
@@ -1047,6 +1061,24 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
         # As a last resort, fall back to default encoding.
         line = json.dumps(task_obj) + "\n"
     _requeue_deferred_spawn_payload(line)
+    global _WARNED_SPAWN_QUEUE_GROWTH
+    try:
+        if not _WARNED_SPAWN_QUEUE_GROWTH and _SPAWN_QUEUE_PATH.exists():
+            size = _SPAWN_QUEUE_PATH.stat().st_size
+            if size > _SPAWN_QUEUE_MAX_BYTES:
+                _WARNED_SPAWN_QUEUE_GROWTH = True
+                _panel(
+                    "⚠ Spawn queue growing",
+                    [
+                        ("Queue", str(_SPAWN_QUEUE_PATH)),
+                        ("Size", f"{size} bytes"),
+                        ("Limit", f"{_SPAWN_QUEUE_MAX_BYTES} bytes"),
+                        ("Hint", "Run the drain command or reduce load."),
+                    ],
+                    kind="warning",
+                )
+    except Exception:
+        pass
 
 
 def _iter_json_objects_from_mixed_text(raw: str):
@@ -1658,7 +1690,7 @@ def _spawn_child_atomic(child_task: dict, parent_task_with_nextlink: dict) -> tu
             ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "import", "-"],
             input_text=payload,
             env=env,
-            timeout=2,
+            timeout=5,
             retries=1,
         )
         if not ok and (err == "timeout" or _is_lock_error(err)):
@@ -2040,11 +2072,19 @@ def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] |
 
 
 @lru_cache(maxsize=32)
-def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None) -> tuple[dict, ...]:
-    """Cached chain export; returns an immutable tuple to avoid accidental mutation."""
+def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str) -> tuple[dict, ...]:
+    """Cached chain export keyed by stable parameters."""
+    since = datetime.fromisoformat(since_key) if since_key else None
+    extra = extra_key or None
     if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
         return tuple(_CHAIN_CACHE or [])
     return tuple(tw_export_chain(chain_id, since=since, extra=extra, env=None) or [])
+
+
+def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None) -> tuple[dict, ...]:
+    since_key = since.isoformat() if isinstance(since, datetime) else ""
+    extra_key = str(extra or "")
+    return _tw_export_chain_cached_key(chain_id, since_key, extra_key)
 
 
 def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
@@ -2857,13 +2897,13 @@ def _carry_rel_dt_utc(parent: dict, child: dict, child_due_utc: datetime, field:
     p_val = _dtparse(parent.get(field))
     if not (isinstance(p_due, datetime) and isinstance(p_val, datetime) and isinstance(child_due_utc, datetime)):
         if _DEBUG_WAIT_SCHED:
-            _LAST_WAIT_SCHED_DEBUG[field] = {
+            _set_wait_sched_debug(field, {
                 "ok": False,
                 "reason": "parse-failed",
                 "parent_due": parent.get("due"),
                 "parent_val": parent.get(field),
                 "child_due": child.get("due") or (core.fmt_isoz(child_due_utc) if isinstance(child_due_utc, datetime) else None),
-            }
+            })
         return
 
     delta = (p_val - p_due)
@@ -2873,14 +2913,14 @@ def _carry_rel_dt_utc(parent: dict, child: dict, child_due_utc: datetime, field:
     if _DEBUG_WAIT_SCHED:
         delta_s = _fmt_td_dd_hhmm(delta)
 
-        _LAST_WAIT_SCHED_DEBUG[field] = {
+        _set_wait_sched_debug(field, {
             "ok": True,
             "parent_due": parent.get("due"),
             "parent_val": parent.get(field),
             "delta": delta_s,
             "child_due": child.get("due"),
             "child_val": child.get(field),
-        }
+        })
 
 # ------------------------------------------------------------------------------
 # End-of-chain summary + stats
@@ -3719,7 +3759,7 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     if extra:
         args += shlex.split(extra)
     args.append("export")
-    ok, out, err = _run_task(args, env=env, timeout=3.0, retries=2)
+    ok, out, err = _run_task(args, env=env, timeout=1.5, retries=1)
     if not ok:
         _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
         if chain_id and chain_id not in _WARNED_CHAIN_EXPORT:

@@ -274,8 +274,8 @@ def _drain_queue() -> dict:
 
 def main() -> int:
     stats = _drain_queue()
-    ok = stats.get("errors", 0) == 0
-    print(json.dumps({"ok": ok, **stats}, ensure_ascii=False), end="")
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        _diag(f"on-exit drain: processed={stats.get('processed', 0)} errors={stats.get('errors', 0)} requeued={stats.get('requeued', 0)}")
     return 0
 
 

@@ -41,6 +41,9 @@ _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
 _DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
+_QUEUE_MAX_BYTES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_BYTES") or 524288)
+_QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000)
+_DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)
 
 
 def _diag(msg: str) -> None:
@@ -218,7 +221,18 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
         if not locked:
             return
         try:
-            with open(_DEAD_LETTER_PATH, "a", encoding="utf-8") as f:
+            if _DEAD_LETTER_MAX_BYTES > 0 and _DEAD_LETTER_PATH.exists():
+                try:
+                    st = _DEAD_LETTER_PATH.stat()
+                    if st.st_size > _DEAD_LETTER_MAX_BYTES:
+                        ts = int(time.time())
+                        overflow = _DEAD_LETTER_PATH.with_suffix(f".overflow.{ts}.jsonl")
+                        os.replace(_DEAD_LETTER_PATH, overflow)
+                        _diag(f"dead-letter rotated: {overflow}")
+                except Exception:
+                    pass
+            fd = os.open(str(_DEAD_LETTER_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
         except Exception:
             pass
@@ -235,37 +249,39 @@ def _take_queue_entries() -> list[dict]:
         except Exception:
             return entries
         try:
-            raw = _QUEUE_PATH.read_text(encoding="utf-8")
+            st = _QUEUE_PATH.stat()
+            if _QUEUE_MAX_BYTES > 0 and st.st_size > _QUEUE_MAX_BYTES:
+                try:
+                    ts = int(time.time())
+                    overflow = _QUEUE_PATH.with_suffix(f".overflow.{ts}.jsonl")
+                    os.replace(_QUEUE_PATH, overflow)
+                    _diag(f"queue rotated: {overflow}")
+                except Exception:
+                    pass
+                return entries
         except Exception:
-            return entries
-        if not (raw or "").strip():
-            try:
-                _QUEUE_PATH.unlink()
-            except Exception:
-                pass
-            return entries
-
-        remainder: list[str] = []
-        for line in raw.splitlines():
-            ln = line.strip()
-            if not ln:
-                continue
-            try:
-                obj = json.loads(ln)
-            except Exception:
-                remainder.append(line)
-                continue
-            if isinstance(obj, dict):
-                entries.append(obj)
-            else:
-                remainder.append(line)
+            pass
 
         tmp_path = _QUEUE_PATH.with_suffix(".staging")
         try:
-            if remainder:
-                tmp_path.write_text("\n".join(remainder) + "\n", encoding="utf-8")
-            else:
-                tmp_path.write_text("", encoding="utf-8")
+            fd_out = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+            with open(_QUEUE_PATH, "r", encoding="utf-8") as f_in, os.fdopen(fd_out, "w", encoding="utf-8") as f_out:
+                for line in f_in:
+                    ln = line.strip()
+                    if not ln:
+                        continue
+                    if _QUEUE_MAX_LINES > 0 and len(entries) >= _QUEUE_MAX_LINES:
+                        f_out.write(line)
+                        continue
+                    try:
+                        obj = json.loads(ln)
+                    except Exception:
+                        f_out.write(line)
+                        continue
+                    if isinstance(obj, dict):
+                        entries.append(obj)
+                    else:
+                        f_out.write(line)
             os.replace(tmp_path, _QUEUE_PATH)
         except Exception:
             try:
@@ -283,7 +299,8 @@ def _requeue_entries(entries: list[dict]) -> None:
         if not locked:
             return
         try:
-            with open(_QUEUE_PATH, "a", encoding="utf-8") as f:
+            fd = os.open(str(_QUEUE_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
                 for obj in entries:
                     f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
         except Exception:

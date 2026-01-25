@@ -1388,7 +1388,6 @@ def test_on_add_dnf_cache_versioned_payload():
         cache_path = os.path.join(td, "dnf_cache.jsonl")
         mod._DNF_DISK_CACHE_PATH = Path(cache_path)
         mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
-        mod._DNF_DISK_CACHE_PATH_LEGACY = Path(os.path.join(td, "dnf_cache.pkl"))
         mod._DNF_DISK_CACHE_ENABLED = True
         mod._DNF_DISK_CACHE = OrderedDict([("k1", {"v": 1})])
         mod._DNF_DISK_CACHE_DIRTY = True
@@ -1402,7 +1401,7 @@ def test_on_add_dnf_cache_versioned_payload():
 
 
 def test_on_add_dnf_cache_corrupt_payload_recovers():
-    """on-add DNF cache load should fail on invalid JSONL payloads."""
+    """on-add DNF cache load should quarantine and continue on invalid JSONL."""
     hook = _find_hook_file("on-add-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_add_cache_corrupt_test")
     if not hasattr(mod, "_load_dnf_disk_cache"):
@@ -1413,19 +1412,15 @@ def test_on_add_dnf_cache_corrupt_payload_recovers():
     with tempfile.TemporaryDirectory() as td:
         cache_path = os.path.join(td, "dnf_cache.jsonl")
         with open(cache_path, "wb") as f:
-            f.write(b"not a pickle")
+            f.write(b"{bad-json}\n")
 
         mod._DNF_DISK_CACHE_PATH = Path(cache_path)
         mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
-        mod._DNF_DISK_CACHE_PATH_LEGACY = Path(os.path.join(td, "dnf_cache.pkl"))
         mod._DNF_DISK_CACHE_ENABLED = True
         mod._DNF_DISK_CACHE = None
 
-        try:
-            mod._load_dnf_disk_cache()
-            expect(False, "DNF cache corrupt JSONL should raise")
-        except Exception:
-            pass
+        loaded = mod._load_dnf_disk_cache()
+        expect(isinstance(loaded, OrderedDict), "DNF cache load should return OrderedDict")
 
 
 def test_on_add_dnf_cache_quarantines_invalid_jsonl():
@@ -1444,7 +1439,6 @@ def test_on_add_dnf_cache_quarantines_invalid_jsonl():
 
         mod._DNF_DISK_CACHE_PATH = Path(cache_path)
         mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
-        mod._DNF_DISK_CACHE_PATH_LEGACY = Path(os.path.join(td, "dnf_cache.pkl"))
         mod._DNF_DISK_CACHE_ENABLED = True
         mod._DNF_DISK_CACHE = None
 
@@ -1473,7 +1467,6 @@ def test_on_add_dnf_cache_size_guard_skips_load():
 
         mod._DNF_DISK_CACHE_PATH = Path(cache_path)
         mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
-        mod._DNF_DISK_CACHE_PATH_LEGACY = Path(os.path.join(td, "dnf_cache.pkl"))
         mod._DNF_DISK_CACHE_ENABLED = True
         mod._DNF_DISK_CACHE = None
 
@@ -2008,7 +2001,53 @@ def test_on_exit_lock_failure_keeps_queue():
             mod._lock_queue = orig_lock
 
         expect(got == [], "lock failure should return empty entries")
-        expect(mod._QUEUE_PATH.exists(), "queue should remain on lock failure")
+        expect(mod._QUEUE_PATH.exists() and mod._QUEUE_PATH.read_text(encoding="utf-8"), "queue should remain on lock failure")
+
+
+def test_on_exit_queue_streaming_line_cap():
+    """on-exit should stream queue and honor line cap."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_queue_line_cap_test")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_MAX_LINES = 1
+
+        entry1 = {"child": {"uuid": "00000000-0000-0000-0000-000000000111"}}
+        entry2 = {"child": {"uuid": "00000000-0000-0000-0000-000000000222"}}
+        mod._QUEUE_PATH.write_text(json.dumps(entry1) + "\n" + json.dumps(entry2) + "\n", encoding="utf-8")
+
+        entries = mod._take_queue_entries()
+        expect(len(entries) == 1, f"unexpected entries length: {entries}")
+        remaining = mod._QUEUE_PATH.read_text(encoding="utf-8").strip().splitlines()
+        expect(len(remaining) == 1, "queue should keep remainder lines")
+
+
+def test_on_exit_dead_letter_rotation():
+    """dead-letter should rotate when exceeding size cap."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_dead_letter_rotation_test")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+        mod._DEAD_LETTER_MAX_BYTES = 10
+
+        entry = {"child": {"uuid": "00000000-0000-0000-0000-000000000999"}}
+        mod._write_dead_letter(entry, "fail")
+        mod._write_dead_letter(entry, "fail2")
+
+        rotated = [p for p in os.listdir(td) if p.startswith(".nautical_dead_letter.overflow.")]
+        expect(rotated, "dead-letter should rotate when size exceeds cap")
 
 
 
@@ -2284,6 +2323,8 @@ TESTS = [
     test_parse_anchor_expr_fuzz_inputs,
     test_rand_determinism_with_seed,
     test_on_exit_lock_failure_keeps_queue,
+    test_on_exit_queue_streaming_line_cap,
+    test_on_exit_dead_letter_rotation,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,

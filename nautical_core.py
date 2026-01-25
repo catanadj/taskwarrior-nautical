@@ -141,6 +141,10 @@ def _config_paths() -> list[str]:
     return out
 
 def _warn_env_config_missing(env_path: str) -> None:
+    _warn_once_per_day_any(
+        "config_missing",
+        "[nautical] NAUTICAL_CONFIG path missing; using defaults.",
+    )
     if os.environ.get("NAUTICAL_DIAG") != "1":
         return
     ap = os.path.abspath(os.path.expanduser(env_path))
@@ -202,6 +206,32 @@ def _warn_once_per_day(key: str, message: str) -> None:
     """Persist a tiny sentinel so we do not spam hook output."""
     if os.environ.get("NAUTICAL_DIAG") != "1":
         return
+    try:
+        d = _nautical_cache_dir()
+        os.makedirs(d, exist_ok=True)
+        stamp_path = os.path.join(d, f".diag_{key}.stamp")
+
+        today = date.today().isoformat()
+        if os.path.exists(stamp_path):
+            try:
+                with open(stamp_path, "r", encoding="utf-8") as f:
+                    if f.read().strip() == today:
+                        return
+            except Exception:
+                pass
+
+        with open(stamp_path, "w", encoding="utf-8") as f:
+            f.write(today)
+        try:
+            print(message, file=sys.stderr)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _warn_once_per_day_any(key: str, message: str) -> None:
+    """Persist a tiny sentinel so we do not spam hook output (always on)."""
     try:
         d = _nautical_cache_dir()
         os.makedirs(d, exist_ok=True)
@@ -644,6 +674,10 @@ def render_panel(
 
 def _warn_missing_toml_parser(config_path: str) -> None:
     pyver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    _warn_once_per_day_any(
+        "missing_toml_parser_min",
+        "[nautical] Config present but TOML parser unavailable; using defaults.",
+    )
     msg = (
         "[nautical] Config detected but not loaded: TOML parser unavailable.\n"
         f"          Path: {config_path}\n"
@@ -656,6 +690,10 @@ def _warn_missing_toml_parser(config_path: str) -> None:
 
 
 def _warn_toml_parse_error(config_path: str, err: Exception) -> None:
+    _warn_once_per_day_any(
+        "toml_parse_error_min",
+        "[nautical] Config parse failed; using defaults.",
+    )
     msg = (
         "[nautical] Config file found but could not be parsed; defaults will be used.\n"
         f"          Path: {config_path}\n"

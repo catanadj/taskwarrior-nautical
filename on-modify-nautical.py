@@ -21,12 +21,15 @@ import re
 from decimal import Decimal, InvalidOperation
 import shlex
 import time as _time
+import random
 try:
     import fcntl  # POSIX advisory lock
 except Exception:
     fcntl = None
 
 from typing import Optional
+
+_MAX_JSON_BYTES = 10 * 1024 * 1024
 
 
 # Optional: DST-aware local TZ helpers (used by some carry-forward variants)
@@ -237,6 +240,9 @@ TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
 # ------------------------------------------------------------------------------
 _SPAWN_QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _SPAWN_QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
+_SPAWN_LOCK_RETRIES = 6
+_SPAWN_LOCK_SLEEP_BASE = 0.03
+_WARNED_SPAWN_QUEUE_LOCK = False
 
 
 _candidates = []
@@ -276,6 +282,11 @@ if core is None:
         str(p) for p in _candidates
     )
     raise ModuleNotFoundError(msg)
+
+try:
+    core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
+except Exception:
+    pass
 
 try:
     _MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", _MAX_JSON_BYTES))
@@ -398,7 +409,6 @@ def _print_task(task):
     print(json.dumps(task, ensure_ascii=False), end="")
 
 
-_MAX_JSON_BYTES = 10 * 1024 * 1024
 
 
 _PANEL_THEMES = {
@@ -729,22 +739,65 @@ _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
 
 
 def _queue_locked(fn):
-    """Run `fn()` under an advisory file lock (best-effort)."""
+    """Run `fn()` under a bounded non-blocking lock. Returns True on success."""
     if fcntl is None:
-        return fn()
+        fd = None
+        acquired = False
+        for _ in range(_SPAWN_LOCK_RETRIES):
+            try:
+                _SPAWN_QUEUE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            try:
+                fd = os.open(str(_SPAWN_QUEUE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                acquired = True
+                break
+            except FileExistsError:
+                jitter = random.uniform(0.0, _SPAWN_LOCK_SLEEP_BASE)
+                _time.sleep(_SPAWN_LOCK_SLEEP_BASE + jitter)
+            except Exception:
+                break
+        try:
+            if not acquired:
+                return False
+            fn()
+            return True
+        finally:
+            try:
+                if acquired and fd is not None:
+                    os.close(fd)
+            except Exception:
+                pass
+            try:
+                if acquired and fd is not None:
+                    os.unlink(_SPAWN_QUEUE_LOCK)
+            except Exception:
+                pass
+
     try:
         _SPAWN_QUEUE_LOCK.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
 
     lf = None
+    acquired = False
     try:
         lf = open(_SPAWN_QUEUE_LOCK, "a", encoding="utf-8")
-        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
-        return fn()
+        for _ in range(_SPAWN_LOCK_RETRIES):
+            try:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except Exception:
+                jitter = random.uniform(0.0, _SPAWN_LOCK_SLEEP_BASE)
+                _time.sleep(_SPAWN_LOCK_SLEEP_BASE + jitter)
+        if not acquired:
+            return False
+        fn()
+        return True
     finally:
         try:
-            if lf is not None:
+            if acquired and lf is not None:
                 fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
         except Exception:
             pass
@@ -768,12 +821,26 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
         except Exception:
             pass
         try:
-            with open(_SPAWN_QUEUE_PATH, "a", encoding="utf-8") as f:
+            fd = os.open(str(_SPAWN_QUEUE_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(line)
         except Exception:
             pass
 
-    _queue_locked(_put)
+    ok = _queue_locked(_put)
+    if not ok:
+        global _WARNED_SPAWN_QUEUE_LOCK
+        if not _WARNED_SPAWN_QUEUE_LOCK:
+            _WARNED_SPAWN_QUEUE_LOCK = True
+            _panel(
+                "⚠ Spawn queue busy",
+                [
+                    ("Queue", str(_SPAWN_QUEUE_PATH)),
+                    ("Hint", "Queue lock busy; spawn intent not queued."),
+                ],
+                kind="warning",
+            )
+        return
     global _WARNED_SPAWN_QUEUE_GROWTH
     try:
         if not _WARNED_SPAWN_QUEUE_GROWTH and _SPAWN_QUEUE_PATH.exists():

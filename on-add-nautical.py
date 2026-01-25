@@ -18,13 +18,13 @@ Features:
 from __future__ import annotations
 
 import sys, json, os, importlib, time, atexit
+import random
 import re
 from pathlib import Path
 from datetime import timedelta, timezone, datetime
 from functools import lru_cache
 from contextlib import contextmanager
 import shlex, subprocess
-import pickle
 import shutil
 import tempfile
 import textwrap
@@ -105,6 +105,11 @@ if core is None:
     raise ModuleNotFoundError(msg)
 
 try:
+    core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
+except Exception:
+    pass
+
+try:
     _MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", _MAX_JSON_BYTES))
 except Exception:
     pass
@@ -175,16 +180,14 @@ def _to_local_cached(dt):
 # Default on; set NAUTICAL_DNF_DISK_CACHE=0 to disable.
 _DNF_DISK_CACHE_ENABLED = (os.getenv("NAUTICAL_DNF_DISK_CACHE") or "1").strip().lower() in ("1", "true", "yes", "on")
 _DNF_DISK_CACHE_PATH = HOOK_DIR / ".nautical_cache" / "dnf_cache.jsonl"
-_DNF_DISK_CACHE_PATH_LEGACY = HOOK_DIR / ".nautical_cache" / "dnf_cache.pkl"
 _DNF_DISK_CACHE = None  # OrderedDict[str, object]
 _DNF_DISK_CACHE_DIRTY = False
 _DNF_DISK_CACHE_MAX = 256
 _DNF_DISK_CACHE_LOCK = _DNF_DISK_CACHE_PATH.with_suffix(".lock")
 _DNF_DISK_CACHE_VERSION = 1
 _DNF_DISK_CACHE_MAX_BYTES = 256 * 1024
-
-class _DNFCacheError(Exception):
-    pass
+_DNF_LOCK_RETRIES = 6
+_DNF_LOCK_SLEEP_BASE = 0.03
 
 def _core_sig() -> str:
     try:
@@ -211,8 +214,14 @@ def _dnf_cache_lock():
             pass
         try:
             lf = open(_DNF_DISK_CACHE_LOCK, "a", encoding="utf-8")
-            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
-            acquired = True
+            for attempt in range(_DNF_LOCK_RETRIES):
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except Exception:
+                    jitter = random.uniform(0.0, _DNF_LOCK_SLEEP_BASE)
+                    time.sleep(_DNF_LOCK_SLEEP_BASE + jitter)
         except Exception:
             lf = None
         try:
@@ -233,7 +242,7 @@ def _dnf_cache_lock():
     # Fallback: lockfile via O_EXCL (best-effort, short spin).
     fd = None
     acquired = False
-    for _ in range(6):
+    for _ in range(_DNF_LOCK_RETRIES):
         try:
             _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -243,7 +252,8 @@ def _dnf_cache_lock():
             acquired = True
             break
         except FileExistsError:
-            time.sleep(0.05)
+            jitter = random.uniform(0.0, _DNF_LOCK_SLEEP_BASE)
+            time.sleep(_DNF_LOCK_SLEEP_BASE + jitter)
         except Exception:
             break
     try:
@@ -316,7 +326,8 @@ def _load_dnf_disk_cache() -> OrderedDict:
                             _diag(f"DNF cache quarantined: {bad}")
                         except Exception:
                             pass
-                        raise _DNFCacheError(parse_error)
+                        _DNF_DISK_CACHE = OrderedDict()
+                        return _DNF_DISK_CACHE
                     if not parsed_any and (file_size or 0) > 0:
                         try:
                             ts = int(time.time())
@@ -325,22 +336,9 @@ def _load_dnf_disk_cache() -> OrderedDict:
                             _diag(f"DNF cache quarantined: {bad}")
                         except Exception:
                             pass
-                        raise _DNFCacheError("DNF cache JSONL contains no valid entries")
-            elif _DNF_DISK_CACHE_PATH_LEGACY.exists():
-                # Legacy pickle format: raw dict or versioned dict.
-                with open(_DNF_DISK_CACHE_PATH_LEGACY, "rb") as f:
-                    obj = pickle.load(f)
-                if isinstance(obj, dict) and "data" in obj:
-                    data = obj.get("data")
-                    if isinstance(data, dict):
-                        _DNF_DISK_CACHE = OrderedDict(data.items())
-                elif isinstance(obj, dict):
-                    _DNF_DISK_CACHE = OrderedDict(obj.items())
-                if _DNF_DISK_CACHE:
-                    _DNF_DISK_CACHE_DIRTY = True
+                        _DNF_DISK_CACHE = OrderedDict()
+                        return _DNF_DISK_CACHE
     except Exception as e:
-        if isinstance(e, _DNFCacheError):
-            raise
         _DNF_DISK_CACHE = OrderedDict()
     return _DNF_DISK_CACHE
 
@@ -362,6 +360,10 @@ def _save_dnf_disk_cache() -> None:
                 prefix=".dnf_cache.",
                 suffix=".tmp",
             )
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 header = {"version": _DNF_DISK_CACHE_VERSION}
                 f.write(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -369,11 +371,6 @@ def _save_dnf_disk_cache() -> None:
                     rec = {"key": k, "value": v}
                     f.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
             os.replace(tmp, _DNF_DISK_CACHE_PATH)
-            try:
-                if _DNF_DISK_CACHE_PATH_LEGACY.exists():
-                    _DNF_DISK_CACHE_PATH_LEGACY.unlink()
-            except Exception:
-                pass
             _DNF_DISK_CACHE_DIRTY = False
     except Exception:
         # cache write failures must never affect hook correctness

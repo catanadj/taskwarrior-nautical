@@ -17,10 +17,6 @@ import subprocess
 import random
 from pathlib import Path
 from contextlib import contextmanager
-try:
-    import fcntl  # POSIX advisory lock
-except Exception:
-    fcntl = None
 
 
 try:
@@ -34,6 +30,12 @@ except Exception:
 
 
 HOOK_DIR = Path(__file__).resolve().parent
+if str(HOOK_DIR) not in sys.path:
+    sys.path.insert(0, str(HOOK_DIR))
+try:
+    import nautical_core as core
+except Exception:
+    core = None
 TW_DIR = HOOK_DIR.parent
 TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
 
@@ -80,142 +82,20 @@ def _sleep(secs: float) -> None:
 
 @contextmanager
 def _lock_queue():
-    if fcntl is not None:
-        lf = None
-        acquired = False
-        try:
-            _QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        try:
-            fd = os.open(str(_QUEUE_LOCK), os.O_CREAT | os.O_RDWR, 0o600)
-            lf = os.fdopen(fd, "a", encoding="utf-8")
-            for _ in range(6):
-                try:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    acquired = True
-                    break
-                except Exception:
-                    time.sleep(0.05)
-        except Exception:
-            lf = None
-        try:
-            yield acquired
-        finally:
-            try:
-                if acquired and lf is not None:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
-            try:
-                if lf is not None:
-                    lf.close()
-            except Exception:
-                pass
+    if core is None or not hasattr(core, "safe_lock"):
+        yield False
         return
-
-    fd = None
-    acquired = False
-    for _ in range(6):
-        try:
-            _QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        try:
-            fd = os.open(str(_QUEUE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            acquired = True
-            break
-        except FileExistsError:
-            time.sleep(0.05)
-        except Exception:
-            break
-    try:
+    with core.safe_lock(_QUEUE_LOCK, retries=6, sleep_base=0.05, jitter=0.0, mkdir=True) as acquired:
         yield acquired
-    finally:
-        try:
-            if acquired and fd is not None:
-                os.close(fd)
-        except Exception:
-            pass
-        try:
-            if acquired and fd is not None:
-                os.unlink(_QUEUE_LOCK)
-        except Exception:
-            pass
 
 
 @contextmanager
 def _lock_dead_letter():
-    if fcntl is not None:
-        lf = None
-        acquired = False
-        try:
-            _DEAD_LETTER_PATH.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        try:
-            fd = os.open(str(_DEAD_LETTER_LOCK), os.O_CREAT | os.O_RDWR, 0o600)
-            lf = os.fdopen(fd, "a", encoding="utf-8")
-            for _ in range(6):
-                try:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    acquired = True
-                    break
-                except Exception:
-                    time.sleep(0.05)
-        except Exception:
-            lf = None
-        try:
-            yield acquired
-        finally:
-            try:
-                if acquired and lf is not None:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
-            try:
-                if lf is not None:
-                    lf.close()
-            except Exception:
-                pass
+    if core is None or not hasattr(core, "safe_lock"):
+        yield False
         return
-
-    fd = None
-    acquired = False
-    for _ in range(6):
-        try:
-            _DEAD_LETTER_PATH.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        try:
-            fd = os.open(str(_DEAD_LETTER_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            acquired = True
-            break
-        except FileExistsError:
-            time.sleep(0.05)
-        except Exception:
-            break
-    try:
+    with core.safe_lock(_DEAD_LETTER_LOCK, retries=6, sleep_base=0.05, jitter=0.0, mkdir=True) as acquired:
         yield acquired
-    finally:
-        try:
-            if acquired and fd is not None:
-                os.close(fd)
-        except Exception:
-            pass
-        try:
-            if acquired and fd is not None:
-                os.unlink(_DEAD_LETTER_LOCK)
-        except Exception:
-            pass
 
 
 def _write_dead_letter(entry: dict, reason: str) -> None:
@@ -328,7 +208,16 @@ def _export_uuid(uuid_str: str) -> dict | None:
     if not uuid_str:
         return None
     ok, out, _err = _run_task(
-        ["task", "rc.hooks=off", "rc.json.array=off", "rc.verbose=nothing", "rc.color=off", f"uuid:{uuid_str}", "export"],
+        [
+            "task",
+            f"rc.data.location={TW_DATA_DIR}",
+            "rc.hooks=off",
+            "rc.json.array=off",
+            "rc.verbose=nothing",
+            "rc.color=off",
+            f"uuid:{uuid_str}",
+            "export",
+        ],
         timeout=3.0,
     )
     if not ok:
@@ -368,7 +257,15 @@ def _update_parent_nextlink(parent_uuid: str, child_short: str) -> tuple[bool, s
     if not parent_uuid or not child_short:
         return False, "missing parent or child"
     ok, _out, err = _run_task(
-        ["task", "rc.hooks=off", "rc.verbose=nothing", f"uuid:{parent_uuid}", "modify", f"nextLink:{child_short}"],
+        [
+            "task",
+            f"rc.data.location={TW_DATA_DIR}",
+            "rc.hooks=off",
+            "rc.verbose=nothing",
+            f"uuid:{parent_uuid}",
+            "modify",
+            f"nextLink:{child_short}",
+        ],
         timeout=4.0,
     )
     return ok, err or ""

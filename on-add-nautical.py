@@ -18,7 +18,6 @@ Features:
 from __future__ import annotations
 
 import sys, json, os, importlib, time, atexit
-import random
 import re
 from pathlib import Path
 from datetime import timedelta, timezone, datetime
@@ -29,12 +28,6 @@ import shutil
 import tempfile
 import textwrap
 from collections import OrderedDict
-try:
-    import fcntl  # POSIX advisory lock
-except Exception:
-    fcntl = None
-
-
  # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
  # Python's json.dumps() defaults to ensure_ascii=True, which escapes non-ASCII
  # as "\\uXXXX". We prefer human-readable UTF-8 JSON for hook passthrough.
@@ -206,75 +199,14 @@ def _dnf_cache_key(expr: str) -> str:
 @contextmanager
 def _dnf_cache_lock():
     """Best-effort lock for disk cache access. Yields True if acquired."""
-    if fcntl is not None:
-        lf = None
-        acquired = False
-        try:
-            _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        try:
-            fd = os.open(str(_DNF_DISK_CACHE_LOCK), os.O_CREAT | os.O_RDWR, 0o600)
-            lf = os.fdopen(fd, "a", encoding="utf-8")
-            for attempt in range(_DNF_LOCK_RETRIES):
-                try:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    acquired = True
-                    break
-                except Exception:
-                    jitter = random.uniform(0.0, _DNF_LOCK_SLEEP_BASE)
-                    time.sleep(_DNF_LOCK_SLEEP_BASE + jitter)
-        except Exception:
-            lf = None
-        try:
-            yield acquired
-        finally:
-            try:
-                if acquired and lf is not None:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
-            try:
-                if lf is not None:
-                    lf.close()
-            except Exception:
-                pass
-        return
-
-    # Fallback: lockfile via O_EXCL (best-effort, short spin).
-    fd = None
-    acquired = False
-    for _ in range(_DNF_LOCK_RETRIES):
-        try:
-            _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        try:
-            fd = os.open(str(_DNF_DISK_CACHE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            acquired = True
-            break
-        except FileExistsError:
-            jitter = random.uniform(0.0, _DNF_LOCK_SLEEP_BASE)
-            time.sleep(_DNF_LOCK_SLEEP_BASE + jitter)
-        except Exception:
-            break
-    try:
+    with core.safe_lock(
+        _DNF_DISK_CACHE_LOCK,
+        retries=_DNF_LOCK_RETRIES,
+        sleep_base=_DNF_LOCK_SLEEP_BASE,
+        jitter=_DNF_LOCK_SLEEP_BASE,
+        mkdir=True,
+    ) as acquired:
         yield acquired
-    finally:
-        try:
-            if acquired and fd is not None:
-                os.close(fd)
-        except Exception:
-            pass
-        try:
-            if acquired and fd is not None:
-                os.unlink(_DNF_DISK_CACHE_LOCK)
-        except Exception:
-            pass
 
 def _load_dnf_disk_cache() -> OrderedDict:
     global _DNF_DISK_CACHE, _DNF_DISK_CACHE_DIRTY

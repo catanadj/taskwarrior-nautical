@@ -391,6 +391,29 @@ def test_hook_stdout_strict_json_with_diag_on_modify():
         expect(p.returncode == 0, f"on-modify returned {p.returncode}")
         _assert_stdout_json_only(p.stdout)
 
+def test_on_exit_uses_tw_data_dir_for_export_and_modify():
+    """on-exit should target TW_DATA_DIR for export/modify calls."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_data_dir_test")
+    calls = []
+
+    def _fake_run_task(cmd, **_kwargs):
+        calls.append(cmd)
+        if "export" in cmd:
+            return True, json.dumps({"uuid": "deadbeef"}), ""
+        return True, "", ""
+
+    mod._run_task = _fake_run_task
+    mod.TW_DATA_DIR = "/tmp/nautical_test_data"
+
+    mod._export_uuid("deadbeef")
+    mod._update_parent_nextlink("parent-uuid", "childshort")
+
+    expect(calls, "expected _run_task to be called")
+    want = f"rc.data.location={mod.TW_DATA_DIR}"
+    expect(want in calls[0], f"export missing data dir: {calls[0]!r}")
+    expect(want in calls[1], f"modify missing data dir: {calls[1]!r}")
+
 def test_on_modify_read_two_fuzz_inputs():
     """on-modify input parsing should be strict and return JSON errors on bad input."""
     hook = _find_hook_file("on-modify-nautical.py")

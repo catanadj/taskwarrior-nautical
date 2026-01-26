@@ -21,12 +21,6 @@ import re
 from decimal import Decimal, InvalidOperation
 import shlex
 import time as _time
-import random
-try:
-    import fcntl  # POSIX advisory lock
-except Exception:
-    fcntl = None
-
 from typing import Optional
 
 _MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -751,81 +745,17 @@ _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
 
 def _queue_locked(fn):
     """Run `fn()` under a bounded non-blocking lock. Returns True on success."""
-    if fcntl is None:
-        fd = None
-        acquired = False
-        for _ in range(_SPAWN_LOCK_RETRIES):
-            try:
-                _SPAWN_QUEUE_LOCK.parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
-            try:
-                fd = os.open(str(_SPAWN_QUEUE_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                try:
-                    os.fchmod(fd, 0o600)
-                except Exception:
-                    pass
-                acquired = True
-                break
-            except FileExistsError:
-                jitter = random.uniform(0.0, _SPAWN_LOCK_SLEEP_BASE)
-                _time.sleep(_SPAWN_LOCK_SLEEP_BASE + jitter)
-            except Exception:
-                break
-        try:
-            if not acquired:
-                return False
-            fn()
-            return True
-        finally:
-            try:
-                if acquired and fd is not None:
-                    os.close(fd)
-            except Exception:
-                pass
-            try:
-                if acquired and fd is not None:
-                    os.unlink(_SPAWN_QUEUE_LOCK)
-            except Exception:
-                pass
-
-    try:
-        _SPAWN_QUEUE_LOCK.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-
-    lf = None
-    acquired = False
-    try:
-        fd = os.open(str(_SPAWN_QUEUE_LOCK), os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        lf = os.fdopen(fd, "a", encoding="utf-8")
-        for _ in range(_SPAWN_LOCK_RETRIES):
-            try:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-                break
-            except Exception:
-                jitter = random.uniform(0.0, _SPAWN_LOCK_SLEEP_BASE)
-                _time.sleep(_SPAWN_LOCK_SLEEP_BASE + jitter)
+    with core.safe_lock(
+        _SPAWN_QUEUE_LOCK,
+        retries=_SPAWN_LOCK_RETRIES,
+        sleep_base=_SPAWN_LOCK_SLEEP_BASE,
+        jitter=_SPAWN_LOCK_SLEEP_BASE,
+        mkdir=True,
+    ) as acquired:
         if not acquired:
             return False
         fn()
         return True
-    finally:
-        try:
-            if acquired and lf is not None:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
-        try:
-            if lf is not None:
-                lf.close()
-        except Exception:
-            pass
 
 
 def _enqueue_deferred_spawn(task_obj: dict) -> None:

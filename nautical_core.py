@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache
 from calendar import month_name
 from datetime import date as _date
-import json, zlib, base64, hashlib, tempfile, time
+import json, zlib, base64, hashlib, tempfile, time, random
 import difflib
 from contextlib import contextmanager
 try:
@@ -1728,6 +1728,104 @@ def _cache_lock_path(key: str) -> str:
     if not base:
         return ""
     return os.path.join(base, f".{key}.lock")
+
+@contextmanager
+def safe_lock(path: str | os.PathLike, *, retries: int = 6, sleep_base: float = 0.05, jitter: float = 0.0, mode: int = 0o600, mkdir: bool = True):
+    """Best-effort lock helper with fcntl (non-blocking) or O_EXCL fallback."""
+    path_str = str(path) if path else ""
+    if not path_str:
+        yield False
+        return
+
+    def _sleep_once():
+        try:
+            delay = float(sleep_base or 0.0)
+        except Exception:
+            delay = 0.0
+        if jitter:
+            try:
+                delay += random.uniform(0.0, float(jitter))
+            except Exception:
+                pass
+        if delay > 0:
+            time.sleep(delay)
+
+    def _ensure_parent():
+        if not mkdir:
+            return
+        try:
+            parent = os.path.dirname(path_str)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        except Exception:
+            pass
+
+    tries = max(1, int(retries or 0))
+
+    if fcntl is not None:
+        lf = None
+        acquired = False
+        _ensure_parent()
+        try:
+            fd = os.open(path_str, os.O_CREAT | os.O_RDWR, mode)
+            try:
+                os.fchmod(fd, mode)
+            except Exception:
+                pass
+            lf = os.fdopen(fd, "a", encoding="utf-8")
+            for _ in range(tries):
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except Exception:
+                    _sleep_once()
+        except Exception:
+            lf = None
+        try:
+            yield acquired
+        finally:
+            try:
+                if acquired and lf is not None:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                if lf is not None:
+                    lf.close()
+            except Exception:
+                pass
+        return
+
+    fd = None
+    acquired = False
+    for _ in range(tries):
+        _ensure_parent()
+        try:
+            fd = os.open(path_str, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+            try:
+                os.fchmod(fd, mode)
+            except Exception:
+                pass
+            acquired = True
+            break
+        except FileExistsError:
+            _sleep_once()
+        except Exception:
+            break
+    try:
+        yield acquired
+    finally:
+        try:
+            if acquired and fd is not None:
+                os.close(fd)
+        except Exception:
+            pass
+        try:
+            if acquired and fd is not None:
+                os.unlink(path_str)
+        except Exception:
+            pass
 
 @contextmanager
 def _cache_lock(key: str):

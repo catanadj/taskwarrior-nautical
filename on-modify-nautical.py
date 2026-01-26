@@ -10,6 +10,7 @@ Chained next-link spawner for Taskwarrior.
 """
 
 import sys, json, os, uuid, subprocess, importlib
+import importlib.util
 import atexit
 import time as _ptime
 import statistics
@@ -327,9 +328,14 @@ def _load_core() -> None:
     base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
     pyfile = base / "nautical_core.py"
     pkgini = base / "nautical_core" / "__init__.py"
-    if pyfile.is_file() or pkgini.is_file():
-        sys.path.insert(0, str(base))
-        core = importlib.import_module("nautical_core")
+    target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+    if target:
+        spec = importlib.util.spec_from_file_location("nautical_core", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_core"] = module
+            spec.loader.exec_module(module)
+            core = module
     if core is None:
         msg = "nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH."
         raise ModuleNotFoundError(msg)
@@ -883,8 +889,10 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
         line = json.dumps(task_obj, ensure_ascii=False, separators=(",", ":")) + "\n"
     except Exception:
         line = json.dumps(task_obj) + "\n"
+    put_ok = True
 
     def _put():
+        nonlocal put_ok
         try:
             _SPAWN_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -906,11 +914,15 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
                 pass
             with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(line)
-        except Exception:
-            pass
+        except Exception as e:
+            put_ok = False
+            _write_dead_letter(task_obj, f"spawn queue write failed: {e}")
+            _diag(f"spawn queue write failed: {e}")
 
     ok = _queue_locked(_put)
     if not ok:
+        _write_dead_letter(task_obj, "queue lock busy")
+        _diag("queue lock busy; intent dead-lettered")
         _diag_count("queue_lock_failures")
         global _WARNED_SPAWN_QUEUE_LOCK
         if not _WARNED_SPAWN_QUEUE_LOCK:
@@ -923,6 +935,8 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
                 ],
                 kind="warning",
             )
+        return
+    if not put_ok:
         return
     global _WARNED_SPAWN_QUEUE_GROWTH
     try:
@@ -1002,6 +1016,8 @@ def _run_task(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 env=env,
             )
             try:
@@ -1318,6 +1334,7 @@ def _spawn_intent_entry(
     parent_uuid: str,
     child_obj: dict,
     child_short: str,
+    parent_nextlink: str | None = None,
     spawn_intent_id: str | None = None,
 ) -> dict:
     intent_id = (spawn_intent_id or "").strip()
@@ -1325,6 +1342,7 @@ def _spawn_intent_entry(
         intent_id = f"si_{uuid.uuid4().hex[:12]}"
     return {
         "parent_uuid": parent_uuid,
+        "parent_nextlink": (parent_nextlink or "").strip(),
         "child_short": child_short,
         "child": child_obj,
         "spawn_intent_id": intent_id,
@@ -1377,6 +1395,7 @@ def _spawn_child_atomic(
         parent_task_with_nextlink.get("uuid") or "",
         child_obj,
         child_short,
+        parent_task_with_nextlink.get("nextLink") or "",
         spawn_intent_id,
     )
     _enqueue_spawn_intent(entry)
@@ -1407,7 +1426,7 @@ def _task(args, env=None) -> str:
     """
     env = env or os.environ.copy()
     ok, out, err = _run_task(
-        ["task", "rc.hooks=off"] + list(args),
+        ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off"] + list(args),
         env=env,
         timeout=3.0,
         retries=2,
@@ -3487,16 +3506,7 @@ def _chain_export_timeout(chain_id: str) -> float:
 def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
     if not chain_id:
         return []
-    if _tw_lock_recent():
-        if chain_id and chain_id not in _WARNED_CHAIN_EXPORT:
-            _WARNED_CHAIN_EXPORT.add(chain_id)
-            _panel(
-                "⚠ Chain export skipped",
-                [("ChainID", chain_id), ("Reason", "Taskwarrior lock active")],
-                kind="warning",
-            )
-        return []
-    args = ["task", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
+    args = ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
     if since:
         args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
     if extra:
@@ -3510,7 +3520,10 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
         _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
         if chain_id and chain_id not in _WARNED_CHAIN_EXPORT:
             _WARNED_CHAIN_EXPORT.add(chain_id)
-            reason = (err or "").strip() or "task export failed"
+            if _is_lock_error(err):
+                reason = "Taskwarrior lock active"
+            else:
+                reason = (err or "").strip() or "task export failed"
             _panel("⚠ Chain export failed", [("ChainID", chain_id), ("Reason", reason)], kind="warning")
         return []
     try:

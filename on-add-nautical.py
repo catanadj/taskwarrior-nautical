@@ -18,6 +18,7 @@ Features:
 from __future__ import annotations
 
 import sys, json, os, importlib, time, atexit, hashlib
+import importlib.util
 import re
 from pathlib import Path
 from datetime import timedelta, timezone, datetime
@@ -56,6 +57,7 @@ _MAX_JSON_BYTES = 10 * 1024 * 1024
 # --------------------------------------------------------------------------------------
 HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
+TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
 
 # --- Optional micro-profiler (stderr-only; enable with NAUTICAL_PROFILE=1 or 2)
 _PROFILE_LEVEL = int(os.environ.get('NAUTICAL_PROFILE', '0') or '0')
@@ -71,9 +73,14 @@ def _load_core() -> None:
     base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
     pyfile = base / "nautical_core.py"
     pkgini = base / "nautical_core" / "__init__.py"
-    if pyfile.is_file() or pkgini.is_file():
-        sys.path.insert(0, str(base))
-        core = importlib.import_module("nautical_core")
+    target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+    if target:
+        spec = importlib.util.spec_from_file_location("nautical_core", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_core"] = module
+            spec.loader.exec_module(module)
+            core = module
     if core is None:
         msg = "nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH."
         raise ModuleNotFoundError(msg)
@@ -599,6 +606,8 @@ def _run_task(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 env=env,
             )
             try:
@@ -991,7 +1000,7 @@ def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
 def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None) -> list[dict]:
     if not chain_id:
         return []
-    args = ["task", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
+    args = ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
     if since:
         args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
     if extra:

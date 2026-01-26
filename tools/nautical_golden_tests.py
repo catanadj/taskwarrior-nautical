@@ -592,7 +592,7 @@ def test_on_exit_timeouts_configurable():
             mod._export_uuid("u1")
             mod._import_child({"uuid": "u2"})
             mod._update_parent_nextlink("p", "c")
-            expect(timeouts == [1.5, 2.5, 3.5], f"unexpected timeouts: {timeouts}")
+            expect(timeouts == [1.5, 2.5, 1.5, 3.5], f"unexpected timeouts: {timeouts}")
         finally:
             if prev_taskdata is None:
                 os.environ.pop("TASKDATA", None)
@@ -672,17 +672,27 @@ def test_diag_log_redacts_sensitive_fields():
                 os.environ["NAUTICAL_DIAG_LOG"] = prev_diag_log
 
 def test_on_exit_requeues_when_task_lock_recent():
-    """on-exit should requeue when Taskwarrior lock looks active."""
+    """on-exit should requeue when Taskwarrior export reports a lock."""
     hook = _find_hook_file("on-exit-nautical.py")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
         try:
             mod = _load_hook_module(hook, "_nautical_on_exit_lock_recent_test")
-            lock_path = mod.TW_DATA_DIR / "lock"
-            lock_path.write_text("lock", encoding="utf-8")
-            entry = {"child": {"uuid": "u1"}, "parent_uuid": "p1", "child_short": "c1"}
+            entry = {
+                "child": {"uuid": "u1"},
+                "parent_uuid": "p1",
+                "child_short": "c1",
+                "spawn_intent_id": "si_test",
+            }
             mod._requeue_entries([entry])
+
+            def _run_task_stub(cmd, **_kwargs):
+                if "export" in cmd:
+                    return False, "", "database is locked"
+                return True, "", ""
+
+            mod._run_task = _run_task_stub
             stats = mod._drain_queue()
             expect(stats.get("requeued") == 1, f"expected requeue when lock active, got {stats}")
         finally:
@@ -745,7 +755,15 @@ def test_on_exit_large_queue_bounded_drain():
         try:
             mod_exit = _load_hook_module(hook, "_nautical_on_exit_large_queue_test")
             q_path = mod_exit._QUEUE_PATH
-            entries = [{"child": {"uuid": f"u{i}"}, "parent_uuid": f"p{i}", "child_short": f"c{i}"} for i in range(7)]
+            entries = [
+                {
+                    "child": {"uuid": f"u{i}"},
+                    "parent_uuid": f"p{i}",
+                    "child_short": f"c{i}",
+                    "spawn_intent_id": f"si_{i}",
+                }
+                for i in range(7)
+            ]
             with open(q_path, "w", encoding="utf-8") as f:
                 for obj in entries:
                     f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -791,6 +809,8 @@ def test_on_exit_queue_drain_idempotent():
                             break
                     if uuid and uuid in imported:
                         return True, json.dumps({"uuid": uuid}), ""
+                    if uuid in {"p1", "p2"}:
+                        return True, json.dumps({"uuid": uuid, "nextLink": ""}), ""
                     return True, "{}", ""
                 if "import" in cmd:
                     import_calls += 1
@@ -812,8 +832,8 @@ def test_on_exit_queue_drain_idempotent():
             mod_exit._run_task = _fake_run_task
             q_path = mod_exit._QUEUE_PATH
             entries = [
-                {"child": {"uuid": "u1"}, "parent_uuid": "p1", "child_short": "c1"},
-                {"child": {"uuid": "u2"}, "parent_uuid": "p2", "child_short": "c2"},
+                {"child": {"uuid": "u1"}, "parent_uuid": "p1", "child_short": "c1", "spawn_intent_id": "si_1"},
+                {"child": {"uuid": "u2"}, "parent_uuid": "p2", "child_short": "c2", "spawn_intent_id": "si_2"},
             ]
             with open(q_path, "w", encoding="utf-8") as f:
                 for obj in entries:
@@ -903,7 +923,7 @@ def test_on_exit_uses_tw_data_dir_for_export_and_modify():
     expect(calls, "expected _run_task to be called")
     want = f"rc.data.location={mod.TW_DATA_DIR}"
     expect(want in calls[0], f"export missing data dir: {calls[0]!r}")
-    expect(want in calls[1], f"modify missing data dir: {calls[1]!r}")
+    expect(any(want in call for call in calls[1:]), f"modify missing data dir: {calls!r}")
 
 def test_on_modify_read_two_fuzz_inputs():
     """on-modify input parsing should be strict and return JSON errors on bad input."""
@@ -1186,7 +1206,7 @@ def test_on_modify_chain_export_cache_key_includes_params():
     expect(len(calls) == 2, f"cache key ignored params, calls={calls}")
 
 def test_on_modify_chain_export_skips_when_locked():
-    """tw_export_chain should skip when Taskwarrior lock is active."""
+    """tw_export_chain should treat lock errors as non-fatal and return empty."""
     hook = _find_hook_file("on-modify-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_modify_lock_skip_test")
     if not hasattr(mod, "tw_export_chain"):
@@ -1195,17 +1215,12 @@ def test_on_modify_chain_export_skips_when_locked():
 
     def _fake_run_task(*_args, **_kwargs):
         calls.append(True)
-        return False, "", "should not be called"
+        return False, "", "database is locked"
 
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        mod.TW_DATA_DIR = td_path
-        lock_path = td_path / "lock"
-        lock_path.write_text("lock", encoding="utf-8")
-        mod._run_task = _fake_run_task
-        out = mod.tw_export_chain("abc")
-        expect(out == [], "expected empty export when lock is active")
-        expect(len(calls) == 0, "tw_export_chain should not call task when locked")
+    mod._run_task = _fake_run_task
+    out = mod.tw_export_chain("abc")
+    expect(out == [], "expected empty export when lock is active")
+    expect(len(calls) == 1, "tw_export_chain should attempt task once")
 
 def test_weekly_and_unsat():
     """Test weekly AND (Sat AND Mon) must be unsatisfiable"""
@@ -2156,7 +2171,7 @@ def test_on_modify_spawn_intent_id_in_entry():
     if not hasattr(mod, "_spawn_intent_entry"):
         raise AssertionError("on-modify hook does not expose spawn intent helper")
 
-    entry = mod._spawn_intent_entry("parent", {"uuid": "child"}, "deadbeef", "si_test")
+    entry = mod._spawn_intent_entry("parent", {"uuid": "child"}, "deadbeef", "", "si_test")
     expect(entry.get("spawn_intent_id") == "si_test", "spawn_intent_id should be preserved in queue entry")
 
 def test_on_exit_spawn_intents_drain():
@@ -2175,10 +2190,12 @@ def test_on_exit_spawn_intents_drain():
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
 
         child_uuid = "00000000-0000-0000-0000-000000000999"
+        parent_uuid = "00000000-0000-0000-0000-000000000111"
         entry = {
-            "parent_uuid": "00000000-0000-0000-0000-000000000111",
+            "parent_uuid": parent_uuid,
             "child_short": "deadbeef",
             "child": {"uuid": child_uuid, "description": "test"},
+            "spawn_intent_id": "si_test",
         }
         mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
@@ -2191,6 +2208,8 @@ def test_on_exit_spawn_intents_drain():
                 if imported["ok"]:
                     return True, json.dumps({"uuid": child_uuid}), ""
                 return True, "{}", ""
+            if "export" in cmd_s and f"uuid:{parent_uuid}" in cmd_s:
+                return True, json.dumps({"uuid": parent_uuid, "nextLink": ""}), ""
             if "import" in cmd_s:
                 imported["ok"] = True
                 return True, "", ""
@@ -2313,6 +2332,7 @@ def test_on_exit_dead_letter_on_import_failure():
             "parent_uuid": "00000000-0000-0000-0000-000000000888",
             "child_short": "c0ffee12",
             "child": {"uuid": child_uuid, "description": "test"},
+            "spawn_intent_id": "si_test",
         }
         mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
@@ -2320,6 +2340,8 @@ def test_on_exit_dead_letter_on_import_failure():
             cmd_s = " ".join(cmd)
             if "export" in cmd_s and f"uuid:{child_uuid}" in cmd_s:
                 return True, "{}", ""
+            if "export" in cmd_s and "uuid:00000000-0000-0000-0000-000000000888" in cmd_s:
+                return True, json.dumps({"uuid": "00000000-0000-0000-0000-000000000888", "nextLink": ""}), ""
             if "import" in cmd_s:
                 return False, "", "invalid task"
             return False, "", "unexpected"
@@ -2555,6 +2577,7 @@ def test_on_exit_import_error_but_child_exists():
             "parent_uuid": "00000000-0000-0000-0000-000000000456",
             "child_short": "abcdef12",
             "child": {"uuid": child_uuid, "description": "test"},
+            "spawn_intent_id": "si_test",
         }
         mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
@@ -2568,7 +2591,9 @@ def test_on_exit_import_error_but_child_exists():
                     return True, json.dumps({"uuid": child_uuid}), ""
                 return True, "{}", ""
             if "import" in cmd_s:
-                return False, "", "lock error"
+                return False, "", "invalid task"
+            if "export" in cmd_s and "uuid:00000000-0000-0000-0000-000000000456" in cmd_s:
+                return True, json.dumps({"uuid": "00000000-0000-0000-0000-000000000456", "nextLink": ""}), ""
             if "modify" in cmd_s and "uuid:00000000-0000-0000-0000-000000000456" in cmd_s:
                 return True, "", ""
             return False, "", "unexpected"
@@ -2843,7 +2868,7 @@ def test_on_exit_export_uuid_noisy_stdout():
 
     mod._run_task = _run_task_noisy
     obj = mod._export_uuid("00000000-0000-0000-0000-000000000111")
-    expect(obj and obj.get("uuid"), "noisy stdout should still be treated as exists")
+    expect(obj and obj.get("exists"), "noisy stdout should still be treated as exists")
 
 
 def test_on_modify_cp_completion_spawns_next_link():

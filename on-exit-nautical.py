@@ -15,6 +15,7 @@ import json
 import time
 import subprocess
 import random
+import importlib.util
 from pathlib import Path
 from contextlib import contextmanager
 try:
@@ -36,10 +37,18 @@ except Exception:
 HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
 _CORE_BASE = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
-if str(_CORE_BASE) not in sys.path:
-    sys.path.insert(0, str(_CORE_BASE))
+core = None
 try:
-    import nautical_core as core
+    pyfile = _CORE_BASE / "nautical_core.py"
+    pkgini = _CORE_BASE / "nautical_core" / "__init__.py"
+    target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+    if target:
+        spec = importlib.util.spec_from_file_location("nautical_core", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_core"] = module
+            spec.loader.exec_module(module)
+            core = module
 except Exception:
     core = None
 TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
@@ -53,6 +62,8 @@ _QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000
 _DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)
 _QUEUE_QUARANTINE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.bad.jsonl"
 _QUEUE_QUARANTINE_MAX_BYTES = int(os.environ.get("NAUTICAL_QUEUE_BAD_MAX_BYTES") or 262144)
+_QUEUE_RETRY_MAX = int(os.environ.get("NAUTICAL_QUEUE_RETRY_MAX") or 6)
+_QUEUE_LOCK_FAIL_MARKER = TW_DATA_DIR / ".nautical_spawn_queue.lock_failed"
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -236,6 +247,8 @@ def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float =
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         try:
             out, err = proc.communicate(input=input_text, timeout=timeout)
@@ -254,7 +267,15 @@ def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float =
 
 def _is_lock_error(err: str) -> bool:
     e = (err or "").lower()
-    return "lock" in e or "locked" in e or "database is locked" in e
+    return (
+        "database is locked" in e
+        or "unable to lock" in e
+        or "resource temporarily unavailable" in e
+        or "another task is running" in e
+        or "lock file" in e
+        or "lockfile" in e
+        or "locked by" in e
+    )
 
 def _tw_lock_path() -> Path:
     return TW_DATA_DIR / "lock"
@@ -271,6 +292,29 @@ def _tw_lock_recent(max_age_s: float = 5.0) -> bool:
 
 def _sleep(secs: float) -> None:
     time.sleep(secs)
+
+_LAST_QUEUE_LOCK_DIAG_TS = 0.0
+
+def _record_queue_lock_failure() -> None:
+    global _LAST_QUEUE_LOCK_DIAG_TS
+    now = time.time()
+    if now - _LAST_QUEUE_LOCK_DIAG_TS >= 60.0:
+        _diag("queue lock not acquired; drain deferred")
+        _LAST_QUEUE_LOCK_DIAG_TS = now
+    try:
+        payload = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "reason": "queue lock busy",
+        }
+        fd = os.open(str(_QUEUE_LOCK_FAIL_MARKER), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
 
 
 @contextmanager
@@ -354,11 +398,26 @@ def _quarantine_queue_line(raw_line: str, reason: str) -> None:
     except Exception:
         pass
 
+def _fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(str(path), os.O_DIRECTORY)
+    except Exception:
+        return
+    try:
+        os.fsync(fd)
+    except Exception:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+
 def _take_queue_entries() -> list[dict]:
     entries: list[dict] = []
     with _lock_queue() as locked:
         if not locked:
-            _diag("queue lock not acquired; drain deferred")
+            _record_queue_lock_failure()
             return entries
         try:
             if not _QUEUE_PATH.exists():
@@ -402,7 +461,13 @@ def _take_queue_entries() -> list[dict]:
                     else:
                         _quarantine_queue_line(line, "queue json not object")
                         f_out.write(line)
+                try:
+                    f_out.flush()
+                    os.fsync(f_out.fileno())
+                except Exception:
+                    pass
             os.replace(tmp_path, _QUEUE_PATH)
+            _fsync_dir(_QUEUE_PATH.parent)
             if overflow_path:
                 try:
                     overflow_path.unlink()
@@ -422,6 +487,7 @@ def _requeue_entries(entries: list[dict]) -> None:
         return
     with _lock_queue() as locked:
         if not locked:
+            _record_queue_lock_failure()
             return
         try:
             fd = os.open(str(_QUEUE_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
@@ -436,10 +502,33 @@ def _requeue_entries(entries: list[dict]) -> None:
             pass
 
 
-def _export_uuid(uuid_str: str) -> dict | None:
+def _validate_queue_entry(entry: dict) -> tuple[bool, str]:
+    if not isinstance(entry, dict):
+        return False, "entry not object"
+    spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
+    if not spawn_intent_id:
+        return False, "missing spawn_intent_id"
+    child = entry.get("child")
+    if not isinstance(child, dict):
+        return False, "missing child object"
+    child_uuid = (child.get("uuid") or "").strip()
+    if not child_uuid:
+        return False, "missing child uuid"
+    return True, ""
+
+def _bump_attempts(entry: dict) -> int:
+    try:
+        attempts = int(entry.get("attempts") or 0)
+    except Exception:
+        attempts = 0
+    attempts += 1
+    entry["attempts"] = attempts
+    return attempts
+
+def _export_uuid(uuid_str: str) -> dict:
     if not uuid_str:
-        return None
-    ok, out, _err = _run_task(
+        return {"exists": False, "retryable": False, "err": "missing uuid", "obj": None}
+    ok, out, err = _run_task(
         [
             "task",
             f"rc.data.location={TW_DATA_DIR}",
@@ -453,14 +542,16 @@ def _export_uuid(uuid_str: str) -> dict | None:
         timeout=_TASK_TIMEOUT_EXPORT,
     )
     if not ok:
-        return None
+        return {"exists": False, "retryable": _is_lock_error(err), "err": err or "", "obj": None}
     try:
         obj = json.loads(out.strip() or "{}")
-        return obj if obj.get("uuid") else None
+        if obj.get("uuid"):
+            return {"exists": True, "retryable": False, "err": "", "obj": obj}
+        return {"exists": False, "retryable": False, "err": "not found", "obj": None}
     except Exception:
         if uuid_str in out:
-            return {"uuid": uuid_str}
-        return None
+            return {"exists": True, "retryable": False, "err": "", "obj": {"uuid": uuid_str}}
+        return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
 
 
 def _import_child(obj: dict) -> tuple[bool, str]:
@@ -485,9 +576,25 @@ def _import_child(obj: dict) -> tuple[bool, str]:
     return False, last_err
 
 
-def _update_parent_nextlink(parent_uuid: str, child_short: str) -> tuple[bool, str]:
+def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[bool, str]:
     if not parent_uuid or not child_short:
         return False, "missing parent or child"
+    res = _export_uuid(parent_uuid)
+    if res.get("retryable"):
+        return False, "parent export locked"
+    parent = res.get("obj") if isinstance(res, dict) else None
+    if not parent:
+        return False, "parent missing"
+    current = (parent.get("nextLink") or "").strip()
+    expected = (expected_prev or "").strip()
+    if current == child_short:
+        return True, ""
+    if expected:
+        if current != expected:
+            return False, "parent nextLink changed"
+    else:
+        if current:
+            return False, "parent nextLink already set"
     ok, _out, err = _run_task(
         [
             "task",
@@ -505,7 +612,8 @@ def _update_parent_nextlink(parent_uuid: str, child_short: str) -> tuple[bool, s
 def _parent_points_to_child(parent_uuid: str, child_short: str) -> bool:
     if not parent_uuid or not child_short:
         return False
-    parent = _export_uuid(parent_uuid)
+    res = _export_uuid(parent_uuid)
+    parent = res.get("obj") if isinstance(res, dict) else None
     if not parent:
         return False
     return (parent.get("nextLink") or "").strip() == child_short
@@ -532,33 +640,46 @@ def _drain_queue() -> dict:
     processed = 0
     errors = 0
     requeue: list[dict] = []
+    dead_lettered = 0
 
     for entry in _take_queue_entries():
+        valid, reason = _validate_queue_entry(entry)
+        if not valid:
+            _write_dead_letter(entry, reason)
+            dead_lettered += 1
+            errors += 1
+            continue
         spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
         parent_uuid = (entry.get("parent_uuid") or "").strip()
+        expected_parent_nextlink = (entry.get("parent_nextlink") or "").strip()
         child = entry.get("child") or {}
         child_short = (entry.get("child_short") or "").strip()
         child_uuid = (child.get("uuid") or "").strip()
-
-        if not child_uuid:
-            if spawn_intent_id:
-                _diag(f"missing child uuid (intent={spawn_intent_id})")
-            _write_dead_letter(entry, "missing child uuid")
-            errors += 1
-            continue
-
-        exists = _export_uuid(child_uuid)
-        if not exists:
-            if _tw_lock_recent():
+        export_res = _export_uuid(child_uuid)
+        if not export_res.get("exists"):
+            if export_res.get("retryable"):
                 if spawn_intent_id:
                     _diag(f"task lock active; requeue (intent={spawn_intent_id})")
-                requeue.append(entry)
+                if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+                    _write_dead_letter(entry, "exceeded retry budget")
+                    dead_lettered += 1
+                    errors += 1
+                else:
+                    requeue.append(entry)
                 continue
             ok, err = _import_child(child)
             if not ok:
+                if _is_lock_error(err):
+                    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+                        _write_dead_letter(entry, "exceeded retry budget")
+                        dead_lettered += 1
+                        errors += 1
+                    else:
+                        requeue.append(entry)
+                    continue
                 # If import reported failure but the child exists, continue.
-                if _export_uuid(child_uuid):
-                    exists = True
+                if _export_uuid(child_uuid).get("exists"):
+                    export_res = {"exists": True}
                 else:
                     if spawn_intent_id:
                         _diag(f"child import failed (intent={spawn_intent_id}): {err}")
@@ -567,31 +688,47 @@ def _drain_queue() -> dict:
                     if parent_uuid and child_short and _parent_points_to_child(parent_uuid, child_short):
                         _clear_parent_nextlink(parent_uuid)
                     _write_dead_letter(entry, f"child import failed: {err}")
+                    dead_lettered += 1
                     errors += 1
                     continue
 
         # Confirm child exists before touching parent.
-        if not _export_uuid(child_uuid):
+        confirm_res = _export_uuid(child_uuid)
+        if not confirm_res.get("exists"):
+            if confirm_res.get("retryable"):
+                if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+                    _write_dead_letter(entry, "exceeded retry budget")
+                    errors += 1
+                else:
+                    requeue.append(entry)
+                continue
             if spawn_intent_id:
                 _diag(f"child missing after import (intent={spawn_intent_id})")
             if parent_uuid and child_short and _parent_points_to_child(parent_uuid, child_short):
                 _clear_parent_nextlink(parent_uuid)
             _write_dead_letter(entry, "child missing after import")
+            dead_lettered += 1
             errors += 1
             continue
 
         if parent_uuid and child_short:
-            ok, err = _update_parent_nextlink(parent_uuid, child_short)
+            ok, err = _update_parent_nextlink(parent_uuid, child_short, expected_parent_nextlink)
             if not ok:
                 if spawn_intent_id:
                     _diag(f"parent update failed (intent={spawn_intent_id}): {parent_uuid}")
                 else:
                     _diag(f"parent update failed: {parent_uuid}")
-                if _is_lock_error(err):
-                    requeue.append(entry)
+                if err == "parent export locked" or _is_lock_error(err):
+                    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+                        _write_dead_letter(entry, "exceeded retry budget")
+                        dead_lettered += 1
+                        errors += 1
+                    else:
+                        requeue.append(entry)
                 else:
                     _write_dead_letter(entry, f"parent update failed: {err}")
-                errors += 1
+                    dead_lettered += 1
+                    errors += 1
                 continue
 
         processed += 1
@@ -599,7 +736,12 @@ def _drain_queue() -> dict:
     if requeue:
         _requeue_entries(requeue)
 
-    return {"processed": processed, "errors": errors, "requeued": len(requeue)}
+    return {
+        "processed": processed,
+        "errors": errors,
+        "requeued": len(requeue),
+        "dead_lettered": dead_lettered,
+    }
 
 
 def main() -> int:
@@ -609,7 +751,13 @@ def main() -> int:
         pass
     stats = _drain_queue()
     if os.environ.get("NAUTICAL_DIAG") == "1":
-        _diag(f"on-exit drain: processed={stats.get('processed', 0)} errors={stats.get('errors', 0)} requeued={stats.get('requeued', 0)}")
+        _diag(
+            "on-exit drain: "
+            f"processed={stats.get('processed', 0)} "
+            f"errors={stats.get('errors', 0)} "
+            f"requeued={stats.get('requeued', 0)} "
+            f"dead_lettered={stats.get('dead_lettered', 0)}"
+        )
     return 0
 
 

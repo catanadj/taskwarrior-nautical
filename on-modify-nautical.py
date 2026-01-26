@@ -3663,7 +3663,6 @@ def main():
         cp_raw = (new.get("cp") or "").strip()
         new_cp = _strip_quotes(cp_raw)
         if new_anchor and new_cp:
-            _panel("❌ Invalid chain config", [("Reason", "anchor and cp cannot both be set; clear one")], kind="error")
             _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
 
         # CP validation only happens on completion, NOT on modification
@@ -3690,7 +3689,6 @@ def main():
     anchor_raw = (new.get("anchor") or "").strip()
     new_anchor = _strip_quotes(anchor_raw)
     if new_anchor and new_cp:
-        _panel("❌ Invalid chain config", [("Reason", "anchor and cp cannot both be set; clear one")], kind="error")
         _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
 
     if new_cp:

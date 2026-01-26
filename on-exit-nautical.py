@@ -51,6 +51,8 @@ _DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
 _QUEUE_MAX_BYTES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_BYTES") or 524288)
 _QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000)
 _DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)
+_QUEUE_QUARANTINE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.bad.jsonl"
+_QUEUE_QUARANTINE_MAX_BYTES = int(os.environ.get("NAUTICAL_QUEUE_BAD_MAX_BYTES") or 262144)
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -319,6 +321,39 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
         except Exception:
             pass
 
+def _quarantine_queue_line(raw_line: str, reason: str) -> None:
+    if not raw_line:
+        return
+    try:
+        _QUEUE_QUARANTINE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        if _QUEUE_QUARANTINE_MAX_BYTES > 0 and _QUEUE_QUARANTINE_PATH.exists():
+            try:
+                st = _QUEUE_QUARANTINE_PATH.stat()
+                if st.st_size > _QUEUE_QUARANTINE_MAX_BYTES:
+                    ts = int(time.time())
+                    overflow = _QUEUE_QUARANTINE_PATH.with_suffix(f".overflow.{ts}.jsonl")
+                    os.replace(_QUEUE_QUARANTINE_PATH, overflow)
+                    _diag(f"queue quarantine rotated: {overflow}")
+            except Exception:
+                pass
+        payload = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "reason": reason,
+            "raw": raw_line,
+        }
+        fd = os.open(str(_QUEUE_QUARANTINE_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
 def _take_queue_entries() -> list[dict]:
     entries: list[dict] = []
     with _lock_queue() as locked:
@@ -359,11 +394,13 @@ def _take_queue_entries() -> list[dict]:
                     try:
                         obj = json.loads(ln)
                     except Exception:
+                        _quarantine_queue_line(line, "queue json parse")
                         _write_dead_letter({"raw": line}, "queue json parse")
                         continue
                     if isinstance(obj, dict):
                         entries.append(obj)
                     else:
+                        _quarantine_queue_line(line, "queue json not object")
                         f_out.write(line)
             os.replace(tmp_path, _QUEUE_PATH)
             if overflow_path:

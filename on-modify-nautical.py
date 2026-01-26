@@ -861,6 +861,7 @@ def _queue_locked(fn):
     """Run `fn()` under a bounded non-blocking lock. Returns True on success."""
     if not _require_core():
         return False
+    t0 = _time.perf_counter()
     with core.safe_lock(
         _SPAWN_QUEUE_LOCK,
         retries=_SPAWN_LOCK_RETRIES,
@@ -870,6 +871,7 @@ def _queue_locked(fn):
         stale_after=30.0,
     ) as acquired:
         if not acquired:
+            _diag(f"queue lock not acquired after {int((_time.perf_counter() - t0) * 1000)}ms: {_SPAWN_QUEUE_LOCK}")
             return False
         fn()
         return True
@@ -3841,7 +3843,6 @@ def main():
         return
 
     deferred_spawn = False
-    spawn_note = None
     spawn_intent_id = None
     try:
         (
@@ -3852,8 +3853,6 @@ def main():
             defer_reason,
             spawn_intent_id,
         ) = _spawn_child_atomic(child, new)
-        if deferred_spawn:
-            spawn_note = "[yellow]Queued[/] (will import after this command finishes)"
         if not verified and not deferred_spawn:
             _panel(
                 "⛓ Chain warning",
@@ -3909,8 +3908,6 @@ def main():
 
     # Feedback panel
     fb = []
-    if spawn_note:
-        fb.append(("Spawn", spawn_note))
     if kind == "anchor":
         anchor_raw = (new.get("anchor") or "").strip()
         expr_str = _strip_quotes(anchor_raw) 
@@ -3990,10 +3987,7 @@ def main():
         if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
             fb.append(("Intent", spawn_intent_id))
 
-        if deferred_spawn:
-            title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short} [queued]"
-        else:
-            title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short} [{child_id}]"
+        title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short} [{child_id}]"
         tl = _timeline_lines(
             "anchor",
             new,
@@ -4091,10 +4085,7 @@ def main():
         if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
             fb.append(("Intent", spawn_intent_id))
 
-        if deferred_spawn:
-            title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short} [queued]"
-        else:
-            title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short} [{child_id}]"
+        title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short} [{child_id}]"
         tl = _timeline_lines(
             "cp",
             new,

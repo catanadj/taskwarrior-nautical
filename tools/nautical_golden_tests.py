@@ -2244,6 +2244,27 @@ def test_on_exit_queue_drain_is_transactional():
         expect(after == original, "queue should remain unchanged on replace failure")
 
 
+def test_on_exit_quarantines_bad_queue_lines():
+    """on-exit should quarantine invalid queue JSON lines."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_exit_quarantine_test")
+            q_path = mod._QUEUE_PATH
+            q_path.parent.mkdir(parents=True, exist_ok=True)
+            q_path.write_text("{bad-json}\n", encoding="utf-8")
+            mod._take_queue_entries()
+            bad_path = mod._QUEUE_QUARANTINE_PATH
+            expect(bad_path.exists(), "queue quarantine file not created")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+
+
 def test_on_exit_import_child_retries_on_lock():
     """on-exit should retry child import on lock errors with backoff."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -3100,6 +3121,7 @@ TESTS = [
     test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,
     test_on_exit_queue_drain_is_transactional,
+    test_on_exit_quarantines_bad_queue_lines,
     test_on_exit_import_child_retries_on_lock,
     test_on_exit_dead_letter_on_import_failure,
     test_on_exit_large_queue_bounded_drain,

@@ -175,18 +175,17 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, 
             acquired = True
             break
         except FileExistsError:
-            stale = False
-            if _lock_stale_pid(path_str):
-                stale = True
+            pid_stale = _lock_stale_pid(path_str)
+            age_stale = False
             if stale_after is not None:
                 try:
                     st = os.stat(path_str)
                     age = time.time() - float(st.st_mtime)
                     if age >= float(stale_after):
-                        stale = True
+                        age_stale = True
                 except Exception:
-                    stale = False
-            if stale:
+                    age_stale = False
+            if pid_stale and age_stale:
                 try:
                     os.unlink(path_str)
                 except Exception:
@@ -519,13 +518,15 @@ def _take_queue_entries() -> list[dict]:
                     else:
                         _quarantine_queue_line(line, "queue json not object")
                         f_out.write(line)
-                try:
-                    f_out.flush()
-                    os.fsync(f_out.fileno())
-                except Exception:
-                    pass
+                if _DURABLE_QUEUE:
+                    try:
+                        f_out.flush()
+                        os.fsync(f_out.fileno())
+                    except Exception:
+                        pass
             os.replace(tmp_path, _QUEUE_PATH)
-            _fsync_dir(_QUEUE_PATH.parent)
+            if _DURABLE_QUEUE:
+                _fsync_dir(_QUEUE_PATH.parent)
             if overflow_path:
                 try:
                     overflow_path.unlink()

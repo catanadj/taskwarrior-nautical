@@ -442,8 +442,20 @@ def _tolocal(dt):
 # ------------------------------------------------------------------------------
 def _fail_and_exit(title: str, msg: str) -> None:
     _panel(f"❌ {title}", [("Message", msg)], kind="error")
-    print(json.dumps({"error": title, "message": msg}, ensure_ascii=False))
+    _panic_emit(title, msg)
     sys.exit(1)
+
+_RAW_INPUT_TEXT = ""
+_PARSED_NEW = None
+
+def _panic_emit(title: str, msg: str) -> None:
+    try:
+        if _PARSED_NEW is not None:
+            print(json.dumps(_PARSED_NEW, ensure_ascii=False), end="")
+        else:
+            print(json.dumps({"error": title, "message": msg}, ensure_ascii=False), end="")
+    except Exception:
+        pass
 
 
 def _read_two():
@@ -451,6 +463,8 @@ def _read_two():
     if len(raw_bytes) > _MAX_JSON_BYTES:
         _fail_and_exit("Invalid input", f"on-modify input exceeds {_MAX_JSON_BYTES} bytes")
     raw = raw_bytes.decode("utf-8", errors="replace")
+    global _RAW_INPUT_TEXT
+    _RAW_INPUT_TEXT = raw
     if not raw or not raw.strip():
         _fail_and_exit("Invalid input", "on-modify must receive two JSON tasks")
 
@@ -490,8 +504,11 @@ def _read_two():
     if len(objs) >= 2:
         if raw[idx:].strip():
             _fail_and_exit("Protocol error", "Invalid JSON input: trailing content")
+        global _PARSED_NEW
+        _PARSED_NEW = objs[-1]
         return objs[0], objs[-1]
     if len(objs) == 1:
+        _PARSED_NEW = objs[0]
         return objs[0], objs[0]
 
     _fail_and_exit("Invalid input", "on-modify must receive two JSON tasks")
@@ -1106,7 +1123,7 @@ def _export_uuid_short(u_short: str, env=None):
             _diag_count("export_uuid_cache_misses")
     env = env or os.environ.copy()
     ok, out, err = _run_task(
-        ["task", "rc.hooks=off", "rc.json.array=off", f"uuid:{u_short}", "export"],
+        ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=off", f"uuid:{u_short}", "export"],
         env=env,
         timeout=2.5,
         retries=2,
@@ -1127,7 +1144,7 @@ def _export_uuid_short(u_short: str, env=None):
 
 
 def _task_exists_by_uuid(u: str, env: dict) -> bool:
-    q = ["task", "rc.hooks=off", "rc.json.array=off", f"uuid:{u}", "export"]
+    q = ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=off", f"uuid:{u}", "export"]
     ok, out, err = _run_task(q, env=env, timeout=2.5, retries=2)
     if not ok:
         _diag(f"task exists check failed (uuid={u[:8]}): {err.strip()}")
@@ -4040,7 +4057,7 @@ def main():
         if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
             fb.append(("Intent", spawn_intent_id))
 
-        title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short} [{child_id}]"
+        title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short}"
         tl = _timeline_lines(
             "anchor",
             new,
@@ -4227,8 +4244,10 @@ if __name__ == "__main__":
                     new_obj = arr[-1]
         except Exception:
             new_obj = None
-        if new_obj is None:
-            new_obj = {}
-        print(json.dumps(new_obj, ensure_ascii=False), end="")
-        sys.stdout.flush()
-        raise SystemExit(0)
+        if new_obj is not None:
+            print(json.dumps(new_obj, ensure_ascii=False), end="")
+            try:
+                sys.stdout.flush()
+            except Exception:
+                pass
+        raise SystemExit(1)

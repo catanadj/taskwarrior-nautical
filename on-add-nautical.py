@@ -745,14 +745,10 @@ def _panic_passthrough() -> None:
             print(json.dumps(_PARSED_TASK, ensure_ascii=False), end="")
         elif _RAW_INPUT_TEXT:
             sys.stdout.write(_RAW_INPUT_TEXT)
-        else:
-            print("{}", end="")
     except Exception:
         try:
             if _RAW_INPUT_TEXT:
                 sys.stdout.write(_RAW_INPUT_TEXT)
-            else:
-                print("{}", end="")
         except Exception:
             pass
     try:

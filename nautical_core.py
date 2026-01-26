@@ -1877,18 +1877,17 @@ def safe_lock(
             acquired = True
             break
         except FileExistsError:
-            stale = False
-            if _lock_stale_pid(path_str):
-                stale = True
+            pid_stale = _lock_stale_pid(path_str)
+            age_stale = False
             if stale_after is not None:
                 try:
                     st = os.stat(path_str)
                     age = time.time() - float(st.st_mtime)
                     if age >= float(stale_after):
-                        stale = True
+                        age_stale = True
                 except Exception:
-                    stale = False
-            if stale:
+                    age_stale = False
+            if pid_stale and age_stale:
                 try:
                     os.unlink(path_str)
                 except Exception:

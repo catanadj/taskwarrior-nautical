@@ -496,9 +496,8 @@ def test_safe_lock_fallback_stale_cleanup():
         with tempfile.TemporaryDirectory() as td:
             lock_path = os.path.join(td, ".nautical_stale.lock")
             with open(lock_path, "w", encoding="utf-8") as f:
-                f.write("stale")
-            old = _time.time() - 5.0
-            os.utime(lock_path, (old, old))
+                f.write("999999 0\n")
+            os.utime(lock_path, (1, 1))
             with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0, stale_after=1.0) as ok:
                 expect(ok, "stale fallback lock was not cleared")
     finally:
@@ -515,7 +514,8 @@ def test_safe_lock_fallback_stale_pid_cleanup():
             lock_path = os.path.join(td, ".nautical_pid.lock")
             with open(lock_path, "w", encoding="utf-8") as f:
                 f.write("999999 0\n")
-            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0, stale_after=9999.0) as ok:
+            os.utime(lock_path, (1, 1))
+            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0, stale_after=1.0) as ok:
                 expect(ok, "stale PID lock was not cleared")
     finally:
         mod_core.fcntl = prev_fcntl

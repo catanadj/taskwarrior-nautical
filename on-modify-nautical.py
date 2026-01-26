@@ -290,6 +290,8 @@ TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
 # ------------------------------------------------------------------------------
 _SPAWN_QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _SPAWN_QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
+_DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical_dead_letter.jsonl"
+_DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
 _SPAWN_LOCK_RETRIES = 6
 _SPAWN_LOCK_SLEEP_BASE = 0.03
 _WARNED_SPAWN_QUEUE_LOCK = False
@@ -454,22 +456,31 @@ def _read_two():
 
     decoder = json.JSONDecoder()
     idx = 0
-    objs = []
+    objs: list[object] = []
     n = len(raw)
+    tries = 0
 
-    while idx < n:
+    while idx < n and len(objs) < 2:
         while idx < n and raw[idx].isspace():
             idx += 1
         if idx >= n:
             break
         try:
             obj, end = decoder.raw_decode(raw, idx)
-        except Exception:
-            break
+        except Exception as e:
+            _fail_and_exit("Protocol error", f"Invalid JSON input: {e}")
         objs.append(obj)
+        if end <= idx:
+            tries += 1
+            if tries >= 2:
+                _fail_and_exit("Protocol error", "Invalid JSON input: parser made no progress")
+            idx += 1
+            continue
         idx = end
 
     if len(objs) == 1 and isinstance(objs[0], list):
+        if raw[idx:].strip():
+            _fail_and_exit("Protocol error", "Invalid JSON input: trailing content")
         arr = [o for o in objs[0] if isinstance(o, dict)]
         if len(arr) >= 2:
             return arr[0], arr[-1]
@@ -477,6 +488,8 @@ def _read_two():
             return arr[0], arr[0]
     objs = [o for o in objs if isinstance(o, dict)]
     if len(objs) >= 2:
+        if raw[idx:].strip():
+            _fail_and_exit("Protocol error", "Invalid JSON input: trailing content")
         return objs[0], objs[-1]
     if len(objs) == 1:
         return objs[0], objs[0]
@@ -845,6 +858,15 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
         except Exception:
             pass
         try:
+            if _SPAWN_QUEUE_PATH.exists():
+                try:
+                    size = _SPAWN_QUEUE_PATH.stat().st_size
+                    if size > _SPAWN_QUEUE_MAX_BYTES:
+                        _write_dead_letter(task_obj, "spawn queue full")
+                        _diag("spawn queue full; intent dropped")
+                        return
+                except Exception:
+                    pass
             fd = os.open(str(_SPAWN_QUEUE_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
             try:
                 os.fchmod(fd, 0o600)
@@ -886,6 +908,34 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
                     ],
                     kind="warning",
                 )
+    except Exception:
+        pass
+
+def _write_dead_letter(entry: dict, reason: str) -> None:
+    payload = {
+        "ts": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "reason": reason,
+        "spawn_intent_id": (entry.get("spawn_intent_id") or "").strip(),
+        "parent_uuid": (entry.get("parent_uuid") or "").strip(),
+        "child_short": (entry.get("child_short") or "").strip(),
+        "child_uuid": ((entry.get("child") or {}).get("uuid") or "").strip(),
+        "entry": entry,
+    }
+    try:
+        _DEAD_LETTER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        with core.safe_lock(_DEAD_LETTER_LOCK, retries=3, sleep_base=0.02, jitter=0.02, mkdir=True, stale_after=30.0) as ok:
+            if not ok:
+                return
+            fd = os.open(str(_DEAD_LETTER_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
     except Exception:
         pass
 

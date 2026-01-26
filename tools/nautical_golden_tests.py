@@ -628,6 +628,26 @@ def test_diag_log_rotation_bounds():
             else:
                 os.environ["NAUTICAL_DIAG_LOG_MAX_BYTES"] = prev_diag_max
 
+def test_on_exit_requeues_when_task_lock_recent():
+    """on-exit should requeue when Taskwarrior lock looks active."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_exit_lock_recent_test")
+            lock_path = mod.TW_DATA_DIR / "lock"
+            lock_path.write_text("lock", encoding="utf-8")
+            entry = {"child": {"uuid": "u1"}, "parent_uuid": "p1", "child_short": "c1"}
+            mod._requeue_entries([entry])
+            stats = mod._drain_queue()
+            expect(stats.get("requeued") == 1, f"expected requeue when lock active, got {stats}")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+
 def test_core_cache_dir_and_lock_permissions():
     """Core cache dir and lock files should have restricted permissions."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
@@ -770,6 +790,55 @@ def test_on_exit_queue_drain_idempotent():
             else:
                 os.environ["TASKDATA"] = prev_taskdata
 
+def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
+    """on-exit should clear parent nextLink if child is missing after failed import."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_exit_rollback_test")
+            calls = []
+            parent_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            child_uuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+            child_short = "bbbbbbbb"
+
+            def _fake_run_task(cmd, *, input_text=None, timeout=0.0):
+                if "export" in cmd:
+                    target = ""
+                    for part in cmd:
+                        if isinstance(part, str) and part.startswith("uuid:"):
+                            target = part.split(":", 1)[1]
+                            break
+                    if target == child_uuid:
+                        return True, "{}", ""
+                    if target == parent_uuid:
+                        payload = {"uuid": parent_uuid, "nextLink": child_short}
+                        return True, json.dumps(payload), ""
+                if "modify" in cmd and "nextLink:" in cmd:
+                    calls.append("clear_parent")
+                    return True, "", ""
+                return True, "", ""
+
+            mod._run_task = _fake_run_task
+            mod._import_child = lambda _obj: (False, "import failed")
+            q_path = mod._QUEUE_PATH
+            entry = {
+                "parent_uuid": parent_uuid,
+                "child_short": child_short,
+                "child": {"uuid": child_uuid},
+                "spawn_intent_id": "si_test",
+            }
+            q_path.parent.mkdir(parents=True, exist_ok=True)
+            q_path.write_text(json.dumps(entry, ensure_ascii=False) + "\n", encoding="utf-8")
+            mod._drain_queue()
+            expect("clear_parent" in calls, "expected parent nextLink rollback on missing child")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+
 def test_on_exit_uses_tw_data_dir_for_export_and_modify():
     """on-exit should target TW_DATA_DIR for export/modify calls."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -812,6 +881,37 @@ def test_on_modify_read_two_fuzz_inputs():
         else:
             expect(p.returncode == 0, f"on-modify returned {p.returncode} for case {mode}")
             _assert_stdout_json_only(p.stdout)
+
+def test_on_modify_read_two_invalid_trailing():
+    """on-modify should fail on extra garbage after JSON objects."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    raw = json.dumps({"status": "pending"}) + "\n" + json.dumps({"status": "pending"}) + "\n" + "{bad"
+    p = _run_hook_script_raw(hook, raw)
+    expect(p.returncode != 0, "on-modify should fail on trailing garbage")
+    payload = _extract_last_json(p.stdout or "")
+    expect("error" in payload and "message" in payload, "on-modify error response missing fields")
+
+def test_on_modify_queue_full_drops_with_dead_letter():
+    """on-modify should drop spawn intent when queue exceeds max bytes."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_modify_queue_full_test")
+            q_path = mod._SPAWN_QUEUE_PATH
+            dl_path = mod._DEAD_LETTER_PATH
+            q_path.parent.mkdir(parents=True, exist_ok=True)
+            q_path.write_text("x" * 128, encoding="utf-8")
+            mod._SPAWN_QUEUE_MAX_BYTES = 10
+            mod._enqueue_deferred_spawn({"spawn_intent_id": "si_full", "child": {"uuid": "u1"}})
+            expect(q_path.read_text(encoding="utf-8") == "x" * 128, "queue should not grow when full")
+            expect(dl_path.exists(), "dead-letter not written on queue full")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
 
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
@@ -2837,9 +2937,12 @@ TESTS = [
     test_on_exit_repairs_queue_and_dead_letter_permissions,
     test_on_exit_timeouts_configurable,
     test_diag_log_rotation_bounds,
+    test_on_exit_requeues_when_task_lock_recent,
     test_core_cache_dir_and_lock_permissions,
     test_core_cache_lock_contention_matches_safe_lock,
     test_on_modify_invalid_json_passthrough,
+    test_on_modify_read_two_invalid_trailing,
+    test_on_modify_queue_full_drops_with_dead_letter,
     test_next_for_and_no_progress_fails_fast,
     test_roll_apply_has_guard,
     test_anchor_cache_cleans_stale_tmp_files,
@@ -2862,6 +2965,7 @@ TESTS = [
     test_on_exit_dead_letter_on_import_failure,
     test_on_exit_large_queue_bounded_drain,
     test_on_exit_queue_drain_idempotent,
+    test_on_exit_rolls_back_parent_nextlink_on_missing_child,
     test_on_exit_uses_tw_data_dir_for_export_and_modify,
     test_on_modify_carry_wall_clock_across_dst,
     test_normalize_spec_for_acf_cache_guards,

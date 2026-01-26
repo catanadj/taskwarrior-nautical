@@ -232,6 +232,19 @@ def _is_lock_error(err: str) -> bool:
     e = (err or "").lower()
     return "lock" in e or "locked" in e or "database is locked" in e
 
+def _tw_lock_path() -> Path:
+    return TW_DATA_DIR / "lock"
+
+def _tw_lock_recent(max_age_s: float = 5.0) -> bool:
+    try:
+        p = _tw_lock_path()
+        if not p.exists():
+            return False
+        age = time.time() - p.stat().st_mtime
+        return age >= 0 and age <= max_age_s
+    except Exception:
+        return False
+
 def _sleep(secs: float) -> None:
     time.sleep(secs)
 
@@ -430,6 +443,31 @@ def _update_parent_nextlink(parent_uuid: str, child_short: str) -> tuple[bool, s
     )
     return ok, err or ""
 
+def _parent_points_to_child(parent_uuid: str, child_short: str) -> bool:
+    if not parent_uuid or not child_short:
+        return False
+    parent = _export_uuid(parent_uuid)
+    if not parent:
+        return False
+    return (parent.get("nextLink") or "").strip() == child_short
+
+def _clear_parent_nextlink(parent_uuid: str) -> tuple[bool, str]:
+    if not parent_uuid:
+        return False, "missing parent"
+    ok, _out, err = _run_task(
+        [
+            "task",
+            f"rc.data.location={TW_DATA_DIR}",
+            "rc.hooks=off",
+            "rc.verbose=nothing",
+            f"uuid:{parent_uuid}",
+            "modify",
+            "nextLink:",
+        ],
+        timeout=_TASK_TIMEOUT_MODIFY,
+    )
+    return ok, err or ""
+
 
 def _drain_queue() -> dict:
     processed = 0
@@ -452,6 +490,11 @@ def _drain_queue() -> dict:
 
         exists = _export_uuid(child_uuid)
         if not exists:
+            if _tw_lock_recent():
+                if spawn_intent_id:
+                    _diag(f"task lock active; requeue (intent={spawn_intent_id})")
+                requeue.append(entry)
+                continue
             ok, err = _import_child(child)
             if not ok:
                 # If import reported failure but the child exists, continue.
@@ -462,6 +505,8 @@ def _drain_queue() -> dict:
                         _diag(f"child import failed (intent={spawn_intent_id}): {err}")
                     else:
                         _diag(f"child import failed: {err}")
+                    if parent_uuid and child_short and _parent_points_to_child(parent_uuid, child_short):
+                        _clear_parent_nextlink(parent_uuid)
                     _write_dead_letter(entry, f"child import failed: {err}")
                     errors += 1
                     continue
@@ -470,6 +515,8 @@ def _drain_queue() -> dict:
         if not _export_uuid(child_uuid):
             if spawn_intent_id:
                 _diag(f"child missing after import (intent={spawn_intent_id})")
+            if parent_uuid and child_short and _parent_points_to_child(parent_uuid, child_short):
+                _clear_parent_nextlink(parent_uuid)
             _write_dead_letter(entry, "child missing after import")
             errors += 1
             continue

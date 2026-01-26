@@ -483,6 +483,151 @@ def test_safe_lock_fallback_contention():
     finally:
         mod_core.fcntl = prev_fcntl
 
+def test_safe_lock_fallback_stale_cleanup():
+    """safe_lock fallback should clear stale lockfiles."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    mod_core = _load_hook_module(core_path, "_nautical_core_lock_stale_test")
+    prev_fcntl = getattr(mod_core, "fcntl", None)
+    mod_core.fcntl = None
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = os.path.join(td, ".nautical_stale.lock")
+            with open(lock_path, "w", encoding="utf-8") as f:
+                f.write("stale")
+            old = _time.time() - 5.0
+            os.utime(lock_path, (old, old))
+            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0, stale_after=1.0) as ok:
+                expect(ok, "stale fallback lock was not cleared")
+    finally:
+        mod_core.fcntl = prev_fcntl
+
+def test_on_modify_queue_repairs_permissions():
+    """Existing queue file permissions should be repaired on append."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_modify_queue_perm_test")
+            q_path = mod._SPAWN_QUEUE_PATH
+            q_path.parent.mkdir(parents=True, exist_ok=True)
+            q_path.write_text("{}", encoding="utf-8")
+            os.chmod(q_path, 0o666)
+            mod._enqueue_deferred_spawn({"uuid": "00000000-0000-0000-0000-000000000123"})
+            mode = stat.S_IMODE(q_path.stat().st_mode)
+            expect((mode & 0o077) == 0, f"queue perms not repaired: {oct(mode)}")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+
+def test_on_exit_repairs_queue_and_dead_letter_permissions():
+    """Existing queue/dead-letter permissions should be repaired on write."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_exit_perm_repair_test")
+            q_path = mod._QUEUE_PATH
+            dl_path = mod._DEAD_LETTER_PATH
+            q_path.parent.mkdir(parents=True, exist_ok=True)
+            q_path.write_text("{}", encoding="utf-8")
+            dl_path.write_text("{}", encoding="utf-8")
+            os.chmod(q_path, 0o666)
+            os.chmod(dl_path, 0o666)
+            mod._requeue_entries([{"uuid": "00000000-0000-0000-0000-000000000456"}])
+            mod._write_dead_letter({"uuid": "00000000-0000-0000-0000-000000000789"}, "perm test")
+            q_mode = stat.S_IMODE(q_path.stat().st_mode)
+            dl_mode = stat.S_IMODE(dl_path.stat().st_mode)
+            expect((q_mode & 0o077) == 0, f"queue perms not repaired: {oct(q_mode)}")
+            expect((dl_mode & 0o077) == 0, f"dead-letter perms not repaired: {oct(dl_mode)}")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+
+def test_on_exit_timeouts_configurable():
+    """on-exit should honor timeout env vars for task commands."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        prev_export = os.environ.get("NAUTICAL_TASK_TIMEOUT_EXPORT")
+        prev_import = os.environ.get("NAUTICAL_TASK_TIMEOUT_IMPORT")
+        prev_modify = os.environ.get("NAUTICAL_TASK_TIMEOUT_MODIFY")
+        os.environ["TASKDATA"] = td
+        os.environ["NAUTICAL_TASK_TIMEOUT_EXPORT"] = "1.5"
+        os.environ["NAUTICAL_TASK_TIMEOUT_IMPORT"] = "2.5"
+        os.environ["NAUTICAL_TASK_TIMEOUT_MODIFY"] = "3.5"
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_exit_timeout_test")
+            timeouts = []
+
+            def _fake_run_task(cmd, *, input_text=None, timeout=0.0):
+                timeouts.append(timeout)
+                if "export" in cmd:
+                    return True, json.dumps({"uuid": "u1"}), ""
+                return True, "", ""
+
+            mod._run_task = _fake_run_task
+            mod._export_uuid("u1")
+            mod._import_child({"uuid": "u2"})
+            mod._update_parent_nextlink("p", "c")
+            expect(timeouts == [1.5, 2.5, 3.5], f"unexpected timeouts: {timeouts}")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+            if prev_export is None:
+                os.environ.pop("NAUTICAL_TASK_TIMEOUT_EXPORT", None)
+            else:
+                os.environ["NAUTICAL_TASK_TIMEOUT_EXPORT"] = prev_export
+            if prev_import is None:
+                os.environ.pop("NAUTICAL_TASK_TIMEOUT_IMPORT", None)
+            else:
+                os.environ["NAUTICAL_TASK_TIMEOUT_IMPORT"] = prev_import
+            if prev_modify is None:
+                os.environ.pop("NAUTICAL_TASK_TIMEOUT_MODIFY", None)
+            else:
+                os.environ["NAUTICAL_TASK_TIMEOUT_MODIFY"] = prev_modify
+
+def test_diag_log_rotation_bounds():
+    """Persistent diag log should rotate when exceeding max size."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        prev_diag_log = os.environ.get("NAUTICAL_DIAG_LOG")
+        prev_diag_max = os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES")
+        os.environ["TASKDATA"] = td
+        os.environ["NAUTICAL_DIAG_LOG"] = "1"
+        os.environ["NAUTICAL_DIAG_LOG_MAX_BYTES"] = "20"
+        try:
+            mod = _load_hook_module(hook, "_nautical_diag_log_rotation_test")
+            log_path = Path(td) / ".nautical_diag.jsonl"
+            log_path.write_text("x" * 64, encoding="utf-8")
+            mod._diag("rotate me")
+            overflow = list(Path(td).glob(".nautical_diag.overflow.*.jsonl"))
+            expect(overflow, "diag log did not rotate")
+            expect(log_path.exists(), "diag log missing after rotation")
+            content = log_path.read_text(encoding="utf-8").strip()
+            expect(content, "diag log not written after rotation")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+            if prev_diag_log is None:
+                os.environ.pop("NAUTICAL_DIAG_LOG", None)
+            else:
+                os.environ["NAUTICAL_DIAG_LOG"] = prev_diag_log
+            if prev_diag_max is None:
+                os.environ.pop("NAUTICAL_DIAG_LOG_MAX_BYTES", None)
+            else:
+                os.environ["NAUTICAL_DIAG_LOG_MAX_BYTES"] = prev_diag_max
+
 def test_core_cache_dir_and_lock_permissions():
     """Core cache dir and lock files should have restricted permissions."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
@@ -2687,6 +2832,11 @@ TESTS = [
     test_hook_files_are_private_permissions,
     test_safe_lock_fcntl_contention,
     test_safe_lock_fallback_contention,
+    test_safe_lock_fallback_stale_cleanup,
+    test_on_modify_queue_repairs_permissions,
+    test_on_exit_repairs_queue_and_dead_letter_permissions,
+    test_on_exit_timeouts_configurable,
+    test_diag_log_rotation_bounds,
     test_core_cache_dir_and_lock_permissions,
     test_core_cache_lock_contention_matches_safe_lock,
     test_on_modify_invalid_json_passthrough,

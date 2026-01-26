@@ -234,6 +234,7 @@ def _dnf_cache_lock():
         sleep_base=_DNF_LOCK_SLEEP_BASE,
         jitter=_DNF_LOCK_SLEEP_BASE,
         mkdir=True,
+        stale_after=30.0,
     ) as acquired:
         yield acquired
 
@@ -525,6 +526,42 @@ def _diag(msg: str) -> None:
             sys.stderr.write(f"[nautical] {msg}\n")
         except Exception:
             pass
+    _diag_log(msg)
+
+_DIAG_LOG_MAX_BYTES = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
+_DIAG_LOG_PATH = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser() / ".nautical_diag.jsonl"
+
+def _diag_log(msg: str) -> None:
+    if os.environ.get("NAUTICAL_DIAG_LOG") != "1":
+        return
+    try:
+        _DIAG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        if _DIAG_LOG_MAX_BYTES > 0 and _DIAG_LOG_PATH.exists():
+            try:
+                st = _DIAG_LOG_PATH.stat()
+                if st.st_size > _DIAG_LOG_MAX_BYTES:
+                    ts = int(time.time())
+                    overflow = _DIAG_LOG_PATH.with_suffix(f".overflow.{ts}.jsonl")
+                    os.replace(_DIAG_LOG_PATH, overflow)
+            except Exception:
+                pass
+        fd = os.open(str(_DIAG_LOG_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        payload = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "hook": "on-add",
+            "msg": str(msg),
+        }
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
 
 
 def _run_task(

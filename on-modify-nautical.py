@@ -22,6 +22,7 @@ from decimal import Decimal, InvalidOperation
 import shlex
 import time as _time
 from typing import Optional
+import stat
 
 _MAX_JSON_BYTES = 10 * 1024 * 1024
 
@@ -102,6 +103,48 @@ def _diag(msg: str) -> None:
             sys.stderr.write(f"[nautical] {msg}\n")
         except Exception:
             pass
+    _diag_log(msg)
+
+_DIAG_LOG_MAX_BYTES = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
+
+def _diag_log_path() -> Path:
+    base = os.environ.get("TASKDATA")
+    if base:
+        return Path(base).expanduser() / ".nautical_diag.jsonl"
+    return Path(__file__).resolve().parent.parent / ".nautical_diag.jsonl"
+
+def _diag_log(msg: str) -> None:
+    if os.environ.get("NAUTICAL_DIAG_LOG") != "1":
+        return
+    path = _diag_log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        if _DIAG_LOG_MAX_BYTES > 0 and path.exists():
+            try:
+                st = path.stat()
+                if st.st_size > _DIAG_LOG_MAX_BYTES:
+                    ts = int(_time.time())
+                    overflow = path.with_suffix(f".overflow.{ts}.jsonl")
+                    os.replace(path, overflow)
+            except Exception:
+                pass
+        fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        payload = {
+            "ts": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+            "hook": "on-modify",
+            "msg": str(msg),
+        }
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
 
 
 def _is_lock_error(stderr: str) -> bool:
@@ -262,15 +305,45 @@ def _add(p):
     if p not in _candidates:
         _candidates.append(p)
 
+def _path_is_safe(p: Path) -> bool:
+    try:
+        st = p.stat()
+        mode = stat.S_IMODE(st.st_mode)
+        if (mode & 0o022) != 0:
+            return False
+        uid = None
+        for attr in ("geteuid", "getuid"):
+            fn = getattr(os, attr, None)
+            if callable(fn):
+                try:
+                    uid = fn()
+                    break
+                except Exception:
+                    pass
+        if uid is None:
+            return True
+        return st.st_uid == uid or uid == 0
+    except Exception:
+        return False
+
+def _add_dev(p):
+    if not p:
+        return
+    p = Path(p).expanduser().resolve()
+    if _path_is_safe(p):
+        _add(p)
+    else:
+        _diag(f"dev path rejected (unsafe): {p}")
+
 
 _add(HOOK_DIR)
 _add(TW_DIR)
 if os.environ.get("NAUTICAL_DEV") == "1":
     if os.environ.get("TASKDATA"):
-        _add(os.environ["TASKDATA"])
+        _add_dev(os.environ["TASKDATA"])
     if os.environ.get("TASKRC"):
-        _add(Path(os.environ["TASKRC"]).parent)
-    _add(Path.home() / ".task")
+        _add_dev(Path(os.environ["TASKRC"]).parent)
+    _add_dev(Path.home() / ".task")
 
 core = None
 for base in _candidates:
@@ -751,6 +824,7 @@ def _queue_locked(fn):
         sleep_base=_SPAWN_LOCK_SLEEP_BASE,
         jitter=_SPAWN_LOCK_SLEEP_BASE,
         mkdir=True,
+        stale_after=30.0,
     ) as acquired:
         if not acquired:
             return False
@@ -772,6 +846,10 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
             pass
         try:
             fd = os.open(str(_SPAWN_QUEUE_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
             with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(line)
         except Exception:

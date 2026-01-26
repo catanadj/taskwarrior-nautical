@@ -1742,7 +1742,16 @@ def _cache_lock_path(key: str) -> str:
     return os.path.join(base, f".{key}.lock")
 
 @contextmanager
-def safe_lock(path: str | os.PathLike, *, retries: int = 6, sleep_base: float = 0.05, jitter: float = 0.0, mode: int = 0o600, mkdir: bool = True):
+def safe_lock(
+    path: str | os.PathLike,
+    *,
+    retries: int = 6,
+    sleep_base: float = 0.05,
+    jitter: float = 0.0,
+    mode: int = 0o600,
+    mkdir: bool = True,
+    stale_after: float | None = 60.0,
+):
     """Best-effort lock helper with fcntl (non-blocking) or O_EXCL fallback."""
     path_str = str(path) if path else ""
     if not path_str:
@@ -1819,10 +1828,30 @@ def safe_lock(path: str | os.PathLike, *, retries: int = 6, sleep_base: float = 
                 os.fchmod(fd, mode)
             except Exception:
                 pass
+            try:
+                payload = f"{os.getpid()} {int(time.time())}\n"
+                os.write(fd, payload.encode("ascii", "replace"))
+            except Exception:
+                pass
             acquired = True
             break
         except FileExistsError:
-            _sleep_once()
+            stale = False
+            if stale_after is not None:
+                try:
+                    st = os.stat(path_str)
+                    age = time.time() - float(st.st_mtime)
+                    if age >= float(stale_after):
+                        stale = True
+                except Exception:
+                    stale = False
+            if stale:
+                try:
+                    os.unlink(path_str)
+                except Exception:
+                    pass
+            else:
+                _sleep_once()
         except Exception:
             break
     try:
@@ -1846,7 +1875,7 @@ def _cache_lock(key: str):
     if not lock_path:
         yield False
         return
-    with safe_lock(lock_path, retries=6, sleep_base=0.05, jitter=0.0, mode=0o600, mkdir=True) as acquired:
+    with safe_lock(lock_path, retries=6, sleep_base=0.05, jitter=0.0, mode=0o600, mkdir=True, stale_after=300.0) as acquired:
         yield acquired
 
 

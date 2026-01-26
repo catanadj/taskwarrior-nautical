@@ -51,8 +51,18 @@ _QUEUE_MAX_BYTES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_BYTES") or 52428
 _QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000)
 _DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(str(os.environ.get(name, "")).strip() or default)
+    except Exception:
+        return float(default)
+
+_TASK_TIMEOUT_EXPORT = _env_float("NAUTICAL_TASK_TIMEOUT_EXPORT", 3.0)
+_TASK_TIMEOUT_IMPORT = _env_float("NAUTICAL_TASK_TIMEOUT_IMPORT", 8.0)
+_TASK_TIMEOUT_MODIFY = _env_float("NAUTICAL_TASK_TIMEOUT_MODIFY", 4.0)
+
 @contextmanager
-def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05):
+def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, stale_after: float | None = 60.0):
     path_str = str(path) if path else ""
     if not path_str:
         yield False
@@ -117,10 +127,30 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05):
                 os.fchmod(fd, 0o600)
             except Exception:
                 pass
+            try:
+                payload = f"{os.getpid()} {int(time.time())}\n"
+                os.write(fd, payload.encode("ascii", "replace"))
+            except Exception:
+                pass
             acquired = True
             break
         except FileExistsError:
-            _sleep_once()
+            stale = False
+            if stale_after is not None:
+                try:
+                    st = os.stat(path_str)
+                    age = time.time() - float(st.st_mtime)
+                    if age >= float(stale_after):
+                        stale = True
+                except Exception:
+                    stale = False
+            if stale:
+                try:
+                    os.unlink(path_str)
+                except Exception:
+                    pass
+            else:
+                _sleep_once()
         except Exception:
             break
     try:
@@ -144,6 +174,42 @@ def _diag(msg: str) -> None:
             sys.stderr.write(f"[nautical] {msg}\n")
         except Exception:
             pass
+    _diag_log(msg)
+
+_DIAG_LOG_MAX_BYTES = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
+_DIAG_LOG_PATH = TW_DATA_DIR / ".nautical_diag.jsonl"
+
+def _diag_log(msg: str) -> None:
+    if os.environ.get("NAUTICAL_DIAG_LOG") != "1":
+        return
+    try:
+        _DIAG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        if _DIAG_LOG_MAX_BYTES > 0 and _DIAG_LOG_PATH.exists():
+            try:
+                st = _DIAG_LOG_PATH.stat()
+                if st.st_size > _DIAG_LOG_MAX_BYTES:
+                    ts = int(time.time())
+                    overflow = _DIAG_LOG_PATH.with_suffix(f".overflow.{ts}.jsonl")
+                    os.replace(_DIAG_LOG_PATH, overflow)
+            except Exception:
+                pass
+        fd = os.open(str(_DIAG_LOG_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        payload = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "hook": "on-exit",
+            "msg": str(msg),
+        }
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
 
 
 def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float = 6.0) -> tuple[bool, str, str]:
@@ -173,14 +239,14 @@ def _sleep(secs: float) -> None:
 @contextmanager
 def _lock_queue():
     lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(_QUEUE_LOCK, retries=6, sleep_base=0.05) as acquired:
+    with lock_fn(_QUEUE_LOCK, retries=6, sleep_base=0.05, stale_after=30.0) as acquired:
         yield acquired
 
 
 @contextmanager
 def _lock_dead_letter():
     lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(_DEAD_LETTER_LOCK, retries=6, sleep_base=0.05) as acquired:
+    with lock_fn(_DEAD_LETTER_LOCK, retries=6, sleep_base=0.05, stale_after=30.0) as acquired:
         yield acquired
 
 
@@ -209,6 +275,10 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
                 except Exception:
                     pass
             fd = os.open(str(_DEAD_LETTER_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
             with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
         except Exception:
@@ -283,6 +353,10 @@ def _requeue_entries(entries: list[dict]) -> None:
             return
         try:
             fd = os.open(str(_QUEUE_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
             with os.fdopen(fd, "a", encoding="utf-8") as f:
                 for obj in entries:
                     f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -304,7 +378,7 @@ def _export_uuid(uuid_str: str) -> dict | None:
             f"uuid:{uuid_str}",
             "export",
         ],
-        timeout=3.0,
+        timeout=_TASK_TIMEOUT_EXPORT,
     )
     if not ok:
         return None
@@ -325,7 +399,7 @@ def _import_child(obj: dict) -> tuple[bool, str]:
         ok, _out, err = _run_task(
             ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.verbose=nothing", "import", "-"],
             input_text=payload,
-            timeout=8.0,
+            timeout=_TASK_TIMEOUT_IMPORT,
         )
         if ok:
             return True, ""
@@ -352,7 +426,7 @@ def _update_parent_nextlink(parent_uuid: str, child_short: str) -> tuple[bool, s
             "modify",
             f"nextLink:{child_short}",
         ],
-        timeout=4.0,
+        timeout=_TASK_TIMEOUT_MODIFY,
     )
     return ok, err or ""
 

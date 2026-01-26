@@ -3659,6 +3659,13 @@ def main():
                 _validate_anchor_on_modify(new_anchor)
                 # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
 
+        # Reject conflicting chain types on modify: anchor + cp both set.
+        cp_raw = (new.get("cp") or "").strip()
+        new_cp = _strip_quotes(cp_raw)
+        if new_anchor and new_cp:
+            _panel("❌ Invalid chain config", [("Reason", "anchor and cp cannot both be set; clear one")], kind="error")
+            _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
+
         # CP validation only happens on completion, NOT on modification
         # because taskwarrior already validates the duration format
         
@@ -3680,6 +3687,11 @@ def main():
     # Now we should validate CP (in addition to anchor which was already validated on modify)
     cp_raw = (new.get("cp") or "").strip()
     new_cp = _strip_quotes(cp_raw)
+    anchor_raw = (new.get("anchor") or "").strip()
+    new_anchor = _strip_quotes(anchor_raw)
+    if new_anchor and new_cp:
+        _panel("❌ Invalid chain config", [("Reason", "anchor and cp cannot both be set; clear one")], kind="error")
+        _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
 
     if new_cp:
         # Validate CP on completion
@@ -3697,8 +3709,6 @@ def main():
             sys.exit(1)
 
         # Deep checks only if fields changed
-        anchor_raw = (new.get("anchor") or "").strip()
-        new_anchor = _strip_quotes(anchor_raw)
         if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
             if new_anchor:
                 _validate_anchor_on_modify(new_anchor)

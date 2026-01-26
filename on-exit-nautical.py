@@ -49,6 +49,10 @@ try:
             sys.modules["nautical_core"] = module
             spec.loader.exec_module(module)
             core = module
+            try:
+                core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
+            except Exception:
+                pass
 except Exception:
     core = None
 TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
@@ -64,6 +68,8 @@ _QUEUE_QUARANTINE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.bad.jsonl"
 _QUEUE_QUARANTINE_MAX_BYTES = int(os.environ.get("NAUTICAL_QUEUE_BAD_MAX_BYTES") or 262144)
 _QUEUE_RETRY_MAX = int(os.environ.get("NAUTICAL_QUEUE_RETRY_MAX") or 6)
 _QUEUE_LOCK_FAIL_MARKER = TW_DATA_DIR / ".nautical_spawn_queue.lock_failed"
+_QUEUE_LOCK_FAIL_COUNT = TW_DATA_DIR / ".nautical_spawn_queue.lock_failed.count"
+_DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -130,6 +136,26 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, 
 
     fd = None
     acquired = False
+    def _lock_stale_pid(path_str: str) -> bool:
+        try:
+            with open(path_str, "r", encoding="utf-8") as f:
+                head = f.read(64)
+            pid_str = head.strip().split()[0]
+            pid = int(pid_str)
+            if pid <= 0:
+                return True
+            try:
+                os.kill(pid, 0)
+                return False
+            except PermissionError:
+                return False
+            except ProcessLookupError:
+                return True
+            except Exception:
+                return False
+        except Exception:
+            return False
+
     for _ in range(tries):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -150,6 +176,8 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, 
             break
         except FileExistsError:
             stale = False
+            if _lock_stale_pid(path_str):
+                stale = True
             if stale_after is not None:
                 try:
                     st = os.stat(path_str)
@@ -249,6 +277,7 @@ def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float =
             text=True,
             encoding="utf-8",
             errors="replace",
+            close_fds=True,
         )
         try:
             out, err = proc.communicate(input=input_text, timeout=timeout)
@@ -315,6 +344,28 @@ def _record_queue_lock_failure() -> None:
             f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
     except Exception:
         pass
+    try:
+        count = 0
+        if _QUEUE_LOCK_FAIL_COUNT.exists():
+            try:
+                data = json.loads(_QUEUE_LOCK_FAIL_COUNT.read_text(encoding="utf-8") or "{}")
+                count = int(data.get("count") or 0)
+            except Exception:
+                count = 0
+        count += 1
+        payload = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "count": count,
+        }
+        fd = os.open(str(_QUEUE_LOCK_FAIL_COUNT), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
 
 
 @contextmanager
@@ -362,6 +413,13 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
                 pass
             with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+                if _DURABLE_QUEUE:
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                        _fsync_dir(_DEAD_LETTER_PATH.parent)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -498,6 +556,13 @@ def _requeue_entries(entries: list[dict]) -> None:
             with os.fdopen(fd, "a", encoding="utf-8") as f:
                 for obj in entries:
                     f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
+                if _DURABLE_QUEUE:
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                        _fsync_dir(_QUEUE_PATH.parent)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -729,6 +794,26 @@ def _drain_queue() -> dict:
                     _write_dead_letter(entry, f"parent update failed: {err}")
                     dead_lettered += 1
                     errors += 1
+                continue
+            verify_res = _export_uuid(parent_uuid)
+            if verify_res.get("retryable"):
+                if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+                    _write_dead_letter(entry, "exceeded retry budget")
+                    dead_lettered += 1
+                    errors += 1
+                else:
+                    requeue.append(entry)
+                continue
+            parent_obj = verify_res.get("obj") if isinstance(verify_res, dict) else None
+            if not parent_obj:
+                _write_dead_letter(entry, "parent missing after update")
+                dead_lettered += 1
+                errors += 1
+                continue
+            if (parent_obj.get("nextLink") or "").strip() != child_short:
+                _write_dead_letter(entry, "parent nextLink mismatch after update")
+                dead_lettered += 1
+                errors += 1
                 continue
 
         processed += 1

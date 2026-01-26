@@ -9,17 +9,15 @@ Chained next-link spawner for Taskwarrior.
 - Timeline is capped and marks (last link).
 """
 
-import sys, json, os, uuid, subprocess, importlib
+import sys, json, os, uuid, subprocess, importlib, random
 import importlib.util
 import atexit
 import time as _ptime
-import statistics
 from collections import OrderedDict
 from pathlib import Path
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 import re
-from decimal import Decimal, InvalidOperation
 import shlex
 import time as _time
 from typing import Optional
@@ -318,6 +316,7 @@ _DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
 _SPAWN_LOCK_RETRIES = 6
 _SPAWN_LOCK_SLEEP_BASE = 0.03
 _WARNED_SPAWN_QUEUE_LOCK = False
+_DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 
 core = None
 
@@ -882,6 +881,21 @@ def _queue_locked(fn):
         fn()
         return True
 
+def _fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(str(path), os.O_DIRECTORY)
+    except Exception:
+        return
+    try:
+        os.fsync(fd)
+    except Exception:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+
 
 def _enqueue_deferred_spawn(task_obj: dict) -> None:
     """Append one task JSON object to the spawn intent queue (JSONL, UTF-8)."""
@@ -914,6 +928,13 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
                 pass
             with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(line)
+                if _DURABLE_QUEUE:
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                        _fsync_dir(_SPAWN_QUEUE_PATH.parent)
+                    except Exception:
+                        pass
         except Exception as e:
             put_ok = False
             _write_dead_letter(task_obj, f"spawn queue write failed: {e}")
@@ -984,6 +1005,13 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
                 pass
             with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+                if _DURABLE_QUEUE:
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                        _fsync_dir(_DEAD_LETTER_PATH.parent)
+                    except Exception:
+                        pass
     except Exception:
         pass
 
@@ -1018,6 +1046,7 @@ def _run_task(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                close_fds=True,
                 env=env,
             )
             try:
@@ -1032,7 +1061,10 @@ def _run_task(
                 _diag_count("run_task_failures")
                 last_err = "timeout"
                 if attempt < retries:
-                    _time.sleep(retry_delay * attempt)
+                    base = max(0.0, float(retry_delay))
+                    delay = base * (2 ** (attempt - 1))
+                    jitter = random.uniform(0.0, base) if base > 0 else 0.0
+                    _time.sleep(delay + jitter)
                     continue
                 return False, out or "", last_err
             _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
@@ -1042,14 +1074,20 @@ def _run_task(
                 return True, last_out, last_err
             _diag_count("run_task_failures")
             if attempt < retries:
-                _time.sleep(retry_delay * attempt)
+                base = max(0.0, float(retry_delay))
+                delay = base * (2 ** (attempt - 1))
+                jitter = random.uniform(0.0, base) if base > 0 else 0.0
+                _time.sleep(delay + jitter)
                 continue
             return False, last_out, last_err
         except Exception as e:
             _diag_count("run_task_failures")
             last_err = str(e)
             if attempt < retries:
-                _time.sleep(retry_delay * attempt)
+                base = max(0.0, float(retry_delay))
+                delay = base * (2 ** (attempt - 1))
+                jitter = random.uniform(0.0, base) if base > 0 else 0.0
+                _time.sleep(delay + jitter)
                 continue
             return False, last_out, last_err
     return False, last_out, last_err
@@ -1531,6 +1569,7 @@ def _format_root_and_age(task: dict, now_utc: datetime) -> str:
 def _canon_for_compare(v):
     """Canonicalize values so 5 == 5.0, strings are trimmed, and
     dict/list comparisons are stable."""
+    from decimal import Decimal, InvalidOperation
     if v is None:
         return None
     # Booleans/numbers
@@ -2744,6 +2783,7 @@ def _chain_health_advice(
 
         if len(deltas) >= 2:
             try:
+                import statistics
                 vol = statistics.pstdev(deltas)
             except Exception:
                 vol = None

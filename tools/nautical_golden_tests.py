@@ -345,9 +345,12 @@ def test_warn_once_per_day_no_diag_silent():
                 os.environ["NAUTICAL_DIAG"] = prev_diag
 
 def test_on_add_fail_and_exit_emits_json():
-    """_fail_and_exit should emit JSON to stdout for hook error paths."""
+    """_fail_and_exit should pass through original task JSON when available."""
     hook = _find_hook_file("on-add-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_add_fail_test")
+    task = {"uuid": "00000000-0000-0000-0000-000000000abc", "description": "fail test"}
+    mod._PARSED_TASK = dict(task)
+    mod._RAW_INPUT_TEXT = json.dumps(task, ensure_ascii=False)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         try:
@@ -358,8 +361,7 @@ def test_on_add_fail_and_exit_emits_json():
             raise AssertionError("_fail_and_exit did not exit")
     out = buf.getvalue().strip()
     obj = json.loads(out)
-    expect(obj.get("error") == "Invalid anchor", f"unexpected error field: {obj!r}")
-    expect("anchor syntax error" in (obj.get("message") or ""), f"unexpected message field: {obj!r}")
+    expect(obj.get("uuid") == task["uuid"], f"unexpected passthrough: {obj!r}")
 
 def test_hook_stdout_strict_json_with_diag_on_add():
     """on-add must keep stdout JSON-only even when diagnostics are enabled."""
@@ -798,6 +800,7 @@ def test_on_exit_queue_drain_idempotent():
             import_calls = 0
             modify_calls = 0
             modify_fail_once = True
+            parent_next = {"p1": "", "p2": ""}
 
             def _fake_run_task(cmd, *, input_text=None, timeout=6.0):
                 nonlocal import_calls, modify_calls, modify_fail_once
@@ -810,7 +813,7 @@ def test_on_exit_queue_drain_idempotent():
                     if uuid and uuid in imported:
                         return True, json.dumps({"uuid": uuid}), ""
                     if uuid in {"p1", "p2"}:
-                        return True, json.dumps({"uuid": uuid, "nextLink": ""}), ""
+                        return True, json.dumps({"uuid": uuid, "nextLink": parent_next[uuid]}), ""
                     return True, "{}", ""
                 if "import" in cmd:
                     import_calls += 1
@@ -826,6 +829,9 @@ def test_on_exit_queue_drain_idempotent():
                     if modify_fail_once:
                         modify_fail_once = False
                         return False, "", "database is locked"
+                    for parent_id, child_short in (("p1", "c1"), ("p2", "c2")):
+                        if f"uuid:{parent_id}" in cmd:
+                            parent_next[parent_id] = child_short
                     return True, "", ""
                 return True, "", ""
 
@@ -2201,6 +2207,7 @@ def test_on_exit_spawn_intents_drain():
 
         imported = {"ok": False}
         parent_updated = {"ok": False}
+        parent_next = {"value": ""}
 
         def _run_task_stub(cmd, **_kwargs):
             cmd_s = " ".join(cmd)
@@ -2209,12 +2216,13 @@ def test_on_exit_spawn_intents_drain():
                     return True, json.dumps({"uuid": child_uuid}), ""
                 return True, "{}", ""
             if "export" in cmd_s and f"uuid:{parent_uuid}" in cmd_s:
-                return True, json.dumps({"uuid": parent_uuid, "nextLink": ""}), ""
+                return True, json.dumps({"uuid": parent_uuid, "nextLink": parent_next["value"]}), ""
             if "import" in cmd_s:
                 imported["ok"] = True
                 return True, "", ""
             if "modify" in cmd_s and "uuid:00000000-0000-0000-0000-000000000111" in cmd_s:
                 parent_updated["ok"] = True
+                parent_next["value"] = "deadbeef"
                 return True, "", ""
             return False, "", "unexpected"
 
@@ -2582,6 +2590,7 @@ def test_on_exit_import_error_but_child_exists():
         mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
         state = {"export": 0}
+        parent_next = {"value": ""}
 
         def _run_task_stub(cmd, **_kwargs):
             cmd_s = " ".join(cmd)
@@ -2593,8 +2602,9 @@ def test_on_exit_import_error_but_child_exists():
             if "import" in cmd_s:
                 return False, "", "invalid task"
             if "export" in cmd_s and "uuid:00000000-0000-0000-0000-000000000456" in cmd_s:
-                return True, json.dumps({"uuid": "00000000-0000-0000-0000-000000000456", "nextLink": ""}), ""
+                return True, json.dumps({"uuid": "00000000-0000-0000-0000-000000000456", "nextLink": parent_next["value"]}), ""
             if "modify" in cmd_s and "uuid:00000000-0000-0000-0000-000000000456" in cmd_s:
+                parent_next["value"] = "abcdef12"
                 return True, "", ""
             return False, "", "unexpected"
 

@@ -17,7 +17,7 @@ Features:
 
 from __future__ import annotations
 
-import sys, json, os, importlib, time, atexit, hashlib
+import sys, json, os, importlib, time, atexit, hashlib, random
 import importlib.util
 import re
 from pathlib import Path
@@ -25,11 +25,8 @@ from datetime import timedelta, timezone, datetime
 from functools import lru_cache
 from contextlib import contextmanager
 import shlex, subprocess
-import shutil
 import tempfile
-import textwrap
 from collections import OrderedDict
-import stat
  # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
  # Python's json.dumps() defaults to ensure_ascii=True, which escapes non-ASCII
  # as "\\uXXXX". We prefer human-readable UTF-8 JSON for hook passthrough.
@@ -608,6 +605,7 @@ def _run_task(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                close_fds=True,
                 env=env,
             )
             try:
@@ -620,7 +618,10 @@ def _run_task(
                     out, err = "", ""
                 last_err = "timeout"
                 if attempt < retries:
-                    time.sleep(retry_delay * attempt)
+                    base = max(0.0, float(retry_delay))
+                    delay = base * (2 ** (attempt - 1))
+                    jitter = random.uniform(0.0, base) if base > 0 else 0.0
+                    time.sleep(delay + jitter)
                     continue
                 return False, out or "", last_err
             last_out = out or ""
@@ -628,13 +629,19 @@ def _run_task(
             if proc.returncode == 0:
                 return True, last_out, last_err
             if attempt < retries:
-                time.sleep(retry_delay * attempt)
+                base = max(0.0, float(retry_delay))
+                delay = base * (2 ** (attempt - 1))
+                jitter = random.uniform(0.0, base) if base > 0 else 0.0
+                time.sleep(delay + jitter)
                 continue
             return False, last_out, last_err
         except Exception as e:
             last_err = str(e)
             if attempt < retries:
-                time.sleep(retry_delay * attempt)
+                base = max(0.0, float(retry_delay))
+                delay = base * (2 ** (attempt - 1))
+                jitter = random.uniform(0.0, base) if base > 0 else 0.0
+                time.sleep(delay + jitter)
                 continue
             return False, last_out, last_err
     return False, last_out, last_err
@@ -719,29 +726,39 @@ def _format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]
 def _fail_and_exit(title: str, msg: str) -> None:
     # Pretty panel -> stderr
     _panel(f"❌ {title}", [("Message", msg)], kind="error")
-    # Minimal feedback -> stdout (what Task expects when a hook fails)
-    print(json.dumps({"error": title, "message": msg}, ensure_ascii=False))
-    sys.stdout.flush()
+    _panic_passthrough()
     sys.exit(1)
 
 
 def _error_and_exit(msg_tuples):
     _panel("❌ Invalid Chain", msg_tuples, kind="error")
-    err = "Invalid chain"
-    msg_parts = []
-    for k, v in msg_tuples or []:
-        if k:
-            err = str(k)
-            if v:
-                msg_parts.append(f"{k}: {v}")
-            else:
-                msg_parts.append(str(k))
-        elif v:
-            msg_parts.append(str(v))
-    msg = "; ".join(msg_parts) if msg_parts else "Invalid chain configuration."
-    print(json.dumps({"error": err, "message": msg}, ensure_ascii=False))
-    sys.stdout.flush()
+    _panic_passthrough()
     sys.exit(1)
+
+_RAW_INPUT_TEXT = ""
+_PARSED_TASK = None
+
+def _panic_passthrough() -> None:
+    """Emit the original input task when possible; only emit {} if stdin was empty."""
+    try:
+        if _PARSED_TASK is not None:
+            print(json.dumps(_PARSED_TASK, ensure_ascii=False), end="")
+        elif _RAW_INPUT_TEXT:
+            sys.stdout.write(_RAW_INPUT_TEXT)
+        else:
+            print("{}", end="")
+    except Exception:
+        try:
+            if _RAW_INPUT_TEXT:
+                sys.stdout.write(_RAW_INPUT_TEXT)
+            else:
+                print("{}", end="")
+        except Exception:
+            pass
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 
 
@@ -1037,14 +1054,19 @@ def main():
             atexit.register(prof.emit)
     with prof.section('read:stdin'):
         raw_bytes = sys.stdin.buffer.read(_MAX_JSON_BYTES + 1)
+        raw_text = raw_bytes.decode("utf-8", errors="replace")
+        global _RAW_INPUT_TEXT
+        _RAW_INPUT_TEXT = raw_text
         if len(raw_bytes) > _MAX_JSON_BYTES:
             _fail_and_exit("Invalid input", f"on-add input exceeds {_MAX_JSON_BYTES} bytes")
-        raw = raw_bytes.decode("utf-8", errors="replace").strip()
+        raw = raw_text.strip()
     if not raw:
         _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
     try:
         with prof.section('parse:json'):
             task = json.loads(raw)
+            global _PARSED_TASK
+            _PARSED_TASK = task
     except Exception:
         _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
 

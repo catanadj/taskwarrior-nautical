@@ -24,6 +24,7 @@ from typing import Optional
 import stat
 
 _MAX_JSON_BYTES = 10 * 1024 * 1024
+NAUTICAL_HOOK_VERSION = "updateE-20260126"
 
 
 # Optional: DST-aware local TZ helpers (used by some carry-forward variants)
@@ -442,20 +443,10 @@ def _tolocal(dt):
 # ------------------------------------------------------------------------------
 def _fail_and_exit(title: str, msg: str) -> None:
     _panel(f"❌ {title}", [("Message", msg)], kind="error")
-    _panic_emit(title, msg)
     sys.exit(1)
 
 _RAW_INPUT_TEXT = ""
 _PARSED_NEW = None
-
-def _panic_emit(title: str, msg: str) -> None:
-    try:
-        if _PARSED_NEW is not None:
-            print(json.dumps(_PARSED_NEW, ensure_ascii=False), end="")
-        else:
-            print(json.dumps({"error": title, "message": msg}, ensure_ascii=False), end="")
-    except Exception:
-        pass
 
 
 def _read_two():
@@ -1000,6 +991,8 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
         return
     payload = {
         "ts": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "hook": "on-modify",
+        "hook_version": NAUTICAL_HOOK_VERSION,
         "reason": reason,
         "spawn_intent_id": (entry.get("spawn_intent_id") or "").strip(),
         "parent_uuid": (entry.get("parent_uuid") or "").strip(),

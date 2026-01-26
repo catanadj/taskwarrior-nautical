@@ -66,6 +66,7 @@ _QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000
 _DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)
 _QUEUE_QUARANTINE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.bad.jsonl"
 _QUEUE_QUARANTINE_MAX_BYTES = int(os.environ.get("NAUTICAL_QUEUE_BAD_MAX_BYTES") or 262144)
+NAUTICAL_HOOK_VERSION = "updateE-20260126"
 _QUEUE_RETRY_MAX = int(os.environ.get("NAUTICAL_QUEUE_RETRY_MAX") or 6)
 _QUEUE_LOCK_FAIL_MARKER = TW_DATA_DIR / ".nautical_spawn_queue.lock_failed"
 _QUEUE_LOCK_FAIL_COUNT = TW_DATA_DIR / ".nautical_spawn_queue.lock_failed.count"
@@ -384,6 +385,8 @@ def _lock_dead_letter():
 def _write_dead_letter(entry: dict, reason: str) -> None:
     payload = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "hook": "on-exit",
+        "hook_version": NAUTICAL_HOOK_VERSION,
         "reason": reason,
         "spawn_intent_id": (entry.get("spawn_intent_id") or "").strip(),
         "parent_uuid": (entry.get("parent_uuid") or "").strip(),

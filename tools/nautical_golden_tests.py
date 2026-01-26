@@ -345,7 +345,7 @@ def test_warn_once_per_day_no_diag_silent():
                 os.environ["NAUTICAL_DIAG"] = prev_diag
 
 def test_on_add_fail_and_exit_emits_json():
-    """_fail_and_exit should pass through original task JSON when available."""
+    """_fail_and_exit should fail-closed without emitting task JSON."""
     hook = _find_hook_file("on-add-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_add_fail_test")
     task = {"uuid": "00000000-0000-0000-0000-000000000abc", "description": "fail test"}
@@ -360,8 +360,7 @@ def test_on_add_fail_and_exit_emits_json():
         else:
             raise AssertionError("_fail_and_exit did not exit")
     out = buf.getvalue().strip()
-    obj = json.loads(out)
-    expect(obj.get("uuid") == task["uuid"], f"unexpected passthrough: {obj!r}")
+    expect(out == "", f"expected no stdout on failure, got: {out!r}")
 
 def test_hook_stdout_strict_json_with_diag_on_add():
     """on-add must keep stdout JSON-only even when diagnostics are enabled."""
@@ -945,8 +944,7 @@ def test_on_modify_read_two_fuzz_inputs():
         p = _run_hook_script_raw(hook, raw)
         if mode in {"empty", "invalid"}:
             expect(p.returncode != 0, f"on-modify should fail for case {mode}")
-            payload = _extract_last_json(p.stdout or "")
-            expect("error" in payload and "message" in payload, "on-modify error response missing fields")
+            expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
         else:
             expect(p.returncode == 0, f"on-modify returned {p.returncode} for case {mode}")
             _assert_stdout_json_only(p.stdout)
@@ -957,8 +955,7 @@ def test_on_modify_read_two_invalid_trailing():
     raw = json.dumps({"status": "pending"}) + "\n" + json.dumps({"status": "pending"}) + "\n" + "{bad"
     p = _run_hook_script_raw(hook, raw)
     expect(p.returncode != 0, "on-modify should fail on trailing garbage")
-    payload = _extract_last_json(p.stdout or "")
-    expect("error" in payload and "message" in payload, "on-modify error response missing fields")
+    expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
 
 def test_on_modify_queue_full_drops_with_dead_letter():
     """on-modify should drop spawn intent when queue exceeds max bytes."""
@@ -1083,13 +1080,12 @@ def test_dst_round_trip_noon_preserves_local_date():
             expect(back.hour == 12 and back.minute == 0, f"DST round-trip time mismatch: {back}")
 
 def test_on_modify_invalid_json_passthrough():
-    """Malformed JSON should fail fast and return a JSON error object."""
+    """Malformed JSON should fail fast without stdout JSON."""
     path = _find_hook_file("on-modify-nautical.py")
     raw = "{not-json}"
     p = _run_hook_script_raw(path, raw)
     expect(p.returncode != 0, "on-modify should fail on invalid JSON input")
-    payload = _extract_last_json(p.stdout or "")
-    expect("error" in payload and "message" in payload, "on-modify error response missing fields")
+    expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
 
 def test_next_for_and_no_progress_fails_fast():
     """_next_for_and should fail fast when a term makes no forward progress."""

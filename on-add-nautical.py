@@ -40,6 +40,7 @@ except Exception:
     pass
 
 # ========= User-togglable constants =========================================
+NAUTICAL_HOOK_VERSION = "updateE-20260126"
 ANCHOR_WARN = True  # If True, warn when a user-provided due is not on an anchor day
 UPCOMING_PREVIEW = 5  # How many future dates to preview.
 _PREVIEW_HARD_CAP = 100
@@ -726,13 +727,11 @@ def _format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]
 def _fail_and_exit(title: str, msg: str) -> None:
     # Pretty panel -> stderr
     _panel(f"❌ {title}", [("Message", msg)], kind="error")
-    _panic_passthrough()
     sys.exit(1)
 
 
 def _error_and_exit(msg_tuples):
     _panel("❌ Invalid Chain", msg_tuples, kind="error")
-    _panic_passthrough()
     sys.exit(1)
 
 _RAW_INPUT_TEXT = ""

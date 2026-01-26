@@ -17,7 +17,7 @@ Features:
 
 from __future__ import annotations
 
-import sys, json, os, importlib, time, atexit
+import sys, json, os, importlib, time, atexit, hashlib
 import re
 from pathlib import Path
 from datetime import timedelta, timezone, datetime
@@ -52,92 +52,45 @@ _MAX_JSON_BYTES = 10 * 1024 * 1024
 # ============================================================================
 
 # --------------------------------------------------------------------------------------
-# Locate and import nautical_core (looks in ~/.task/hooks, ~/.task, $TASKDATA, $TASKRC)
+# Locate and import nautical_core (single fixed location: ~/.task)
 # --------------------------------------------------------------------------------------
 HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
-
-_candidates: list[Path] = []
 
 # --- Optional micro-profiler (stderr-only; enable with NAUTICAL_PROFILE=1 or 2)
 _PROFILE_LEVEL = int(os.environ.get('NAUTICAL_PROFILE', '0') or '0')
 _IMPORT_T0 = time.perf_counter()
 
-def _add(p):
-    if not p:
-        return
-    p = Path(p).expanduser().resolve()
-    if p not in _candidates:
-        _candidates.append(p)
-
-def _path_is_safe(p: Path) -> bool:
-    try:
-        st = p.stat()
-        mode = stat.S_IMODE(st.st_mode)
-        if (mode & 0o022) != 0:
-            return False
-        uid = None
-        for attr in ("geteuid", "getuid"):
-            fn = getattr(os, attr, None)
-            if callable(fn):
-                try:
-                    uid = fn()
-                    break
-                except Exception:
-                    pass
-        if uid is None:
-            return True
-        return st.st_uid == uid or uid == 0
-    except Exception:
-        return False
-
-def _add_dev(p):
-    if not p:
-        return
-    p = Path(p).expanduser().resolve()
-    if _path_is_safe(p):
-        _add(p)
-
-
-_add(HOOK_DIR)  # dev copy next to hook
-_add(TW_DIR)  # ~/.task
-if os.environ.get("NAUTICAL_DEV") == "1":
-    if os.environ.get("TASKDATA"):
-        _add_dev(os.environ["TASKDATA"])
-    if os.environ.get("TASKRC"):
-        _add_dev(Path(os.environ["TASKRC"]).parent)
-    _add_dev(Path.home() / ".task")
-
 core = None
-for base in _candidates:
+_IMPORT_MS = None
+
+def _load_core() -> None:
+    global core, _IMPORT_MS, _MAX_JSON_BYTES
+    if core is not None:
+        return
+    base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
     pyfile = base / "nautical_core.py"
     pkgini = base / "nautical_core" / "__init__.py"
-    if pyfile.is_file():
+    if pyfile.is_file() or pkgini.is_file():
         sys.path.insert(0, str(base))
         core = importlib.import_module("nautical_core")
-        break
-    if pkgini.is_file():
-        sys.path.insert(0, str(base))
-        core = importlib.import_module("nautical_core")
-        break
-
-if core is None:
-    msg = "nautical_core.py not found. Looked in:\n  " + "\n  ".join(
-        str(p) for p in _candidates
-    )
-    raise ModuleNotFoundError(msg)
-
-try:
-    core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
-except Exception:
-    pass
-
-try:
-    _MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", _MAX_JSON_BYTES))
-except Exception:
-    pass
-
-_IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
+    if core is None:
+        msg = "nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH."
+        raise ModuleNotFoundError(msg)
+    try:
+        core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
+    except Exception:
+        pass
+    try:
+        _MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", _MAX_JSON_BYTES))
+    except Exception:
+        pass
+    try:
+        global _CORE_SIG
+        _CORE_SIG = _core_sig()
+    except Exception:
+        pass
+    _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
 
 class _Profiler:
     """Minimal, low-risk profiler for hook execution (stderr-only)."""
@@ -214,6 +167,7 @@ _DNF_LOCK_SLEEP_BASE = 0.03
 
 def _core_sig() -> str:
     try:
+        _load_core()
         st = Path(core.__file__).stat()
         return f"{st.st_mtime_ns}:{st.st_size}"
     except Exception:
@@ -228,6 +182,11 @@ def _dnf_cache_key(expr: str) -> str:
 @contextmanager
 def _dnf_cache_lock():
     """Best-effort lock for disk cache access. Yields True if acquired."""
+    try:
+        _load_core()
+    except Exception:
+        yield False
+        return
     with core.safe_lock(
         _DNF_DISK_CACHE_LOCK,
         retries=_DNF_LOCK_RETRIES,
@@ -263,34 +222,44 @@ def _load_dnf_disk_cache() -> OrderedDict:
                 with open(_DNF_DISK_CACHE_PATH, "r", encoding="utf-8") as f:
                     parsed_any = False
                     parse_error = None
-                    header_checked = False
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            obj = json.loads(line)
-                        except Exception:
-                            parse_error = "DNF cache JSONL parse failure"
-                            break
+                    lines = [ln.strip() for ln in f if ln.strip()]
+                    if not lines:
+                        return _DNF_DISK_CACHE
+                    try:
+                        first_obj = json.loads(lines[0])
+                    except Exception:
+                        first_obj = None
+                    data_lines = lines
+                    if isinstance(first_obj, dict) and "version" in first_obj:
                         parsed_any = True
-                        if not header_checked and isinstance(obj, dict) and "version" in obj:
-                            header_checked = True
-                            if int(obj.get("version") or 0) != _DNF_DISK_CACHE_VERSION:
-                                parse_error = "DNF cache version mismatch"
+                        if int(first_obj.get("version") or 0) != _DNF_DISK_CACHE_VERSION:
+                            parse_error = "DNF cache version mismatch"
+                        checksum = (first_obj.get("checksum") or "").strip()
+                        data_lines = lines[1:]
+                        if checksum:
+                            payload = "\n".join(data_lines)
+                            calc = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+                            if checksum != calc:
+                                parse_error = "DNF cache checksum mismatch"
+                    if not parse_error:
+                        for line in data_lines:
+                            try:
+                                obj = json.loads(line)
+                            except Exception:
+                                parse_error = "DNF cache JSONL parse failure"
                                 break
-                            continue
-                        key = None
-                        val = None
-                        if isinstance(obj, dict):
-                            if "key" in obj and "value" in obj:
-                                key = obj.get("key")
-                                val = obj.get("value")
-                            elif "k" in obj and "v" in obj:
-                                key = obj.get("k")
-                                val = obj.get("v")
-                        if key is not None:
-                            _DNF_DISK_CACHE[str(key)] = val
+                            parsed_any = True
+                            key = None
+                            val = None
+                            if isinstance(obj, dict):
+                                if "key" in obj and "value" in obj:
+                                    key = obj.get("key")
+                                    val = obj.get("value")
+                                elif "k" in obj and "v" in obj:
+                                    key = obj.get("k")
+                                    val = obj.get("v")
+                            if key is not None:
+                                _DNF_DISK_CACHE[str(key)] = val
                     if parse_error:
                         try:
                             ts = int(time.time())
@@ -337,12 +306,17 @@ def _save_dnf_disk_cache() -> None:
                 os.fchmod(fd, 0o600)
             except Exception:
                 pass
+            records = []
+            for k, v in _DNF_DISK_CACHE.items():
+                rec = {"key": k, "value": v}
+                records.append(json.dumps(rec, ensure_ascii=False, separators=(",", ":")))
+            payload = "\n".join(records)
+            checksum = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                header = {"version": _DNF_DISK_CACHE_VERSION}
+                header = {"version": _DNF_DISK_CACHE_VERSION, "checksum": checksum}
                 f.write(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n")
-                for k, v in _DNF_DISK_CACHE.items():
-                    rec = {"key": k, "value": v}
-                    f.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
+                if payload:
+                    f.write(payload + "\n")
             os.replace(tmp, _DNF_DISK_CACHE_PATH)
             _DNF_DISK_CACHE_DIRTY = False
     except Exception:
@@ -355,8 +329,17 @@ def _save_dnf_disk_cache() -> None:
             except Exception:
                 pass
 
+def _save_dnf_disk_cache_signal_safe() -> None:
+    """Best-effort cache save for atexit; avoid heavy work if shutting down."""
+    try:
+        if not _DNF_DISK_CACHE_DIRTY:
+            return
+        _save_dnf_disk_cache()
+    except Exception:
+        pass
+
 if _DNF_DISK_CACHE_ENABLED:
-    atexit.register(_save_dnf_disk_cache)
+    atexit.register(_save_dnf_disk_cache_signal_safe)
 
 @lru_cache(maxsize=256)
 def _validate_anchor_expr_cached(expr: str):
@@ -366,6 +349,7 @@ def _validate_anchor_expr_cached(expr: str):
     Always caches in-memory (per invocation). Optionally caches across invocations
     when NAUTICAL_DNF_DISK_CACHE=1.
     """
+    _load_core()
     global _DNF_DISK_CACHE_DIRTY
     if _DNF_DISK_CACHE_ENABLED:
         cache = _load_dnf_disk_cache()
@@ -389,6 +373,14 @@ def _validate_anchor_expr_cached(expr: str):
         _DNF_DISK_CACHE_DIRTY = True
 
     return dnf
+
+def _task_has_nautical_fields(task: dict) -> bool:
+    if not isinstance(task, dict):
+        return False
+    for key in ("anchor", "anchor_mode", "cp", "chainID", "chainid", "chainMax", "chainUntil"):
+        if (task.get(key) or "").strip():
+            return True
+    return False
 
 
 def _human_delta(a, b, use_months_days=True):
@@ -422,6 +414,15 @@ _PANEL_THEMES = {
 
 
 def _panel(title, rows, kind: str = "info"):
+    if core is None:
+        try:
+            _load_core()
+        except Exception:
+            try:
+                sys.stderr.write(f"[nautical] {title}\n")
+            except Exception:
+                pass
+            return
     core.render_panel(
         title,
         rows,
@@ -530,6 +531,19 @@ def _diag(msg: str) -> None:
 
 _DIAG_LOG_MAX_BYTES = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
 _DIAG_LOG_PATH = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser() / ".nautical_diag.jsonl"
+_DIAG_LOG_REDACT_KEYS = {"description", "annotation", "annotations", "note", "notes"}
+
+def _diag_log_redact(msg: str) -> str:
+    try:
+        data = json.loads(msg)
+        if isinstance(data, dict):
+            for k in list(data.keys()):
+                if k in _DIAG_LOG_REDACT_KEYS:
+                    data[k] = "[redacted]"
+            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        pass
+    return msg
 
 def _diag_log(msg: str) -> None:
     if os.environ.get("NAUTICAL_DIAG_LOG") != "1":
@@ -556,7 +570,7 @@ def _diag_log(msg: str) -> None:
         payload = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "hook": "on-add",
-            "msg": str(msg),
+            "msg": _diag_log_redact(str(msg)),
         }
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -579,25 +593,31 @@ def _run_task(
     attempts = max(1, int(retries))
     for attempt in range(1, attempts + 1):
         try:
-            r = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                input=input_text,
-                text=True,
-                env=env,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=timeout,
+                text=True,
+                env=env,
             )
-            last_out = r.stdout or ""
-            last_err = r.stderr or ""
-            if r.returncode == 0:
+            try:
+                out, err = proc.communicate(input=input_text, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    out, err = proc.communicate(timeout=1.0)
+                except Exception:
+                    out, err = "", ""
+                last_err = "timeout"
+                if attempt < retries:
+                    time.sleep(retry_delay * attempt)
+                    continue
+                return False, out or "", last_err
+            last_out = out or ""
+            last_err = err or ""
+            if proc.returncode == 0:
                 return True, last_out, last_err
-            if attempt < retries:
-                time.sleep(retry_delay * attempt)
-                continue
-            return False, last_out, last_err
-        except subprocess.TimeoutExpired:
-            last_err = "timeout"
             if attempt < retries:
                 time.sleep(retry_delay * attempt)
                 continue
@@ -1018,6 +1038,24 @@ def main():
             task = json.loads(raw)
     except Exception:
         _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
+
+    if not _task_has_nautical_fields(task):
+        print(json.dumps(task, ensure_ascii=False), end="")
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        return
+
+    try:
+        _load_core()
+    except Exception as e:
+        _fail_and_exit("Hook misconfigured", str(e))
+    try:
+        if getattr(prof, "enabled", False) and _IMPORT_MS is not None:
+            prof.import_ms = _IMPORT_MS
+    except Exception:
+        pass
 
     with prof.section('clock:now'):
         now_utc = core.now_utc()

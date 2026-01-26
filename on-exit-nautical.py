@@ -34,13 +34,14 @@ except Exception:
 
 
 HOOK_DIR = Path(__file__).resolve().parent
-if str(HOOK_DIR) not in sys.path:
-    sys.path.insert(0, str(HOOK_DIR))
+TW_DIR = HOOK_DIR.parent
+_CORE_BASE = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
+if str(_CORE_BASE) not in sys.path:
+    sys.path.insert(0, str(_CORE_BASE))
 try:
     import nautical_core as core
 except Exception:
     core = None
-TW_DIR = HOOK_DIR.parent
 TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
 
 _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
@@ -178,6 +179,19 @@ def _diag(msg: str) -> None:
 
 _DIAG_LOG_MAX_BYTES = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
 _DIAG_LOG_PATH = TW_DATA_DIR / ".nautical_diag.jsonl"
+_DIAG_LOG_REDACT_KEYS = {"description", "annotation", "annotations", "note", "notes"}
+
+def _diag_log_redact(msg: str) -> str:
+    try:
+        data = json.loads(msg)
+        if isinstance(data, dict):
+            for k in list(data.keys()):
+                if k in _DIAG_LOG_REDACT_KEYS:
+                    data[k] = "[redacted]"
+            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        pass
+    return msg
 
 def _diag_log(msg: str) -> None:
     if os.environ.get("NAUTICAL_DIAG_LOG") != "1":
@@ -204,7 +218,7 @@ def _diag_log(msg: str) -> None:
         payload = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "hook": "on-exit",
-            "msg": str(msg),
+            "msg": _diag_log_redact(str(msg)),
         }
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -214,15 +228,23 @@ def _diag_log(msg: str) -> None:
 
 def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float = 6.0) -> tuple[bool, str, str]:
     try:
-        r = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            input=input_text,
-            text=True,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=timeout,
+            text=True,
         )
-        return (r.returncode == 0, r.stdout or "", r.stderr or "")
+        try:
+            out, err = proc.communicate(input=input_text, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                out, err = proc.communicate(timeout=1.0)
+            except Exception:
+                out, err = "", ""
+            return (False, out or "", "timeout")
+        return (proc.returncode == 0, out or "", err or "")
     except subprocess.TimeoutExpired:
         return (False, "", "timeout")
     except Exception as e:

@@ -9,7 +9,7 @@ import os, re, sys
 import copy
 import math
 from datetime import datetime, timedelta, timezone, date
-from functools import lru_cache
+from functools import lru_cache, wraps
 from calendar import month_name
 from datetime import date as _date
 import json, zlib, base64, hashlib, tempfile, time, random
@@ -818,11 +818,32 @@ MAX_LINK_NUMBER = _conf_int("max_link_number", 10000, min_value=1)
 SANITIZE_UDA = _conf_bool("sanitize_uda", False, true_values={"1", "yes", "true", "on"})
 SANITIZE_UDA_MAX_LEN = _conf_int("sanitize_uda_max_len", 1024, min_value=64, max_value=4096)
 MAX_JSON_BYTES = _conf_int("max_json_bytes", 10 * 1024 * 1024, min_value=1024, max_value=100 * 1024 * 1024)
+_CACHE_TTL_SECS = _conf_int("cache_ttl_secs", 3600, min_value=0)
+
+def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
+    ttl_val = _CACHE_TTL_SECS if ttl is None else ttl
+    def _decorator(fn):
+        cached = lru_cache(maxsize=maxsize)(fn)
+        last = {"t": time.time()}
+        @wraps(fn)
+        def _wrapper(*args, **kwargs):
+            if ttl_val and (time.time() - last["t"] > ttl_val):
+                cached.cache_clear()
+                last["t"] = time.time()
+            return cached(*args, **kwargs)
+        _wrapper.cache_clear = cached.cache_clear
+        _wrapper.cache_info = cached.cache_info
+        return _wrapper
+    return _decorator
 
 def short_uuid(u: str | None) -> str:
     """Taskwarrior-style short uuid (first 8 hex)."""
-    u = (u or "").strip().lower()
-    return u.split("-")[0] if u else ""
+    if not u or not isinstance(u, str):
+        return ""
+    s = u.strip().lower()
+    if not s:
+        return ""
+    return s.split("-")[0] if "-" in s else s[:8]
 
 def should_stamp_chain_id(task: dict) -> bool:
     """We stamp a chainID when task becomes/starts a nautical chain."""
@@ -1516,7 +1537,7 @@ def _normalize_spec_for_acf_uncached(typ: str, spec: str):
     return None
 
 
-@lru_cache(maxsize=512)
+@_ttl_lru_cache(maxsize=512)
 def _normalize_spec_for_acf_cached(typ: str, spec: str, fmt: str):
     typ = (typ or "").strip().lower()[:1]
     if typ not in ("w", "m", "y"):
@@ -1604,7 +1625,7 @@ def acf_to_original_format(acf_str: str) -> str:
     return " | ".join(sorted(terms_str))
 
 
-@lru_cache(maxsize=512)
+@_ttl_lru_cache(maxsize=512)
 def _year_pair_cached(a: int, b: int, fmt: str) -> tuple[int, int]:
     """Interpret (a,b) according to ANCHOR_YEAR_FMT; return (day, month)."""
     return (b, a) if fmt == "MD" else (a, b)
@@ -1781,6 +1802,26 @@ def safe_lock(
         except Exception:
             pass
 
+    def _lock_stale_pid(path: str) -> bool:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                head = f.read(64)
+            pid_str = head.strip().split()[0]
+            pid = int(pid_str)
+            if pid <= 0:
+                return True
+            try:
+                os.kill(pid, 0)
+                return False
+            except PermissionError:
+                return False
+            except ProcessLookupError:
+                return True
+            except Exception:
+                return False
+        except Exception:
+            return False
+
     tries = max(1, int(retries or 0))
 
     if fcntl is not None:
@@ -1837,6 +1878,8 @@ def safe_lock(
             break
         except FileExistsError:
             stale = False
+            if _lock_stale_pid(path_str):
+                stale = True
             if stale_after is not None:
                 try:
                     st = os.stat(path_str)
@@ -2014,7 +2057,7 @@ def _wd_idx(s: str) -> int | None:
     return None
 
 
-@lru_cache(maxsize=128)
+@_ttl_lru_cache(maxsize=128)
 def _wday_idx_any(s: str) -> int | None:
     """Weekday index for weekly specs.
 
@@ -3979,7 +4022,7 @@ def _filter_by_w(dt_list: list[_date], term: list[dict]):
     return [d for d in dt_list if d.weekday() in allowed]
 
 
-@lru_cache(maxsize=128)
+@_ttl_lru_cache(maxsize=128)
 def _month_tokens_for_atom_cached(y: int, m: int, spec: str) -> set[int]:
     """
     Cached version of month token expansion.
@@ -4227,7 +4270,7 @@ def _parse_atom_mods(mods_str: str):
     return mods
 
 
-@lru_cache(maxsize=512)
+@_ttl_lru_cache(maxsize=512)
 def _parse_y_token_cached(tok: str, fmt: str):
     """Parse yearly token (e.g., '15-02' or 'q1')."""
     tok = tok.strip().lower()
@@ -4473,7 +4516,7 @@ def parse_anchor_expr_to_dnf(s: str):
     return dnf
 
 
-@lru_cache(maxsize=256)
+@_ttl_lru_cache(maxsize=256)
 def _parse_anchor_expr_to_dnf_cached_obj(s: str, fmt: str):
     return parse_anchor_expr_to_dnf(s)
 
@@ -5182,7 +5225,7 @@ def validate_anchor_expr_strict(expr):
 
 
 # -------- Cached Expansion Functions ----------
-@lru_cache(maxsize=128)
+@_ttl_lru_cache(maxsize=128)
 def expand_weekly_cached(spec: str):
     """Cached expansion of weekly specification to weekday numbers.
 
@@ -5192,7 +5235,7 @@ def expand_weekly_cached(spec: str):
     return sorted(_weekly_spec_to_wset(spec, mods=None))
 
 
-@lru_cache(maxsize=128)
+@_ttl_lru_cache(maxsize=128)
 def expand_weekly_cached_mods(spec: str, bd_only: bool):
     """Cached expansion of weekly specification with bd/wd filtering applied."""
     days = expand_weekly_cached(spec)
@@ -5201,7 +5244,7 @@ def expand_weekly_cached_mods(spec: str, bd_only: bool):
     return days
 
 
-@lru_cache(maxsize=128)
+@_ttl_lru_cache(maxsize=128)
 def expand_yearly_cached(spec: str, y: int):
     """
     Expand yearly tokens into concrete dates for year y.
@@ -5274,7 +5317,7 @@ def expand_yearly_cached(spec: str, y: int):
 
 
 
-@lru_cache(maxsize=128)
+@_ttl_lru_cache(maxsize=128)
 def expand_monthly_cached(spec: str, y: int, m: int):
     """Cached expansion of monthly specification for given month."""
     out = set()
@@ -5963,26 +6006,27 @@ def build_local_datetime(d: date, hhmm=(DEFAULT_DUE_HOUR, 0)) -> datetime:
     if not _LOCAL_TZ:
         return naive.replace(tzinfo=timezone.utc)
 
-    aware0 = naive.replace(tzinfo=_LOCAL_TZ, fold=0)
-    aware1 = naive.replace(tzinfo=_LOCAL_TZ, fold=1)
+    candidates = []
+    for fold in (0, 1):
+        aware = naive.replace(tzinfo=_LOCAL_TZ, fold=fold)
+        back = aware.astimezone(timezone.utc).astimezone(_LOCAL_TZ)
+        if back.replace(tzinfo=None) == naive:
+            candidates.append(aware)
+    if candidates:
+        # Ambiguous time: choose the earlier UTC instant for determinism.
+        best = min(candidates, key=lambda dt: dt.astimezone(timezone.utc))
+        return best.astimezone(timezone.utc)
 
-    # Ambiguous time (fall back): choose earlier instance (fold=0).
-    if aware0.utcoffset() != aware1.utcoffset():
-        return aware0.astimezone(timezone.utc)
-
-    # Non-existent time (spring forward): shift forward to next valid minute.
-    back = aware0.astimezone(timezone.utc).astimezone(_LOCAL_TZ)
-    if back.replace(tzinfo=None) != naive:
-        cand = naive
-        for _ in range(180):
-            cand += timedelta(minutes=1)
-            aware = cand.replace(tzinfo=_LOCAL_TZ, fold=0)
+    # Non-existent time (spring forward): shift forward by 1 hour, then to next valid minute.
+    cand = naive + timedelta(hours=1)
+    for _ in range(180):
+        for fold in (0, 1):
+            aware = cand.replace(tzinfo=_LOCAL_TZ, fold=fold)
             back = aware.astimezone(timezone.utc).astimezone(_LOCAL_TZ)
             if back.replace(tzinfo=None) == cand:
                 return aware.astimezone(timezone.utc)
-        return aware0.astimezone(timezone.utc)
-
-    return aware0.astimezone(timezone.utc)
+        cand += timedelta(minutes=1)
+    return naive.replace(tzinfo=_LOCAL_TZ, fold=0).astimezone(timezone.utc)
 
 
 

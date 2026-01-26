@@ -64,6 +64,15 @@ _SPAWN_RETRY_DELAY = 0.1  # seconds between retries
 _DEFAULT_SPAWN_QUEUE_MAX_BYTES = 524288
 # spawn_queue_drain_max_items remains in config for legacy docs, but is unused here.
 _SPAWN_QUEUE_DRAIN_MAX_ITEMS = 200
+_DEFAULT_CHAIN_EXPORT_TIMEOUT_BASE = 1.5
+_DEFAULT_CHAIN_EXPORT_TIMEOUT_PER_100 = 1.0
+_DEFAULT_CHAIN_EXPORT_TIMEOUT_MAX = 12.0
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(str(os.environ.get(name, "")).strip() or default)
+    except Exception:
+        return float(default)
 
 # Panel chain index for fast timeline lookups (set per hook run)
 _PANEL_CHAIN_BY_LINK = None
@@ -106,6 +115,19 @@ def _diag(msg: str) -> None:
     _diag_log(msg)
 
 _DIAG_LOG_MAX_BYTES = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
+_DIAG_LOG_REDACT_KEYS = {"description", "annotation", "annotations", "note", "notes"}
+
+def _diag_log_redact(msg: str) -> str:
+    try:
+        data = json.loads(msg)
+        if isinstance(data, dict):
+            for k in list(data.keys()):
+                if k in _DIAG_LOG_REDACT_KEYS:
+                    data[k] = "[redacted]"
+            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        pass
+    return msg
 
 def _diag_log_path() -> Path:
     base = os.environ.get("TASKDATA")
@@ -139,7 +161,7 @@ def _diag_log(msg: str) -> None:
         payload = {
             "ts": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
             "hook": "on-modify",
-            "msg": str(msg),
+            "msg": _diag_log_redact(str(msg)),
         }
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -278,7 +300,7 @@ def _append_next_wait_sched_rows(
         ))
 
 # ------------------------------------------------------------------------------
-# Locate nautical_core
+# Locate nautical_core (single fixed location: ~/.task)
 # ------------------------------------------------------------------------------
 HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
@@ -296,100 +318,73 @@ _SPAWN_LOCK_RETRIES = 6
 _SPAWN_LOCK_SLEEP_BASE = 0.03
 _WARNED_SPAWN_QUEUE_LOCK = False
 
-
-_candidates = []
-
-
-def _add(p):
-    if not p:
-        return
-    p = Path(p).expanduser().resolve()
-    if p not in _candidates:
-        _candidates.append(p)
-
-def _path_is_safe(p: Path) -> bool:
-    try:
-        st = p.stat()
-        mode = stat.S_IMODE(st.st_mode)
-        if (mode & 0o022) != 0:
-            return False
-        uid = None
-        for attr in ("geteuid", "getuid"):
-            fn = getattr(os, attr, None)
-            if callable(fn):
-                try:
-                    uid = fn()
-                    break
-                except Exception:
-                    pass
-        if uid is None:
-            return True
-        return st.st_uid == uid or uid == 0
-    except Exception:
-        return False
-
-def _add_dev(p):
-    if not p:
-        return
-    p = Path(p).expanduser().resolve()
-    if _path_is_safe(p):
-        _add(p)
-    else:
-        _diag(f"dev path rejected (unsafe): {p}")
-
-
-_add(HOOK_DIR)
-_add(TW_DIR)
-if os.environ.get("NAUTICAL_DEV") == "1":
-    if os.environ.get("TASKDATA"):
-        _add_dev(os.environ["TASKDATA"])
-    if os.environ.get("TASKRC"):
-        _add_dev(Path(os.environ["TASKRC"]).parent)
-    _add_dev(Path.home() / ".task")
-
 core = None
-for base in _candidates:
+
+def _load_core() -> None:
+    global core, _MAX_JSON_BYTES
+    if core is not None:
+        return
+    base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
     pyfile = base / "nautical_core.py"
     pkgini = base / "nautical_core" / "__init__.py"
-    if pyfile.is_file():
+    if pyfile.is_file() or pkgini.is_file():
         sys.path.insert(0, str(base))
         core = importlib.import_module("nautical_core")
-        break
-    if pkgini.is_file():
-        sys.path.insert(0, str(base))
-        core = importlib.import_module("nautical_core")
-        break
+    if core is None:
+        msg = "nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH."
+        raise ModuleNotFoundError(msg)
+    try:
+        core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
+    except Exception:
+        pass
+    try:
+        _MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", _MAX_JSON_BYTES))
+    except Exception:
+        pass
+    _apply_core_config()
 
-if core is None:
-    msg = "nautical_core.py not found. Looked in:\n  " + "\n  ".join(
-        str(p) for p in _candidates
-    )
-    raise ModuleNotFoundError(msg)
-
-try:
-    core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
-except Exception:
-    pass
-
-try:
-    _MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", _MAX_JSON_BYTES))
-except Exception:
-    pass
+def _require_core() -> bool:
+    try:
+        _load_core()
+        return core is not None
+    except Exception:
+        return False
 
 # ------------------------------------------------------------------------------
 # Config-driven toggles (env overrides still supported via core config helpers)
 # ------------------------------------------------------------------------------
-_CHAIN_COLOR_PER_CHAIN = core.CHAIN_COLOR_PER_CHAIN
-_SHOW_TIMELINE_GAPS = core.SHOW_TIMELINE_GAPS
-_SHOW_ANALYTICS = core.SHOW_ANALYTICS
-_ANALYTICS_STYLE = core.ANALYTICS_STYLE
-_ANALYTICS_ONTIME_TOL_SECS = core.ANALYTICS_ONTIME_TOL_SECS
-_CHECK_CHAIN_INTEGRITY = core.CHECK_CHAIN_INTEGRITY
-_VERIFY_IMPORT = core.VERIFY_IMPORT
-_DEBUG_WAIT_SCHED = core.DEBUG_WAIT_SCHED if hasattr(core, "DEBUG_WAIT_SCHED") else _DEFAULT_DEBUG_WAIT_SCHED
-_SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES if hasattr(core, "SPAWN_QUEUE_MAX_BYTES") else _DEFAULT_SPAWN_QUEUE_MAX_BYTES
-_SPAWN_QUEUE_DRAIN_MAX_ITEMS = core.SPAWN_QUEUE_DRAIN_MAX_ITEMS
-_MAX_CHAIN_WALK = core.MAX_CHAIN_WALK
+_CHAIN_COLOR_PER_CHAIN = True
+_SHOW_TIMELINE_GAPS = False
+_SHOW_ANALYTICS = False
+_ANALYTICS_STYLE = "compact"
+_ANALYTICS_ONTIME_TOL_SECS = 3600
+_CHECK_CHAIN_INTEGRITY = False
+_VERIFY_IMPORT = False
+_DEBUG_WAIT_SCHED = _DEFAULT_DEBUG_WAIT_SCHED
+_SPAWN_QUEUE_MAX_BYTES = _DEFAULT_SPAWN_QUEUE_MAX_BYTES
+_SPAWN_QUEUE_DRAIN_MAX_ITEMS = _SPAWN_QUEUE_DRAIN_MAX_ITEMS
+_MAX_CHAIN_WALK = _MAX_CHAIN_WALK
+
+def _apply_core_config() -> None:
+    global _CHAIN_COLOR_PER_CHAIN, _SHOW_TIMELINE_GAPS, _SHOW_ANALYTICS, _ANALYTICS_STYLE
+    global _ANALYTICS_ONTIME_TOL_SECS, _CHECK_CHAIN_INTEGRITY, _VERIFY_IMPORT
+    global _DEBUG_WAIT_SCHED, _SPAWN_QUEUE_MAX_BYTES, _SPAWN_QUEUE_DRAIN_MAX_ITEMS, _MAX_CHAIN_WALK
+    if core is None:
+        return
+    _CHAIN_COLOR_PER_CHAIN = core.CHAIN_COLOR_PER_CHAIN
+    _SHOW_TIMELINE_GAPS = core.SHOW_TIMELINE_GAPS
+    _SHOW_ANALYTICS = core.SHOW_ANALYTICS
+    _ANALYTICS_STYLE = core.ANALYTICS_STYLE
+    _ANALYTICS_ONTIME_TOL_SECS = core.ANALYTICS_ONTIME_TOL_SECS
+    _CHECK_CHAIN_INTEGRITY = core.CHECK_CHAIN_INTEGRITY
+    _VERIFY_IMPORT = core.VERIFY_IMPORT
+    _DEBUG_WAIT_SCHED = core.DEBUG_WAIT_SCHED if hasattr(core, "DEBUG_WAIT_SCHED") else _DEFAULT_DEBUG_WAIT_SCHED
+    _SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES if hasattr(core, "SPAWN_QUEUE_MAX_BYTES") else _DEFAULT_SPAWN_QUEUE_MAX_BYTES
+    _SPAWN_QUEUE_DRAIN_MAX_ITEMS = core.SPAWN_QUEUE_DRAIN_MAX_ITEMS
+    _MAX_CHAIN_WALK = core.MAX_CHAIN_WALK
+_CHAIN_EXPORT_TIMEOUT_BASE = _env_float("NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE", _DEFAULT_CHAIN_EXPORT_TIMEOUT_BASE)
+_CHAIN_EXPORT_TIMEOUT_PER_100 = _env_float("NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100", _DEFAULT_CHAIN_EXPORT_TIMEOUT_PER_100)
+_CHAIN_EXPORT_TIMEOUT_MAX = _env_float("NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX", _DEFAULT_CHAIN_EXPORT_TIMEOUT_MAX)
 
 
 # ------------------------------------------------------------------------------
@@ -497,7 +492,31 @@ def _read_two():
     _fail_and_exit("Invalid input", "on-modify must receive two JSON tasks")
 
 
+def _task_has_nautical_fields(old: dict, new: dict) -> bool:
+    keys = ("anchor", "anchor_mode", "cp", "chainID", "chainid", "nextLink", "prevLink", "link")
+    for task in (old, new):
+        if not isinstance(task, dict):
+            continue
+        for key in keys:
+            val = task.get(key)
+            if val is None:
+                continue
+            try:
+                s = str(val).strip()
+            except Exception:
+                s = ""
+            if s:
+                return True
+    return False
+
+
 def _print_task(task):
+    if core is None:
+        try:
+            _load_core()
+        except Exception:
+            print(json.dumps(task, ensure_ascii=False), end="")
+            return
     if core.SANITIZE_UDA:
         core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
     print(json.dumps(task, ensure_ascii=False), end="")
@@ -524,6 +543,15 @@ def _panel(
     title_style: str | None = None,
     label_style: str | None = None,
 ):
+    if core is None:
+        try:
+            _load_core()
+        except Exception:
+            try:
+                sys.stderr.write(f"[nautical] {title}\n")
+            except Exception:
+                pass
+            return
     themes = dict(_PANEL_THEMES)
     theme = dict(themes.get(kind, themes.get("info", {})))
     if border_style:
@@ -831,6 +859,8 @@ _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
 
 def _queue_locked(fn):
     """Run `fn()` under a bounded non-blocking lock. Returns True on success."""
+    if not _require_core():
+        return False
     with core.safe_lock(
         _SPAWN_QUEUE_LOCK,
         retries=_SPAWN_LOCK_RETRIES,
@@ -912,6 +942,8 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
         pass
 
 def _write_dead_letter(entry: dict, reason: str) -> None:
+    if not _require_core():
+        return
     payload = {
         "ts": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
         "reason": reason,
@@ -962,28 +994,35 @@ def _run_task(
     for attempt in range(1, attempts + 1):
         try:
             t0 = _ptime.perf_counter()
-            r = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                input=input_text,
-                text=True,
-                env=env,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=timeout,
+                text=True,
+                env=env,
             )
+            try:
+                out, err = proc.communicate(input=input_text, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    out, err = proc.communicate(timeout=1.0)
+                except Exception:
+                    out, err = "", ""
+                _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
+                _diag_count("run_task_failures")
+                last_err = "timeout"
+                if attempt < retries:
+                    _time.sleep(retry_delay * attempt)
+                    continue
+                return False, out or "", last_err
             _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
-            last_out = r.stdout or ""
-            last_err = r.stderr or ""
-            if r.returncode == 0:
+            last_out = out or ""
+            last_err = err or ""
+            if proc.returncode == 0:
                 return True, last_out, last_err
             _diag_count("run_task_failures")
-            if attempt < retries:
-                _time.sleep(retry_delay * attempt)
-                continue
-            return False, last_out, last_err
-        except subprocess.TimeoutExpired:
-            _diag_count("run_task_failures")
-            last_err = "timeout"
             if attempt < retries:
                 _time.sleep(retry_delay * attempt)
                 continue
@@ -2445,6 +2484,8 @@ def _carry_relative_datetime(parent: dict, child: dict, child_due_utc: datetime,
     """
     if not isinstance(parent, dict) or not isinstance(child, dict):
         return
+    if not _require_core():
+        return
     if not (parent.get(field) and parent.get("due")):
         return
 
@@ -2791,6 +2832,11 @@ def _chain_health_advice(
 
 
 def _chain_integrity_warnings(chain: list[dict], expected_chain_id: str | None = None) -> list[str]:
+    if core is None:
+        try:
+            _load_core()
+        except Exception:
+            return []
     warnings: list[str] = []
     if not isinstance(chain, list) or not chain:
         return warnings
@@ -3156,6 +3202,8 @@ def _timeline_lines(
     """
     Compact timeline with inline gaps.
     """
+    if not _require_core():
+        return []
     cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
     nxt_no = cur_no + 1
     allowed_future = (
@@ -3412,6 +3460,28 @@ def _safe_dt(v):
     except Exception:
         return None
 
+def _extra_safe(extra: str) -> bool:
+    if not isinstance(extra, str):
+        return False
+    s = extra.strip()
+    if not s:
+        return True
+    return re.match(r"^[\w\.\-:,=\s]+$", s) is not None
+
+def _chain_export_timeout(chain_id: str) -> float:
+    base = float(_CHAIN_EXPORT_TIMEOUT_BASE)
+    per_100 = float(_CHAIN_EXPORT_TIMEOUT_PER_100)
+    max_t = float(_CHAIN_EXPORT_TIMEOUT_MAX)
+    est = base
+    if chain_id and _CHAIN_CACHE_CHAIN_ID == chain_id and _CHAIN_CACHE:
+        extra = max(0, len(_CHAIN_CACHE) // 100)
+        est = base + (extra * per_100)
+    if est < base:
+        est = base
+    if est > max_t:
+        est = max_t
+    return est
+
 def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
     if not chain_id:
         return []
@@ -3428,9 +3498,12 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     if since:
         args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
     if extra:
+        if not _extra_safe(extra):
+            _diag(f"tw_export_chain rejected extra: {extra!r}")
+            return []
         args += shlex.split(extra)
     args.append("export")
-    ok, out, err = _run_task(args, env=env, timeout=1.5, retries=1)
+    ok, out, err = _run_task(args, env=env, timeout=_chain_export_timeout(chain_id), retries=1)
     if not ok:
         _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
         if chain_id and chain_id not in _WARNED_CHAIN_EXPORT:
@@ -3455,6 +3528,15 @@ def main():
     if (new.get("status") or "").lower() == "deleted":
         print(json.dumps(new, ensure_ascii=False))
         return
+
+    if not _task_has_nautical_fields(old, new):
+        print(json.dumps(new, ensure_ascii=False))
+        return
+
+    try:
+        _load_core()
+    except Exception as e:
+        _fail_and_exit("Hook misconfigured", str(e))
 
 
     # --- pre-flight: validate on simple modify (not completion) ---

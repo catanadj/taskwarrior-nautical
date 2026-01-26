@@ -25,6 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
+os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
 
 core = importlib.import_module("nautical_core")
 _hook = importlib.import_module("on-modify-nautical")
@@ -501,6 +502,22 @@ def test_safe_lock_fallback_stale_cleanup():
     finally:
         mod_core.fcntl = prev_fcntl
 
+def test_safe_lock_fallback_stale_pid_cleanup():
+    """safe_lock fallback should clear lockfiles with dead PIDs."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    mod_core = _load_hook_module(core_path, "_nautical_core_lock_pid_stale_test")
+    prev_fcntl = getattr(mod_core, "fcntl", None)
+    mod_core.fcntl = None
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = os.path.join(td, ".nautical_pid.lock")
+            with open(lock_path, "w", encoding="utf-8") as f:
+                f.write("999999 0\n")
+            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0, stale_after=9999.0) as ok:
+                expect(ok, "stale PID lock was not cleared")
+    finally:
+        mod_core.fcntl = prev_fcntl
+
 def test_on_modify_queue_repairs_permissions():
     """Existing queue file permissions should be repaired on append."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -627,6 +644,32 @@ def test_diag_log_rotation_bounds():
                 os.environ.pop("NAUTICAL_DIAG_LOG_MAX_BYTES", None)
             else:
                 os.environ["NAUTICAL_DIAG_LOG_MAX_BYTES"] = prev_diag_max
+
+def test_diag_log_redacts_sensitive_fields():
+    """Persistent diag log should redact sensitive fields."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        prev_diag_log = os.environ.get("NAUTICAL_DIAG_LOG")
+        os.environ["TASKDATA"] = td
+        os.environ["NAUTICAL_DIAG_LOG"] = "1"
+        try:
+            mod = _load_hook_module(hook, "_nautical_diag_log_redact_test")
+            msg = json.dumps({"description": "secret", "notes": "hidden", "ok": "keep"})
+            mod._diag(msg)
+            log_path = Path(td) / ".nautical_diag.jsonl"
+            content = log_path.read_text(encoding="utf-8")
+            expect("secret" not in content and "hidden" not in content, "diag log did not redact sensitive fields")
+            expect("[redacted]" in content, "diag log missing redaction marker")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+            if prev_diag_log is None:
+                os.environ.pop("NAUTICAL_DIAG_LOG", None)
+            else:
+                os.environ["NAUTICAL_DIAG_LOG"] = prev_diag_log
 
 def test_on_exit_requeues_when_task_lock_recent():
     """on-exit should requeue when Taskwarrior lock looks active."""
@@ -899,6 +942,8 @@ def test_on_modify_queue_full_drops_with_dead_letter():
         os.environ["TASKDATA"] = td
         try:
             mod = _load_hook_module(hook, "_nautical_on_modify_queue_full_test")
+            if hasattr(mod, "_load_core"):
+                mod._load_core()
             q_path = mod._SPAWN_QUEUE_PATH
             dl_path = mod._DEAD_LETTER_PATH
             q_path.parent.mkdir(parents=True, exist_ok=True)
@@ -912,6 +957,59 @@ def test_on_modify_queue_full_drops_with_dead_letter():
                 os.environ.pop("TASKDATA", None)
             else:
                 os.environ["TASKDATA"] = prev_taskdata
+
+def test_on_modify_chain_export_timeout_scales():
+    """tw_export_chain should scale timeout based on cached chain size."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    prev_base = os.environ.get("NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE")
+    prev_per = os.environ.get("NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100")
+    prev_max = os.environ.get("NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX")
+    os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE"] = "1.5"
+    os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100"] = "1.0"
+    os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX"] = "5.0"
+    try:
+        mod = _load_hook_module(hook, "_nautical_chain_export_timeout_test")
+        mod._CHAIN_CACHE_CHAIN_ID = "cid"
+        mod._CHAIN_CACHE = [{}] * 250
+        mod._tw_lock_recent = lambda: False
+        captured = {}
+
+        def _fake_run_task(_cmd, env=None, timeout=0.0, retries=0):
+            captured["timeout"] = timeout
+            return True, "[]", ""
+
+        mod._run_task = _fake_run_task
+        mod.tw_export_chain("cid")
+        expect(captured.get("timeout") == 3.5, f"unexpected timeout: {captured.get('timeout')}")
+    finally:
+        if prev_base is None:
+            os.environ.pop("NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE", None)
+        else:
+            os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE"] = prev_base
+        if prev_per is None:
+            os.environ.pop("NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100", None)
+        else:
+            os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100"] = prev_per
+        if prev_max is None:
+            os.environ.pop("NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX", None)
+        else:
+            os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX"] = prev_max
+
+def test_tw_export_chain_extra_validation():
+    """tw_export_chain should reject unsafe extra arguments."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_chain_export_extra_test")
+    mod._tw_lock_recent = lambda: False
+    called = {"run": False}
+
+    def _fake_run_task(_cmd, env=None, timeout=0.0, retries=0):
+        called["run"] = True
+        return True, "[]", ""
+
+    mod._run_task = _fake_run_task
+    out = mod.tw_export_chain("cid", extra="status:pending; rm -rf /")
+    expect(out == [], "unsafe extra should return empty list")
+    expect(not called["run"], "unsafe extra should not call task")
 
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
@@ -1022,6 +1120,12 @@ def test_weeks_between_iso_boundary():
     d3 = date(2024, 12, 29)  # ISO week 2024-W52
     d4 = date(2024, 12, 30)  # ISO week 2025-W01
     expect(core._weeks_between(d3, d4) == 1, "ISO week boundary should be 1")
+
+def test_short_uuid_invalid_inputs():
+    """short_uuid should not crash on invalid inputs."""
+    expect(core.short_uuid(None) == "", "short_uuid None should be empty")
+    expect(core.short_uuid(1234) == "", "short_uuid non-string should be empty")
+    expect(core.short_uuid("abcd") == "abcd", "short_uuid should keep short strings")
 
 def test_anchor_expr_length_limit():
     """Anchor expressions over 1024 chars should fail fast."""
@@ -1952,6 +2056,29 @@ def test_on_add_dnf_cache_quarantines_invalid_jsonl():
         expect(quarantined, "DNF cache should quarantine invalid JSONL")
 
 
+def test_on_add_dnf_cache_checksum_mismatch_quarantines():
+    """on-add DNF cache should quarantine on checksum mismatch."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_cache_checksum_test")
+    if not hasattr(mod, "_load_dnf_disk_cache"):
+        raise AssertionError("on-add hook does not expose DNF cache helpers")
+
+    with tempfile.TemporaryDirectory() as td:
+        cache_path = os.path.join(td, "dnf_cache.jsonl")
+        bad_header = json.dumps({"version": 1, "checksum": "deadbeefdeadbeef"})
+        with open(cache_path, "w", encoding="utf-8") as f:
+            f.write(bad_header + "\n")
+            f.write(json.dumps({"key": "k1", "value": {"v": 1}}) + "\n")
+
+        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
+        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
+        mod._DNF_DISK_CACHE_ENABLED = True
+        mod._DNF_DISK_CACHE = None
+        mod._load_dnf_disk_cache()
+        quarantined = [p for p in os.listdir(td) if p.startswith("dnf_cache.corrupt.") and p.endswith(".jsonl")]
+        expect(quarantined, "DNF cache should quarantine checksum mismatch")
+
+
 def test_on_add_dnf_cache_size_guard_skips_load():
     """on-add DNF cache skips load when file is too large."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -2189,6 +2316,8 @@ def test_on_modify_carry_wall_clock_across_dst():
     """carry-forward should preserve local wall-clock offset across DST."""
     hook = _find_hook_file("on-modify-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_modify_carry_dst_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
 
     try:
         from zoneinfo import ZoneInfo
@@ -2236,6 +2365,8 @@ def test_on_modify_link_limit():
     """on-modify should block spawns when link exceeds max."""
     hook = _find_hook_file("on-modify-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_modify_link_limit_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
     mod._SHOW_TIMELINE_GAPS = False
     mod._SHOW_ANALYTICS = False
     mod._CHECK_CHAIN_INTEGRITY = False
@@ -2365,6 +2496,8 @@ def test_on_modify_panel_fallback():
     """on-modify panel should fall back to plain output on errors."""
     hook = _find_hook_file("on-modify-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_modify_panel_fallback_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
 
     orig_term = mod.core.term_width_stderr
     mod.core.term_width_stderr = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom"))
@@ -2933,20 +3066,25 @@ TESTS = [
     test_safe_lock_fcntl_contention,
     test_safe_lock_fallback_contention,
     test_safe_lock_fallback_stale_cleanup,
+    test_safe_lock_fallback_stale_pid_cleanup,
     test_on_modify_queue_repairs_permissions,
     test_on_exit_repairs_queue_and_dead_letter_permissions,
     test_on_exit_timeouts_configurable,
     test_diag_log_rotation_bounds,
+    test_diag_log_redacts_sensitive_fields,
     test_on_exit_requeues_when_task_lock_recent,
     test_core_cache_dir_and_lock_permissions,
     test_core_cache_lock_contention_matches_safe_lock,
     test_on_modify_invalid_json_passthrough,
     test_on_modify_read_two_invalid_trailing,
     test_on_modify_queue_full_drops_with_dead_letter,
+    test_on_modify_chain_export_timeout_scales,
+    test_tw_export_chain_extra_validation,
     test_next_for_and_no_progress_fails_fast,
     test_roll_apply_has_guard,
     test_anchor_cache_cleans_stale_tmp_files,
     test_weeks_between_iso_boundary,
+    test_short_uuid_invalid_inputs,
     test_anchor_expr_length_limit,
     test_build_local_datetime_dst_gap_and_ambiguous,
     test_on_modify_chain_export_cache_key_includes_params,
@@ -2957,6 +3095,7 @@ TESTS = [
     test_on_add_dnf_cache_versioned_payload,
     test_on_add_dnf_cache_corrupt_payload_recovers,
     test_on_add_dnf_cache_quarantines_invalid_jsonl,
+    test_on_add_dnf_cache_checksum_mismatch_quarantines,
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,

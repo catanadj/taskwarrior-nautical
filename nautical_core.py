@@ -1692,14 +1692,26 @@ def _cache_dir() -> str:
         candidates.append(os.path.join(os.path.expanduser(taskdata), ".nautical-cache"))
 
     candidates.append(_nautical_cache_dir())
-    candidates.append(os.path.join(tempfile.gettempdir(), "nautical-cache"))
+    if os.environ.get("NAUTICAL_ALLOW_TMP_CACHE") == "1":
+        candidates.append(os.path.join(tempfile.gettempdir(), "nautical-cache"))
+
+    def _ensure_cache_dir(path: str) -> bool:
+        try:
+            os.makedirs(path, mode=0o700, exist_ok=True)
+            if os.path.isdir(path):
+                try:
+                    os.chmod(path, 0o700)
+                except Exception:
+                    pass
+            return os.path.isdir(path) and os.access(path, os.W_OK)
+        except Exception:
+            return False
 
     for p in candidates:
         if not p:
             continue
         try:
-            os.makedirs(p, exist_ok=True)
-            if os.path.isdir(p) and os.access(p, os.W_OK):
+            if _ensure_cache_dir(p):
                 _CACHE_DIR = p
                 return p
         except Exception:
@@ -1834,59 +1846,8 @@ def _cache_lock(key: str):
     if not lock_path:
         yield False
         return
-    if fcntl is not None:
-        lf = None
-        acquired = False
-        try:
-            lf = open(lock_path, "a", encoding="utf-8")
-            for _ in range(6):
-                try:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    acquired = True
-                    break
-                except Exception:
-                    time.sleep(0.05)
-        except Exception:
-            lf = None
-        try:
-            yield acquired
-        finally:
-            try:
-                if acquired and lf is not None:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
-            try:
-                if lf is not None:
-                    lf.close()
-            except Exception:
-                pass
-        return
-
-    fd = None
-    acquired = False
-    for _ in range(6):
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            acquired = True
-            break
-        except FileExistsError:
-            time.sleep(0.05)
-        except Exception:
-            break
-    try:
+    with safe_lock(lock_path, retries=6, sleep_base=0.05, jitter=0.0, mode=0o600, mkdir=True) as acquired:
         yield acquired
-    finally:
-        try:
-            if acquired and fd is not None:
-                os.close(fd)
-        except Exception:
-            pass
-        try:
-            if acquired and fd is not None:
-                os.unlink(lock_path)
-        except Exception:
-            pass
 
 
 def _is_dnf_like(dnf) -> bool:

@@ -15,7 +15,7 @@ Optional:
 """
 
 import importlib
-import sys, os, re, json, io, contextlib
+import sys, os, re, json, io, contextlib, stat
 import tempfile
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
@@ -390,6 +390,240 @@ def test_hook_stdout_strict_json_with_diag_on_modify():
         p = _run_hook_script_raw(hook, raw, env_extra=env)
         expect(p.returncode == 0, f"on-modify returned {p.returncode}")
         _assert_stdout_json_only(p.stdout)
+
+def test_hook_files_are_private_permissions():
+    """Queue/dead-letter/lock files should not be group/world-readable."""
+    lock_path = None
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+            mod_core = _load_hook_module(core_path, "_nautical_core_perm_test")
+            lock_path = os.path.join(td, ".nautical_perm_test.lock")
+            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
+                expect(ok, "safe_lock did not acquire")
+                mode = stat.S_IMODE(os.stat(lock_path).st_mode)
+                expect((mode & 0o077) == 0, f"lock file has group/other perms: {oct(mode)}")
+
+            hook_modify = _find_hook_file("on-modify-nautical.py")
+            mod_modify = _load_hook_module(hook_modify, "_nautical_on_modify_perm_test")
+            mod_modify._enqueue_deferred_spawn({"uuid": "00000000-0000-0000-0000-000000000999"})
+            q_path = mod_modify._SPAWN_QUEUE_PATH
+            expect(q_path.exists(), f"spawn queue not created: {q_path}")
+            mode = stat.S_IMODE(q_path.stat().st_mode)
+            expect((mode & 0o077) == 0, f"queue file has group/other perms: {oct(mode)}")
+
+            hook_exit = _find_hook_file("on-exit-nautical.py")
+            mod_exit = _load_hook_module(hook_exit, "_nautical_on_exit_perm_test")
+            mod_exit._write_dead_letter({"uuid": "00000000-0000-0000-0000-000000000888"}, "perm test")
+            dl_path = mod_exit._DEAD_LETTER_PATH
+            expect(dl_path.exists(), f"dead-letter not created: {dl_path}")
+            mode = stat.S_IMODE(dl_path.stat().st_mode)
+            expect((mode & 0o077) == 0, f"dead-letter has group/other perms: {oct(mode)}")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+
+def test_safe_lock_fcntl_contention():
+    """safe_lock should fail to acquire when another process holds the lock."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    mod_core = _load_hook_module(core_path, "_nautical_core_lock_fcntl_test")
+    if getattr(mod_core, "fcntl", None) is None:
+        return
+    with tempfile.TemporaryDirectory() as td:
+        lock_path = os.path.join(td, ".nautical_fcntl.lock")
+        ready_path = os.path.join(td, ".nautical_fcntl.ready")
+        script = (
+            "import os, time\n"
+            "import fcntl\n"
+            "lp = os.environ['LOCK_PATH']\n"
+            "rp = os.environ['READY_PATH']\n"
+            "fd = os.open(lp, os.O_CREAT | os.O_RDWR, 0o600)\n"
+            "f = os.fdopen(fd, 'a', encoding='utf-8')\n"
+            "fcntl.flock(f.fileno(), fcntl.LOCK_EX)\n"
+            "with open(rp, 'w', encoding='utf-8') as r:\n"
+            "    r.write('ready')\n"
+            "time.sleep(1.0)\n"
+        )
+        p = subprocess.Popen(
+            [sys.executable, "-c", script],
+            env={**os.environ, "LOCK_PATH": lock_path, "READY_PATH": ready_path},
+        )
+        try:
+            for _ in range(50):
+                if os.path.exists(ready_path):
+                    break
+                _time.sleep(0.02)
+            expect(os.path.exists(ready_path), "lock holder did not start")
+            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
+                expect(not ok, "safe_lock should not acquire while locked")
+        finally:
+            p.wait(timeout=3.0)
+        with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
+            expect(ok, "safe_lock should acquire after lock release")
+
+def test_safe_lock_fallback_contention():
+    """safe_lock should fail to acquire when fallback lockfile exists."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    mod_core = _load_hook_module(core_path, "_nautical_core_lock_fallback_test")
+    prev_fcntl = getattr(mod_core, "fcntl", None)
+    mod_core.fcntl = None
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = os.path.join(td, ".nautical_fallback.lock")
+            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
+                expect(ok, "fallback safe_lock did not acquire")
+                with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok2:
+                    expect(not ok2, "fallback safe_lock should not acquire when locked")
+            with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok3:
+                expect(ok3, "fallback safe_lock should acquire after release")
+    finally:
+        mod_core.fcntl = prev_fcntl
+
+def test_core_cache_dir_and_lock_permissions():
+    """Core cache dir and lock files should have restricted permissions."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    with tempfile.TemporaryDirectory() as td:
+        cache_dir = os.path.join(td, "cache")
+        mod = _load_hook_module(core_path, "_nautical_core_cache_perm_test")
+        mod._CACHE_DIR = None
+        mod.ANCHOR_CACHE_DIR_OVERRIDE = cache_dir
+        path = mod._cache_dir()
+        expect(path == cache_dir, f"cache dir mismatch: {path}")
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        expect((mode & 0o077) == 0, f"cache dir has group/other perms: {oct(mode)}")
+        lock_path = mod._cache_lock_path("permtest")
+        with mod._cache_lock("permtest") as ok:
+            expect(ok, "cache lock did not acquire")
+            lmode = stat.S_IMODE(os.stat(lock_path).st_mode)
+            expect((lmode & 0o077) == 0, f"cache lock has group/other perms: {oct(lmode)}")
+
+def test_core_cache_lock_contention_matches_safe_lock():
+    """_cache_lock should block contention similarly to safe_lock."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    with tempfile.TemporaryDirectory() as td:
+        cache_dir = os.path.join(td, "cache")
+        mod = _load_hook_module(core_path, "_nautical_core_cache_lock_test")
+        mod._CACHE_DIR = None
+        mod.ANCHOR_CACHE_DIR_OVERRIDE = cache_dir
+        mod._cache_dir()
+        with mod._cache_lock("contend") as ok:
+            expect(ok, "cache lock did not acquire")
+            with mod._cache_lock("contend") as ok2:
+                expect(not ok2, "cache lock should not acquire when already locked")
+        prev = getattr(mod, "fcntl", None)
+        mod.fcntl = None
+        try:
+            with mod._cache_lock("contend2") as ok3:
+                expect(ok3, "fallback cache lock did not acquire")
+                with mod._cache_lock("contend2") as ok4:
+                    expect(not ok4, "fallback cache lock should not acquire when locked")
+        finally:
+            mod.fcntl = prev
+
+def test_on_exit_large_queue_bounded_drain():
+    """Large queues should drain in bounded batches and leave remainder."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        prev_max_lines = os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES")
+        prev_max_bytes = os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_BYTES")
+        os.environ["TASKDATA"] = td
+        os.environ["NAUTICAL_SPAWN_QUEUE_MAX_LINES"] = "3"
+        os.environ["NAUTICAL_SPAWN_QUEUE_MAX_BYTES"] = "1048576"
+        try:
+            mod_exit = _load_hook_module(hook, "_nautical_on_exit_large_queue_test")
+            q_path = mod_exit._QUEUE_PATH
+            entries = [{"child": {"uuid": f"u{i}"}, "parent_uuid": f"p{i}", "child_short": f"c{i}"} for i in range(7)]
+            with open(q_path, "w", encoding="utf-8") as f:
+                for obj in entries:
+                    f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
+            batch = mod_exit._take_queue_entries()
+            expect(len(batch) == 3, f"expected bounded batch size 3, got {len(batch)}")
+            with open(q_path, "r", encoding="utf-8") as f:
+                remaining = [ln for ln in f.read().splitlines() if ln.strip()]
+            expect(len(remaining) == 4, f"expected 4 remaining lines, got {len(remaining)}")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+            if prev_max_lines is None:
+                os.environ.pop("NAUTICAL_SPAWN_QUEUE_MAX_LINES", None)
+            else:
+                os.environ["NAUTICAL_SPAWN_QUEUE_MAX_LINES"] = prev_max_lines
+            if prev_max_bytes is None:
+                os.environ.pop("NAUTICAL_SPAWN_QUEUE_MAX_BYTES", None)
+            else:
+                os.environ["NAUTICAL_SPAWN_QUEUE_MAX_BYTES"] = prev_max_bytes
+
+def test_on_exit_queue_drain_idempotent():
+    """Re-draining after a mid-run failure should not re-import children."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod_exit = _load_hook_module(hook, "_nautical_on_exit_idempotent_test")
+            imported = set()
+            import_calls = 0
+            modify_calls = 0
+            modify_fail_once = True
+
+            def _fake_run_task(cmd, *, input_text=None, timeout=6.0):
+                nonlocal import_calls, modify_calls, modify_fail_once
+                if "export" in cmd:
+                    uuid = ""
+                    for part in cmd:
+                        if isinstance(part, str) and part.startswith("uuid:"):
+                            uuid = part.split(":", 1)[1]
+                            break
+                    if uuid and uuid in imported:
+                        return True, json.dumps({"uuid": uuid}), ""
+                    return True, "{}", ""
+                if "import" in cmd:
+                    import_calls += 1
+                    try:
+                        obj = json.loads((input_text or "").strip() or "{}")
+                    except Exception:
+                        obj = {}
+                    if isinstance(obj, dict) and obj.get("uuid"):
+                        imported.add(obj["uuid"])
+                    return True, "", ""
+                if "modify" in cmd:
+                    modify_calls += 1
+                    if modify_fail_once:
+                        modify_fail_once = False
+                        return False, "", "database is locked"
+                    return True, "", ""
+                return True, "", ""
+
+            mod_exit._run_task = _fake_run_task
+            q_path = mod_exit._QUEUE_PATH
+            entries = [
+                {"child": {"uuid": "u1"}, "parent_uuid": "p1", "child_short": "c1"},
+                {"child": {"uuid": "u2"}, "parent_uuid": "p2", "child_short": "c2"},
+            ]
+            with open(q_path, "w", encoding="utf-8") as f:
+                for obj in entries:
+                    f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+            stats1 = mod_exit._drain_queue()
+            expect(stats1.get("requeued") == 1, f"expected one requeue, got {stats1}")
+
+            stats2 = mod_exit._drain_queue()
+            expect(stats2.get("errors") == 0, f"second drain should be clean, got {stats2}")
+            expect(import_calls == 2, f"expected 2 imports total, got {import_calls}")
+            expect(modify_calls == 3, f"expected 3 modify calls, got {modify_calls}")
+            expect(not q_path.exists() or not q_path.read_text(encoding="utf-8").strip(), "queue not fully drained")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
 
 def test_on_exit_uses_tw_data_dir_for_export_and_modify():
     """on-exit should target TW_DATA_DIR for export/modify calls."""
@@ -2450,6 +2684,11 @@ TESTS = [
     test_warn_once_per_day_no_diag_silent,
     test_hook_stdout_strict_json_with_diag_on_add,
     test_hook_stdout_strict_json_with_diag_on_modify,
+    test_hook_files_are_private_permissions,
+    test_safe_lock_fcntl_contention,
+    test_safe_lock_fallback_contention,
+    test_core_cache_dir_and_lock_permissions,
+    test_core_cache_lock_contention_matches_safe_lock,
     test_on_modify_invalid_json_passthrough,
     test_next_for_and_no_progress_fails_fast,
     test_roll_apply_has_guard,
@@ -2471,6 +2710,9 @@ TESTS = [
     test_on_exit_queue_drain_is_transactional,
     test_on_exit_import_child_retries_on_lock,
     test_on_exit_dead_letter_on_import_failure,
+    test_on_exit_large_queue_bounded_drain,
+    test_on_exit_queue_drain_idempotent,
+    test_on_exit_uses_tw_data_dir_for_export_and_modify,
     test_on_modify_carry_wall_clock_across_dst,
     test_normalize_spec_for_acf_cache_guards,
     test_on_modify_link_limit,

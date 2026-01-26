@@ -28,6 +28,7 @@ import shutil
 import tempfile
 import textwrap
 from collections import OrderedDict
+import stat
  # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
  # Python's json.dumps() defaults to ensure_ascii=True, which escapes non-ASCII
  # as "\\uXXXX". We prefer human-readable UTF-8 JSON for hook passthrough.
@@ -69,15 +70,43 @@ def _add(p):
     if p not in _candidates:
         _candidates.append(p)
 
+def _path_is_safe(p: Path) -> bool:
+    try:
+        st = p.stat()
+        mode = stat.S_IMODE(st.st_mode)
+        if (mode & 0o022) != 0:
+            return False
+        uid = None
+        for attr in ("geteuid", "getuid"):
+            fn = getattr(os, attr, None)
+            if callable(fn):
+                try:
+                    uid = fn()
+                    break
+                except Exception:
+                    pass
+        if uid is None:
+            return True
+        return st.st_uid == uid or uid == 0
+    except Exception:
+        return False
+
+def _add_dev(p):
+    if not p:
+        return
+    p = Path(p).expanduser().resolve()
+    if _path_is_safe(p):
+        _add(p)
+
 
 _add(HOOK_DIR)  # dev copy next to hook
 _add(TW_DIR)  # ~/.task
 if os.environ.get("NAUTICAL_DEV") == "1":
     if os.environ.get("TASKDATA"):
-        _add(os.environ["TASKDATA"])
+        _add_dev(os.environ["TASKDATA"])
     if os.environ.get("TASKRC"):
-        _add(Path(os.environ["TASKRC"]).parent)
-    _add(Path.home() / ".task")
+        _add_dev(Path(os.environ["TASKRC"]).parent)
+    _add_dev(Path.home() / ".task")
 
 core = None
 for base in _candidates:

@@ -17,6 +17,10 @@ import subprocess
 import random
 from pathlib import Path
 from contextlib import contextmanager
+try:
+    import fcntl  # POSIX advisory lock
+except Exception:
+    fcntl = None
 
 
 try:
@@ -46,6 +50,92 @@ _DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
 _QUEUE_MAX_BYTES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_BYTES") or 524288)
 _QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000)
 _DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)
+
+@contextmanager
+def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05):
+    path_str = str(path) if path else ""
+    if not path_str:
+        yield False
+        return
+    def _sleep_once():
+        try:
+            delay = float(sleep_base or 0.0)
+        except Exception:
+            delay = 0.0
+        if delay > 0:
+            time.sleep(delay)
+
+    tries = max(1, int(retries or 0))
+    if fcntl is not None:
+        lf = None
+        acquired = False
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            fd = os.open(path_str, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
+            lf = os.fdopen(fd, "a", encoding="utf-8")
+            for _ in range(tries):
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except Exception:
+                    _sleep_once()
+        except Exception:
+            lf = None
+        try:
+            yield acquired
+        finally:
+            try:
+                if acquired and lf is not None:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                if lf is not None:
+                    lf.close()
+            except Exception:
+                pass
+        return
+
+    fd = None
+    acquired = False
+    for _ in range(tries):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            fd = os.open(path_str, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
+            acquired = True
+            break
+        except FileExistsError:
+            _sleep_once()
+        except Exception:
+            break
+    try:
+        yield acquired
+    finally:
+        try:
+            if acquired and fd is not None:
+                os.close(fd)
+        except Exception:
+            pass
+        try:
+            if acquired and fd is not None:
+                os.unlink(path_str)
+        except Exception:
+            pass
 
 
 def _diag(msg: str) -> None:
@@ -82,19 +172,15 @@ def _sleep(secs: float) -> None:
 
 @contextmanager
 def _lock_queue():
-    if core is None or not hasattr(core, "safe_lock"):
-        yield False
-        return
-    with core.safe_lock(_QUEUE_LOCK, retries=6, sleep_base=0.05, jitter=0.0, mkdir=True) as acquired:
+    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
+    with lock_fn(_QUEUE_LOCK, retries=6, sleep_base=0.05) as acquired:
         yield acquired
 
 
 @contextmanager
 def _lock_dead_letter():
-    if core is None or not hasattr(core, "safe_lock"):
-        yield False
-        return
-    with core.safe_lock(_DEAD_LETTER_LOCK, retries=6, sleep_base=0.05, jitter=0.0, mkdir=True) as acquired:
+    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
+    with lock_fn(_DEAD_LETTER_LOCK, retries=6, sleep_base=0.05) as acquired:
         yield acquired
 
 

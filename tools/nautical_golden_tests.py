@@ -859,7 +859,7 @@ def test_on_exit_queue_drain_idempotent():
                 os.environ["TASKDATA"] = prev_taskdata
 
 def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
-    """on-exit should clear parent nextLink if child is missing after failed import."""
+    """on-exit should not update parent nextLink if child is missing after failed import."""
     hook = _find_hook_file("on-exit-nautical.py")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
@@ -871,7 +871,7 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
             child_uuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
             child_short = "bbbbbbbb"
 
-            def _fake_run_task(cmd, *, input_text=None, timeout=0.0):
+            def _fake_run_task(cmd, *, input_text=None, timeout=0.0, **_kwargs):
                 if "export" in cmd:
                     target = ""
                     for part in cmd:
@@ -900,7 +900,7 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
             q_path.parent.mkdir(parents=True, exist_ok=True)
             q_path.write_text(json.dumps(entry, ensure_ascii=False) + "\n", encoding="utf-8")
             mod._drain_queue()
-            expect("clear_parent" in calls, "expected parent nextLink rollback on missing child")
+            expect("clear_parent" not in calls, "parent nextLink should not be updated on missing child")
         finally:
             if prev_taskdata is None:
                 os.environ.pop("TASKDATA", None)
@@ -942,7 +942,7 @@ def test_on_modify_read_two_fuzz_inputs():
     ]
     for raw, mode in cases:
         p = _run_hook_script_raw(hook, raw)
-        if mode in {"empty", "invalid"}:
+        if mode in {"empty", "invalid", "json"}:
             expect(p.returncode != 0, f"on-modify should fail for case {mode}")
             expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
         else:
@@ -997,7 +997,7 @@ def test_on_modify_chain_export_timeout_scales():
         mod._tw_lock_recent = lambda: False
         captured = {}
 
-        def _fake_run_task(_cmd, env=None, timeout=0.0, retries=0):
+        def _fake_run_task(_cmd, env=None, timeout=0.0, retries=0, **_kwargs):
             captured["timeout"] = timeout
             return True, "[]", ""
 
@@ -1121,8 +1121,9 @@ def test_anchor_cache_cleans_stale_tmp_files():
     with tempfile.TemporaryDirectory() as td:
         cfg = os.path.join(td, "nautical.toml")
         with open(cfg, "w", encoding="utf-8") as f:
-            f.write('enable_anchor_cache = true\n')
-            f.write('anchor_cache_dir = "' + td.replace("\\\\", "/") + '"\\n')
+            f.write("enable_anchor_cache = true\n")
+            td_path_norm = td.replace("\\", "/")
+            f.write(f'anchor_cache_dir = "{td_path_norm}"\n')
         mod = _load_core_module(core_path, "_nautical_core_cache_tmp_test", cfg)
         mod.ENABLE_ANCHOR_CACHE = True
         mod.ANCHOR_CACHE_DIR_OVERRIDE = td
@@ -1192,8 +1193,8 @@ def test_on_modify_chain_export_cache_key_includes_params():
         raise AssertionError("on-modify hook does not expose chain cache helper")
     calls = []
 
-    def _fake(chain_id: str, since=None, extra=None, env=None):
-        calls.append((chain_id, since, extra))
+    def _fake(chain_id: str, since=None, extra=None, env=None, limit=None):
+        calls.append((chain_id, since, extra, limit))
         return [{"uuid": "x"}]
 
     mod.tw_export_chain = _fake
@@ -2189,6 +2190,7 @@ def test_on_exit_spawn_intents_drain():
         td_path = Path(td)
         mod.TW_DATA_DIR = td_path
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
 
         child_uuid = "00000000-0000-0000-0000-000000000999"
@@ -2243,6 +2245,7 @@ def test_on_exit_queue_drain_is_transactional():
         td_path = Path(td)
         mod.TW_DATA_DIR = td_path
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
 
         child_uuid = "00000000-0000-0000-0000-000000000123"
@@ -2327,6 +2330,7 @@ def test_on_exit_dead_letter_on_import_failure():
         td_path = Path(td)
         mod.TW_DATA_DIR = td_path
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
@@ -2572,6 +2576,7 @@ def test_on_exit_import_error_but_child_exists():
         td_path = Path(td)
         mod.TW_DATA_DIR = td_path
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
@@ -2724,6 +2729,7 @@ def test_on_exit_lock_failure_keeps_queue():
         td_path = Path(td)
         mod.TW_DATA_DIR = td_path
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
 
         entry = {"child": {"uuid": "00000000-0000-0000-0000-000000000999"}}
@@ -2757,6 +2763,7 @@ def test_on_exit_queue_streaming_line_cap():
         td_path = Path(td)
         mod.TW_DATA_DIR = td_path
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
         mod._QUEUE_MAX_LINES = 1
 
@@ -2781,6 +2788,7 @@ def test_on_exit_queue_rotate_then_drain():
         td_path = Path(td)
         mod.TW_DATA_DIR = td_path
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
         mod._QUEUE_MAX_BYTES = 1
         mod._QUEUE_MAX_LINES = 10
@@ -2852,6 +2860,7 @@ def test_queue_json_parse_dead_letter():
         td_path = Path(td)
         mod.TW_DATA_DIR = td_path
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"

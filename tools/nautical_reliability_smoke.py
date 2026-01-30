@@ -56,7 +56,7 @@ def _add_task(args, env):
 def _run_load(env, count):
     ids = []
     for i in range(count):
-        tid = _add_task([f"nautical load {i}", "anchor:m:17", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
+        tid = _add_task([f"nautical load {i}", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
         ids.append(tid)
     for tid in ids:
         _task(["done", str(tid)], env=env)
@@ -88,7 +88,7 @@ def _export_one(cmd_args, env):
         return None
 
 def _run_chain_until_failure(env, max_iters: int, settle_s: float) -> tuple[int, str | None]:
-    tid = _add_task(["nautical chain limit", "anchor:m:17", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
+    tid = _add_task(["nautical chain limit", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
     parent = _export_one(["rc.json.array=off", "status:pending", "sort:entry-", "limit:1", "export"], env=env)
     if not parent:
         try:
@@ -306,7 +306,7 @@ def main() -> int:
         _check_hook_exec(Path.home() / ".task" / "hooks")
 
         # Test 1: happy path
-        tid = _add_task(["nautical test", "anchor:m:17", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
+        tid = _add_task(["nautical test", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
         _task(["done", str(tid)], env=env)
         q_path = td_path / ".nautical_spawn_queue.jsonl"
         if q_path.exists():
@@ -322,7 +322,7 @@ def main() -> int:
         lock_path = td_path / ".nautical_spawn_queue.lock"
         lock_path.write_text("hold")
         try:
-            tid = _add_task(["nautical lock test", "anchor:m:17", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
+            tid = _add_task(["nautical lock test", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
             _task(["done", str(tid)], env=env)
         finally:
             try:
@@ -343,7 +343,7 @@ def main() -> int:
 
         # Test 4: CAS race (simulate by overwriting nextLink)
         # create new task and grab parent uuid
-        tid = _add_task(["nautical cas test", "anchor:m:17", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
+        tid = _add_task(["nautical cas test", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
         parent = _task([f"id:{tid}", "export"], env=env).stdout
         if not parent.strip():
             raise RuntimeError("parent export missing")
@@ -356,7 +356,7 @@ def main() -> int:
         # Test 5: durable queue mode
         env_durable = env.copy()
         env_durable["NAUTICAL_DURABLE_QUEUE"] = "1"
-        tid = _add_task(["nautical durable test", "anchor:m:17", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env_durable)
+        tid = _add_task(["nautical durable test", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env_durable)
         _task(["done", str(tid)], env=env_durable)
         time.sleep(0.2)
         print("[smoke] durable mode ok")

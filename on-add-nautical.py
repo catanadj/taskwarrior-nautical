@@ -1433,8 +1433,8 @@ def main():
                 iterations += 1
 
                 nxt = step_once(prev)
-            if not nxt or nxt > end_day:
-                break
+                if not nxt or nxt > end_day:
+                    break
                 count += 1
                 last = nxt
                 prev = nxt

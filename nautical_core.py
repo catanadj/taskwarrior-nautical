@@ -3846,7 +3846,7 @@ def coerce_int(v, default=None):
         if v is None:
             return default
         if isinstance(v, bool):
-            return int(v)
+            return default
         if isinstance(v, int):
             return v if abs(v) <= (2**63 - 1) else default
         if isinstance(v, float):
@@ -4485,10 +4485,12 @@ def parse_anchor_expr_to_dnf(s: str):
         return [[{"typ": tlo, "spec": spec.strip().lower(), "ival": ival, "mods": mods}]]
 
 
-    def parse_factor():
+    def parse_factor(depth: int = 0):
+        if depth > 50:
+            raise ParseError("Expression nesting too deep")
         skip_ws()
         if take("("):
-            res = parse_expr()
+            res = parse_expr(depth + 1)
             skip_ws()
             if not take(")"):
                 raise ParseError("Unclosed '('")
@@ -4498,33 +4500,33 @@ def parse_anchor_expr_to_dnf(s: str):
     def and_merge(A, B):
         return [ta + tb for ta in A for tb in B]
 
-    def parse_term():
+    def parse_term(depth: int = 0):
         nonlocal i
-        left = parse_factor()
+        left = parse_factor(depth)
         while True:
             pos = i
             skip_ws()
             if not take("+"):
                 i = pos
                 break
-            right = parse_factor()
+            right = parse_factor(depth)
             left = and_merge(left, right)
         return left
 
-    def parse_expr():
+    def parse_expr(depth: int = 0):
         nonlocal i
-        left = parse_term()
+        left = parse_term(depth)
         while True:
             pos = i
             skip_ws()
             if not take("|"):
                 i = pos
                 break
-            right = parse_term()
+            right = parse_term(depth)
             left = left + right
         return left
 
-    res = parse_expr(); skip_ws()
+    res = parse_expr(0); skip_ws()
     if i != n:
         raise ParseError("Unexpected trailing characters")
     dnf = _rewrite_quarters_in_context(res)

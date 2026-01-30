@@ -4,7 +4,7 @@
 on-exit-nautical.py
 
 Drains Nautical spawn intents after Taskwarrior releases its lock.
-Reads JSONL queue entries and imports child tasks.
+Reads JSONL queue entries, imports child tasks, and updates parent nextLink.
 """
 
 from __future__ import annotations
@@ -58,6 +58,7 @@ except Exception:
 TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
 
 _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
+_QUEUE_PROCESSING_PATH = TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"
 _QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
 _DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
@@ -512,6 +513,34 @@ def _take_queue_entries() -> list[dict]:
             _record_queue_lock_failure()
             return entries
         try:
+            if _QUEUE_PROCESSING_PATH.exists():
+                try:
+                    if not _QUEUE_PATH.exists():
+                        os.replace(_QUEUE_PROCESSING_PATH, _QUEUE_PATH)
+                    else:
+                        with open(_QUEUE_PROCESSING_PATH, "r", encoding="utf-8") as f_in:
+                            fd = os.open(str(_QUEUE_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+                            try:
+                                os.fchmod(fd, 0o600)
+                            except Exception:
+                                pass
+                            with os.fdopen(fd, "a", encoding="utf-8") as f_out:
+                                for line in f_in:
+                                    f_out.write(line)
+                                if _DURABLE_QUEUE:
+                                    try:
+                                        f_out.flush()
+                                        os.fsync(f_out.fileno())
+                                    except Exception:
+                                        pass
+                        os.unlink(_QUEUE_PROCESSING_PATH)
+                        if _DURABLE_QUEUE:
+                            _fsync_dir(_QUEUE_PATH.parent)
+                except Exception:
+                    return entries
+        except Exception:
+            return entries
+        try:
             if not _QUEUE_PATH.exists():
                 return entries
         except Exception:
@@ -532,9 +561,11 @@ def _take_queue_entries() -> list[dict]:
 
         src_path = overflow_path or _QUEUE_PATH
         tmp_path = _QUEUE_PATH.with_suffix(".staging")
+        tmp_processing = _QUEUE_PROCESSING_PATH.with_suffix(".staging")
         try:
             fd_out = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-            with open(src_path, "r", encoding="utf-8") as f_in, os.fdopen(fd_out, "w", encoding="utf-8") as f_out:
+            fd_proc = os.open(str(tmp_processing), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+            with open(src_path, "r", encoding="utf-8") as f_in, os.fdopen(fd_out, "w", encoding="utf-8") as f_out, os.fdopen(fd_proc, "w", encoding="utf-8") as f_proc:
                 for line in f_in:
                     ln = line.strip()
                     if not ln:
@@ -550,6 +581,7 @@ def _take_queue_entries() -> list[dict]:
                         continue
                     if isinstance(obj, dict):
                         entries.append(obj)
+                        f_proc.write(line)
                     else:
                         _quarantine_queue_line(line, "queue json not object")
                         f_out.write(line)
@@ -557,9 +589,18 @@ def _take_queue_entries() -> list[dict]:
                     try:
                         f_out.flush()
                         os.fsync(f_out.fileno())
+                        f_proc.flush()
+                        os.fsync(f_proc.fileno())
                     except Exception:
                         pass
             os.replace(tmp_path, _QUEUE_PATH)
+            if entries:
+                os.replace(tmp_processing, _QUEUE_PROCESSING_PATH)
+            else:
+                try:
+                    tmp_processing.unlink()
+                except Exception:
+                    pass
             if _DURABLE_QUEUE:
                 _fsync_dir(_QUEUE_PATH.parent)
             if overflow_path:
@@ -571,6 +612,11 @@ def _take_queue_entries() -> list[dict]:
             try:
                 if tmp_path.exists():
                     tmp_path.unlink()
+            except Exception:
+                pass
+            try:
+                if tmp_processing.exists():
+                    tmp_processing.unlink()
             except Exception:
                 pass
     return entries
@@ -676,6 +722,39 @@ def _import_child(obj: dict) -> tuple[bool, str]:
             _sleep(base + jitter)
     return False, last_err
 
+def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[bool, str]:
+    if not parent_uuid or not child_short:
+        return False, "missing parent or child"
+    res = _export_uuid(parent_uuid)
+    if res.get("retryable"):
+        return False, "parent export locked"
+    parent = res.get("obj") if isinstance(res, dict) else None
+    if not parent:
+        return False, "parent missing"
+    current = (parent.get("nextLink") or "").strip()
+    expected = (expected_prev or "").strip()
+    if current == child_short:
+        return True, ""
+    if expected:
+        if current != expected:
+            return False, "parent nextLink changed"
+    else:
+        if current:
+            return False, "parent nextLink already set"
+    ok, _out, err = _run_task(
+        [
+            "task",
+            f"rc.data.location={TW_DATA_DIR}",
+            "rc.hooks=off",
+            "rc.verbose=nothing",
+            f"uuid:{parent_uuid}",
+            "modify",
+            f"nextLink:{child_short}",
+        ],
+        timeout=_TASK_TIMEOUT_MODIFY,
+    )
+    return ok, err or ""
+
 
 def _drain_queue() -> dict:
     processed = 0
@@ -692,6 +771,7 @@ def _drain_queue() -> dict:
             continue
         spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
         parent_uuid = (entry.get("parent_uuid") or "").strip()
+        expected_parent_nextlink = (entry.get("parent_nextlink") or "").strip()
         child = entry.get("child") or {}
         child_short = (entry.get("child_short") or "").strip()
         child_uuid = (child.get("uuid") or "").strip()
@@ -747,10 +827,37 @@ def _drain_queue() -> dict:
             errors += 1
             continue
 
+        if parent_uuid and child_short:
+            ok, err = _update_parent_nextlink(parent_uuid, child_short, expected_parent_nextlink)
+            if not ok:
+                if spawn_intent_id:
+                    _diag(f"parent update failed (intent={spawn_intent_id}): {parent_uuid}")
+                else:
+                    _diag(f"parent update failed: {parent_uuid}")
+                if err == "parent export locked" or _is_lock_error(err):
+                    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+                        _write_dead_letter(entry, "exceeded retry budget")
+                        dead_lettered += 1
+                        errors += 1
+                    else:
+                        requeue.append(entry)
+                else:
+                    _write_dead_letter(entry, f"parent update failed: {err}")
+                    dead_lettered += 1
+                    errors += 1
+                continue
+
         processed += 1
 
     if requeue:
         _requeue_entries(requeue)
+    try:
+        if _QUEUE_PROCESSING_PATH.exists():
+            _QUEUE_PROCESSING_PATH.unlink()
+            if _DURABLE_QUEUE:
+                _fsync_dir(_QUEUE_PROCESSING_PATH.parent)
+    except Exception:
+        pass
 
     return {
         "processed": processed,

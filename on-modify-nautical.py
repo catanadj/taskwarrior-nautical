@@ -1448,7 +1448,7 @@ def _spawn_child_atomic(
     We intentionally avoid importing the parent from inside the hook to reduce the
     risk of re-entering Taskwarrior while it is holding the datastore lock.
 
-    We enqueue the child for the on-exit hook to import after the main command returns.
+    We enqueue the child for the on-exit hook to import, then update the parent link.
     """
     env = os.environ.copy()
 
@@ -1477,7 +1477,7 @@ def _spawn_child_atomic(
         parent_task_with_nextlink.get("uuid") or "",
         child_obj,
         child_short,
-        "",
+        parent_task_with_nextlink.get("nextLink") or "",
         spawn_intent_id,
     )
     _enqueue_spawn_intent(entry)
@@ -2661,9 +2661,9 @@ def _build_child_from_parent(
         child.pop("anchor_mode", None)
 
 
-    # Carry wait/scheduled forward relative to due (UTC delta to avoid DST drift)
-    _carry_rel_dt_utc(parent, child, child_due_utc, "wait")
-    _carry_rel_dt_utc(parent, child, child_due_utc, "scheduled")
+    # Carry wait/scheduled forward relative to due (local wall-clock delta)
+    _carry_relative_datetime(parent, child, child_due_utc, "wait")
+    _carry_relative_datetime(parent, child, child_due_utc, "scheduled")
 
     if cpmax:
         child["chainMax"] = int(cpmax)
@@ -3975,8 +3975,8 @@ def main():
         _print_task(new)
         return
 
-    # Reflect link on parent immediately for deferred spawns, or once confirmed for direct spawns.
-    if verified or deferred_spawn:
+    # Reflect link on parent only when child is confirmed.
+    if verified:
         new["nextLink"] = child_short
 
     # Build an in-memory chain index once for panel/timeline lookups.

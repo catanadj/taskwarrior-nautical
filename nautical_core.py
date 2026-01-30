@@ -1802,14 +1802,37 @@ def safe_lock(
         except Exception:
             pass
 
+    def _lock_age(path: str) -> float | None:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                head = f.read(64)
+            parts = head.strip().split()
+            if len(parts) >= 2:
+                return time.time() - float(parts[1])
+        except Exception:
+            pass
+        try:
+            st = os.stat(path)
+            return time.time() - float(st.st_mtime)
+        except Exception:
+            return None
+
     def _lock_stale_pid(path: str) -> bool:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 head = f.read(64)
-            pid_str = head.strip().split()[0]
+            parts = head.strip().split()
+            pid_str = parts[0] if parts else ""
             pid = int(pid_str)
             if pid <= 0:
                 return True
+            if stale_after is not None and len(parts) >= 2:
+                try:
+                    age = time.time() - float(parts[1])
+                    if age < float(stale_after):
+                        return False
+                except Exception:
+                    pass
             try:
                 os.kill(pid, 0)
                 return False
@@ -1880,13 +1903,9 @@ def safe_lock(
             pid_stale = _lock_stale_pid(path_str)
             age_stale = False
             if stale_after is not None:
-                try:
-                    st = os.stat(path_str)
-                    age = time.time() - float(st.st_mtime)
-                    if age >= float(stale_after):
-                        age_stale = True
-                except Exception:
-                    age_stale = False
+                age = _lock_age(path_str)
+                if age is not None and age >= float(stale_after):
+                    age_stale = True
             if pid_stale and age_stale:
                 try:
                     os.unlink(path_str)

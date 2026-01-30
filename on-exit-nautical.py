@@ -4,7 +4,7 @@
 on-exit-nautical.py
 
 Drains Nautical spawn intents after Taskwarrior releases its lock.
-Reads JSONL queue entries, imports child tasks, and updates parent nextLink.
+Reads JSONL queue entries and imports child tasks.
 """
 
 from __future__ import annotations
@@ -61,6 +61,7 @@ _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
 _DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
+_DEAD_LETTER_RETENTION_DAYS = int(os.environ.get("NAUTICAL_DEAD_LETTER_RETENTION_DAYS") or 30)
 _QUEUE_MAX_BYTES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_BYTES") or 524288)
 _QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000)
 _DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)
@@ -137,14 +138,37 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, 
 
     fd = None
     acquired = False
+    def _lock_age(path_str: str) -> float | None:
+        try:
+            with open(path_str, "r", encoding="utf-8") as f:
+                head = f.read(64)
+            parts = head.strip().split()
+            if len(parts) >= 2:
+                return time.time() - float(parts[1])
+        except Exception:
+            pass
+        try:
+            st = os.stat(path_str)
+            return time.time() - float(st.st_mtime)
+        except Exception:
+            return None
+
     def _lock_stale_pid(path_str: str) -> bool:
         try:
             with open(path_str, "r", encoding="utf-8") as f:
                 head = f.read(64)
-            pid_str = head.strip().split()[0]
+            parts = head.strip().split()
+            pid_str = parts[0] if parts else ""
             pid = int(pid_str)
             if pid <= 0:
                 return True
+            if stale_after is not None and len(parts) >= 2:
+                try:
+                    age = time.time() - float(parts[1])
+                    if age < float(stale_after):
+                        return False
+                except Exception:
+                    pass
             try:
                 os.kill(pid, 0)
                 return False
@@ -179,13 +203,9 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, 
             pid_stale = _lock_stale_pid(path_str)
             age_stale = False
             if stale_after is not None:
-                try:
-                    st = os.stat(path_str)
-                    age = time.time() - float(st.st_mtime)
-                    if age >= float(stale_after):
-                        age_stale = True
-                except Exception:
-                    age_stale = False
+                age = _lock_age(path_str)
+                if age is not None and age >= float(stale_after):
+                    age_stale = True
             if pid_stale and age_stale:
                 try:
                     os.unlink(path_str)
@@ -406,6 +426,18 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
                         overflow = _DEAD_LETTER_PATH.with_suffix(f".overflow.{ts}.jsonl")
                         os.replace(_DEAD_LETTER_PATH, overflow)
                         _diag(f"dead-letter rotated: {overflow}")
+                        if _DEAD_LETTER_RETENTION_DAYS > 0:
+                            try:
+                                cutoff = time.time() - (_DEAD_LETTER_RETENTION_DAYS * 86400)
+                                candidates = sorted(_DEAD_LETTER_PATH.parent.glob(f"{_DEAD_LETTER_PATH.stem}.overflow.*.jsonl"))
+                                for old in candidates:
+                                    try:
+                                        if old.stat().st_mtime < cutoff:
+                                            old.unlink()
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
                 except Exception:
                     pass
             fd = os.open(str(_DEAD_LETTER_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
@@ -645,66 +677,6 @@ def _import_child(obj: dict) -> tuple[bool, str]:
     return False, last_err
 
 
-def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[bool, str]:
-    if not parent_uuid or not child_short:
-        return False, "missing parent or child"
-    res = _export_uuid(parent_uuid)
-    if res.get("retryable"):
-        return False, "parent export locked"
-    parent = res.get("obj") if isinstance(res, dict) else None
-    if not parent:
-        return False, "parent missing"
-    current = (parent.get("nextLink") or "").strip()
-    expected = (expected_prev or "").strip()
-    if current == child_short:
-        return True, ""
-    if expected:
-        if current != expected:
-            return False, "parent nextLink changed"
-    else:
-        if current:
-            return False, "parent nextLink already set"
-    ok, _out, err = _run_task(
-        [
-            "task",
-            f"rc.data.location={TW_DATA_DIR}",
-            "rc.hooks=off",
-            "rc.verbose=nothing",
-            f"uuid:{parent_uuid}",
-            "modify",
-            f"nextLink:{child_short}",
-        ],
-        timeout=_TASK_TIMEOUT_MODIFY,
-    )
-    return ok, err or ""
-
-def _parent_points_to_child(parent_uuid: str, child_short: str) -> bool:
-    if not parent_uuid or not child_short:
-        return False
-    res = _export_uuid(parent_uuid)
-    parent = res.get("obj") if isinstance(res, dict) else None
-    if not parent:
-        return False
-    return (parent.get("nextLink") or "").strip() == child_short
-
-def _clear_parent_nextlink(parent_uuid: str) -> tuple[bool, str]:
-    if not parent_uuid:
-        return False, "missing parent"
-    ok, _out, err = _run_task(
-        [
-            "task",
-            f"rc.data.location={TW_DATA_DIR}",
-            "rc.hooks=off",
-            "rc.verbose=nothing",
-            f"uuid:{parent_uuid}",
-            "modify",
-            "nextLink:",
-        ],
-        timeout=_TASK_TIMEOUT_MODIFY,
-    )
-    return ok, err or ""
-
-
 def _drain_queue() -> dict:
     processed = 0
     errors = 0
@@ -720,7 +692,6 @@ def _drain_queue() -> dict:
             continue
         spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
         parent_uuid = (entry.get("parent_uuid") or "").strip()
-        expected_parent_nextlink = (entry.get("parent_nextlink") or "").strip()
         child = entry.get("child") or {}
         child_short = (entry.get("child_short") or "").strip()
         child_uuid = (child.get("uuid") or "").strip()
@@ -754,8 +725,6 @@ def _drain_queue() -> dict:
                         _diag(f"child import failed (intent={spawn_intent_id}): {err}")
                     else:
                         _diag(f"child import failed: {err}")
-                    if parent_uuid and child_short and _parent_points_to_child(parent_uuid, child_short):
-                        _clear_parent_nextlink(parent_uuid)
                     _write_dead_letter(entry, f"child import failed: {err}")
                     dead_lettered += 1
                     errors += 1
@@ -773,52 +742,10 @@ def _drain_queue() -> dict:
                 continue
             if spawn_intent_id:
                 _diag(f"child missing after import (intent={spawn_intent_id})")
-            if parent_uuid and child_short and _parent_points_to_child(parent_uuid, child_short):
-                _clear_parent_nextlink(parent_uuid)
             _write_dead_letter(entry, "child missing after import")
             dead_lettered += 1
             errors += 1
             continue
-
-        if parent_uuid and child_short:
-            ok, err = _update_parent_nextlink(parent_uuid, child_short, expected_parent_nextlink)
-            if not ok:
-                if spawn_intent_id:
-                    _diag(f"parent update failed (intent={spawn_intent_id}): {parent_uuid}")
-                else:
-                    _diag(f"parent update failed: {parent_uuid}")
-                if err == "parent export locked" or _is_lock_error(err):
-                    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                        _write_dead_letter(entry, "exceeded retry budget")
-                        dead_lettered += 1
-                        errors += 1
-                    else:
-                        requeue.append(entry)
-                else:
-                    _write_dead_letter(entry, f"parent update failed: {err}")
-                    dead_lettered += 1
-                    errors += 1
-                continue
-            verify_res = _export_uuid(parent_uuid)
-            if verify_res.get("retryable"):
-                if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                    _write_dead_letter(entry, "exceeded retry budget")
-                    dead_lettered += 1
-                    errors += 1
-                else:
-                    requeue.append(entry)
-                continue
-            parent_obj = verify_res.get("obj") if isinstance(verify_res, dict) else None
-            if not parent_obj:
-                _write_dead_letter(entry, "parent missing after update")
-                dead_lettered += 1
-                errors += 1
-                continue
-            if (parent_obj.get("nextLink") or "").strip() != child_short:
-                _write_dead_letter(entry, "parent nextLink mismatch after update")
-                dead_lettered += 1
-                errors += 1
-                continue
 
         processed += 1
 

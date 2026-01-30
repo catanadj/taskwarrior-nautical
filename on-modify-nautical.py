@@ -497,10 +497,19 @@ def _read_two():
             _fail_and_exit("Protocol error", "Invalid JSON input: trailing content")
         global _PARSED_NEW
         _PARSED_NEW = objs[-1]
-        return objs[0], objs[-1]
+        old, new = objs[0], objs[-1]
+        old_uuid = (old.get("uuid") or "").strip()
+        new_uuid = (new.get("uuid") or "").strip()
+        if not old_uuid or not new_uuid or old_uuid != new_uuid:
+            _fail_and_exit("Protocol error", "Old and new task UUIDs differ")
+        return old, new
     if len(objs) == 1:
         _PARSED_NEW = objs[0]
-        return objs[0], objs[0]
+        only = objs[0]
+        only_uuid = (only.get("uuid") or "").strip()
+        if not only_uuid:
+            _fail_and_exit("Protocol error", "Missing task UUID in on-modify input")
+        return only, only
 
     _fail_and_exit("Invalid input", "on-modify must receive two JSON tasks")
 
@@ -1148,6 +1157,31 @@ def _task_exists_by_uuid(u: str, env: dict) -> bool:
         data = {}
     return bool(data.get("uuid"))
 
+def _reserve_child_uuid(env: dict) -> str:
+    candidate = str(uuid.uuid4())
+    for _ in range(5):
+        ok, out, err = _run_task(
+            [
+                "task",
+                f"rc.data.location={TW_DATA_DIR}",
+                "rc.hooks=off",
+                "rc.json.array=off",
+                f"uuid:{candidate}",
+                "count",
+            ],
+            env=env,
+            timeout=2.5,
+            retries=2,
+        )
+        if ok:
+            if (out or "").strip() == "0":
+                return candidate
+            candidate = str(uuid.uuid4())
+            continue
+        _diag(f"uuid availability check failed (uuid={candidate[:8]}): {err.strip()}")
+        break
+    return candidate
+
 
 def _sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
     removed = set()
@@ -1252,7 +1286,7 @@ def _spawn_child(child_task: dict) -> tuple[str, set[str]]:
     Raises RuntimeError with detailed context on failure.
     """
     env = os.environ.copy()
-    child_uuid = str(uuid.uuid4())
+    child_uuid = _reserve_child_uuid(env)
     obj = dict(child_task)
     obj["uuid"] = child_uuid
     if "entry" not in obj:
@@ -1414,12 +1448,12 @@ def _spawn_child_atomic(
     We intentionally avoid importing the parent from inside the hook to reduce the
     risk of re-entering Taskwarrior while it is holding the datastore lock.
 
-    We enqueue the child for the on-exit hook to import and link after the main command returns.
+    We enqueue the child for the on-exit hook to import after the main command returns.
     """
     env = os.environ.copy()
 
     # Prepare child with a stable UUID (so retries cannot fork).
-    child_uuid = str(uuid.uuid4())
+    child_uuid = _reserve_child_uuid(env)
     spawn_intent_id = f"si_{uuid.uuid4().hex[:12]}"
     child_obj = dict(child_task)
     child_obj["uuid"] = child_uuid
@@ -1443,7 +1477,7 @@ def _spawn_child_atomic(
         parent_task_with_nextlink.get("uuid") or "",
         child_obj,
         child_short,
-        parent_task_with_nextlink.get("nextLink") or "",
+        "",
         spawn_intent_id,
     )
     _enqueue_spawn_intent(entry)
@@ -2627,9 +2661,9 @@ def _build_child_from_parent(
         child.pop("anchor_mode", None)
 
 
-    # Carry wait/scheduled forward relative to due (if present on parent)
-    _carry_relative_datetime(parent, child, child_due_utc, "wait")
-    _carry_relative_datetime(parent, child, child_due_utc, "scheduled")
+    # Carry wait/scheduled forward relative to due (UTC delta to avoid DST drift)
+    _carry_rel_dt_utc(parent, child, child_due_utc, "wait")
+    _carry_rel_dt_utc(parent, child, child_due_utc, "scheduled")
 
     if cpmax:
         child["chainMax"] = int(cpmax)
@@ -3941,8 +3975,8 @@ def main():
         _print_task(new)
         return
 
-    # Reflect link on parent only when child is confirmed.
-    if verified:
+    # Reflect link on parent immediately for deferred spawns, or once confirmed for direct spawns.
+    if verified or deferred_spawn:
         new["nextLink"] = child_short
 
     # Build an in-memory chain index once for panel/timeline lookups.

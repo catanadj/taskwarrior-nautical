@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import argparse
 import multiprocessing as mp
+import json
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,6 +41,53 @@ def _run_load(env, count):
     for tid in ids:
         _task(["done", str(tid)], env=env)
     time.sleep(0.2)
+
+def _export_one(cmd_args, env):
+    p = _task(cmd_args, env=env)
+    raw = (p.stdout or "").strip()
+    if not raw:
+        return None
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, list):
+            return obj[0] if obj else None
+        return obj
+    except Exception:
+        return None
+
+def _run_chain_until_failure(env, max_iters: int, settle_s: float) -> tuple[int, str | None]:
+    tid = _add_task(["nautical chain limit", "anchor:m:17", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
+    parent = _export_one([f"id:{tid}", "rc.json.array=off", "export"], env=env)
+    if not parent:
+        return (0, "parent export missing")
+    chain_id = (parent.get("chainID") or parent.get("chainid") or "").strip()
+    if not chain_id:
+        return (0, "missing chainID")
+
+    completed = 0
+    last_uuid = None
+    for _ in range(max_iters):
+        obj = _export_one([f"chainID:{chain_id}", "status:pending", "sort:link+", "limit:1", "rc.json.array=off", "export"], env=env)
+        if not obj:
+            # allow time for spawn queue to drain
+            time.sleep(settle_s)
+            obj = _export_one([f"chainID:{chain_id}", "status:pending", "sort:link+", "limit:1", "rc.json.array=off", "export"], env=env)
+            if not obj:
+                if _check_failure(Path(env["TASKDATA"])):
+                    return (completed, "failure signal found")
+                return (completed, "no pending task found")
+        uuid = (obj.get("uuid") or "").strip()
+        if not uuid:
+            return (completed, "pending task missing uuid")
+        if uuid == last_uuid:
+            return (completed, "no progress (same pending uuid)")
+        _task([f"uuid:{uuid}", "done"], env=env)
+        completed += 1
+        last_uuid = uuid
+        if _check_failure(Path(env["TASKDATA"])):
+            return (completed, "failure signal found")
+        time.sleep(settle_s)
+    return (completed, "max iters reached")
 
 def _check_failure(td_path: Path) -> bool:
     dl = td_path / ".nautical_dead_letter.jsonl"
@@ -94,6 +142,9 @@ def main() -> int:
     parser.add_argument("--max", dest="max_load", type=int, default=2000, help="max load for limit finder")
     parser.add_argument("--step", type=float, default=2.0, help="multiplicative step for limit finder")
     parser.add_argument("--workers", type=int, default=1, help="parallel workers for load tests")
+    parser.add_argument("--chain-until-failure", action="store_true", help="complete a single chain until failure")
+    parser.add_argument("--chain-max", type=int, default=2000, help="max chain completions for chain-until-failure")
+    parser.add_argument("--chain-settle", type=float, default=0.2, help="sleep between chain completions")
     args = parser.parse_args()
 
     env = os.environ.copy()
@@ -209,6 +260,11 @@ def main() -> int:
                     print(f"[smoke] load {load} failed ({dt:.2f}s): {errs[:3]}")
                     break
             print(f"[smoke] max safe load ~= {last_ok}")
+
+        if args.chain_until_failure:
+            print(f"[smoke] chain until failure: max={args.chain_max} settle={args.chain_settle}s")
+            count, reason = _run_chain_until_failure(env, args.chain_max, args.chain_settle)
+            print(f"[smoke] chain completed {count} links ({reason})")
 
         print("[smoke] all tests completed")
 

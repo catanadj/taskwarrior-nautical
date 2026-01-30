@@ -325,6 +325,7 @@ def _is_lock_error(err: str) -> bool:
         or "lock file" in e
         or "lockfile" in e
         or "locked by" in e
+        or "timeout" in e
     )
 
 def _tw_lock_path() -> Path:

@@ -218,7 +218,11 @@ def _load_dnf_disk_cache() -> OrderedDict:
                 try:
                     st = _DNF_DISK_CACHE_PATH.stat()
                     if st.st_size > _DNF_DISK_CACHE_MAX_BYTES:
-                        _diag(f"DNF cache too large; skipping load: {_DNF_DISK_CACHE_PATH}")
+                        _diag(f"DNF cache too large; resetting: {_DNF_DISK_CACHE_PATH}")
+                        try:
+                            _DNF_DISK_CACHE_PATH.unlink()
+                        except Exception:
+                            pass
                         return _DNF_DISK_CACHE
                     file_size = st.st_size
                 except Exception:
@@ -1248,6 +1252,8 @@ def main():
                     default_seed=interval_seed,  # <-- fixed seed for the whole chain
                     seed_base=seed_base,
                 )
+                if nxt_date is None or nxt_date <= prev_local_date:
+                    return None
                 return nxt_date
             except Exception:
                 return None
@@ -1261,7 +1267,7 @@ def main():
                 [
                     (
                         "anchor pattern",
-                        "No matching anchor dates found. Pattern may be invalid or too restrictive.",
+                        "No matching anchor dates found. Pattern may be invalid, non-advancing, or too restrictive.",
                     )
                 ]
             )
@@ -1427,8 +1433,8 @@ def main():
                 iterations += 1
 
                 nxt = step_once(prev)
-                if not nxt or nxt > end_day:
-                    break
+            if not nxt or nxt > end_day:
+                break
                 count += 1
                 last = nxt
                 prev = nxt

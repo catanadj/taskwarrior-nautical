@@ -9,7 +9,7 @@ Chained next-link spawner for Taskwarrior.
 - Timeline is capped and marks (last link).
 """
 
-import sys, json, os, uuid, subprocess, importlib, random
+import sys, json, os, uuid, subprocess, importlib, random, tempfile
 import importlib.util
 import atexit
 import time as _ptime
@@ -1048,6 +1048,7 @@ def _run_task(
     timeout: float = 3.0,
     retries: int = 2,
     retry_delay: float = 0.15,
+    use_tempfiles: bool = False,
 ) -> tuple[bool, str, str]:
     _diag_count("run_task_calls")
     env = env or os.environ.copy()
@@ -1057,12 +1058,23 @@ def _run_task(
     for attempt in range(1, attempts + 1):
         try:
             t0 = _ptime.perf_counter()
+            out_path = err_path = None
+            out_f = err_f = None
+            if use_tempfiles:
+                try:
+                    out_f = tempfile.NamedTemporaryFile(delete=False)
+                    err_f = tempfile.NamedTemporaryFile(delete=False)
+                    out_path = out_f.name
+                    err_path = err_f.name
+                except Exception:
+                    out_f = err_f = None
+                    out_path = err_path = None
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                stdout=(out_f if out_f is not None else subprocess.PIPE),
+                stderr=(err_f if err_f is not None else subprocess.PIPE),
+                text=not bool(out_f),
                 encoding="utf-8",
                 errors="replace",
                 close_fds=True,
@@ -1076,6 +1088,33 @@ def _run_task(
                     out, err = proc.communicate(timeout=1.0)
                 except Exception:
                     out, err = "", ""
+                try:
+                    if out_f is not None:
+                        out_f.close()
+                    if err_f is not None:
+                        err_f.close()
+                except Exception:
+                    pass
+                if out_path:
+                    try:
+                        with open(out_path, "rb") as f:
+                            out = f.read().decode("utf-8", "replace")
+                    except Exception:
+                        out = ""
+                    try:
+                        os.unlink(out_path)
+                    except Exception:
+                        pass
+                if err_path:
+                    try:
+                        with open(err_path, "rb") as f:
+                            err = f.read().decode("utf-8", "replace")
+                    except Exception:
+                        err = ""
+                    try:
+                        os.unlink(err_path)
+                    except Exception:
+                        pass
                 _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
                 _diag_count("run_task_failures")
                 last_err = "timeout"
@@ -1086,6 +1125,33 @@ def _run_task(
                     _time.sleep(delay + jitter)
                     continue
                 return False, out or "", last_err
+            try:
+                if out_f is not None:
+                    out_f.close()
+                if err_f is not None:
+                    err_f.close()
+            except Exception:
+                pass
+            if out_path:
+                try:
+                    with open(out_path, "rb") as f:
+                        out = f.read().decode("utf-8", "replace")
+                except Exception:
+                    out = ""
+                try:
+                    os.unlink(out_path)
+                except Exception:
+                    pass
+            if err_path:
+                try:
+                    with open(err_path, "rb") as f:
+                        err = f.read().decode("utf-8", "replace")
+                except Exception:
+                    err = ""
+                try:
+                    os.unlink(err_path)
+                except Exception:
+                    pass
             _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
             last_out = out or ""
             last_err = err or ""
@@ -1159,7 +1225,7 @@ def _task_exists_by_uuid(u: str, env: dict) -> bool:
 
 def _reserve_child_uuid(env: dict) -> str:
     candidate = str(uuid.uuid4())
-    for _ in range(5):
+    while True:
         ok, out, err = _run_task(
             [
                 "task",
@@ -1179,8 +1245,7 @@ def _reserve_child_uuid(env: dict) -> str:
             candidate = str(uuid.uuid4())
             continue
         _diag(f"uuid availability check failed (uuid={candidate[:8]}): {err.strip()}")
-        break
-    return candidate
+        return candidate
 
 
 def _sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
@@ -1549,7 +1614,7 @@ def tw_export_chain_required(seed_task, env=None):
         )
     if env is None:
         return _get_chain_export(chain_id)
-    return tw_export_chain(chain_id, env=env)
+    return tw_export_chain(chain_id, env=env, limit=_MAX_CHAIN_WALK)
 def _tw_get_cached(ref: str) -> str:
     """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
     try:
@@ -1842,19 +1907,19 @@ def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] |
 
 
 @lru_cache(maxsize=32)
-def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str) -> tuple[dict, ...]:
+def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str, limit: int) -> tuple[dict, ...]:
     """Cached chain export keyed by stable parameters."""
     since = datetime.fromisoformat(since_key) if since_key else None
     extra = extra_key or None
     if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
         return tuple(_CHAIN_CACHE or [])
-    return tuple(tw_export_chain(chain_id, since=since, extra=extra, env=None) or [])
+    return tuple(tw_export_chain(chain_id, since=since, extra=extra, env=None, limit=limit) or [])
 
 
-def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None) -> tuple[dict, ...]:
+def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None, limit: int) -> tuple[dict, ...]:
     since_key = since.isoformat() if isinstance(since, datetime) else ""
     extra_key = str(extra or "")
-    return _tw_export_chain_cached_key(chain_id, since_key, extra_key)
+    return _tw_export_chain_cached_key(chain_id, since_key, extra_key, limit)
 
 
 def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
@@ -1862,10 +1927,10 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
     if not chain_id:
         return []
     if env is not None:
-        return tw_export_chain(chain_id, since=since, extra=extra, env=env)
+        return tw_export_chain(chain_id, since=since, extra=extra, env=env, limit=_MAX_CHAIN_WALK)
     if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
         return list(_CHAIN_CACHE)
-    cached = _tw_export_chain_cached(chain_id, since, extra)
+    cached = _tw_export_chain_cached(chain_id, since, extra, _MAX_CHAIN_WALK)
     return list(cached)
 
 
@@ -3587,19 +3652,27 @@ def _chain_export_timeout(chain_id: str) -> float:
         est = max_t
     return est
 
-def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
+def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None, limit: int | None = None) -> list[dict]:
     if not chain_id:
         return []
     args = ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
     if since:
         args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
+    if limit and isinstance(limit, int) and limit > 0:
+        args.append(f"limit:{limit}")
     if extra:
         if not _extra_safe(extra):
             _diag(f"tw_export_chain rejected extra: {extra!r}")
             return []
         args += shlex.split(extra)
     args.append("export")
-    ok, out, err = _run_task(args, env=env, timeout=_chain_export_timeout(chain_id), retries=1)
+    ok, out, err = _run_task(
+        args,
+        env=env,
+        timeout=_chain_export_timeout(chain_id),
+        retries=1,
+        use_tempfiles=True,
+    )
     if not ok:
         _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
         if chain_id and chain_id not in _WARNED_CHAIN_EXPORT:
@@ -3765,6 +3838,16 @@ def main():
     now_utc = core.now_utc()
     parent_short = _short(new.get("uuid"))
     base_no = core.coerce_int(new.get("link"), 1)
+    if base_no < 1 or base_no > core.MAX_LINK_NUMBER:
+        _panel(
+            "⛔ Link number invalid",
+            [
+                ("Reason", f"Link number {base_no} is outside 1..{core.MAX_LINK_NUMBER}."),
+            ],
+            kind="error",
+        )
+        _print_task(new)
+        return
     next_no = base_no + 1
     if next_no > core.MAX_LINK_NUMBER:
         _panel(

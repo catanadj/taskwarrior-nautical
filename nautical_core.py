@@ -52,8 +52,17 @@ def _read_toml(path: str) -> dict:
     except Exception:
         return {}
 
+    env_path = os.environ.get("NAUTICAL_CONFIG") or ""
+    env_abs = os.path.abspath(os.path.expanduser(env_path)) if env_path else ""
+    is_env_path = bool(env_abs and path == env_abs)
+
     # File exists, but we cannot parse TOML (Python < 3.11 and no tomli)
     if tomllib is None:
+        if is_env_path:
+            raise RuntimeError(
+                f"NAUTICAL_CONFIG is set but TOML parser is unavailable for {path}. "
+                "Install tomli or upgrade to Python 3.11+."
+            )
         _warn_missing_toml_parser(path)
         return {}
 
@@ -61,6 +70,8 @@ def _read_toml(path: str) -> dict:
         with open(path, "rb") as f:
             return tomllib.load(f) or {}
     except Exception as e:
+        if is_env_path:
+            raise RuntimeError(f"NAUTICAL_CONFIG parse failed for {path}: {e}")
         # Either show full details in explicit diagnostic mode
         if os.environ.get("NAUTICAL_DIAG") == "1":
             print(f"[nautical] Failed to parse TOML: {path}: {e}", file=sys.stderr)
@@ -1047,6 +1058,11 @@ def sanitize_text(v: str, max_len: int = 1024) -> str:
         return v
     s = _CONTROL_CHARS_RE.sub("", v)
     if max_len > 0 and len(s) > max_len:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                print(f"[nautical] UDA value truncated from {len(s)} to {max_len} chars", file=sys.stderr)
+            except Exception:
+                pass
         s = s[:max_len]
     return s
 
@@ -1057,7 +1073,13 @@ def sanitize_task_strings(task: dict, max_len: int = 1024) -> None:
         return
     for k, v in list(task.items()):
         if isinstance(v, str):
-            task[k] = sanitize_text(v, max_len=max_len)
+            cleaned = sanitize_text(v, max_len=max_len)
+            if cleaned != v and os.environ.get("NAUTICAL_DIAG") == "1":
+                try:
+                    print(f"[nautical] UDA field truncated: {k}", file=sys.stderr)
+                except Exception:
+                    pass
+            task[k] = cleaned
 
 
 def _split_csv_tokens(spec: str) -> list[str]:

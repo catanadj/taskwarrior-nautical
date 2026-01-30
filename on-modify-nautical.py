@@ -1614,7 +1614,7 @@ def tw_export_chain_required(seed_task, env=None):
         )
     if env is None:
         return _get_chain_export(chain_id)
-    return tw_export_chain(chain_id, env=env)
+    return tw_export_chain(chain_id, env=env, limit=_MAX_CHAIN_WALK)
 def _tw_get_cached(ref: str) -> str:
     """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
     try:
@@ -1907,19 +1907,19 @@ def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] |
 
 
 @lru_cache(maxsize=32)
-def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str) -> tuple[dict, ...]:
+def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str, limit: int) -> tuple[dict, ...]:
     """Cached chain export keyed by stable parameters."""
     since = datetime.fromisoformat(since_key) if since_key else None
     extra = extra_key or None
     if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
         return tuple(_CHAIN_CACHE or [])
-    return tuple(tw_export_chain(chain_id, since=since, extra=extra, env=None) or [])
+    return tuple(tw_export_chain(chain_id, since=since, extra=extra, env=None, limit=limit) or [])
 
 
-def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None) -> tuple[dict, ...]:
+def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None, limit: int) -> tuple[dict, ...]:
     since_key = since.isoformat() if isinstance(since, datetime) else ""
     extra_key = str(extra or "")
-    return _tw_export_chain_cached_key(chain_id, since_key, extra_key)
+    return _tw_export_chain_cached_key(chain_id, since_key, extra_key, limit)
 
 
 def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
@@ -1927,10 +1927,10 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
     if not chain_id:
         return []
     if env is not None:
-        return tw_export_chain(chain_id, since=since, extra=extra, env=env)
+        return tw_export_chain(chain_id, since=since, extra=extra, env=env, limit=_MAX_CHAIN_WALK)
     if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
         return list(_CHAIN_CACHE)
-    cached = _tw_export_chain_cached(chain_id, since, extra)
+    cached = _tw_export_chain_cached(chain_id, since, extra, _MAX_CHAIN_WALK)
     return list(cached)
 
 
@@ -3268,8 +3268,10 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
     root = _short(_root_uuid_from(current))
 
     cur_s = _short(current.get("uuid"))
-    first = _dtparse(chain[0].get("due")) if chain else None
-    last = _dtparse(chain[-1].get("end")) if chain else None
+    first_task = _export_chain_endpoint(chain_id, "first")
+    last_task = _export_chain_endpoint(chain_id, "last")
+    first = _dtparse((first_task or {}).get("due")) if first_task else (_dtparse(chain[0].get("due")) if chain else None)
+    last = _dtparse((last_task or {}).get("end")) if last_task else (_dtparse(chain[-1].get("end")) if chain else None)
     span = "–"
     if first and last:
         span = (
@@ -3652,12 +3654,14 @@ def _chain_export_timeout(chain_id: str) -> float:
         est = max_t
     return est
 
-def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
+def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None, limit: int | None = None) -> list[dict]:
     if not chain_id:
         return []
     args = ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
     if since:
         args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
+    if limit and isinstance(limit, int) and limit > 0:
+        args.append(f"limit:{limit}")
     if extra:
         if not _extra_safe(extra):
             _diag(f"tw_export_chain rejected extra: {extra!r}")
@@ -3687,6 +3691,35 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     except Exception as e:
         _diag(f"tw_export_chain JSON parse failed: {e}")
         return []
+
+
+def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
+    """Return the first/last chain task using a minimal export."""
+    if not chain_id:
+        return None
+    sort_dir = "+" if direction == "first" else "-"
+    args = [
+        "task",
+        f"rc.data.location={TW_DATA_DIR}",
+        "rc.hooks=off",
+        "rc.json.array=on",
+        "rc.verbose=nothing",
+        f"chainID:{chain_id}",
+        f"sort:link{sort_dir}",
+        "limit:1",
+        "export",
+    ]
+    ok, out, err = _run_task(args, env=None, timeout=3.0, retries=1)
+    if not ok:
+        _diag(f"chain endpoint export failed ({direction}): {err.strip()}")
+        return None
+    try:
+        data = json.loads(out.strip() or "[]")
+        if isinstance(data, list) and data:
+            return data[0]
+    except Exception:
+        pass
+    return None
 
 # ------------------------------------------------------------------------------
 # Main

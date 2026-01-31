@@ -170,6 +170,7 @@ Links left: 8 left (cap #10)
 Common knobs:
 
 - `NAUTICAL_DNF_DISK_CACHE=0` disables the on-add JSONL cache (default: enabled).
+- `NAUTICAL_EXIT_STRICT=1` makes on-exit return 1 when spawns are dead-lettered or errored (for scripting).
 - `NAUTICAL_DIAG=1` prints diagnostics and config search paths.
 - `NAUTICAL_PROFILE=1` emits lightweight timing (stderr).
 - `panel_mode="fast"` forces plain panel rendering (skip Rich).

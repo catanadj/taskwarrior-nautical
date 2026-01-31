@@ -73,6 +73,8 @@ _QUEUE_RETRY_MAX = int(os.environ.get("NAUTICAL_QUEUE_RETRY_MAX") or 6)
 _QUEUE_LOCK_FAIL_MARKER = TW_DATA_DIR / ".nautical_spawn_queue.lock_failed"
 _QUEUE_LOCK_FAIL_COUNT = TW_DATA_DIR / ".nautical_spawn_queue.lock_failed.count"
 _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
+# When set, exit 1 if any spawns were dead-lettered or errored (for scripting/monitoring).
+_EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in ("1", "true", "yes", "on")
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -238,6 +240,15 @@ def _diag(msg: str) -> None:
         except Exception:
             pass
     _diag_log(msg)
+
+
+def _emit_exit_feedback(msg: str) -> None:
+    """Write required feedback to stderr when exiting non-zero (Taskwarrior hook contract)."""
+    try:
+        sys.stderr.write(msg + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
 
 _DIAG_LOG_MAX_BYTES = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
 _DIAG_LOG_PATH = TW_DATA_DIR / ".nautical_diag.jsonl"
@@ -882,6 +893,14 @@ def main() -> int:
             f"requeued={stats.get('requeued', 0)} "
             f"dead_lettered={stats.get('dead_lettered', 0)}"
         )
+    errors = stats.get("errors", 0)
+    dead_lettered = stats.get("dead_lettered", 0)
+    if _EXIT_STRICT and (errors > 0 or dead_lettered > 0):
+        _emit_exit_feedback(
+            f"[nautical] on-exit: {dead_lettered} dead-lettered, {errors} errors. "
+            "Check .nautical_dead_letter.jsonl (set NAUTICAL_EXIT_STRICT=0 to disable)"
+        )
+        return 1
     return 0
 
 
@@ -891,10 +910,9 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as e:
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            _diag(f"on-exit unexpected error: {e}")
+        _emit_exit_feedback(f"[nautical] on-exit: unexpected error: {e}")
         try:
             _write_dead_letter({"error": str(e)}, "on-exit exception")
         except Exception:
             pass
-        raise SystemExit(0)
+        raise SystemExit(1)

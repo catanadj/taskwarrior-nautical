@@ -300,6 +300,7 @@ def _diag_log(msg: str) -> None:
 
 
 def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float = 6.0) -> tuple[bool, str, str]:
+    env = os.environ.copy()
     try:
         proc = subprocess.Popen(
             cmd,
@@ -310,6 +311,7 @@ def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float =
             encoding="utf-8",
             errors="replace",
             close_fds=True,
+            env=env,
         )
         try:
             out, err = proc.communicate(input=input_text, timeout=timeout)

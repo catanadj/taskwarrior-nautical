@@ -234,12 +234,13 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, 
 
 
 def _diag(msg: str) -> None:
-    if os.environ.get("NAUTICAL_DIAG") == "1":
+    if core is not None:
+        core.diag(msg, "on-exit", str(TW_DATA_DIR))
+    elif os.environ.get("NAUTICAL_DIAG") == "1":
         try:
             sys.stderr.write(f"[nautical] {msg}\n")
         except Exception:
             pass
-    _diag_log(msg)
 
 
 def _emit_exit_feedback(msg: str) -> None:
@@ -250,56 +251,17 @@ def _emit_exit_feedback(msg: str) -> None:
     except Exception:
         pass
 
-_DIAG_LOG_MAX_BYTES = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
-_DIAG_LOG_PATH = TW_DATA_DIR / ".nautical_diag.jsonl"
-_DIAG_LOG_REDACT_KEYS = {"description", "annotation", "annotations", "note", "notes"}
-
-def _diag_log_redact(msg: str) -> str:
-    try:
-        data = json.loads(msg)
-        if isinstance(data, dict):
-            for k in list(data.keys()):
-                if k in _DIAG_LOG_REDACT_KEYS:
-                    data[k] = "[redacted]"
-            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
-        pass
-    return msg
-
-def _diag_log(msg: str) -> None:
-    if os.environ.get("NAUTICAL_DIAG_LOG") != "1":
-        return
-    try:
-        _DIAG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    try:
-        if _DIAG_LOG_MAX_BYTES > 0 and _DIAG_LOG_PATH.exists():
-            try:
-                st = _DIAG_LOG_PATH.stat()
-                if st.st_size > _DIAG_LOG_MAX_BYTES:
-                    ts = int(time.time())
-                    overflow = _DIAG_LOG_PATH.with_suffix(f".overflow.{ts}.jsonl")
-                    os.replace(_DIAG_LOG_PATH, overflow)
-            except Exception:
-                pass
-        fd = os.open(str(_DIAG_LOG_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        payload = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "hook": "on-exit",
-            "msg": _diag_log_redact(str(msg)),
-        }
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-    except Exception:
-        pass
-
-
 def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float = 6.0) -> tuple[bool, str, str]:
+    run_fn = core.run_task if core is not None else None
+    if run_fn is not None:
+        return run_fn(
+            cmd,
+            env=os.environ.copy(),
+            input_text=input_text,
+            timeout=timeout,
+            retries=1,
+            retry_delay=0.0,
+        )
     env = os.environ.copy()
     try:
         proc = subprocess.Popen(
@@ -328,17 +290,15 @@ def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float =
     except Exception as e:
         return (False, "", str(e))
 
+
 def _is_lock_error(err: str) -> bool:
+    if core is not None:
+        return core.is_lock_error(err)
     e = (err or "").lower()
     return (
-        "database is locked" in e
-        or "unable to lock" in e
-        or "resource temporarily unavailable" in e
-        or "another task is running" in e
-        or "lock file" in e
-        or "lockfile" in e
-        or "locked by" in e
-        or "timeout" in e
+        "database is locked" in e or "unable to lock" in e
+        or "resource temporarily unavailable" in e or "another task is running" in e
+        or "lock file" in e or "lockfile" in e or "locked by" in e or "timeout" in e
     )
 
 def _tw_lock_path() -> Path:

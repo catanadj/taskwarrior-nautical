@@ -531,60 +531,17 @@ def _format_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, s
 
 
 def _diag(msg: str) -> None:
-    if os.environ.get("NAUTICAL_DIAG") == "1":
+    try:
+        _load_core()
+    except Exception:
+        pass
+    if core is not None:
+        core.diag(msg, "on-add", str(TW_DATA_DIR))
+    elif os.environ.get("NAUTICAL_DIAG") == "1":
         try:
             sys.stderr.write(f"[nautical] {msg}\n")
         except Exception:
             pass
-    _diag_log(msg)
-
-_DIAG_LOG_MAX_BYTES = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
-_DIAG_LOG_PATH = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser() / ".nautical_diag.jsonl"
-_DIAG_LOG_REDACT_KEYS = {"description", "annotation", "annotations", "note", "notes"}
-
-def _diag_log_redact(msg: str) -> str:
-    try:
-        data = json.loads(msg)
-        if isinstance(data, dict):
-            for k in list(data.keys()):
-                if k in _DIAG_LOG_REDACT_KEYS:
-                    data[k] = "[redacted]"
-            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
-        pass
-    return msg
-
-def _diag_log(msg: str) -> None:
-    if os.environ.get("NAUTICAL_DIAG_LOG") != "1":
-        return
-    try:
-        _DIAG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    try:
-        if _DIAG_LOG_MAX_BYTES > 0 and _DIAG_LOG_PATH.exists():
-            try:
-                st = _DIAG_LOG_PATH.stat()
-                if st.st_size > _DIAG_LOG_MAX_BYTES:
-                    ts = int(time.time())
-                    overflow = _DIAG_LOG_PATH.with_suffix(f".overflow.{ts}.jsonl")
-                    os.replace(_DIAG_LOG_PATH, overflow)
-            except Exception:
-                pass
-        fd = os.open(str(_DIAG_LOG_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        payload = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "hook": "on-add",
-            "msg": _diag_log_redact(str(msg)),
-        }
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-    except Exception:
-        pass
 
 
 def _run_task(
@@ -596,60 +553,43 @@ def _run_task(
     retries: int = 2,
     retry_delay: float = 0.15,
 ) -> tuple[bool, str, str]:
+    try:
+        _load_core()
+    except Exception:
+        pass
+    if core is not None:
+        return core.run_task(
+            cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+        )
     env = env or os.environ.copy()
-    last_out = ""
-    last_err = ""
-    attempts = max(1, int(retries))
-    for attempt in range(1, attempts + 1):
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            close_fds=True,
+            env=env,
+        )
+        out, err = proc.communicate(input=input_text, timeout=timeout)
+        return (proc.returncode == 0, out or "", err or "")
+    except subprocess.TimeoutExpired:
+        proc.kill()
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                close_fds=True,
-                env=env,
-            )
-            try:
-                out, err = proc.communicate(input=input_text, timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                try:
-                    out, err = proc.communicate(timeout=1.0)
-                except Exception:
-                    out, err = "", ""
-                last_err = "timeout"
-                if attempt < retries:
-                    base = max(0.0, float(retry_delay))
-                    delay = base * (2 ** (attempt - 1))
-                    jitter = random.uniform(0.0, base) if base > 0 else 0.0
-                    time.sleep(delay + jitter)
-                    continue
-                return False, out or "", last_err
-            last_out = out or ""
-            last_err = err or ""
-            if proc.returncode == 0:
-                return True, last_out, last_err
-            if attempt < retries:
-                base = max(0.0, float(retry_delay))
-                delay = base * (2 ** (attempt - 1))
-                jitter = random.uniform(0.0, base) if base > 0 else 0.0
-                time.sleep(delay + jitter)
-                continue
-            return False, last_out, last_err
-        except Exception as e:
-            last_err = str(e)
-            if attempt < retries:
-                base = max(0.0, float(retry_delay))
-                delay = base * (2 ** (attempt - 1))
-                jitter = random.uniform(0.0, base) if base > 0 else 0.0
-                time.sleep(delay + jitter)
-                continue
-            return False, last_out, last_err
-    return False, last_out, last_err
+            out, err = proc.communicate(timeout=1.0)
+        except Exception:
+            out, err = "", ""
+        return (False, out or "", "timeout")
+    except Exception as e:
+        return (False, "", str(e))
 
 
 

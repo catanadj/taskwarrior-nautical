@@ -107,78 +107,31 @@ _WARNED_CHAIN_EXPORT: set[str] = set()
 
 
 def _diag(msg: str) -> None:
-    if os.environ.get("NAUTICAL_DIAG") == "1":
+    try:
+        _load_core()
+    except Exception:
+        pass
+    if core is not None:
+        core.diag(msg, "on-modify", str(TW_DATA_DIR))
+    elif os.environ.get("NAUTICAL_DIAG") == "1":
         try:
             sys.stderr.write(f"[nautical] {msg}\n")
         except Exception:
             pass
-    _diag_log(msg)
-
-_DIAG_LOG_MAX_BYTES = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
-_DIAG_LOG_REDACT_KEYS = {"description", "annotation", "annotations", "note", "notes"}
-
-def _diag_log_redact(msg: str) -> str:
-    try:
-        data = json.loads(msg)
-        if isinstance(data, dict):
-            for k in list(data.keys()):
-                if k in _DIAG_LOG_REDACT_KEYS:
-                    data[k] = "[redacted]"
-            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
-        pass
-    return msg
-
-def _diag_log_path() -> Path:
-    base = os.environ.get("TASKDATA")
-    if base:
-        return Path(base).expanduser() / ".nautical_diag.jsonl"
-    return Path(__file__).resolve().parent.parent / ".nautical_diag.jsonl"
-
-def _diag_log(msg: str) -> None:
-    if os.environ.get("NAUTICAL_DIAG_LOG") != "1":
-        return
-    path = _diag_log_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    try:
-        if _DIAG_LOG_MAX_BYTES > 0 and path.exists():
-            try:
-                st = path.stat()
-                if st.st_size > _DIAG_LOG_MAX_BYTES:
-                    ts = int(_time.time())
-                    overflow = path.with_suffix(f".overflow.{ts}.jsonl")
-                    os.replace(path, overflow)
-            except Exception:
-                pass
-        fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        payload = {
-            "ts": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
-            "hook": "on-modify",
-            "msg": _diag_log_redact(str(msg)),
-        }
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-    except Exception:
-        pass
 
 
 def _is_lock_error(stderr: str) -> bool:
+    try:
+        _load_core()
+    except Exception:
+        pass
+    if core is not None:
+        return core.is_lock_error(stderr)
     s = (stderr or "").lower()
     return (
-        "database is locked" in s
-        or "unable to lock" in s
-        or "resource temporarily unavailable" in s
-        or "another task is running" in s
-        or "lock file" in s
-        or "lockfile" in s
-        or "locked by" in s
+        "database is locked" in s or "unable to lock" in s
+        or "resource temporarily unavailable" in s or "another task is running" in s
+        or "lock file" in s or "lockfile" in s or "locked by" in s or "timeout" in s
     )
 
 
@@ -1050,132 +1003,51 @@ def _run_task(
     retry_delay: float = 0.15,
     use_tempfiles: bool = False,
 ) -> tuple[bool, str, str]:
+    try:
+        _load_core()
+    except Exception:
+        pass
     _diag_count("run_task_calls")
-    env = env or os.environ.copy()
-    last_out = ""
-    last_err = ""
-    attempts = max(1, int(retries))
-    for attempt in range(1, attempts + 1):
+    t0 = _ptime.perf_counter()
+    if core is not None:
+        ok, out, err = core.run_task(
+            cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+            use_tempfiles=use_tempfiles,
+        )
+    else:
+        env = env or os.environ.copy()
         try:
-            t0 = _ptime.perf_counter()
-            out_path = err_path = None
-            out_f = err_f = None
-            if use_tempfiles:
-                try:
-                    out_f = tempfile.NamedTemporaryFile(delete=False)
-                    err_f = tempfile.NamedTemporaryFile(delete=False)
-                    out_path = out_f.name
-                    err_path = err_f.name
-                except Exception:
-                    out_f = err_f = None
-                    out_path = err_path = None
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
-                stdout=(out_f if out_f is not None else subprocess.PIPE),
-                stderr=(err_f if err_f is not None else subprocess.PIPE),
-                text=not bool(out_f),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
                 encoding="utf-8",
                 errors="replace",
                 close_fds=True,
                 env=env,
             )
+            out, err = proc.communicate(input=input_text, timeout=timeout)
+            ok, out, err = (proc.returncode == 0, out or "", err or "")
+        except subprocess.TimeoutExpired:
+            proc.kill()
             try:
-                out, err = proc.communicate(input=input_text, timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                try:
-                    out, err = proc.communicate(timeout=1.0)
-                except Exception:
-                    out, err = "", ""
-                try:
-                    if out_f is not None:
-                        out_f.close()
-                    if err_f is not None:
-                        err_f.close()
-                except Exception:
-                    pass
-                if out_path:
-                    try:
-                        with open(out_path, "rb") as f:
-                            out = f.read().decode("utf-8", "replace")
-                    except Exception:
-                        out = ""
-                    try:
-                        os.unlink(out_path)
-                    except Exception:
-                        pass
-                if err_path:
-                    try:
-                        with open(err_path, "rb") as f:
-                            err = f.read().decode("utf-8", "replace")
-                    except Exception:
-                        err = ""
-                    try:
-                        os.unlink(err_path)
-                    except Exception:
-                        pass
-                _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
-                _diag_count("run_task_failures")
-                last_err = "timeout"
-                if attempt < retries:
-                    base = max(0.0, float(retry_delay))
-                    delay = base * (2 ** (attempt - 1))
-                    jitter = random.uniform(0.0, base) if base > 0 else 0.0
-                    _time.sleep(delay + jitter)
-                    continue
-                return False, out or "", last_err
-            try:
-                if out_f is not None:
-                    out_f.close()
-                if err_f is not None:
-                    err_f.close()
+                out, err = proc.communicate(timeout=1.0)
             except Exception:
-                pass
-            if out_path:
-                try:
-                    with open(out_path, "rb") as f:
-                        out = f.read().decode("utf-8", "replace")
-                except Exception:
-                    out = ""
-                try:
-                    os.unlink(out_path)
-                except Exception:
-                    pass
-            if err_path:
-                try:
-                    with open(err_path, "rb") as f:
-                        err = f.read().decode("utf-8", "replace")
-                except Exception:
-                    err = ""
-                try:
-                    os.unlink(err_path)
-                except Exception:
-                    pass
-            _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
-            last_out = out or ""
-            last_err = err or ""
-            if proc.returncode == 0:
-                return True, last_out, last_err
-            _diag_count("run_task_failures")
-            if attempt < retries:
-                base = max(0.0, float(retry_delay))
-                delay = base * (2 ** (attempt - 1))
-                jitter = random.uniform(0.0, base) if base > 0 else 0.0
-                _time.sleep(delay + jitter)
-                continue
-            return False, last_out, last_err
+                out, err = "", ""
+            ok, out, err = (False, out or "", "timeout")
         except Exception as e:
-            _diag_count("run_task_failures")
-            last_err = str(e)
-            if attempt < retries:
-                base = max(0.0, float(retry_delay))
-                delay = base * (2 ** (attempt - 1))
-                jitter = random.uniform(0.0, base) if base > 0 else 0.0
-                _time.sleep(delay + jitter)
-                continue
-            return False, last_out, last_err
-    return False, last_out, last_err
+            ok, out, err = (False, "", str(e))
+    _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
+    if not ok:
+        _diag_count("run_task_failures")
+    return ok, out, err
 
 
 def _export_uuid_short(u_short: str, env=None):

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache, wraps
 from calendar import month_name
 from datetime import date as _date
-import json, zlib, base64, hashlib, tempfile, time, random
+import json, zlib, base64, hashlib, tempfile, time, random, subprocess
 import difflib
 from contextlib import contextmanager
 try:
@@ -1960,6 +1960,230 @@ def _cache_lock(key: str):
         return
     with safe_lock(lock_path, retries=6, sleep_base=0.05, jitter=0.0, mode=0o600, mkdir=True, stale_after=300.0) as acquired:
         yield acquired
+
+
+# -------- Hook utilities (run_task, diag) --------
+_DIAG_LOG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
+
+
+def diag_log_redact(msg: str, redact_keys: frozenset | None = None) -> str:
+    """Redact sensitive keys from JSON msg for diagnostic logs."""
+    keys = redact_keys or _DIAG_LOG_REDACT_KEYS
+    try:
+        data = json.loads(msg)
+        if isinstance(data, dict):
+            for k in list(data.keys()):
+                if k in keys:
+                    data[k] = "[redacted]"
+            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        pass
+    return msg
+
+
+def _diag_log_path(data_dir: str | None = None) -> str:
+    base = data_dir or os.environ.get("TASKDATA")
+    if base:
+        return os.path.join(os.path.abspath(os.path.expanduser(base)), ".nautical_diag.jsonl")
+    return os.path.join(os.path.expanduser("~/.task"), ".nautical_diag.jsonl")
+
+
+def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
+    """Append a JSONL diagnostic log entry (when NAUTICAL_DIAG_LOG=1)."""
+    if os.environ.get("NAUTICAL_DIAG_LOG") != "1":
+        return
+    path = _diag_log_path(data_dir)
+    max_bytes = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        if max_bytes > 0 and os.path.exists(path):
+            try:
+                st = os.stat(path)
+                if st.st_size > max_bytes:
+                    overflow = path.replace(".jsonl", f".overflow.{int(time.time())}.jsonl")
+                    os.replace(path, overflow)
+            except Exception:
+                pass
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        payload = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "hook": hook_name,
+            "msg": diag_log_redact(str(msg)),
+        }
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
+def diag(msg: str, hook_name: str = "nautical", data_dir: str | None = None) -> None:
+    """Write diagnostics to stderr when NAUTICAL_DIAG=1 and append to diag log when NAUTICAL_DIAG_LOG=1."""
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        try:
+            sys.stderr.write(f"[nautical] {msg}\n")
+        except Exception:
+            pass
+    diag_log(msg, hook_name, data_dir)
+
+
+def run_task(
+    cmd: list[str],
+    *,
+    env: dict | None = None,
+    input_text: str | None = None,
+    timeout: float = 3.0,
+    retries: int = 2,
+    retry_delay: float = 0.15,
+    use_tempfiles: bool = False,
+) -> tuple[bool, str, str]:
+    """Run a subprocess; returns (ok, stdout, stderr). Uses env or os.environ.copy()."""
+    env = env or os.environ.copy()
+    last_out = ""
+    last_err = ""
+    attempts = max(1, int(retries))
+    for attempt in range(1, attempts + 1):
+        out_path = err_path = None
+        out_f = err_f = None
+        try:
+            if use_tempfiles:
+                try:
+                    out_f = tempfile.NamedTemporaryFile(delete=False)
+                    err_f = tempfile.NamedTemporaryFile(delete=False)
+                    out_path = out_f.name
+                    err_path = err_f.name
+                except Exception:
+                    out_f = err_f = None
+                    out_path = err_path = None
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=(out_f if out_f is not None else subprocess.PIPE),
+                stderr=(err_f if err_f is not None else subprocess.PIPE),
+                text=not bool(out_f),
+                encoding="utf-8",
+                errors="replace",
+                close_fds=True,
+                env=env,
+            )
+            try:
+                out, err = proc.communicate(input=input_text, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    out, err = proc.communicate(timeout=1.0)
+                except Exception:
+                    out, err = "", ""
+                try:
+                    if out_f is not None:
+                        out_f.close()
+                    if err_f is not None:
+                        err_f.close()
+                except Exception:
+                    pass
+                if out_path:
+                    try:
+                        with open(out_path, "rb") as f:
+                            out = f.read().decode("utf-8", "replace")
+                    except Exception:
+                        out = ""
+                    try:
+                        os.unlink(out_path)
+                    except Exception:
+                        pass
+                if err_path:
+                    try:
+                        with open(err_path, "rb") as f:
+                            err = f.read().decode("utf-8", "replace")
+                    except Exception:
+                        err = ""
+                    try:
+                        os.unlink(err_path)
+                    except Exception:
+                        pass
+                last_err = "timeout"
+                if attempt < retries:
+                    delay = retry_delay * (2 ** (attempt - 1))
+                    jitter = random.uniform(0.0, retry_delay) if retry_delay > 0 else 0.0
+                    time.sleep(delay + jitter)
+                    continue
+                return False, out or "", last_err
+            try:
+                if out_f is not None:
+                    out_f.close()
+                if err_f is not None:
+                    err_f.close()
+            except Exception:
+                pass
+            if out_path:
+                try:
+                    with open(out_path, "rb") as f:
+                        out = f.read().decode("utf-8", "replace")
+                except Exception:
+                    out = ""
+                try:
+                    os.unlink(out_path)
+                except Exception:
+                    pass
+            if err_path:
+                try:
+                    with open(err_path, "rb") as f:
+                        err = f.read().decode("utf-8", "replace")
+                except Exception:
+                    err = ""
+                try:
+                    os.unlink(err_path)
+                except Exception:
+                    pass
+            last_out = out or ""
+            last_err = err or ""
+            if proc.returncode == 0:
+                return True, last_out, last_err
+            if attempt < retries:
+                delay = retry_delay * (2 ** (attempt - 1))
+                jitter = random.uniform(0.0, retry_delay) if retry_delay > 0 else 0.0
+                time.sleep(delay + jitter)
+                continue
+            return False, last_out, last_err
+        except Exception as e:
+            last_err = str(e)
+            try:
+                if out_path and os.path.exists(out_path):
+                    os.unlink(out_path)
+                if err_path and os.path.exists(err_path):
+                    os.unlink(err_path)
+            except Exception:
+                pass
+            if attempt < retries:
+                delay = retry_delay * (2 ** (attempt - 1))
+                jitter = random.uniform(0.0, retry_delay) if retry_delay > 0 else 0.0
+                time.sleep(delay + jitter)
+                continue
+            return False, last_out, last_err
+    return False, last_out, last_err
+
+
+def is_lock_error(err: str) -> bool:
+    """Check if stderr indicates a Taskwarrior/database lock error."""
+    e = (err or "").lower()
+    return (
+        "database is locked" in e
+        or "unable to lock" in e
+        or "resource temporarily unavailable" in e
+        or "another task is running" in e
+        or "lock file" in e
+        or "lockfile" in e
+        or "locked by" in e
+        or "timeout" in e
+    )
 
 
 def _is_dnf_like(dnf) -> bool:

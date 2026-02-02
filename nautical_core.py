@@ -21,8 +21,20 @@ except Exception:
     fcntl = None
 
 
+# ==============================================================================
+# TABLE OF CONTENTS (major sections)
+# 1) Config & defaults
+# 2) Anchor parsing (DNF/ACF helpers)
+# 3) Anchor cache & locking
+# 4) Hook utilities (diag, run_task)
+# 5) Taskwarrior helpers (exports, parsing, chain ops)
+# ==============================================================================
 
-# --- Embedded config -----------------------------------
+
+# ==============================================================================
+# SECTION: Config & defaults
+# ==============================================================================
+# --- TOML loading helpers ---
 
 
 try:
@@ -34,15 +46,21 @@ except Exception:
         tomllib = None
 
 
-# Defaults 
+# --- Defaults ---
 _DEFAULTS = {
     "wrand_salt": "nautical|wrand|v1",  # change to reshuffle weekly-rand streams
     "tz": "Europe/Bucharest",           # reserved for future DST/zone features
     "holiday_region": "",               # reserved for future holiday features
 }
 
-# Small cache to avoid re-reading per import
+# --- Config cache ---
 _CONF_CACHE = None
+
+# --- Core constants ---
+_CACHE_LOCK_RETRIES = 6
+_CACHE_LOCK_SLEEP_BASE = 0.05
+_CACHE_LOCK_JITTER = 0.0
+_CACHE_LOCK_STALE_AFTER = 300.0
 
 def _read_toml(path: str) -> dict:
     # Fast path: missing file => no config here
@@ -351,6 +369,9 @@ def fast_color_enabled(force: bool | None = None, fast_color: bool = True) -> bo
     return bool(fast_color)
 
 
+# ==============================================================================
+# SECTION: Panels & formatting helpers
+# ==============================================================================
 def ansi(code: str) -> str:
     return f"\x1b[{code}m"
 
@@ -847,6 +868,9 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
         return _wrapper
     return _decorator
 
+# ==============================================================================
+# SECTION: Taskwarrior helpers
+# ==============================================================================
 def short_uuid(u: str | None) -> str:
     """Taskwarrior-style short uuid (first 8 hex)."""
     if not u or not isinstance(u, str):
@@ -864,7 +888,9 @@ def should_stamp_chain_id(task: dict) -> bool:
     already    = bool((task.get("chainID") or "").strip())
     return (has_anchor or has_cp) and not already
 
-# -------- TZ ----------
+# ==============================================================================
+# SECTION: Time & timezone helpers
+# ==============================================================================
 try:
     from zoneinfo import ZoneInfo
 
@@ -879,8 +905,7 @@ def now_utc():
 
 def to_local(dt_utc: datetime) -> datetime:
     """Convert UTC datetime to local timezone."""
-    if dt_utc.tzinfo is None:
-        dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+    dt_utc = _ensure_utc(dt_utc)
     return dt_utc.astimezone(_LOCAL_TZ) if _LOCAL_TZ else dt_utc
 
 
@@ -892,15 +917,23 @@ def fmt_dt_local(dt_utc: datetime) -> str:
 
 def fmt_isoz(dt_utc: datetime) -> str:
     """Format UTC datetime as ISO 8601 with Zulu time."""
-    return dt_utc.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _ensure_utc(dt_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# -------- Config ----------
+def _ensure_utc(dt_utc: datetime) -> datetime:
+    """Return a timezone-aware UTC datetime."""
+    if dt_utc.tzinfo is None:
+        return dt_utc.replace(tzinfo=timezone.utc)
+    return dt_utc.astimezone(timezone.utc)
+
+
+# --- Date/time config ---
 DATE_FORMATS = ("%Y%m%dT%H%M%SZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d")
 UNTIL_COUNT_CAP = 1000
 INTERSECTION_GUARD_STEPS = 256
 DEFAULT_DUE_HOUR = 11
 
+# --- Weekday constants ---
 _WEEKDAYS = {
     "mon": 0,
     "monday": 0,
@@ -1384,6 +1417,10 @@ def _expand_weekly_aliases(spec: str) -> str:
     return ",".join([t for t in out if t])
 
 
+# ==============================================================================
+# SECTION: Anchor parsing (DNF/ACF helpers)
+# ==============================================================================
+# --- Token normalization ---
 def _expand_monthly_aliases(spec: str) -> str:
     spec = (spec or "").strip().lower()
     if not spec:
@@ -1414,6 +1451,9 @@ def _normalize_weekday(s: str) -> str | None:
         pass
     return None
 
+# ------------------------------------------------------------------------------
+# ACF (Anchor Canonical Form) helpers
+# ------------------------------------------------------------------------------
 def _atom_sort_key(x: dict) -> tuple:
     # Stable order by (type, interval, spec-json, mods-json)
     sj = json.dumps(x.get("s"), separators=(",", ":"), sort_keys=True)
@@ -1716,6 +1756,10 @@ def _acf_spec_to_string(typ: str, spec) -> str:
     return str(spec)
 
 
+# ==============================================================================
+# SECTION: Anchor cache & locking
+# ==============================================================================
+# --- Cache directory discovery & IO ---
 _CACHE_DIR = None
 
 def _cache_dir() -> str:
@@ -1958,11 +2002,22 @@ def _cache_lock(key: str):
     if not lock_path:
         yield False
         return
-    with safe_lock(lock_path, retries=6, sleep_base=0.05, jitter=0.0, mode=0o600, mkdir=True, stale_after=300.0) as acquired:
+    with safe_lock(
+        lock_path,
+        retries=_CACHE_LOCK_RETRIES,
+        sleep_base=_CACHE_LOCK_SLEEP_BASE,
+        jitter=_CACHE_LOCK_JITTER,
+        mode=0o600,
+        mkdir=True,
+        stale_after=_CACHE_LOCK_STALE_AFTER,
+    ) as acquired:
         yield acquired
 
 
-# -------- Hook utilities (run_task, diag) --------
+# ==============================================================================
+# SECTION: Hook utilities (diag, run_task)
+# ==============================================================================
+# --- Diagnostic logging ---
 _DIAG_LOG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
 
 
@@ -2034,7 +2089,7 @@ def diag(msg: str, hook_name: str = "nautical", data_dir: str | None = None) -> 
             pass
     diag_log(msg, hook_name, data_dir)
 
-
+# --- Subprocess runner ---
 def run_task(
     cmd: list[str],
     *,
@@ -2198,6 +2253,17 @@ def _is_dnf_like(dnf) -> bool:
                 return False
     return True
 
+def _is_atom_like(atom) -> bool:
+    if not isinstance(atom, dict):
+        return False
+    typ = (atom.get("typ") or atom.get("type") or "").strip()
+    if not typ:
+        return False
+    mods = atom.get("mods", {})
+    if mods is not None and not isinstance(mods, dict):
+        return False
+    return True
+
 
 def _normalize_dnf_cached(dnf):
     """Normalize cached DNF to match parser types (tuple for single time)."""
@@ -2242,7 +2308,9 @@ def cache_load(key: str) -> dict | None:
             if not _is_dnf_like(obj.get("dnf")):
                 return None
         return obj
-    except Exception:
+    except (OSError, ValueError, json.JSONDecodeError, zlib.error) as e:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            diag(f"cache_load failed: {e}")
         return None
 
 def cache_save(key: str, obj: dict) -> None:
@@ -2288,6 +2356,9 @@ def cache_save(key: str, obj: dict) -> None:
                 except Exception:
                     pass
             os.replace(tmpf, path)
+    except (OSError, ValueError, json.JSONDecodeError, zlib.error) as e:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            diag(f"cache_save failed: {e}")
     finally:
         if tmpf and os.path.exists(tmpf):
             try:
@@ -4086,6 +4157,9 @@ def _parse_group_with_inline_mods(typ: str, ival: int, spec: str, outer_mods_str
     return or_terms
 
 
+# ------------------------------------------------------------------------------
+# Date/time parsing & humanization
+# ------------------------------------------------------------------------------
 def coerce_int(v, default=None):
     """Safely convert value to int, handling floats and strings."""
     try:
@@ -4573,6 +4647,9 @@ def _parse_y_token(tok: str):
     return _parse_y_token_cached(tok, _yearfmt())
 
 
+# ------------------------------------------------------------------------------
+# Anchor DNF parser
+# ------------------------------------------------------------------------------
 def parse_anchor_expr_to_dnf(s: str):
     """Parse anchor expression into Disjunctive Normal Form."""
     # Accept anchors wrapped in quotes from the CLI; normalize rand-month alias.
@@ -4802,7 +4879,9 @@ def parse_anchor_expr_to_dnf_cached(s: str):
 
 
 
-# ---- Yearly token format validator (that honors ANCHOR_YEAR_FMT) -----------------
+# ------------------------------------------------------------------------------
+# Anchor validators
+# ------------------------------------------------------------------------------
 class YearTokenFormatError(ParseError):
     pass
 
@@ -5032,6 +5111,9 @@ def _term_has_any_match_within(
     return False
 
 
+# ------------------------------------------------------------------------------
+# Anchor satisfiability checks
+# ------------------------------------------------------------------------------
 def _validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d: date):
     """
     For each AND-term (inside a DNF expression), ensure it's satisfiable.
@@ -5442,6 +5524,8 @@ def validate_anchor_expr_strict(expr):
         for atom in term:
             if not isinstance(atom, dict):
                 raise ParseError("Internal error: each atom must be a dict.")
+            if not _is_atom_like(atom):
+                raise ParseError("Internal error: atom missing required fields (typ/spec/mods).")
 
     # 3) Per-atom strict checks
     for term in dnf:
@@ -5837,6 +5921,9 @@ def base_next_after_atom(atom, ref_d: date) -> date:
         return ref_d + timedelta(days=366)
 
 
+# ------------------------------------------------------------------------------
+# Anchor scheduling & iteration helpers
+# ------------------------------------------------------------------------------
 def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
     """
     Strictly-after guard + /N gating by buckets:
@@ -6265,6 +6352,9 @@ def pick_hhmm_from_dnf_for_date(dnf, target: date, default_seed: date):
     return None
 
 
+# ------------------------------------------------------------------------------
+# Datetime construction (local wall-clock -> UTC)
+# ------------------------------------------------------------------------------
 def build_local_datetime(d: date, hhmm=(DEFAULT_DUE_HOUR, 0)) -> datetime:
     """Build a UTC datetime from local wall-clock date+time with DST handling."""
     hh, mm = hhmm
@@ -6296,6 +6386,9 @@ def build_local_datetime(d: date, hhmm=(DEFAULT_DUE_HOUR, 0)) -> datetime:
 
 
 
+# ------------------------------------------------------------------------------
+# Yearly token helpers
+# ------------------------------------------------------------------------------
 def _iter_y_segments(s: str):
     """
     Yield the raw yearly-spec segments that follow 'y:' up to the next

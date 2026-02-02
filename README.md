@@ -179,6 +179,13 @@ Common knobs:
 - `spawn_queue_max_bytes` caps deferred spawn queue size.
 - `spawn_queue_drain_max_items` caps items drained per batch.
 
+Dead-letter recovery (manual):
+
+1. Inspect `.nautical_dead_letter.jsonl` in `TASKDATA` and pick entries to retry.
+2. Append those JSON lines to `.nautical_spawn_queue.jsonl` (one entry per line).
+3. Optionally remove retried lines from the dead-letter file.
+4. Run any Taskwarrior command to trigger on-exit drain.
+
 Self-check:
 
 ```

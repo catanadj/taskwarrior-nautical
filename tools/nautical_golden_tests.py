@@ -583,7 +583,7 @@ def test_on_exit_timeouts_configurable():
             mod = _load_hook_module(hook, "_nautical_on_exit_timeout_test")
             timeouts = []
 
-            def _fake_run_task(cmd, *, input_text=None, timeout=0.0):
+            def _fake_run_task(cmd, *, input_text=None, timeout=0.0, **_kwargs):
                 timeouts.append(timeout)
                 if "export" in cmd:
                     return True, json.dumps({"uuid": "u1"}), ""
@@ -801,7 +801,7 @@ def test_on_exit_queue_drain_idempotent():
             modify_fail_once = True
             parent_next = {"p1": "", "p2": ""}
 
-            def _fake_run_task(cmd, *, input_text=None, timeout=6.0):
+            def _fake_run_task(cmd, *, input_text=None, timeout=6.0, **_kwargs):
                 nonlocal import_calls, modify_calls, modify_fail_once
                 if "export" in cmd:
                     uuid = ""
@@ -2074,8 +2074,8 @@ def test_on_add_dnf_cache_quarantines_invalid_jsonl():
         expect(quarantined, "DNF cache should quarantine invalid JSONL")
 
 
-def test_on_add_dnf_cache_checksum_mismatch_quarantines():
-    """on-add DNF cache should quarantine on checksum mismatch."""
+def test_on_add_dnf_cache_checksum_mismatch_salvages():
+    """on-add DNF cache should salvage entries on checksum mismatch."""
     hook = _find_hook_file("on-add-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_add_cache_checksum_test")
     if not hasattr(mod, "_load_dnf_disk_cache"):
@@ -2092,9 +2092,10 @@ def test_on_add_dnf_cache_checksum_mismatch_quarantines():
         mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
         mod._DNF_DISK_CACHE_ENABLED = True
         mod._DNF_DISK_CACHE = None
-        mod._load_dnf_disk_cache()
+        cache = mod._load_dnf_disk_cache()
+        expect(cache.get("k1") == {"v": 1}, "DNF cache should salvage entries on checksum mismatch")
         quarantined = [p for p in os.listdir(td) if p.startswith("dnf_cache.corrupt.") and p.endswith(".jsonl")]
-        expect(quarantined, "DNF cache should quarantine checksum mismatch")
+        expect(not quarantined, "DNF cache should not quarantine checksum mismatch when salvageable")
 
 
 def test_on_add_dnf_cache_size_guard_skips_load():
@@ -2947,15 +2948,27 @@ def test_on_add_run_task_timeout():
     if not hasattr(mod, "_run_task"):
         raise AssertionError("on-add hook does not expose _run_task")
 
-    def _raise_timeout(*_args, **_kwargs):
-        raise subprocess.TimeoutExpired(cmd="task", timeout=1)
-
-    orig = mod.subprocess.run
-    mod.subprocess.run = _raise_timeout
+    orig_core_run = mod.core.run_task if getattr(mod, "core", None) is not None else None
+    orig_popen = None
+    if orig_core_run is not None:
+        mod.core.run_task = lambda *_args, **_kwargs: (False, "", "timeout")
+    else:
+        orig_popen = mod.subprocess.Popen
+        class _FakeProc:
+            def __init__(self):
+                self.returncode = 1
+            def communicate(self, input=None, timeout=None):
+                raise subprocess.TimeoutExpired(cmd="task", timeout=timeout)
+            def kill(self):
+                return None
+        mod.subprocess.Popen = lambda *_args, **_kwargs: _FakeProc()
     try:
         ok, _out, err = mod._run_task(["task", "export"], timeout=0.1, retries=1)
     finally:
-        mod.subprocess.run = orig
+        if orig_core_run is not None:
+            mod.core.run_task = orig_core_run
+        if orig_popen is not None:
+            mod.subprocess.Popen = orig_popen
 
     expect(not ok, "_run_task should return ok=False on timeout")
     expect(err == "timeout", f"_run_task should report timeout, got {err!r}")
@@ -2968,15 +2981,27 @@ def test_on_modify_run_task_timeout():
     if not hasattr(mod, "_run_task"):
         raise AssertionError("on-modify hook does not expose _run_task")
 
-    def _raise_timeout(*_args, **_kwargs):
-        raise subprocess.TimeoutExpired(cmd="task", timeout=1)
-
-    orig = mod.subprocess.run
-    mod.subprocess.run = _raise_timeout
+    orig_core_run = mod.core.run_task if getattr(mod, "core", None) is not None else None
+    orig_popen = None
+    if orig_core_run is not None:
+        mod.core.run_task = lambda *_args, **_kwargs: (False, "", "timeout")
+    else:
+        orig_popen = mod.subprocess.Popen
+        class _FakeProc:
+            def __init__(self):
+                self.returncode = 1
+            def communicate(self, input=None, timeout=None):
+                raise subprocess.TimeoutExpired(cmd="task", timeout=timeout)
+            def kill(self):
+                return None
+        mod.subprocess.Popen = lambda *_args, **_kwargs: _FakeProc()
     try:
         ok, _out, err = mod._run_task(["task", "export"], timeout=0.1, retries=1)
     finally:
-        mod.subprocess.run = orig
+        if orig_core_run is not None:
+            mod.core.run_task = orig_core_run
+        if orig_popen is not None:
+            mod.subprocess.Popen = orig_popen
 
     expect(not ok, "_run_task should return ok=False on timeout")
     expect(err == "timeout", f"_run_task should report timeout, got {err!r}")
@@ -3156,7 +3181,7 @@ TESTS = [
     test_on_add_dnf_cache_versioned_payload,
     test_on_add_dnf_cache_corrupt_payload_recovers,
     test_on_add_dnf_cache_quarantines_invalid_jsonl,
-    test_on_add_dnf_cache_checksum_mismatch_quarantines,
+    test_on_add_dnf_cache_checksum_mismatch_salvages,
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,

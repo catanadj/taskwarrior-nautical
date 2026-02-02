@@ -370,6 +370,119 @@ def _anchor_explain(expr: str) -> int:
     console.print(Panel(table, title="Anchor explain", border_style=COLORS["secondary"], expand=False))
     return 0
 
+def _taskdata_dir() -> Path:
+    td = os.environ.get("TASKDATA")
+    if td:
+        return Path(td).expanduser()
+    return Path.home() / ".task"
+
+def _is_valid_spawn_entry(entry: dict) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
+    if not spawn_intent_id:
+        return False
+    child = entry.get("child")
+    if not isinstance(child, dict):
+        return False
+    child_uuid = (child.get("uuid") or "").strip()
+    if not child_uuid:
+        return False
+    return True
+
+def _recover_dead_letter(*, dry_run: bool, prune: bool, limit: int | None) -> int:
+    td = _taskdata_dir()
+    dead_path = td / ".nautical_dead_letter.jsonl"
+    queue_path = td / ".nautical_spawn_queue.jsonl"
+    lock_dead = td / ".nautical_dead_letter.lock"
+    lock_queue = td / ".nautical_spawn_queue.lock"
+
+    if not dead_path.exists():
+        console.print(f"[{COLORS['warning']}]No dead-letter file found at {dead_path}[/]")
+        return 0
+
+    lock_fn = getattr(core, "safe_lock", None) if core else None
+    if lock_fn is None:
+        def _noop_lock(_path, **_kwargs):
+            from contextlib import contextmanager
+            @contextmanager
+            def _cm():
+                yield True
+            return _cm()
+        lock_fn = _noop_lock
+
+    lines: list[str] = []
+    recovered_entries: list[dict] = []
+    recovered_line_indexes: list[int] = []
+    skipped = 0
+    invalid = 0
+
+    with lock_fn(lock_dead, retries=3, sleep_base=0.05, jitter=0.05, mkdir=True, stale_after=30.0) as ok:
+        if not ok:
+            console.print(f"[{COLORS['warning']}]Dead-letter lock busy; try again later.[/]")
+            return 1
+        try:
+            lines = [ln.rstrip("\n") for ln in dead_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        except Exception as e:
+            console.print(f"[{COLORS['error']}]Failed to read dead-letter file: {e}[/]")
+            return 1
+
+    for idx, line in enumerate(lines):
+        if limit is not None and len(recovered_entries) >= limit:
+            break
+        try:
+            obj = json.loads(line)
+        except Exception:
+            skipped += 1
+            continue
+        entry = obj.get("entry") if isinstance(obj, dict) else None
+        if isinstance(entry, dict) and _is_valid_spawn_entry(entry):
+            recovered_entries.append(entry)
+            recovered_line_indexes.append(idx)
+        else:
+            invalid += 1
+
+    if dry_run:
+        console.print(
+            f"[{COLORS['secondary']}]Recoverable entries: {len(recovered_entries)} "
+            f"(invalid: {invalid}, skipped: {skipped})[/]"
+        )
+        return 0
+
+    if recovered_entries:
+        with lock_fn(lock_queue, retries=3, sleep_base=0.05, jitter=0.05, mkdir=True, stale_after=30.0) as ok:
+            if not ok:
+                console.print(f"[{COLORS['warning']}]Queue lock busy; try again later.[/]")
+                return 1
+            try:
+                queue_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(queue_path, "a", encoding="utf-8") as f:
+                    for entry in recovered_entries:
+                        f.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
+            except Exception as e:
+                console.print(f"[{COLORS['error']}]Failed to append to spawn queue: {e}[/]")
+                return 1
+
+    if prune and recovered_line_indexes:
+        recovered_set = set(recovered_line_indexes)
+        with lock_fn(lock_dead, retries=3, sleep_base=0.05, jitter=0.05, mkdir=True, stale_after=30.0) as ok:
+            if not ok:
+                console.print(f"[{COLORS['warning']}]Dead-letter lock busy; prune skipped.[/]")
+            else:
+                try:
+                    current = [ln for ln in dead_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+                    kept = [ln for i, ln in enumerate(current) if i not in recovered_set]
+                    dead_path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+                except Exception as e:
+                    console.print(f"[{COLORS['warning']}]Failed to prune dead-letter file: {e}[/]")
+
+    console.print(
+        f"[{COLORS['success']}]Recovered {len(recovered_entries)} entries[/]"
+        + (f" (invalid: {invalid})" if invalid else "")
+        + (f" (skipped: {skipped})" if skipped else "")
+    )
+    return 0
+
 def _validate_anchor(expr: str) -> int:
     try:
         core.validate_anchor_expr_strict(expr)
@@ -2470,6 +2583,27 @@ def main():
                         help="Force vertical timing chart (good for Termux/narrow terminals)")
     parser.add_argument("--horizontal", action="store_true",
                         help="Force horizontal timing chart")
+    parser.add_argument(
+        "--recover-dead-letter",
+        action="store_true",
+        help="Requeue dead-lettered spawn intents into the spawn queue",
+    )
+    parser.add_argument(
+        "--recover-dry-run",
+        action="store_true",
+        help="Report recoverable dead-letter entries without writing files",
+    )
+    parser.add_argument(
+        "--recover-prune",
+        action="store_true",
+        help="Remove recovered lines from the dead-letter file",
+    )
+    parser.add_argument(
+        "--recover-limit",
+        type=int,
+        default=None,
+        help="Recover at most N entries from dead-letter",
+    )
 
 
     args = parser.parse_args()
@@ -2477,7 +2611,7 @@ def main():
         console.print(f"[{COLORS['error']}]Error: nautical_core.py not found.[/]")
         sys.exit(1)
 
-    if args.self_check or args.explain or args.validate:
+    if args.self_check or args.explain or args.validate or args.recover_dead_letter:
         code = 0
         if args.self_check:
             code = max(code, _self_check())
@@ -2485,6 +2619,15 @@ def main():
             code = max(code, _validate_anchor(args.validate))
         if args.explain:
             code = max(code, _anchor_explain(args.explain))
+        if args.recover_dead_letter:
+            code = max(
+                code,
+                _recover_dead_letter(
+                    dry_run=args.recover_dry_run,
+                    prune=args.recover_prune,
+                    limit=args.recover_limit,
+                ),
+            )
         sys.exit(code)
 
     analyzer = TaskAnalyzer()

@@ -269,6 +269,9 @@ _DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
 _SPAWN_LOCK_RETRIES = 6
 _SPAWN_LOCK_SLEEP_BASE = 0.03
+_SPAWN_LOCK_STALE_AFTER = 30.0
+_DEAD_LETTER_LOCK_RETRIES = _SPAWN_LOCK_RETRIES
+_DEAD_LETTER_LOCK_SLEEP_BASE = _SPAWN_LOCK_SLEEP_BASE
 _WARNED_SPAWN_QUEUE_LOCK = False
 _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 
@@ -344,6 +347,9 @@ def _apply_core_config() -> None:
 _CHAIN_EXPORT_TIMEOUT_BASE = _env_float("NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE", _DEFAULT_CHAIN_EXPORT_TIMEOUT_BASE)
 _CHAIN_EXPORT_TIMEOUT_PER_100 = _env_float("NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100", _DEFAULT_CHAIN_EXPORT_TIMEOUT_PER_100)
 _CHAIN_EXPORT_TIMEOUT_MAX = _env_float("NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX", _DEFAULT_CHAIN_EXPORT_TIMEOUT_MAX)
+_CHAIN_EXPORT_TIMES: list[float] = []
+_CHAIN_EXPORT_TIMES_MAX = 20
+_CHAIN_EXPORT_TIMEOUT_FLOOR = _CHAIN_EXPORT_TIMEOUT_BASE
 
 
 # ------------------------------------------------------------------------------
@@ -417,8 +423,13 @@ def _read_two():
     objs: list[object] = []
     n = len(raw)
     tries = 0
+    loop_guard = 0
+    max_loops = 10
 
     while idx < n and len(objs) < 2:
+        loop_guard += 1
+        if loop_guard > max_loops:
+            _fail_and_exit("Protocol error", "Invalid JSON input: too many parse attempts")
         while idx < n and raw[idx].isspace():
             idx += 1
         if idx >= n:
@@ -843,7 +854,7 @@ def _queue_locked(fn):
         sleep_base=_SPAWN_LOCK_SLEEP_BASE,
         jitter=_SPAWN_LOCK_SLEEP_BASE,
         mkdir=True,
-        stale_after=30.0,
+        stale_after=_SPAWN_LOCK_STALE_AFTER,
     ) as acquired:
         if not acquired:
             _diag(f"queue lock not acquired after {int((_time.perf_counter() - t0) * 1000)}ms: {_SPAWN_QUEUE_LOCK}")
@@ -967,7 +978,14 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
     except Exception:
         pass
     try:
-        with core.safe_lock(_DEAD_LETTER_LOCK, retries=3, sleep_base=0.02, jitter=0.02, mkdir=True, stale_after=30.0) as ok:
+        with core.safe_lock(
+            _DEAD_LETTER_LOCK,
+            retries=_DEAD_LETTER_LOCK_RETRIES,
+            sleep_base=_DEAD_LETTER_LOCK_SLEEP_BASE,
+            jitter=_DEAD_LETTER_LOCK_SLEEP_BASE,
+            mkdir=True,
+            stale_after=_SPAWN_LOCK_STALE_AFTER,
+        ) as ok:
             if not ok:
                 return
             fd = os.open(str(_DEAD_LETTER_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
@@ -1021,6 +1039,7 @@ def _run_task(
         )
     else:
         env = env or os.environ.copy()
+        proc = None
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -1036,13 +1055,23 @@ def _run_task(
             out, err = proc.communicate(input=input_text, timeout=timeout)
             ok, out, err = (proc.returncode == 0, out or "", err or "")
         except subprocess.TimeoutExpired:
-            proc.kill()
+            if proc is not None:
+                proc.kill()
             try:
-                out, err = proc.communicate(timeout=1.0)
+                out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
             except Exception:
                 out, err = "", ""
             ok, out, err = (False, out or "", "timeout")
         except Exception as e:
+            if proc is not None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
             ok, out, err = (False, "", str(e))
     _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
     if not ok:
@@ -3513,6 +3542,7 @@ def _extra_safe(extra: str) -> bool:
     return re.match(r"^[\w\.\-:,=\s]+$", s) is not None
 
 def _chain_export_timeout(chain_id: str) -> float:
+    global _CHAIN_EXPORT_TIMEOUT_FLOOR
     base = float(_CHAIN_EXPORT_TIMEOUT_BASE)
     per_100 = float(_CHAIN_EXPORT_TIMEOUT_PER_100)
     max_t = float(_CHAIN_EXPORT_TIMEOUT_MAX)
@@ -3520,13 +3550,29 @@ def _chain_export_timeout(chain_id: str) -> float:
     if chain_id and _CHAIN_CACHE_CHAIN_ID == chain_id and _CHAIN_CACHE:
         extra = max(0, len(_CHAIN_CACHE) // 100)
         est = base + (extra * per_100)
+    adaptive = 0.0
+    if _CHAIN_EXPORT_TIMES:
+        try:
+            times = sorted(t for t in _CHAIN_EXPORT_TIMES if t > 0)
+        except Exception:
+            times = []
+        if times:
+            idx = int(0.95 * (len(times) - 1))
+            p95 = times[max(0, min(idx, len(times) - 1))]
+            adaptive = p95 * 2.0
+    floor = _CHAIN_EXPORT_TIMEOUT_FLOOR
+    if floor < base:
+        floor = base
+        _CHAIN_EXPORT_TIMEOUT_FLOOR = base
     if est < base:
         est = base
-    if est > max_t:
-        est = max_t
-    return est
+    timeout = max(est, adaptive, floor)
+    if timeout > max_t:
+        timeout = max_t
+    return timeout
 
 def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None, limit: int | None = None) -> list[dict]:
+    global _CHAIN_EXPORT_TIMEOUT_FLOOR
     if not chain_id:
         return []
     args = ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
@@ -3540,14 +3586,26 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
             return []
         args += shlex.split(extra)
     args.append("export")
+    start = _time.perf_counter()
+    timeout = _chain_export_timeout(chain_id)
     ok, out, err = _run_task(
         args,
         env=env,
-        timeout=_chain_export_timeout(chain_id),
+        timeout=timeout,
         retries=1,
         use_tempfiles=True,
     )
+    elapsed = _time.perf_counter() - start
+    if ok:
+        if elapsed > 0:
+            _CHAIN_EXPORT_TIMES.append(elapsed)
+            if len(_CHAIN_EXPORT_TIMES) > _CHAIN_EXPORT_TIMES_MAX:
+                del _CHAIN_EXPORT_TIMES[:len(_CHAIN_EXPORT_TIMES) - _CHAIN_EXPORT_TIMES_MAX]
+        if _CHAIN_EXPORT_TIMEOUT_FLOOR > _CHAIN_EXPORT_TIMEOUT_BASE:
+            _CHAIN_EXPORT_TIMEOUT_FLOOR = max(_CHAIN_EXPORT_TIMEOUT_BASE, _CHAIN_EXPORT_TIMEOUT_FLOOR * 0.9)
     if not ok:
+        if "timeout" in (err or "").lower():
+            _CHAIN_EXPORT_TIMEOUT_FLOOR = min(_CHAIN_EXPORT_TIMEOUT_MAX, max(_CHAIN_EXPORT_TIMEOUT_FLOOR, timeout * 1.5))
         _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
         if chain_id and chain_id not in _WARNED_CHAIN_EXPORT:
             _WARNED_CHAIN_EXPORT.add(chain_id)

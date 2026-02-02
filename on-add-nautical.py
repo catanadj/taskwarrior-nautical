@@ -230,7 +230,7 @@ def _load_dnf_disk_cache() -> OrderedDict:
                     pass
                 with open(_DNF_DISK_CACHE_PATH, "r", encoding="utf-8") as f:
                     parsed_any = False
-                    parse_error = None
+                    soft_error = False
                     lines = [ln.strip() for ln in f if ln.strip()]
                     if not lines:
                         return _DNF_DISK_CACHE
@@ -240,45 +240,35 @@ def _load_dnf_disk_cache() -> OrderedDict:
                         first_obj = None
                     data_lines = lines
                     if isinstance(first_obj, dict) and "version" in first_obj:
-                        parsed_any = True
                         if int(first_obj.get("version") or 0) != _DNF_DISK_CACHE_VERSION:
-                            parse_error = "DNF cache version mismatch"
+                            soft_error = True
                         checksum = (first_obj.get("checksum") or "").strip()
                         data_lines = lines[1:]
                         if checksum:
                             payload = "\n".join(data_lines)
                             calc = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
                             if checksum != calc:
-                                parse_error = "DNF cache checksum mismatch"
-                    if not parse_error:
-                        for line in data_lines:
-                            try:
-                                obj = json.loads(line)
-                            except Exception:
-                                parse_error = "DNF cache JSONL parse failure"
-                                break
-                            parsed_any = True
-                            key = None
-                            val = None
-                            if isinstance(obj, dict):
-                                if "key" in obj and "value" in obj:
-                                    key = obj.get("key")
-                                    val = obj.get("value")
-                                elif "k" in obj and "v" in obj:
-                                    key = obj.get("k")
-                                    val = obj.get("v")
-                            if key is not None:
-                                _DNF_DISK_CACHE[str(key)] = val
-                    if parse_error:
+                                soft_error = True
+                    for line in data_lines:
                         try:
-                            ts = int(time.time())
-                            bad = _DNF_DISK_CACHE_PATH.with_suffix(f".corrupt.{ts}.jsonl")
-                            os.replace(_DNF_DISK_CACHE_PATH, bad)
-                            _diag(f"DNF cache quarantined: {bad}")
+                            obj = json.loads(line)
                         except Exception:
-                            pass
-                        _DNF_DISK_CACHE = OrderedDict()
-                        return _DNF_DISK_CACHE
+                            soft_error = True
+                            continue
+                        key = None
+                        val = None
+                        if isinstance(obj, dict):
+                            if "key" in obj and "value" in obj:
+                                key = obj.get("key")
+                                val = obj.get("value")
+                            elif "k" in obj and "v" in obj:
+                                key = obj.get("k")
+                                val = obj.get("v")
+                        if key is not None:
+                            _DNF_DISK_CACHE[str(key)] = val
+                            parsed_any = True
+                    if soft_error and parsed_any:
+                        _DNF_DISK_CACHE_DIRTY = True
                     if not parsed_any and (file_size or 0) > 0:
                         try:
                             ts = int(time.time())
@@ -567,6 +557,7 @@ def _run_task(
             retry_delay=retry_delay,
         )
     env = env or os.environ.copy()
+    proc = None
     try:
         proc = subprocess.Popen(
             cmd,
@@ -582,13 +573,23 @@ def _run_task(
         out, err = proc.communicate(input=input_text, timeout=timeout)
         return (proc.returncode == 0, out or "", err or "")
     except subprocess.TimeoutExpired:
-        proc.kill()
+        if proc is not None:
+            proc.kill()
         try:
-            out, err = proc.communicate(timeout=1.0)
+            out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
         except Exception:
             out, err = "", ""
         return (False, out or "", "timeout")
     except Exception as e:
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=1.0)
+            except Exception:
+                pass
         return (False, "", str(e))
 
 

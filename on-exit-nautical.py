@@ -82,9 +82,21 @@ def _env_float(name: str, default: float) -> float:
     except Exception:
         return float(default)
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.environ.get(name, "")).strip() or default)
+    except Exception:
+        return int(default)
+
 _TASK_TIMEOUT_EXPORT = _env_float("NAUTICAL_TASK_TIMEOUT_EXPORT", 3.0)
 _TASK_TIMEOUT_IMPORT = _env_float("NAUTICAL_TASK_TIMEOUT_IMPORT", 8.0)
 _TASK_TIMEOUT_MODIFY = _env_float("NAUTICAL_TASK_TIMEOUT_MODIFY", 4.0)
+_TASK_RETRIES_EXPORT = _env_int("NAUTICAL_TASK_RETRIES_EXPORT", 2)
+_TASK_RETRIES_MODIFY = _env_int("NAUTICAL_TASK_RETRIES_MODIFY", 2)
+_TASK_RETRY_DELAY = _env_float("NAUTICAL_TASK_RETRY_DELAY", 0.2)
+_QUEUE_LOCK_RETRIES = _env_int("NAUTICAL_QUEUE_LOCK_RETRIES", 6)
+_QUEUE_LOCK_SLEEP_BASE = _env_float("NAUTICAL_QUEUE_LOCK_SLEEP_BASE", 0.03)
+_QUEUE_LOCK_STALE_AFTER = _env_float("NAUTICAL_QUEUE_LOCK_STALE_AFTER", 30.0)
 
 @contextmanager
 def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, stale_after: float | None = 60.0):
@@ -251,7 +263,14 @@ def _emit_exit_feedback(msg: str) -> None:
     except Exception:
         pass
 
-def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float = 6.0) -> tuple[bool, str, str]:
+def _run_task(
+    cmd: list[str],
+    *,
+    input_text: str | None = None,
+    timeout: float = 6.0,
+    retries: int = 1,
+    retry_delay: float = 0.0,
+) -> tuple[bool, str, str]:
     run_fn = core.run_task if core is not None else None
     if run_fn is not None:
         return run_fn(
@@ -259,36 +278,81 @@ def _run_task(cmd: list[str], *, input_text: str | None = None, timeout: float =
             env=os.environ.copy(),
             input_text=input_text,
             timeout=timeout,
-            retries=1,
-            retry_delay=0.0,
+            retries=max(1, int(retries)),
+            retry_delay=max(0.0, float(retry_delay)),
         )
     env = os.environ.copy()
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            close_fds=True,
-            env=env,
-        )
+    attempts = max(1, int(retries))
+    delay = max(0.0, float(retry_delay))
+    last_out = ""
+    last_err = ""
+    for attempt in range(1, attempts + 1):
+        proc = None
         try:
-            out, err = proc.communicate(input=input_text, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                close_fds=True,
+                env=env,
+            )
             try:
-                out, err = proc.communicate(timeout=1.0)
-            except Exception:
-                out, err = "", ""
-            return (False, out or "", "timeout")
-        return (proc.returncode == 0, out or "", err or "")
-    except subprocess.TimeoutExpired:
-        return (False, "", "timeout")
-    except Exception as e:
-        return (False, "", str(e))
+                out, err = proc.communicate(input=input_text, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                if proc is not None:
+                    proc.kill()
+                try:
+                    out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
+                except Exception:
+                    out, err = "", ""
+                last_out = out or ""
+                last_err = "timeout"
+                if attempt < attempts and delay > 0:
+                    jitter = random.uniform(0.0, delay)
+                    _sleep(delay * (2 ** (attempt - 1)) + jitter)
+                    continue
+                return (False, last_out, last_err)
+            last_out = out or ""
+            last_err = err or ""
+            if proc.returncode == 0:
+                return (True, last_out, last_err)
+            if attempt < attempts and delay > 0:
+                jitter = random.uniform(0.0, delay)
+                _sleep(delay * (2 ** (attempt - 1)) + jitter)
+                continue
+            return (False, last_out, last_err)
+        except subprocess.TimeoutExpired:
+            if proc is not None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+            last_err = "timeout"
+        except Exception as e:
+            if proc is not None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+            last_err = str(e)
+        if attempt < attempts and delay > 0:
+            jitter = random.uniform(0.0, delay)
+            _sleep(delay * (2 ** (attempt - 1)) + jitter)
+            continue
+        return (False, last_out, last_err)
+    return (False, last_out, last_err)
 
 
 def _is_lock_error(err: str) -> bool:
@@ -366,14 +430,24 @@ def _record_queue_lock_failure() -> None:
 @contextmanager
 def _lock_queue():
     lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(_QUEUE_LOCK, retries=6, sleep_base=0.05, stale_after=30.0) as acquired:
+    with lock_fn(
+        _QUEUE_LOCK,
+        retries=_QUEUE_LOCK_RETRIES,
+        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
+        stale_after=_QUEUE_LOCK_STALE_AFTER,
+    ) as acquired:
         yield acquired
 
 
 @contextmanager
 def _lock_dead_letter():
     lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(_DEAD_LETTER_LOCK, retries=6, sleep_base=0.05, stale_after=30.0) as acquired:
+    with lock_fn(
+        _DEAD_LETTER_LOCK,
+        retries=_QUEUE_LOCK_RETRIES,
+        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
+        stale_after=_QUEUE_LOCK_STALE_AFTER,
+    ) as acquired:
         yield acquired
 
 
@@ -661,6 +735,8 @@ def _export_uuid(uuid_str: str) -> dict:
             "export",
         ],
         timeout=_TASK_TIMEOUT_EXPORT,
+        retries=_TASK_RETRIES_EXPORT,
+        retry_delay=_TASK_RETRY_DELAY,
     )
     if not ok:
         return {"exists": False, "retryable": _is_lock_error(err), "err": err or "", "obj": None}
@@ -726,6 +802,8 @@ def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: s
             f"nextLink:{child_short}",
         ],
         timeout=_TASK_TIMEOUT_MODIFY,
+        retries=_TASK_RETRIES_MODIFY,
+        retry_delay=_TASK_RETRY_DELAY,
     )
     return ok, err or ""
 

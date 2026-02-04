@@ -255,10 +255,16 @@ def _append_next_wait_sched_rows(
 # ------------------------------------------------------------------------------
 # Locate nautical_core (single fixed location: ~/.task)
 # ------------------------------------------------------------------------------
+
+try:
+    # Get the fifth argument and remove the "data:" prefix
+    hook_data_arg = len(sys.argv) > 5 and len(sys.argv[5]) >= 5 and Path(sys.argv[5][5:])
+except Exception:
+    hook_data_arg = None
+
 HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
-
-TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
+TW_DATA_DIR = hook_data_arg or Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
 
 # ------------------------------------------------------------------------------
 # Deferred next-link spawn queue (used when nested `task import` times out due to TW lock)

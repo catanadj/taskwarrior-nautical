@@ -55,7 +55,14 @@ try:
                 pass
 except Exception:
     core = None
-TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
+
+try:
+    # Get the fifth argument and remove the "data:" prefix
+    hook_data_arg = len(sys.argv) > 5 and len(sys.argv[5]) >= 5 and Path(sys.argv[5][5:])
+except Exception:
+    hook_data_arg = None
+
+TW_DATA_DIR = hook_data_arg or Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
 
 _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _QUEUE_PROCESSING_PATH = TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"

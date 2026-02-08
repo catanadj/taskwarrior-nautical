@@ -1112,7 +1112,18 @@ def _export_uuid_short(u_short: str, env=None):
         return None
 
 
-def _task_exists_by_uuid(u: str, env: dict) -> bool:
+def _task_exists_by_uuid(u: str, env: dict | None) -> bool:
+    if env is None:
+        return _task_exists_by_uuid_cached(u)
+    return _task_exists_by_uuid_uncached(u, env=env)
+
+
+@lru_cache(maxsize=512)
+def _task_exists_by_uuid_cached(u: str) -> bool:
+    return _task_exists_by_uuid_uncached(u, env=None)
+
+
+def _task_exists_by_uuid_uncached(u: str, env: dict | None) -> bool:
     q = ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=off", f"uuid:{u}", "export"]
     ok, out, err = _run_task(q, env=env, timeout=2.5, retries=2)
     if not ok:
@@ -1485,6 +1496,18 @@ def _task(args, env=None) -> str:
 
 def _export_uuid_full(u: str, env=None) -> dict | None:
     """Export a single task by full UUID."""
+    if env is None:
+        res = _export_uuid_full_cached(u)
+        return dict(res) if isinstance(res, dict) else None
+    return _export_uuid_full_uncached(u, env=env)
+
+
+@lru_cache(maxsize=256)
+def _export_uuid_full_cached(u: str) -> dict | None:
+    return _export_uuid_full_uncached(u, env=None)
+
+
+def _export_uuid_full_uncached(u: str, env=None) -> dict | None:
     if env is None and u and u in _CHAIN_BY_UUID:
         # Return a shallow copy to avoid accidental mutation of cache.
         _diag_count("export_full_cache_hits")

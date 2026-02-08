@@ -286,6 +286,34 @@ def _warn_once_per_day_any(key: str, message: str) -> None:
         pass
 
 
+def _warn_rate_limited_any(key: str, message: str, min_interval_s: float = 3600.0) -> None:
+    """Emit a diagnostic warning at most once per min_interval_s (always on)."""
+    try:
+        d = _nautical_cache_dir()
+        os.makedirs(d, exist_ok=True)
+        stamp_path = os.path.join(d, f".diag_{key}.stamp")
+        now = time.time()
+        last = None
+        if os.path.exists(stamp_path):
+            try:
+                with open(stamp_path, "r", encoding="utf-8") as f:
+                    raw = f.read().strip()
+                last = float(raw) if raw else None
+            except Exception:
+                last = None
+        if last is not None and (now - last) < float(min_interval_s or 0.0):
+            return
+        with open(stamp_path, "w", encoding="utf-8") as f:
+            f.write(str(now))
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                print(message, file=sys.stderr)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _emit_cache_metrics() -> None:
     """Emit lru_cache metrics when NAUTICAL_DIAG_METRICS=1."""
     if os.environ.get("NAUTICAL_DIAG_METRICS") != "1":
@@ -2022,9 +2050,21 @@ def _cache_lock(key: str):
 _DIAG_LOG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
 
 
+def _redact_dict(data: dict, redact_keys: frozenset) -> dict:
+    out = {}
+    for k, v in (data or {}).items():
+        if k in redact_keys:
+            out[k] = "[redacted]"
+        else:
+            out[k] = v
+    return out
+
+
 def diag_log_redact(msg: str, redact_keys: frozenset | None = None) -> str:
     """Redact sensitive keys from JSON msg for diagnostic logs."""
     keys = redact_keys or _DIAG_LOG_REDACT_KEYS
+    if isinstance(msg, dict):
+        return _redact_dict(msg, keys)
     try:
         data = json.loads(msg)
         if isinstance(data, dict):
@@ -2073,15 +2113,28 @@ def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
         payload = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "hook": hook_name,
-            "msg": diag_log_redact(str(msg)),
+            "pid": os.getpid(),
+            "ppid": os.getppid(),
+            "cwd": os.getcwd(),
         }
+        if data_dir:
+            payload["data_dir"] = str(data_dir)
+        if isinstance(msg, dict):
+            red = diag_log_redact(msg)
+            if isinstance(red, dict):
+                payload["msg"] = str(red.get("msg") or red.get("message") or "")
+                payload["data"] = red
+            else:
+                payload["msg"] = str(red)
+        else:
+            payload["msg"] = diag_log_redact(str(msg))
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
     except Exception:
         pass
 
 
-def diag(msg: str, hook_name: str = "nautical", data_dir: str | None = None) -> None:
+def diag(msg, hook_name: str = "nautical", data_dir: str | None = None) -> None:
     """Write diagnostics to stderr when NAUTICAL_DIAG=1 and append to diag log when NAUTICAL_DIAG_LOG=1."""
     if os.environ.get("NAUTICAL_DIAG") == "1":
         try:
@@ -2130,8 +2183,8 @@ def run_task(
                 stdout=(out_f if out_f is not None else subprocess.PIPE),
                 stderr=(err_f if err_f is not None else subprocess.PIPE),
                 text=text_mode,
-                encoding="utf-8",
-                errors="replace",
+                encoding=("utf-8" if text_mode else None),
+                errors=("replace" if text_mode else None),
                 close_fds=True,
                 env=env,
             )

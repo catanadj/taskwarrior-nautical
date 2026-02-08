@@ -344,6 +344,29 @@ def test_warn_once_per_day_no_diag_silent():
             else:
                 os.environ["NAUTICAL_DIAG"] = prev_diag
 
+def test_warn_once_per_day_any_no_diag_silent():
+    """Ensure _warn_once_per_day_any does not write to stderr when NAUTICAL_DIAG is unset."""
+    with tempfile.TemporaryDirectory() as td:
+        prev = os.environ.get("XDG_CACHE_HOME")
+        prev_diag = os.environ.get("NAUTICAL_DIAG")
+        os.environ["XDG_CACHE_HOME"] = td
+        if "NAUTICAL_DIAG" in os.environ:
+            os.environ.pop("NAUTICAL_DIAG", None)
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(buf):
+                core._warn_once_per_day_any("golden_test_any_silent", "golden test message")
+            expect(buf.getvalue() == "", "expected no stderr output when NAUTICAL_DIAG is unset")
+        finally:
+            if prev is None:
+                os.environ.pop("XDG_CACHE_HOME", None)
+            else:
+                os.environ["XDG_CACHE_HOME"] = prev
+            if prev_diag is None:
+                os.environ.pop("NAUTICAL_DIAG", None)
+            else:
+                os.environ["NAUTICAL_DIAG"] = prev_diag
+
 def test_on_add_fail_and_exit_emits_json():
     """_fail_and_exit should fail-closed without emitting task JSON."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -392,6 +415,14 @@ def test_hook_stdout_strict_json_with_diag_on_modify():
         p = _run_hook_script_raw(hook, raw, env_extra=env)
         expect(p.returncode == 0, f"on-modify returned {p.returncode}")
         _assert_stdout_json_only(p.stdout)
+
+def test_hook_stdout_empty_on_exit():
+    """on-exit should not emit stdout (stdout is redirected to /dev/null)."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    env = {"NAUTICAL_DIAG": "1"}
+    p = _run_hook_script_raw(hook, "", env_extra=env)
+    expect(p.returncode == 0, f"on-exit returned {p.returncode}")
+    expect((p.stdout or "") == "", f"on-exit expected empty stdout, got: {p.stdout!r}")
 
 def test_hook_files_are_private_permissions():
     """Queue/dead-letter/lock files should not be group/world-readable."""
@@ -672,6 +703,58 @@ def test_diag_log_redacts_sensitive_fields():
             else:
                 os.environ["NAUTICAL_DIAG_LOG"] = prev_diag_log
 
+def test_diag_log_structured_fields():
+    """Persistent diag log should include structured fields for dict messages."""
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        prev_diag_log = os.environ.get("NAUTICAL_DIAG_LOG")
+        os.environ["TASKDATA"] = td
+        os.environ["NAUTICAL_DIAG_LOG"] = "1"
+        try:
+            core.diag({"msg": "hello", "description": "secret", "ok": "keep", "event": "test"})
+            log_path = Path(td) / ".nautical_diag.jsonl"
+            line = log_path.read_text(encoding="utf-8").strip().splitlines()[-1]
+            obj = json.loads(line)
+            expect(obj.get("msg") == "hello", f"unexpected msg: {obj.get('msg')!r}")
+            data = obj.get("data") or {}
+            expect(data.get("description") == "[redacted]", "structured redaction missing")
+            expect(data.get("ok") == "keep", "structured payload missing ok field")
+            expect("pid" in obj and "cwd" in obj, "structured fields missing pid/cwd")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+            if prev_diag_log is None:
+                os.environ.pop("NAUTICAL_DIAG_LOG", None)
+            else:
+                os.environ["NAUTICAL_DIAG_LOG"] = prev_diag_log
+
+def test_warn_rate_limited_any():
+    """Rate-limited warnings should only emit once per interval."""
+    with tempfile.TemporaryDirectory() as td:
+        prev_cache = os.environ.get("XDG_CACHE_HOME")
+        prev_diag = os.environ.get("NAUTICAL_DIAG")
+        os.environ["XDG_CACHE_HOME"] = td
+        os.environ["NAUTICAL_DIAG"] = "1"
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(buf):
+                core._warn_rate_limited_any("golden_rate_limit", "rate limit message", min_interval_s=3600.0)
+                core._warn_rate_limited_any("golden_rate_limit", "rate limit message", min_interval_s=3600.0)
+            out = buf.getvalue().strip().splitlines()
+            expect(len([ln for ln in out if "rate limit message" in ln]) == 1,
+                   f"expected 1 warning, got: {out}")
+        finally:
+            if prev_cache is None:
+                os.environ.pop("XDG_CACHE_HOME", None)
+            else:
+                os.environ["XDG_CACHE_HOME"] = prev_cache
+            if prev_diag is None:
+                os.environ.pop("NAUTICAL_DIAG", None)
+            else:
+                os.environ["NAUTICAL_DIAG"] = prev_diag
+
 def test_on_exit_requeues_when_task_lock_recent():
     """on-exit should requeue when Taskwarrior export reports a lock."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -948,6 +1031,20 @@ def test_on_modify_read_two_fuzz_inputs():
         else:
             expect(p.returncode == 0, f"on-modify returned {p.returncode} for case {mode}")
             _assert_stdout_json_only(p.stdout)
+
+def test_on_add_read_one_fuzz_inputs():
+    """on-add input parsing should reject malformed JSON and empty input."""
+    hook = _find_hook_file("on-add-nautical.py")
+    cases = [
+        ("", "empty"),
+        ("{not-json}", "invalid"),
+        (json.dumps({"status": "pending"}) + "\n" + json.dumps({"status": "pending"}), "multi"),
+        ("  \n" + json.dumps({"status": "pending"}) + "\n{bad", "trailing"),
+    ]
+    for raw, mode in cases:
+        p = _run_hook_script_raw(hook, raw)
+        expect(p.returncode != 0, f"on-add should fail for case {mode}")
+        expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
 
 def test_on_modify_read_two_invalid_trailing():
     """on-modify should fail on extra garbage after JSON objects."""
@@ -1999,6 +2096,19 @@ def test_hook_task_runner_handles_nonzero():
     expect(not ok2, "_run_task expected non-zero exit to return ok=False")
 
 
+def test_core_run_task_tempfiles_accepts_text_input():
+    """core.run_task should accept str input_text with use_tempfiles=True."""
+    ok, out, err = core.run_task(
+        [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
+        input_text="hello\n",
+        timeout=2.0,
+        retries=1,
+        use_tempfiles=True,
+    )
+    expect(ok, f"run_task expected ok=True, got err={err!r}")
+    expect(out == "hello\n", f"run_task expected echoed input, got {out!r}")
+
+
 def test_on_add_dnf_cache_versioned_payload():
     """on-add DNF cache uses versioned payload and can round-trip."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -2290,6 +2400,123 @@ def test_on_exit_quarantines_bad_queue_lines():
                 os.environ.pop("TASKDATA", None)
             else:
                 os.environ["TASKDATA"] = prev_taskdata
+
+
+def test_on_exit_dead_letter_on_missing_fields():
+    """on-exit should dead-letter entries missing required fields."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_missing_fields_test")
+    if not hasattr(mod, "_drain_queue"):
+        raise AssertionError("on-exit hook does not expose drain helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        entry_missing_spawn = {
+            "parent_uuid": "00000000-0000-0000-0000-000000000111",
+            "child_short": "deadbeef",
+            "child": {"uuid": "00000000-0000-0000-0000-000000000999"},
+        }
+        entry_missing_child_uuid = {
+            "spawn_intent_id": "si_missing_child_uuid",
+            "child": {},
+        }
+        mod._QUEUE_PATH.write_text(
+            json.dumps(entry_missing_spawn) + "\n" + json.dumps(entry_missing_child_uuid) + "\n",
+            encoding="utf-8",
+        )
+
+        stats = mod._drain_queue()
+        expect(stats.get("errors") == 2, f"expected 2 errors, got: {stats}")
+        expect(mod._DEAD_LETTER_PATH.exists(), "dead letter file not created")
+        reasons = []
+        for line in mod._DEAD_LETTER_PATH.read_text(encoding="utf-8").splitlines():
+            try:
+                reasons.append(json.loads(line).get("reason"))
+            except Exception:
+                pass
+        expect("missing spawn_intent_id" in reasons, f"missing spawn_intent_id not in reasons: {reasons}")
+        expect("missing child uuid" in reasons, f"missing child uuid not in reasons: {reasons}")
+
+
+def test_on_exit_processing_file_merges_into_queue():
+    """on-exit should merge .processing queue back into main queue when both exist."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_processing_merge_test")
+    if not hasattr(mod, "_take_queue_entries"):
+        raise AssertionError("on-exit hook does not expose queue helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+
+        entry_a = {"spawn_intent_id": "si_a", "child": {"uuid": "00000000-0000-0000-0000-000000000aaa"}}
+        entry_b = {"spawn_intent_id": "si_b", "child": {"uuid": "00000000-0000-0000-0000-000000000bbb"}}
+        mod._QUEUE_PATH.write_text(json.dumps(entry_a) + "\n", encoding="utf-8")
+        mod._QUEUE_PROCESSING_PATH.write_text(json.dumps(entry_b) + "\n", encoding="utf-8")
+
+        entries = mod._take_queue_entries()
+        ids = sorted([e.get("spawn_intent_id") for e in entries if isinstance(e, dict)])
+        expect(ids == ["si_a", "si_b"], f"unexpected merged ids: {ids}")
+
+
+def test_on_exit_parent_nextlink_changed_dead_letter():
+    """on-exit should dead-letter when parent nextLink changed unexpectedly."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_parent_nextlink_changed_test")
+    if not hasattr(mod, "_drain_queue"):
+        raise AssertionError("on-exit hook does not expose drain helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        child_uuid = "00000000-0000-0000-0000-000000000999"
+        parent_uuid = "00000000-0000-0000-0000-000000000111"
+        entry = {
+            "spawn_intent_id": "si_conflict",
+            "parent_uuid": parent_uuid,
+            "parent_nextlink": "prevlink",
+            "child_short": "deadbeef",
+            "child": {"uuid": child_uuid},
+        }
+        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        def _run_task_stub(cmd, **_kwargs):
+            cmd_s = " ".join(cmd)
+            if "export" in cmd_s and f"uuid:{child_uuid}" in cmd_s:
+                return True, json.dumps({"uuid": child_uuid}), ""
+            if "export" in cmd_s and f"uuid:{parent_uuid}" in cmd_s:
+                return True, json.dumps({"uuid": parent_uuid, "nextLink": "other"}), ""
+            return False, "", "unexpected"
+
+        mod._run_task = _run_task_stub
+        stats = mod._drain_queue()
+        expect(stats.get("errors") == 1, f"expected 1 error, got: {stats}")
+        expect(mod._DEAD_LETTER_PATH.exists(), "dead letter file not created")
+        lines = mod._DEAD_LETTER_PATH.read_text(encoding="utf-8").splitlines()
+        reasons = []
+        for line in lines:
+            try:
+                reasons.append(json.loads(line).get("reason", ""))
+            except Exception:
+                pass
+        expect(any("parent update failed: parent nextLink changed" in r for r in reasons),
+               f"unexpected reasons: {reasons}")
 
 
 def test_on_exit_import_child_retries_on_lock():
@@ -3047,6 +3274,27 @@ def test_on_modify_export_uuid_short_prefix_mismatch():
     expect(obj is None, "Prefix mismatch should yield None from _export_uuid_short")
 
 
+def test_on_modify_export_uuid_full_cached():
+    """Full UUID export should be cached within a hook run."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_export_full_cache_test")
+    calls = {"count": 0}
+    uuid_full = "00000000-0000-0000-0000-000000000abc"
+
+    def _run_task_stub(cmd, **_kwargs):
+        cmd_s = " ".join(cmd)
+        if "export" in cmd_s and f"uuid:{uuid_full}" in cmd_s:
+            calls["count"] += 1
+            return True, json.dumps([{"uuid": uuid_full}]), ""
+        return False, "", "unexpected"
+
+    mod._run_task = _run_task_stub
+    a = mod._export_uuid_full(uuid_full, env=None)
+    b = mod._export_uuid_full(uuid_full, env=None)
+    expect(a and b, "expected export results")
+    expect(calls["count"] == 1, f"expected 1 export call, got {calls['count']}")
+
+
 def test_on_modify_missing_taskdata_uses_tw_dir():
     """on-modify uses TW_DIR when TASKDATA is missing."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -3144,10 +3392,13 @@ TESTS = [
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_task_runner_handles_nonzero,
+    test_core_run_task_tempfiles_accepts_text_input,
     test_warn_once_per_day_stamp_written,
     test_warn_once_per_day_no_diag_silent,
+    test_warn_once_per_day_any_no_diag_silent,
     test_hook_stdout_strict_json_with_diag_on_add,
     test_hook_stdout_strict_json_with_diag_on_modify,
+    test_hook_stdout_empty_on_exit,
     test_hook_files_are_private_permissions,
     test_safe_lock_fcntl_contention,
     test_safe_lock_fallback_contention,
@@ -3158,6 +3409,7 @@ TESTS = [
     test_on_exit_timeouts_configurable,
     test_diag_log_rotation_bounds,
     test_diag_log_redacts_sensitive_fields,
+    test_diag_log_structured_fields,
     test_on_exit_requeues_when_task_lock_recent,
     test_core_cache_dir_and_lock_permissions,
     test_core_cache_lock_contention_matches_safe_lock,
@@ -3177,6 +3429,7 @@ TESTS = [
     test_on_modify_chain_export_skips_when_locked,
     test_coerce_int_bounds,
     test_on_add_fail_and_exit_emits_json,
+    test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_versioned_payload,
     test_on_add_dnf_cache_corrupt_payload_recovers,
@@ -3187,6 +3440,8 @@ TESTS = [
     test_on_exit_spawn_intents_drain,
     test_on_exit_queue_drain_is_transactional,
     test_on_exit_quarantines_bad_queue_lines,
+    test_on_exit_dead_letter_on_missing_fields,
+    test_on_exit_processing_file_merges_into_queue,
     test_on_exit_import_child_retries_on_lock,
     test_on_exit_dead_letter_on_import_failure,
     test_on_exit_large_queue_bounded_drain,
@@ -3201,6 +3456,7 @@ TESTS = [
     test_on_add_profiler_lazy_init,
     test_on_modify_panel_fallback,
     test_on_exit_import_error_but_child_exists,
+    test_on_exit_parent_nextlink_changed_dead_letter,
     test_cache_metrics_emits_when_enabled,
     test_sanitize_task_strings_removes_controls,
     test_clear_all_caches_env,
@@ -3221,10 +3477,12 @@ TESTS = [
     test_on_modify_run_task_timeout,
     test_on_modify_export_uuid_short_invalid_json,
     test_on_modify_export_uuid_short_prefix_mismatch,
+    test_on_modify_export_uuid_full_cached,
     test_on_modify_missing_taskdata_uses_tw_dir,
     test_hooks_no_direct_subprocess_run,
     test_chain_integrity_warnings_detects_issues,
     test_dst_round_trip_noon_preserves_local_date,
+    test_warn_rate_limited_any,
 
 ]
 

@@ -828,6 +828,7 @@ def _drain_queue() -> dict:
         child_short = (entry.get("child_short") or "").strip()
         child_uuid = (child.get("uuid") or "").strip()
         export_res = _export_uuid(child_uuid)
+        imported = False
         if not export_res.get("exists"):
             if export_res.get("retryable"):
                 if spawn_intent_id:
@@ -861,23 +862,25 @@ def _drain_queue() -> dict:
                     dead_lettered += 1
                     errors += 1
                     continue
+            imported = True
 
-        # Confirm child exists before touching parent.
-        confirm_res = _export_uuid(child_uuid)
-        if not confirm_res.get("exists"):
-            if confirm_res.get("retryable"):
-                if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                    _write_dead_letter(entry, "exceeded retry budget")
-                    errors += 1
-                else:
-                    requeue.append(entry)
+        if imported:
+            # Confirm child exists before touching parent only when we just imported.
+            confirm_res = _export_uuid(child_uuid)
+            if not confirm_res.get("exists"):
+                if confirm_res.get("retryable"):
+                    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+                        _write_dead_letter(entry, "exceeded retry budget")
+                        errors += 1
+                    else:
+                        requeue.append(entry)
+                    continue
+                if spawn_intent_id:
+                    _diag(f"child missing after import (intent={spawn_intent_id})")
+                _write_dead_letter(entry, "child missing after import")
+                dead_lettered += 1
+                errors += 1
                 continue
-            if spawn_intent_id:
-                _diag(f"child missing after import (intent={spawn_intent_id})")
-            _write_dead_letter(entry, "child missing after import")
-            dead_lettered += 1
-            errors += 1
-            continue
 
         if parent_uuid and child_short:
             ok, err = _update_parent_nextlink(parent_uuid, child_short, expected_parent_nextlink)

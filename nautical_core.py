@@ -277,10 +277,11 @@ def _warn_once_per_day_any(key: str, message: str) -> None:
 
         with open(stamp_path, "w", encoding="utf-8") as f:
             f.write(today)
-        try:
-            print(message, file=sys.stderr)
-        except Exception:
-            pass
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                print(message, file=sys.stderr)
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -2118,12 +2119,17 @@ def run_task(
                 except Exception:
                     out_f = err_f = None
                     out_path = err_path = None
+            text_mode = not bool(out_f)
+            if not text_mode and isinstance(input_text, str):
+                input_text = input_text.encode("utf-8")
+            elif text_mode and isinstance(input_text, (bytes, bytearray)):
+                input_text = input_text.decode("utf-8", "replace")
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=(out_f if out_f is not None else subprocess.PIPE),
                 stderr=(err_f if err_f is not None else subprocess.PIPE),
-                text=not bool(out_f),
+                text=text_mode,
                 encoding="utf-8",
                 errors="replace",
                 close_fds=True,

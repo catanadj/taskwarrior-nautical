@@ -632,7 +632,8 @@ def _take_queue_entries() -> list[dict]:
                         f_proc.write(line)
                     else:
                         _quarantine_queue_line(line, "queue json not object")
-                        f_out.write(line)
+                        _write_dead_letter({"raw": line}, "queue json not object")
+                        continue
                 if _DURABLE_QUEUE:
                     try:
                         f_out.flush()
@@ -670,13 +671,13 @@ def _take_queue_entries() -> list[dict]:
     return entries
 
 
-def _requeue_entries(entries: list[dict]) -> None:
+def _requeue_entries(entries: list[dict]) -> bool:
     if not entries:
-        return
+        return True
     with _lock_queue() as locked:
         if not locked:
             _record_queue_lock_failure()
-            return
+            return False
         try:
             fd = os.open(str(_QUEUE_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
             try:
@@ -693,8 +694,10 @@ def _requeue_entries(entries: list[dict]) -> None:
                         _fsync_dir(_QUEUE_PATH.parent)
                     except Exception:
                         pass
-        except Exception:
-            pass
+            return True
+        except Exception as e:
+            _diag(f"requeue write failed: {e}")
+            return False
 
 
 def _validate_queue_entry(entry: dict) -> tuple[bool, str]:
@@ -904,20 +907,28 @@ def _drain_queue() -> dict:
 
         processed += 1
 
+    requeue_failed = 0
+    requeue_ok = True
     if requeue:
-        _requeue_entries(requeue)
-    try:
-        if _QUEUE_PROCESSING_PATH.exists():
-            _QUEUE_PROCESSING_PATH.unlink()
-            if _DURABLE_QUEUE:
-                _fsync_dir(_QUEUE_PROCESSING_PATH.parent)
-    except Exception:
-        pass
+        requeue_ok = _requeue_entries(requeue)
+        if not requeue_ok:
+            requeue_failed = len(requeue)
+            errors += requeue_failed
+            _diag(f"requeue failed for {requeue_failed} entries; keeping processing file")
+    if requeue_ok:
+        try:
+            if _QUEUE_PROCESSING_PATH.exists():
+                _QUEUE_PROCESSING_PATH.unlink()
+                if _DURABLE_QUEUE:
+                    _fsync_dir(_QUEUE_PROCESSING_PATH.parent)
+        except Exception:
+            pass
 
     return {
         "processed": processed,
         "errors": errors,
-        "requeued": len(requeue),
+        "requeued": len(requeue) if requeue_ok else 0,
+        "requeue_failed": requeue_failed,
         "dead_lettered": dead_lettered,
     }
 
@@ -934,6 +945,7 @@ def main() -> int:
             f"processed={stats.get('processed', 0)} "
             f"errors={stats.get('errors', 0)} "
             f"requeued={stats.get('requeued', 0)} "
+            f"requeue_failed={stats.get('requeue_failed', 0)} "
             f"dead_lettered={stats.get('dead_lettered', 0)}"
         )
     errors = stats.get("errors", 0)

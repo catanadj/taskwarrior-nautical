@@ -1054,6 +1054,65 @@ def test_on_modify_read_two_invalid_trailing():
     expect(p.returncode != 0, "on-modify should fail on trailing garbage")
     expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
 
+def test_on_modify_invalid_anchor_has_no_stdout():
+    """on-modify should keep stdout empty on semantic validation failures."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000611",
+        "status": "pending",
+        "description": "invalid anchor test",
+    }
+    new = dict(old)
+    new["anchor"] = "bad"
+    raw = json.dumps(old) + "\n" + json.dumps(new)
+    p = _run_hook_script_raw(hook, raw)
+    expect(p.returncode != 0, "on-modify should fail on invalid anchor")
+    expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
+
+def test_on_add_rejects_oversized_stdin_early():
+    """on-add should reject stdin over _MAX_JSON_BYTES before JSON parsing."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_oversized_input_test")
+    mod._MAX_JSON_BYTES = 32
+    raw = json.dumps({"uuid": "u", "status": "pending", "description": "x" * 256})
+
+    stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
+    out = io.StringIO()
+    err = io.StringIO()
+    orig_stdin, orig_stdout, orig_stderr = sys.stdin, sys.stdout, sys.stderr
+    try:
+        sys.stdin, sys.stdout, sys.stderr = stdin, out, err
+        try:
+            mod.main()
+            raise AssertionError("on-add should fail on oversized stdin")
+        except SystemExit as e:
+            expect(e.code == 1, f"unexpected exit code: {e.code}")
+    finally:
+        sys.stdin, sys.stdout, sys.stderr = orig_stdin, orig_stdout, orig_stderr
+    expect((out.getvalue() or "").strip() == "", f"expected no stdout on oversized input, got: {out.getvalue()!r}")
+
+def test_on_modify_rejects_oversized_stdin_early():
+    """on-modify should reject stdin over _MAX_JSON_BYTES before object parsing."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_oversized_input_test")
+    mod._MAX_JSON_BYTES = 32
+    raw = json.dumps({"uuid": "u", "status": "pending", "description": "x" * 256})
+
+    stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
+    out = io.StringIO()
+    err = io.StringIO()
+    orig_stdin, orig_stdout, orig_stderr = sys.stdin, sys.stdout, sys.stderr
+    try:
+        sys.stdin, sys.stdout, sys.stderr = stdin, out, err
+        try:
+            mod._read_two()
+            raise AssertionError("on-modify should fail on oversized stdin")
+        except SystemExit as e:
+            expect(e.code == 1, f"unexpected exit code: {e.code}")
+    finally:
+        sys.stdin, sys.stdout, sys.stderr = orig_stdin, orig_stdout, orig_stderr
+    expect((out.getvalue() or "").strip() == "", f"expected no stdout on oversized input, got: {out.getvalue()!r}")
+
 def test_on_modify_queue_full_drops_with_dead_letter():
     """on-modify should drop spawn intent when queue exceeds max bytes."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -3100,6 +3159,60 @@ def test_queue_json_parse_dead_letter():
         remaining = mod._QUEUE_PATH.read_text(encoding="utf-8").strip()
         expect(remaining == "", "queue should be cleared of bad line")
 
+def test_queue_json_non_object_dead_letter_removed():
+    """Non-object queue JSON should be dead-lettered and removed from queue."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_queue_json_non_object_test")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+        mod._QUEUE_QUARANTINE_PATH = td_path / ".nautical_spawn_queue.bad.jsonl"
+
+        mod._QUEUE_PATH.write_text('"not-an-object"\n', encoding="utf-8")
+        entries = mod._take_queue_entries()
+        expect(entries == [], "non-object JSON should not yield entries")
+        expect(mod._DEAD_LETTER_PATH.exists(), "dead-letter should be created for non-object JSON")
+        remaining = mod._QUEUE_PATH.read_text(encoding="utf-8").strip()
+        expect(remaining == "", "queue should be cleared of non-object line")
+
+def test_on_exit_requeue_failure_keeps_processing_file():
+    """on-exit must not drop processing entries when requeue persistence fails."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_requeue_fail_keeps_processing_test")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        entry = {
+            "spawn_intent_id": "si_requeue_fail",
+            "parent_uuid": "",
+            "child_short": "deadbeef",
+            "child": {"uuid": "00000000-0000-0000-0000-000000000777"},
+        }
+        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        mod._export_uuid = lambda _u: {"exists": False, "retryable": True, "err": "database is locked", "obj": None}
+        mod._requeue_entries = lambda _entries: False
+
+        stats = mod._drain_queue()
+        expect(stats.get("requeue_failed") == 1, f"expected one requeue failure, got {stats}")
+        expect(stats.get("errors", 0) >= 1, f"expected error count incremented, got {stats}")
+        expect(mod._QUEUE_PROCESSING_PATH.exists(), "processing file should be preserved on requeue failure")
+        processing = mod._QUEUE_PROCESSING_PATH.read_text(encoding="utf-8").strip()
+        expect(processing, "processing file should retain undelivered entry")
+
 
 def test_on_exit_export_uuid_noisy_stdout():
     """on-exit export should tolerate noisy stdout when UUID present."""
@@ -3415,6 +3528,9 @@ TESTS = [
     test_core_cache_lock_contention_matches_safe_lock,
     test_on_modify_invalid_json_passthrough,
     test_on_modify_read_two_invalid_trailing,
+    test_on_modify_invalid_anchor_has_no_stdout,
+    test_on_add_rejects_oversized_stdin_early,
+    test_on_modify_rejects_oversized_stdin_early,
     test_on_modify_queue_full_drops_with_dead_letter,
     test_on_modify_chain_export_timeout_scales,
     test_tw_export_chain_extra_validation,
@@ -3468,7 +3584,9 @@ TESTS = [
     test_on_exit_queue_rotate_then_drain,
     test_on_exit_dead_letter_rotation,
     test_queue_json_parse_dead_letter,
+    test_queue_json_non_object_dead_letter_removed,
     test_on_exit_dead_letter_carries_spawn_intent_id,
+    test_on_exit_requeue_failure_keeps_processing_file,
     test_on_exit_export_uuid_noisy_stdout,
     test_core_import_deterministic,
     test_on_modify_spawn_intent_id_in_entry,

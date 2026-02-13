@@ -1685,10 +1685,7 @@ def main():
 
 # --------------------------------------------------------------------------------------
 if __name__ == "__main__":
-    import io
-    raw = sys.stdin.read()
     try:
-        sys.stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
         main()
     except SystemExit:
         raise
@@ -1696,16 +1693,6 @@ if __name__ == "__main__":
         if os.environ.get("NAUTICAL_DIAG") == "1":
             try:
                 sys.stderr.write(f"[nautical] on-add unexpected error: {e}\n")
-            except Exception:
-                pass
-        out = (raw or "").strip()
-        if out:
-            try:
-                obj = json.loads(out)
-                if isinstance(obj, dict):
-                    print(json.dumps(obj, ensure_ascii=False), end="")
-                    sys.stdout.flush()
-                    raise SystemExit(0)
             except Exception:
                 pass
         raise SystemExit(1)

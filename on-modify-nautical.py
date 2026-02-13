@@ -3207,15 +3207,7 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
     rows = []
     rows.append(("Reason", reason))
 
-    # Get root and age
-    root_short, age_str = _chain_root_and_age(current, now_utc)
-    
-    # Show chain info with root and age
-    chain_display = f"{root_short}"
-    if age_str != "—":
-        chain_display += f" ({age_str})"
-    
-    rows.append(("Root", chain_display))
+    rows.append(("Root", _format_root_and_age(current, now_utc)))
 
     # Show if chain was truncated
     chain_display = f"{root} … {cur_s}  [dim](#{L}, {len(chain)} tasks"
@@ -3462,9 +3454,7 @@ def _timeline_lines(
     return lines
 
 def _got_anchor_invalid(msg: str) -> None:
-    _panel("❌ Invalid anchor", [("Validation", msg)], kind="error")
-    print(json.dumps({"error": "Invalid anchor", "message": msg}, ensure_ascii=False))
-    sys.exit(1)
+    _fail_and_exit("Invalid anchor", msg)
 
 
 # chainUntil -> numeric cap and "Final (until)"
@@ -3789,13 +3779,9 @@ def main():
             if td is None:
                 raise ValueError(f"Invalid duration format '{new_cp}'")
         except ValueError as e:
-            _panel("❌ Invalid CP", [("Validation", str(e))], kind="error")
-            print(json.dumps({"error": "Invalid CP", "message": str(e)}, ensure_ascii=False))
-            sys.exit(1)
+            _fail_and_exit("Invalid CP", str(e))
         except Exception as e:
-            _panel("❌ CP Error", [("Validation", f"Unexpected error: {str(e)}")], kind="error")
-            print(json.dumps({"error": "CP parsing error", "message": str(e)}, ensure_ascii=False))
-            sys.exit(1)
+            _fail_and_exit("CP parsing error", f"Unexpected error: {e}")
 
         # Deep checks only if fields changed
         if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
@@ -4309,10 +4295,7 @@ def main():
 
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    import io
-    raw = sys.stdin.read()
     try:
-        sys.stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
         main()
     except SystemExit:
         raise
@@ -4322,35 +4305,4 @@ if __name__ == "__main__":
                 sys.stderr.write(f"[nautical] on-modify unexpected error: {e}\n")
             except Exception:
                 pass
-        new_obj = None
-        try:
-            decoder = json.JSONDecoder()
-            idx = 0
-            objs = []
-            n = len(raw)
-            while idx < n:
-                while idx < n and raw[idx].isspace():
-                    idx += 1
-                if idx >= n:
-                    break
-                obj, end = decoder.raw_decode(raw, idx)
-                objs.append(obj)
-                idx = end
-            if len(objs) == 1 and isinstance(objs[0], list):
-                arr = [o for o in objs[0] if isinstance(o, dict)]
-                if arr:
-                    new_obj = arr[-1]
-            else:
-                arr = [o for o in objs if isinstance(o, dict)]
-                if arr:
-                    new_obj = arr[-1]
-        except Exception:
-            new_obj = None
-        if new_obj is not None:
-            print(json.dumps(new_obj, ensure_ascii=False), end="")
-            try:
-                sys.stdout.flush()
-            except Exception:
-                pass
-            raise SystemExit(0)
         raise SystemExit(1)

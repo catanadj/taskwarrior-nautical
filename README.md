@@ -165,98 +165,11 @@ Links left: 8 left (cap #10)
 
 ---
 
-## Operational Knobs
+## Operations
 
-Common knobs:
+Operational knobs, performance checklist, and load-testing guidance are now in the manual:
 
-- `NAUTICAL_DNF_DISK_CACHE=0` disables the on-add JSONL cache (default: enabled).
-- `NAUTICAL_EXIT_STRICT=1` makes on-exit return 1 when spawns are dead-lettered or errored (for scripting).
-- `NAUTICAL_DIAG=1` prints diagnostics and config search paths.
-- `NAUTICAL_DIAG_LOG=1` persists structured diagnostics to `TASKDATA/.nautical_diag.jsonl`.
-- `NAUTICAL_DIAG_LOG_MAX_BYTES=262144` caps the diagnostic log before rotation.
-- `NAUTICAL_DURABLE_QUEUE=1` enables fsync for queue/dead-letter writes (safer, slower).
-- `NAUTICAL_PROFILE=1` emits lightweight timing (stderr).
-- `panel_mode="fast"` forces plain panel rendering (skip Rich).
-- `panel_mode="line"` shows a single summary line inside a compact panel.
-- `fast_color=false` disables ANSI in fast panels.
-- `spawn_queue_max_bytes` caps deferred spawn queue size.
-- `spawn_queue_drain_max_items` caps items drained per batch.
-
-Data directory resolution:
-
-- Hooks resolve Taskwarrior data dir from `TASKDATA` or hook argv (`data:` / `data.location:` in Hooks v2).
-- `rc.data.location=...` is only injected for hook-spawned `task` calls when that data dir is explicit.
-
-Dead-letter recovery (manual):
-
-1. Inspect `.nautical_dead_letter.jsonl` in `TASKDATA` and pick entries to retry.
-2. Append those JSON lines to `.nautical_spawn_queue.jsonl` (one entry per line).
-3. Optionally remove retried lines from the dead-letter file.
-4. Run any Taskwarrior command to trigger on-exit drain.
-
-Self-check:
-
-```
-python3 nautical_navigator.py --self-check
-NAUTICAL_DIAG=1 python3 nautical_navigator.py --self-check
-```
-
-Production hardening rollout:
-
-1. Stage 1: enable diagnostics only.
-2. `NAUTICAL_DIAG_LOG=1` and optional `NAUTICAL_DURABLE_QUEUE=1`.
-3. Monitor queue/dead-letter health with `python3 tools/nautical_health_check.py --json`.
-4. Keep `NAUTICAL_EXIT_STRICT=0` during bake-in.
-5. Stage 2: flip `NAUTICAL_EXIT_STRICT=1` after dead-letter/requeue-failure rates are stable.
-
-Periodic alert example:
-
-```
-python3 tools/nautical_health_check.py --taskdata ~/.task --queue-crit-bytes 524288
-```
-
-Exit code semantics:
-
-- `0` = healthy
-- `1` = warning
-- `2` = critical
-
-Automation templates:
-
-- `tools/ops/nautical-health-check.crontab`
-- `tools/ops/nautical-health-check.service`
-- `tools/ops/nautical-health-check.timer`
-- `tools/ops/nautical_health_check_cron.sh`
-- `tools/ops/README.md` (install steps)
-
----
-
-## Performance Checklist
-
-- Enable disk cache: default on (disable only if debugging).
-- Use `panel_mode="fast"` on slow terminals or mobile.
-- If you see slowdowns, run `NAUTICAL_PROFILE=1` for a short session.
-- For heavy workloads, raise `spawn_queue_max_bytes` and `spawn_queue_drain_max_items`.
-
----
-
-## Load Testing
-
-Use `tools/load_test_nautical.py` to measure performance on your machine:
-
-```
-python3 tools/load_test_nautical.py --tasks 2000 --concurrency 4
-python3 tools/load_test_nautical.py --ramp --ramp-start 200 --ramp-step 500 --ramp-max 10000 --concurrency 16
-python3 tools/load_test_nautical.py --ramp --done-only --ramp-start 200 --ramp-step 500 --ramp-max 10000 --concurrency 16
-python3 tools/load_test_nautical.py --rate-ramp --rate-secs 30 --rate-start 5 --rate-step 5 --rate-max 100
-```
-
-What each mode does:
-
-- Batch: fixed number of adds (and optional dones), report latency stats.
-- Ramp: increase task count per stage until thresholds are hit.
-- Done-only: measure on-modify performance by completing tasks created in the stage.
-- Rate-ramp: increase target ops/sec and report throughput and latency limits.
+- `Manual.md` - see "Operational Knobs", "Performance Checklist", and "Load Testing".
 
 ## Requirements
 

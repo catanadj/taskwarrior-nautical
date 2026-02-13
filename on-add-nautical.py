@@ -62,6 +62,7 @@ _PROFILE_LEVEL = int(os.environ.get('NAUTICAL_PROFILE', '0') or '0')
 _IMPORT_T0 = time.perf_counter()
 
 core = None
+_CORE_READY = False
 try:
     pyfile = _CORE_BASE / "nautical_core.py"
     pkgini = _CORE_BASE / "nautical_core" / "__init__.py"
@@ -93,7 +94,9 @@ TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
 _IMPORT_MS = None
 
 def _load_core() -> None:
-    global core, _IMPORT_MS, _MAX_JSON_BYTES
+    global core, _IMPORT_MS, _MAX_JSON_BYTES, _CORE_READY
+    if core is not None and _CORE_READY:
+        return
     if core is None:
         base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
         pyfile = base / "nautical_core.py"
@@ -123,6 +126,7 @@ def _load_core() -> None:
     except Exception:
         pass
     _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
+    _CORE_READY = True
 
 class _Profiler:
     """Minimal, low-risk profiler for hook execution (stderr-only)."""

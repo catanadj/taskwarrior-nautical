@@ -260,6 +260,7 @@ TW_DIR = HOOK_DIR.parent
 _CORE_BASE = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
 
 core = None
+_CORE_READY = False
 try:
     pyfile = _CORE_BASE / "nautical_core.py"
     pkgini = _CORE_BASE / "nautical_core" / "__init__.py"
@@ -312,7 +313,9 @@ _WARNED_SPAWN_QUEUE_LOCK = False
 _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 
 def _load_core() -> None:
-    global core, _MAX_JSON_BYTES
+    global core, _MAX_JSON_BYTES, _CORE_READY
+    if core is not None and _CORE_READY:
+        return
     if core is None:
         base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
         pyfile = base / "nautical_core.py"
@@ -337,6 +340,7 @@ def _load_core() -> None:
     except Exception:
         pass
     _apply_core_config()
+    _CORE_READY = True
 
 def _require_core() -> bool:
     try:

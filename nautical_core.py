@@ -2050,6 +2050,47 @@ def _cache_lock(key: str):
 _DIAG_LOG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
 
 
+def _hook_arg_value(argv: list[str], keys: tuple[str, ...]) -> str:
+    for tok in argv:
+        s = str(tok or "").strip()
+        if not s:
+            continue
+        for key in keys:
+            for sep in (":", "="):
+                prefix = f"{key}{sep}"
+                if s.startswith(prefix):
+                    val = s[len(prefix):].strip()
+                    if val:
+                        return val
+    return ""
+
+
+def resolve_task_data_context(
+    *,
+    argv: list[str] | None = None,
+    env: dict | None = None,
+    tw_dir: str | None = None,
+) -> tuple[str, bool, str]:
+    """
+    Resolve Taskwarrior data directory context for hooks.
+
+    Returns: (task_data_dir, use_rc_data_location, source)
+      - task_data_dir: resolved directory path (user-expanded)
+      - use_rc_data_location: True only when source is explicit (argv/env)
+      - source: one of "argv", "env", "fallback"
+    """
+    args = list(argv if argv is not None else sys.argv[1:])
+    env_map = env if env is not None else os.environ
+    taskdata_env = str((env_map.get("TASKDATA") if hasattr(env_map, "get") else "") or "").strip()
+    taskdata_arg = _hook_arg_value(args, ("data", "data.location"))
+    explicit = taskdata_arg or taskdata_env
+    if explicit:
+        source = "argv" if taskdata_arg else "env"
+        return os.path.expanduser(str(explicit)), True, source
+    base = str(tw_dir or "~/.task")
+    return os.path.expanduser(base), False, "fallback"
+
+
 def _redact_dict(data: dict, redact_keys: frozenset) -> dict:
     out = {}
     for k, v in (data or {}).items():

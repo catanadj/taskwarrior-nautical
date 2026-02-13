@@ -55,22 +55,16 @@ _MAX_JSON_BYTES = 10 * 1024 * 1024
 # --------------------------------------------------------------------------------------
 HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
-TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
+_CORE_BASE = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
 
 # --- Optional micro-profiler (stderr-only; enable with NAUTICAL_PROFILE=1 or 2)
 _PROFILE_LEVEL = int(os.environ.get('NAUTICAL_PROFILE', '0') or '0')
 _IMPORT_T0 = time.perf_counter()
 
 core = None
-_IMPORT_MS = None
-
-def _load_core() -> None:
-    global core, _IMPORT_MS, _MAX_JSON_BYTES
-    if core is not None:
-        return
-    base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
-    pyfile = base / "nautical_core.py"
-    pkgini = base / "nautical_core" / "__init__.py"
+try:
+    pyfile = _CORE_BASE / "nautical_core.py"
+    pkgini = _CORE_BASE / "nautical_core" / "__init__.py"
     target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
     if target:
         spec = importlib.util.spec_from_file_location("nautical_core", target)
@@ -79,6 +73,39 @@ def _load_core() -> None:
             sys.modules["nautical_core"] = module
             spec.loader.exec_module(module)
             core = module
+except Exception:
+    core = None
+
+def _resolve_task_data_context() -> tuple[str, bool]:
+    resolver = getattr(core, "resolve_task_data_context", None) if core is not None else None
+    if not callable(resolver):
+        raise RuntimeError("nautical_core.resolve_task_data_context is required")
+    data_dir, use_rc, _source = resolver(
+        argv=sys.argv[1:],
+        env=os.environ,
+        tw_dir=str(TW_DIR),
+    )
+    return str(data_dir), bool(use_rc)
+
+
+_TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
+TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+_IMPORT_MS = None
+
+def _load_core() -> None:
+    global core, _IMPORT_MS, _MAX_JSON_BYTES
+    if core is None:
+        base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
+        pyfile = base / "nautical_core.py"
+        pkgini = base / "nautical_core" / "__init__.py"
+        target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+        if target:
+            spec = importlib.util.spec_from_file_location("nautical_core", target)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                sys.modules["nautical_core"] = module
+                spec.loader.exec_module(module)
+                core = module
     if core is None:
         msg = "nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH."
         raise ModuleNotFoundError(msg)
@@ -957,7 +984,10 @@ def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
 def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None) -> list[dict]:
     if not chain_id:
         return []
-    args = ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
+    args = ["task"]
+    if _USE_RC_DATA_LOCATION:
+        args.append(f"rc.data.location={TW_DATA_DIR}")
+    args += ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
     if since:
         args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
     if extra:

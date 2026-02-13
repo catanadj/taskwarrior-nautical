@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Nautical health check periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=nautical-health-check.service
+
+[Install]
+WantedBy=timers.target

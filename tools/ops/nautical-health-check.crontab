@@ -1,0 +1,5 @@
+# Nautical health check every 5 minutes.
+# Replace REPO_DIR with your absolute checkout path.
+# Install with: crontab -e (copy the line below)
+
+*/5 * * * * TASKDATA="$HOME/.task" /bin/bash "REPO_DIR/tools/ops/nautical_health_check_cron.sh"

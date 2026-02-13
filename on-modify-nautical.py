@@ -257,8 +257,44 @@ def _append_next_wait_sched_rows(
 # ------------------------------------------------------------------------------
 HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
+_CORE_BASE = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
 
-TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
+core = None
+try:
+    pyfile = _CORE_BASE / "nautical_core.py"
+    pkgini = _CORE_BASE / "nautical_core" / "__init__.py"
+    target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+    if target:
+        spec = importlib.util.spec_from_file_location("nautical_core", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_core"] = module
+            spec.loader.exec_module(module)
+            core = module
+except Exception:
+    core = None
+
+def _resolve_task_data_context() -> tuple[str, bool]:
+    resolver = getattr(core, "resolve_task_data_context", None) if core is not None else None
+    if not callable(resolver):
+        raise RuntimeError("nautical_core.resolve_task_data_context is required")
+    data_dir, use_rc, _source = resolver(
+        argv=sys.argv[1:],
+        env=os.environ,
+        tw_dir=str(TW_DIR),
+    )
+    return str(data_dir), bool(use_rc)
+
+
+_TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
+TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+
+
+def _task_cmd_prefix() -> list[str]:
+    cmd = ["task"]
+    if _USE_RC_DATA_LOCATION:
+        cmd.append(f"rc.data.location={TW_DATA_DIR}")
+    return cmd
 
 # ------------------------------------------------------------------------------
 # Deferred next-link spawn queue (used when nested `task import` times out due to TW lock)
@@ -275,23 +311,20 @@ _DEAD_LETTER_LOCK_SLEEP_BASE = _SPAWN_LOCK_SLEEP_BASE
 _WARNED_SPAWN_QUEUE_LOCK = False
 _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 
-core = None
-
 def _load_core() -> None:
     global core, _MAX_JSON_BYTES
-    if core is not None:
-        return
-    base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
-    pyfile = base / "nautical_core.py"
-    pkgini = base / "nautical_core" / "__init__.py"
-    target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
-    if target:
-        spec = importlib.util.spec_from_file_location("nautical_core", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_core"] = module
-            spec.loader.exec_module(module)
-            core = module
+    if core is None:
+        base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
+        pyfile = base / "nautical_core.py"
+        pkgini = base / "nautical_core" / "__init__.py"
+        target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+        if target:
+            spec = importlib.util.spec_from_file_location("nautical_core", target)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                sys.modules["nautical_core"] = module
+                spec.loader.exec_module(module)
+                core = module
     if core is None:
         msg = "nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH."
         raise ModuleNotFoundError(msg)
@@ -1092,7 +1125,7 @@ def _export_uuid_short(u_short: str, env=None):
             _diag_count("export_uuid_cache_misses")
     env = env or os.environ.copy()
     ok, out, err = _run_task(
-        ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=off", f"uuid:{u_short}", "export"],
+        _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{u_short}", "export"],
         env=env,
         timeout=2.5,
         retries=2,
@@ -1124,7 +1157,7 @@ def _task_exists_by_uuid_cached(u: str) -> bool:
 
 
 def _task_exists_by_uuid_uncached(u: str, env: dict | None) -> bool:
-    q = ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=off", f"uuid:{u}", "export"]
+    q = _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{u}", "export"]
     ok, out, err = _run_task(q, env=env, timeout=2.5, retries=2)
     if not ok:
         _diag(f"task exists check failed (uuid={u[:8]}): {err.strip()}")
@@ -1139,14 +1172,7 @@ def _reserve_child_uuid(env: dict) -> str:
     candidate = str(uuid.uuid4())
     while True:
         ok, out, err = _run_task(
-            [
-                "task",
-                f"rc.data.location={TW_DATA_DIR}",
-                "rc.hooks=off",
-                "rc.json.array=off",
-                f"uuid:{candidate}",
-                "count",
-            ],
+            _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{candidate}", "count"],
             env=env,
             timeout=2.5,
             retries=2,
@@ -1285,7 +1311,7 @@ def _spawn_child(child_task: dict) -> tuple[str, set[str]]:
         payload = json.dumps(obj) + "\n"
 
         ok, _out, err = _run_task(
-            ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "import", "-"],
+            _task_cmd_prefix() + ["rc.hooks=off", "import", "-"],
             input_text=payload,
             env=env,
             timeout=10,  # prevent hanging
@@ -1485,7 +1511,7 @@ def _task(args, env=None) -> str:
     """
     env = env or os.environ.copy()
     ok, out, err = _run_task(
-        ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off"] + list(args),
+        _task_cmd_prefix() + ["rc.hooks=off"] + list(args),
         env=env,
         timeout=3.0,
         retries=2,
@@ -3588,7 +3614,7 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     global _CHAIN_EXPORT_TIMEOUT_FLOOR
     if not chain_id:
         return []
-    args = ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
+    args = _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
     if since:
         args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
     if limit and isinstance(limit, int) and limit > 0:
@@ -3641,9 +3667,7 @@ def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
     if not chain_id:
         return None
     sort_dir = "+" if direction == "first" else "-"
-    args = [
-        "task",
-        f"rc.data.location={TW_DATA_DIR}",
+    args = _task_cmd_prefix() + [
         "rc.hooks=off",
         "rc.json.array=on",
         "rc.verbose=nothing",

@@ -55,7 +55,28 @@ try:
                 pass
 except Exception:
     core = None
-TW_DATA_DIR = Path(os.environ.get("TASKDATA") or str(TW_DIR)).expanduser()
+
+def _resolve_task_data_context() -> tuple[str, bool]:
+    resolver = getattr(core, "resolve_task_data_context", None) if core is not None else None
+    if not callable(resolver):
+        raise RuntimeError("nautical_core.resolve_task_data_context is required")
+    data_dir, use_rc, _source = resolver(
+        argv=sys.argv[1:],
+        env=os.environ,
+        tw_dir=str(TW_DIR),
+    )
+    return str(data_dir), bool(use_rc)
+
+
+_TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
+TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+
+
+def _task_cmd_prefix() -> list[str]:
+    cmd = ["task"]
+    if _USE_RC_DATA_LOCATION:
+        cmd.append(f"rc.data.location={TW_DATA_DIR}")
+    return cmd
 
 _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _QUEUE_PROCESSING_PATH = TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"
@@ -727,16 +748,7 @@ def _export_uuid(uuid_str: str) -> dict:
     if not uuid_str:
         return {"exists": False, "retryable": False, "err": "missing uuid", "obj": None}
     ok, out, err = _run_task(
-        [
-            "task",
-            f"rc.data.location={TW_DATA_DIR}",
-            "rc.hooks=off",
-            "rc.json.array=off",
-            "rc.verbose=nothing",
-            "rc.color=off",
-            f"uuid:{uuid_str}",
-            "export",
-        ],
+        _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", "rc.verbose=nothing", "rc.color=off", f"uuid:{uuid_str}", "export"],
         timeout=_TASK_TIMEOUT_EXPORT,
         retries=_TASK_RETRIES_EXPORT,
         retry_delay=_TASK_RETRY_DELAY,
@@ -760,7 +772,7 @@ def _import_child(obj: dict) -> tuple[bool, str]:
     last_err = ""
     for attempt in range(max_retries):
         ok, _out, err = _run_task(
-            ["task", f"rc.data.location={TW_DATA_DIR}", "rc.hooks=off", "rc.verbose=nothing", "import", "-"],
+            _task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "import", "-"],
             input_text=payload,
             timeout=_TASK_TIMEOUT_IMPORT,
         )
@@ -795,15 +807,7 @@ def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: s
         if current:
             return False, "parent nextLink already set"
     ok, _out, err = _run_task(
-        [
-            "task",
-            f"rc.data.location={TW_DATA_DIR}",
-            "rc.hooks=off",
-            "rc.verbose=nothing",
-            f"uuid:{parent_uuid}",
-            "modify",
-            f"nextLink:{child_short}",
-        ],
+        _task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", f"uuid:{parent_uuid}", "modify", f"nextLink:{child_short}"],
         timeout=_TASK_TIMEOUT_MODIFY,
         retries=_TASK_RETRIES_MODIFY,
         retry_delay=_TASK_RETRY_DELAY,

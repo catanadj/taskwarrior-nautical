@@ -991,7 +991,7 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
                 os.environ["TASKDATA"] = prev_taskdata
 
 def test_on_exit_uses_tw_data_dir_for_export_and_modify():
-    """on-exit should target TW_DATA_DIR for export/modify calls."""
+    """on-exit should target TW_DATA_DIR when explicit data dir is enabled."""
     hook = _find_hook_file("on-exit-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_exit_data_dir_test")
     calls = []
@@ -1004,6 +1004,7 @@ def test_on_exit_uses_tw_data_dir_for_export_and_modify():
 
     mod._run_task = _fake_run_task
     mod.TW_DATA_DIR = "/tmp/nautical_test_data"
+    mod._USE_RC_DATA_LOCATION = True
 
     mod._export_uuid("deadbeef")
     mod._update_parent_nextlink("parent-uuid", "childshort")
@@ -1012,6 +1013,262 @@ def test_on_exit_uses_tw_data_dir_for_export_and_modify():
     want = f"rc.data.location={mod.TW_DATA_DIR}"
     expect(want in calls[0], f"export missing data dir: {calls[0]!r}")
     expect(any(want in call for call in calls[1:]), f"modify missing data dir: {calls!r}")
+
+def test_on_exit_no_explicit_taskdata_skips_rc_data_location():
+    """on-exit should not force rc.data.location when data dir is not explicit."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    prev_taskdata = os.environ.get("TASKDATA")
+    prev_argv = list(sys.argv)
+    if "TASKDATA" in os.environ:
+        del os.environ["TASKDATA"]
+    sys.argv = ["on-exit-nautical.py"]
+    try:
+        mod = _load_hook_module(hook, "_nautical_on_exit_no_data_override_test")
+    finally:
+        sys.argv = prev_argv
+        if prev_taskdata is not None:
+            os.environ["TASKDATA"] = prev_taskdata
+    calls = []
+
+    def _fake_run_task(cmd, **_kwargs):
+        calls.append(cmd)
+        return True, json.dumps({"uuid": "deadbeef"}), ""
+
+    mod._run_task = _fake_run_task
+    mod._export_uuid("deadbeef")
+    expect(calls, "expected _run_task to be called")
+    expect(
+        all(not str(part).startswith("rc.data.location=") for part in calls[0]),
+        f"should not force rc.data.location without explicit data dir: {calls[0]!r}",
+    )
+
+def test_on_exit_reads_data_arg_from_hook_argv():
+    """on-exit should resolve TW_DATA_DIR from hook argv data: token."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    prev_taskdata = os.environ.get("TASKDATA")
+    prev_argv = list(sys.argv)
+    if "TASKDATA" in os.environ:
+        del os.environ["TASKDATA"]
+    sys.argv = ["on-exit-nautical.py", "api:2", "command:modify", "data:/tmp/nautical_data_arg_test"]
+    try:
+        mod = _load_hook_module(hook, "_nautical_on_exit_data_arg_test")
+    finally:
+        sys.argv = prev_argv
+        if prev_taskdata is not None:
+            os.environ["TASKDATA"] = prev_taskdata
+    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_data_arg_test"), f"unexpected TW_DATA_DIR: {mod.TW_DATA_DIR}")
+    expect(bool(getattr(mod, "_USE_RC_DATA_LOCATION", False)), "rc.data.location should be enabled when data arg is present")
+
+def test_on_modify_no_explicit_taskdata_skips_rc_data_location():
+    """on-modify should not force rc.data.location when data dir is not explicit."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    prev_taskdata = os.environ.get("TASKDATA")
+    prev_argv = list(sys.argv)
+    if "TASKDATA" in os.environ:
+        del os.environ["TASKDATA"]
+    sys.argv = ["on-modify-nautical.py"]
+    try:
+        mod = _load_hook_module(hook, "_nautical_on_modify_no_data_override_test")
+    finally:
+        sys.argv = prev_argv
+        if prev_taskdata is not None:
+            os.environ["TASKDATA"] = prev_taskdata
+    calls = []
+
+    def _fake_run_task(cmd, **_kwargs):
+        calls.append(cmd)
+        return True, json.dumps({"uuid": "deadbeef"}), ""
+
+    mod._run_task = _fake_run_task
+    _ = mod._task_exists_by_uuid_uncached("deadbeef", env={})
+    expect(calls, "expected _run_task to be called")
+    expect(
+        all(not str(part).startswith("rc.data.location=") for part in calls[0]),
+        f"should not force rc.data.location without explicit data dir: {calls[0]!r}",
+    )
+
+def test_on_modify_reads_data_arg_from_hook_argv():
+    """on-modify should resolve TW_DATA_DIR from hook argv data: token."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    prev_taskdata = os.environ.get("TASKDATA")
+    prev_argv = list(sys.argv)
+    if "TASKDATA" in os.environ:
+        del os.environ["TASKDATA"]
+    sys.argv = ["on-modify-nautical.py", "api:2", "command:modify", "data:/tmp/nautical_data_arg_mod_test"]
+    try:
+        mod = _load_hook_module(hook, "_nautical_on_modify_data_arg_test")
+    finally:
+        sys.argv = prev_argv
+        if prev_taskdata is not None:
+            os.environ["TASKDATA"] = prev_taskdata
+    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_data_arg_mod_test"), f"unexpected TW_DATA_DIR: {mod.TW_DATA_DIR}")
+    expect(bool(getattr(mod, "_USE_RC_DATA_LOCATION", False)), "rc.data.location should be enabled when data arg is present")
+
+def test_on_add_no_explicit_taskdata_skips_rc_data_location():
+    """on-add should not force rc.data.location when data dir is not explicit."""
+    hook = _find_hook_file("on-add-nautical.py")
+    prev_taskdata = os.environ.get("TASKDATA")
+    prev_argv = list(sys.argv)
+    if "TASKDATA" in os.environ:
+        del os.environ["TASKDATA"]
+    sys.argv = ["on-add-nautical.py"]
+    try:
+        mod = _load_hook_module(hook, "_nautical_on_add_no_data_override_test")
+    finally:
+        sys.argv = prev_argv
+        if prev_taskdata is not None:
+            os.environ["TASKDATA"] = prev_taskdata
+    calls = []
+
+    def _fake_run_task(cmd, **_kwargs):
+        calls.append(cmd)
+        return True, "[]", ""
+
+    mod._run_task = _fake_run_task
+    _ = mod.tw_export_chain("cid-test")
+    expect(calls, "expected _run_task to be called")
+    expect(
+        all(not str(part).startswith("rc.data.location=") for part in calls[0]),
+        f"should not force rc.data.location without explicit data dir: {calls[0]!r}",
+    )
+
+def test_on_add_reads_data_arg_from_hook_argv():
+    """on-add should resolve TW_DATA_DIR from hook argv data: token."""
+    hook = _find_hook_file("on-add-nautical.py")
+    prev_taskdata = os.environ.get("TASKDATA")
+    prev_argv = list(sys.argv)
+    if "TASKDATA" in os.environ:
+        del os.environ["TASKDATA"]
+    sys.argv = ["on-add-nautical.py", "api:2", "command:add", "data:/tmp/nautical_data_arg_add_test"]
+    try:
+        mod = _load_hook_module(hook, "_nautical_on_add_data_arg_test")
+    finally:
+        sys.argv = prev_argv
+        if prev_taskdata is not None:
+            os.environ["TASKDATA"] = prev_taskdata
+    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_data_arg_add_test"), f"unexpected TW_DATA_DIR: {mod.TW_DATA_DIR}")
+    expect(bool(getattr(mod, "_USE_RC_DATA_LOCATION", False)), "rc.data.location should be enabled when data arg is present")
+
+def test_on_exit_data_arg_overrides_taskdata_env():
+    """on-exit should prefer hook argv data: over TASKDATA env when both are present."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    prev_taskdata = os.environ.get("TASKDATA")
+    prev_argv = list(sys.argv)
+    os.environ["TASKDATA"] = "/tmp/nautical_env_exit_test"
+    sys.argv = ["on-exit-nautical.py", "api:2", "command:modify", "data:/tmp/nautical_arg_exit_test"]
+    try:
+        mod = _load_hook_module(hook, "_nautical_on_exit_data_arg_precedence_test")
+    finally:
+        sys.argv = prev_argv
+        if prev_taskdata is None:
+            os.environ.pop("TASKDATA", None)
+        else:
+            os.environ["TASKDATA"] = prev_taskdata
+    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_arg_exit_test"), f"expected argv data dir, got: {mod.TW_DATA_DIR}")
+
+def test_on_modify_data_arg_overrides_taskdata_env():
+    """on-modify should prefer hook argv data: over TASKDATA env when both are present."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    prev_taskdata = os.environ.get("TASKDATA")
+    prev_argv = list(sys.argv)
+    os.environ["TASKDATA"] = "/tmp/nautical_env_modify_test"
+    sys.argv = ["on-modify-nautical.py", "api:2", "command:modify", "data:/tmp/nautical_arg_modify_test"]
+    try:
+        mod = _load_hook_module(hook, "_nautical_on_modify_data_arg_precedence_test")
+    finally:
+        sys.argv = prev_argv
+        if prev_taskdata is None:
+            os.environ.pop("TASKDATA", None)
+        else:
+            os.environ["TASKDATA"] = prev_taskdata
+    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_arg_modify_test"), f"expected argv data dir, got: {mod.TW_DATA_DIR}")
+
+def test_on_add_data_arg_overrides_taskdata_env():
+    """on-add should prefer hook argv data: over TASKDATA env when both are present."""
+    hook = _find_hook_file("on-add-nautical.py")
+    prev_taskdata = os.environ.get("TASKDATA")
+    prev_argv = list(sys.argv)
+    os.environ["TASKDATA"] = "/tmp/nautical_env_add_test"
+    sys.argv = ["on-add-nautical.py", "api:2", "command:add", "data:/tmp/nautical_arg_add_test"]
+    try:
+        mod = _load_hook_module(hook, "_nautical_on_add_data_arg_precedence_test")
+    finally:
+        sys.argv = prev_argv
+        if prev_taskdata is None:
+            os.environ.pop("TASKDATA", None)
+        else:
+            os.environ["TASKDATA"] = prev_taskdata
+    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_arg_add_test"), f"expected argv data dir, got: {mod.TW_DATA_DIR}")
+
+def test_core_resolve_task_data_context_precedence():
+    """core resolver should prefer argv data:, then TASKDATA env, then tw_dir fallback."""
+    d1, use1, src1 = core.resolve_task_data_context(
+        argv=["api:2", "command:modify", "data:/tmp/nautical_core_arg_test"],
+        env={"TASKDATA": "/tmp/nautical_core_env_test"},
+        tw_dir="/tmp/nautical_core_fallback_test",
+    )
+    expect(str(d1).endswith("/tmp/nautical_core_arg_test"), f"unexpected argv resolution: {(d1, use1, src1)!r}")
+    expect(bool(use1), "argv data: should enable rc.data.location")
+    expect(src1 == "argv", f"expected argv source, got {src1!r}")
+
+    d2, use2, src2 = core.resolve_task_data_context(
+        argv=["api:2", "command:modify"],
+        env={"TASKDATA": "/tmp/nautical_core_env_test"},
+        tw_dir="/tmp/nautical_core_fallback_test",
+    )
+    expect(str(d2).endswith("/tmp/nautical_core_env_test"), f"unexpected env resolution: {(d2, use2, src2)!r}")
+    expect(bool(use2), "TASKDATA should enable rc.data.location")
+    expect(src2 == "env", f"expected env source, got {src2!r}")
+
+    d3, use3, src3 = core.resolve_task_data_context(
+        argv=["api:2", "command:modify"],
+        env={},
+        tw_dir="/tmp/nautical_core_fallback_test",
+    )
+    expect(str(d3).endswith("/tmp/nautical_core_fallback_test"), f"unexpected fallback resolution: {(d3, use3, src3)!r}")
+    expect(not bool(use3), "fallback should not enable rc.data.location")
+    expect(src3 == "fallback", f"expected fallback source, got {src3!r}")
+
+def _assert_hook_requires_core_data_context(hook_name: str, module_name: str):
+    hook = _find_hook_file(hook_name)
+    prev_core = os.environ.get("NAUTICAL_CORE_PATH")
+    prev_argv = list(sys.argv)
+    with tempfile.TemporaryDirectory() as td:
+        fake_core = Path(td) / "nautical_core.py"
+        fake_core.write_text(
+            "def _warn_once_per_day_any(*_args, **_kwargs):\n"
+            "    return None\n",
+            encoding="utf-8",
+        )
+        os.environ["NAUTICAL_CORE_PATH"] = td
+        sys.argv = [hook_name]
+        try:
+            try:
+                _load_hook_module(hook, module_name)
+                raise AssertionError("expected hook import to fail without core data resolver")
+            except Exception as e:
+                expect(
+                    "resolve_task_data_context" in str(e),
+                    f"unexpected error when resolver missing: {e!r}",
+                )
+        finally:
+            sys.argv = prev_argv
+            if prev_core is None:
+                os.environ.pop("NAUTICAL_CORE_PATH", None)
+            else:
+                os.environ["NAUTICAL_CORE_PATH"] = prev_core
+
+def test_on_add_requires_core_data_context_helper():
+    """on-add should fail closed when core data-context resolver is unavailable."""
+    _assert_hook_requires_core_data_context("on-add-nautical.py", "_nautical_on_add_requires_core_data_ctx_test")
+
+def test_on_modify_requires_core_data_context_helper():
+    """on-modify should fail closed when core data-context resolver is unavailable."""
+    _assert_hook_requires_core_data_context("on-modify-nautical.py", "_nautical_on_modify_requires_core_data_ctx_test")
+
+def test_on_exit_requires_core_data_context_helper():
+    """on-exit should fail closed when core data-context resolver is unavailable."""
+    _assert_hook_requires_core_data_context("on-exit-nautical.py", "_nautical_on_exit_requires_core_data_ctx_test")
 
 def test_on_modify_read_two_fuzz_inputs():
     """on-modify input parsing should be strict and return JSON errors on bad input."""
@@ -1112,6 +1369,63 @@ def test_on_modify_rejects_oversized_stdin_early():
     finally:
         sys.stdin, sys.stdout, sys.stderr = orig_stdin, orig_stdout, orig_stderr
     expect((out.getvalue() or "").strip() == "", f"expected no stdout on oversized input, got: {out.getvalue()!r}")
+
+def test_health_check_json_ok_empty_taskdata():
+    """health check should report ok for empty taskdata."""
+    path = os.path.join(ROOT, "tools", "nautical_health_check.py")
+    with tempfile.TemporaryDirectory() as td:
+        p = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--json"],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(p.returncode == 0, f"health check returned {p.returncode}: {p.stderr!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        expect(obj.get("status") == "ok", f"unexpected status: {obj}")
+
+def test_health_check_critical_queue_bytes():
+    """health check should return critical when queue exceeds crit threshold."""
+    path = os.path.join(ROOT, "tools", "nautical_health_check.py")
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        q = td_path / ".nautical_spawn_queue.jsonl"
+        q.write_text("x" * 64, encoding="utf-8")
+        p = subprocess.run(
+            [
+                sys.executable,
+                path,
+                "--taskdata",
+                td,
+                "--queue-warn-bytes",
+                "32",
+                "--queue-crit-bytes",
+                "48",
+                "--json",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(p.returncode == 2, f"expected critical exit code 2, got {p.returncode}. stderr={p.stderr!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        expect(obj.get("status") == "crit", f"unexpected status: {obj}")
+
+def test_ops_templates_present_and_runner_executable():
+    """ops templates should exist and runner script should be executable."""
+    ops = os.path.join(ROOT, "tools", "ops")
+    files = [
+        "README.md",
+        "nautical-health-check.crontab",
+        "nautical-health-check.service",
+        "nautical-health-check.timer",
+        "nautical_health_check_cron.sh",
+    ]
+    for name in files:
+        p = os.path.join(ops, name)
+        expect(os.path.isfile(p), f"missing ops template: {p}")
+    runner = os.path.join(ops, "nautical_health_check_cron.sh")
+    expect(os.access(runner, os.X_OK), f"runner should be executable: {runner}")
 
 def test_on_modify_queue_full_drops_with_dead_letter():
     """on-modify should drop spawn intent when queue exceeds max bytes."""
@@ -3531,6 +3845,9 @@ TESTS = [
     test_on_modify_invalid_anchor_has_no_stdout,
     test_on_add_rejects_oversized_stdin_early,
     test_on_modify_rejects_oversized_stdin_early,
+    test_health_check_json_ok_empty_taskdata,
+    test_health_check_critical_queue_bytes,
+    test_ops_templates_present_and_runner_executable,
     test_on_modify_queue_full_drops_with_dead_letter,
     test_on_modify_chain_export_timeout_scales,
     test_tw_export_chain_extra_validation,
@@ -3564,6 +3881,19 @@ TESTS = [
     test_on_exit_queue_drain_idempotent,
     test_on_exit_rolls_back_parent_nextlink_on_missing_child,
     test_on_exit_uses_tw_data_dir_for_export_and_modify,
+    test_on_exit_no_explicit_taskdata_skips_rc_data_location,
+    test_on_exit_reads_data_arg_from_hook_argv,
+    test_on_modify_no_explicit_taskdata_skips_rc_data_location,
+    test_on_modify_reads_data_arg_from_hook_argv,
+    test_on_add_no_explicit_taskdata_skips_rc_data_location,
+    test_on_add_reads_data_arg_from_hook_argv,
+    test_on_exit_data_arg_overrides_taskdata_env,
+    test_on_modify_data_arg_overrides_taskdata_env,
+    test_on_add_data_arg_overrides_taskdata_env,
+    test_core_resolve_task_data_context_precedence,
+    test_on_add_requires_core_data_context_helper,
+    test_on_modify_requires_core_data_context_helper,
+    test_on_exit_requires_core_data_context_helper,
     test_on_modify_carry_wall_clock_across_dst,
     test_normalize_spec_for_acf_cache_guards,
     test_on_modify_link_limit,

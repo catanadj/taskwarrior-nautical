@@ -15,9 +15,11 @@ task add "Board prep" anchor:"m:2mon | m:15@pbd"
 ```
 
 <p align="center">
-<script src="https://asciinema.org/a/hy2DwagF0r2kBs3l.js" id="asciicast-hy2DwagF0r2kBs3l" async="true"></script>
+![demo2](https://github.com/user-attachments/assets/96902e4a-2ff8-4b8f-9d4e-4d539299053d)
+
   </a>
 </p>
+
 
 ---
 

@@ -15,8 +15,8 @@ task add "Board prep" anchor:"m:2mon | m:15@pbd"
 ```
 
 <p align="center">
-  <a href="https://asciinema.org/a/123456" target="_blank">
-  <img src="https://asciinema.org/a/123456.svg" width="700">
+  <a href="https://asciinema.org/a/hy2DwagF0r2kBs3l" target="_blank">
+  <img src="https://asciinema.org/a/hy2DwagF0r2kBs3l.svg" width="700">
   </a>
 </p>
 

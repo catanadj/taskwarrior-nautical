@@ -14,11 +14,9 @@ task add "Take Vitamin" cp:33h due:now+12h
 task add "Board prep" anchor:"m:2mon | m:15@pbd"
 ```
 
-<p align="center">
+
 ![demo2](https://github.com/user-attachments/assets/96902e4a-2ff8-4b8f-9d4e-4d539299053d)
 
-  </a>
-</p>
 
 
 ---

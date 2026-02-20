@@ -222,6 +222,18 @@ def _load_config() -> dict:
     cfg["wrand_salt"]      = str(cfg.get("wrand_salt") or _DEFAULTS["wrand_salt"])
     cfg["tz"]              = str(cfg.get("tz") or _DEFAULTS["tz"])
     cfg["holiday_region"]  = str(cfg.get("holiday_region") or "")
+    # Alias support:
+    #   recurrence_update_udas = [...]
+    #   [recurrence] update_udas = [...]
+    #   recurrence.update_udas = "..."
+    if cfg.get("recurrence_update_udas") is None:
+        rec = cfg.get("recurrence")
+        if isinstance(rec, dict):
+            rec_norm = _normalize_keys(rec)
+            if rec_norm.get("update_udas") is not None:
+                cfg["recurrence_update_udas"] = rec_norm.get("update_udas")
+    if cfg.get("recurrence_update_udas") is None and cfg.get("recurrence.update_udas") is not None:
+        cfg["recurrence_update_udas"] = cfg.get("recurrence.update_udas")
     return cfg
 
 
@@ -821,6 +833,50 @@ def _conf_bool(
         return False
     return bool(default)
 
+
+def _conf_csv_or_list(key: str, default: list[str] | None = None, lower: bool = False) -> list[str]:
+    v = _conf_raw(key)
+    if v is None:
+        return list(default or [])
+    if isinstance(v, str):
+        raw_items = v.split(",")
+    elif isinstance(v, (list, tuple, set)):
+        raw_items = list(v)
+    else:
+        raw_items = [v]
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        s = str(item).strip()
+        if not s:
+            continue
+        if lower:
+            s = s.lower()
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out if out else list(default or [])
+
+
+_UDA_ATTR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+def _conf_uda_field_list(key: str) -> list[str]:
+    fields = _conf_csv_or_list(key, default=[], lower=True)
+    out: list[str] = []
+    for f in fields:
+        if _UDA_ATTR_NAME_RE.fullmatch(f):
+            out.append(f)
+            continue
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                print(f"[nautical] Ignoring invalid UDA field in {key}: {f!r}", file=sys.stderr)
+            except Exception:
+                pass
+    return out
+
 def _trueish(v, default=False):
     if v is None:
         return default
@@ -879,6 +935,7 @@ MAX_LINK_NUMBER = _conf_int("max_link_number", 10000, min_value=1)
 SANITIZE_UDA = _conf_bool("sanitize_uda", False, true_values={"1", "yes", "true", "on"})
 SANITIZE_UDA_MAX_LEN = _conf_int("sanitize_uda_max_len", 1024, min_value=64, max_value=4096)
 MAX_JSON_BYTES = _conf_int("max_json_bytes", 10 * 1024 * 1024, min_value=1024, max_value=100 * 1024 * 1024)
+RECURRENCE_UPDATE_UDAS = tuple(_conf_uda_field_list("recurrence_update_udas"))
 _CACHE_TTL_SECS = _conf_int("cache_ttl_secs", 3600, min_value=0)
 
 def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):

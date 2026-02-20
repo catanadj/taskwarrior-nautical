@@ -360,6 +360,7 @@ _ANALYTICS_ONTIME_TOL_SECS = 3600
 _CHECK_CHAIN_INTEGRITY = False
 _VERIFY_IMPORT = False
 _DEBUG_WAIT_SCHED = _DEFAULT_DEBUG_WAIT_SCHED
+_RECURRENCE_UPDATE_UDAS: tuple[str, ...] = ()
 _SPAWN_QUEUE_MAX_BYTES = _DEFAULT_SPAWN_QUEUE_MAX_BYTES
 _SPAWN_QUEUE_DRAIN_MAX_ITEMS = _SPAWN_QUEUE_DRAIN_MAX_ITEMS
 _MAX_CHAIN_WALK = _MAX_CHAIN_WALK
@@ -367,7 +368,7 @@ _MAX_CHAIN_WALK = _MAX_CHAIN_WALK
 def _apply_core_config() -> None:
     global _CHAIN_COLOR_PER_CHAIN, _SHOW_TIMELINE_GAPS, _SHOW_ANALYTICS, _ANALYTICS_STYLE
     global _ANALYTICS_ONTIME_TOL_SECS, _CHECK_CHAIN_INTEGRITY, _VERIFY_IMPORT
-    global _DEBUG_WAIT_SCHED, _SPAWN_QUEUE_MAX_BYTES, _SPAWN_QUEUE_DRAIN_MAX_ITEMS, _MAX_CHAIN_WALK
+    global _DEBUG_WAIT_SCHED, _RECURRENCE_UPDATE_UDAS, _SPAWN_QUEUE_MAX_BYTES, _SPAWN_QUEUE_DRAIN_MAX_ITEMS, _MAX_CHAIN_WALK
     if core is None:
         return
     _CHAIN_COLOR_PER_CHAIN = core.CHAIN_COLOR_PER_CHAIN
@@ -378,6 +379,7 @@ def _apply_core_config() -> None:
     _CHECK_CHAIN_INTEGRITY = core.CHECK_CHAIN_INTEGRITY
     _VERIFY_IMPORT = core.VERIFY_IMPORT
     _DEBUG_WAIT_SCHED = core.DEBUG_WAIT_SCHED if hasattr(core, "DEBUG_WAIT_SCHED") else _DEFAULT_DEBUG_WAIT_SCHED
+    _RECURRENCE_UPDATE_UDAS = tuple(core.RECURRENCE_UPDATE_UDAS) if hasattr(core, "RECURRENCE_UPDATE_UDAS") else ()
     _SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES if hasattr(core, "SPAWN_QUEUE_MAX_BYTES") else _DEFAULT_SPAWN_QUEUE_MAX_BYTES
     _SPAWN_QUEUE_DRAIN_MAX_ITEMS = core.SPAWN_QUEUE_DRAIN_MAX_ITEMS
     _MAX_CHAIN_WALK = core.MAX_CHAIN_WALK
@@ -1888,6 +1890,36 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
     return list(cached)
 
 
+def _existing_next_task(parent_task: dict, next_no: int) -> dict | None:
+    """Return an existing next-link task for idempotent re-completion handling."""
+    if not isinstance(parent_task, dict):
+        return None
+
+    # Fast path: explicit nextLink pointer on parent.
+    next_ref = (parent_task.get("nextLink") or "").strip()
+    if next_ref:
+        obj = _export_uuid_short_cached(next_ref)
+        if isinstance(obj, dict) and (obj.get("status") or "").strip().lower() != "deleted":
+            return obj
+
+    # Fallback: any non-deleted task already occupying next link number in this chain.
+    chain_id = (parent_task.get("chainID") or parent_task.get("chainid") or "").strip()
+    if not chain_id:
+        return None
+    try:
+        rows = _get_chain_export(chain_id, extra=f"link:{int(next_no)} status.not:deleted")
+    except Exception:
+        rows = []
+    if not rows:
+        return None
+
+    for st in ("pending", "waiting", "completed"):
+        for row in rows:
+            if (row.get("status") or "").strip().lower() == st:
+                return row
+    return rows[0]
+
+
 def _build_chain_indexes(chain: list[dict]) -> tuple[dict[int, list[dict]], dict[str, dict]]:
     """Build link-index and short-uuid index for quick in-memory lookups."""
     by_link: dict[int, list[dict]] = {}
@@ -2535,6 +2567,35 @@ _RESERVED_DROP = {
 }
 
 _RESERVED_OVERRIDE = {"due", "entry", "status", "chain", "prevLink", "link"}
+_UDA_CARRY_SKIP_LOWER = {
+    "id",
+    "uuid",
+    "urgency",
+    "status",
+    "modified",
+    "start",
+    "end",
+    "mask",
+    "imask",
+    "parent",
+    "recur",
+    "rc",
+    "nextlink",
+    "prevlink",
+    "link",
+    "chain",
+    "chainmax",
+    "chainuntil",
+    "chainid",
+    "cp",
+    "anchor",
+    "anchor_mode",
+    "due",
+    "entry",
+    "wait",
+    "scheduled",
+    "until",
+}
 
 
 
@@ -2600,7 +2661,7 @@ def _local_naive_to_utc(dt_local_naive: datetime) -> datetime:
 
 
 def _carry_relative_datetime(parent: dict, child: dict, child_due_utc: datetime, field: str) -> None:
-    """Carry wait/scheduled forward relative to due, preserving local wall-clock offset.
+    """Carry a datetime field forward relative to due, preserving local wall-clock offset.
 
     offset := (parent[field] - parent[due]) computed in local wall-clock space
     child[field] := child_due + offset (also in local wall-clock space)
@@ -2646,6 +2707,30 @@ def _carry_relative_datetime(parent: dict, child: dict, child_due_utc: datetime,
         # If anything goes wrong, do not mutate the child's field (leave inherited value).
         return
 
+
+def _configured_recurrence_uda_fields(parent: dict) -> tuple[str, ...]:
+    if not isinstance(parent, dict):
+        return ()
+    cfg = _RECURRENCE_UPDATE_UDAS if isinstance(_RECURRENCE_UPDATE_UDAS, (tuple, list)) else ()
+    if not cfg:
+        return ()
+    parent_keys: dict[str, str] = {}
+    for k in parent.keys():
+        if isinstance(k, str) and k:
+            parent_keys.setdefault(k.lower(), k)
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in cfg:
+        lk = str(name or "").strip().lower()
+        if not lk or lk in seen or lk in _UDA_CARRY_SKIP_LOWER:
+            continue
+        seen.add(lk)
+        actual = parent_keys.get(lk)
+        if actual:
+            out.append(actual)
+    return tuple(out)
+
+
 def _build_child_from_parent(
     parent: dict,
     child_due_utc,
@@ -2680,9 +2765,11 @@ def _build_child_from_parent(
         child.pop("anchor_mode", None)
 
 
-    # Carry wait/scheduled forward relative to due (local wall-clock delta)
+    # Carry wait/scheduled forward relative to due (local wall-clock delta).
     _carry_relative_datetime(parent, child, child_due_utc, "wait")
     _carry_relative_datetime(parent, child, child_due_utc, "scheduled")
+    for uda_field in _configured_recurrence_uda_fields(parent):
+        _carry_relative_datetime(parent, child, child_due_utc, uda_field)
 
     if cpmax:
         child["chainMax"] = int(cpmax)
@@ -3897,6 +3984,25 @@ def main():
                 ("Fix", "Run tools/nautical_backfill_chainid.py, then retry."),
             ],
             kind="error",
+        )
+        _print_task(new)
+        return
+
+    # Idempotency guard:
+    # If this completed link already has a spawned next task (typical done->pending->done),
+    # do not enqueue a duplicate spawn.
+    existing_next = _existing_next_task(new, next_no)
+    if existing_next:
+        ex_uuid = (existing_next.get("uuid") or "").strip()
+        ex_short = _short(ex_uuid)
+        ex_status = ((existing_next.get("status") or "").strip() or "unknown").lower()
+        _panel(
+            "ℹ Spawn skipped",
+            [
+                ("Reason", "Next link already exists for this completed task."),
+                ("Existing", f"#{next_no} {ex_short} ({ex_status})"),
+            ],
+            kind="note",
         )
         _print_task(new)
         return

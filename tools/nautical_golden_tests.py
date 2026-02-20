@@ -1549,6 +1549,35 @@ def test_dst_round_trip_noon_preserves_local_date():
             expect(back.date() == d, f"DST round-trip date mismatch: {d} -> {back.date()}")
             expect(back.hour == 12 and back.minute == 0, f"DST round-trip time mismatch: {back}")
 
+
+def test_core_recurrence_update_udas_config_aliases():
+    """recurrence UDA carry config should accept top-level and [recurrence] alias forms."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+
+    with tempfile.TemporaryDirectory() as td:
+        cfg = os.path.join(td, "nautical.toml")
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write('recurrence_update_udas = ["rappel", "next_review"]\n')
+            f.write("[recurrence]\n")
+            f.write('update_udas = "ignored_alias"\n')
+        mod = _load_core_module(core_path, "_nautical_core_recur_udas_top_test", cfg)
+        expect(
+            mod.RECURRENCE_UPDATE_UDAS == ("rappel", "next_review"),
+            f"unexpected top-level recurrence_update_udas: {mod.RECURRENCE_UPDATE_UDAS}",
+        )
+
+    with tempfile.TemporaryDirectory() as td:
+        cfg = os.path.join(td, "nautical.toml")
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write("[recurrence]\n")
+            f.write('update_udas = "rappel, next_review, bad-name, 9x"\n')
+        mod = _load_core_module(core_path, "_nautical_core_recur_udas_alias_test", cfg)
+        expect(
+            mod.RECURRENCE_UPDATE_UDAS == ("rappel", "next_review"),
+            f"unexpected alias recurrence.update_udas parse: {mod.RECURRENCE_UPDATE_UDAS}",
+        )
+
+
 def test_on_modify_invalid_json_passthrough():
     """Malformed JSON should fail fast without stdout JSON."""
     path = _find_hook_file("on-modify-nautical.py")
@@ -2998,6 +3027,56 @@ def test_on_modify_carry_wall_clock_across_dst():
     expect(wait_local.hour == 3 and wait_local.minute == 30, f"unexpected local wait: {wait_local}")
 
 
+def test_on_modify_build_child_carries_configured_uda_datetime():
+    """configured recurrence_update_udas fields should carry with wall-clock delta."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_carry_uda_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:
+        return
+
+    prev_cfg = getattr(mod, "_RECURRENCE_UPDATE_UDAS", ())
+    try:
+        mod._RECURRENCE_UPDATE_UDAS = ("rappel",)
+        mod.core.LOCAL_TZ_NAME = "America/New_York"
+        mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+
+        due_local = date(2025, 3, 9)
+        due_utc = mod.core.build_local_datetime(due_local, (1, 30))
+        rappel_utc = mod.core.build_local_datetime(due_local, (3, 30))
+        child_due_utc = mod.core.build_local_datetime(date(2025, 3, 10), (1, 30))
+
+        parent = {
+            "uuid": "00000000-0000-0000-0000-000000000999",
+            "status": "completed",
+            "due": mod.core.fmt_isoz(due_utc),
+            "rappel": mod.core.fmt_isoz(rappel_utc),
+            "cp": "1d",
+            "chainID": "cid12345",
+        }
+        child = mod._build_child_from_parent(
+            parent,
+            child_due_utc,
+            2,
+            "deadbeef",
+            "cp",
+            0,
+            None,
+        )
+        rappel_child = mod.core.parse_dt_any(child.get("rappel"))
+        rappel_local = mod.core.to_local(rappel_child)
+        expect(
+            rappel_local.hour == 3 and rappel_local.minute == 30,
+            f"unexpected local rappel: {rappel_local}",
+        )
+    finally:
+        mod._RECURRENCE_UPDATE_UDAS = prev_cfg
+
+
 def test_normalize_spec_for_acf_cache_guards():
     """normalize spec cache should bound inputs before caching."""
     import nautical_core as core
@@ -3541,6 +3620,126 @@ def test_on_exit_export_uuid_noisy_stdout():
     expect(obj and obj.get("exists"), "noisy stdout should still be treated as exists")
 
 
+def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
+    """Re-completing a reactivated task should not spawn when nextLink already exists."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_recomplete_skip_spawn_test")
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._SHOW_ANALYTICS = False
+    mod._CHECK_CHAIN_INTEGRITY = False
+
+    called = {"spawn": False}
+
+    def _spawn_child_atomic_stub(_child, _parent):
+        called["spawn"] = True
+        return ("deadbeef", set(), False, True, "queued")
+
+    mod._spawn_child_atomic = _spawn_child_atomic_stub
+    mod._export_uuid_short_cached = lambda _short: {
+        "uuid": "deadbeef-0000-0000-0000-000000000222",
+        "status": "pending",
+        "link": 2,
+    }
+
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000111",
+        "status": "pending",
+        "description": "reactivated duplicate guard",
+        "cp": "P1D",
+        "chainID": "abcd1234",
+        "link": 1,
+        "nextLink": "deadbeef",
+        "due": "20250101T090000Z",
+    }
+    new = dict(old)
+    new.update(
+        {
+            "status": "completed",
+            "end": "20250102T090000Z",
+        }
+    )
+
+    raw = json.dumps(old) + "\n" + json.dumps(new) + "\n"
+    buf_out = io.StringIO()
+    buf_err = io.StringIO()
+    buf_in = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
+    prev_stdin = sys.stdin
+    try:
+        sys.stdin = buf_in
+        with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
+            mod.main()
+    finally:
+        sys.stdin = prev_stdin
+
+    out_task = _extract_last_json(buf_out.getvalue())
+    expect(not called["spawn"], "re-completion should not trigger duplicate spawn")
+    expect(out_task.get("nextLink") == "deadbeef", "existing nextLink should be preserved")
+
+
+def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
+    """Re-completing should not spawn when link #N+1 already exists in chain even if nextLink is empty."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_recomplete_link_guard_test")
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._SHOW_ANALYTICS = False
+    mod._CHECK_CHAIN_INTEGRITY = False
+
+    called = {"spawn": False}
+
+    def _spawn_child_atomic_stub(_child, _parent):
+        called["spawn"] = True
+        return ("cafebabe", set(), False, True, "queued")
+
+    mod._spawn_child_atomic = _spawn_child_atomic_stub
+    mod._export_uuid_short_cached = lambda _short: None
+
+    def _get_chain_export_stub(chain_id, since=None, extra=None, env=None):
+        if chain_id == "abcd1234" and extra and "link:2" in extra:
+            return [
+                {
+                    "uuid": "00000000-0000-0000-0000-000000000222",
+                    "status": "pending",
+                    "link": 2,
+                    "chainID": "abcd1234",
+                }
+            ]
+        return []
+
+    mod._get_chain_export = _get_chain_export_stub
+
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000111",
+        "status": "pending",
+        "description": "reactivated duplicate guard via link check",
+        "cp": "P1D",
+        "chainID": "abcd1234",
+        "link": 1,
+        "due": "20250101T090000Z",
+    }
+    new = dict(old)
+    new.update(
+        {
+            "status": "completed",
+            "end": "20250102T090000Z",
+        }
+    )
+
+    raw = json.dumps(old) + "\n" + json.dumps(new) + "\n"
+    buf_out = io.StringIO()
+    buf_err = io.StringIO()
+    buf_in = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
+    prev_stdin = sys.stdin
+    try:
+        sys.stdin = buf_in
+        with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
+            mod.main()
+    finally:
+        sys.stdin = prev_stdin
+
+    _ = _extract_last_json(buf_out.getvalue())
+    expect(not called["spawn"], "existing link #N+1 should prevent duplicate spawn")
+
+
 def test_on_modify_cp_completion_spawns_next_link():
     """on-modify should spawn the next CP link on completion."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -3920,6 +4119,8 @@ TESTS = [
     test_on_exit_export_uuid_noisy_stdout,
     test_core_import_deterministic,
     test_on_modify_spawn_intent_id_in_entry,
+    test_on_modify_recompleted_task_with_nextlink_skips_spawn,
+    test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,
@@ -3930,7 +4131,9 @@ TESTS = [
     test_hooks_no_direct_subprocess_run,
     test_chain_integrity_warnings_detects_issues,
     test_dst_round_trip_noon_preserves_local_date,
+    test_core_recurrence_update_udas_config_aliases,
     test_warn_rate_limited_any,
+    test_on_modify_build_child_carries_configured_uda_datetime,
 
 ]
 

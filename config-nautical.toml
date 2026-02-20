@@ -1,5 +1,5 @@
 # Nautical config
-wrand_salt      = "nautical|wrand|v2"
+wrand_salt      = "nautical|wrand|v3"
 tz              = "Australia/Sydney"
 holiday_region  = "" 				# not implemented yet
 
@@ -22,6 +22,7 @@ analytics_ontime_tol_secs = 14400    # "on time" window in seconds
 check_chain_integrity = true         # warn on gaps/mismatched links/chainID inconsistencies
 verify_import = true                 # verify child import via export
 debug_wait_sched = false             # include wait/scheduled debug rows
+recurrence_update_udas = []          # optional date UDAs to carry relative to due (e.g., ["rappel"])
 panel_mode = "rich"                  # "rich", "fast" (aka "plain"), or "line"
 fast_color = true                    # allow ANSI color in fast mode
 spawn_queue_max_bytes = 524288       # max queued JSONL bytes before fast-drain

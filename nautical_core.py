@@ -48,7 +48,7 @@ except Exception:
 
 # --- Defaults ---
 _DEFAULTS = {
-    "wrand_salt": "nautical|wrand|v1",  # change to reshuffle weekly-rand streams
+    "wrand_salt": "nautical|wrand|v3",  # change to reshuffle weekly-rand streams
     "tz": "Europe/Bucharest",           # reserved for future DST/zone features
     "holiday_region": "",               # reserved for future holiday features
 }
@@ -74,7 +74,7 @@ def _read_toml(path: str) -> dict:
     env_abs = os.path.abspath(os.path.expanduser(env_path)) if env_path else ""
     is_env_path = bool(env_abs and path == env_abs)
 
-    # File exists, but we cannot parse TOML (Python < 3.11 and no tomli)
+    # File exists, but cannot parse TOML (Python < 3.11 and no tomli)
     if tomllib is None:
         if is_env_path:
             raise RuntimeError(

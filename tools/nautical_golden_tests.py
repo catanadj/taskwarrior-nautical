@@ -16,6 +16,7 @@ Optional:
 
 import importlib
 import sys, os, re, json, io, contextlib, stat
+import sqlite3
 import tempfile
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
@@ -1540,6 +1541,72 @@ def test_on_modify_queue_full_drops_with_dead_letter():
             else:
                 os.environ["TASKDATA"] = prev_taskdata
 
+def test_on_modify_enqueue_uses_sqlite_when_legacy_empty():
+    """on-modify should enqueue spawn intents into SQLite when legacy JSONL is empty."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_modify_enqueue_sqlite_test")
+            if hasattr(mod, "_load_core"):
+                mod._load_core()
+            entry = {
+                "spawn_intent_id": "si_sqlite_a",
+                "parent_uuid": "00000000-0000-0000-0000-000000000001",
+                "child_short": "00000001",
+                "child": {"uuid": "00000000-0000-0000-0000-000000000002"},
+            }
+            ok, reason = mod._enqueue_deferred_spawn(entry)
+            expect(ok, f"sqlite enqueue failed: {reason}")
+            db_path = mod._SPAWN_QUEUE_DB_PATH
+            expect(db_path.exists(), f"sqlite queue db missing: {db_path}")
+            expect(mod._SPAWN_QUEUE_PATH.exists(), "legacy queue touch file missing")
+            with sqlite3.connect(str(db_path)) as conn:
+                row = conn.execute(
+                    "SELECT payload FROM queue_entries WHERE spawn_intent_id=?",
+                    ("si_sqlite_a",),
+                ).fetchone()
+            expect(row is not None, "sqlite queue row missing")
+            payload = json.loads((row[0] or "").strip() or "{}")
+            expect(payload.get("spawn_intent_id") == "si_sqlite_a", f"unexpected sqlite payload: {payload}")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+
+def test_on_modify_enqueue_prefers_jsonl_when_legacy_backlog_exists():
+    """on-modify should keep using JSONL while legacy queue contains entries."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_modify_enqueue_jsonl_backlog_test")
+            if hasattr(mod, "_load_core"):
+                mod._load_core()
+            q_path = mod._SPAWN_QUEUE_PATH
+            q_path.parent.mkdir(parents=True, exist_ok=True)
+            q_path.write_text('{"spawn_intent_id":"legacy_1"}\n', encoding="utf-8")
+
+            entry = {
+                "spawn_intent_id": "legacy_2",
+                "parent_uuid": "00000000-0000-0000-0000-000000000003",
+                "child_short": "00000003",
+                "child": {"uuid": "00000000-0000-0000-0000-000000000004"},
+            }
+            ok, reason = mod._enqueue_deferred_spawn(entry)
+            expect(ok, f"legacy enqueue failed: {reason}")
+            txt = q_path.read_text(encoding="utf-8")
+            expect('"spawn_intent_id":"legacy_1"' in txt, f"legacy entry missing after enqueue: {txt!r}")
+            expect('"spawn_intent_id":"legacy_2"' in txt, f"new entry not appended to JSONL backlog: {txt!r}")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+
 def test_on_modify_chain_export_timeout_scales():
     """tw_export_chain should scale timeout based on cached chain size."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -2832,6 +2899,84 @@ def test_on_exit_spawn_intents_drain():
         expect(stats.get("processed") == 1, f"unexpected drain processed: {stats}")
         expect(imported["ok"], "child import did not run")
         expect(parent_updated["ok"], "parent update did not run")
+
+def test_on_exit_drain_skips_finalized_sqlite_intent():
+    """on-exit should skip and ack SQLite entries already finalized in intent log."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_skip_test")
+    if not hasattr(mod, "_drain_queue"):
+        raise AssertionError("on-exit hook does not expose drain helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        mod._QUEUE_PATH.write_text("", encoding="utf-8")
+        intent_log = mod._QUEUE_PATH.parent / ".nautical_spawn_intents.jsonl"
+        intent_log.write_text(
+            json.dumps(
+                {
+                    "ts": "2026-01-01T00:00:00Z",
+                    "hook": "on-exit",
+                    "status": "done",
+                    "spawn_intent_id": "si_done",
+                    "reason": "processed",
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+                "VALUES (?, ?, 0, 'queued', 1.0, 1.0)",
+                (
+                    "si_done",
+                    json.dumps(
+                        {
+                            "spawn_intent_id": "si_done",
+                            "parent_uuid": "00000000-0000-0000-0000-000000000111",
+                            "child_short": "deadbeef",
+                            "child": {"uuid": "00000000-0000-0000-0000-000000000999"},
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
+            conn.commit()
+
+        stats = mod._drain_queue()
+        expect(stats.get("entries_total") == 1, f"unexpected entries_total: {stats}")
+        expect(stats.get("entries_skipped_idempotent") == 1, f"expected idempotent skip: {stats}")
+        expect(stats.get("processed") == 1, f"expected processed=1 due to skip accounting: {stats}")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            remaining = conn.execute("SELECT COUNT(1) FROM queue_entries").fetchone()[0]
+        expect(int(remaining) == 0, f"sqlite entry should be acked/deleted, remaining={remaining}")
 
 
 def test_on_exit_queue_drain_is_transactional():
@@ -4390,6 +4535,8 @@ TESTS = [
     test_health_check_critical_queue_bytes,
     test_ops_templates_present_and_runner_executable,
     test_on_modify_queue_full_drops_with_dead_letter,
+    test_on_modify_enqueue_uses_sqlite_when_legacy_empty,
+    test_on_modify_enqueue_prefers_jsonl_when_legacy_backlog_exists,
     test_on_modify_chain_export_timeout_scales,
     test_tw_export_chain_extra_validation,
     test_next_for_and_no_progress_fails_fast,
@@ -4416,6 +4563,7 @@ TESTS = [
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,
+    test_on_exit_drain_skips_finalized_sqlite_intent,
     test_on_exit_queue_drain_is_transactional,
     test_on_exit_queue_stat_failure_does_not_crash,
     test_on_exit_quarantines_bad_queue_lines,

@@ -13,6 +13,7 @@ import sys, json, os, uuid, subprocess, importlib, random, tempfile
 import importlib.util
 import atexit
 import time as _ptime
+import sqlite3
 from collections import OrderedDict
 from pathlib import Path
 from datetime import datetime, timedelta, timezone, time
@@ -329,6 +330,7 @@ def _task_cmd_prefix() -> list[str]:
 # ------------------------------------------------------------------------------
 _SPAWN_QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _SPAWN_QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
+_SPAWN_QUEUE_DB_PATH = TW_DATA_DIR / ".nautical_queue.db"
 _DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
 _SPAWN_LOCK_RETRIES = 6
@@ -990,8 +992,151 @@ def _fsync_dir(path: Path) -> None:
             pass
 
 
-def _enqueue_deferred_spawn(task_obj: dict) -> tuple[bool, str]:
-    """Append one task JSON object to the spawn intent queue (JSONL, UTF-8)."""
+def _spawn_queue_jsonl_has_data() -> bool:
+    try:
+        return _SPAWN_QUEUE_PATH.exists() and _SPAWN_QUEUE_PATH.stat().st_size > 0
+    except Exception:
+        return False
+
+
+def _spawn_queue_compat_touch_jsonl() -> None:
+    # Keep the legacy queue file around for mixed-version tooling/tests.
+    try:
+        _SPAWN_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        fd = os.open(str(_SPAWN_QUEUE_PATH), os.O_CREAT | os.O_WRONLY, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        os.close(fd)
+    except Exception:
+        pass
+
+
+def _spawn_queue_db_size_bytes() -> int:
+    total = 0
+    paths = (
+        _SPAWN_QUEUE_DB_PATH,
+        Path(str(_SPAWN_QUEUE_DB_PATH) + "-wal"),
+        Path(str(_SPAWN_QUEUE_DB_PATH) + "-shm"),
+    )
+    for p in paths:
+        try:
+            if p.exists():
+                total += p.stat().st_size
+        except Exception:
+            continue
+    return total
+
+
+def _spawn_queue_total_bytes() -> int:
+    total = _spawn_queue_db_size_bytes()
+    try:
+        if _SPAWN_QUEUE_PATH.exists():
+            total += _SPAWN_QUEUE_PATH.stat().st_size
+    except Exception:
+        pass
+    return total
+
+
+def _spawn_queue_warn_growth(queue_path: Path, size: int) -> None:
+    global _WARNED_SPAWN_QUEUE_GROWTH
+    try:
+        if _WARNED_SPAWN_QUEUE_GROWTH:
+            return
+        if _SPAWN_QUEUE_MAX_BYTES <= 0:
+            return
+        if size > _SPAWN_QUEUE_MAX_BYTES:
+            _WARNED_SPAWN_QUEUE_GROWTH = True
+            _panel(
+                "⚠ Spawn queue growing",
+                [
+                    ("Queue", str(queue_path)),
+                    ("Size", f"{size} bytes"),
+                    ("Limit", f"{_SPAWN_QUEUE_MAX_BYTES} bytes"),
+                    ("Hint", "Run the on-exit hook or reduce load."),
+                ],
+                kind="warning",
+            )
+    except Exception:
+        pass
+
+
+def _handle_enqueue_lock_busy(task_obj: dict) -> tuple[bool, str]:
+    _write_dead_letter(task_obj, "queue lock busy")
+    _diag("queue lock busy; intent dead-lettered")
+    _diag_count("queue_lock_failures")
+    global _WARNED_SPAWN_QUEUE_LOCK
+    if not _WARNED_SPAWN_QUEUE_LOCK:
+        _WARNED_SPAWN_QUEUE_LOCK = True
+        _panel(
+            "⚠ Spawn queue busy",
+            [
+                ("Queue", str(_SPAWN_QUEUE_DB_PATH)),
+                ("Hint", "Queue lock busy; spawn intent not queued."),
+            ],
+            kind="warning",
+        )
+    return False, "queue lock busy"
+
+
+def _spawn_queue_db_connect() -> sqlite3.Connection | None:
+    try:
+        _SPAWN_QUEUE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        conn = sqlite3.connect(
+            str(_SPAWN_QUEUE_DB_PATH),
+            timeout=max(1.0, _SPAWN_LOCK_SLEEP_BASE * max(1, _SPAWN_LOCK_RETRIES) * 4.0),
+        )
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=1500")
+        try:
+            if _SPAWN_QUEUE_DB_PATH.exists():
+                os.chmod(_SPAWN_QUEUE_DB_PATH, 0o600)
+        except Exception:
+            pass
+        return conn
+    except Exception as e:
+        _diag(f"queue db connect failed: {e}")
+        return None
+
+
+def _spawn_queue_db_init(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS queue_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            spawn_intent_id TEXT,
+            payload TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            state TEXT NOT NULL DEFAULT 'queued',
+            claim_token TEXT,
+            claimed_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_entries_spawn_intent
+        ON queue_entries (spawn_intent_id)
+        WHERE spawn_intent_id IS NOT NULL AND spawn_intent_id <> ''
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_state_id ON queue_entries (state, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_claimed_at ON queue_entries (claimed_at)")
+    conn.commit()
+
+
+def _enqueue_deferred_spawn_jsonl(task_obj: dict) -> tuple[bool, str]:
+    """Append one task JSON object to the legacy spawn queue (JSONL, UTF-8)."""
     try:
         line = json.dumps(task_obj, ensure_ascii=False, separators=(",", ":")) + "\n"
     except Exception:
@@ -1056,25 +1201,113 @@ def _enqueue_deferred_spawn(task_obj: dict) -> tuple[bool, str]:
         return False, "queue lock busy"
     if not put_ok:
         return False, (fail_reason or "spawn queue write failed")
-    global _WARNED_SPAWN_QUEUE_GROWTH
     try:
-        if not _WARNED_SPAWN_QUEUE_GROWTH and _SPAWN_QUEUE_PATH.exists():
-            size = _SPAWN_QUEUE_PATH.stat().st_size
-            if size > _SPAWN_QUEUE_MAX_BYTES:
-                _WARNED_SPAWN_QUEUE_GROWTH = True
-                _panel(
-                    "⚠ Spawn queue growing",
-                    [
-                        ("Queue", str(_SPAWN_QUEUE_PATH)),
-                        ("Size", f"{size} bytes"),
-                        ("Limit", f"{_SPAWN_QUEUE_MAX_BYTES} bytes"),
-                        ("Hint", "Run the on-exit hook or reduce load."),
-                    ],
-                    kind="warning",
-                )
+        if _SPAWN_QUEUE_PATH.exists():
+            _spawn_queue_warn_growth(_SPAWN_QUEUE_PATH, _SPAWN_QUEUE_PATH.stat().st_size)
     except Exception:
         pass
     return True, ""
+
+
+def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
+    if _SPAWN_QUEUE_MAX_BYTES > 0:
+        try:
+            if _spawn_queue_total_bytes() > _SPAWN_QUEUE_MAX_BYTES:
+                _write_dead_letter(task_obj, "spawn queue full")
+                _diag("spawn queue full; intent dropped")
+                return False, "spawn queue full"
+        except Exception:
+            pass
+
+    conn = _spawn_queue_db_connect()
+    if conn is None:
+        return False, "spawn queue db unavailable"
+    try:
+        _spawn_queue_db_init(conn)
+        payload = json.dumps(task_obj, ensure_ascii=False, separators=(",", ":"))
+        now = _time.time()
+        spawn_intent_id = (task_obj.get("spawn_intent_id") or "").strip() if isinstance(task_obj, dict) else ""
+        conn.execute("BEGIN IMMEDIATE")
+        if spawn_intent_id:
+            cur = conn.execute(
+                "UPDATE queue_entries SET payload=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
+                "WHERE spawn_intent_id=?",
+                (payload, now, spawn_intent_id),
+            )
+            if int(getattr(cur, "rowcount", 0) or 0) <= 0:
+                try:
+                    conn.execute(
+                        "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+                        "VALUES (?, ?, 0, 'queued', NULL, NULL, ?, ?)",
+                        (spawn_intent_id, payload, now, now),
+                    )
+                except sqlite3.IntegrityError:
+                    conn.execute(
+                        "UPDATE queue_entries SET payload=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
+                        "WHERE spawn_intent_id=?",
+                        (payload, now, spawn_intent_id),
+                    )
+        else:
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+                "VALUES (NULL, ?, 0, 'queued', NULL, NULL, ?, ?)",
+                (payload, now, now),
+            )
+        conn.commit()
+        try:
+            if _SPAWN_QUEUE_DB_PATH.exists():
+                os.chmod(_SPAWN_QUEUE_DB_PATH, 0o600)
+            wal = Path(str(_SPAWN_QUEUE_DB_PATH) + "-wal")
+            if wal.exists():
+                os.chmod(wal, 0o600)
+            shm = Path(str(_SPAWN_QUEUE_DB_PATH) + "-shm")
+            if shm.exists():
+                os.chmod(shm, 0o600)
+        except Exception:
+            pass
+        _spawn_queue_compat_touch_jsonl()
+        _spawn_queue_warn_growth(_SPAWN_QUEUE_DB_PATH, _spawn_queue_db_size_bytes())
+        return True, ""
+    except sqlite3.OperationalError as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        msg = str(e).lower()
+        if "locked" in msg or "busy" in msg:
+            return _handle_enqueue_lock_busy(task_obj)
+        fail_reason = f"spawn queue write failed: {e}"
+        _write_dead_letter(task_obj, fail_reason)
+        _diag(fail_reason)
+        return False, fail_reason
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        fail_reason = f"spawn queue write failed: {e}"
+        _write_dead_letter(task_obj, fail_reason)
+        _diag(fail_reason)
+        return False, fail_reason
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _enqueue_deferred_spawn(task_obj: dict) -> tuple[bool, str]:
+    # Keep append-order compatibility while a legacy JSONL backlog exists.
+    if _spawn_queue_jsonl_has_data():
+        return _enqueue_deferred_spawn_jsonl(task_obj)
+    ok, reason = _enqueue_deferred_spawn_sqlite(task_obj)
+    if ok:
+        return True, ""
+    # Fallback for environments without sqlite support.
+    if reason == "spawn queue db unavailable":
+        return _enqueue_deferred_spawn_jsonl(task_obj)
+    return False, reason
+
 
 def _write_dead_letter(entry: dict, reason: str) -> None:
     if not _require_core():

@@ -15,6 +15,7 @@ import json
 import time
 import subprocess
 import random
+import sqlite3
 import importlib.util
 from pathlib import Path
 from contextlib import contextmanager
@@ -108,6 +109,7 @@ def _task_cmd_prefix() -> list[str]:
 _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _QUEUE_PROCESSING_PATH = TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"
 _QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
+_QUEUE_DB_PATH = TW_DATA_DIR / ".nautical_queue.db"
 _DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
 _DEAD_LETTER_RETENTION_DAYS = int(os.environ.get("NAUTICAL_DEAD_LETTER_RETENTION_DAYS") or 30)
@@ -150,6 +152,7 @@ _INTENT_LOG_MAX_ENTRIES = _env_int("NAUTICAL_INTENT_LOG_MAX_ENTRIES", 20000)
 _LOCK_STORM_THRESHOLD = _env_int("NAUTICAL_LOCK_STORM_THRESHOLD", 8)
 _LOCK_BACKOFF_BASE = _env_float("NAUTICAL_LOCK_BACKOFF_BASE", 0.05)
 _LOCK_BACKOFF_MAX = _env_float("NAUTICAL_LOCK_BACKOFF_MAX", 1.0)
+_QUEUE_PROCESSING_STALE_AFTER = _env_float("NAUTICAL_QUEUE_PROCESSING_STALE_AFTER", 300.0)
 
 @contextmanager
 def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, stale_after: float | None = 60.0):
@@ -772,7 +775,7 @@ def _fsync_dir(path: Path) -> None:
         except Exception:
             pass
 
-def _take_queue_entries() -> list[dict]:
+def _take_queue_entries_jsonl() -> list[dict]:
     entries: list[dict] = []
     with _lock_queue() as locked:
         if not locked:
@@ -889,7 +892,7 @@ def _take_queue_entries() -> list[dict]:
     return entries
 
 
-def _requeue_entries(entries: list[dict]) -> bool:
+def _requeue_entries_jsonl(entries: list[dict]) -> bool:
     if not entries:
         return True
     with _lock_queue() as locked:
@@ -916,6 +919,256 @@ def _requeue_entries(entries: list[dict]) -> bool:
         except Exception as e:
             _diag(f"requeue write failed: {e}")
             return False
+
+
+def _queue_jsonl_has_data() -> bool:
+    try:
+        return _QUEUE_PATH.exists() and _QUEUE_PATH.stat().st_size > 0
+    except Exception:
+        return False
+
+
+def _queue_db_connect() -> sqlite3.Connection | None:
+    try:
+        _QUEUE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        conn = sqlite3.connect(str(_QUEUE_DB_PATH), timeout=max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=1500")
+        try:
+            if _QUEUE_DB_PATH.exists():
+                os.chmod(_QUEUE_DB_PATH, 0o600)
+        except Exception:
+            pass
+        return conn
+    except Exception as e:
+        _diag(f"queue db connect failed: {e}")
+        return None
+
+
+def _queue_db_init(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS queue_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            spawn_intent_id TEXT,
+            payload TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            state TEXT NOT NULL DEFAULT 'queued',
+            claim_token TEXT,
+            claimed_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_entries_spawn_intent
+        ON queue_entries (spawn_intent_id)
+        WHERE spawn_intent_id IS NOT NULL AND spawn_intent_id <> ''
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_state_id ON queue_entries (state, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_claimed_at ON queue_entries (claimed_at)")
+    conn.commit()
+
+
+def _take_queue_entries_sqlite() -> list[dict]:
+    conn = _queue_db_connect()
+    if conn is None:
+        return []
+    try:
+        _queue_db_init(conn)
+    except Exception as e:
+        _diag(f"queue db init failed: {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return []
+    token = f"drain-{os.getpid()}-{int(time.time() * 1000)}"
+    now = time.time()
+    rows: list[sqlite3.Row] = []
+    try:
+        if _QUEUE_PROCESSING_STALE_AFTER > 0:
+            cutoff = now - _QUEUE_PROCESSING_STALE_AFTER
+            conn.execute(
+                "UPDATE queue_entries SET state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
+                "WHERE state='processing' AND claimed_at IS NOT NULL AND claimed_at < ?",
+                (now, cutoff),
+            )
+            conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        q = "SELECT id, payload, attempts FROM queue_entries WHERE state='queued' ORDER BY id"
+        params: tuple = ()
+        if _QUEUE_MAX_LINES > 0:
+            q += " LIMIT ?"
+            params = (_QUEUE_MAX_LINES,)
+        rows = list(conn.execute(q, params))
+        if rows:
+            ids = [int(r["id"]) for r in rows]
+            ph = ",".join("?" for _ in ids)
+            conn.execute(
+                f"UPDATE queue_entries SET state='processing', claim_token=?, claimed_at=?, updated_at=? "
+                f"WHERE id IN ({ph})",
+                (token, now, now, *ids),
+            )
+        conn.commit()
+    except sqlite3.OperationalError as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if "locked" in str(e).lower() or "busy" in str(e).lower():
+            _record_queue_lock_failure()
+        else:
+            _diag(f"queue db claim failed: {e}")
+        rows = []
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        _diag(f"queue db claim failed: {e}")
+        rows = []
+
+    entries: list[dict] = []
+    for r in rows:
+        rid = int(r["id"])
+        payload = (r["payload"] or "").strip()
+        attempts_db = int(r["attempts"] or 0)
+        try:
+            obj = json.loads(payload) if payload else {}
+        except Exception:
+            obj = {"raw": payload}
+        if not isinstance(obj, dict):
+            obj = {"raw": payload}
+        if "attempts" not in obj:
+            obj["attempts"] = attempts_db
+        obj["__queue_backend"] = "sqlite"
+        obj["__queue_id"] = rid
+        entries.append(obj)
+    try:
+        conn.close()
+    except Exception:
+        pass
+    return entries
+
+
+def _ack_queue_entries_sqlite(entry_ids: list[int]) -> bool:
+    ids = [int(i) for i in (entry_ids or []) if i]
+    if not ids:
+        return True
+    conn = _queue_db_connect()
+    if conn is None:
+        return False
+    try:
+        _queue_db_init(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        ph = ",".join("?" for _ in ids)
+        conn.execute(f"DELETE FROM queue_entries WHERE id IN ({ph})", ids)
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.OperationalError as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if "locked" in str(e).lower() or "busy" in str(e).lower():
+            _record_queue_lock_failure()
+        else:
+            _diag(f"queue db ack failed: {e}")
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        _diag(f"queue db ack failed: {e}")
+    try:
+        conn.close()
+    except Exception:
+        pass
+    return False
+
+
+def _requeue_entries_sqlite(entries: list[dict]) -> bool:
+    items = [e for e in (entries or []) if isinstance(e, dict) and e.get("__queue_backend") == "sqlite" and e.get("__queue_id")]
+    if not items:
+        return True
+    conn = _queue_db_connect()
+    if conn is None:
+        return False
+    now = time.time()
+    try:
+        _queue_db_init(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        for e in items:
+            rid = int(e.get("__queue_id") or 0)
+            if rid <= 0:
+                continue
+            out = dict(e)
+            out.pop("__queue_backend", None)
+            out.pop("__queue_id", None)
+            try:
+                attempts = int(out.get("attempts") or 0)
+            except Exception:
+                attempts = 0
+            payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+            conn.execute(
+                "UPDATE queue_entries SET state='queued', claim_token=NULL, claimed_at=NULL, attempts=?, payload=?, updated_at=? "
+                "WHERE id=?",
+                (attempts, payload, now, rid),
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.OperationalError as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if "locked" in str(e).lower() or "busy" in str(e).lower():
+            _record_queue_lock_failure()
+        else:
+            _diag(f"queue db requeue failed: {e}")
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        _diag(f"queue db requeue failed: {e}")
+    try:
+        conn.close()
+    except Exception:
+        pass
+    return False
+
+
+def _take_queue_entries() -> list[dict]:
+    # Backward compatibility: if legacy JSONL has data, drain it with legacy logic.
+    if _queue_jsonl_has_data():
+        return _take_queue_entries_jsonl()
+    entries = _take_queue_entries_sqlite()
+    if entries:
+        return entries
+    # Fallback: legacy queue may still be present in some mixed-version environments.
+    return _take_queue_entries_jsonl()
+
+
+def _requeue_entries(entries: list[dict]) -> bool:
+    if not entries:
+        return True
+    sqlite_items = [e for e in entries if isinstance(e, dict) and e.get("__queue_backend") == "sqlite"]
+    jsonl_items = [e for e in entries if not (isinstance(e, dict) and e.get("__queue_backend") == "sqlite")]
+    ok_sqlite = _requeue_entries_sqlite(sqlite_items)
+    ok_jsonl = _requeue_entries_jsonl(jsonl_items)
+    return bool(ok_sqlite and ok_jsonl)
 
 
 def _validate_queue_entry(entry: dict) -> tuple[bool, str]:
@@ -1052,6 +1305,7 @@ def _drain_queue() -> dict:
     circuit_breaks = 0
     intent_mark_ok = 0
     intent_mark_fail = 0
+    sqlite_acked_ids: set[int] = set()
 
     intent_t0 = time.perf_counter()
     finalized_intents, intent_log_ready = _load_finalized_intents()
@@ -1068,12 +1322,42 @@ def _drain_queue() -> dict:
         else:
             intent_mark_fail += 1
 
+    def _queue_backend(entry: dict) -> str:
+        if not isinstance(entry, dict):
+            return "jsonl"
+        b = (entry.get("__queue_backend") or "").strip().lower()
+        return b if b else "jsonl"
+
+    def _queue_id(entry: dict) -> int:
+        if not isinstance(entry, dict):
+            return 0
+        try:
+            return int(entry.get("__queue_id") or 0)
+        except Exception:
+            return 0
+
+    def _entry_clean(entry: dict) -> dict:
+        if not isinstance(entry, dict):
+            return {}
+        out = dict(entry)
+        out.pop("__queue_backend", None)
+        out.pop("__queue_id", None)
+        return out
+
+    def _ack_sqlite(entry: dict) -> None:
+        if _queue_backend(entry) != "sqlite":
+            return
+        rid = _queue_id(entry)
+        if rid > 0:
+            sqlite_acked_ids.add(rid)
+
     def _dead_letter(entry: dict, reason: str) -> None:
         nonlocal dead_lettered, errors
-        _write_dead_letter(entry, reason)
+        _write_dead_letter(_entry_clean(entry), reason)
         dead_lettered += 1
         errors += 1
         _mark_final(entry, "dead", reason)
+        _ack_sqlite(entry)
 
     def _record_lock_event(idx: int) -> bool:
         nonlocal lock_events, lock_streak, lock_streak_max, circuit_breaks
@@ -1103,6 +1387,7 @@ def _drain_queue() -> dict:
         if spawn_intent_id and spawn_intent_id in finalized_intents:
             skipped_idempotent += 1
             processed += 1
+            _ack_sqlite(entry)
             _reset_lock_streak()
             continue
 
@@ -1212,6 +1497,7 @@ def _drain_queue() -> dict:
 
         processed += 1
         _mark_final(entry, "done", "processed")
+        _ack_sqlite(entry)
         _reset_lock_streak()
 
     requeue_failed = 0
@@ -1230,6 +1516,11 @@ def _drain_queue() -> dict:
                     _fsync_dir(_QUEUE_PROCESSING_PATH.parent)
         except Exception:
             pass
+
+    if sqlite_acked_ids:
+        if not _ack_queue_entries_sqlite(sorted(sqlite_acked_ids)):
+            errors += len(sqlite_acked_ids)
+            _diag(f"queue db ack failed for {len(sqlite_acked_ids)} entries")
 
     return {
         "processed": processed,

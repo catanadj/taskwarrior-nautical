@@ -169,6 +169,8 @@ Links left: 8 left (cap #10)
 Operational knobs, performance checklist, and load-testing guidance are now in the manual:
 
 - `Manual.md` - see "Operational Knobs", "Performance Checklist", and "Load Testing".
+- Deferred spawn queue is SQLite-first at `TASKDATA/.nautical_queue.db`; legacy JSONL queue files remain supported for mixed-version compatibility/recovery.
+- `tools/nautical_health_check.py` monitors both JSONL + SQLite queue pressure (for example `--queue-db-crit-rows 200`).
 
 ## Requirements
 

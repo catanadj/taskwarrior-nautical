@@ -922,10 +922,13 @@ def _requeue_entries_jsonl(entries: list[dict]) -> bool:
 
 
 def _queue_jsonl_has_data() -> bool:
-    try:
-        return _QUEUE_PATH.exists() and _QUEUE_PATH.stat().st_size > 0
-    except Exception:
-        return False
+    for p in (_QUEUE_PATH, _QUEUE_PROCESSING_PATH):
+        try:
+            if p.exists() and p.stat().st_size > 0:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _queue_db_connect() -> sqlite3.Connection | None:

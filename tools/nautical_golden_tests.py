@@ -1501,6 +1501,60 @@ def test_health_check_critical_queue_bytes():
         obj = json.loads((p.stdout or "").strip() or "{}")
         expect(obj.get("status") == "crit", f"unexpected status: {obj}")
 
+def test_health_check_critical_queue_db_rows():
+    """health check should return critical when sqlite queue rows exceed crit threshold."""
+    path = os.path.join(ROOT, "tools", "nautical_health_check.py")
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        db = td_path / ".nautical_queue.db"
+        with sqlite3.connect(str(db)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+                "VALUES (?, ?, 0, 'queued', 1.0, 1.0)",
+                ("si_hc", json.dumps({"spawn_intent_id": "si_hc"})),
+            )
+            conn.commit()
+        p = subprocess.run(
+            [
+                sys.executable,
+                path,
+                "--taskdata",
+                td,
+                "--queue-warn-bytes",
+                "1048576",
+                "--queue-crit-bytes",
+                "10485760",
+                "--queue-db-warn-rows",
+                "1",
+                "--queue-db-crit-rows",
+                "1",
+                "--json",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(p.returncode == 2, f"expected critical exit code 2, got {p.returncode}. stderr={p.stderr!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        expect(obj.get("status") == "crit", f"unexpected status: {obj}")
+        metrics = obj.get("metrics") or {}
+        expect(int(metrics.get("queue_db_rows") or 0) == 1, f"expected queue_db_rows=1, got {metrics}")
+
 def test_ops_templates_present_and_runner_executable():
     """ops templates should exist and runner script should be executable."""
     ops = os.path.join(ROOT, "tools", "ops")
@@ -2899,6 +2953,68 @@ def test_on_exit_spawn_intents_drain():
         expect(stats.get("processed") == 1, f"unexpected drain processed: {stats}")
         expect(imported["ok"], "child import did not run")
         expect(parent_updated["ok"], "parent update did not run")
+
+def test_on_exit_take_queue_prefers_legacy_processing_backlog_over_sqlite():
+    """on-exit should drain legacy processing backlog before sqlite queue in mixed-version state."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_processing_priority_test")
+    if not hasattr(mod, "_take_queue_entries"):
+        raise AssertionError("on-exit hook does not expose queue helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
+
+        legacy = {
+            "spawn_intent_id": "si_legacy_processing",
+            "parent_uuid": "00000000-0000-0000-0000-000000000101",
+            "child_short": "abcd0001",
+            "child": {"uuid": "00000000-0000-0000-0000-000000000102"},
+        }
+        sqlite_entry = {
+            "spawn_intent_id": "si_sqlite_pending",
+            "parent_uuid": "00000000-0000-0000-0000-000000000201",
+            "child_short": "abcd0002",
+            "child": {"uuid": "00000000-0000-0000-0000-000000000202"},
+        }
+        mod._QUEUE_PATH.write_text("", encoding="utf-8")
+        mod._QUEUE_PROCESSING_PATH.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+                "VALUES (?, ?, 0, 'queued', 1.0, 1.0)",
+                ("si_sqlite_pending", json.dumps(sqlite_entry, ensure_ascii=False, separators=(",", ":"))),
+            )
+            conn.commit()
+
+        entries = mod._take_queue_entries()
+        expect(len(entries) == 1, f"expected one legacy entry, got: {entries}")
+        expect(entries[0].get("spawn_intent_id") == "si_legacy_processing", f"wrong entry selected: {entries}")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            still_pending = conn.execute(
+                "SELECT COUNT(1) FROM queue_entries WHERE spawn_intent_id='si_sqlite_pending' AND state='queued'"
+            ).fetchone()[0]
+        expect(int(still_pending) == 1, "sqlite entry should remain queued while legacy processing backlog drains first")
 
 def test_on_exit_drain_skips_finalized_sqlite_intent():
     """on-exit should skip and ack SQLite entries already finalized in intent log."""
@@ -4533,6 +4649,7 @@ TESTS = [
     test_on_modify_rejects_oversized_stdin_early,
     test_health_check_json_ok_empty_taskdata,
     test_health_check_critical_queue_bytes,
+    test_health_check_critical_queue_db_rows,
     test_ops_templates_present_and_runner_executable,
     test_on_modify_queue_full_drops_with_dead_letter,
     test_on_modify_enqueue_uses_sqlite_when_legacy_empty,
@@ -4563,6 +4680,7 @@ TESTS = [
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,
+    test_on_exit_take_queue_prefers_legacy_processing_backlog_over_sqlite,
     test_on_exit_drain_skips_finalized_sqlite_intent,
     test_on_exit_queue_drain_is_transactional,
     test_on_exit_queue_stat_failure_does_not_crash,

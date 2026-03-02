@@ -385,6 +385,95 @@ def test_on_add_fail_and_exit_emits_json():
     out = buf.getvalue().strip()
     expect(out == "", f"expected no stdout on failure, got: {out!r}")
 
+
+def test_on_add_panic_passthrough_emits_valid_json():
+    """on-add panic passthrough should always emit a valid JSON object."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_panic_passthrough_test")
+    mod._PARSED_TASK = {"uuid": "00000000-0000-0000-0000-000000000111", "description": "panic-add"}
+    mod._RAW_INPUT_TEXT = "{not-json"
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mod._panic_passthrough()
+    out = buf.getvalue().strip()
+    obj = json.loads(out or "{}")
+    expect(isinstance(obj, dict), f"panic passthrough must emit JSON object, got: {out!r}")
+    expect(obj.get("uuid") == "00000000-0000-0000-0000-000000000111", "parsed task should be preserved")
+
+
+def test_on_modify_panic_passthrough_uses_latest_task():
+    """on-modify panic passthrough should emit the latest task object."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_panic_passthrough_test")
+    mod._PARSED_NEW = None
+    old = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"}
+    new = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "completed"}
+    mod._RAW_INPUT_TEXT = json.dumps(old) + "\n" + json.dumps(new)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mod._panic_passthrough()
+    out = buf.getvalue().strip()
+    obj = json.loads(out or "{}")
+    expect(isinstance(obj, dict), f"panic passthrough must emit JSON object, got: {out!r}")
+    expect(obj.get("status") == "completed", f"expected latest task, got: {obj}")
+
+
+def test_on_add_ignores_unsafe_core_path_override():
+    """on-add should ignore unsafe NAUTICAL_CORE_PATH overrides by default."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_unsafe_core_path_test")
+    prev = os.environ.get("NAUTICAL_CORE_PATH")
+    prev_trust = os.environ.get("NAUTICAL_TRUST_CORE_PATH")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            try:
+                os.chmod(td, 0o777)
+            except Exception:
+                pass
+            os.environ["NAUTICAL_CORE_PATH"] = td
+            os.environ.pop("NAUTICAL_TRUST_CORE_PATH", None)
+            got = mod._trusted_core_base(Path(mod.TW_DIR))
+            expect(Path(got).resolve() == Path(mod.TW_DIR).resolve(),
+                   f"unsafe core path should fall back to TW_DIR, got {got}")
+    finally:
+        if prev is None:
+            os.environ.pop("NAUTICAL_CORE_PATH", None)
+        else:
+            os.environ["NAUTICAL_CORE_PATH"] = prev
+        if prev_trust is None:
+            os.environ.pop("NAUTICAL_TRUST_CORE_PATH", None)
+        else:
+            os.environ["NAUTICAL_TRUST_CORE_PATH"] = prev_trust
+
+
+def test_on_modify_ignores_unsafe_core_path_override():
+    """on-modify should ignore unsafe NAUTICAL_CORE_PATH overrides by default."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_unsafe_core_path_test")
+    prev = os.environ.get("NAUTICAL_CORE_PATH")
+    prev_trust = os.environ.get("NAUTICAL_TRUST_CORE_PATH")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            try:
+                os.chmod(td, 0o777)
+            except Exception:
+                pass
+            os.environ["NAUTICAL_CORE_PATH"] = td
+            os.environ.pop("NAUTICAL_TRUST_CORE_PATH", None)
+            got = mod._trusted_core_base(Path(mod.TW_DIR))
+            expect(Path(got).resolve() == Path(mod.TW_DIR).resolve(),
+                   f"unsafe core path should fall back to TW_DIR, got {got}")
+    finally:
+        if prev is None:
+            os.environ.pop("NAUTICAL_CORE_PATH", None)
+        else:
+            os.environ["NAUTICAL_CORE_PATH"] = prev
+        if prev_trust is None:
+            os.environ.pop("NAUTICAL_TRUST_CORE_PATH", None)
+        else:
+            os.environ["NAUTICAL_TRUST_CORE_PATH"] = prev_trust
+
+
 def test_hook_stdout_strict_json_with_diag_on_add():
     """on-add must keep stdout JSON-only even when diagnostics are enabled."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -2783,6 +2872,48 @@ def test_on_exit_queue_drain_is_transactional():
         expect(after == original, "queue should remain unchanged on replace failure")
 
 
+def test_on_exit_queue_stat_failure_does_not_crash():
+    """on-exit should handle queue stat failures without crashing."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_queue_stat_failure_test")
+    if not hasattr(mod, "_take_queue_entries"):
+        raise AssertionError("on-exit hook does not expose queue helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_PATH.write_text(
+            json.dumps({"spawn_intent_id": "si_stat", "child": {"uuid": "00000000-0000-0000-0000-000000000123"}}) + "\n",
+            encoding="utf-8",
+        )
+
+        orig_stat = mod.Path.stat
+        orig_exists = mod.Path.exists
+
+        def _stat_fail(path_obj):
+            if path_obj == mod._QUEUE_PATH:
+                raise OSError("stat failed")
+            return orig_stat(path_obj)
+
+        def _exists_override(path_obj):
+            if path_obj == mod._QUEUE_PATH:
+                return True
+            return orig_exists(path_obj)
+
+        mod.Path.stat = _stat_fail
+        mod.Path.exists = _exists_override
+        try:
+            entries = mod._take_queue_entries()
+        finally:
+            mod.Path.stat = orig_stat
+            mod.Path.exists = orig_exists
+
+        expect(len(entries) == 1, f"expected one entry despite stat failure, got: {entries}")
+
+
 def test_on_exit_quarantines_bad_queue_lines():
     """on-exit should quarantine invalid queue JSON lines."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -2898,12 +3029,17 @@ def test_on_exit_parent_nextlink_changed_dead_letter():
         }
         mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
+        calls = {"import": 0}
+
         def _run_task_stub(cmd, **_kwargs):
             cmd_s = " ".join(cmd)
             if "export" in cmd_s and f"uuid:{child_uuid}" in cmd_s:
                 return True, json.dumps({"uuid": child_uuid}), ""
             if "export" in cmd_s and f"uuid:{parent_uuid}" in cmd_s:
                 return True, json.dumps({"uuid": parent_uuid, "nextLink": "other"}), ""
+            if " import " in f" {cmd_s} ":
+                calls["import"] += 1
+                return True, "", ""
             return False, "", "unexpected"
 
         mod._run_task = _run_task_stub
@@ -2919,6 +3055,105 @@ def test_on_exit_parent_nextlink_changed_dead_letter():
                 pass
         expect(any("parent update failed: parent nextLink changed" in r for r in reasons),
                f"unexpected reasons: {reasons}")
+        expect(calls["import"] == 0, "child import should not run when parent CAS precheck fails")
+
+
+def test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter():
+    """on-exit should count dead-lettered retries when post-import confirm stays locked."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_post_import_retry_budget_test")
+    if not hasattr(mod, "_drain_queue"):
+        raise AssertionError("on-exit hook does not expose drain helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        child_uuid = "00000000-0000-0000-0000-000000000888"
+        entry = {
+            "spawn_intent_id": "si_budget",
+            "attempts": mod._QUEUE_RETRY_MAX,
+            "child": {"uuid": child_uuid},
+        }
+        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        calls = {"child_export": 0}
+
+        def _run_task_stub(cmd, **_kwargs):
+            cmd_s = " ".join(cmd)
+            if f"uuid:{child_uuid}" in cmd_s and "export" in cmd_s:
+                calls["child_export"] += 1
+                if calls["child_export"] == 1:
+                    return True, "{}", ""
+                return False, "", "database is locked"
+            if " import " in f" {cmd_s} ":
+                return True, "", ""
+            return False, "", "unexpected"
+
+        mod._run_task = _run_task_stub
+        stats = mod._drain_queue()
+        expect(stats.get("errors") == 1, f"expected one error, got: {stats}")
+        expect(stats.get("dead_lettered") == 1, f"expected one dead-lettered entry, got: {stats}")
+
+
+def test_on_exit_post_import_parent_conflict_cleans_orphan():
+    """on-exit should clean up an imported child when parent CAS loses the race."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_post_import_cleanup_test")
+    if not hasattr(mod, "_drain_queue"):
+        raise AssertionError("on-exit hook does not expose drain helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        child_uuid = "00000000-0000-0000-0000-000000000777"
+        parent_uuid = "00000000-0000-0000-0000-000000000111"
+        entry = {
+            "spawn_intent_id": "si_cleanup",
+            "parent_uuid": parent_uuid,
+            "parent_nextlink": "",
+            "child_short": child_uuid[:8],
+            "child": {"uuid": child_uuid},
+        }
+        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        state = {"parent_exports": 0, "child_exports": 0, "cleanup_called": False}
+
+        def _run_task_stub(cmd, **_kwargs):
+            cmd_s = " ".join(cmd)
+            if f"uuid:{parent_uuid}" in cmd_s and "export" in cmd_s:
+                state["parent_exports"] += 1
+                if state["parent_exports"] == 1:
+                    return True, json.dumps({"uuid": parent_uuid, "nextLink": ""}), ""
+                return True, json.dumps({"uuid": parent_uuid, "nextLink": "other"}), ""
+            if f"uuid:{child_uuid}" in cmd_s and "export" in cmd_s:
+                state["child_exports"] += 1
+                if state["child_exports"] == 1:
+                    return True, "{}", ""
+                return True, json.dumps({"uuid": child_uuid}), ""
+            if " import " in f" {cmd_s} ":
+                return True, "", ""
+            if f"uuid:{child_uuid}" in cmd_s and "modify status:deleted" in cmd_s:
+                state["cleanup_called"] = True
+                return True, "", ""
+            return False, "", "unexpected"
+
+        mod._run_task = _run_task_stub
+        stats = mod._drain_queue()
+        expect(stats.get("errors") == 1, f"expected one error, got: {stats}")
+        expect(stats.get("dead_lettered") == 1, f"expected dead-lettered conflict, got: {stats}")
+        expect(state["cleanup_called"], "orphan cleanup should run after post-import parent conflict")
 
 
 def test_on_exit_import_child_retries_on_lock():
@@ -3632,7 +3867,7 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
 
     def _spawn_child_atomic_stub(_child, _parent):
         called["spawn"] = True
-        return ("deadbeef", set(), False, True, "queued")
+        return ("deadbeef", set(), False, True, "queued", "si_test1")
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
     mod._export_uuid_short_cached = lambda _short: {
@@ -3688,7 +3923,7 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
 
     def _spawn_child_atomic_stub(_child, _parent):
         called["spawn"] = True
-        return ("cafebabe", set(), False, True, "queued")
+        return ("cafebabe", set(), False, True, "queued", "si_test2")
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
     mod._export_uuid_short_cached = lambda _short: None
@@ -3752,7 +3987,7 @@ def test_on_modify_cp_completion_spawns_next_link():
 
     def _spawn_child_atomic_stub(child, parent):
         spawned["child"] = child
-        return ("deadbeef", set(), False, True, "queued")
+        return ("deadbeef", set(), False, True, "queued", "si_test3")
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
     mod._export_uuid_short_cached = lambda _short: {}
@@ -3792,6 +4027,24 @@ def test_on_modify_cp_completion_spawns_next_link():
     out_task = _extract_last_json(buf_out.getvalue())
     expect("child" in spawned, "CP completion did not trigger spawn")
     expect(out_task.get("nextLink") in (None, ""), "CP completion should not set nextLink in decision-only mode")
+
+
+def test_on_modify_spawn_intent_queue_failure_is_reported():
+    """_spawn_child_atomic should report queue failure instead of claiming deferred success."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_spawn_queue_failure_test")
+    mod._reserve_child_uuid = lambda _env: "00000000-0000-0000-0000-00000000abcd"
+    mod._enqueue_spawn_intent = lambda _entry: (False, "queue lock busy")
+
+    child_short, _stripped, verified, deferred, reason, intent = mod._spawn_child_atomic(
+        {"description": "x"},
+        {"uuid": "00000000-0000-0000-0000-000000000111", "nextLink": ""},
+    )
+    expect(child_short == "00000000", f"unexpected child short: {child_short}")
+    expect(not verified, "verified should be false when queue fails")
+    expect(not deferred, "deferred should be false when queue fails")
+    expect("queue lock busy" in (reason or ""), f"missing queue failure reason: {reason}")
+    expect(bool(intent), "spawn intent id should still be generated")
 
 
 def test_on_add_run_task_timeout():
@@ -4061,6 +4314,10 @@ TESTS = [
     test_on_modify_chain_export_skips_when_locked,
     test_coerce_int_bounds,
     test_on_add_fail_and_exit_emits_json,
+    test_on_add_panic_passthrough_emits_valid_json,
+    test_on_modify_panic_passthrough_uses_latest_task,
+    test_on_add_ignores_unsafe_core_path_override,
+    test_on_modify_ignores_unsafe_core_path_override,
     test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_versioned_payload,
@@ -4071,6 +4328,7 @@ TESTS = [
     test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,
     test_on_exit_queue_drain_is_transactional,
+    test_on_exit_queue_stat_failure_does_not_crash,
     test_on_exit_quarantines_bad_queue_lines,
     test_on_exit_dead_letter_on_missing_fields,
     test_on_exit_processing_file_merges_into_queue,
@@ -4102,6 +4360,8 @@ TESTS = [
     test_on_modify_panel_fallback,
     test_on_exit_import_error_but_child_exists,
     test_on_exit_parent_nextlink_changed_dead_letter,
+    test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter,
+    test_on_exit_post_import_parent_conflict_cleans_orphan,
     test_cache_metrics_emits_when_enabled,
     test_sanitize_task_strings_removes_controls,
     test_clear_all_caches_env,
@@ -4122,6 +4382,7 @@ TESTS = [
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_on_modify_cp_completion_spawns_next_link,
+    test_on_modify_spawn_intent_queue_failure_is_reported,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,
     test_on_modify_export_uuid_short_invalid_json,

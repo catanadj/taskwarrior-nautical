@@ -36,7 +36,34 @@ except Exception:
 
 HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
-_CORE_BASE = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
+
+def _trusted_core_base(default_base: Path) -> Path:
+    raw = (os.environ.get("NAUTICAL_CORE_PATH") or "").strip()
+    if not raw:
+        return default_base
+    try:
+        cand = Path(raw).expanduser().resolve()
+    except Exception:
+        return default_base
+    if (os.environ.get("NAUTICAL_TRUST_CORE_PATH") or "").strip().lower() in ("1", "true", "yes", "on"):
+        return cand
+    try:
+        st = os.stat(cand)
+        uid_fn = getattr(os, "getuid", None)
+        if callable(uid_fn) and st.st_uid != uid_fn():
+            raise PermissionError("owner mismatch")
+        if (st.st_mode & 0o002) != 0:
+            raise PermissionError("path is world-writable")
+        return cand
+    except Exception as e:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                sys.stderr.write(f"[nautical] Ignoring unsafe NAUTICAL_CORE_PATH '{raw}': {e}\n")
+            except Exception:
+                pass
+        return default_base
+
+_CORE_BASE = _trusted_core_base(TW_DIR)
 core = None
 try:
     pyfile = _CORE_BASE / "nautical_core.py"
@@ -403,9 +430,12 @@ def _sleep(secs: float) -> None:
     time.sleep(secs)
 
 _LAST_QUEUE_LOCK_DIAG_TS = 0.0
+_QUEUE_LOCK_FAILURES_THIS_RUN = 0
 
 def _record_queue_lock_failure() -> None:
     global _LAST_QUEUE_LOCK_DIAG_TS
+    global _QUEUE_LOCK_FAILURES_THIS_RUN
+    _QUEUE_LOCK_FAILURES_THIS_RUN += 1
     now = time.time()
     if now - _LAST_QUEUE_LOCK_DIAG_TS >= 60.0:
         _diag("queue lock not acquired; drain deferred")
@@ -486,6 +516,7 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
     }
     with _lock_dead_letter() as locked:
         if not locked:
+            _diag("dead-letter lock busy; entry not recorded")
             return
         try:
             if _DEAD_LETTER_MAX_BYTES > 0 and _DEAD_LETTER_PATH.exists():
@@ -615,8 +646,8 @@ def _take_queue_entries() -> list[dict]:
         except Exception:
             return entries
         try:
-            st = _QUEUE_PATH.stat()
             overflow_path = None
+            st = _QUEUE_PATH.stat()
             if _QUEUE_MAX_BYTES > 0 and st.st_size > _QUEUE_MAX_BYTES:
                 try:
                     ts = int(time.time())
@@ -788,31 +819,56 @@ def _import_child(obj: dict) -> tuple[bool, str]:
     return False, last_err
 
 def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[bool, str]:
+    state, msg = _parent_nextlink_state(parent_uuid, child_short, expected_prev)
+    if state == "ok":
+        ok, _out, err = _run_task(
+            _task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", f"uuid:{parent_uuid}", "modify", f"nextLink:{child_short}"],
+            timeout=_TASK_TIMEOUT_MODIFY,
+            retries=_TASK_RETRIES_MODIFY,
+            retry_delay=_TASK_RETRY_DELAY,
+        )
+        return ok, err or ""
+    if state == "already":
+        return True, ""
+    return False, msg
+
+
+def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[str, str]:
     if not parent_uuid or not child_short:
-        return False, "missing parent or child"
+        return "invalid", "missing parent or child"
     res = _export_uuid(parent_uuid)
     if res.get("retryable"):
-        return False, "parent export locked"
+        return "locked", "parent export locked"
     parent = res.get("obj") if isinstance(res, dict) else None
     if not parent:
-        return False, "parent missing"
+        return "missing", "parent missing"
     current = (parent.get("nextLink") or "").strip()
     expected = (expected_prev or "").strip()
     if current == child_short:
-        return True, ""
+        return "already", ""
     if expected:
         if current != expected:
-            return False, "parent nextLink changed"
+            return "conflict", "parent nextLink changed"
     else:
         if current:
-            return False, "parent nextLink already set"
+            return "conflict", "parent nextLink already set"
+    return "ok", ""
+
+
+def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
+    if not child_uuid:
+        return
     ok, _out, err = _run_task(
-        _task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", f"uuid:{parent_uuid}", "modify", f"nextLink:{child_short}"],
+        _task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", f"uuid:{child_uuid}", "modify", "status:deleted"],
         timeout=_TASK_TIMEOUT_MODIFY,
         retries=_TASK_RETRIES_MODIFY,
         retry_delay=_TASK_RETRY_DELAY,
     )
-    return ok, err or ""
+    if not ok:
+        if spawn_intent_id:
+            _diag(f"orphan cleanup failed (intent={spawn_intent_id} child={child_uuid[:8]}): {err}")
+        else:
+            _diag(f"orphan cleanup failed (child={child_uuid[:8]}): {err}")
 
 
 def _drain_queue() -> dict:
@@ -834,6 +890,25 @@ def _drain_queue() -> dict:
         child = entry.get("child") or {}
         child_short = (entry.get("child_short") or "").strip()
         child_uuid = (child.get("uuid") or "").strip()
+        parent_linked_already = False
+        if parent_uuid and child_short:
+            link_state, link_err = _parent_nextlink_state(parent_uuid, child_short, expected_parent_nextlink)
+            if link_state == "locked":
+                if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+                    _write_dead_letter(entry, "exceeded retry budget")
+                    dead_lettered += 1
+                    errors += 1
+                else:
+                    requeue.append(entry)
+                continue
+            if link_state in {"conflict", "missing", "invalid"}:
+                _write_dead_letter(entry, f"parent update failed: {link_err}")
+                dead_lettered += 1
+                errors += 1
+                continue
+            if link_state == "already":
+                parent_linked_already = True
+
         export_res = _export_uuid(child_uuid)
         imported = False
         if not export_res.get("exists"):
@@ -878,6 +953,7 @@ def _drain_queue() -> dict:
                 if confirm_res.get("retryable"):
                     if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
                         _write_dead_letter(entry, "exceeded retry budget")
+                        dead_lettered += 1
                         errors += 1
                     else:
                         requeue.append(entry)
@@ -889,7 +965,7 @@ def _drain_queue() -> dict:
                 errors += 1
                 continue
 
-        if parent_uuid and child_short:
+        if parent_uuid and child_short and not parent_linked_already:
             ok, err = _update_parent_nextlink(parent_uuid, child_short, expected_parent_nextlink)
             if not ok:
                 if spawn_intent_id:
@@ -904,6 +980,8 @@ def _drain_queue() -> dict:
                     else:
                         requeue.append(entry)
                 else:
+                    if imported:
+                        _cleanup_orphan_child(child_uuid, spawn_intent_id)
                     _write_dead_letter(entry, f"parent update failed: {err}")
                     dead_lettered += 1
                     errors += 1
@@ -934,6 +1012,7 @@ def _drain_queue() -> dict:
         "requeued": len(requeue) if requeue_ok else 0,
         "requeue_failed": requeue_failed,
         "dead_lettered": dead_lettered,
+        "queue_lock_failures": _QUEUE_LOCK_FAILURES_THIS_RUN,
     }
 
 
@@ -950,13 +1029,15 @@ def main() -> int:
             f"errors={stats.get('errors', 0)} "
             f"requeued={stats.get('requeued', 0)} "
             f"requeue_failed={stats.get('requeue_failed', 0)} "
-            f"dead_lettered={stats.get('dead_lettered', 0)}"
+            f"dead_lettered={stats.get('dead_lettered', 0)} "
+            f"queue_lock_failures={stats.get('queue_lock_failures', 0)}"
         )
     errors = stats.get("errors", 0)
     dead_lettered = stats.get("dead_lettered", 0)
-    if _EXIT_STRICT and (errors > 0 or dead_lettered > 0):
+    queue_lock_failures = stats.get("queue_lock_failures", 0)
+    if _EXIT_STRICT and (errors > 0 or dead_lettered > 0 or queue_lock_failures > 0):
         _emit_exit_feedback(
-            f"[nautical] on-exit: {dead_lettered} dead-lettered, {errors} errors. "
+            f"[nautical] on-exit: {dead_lettered} dead-lettered, {errors} errors, {queue_lock_failures} queue lock failures. "
             "Check .nautical_dead_letter.jsonl (set NAUTICAL_EXIT_STRICT=0 to disable)"
         )
         return 1

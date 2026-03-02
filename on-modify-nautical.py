@@ -257,7 +257,34 @@ def _append_next_wait_sched_rows(
 # ------------------------------------------------------------------------------
 HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
-_CORE_BASE = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
+
+def _trusted_core_base(default_base: Path) -> Path:
+    raw = (os.environ.get("NAUTICAL_CORE_PATH") or "").strip()
+    if not raw:
+        return default_base
+    try:
+        cand = Path(raw).expanduser().resolve()
+    except Exception:
+        return default_base
+    if (os.environ.get("NAUTICAL_TRUST_CORE_PATH") or "").strip().lower() in ("1", "true", "yes", "on"):
+        return cand
+    try:
+        st = os.stat(cand)
+        uid_fn = getattr(os, "getuid", None)
+        if callable(uid_fn) and st.st_uid != uid_fn():
+            raise PermissionError("owner mismatch")
+        if (st.st_mode & 0o002) != 0:
+            raise PermissionError("path is world-writable")
+        return cand
+    except Exception as e:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                sys.stderr.write(f"[nautical] Ignoring unsafe NAUTICAL_CORE_PATH '{raw}': {e}\n")
+            except Exception:
+                pass
+        return default_base
+
+_CORE_BASE = _trusted_core_base(TW_DIR)
 
 core = None
 _CORE_READY = False
@@ -317,7 +344,7 @@ def _load_core() -> None:
     if core is not None and _CORE_READY:
         return
     if core is None:
-        base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
+        base = _CORE_BASE
         pyfile = base / "nautical_core.py"
         pkgini = base / "nautical_core" / "__init__.py"
         target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
@@ -515,6 +542,52 @@ def _read_two():
         return only, only
 
     _fail_and_exit("Invalid input", "on-modify must receive two JSON tasks")
+
+
+def _decode_latest_task_from_raw(raw: str) -> dict | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    decoder = json.JSONDecoder()
+    idx = 0
+    n = len(raw)
+    last_task = None
+    while idx < n:
+        while idx < n and raw[idx].isspace():
+            idx += 1
+        if idx >= n:
+            break
+        try:
+            obj, end = decoder.raw_decode(raw, idx)
+        except Exception:
+            break
+        if isinstance(obj, dict):
+            last_task = obj
+        elif isinstance(obj, list):
+            arr = [x for x in obj if isinstance(x, dict)]
+            if arr:
+                last_task = arr[-1]
+        if end <= idx:
+            break
+        idx = end
+    return last_task if isinstance(last_task, dict) else None
+
+
+def _panic_passthrough() -> None:
+    fallback = {}
+    task = _PARSED_NEW if isinstance(_PARSED_NEW, dict) else None
+    if task is None:
+        task = _decode_latest_task_from_raw(_RAW_INPUT_TEXT)
+    try:
+        print(json.dumps(task if isinstance(task, dict) else fallback, ensure_ascii=False), end="")
+    except Exception:
+        try:
+            print("{}", end="")
+        except Exception:
+            pass
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 
 def _task_has_nautical_fields(old: dict, new: dict) -> bool:
@@ -917,16 +990,17 @@ def _fsync_dir(path: Path) -> None:
             pass
 
 
-def _enqueue_deferred_spawn(task_obj: dict) -> None:
+def _enqueue_deferred_spawn(task_obj: dict) -> tuple[bool, str]:
     """Append one task JSON object to the spawn intent queue (JSONL, UTF-8)."""
     try:
         line = json.dumps(task_obj, ensure_ascii=False, separators=(",", ":")) + "\n"
     except Exception:
         line = json.dumps(task_obj) + "\n"
     put_ok = True
+    fail_reason = ""
 
     def _put():
-        nonlocal put_ok
+        nonlocal put_ok, fail_reason
         try:
             _SPAWN_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -936,6 +1010,8 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
                 try:
                     size = _SPAWN_QUEUE_PATH.stat().st_size
                     if size > _SPAWN_QUEUE_MAX_BYTES:
+                        put_ok = False
+                        fail_reason = "spawn queue full"
                         _write_dead_letter(task_obj, "spawn queue full")
                         _diag("spawn queue full; intent dropped")
                         return
@@ -957,6 +1033,7 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
                         pass
         except Exception as e:
             put_ok = False
+            fail_reason = f"spawn queue write failed: {e}"
             _write_dead_letter(task_obj, f"spawn queue write failed: {e}")
             _diag(f"spawn queue write failed: {e}")
 
@@ -974,11 +1051,11 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
                     ("Queue", str(_SPAWN_QUEUE_PATH)),
                     ("Hint", "Queue lock busy; spawn intent not queued."),
                 ],
-                kind="warning",
-            )
-        return
+                    kind="warning",
+                )
+        return False, "queue lock busy"
     if not put_ok:
-        return
+        return False, (fail_reason or "spawn queue write failed")
     global _WARNED_SPAWN_QUEUE_GROWTH
     try:
         if not _WARNED_SPAWN_QUEUE_GROWTH and _SPAWN_QUEUE_PATH.exists():
@@ -997,6 +1074,7 @@ def _enqueue_deferred_spawn(task_obj: dict) -> None:
                 )
     except Exception:
         pass
+    return True, ""
 
 def _write_dead_letter(entry: dict, reason: str) -> None:
     if not _require_core():
@@ -1026,6 +1104,7 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
             stale_after=_SPAWN_LOCK_STALE_AFTER,
         ) as ok:
             if not ok:
+                _diag("dead-letter lock busy; entry not recorded")
                 return
             fd = os.open(str(_DEAD_LETTER_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
             try:
@@ -1440,10 +1519,10 @@ def _spawn_intent_entry(
     }
 
 
-def _enqueue_spawn_intent(entry: dict) -> None:
+def _enqueue_spawn_intent(entry: dict) -> tuple[bool, str]:
     if not isinstance(entry, dict):
-        return
-    _enqueue_deferred_spawn(entry)
+        return False, "invalid spawn intent"
+    return _enqueue_deferred_spawn(entry)
 
 
 def _spawn_child_atomic(
@@ -1489,7 +1568,16 @@ def _spawn_child_atomic(
         parent_task_with_nextlink.get("nextLink") or "",
         spawn_intent_id,
     )
-    _enqueue_spawn_intent(entry)
+    queued, queue_reason = _enqueue_spawn_intent(entry)
+    if not queued:
+        return (
+            child_short,
+            stripped_attrs,
+            False,
+            False,
+            f"Spawn intent queue failed: {queue_reason}",
+            spawn_intent_id,
+        )
     _diag_count("spawn_deferred")
     return (
         child_short,
@@ -4439,4 +4527,5 @@ if __name__ == "__main__":
                 sys.stderr.write(f"[nautical] on-modify unexpected error: {e}\n")
             except Exception:
                 pass
+        _panic_passthrough()
         raise SystemExit(1)

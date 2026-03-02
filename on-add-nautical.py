@@ -55,7 +55,34 @@ _MAX_JSON_BYTES = 10 * 1024 * 1024
 # --------------------------------------------------------------------------------------
 HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
-_CORE_BASE = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
+
+def _trusted_core_base(default_base: Path) -> Path:
+    raw = (os.environ.get("NAUTICAL_CORE_PATH") or "").strip()
+    if not raw:
+        return default_base
+    try:
+        cand = Path(raw).expanduser().resolve()
+    except Exception:
+        return default_base
+    if (os.environ.get("NAUTICAL_TRUST_CORE_PATH") or "").strip().lower() in ("1", "true", "yes", "on"):
+        return cand
+    try:
+        st = os.stat(cand)
+        uid_fn = getattr(os, "getuid", None)
+        if callable(uid_fn) and st.st_uid != uid_fn():
+            raise PermissionError("owner mismatch")
+        if (st.st_mode & 0o002) != 0:
+            raise PermissionError("path is world-writable")
+        return cand
+    except Exception as e:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            try:
+                sys.stderr.write(f"[nautical] Ignoring unsafe NAUTICAL_CORE_PATH '{raw}': {e}\n")
+            except Exception:
+                pass
+        return default_base
+
+_CORE_BASE = _trusted_core_base(TW_DIR)
 
 # --- Optional micro-profiler (stderr-only; enable with NAUTICAL_PROFILE=1 or 2)
 _PROFILE_LEVEL = int(os.environ.get('NAUTICAL_PROFILE', '0') or '0')
@@ -98,7 +125,7 @@ def _load_core() -> None:
     if core is not None and _CORE_READY:
         return
     if core is None:
-        base = Path(os.environ.get("NAUTICAL_CORE_PATH") or str(TW_DIR)).expanduser().resolve()
+        base = _CORE_BASE
         pyfile = base / "nautical_core.py"
         pkgini = base / "nautical_core" / "__init__.py"
         target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
@@ -714,16 +741,21 @@ _RAW_INPUT_TEXT = ""
 _PARSED_TASK = None
 
 def _panic_passthrough() -> None:
-    """Emit the original input task when possible; only emit {} if stdin was empty."""
+    """Emit a valid fallback JSON task on unexpected errors."""
+    fallback = {}
+    task = _PARSED_TASK if isinstance(_PARSED_TASK, dict) else None
+    if task is None and _RAW_INPUT_TEXT:
+        try:
+            parsed = json.loads(_RAW_INPUT_TEXT.strip())
+            if isinstance(parsed, dict):
+                task = parsed
+        except Exception:
+            task = None
     try:
-        if _PARSED_TASK is not None:
-            print(json.dumps(_PARSED_TASK, ensure_ascii=False), end="")
-        elif _RAW_INPUT_TEXT:
-            sys.stdout.write(_RAW_INPUT_TEXT)
+        print(json.dumps(task if isinstance(task, dict) else fallback, ensure_ascii=False), end="")
     except Exception:
         try:
-            if _RAW_INPUT_TEXT:
-                sys.stdout.write(_RAW_INPUT_TEXT)
+            print("{}", end="")
         except Exception:
             pass
     try:
@@ -1729,4 +1761,5 @@ if __name__ == "__main__":
                 sys.stderr.write(f"[nautical] on-add unexpected error: {e}\n")
             except Exception:
                 pass
+        _panic_passthrough()
         raise SystemExit(1)

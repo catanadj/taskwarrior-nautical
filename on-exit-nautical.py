@@ -145,6 +145,11 @@ _TASK_RETRY_DELAY = _env_float("NAUTICAL_TASK_RETRY_DELAY", 0.2)
 _QUEUE_LOCK_RETRIES = _env_int("NAUTICAL_QUEUE_LOCK_RETRIES", 6)
 _QUEUE_LOCK_SLEEP_BASE = _env_float("NAUTICAL_QUEUE_LOCK_SLEEP_BASE", 0.03)
 _QUEUE_LOCK_STALE_AFTER = _env_float("NAUTICAL_QUEUE_LOCK_STALE_AFTER", 30.0)
+_INTENT_LOG_MAX_BYTES = _env_int("NAUTICAL_INTENT_LOG_MAX_BYTES", 524288)
+_INTENT_LOG_MAX_ENTRIES = _env_int("NAUTICAL_INTENT_LOG_MAX_ENTRIES", 20000)
+_LOCK_STORM_THRESHOLD = _env_int("NAUTICAL_LOCK_STORM_THRESHOLD", 8)
+_LOCK_BACKOFF_BASE = _env_float("NAUTICAL_LOCK_BACKOFF_BASE", 0.05)
+_LOCK_BACKOFF_MAX = _env_float("NAUTICAL_LOCK_BACKOFF_MAX", 1.0)
 
 @contextmanager
 def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, stale_after: float | None = 60.0):
@@ -500,6 +505,167 @@ def _lock_dead_letter():
         stale_after=_QUEUE_LOCK_STALE_AFTER,
     ) as acquired:
         yield acquired
+
+
+def _intent_log_path() -> Path:
+    return _QUEUE_PATH.parent / ".nautical_spawn_intents.jsonl"
+
+
+def _intent_log_lock_path() -> Path:
+    return _QUEUE_PATH.parent / ".nautical_spawn_intents.lock"
+
+
+@contextmanager
+def _lock_intent_log():
+    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
+    with lock_fn(
+        _intent_log_lock_path(),
+        retries=_QUEUE_LOCK_RETRIES,
+        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
+        stale_after=_QUEUE_LOCK_STALE_AFTER,
+    ) as acquired:
+        yield acquired
+
+
+def _load_finalized_intents() -> tuple[set[str], bool]:
+    """Return finalized spawn_intent_id set, with best-effort compaction."""
+    final_states: dict[str, str] = {}
+    p = _intent_log_path()
+    with _lock_intent_log() as locked:
+        if not locked:
+            _diag("intent log lock busy; idempotency disabled for this drain")
+            return set(), False
+        try:
+            if not p.exists():
+                return set(), True
+        except Exception:
+            return set(), True
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    ln = line.strip()
+                    if not ln:
+                        continue
+                    try:
+                        obj = json.loads(ln)
+                    except Exception:
+                        continue
+                    sid = (obj.get("spawn_intent_id") or "").strip()
+                    status = (obj.get("status") or "").strip().lower()
+                    if not sid or status not in {"done", "dead"}:
+                        continue
+                    if sid in final_states:
+                        final_states.pop(sid, None)
+                    final_states[sid] = status
+        except Exception as e:
+            _diag(f"intent log read failed: {e}")
+            return set(), False
+
+        try:
+            st_size = p.stat().st_size
+        except Exception:
+            st_size = 0
+        needs_compact = bool(
+            (_INTENT_LOG_MAX_BYTES > 0 and st_size > _INTENT_LOG_MAX_BYTES)
+            or (_INTENT_LOG_MAX_ENTRIES > 0 and len(final_states) > _INTENT_LOG_MAX_ENTRIES)
+        )
+        if _INTENT_LOG_MAX_ENTRIES > 0 and len(final_states) > _INTENT_LOG_MAX_ENTRIES:
+            drop_n = len(final_states) - _INTENT_LOG_MAX_ENTRIES
+            for sid in list(final_states.keys())[:drop_n]:
+                final_states.pop(sid, None)
+        if needs_compact:
+            tmp_path = p.with_suffix(".staging")
+            try:
+                fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+                try:
+                    os.fchmod(fd, 0o600)
+                except Exception:
+                    pass
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    for sid, status in final_states.items():
+                        payload = {
+                            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "hook": "on-exit",
+                            "hook_version": NAUTICAL_HOOK_VERSION,
+                            "status": status,
+                            "spawn_intent_id": sid,
+                            "reason": "compacted",
+                        }
+                        f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+                    if _DURABLE_QUEUE:
+                        try:
+                            f.flush()
+                            os.fsync(f.fileno())
+                        except Exception:
+                            pass
+                os.replace(tmp_path, p)
+                if _DURABLE_QUEUE:
+                    _fsync_dir(p.parent)
+            except Exception as e:
+                _diag(f"intent log compaction failed: {e}")
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except Exception:
+                    pass
+    return set(final_states.keys()), True
+
+
+def _mark_intent_status(spawn_intent_id: str, status: str, reason: str = "") -> bool:
+    sid = (spawn_intent_id or "").strip()
+    st = (status or "").strip().lower()
+    if not sid or st not in {"done", "dead"}:
+        return False
+    payload = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "hook": "on-exit",
+        "hook_version": NAUTICAL_HOOK_VERSION,
+        "status": st,
+        "spawn_intent_id": sid,
+        "reason": reason,
+    }
+    p = _intent_log_path()
+    with _lock_intent_log() as locked:
+        if not locked:
+            _diag(f"intent log lock busy; could not mark {sid} as {st}")
+            return False
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            fd = os.open(str(p), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+                if _DURABLE_QUEUE:
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                        _fsync_dir(p.parent)
+                    except Exception:
+                        pass
+            return True
+        except Exception as e:
+            _diag(f"intent log write failed ({sid}={st}): {e}")
+            return False
+
+
+def _lock_backoff_delay(streak: int) -> float:
+    if streak <= 0:
+        return 0.0
+    base = max(0.0, float(_LOCK_BACKOFF_BASE or 0.0))
+    cap = max(0.0, float(_LOCK_BACKOFF_MAX or 0.0))
+    if base <= 0.0:
+        return 0.0
+    exp = min(int(streak), 8)
+    delay = base * (2 ** (exp - 1))
+    delay = min(delay, cap if cap > 0 else delay)
+    jitter = random.uniform(0.0, base) if base > 0 else 0.0
+    return delay + jitter
 
 
 def _write_dead_letter(entry: dict, reason: str) -> None:
@@ -872,17 +1038,78 @@ def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
 
 
 def _drain_queue() -> dict:
+    drain_t0 = time.perf_counter()
     processed = 0
     errors = 0
     requeue: list[dict] = []
     dead_lettered = 0
+    entries = _take_queue_entries()
+    entries_total = len(entries)
+    skipped_idempotent = 0
+    lock_events = 0
+    lock_streak = 0
+    lock_streak_max = 0
+    circuit_breaks = 0
+    intent_mark_ok = 0
+    intent_mark_fail = 0
 
-    for entry in _take_queue_entries():
+    intent_t0 = time.perf_counter()
+    finalized_intents, intent_log_ready = _load_finalized_intents()
+    intent_log_load_ms = (time.perf_counter() - intent_t0) * 1000.0
+
+    def _mark_final(entry: dict, status: str, reason: str) -> None:
+        nonlocal intent_mark_ok, intent_mark_fail
+        sid = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
+        if not sid:
+            return
+        if _mark_intent_status(sid, status, reason):
+            finalized_intents.add(sid)
+            intent_mark_ok += 1
+        else:
+            intent_mark_fail += 1
+
+    def _dead_letter(entry: dict, reason: str) -> None:
+        nonlocal dead_lettered, errors
+        _write_dead_letter(entry, reason)
+        dead_lettered += 1
+        errors += 1
+        _mark_final(entry, "dead", reason)
+
+    def _record_lock_event(idx: int) -> bool:
+        nonlocal lock_events, lock_streak, lock_streak_max, circuit_breaks
+        lock_events += 1
+        lock_streak += 1
+        if lock_streak > lock_streak_max:
+            lock_streak_max = lock_streak
+        delay = _lock_backoff_delay(lock_streak)
+        if delay > 0:
+            _sleep(delay)
+        if _LOCK_STORM_THRESHOLD > 0 and lock_streak >= _LOCK_STORM_THRESHOLD and (idx + 1) < entries_total:
+            circuit_breaks += 1
+            requeue.extend(entries[idx + 1:])
+            _diag(
+                f"lock storm detected (streak={lock_streak}); "
+                f"requeued remaining {entries_total - (idx + 1)} entries"
+            )
+            return True
+        return False
+
+    def _reset_lock_streak() -> None:
+        nonlocal lock_streak
+        lock_streak = 0
+
+    for idx, entry in enumerate(entries):
+        spawn_intent_id = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
+        if spawn_intent_id and spawn_intent_id in finalized_intents:
+            skipped_idempotent += 1
+            processed += 1
+            _reset_lock_streak()
+            continue
+
         valid, reason = _validate_queue_entry(entry)
         if not valid:
-            _write_dead_letter(entry, reason)
-            dead_lettered += 1
-            errors += 1
+            _dead_letter(entry, reason)
+            _reset_lock_streak()
             continue
         spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
         parent_uuid = (entry.get("parent_uuid") or "").strip()
@@ -895,16 +1122,15 @@ def _drain_queue() -> dict:
             link_state, link_err = _parent_nextlink_state(parent_uuid, child_short, expected_parent_nextlink)
             if link_state == "locked":
                 if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                    _write_dead_letter(entry, "exceeded retry budget")
-                    dead_lettered += 1
-                    errors += 1
+                    _dead_letter(entry, "exceeded retry budget")
                 else:
                     requeue.append(entry)
+                if _record_lock_event(idx):
+                    break
                 continue
             if link_state in {"conflict", "missing", "invalid"}:
-                _write_dead_letter(entry, f"parent update failed: {link_err}")
-                dead_lettered += 1
-                errors += 1
+                _dead_letter(entry, f"parent update failed: {link_err}")
+                _reset_lock_streak()
                 continue
             if link_state == "already":
                 parent_linked_already = True
@@ -916,21 +1142,21 @@ def _drain_queue() -> dict:
                 if spawn_intent_id:
                     _diag(f"task lock active; requeue (intent={spawn_intent_id})")
                 if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                    _write_dead_letter(entry, "exceeded retry budget")
-                    dead_lettered += 1
-                    errors += 1
+                    _dead_letter(entry, "exceeded retry budget")
                 else:
                     requeue.append(entry)
+                if _record_lock_event(idx):
+                    break
                 continue
             ok, err = _import_child(child)
             if not ok:
                 if _is_lock_error(err):
                     if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                        _write_dead_letter(entry, "exceeded retry budget")
-                        dead_lettered += 1
-                        errors += 1
+                        _dead_letter(entry, "exceeded retry budget")
                     else:
                         requeue.append(entry)
+                    if _record_lock_event(idx):
+                        break
                     continue
                 # If import reported failure but the child exists, continue.
                 if _export_uuid(child_uuid).get("exists"):
@@ -940,9 +1166,8 @@ def _drain_queue() -> dict:
                         _diag(f"child import failed (intent={spawn_intent_id}): {err}")
                     else:
                         _diag(f"child import failed: {err}")
-                    _write_dead_letter(entry, f"child import failed: {err}")
-                    dead_lettered += 1
-                    errors += 1
+                    _dead_letter(entry, f"child import failed: {err}")
+                    _reset_lock_streak()
                     continue
             imported = True
 
@@ -952,17 +1177,16 @@ def _drain_queue() -> dict:
             if not confirm_res.get("exists"):
                 if confirm_res.get("retryable"):
                     if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                        _write_dead_letter(entry, "exceeded retry budget")
-                        dead_lettered += 1
-                        errors += 1
+                        _dead_letter(entry, "exceeded retry budget")
                     else:
                         requeue.append(entry)
+                    if _record_lock_event(idx):
+                        break
                     continue
                 if spawn_intent_id:
                     _diag(f"child missing after import (intent={spawn_intent_id})")
-                _write_dead_letter(entry, "child missing after import")
-                dead_lettered += 1
-                errors += 1
+                _dead_letter(entry, "child missing after import")
+                _reset_lock_streak()
                 continue
 
         if parent_uuid and child_short and not parent_linked_already:
@@ -974,20 +1198,21 @@ def _drain_queue() -> dict:
                     _diag(f"parent update failed: {parent_uuid}")
                 if err == "parent export locked" or _is_lock_error(err):
                     if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                        _write_dead_letter(entry, "exceeded retry budget")
-                        dead_lettered += 1
-                        errors += 1
+                        _dead_letter(entry, "exceeded retry budget")
                     else:
                         requeue.append(entry)
+                    if _record_lock_event(idx):
+                        break
                 else:
                     if imported:
                         _cleanup_orphan_child(child_uuid, spawn_intent_id)
-                    _write_dead_letter(entry, f"parent update failed: {err}")
-                    dead_lettered += 1
-                    errors += 1
+                    _dead_letter(entry, f"parent update failed: {err}")
+                    _reset_lock_streak()
                 continue
 
         processed += 1
+        _mark_final(entry, "done", "processed")
+        _reset_lock_streak()
 
     requeue_failed = 0
     requeue_ok = True
@@ -1013,6 +1238,17 @@ def _drain_queue() -> dict:
         "requeue_failed": requeue_failed,
         "dead_lettered": dead_lettered,
         "queue_lock_failures": _QUEUE_LOCK_FAILURES_THIS_RUN,
+        "entries_total": entries_total,
+        "entries_skipped_idempotent": skipped_idempotent,
+        "lock_events": lock_events,
+        "lock_streak_max": lock_streak_max,
+        "circuit_breaks": circuit_breaks,
+        "intent_log_ready": 1 if intent_log_ready else 0,
+        "intent_log_size": len(finalized_intents),
+        "intent_log_load_ms": round(intent_log_load_ms, 3),
+        "intent_mark_ok": intent_mark_ok,
+        "intent_mark_fail": intent_mark_fail,
+        "drain_ms": round((time.perf_counter() - drain_t0) * 1000.0, 3),
     }
 
 
@@ -1025,12 +1261,23 @@ def main() -> int:
     if os.environ.get("NAUTICAL_DIAG") == "1":
         _diag(
             "on-exit drain: "
+            f"entries_total={stats.get('entries_total', 0)} "
+            f"idempotent_skipped={stats.get('entries_skipped_idempotent', 0)} "
             f"processed={stats.get('processed', 0)} "
             f"errors={stats.get('errors', 0)} "
             f"requeued={stats.get('requeued', 0)} "
             f"requeue_failed={stats.get('requeue_failed', 0)} "
             f"dead_lettered={stats.get('dead_lettered', 0)} "
-            f"queue_lock_failures={stats.get('queue_lock_failures', 0)}"
+            f"queue_lock_failures={stats.get('queue_lock_failures', 0)} "
+            f"lock_events={stats.get('lock_events', 0)} "
+            f"lock_streak_max={stats.get('lock_streak_max', 0)} "
+            f"circuit_breaks={stats.get('circuit_breaks', 0)} "
+            f"intent_log_ready={stats.get('intent_log_ready', 0)} "
+            f"intent_log_size={stats.get('intent_log_size', 0)} "
+            f"intent_mark_ok={stats.get('intent_mark_ok', 0)} "
+            f"intent_mark_fail={stats.get('intent_mark_fail', 0)} "
+            f"intent_log_load_ms={stats.get('intent_log_load_ms', 0)} "
+            f"drain_ms={stats.get('drain_ms', 0)}"
         )
     errors = stats.get("errors", 0)
     dead_lettered = stats.get("dead_lettered", 0)

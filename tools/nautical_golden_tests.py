@@ -3156,6 +3156,95 @@ def test_on_exit_post_import_parent_conflict_cleans_orphan():
         expect(state["cleanup_called"], "orphan cleanup should run after post-import parent conflict")
 
 
+def test_on_exit_idempotent_skip_for_finalized_intent():
+    """on-exit should skip queue entries already finalized in the intent log."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_intent_skip_test")
+    if not hasattr(mod, "_drain_queue"):
+        raise AssertionError("on-exit hook does not expose drain helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        sid = "si_done_skip"
+        child_uuid = "00000000-0000-0000-0000-000000000909"
+        mod._QUEUE_PATH.write_text(
+            json.dumps({"spawn_intent_id": sid, "child": {"uuid": child_uuid}, "child_short": child_uuid[:8]}) + "\n",
+            encoding="utf-8",
+        )
+        intent_payload = {
+            "ts": "2026-01-01T00:00:00Z",
+            "hook": "on-exit",
+            "status": "done",
+            "spawn_intent_id": sid,
+            "reason": "processed",
+        }
+        mod._intent_log_path().write_text(json.dumps(intent_payload) + "\n", encoding="utf-8")
+
+        def _run_task_should_not_call(*_a, **_k):
+            raise AssertionError("task subprocess should not be called for finalized intent")
+
+        mod._run_task = _run_task_should_not_call
+        stats = mod._drain_queue()
+        expect(stats.get("processed") == 1, f"expected one processed (skipped) entry, got: {stats}")
+        expect(stats.get("entries_skipped_idempotent") == 1, f"expected one idempotent skip, got: {stats}")
+        expect(stats.get("errors") == 0, f"expected no errors, got: {stats}")
+
+
+def test_on_exit_lock_storm_circuit_requeues_remaining():
+    """on-exit should trip circuit breaker and requeue remaining entries under lock storm."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_lock_storm_circuit_test")
+    if not hasattr(mod, "_drain_queue"):
+        raise AssertionError("on-exit hook does not expose drain helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        entries = []
+        for i in range(3):
+            entries.append(
+                {
+                    "spawn_intent_id": f"si_storm_{i}",
+                    "child_short": f"deadbe{i}",
+                    "child": {"uuid": f"00000000-0000-0000-0000-0000000009{i}{i}"},
+                }
+            )
+        mod._QUEUE_PATH.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
+
+        mod._LOCK_STORM_THRESHOLD = 2
+        mod._LOCK_BACKOFF_BASE = 0.0
+        mod._LOCK_BACKOFF_MAX = 0.0
+        mod._export_uuid = lambda _u: {"exists": False, "retryable": True, "err": "database is locked", "obj": None}
+
+        captured = {"count": 0}
+
+        def _requeue_capture(items):
+            captured["count"] = len(items)
+            return True
+
+        mod._requeue_entries = _requeue_capture
+        stats = mod._drain_queue()
+        expect(stats.get("circuit_breaks") == 1, f"expected one circuit break, got: {stats}")
+        expect(stats.get("requeued") == 3, f"expected three requeued entries, got: {stats}")
+        expect(captured["count"] == 3, f"expected three entries passed to requeue, got: {captured}")
+        expect(stats.get("lock_events", 0) >= 2, f"expected lock events in stats, got: {stats}")
+        for key in ("entries_total", "entries_skipped_idempotent", "intent_log_load_ms", "drain_ms"):
+            expect(key in stats, f"missing metric key: {key}")
+
+
 def test_on_exit_import_child_retries_on_lock():
     """on-exit should retry child import on lock errors with backoff."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -4362,6 +4451,8 @@ TESTS = [
     test_on_exit_parent_nextlink_changed_dead_letter,
     test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter,
     test_on_exit_post_import_parent_conflict_cleans_orphan,
+    test_on_exit_idempotent_skip_for_finalized_intent,
+    test_on_exit_lock_storm_circuit_requeues_remaining,
     test_cache_metrics_emits_when_enabled,
     test_sanitize_task_strings_removes_controls,
     test_clear_all_caches_env,

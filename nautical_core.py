@@ -4035,6 +4035,78 @@ def _inject_prevnext_phrase(txt: str, term) -> str:
     return txt + phrase
 
 
+def _join_natural_or_terms(terms: list[str]) -> str:
+    if not terms:
+        return ""
+    if len(terms) == 1:
+        return terms[0]
+    if len(terms) == 2:
+        return f"either {terms[0]} or {terms[1]}"
+    return "either " + ", ".join(terms[:-1]) + ", or " + terms[-1]
+
+
+def _longest_common_suffix(parts: list[str]) -> str:
+    if not parts:
+        return ""
+    rev = [p[::-1] for p in parts if isinstance(p, str)]
+    if not rev:
+        return ""
+    prefix = os.path.commonprefix(rev)
+    return prefix[::-1]
+
+
+def _compress_or_terms_by_clause(terms: list[str], delim: str) -> str | None:
+    """Compact repeated OR terms of the form '<shared><delim><variant><shared-tail>'."""
+    if not terms or len(terms) < 2:
+        return None
+
+    if not isinstance(delim, str) or not delim:
+        return None
+    split: list[tuple[str, str]] = []
+    for t in terms:
+        if not isinstance(t, str):
+            return None
+        idx = t.find(delim)
+        if idx <= 0:
+            return None
+        prefix = t[:idx]
+        rest = t[idx + len(delim):]
+        if not rest:
+            return None
+        split.append((prefix, rest))
+
+    prefixes = {p for p, _ in split}
+    if len(prefixes) != 1:
+        return None
+    prefix = split[0][0]
+    rests = [r for _, r in split]
+    if len(set(rests)) <= 1:
+        return None
+
+    common_tail = _longest_common_suffix(rests)
+    if delim == " and within ":
+        # Avoid over-compressing calendar-day yearly phrases into "Jan, Feb, ... Oct 1 each year".
+        # Prefer keeping day with each variant: "Jan 1, Feb 1, ... Oct 1 each year".
+        if (
+            common_tail
+            and re.match(r"^\s+\d{1,2}\b", common_tail)
+            and "each year" in common_tail
+        ):
+            alt_tail = " each year"
+            if all(r.endswith(alt_tail) for r in rests):
+                common_tail = alt_tail
+    variants: list[str] = []
+    for r in rests:
+        v = r[:-len(common_tail)] if common_tail else r
+        v = v.strip(" ,")
+        if not v:
+            return None
+        variants.append(v)
+
+    joined = _join_natural_or_terms(variants)
+    return f"{prefix}{delim}{joined}{common_tail}"
+
+
 def describe_anchor_dnf(dnf: list, task: dict) -> str:
     """
     Render the whole expression (OR of AND-terms) into one sentence and append mode.
@@ -4049,15 +4121,6 @@ def describe_anchor_dnf(dnf: list, task: dict) -> str:
             return "skip missed anchors"
         return ""
 
-    def _join_terms(terms: list[str]) -> str:
-        if not terms:
-            return ""
-        if len(terms) == 1:
-            return terms[0]
-        if len(terms) == 2:
-            return f"either {terms[0]} or {terms[1]}"
-        return "either " + ", ".join(terms[:-1]) + ", or " + terms[-1]
-
     # Special-case compression
     bucket = _try_bucket_rand_monthly(dnf, task)
     if bucket:
@@ -4070,7 +4133,20 @@ def describe_anchor_dnf(dnf: list, task: dict) -> str:
     terms = [describe_anchor_term(term, due_dt) for term in (dnf or [])]
     if not terms:
         return ""
-    sentence = _join_terms(terms)
+    # Deduplicate while preserving order before joining/compression.
+    seen = set()
+    uniq_terms = []
+    for t in terms:
+        if t and t not in seen:
+            seen.add(t)
+            uniq_terms.append(t)
+    if not uniq_terms:
+        return ""
+    sentence = (
+        _compress_or_terms_by_clause(uniq_terms, " and within ")
+        or _compress_or_terms_by_clause(uniq_terms, " that fall on ")
+        or _join_natural_or_terms(uniq_terms)
+    )
     mode = (task.get("anchor_mode") or "skip").lower()
     tail = _mode_tail(mode)
     return f"{sentence}; {tail}" if tail else sentence

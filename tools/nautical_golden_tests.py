@@ -2198,6 +2198,33 @@ def test_natural_language_comprehensive():
         assert expected_phrase.lower() in natural.lower(), \
             f"{anchor}: expected '{expected_phrase}' in '{natural}'"
 
+def test_natural_compresses_repeated_within_variants():
+    """describe_anchor_dnf should compact repeated OR terms that only vary by yearly 'within' token."""
+    expr = (
+        "(w:mon..wed) + (m:1..10) + "
+        "(y:01-01|y:02-01|y:03-01|y:04-01|y:05-01|y:06-01|y:07-01|y:08-01|y:09-01|y:10-01)"
+    )
+    dnf = core.validate_anchor_expr_strict(expr)
+    nat = core.describe_anchor_dnf(dnf, {"anchor_mode": "skip"})
+    low = (nat or "").lower()
+
+    assert "and within either " in low, f"Natural should compact yearly variants: {nat!r}"
+    assert low.count("mondays through wednesdays") == 1, f"Natural repeats shared prefix: {nat!r}"
+    assert "jan 1" in low and "oct 1" in low, f"Natural lost yearly endpoints: {nat!r}"
+    assert "skip missed anchors" in low, f"Natural should include mode tail: {nat!r}"
+
+def test_natural_compresses_repeated_fall_on_variants():
+    """describe_anchor_dnf should compact repeated OR terms that only vary by monthly 'that fall on' token."""
+    expr = "(w:mon) + (m:1|m:2|m:3)"
+    dnf = core.validate_anchor_expr_strict(expr)
+    nat = core.describe_anchor_dnf(dnf, {"anchor_mode": "skip"})
+    low = (nat or "").lower()
+
+    assert "that fall on either " in low, f"Natural should compact monthly variants: {nat!r}"
+    assert low.count("mondays") == 1, f"Natural repeats shared prefix: {nat!r}"
+    assert "the 1st" in low and "the 3rd day of each month" in low, f"Natural lost monthly endpoints: {nat!r}"
+    assert "skip missed anchors" in low, f"Natural should include mode tail: {nat!r}"
+
 def test_edge_cases():
     """Test edge cases and boundary conditions"""
     test_cases = [
@@ -4608,6 +4635,8 @@ TESTS = [
     test_deterministic_randomness,
     test_edge_cases,
     test_natural_language_comprehensive,
+    test_natural_compresses_repeated_within_variants,
+    test_natural_compresses_repeated_fall_on_variants,
     test_parser_validation,
     test_cache_consistency,
     test_yearly_rand_natural_and_bounds,

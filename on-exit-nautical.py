@@ -100,6 +100,16 @@ _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
 TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
 
 
+def _tw_data_dir_path() -> Path:
+    td = TW_DATA_DIR
+    if isinstance(td, Path):
+        return td
+    try:
+        return Path(str(td)).expanduser()
+    except Exception:
+        return Path(".")
+
+
 def _task_cmd_prefix() -> list[str]:
     cmd = ["task"]
     if _USE_RC_DATA_LOCATION:
@@ -422,7 +432,7 @@ def _is_lock_error(err: str) -> bool:
     )
 
 def _tw_lock_path() -> Path:
-    return TW_DATA_DIR / "lock"
+    return _tw_data_dir_path() / "lock"
 
 def _tw_lock_recent(max_age_s: float = 5.0) -> bool:
     try:
@@ -511,11 +521,11 @@ def _lock_dead_letter():
 
 
 def _intent_log_path() -> Path:
-    return _QUEUE_PATH.parent / ".nautical_spawn_intents.jsonl"
+    return _tw_data_dir_path() / ".nautical_spawn_intents.jsonl"
 
 
 def _intent_log_lock_path() -> Path:
-    return _QUEUE_PATH.parent / ".nautical_spawn_intents.lock"
+    return _tw_data_dir_path() / ".nautical_spawn_intents.lock"
 
 
 @contextmanager
@@ -537,7 +547,7 @@ def _parent_nextlink_lock_path(parent_uuid: str) -> Path:
         safe = "unknown"
     if len(safe) > 64:
         safe = safe[:64]
-    return TW_DATA_DIR / f".nautical_parent_nextlink.{safe}.lock"
+    return _tw_data_dir_path() / f".nautical_parent_nextlink.{safe}.lock"
 
 
 @contextmanager
@@ -946,7 +956,14 @@ def _requeue_entries_jsonl(entries: list[dict]) -> bool:
 def _queue_jsonl_has_data() -> bool:
     for p in (_QUEUE_PATH, _QUEUE_PROCESSING_PATH):
         try:
-            if p.exists() and p.stat().st_size > 0:
+            if not p.exists():
+                continue
+            try:
+                if p.stat().st_size > 0:
+                    return True
+            except Exception:
+                # Be conservative when metadata is unavailable; migration will
+                # validate content and dead-letter malformed entries.
                 return True
         except Exception:
             continue
@@ -954,19 +971,27 @@ def _queue_jsonl_has_data() -> bool:
 
 
 def _queue_db_connect() -> sqlite3.Connection | None:
+    db_path = _QUEUE_DB_PATH
     try:
-        _QUEUE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # Follow an overridden queue JSONL path in tests/mixed setups when DB path wasn't updated.
+        if isinstance(_QUEUE_PATH, Path) and isinstance(_QUEUE_DB_PATH, Path):
+            if _QUEUE_DB_PATH.parent != _QUEUE_PATH.parent:
+                db_path = _QUEUE_PATH.parent / _QUEUE_DB_PATH.name
+    except Exception:
+        db_path = _QUEUE_DB_PATH
+    try:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
     try:
-        conn = sqlite3.connect(str(_QUEUE_DB_PATH), timeout=max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0))
+        conn = sqlite3.connect(str(db_path), timeout=max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=1500")
         try:
-            if _QUEUE_DB_PATH.exists():
-                os.chmod(_QUEUE_DB_PATH, 0o600)
+            if db_path.exists():
+                os.chmod(db_path, 0o600)
         except Exception:
             pass
         return conn
@@ -1175,25 +1200,117 @@ def _requeue_entries_sqlite(entries: list[dict]) -> bool:
     return False
 
 
+def _enqueue_entries_sqlite(entries: list[dict]) -> bool:
+    items = [e for e in (entries or []) if isinstance(e, dict)]
+    if not items:
+        return True
+    conn = _queue_db_connect()
+    if conn is None:
+        return False
+    now = time.time()
+    try:
+        _queue_db_init(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        for e in items:
+            out = dict(e)
+            out.pop("__queue_backend", None)
+            out.pop("__queue_id", None)
+            try:
+                attempts = int(out.get("attempts") or 0)
+            except Exception:
+                attempts = 0
+            payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+            sid = (out.get("spawn_intent_id") or "").strip()
+            if sid:
+                cur = conn.execute(
+                    "UPDATE queue_entries SET payload=?, attempts=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
+                    "WHERE spawn_intent_id=?",
+                    (payload, attempts, now, sid),
+                )
+                if int(getattr(cur, "rowcount", 0) or 0) <= 0:
+                    try:
+                        conn.execute(
+                            "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+                            "VALUES (?, ?, ?, 'queued', NULL, NULL, ?, ?)",
+                            (sid, payload, attempts, now, now),
+                        )
+                    except sqlite3.IntegrityError:
+                        conn.execute(
+                            "UPDATE queue_entries SET payload=?, attempts=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
+                            "WHERE spawn_intent_id=?",
+                            (payload, attempts, now, sid),
+                        )
+            else:
+                conn.execute(
+                    "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+                    "VALUES (NULL, ?, ?, 'queued', NULL, NULL, ?, ?)",
+                    (payload, attempts, now, now),
+                )
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.OperationalError as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        msg = str(e).lower()
+        if "locked" in msg or "busy" in msg:
+            _record_queue_lock_failure()
+        else:
+            _diag(f"queue db migrate enqueue failed: {e}")
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        _diag(f"queue db migrate enqueue failed: {e}")
+    try:
+        conn.close()
+    except Exception:
+        pass
+    return False
+
+
+def _migrate_legacy_jsonl_to_sqlite() -> None:
+    if not _queue_jsonl_has_data():
+        return
+    legacy_entries = _take_queue_entries_jsonl()
+    if not legacy_entries:
+        return
+    if _enqueue_entries_sqlite(legacy_entries):
+        try:
+            if _QUEUE_PROCESSING_PATH.exists():
+                _QUEUE_PROCESSING_PATH.unlink()
+                if _DURABLE_QUEUE:
+                    _fsync_dir(_QUEUE_PROCESSING_PATH.parent)
+        except Exception:
+            pass
+        _diag(f"migrated {len(legacy_entries)} legacy queue entries to sqlite")
+        return
+    _diag(f"legacy queue migration failed; restoring {len(legacy_entries)} entries to JSONL")
+    _requeue_entries_jsonl(legacy_entries)
+
+
 def _take_queue_entries() -> list[dict]:
-    # Backward compatibility: if legacy JSONL has data, drain it with legacy logic.
-    if _queue_jsonl_has_data():
-        return _take_queue_entries_jsonl()
-    entries = _take_queue_entries_sqlite()
-    if entries:
-        return entries
-    # Fallback: legacy queue may still be present in some mixed-version environments.
-    return _take_queue_entries_jsonl()
+    _migrate_legacy_jsonl_to_sqlite()
+    return _take_queue_entries_sqlite()
 
 
 def _requeue_entries(entries: list[dict]) -> bool:
-    if not entries:
+    items = [e for e in (entries or []) if isinstance(e, dict)]
+    if not items:
         return True
-    sqlite_items = [e for e in entries if isinstance(e, dict) and e.get("__queue_backend") == "sqlite"]
-    jsonl_items = [e for e in entries if not (isinstance(e, dict) and e.get("__queue_backend") == "sqlite")]
-    ok_sqlite = _requeue_entries_sqlite(sqlite_items)
-    ok_jsonl = _requeue_entries_jsonl(jsonl_items)
-    return bool(ok_sqlite and ok_jsonl)
+    claimed: list[dict] = []
+    fresh: list[dict] = []
+    for e in items:
+        if (e.get("__queue_backend") == "sqlite") and e.get("__queue_id"):
+            claimed.append(e)
+        else:
+            fresh.append(e)
+    ok_claimed = _requeue_entries_sqlite(claimed) if claimed else True
+    ok_fresh = _enqueue_entries_sqlite(fresh) if fresh else True
+    return ok_claimed and ok_fresh
 
 
 def _validate_queue_entry(entry: dict) -> tuple[bool, str]:
@@ -1354,9 +1471,9 @@ def _drain_queue() -> dict:
 
     def _queue_backend(entry: dict) -> str:
         if not isinstance(entry, dict):
-            return "jsonl"
+            return "sqlite"
         b = (entry.get("__queue_backend") or "").strip().lower()
-        return b if b else "jsonl"
+        return b if b else "sqlite"
 
     def _queue_id(entry: dict) -> int:
         if not isinstance(entry, dict):
@@ -1537,15 +1654,7 @@ def _drain_queue() -> dict:
         if not requeue_ok:
             requeue_failed = len(requeue)
             errors += requeue_failed
-            _diag(f"requeue failed for {requeue_failed} entries; keeping processing file")
-    if requeue_ok:
-        try:
-            if _QUEUE_PROCESSING_PATH.exists():
-                _QUEUE_PROCESSING_PATH.unlink()
-                if _DURABLE_QUEUE:
-                    _fsync_dir(_QUEUE_PROCESSING_PATH.parent)
-        except Exception:
-            pass
+            _diag(f"requeue failed for {requeue_failed} entries")
 
     if sqlite_acked_ids:
         if not _ack_queue_entries_sqlite(sorted(sqlite_acked_ids)):

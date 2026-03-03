@@ -531,11 +531,13 @@ def test_hook_files_are_private_permissions():
 
             hook_modify = _find_hook_file("on-modify-nautical.py")
             mod_modify = _load_hook_module(hook_modify, "_nautical_on_modify_perm_test")
-            mod_modify._enqueue_deferred_spawn({"uuid": "00000000-0000-0000-0000-000000000999"})
-            q_path = mod_modify._SPAWN_QUEUE_PATH
-            expect(q_path.exists(), f"spawn queue not created: {q_path}")
-            mode = stat.S_IMODE(q_path.stat().st_mode)
-            expect((mode & 0o077) == 0, f"queue file has group/other perms: {oct(mode)}")
+            mod_modify._enqueue_deferred_spawn(
+                {"spawn_intent_id": "si_perm", "child": {"uuid": "00000000-0000-0000-0000-000000000999"}}
+            )
+            db_path = mod_modify._SPAWN_QUEUE_DB_PATH
+            expect(db_path.exists(), f"sqlite queue not created: {db_path}")
+            mode = stat.S_IMODE(db_path.stat().st_mode)
+            expect((mode & 0o077) == 0, f"sqlite queue file has group/other perms: {oct(mode)}")
 
             hook_exit = _find_hook_file("on-exit-nautical.py")
             mod_exit = _load_hook_module(hook_exit, "_nautical_on_exit_perm_test")
@@ -641,20 +643,22 @@ def test_safe_lock_fallback_stale_pid_cleanup():
         mod_core.fcntl = prev_fcntl
 
 def test_on_modify_queue_repairs_permissions():
-    """Existing queue file permissions should be repaired on append."""
+    """Existing sqlite queue file permissions should be repaired on enqueue."""
     hook = _find_hook_file("on-modify-nautical.py")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
         try:
             mod = _load_hook_module(hook, "_nautical_on_modify_queue_perm_test")
-            q_path = mod._SPAWN_QUEUE_PATH
-            q_path.parent.mkdir(parents=True, exist_ok=True)
-            q_path.write_text("{}", encoding="utf-8")
-            os.chmod(q_path, 0o666)
-            mod._enqueue_deferred_spawn({"uuid": "00000000-0000-0000-0000-000000000123"})
-            mode = stat.S_IMODE(q_path.stat().st_mode)
-            expect((mode & 0o077) == 0, f"queue perms not repaired: {oct(mode)}")
+            db_path = mod._SPAWN_QUEUE_DB_PATH
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            db_path.write_text("", encoding="utf-8")
+            os.chmod(db_path, 0o666)
+            mod._enqueue_deferred_spawn(
+                {"spawn_intent_id": "si_perm_fix", "child": {"uuid": "00000000-0000-0000-0000-000000000123"}}
+            )
+            mode = stat.S_IMODE(db_path.stat().st_mode)
+            expect((mode & 0o077) == 0, f"sqlite queue perms not repaired: {oct(mode)}")
         finally:
             if prev_taskdata is None:
                 os.environ.pop("TASKDATA", None)
@@ -662,25 +666,46 @@ def test_on_modify_queue_repairs_permissions():
                 os.environ["TASKDATA"] = prev_taskdata
 
 def test_on_exit_repairs_queue_and_dead_letter_permissions():
-    """Existing queue/dead-letter permissions should be repaired on write."""
+    """Existing sqlite queue/dead-letter permissions should be repaired on write."""
     hook = _find_hook_file("on-exit-nautical.py")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
         try:
             mod = _load_hook_module(hook, "_nautical_on_exit_perm_repair_test")
-            q_path = mod._QUEUE_PATH
+            db_path = mod._QUEUE_DB_PATH
             dl_path = mod._DEAD_LETTER_PATH
-            q_path.parent.mkdir(parents=True, exist_ok=True)
-            q_path.write_text("{}", encoding="utf-8")
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(str(db_path)) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS queue_entries (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        spawn_intent_id TEXT,
+                        payload TEXT NOT NULL,
+                        attempts INTEGER NOT NULL DEFAULT 0,
+                        state TEXT NOT NULL DEFAULT 'queued',
+                        claim_token TEXT,
+                        claimed_at REAL,
+                        created_at REAL NOT NULL,
+                        updated_at REAL NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+                    "VALUES (?, ?, 0, 'processing', 1.0, 1.0)",
+                    ("si_perm_fix", json.dumps({"spawn_intent_id": "si_perm_fix"}, ensure_ascii=False, separators=(",", ":"))),
+                )
+                conn.commit()
             dl_path.write_text("{}", encoding="utf-8")
-            os.chmod(q_path, 0o666)
+            os.chmod(db_path, 0o666)
             os.chmod(dl_path, 0o666)
-            mod._requeue_entries([{"uuid": "00000000-0000-0000-0000-000000000456"}])
+            mod._requeue_entries([{"__queue_backend": "sqlite", "__queue_id": 1, "spawn_intent_id": "si_perm_fix"}])
             mod._write_dead_letter({"uuid": "00000000-0000-0000-0000-000000000789"}, "perm test")
-            q_mode = stat.S_IMODE(q_path.stat().st_mode)
+            q_mode = stat.S_IMODE(db_path.stat().st_mode)
             dl_mode = stat.S_IMODE(dl_path.stat().st_mode)
-            expect((q_mode & 0o077) == 0, f"queue perms not repaired: {oct(q_mode)}")
+            expect((q_mode & 0o077) == 0, f"sqlite queue perms not repaired: {oct(q_mode)}")
             expect((dl_mode & 0o077) == 0, f"dead-letter perms not repaired: {oct(dl_mode)}")
         finally:
             if prev_taskdata is None:
@@ -1581,13 +1606,13 @@ def test_on_modify_queue_full_drops_with_dead_letter():
             mod = _load_hook_module(hook, "_nautical_on_modify_queue_full_test")
             if hasattr(mod, "_load_core"):
                 mod._load_core()
-            q_path = mod._SPAWN_QUEUE_PATH
+            db_path = mod._SPAWN_QUEUE_DB_PATH
             dl_path = mod._DEAD_LETTER_PATH
-            q_path.parent.mkdir(parents=True, exist_ok=True)
-            q_path.write_text("x" * 128, encoding="utf-8")
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            db_path.write_text("x" * 128, encoding="utf-8")
             mod._SPAWN_QUEUE_MAX_BYTES = 10
             mod._enqueue_deferred_spawn({"spawn_intent_id": "si_full", "child": {"uuid": "u1"}})
-            expect(q_path.read_text(encoding="utf-8") == "x" * 128, "queue should not grow when full")
+            expect(db_path.read_text(encoding="utf-8") == "x" * 128, "sqlite queue file should not grow when full")
             expect(dl_path.exists(), "dead-letter not written on queue full")
         finally:
             if prev_taskdata is None:
@@ -1615,7 +1640,6 @@ def test_on_modify_enqueue_uses_sqlite_when_legacy_empty():
             expect(ok, f"sqlite enqueue failed: {reason}")
             db_path = mod._SPAWN_QUEUE_DB_PATH
             expect(db_path.exists(), f"sqlite queue db missing: {db_path}")
-            expect(mod._SPAWN_QUEUE_PATH.exists(), "legacy queue touch file missing")
             with sqlite3.connect(str(db_path)) as conn:
                 row = conn.execute(
                     "SELECT payload FROM queue_entries WHERE spawn_intent_id=?",
@@ -1630,14 +1654,14 @@ def test_on_modify_enqueue_uses_sqlite_when_legacy_empty():
             else:
                 os.environ["TASKDATA"] = prev_taskdata
 
-def test_on_modify_enqueue_prefers_jsonl_when_legacy_backlog_exists():
-    """on-modify should keep using JSONL while legacy queue contains entries."""
+def test_on_modify_enqueue_uses_sqlite_even_with_legacy_jsonl_backlog():
+    """on-modify should enqueue to SQLite even if a legacy JSONL backlog file exists."""
     hook = _find_hook_file("on-modify-nautical.py")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
         try:
-            mod = _load_hook_module(hook, "_nautical_on_modify_enqueue_jsonl_backlog_test")
+            mod = _load_hook_module(hook, "_nautical_on_modify_enqueue_sqlite_with_jsonl_backlog_test")
             if hasattr(mod, "_load_core"):
                 mod._load_core()
             q_path = mod._SPAWN_QUEUE_PATH
@@ -1651,10 +1675,20 @@ def test_on_modify_enqueue_prefers_jsonl_when_legacy_backlog_exists():
                 "child": {"uuid": "00000000-0000-0000-0000-000000000004"},
             }
             ok, reason = mod._enqueue_deferred_spawn(entry)
-            expect(ok, f"legacy enqueue failed: {reason}")
+            expect(ok, f"sqlite enqueue failed: {reason}")
+            db_path = mod._SPAWN_QUEUE_DB_PATH
+            expect(db_path.exists(), f"sqlite queue db missing: {db_path}")
+            with sqlite3.connect(str(db_path)) as conn:
+                row = conn.execute(
+                    "SELECT payload FROM queue_entries WHERE spawn_intent_id=?",
+                    ("legacy_2",),
+                ).fetchone()
+            expect(row is not None, "sqlite queue row missing when legacy backlog exists")
+            payload = json.loads((row[0] or "").strip() or "{}")
+            expect(payload.get("spawn_intent_id") == "legacy_2", f"unexpected sqlite payload: {payload}")
             txt = q_path.read_text(encoding="utf-8")
-            expect('"spawn_intent_id":"legacy_1"' in txt, f"legacy entry missing after enqueue: {txt!r}")
-            expect('"spawn_intent_id":"legacy_2"' in txt, f"new entry not appended to JSONL backlog: {txt!r}")
+            expect('"spawn_intent_id":"legacy_1"' in txt, f"legacy entry should remain untouched: {txt!r}")
+            expect('"spawn_intent_id":"legacy_2"' not in txt, f"new entry should not be appended to JSONL backlog: {txt!r}")
         finally:
             if prev_taskdata is None:
                 os.environ.pop("TASKDATA", None)
@@ -2981,10 +3015,10 @@ def test_on_exit_spawn_intents_drain():
         expect(imported["ok"], "child import did not run")
         expect(parent_updated["ok"], "parent update did not run")
 
-def test_on_exit_take_queue_prefers_legacy_processing_backlog_over_sqlite():
-    """on-exit should drain legacy processing backlog before sqlite queue in mixed-version state."""
+def test_on_exit_take_queue_migrates_legacy_processing_backlog_to_sqlite():
+    """on-exit should migrate legacy processing backlog into sqlite and then claim from sqlite."""
     hook = _find_hook_file("on-exit-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_exit_processing_priority_test")
+    mod = _load_hook_module(hook, "_nautical_on_exit_processing_migration_test")
     if not hasattr(mod, "_take_queue_entries"):
         raise AssertionError("on-exit hook does not expose queue helper")
 
@@ -3002,46 +3036,19 @@ def test_on_exit_take_queue_prefers_legacy_processing_backlog_over_sqlite():
             "child_short": "abcd0001",
             "child": {"uuid": "00000000-0000-0000-0000-000000000102"},
         }
-        sqlite_entry = {
-            "spawn_intent_id": "si_sqlite_pending",
-            "parent_uuid": "00000000-0000-0000-0000-000000000201",
-            "child_short": "abcd0002",
-            "child": {"uuid": "00000000-0000-0000-0000-000000000202"},
-        }
         mod._QUEUE_PATH.write_text("", encoding="utf-8")
         mod._QUEUE_PROCESSING_PATH.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
 
-        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
-            conn.execute(
-                """
-                CREATE TABLE queue_entries (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    spawn_intent_id TEXT,
-                    payload TEXT NOT NULL,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    state TEXT NOT NULL DEFAULT 'queued',
-                    claim_token TEXT,
-                    claimed_at REAL,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
-                "VALUES (?, ?, 0, 'queued', 1.0, 1.0)",
-                ("si_sqlite_pending", json.dumps(sqlite_entry, ensure_ascii=False, separators=(",", ":"))),
-            )
-            conn.commit()
-
         entries = mod._take_queue_entries()
-        expect(len(entries) == 1, f"expected one legacy entry, got: {entries}")
-        expect(entries[0].get("spawn_intent_id") == "si_legacy_processing", f"wrong entry selected: {entries}")
+        expect(len(entries) == 1, f"expected one migrated entry, got: {entries}")
+        expect(entries[0].get("spawn_intent_id") == "si_legacy_processing", f"wrong entry claimed: {entries}")
+        expect(entries[0].get("__queue_backend") == "sqlite", f"entry should be sqlite-backed: {entries}")
+        expect(not mod._QUEUE_PROCESSING_PATH.exists(), "legacy processing backlog should be cleared after migration")
         with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
-            still_pending = conn.execute(
-                "SELECT COUNT(1) FROM queue_entries WHERE spawn_intent_id='si_sqlite_pending' AND state='queued'"
+            still_processing = conn.execute(
+                "SELECT COUNT(1) FROM queue_entries WHERE spawn_intent_id='si_legacy_processing' AND state='processing'"
             ).fetchone()[0]
-        expect(int(still_pending) == 1, "sqlite entry should remain queued while legacy processing backlog drains first")
+        expect(int(still_processing) == 1, "migrated sqlite entry should be claimed as processing")
 
 def test_on_exit_drain_skips_finalized_sqlite_intent():
     """on-exit should skip and ack SQLite entries already finalized in intent log."""
@@ -4228,10 +4235,10 @@ def test_queue_json_non_object_dead_letter_removed():
         remaining = mod._QUEUE_PATH.read_text(encoding="utf-8").strip()
         expect(remaining == "", "queue should be cleared of non-object line")
 
-def test_on_exit_requeue_failure_keeps_processing_file():
-    """on-exit must not drop processing entries when requeue persistence fails."""
+def test_on_exit_requeue_failure_leaves_sqlite_entry_processing():
+    """on-exit should report requeue failure and keep sqlite claim state for investigation."""
     hook = _find_hook_file("on-exit-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_exit_requeue_fail_keeps_processing_test")
+    mod = _load_hook_module(hook, "_nautical_on_exit_requeue_fail_sqlite_processing_test")
 
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
@@ -4239,6 +4246,7 @@ def test_on_exit_requeue_failure_keeps_processing_file():
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
         mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
 
@@ -4248,7 +4256,28 @@ def test_on_exit_requeue_failure_keeps_processing_file():
             "child_short": "deadbeef",
             "child": {"uuid": "00000000-0000-0000-0000-000000000777"},
         }
-        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+                "VALUES (?, ?, 0, 'queued', 1.0, 1.0)",
+                ("si_requeue_fail", json.dumps(entry, ensure_ascii=False, separators=(",", ":"))),
+            )
+            conn.commit()
 
         mod._export_uuid = lambda _u: {"exists": False, "retryable": True, "err": "database is locked", "obj": None}
         mod._requeue_entries = lambda _entries: False
@@ -4256,9 +4285,11 @@ def test_on_exit_requeue_failure_keeps_processing_file():
         stats = mod._drain_queue()
         expect(stats.get("requeue_failed") == 1, f"expected one requeue failure, got {stats}")
         expect(stats.get("errors", 0) >= 1, f"expected error count incremented, got {stats}")
-        expect(mod._QUEUE_PROCESSING_PATH.exists(), "processing file should be preserved on requeue failure")
-        processing = mod._QUEUE_PROCESSING_PATH.read_text(encoding="utf-8").strip()
-        expect(processing, "processing file should retain undelivered entry")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            state = conn.execute(
+                "SELECT state FROM queue_entries WHERE spawn_intent_id='si_requeue_fail'"
+            ).fetchone()
+        expect(state is not None and state[0] == "processing", f"sqlite entry should remain processing on requeue failure: {state}")
 
 
 def test_on_exit_export_uuid_noisy_stdout():
@@ -4724,7 +4755,7 @@ TESTS = [
     test_ops_templates_present_and_runner_executable,
     test_on_modify_queue_full_drops_with_dead_letter,
     test_on_modify_enqueue_uses_sqlite_when_legacy_empty,
-    test_on_modify_enqueue_prefers_jsonl_when_legacy_backlog_exists,
+    test_on_modify_enqueue_uses_sqlite_even_with_legacy_jsonl_backlog,
     test_on_modify_chain_export_timeout_scales,
     test_tw_export_chain_extra_validation,
     test_next_for_and_no_progress_fails_fast,
@@ -4751,7 +4782,7 @@ TESTS = [
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,
-    test_on_exit_take_queue_prefers_legacy_processing_backlog_over_sqlite,
+    test_on_exit_take_queue_migrates_legacy_processing_backlog_to_sqlite,
     test_on_exit_drain_skips_finalized_sqlite_intent,
     test_on_exit_queue_drain_is_transactional,
     test_on_exit_queue_stat_failure_does_not_crash,
@@ -4804,7 +4835,7 @@ TESTS = [
     test_queue_json_parse_dead_letter,
     test_queue_json_non_object_dead_letter_removed,
     test_on_exit_dead_letter_carries_spawn_intent_id,
-    test_on_exit_requeue_failure_keeps_processing_file,
+    test_on_exit_requeue_failure_leaves_sqlite_entry_processing,
     test_on_exit_export_uuid_noisy_stdout,
     test_core_import_deterministic,
     test_on_modify_spawn_intent_id_in_entry,

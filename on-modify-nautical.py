@@ -957,25 +957,6 @@ _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
 
 
 
-def _queue_locked(fn):
-    """Run `fn()` under a bounded non-blocking lock. Returns True on success."""
-    if not _require_core():
-        return False
-    t0 = _time.perf_counter()
-    with core.safe_lock(
-        _SPAWN_QUEUE_LOCK,
-        retries=_SPAWN_LOCK_RETRIES,
-        sleep_base=_SPAWN_LOCK_SLEEP_BASE,
-        jitter=_SPAWN_LOCK_SLEEP_BASE,
-        mkdir=True,
-        stale_after=_SPAWN_LOCK_STALE_AFTER,
-    ) as acquired:
-        if not acquired:
-            _diag(f"queue lock not acquired after {int((_time.perf_counter() - t0) * 1000)}ms: {_SPAWN_QUEUE_LOCK}")
-            return False
-        fn()
-        return True
-
 def _fsync_dir(path: Path) -> None:
     try:
         fd = os.open(str(path), os.O_DIRECTORY)
@@ -990,30 +971,6 @@ def _fsync_dir(path: Path) -> None:
             os.close(fd)
         except Exception:
             pass
-
-
-def _spawn_queue_jsonl_has_data() -> bool:
-    try:
-        return _SPAWN_QUEUE_PATH.exists() and _SPAWN_QUEUE_PATH.stat().st_size > 0
-    except Exception:
-        return False
-
-
-def _spawn_queue_compat_touch_jsonl() -> None:
-    # Keep the legacy queue file around for mixed-version tooling/tests.
-    try:
-        _SPAWN_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    try:
-        fd = os.open(str(_SPAWN_QUEUE_PATH), os.O_CREAT | os.O_WRONLY, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        os.close(fd)
-    except Exception:
-        pass
 
 
 def _spawn_queue_db_size_bytes() -> int:
@@ -1033,13 +990,7 @@ def _spawn_queue_db_size_bytes() -> int:
 
 
 def _spawn_queue_total_bytes() -> int:
-    total = _spawn_queue_db_size_bytes()
-    try:
-        if _SPAWN_QUEUE_PATH.exists():
-            total += _SPAWN_QUEUE_PATH.stat().st_size
-    except Exception:
-        pass
-    return total
+    return _spawn_queue_db_size_bytes()
 
 
 def _spawn_queue_warn_growth(queue_path: Path, size: int) -> None:
@@ -1135,80 +1086,6 @@ def _spawn_queue_db_init(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _enqueue_deferred_spawn_jsonl(task_obj: dict) -> tuple[bool, str]:
-    """Append one task JSON object to the legacy spawn queue (JSONL, UTF-8)."""
-    try:
-        line = json.dumps(task_obj, ensure_ascii=False, separators=(",", ":")) + "\n"
-    except Exception:
-        line = json.dumps(task_obj) + "\n"
-    put_ok = True
-    fail_reason = ""
-
-    def _put():
-        nonlocal put_ok, fail_reason
-        try:
-            _SPAWN_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        try:
-            if _SPAWN_QUEUE_PATH.exists():
-                try:
-                    size = _SPAWN_QUEUE_PATH.stat().st_size
-                    if size > _SPAWN_QUEUE_MAX_BYTES:
-                        put_ok = False
-                        fail_reason = "spawn queue full"
-                        _write_dead_letter(task_obj, "spawn queue full")
-                        _diag("spawn queue full; intent dropped")
-                        return
-                except Exception:
-                    pass
-            fd = os.open(str(_SPAWN_QUEUE_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            with os.fdopen(fd, "a", encoding="utf-8") as f:
-                f.write(line)
-                if _DURABLE_QUEUE:
-                    try:
-                        f.flush()
-                        os.fsync(f.fileno())
-                        _fsync_dir(_SPAWN_QUEUE_PATH.parent)
-                    except Exception:
-                        pass
-        except Exception as e:
-            put_ok = False
-            fail_reason = f"spawn queue write failed: {e}"
-            _write_dead_letter(task_obj, f"spawn queue write failed: {e}")
-            _diag(f"spawn queue write failed: {e}")
-
-    ok = _queue_locked(_put)
-    if not ok:
-        _write_dead_letter(task_obj, "queue lock busy")
-        _diag("queue lock busy; intent dead-lettered")
-        _diag_count("queue_lock_failures")
-        global _WARNED_SPAWN_QUEUE_LOCK
-        if not _WARNED_SPAWN_QUEUE_LOCK:
-            _WARNED_SPAWN_QUEUE_LOCK = True
-            _panel(
-                "⚠ Spawn queue busy",
-                [
-                    ("Queue", str(_SPAWN_QUEUE_PATH)),
-                    ("Hint", "Queue lock busy; spawn intent not queued."),
-                ],
-                    kind="warning",
-                )
-        return False, "queue lock busy"
-    if not put_ok:
-        return False, (fail_reason or "spawn queue write failed")
-    try:
-        if _SPAWN_QUEUE_PATH.exists():
-            _spawn_queue_warn_growth(_SPAWN_QUEUE_PATH, _SPAWN_QUEUE_PATH.stat().st_size)
-    except Exception:
-        pass
-    return True, ""
-
-
 def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
     if _SPAWN_QUEUE_MAX_BYTES > 0:
         try:
@@ -1265,7 +1142,6 @@ def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
                 os.chmod(shm, 0o600)
         except Exception:
             pass
-        _spawn_queue_compat_touch_jsonl()
         _spawn_queue_warn_growth(_SPAWN_QUEUE_DB_PATH, _spawn_queue_db_size_bytes())
         return True, ""
     except sqlite3.OperationalError as e:
@@ -1297,16 +1173,7 @@ def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
 
 
 def _enqueue_deferred_spawn(task_obj: dict) -> tuple[bool, str]:
-    # Keep append-order compatibility while a legacy JSONL backlog exists.
-    if _spawn_queue_jsonl_has_data():
-        return _enqueue_deferred_spawn_jsonl(task_obj)
-    ok, reason = _enqueue_deferred_spawn_sqlite(task_obj)
-    if ok:
-        return True, ""
-    # Fallback for environments without sqlite support.
-    if reason == "spawn queue db unavailable":
-        return _enqueue_deferred_spawn_jsonl(task_obj)
-    return False, reason
+    return _enqueue_deferred_spawn_sqlite(task_obj)
 
 
 def _write_dead_letter(entry: dict, reason: str) -> None:

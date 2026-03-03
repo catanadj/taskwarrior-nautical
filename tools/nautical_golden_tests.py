@@ -3346,6 +3346,48 @@ def test_on_exit_parent_nextlink_changed_dead_letter():
         expect(calls["import"] == 0, "child import should not run when parent CAS precheck fails")
 
 
+def test_on_exit_parent_update_lock_busy_requeues():
+    """on-exit should requeue (not dead-letter) when parent nextLink lock is busy."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_parent_lock_busy_requeue_test")
+    if not hasattr(mod, "_drain_queue"):
+        raise AssertionError("on-exit hook does not expose drain helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        child_uuid = "00000000-0000-0000-0000-000000000555"
+        parent_uuid = "00000000-0000-0000-0000-000000000111"
+        entry = {
+            "spawn_intent_id": "si_parent_lock_busy",
+            "parent_uuid": parent_uuid,
+            "parent_nextlink": "",
+            "child_short": child_uuid[:8],
+            "child": {"uuid": child_uuid},
+        }
+        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+        # Precheck passes and child is considered present; contention happens at parent update lock.
+        mod._parent_nextlink_state = lambda *_args, **_kwargs: ("ok", "")
+        mod._export_uuid = lambda uuid_str: {"exists": True, "retryable": False, "err": "", "obj": {"uuid": uuid_str}}
+
+        @contextlib.contextmanager
+        def _busy_parent_lock(_parent_uuid: str):
+            yield False
+
+        mod._lock_parent_nextlink = _busy_parent_lock
+        stats = mod._drain_queue()
+        expect(stats.get("requeued") == 1, f"expected one requeued entry, got: {stats}")
+        expect(stats.get("errors") == 0, f"lock-busy parent update should be retryable: {stats}")
+        expect(not mod._DEAD_LETTER_PATH.exists(), "lock-busy parent update should not dead-letter")
+
+
 def test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter():
     """on-exit should count dead-lettered retries when post-import confirm stays locked."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -4744,6 +4786,7 @@ TESTS = [
     test_on_modify_panel_fallback,
     test_on_exit_import_error_but_child_exists,
     test_on_exit_parent_nextlink_changed_dead_letter,
+    test_on_exit_parent_update_lock_busy_requeues,
     test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter,
     test_on_exit_post_import_parent_conflict_cleans_orphan,
     test_on_exit_idempotent_skip_for_finalized_intent,

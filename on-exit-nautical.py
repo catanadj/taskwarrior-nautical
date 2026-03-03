@@ -530,6 +530,28 @@ def _lock_intent_log():
         yield acquired
 
 
+def _parent_nextlink_lock_path(parent_uuid: str) -> Path:
+    raw = (parent_uuid or "").strip().lower()
+    safe = "".join(ch for ch in raw if ch.isalnum())
+    if not safe:
+        safe = "unknown"
+    if len(safe) > 64:
+        safe = safe[:64]
+    return TW_DATA_DIR / f".nautical_parent_nextlink.{safe}.lock"
+
+
+@contextmanager
+def _lock_parent_nextlink(parent_uuid: str):
+    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
+    with lock_fn(
+        _parent_nextlink_lock_path(parent_uuid),
+        retries=_QUEUE_LOCK_RETRIES,
+        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
+        stale_after=_QUEUE_LOCK_STALE_AFTER,
+    ) as acquired:
+        yield acquired
+
+
 def _load_finalized_intents() -> tuple[set[str], bool]:
     """Return finalized spawn_intent_id set, with best-effort compaction."""
     final_states: dict[str, str] = {}
@@ -1241,18 +1263,23 @@ def _import_child(obj: dict) -> tuple[bool, str]:
     return False, last_err
 
 def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[bool, str]:
-    state, msg = _parent_nextlink_state(parent_uuid, child_short, expected_prev)
-    if state == "ok":
-        ok, _out, err = _run_task(
-            _task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", f"uuid:{parent_uuid}", "modify", f"nextLink:{child_short}"],
-            timeout=_TASK_TIMEOUT_MODIFY,
-            retries=_TASK_RETRIES_MODIFY,
-            retry_delay=_TASK_RETRY_DELAY,
-        )
-        return ok, err or ""
-    if state == "already":
-        return True, ""
-    return False, msg
+    if not parent_uuid or not child_short:
+        return False, "missing parent or child"
+    with _lock_parent_nextlink(parent_uuid) as locked:
+        if not locked:
+            return False, "parent lock busy"
+        state, msg = _parent_nextlink_state(parent_uuid, child_short, expected_prev)
+        if state == "ok":
+            ok, _out, err = _run_task(
+                _task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", f"uuid:{parent_uuid}", "modify", f"nextLink:{child_short}"],
+                timeout=_TASK_TIMEOUT_MODIFY,
+                retries=_TASK_RETRIES_MODIFY,
+                retry_delay=_TASK_RETRY_DELAY,
+            )
+            return ok, err or ""
+        if state == "already":
+            return True, ""
+        return False, msg
 
 
 def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[str, str]:
@@ -1484,7 +1511,7 @@ def _drain_queue() -> dict:
                     _diag(f"parent update failed (intent={spawn_intent_id}): {parent_uuid}")
                 else:
                     _diag(f"parent update failed: {parent_uuid}")
-                if err == "parent export locked" or _is_lock_error(err):
+                if err in {"parent export locked", "parent lock busy"} or _is_lock_error(err):
                     if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
                         _dead_letter(entry, "exceeded retry budget")
                     else:

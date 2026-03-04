@@ -90,10 +90,13 @@ _IMPORT_T0 = time.perf_counter()
 
 core = None
 _CORE_READY = False
+_CORE_IMPORT_ERROR: Exception | None = None
+_CORE_IMPORT_TARGET: Path | None = None
 try:
     pyfile = _CORE_BASE / "nautical_core.py"
     pkgini = _CORE_BASE / "nautical_core" / "__init__.py"
     target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+    _CORE_IMPORT_TARGET = target
     if target:
         spec = importlib.util.spec_from_file_location("nautical_core", target)
         if spec and spec.loader:
@@ -101,13 +104,22 @@ try:
             sys.modules["nautical_core"] = module
             spec.loader.exec_module(module)
             core = module
-except Exception:
+except Exception as e:
     core = None
+    _CORE_IMPORT_ERROR = e
 
 def _resolve_task_data_context() -> tuple[str, bool]:
     resolver = getattr(core, "resolve_task_data_context", None) if core is not None else None
     if not callable(resolver):
-        raise RuntimeError("nautical_core.resolve_task_data_context is required")
+        if core is not None:
+            raise RuntimeError("nautical_core.resolve_task_data_context is required")
+        if _CORE_IMPORT_ERROR is not None:
+            target = str(_CORE_IMPORT_TARGET or (_CORE_BASE / "nautical_core.py"))
+            raise RuntimeError(
+                f"Failed to import nautical_core from {target}: "
+                f"{type(_CORE_IMPORT_ERROR).__name__}: {_CORE_IMPORT_ERROR}"
+            ) from _CORE_IMPORT_ERROR
+        raise ModuleNotFoundError("nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH.")
     data_dir, use_rc, _source = resolver(
         argv=sys.argv[1:],
         env=os.environ,

@@ -287,14 +287,27 @@ def _trusted_core_base(default_base: Path) -> Path:
 
 _CORE_BASE = _trusted_core_base(TW_DIR)
 
+
+def _core_target_from_base(base: Path) -> Path | None:
+    try:
+        if base.is_file():
+            if base.name == "nautical_core.py":
+                return base
+            if base.name == "__init__.py" and base.parent.name == "nautical_core":
+                return base
+            return None
+    except Exception:
+        return None
+    pyfile = base / "nautical_core.py"
+    pkgini = base / "nautical_core" / "__init__.py"
+    return pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+
 core = None
 _CORE_READY = False
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
 try:
-    pyfile = _CORE_BASE / "nautical_core.py"
-    pkgini = _CORE_BASE / "nautical_core" / "__init__.py"
-    target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+    target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
     if target:
         spec = importlib.util.spec_from_file_location("nautical_core", target)
@@ -318,7 +331,10 @@ def _resolve_task_data_context() -> tuple[str, bool]:
                 f"Failed to import nautical_core from {target}: "
                 f"{type(_CORE_IMPORT_ERROR).__name__}: {_CORE_IMPORT_ERROR}"
             ) from _CORE_IMPORT_ERROR
-        raise ModuleNotFoundError("nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH.")
+        raise ModuleNotFoundError(
+            f"nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH. "
+            f"(resolved base: {_CORE_BASE})"
+        )
     data_dir, use_rc, _source = resolver(
         argv=sys.argv[1:],
         env=os.environ,
@@ -359,9 +375,7 @@ def _load_core() -> None:
         return
     if core is None:
         base = _CORE_BASE
-        pyfile = base / "nautical_core.py"
-        pkgini = base / "nautical_core" / "__init__.py"
-        target = pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+        target = _core_target_from_base(base)
         if target:
             spec = importlib.util.spec_from_file_location("nautical_core", target)
             if spec and spec.loader:
@@ -370,7 +384,10 @@ def _load_core() -> None:
                 spec.loader.exec_module(module)
                 core = module
     if core is None:
-        msg = "nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH."
+        msg = (
+            "nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH. "
+            f"(resolved base: {_CORE_BASE})"
+        )
         raise ModuleNotFoundError(msg)
     try:
         core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")

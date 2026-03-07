@@ -8,6 +8,7 @@ from __future__ import annotations
 import os, re, sys
 import copy
 import math
+from types import MappingProxyType
 from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache, wraps
 from calendar import month_name
@@ -123,8 +124,15 @@ def _path_safety_error(path_value: str, *, expect_dir: bool = True) -> str | Non
                     return f"owner mismatch (uid {st.st_uid} != {uid})"
         if _world_writable_without_sticky(st.st_mode):
             return "world-writable path without sticky bit"
-        if not os.access(probe, os.W_OK | os.X_OK):
-            return "path is not writable/searchable"
+        if expect_dir:
+            if not os.access(probe, os.W_OK | os.X_OK):
+                return "path is not writable/searchable"
+        else:
+            if target_exists and not os.path.isdir(ap):
+                if not os.access(ap, os.R_OK):
+                    return "path is not readable"
+            elif not os.access(probe, os.W_OK | os.X_OK):
+                return "parent path is not writable/searchable"
     except Exception as e:
         return str(e)
     return None
@@ -165,6 +173,17 @@ def _read_toml(path: str) -> dict:
     env_path = os.environ.get("NAUTICAL_CONFIG") or ""
     env_abs = os.path.abspath(os.path.expanduser(env_path)) if env_path else ""
     is_env_path = bool(env_abs and path == env_abs)
+    trust_config_path = _env_flag_true("NAUTICAL_TRUST_CONFIG_PATH")
+
+    if not trust_config_path:
+        safety_err = _path_safety_error(path, expect_dir=False)
+        if safety_err:
+            if os.environ.get("NAUTICAL_DIAG") == "1":
+                try:
+                    sys.stderr.write(f"[nautical] Ignoring unsafe config path '{path}': {safety_err}\n")
+                except Exception:
+                    pass
+            return {}
 
     # File exists, but cannot parse TOML (Python < 3.11 and no tomli)
     if tomllib is None:
@@ -871,10 +890,11 @@ def _warn_toml_parse_error(config_path: str, err: Exception) -> None:
 def _get_config() -> dict:
     global _CONF_CACHE
     if _CONF_CACHE is None:
-        _CONF_CACHE = _load_config()
-    return _CONF_CACHE
+        # Cache an internal mutable copy, but never expose it directly.
+        _CONF_CACHE = copy.deepcopy(_load_config())
+    return copy.deepcopy(_CONF_CACHE)
 
-_CONF = _get_config()
+_CONF = MappingProxyType(_get_config())
 
 def _conf_raw(key: str):
     return _CONF.get(key)

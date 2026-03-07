@@ -1090,13 +1090,20 @@ def _take_queue_entries_sqlite() -> list[dict]:
             params = (_QUEUE_MAX_LINES,)
         rows = list(conn.execute(q, params))
         if rows:
-            ids = [int(r["id"]) for r in rows]
-            ph = ",".join("?" for _ in ids)
-            conn.execute(
-                f"UPDATE queue_entries SET state='processing', claim_token=?, claimed_at=?, updated_at=? "
-                f"WHERE id IN ({ph})",
-                (token, now, now, *ids),
-            )
+            ids: list[int] = []
+            for r in rows:
+                try:
+                    rid = int(r["id"])
+                except Exception:
+                    continue
+                if rid > 0:
+                    ids.append(rid)
+            if ids:
+                conn.executemany(
+                    "UPDATE queue_entries SET state='processing', claim_token=?, claimed_at=?, updated_at=? "
+                    "WHERE id=?",
+                    [(token, now, now, rid) for rid in ids],
+                )
         conn.commit()
     except sqlite3.OperationalError as e:
         try:
@@ -1140,7 +1147,14 @@ def _take_queue_entries_sqlite() -> list[dict]:
 
 
 def _ack_queue_entries_sqlite(entry_ids: list[int]) -> bool:
-    ids = [int(i) for i in (entry_ids or []) if i]
+    ids: list[int] = []
+    for raw in (entry_ids or []):
+        try:
+            rid = int(raw)
+        except Exception:
+            continue
+        if rid > 0:
+            ids.append(rid)
     if not ids:
         return True
     conn = _queue_db_connect()
@@ -1149,8 +1163,10 @@ def _ack_queue_entries_sqlite(entry_ids: list[int]) -> bool:
     try:
         _queue_db_init(conn)
         conn.execute("BEGIN IMMEDIATE")
-        ph = ",".join("?" for _ in ids)
-        conn.execute(f"DELETE FROM queue_entries WHERE id IN ({ph})", ids)
+        conn.executemany(
+            "DELETE FROM queue_entries WHERE id=?",
+            [(rid,) for rid in ids],
+        )
         conn.commit()
         conn.close()
         return True

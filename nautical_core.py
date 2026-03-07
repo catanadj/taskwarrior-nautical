@@ -62,6 +62,98 @@ _CACHE_LOCK_SLEEP_BASE = 0.05
 _CACHE_LOCK_JITTER = 0.0
 _CACHE_LOCK_STALE_AFTER = 300.0
 
+def _env_flag_true(name: str, env_map: dict | None = None) -> bool:
+    src = env_map if env_map is not None else os.environ
+    try:
+        raw = src.get(name, "") if hasattr(src, "get") else ""
+    except Exception:
+        raw = ""
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _normalized_abspath(path_value: str) -> str:
+    return os.path.abspath(os.path.expanduser(str(path_value or "").strip()))
+
+
+def _nearest_existing_dir(path_value: str) -> str | None:
+    cur = _normalized_abspath(path_value)
+    while cur:
+        if os.path.isdir(cur):
+            return cur
+        parent = os.path.dirname(cur)
+        if not parent or parent == cur:
+            return None
+        cur = parent
+    return None
+
+
+def _world_writable_without_sticky(mode: int) -> bool:
+    return bool(mode & 0o002) and not bool(mode & 0o1000)
+
+
+def _path_safety_error(path_value: str, *, expect_dir: bool = True) -> str | None:
+    """
+    Return a short error string when path is unsafe for filesystem operations.
+
+    Rules:
+      - Existing target dirs must be owned by current user (when getuid is available).
+      - Existing target/ancestor must not be world-writable unless sticky bit is set.
+      - Path must resolve to / under a writable+searchable existing ancestor.
+    """
+    ap = _normalized_abspath(path_value)
+    if not ap:
+        return "empty path"
+    try:
+        target_exists = os.path.exists(ap)
+        if target_exists:
+            if expect_dir and not os.path.isdir(ap):
+                return "not a directory"
+            probe = ap
+        else:
+            probe = _nearest_existing_dir(ap)
+            if not probe:
+                return "no existing parent directory"
+
+        st = os.stat(probe)
+        if target_exists:
+            uid_fn = getattr(os, "getuid", None)
+            if callable(uid_fn):
+                uid = uid_fn()
+                if st.st_uid != uid:
+                    return f"owner mismatch (uid {st.st_uid} != {uid})"
+        if _world_writable_without_sticky(st.st_mode):
+            return "world-writable path without sticky bit"
+        if not os.access(probe, os.W_OK | os.X_OK):
+            return "path is not writable/searchable"
+    except Exception as e:
+        return str(e)
+    return None
+
+
+def _validated_user_dir(
+    path_value: str,
+    *,
+    label: str,
+    trust_env: str = "",
+    env_map: dict | None = None,
+    warn_on_error: bool = True,
+) -> str:
+    ap = _normalized_abspath(path_value)
+    if not ap:
+        return ""
+    if trust_env and _env_flag_true(trust_env, env_map):
+        return ap
+    err = _path_safety_error(ap, expect_dir=True)
+    if err:
+        if warn_on_error and _env_flag_true("NAUTICAL_DIAG", env_map):
+            try:
+                sys.stderr.write(f"[nautical] Ignoring unsafe {label} '{path_value}': {err}\n")
+            except Exception:
+                pass
+        return ""
+    return ap
+
+
 def _read_toml(path: str) -> dict:
     # Fast path: missing file => no config here
     try:
@@ -1855,16 +1947,34 @@ def _cache_dir() -> str:
 
     candidates = []
     if ANCHOR_CACHE_DIR_OVERRIDE:
-        candidates.append(os.path.expanduser(ANCHOR_CACHE_DIR_OVERRIDE))
+        override = _validated_user_dir(
+            ANCHOR_CACHE_DIR_OVERRIDE,
+            label="anchor_cache_dir",
+            trust_env="NAUTICAL_TRUST_CACHE_PATH",
+        )
+        if override:
+            candidates.append(override)
 
     here = os.path.dirname(os.path.abspath(__file__))
     candidates.append(os.path.join(here, ".nautical-cache"))
 
     taskdata = os.environ.get("TASKDATA")
     if taskdata:
-        candidates.append(os.path.join(os.path.expanduser(taskdata), ".nautical-cache"))
+        safe_taskdata = _validated_user_dir(
+            taskdata,
+            label="TASKDATA",
+            trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
+        )
+        if safe_taskdata:
+            candidates.append(os.path.join(safe_taskdata, ".nautical-cache"))
 
-    candidates.append(_nautical_cache_dir())
+    safe_default_cache = _validated_user_dir(
+        _nautical_cache_dir(),
+        label="XDG cache dir",
+        trust_env="NAUTICAL_TRUST_CACHE_PATH",
+    )
+    if safe_default_cache:
+        candidates.append(safe_default_cache)
     if os.environ.get("NAUTICAL_ALLOW_TMP_CACHE") == "1":
         candidates.append(os.path.join(tempfile.gettempdir(), "nautical-cache"))
 
@@ -2143,9 +2253,23 @@ def resolve_task_data_context(
     explicit = taskdata_arg or taskdata_env
     if explicit:
         source = "argv" if taskdata_arg else "env"
-        return os.path.expanduser(str(explicit)), True, source
+        safe_explicit = _validated_user_dir(
+            str(explicit),
+            label=("rc.data.location" if taskdata_arg else "TASKDATA"),
+            trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
+            env_map=env_map,
+        )
+        if safe_explicit:
+            return safe_explicit, True, source
     base = str(tw_dir or "~/.task")
-    return os.path.expanduser(base), False, "fallback"
+    safe_fallback = _validated_user_dir(
+        base,
+        label="fallback task data dir",
+        trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
+        env_map=env_map,
+        warn_on_error=False,
+    )
+    return (safe_fallback or _normalized_abspath(base)), False, "fallback"
 
 
 def _redact_dict(data: dict, redact_keys: frozenset) -> dict:
@@ -2178,8 +2302,21 @@ def diag_log_redact(msg: str, redact_keys: frozenset | None = None) -> str:
 def _diag_log_path(data_dir: str | None = None) -> str:
     base = data_dir or os.environ.get("TASKDATA")
     if base:
-        return os.path.join(os.path.abspath(os.path.expanduser(base)), ".nautical_diag.jsonl")
-    return os.path.join(os.path.expanduser("~/.task"), ".nautical_diag.jsonl")
+        safe_base = _validated_user_dir(
+            str(base),
+            label="diag data dir",
+            trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
+            warn_on_error=False,
+        )
+        if safe_base:
+            return os.path.join(safe_base, ".nautical_diag.jsonl")
+    safe_default = _validated_user_dir(
+        "~/.task",
+        label="diag fallback dir",
+        trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
+        warn_on_error=False,
+    )
+    return os.path.join((safe_default or _normalized_abspath("~/.task")), ".nautical_diag.jsonl")
 
 
 def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:

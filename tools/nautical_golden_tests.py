@@ -1344,6 +1344,56 @@ def test_core_resolve_task_data_context_precedence():
     expect(not bool(use3), "fallback should not enable rc.data.location")
     expect(src3 == "fallback", f"expected fallback source, got {src3!r}")
 
+def test_core_resolve_task_data_context_rejects_unsafe_world_writable_dir():
+    """core resolver should reject explicit world-writable data dirs by default."""
+    if os.name == "nt":
+        expect(True, "skip on non-POSIX")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        unsafe = Path(td) / "unsafe-data-dir"
+        unsafe.mkdir()
+        try:
+            os.chmod(unsafe, 0o777)
+        except Exception:
+            expect(True, "chmod unavailable; skip")
+            return
+        fallback = Path(td) / "safe-fallback"
+        got, use_rc, src = core.resolve_task_data_context(
+            argv=["api:2", "command:modify", f"data:{unsafe}"],
+            env={},
+            tw_dir=str(fallback),
+        )
+        expect(src == "fallback", f"unsafe explicit dir should fall back, got source={src!r}")
+        expect(not bool(use_rc), "fallback path should disable rc.data.location")
+        expect(str(got).endswith("/safe-fallback"), f"unexpected fallback path: {got!r}")
+
+
+def test_core_resolve_task_data_context_trust_override_allows_explicit_dir():
+    """core resolver trust override should allow explicit paths without safety checks."""
+    if os.name == "nt":
+        expect(True, "skip on non-POSIX")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        unsafe = Path(td) / "unsafe-data-dir"
+        unsafe.mkdir()
+        try:
+            os.chmod(unsafe, 0o777)
+        except Exception:
+            expect(True, "chmod unavailable; skip")
+            return
+        got, use_rc, src = core.resolve_task_data_context(
+            argv=["api:2", "command:modify", f"data:{unsafe}"],
+            env={"NAUTICAL_TRUST_TASKDATA_PATH": "1"},
+            tw_dir=str(Path(td) / "safe-fallback"),
+        )
+        expect(src == "argv", f"trusted explicit dir should keep argv source, got {src!r}")
+        expect(bool(use_rc), "trusted explicit dir should keep rc.data.location enabled")
+        expect(
+            got == os.path.abspath(str(unsafe)),
+            f"trusted explicit dir mismatch: got={got!r} want={os.path.abspath(str(unsafe))!r}",
+        )
+
+
 def _assert_hook_requires_core_data_context(hook_name: str, module_name: str):
     hook = _find_hook_file(hook_name)
     prev_core = os.environ.get("NAUTICAL_CORE_PATH")
@@ -4805,6 +4855,8 @@ TESTS = [
     test_on_modify_data_arg_overrides_taskdata_env,
     test_on_add_data_arg_overrides_taskdata_env,
     test_core_resolve_task_data_context_precedence,
+    test_core_resolve_task_data_context_rejects_unsafe_world_writable_dir,
+    test_core_resolve_task_data_context_trust_override_allows_explicit_dir,
     test_on_add_requires_core_data_context_helper,
     test_on_modify_requires_core_data_context_helper,
     test_on_exit_requires_core_data_context_helper,

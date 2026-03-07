@@ -959,9 +959,11 @@ def _safe_parse_datetime(s, field_name) -> tuple[datetime | None, str | None]:
             return (None, f"{field_name}: Unrecognized datetime format '{s}'")
         return (dt, None)
     except ValueError as e:
-        return (None, f"{field_name}: {str(e)}")
+        _diag(f"{field_name} parse value error: {e}")
+        return (None, f"{field_name}: Invalid datetime value")
     except Exception as e:
-        return (None, f"{field_name}: Unexpected parsing error: {str(e)}")
+        _diag(f"{field_name} parse unexpected error: {e}")
+        return (None, f"{field_name}: Unexpected parsing error")
 
 
 def _validate_no_legacy_colon_ranges(expr: str) -> tuple[bool, str | None]:
@@ -1015,9 +1017,11 @@ def _safe_parse_duration(s, field_name) -> tuple[timedelta | None, str | None]:
             )
         return (td, None)
     except ValueError as e:
-        return (None, f"{field_name}: {str(e)}")
+        _diag(f"{field_name} duration parse value error: {e}")
+        return (None, f"{field_name}: Invalid duration value")
     except Exception as e:
-        return (None, f"{field_name}: Unexpected parsing error: {str(e)}")
+        _diag(f"{field_name} duration parse unexpected error: {e}")
+        return (None, f"{field_name}: Unexpected parsing error")
 
 
 def _validate_anchor_syntax_strict(expr) -> tuple[bool, str | None]:
@@ -1116,7 +1120,8 @@ def main():
     try:
         _load_core()
     except Exception as e:
-        _fail_and_exit("Hook misconfigured", str(e))
+        _diag(f"core load failed: {e}")
+        _fail_and_exit("Hook misconfigured", "Failed to initialize nautical core")
     try:
         if getattr(prof, "enabled", False) and _IMPORT_MS is not None:
             prof.import_ms = _IMPORT_MS

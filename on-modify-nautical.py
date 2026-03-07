@@ -534,7 +534,8 @@ def _read_two():
         try:
             obj, end = decoder.raw_decode(raw, idx)
         except Exception as e:
-            _fail_and_exit("Protocol error", f"Invalid JSON input: {e}")
+            _diag(f"json decode error: {e}")
+            _fail_and_exit("Protocol error", "Invalid JSON input")
         objs.append(obj)
         if end <= idx:
             tries += 1
@@ -2484,11 +2485,14 @@ def _safe_parse_datetime(dt_str: str) -> tuple[datetime | None, str | None]:
             return (None, f"Unrecognized datetime format '{dt_str}'")
         return (dt, None)
     except ValueError as e:
-        return (None, f"DateTime parsing error: {str(e)}")
+        _diag(f"datetime parse value error: {e}")
+        return (None, "DateTime parsing error")
     except TypeError as e:
-        return (None, f"DateTime type error: {str(e)}")
+        _diag(f"datetime parse type error: {e}")
+        return (None, "DateTime type error")
     except Exception as e:
-        return (None, f"Unexpected error parsing datetime '{dt_str}': {str(e)}")
+        _diag(f"datetime parse unexpected error: {e}")
+        return (None, "Unexpected error parsing datetime")
 
 
 def _validate_anchor_mode(mode_str: str) -> tuple[str, str | None]:
@@ -2525,11 +2529,14 @@ def _safe_parse_cp_duration(duration_str: str) -> tuple[timedelta | None, str | 
             )
         return (td, None)
     except ValueError as e:
-        return (None, f"Duration parsing error: {str(e)}")
+        _diag(f"duration parse value error: {e}")
+        return (None, "Duration parsing error")
     except TypeError as e:
-        return (None, f"Duration type error: {str(e)}")
+        _diag(f"duration parse type error: {e}")
+        return (None, "Duration type error")
     except Exception as e:
-        return (None, f"Unexpected error parsing duration '{duration_str}': {str(e)}")
+        _diag(f"duration parse unexpected error: {e}")
+        return (None, "Unexpected error parsing duration")
 
 
 def _compute_anchor_child_due(parent: dict):
@@ -4014,7 +4021,8 @@ def main():
     try:
         _load_core()
     except Exception as e:
-        _fail_and_exit("Hook misconfigured", str(e))
+        _diag(f"core load failed: {e}")
+        _fail_and_exit("Hook misconfigured", "Failed to initialize nautical core")
 
 
     # --- pre-flight: validate on simple modify (not completion) ---
@@ -4113,7 +4121,8 @@ def main():
         except ValueError as e:
             _fail_and_exit("Invalid CP", str(e))
         except Exception as e:
-            _fail_and_exit("CP parsing error", f"Unexpected error: {e}")
+            _diag(f"cp parse unexpected error: {e}")
+            _fail_and_exit("CP parsing error", "Unexpected error while parsing cp")
 
         # Deep checks only if fields changed
         if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):

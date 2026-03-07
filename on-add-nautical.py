@@ -1033,7 +1033,11 @@ def _validate_anchor_syntax_strict(expr) -> tuple[bool, str | None]:
         core.validate_anchor_expr_strict(expr)
         return True, None
     except Exception as e:
-        return False, str(e)
+        parse_err_t = getattr(core, "ParseError", None)
+        if parse_err_t is not None and isinstance(e, parse_err_t):
+            return False, str(e)
+        _diag(f"anchor validation unexpected error: {e}")
+        return False, "anchor syntax error"
 
 
 def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
@@ -1264,7 +1268,8 @@ def main():
         try:
             dnf = _validate_anchor_expr_cached(anchor_str)
         except Exception as e:
-            _fail_and_exit("Invalid anchor", f"anchor syntax error: {e}")
+            _diag(f"anchor cache/validation failed: {e}")
+            _fail_and_exit("Invalid anchor", "anchor syntax error")
         prof.add_ms('anchor:dnf', (time.perf_counter() - _t0) * 1000.0)
 
 

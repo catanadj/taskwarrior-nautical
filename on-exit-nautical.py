@@ -1772,9 +1772,10 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as e:
-        _emit_exit_feedback(f"[nautical] on-exit: unexpected error: {e}")
+        _diag(f"on-exit unexpected error: {e}")
+        _emit_exit_feedback("[nautical] on-exit: unexpected error")
         try:
-            _write_dead_letter({"error": str(e)}, "on-exit exception")
+            _write_dead_letter({"error": "unexpected_error"}, "on-exit exception")
         except Exception:
             pass
         raise SystemExit(1)

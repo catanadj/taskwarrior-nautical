@@ -4250,9 +4250,10 @@ def main():
         _print_task(new)
         return
     except Exception as e:
+        _diag(f"compute next due failed: {e}")
         _panel(
             "⛔ Chain error",
-            [("Reason", f"Could not compute next due: {str(e)}")],
+            [("Reason", "Could not compute next due")],
             kind="error",
         )
         _print_task(new)
@@ -4352,9 +4353,10 @@ def main():
             new, child_due, next_no, parent_short, kind, cpmax, until_dt
         )
     except Exception as e:
+        _diag(f"build child failed: {e}")
         _panel(
             "⛓ Chain error",
-            [("Reason", f"Failed to build next link ({e})")],
+            [("Reason", "Failed to build next link")],
             kind="error",
         )
         _print_task(new)
@@ -4380,9 +4382,10 @@ def main():
             _print_task(new)
             return
     except Exception as e:
+        _diag(f"spawn child failed: {e}")
         _panel(
             "⛓ Chain error",
-            [("Reason", f"Failed to spawn next link ({e})")],
+            [("Reason", "Failed to spawn next link")],
             kind="error",
         )
         _print_task(new)

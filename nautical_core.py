@@ -134,7 +134,7 @@ def _path_safety_error(path_value: str, *, expect_dir: bool = True) -> str | Non
             if callable(uid_fn):
                 uid = uid_fn()
                 if st.st_uid != uid:
-                    return f"owner mismatch (uid {st.st_uid} != {uid})"
+                    return "owner mismatch"
         if _world_writable_without_sticky(st.st_mode):
             return "world-writable path without sticky bit"
         if expect_dir:
@@ -327,7 +327,6 @@ def _warn_env_config_missing(env_path: str) -> None:
     ap = os.path.abspath(os.path.expanduser(env_path))
     print(
         "[nautical] NAUTICAL_CONFIG is set but the file is missing or invalid; defaults will be used.\n"
-        f"          NAUTICAL_CONFIG={env_path}\n"
         f"          Resolved path: {ap}\n"
         "          Fix: create the file at that path or update NAUTICAL_CONFIG.\n",
         file=sys.stderr,

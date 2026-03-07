@@ -3244,11 +3244,21 @@ def _rewrite_quarters_in_context(dnf):
                 return True
         return False
 
+    _MONTH_SELECTOR_MAX_LEN = 64
+
+    def _is_negative_ascii_int(tok: str) -> bool:
+        if len(tok) < 2 or tok[0] != "-":
+            return False
+        rest = tok[1:]
+        return rest.isascii() and rest.isdigit()
+
     def _is_start_month_selector(tok: str) -> bool:
         t = (tok or "").strip().lower()
+        if len(t) > _MONTH_SELECTOR_MAX_LEN:
+            raise ParseError("Monthly selector too long (max 64 characters).")
         if t in ("1", "1bd"):
             return True
-        m = _nth_weekday_re.match(t)
+        m = _safe_match(_nth_weekday_re, t, max_len=_MONTH_SELECTOR_MAX_LEN)
         if m:
             n_raw = (m.group(1) or "").lower()
             return n_raw in ("1", "1st")
@@ -3256,15 +3266,17 @@ def _rewrite_quarters_in_context(dnf):
 
     def _is_end_month_selector(tok: str) -> bool:
         t = (tok or "").strip().lower()
+        if len(t) > _MONTH_SELECTOR_MAX_LEN:
+            raise ParseError("Monthly selector too long (max 64 characters).")
         # -N
-        if re.fullmatch(r"-\d+", t):
+        if _is_negative_ascii_int(t):
             return True
         # -Nbd
-        m_bd = _bd_re.match(t)
+        m_bd = _safe_match(_bd_re, t, max_len=_MONTH_SELECTOR_MAX_LEN)
         if m_bd and int(m_bd.group(1)) < 0:
             return True
         # last-fri / -Nfri
-        m = _nth_weekday_re.match(t)
+        m = _safe_match(_nth_weekday_re, t, max_len=_MONTH_SELECTOR_MAX_LEN)
         if m:
             n_raw = (m.group(1) or "").lower()
             return n_raw == "last" or n_raw.startswith("-")
@@ -6634,6 +6646,8 @@ def _iter_y_segments(s: str):
 def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
     # Accept anchors wrapped in single or double quotes and normalize rand-month alias.
     s = _unwrap_quotes(expr or "").strip().lower()
+    if len(s) > 1024:
+        return ("Anchor expression too long (max 1024 characters).", [])
     # normalize 'mm-rand' → 'rand-mm' for consistency
     s = re.sub(r'\b(\d{2})-rand\b', r'rand-\1', s)
     # Allow bare month aliases: replace 'y:jun' with a canonical monthly window for linting

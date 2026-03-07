@@ -1394,6 +1394,59 @@ def test_core_resolve_task_data_context_trust_override_allows_explicit_dir():
         )
 
 
+def test_core_resolve_task_data_context_rejects_parent_traversal_segments():
+    """core resolver should reject explicit data paths containing '..' by default."""
+    d, use_rc, src = core.resolve_task_data_context(
+        argv=["api:2", "command:modify", "data:../nautical_bad_dir"],
+        env={},
+        tw_dir="/tmp/nautical_core_fallback_test",
+    )
+    expect(src == "fallback", f"parent traversal path should fall back, got source={src!r}")
+    expect(not bool(use_rc), "fallback should disable rc.data.location for rejected path")
+    expect(str(d).endswith("/tmp/nautical_core_fallback_test"), f"unexpected fallback path: {d!r}")
+
+
+def test_core_config_paths_rejects_parent_traversal_in_env():
+    """_config_paths should reject NAUTICAL_CONFIG values containing '..' by default."""
+    prev_cfg = os.environ.get("NAUTICAL_CONFIG")
+    prev_trust = os.environ.get("NAUTICAL_TRUST_CONFIG_PATH")
+    try:
+        os.environ["NAUTICAL_CONFIG"] = "../nautical.toml"
+        os.environ.pop("NAUTICAL_TRUST_CONFIG_PATH", None)
+        got = core._config_paths()
+    finally:
+        if prev_cfg is None:
+            os.environ.pop("NAUTICAL_CONFIG", None)
+        else:
+            os.environ["NAUTICAL_CONFIG"] = prev_cfg
+        if prev_trust is None:
+            os.environ.pop("NAUTICAL_TRUST_CONFIG_PATH", None)
+        else:
+            os.environ["NAUTICAL_TRUST_CONFIG_PATH"] = prev_trust
+    expect(got == [], f"expected NAUTICAL_CONFIG traversal path to be rejected, got: {got!r}")
+
+
+def test_core_config_paths_trust_override_allows_parent_traversal_in_env():
+    """_config_paths trust override should permit parent-segment NAUTICAL_CONFIG values."""
+    prev_cfg = os.environ.get("NAUTICAL_CONFIG")
+    prev_trust = os.environ.get("NAUTICAL_TRUST_CONFIG_PATH")
+    try:
+        os.environ["NAUTICAL_CONFIG"] = "../nautical.toml"
+        os.environ["NAUTICAL_TRUST_CONFIG_PATH"] = "1"
+        got = core._config_paths()
+    finally:
+        if prev_cfg is None:
+            os.environ.pop("NAUTICAL_CONFIG", None)
+        else:
+            os.environ["NAUTICAL_CONFIG"] = prev_cfg
+        if prev_trust is None:
+            os.environ.pop("NAUTICAL_TRUST_CONFIG_PATH", None)
+        else:
+            os.environ["NAUTICAL_TRUST_CONFIG_PATH"] = prev_trust
+    expect(len(got) == 1, f"expected trusted NAUTICAL_CONFIG to be returned, got: {got!r}")
+    expect(got[0] == os.path.abspath(os.path.expanduser("../nautical.toml")), f"unexpected trusted path: {got!r}")
+
+
 def _assert_hook_requires_core_data_context(hook_name: str, module_name: str):
     hook = _find_hook_file(hook_name)
     prev_core = os.environ.get("NAUTICAL_CORE_PATH")
@@ -4857,6 +4910,9 @@ TESTS = [
     test_core_resolve_task_data_context_precedence,
     test_core_resolve_task_data_context_rejects_unsafe_world_writable_dir,
     test_core_resolve_task_data_context_trust_override_allows_explicit_dir,
+    test_core_resolve_task_data_context_rejects_parent_traversal_segments,
+    test_core_config_paths_rejects_parent_traversal_in_env,
+    test_core_config_paths_trust_override_allows_parent_traversal_in_env,
     test_on_add_requires_core_data_context_helper,
     test_on_modify_requires_core_data_context_helper,
     test_on_exit_requires_core_data_context_helper,

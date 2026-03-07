@@ -72,6 +72,19 @@ def _env_flag_true(name: str, env_map: dict | None = None) -> bool:
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _path_input_error(path_value: str) -> str | None:
+    raw = str(path_value or "").strip()
+    if not raw:
+        return "empty path"
+    if "\x00" in raw:
+        return "NUL byte in path"
+    # Block traversal segments before normalization.
+    parts = raw.replace("\\", "/").split("/")
+    if any(p == ".." for p in parts):
+        return "parent traversal ('..') is not allowed"
+    return None
+
+
 def _normalized_abspath(path_value: str) -> str:
     return os.path.abspath(os.path.expanduser(str(path_value or "").strip()))
 
@@ -146,9 +159,16 @@ def _validated_user_dir(
     env_map: dict | None = None,
     warn_on_error: bool = True,
 ) -> str:
-    ap = _normalized_abspath(path_value)
-    if not ap:
+    raw = str(path_value or "").strip()
+    in_err = _path_input_error(raw)
+    if in_err:
+        if warn_on_error and _env_flag_true("NAUTICAL_DIAG", env_map):
+            try:
+                sys.stderr.write(f"[nautical] Ignoring unsafe {label} '{raw}': {in_err}\n")
+            except Exception:
+                pass
         return ""
+    ap = _normalized_abspath(raw)
     if trust_env and _env_flag_true(trust_env, env_map):
         return ap
     err = _path_safety_error(ap, expect_dir=True)
@@ -176,6 +196,14 @@ def _read_toml(path: str) -> dict:
     trust_config_path = _env_flag_true("NAUTICAL_TRUST_CONFIG_PATH")
 
     if not trust_config_path:
+        in_err = _path_input_error(path)
+        if in_err:
+            if os.environ.get("NAUTICAL_DIAG") == "1":
+                try:
+                    sys.stderr.write(f"[nautical] Ignoring unsafe config path '{path}': {in_err}\n")
+                except Exception:
+                    pass
+            return {}
         safety_err = _path_safety_error(path, expect_dir=False)
         if safety_err:
             if os.environ.get("NAUTICAL_DIAG") == "1":
@@ -212,7 +240,16 @@ def _read_toml(path: str) -> dict:
 def _config_paths() -> list[str]:
     env_path = os.environ.get("NAUTICAL_CONFIG")
     if env_path:
-        ap = os.path.abspath(os.path.expanduser(env_path))
+        raw_env = str(env_path).strip()
+        in_err = _path_input_error(raw_env)
+        if in_err and not _env_flag_true("NAUTICAL_TRUST_CONFIG_PATH"):
+            if os.environ.get("NAUTICAL_DIAG") == "1":
+                try:
+                    sys.stderr.write(f"[nautical] Ignoring unsafe NAUTICAL_CONFIG '{raw_env}': {in_err}\n")
+                except Exception:
+                    pass
+            return []
+        ap = os.path.abspath(os.path.expanduser(raw_env))
         if (not os.path.exists(ap)) or os.path.isdir(ap):
             _warn_env_config_missing(env_path)
         return [ap]
@@ -350,7 +387,14 @@ def _load_config() -> dict:
 
 
 def _nautical_cache_dir() -> str:
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    base_raw = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    safe_base = _validated_user_dir(
+        base_raw,
+        label="XDG_CACHE_HOME",
+        trust_env="NAUTICAL_TRUST_CACHE_PATH",
+        warn_on_error=False,
+    )
+    base = safe_base or os.path.expanduser("~/.cache")
     return os.path.join(base, "nautical")
 
 

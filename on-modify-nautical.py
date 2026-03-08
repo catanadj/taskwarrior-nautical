@@ -505,16 +505,38 @@ _RAW_INPUT_TEXT = ""
 _PARSED_NEW = None
 
 
-def _read_two():
-    raw_bytes = sys.stdin.buffer.read(_MAX_JSON_BYTES + 1)
-    if len(raw_bytes) > _MAX_JSON_BYTES:
-        _fail_and_exit("Invalid input", f"on-modify input exceeds {_MAX_JSON_BYTES} bytes")
-    raw = raw_bytes.decode("utf-8", errors="replace")
-    global _RAW_INPUT_TEXT
-    _RAW_INPUT_TEXT = raw
-    if not raw or not raw.strip():
-        _fail_and_exit("Invalid input", "on-modify must receive two JSON tasks")
+def _fail_protocol_error(msg: str) -> None:
+    _fail_and_exit("Protocol error", msg)
 
+
+def _fail_invalid_input(msg: str) -> None:
+    _fail_and_exit("Invalid input", msg)
+
+
+def _task_uuid_or_empty(task: dict) -> str:
+    if not isinstance(task, dict):
+        return ""
+    try:
+        return str(task.get("uuid") or "").strip()
+    except Exception:
+        return ""
+
+
+def _validate_modify_pair(old: dict, new: dict) -> tuple[dict, dict]:
+    old_uuid = _task_uuid_or_empty(old)
+    new_uuid = _task_uuid_or_empty(new)
+    if not old_uuid or not new_uuid or old_uuid != new_uuid:
+        _fail_protocol_error("Old and new task UUIDs differ")
+    return old, new
+
+
+def _validate_single_modify_task(task: dict) -> tuple[dict, dict]:
+    if not _task_uuid_or_empty(task):
+        _fail_protocol_error("Missing task UUID in on-modify input")
+    return task, task
+
+
+def _decode_leading_json_objects(raw: str, max_objects: int = 2) -> tuple[list[object], int]:
     decoder = json.JSONDecoder()
     idx = 0
     objs: list[object] = []
@@ -523,10 +545,10 @@ def _read_two():
     loop_guard = 0
     max_loops = 10
 
-    while idx < n and len(objs) < 2:
+    while idx < n and len(objs) < max_objects:
         loop_guard += 1
         if loop_guard > max_loops:
-            _fail_and_exit("Protocol error", "Invalid JSON input: too many parse attempts")
+            _fail_protocol_error("Invalid JSON input: too many parse attempts")
         while idx < n and raw[idx].isspace():
             idx += 1
         if idx >= n:
@@ -535,45 +557,57 @@ def _read_two():
             obj, end = decoder.raw_decode(raw, idx)
         except Exception as e:
             _diag(f"json decode error: {e}")
-            _fail_and_exit("Protocol error", "Invalid JSON input")
+            _fail_protocol_error("Invalid JSON input")
         objs.append(obj)
         if end <= idx:
             tries += 1
             if tries >= 2:
-                _fail_and_exit("Protocol error", "Invalid JSON input: parser made no progress")
+                _fail_protocol_error("Invalid JSON input: parser made no progress")
             idx += 1
             continue
         idx = end
 
+    return objs, idx
+
+
+def _read_two():
+    global _RAW_INPUT_TEXT, _PARSED_NEW
+    raw_bytes = sys.stdin.buffer.read(_MAX_JSON_BYTES + 1)
+    if len(raw_bytes) > _MAX_JSON_BYTES:
+        _fail_invalid_input(f"on-modify input exceeds {_MAX_JSON_BYTES} bytes")
+    raw = raw_bytes.decode("utf-8", errors="replace")
+    _RAW_INPUT_TEXT = raw
+    if not raw or not raw.strip():
+        _fail_invalid_input("on-modify must receive two JSON tasks")
+
+    objs, idx = _decode_leading_json_objects(raw, max_objects=2)
+
     if len(objs) == 1 and isinstance(objs[0], list):
         if raw[idx:].strip():
-            _fail_and_exit("Protocol error", "Invalid JSON input: trailing content")
+            _fail_protocol_error("Invalid JSON input: trailing content")
         arr = [o for o in objs[0] if isinstance(o, dict)]
         if len(arr) >= 2:
-            return arr[0], arr[-1]
+            _PARSED_NEW = arr[-1]
+            old, new = _validate_modify_pair(arr[0], arr[-1])
+            return old, new
         if len(arr) == 1:
-            return arr[0], arr[0]
+            _PARSED_NEW = arr[0]
+            only, _ = _validate_single_modify_task(arr[0])
+            return only, only
+
     objs = [o for o in objs if isinstance(o, dict)]
     if len(objs) >= 2:
         if raw[idx:].strip():
-            _fail_and_exit("Protocol error", "Invalid JSON input: trailing content")
-        global _PARSED_NEW
+            _fail_protocol_error("Invalid JSON input: trailing content")
         _PARSED_NEW = objs[-1]
-        old, new = objs[0], objs[-1]
-        old_uuid = (old.get("uuid") or "").strip()
-        new_uuid = (new.get("uuid") or "").strip()
-        if not old_uuid or not new_uuid or old_uuid != new_uuid:
-            _fail_and_exit("Protocol error", "Old and new task UUIDs differ")
+        old, new = _validate_modify_pair(objs[0], objs[-1])
         return old, new
     if len(objs) == 1:
         _PARSED_NEW = objs[0]
-        only = objs[0]
-        only_uuid = (only.get("uuid") or "").strip()
-        if not only_uuid:
-            _fail_and_exit("Protocol error", "Missing task UUID in on-modify input")
+        only, _ = _validate_single_modify_task(objs[0])
         return only, only
 
-    _fail_and_exit("Invalid input", "on-modify must receive two JSON tasks")
+    _fail_invalid_input("on-modify must receive two JSON tasks")
 
 
 def _decode_latest_task_from_raw(raw: str) -> dict | None:

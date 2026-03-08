@@ -506,6 +506,39 @@ def test_hook_stdout_strict_json_with_diag_on_modify():
         expect(p.returncode == 0, f"on-modify returned {p.returncode}")
         _assert_stdout_json_only(p.stdout)
 
+def test_hook_stdout_unicode_unescaped_on_add():
+    """on-add passthrough stdout should preserve Unicode (ensure_ascii=False)."""
+    hook = _find_hook_file("on-add-nautical.py")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000445",
+        "status": "pending",
+        "description": "Cafe ăîșț ✅",
+    }
+    p = _run_hook_script(hook, task)
+    expect(p.returncode == 0, f"on-add returned {p.returncode}")
+    out = (p.stdout or "").strip()
+    _assert_stdout_json_only(out)
+    expect("ăîșț ✅" in out, f"expected raw Unicode in stdout, got: {out!r}")
+    expect("\\u" not in out, f"stdout should not escape Unicode: {out!r}")
+
+def test_hook_stdout_unicode_unescaped_on_modify():
+    """on-modify passthrough stdout should preserve Unicode (ensure_ascii=False)."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    raw = json.dumps(
+        {
+            "uuid": "00000000-0000-0000-0000-000000000446",
+            "status": "pending",
+            "description": "Cafe ăîșț ✅",
+        },
+        ensure_ascii=False,
+    )
+    p = _run_hook_script_raw(hook, raw)
+    expect(p.returncode == 0, f"on-modify returned {p.returncode}")
+    out = (p.stdout or "").strip()
+    _assert_stdout_json_only(out)
+    expect("ăîșț ✅" in out, f"expected raw Unicode in stdout, got: {out!r}")
+    expect("\\u" not in out, f"stdout should not escape Unicode: {out!r}")
+
 def test_hook_stdout_empty_on_exit():
     """on-exit should not emit stdout (stdout is redirected to /dev/null)."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -1527,6 +1560,27 @@ def test_on_modify_read_two_invalid_trailing():
     raw = json.dumps({"status": "pending"}) + "\n" + json.dumps({"status": "pending"}) + "\n" + "{bad"
     p = _run_hook_script_raw(hook, raw)
     expect(p.returncode != 0, "on-modify should fail on trailing garbage")
+    expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
+
+def test_on_modify_read_two_array_uuid_mismatch_fails():
+    """on-modify array input should reject old/new UUID mismatches."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    raw = json.dumps(
+        [
+            {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"},
+            {"uuid": "00000000-0000-0000-0000-000000000222", "status": "completed"},
+        ]
+    )
+    p = _run_hook_script_raw(hook, raw)
+    expect(p.returncode != 0, "on-modify should fail for mismatched UUIDs in array input")
+    expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
+
+def test_on_modify_read_two_array_single_missing_uuid_fails():
+    """on-modify array input with one dict must include UUID."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    raw = json.dumps([{"status": "pending"}])
+    p = _run_hook_script_raw(hook, raw)
+    expect(p.returncode != 0, "on-modify should fail when array input lacks UUID")
     expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
 
 def test_on_modify_invalid_anchor_has_no_stdout():
@@ -4832,6 +4886,8 @@ TESTS = [
     test_warn_once_per_day_any_no_diag_silent,
     test_hook_stdout_strict_json_with_diag_on_add,
     test_hook_stdout_strict_json_with_diag_on_modify,
+    test_hook_stdout_unicode_unescaped_on_add,
+    test_hook_stdout_unicode_unescaped_on_modify,
     test_hook_stdout_empty_on_exit,
     test_hook_files_are_private_permissions,
     test_safe_lock_fcntl_contention,
@@ -4849,6 +4905,8 @@ TESTS = [
     test_core_cache_lock_contention_matches_safe_lock,
     test_on_modify_invalid_json_passthrough,
     test_on_modify_read_two_invalid_trailing,
+    test_on_modify_read_two_array_uuid_mismatch_fails,
+    test_on_modify_read_two_array_single_missing_uuid_fails,
     test_on_modify_invalid_anchor_has_no_stdout,
     test_on_add_rejects_oversized_stdin_early,
     test_on_modify_rejects_oversized_stdin_early,

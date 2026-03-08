@@ -1606,19 +1606,128 @@ def _requeue_or_dead_letter_for_lock(entry: dict, idx: int, state: _DrainState) 
     return state.record_lock_event(idx)
 
 
-def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
+def _handle_entry_gate(entry: dict, state: _DrainState) -> bool:
     spawn_intent_id = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
     if spawn_intent_id and spawn_intent_id in state.finalized_intents:
         state.skipped_idempotent += 1
         state.processed += 1
         state.ack_sqlite(entry)
         state.reset_lock_streak()
-        return False
+        return True
 
     valid, reason = _validate_queue_entry(entry)
     if not valid:
         state.dead_letter(entry, reason)
         state.reset_lock_streak()
+        return True
+    return False
+
+
+def _precheck_parent_link_state(
+    entry: dict,
+    idx: int,
+    state: _DrainState,
+    *,
+    parent_uuid: str,
+    child_short: str,
+    expected_parent_nextlink: str,
+) -> tuple[str, bool]:
+    if not (parent_uuid and child_short):
+        return "ok", False
+
+    link_state, link_err = _parent_nextlink_state(parent_uuid, child_short, expected_parent_nextlink)
+    if link_state == "locked":
+        return ("break", False) if _requeue_or_dead_letter_for_lock(entry, idx, state) else ("continue", False)
+    if link_state in {"conflict", "missing", "invalid"}:
+        state.dead_letter(entry, f"parent update failed: {link_err}")
+        state.reset_lock_streak()
+        return "continue", False
+    if link_state == "already":
+        return "ok", True
+    return "ok", False
+
+
+def _ensure_child_exists_for_entry(
+    entry: dict,
+    idx: int,
+    state: _DrainState,
+    *,
+    child: dict,
+    child_uuid: str,
+    spawn_intent_id: str,
+) -> tuple[str, bool]:
+    export_res = _export_uuid(child_uuid)
+    imported = False
+    if not export_res.get("exists"):
+        if export_res.get("retryable"):
+            if spawn_intent_id:
+                _diag(f"task lock active; requeue (intent={spawn_intent_id})")
+            return ("break", False) if _requeue_or_dead_letter_for_lock(entry, idx, state) else ("continue", False)
+        ok, err = _import_child(child)
+        if not ok:
+            if _is_lock_error(err):
+                return ("break", False) if _requeue_or_dead_letter_for_lock(entry, idx, state) else ("continue", False)
+            # If import reported failure but the child exists, continue.
+            if not _export_uuid(child_uuid).get("exists"):
+                if spawn_intent_id:
+                    _diag(f"child import failed (intent={spawn_intent_id}): {err}")
+                else:
+                    _diag(f"child import failed: {err}")
+                state.dead_letter(entry, f"child import failed: {err}")
+                state.reset_lock_streak()
+                return "continue", False
+        imported = True
+
+    if imported:
+        # Confirm child exists before touching parent only when we just imported.
+        confirm_res = _export_uuid(child_uuid)
+        if not confirm_res.get("exists"):
+            if confirm_res.get("retryable"):
+                return ("break", False) if _requeue_or_dead_letter_for_lock(entry, idx, state) else ("continue", False)
+            if spawn_intent_id:
+                _diag(f"child missing after import (intent={spawn_intent_id})")
+            state.dead_letter(entry, "child missing after import")
+            state.reset_lock_streak()
+            return "continue", False
+
+    return "ok", imported
+
+
+def _apply_parent_update_for_entry(
+    entry: dict,
+    idx: int,
+    state: _DrainState,
+    *,
+    parent_uuid: str,
+    child_short: str,
+    expected_parent_nextlink: str,
+    child_uuid: str,
+    spawn_intent_id: str,
+    parent_linked_already: bool,
+    imported: bool,
+) -> str:
+    if not (parent_uuid and child_short) or parent_linked_already:
+        return "ok"
+
+    ok, err = _update_parent_nextlink(parent_uuid, child_short, expected_parent_nextlink)
+    if ok:
+        return "ok"
+
+    if spawn_intent_id:
+        _diag(f"parent update failed (intent={spawn_intent_id}): {parent_uuid}")
+    else:
+        _diag(f"parent update failed: {parent_uuid}")
+    if err in {"parent export locked", "parent lock busy"} or _is_lock_error(err):
+        return "break" if _requeue_or_dead_letter_for_lock(entry, idx, state) else "continue"
+    if imported:
+        _cleanup_orphan_child(child_uuid, spawn_intent_id)
+    state.dead_letter(entry, f"parent update failed: {err}")
+    state.reset_lock_streak()
+    return "continue"
+
+
+def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
+    if _handle_entry_gate(entry, state):
         return False
 
     spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
@@ -1628,68 +1737,48 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     child_short = (entry.get("child_short") or "").strip()
     child_uuid = (child.get("uuid") or "").strip()
 
-    parent_linked_already = False
-    if parent_uuid and child_short:
-        link_state, link_err = _parent_nextlink_state(parent_uuid, child_short, expected_parent_nextlink)
-        if link_state == "locked":
-            return _requeue_or_dead_letter_for_lock(entry, idx, state)
-        if link_state in {"conflict", "missing", "invalid"}:
-            state.dead_letter(entry, f"parent update failed: {link_err}")
-            state.reset_lock_streak()
-            return False
-        if link_state == "already":
-            parent_linked_already = True
+    link_action, parent_linked_already = _precheck_parent_link_state(
+        entry,
+        idx,
+        state,
+        parent_uuid=parent_uuid,
+        child_short=child_short,
+        expected_parent_nextlink=expected_parent_nextlink,
+    )
+    if link_action == "break":
+        return True
+    if link_action == "continue":
+        return False
 
-    export_res = _export_uuid(child_uuid)
-    imported = False
-    if not export_res.get("exists"):
-        if export_res.get("retryable"):
-            if spawn_intent_id:
-                _diag(f"task lock active; requeue (intent={spawn_intent_id})")
-            return _requeue_or_dead_letter_for_lock(entry, idx, state)
-        ok, err = _import_child(child)
-        if not ok:
-            if _is_lock_error(err):
-                return _requeue_or_dead_letter_for_lock(entry, idx, state)
-            # If import reported failure but the child exists, continue.
-            if _export_uuid(child_uuid).get("exists"):
-                export_res = {"exists": True}
-            else:
-                if spawn_intent_id:
-                    _diag(f"child import failed (intent={spawn_intent_id}): {err}")
-                else:
-                    _diag(f"child import failed: {err}")
-                state.dead_letter(entry, f"child import failed: {err}")
-                state.reset_lock_streak()
-                return False
-        imported = True
+    child_action, imported = _ensure_child_exists_for_entry(
+        entry,
+        idx,
+        state,
+        child=child,
+        child_uuid=child_uuid,
+        spawn_intent_id=spawn_intent_id,
+    )
+    if child_action == "break":
+        return True
+    if child_action == "continue":
+        return False
 
-    if imported:
-        # Confirm child exists before touching parent only when we just imported.
-        confirm_res = _export_uuid(child_uuid)
-        if not confirm_res.get("exists"):
-            if confirm_res.get("retryable"):
-                return _requeue_or_dead_letter_for_lock(entry, idx, state)
-            if spawn_intent_id:
-                _diag(f"child missing after import (intent={spawn_intent_id})")
-            state.dead_letter(entry, "child missing after import")
-            state.reset_lock_streak()
-            return False
-
-    if parent_uuid and child_short and not parent_linked_already:
-        ok, err = _update_parent_nextlink(parent_uuid, child_short, expected_parent_nextlink)
-        if not ok:
-            if spawn_intent_id:
-                _diag(f"parent update failed (intent={spawn_intent_id}): {parent_uuid}")
-            else:
-                _diag(f"parent update failed: {parent_uuid}")
-            if err in {"parent export locked", "parent lock busy"} or _is_lock_error(err):
-                return _requeue_or_dead_letter_for_lock(entry, idx, state)
-            if imported:
-                _cleanup_orphan_child(child_uuid, spawn_intent_id)
-            state.dead_letter(entry, f"parent update failed: {err}")
-            state.reset_lock_streak()
-            return False
+    parent_action = _apply_parent_update_for_entry(
+        entry,
+        idx,
+        state,
+        parent_uuid=parent_uuid,
+        child_short=child_short,
+        expected_parent_nextlink=expected_parent_nextlink,
+        child_uuid=child_uuid,
+        spawn_intent_id=spawn_intent_id,
+        parent_linked_already=parent_linked_already,
+        imported=imported,
+    )
+    if parent_action == "break":
+        return True
+    if parent_action == "continue":
+        return False
 
     state.processed += 1
     state.mark_final(entry, "done", "processed")

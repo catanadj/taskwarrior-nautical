@@ -2442,6 +2442,80 @@ def diag(msg, hook_name: str = "nautical", data_dir: str | None = None) -> None:
     diag_log(msg, hook_name, data_dir)
 
 # --- Subprocess runner ---
+def _run_task_should_retry(attempt: int, retries: int) -> bool:
+    return attempt < retries
+
+
+def _run_task_retry_sleep(attempt: int, retry_delay: float) -> None:
+    delay = retry_delay * (2 ** (attempt - 1))
+    jitter = random.uniform(0.0, retry_delay) if retry_delay > 0 else 0.0
+    time.sleep(delay + jitter)
+
+
+def _run_task_prepare_tempfiles(use_tempfiles: bool):
+    out_path = err_path = None
+    out_f = err_f = None
+    if use_tempfiles:
+        try:
+            out_f = tempfile.NamedTemporaryFile(delete=False)
+            err_f = tempfile.NamedTemporaryFile(delete=False)
+            out_path = out_f.name
+            err_path = err_f.name
+        except Exception:
+            out_f = err_f = None
+            out_path = err_path = None
+    return out_f, err_f, out_path, err_path
+
+
+def _run_task_normalize_input(input_text, text_mode: bool):
+    if not text_mode and isinstance(input_text, str):
+        return input_text.encode("utf-8")
+    if text_mode and isinstance(input_text, (bytes, bytearray)):
+        return input_text.decode("utf-8", "replace")
+    return input_text
+
+
+def _run_task_collect_outputs(out_f, err_f, out_path, err_path, out, err):
+    try:
+        if out_f is not None:
+            out_f.close()
+        if err_f is not None:
+            err_f.close()
+    except Exception:
+        pass
+    if out_path:
+        try:
+            with open(out_path, "rb") as f:
+                out = f.read().decode("utf-8", "replace")
+        except Exception:
+            out = ""
+        try:
+            os.unlink(out_path)
+        except Exception:
+            pass
+    if err_path:
+        try:
+            with open(err_path, "rb") as f:
+                err = f.read().decode("utf-8", "replace")
+        except Exception:
+            err = ""
+        try:
+            os.unlink(err_path)
+        except Exception:
+            pass
+    return out, err
+
+
+def _run_task_cleanup_paths(out_path: str | None, err_path: str | None) -> None:
+    try:
+        if out_path and os.path.exists(out_path):
+            os.unlink(out_path)
+        if err_path and os.path.exists(err_path):
+            os.unlink(err_path)
+    except Exception:
+        pass
+
+
 def run_task(
     cmd: list[str],
     *,
@@ -2458,23 +2532,11 @@ def run_task(
     last_err = ""
     attempts = max(1, int(retries))
     for attempt in range(1, attempts + 1):
-        out_path = err_path = None
-        out_f = err_f = None
+        out_f, err_f, out_path, err_path = None, None, None, None
         try:
-            if use_tempfiles:
-                try:
-                    out_f = tempfile.NamedTemporaryFile(delete=False)
-                    err_f = tempfile.NamedTemporaryFile(delete=False)
-                    out_path = out_f.name
-                    err_path = err_f.name
-                except Exception:
-                    out_f = err_f = None
-                    out_path = err_path = None
+            out_f, err_f, out_path, err_path = _run_task_prepare_tempfiles(use_tempfiles)
             text_mode = not bool(out_f)
-            if not text_mode and isinstance(input_text, str):
-                input_text = input_text.encode("utf-8")
-            elif text_mode and isinstance(input_text, (bytes, bytearray)):
-                input_text = input_text.decode("utf-8", "replace")
+            input_text = _run_task_normalize_input(input_text, text_mode)
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
@@ -2494,90 +2556,26 @@ def run_task(
                     out, err = proc.communicate(timeout=1.0)
                 except Exception:
                     out, err = "", ""
-                try:
-                    if out_f is not None:
-                        out_f.close()
-                    if err_f is not None:
-                        err_f.close()
-                except Exception:
-                    pass
-                if out_path:
-                    try:
-                        with open(out_path, "rb") as f:
-                            out = f.read().decode("utf-8", "replace")
-                    except Exception:
-                        out = ""
-                    try:
-                        os.unlink(out_path)
-                    except Exception:
-                        pass
-                if err_path:
-                    try:
-                        with open(err_path, "rb") as f:
-                            err = f.read().decode("utf-8", "replace")
-                    except Exception:
-                        err = ""
-                    try:
-                        os.unlink(err_path)
-                    except Exception:
-                        pass
+                out, err = _run_task_collect_outputs(out_f, err_f, out_path, err_path, out, err)
                 last_err = "timeout"
-                if attempt < retries:
-                    delay = retry_delay * (2 ** (attempt - 1))
-                    jitter = random.uniform(0.0, retry_delay) if retry_delay > 0 else 0.0
-                    time.sleep(delay + jitter)
+                if _run_task_should_retry(attempt, retries):
+                    _run_task_retry_sleep(attempt, retry_delay)
                     continue
                 return False, out or "", last_err
-            try:
-                if out_f is not None:
-                    out_f.close()
-                if err_f is not None:
-                    err_f.close()
-            except Exception:
-                pass
-            if out_path:
-                try:
-                    with open(out_path, "rb") as f:
-                        out = f.read().decode("utf-8", "replace")
-                except Exception:
-                    out = ""
-                try:
-                    os.unlink(out_path)
-                except Exception:
-                    pass
-            if err_path:
-                try:
-                    with open(err_path, "rb") as f:
-                        err = f.read().decode("utf-8", "replace")
-                except Exception:
-                    err = ""
-                try:
-                    os.unlink(err_path)
-                except Exception:
-                    pass
+            out, err = _run_task_collect_outputs(out_f, err_f, out_path, err_path, out, err)
             last_out = out or ""
             last_err = err or ""
             if proc.returncode == 0:
                 return True, last_out, last_err
-            if attempt < retries:
-                delay = retry_delay * (2 ** (attempt - 1))
-                jitter = random.uniform(0.0, retry_delay) if retry_delay > 0 else 0.0
-                time.sleep(delay + jitter)
+            if _run_task_should_retry(attempt, retries):
+                _run_task_retry_sleep(attempt, retry_delay)
                 continue
             return False, last_out, last_err
         except Exception as e:
             last_err = str(e)
-            try:
-                if out_path and os.path.exists(out_path):
-                    os.unlink(out_path)
-                if err_path and os.path.exists(err_path):
-                    os.unlink(err_path)
-            except Exception:
-                pass
-            if attempt < retries:
-                delay = retry_delay * (2 ** (attempt - 1))
-                jitter = random.uniform(0.0, retry_delay) if retry_delay > 0 else 0.0
-                time.sleep(delay + jitter)
+            _run_task_cleanup_paths(out_path, err_path)
+            if _run_task_should_retry(attempt, retries):
+                _run_task_retry_sleep(attempt, retry_delay)
                 continue
             return False, last_out, last_err
     return False, last_out, last_err

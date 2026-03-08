@@ -2939,6 +2939,63 @@ def test_core_run_task_tempfiles_accepts_text_input():
     expect(out == "hello\n", f"run_task expected echoed input, got {out!r}")
 
 
+def test_core_run_task_timeout_reports_timeout_with_tempfiles():
+    """core.run_task should return timeout marker when process exceeds timeout using tempfiles."""
+    ok, _out, err = core.run_task(
+        [sys.executable, "-c", "import time; time.sleep(0.25); print('late')"],
+        timeout=0.05,
+        retries=1,
+        use_tempfiles=True,
+    )
+    expect(not ok, "run_task timeout path should return ok=False")
+    expect(err == "timeout", f"run_task timeout path should return 'timeout', got {err!r}")
+
+
+def test_core_run_task_nonzero_retries_use_expected_backoff():
+    """core.run_task should apply exponential retry backoff for non-zero exits."""
+    sleeps = []
+    orig_sleep = core.time.sleep
+    orig_uniform = core.random.uniform
+    try:
+        core.time.sleep = lambda v: sleeps.append(v)
+        core.random.uniform = lambda _a, _b: 0.0
+        ok, _out, _err = core.run_task(
+            [sys.executable, "-c", "import sys; sys.exit(3)"],
+            timeout=1.0,
+            retries=3,
+            retry_delay=0.2,
+            use_tempfiles=False,
+        )
+        expect(not ok, "run_task non-zero command should fail")
+        expect(len(sleeps) == 2, f"expected 2 backoff sleeps, got {sleeps}")
+        expect(abs(sleeps[0] - 0.2) < 1e-9, f"unexpected first backoff: {sleeps}")
+        expect(abs(sleeps[1] - 0.4) < 1e-9, f"unexpected second backoff: {sleeps}")
+    finally:
+        core.time.sleep = orig_sleep
+        core.random.uniform = orig_uniform
+
+
+def test_core_run_task_tempfiles_fallback_handles_bytes_input():
+    """core.run_task should fall back to text mode if tempfile allocation fails."""
+    orig_ntf = core.tempfile.NamedTemporaryFile
+    try:
+        def _raise_named_tempfile(*_args, **_kwargs):
+            raise OSError("tempfile unavailable")
+
+        core.tempfile.NamedTemporaryFile = _raise_named_tempfile
+        ok, out, err = core.run_task(
+            [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
+            input_text=b"abc\xff\n",
+            timeout=1.0,
+            retries=1,
+            use_tempfiles=True,
+        )
+        expect(ok, f"run_task fallback should still succeed, got err={err!r}")
+        expect(out == "abc\ufffd\n", f"fallback should decode bytes in text mode, got {out!r}")
+    finally:
+        core.tempfile.NamedTemporaryFile = orig_ntf
+
+
 def test_on_add_dnf_cache_versioned_payload():
     """on-add DNF cache uses versioned payload and can round-trip."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -4881,6 +4938,9 @@ TESTS = [
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_task_runner_handles_nonzero,
     test_core_run_task_tempfiles_accepts_text_input,
+    test_core_run_task_timeout_reports_timeout_with_tempfiles,
+    test_core_run_task_nonzero_retries_use_expected_backoff,
+    test_core_run_task_tempfiles_fallback_handles_bytes_input,
     test_warn_once_per_day_stamp_written,
     test_warn_once_per_day_no_diag_silent,
     test_warn_once_per_day_any_no_diag_silent,

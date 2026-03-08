@@ -1088,6 +1088,193 @@ def _stamp_chain_id_on_add(task: dict) -> None:
         pass
 
 
+def _norm_t_mod(v):
+    if v is None:
+        return []
+    if isinstance(v, tuple) and len(v) == 2:
+        return [v]
+    if isinstance(v, list):
+        out = []
+        for it in v:
+            if isinstance(it, tuple) and len(it) == 2:
+                out.append(it)
+            elif isinstance(it, list) and len(it) == 2:
+                out.append((int(it[0]), int(it[1])))
+        return out
+    if isinstance(v, str):
+        out = []
+        for part in [p.strip() for p in v.split(",") if p.strip()]:
+            if len(part) == 5 and part[2] == ":" and part[:2].isdigit() and part[3:].isdigit():
+                out.append((int(part[:2]), int(part[3:])))
+        return out
+    return []
+
+
+def _anchor_step_once(dnf, prev_local_date, interval_seed, seed_base):
+    try:
+        nxt_date, _ = core.next_after_expr(
+            dnf,
+            prev_local_date,
+            default_seed=interval_seed,
+            seed_base=seed_base,
+        )
+        if nxt_date is None or nxt_date <= prev_local_date:
+            return None
+        return nxt_date
+    except Exception:
+        return None
+
+
+def _anchor_term_fires_on_date(term, d, interval_seed, seed_base):
+    try:
+        nxt, _ = core.next_after_expr(
+            [term],
+            d - timedelta(days=1),
+            default_seed=interval_seed,
+            seed_base=seed_base,
+        )
+        return nxt == d
+    except Exception:
+        return False
+
+
+def _anchor_expr_fires_on_date(dnf, d, interval_seed, seed_base):
+    try:
+        nxt, _ = core.next_after_expr(
+            dnf,
+            d - timedelta(days=1),
+            default_seed=interval_seed,
+            seed_base=seed_base,
+        )
+        return nxt == d
+    except Exception:
+        return False
+
+
+def _anchor_times_for_date(dnf, d, interval_seed, seed_base):
+    times = set()
+    for term in dnf:
+        if _anchor_term_fires_on_date(term, d, interval_seed, seed_base):
+            for atom in term:
+                mods = atom.get("mods") or {}
+                for hhmm in _norm_t_mod(mods.get("t")):
+                    times.add(hhmm)
+    return sorted(times)
+
+
+def _anchor_pick_occurrence_local(dnf, ref_dt_local, inclusive: bool, fallback_hhmm, interval_seed, seed_base):
+    d0 = ref_dt_local.date()
+
+    # Same-day: if expression fires today, try to pick a slot on the same day.
+    if _anchor_expr_fires_on_date(dnf, d0, interval_seed, seed_base):
+        tlist = _anchor_times_for_date(dnf, d0, interval_seed, seed_base) or [fallback_hhmm]
+        for hhmm in tlist:
+            cand_utc = core.build_local_datetime(d0, hhmm)
+            cand_local = core.to_local(cand_utc)
+            if (cand_local >= ref_dt_local) if inclusive else (cand_local > ref_dt_local):
+                return cand_local
+
+    # Next matching date (strictly after d0)
+    try:
+        nxt_d, _ = core.next_after_expr(
+            dnf,
+            d0,
+            default_seed=interval_seed,
+            seed_base=seed_base,
+        )
+    except Exception:
+        return None
+    tlist = _anchor_times_for_date(dnf, nxt_d, interval_seed, seed_base) or [fallback_hhmm]
+    return core.to_local(core.build_local_datetime(nxt_d, tlist[0]))
+
+
+def _anchor_next_occurrence_after_local_dt(dnf, after_dt_local, fallback_hhmm, interval_seed, seed_base):
+    d0 = after_dt_local.date()
+
+    # Same-day: if expression fires today, try the next time slot today.
+    try:
+        nxt_date, _ = core.next_after_expr(
+            dnf,
+            d0 - timedelta(days=1),
+            default_seed=interval_seed,
+            seed_base=seed_base,
+        )
+        if nxt_date == d0:
+            tlist = _anchor_times_for_date(dnf, d0, interval_seed, seed_base) or [fallback_hhmm]
+            for hhmm in tlist:
+                cand_utc = core.build_local_datetime(d0, hhmm)
+                cand_local = core.to_local(cand_utc)
+                if cand_local > after_dt_local:
+                    return cand_local
+    except Exception:
+        pass
+
+    # Next matching date (strictly after d0)
+    nxt_d = _anchor_step_once(dnf, d0, interval_seed, seed_base)
+    if not nxt_d:
+        return None
+    tlist = _anchor_times_for_date(dnf, nxt_d, interval_seed, seed_base) or [fallback_hhmm]
+    return core.to_local(core.build_local_datetime(nxt_d, tlist[0]))
+
+
+def _anchor_until_summary(dnf, until_dt, first_date_local, first_hhmm, interval_seed, seed_base):
+    if not until_dt:
+        return None, None
+    end_day = _to_local_cached(until_dt).date()
+    count = 0
+    prev = first_date_local - timedelta(days=1)
+    last = None
+    iterations = 0
+    for _ in range(_MAX_PREVIEW_ITERATIONS):
+        if iterations >= _MAX_ITERATIONS:
+            break
+        iterations += 1
+
+        nxt = _anchor_step_once(dnf, prev, interval_seed, seed_base)
+        if not nxt or nxt > end_day:
+            break
+        count += 1
+        last = nxt
+        prev = nxt
+    exact_until_count = max(0, count - 1)
+    if not last:
+        return exact_until_count, None
+    final_hhmm = core.pick_hhmm_from_dnf_for_date(dnf, last, first_date_local) or first_hhmm
+    final_until_dt = core.build_local_datetime(last, final_hhmm).astimezone(timezone.utc)
+    return exact_until_count, final_until_dt
+
+
+def _anchor_build_preview(
+    dnf,
+    first_due_local_dt,
+    preview_limit: int,
+    until_dt,
+    fallback_hhmm,
+    interval_seed,
+    seed_base,
+):
+    preview = []
+    colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
+    cur_dt = first_due_local_dt
+    for i in range(preview_limit):
+        nxt_dt = _anchor_next_occurrence_after_local_dt(
+            dnf,
+            cur_dt,
+            fallback_hhmm,
+            interval_seed,
+            seed_base,
+        )
+        if not nxt_dt:
+            break
+        dt_utc = nxt_dt.astimezone(timezone.utc)
+        if until_dt and dt_utc > until_dt:
+            break
+        color = colors[min(i, len(colors) - 1)]
+        preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
+        cur_dt = nxt_dt
+    return preview
+
+
 def _handle_cp_preview_on_add(
     task: dict,
     cp_str: str,
@@ -1290,21 +1477,7 @@ def _handle_anchor_preview_on_add(
     # Fix: use a stable default_seed for /N gating
     interval_seed = base_local_date  # or first anchor day if you prefer
 
-    def step_once(prev_local_date):
-        try:
-            nxt_date, _ = core.next_after_expr(
-                dnf,
-                prev_local_date,
-                default_seed=interval_seed,  # <-- fixed seed for the whole chain
-                seed_base=seed_base,
-            )
-            if nxt_date is None or nxt_date <= prev_local_date:
-                return None
-            return nxt_date
-        except Exception:
-            return None
-
-    first_date_local = step_once(base_local_date - timedelta(days=1))
+    first_date_local = _anchor_step_once(dnf, base_local_date - timedelta(days=1), interval_seed, seed_base)
 
     # ========== EDGE CASE 7: Anchor pattern doesn't match (no future dates) ==========
     if not first_date_local:
@@ -1319,94 +1492,28 @@ def _handle_anchor_preview_on_add(
 
     fallback_hhmm = (due_hhmm if user_provided_due else (9, 0))
 
-    def _norm_t_mod_early(v):
-        if v is None:
-            return []
-        if isinstance(v, tuple) and len(v) == 2:
-            return [v]
-        if isinstance(v, list):
-            out = []
-            for it in v:
-                if isinstance(it, tuple) and len(it) == 2:
-                    out.append(it)
-                elif isinstance(it, list) and len(it) == 2:
-                    out.append((int(it[0]), int(it[1])))
-            return out
-        if isinstance(v, str):
-            out = []
-            for part in [p.strip() for p in v.split(",") if p.strip()]:
-                if len(part) == 5 and part[2] == ":" and part[:2].isdigit() and part[3:].isdigit():
-                    out.append((int(part[:2]), int(part[3:])))
-            return out
-        return []
-
-    def _term_fires_on_date_early(term, d):
-        try:
-            nxt, _ = core.next_after_expr(
-                [term],
-                d - timedelta(days=1),
-                default_seed=interval_seed,
-                seed_base=seed_base,
-            )
-            return nxt == d
-        except Exception:
-            return False
-
-    def _expr_fires_on_date_early(d):
-        try:
-            nxt, _ = core.next_after_expr(
-                dnf,
-                d - timedelta(days=1),
-                default_seed=interval_seed,
-                seed_base=seed_base,
-            )
-            return nxt == d
-        except Exception:
-            return False
-
-    def _times_for_date_early(d):
-        times = set()
-        for term in dnf:
-            if _term_fires_on_date_early(term, d):
-                for atom in term:
-                    mods = atom.get("mods") or {}
-                    for hhmm in _norm_t_mod_early(mods.get("t")):
-                        times.add(hhmm)
-        return sorted(times)
-
-    def _pick_occurrence_local(ref_dt_local, inclusive: bool):
-        d0 = ref_dt_local.date()
-
-        # Same-day: if expression fires today, try to pick a slot on the same day.
-        if _expr_fires_on_date_early(d0):
-            tlist = _times_for_date_early(d0) or [fallback_hhmm]
-            for hhmm in tlist:
-                cand_utc = core.build_local_datetime(d0, hhmm)
-                cand_local = core.to_local(cand_utc)
-                if (cand_local >= ref_dt_local) if inclusive else (cand_local > ref_dt_local):
-                    return cand_local
-
-        # Next matching date (strictly after d0)
-        try:
-            nxt_d, _ = core.next_after_expr(
-                dnf,
-                d0,
-                default_seed=interval_seed,
-                seed_base=seed_base,
-            )
-        except Exception:
-            return None
-        tlist = _times_for_date_early(nxt_d) or [fallback_hhmm]
-        return core.to_local(core.build_local_datetime(nxt_d, tlist[0]))
-
     _t_first = time.perf_counter()
     if user_provided_due:
         due_local_dt = _to_local_cached(due_dt)
-        first_due_local_dt = _pick_occurrence_local(due_local_dt, inclusive=False)
+        first_due_local_dt = _anchor_pick_occurrence_local(
+            dnf,
+            due_local_dt,
+            inclusive=False,
+            fallback_hhmm=fallback_hhmm,
+            interval_seed=interval_seed,
+            seed_base=seed_base,
+        )
         if not first_due_local_dt:
             _error_and_exit([("anchor pattern", "No matching anchor occurrences found after the provided due.")])
     else:
-        first_due_local_dt = _pick_occurrence_local(now_local, inclusive=True)
+        first_due_local_dt = _anchor_pick_occurrence_local(
+            dnf,
+            now_local,
+            inclusive=True,
+            fallback_hhmm=fallback_hhmm,
+            interval_seed=interval_seed,
+            seed_base=seed_base,
+        )
         if not first_due_local_dt:
             _error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])
     prof.add_ms("anchor:first_occurrence", (time.perf_counter() - _t_first) * 1000.0)
@@ -1438,7 +1545,12 @@ def _handle_anchor_preview_on_add(
 
     if user_provided_due and ANCHOR_WARN:
         due_local_date = _to_local_cached(due_dt).date()
-        first_after_due_date = step_once(due_local_date - timedelta(days=1))
+        first_after_due_date = _anchor_step_once(
+            dnf,
+            due_local_date - timedelta(days=1),
+            interval_seed,
+            seed_base,
+        )
         is_on_anchor_day = first_after_due_date == due_local_date
         if not is_on_anchor_day:
             rows.append(
@@ -1459,32 +1571,14 @@ def _handle_anchor_preview_on_add(
 
     cpmax = core.coerce_int(task.get("chainMax"), 0)
 
-    exact_until_count = None
-    final_until_dt = None
-    if until_dt:
-        end_day = _to_local_cached(until_dt).date()
-        count = 0
-        prev = first_date_local - timedelta(days=1)
-        last = None
-        iterations = 0
-        for _ in range(_MAX_PREVIEW_ITERATIONS):
-            if iterations >= _MAX_ITERATIONS:
-                break
-            iterations += 1
-
-            nxt = step_once(prev)
-            if not nxt or nxt > end_day:
-                break
-            count += 1
-            last = nxt
-            prev = nxt
-        exact_until_count = max(0, count - 1)
-        if last:
-            final_hhmm = (
-                core.pick_hhmm_from_dnf_for_date(dnf, last, first_date_local)
-                or first_hhmm
-            )
-            final_until_dt = core.build_local_datetime(last, final_hhmm).astimezone(timezone.utc)
+    exact_until_count, final_until_dt = _anchor_until_summary(
+        dnf,
+        until_dt,
+        first_date_local,
+        first_hhmm,
+        interval_seed,
+        seed_base,
+    )
 
     allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
     allow_by_until = exact_until_count if exact_until_count is not None else 10**9
@@ -1502,93 +1596,17 @@ def _handle_anchor_preview_on_add(
     prof.add_ms("anchor:validate_strict", (time.perf_counter() - _t_val) * 1000.0)
 
     preview_limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until, _PREVIEW_HARD_CAP))
-    preview = []
-    colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
     fallback_hhmm = first_hhmm
-
-    def _norm_t_mod(v):
-        if v is None:
-            return []
-        if isinstance(v, tuple) and len(v) == 2:
-            return [v]
-        if isinstance(v, list):
-            out = []
-            for it in v:
-                if isinstance(it, tuple) and len(it) == 2:
-                    out.append(it)
-                elif isinstance(it, list) and len(it) == 2:
-                    out.append((int(it[0]), int(it[1])))
-            return out
-        if isinstance(v, str):
-            out = []
-            for part in [p.strip() for p in v.split(",") if p.strip()]:
-                if len(part) == 5 and part[2] == ":" and part[:2].isdigit() and part[3:].isdigit():
-                    out.append((int(part[:2]), int(part[3:])))
-            return out
-        return []
-
-    def _term_fires_on_date(term, d):
-        try:
-            nxt, _ = core.next_after_expr(
-                [term],
-                d - timedelta(days=1),
-                default_seed=interval_seed,
-                seed_base=seed_base,
-            )
-            return nxt == d
-        except Exception:
-            return False
-
-    def _times_for_date(d):
-        times = set()
-        for term in dnf:
-            if _term_fires_on_date(term, d):
-                for atom in term:
-                    mods = atom.get("mods") or {}
-                    for hhmm in _norm_t_mod(mods.get("t")):
-                        times.add(hhmm)
-        return sorted(times)
-
-    def _next_occurrence_after_local_dt(after_dt_local):
-        d0 = after_dt_local.date()
-
-        # Same-day: if expression fires today, try the next time slot today.
-        try:
-            nxt_date, _ = core.next_after_expr(
-                dnf,
-                d0 - timedelta(days=1),
-                default_seed=interval_seed,
-                seed_base=seed_base,
-            )
-            if nxt_date == d0:
-                tlist = _times_for_date(d0) or [fallback_hhmm]
-                for hhmm in tlist:
-                    cand_utc = core.build_local_datetime(d0, hhmm)
-                    cand_local = core.to_local(cand_utc)
-                    if cand_local > after_dt_local:
-                        return cand_local
-        except Exception:
-            pass
-
-        # Next matching date (strictly after d0)
-        nxt_d = step_once(d0)
-        if not nxt_d:
-            return None
-        tlist = _times_for_date(nxt_d) or [fallback_hhmm]
-        return core.to_local(core.build_local_datetime(nxt_d, tlist[0]))
-
     _t_prev = time.perf_counter()
-    cur_dt = first_due_local_dt
-    for i in range(preview_limit):
-        nxt_dt = _next_occurrence_after_local_dt(cur_dt)
-        if not nxt_dt:
-            break
-        dt_utc = nxt_dt.astimezone(timezone.utc)
-        if until_dt and dt_utc > until_dt:
-            break
-        color = colors[min(i, len(colors) - 1)]
-        preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
-        cur_dt = nxt_dt
+    preview = _anchor_build_preview(
+        dnf,
+        first_due_local_dt,
+        preview_limit,
+        until_dt,
+        fallback_hhmm,
+        interval_seed,
+        seed_base,
+    )
     prof.add_ms("anchor:preview_occurrences", (time.perf_counter() - _t_prev) * 1000.0)
     rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
     rows.append(

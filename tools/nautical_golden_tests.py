@@ -2650,6 +2650,34 @@ def test_business_day_modifiers():
         
         assert next_date == expected, f"{anchor}: got {next_date}, expected {expected}"
 
+def test_next_after_atom_with_mods_characterization():
+    """Direct atom scheduling should preserve seed-gated interval and roll/offset behavior."""
+    def _single_atom(expr: str):
+        dnf = core.validate_anchor_expr_strict(expr)
+        expect(len(dnf) == 1 and len(dnf[0]) == 1, f"expected single-atom DNF for {expr!r}")
+        return dnf[0][0]
+
+    cases = [
+        # Monthly /N uses valid-month buckets anchored to seed.
+        ("m/2:31", date(2024, 1, 1), date(2024, 1, 1), date(2024, 1, 31)),
+        ("m/2:31", date(2024, 2, 1), date(2024, 1, 1), date(2024, 5, 31)),
+        ("m/2:31", date(2024, 3, 31), date(2024, 1, 1), date(2024, 5, 31)),
+        # Weekly/yearly /N gating.
+        ("w/2:mon", date(2024, 12, 9), date(2024, 12, 9), date(2024, 12, 23)),
+        ("y/2:06-15", date(2024, 1, 1), date(2024, 1, 1), date(2024, 6, 15)),
+        # @bd skip behavior on weekend target.
+        ("m:3@bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 2, 3)),
+        # Roll then day_offset behavior.
+        ("m:1@nbd@+1d", date(2024, 8, 31), date(2024, 8, 31), date(2024, 9, 3)),
+        # Business-day roll may return candidate equal to ref_d when base is strictly after.
+        ("m:15@nw", date(2024, 6, 14), date(2024, 6, 14), date(2024, 6, 14)),
+    ]
+
+    for expr, ref_d, seed_d, expected in cases:
+        atom = _single_atom(expr)
+        got = core.next_after_atom_with_mods(atom, ref_d, seed_d)
+        expect(got == expected, f"{expr} from {ref_d} seed={seed_d}: got {got}, expected {expected}")
+
 def test_complex_dnf_expressions():
     """Test complex DNF expressions with OR and AND"""
     test_cases = [
@@ -4933,6 +4961,7 @@ TESTS = [
     test_interval_patterns,
     test_complex_dnf_expressions,
     test_business_day_modifiers,
+    test_next_after_atom_with_mods_characterization,
     test_deterministic_randomness,
     test_edge_cases,
     test_natural_language_comprehensive,

@@ -6372,6 +6372,127 @@ def base_next_after_atom(atom, ref_d: date) -> date:
 # ------------------------------------------------------------------------------
 # Anchor scheduling & iteration helpers
 # ------------------------------------------------------------------------------
+def _interval_allowed_for_atom(typ: str, ival: int, seed: date, cand: date) -> bool:
+    if ival <= 1:
+        return True
+    if typ == "w":
+        weeks_diff = _weeks_between(seed, cand)
+        return weeks_diff % ival == 0
+    if typ == "y":
+        return (_year_index(cand) - _year_index(seed)) % ival == 0
+    return True
+
+
+def _advance_probe_for_interval_bucket(typ: str, ival: int, seed: date, cand: date) -> date:
+    if ival <= 1:
+        return cand
+    if typ == "w":
+        cur_monday = cand - timedelta(days=cand.weekday())
+        weeks_from_seed = _weeks_between(seed, cur_monday)
+        diff = weeks_from_seed % ival
+        add_weeks = (ival - diff) if diff != 0 else 0
+        next_allowed_monday = cur_monday + timedelta(weeks=add_weeks or ival)
+        return next_allowed_monday - timedelta(days=1)
+    if typ == "y":
+        diff = (_year_index(cand) - _year_index(seed)) % ival
+        add_y = (ival - diff) if diff != 0 else 0
+        next_jan1 = date(cand.year + (add_y or ival), 1, 1)
+        return next_jan1 - timedelta(days=1)
+    return cand
+
+
+def _month_doms_safe(spec: str, y: int, m: int) -> list[int]:
+    try:
+        return sorted(expand_monthly_cached(spec, y, m))
+    except Exception:
+        return []
+
+
+def _month_has_hit(spec: str, y: int, m: int) -> bool:
+    return bool(_month_doms_safe(spec, y, m))
+
+
+def _first_hit_after_probe_in_month(spec: str, y: int, m: int, probe: date) -> date | None:
+    for d0 in _month_doms_safe(spec, y, m):
+        dt = date(y, m, d0)
+        if dt > probe:
+            return dt
+    return None
+
+
+def _next_valid_month_on_or_after(spec: str, y: int, m: int) -> tuple[int, int]:
+    yy, mm = y, m
+    for _ in range(480):
+        if _month_has_hit(spec, yy, mm):
+            return yy, mm
+        mm += 1
+        if mm > 12:
+            yy += 1
+            mm = 1
+    return y, m
+
+
+def _advance_k_valid_months(spec: str, start_y: int, start_m: int, k: int) -> tuple[int, int]:
+    yy, mm = start_y, start_m
+    steps = max(k, 0)
+    while steps >= 0:
+        mm += 1
+        if mm > 12:
+            mm = 1
+            yy += 1
+        yy, mm = _next_valid_month_on_or_after(spec, yy, mm)
+        steps -= 1
+    return yy, mm
+
+
+def _monthly_align_base_for_interval(spec: str, base: date, probe: date, seed: date, ival: int) -> date:
+    by, bm = base.year, base.month
+
+    # Seed bucket = first valid month on/after seed.
+    sy, sm = _next_valid_month_on_or_after(spec, seed.year, seed.month)
+
+    # Ensure base is in a valid month and strictly > probe.
+    if not _month_has_hit(spec, by, bm):
+        by, bm = _next_valid_month_on_or_after(spec, by, bm)
+        nxt = _first_hit_after_probe_in_month(spec, by, bm, probe)
+        if nxt is None:
+            ny, nm = _advance_k_valid_months(spec, by, bm, 0)
+            doms = _month_doms_safe(spec, ny, nm)
+            base = date(ny, nm, doms[0])
+        else:
+            base = nxt
+    elif base <= probe:
+        nxt = _first_hit_after_probe_in_month(spec, by, bm, probe)
+        if nxt is None:
+            ny, nm = _advance_k_valid_months(spec, by, bm, 0)
+            doms = _month_doms_safe(spec, ny, nm)
+            base = date(ny, nm, doms[0])
+        else:
+            base = nxt
+
+    # Count valid-month steps from (sy, sm) to base(y, m).
+    cnt = 0
+    ty, tm = sy, sm
+    while (ty, tm) != (base.year, base.month) and cnt < 480:
+        ty, tm = _advance_k_valid_months(spec, ty, tm, 0)
+        cnt += 1
+
+    if (cnt % ival) != 0:
+        steps = ival - (cnt % ival)
+        ny, nm = _advance_k_valid_months(spec, base.year, base.month, steps - 1)
+        doms = _month_doms_safe(spec, ny, nm)
+        base = date(ny, nm, doms[0])
+
+    return base
+
+
+def _accept_roll_candidate(ref_d: date, base: date, cand: date, roll_kind: str | None) -> bool:
+    if roll_kind in ("pbd", "nbd", "nw"):
+        # For business-day rolls, rolled candidate may land on ref_d.
+        return base > ref_d and cand >= ref_d
+    return cand > ref_d
+
+
 def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
     """
     Strictly-after guard + /N gating by buckets:
@@ -6386,85 +6507,15 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
 
     seed = default_seed or ref_d
     probe = ref_d
-    typ   = atom["typ"]
-    mods  = atom.get("mods") or {}
-    spec  = atom.get("spec") or ""
+    typ = atom["typ"]
+    mods = atom.get("mods") or {}
+    spec = atom.get("spec") or ""
 
     # Fast path: ival==1 and no modifiers
     if ival == 1 and not _active_mod_keys(mods):
         candidate = base_next_after_atom(atom, ref_d)
         if candidate > ref_d:
             return candidate
-
-    # ---- helpers for weekly/yearly gating ----
-    def _allowed_by_interval(cand: date) -> bool:
-        if ival <= 1:
-            return True
-        if typ == "w":
-            # Use proper week difference
-            weeks_diff = _weeks_between(seed, cand)
-            return weeks_diff % ival == 0
-        if typ == "y":
-            return (_year_index(cand) - _year_index(seed)) % ival == 0
-        # monthly handled separately
-        return True
-
-    def _advance_probe_to_next_allowed_bucket(cand: date) -> date:
-        if ival <= 1:
-            return cand
-        if typ == "w":
-            cur_monday = cand - timedelta(days=cand.weekday())
-            weeks_from_seed = _weeks_between(seed, cur_monday)
-            diff = weeks_from_seed % ival
-            add_weeks = (ival - diff) if diff != 0 else 0
-            next_allowed_monday = cur_monday + timedelta(weeks=add_weeks or ival)
-            return next_allowed_monday - timedelta(days=1)
-        if typ == "y":
-            diff = (_year_index(cand) - _year_index(seed)) % ival
-            add_y = (ival - diff) if diff != 0 else 0
-            next_jan1 = date(cand.year + (add_y or ival), 1, 1)
-            return next_jan1 - timedelta(days=1)
-        return cand
-
-    # ---- helpers for monthly valid-month gating ----
-    def _month_doms(y: int, m: int) -> list[int]:
-        try:
-            return sorted(expand_monthly_cached(spec, y, m))
-        except Exception:
-            return []
-
-    def _month_has_hit(y: int, m: int) -> bool:
-        return bool(_month_doms(y, m))
-
-    def _first_hit_after_probe_in_month(y: int, m: int, p: date) -> date | None:
-        for d0 in _month_doms(y, m):
-            dt = date(y, m, d0)
-            if dt > p:
-                return dt
-        return None
-
-    def _next_valid_month_on_or_after(y: int, m: int) -> tuple[int, int]:
-        yy, mm = y, m
-        for _ in range(480):  # safety bound
-            if _month_has_hit(yy, mm):
-                return yy, mm
-            mm += 1
-            if mm > 12:
-                yy += 1
-                mm = 1
-        return y, m
-
-    def _advance_k_valid_months(start_y: int, start_m: int, k: int) -> tuple[int, int]:
-        yy, mm = start_y, start_m
-        steps = max(k, 0)
-        while steps >= 0:
-            mm += 1
-            if mm > 12:
-                mm = 1
-                yy += 1
-            yy, mm = _next_valid_month_on_or_after(yy, mm)
-            steps -= 1
-        return yy, mm
 
     # ---- guarded iteration ----
     for _ in range(MAX_ANCHOR_ITER):
@@ -6476,65 +6527,21 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
             continue
 
         # weekly/yearly gating first
-        if typ in ("w", "y") and not _allowed_by_interval(base):
-            probe = _advance_probe_to_next_allowed_bucket(base)
+        if typ in ("w", "y") and not _interval_allowed_for_atom(typ, ival, seed, base):
+            probe = _advance_probe_for_interval_bucket(typ, ival, seed, base)
             continue
 
         # monthly special-case: /N by *valid months*
         if typ == "m" and ival > 1:
-            by, bm = base.year, base.month
-
-            # seed bucket = first valid month on/after seed
-            sy, sm = _next_valid_month_on_or_after(seed.year, seed.month)
-
-            # ensure base is in a valid month and strictly > probe
-            if not _month_has_hit(by, bm):
-                by, bm = _next_valid_month_on_or_after(by, bm)
-                nxt = _first_hit_after_probe_in_month(by, bm, probe)
-                if nxt is None:
-                    ny, nm = _advance_k_valid_months(by, bm, 0)
-                    doms = _month_doms(ny, nm)
-                    base = date(ny, nm, doms[0])
-                else:
-                    base = nxt
-            else:
-                if base <= probe:
-                    nxt = _first_hit_after_probe_in_month(by, bm, probe)
-                    if nxt is None:
-                        ny, nm = _advance_k_valid_months(by, bm, 0)
-                        doms = _month_doms(ny, nm)
-                        base = date(ny, nm, doms[0])
-                    else:
-                        base = nxt
-
-            # count valid-month steps from (sy,sm) to base(y,m)
-            cnt = 0
-            ty, tm = sy, sm
-            while (ty, tm) != (base.year, base.month) and cnt < 480:
-                ty, tm = _advance_k_valid_months(ty, tm, 0)
-                cnt += 1
-
-            if (cnt % ival) != 0:
-                steps = ival - (cnt % ival)
-                ny, nm = _advance_k_valid_months(base.year, base.month, steps - 1)
-                doms = _month_doms(ny, nm)
-                base = date(ny, nm, doms[0])
+            base = _monthly_align_base_for_interval(spec, base, probe, seed, ival)
 
         # --- apply roll + offsets and decide acceptance ---
         rolled = roll_apply(base, mods)
         cand = apply_day_offset(rolled, mods)
 
         roll_kind = mods.get("roll")
-        if roll_kind in ("pbd", "nbd", "nw"):
-            # Business-day rolls:
-            #   base must still be strictly after ref_d,
-            #   but the rolled candidate is allowed to land ON ref_d.
-            if base > ref_d and cand >= ref_d:
-                return cand
-        else:
-            # Everything else keeps strict "after ref_d" semantics.
-            if cand > ref_d:
-                return cand
+        if _accept_roll_candidate(ref_d, base, cand, roll_kind):
+            return cand
 
         # advance probe for next iteration
         probe = base + timedelta(days=1)

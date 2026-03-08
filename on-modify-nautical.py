@@ -4379,7 +4379,7 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     _print_task(new)
 
 
-def _handle_completion_modify(old: dict, new: dict) -> None:
+def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
     # If we reach here, the task is being completed
     # Now we should validate CP (in addition to anchor which was already validated on modify)
     cp_raw = (new.get("cp") or "").strip()
@@ -4407,14 +4407,19 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
                 _validate_anchor_on_modify(new_anchor)
             # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
 
-        if (_field_changed(old, new, "cp")
+        if (
+            _field_changed(old, new, "cp")
             or _field_changed(old, new, "chainMax")
-            or _field_changed(old, new, "chainUntil")) and new_cp:
+            or _field_changed(old, new, "chainUntil")
+        ) and new_cp:
             _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
 
         _stamp_chain_id_if_new_nautical(old, new)
 
-    now_utc = core.now_utc()
+    return new_cp, new_anchor
+
+
+def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
     parent_short = _short(new.get("uuid"))
     base_no = core.coerce_int(new.get("link"), 1)
     if base_no < 1 or base_no > core.MAX_LINK_NUMBER:
@@ -4426,7 +4431,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
             kind="error",
         )
         _print_task(new)
-        return
+        return None
     next_no = base_no + 1
     if next_no > core.MAX_LINK_NUMBER:
         _panel(
@@ -4437,7 +4442,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
             kind="error",
         )
         _print_task(new)
-        return
+        return None
 
     # Determine whether chaining is effectively enabled
     raw_ch = (new.get("chain") or "").strip().lower()
@@ -4459,15 +4464,14 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
         else:
             # Not a chain task at all → just pass it through quietly.
             _print_task(new)
-        return
-
+        return None
 
     has_anchor = bool((new.get("anchor") or "").strip())
     has_cp = bool((new.get("cp") or "").strip())
     kind = "anchor" if has_anchor else ("cp" if has_cp else None)
     if not kind:
         _print_task(new)
-        return
+        return None
 
     chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
     if not chain_id:
@@ -4480,7 +4484,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
             kind="error",
         )
         _print_task(new)
-        return
+        return None
 
     # Idempotency guard:
     # If this completed link already has a spawned next task (typical done->pending->done),
@@ -4499,8 +4503,18 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
             kind="note",
         )
         _print_task(new)
-        return
+        return None
 
+    return {
+        "parent_short": parent_short,
+        "base_no": base_no,
+        "next_no": next_no,
+        "kind": kind,
+        "chain_id": chain_id,
+    }
+
+
+def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime) -> dict | None:
     # Compute next due
     try:
         if kind == "anchor":
@@ -4514,9 +4528,8 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
             [("Reason", f"Invalid task field: {str(e)}")],
             kind="error",
         )
-
         _print_task(new)
-        return
+        return None
     except Exception as e:
         _diag(f"compute next due failed: {e}")
         _panel(
@@ -4525,7 +4538,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
             kind="error",
         )
         _print_task(new)
-        return
+        return None
 
     # Parse chainUntil once (you already do this later; do it early too or reuse)
     until_dt, err = _safe_parse_datetime(new.get("chainUntil"))
@@ -4534,7 +4547,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
             "⛔ Chain error", [("Reason", f"Invalid chainUntil: {err}")], kind="error"
         )
         _print_task(new)
-        return
+        return None
 
     # GUARD: chainUntil must be in future
     if until_dt:
@@ -4546,14 +4559,14 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
                 kind="error",
             )
             _print_task(new)
-            return
+            return None
 
     # GUARD: if the computed next due would exceed chainUntil, stop here.
     if until_dt and child_due > until_dt:
         _end_chain_summary(new, "Reached 'until' limit", now_utc)
         new["chain"] = "off"
         _print_task(new)
-        return
+        return None
 
     if not child_due:
         _panel(
@@ -4562,7 +4575,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
             kind="error",
         )
         _print_task(new)
-        return
+        return None
 
     # GUARD: Warn if chain extends unreasonably far
     if until_dt:
@@ -4571,7 +4584,6 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
         )
         if warn_msg and not is_reasonable:
             _panel("⚠ Chain duration warning", [("Warning", warn_msg)], kind="warning")
-
 
     # Effective cap (max/until) -> numeric cap_no and finals for panel
     cpmax = core.coerce_int(new.get("chainMax"), 0)
@@ -4613,8 +4625,30 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
         _end_chain_summary(new, f"Reached cap #{cap_no}", now_utc, current_task=new)
         new["chain"] = "off"
         _print_task(new)
-        return
+        return None
 
+    return {
+        "child_due": child_due,
+        "meta": meta,
+        "dnf": dnf,
+        "until_dt": until_dt,
+        "cpmax": cpmax,
+        "cap_no": cap_no,
+        "finals": finals,
+        "until_cap_no": until_cap_no,
+    }
+
+
+def _completion_build_and_spawn_child(
+    new: dict,
+    *,
+    child_due,
+    next_no: int,
+    parent_short: str,
+    kind: str,
+    cpmax: int,
+    until_dt,
+) -> dict | None:
     # Build child payload & spawn
     try:
         child = _build_child_from_parent(
@@ -4628,7 +4662,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
             kind="error",
         )
         _print_task(new)
-        return
+        return None
 
     deferred_spawn = False
     spawn_intent_id = None
@@ -4648,7 +4682,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
                 kind="warning",
             )
             _print_task(new)
-            return
+            return None
     except Exception as e:
         _diag(f"spawn child failed: {e}")
         _panel(
@@ -4657,11 +4691,62 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
             kind="error",
         )
         _print_task(new)
-        return
+        return None
 
     # Reflect link on parent only when child is confirmed.
     if verified:
         new["nextLink"] = child_short
+
+    return {
+        "child": child,
+        "child_short": child_short,
+        "stripped_attrs": stripped_attrs,
+        "verified": verified,
+        "deferred_spawn": deferred_spawn,
+        "spawn_intent_id": spawn_intent_id,
+    }
+
+
+def _handle_completion_modify(old: dict, new: dict) -> None:
+    _completion_validate_cp_and_anchor(old, new)
+    now_utc = core.now_utc()
+    ctx = _completion_preflight_context(new, now_utc)
+    if ctx is None:
+        return
+    parent_short = ctx["parent_short"]
+    base_no = ctx["base_no"]
+    next_no = ctx["next_no"]
+    kind = ctx["kind"]
+    chain_id = ctx["chain_id"]
+
+    computed = _completion_compute_next_and_limits(new, kind, next_no, now_utc)
+    if computed is None:
+        return
+    child_due = computed["child_due"]
+    meta = computed["meta"]
+    dnf = computed["dnf"]
+    until_dt = computed["until_dt"]
+    cpmax = computed["cpmax"]
+    cap_no = computed["cap_no"]
+    finals = computed["finals"]
+    until_cap_no = computed["until_cap_no"]
+
+    spawned = _completion_build_and_spawn_child(
+        new,
+        child_due=child_due,
+        next_no=next_no,
+        parent_short=parent_short,
+        kind=kind,
+        cpmax=cpmax,
+        until_dt=until_dt,
+    )
+    if spawned is None:
+        return
+    child = spawned["child"]
+    child_short = spawned["child_short"]
+    stripped_attrs = spawned["stripped_attrs"]
+    deferred_spawn = spawned["deferred_spawn"]
+    spawn_intent_id = spawned["spawn_intent_id"]
 
     # Build an in-memory chain index once for panel/timeline lookups.
     chain = []

@@ -4044,6 +4044,273 @@ def _is_non_completion_modify(old: dict, new: dict) -> bool:
     return (old.get("status") == new.get("status")) or (new.get("status") != "completed")
 
 
+def _stamp_chain_id_if_new_nautical(old: dict, new: dict) -> None:
+    # [CHAINID] stamp only when task just became nautical and has no chainID/links
+    try:
+        became_anchor = (not (old.get("anchor") or "").strip()) and ((new.get("anchor") or "").strip())
+        became_cp = (not (old.get("cp") or "").strip()) and ((new.get("cp") or "").strip())
+        already_chain = bool((new.get("chainID") or "").strip())
+        linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
+        if (became_anchor or became_cp) and not already_chain and not linked_already:
+            new["chainID"] = core.short_uuid(new.get("uuid"))
+    except Exception:
+        pass
+
+
+def _resolve_child_id(child_short: str, deferred_spawn: bool, chain_by_short: dict | None) -> str:
+    child_id = ""
+    if not deferred_spawn and chain_by_short:
+        child_id = str(chain_by_short.get(child_short, {}).get("id", "") or "")
+    if not deferred_spawn and not child_id:
+        child_obj = _export_uuid_short_cached(child_short)
+        child_id = child_obj.get("id", "") if child_obj else ""
+    return child_id
+
+
+def _render_anchor_completion_feedback(
+    *,
+    new: dict,
+    child: dict,
+    child_due,
+    child_short: str,
+    next_no: int,
+    parent_short: str,
+    cap_no: int | None,
+    finals: list[tuple[str, object]],
+    now_utc,
+    until_dt,
+    until_cap_no: int | None,
+    dnf,
+    meta: dict,
+    stripped_attrs: list[str],
+    deferred_spawn: bool,
+    spawn_intent_id: str | None,
+    chain_by_short: dict | None,
+    analytics_advice: str | None,
+    integrity_warnings: list[str] | None,
+    base_no: int,
+) -> None:
+    fb = []
+    anchor_raw = (new.get("anchor") or "").strip()
+    expr_str = _strip_quotes(anchor_raw)
+    mode_tag = {
+        "skip": "[cyan]SKIP[/]",
+        "all": "[yellow]ALL[/]",
+        "flex": "[magenta]FLEX[/]",
+    }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
+    fb.append(("Pattern", f"{expr_str}  {mode_tag}"))
+    fb.append(("Natural", core.describe_anchor_dnf(dnf, new)))
+    fb.append(("Basis", _pretty_basis_anchor(meta, new)))
+    fb.append(("Root", _format_root_and_age(new, now_utc)))
+
+    if _DEBUG_WAIT_SCHED and _LAST_WAIT_SCHED_DEBUG:
+        for _fld in ("scheduled", "wait"):
+            d = _LAST_WAIT_SCHED_DEBUG.get(_fld)
+            if not d:
+                continue
+            if d.get("ok"):
+                fb.append(
+                    (
+                        f"{_fld} carry",
+                        f"Δ {d.get('delta')}  parent {d.get('parent_val')} vs {d.get('parent_due')}  →  child {d.get('child_val')}",
+                    )
+                )
+            else:
+                fb.append(
+                    (
+                        f"{_fld} carry",
+                        f"[yellow]skip[/] ({d.get('reason')})  parent {d.get('parent_val')} vs {d.get('parent_due')}",
+                    )
+                )
+    if stripped_attrs:
+        fb.append(
+            (
+                "Sanitised",
+                f"Removed unknown fields: {', '.join(sorted(stripped_attrs))}",
+            )
+        )
+
+    delta = core.humanize_delta(now_utc, child_due, use_months_days=core.expr_has_m_or_y(dnf))
+    fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
+    if analytics_advice:
+        fb.append(("Analytics", analytics_advice))
+    if integrity_warnings:
+        warn_list = integrity_warnings[:4]
+        if len(integrity_warnings) > 4:
+            warn_list.append(f"...and {len(integrity_warnings) - 4} more")
+        fb.append(("Integrity", "\n".join(warn_list)))
+    _append_next_wait_sched_rows(fb, child, child_due)
+
+    if cap_no:
+        if base_no >= cap_no:
+            fb.append(("Link status", "[bold red]This was the last link[/]"))
+        elif base_no == cap_no - 1:
+            fb.append(("Link status", "[yellow]This was the second-to-last link[/]"))
+        fb.append(("Links left", f"{max(0, cap_no - base_no)} left (cap #{cap_no})"))
+
+    for label, when in finals:
+        fb.append(
+            (
+                f"Final ({label})",
+                f"{core.fmt_dt_local(when)}  ({_human_delta(now_utc, when, True)})",
+            )
+        )
+
+    _ = _resolve_child_id(child_short, deferred_spawn, chain_by_short)
+    if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
+        fb.append(("Intent", spawn_intent_id))
+
+    title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short}"
+    tl = _timeline_lines(
+        "anchor",
+        new,
+        child_due,
+        child_short,
+        dnf,
+        next_count=3,
+        cap_no=cap_no,
+        cur_no=base_no,
+        show_gaps=_SHOW_TIMELINE_GAPS,
+        round_anchor_gaps=True,  # Round to nearest day
+    )
+    if tl:
+        fb.append(("Timeline", "\n".join(tl)))
+    if "rand" in expr_str.lower():
+        fb.append(
+            (
+                "Rand",
+                f"[dim]Deterministic picks seeded by root {_short(_root_uuid_from(new))}[/]",
+            )
+        )
+
+    fb = _format_next_anchor_rows(fb)
+
+    if (core.PANEL_MODE or "").strip().lower() == "line":
+        line = _format_line_preview(
+            base_no,
+            new,
+            child_due,
+            child_short,
+            now_utc,
+            cap_no=cap_no,
+            until_dt=until_dt,
+            until_no=until_cap_no,
+        )
+        _panel_line(title, line, kind="preview_anchor")
+    elif _CHAIN_COLOR_PER_CHAIN:
+        chain_colour = _chain_colour_for_task(new, "anchor")
+        _panel(
+            title,
+            fb,
+            kind="preview_anchor",
+            border_style=chain_colour,
+            title_style=chain_colour,
+        )
+    else:
+        # Fast path: use the static theme colours
+        _panel(title, fb, kind="preview_anchor")
+
+
+def _render_cp_completion_feedback(
+    *,
+    new: dict,
+    child: dict,
+    child_due,
+    child_short: str,
+    next_no: int,
+    parent_short: str,
+    cap_no: int | None,
+    finals: list[tuple[str, object]],
+    now_utc,
+    until_dt,
+    until_cap_no: int | None,
+    meta: dict,
+    deferred_spawn: bool,
+    spawn_intent_id: str | None,
+    chain_by_short: dict | None,
+    analytics_advice: str | None,
+    integrity_warnings: list[str] | None,
+    base_no: int,
+) -> None:
+    fb = []
+    delta = core.humanize_delta(now_utc, child_due, use_months_days=False)
+    fb.append(("Period", new.get("cp")))
+    fb.append(("Basis", _pretty_basis_cp(new, meta)))
+    fb.append(("Root", _format_root_and_age(new, now_utc)))
+    fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
+    if analytics_advice:
+        fb.append(("Analytics", analytics_advice))
+    if integrity_warnings:
+        warn_list = integrity_warnings[:4]
+        if len(integrity_warnings) > 4:
+            warn_list.append(f"...and {len(integrity_warnings) - 4} more")
+        fb.append(("Integrity", "\n".join(warn_list)))
+    _append_next_wait_sched_rows(fb, child, child_due)
+
+    if cap_no:
+        if base_no >= cap_no:
+            fb.append(("Link status", "[bold red]This was the last link[/]"))
+        elif base_no == cap_no - 1:
+            fb.append(("Link status", "[yellow]Next link is the last in the chain.[/]"))
+        fb.append(("Links left", f"{max(0, cap_no - base_no)} left (cap #{cap_no})"))
+    else:
+        fb.append(("Limits", "—"))
+
+    for label, when in finals:
+        fb.append(
+            (
+                f"Final ({label})",
+                f"{core.fmt_dt_local(when)}  ({_human_delta(now_utc, when, True)})",
+            )
+        )
+
+    child_id = _resolve_child_id(child_short, deferred_spawn, chain_by_short)
+    if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
+        fb.append(("Intent", spawn_intent_id))
+
+    title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short} [{child_id}]"
+    tl = _timeline_lines(
+        "cp",
+        new,
+        child_due,
+        child_short,
+        None,
+        next_count=3,
+        cap_no=cap_no,
+        cur_no=base_no,
+        show_gaps=_SHOW_TIMELINE_GAPS,
+        round_anchor_gaps=False,  # CP gaps are exact
+    )
+    if tl:
+        fb.append(("Timeline", "\n".join(tl)))
+
+    fb = _format_next_cp_rows(fb)
+
+    if (core.PANEL_MODE or "").strip().lower() == "line":
+        line = _format_line_preview(
+            base_no,
+            new,
+            child_due,
+            child_short,
+            now_utc,
+            cap_no=cap_no,
+            until_dt=until_dt,
+            until_no=until_cap_no,
+        )
+        _panel_line(title, line, kind="preview_cp")
+    elif _CHAIN_COLOR_PER_CHAIN:
+        chain_colour = _chain_colour_for_task(new, "cp")
+        _panel(
+            title,
+            fb,
+            kind="preview_cp",
+            border_style=chain_colour,
+            title_style=chain_colour,
+        )
+    else:
+        _panel(title, fb, kind="preview_cp")
+
+
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
     # This is a non-completion modification
     anchor_raw = (new.get("anchor") or "").strip()
@@ -4107,16 +4374,7 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     # CP validation only happens on completion, NOT on modification
     # because taskwarrior already validates the duration format
 
-    # [CHAINID] stamp only when task just became nautical and has no chainID/links
-    try:
-        became_anchor = (not (old.get("anchor") or "").strip()) and ((new.get("anchor") or "").strip())
-        became_cp = (not (old.get("cp") or "").strip()) and ((new.get("cp") or "").strip())
-        already_chain = bool((new.get("chainID") or "").strip())
-        linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
-        if (became_anchor or became_cp) and not already_chain and not linked_already:
-            new["chainID"] = core.short_uuid(new.get("uuid"))
-    except Exception:
-        pass
+    _stamp_chain_id_if_new_nautical(old, new)
 
     _print_task(new)
 
@@ -4154,16 +4412,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
             or _field_changed(old, new, "chainUntil")) and new_cp:
             _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
 
-        # [CHAINID] stamp only when task just became nautical and has no chainID/links
-        try:
-            became_anchor = (not (old.get("anchor") or "").strip()) and ((new.get("anchor") or "").strip())
-            became_cp     = (not (old.get("cp")     or "").strip()) and ((new.get("cp")     or "").strip())
-            already_chain = bool((new.get("chainID") or "").strip())
-            linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
-            if (became_anchor or became_cp) and not already_chain and not linked_already:
-                new["chainID"] = core.short_uuid(new.get("uuid"))
-        except Exception:
-            pass
+        _stamp_chain_id_if_new_nautical(old, new)
 
     now_utc = core.now_utc()
     parent_short = _short(new.get("uuid"))
@@ -4446,227 +4695,50 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
         except Exception:
             integrity_warnings = None
 
-    # Feedback panel
-    fb = []
     if kind == "anchor":
-        anchor_raw = (new.get("anchor") or "").strip()
-        expr_str = _strip_quotes(anchor_raw) 
-        mode_tag = {
-            "skip": "[cyan]SKIP[/]",
-            "all": "[yellow]ALL[/]",
-            "flex": "[magenta]FLEX[/]",
-        }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
-        fb.append(("Pattern", f"{expr_str}  {mode_tag}"))
-        fb.append(("Natural", core.describe_anchor_dnf(dnf, new)))
-        fb.append(("Basis", _pretty_basis_anchor(meta, new)))
-        fb.append(("Root", _format_root_and_age(new, now_utc)))
-
-        if _DEBUG_WAIT_SCHED and _LAST_WAIT_SCHED_DEBUG:
-            for _fld in ("scheduled", "wait"):
-                d = _LAST_WAIT_SCHED_DEBUG.get(_fld)
-                if not d:
-                    continue
-                if d.get("ok"):
-                    fb.append((
-                        f"{_fld} carry",
-                        f"Δ {d.get('delta')}  parent {d.get('parent_val')} vs {d.get('parent_due')}  →  child {d.get('child_val')}"
-                    ))
-                else:
-                    fb.append((
-                        f"{_fld} carry",
-                        f"[yellow]skip[/] ({d.get('reason')})  parent {d.get('parent_val')} vs {d.get('parent_due')}"
-                    ))
-        if stripped_attrs:
-            fb.append(
-                (
-                    "Sanitised",
-                    f"Removed unknown fields: {', '.join(sorted(stripped_attrs))}",
-                )
-            )
-
-        delta = core.humanize_delta(
-            now_utc, child_due, use_months_days=core.expr_has_m_or_y(dnf)
-        )
-        fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
-        if analytics_advice:
-            fb.append(("Analytics", analytics_advice))
-        if integrity_warnings:
-            warn_list = integrity_warnings[:4]
-            if len(integrity_warnings) > 4:
-                warn_list.append(f"...and {len(integrity_warnings) - 4} more")
-            fb.append(("Integrity", "\n".join(warn_list)))
-        _append_next_wait_sched_rows(fb, child, child_due)
-
-        if cap_no:
-            if base_no >= cap_no:
-                fb.append(("Link status", "[bold red]This was the last link[/]"))
-            elif base_no == cap_no - 1:
-                fb.append(
-                    ("Link status", "[yellow]This was the second-to-last link[/]")
-                )
-            fb.append(
-                ("Links left", f"{max(0, cap_no - base_no)} left (cap #{cap_no})")
-            )
-
-        for label, when in finals:
-            fb.append(
-                (
-                    f"Final ({label})",
-                    f"{core.fmt_dt_local(when)}  ({_human_delta(now_utc, when, True)})",
-                )
-            )
-
-
-        child_id = ""
-        if not deferred_spawn and chain_by_short:
-            child_id = str(chain_by_short.get(child_short, {}).get("id", "") or "")
-        if not deferred_spawn and not child_id:
-            child_obj = _export_uuid_short_cached(child_short)
-            child_id = child_obj.get("id", "") if child_obj else ""
-
-        if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
-            fb.append(("Intent", spawn_intent_id))
-
-        title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short}"
-        tl = _timeline_lines(
-            "anchor",
-            new,
-            child_due,
-            child_short,
-            dnf,
-            next_count=3,
+        _render_anchor_completion_feedback(
+            new=new,
+            child=child,
+            child_due=child_due,
+            child_short=child_short,
+            next_no=next_no,
+            parent_short=parent_short,
             cap_no=cap_no,
-            cur_no=base_no,
-            show_gaps=_SHOW_TIMELINE_GAPS,
-            round_anchor_gaps=True,  # Round to nearest day
-
+            finals=finals,
+            now_utc=now_utc,
+            until_dt=until_dt,
+            until_cap_no=until_cap_no,
+            dnf=dnf,
+            meta=meta,
+            stripped_attrs=stripped_attrs,
+            deferred_spawn=deferred_spawn,
+            spawn_intent_id=spawn_intent_id,
+            chain_by_short=chain_by_short,
+            analytics_advice=analytics_advice,
+            integrity_warnings=integrity_warnings,
+            base_no=base_no,
         )
-        if tl:
-            fb.append(("Timeline", "\n".join(tl)))
-        if "rand" in expr_str.lower():
-            fb.append(
-                (
-                    "Rand",
-                    f"[dim]Deterministic picks seeded by root {_short(_root_uuid_from(new))}[/]",
-                )
-            )
-
-        fb = _format_next_anchor_rows(fb)
-
-        if (core.PANEL_MODE or "").strip().lower() == "line":
-            line = _format_line_preview(
-                base_no,
-                new,
-                child_due,
-                child_short,
-                now_utc,
-                cap_no=cap_no,
-                until_dt=until_dt,
-                until_no=until_cap_no,
-            )
-            _panel_line(title, line, kind="preview_anchor")
-        elif _CHAIN_COLOR_PER_CHAIN:
-            chain_colour = _chain_colour_for_task(new, "anchor")
-            _panel(
-                title,
-                fb,
-                kind="preview_anchor",
-                border_style=chain_colour,
-                title_style=chain_colour,
-            )
-        else:
-            # Fast path: use the static theme colours
-            _panel(title, fb, kind="preview_anchor")
-
-
     else:
-        delta = core.humanize_delta(now_utc, child_due, use_months_days=False)
-        fb.append(("Period", new.get("cp")))
-        fb.append(("Basis", _pretty_basis_cp(new, meta)))
-        fb.append(("Root", _format_root_and_age(new, now_utc)))
-        fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
-        if analytics_advice:
-            fb.append(("Analytics", analytics_advice))
-        if integrity_warnings:
-            warn_list = integrity_warnings[:4]
-            if len(integrity_warnings) > 4:
-                warn_list.append(f"...and {len(integrity_warnings) - 4} more")
-            fb.append(("Integrity", "\n".join(warn_list)))
-        _append_next_wait_sched_rows(fb, child, child_due)
-
-        if cap_no:
-            if base_no >= cap_no:
-                fb.append(("Link status", "[bold red]This was the last link[/]"))
-            elif base_no == cap_no - 1:
-                fb.append(
-                    ("Link status", "[yellow]Next link is the last in the chain.[/]")
-                )
-            fb.append(
-                ("Links left", f"{max(0, cap_no - base_no)} left (cap #{cap_no})")
-            )
-        else:
-            fb.append(("Limits", "—"))
-
-        for label, when in finals:
-            fb.append(
-                (
-                    f"Final ({label})",
-                    f"{core.fmt_dt_local(when)}  ({_human_delta(now_utc, when, True)})",
-                )
-            )
-
-        child_id = ""
-        if not deferred_spawn and chain_by_short:
-            child_id = str(chain_by_short.get(child_short, {}).get("id", "") or "")
-        if not deferred_spawn and not child_id:
-            child_obj = _export_uuid_short_cached(child_short)
-            child_id = child_obj.get("id", "") if child_obj else ""
-
-        if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
-            fb.append(("Intent", spawn_intent_id))
-
-        title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short} [{child_id}]"
-        tl = _timeline_lines(
-            "cp",
-            new,
-            child_due,
-            child_short,
-            None,
-            next_count=3,
+        _render_cp_completion_feedback(
+            new=new,
+            child=child,
+            child_due=child_due,
+            child_short=child_short,
+            next_no=next_no,
+            parent_short=parent_short,
             cap_no=cap_no,
-            cur_no=base_no,
-            show_gaps=_SHOW_TIMELINE_GAPS,
-            round_anchor_gaps=False,  # CP gaps are exact
-
+            finals=finals,
+            now_utc=now_utc,
+            until_dt=until_dt,
+            until_cap_no=until_cap_no,
+            meta=meta,
+            deferred_spawn=deferred_spawn,
+            spawn_intent_id=spawn_intent_id,
+            chain_by_short=chain_by_short,
+            analytics_advice=analytics_advice,
+            integrity_warnings=integrity_warnings,
+            base_no=base_no,
         )
-        if tl:
-            fb.append(("Timeline", "\n".join(tl)))
-
-        fb = _format_next_cp_rows(fb)
-
-        if (core.PANEL_MODE or "").strip().lower() == "line":
-            line = _format_line_preview(
-                base_no,
-                new,
-                child_due,
-                child_short,
-                now_utc,
-                cap_no=cap_no,
-                until_dt=until_dt,
-                until_no=until_cap_no,
-            )
-            _panel_line(title, line, kind="preview_cp")
-        elif _CHAIN_COLOR_PER_CHAIN:
-            chain_colour = _chain_colour_for_task(new, "cp")
-            _panel(
-                title,
-                fb,
-                kind="preview_cp",
-                border_style=chain_colour,
-                title_style=chain_colour,
-            )
-        else:
-            _panel(title, fb, kind="preview_cp")
 
 
 

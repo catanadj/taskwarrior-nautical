@@ -3877,134 +3877,119 @@ def _fmt_yearly_atom(tok: str) -> str:
 
 
 
-def describe_anchor_term(term: list, default_due_dt=None) -> str:
+def _describe_monthly_tokens(spec: str):
+    return _split_csv_lower(spec)
 
-    def _ordinal(n: int) -> str:
-        if 10 <= (n % 100) <= 20:
-            suf = "th"
-        else:
-            suf = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-        return f"{n}{suf}"
 
-    def _parse_monthly_tokens(spec: str):
-        return _split_csv_lower(spec)
-
-    def _is_pure_nth_weekday_spec(spec: str):
-        toks = _parse_monthly_tokens(spec)
-        if not toks:
-            return False, []
-        out = []
-        for t in toks:
-            m = _safe_match(_nth_wd_re, t)
-            if not m:
-                return False, []
-            n_raw, wd = m.group(1), m.group(2)
-            if n_raw == "last":
-                k = -1
-            else:
-                k = int(re.sub(r"(st|nd|rd|th)$", "", n_raw))
-            out.append((k, wd))
-        return True, out
-
-    def _is_pure_dom_spec(spec: str):
-        toks = _parse_monthly_tokens(spec)
-        if not toks:
-            return False, []
-        out = []
-        for t in toks:
-            if not t.isdigit():
-                return False, []
-            d = int(t)
-            if d < 1 or d > 31:
-                return False, []
-            out.append(d)
-        return True, out
-
-    def _single_full_month_from_yearly_spec(spec: str):
-        m = _year_range_colon_re.match(str(spec or "").strip())
+def _describe_is_pure_nth_weekday_spec(spec: str):
+    toks = _describe_monthly_tokens(spec)
+    if not toks:
+        return False, []
+    out = []
+    for t in toks:
+        m = _safe_match(_nth_wd_re, t)
         if not m:
-            return None
-        d1, m1, d2, m2 = map(int, m.groups())
-        if m1 != m2 or d1 != 1:
-            return None
-        if d2 < 28 or d2 > 31:
-            return None
-        return m1  # 1..12
-
-    # ---- business-day roll helpers (pbd/nbd live in mods['roll']) ----
-    def _term_roll_shift(term) -> str | None:
-        saw = set()
-        for a in term:
-            roll = (a.get("mods") or {}).get("roll")
-            if roll in ("nw", "pbd", "nbd"):
-                saw.add(roll)
-        if "nw" in saw:
-            return "nw"
-        if "pbd" in saw:
-            return "pbd"
-        if "nbd" in saw:
-            return "nbd"
-        return None
-
-    # plain 'bd' filter present?
-    def _term_bd_filter(term) -> bool:
-        return any((a.get("mods") or {}).get("bd") for a in term)
-
-    def _roll_suffix(roll: str) -> str:
-        if roll == "pbd":
-            return " if business day; otherwise the previous business day"
-        if roll == "nbd":
-            return " if business day; otherwise the next business day"
-        if roll == "nw":
-            return " if business day; otherwise the nearest business day (Fri if Saturday, Mon if Sunday)"
-        return ""
-
-    def _bd_suffix(roll: str) -> str:
-        return (
-            " if business day; otherwise the previous business day"
-            if roll == "pbd"
-            else " if business day; otherwise the next business day"
-        )
-
-    def _inject_schedule_suffixes(txt: str, term) -> str:
-        """Add either roll suffix (pbd/nbd/nw) or bd-filter suffix (if no roll)."""
-        roll = _term_roll_shift(term)
-        if roll:
-            suffix = _roll_suffix(roll)
-        elif _term_bd_filter(term):
-            suffix = " only if a business day (skipped if weekend)"
+            return False, []
+        n_raw, wd = m.group(1), m.group(2)
+        if n_raw == "last":
+            k = -1
         else:
-            suffix = ""
+            k = int(re.sub(r"(st|nd|rd|th)$", "", n_raw))
+        out.append((k, wd))
+    return True, out
 
-        if not suffix:
-            return txt
 
-        targets = [
-            "the last day of each month",
-            "the first day of each month",
-            "the last day of the month",
-            "the first day of the month",
-            "the last day of each quarter",
-            "the first day of each quarter",
-        ]
-        for t in targets:
-            if t in txt:
-                return txt.replace(t, t + suffix)
+def _describe_is_pure_dom_spec(spec: str):
+    toks = _describe_monthly_tokens(spec)
+    if not toks:
+        return False, []
+    out = []
+    for t in toks:
+        if not t.isdigit():
+            return False, []
+        d = int(t)
+        if d < 1 or d > 31:
+            return False, []
+        out.append(d)
+    return True, out
 
-        if " at " in txt:
-            head, sep, tail = txt.partition(" at ")
-            return f"{head}{suffix} at {tail}"
-        return txt + suffix
 
-    # ---------- Build ----------
-    parts = []
+def _describe_single_full_month_from_yearly_spec(spec: str):
+    m = _year_range_colon_re.match(str(spec or "").strip())
+    if not m:
+        return None
+    d1, m1, d2, m2 = map(int, m.groups())
+    if m1 != m2 or d1 != 1:
+        return None
+    if d2 < 28 or d2 > 31:
+        return None
+    return m1
+
+
+def _describe_term_roll_shift(term) -> str | None:
+    saw = set()
+    for a in term:
+        roll = (a.get("mods") or {}).get("roll")
+        if roll in ("nw", "pbd", "nbd"):
+            saw.add(roll)
+    if "nw" in saw:
+        return "nw"
+    if "pbd" in saw:
+        return "pbd"
+    if "nbd" in saw:
+        return "nbd"
+    return None
+
+
+def _describe_term_bd_filter(term) -> bool:
+    return any((a.get("mods") or {}).get("bd") for a in term)
+
+
+def _describe_roll_suffix(roll: str) -> str:
+    if roll == "pbd":
+        return " if business day; otherwise the previous business day"
+    if roll == "nbd":
+        return " if business day; otherwise the next business day"
+    if roll == "nw":
+        return " if business day; otherwise the nearest business day (Fri if Saturday, Mon if Sunday)"
+    return ""
+
+
+def _describe_inject_schedule_suffixes(txt: str, term) -> str:
+    roll = _describe_term_roll_shift(term)
+    if roll:
+        suffix = _describe_roll_suffix(roll)
+    elif _describe_term_bd_filter(term):
+        suffix = " only if a business day (skipped if weekend)"
+    else:
+        suffix = ""
+
+    if not suffix:
+        return txt
+
+    targets = [
+        "the last day of each month",
+        "the first day of each month",
+        "the last day of the month",
+        "the first day of the month",
+        "the last day of each quarter",
+        "the first day of each quarter",
+    ]
+    for t in targets:
+        if t in txt:
+            return txt.replace(t, t + suffix)
+
+    if " at " in txt:
+        head, _sep, tail = txt.partition(" at ")
+        return f"{head}{suffix} at {tail}"
+    return txt + suffix
+
+
+def _describe_anchor_term_collect(term):
     m_parts = []
     y_parts = []
     w_phrase = None
-    interval_prefix = None
     bd_filter = False
-    suppress_tail = False  # when True, return only prefix (+ optional time)
-
     wk_ival = mo_ival = yr_ival = 1
     monthly_specs = []
     yearly_specs = []
@@ -4018,66 +4003,73 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
             wk_ival = max(wk_ival, ival)
             w_phrase = _fmt_weekdays_list(spec)
             if wk_ival > 1 and spec == "rand":
-                # Prefer: "one random day every 4 weeks"
                 w_phrase = f"one random day every {wk_ival} weeks"
-
         elif typ == "m":
             mo_ival = max(mo_ival, ival)
             monthly_specs.append(spec)
-            tokens = _split_csv_tokens(spec)
-            for tok in tokens:
+            for tok in _split_csv_tokens(spec):
                 m_parts.append(_fmt_monthly_atom(tok))
-
         elif typ == "y":
             yr_ival = max(yr_ival, ival)
             yearly_specs.append(spec)
-
             qmap = a.get("_qmap") or {}
-
             for tok in _split_csv_tokens(spec):
                 phr = _fmt_yearly_atom(tok)
                 if phr and qmap and tok in qmap and not phr.startswith("one random day"):
                     phr = f"{phr} ({qmap[tok]})"
                 y_parts.append(phr)
 
-
         mods = a.get("mods") or {}
         bd_filter = bd_filter or bool(mods.get("bd") or (mods.get("wd") is True))
 
-    # ---------- Fused phrasing: "2nd Monday of March every 2 years" ----------
-    if len(monthly_specs) == 1 and len(yearly_specs) == 1:
-        mspec = monthly_specs[0]
-        yspec = yearly_specs[0]
-        is_nth, pairs = _is_pure_nth_weekday_spec(mspec)
-        fuse_month = _single_full_month_from_yearly_spec(yspec)
-        if is_nth and fuse_month and len(pairs) == 1:
-            k, wd = pairs[0]
-            if k < 0:
-                k_txt = "last" if k == -1 else f"{_ordinal(abs(k))} last"
-            else:
-                k_txt = _ordinal(k)
-            main = f"the {k_txt} {_WD_FULL[wd]} of {_MONTH_FULL[fuse_month]}"
-            hhmm = _fmt_hhmm_for_term(term, default_due_dt)
-            if yr_ival > 1:
-                main = f"{main} every {yr_ival} years"
-            if hhmm:
-                main = f"{main} at {hhmm}"
-            if bd_filter and any("random day each month" in p for p in m_parts):
-                main = f"{main} on a business day"
-            # inject pbd/nbd if present
-            main = _inject_schedule_suffixes(main, term)
-            return main
+    return w_phrase, m_parts, y_parts, bd_filter, wk_ival, mo_ival, yr_ival, monthly_specs, yearly_specs
 
-    # ---------- Interval prefix (w > m > y), plus monthly clarifier logic ----------
+
+def _describe_anchor_term_fused_month_year(
+    term,
+    default_due_dt,
+    monthly_specs,
+    yearly_specs,
+    yr_ival: int,
+    bd_filter: bool,
+    m_parts: list[str],
+) -> str | None:
+    if len(monthly_specs) != 1 or len(yearly_specs) != 1:
+        return None
+    mspec = monthly_specs[0]
+    yspec = yearly_specs[0]
+    is_nth, pairs = _describe_is_pure_nth_weekday_spec(mspec)
+    fuse_month = _describe_single_full_month_from_yearly_spec(yspec)
+    if not (is_nth and fuse_month and len(pairs) == 1):
+        return None
+    k, wd = pairs[0]
+    if k < 0:
+        k_txt = "last" if k == -1 else f"{_ordinal(abs(k))} last"
+    else:
+        k_txt = _ordinal(k)
+    main = f"the {k_txt} {_WD_FULL[wd]} of {_MONTH_FULL[fuse_month]}"
+    hhmm = _fmt_hhmm_for_term(term, default_due_dt)
+    if yr_ival > 1:
+        main = f"{main} every {yr_ival} years"
+    if hhmm:
+        main = f"{main} at {hhmm}"
+    if bd_filter and any("random day each month" in p for p in m_parts):
+        main = f"{main} on a business day"
+    return _describe_inject_schedule_suffixes(main, term)
+
+
+def _describe_anchor_term_interval_prefix(wk_ival, mo_ival, yr_ival, monthly_specs):
+    interval_prefix = None
+    suppress_tail = False
+
     if wk_ival > 1:
         interval_prefix = f"every {wk_ival} weeks: "
-
     elif mo_ival > 1:
         monthly_prefix = f"every {mo_ival} months"
         clarifier = ""
         if len(monthly_specs) == 1:
             mspec = monthly_specs[0]
-            is_nth, pairs = _is_pure_nth_weekday_spec(mspec)
+            is_nth, pairs = _describe_is_pure_nth_weekday_spec(mspec)
             if is_nth:
                 if len(pairs) == 1:
                     k, wd = pairs[0]
@@ -4089,7 +4081,7 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
                 else:
                     clarifier = " among months that satisfy the specified nth-weekdays"
             else:
-                is_dom, doms = _is_pure_dom_spec(mspec)
+                is_dom, doms = _describe_is_pure_dom_spec(mspec)
                 if is_dom and any(d >= 29 for d in doms):
                     clarifier = (
                         f" among months that have day {doms[0]}"
@@ -4098,15 +4090,18 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
                     )
 
         if clarifier:
-            interval_prefix = monthly_prefix + clarifier  # no colon
+            interval_prefix = monthly_prefix + clarifier
             suppress_tail = True
         else:
             interval_prefix = monthly_prefix + ": "
-
     elif yr_ival > 1:
         interval_prefix = f"every {yr_ival} years: "
 
-    # ---------- Build remaining parts (only used when not suppressing tail) ----------
+    return interval_prefix, suppress_tail
+
+
+def _describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter: bool) -> list[str]:
+    parts = []
     if w_phrase:
         parts.append(w_phrase)
 
@@ -4119,42 +4114,57 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
 
     if y_parts:
         yp = " or ".join(y_parts) if len(y_parts) > 1 else y_parts[0]
-        # If yearly already carries the leading semantics ("one random day ..."),
-        # don't prefix with "and within".
         if yp.startswith("one random day"):
             parts.append(yp)
+        elif w_phrase or m_parts:
+            parts.append(f"and within {yp}")
         else:
-            if (w_phrase or m_parts):
-                parts.append(f"and within {yp}")
-            else:
-                parts.append(yp)
-
+            parts.append(yp)
 
     if bd_filter and any("random day each month" in p for p in m_parts):
         parts.append("on a business day")
+    return parts
 
+
+def describe_anchor_term(term: list, default_due_dt=None) -> str:
+    (
+        w_phrase,
+        m_parts,
+        y_parts,
+        bd_filter,
+        wk_ival,
+        mo_ival,
+        yr_ival,
+        monthly_specs,
+        yearly_specs,
+    ) = _describe_anchor_term_collect(term)
+
+    fused = _describe_anchor_term_fused_month_year(
+        term, default_due_dt, monthly_specs, yearly_specs, yr_ival, bd_filter, m_parts
+    )
+    if fused is not None:
+        return fused
+
+    interval_prefix, suppress_tail = _describe_anchor_term_interval_prefix(
+        wk_ival, mo_ival, yr_ival, monthly_specs
+    )
+    parts = _describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter)
     hhmm = _fmt_hhmm_for_term(term, default_due_dt)
 
-    # ---------- Return early when suppressing tail ----------
     if suppress_tail:
         txt = interval_prefix
         if hhmm:
             txt = f"{txt} at {hhmm}"
-        # inject pbd/nbd if present
-        return _inject_schedule_suffixes(txt or "any day", term)
+        return _describe_inject_schedule_suffixes(txt or "any day", term)
 
-    # ---------- Default assembly ----------
     if hhmm:
         parts.append(f"at {hhmm}")
     txt = " ".join(p for p in parts if p)
     if interval_prefix:
         txt = interval_prefix + txt
 
-    # inject pbd/nbd if present
-    txt = _inject_prevnext_phrase(txt, term)  # rewrite “prev/next weekday”
-    txt = _inject_schedule_suffixes(
-        txt or "any day", term
-    )  # add @pbd/@nbd/@nw or @bd wording
+    txt = _inject_prevnext_phrase(txt, term)
+    txt = _describe_inject_schedule_suffixes(txt or "any day", term)
     return txt or "any day"
 
 def describe_anchor_expr(anchor_expr: str, default_due_dt=None) -> str:

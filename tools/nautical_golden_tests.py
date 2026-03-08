@@ -2389,6 +2389,20 @@ def test_natural_language_comprehensive():
         assert expected_phrase.lower() in natural.lower(), \
             f"{anchor}: expected '{expected_phrase}' in '{natural}'"
 
+def test_natural_anchor_characterization_for_complex_terms():
+    """Complex anchor prose should keep stable phrasing for key edge combinations."""
+    cases = [
+        ("m/2:31", "every 2 months among months that have day 31"),
+        ("m/2:2nd-mon", "every 2 months among months that have the 2nd Monday"),
+        ("m:-1@nbd@t=09:00", "the last day of each month if business day; otherwise the next business day at 09:00"),
+        ("m:1@nw", "the 1st day of each month if business day; otherwise the nearest business day (Fri if Saturday, Mon if Sunday)"),
+        ("w/3:rand", "every 3 weeks: one random day every 3 weeks"),
+        ("w:mon + m:1 + y:01-01..03-31", "Mondays that fall on the 1st day of each month and within Jan–Mar each year"),
+    ]
+    for expr, expected in cases:
+        got = core.describe_anchor_expr(expr)
+        assert got == expected, f"{expr}: expected {expected!r}, got {got!r}"
+
 def test_natural_compresses_repeated_within_variants():
     """describe_anchor_dnf should compact repeated OR terms that only vary by yearly 'within' token."""
     expr = (
@@ -4922,6 +4936,7 @@ TESTS = [
     test_deterministic_randomness,
     test_edge_cases,
     test_natural_language_comprehensive,
+    test_natural_anchor_characterization_for_complex_terms,
     test_natural_compresses_repeated_within_variants,
     test_natural_compresses_repeated_fall_on_variants,
     test_parser_validation,

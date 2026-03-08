@@ -1482,45 +1482,50 @@ def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
             _diag(f"orphan cleanup failed (child={child_uuid[:8]}): {err}")
 
 
-def _drain_queue() -> dict:
-    drain_t0 = time.perf_counter()
-    processed = 0
-    errors = 0
-    requeue: list[dict] = []
-    dead_lettered = 0
-    entries = _take_queue_entries()
-    entries_total = len(entries)
-    skipped_idempotent = 0
-    lock_events = 0
-    lock_streak = 0
-    lock_streak_max = 0
-    circuit_breaks = 0
-    intent_mark_ok = 0
-    intent_mark_fail = 0
-    sqlite_acked_ids: set[int] = set()
+class _DrainState:
+    def __init__(
+        self,
+        entries: list[dict],
+        entries_total: int,
+        finalized_intents: set[str],
+        intent_log_ready: bool,
+        intent_log_load_ms: float,
+    ) -> None:
+        self.entries = entries
+        self.entries_total = entries_total
+        self.finalized_intents = finalized_intents
+        self.intent_log_ready = intent_log_ready
+        self.intent_log_load_ms = intent_log_load_ms
+        self.processed = 0
+        self.errors = 0
+        self.requeue: list[dict] = []
+        self.dead_lettered = 0
+        self.skipped_idempotent = 0
+        self.lock_events = 0
+        self.lock_streak = 0
+        self.lock_streak_max = 0
+        self.circuit_breaks = 0
+        self.intent_mark_ok = 0
+        self.intent_mark_fail = 0
+        self.sqlite_acked_ids: set[int] = set()
 
-    intent_t0 = time.perf_counter()
-    finalized_intents, intent_log_ready = _load_finalized_intents()
-    intent_log_load_ms = (time.perf_counter() - intent_t0) * 1000.0
-
-    def _mark_final(entry: dict, status: str, reason: str) -> None:
-        nonlocal intent_mark_ok, intent_mark_fail
+    def mark_final(self, entry: dict, status: str, reason: str) -> None:
         sid = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
         if not sid:
             return
         if _mark_intent_status(sid, status, reason):
-            finalized_intents.add(sid)
-            intent_mark_ok += 1
+            self.finalized_intents.add(sid)
+            self.intent_mark_ok += 1
         else:
-            intent_mark_fail += 1
+            self.intent_mark_fail += 1
 
-    def _queue_backend(entry: dict) -> str:
+    def queue_backend(self, entry: dict) -> str:
         if not isinstance(entry, dict):
             return "sqlite"
         b = (entry.get("__queue_backend") or "").strip().lower()
         return b if b else "sqlite"
 
-    def _queue_id(entry: dict) -> int:
+    def queue_id(self, entry: dict) -> int:
         if not isinstance(entry, dict):
             return 0
         try:
@@ -1528,7 +1533,7 @@ def _drain_queue() -> dict:
         except Exception:
             return 0
 
-    def _entry_clean(entry: dict) -> dict:
+    def entry_clean(self, entry: dict) -> dict:
         if not isinstance(entry, dict):
             return {}
         out = dict(entry)
@@ -1536,195 +1541,197 @@ def _drain_queue() -> dict:
         out.pop("__queue_id", None)
         return out
 
-    def _ack_sqlite(entry: dict) -> None:
-        if _queue_backend(entry) != "sqlite":
+    def ack_sqlite(self, entry: dict) -> None:
+        if self.queue_backend(entry) != "sqlite":
             return
-        rid = _queue_id(entry)
+        rid = self.queue_id(entry)
         if rid > 0:
-            sqlite_acked_ids.add(rid)
+            self.sqlite_acked_ids.add(rid)
 
-    def _dead_letter(entry: dict, reason: str) -> None:
-        nonlocal dead_lettered, errors
-        _write_dead_letter(_entry_clean(entry), reason)
-        dead_lettered += 1
-        errors += 1
-        _mark_final(entry, "dead", reason)
-        _ack_sqlite(entry)
+    def dead_letter(self, entry: dict, reason: str) -> None:
+        _write_dead_letter(self.entry_clean(entry), reason)
+        self.dead_lettered += 1
+        self.errors += 1
+        self.mark_final(entry, "dead", reason)
+        self.ack_sqlite(entry)
 
-    def _record_lock_event(idx: int) -> bool:
-        nonlocal lock_events, lock_streak, lock_streak_max, circuit_breaks
-        lock_events += 1
-        lock_streak += 1
-        if lock_streak > lock_streak_max:
-            lock_streak_max = lock_streak
-        delay = _lock_backoff_delay(lock_streak)
+    def record_lock_event(self, idx: int) -> bool:
+        self.lock_events += 1
+        self.lock_streak += 1
+        if self.lock_streak > self.lock_streak_max:
+            self.lock_streak_max = self.lock_streak
+        delay = _lock_backoff_delay(self.lock_streak)
         if delay > 0:
             _sleep(delay)
-        if _LOCK_STORM_THRESHOLD > 0 and lock_streak >= _LOCK_STORM_THRESHOLD and (idx + 1) < entries_total:
-            circuit_breaks += 1
-            requeue.extend(entries[idx + 1:])
+        if _LOCK_STORM_THRESHOLD > 0 and self.lock_streak >= _LOCK_STORM_THRESHOLD and (idx + 1) < self.entries_total:
+            self.circuit_breaks += 1
+            self.requeue.extend(self.entries[idx + 1:])
             _diag(
-                f"lock storm detected (streak={lock_streak}); "
-                f"requeued remaining {entries_total - (idx + 1)} entries"
+                f"lock storm detected (streak={self.lock_streak}); "
+                f"requeued remaining {self.entries_total - (idx + 1)} entries"
             )
             return True
         return False
 
-    def _reset_lock_streak() -> None:
-        nonlocal lock_streak
-        lock_streak = 0
+    def reset_lock_streak(self) -> None:
+        self.lock_streak = 0
+
+    def to_stats(self, drain_t0: float, requeue_ok: bool, requeue_failed: int) -> dict:
+        return {
+            "processed": self.processed,
+            "errors": self.errors,
+            "requeued": len(self.requeue) if requeue_ok else 0,
+            "requeue_failed": requeue_failed,
+            "dead_lettered": self.dead_lettered,
+            "queue_lock_failures": _QUEUE_LOCK_FAILURES_THIS_RUN,
+            "entries_total": self.entries_total,
+            "entries_skipped_idempotent": self.skipped_idempotent,
+            "lock_events": self.lock_events,
+            "lock_streak_max": self.lock_streak_max,
+            "circuit_breaks": self.circuit_breaks,
+            "intent_log_ready": 1 if self.intent_log_ready else 0,
+            "intent_log_size": len(self.finalized_intents),
+            "intent_log_load_ms": round(self.intent_log_load_ms, 3),
+            "intent_mark_ok": self.intent_mark_ok,
+            "intent_mark_fail": self.intent_mark_fail,
+            "drain_ms": round((time.perf_counter() - drain_t0) * 1000.0, 3),
+        }
+
+
+def _requeue_or_dead_letter_for_lock(entry: dict, idx: int, state: _DrainState) -> bool:
+    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+        state.dead_letter(entry, "exceeded retry budget")
+    else:
+        state.requeue.append(entry)
+    return state.record_lock_event(idx)
+
+
+def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
+    spawn_intent_id = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
+    if spawn_intent_id and spawn_intent_id in state.finalized_intents:
+        state.skipped_idempotent += 1
+        state.processed += 1
+        state.ack_sqlite(entry)
+        state.reset_lock_streak()
+        return False
+
+    valid, reason = _validate_queue_entry(entry)
+    if not valid:
+        state.dead_letter(entry, reason)
+        state.reset_lock_streak()
+        return False
+
+    spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
+    parent_uuid = (entry.get("parent_uuid") or "").strip()
+    expected_parent_nextlink = (entry.get("parent_nextlink") or "").strip()
+    child = entry.get("child") or {}
+    child_short = (entry.get("child_short") or "").strip()
+    child_uuid = (child.get("uuid") or "").strip()
+
+    parent_linked_already = False
+    if parent_uuid and child_short:
+        link_state, link_err = _parent_nextlink_state(parent_uuid, child_short, expected_parent_nextlink)
+        if link_state == "locked":
+            return _requeue_or_dead_letter_for_lock(entry, idx, state)
+        if link_state in {"conflict", "missing", "invalid"}:
+            state.dead_letter(entry, f"parent update failed: {link_err}")
+            state.reset_lock_streak()
+            return False
+        if link_state == "already":
+            parent_linked_already = True
+
+    export_res = _export_uuid(child_uuid)
+    imported = False
+    if not export_res.get("exists"):
+        if export_res.get("retryable"):
+            if spawn_intent_id:
+                _diag(f"task lock active; requeue (intent={spawn_intent_id})")
+            return _requeue_or_dead_letter_for_lock(entry, idx, state)
+        ok, err = _import_child(child)
+        if not ok:
+            if _is_lock_error(err):
+                return _requeue_or_dead_letter_for_lock(entry, idx, state)
+            # If import reported failure but the child exists, continue.
+            if _export_uuid(child_uuid).get("exists"):
+                export_res = {"exists": True}
+            else:
+                if spawn_intent_id:
+                    _diag(f"child import failed (intent={spawn_intent_id}): {err}")
+                else:
+                    _diag(f"child import failed: {err}")
+                state.dead_letter(entry, f"child import failed: {err}")
+                state.reset_lock_streak()
+                return False
+        imported = True
+
+    if imported:
+        # Confirm child exists before touching parent only when we just imported.
+        confirm_res = _export_uuid(child_uuid)
+        if not confirm_res.get("exists"):
+            if confirm_res.get("retryable"):
+                return _requeue_or_dead_letter_for_lock(entry, idx, state)
+            if spawn_intent_id:
+                _diag(f"child missing after import (intent={spawn_intent_id})")
+            state.dead_letter(entry, "child missing after import")
+            state.reset_lock_streak()
+            return False
+
+    if parent_uuid and child_short and not parent_linked_already:
+        ok, err = _update_parent_nextlink(parent_uuid, child_short, expected_parent_nextlink)
+        if not ok:
+            if spawn_intent_id:
+                _diag(f"parent update failed (intent={spawn_intent_id}): {parent_uuid}")
+            else:
+                _diag(f"parent update failed: {parent_uuid}")
+            if err in {"parent export locked", "parent lock busy"} or _is_lock_error(err):
+                return _requeue_or_dead_letter_for_lock(entry, idx, state)
+            if imported:
+                _cleanup_orphan_child(child_uuid, spawn_intent_id)
+            state.dead_letter(entry, f"parent update failed: {err}")
+            state.reset_lock_streak()
+            return False
+
+    state.processed += 1
+    state.mark_final(entry, "done", "processed")
+    state.ack_sqlite(entry)
+    state.reset_lock_streak()
+    return False
+
+
+def _drain_queue() -> dict:
+    drain_t0 = time.perf_counter()
+    entries = _take_queue_entries()
+    entries_total = len(entries)
+    intent_t0 = time.perf_counter()
+    finalized_intents, intent_log_ready = _load_finalized_intents()
+    intent_log_load_ms = (time.perf_counter() - intent_t0) * 1000.0
+    state = _DrainState(
+        entries=entries,
+        entries_total=entries_total,
+        finalized_intents=finalized_intents,
+        intent_log_ready=bool(intent_log_ready),
+        intent_log_load_ms=float(intent_log_load_ms),
+    )
 
     for idx, entry in enumerate(entries):
-        spawn_intent_id = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
-        if spawn_intent_id and spawn_intent_id in finalized_intents:
-            skipped_idempotent += 1
-            processed += 1
-            _ack_sqlite(entry)
-            _reset_lock_streak()
-            continue
-
-        valid, reason = _validate_queue_entry(entry)
-        if not valid:
-            _dead_letter(entry, reason)
-            _reset_lock_streak()
-            continue
-        spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
-        parent_uuid = (entry.get("parent_uuid") or "").strip()
-        expected_parent_nextlink = (entry.get("parent_nextlink") or "").strip()
-        child = entry.get("child") or {}
-        child_short = (entry.get("child_short") or "").strip()
-        child_uuid = (child.get("uuid") or "").strip()
-        parent_linked_already = False
-        if parent_uuid and child_short:
-            link_state, link_err = _parent_nextlink_state(parent_uuid, child_short, expected_parent_nextlink)
-            if link_state == "locked":
-                if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                    _dead_letter(entry, "exceeded retry budget")
-                else:
-                    requeue.append(entry)
-                if _record_lock_event(idx):
-                    break
-                continue
-            if link_state in {"conflict", "missing", "invalid"}:
-                _dead_letter(entry, f"parent update failed: {link_err}")
-                _reset_lock_streak()
-                continue
-            if link_state == "already":
-                parent_linked_already = True
-
-        export_res = _export_uuid(child_uuid)
-        imported = False
-        if not export_res.get("exists"):
-            if export_res.get("retryable"):
-                if spawn_intent_id:
-                    _diag(f"task lock active; requeue (intent={spawn_intent_id})")
-                if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                    _dead_letter(entry, "exceeded retry budget")
-                else:
-                    requeue.append(entry)
-                if _record_lock_event(idx):
-                    break
-                continue
-            ok, err = _import_child(child)
-            if not ok:
-                if _is_lock_error(err):
-                    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                        _dead_letter(entry, "exceeded retry budget")
-                    else:
-                        requeue.append(entry)
-                    if _record_lock_event(idx):
-                        break
-                    continue
-                # If import reported failure but the child exists, continue.
-                if _export_uuid(child_uuid).get("exists"):
-                    export_res = {"exists": True}
-                else:
-                    if spawn_intent_id:
-                        _diag(f"child import failed (intent={spawn_intent_id}): {err}")
-                    else:
-                        _diag(f"child import failed: {err}")
-                    _dead_letter(entry, f"child import failed: {err}")
-                    _reset_lock_streak()
-                    continue
-            imported = True
-
-        if imported:
-            # Confirm child exists before touching parent only when we just imported.
-            confirm_res = _export_uuid(child_uuid)
-            if not confirm_res.get("exists"):
-                if confirm_res.get("retryable"):
-                    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                        _dead_letter(entry, "exceeded retry budget")
-                    else:
-                        requeue.append(entry)
-                    if _record_lock_event(idx):
-                        break
-                    continue
-                if spawn_intent_id:
-                    _diag(f"child missing after import (intent={spawn_intent_id})")
-                _dead_letter(entry, "child missing after import")
-                _reset_lock_streak()
-                continue
-
-        if parent_uuid and child_short and not parent_linked_already:
-            ok, err = _update_parent_nextlink(parent_uuid, child_short, expected_parent_nextlink)
-            if not ok:
-                if spawn_intent_id:
-                    _diag(f"parent update failed (intent={spawn_intent_id}): {parent_uuid}")
-                else:
-                    _diag(f"parent update failed: {parent_uuid}")
-                if err in {"parent export locked", "parent lock busy"} or _is_lock_error(err):
-                    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-                        _dead_letter(entry, "exceeded retry budget")
-                    else:
-                        requeue.append(entry)
-                    if _record_lock_event(idx):
-                        break
-                else:
-                    if imported:
-                        _cleanup_orphan_child(child_uuid, spawn_intent_id)
-                    _dead_letter(entry, f"parent update failed: {err}")
-                    _reset_lock_streak()
-                continue
-
-        processed += 1
-        _mark_final(entry, "done", "processed")
-        _ack_sqlite(entry)
-        _reset_lock_streak()
+        if _process_queue_entry(idx, entry, state):
+            break
 
     requeue_failed = 0
     requeue_ok = True
-    if requeue:
-        requeue_ok = _requeue_entries(requeue)
+    if state.requeue:
+        requeue_ok = _requeue_entries(state.requeue)
         if not requeue_ok:
-            requeue_failed = len(requeue)
-            errors += requeue_failed
+            requeue_failed = len(state.requeue)
+            state.errors += requeue_failed
             _diag(f"requeue failed for {requeue_failed} entries")
 
-    if sqlite_acked_ids:
-        if not _ack_queue_entries_sqlite(sorted(sqlite_acked_ids)):
-            errors += len(sqlite_acked_ids)
-            _diag(f"queue db ack failed for {len(sqlite_acked_ids)} entries")
+    if state.sqlite_acked_ids:
+        if not _ack_queue_entries_sqlite(sorted(state.sqlite_acked_ids)):
+            state.errors += len(state.sqlite_acked_ids)
+            _diag(f"queue db ack failed for {len(state.sqlite_acked_ids)} entries")
 
-    return {
-        "processed": processed,
-        "errors": errors,
-        "requeued": len(requeue) if requeue_ok else 0,
-        "requeue_failed": requeue_failed,
-        "dead_lettered": dead_lettered,
-        "queue_lock_failures": _QUEUE_LOCK_FAILURES_THIS_RUN,
-        "entries_total": entries_total,
-        "entries_skipped_idempotent": skipped_idempotent,
-        "lock_events": lock_events,
-        "lock_streak_max": lock_streak_max,
-        "circuit_breaks": circuit_breaks,
-        "intent_log_ready": 1 if intent_log_ready else 0,
-        "intent_log_size": len(finalized_intents),
-        "intent_log_load_ms": round(intent_log_load_ms, 3),
-        "intent_mark_ok": intent_mark_ok,
-        "intent_mark_fail": intent_mark_fail,
-        "drain_ms": round((time.perf_counter() - drain_t0) * 1000.0, 3),
-    }
+    return state.to_stats(drain_t0, requeue_ok, requeue_failed)
 
 
 def main() -> int:

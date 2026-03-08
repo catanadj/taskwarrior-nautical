@@ -5103,173 +5103,153 @@ def _parse_y_token(tok: str):
 # ------------------------------------------------------------------------------
 # Anchor DNF parser
 # ------------------------------------------------------------------------------
-def parse_anchor_expr_to_dnf(s: str):
-    """Parse anchor expression into Disjunctive Normal Form."""
-    # Accept anchors wrapped in quotes from the CLI; normalize rand-month alias.
+def _normalize_anchor_expr_input(s: str) -> str:
+    """Normalize user anchor expression before parsing."""
     s = _unwrap_quotes(s or "").strip()
     if len(s) > 1024:
         raise ParseError("Anchor expression too long (max 1024 characters).")
-    s = re.sub(r'\b(\d{2})-rand\b', r'rand-\1', s)
+    s = re.sub(r"\b(\d{2})-rand\b", r"rand-\1", s)
     s = _rewrite_weekly_multi_time_atoms(s)
-    i = 0
-    n = len(s)
+    return s
 
-    # --- FATAL: numeric yearly tokens using ':' (should be '-') ----------------
-    # Scan for every 'y[:spec]' tail; ignore modifiers after '@'; then check
-    # each comma-separated token for a numeric colon form like '05:15' or
-    # '05:01:06:30'. Month-name forms must use '..' for ranges.
-    def _fatal_bad_colon_in_year_tail(tail: str) -> str | None:
-        head = tail.split("@", 1)[0]  # strip modifiers
-        for tok in _split_csv_tokens(head):
-            # numeric with ':'  → fatal (e.g., '05:15' or '05:01:06:30')
-            if re.fullmatch(r"\d{2}:\d{2}(?::\d{2}:\d{2})?", tok):
-                fmt = (globals().get("ANCHOR_YEAR_FMT") or "DM").upper()
-                example = "06-01" if fmt == "MD" else "01-06"
-                return (f"Yearly token '{tok}' uses ':' between numbers. "
-                        f"Use '-' and order per ANCHOR_YEAR_FMT={fmt}. Example: '{example}'.")
-            if ":" in tok:
-                return "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."
-        return None
 
-    # Find every 'y' atom head (with optional '/N') then grab its tail up to +,|,) or EOL
+def _fatal_bad_colon_in_year_tail(tail: str) -> str | None:
+    head = tail.split("@", 1)[0]
+    for tok in _split_csv_tokens(head):
+        if re.fullmatch(r"\d{2}:\d{2}(?::\d{2}:\d{2})?", tok):
+            fmt = (globals().get("ANCHOR_YEAR_FMT") or "DM").upper()
+            example = "06-01" if fmt == "MD" else "01-06"
+            return (
+                f"Yearly token '{tok}' uses ':' between numbers. "
+                f"Use '-' and order per ANCHOR_YEAR_FMT={fmt}. Example: '{example}'."
+            )
+        if ":" in tok:
+            return "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."
+    return None
+
+
+def _raise_on_bad_colon_year_tokens(s: str) -> None:
+    # Find every 'y' atom head (with optional /N) then validate its tail.
     for m in re.finditer(r"\by\s*(?:/\d+)?\s*:", s):
-        j = m.end()  # start of tail
+        j = m.end()
         k = j
         while k < len(s) and s[k] not in "+|)":
             k += 1
         tail = s[j:k]
         fatal_msg = _fatal_bad_colon_in_year_tail(tail)
         if fatal_msg:
-            # FIX: Raise ParseError instead of returning tuple
             raise ParseError(fatal_msg)
 
 
-    def skip_ws():
-        nonlocal i
-        while i < n and s[i].isspace():
-            i += 1
+def _skip_ws_pos(s: str, i: int, n: int) -> int:
+    while i < n and s[i].isspace():
+        i += 1
+    return i
 
-    def take(ch):
-        nonlocal i
-        if i < n and s[i] == ch:
-            i += 1
-            return True
-        return False
+
+def _raise_if_comma_joined_anchors(full_tail: str) -> None:
+    if re.search(r"@[^)]*?,\s*(?:w|m|y)(?:/|:)", full_tail):
+        raise ParseError(
+            "It looks like you used a comma to join anchors. "
+            "Use '+' (AND) or '|' (OR), e.g. 'm:31@t=14:00 | w:sun@t=22:00'."
+        )
+    if re.search(r",\s*(?:w|m|y)(?:/|:)", full_tail):
+        raise ParseError(
+            "Anchors must be joined with '+' (AND) or '|' (OR). "
+            "For example: 'm:31 + w:sun' or 'm:31 | w:sun'."
+        )
+
+
+def _normalize_monthly_ordinal_spec(spec: str) -> str:
+    def _ord_norm(mo: re.Match) -> str:
+        return f"{mo.group(1)}{mo.group(3).lower()}"
+
+    return re.sub(
+        r"\b([1-5])\s*(st|nd|rd|th)\s*-\s*(mon|tue|wed|thu|fri|sat|sun)\b",
+        _ord_norm,
+        spec,
+        flags=re.IGNORECASE,
+    )
+
+
+def _build_anchor_atom_dnf(head: str, full_tail: str):
+    """Build DNF node for one parsed atom head/tail pair."""
+    typ, ival = _parse_atom_head(head)
+    tlo = (typ or "").lower()
+
+    dnf_or = _parse_group_with_inline_mods(tlo, ival, full_tail, "")
+    if dnf_or is not None:
+        return dnf_or
+
+    spec, mods_str = (full_tail.split("@", 1) + [""])[:2]
+    if tlo == "m":
+        spec = _normalize_monthly_ordinal_spec(spec)
+
+    if tlo == "w":
+        toks = _split_csv_lower(spec)
+        if "rand" in toks and len(toks) > 1:
+            mods = _parse_atom_mods(mods_str)
+            return [
+                [{"typ": "w", "spec": t, "ival": ival, "mods": mods}]
+                for t in toks
+            ]
+
+    mods = _parse_atom_mods(mods_str)
+    return [[{"typ": tlo, "spec": spec.strip().lower(), "ival": ival, "mods": mods}]]
+
+
+def _parse_anchor_atom_at(s: str, i: int, n: int):
+    """Parse one atom at position i and return (dnf_node, next_i)."""
+    i = _skip_ws_pos(s, i, n)
+
+    start = i
+    while i < n and s[i] not in ":()+|":
+        i += 1
+    head = s[start:i].strip()
+
+    if i >= n or s[i] != ":":
+        raise ParseError("Expected ':' after anchor type. Example 'w:mon', 'm:-1', 'y:06-01'")
+    i += 1
+
+    start = i
+    while i < n:
+        ch = s[i]
+        if ch in ")|":
+            break
+        if ch == "+" and not (i > start and s[i - 1] == "@"):
+            break
+        i += 1
+
+    full_tail = s[start:i].strip()
+    _raise_if_comma_joined_anchors(full_tail)
+    return _build_anchor_atom_dnf(head, full_tail), i
+
+
+def parse_anchor_expr_to_dnf(s: str):
+    """Parse anchor expression into Disjunctive Normal Form."""
+    s = _normalize_anchor_expr_input(s)
+    _raise_on_bad_colon_year_tokens(s)
+
+    i = 0
+    n = len(s)
 
     def parse_atom():
-        """
-        Parse a single anchor atom and return it in DNF as a list of terms, where each
-        term is a list of atom dicts:
-        return value shape: [ [ {typ, spec, ival, mods}, ... ], ... ]
-
-        Expectations (provided by the outer parser scope):
-        - nonlocal i, n, s
-        - helpers: skip_ws(), take(ch), ParseError,
-                    _parse_atom_head(head) -> (typ, ival),
-                    _parse_atom_mods(mods_str) -> dict,
-                    _parse_group_with_inline_mods(typ, ival, tail, leading_mods_str) -> dnf|None
-        """
         nonlocal i
-        skip_ws()
-
-        # ---- read head like "m", "w/2", "y", "m/3" etc. (up to the ':') ----
-        start = i
-        while i < n and s[i] not in ":()+|":
-            i += 1
-        head = s[start:i].strip()
-
-        # require ':' after head (type + optional /N)
-        if not take(":"):
-            raise ParseError("Expected ':' after anchor type. Example 'w:mon', 'm:-1', 'y:06-01'")
-
-        # ---- read the tail (spec + optional '@mods') until atom terminator ----
-        # stop at ')' or '|' or '+' (but allow '@+Nd' inside modifiers)
-        start = i
-        while i < n:
-            ch = s[i]
-            if ch in ")|":
-                break
-            if ch == "+" and not (i > start and s[i - 1] == "@"):
-                break
-            i += 1
-
-        full_tail = s[start:i].strip()  # e.g. "mon,tue@t=09:00" or "1st-mon@t=08:00,fri@t=15:00"
-
-        # ─────────────────────────────────────────────────────────────
-        # Guards against comma "joining" separate atoms:
-        #  - legal: w:mon,tue            (list inside spec)
-        #           m:1st-mon,3rd-wed    (list inside spec)
-        #  - illegal: m:31@t=14:00,w:sun (comma used to start a new anchor)
-        if re.search(r"@[^)]*?,\s*(?:w|m|y)(?:/|:)", full_tail):
-            raise ParseError(
-                "It looks like you used a comma to join anchors. "
-                "Use '+' (AND) or '|' (OR), e.g. 'm:31@t=14:00 | w:sun@t=22:00'."
-            )
-
-        if re.search(r",\s*(?:w|m|y)(?:/|:)", full_tail):
-            raise ParseError(
-                "Anchors must be joined with '+' (AND) or '|' (OR). "
-                "For example: 'm:31 + w:sun' or 'm:31 | w:sun'."
-            )
-        # ─────────────────────────────────────────────────────────────
-
-        # Parse type + optional /N from head
-        typ, ival = _parse_atom_head(head)
-        tlo = (typ or "").lower()
-
-        # Try inline per-item mods rewriter BEFORE we split spec/mods.
-        # This handles cases like "w:mon@t=09:00,fri@t=15:00" (→ OR of per-item atoms).
-        dnf_or = _parse_group_with_inline_mods(tlo, ival, full_tail, "")
-        if dnf_or is not None:
-            return dnf_or  # already an OR over singletons with their own mods
-
-        # Split into spec and mods (if any)
-        spec, mods_str = (full_tail.split("@", 1) + [""])[:2]
-
-        # Normalize monthly ordinal-hyphen tokens (accept "1st-mon", "2nd-tue", ...)
-        # Your monthly engine already understands the compact "1mon" form, so normalize to that.
-        if tlo == "m":
-            def _ord_norm(mo: re.Match) -> str:
-                return f"{mo.group(1)}{mo.group(3).lower()}"
-            spec = re.sub(
-                r'\b([1-5])\s*(st|nd|rd|th)\s*-\s*(mon|tue|wed|thu|fri|sat|sun)\b',
-                _ord_norm,
-                spec,
-                flags=re.IGNORECASE
-            )
-
-        # Special-case: w:rand,mon → OR of singletons so 'rand' doesn't mingle with fixed dows
-        if tlo == "w":
-            toks = _split_csv_lower(spec)
-            if "rand" in toks and len(toks) > 1:
-                mods = _parse_atom_mods(mods_str)
-                return [
-                    [
-                        {
-                            "typ": "w",
-                            "spec": t,
-                            "ival": ival,
-                            "mods": mods,
-                        }
-                    ]
-                    for t in toks
-                ]
-
-        mods = _parse_atom_mods(mods_str)
-
-        # Return a single-term, single-atom DNF node
-        return [[{"typ": tlo, "spec": spec.strip().lower(), "ival": ival, "mods": mods}]]
-
+        node, i = _parse_anchor_atom_at(s, i, n)
+        return node
 
     def parse_factor(depth: int = 0):
+        nonlocal i
         if depth > 50:
             raise ParseError("Expression nesting too deep")
-        skip_ws()
-        if take("("):
+        i = _skip_ws_pos(s, i, n)
+        if i < n and s[i] == "(":
+            i += 1
             res = parse_expr(depth + 1)
-            skip_ws()
-            if not take(")"):
+            i = _skip_ws_pos(s, i, n)
+            if i >= n or s[i] != ")":
                 raise ParseError("Unclosed '('")
+            i += 1
             return res
         return parse_atom()
 
@@ -5281,10 +5261,11 @@ def parse_anchor_expr_to_dnf(s: str):
         left = parse_factor(depth)
         while True:
             pos = i
-            skip_ws()
-            if not take("+"):
+            i = _skip_ws_pos(s, i, n)
+            if i >= n or s[i] != "+":
                 i = pos
                 break
+            i += 1
             right = parse_factor(depth)
             left = and_merge(left, right)
         return left
@@ -5294,15 +5275,17 @@ def parse_anchor_expr_to_dnf(s: str):
         left = parse_term(depth)
         while True:
             pos = i
-            skip_ws()
-            if not take("|"):
+            i = _skip_ws_pos(s, i, n)
+            if i >= n or s[i] != "|":
                 i = pos
                 break
+            i += 1
             right = parse_term(depth)
             left = left + right
         return left
 
-    res = parse_expr(0); skip_ws()
+    res = parse_expr(0)
+    i = _skip_ws_pos(s, i, n)
     if i != n:
         raise ParseError("Unexpected trailing characters")
     dnf = _rewrite_quarters_in_context(res)
@@ -5941,15 +5924,8 @@ def _validate_yearly_spec(spec: str):
             )
 
 
-def validate_anchor_expr_strict(expr):
-    """
-    Validate an anchor expression. Accepts:
-      - str  (e.g., "w/2:sun + m:1st-mon"), parsed to DNF
-      - DNF  (list[list[dict]]), already parsed
-
-    Returns the normalized DNF on success; raises ParseError on failure.
-    """
-    # 1) Normalize to DNF
+def _normalize_anchor_input_to_dnf(expr):
+    """Normalize user input to parsed DNF, preserving current error messages."""
     if isinstance(expr, str):
         s = (expr or "").strip()
         if not s:
@@ -5963,12 +5939,13 @@ def validate_anchor_expr_strict(expr):
     else:
         raise ParseError(f"Invalid anchor type {type(expr).__name__}; expected string or parsed DNF.")
 
-    # FIX: Handle case where parse_anchor_expr_to_dnf might return (message, [])
+    # Defensive compatibility for legacy tuple-style parser errors.
     if isinstance(dnf, tuple) and len(dnf) == 2 and isinstance(dnf[0], str):
-        # This is an error message tuple from the parser
         raise ParseError(dnf[0])
+    return dnf
 
-    # 2) Defensive structure checks (avoid calling .get on strings)
+
+def _assert_dnf_structure_strict(dnf):
     if not isinstance(dnf, (list, tuple)):
         raise ParseError("Internal error: DNF must be a list of terms.")
     for term in dnf:
@@ -5980,50 +5957,68 @@ def validate_anchor_expr_strict(expr):
             if not _is_atom_like(atom):
                 raise ParseError("Internal error: atom missing required fields (typ/spec/mods).")
 
-    # 3) Per-atom strict checks
+
+def _validate_anchor_atom_strict(a: dict) -> None:
+    typ = (a.get("typ") or a.get("type") or "").lower()
+    spec = (a.get("spec") or a.get("value") or "").lower()
+    ival = int(a.get("ival") or a.get("intv") or 1)
+    mods = a.get("mods") or {}
+    active = None
+
+    if typ == "w":
+        _validate_weekly_spec(spec)
+        return
+
+    if typ == "m":
+        if spec == "rand":
+            active = _active_mod_keys(mods)
+            bad = [k for k in active if k not in ("t", "bd", "wd")]
+            if bad:
+                raise ParseError(f"m:rand does not support @{', '.join(bad)}")
+            if ival < 1:
+                raise ParseError("Monthly interval (/N) must be >= 1")
+        else:
+            _validate_monthly_spec(spec)
+        return
+
+    if typ == "y":
+        if spec == "rand" or spec.startswith("rand-"):
+            if spec.startswith("rand-"):
+                try:
+                    mm = int(spec.split("-", 1)[1])
+                except Exception:
+                    raise ParseError(f"Invalid token 'y:{spec}'")
+                if not (1 <= mm <= 12):
+                    raise ParseError(f"Invalid month in y:{spec}")
+            if active is None:
+                active = _active_mod_keys(mods)
+            bad = [k for k in active if k not in ("t", "bd", "wd")]
+            if bad:
+                raise ParseError(f"y:{spec} does not support @{', '.join(bad)}")
+        else:
+            _validate_yearly_token_format(spec)
+        return
+
+    raise ParseError(f"Unknown anchor type '{typ}'")
+
+
+def _validate_anchor_dnf_atoms_strict(dnf) -> None:
     for term in dnf:
         for a in term:
-            typ = (a.get("typ") or a.get("type") or "").lower()
-            spec = (a.get("spec") or a.get("value") or "").lower()
-            ival = int(a.get("ival") or a.get("intv") or 1)
-            mods = a.get("mods") or {}
-            active = None
+            _validate_anchor_atom_strict(a)
 
-            if typ == "w":
-                _validate_weekly_spec(spec)
 
-            elif typ == "m":
-                if spec == "rand":
-                    active = _active_mod_keys(mods)
-                    bad = [k for k in active if k not in ("t", "bd", "wd")]
-                    if bad:
-                        raise ParseError(f"m:rand does not support @{', '.join(bad)}")
-                    ival = int(a.get("ival") or a.get("intv") or 1)
-                    if ival < 1:
-                        raise ParseError("Monthly interval (/N) must be >= 1")
-                else:
-                    _validate_monthly_spec(spec)
+def validate_anchor_expr_strict(expr):
+    """
+    Validate an anchor expression. Accepts:
+      - str  (e.g., "w/2:sun + m:1st-mon"), parsed to DNF
+      - DNF  (list[list[dict]]), already parsed
 
-            elif typ == "y":
-                if spec == "rand" or spec.startswith("rand-"):
-                    if spec.startswith("rand-"):
-                        try:
-                            mm = int(spec.split("-", 1)[1])
-                        except Exception:
-                            raise ParseError(f"Invalid token 'y:{spec}'")
-                        if not (1 <= mm <= 12):
-                            raise ParseError(f"Invalid month in y:{spec}")
-                    if active is None:
-                        active = _active_mod_keys(mods)
-                    bad = [k for k in active if k not in ("t", "bd", "wd")]
-                    if bad:
-                        raise ParseError(f"y:{spec} does not support @{', '.join(bad)}")
-                else:
-                    _validate_yearly_token_format(spec)
-
-            else:
-                raise ParseError(f"Unknown anchor type '{typ}'")
-
+    Returns the normalized DNF on success; raises ParseError on failure.
+    """
+    dnf = _normalize_anchor_input_to_dnf(expr)
+    _assert_dnf_structure_strict(dnf)
+    _validate_anchor_dnf_atoms_strict(dnf)
     return dnf
 
 

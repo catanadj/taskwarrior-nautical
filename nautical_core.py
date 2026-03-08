@@ -6853,112 +6853,115 @@ def _iter_y_segments(s: str):
     for m in re.finditer(r'y\s*:\s*([^\+\|\)]*)', s):
         yield (m.group(1) or "").strip()
 
-def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
-    # Accept anchors wrapped in single or double quotes and normalize rand-month alias.
-    s = _unwrap_quotes(expr or "").strip().lower()
-    if len(s) > 1024:
-        return ("Anchor expression too long (max 1024 characters).", [])
-    # normalize 'mm-rand' → 'rand-mm' for consistency
-    s = re.sub(r'\b(\d{2})-rand\b', r'rand-\1', s)
-    # Allow bare month aliases: replace 'y:jun' with a canonical monthly window for linting
+
+def _lint_expand_year_month_aliases(s: str) -> str:
+    # Allow bare month aliases: replace 'y:jun' with a canonical monthly window for linting.
     def _lint_month_alias_sub(m):
         mm = _month_from_alias(m.group(1))
-        if not mm: return m.group(0)
+        if not mm:
+            return m.group(0)
         return f"y:{_year_full_month_range_token(mm)}"
+
     # Allow bare month aliases ONLY when they are not part of a numeric day-month like 'y:01-13'.
-    #  - 'y:jan' or 'y:03' → expand to full month window
+    #  - 'y:jan' or 'y:03' -> expand to full month window
     #  - do NOT touch 'y:01-13' / 'y:jun-01' etc.
-    s = re.sub(r'\by:([a-z]{3})(?=\b(?!-)|[,+|()])', _lint_month_alias_sub, s)
-    s = re.sub(r'\by:(\d{2})(?=(?:\b(?!-)|[,+|()]))', _lint_month_alias_sub, s)
-    if not s:
-        return None, []
-    warnings: list[str] = []
-    
+    s = re.sub(r"\by:([a-z]{3})(?=\b(?!-)|[,+|()])", _lint_month_alias_sub, s)
+    s = re.sub(r"\by:(\d{2})(?=(?:\b(?!-)|[,+|()]))", _lint_month_alias_sub, s)
+    return s
 
-    # ------------------------------------------------------------------
-    # V2 delimiter contract (strict)
-    # ------------------------------------------------------------------
+
+def _lint_check_weekly_delimiter_contract(s: str) -> str | None:
     if re.search(r"\bw(?:/\d+)?\s*:\s*(?:mon|tue|wed|thu|fri|sat|sun)\s*-\s*(?:mon|tue|wed|thu|fri|sat|sun)\b", s):
-        return ("Weekly ranges must use '..' (e.g., 'w:mon..fri').", [])
+        return "Weekly ranges must use '..' (e.g., 'w:mon..fri')."
     if re.search(r"\bw(?:/\d+)?\s*:\s*(?:mon|tue|wed|thu|fri|sat|sun)(?:\s*:\s*(?:mon|tue|wed|thu|fri|sat|sun))+\b", s):
-        return ("Weekly ranges must use '..' (e.g., 'w:mon..fri').", [])
+        return "Weekly ranges must use '..' (e.g., 'w:mon..fri')."
+    return None
 
 
-    # 1) Yearly tokens: check only inside y: segments
+def _lint_check_yearly_segments(s: str) -> str | None:
     fmt = _yearfmt()  # "MD" or "DM"
     for seg in _iter_y_segments(s):
-        # split on commas (multiple y tokens)
         for tok in _split_csv_tokens(seg):
-            # bare dd:mm (no hyphens anywhere) → definitely wrong (and not a range)
-            if re.fullmatch(r'\d{2}:\d{2}', tok):
-                return ("Yearly day/month must use '-', not ':'. Try '05-15' (not '05:15').", [])
+            if re.fullmatch(r"\d{2}:\d{2}", tok):
+                return "Yearly day/month must use '-', not ':'. Try '05-15' (not '05:15')."
             if ":" in tok:
-                return ("Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2').", [])
-            # valid single day?
-            if re.fullmatch(r'\d{2}-\d{2}', tok):
+                return "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."
+            if re.fullmatch(r"\d{2}-\d{2}", tok):
                 a, b = tok.split("-")
                 x, y = int(a), int(b)
                 if fmt == "MD":
                     if x > 12 and 1 <= y <= 12:
-                        return (f"'{tok}' looks like DD-MM but config expects MM-DD. Try '{y:02d}-{x:02d}'.", [])
+                        return f"'{tok}' looks like DD-MM but config expects MM-DD. Try '{y:02d}-{x:02d}'."
                 else:  # DM
                     if y > 12 and 1 <= x <= 12:
-                        return (f"'{tok}' looks like MM-DD but config expects DD-MM. Try '{y:02d}-{x:02d}'.", [])
+                        return f"'{tok}' looks like MM-DD but config expects DD-MM. Try '{y:02d}-{x:02d}'."
                 continue
-            # valid range? (V2 '..')
-            if re.fullmatch(r'\d{2}-\d{2}\.\.\d{2}-\d{2}', tok):
+            if re.fullmatch(r"\d{2}-\d{2}\.\.\d{2}-\d{2}", tok):
                 left, right = tok.split("..", 1)
                 a, b = left.split("-", 1)
                 c, d = right.split("-", 1)
                 x, y, u, v = int(a), int(b), int(c), int(d)
                 if fmt == "MD":
                     if x > 12 and 1 <= y <= 12:
-                        return (f"'{tok}' starts like DD-MM but config expects MM-DD. "
-                                f"Try '{y:02d}-{x:02d}..{v:02d}-{u:02d}'.", [])
+                        return (
+                            f"'{tok}' starts like DD-MM but config expects MM-DD. "
+                            f"Try '{y:02d}-{x:02d}..{v:02d}-{u:02d}'."
+                        )
                 else:
                     if y > 12 and 1 <= x <= 12:
-                        return (f"'{tok}' starts like MM-DD but config expects DD-MM. "
-                                f"Try '{y:02d}-{x:02d}..{v:02d}-{u:02d}'.", [])
+                        return (
+                            f"'{tok}' starts like MM-DD but config expects DD-MM. "
+                            f"Try '{y:02d}-{x:02d}..{v:02d}-{u:02d}'."
+                        )
                 continue
+    return None
 
-    # 2) MD/DM confusion (use configured ANCHOR_YEAR_FMT)
-    for m in re.finditer(r'\b(\d{2})-(\d{2})(?=([^\d:]|$))', s):
+
+def _lint_check_global_md_dm_confusion(s: str) -> str | None:
+    for m in re.finditer(r"\b(\d{2})-(\d{2})(?=([^\d:]|$))", s):
         a, b = int(m.group(1)), int(m.group(2))
         fmt = _yearfmt()  # "MD" or "DM"
         if fmt == "MD":
             if a > 12 and 1 <= b <= 12:
-                return (f"'{m.group(0)}' looks like DD-MM but config expects MM-DD. Try '{b:02d}-{a:02d}'.", [])
+                return f"'{m.group(0)}' looks like DD-MM but config expects MM-DD. Try '{b:02d}-{a:02d}'."
         else:  # DM
             if b > 12 and 1 <= a <= 12:
-                return (f"'{m.group(0)}' looks like MM-DD but config expects DD-MM. Try '{b:02d}-{a:02d}'.", [])
+                return f"'{m.group(0)}' looks like MM-DD but config expects DD-MM. Try '{b:02d}-{a:02d}'."
+    return None
 
-    # 3) invalid weekday names in typical contexts
-    _wd = set(_WD_ABBR)  # ["mon","tue","wed","thu","fri","sat","sun"]
-    for wd in re.findall(r'\b[a-z]{3,}\b', s):
-        if wd in _wd or wd in ("rand", "rand*"):
+
+def _lint_check_invalid_weekday_names(s: str) -> str | None:
+    wd_set = set(_WD_ABBR)  # ["mon","tue","wed","thu","fri","sat","sun"]
+    for wd in re.findall(r"\b[a-z]{3,}\b", s):
+        if wd in wd_set or wd in ("rand", "rand*"):
             continue
-        if re.search(rf'(?:^|[\s\+\|,:@-])(w:|@prev-|@next-|last-|1st|2nd|3rd|4th|5th-){wd}\b', s):
-            sug = difflib.get_close_matches(wd, list(_wd), n=1, cutoff=0.6)
+        if re.search(rf"(?:^|[\s\+\|,:@-])(w:|@prev-|@next-|last-|1st|2nd|3rd|4th|5th-){wd}\b", s):
+            sug = difflib.get_close_matches(wd, list(wd_set), n=1, cutoff=0.6)
             if sug:
-                return (f"Unknown weekday '{wd}'. Did you mean '{sug[0]}'?", [])
+                return f"Unknown weekday '{wd}'. Did you mean '{sug[0]}'?"
+    return None
 
-    # 4) nth weekday suffix errors and range
+
+def _lint_check_nth_weekday_suffixes(s: str) -> str | None:
     ord_ok = {"1": "1st", "2": "2nd", "3": "3rd", "4": "4th", "5": "5th"}
-    for m in re.finditer(r'\b(\d+)(st|nd|rd|th)-([a-z]+)\b', s):
+    for m in re.finditer(r"\b(\d+)(st|nd|rd|th)-([a-z]+)\b", s):
         n, suff, wd = m.group(1), m.group(2), m.group(3)
         if n not in ord_ok:
-            return (f"Invalid ordinal '{n}{suff}'. Only 1st..5th are supported.", [])
+            return f"Invalid ordinal '{n}{suff}'. Only 1st..5th are supported."
         expect = ord_ok[n]
         if f"{n}{suff}" != expect:
-            return (f"Did you mean '{expect}-{wd}' instead of '{n}{suff}-{wd}'?", [])
+            return f"Did you mean '{expect}-{wd}' instead of '{n}{suff}-{wd}'?"
+    return None
 
-    # 5) unsatisfiable '+' for pure weekly AND like "w:sat + w:mon"
-    and_terms = [t.strip() for t in re.split(r'\|', s)]
+
+def _lint_check_unsat_pure_weekly_and(s: str) -> str | None:
+    wd_set = set(_WD_ABBR)
+    and_terms = [t.strip() for t in re.split(r"\|", s)]
     for t in and_terms:
-        atoms = [a.strip() for a in re.split(r'\+', t)]
+        atoms = [a.strip() for a in re.split(r"\+", t)]
         wsets, only_weekly = [], True
         for a in atoms:
-            m = re.match(r'^w(?:(/\d+)?):([a-z0-9\-\:\,]+)$', a)
+            m = re.match(r"^w(?:(/\d+)?):([a-z0-9\-\:\,]+)$", a)
             if not m:
                 only_weekly = False
                 break
@@ -6969,7 +6972,7 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
                 if "-" in tok or ":" in tok:
                     simple = False
                     break
-                if tok in _wd:
+                if tok in wd_set:
                     ws.add(tok)
             if not simple:
                 only_weekly = False
@@ -6977,20 +6980,70 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
             if ws:
                 wsets.append(ws)
         if only_weekly and wsets and not set.intersection(*wsets):
-            return ("These anchors joined with '+' don't share any possible date. "
-                    "If you meant 'either/or', join them with ',' or '|'.", [])
+            return (
+                "These anchors joined with '+' don't share any possible date. "
+                "If you meant 'either/or', join them with ',' or '|'."
+            )
+    return None
 
-    # 6) quarter ranges like "q4..q2" backwards
-    g = re.search(r'\bq([1-4])\s*\.\.\s*q([1-4])\b', s)
+
+def _lint_check_backward_quarter_ranges(s: str) -> str | None:
+    g = re.search(r"\bq([1-4])\s*\.\.\s*q([1-4])\b", s)
     if g and int(g.group(2)) < int(g.group(1)):
-        return ("Invalid quarter range 'qX..qY': end quarter precedes start quarter. "
-                "Split across the year boundary, e.g., 'q4, q1'.", [])
+        return (
+            "Invalid quarter range 'qX..qY': end quarter precedes start quarter. "
+            "Split across the year boundary, e.g., 'q4, q1'."
+        )
+    return None
 
-    # 7) gentle tip for legacy multi-@t in one atom
-    if re.search(r'y:[^|+)]*@t=\d{2}:\d{2},', s):
+
+def _lint_collect_warnings(s: str) -> list[str]:
+    warnings: list[str] = []
+    if re.search(r"y:[^|+)]*@t=\d{2}:\d{2},", s):
         warnings.append("Multiple @t times inside a single 'y:' atom; ensure each spec has its own @t or use '|'.")
+    return warnings
 
-    return None, warnings
+
+def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
+    # Accept anchors wrapped in single or double quotes and normalize rand-month alias.
+    s = _unwrap_quotes(expr or "").strip().lower()
+    if len(s) > 1024:
+        return ("Anchor expression too long (max 1024 characters).", [])
+    # normalize 'mm-rand' → 'rand-mm' for consistency
+    s = re.sub(r"\b(\d{2})-rand\b", r"rand-\1", s)
+    s = _lint_expand_year_month_aliases(s)
+    if not s:
+        return None, []
+
+    fatal = _lint_check_weekly_delimiter_contract(s)
+    if fatal:
+        return fatal, []
+
+    fatal = _lint_check_yearly_segments(s)
+    if fatal:
+        return fatal, []
+
+    fatal = _lint_check_global_md_dm_confusion(s)
+    if fatal:
+        return fatal, []
+
+    fatal = _lint_check_invalid_weekday_names(s)
+    if fatal:
+        return fatal, []
+
+    fatal = _lint_check_nth_weekday_suffixes(s)
+    if fatal:
+        return fatal, []
+
+    fatal = _lint_check_unsat_pure_weekly_and(s)
+    if fatal:
+        return fatal, []
+
+    fatal = _lint_check_backward_quarter_ranges(s)
+    if fatal:
+        return fatal, []
+
+    return None, _lint_collect_warnings(s)
 
 
 

@@ -2135,6 +2135,33 @@ def test_nth_weekday_range():
     fatal, _ = core.lint_anchor_expr("m:6th-mon")
     expect(bool(fatal), "6th-mon must fatal (nth in 1..5 or last)")
 
+def test_lint_anchor_expr_characterization():
+    """lint_anchor_expr should keep stable fatal messages for key malformed inputs."""
+    cases = [
+        ('"w:mon-fri"', "Weekly ranges must use '..' (e.g., 'w:mon..fri')."),
+        ("w:mon:fri", "Weekly ranges must use '..' (e.g., 'w:mon..fri')."),
+        ("y:01-01:12-31", "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."),
+        ("w:mno", "Unknown weekday 'mno'. Did you mean 'mon'?"),
+        ("m:6th-mon", "Invalid ordinal '6th'. Only 1st..5th are supported."),
+        (
+            "w:sat + w:mon",
+            "These anchors joined with '+' don't share any possible date. If you meant 'either/or', join them with ',' or '|'.",
+        ),
+        (
+            "y:q4..q2",
+            "Invalid quarter range 'qX..qY': end quarter precedes start quarter. Split across the year boundary, e.g., 'q4, q1'.",
+        ),
+    ]
+    for expr, expected in cases:
+        fatal, warns = core.lint_anchor_expr(expr)
+        expect(fatal == expected, f"{expr}: expected fatal {expected!r}, got {fatal!r}")
+        expect(warns == [], f"{expr}: expected no warnings, got {warns!r}")
+
+    too_long = "w:mon" + ("x" * 1100)
+    fatal, warns = core.lint_anchor_expr(too_long)
+    expect(fatal == "Anchor expression too long (max 1024 characters).", f"unexpected length fatal: {fatal!r}")
+    expect(warns == [], f"expected no warnings for long input, got {warns!r}")
+
 def test_last_weekday():
     """Test last weekday of month pattern"""
     # Verify natural language mentions "last"
@@ -4939,6 +4966,7 @@ TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
     test_nth_weekday_range,
+    test_lint_anchor_expr_characterization,
     test_last_weekday,
     test_monthly_valid_months_m2_5th_mon,
     test_leap_year_29feb,

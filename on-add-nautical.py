@@ -1310,40 +1310,9 @@ def _anchor_build_preview(
     return preview
 
 
-def _handle_cp_preview_on_add(
-    task: dict,
-    cp_str: str,
-    ch: str,
-    now_utc: datetime,
-    user_provided_due: bool,
-    due_dt: datetime,
-    until_dt: datetime | None,
-) -> None:
-    rows: list[tuple[str, str]] = []
-
-    def _fmt(dt):
-        return core.fmt_dt_local(dt)
-
-    def _dt(s):
-        return core.parse_dt_any(s)
-
-    td, err = _safe_parse_duration(cp_str, "cp")
-    if err:
-        _error_and_exit([("Invalid cp", err)])
-    if not td:
-        _error_and_exit([("Invalid cp", f"Couldn't parse duration from '{cp_str}'")])
-
-    # ========== EDGE CASE 9: Chain duration warning for cp ==========
-    if until_dt:
-        is_reasonable, warn_msg = _validate_chain_duration_reasonable(
-            until_dt, now_utc, now_utc + td if not user_provided_due else due_dt, "cp"
-        )
-        if not is_reasonable and warn_msg:
-            rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
-
+def _cp_add_period_builder(td: timedelta):
     secs = int(td.total_seconds())
     preserve = secs % 86400 == 0
-    entry_dt = _dt(task.get("entry")) if task.get("entry") else now_utc
 
     def add_period(dt):
         if preserve:
@@ -1354,46 +1323,36 @@ def _handle_cp_preview_on_add(
             return base.astimezone(timezone.utc)
         return (dt + td).replace(microsecond=0)
 
-    if not user_provided_due:
-        due_dt = add_period(entry_dt)
-        task["due"] = _fmt_local_for_task(due_dt)
-        rows.append(("[auto-due]", "Due was not set explicitly; assigned to entry+cp."))
-    else:
-        due_dt = _dt(task.get("due"))
+    return add_period
 
-    rows.append(("Period", f"[bold white]{cp_str}[/]"))
-    rows.append(("First due", f"[bold bright_green]{_fmt(due_dt)}[/]"))
 
-    # Scheduled/Wait preview (relative to First due)
-    _append_wait_sched_rows(rows, task, due_dt, auto_due=(not user_provided_due))
+def _cp_until_summary(due_dt: datetime, until_dt: datetime | None, add_period) -> tuple[int | None, datetime | None]:
+    if not until_dt:
+        return None, None
+    count = 0
+    probe = due_dt
+    last = None
+    iterations = 0
+    for _ in range(_MAX_PREVIEW_ITERATIONS):
+        if iterations >= _MAX_ITERATIONS:
+            break
+        iterations += 1
+        if probe > until_dt:
+            break
+        last = probe
+        count += 1
+        probe = add_period(probe)
+    if count <= 0:
+        return None, None
+    return max(0, count - 1), last
 
-    cpmax = core.coerce_int(task.get("chainMax"), 0)
 
-    exact_until_count = None
-    final_until_dt = None
-    if until_dt:
-        count = 0
-        probe = due_dt
-        last = None
-        iterations = 0
-        for _ in range(_MAX_PREVIEW_ITERATIONS):
-            if iterations >= _MAX_ITERATIONS:
-                break
-            iterations += 1
-            if probe > until_dt:
-                break
-            last = probe
-            count += 1
-            probe = add_period(probe)
-        if count > 0:
-            exact_until_count = max(0, count - 1)
-            final_until_dt = last
+def _cp_preview_lines(due_dt: datetime, until_dt: datetime | None, limit: int, add_period) -> list[str]:
+    def _fmt(dt):
+        return core.fmt_dt_local(dt)
 
-    allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
-    allow_by_until = exact_until_count if exact_until_count is not None else 10**9
-    limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until, _PREVIEW_HARD_CAP))
-
-    preview, nxt = [], due_dt
+    preview = []
+    nxt = due_dt
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
     for i in range(limit):
         nxt = add_period(nxt)
@@ -1401,8 +1360,22 @@ def _handle_cp_preview_on_add(
             break
         color = colors[min(i, len(colors) - 1)]
         preview.append(f"[{color}]{_fmt(nxt)}[/{color}]")
-    rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
-    rows.append(("Delta", f"[bright_yellow]{_human_delta(now_utc, due_dt, False)}[/]"))
+    return preview
+
+
+def _cp_limit_rows(
+    rows: list[tuple[str, str]],
+    *,
+    cpmax: int,
+    due_dt: datetime,
+    until_dt: datetime | None,
+    exact_until_count: int | None,
+    final_until_dt: datetime | None,
+    add_period,
+    now_utc: datetime,
+) -> None:
+    def _fmt(dt):
+        return core.fmt_dt_local(dt)
 
     lim_parts = []
     if cpmax and cpmax > 0:
@@ -1432,6 +1405,75 @@ def _handle_cp_preview_on_add(
 
     if lim_parts:
         rows.append(("Limits", " [dim]|[/] ".join(lim_parts)))
+
+
+def _handle_cp_preview_on_add(
+    task: dict,
+    cp_str: str,
+    ch: str,
+    now_utc: datetime,
+    user_provided_due: bool,
+    due_dt: datetime,
+    until_dt: datetime | None,
+) -> None:
+    rows: list[tuple[str, str]] = []
+
+    def _fmt(dt):
+        return core.fmt_dt_local(dt)
+
+    def _dt(s):
+        return core.parse_dt_any(s)
+
+    td, err = _safe_parse_duration(cp_str, "cp")
+    if err:
+        _error_and_exit([("Invalid cp", err)])
+    if not td:
+        _error_and_exit([("Invalid cp", f"Couldn't parse duration from '{cp_str}'")])
+
+    if until_dt:
+        is_reasonable, warn_msg = _validate_chain_duration_reasonable(
+            until_dt, now_utc, now_utc + td if not user_provided_due else due_dt, "cp"
+        )
+        if not is_reasonable and warn_msg:
+            rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
+
+    add_period = _cp_add_period_builder(td)
+    entry_dt = _dt(task.get("entry")) if task.get("entry") else now_utc
+
+    if not user_provided_due:
+        due_dt = add_period(entry_dt)
+        task["due"] = _fmt_local_for_task(due_dt)
+        rows.append(("[auto-due]", "Due was not set explicitly; assigned to entry+cp."))
+    else:
+        due_dt = _dt(task.get("due"))
+
+    rows.append(("Period", f"[bold white]{cp_str}[/]"))
+    rows.append(("First due", f"[bold bright_green]{_fmt(due_dt)}[/]"))
+
+    # Scheduled/Wait preview (relative to First due)
+    _append_wait_sched_rows(rows, task, due_dt, auto_due=(not user_provided_due))
+
+    cpmax = core.coerce_int(task.get("chainMax"), 0)
+    exact_until_count, final_until_dt = _cp_until_summary(due_dt, until_dt, add_period)
+
+    allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
+    allow_by_until = exact_until_count if exact_until_count is not None else 10**9
+    limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until, _PREVIEW_HARD_CAP))
+
+    preview = _cp_preview_lines(due_dt, until_dt, limit, add_period)
+    rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
+    rows.append(("Delta", f"[bright_yellow]{_human_delta(now_utc, due_dt, False)}[/]"))
+
+    _cp_limit_rows(
+        rows,
+        cpmax=cpmax,
+        due_dt=due_dt,
+        until_dt=until_dt,
+        exact_until_count=exact_until_count,
+        final_until_dt=final_until_dt,
+        add_period=add_period,
+        now_utc=now_utc,
+    )
 
     rows.append(("Chain", "[bold green]enabled[/]" if ch == "on" else "[bold red]disabled[/]"))
     rows = _format_cp_rows(rows)

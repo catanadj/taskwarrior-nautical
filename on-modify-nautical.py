@@ -3594,55 +3594,29 @@ def _create_timeline_segment(tasks: list[dict], last_link_num) -> list[str]:
     return lines
 
 
-def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict = None) -> None:
-    # Use the passed current_task if provided, otherwise use current
-    actual_current = current_task if current_task else current
-    
-    kind_anchor = bool((actual_current.get("anchor") or "").strip())
-    kind = "anchor" if kind_anchor else "cp"
-    
-    chain_id = (actual_current.get("chainID") or actual_current.get("chainid") or "").strip()
-    if not chain_id:
-        _panel(
-            "⚠ Chain summary skipped",
-            [
-                ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
-                ("Fix", "Run tools/nautical_backfill_chainid.py."),
-            ],
-            kind="warning",
-        )
-        return
+def _end_summary_current(current: dict, current_task: dict | None) -> dict:
+    return current_task if current_task else current
 
-    # Chain export (chainID required)
+
+def _end_summary_chain_id_row(actual_current: dict) -> str:
+    return (actual_current.get("chainID") or actual_current.get("chainid") or "").strip()
+
+
+def _end_summary_sorted_chain(chain_id: str, actual_current: dict) -> list[dict]:
     chain = tw_export_chain_required(actual_current)
-    
-    # Replace the last task in chain with the actual_current if it's more up-to-date
     if actual_current and chain:
-        last_idx = -1
         for i, task in enumerate(chain):
             if task.get("uuid") == actual_current.get("uuid"):
-                last_idx = i
+                chain[i] = actual_current
                 break
-        if last_idx >= 0:
-            chain[last_idx] = actual_current
-
-    # Sort chronologically by link number (falls back to due date when link missing)
-    def _link_sort_key(obj):
-        ln = core.coerce_int(obj.get("link"), None)
-        if ln is not None:
-            return (0, ln)
-        due = _dtparse(obj.get("due")) or datetime.max.replace(tzinfo=timezone.utc)
-        return (1, due)
-
     try:
-        chain.sort(key=_link_sort_key)
+        chain = _sort_chain_for_analytics(chain)
     except Exception:
         pass
+    return chain
 
-    L = core.coerce_int(current.get("link"), len(chain))
-    root = _short(_root_uuid_from(current))
 
-    cur_s = _short(current.get("uuid"))
+def _end_summary_span_fields(chain_id: str, chain: list[dict]) -> tuple[datetime | None, datetime | None, str]:
     first_task = _export_chain_endpoint(chain_id, "first")
     last_task = _export_chain_endpoint(chain_id, "last")
     first = _dtparse((first_task or {}).get("due")) if first_task else (_dtparse(chain[0].get("due")) if chain else None)
@@ -3654,24 +3628,13 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
             .replace("in ", "")
             .replace("overdue by ", "")
         )
+    return first, last, span
 
-    rows = []
-    rows.append(("Reason", reason))
 
-    rows.append(("Root", _format_root_and_age(current, now_utc)))
-
-    # Show if chain was truncated
-    chain_display = f"{root} … {cur_s}  [dim](#{L}, {len(chain)} tasks"
-    if len(chain) >= _MAX_CHAIN_WALK:
-        chain_display += f", truncated at {_MAX_CHAIN_WALK})"
-    else:
-        chain_display += ")"
-    rows.append(("Chain", chain_display))
-
+def _end_summary_kind_rows(rows: list[tuple[str, str]], kind: str, current: dict) -> None:
     if kind == "anchor":
         expr = (current.get("anchor") or "").strip()
         mode = (current.get("anchor_mode") or "skip").lower()
-        expr_key = core.cache_key_for_task(expr, mode)
         tag = {
             "skip": "[cyan]SKIP[/]",
             "all": "[yellow]ALL[/]",
@@ -3683,15 +3646,11 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
             rows.append(("Natural", core.describe_anchor_dnf(dnf, current)))
         except Exception:
             pass
-    else:
-        rows.append(("Period", current.get("cp") or "–"))
+        return
+    rows.append(("Period", current.get("cp") or "–"))
 
-    if first:
-        rows.append(("First due", core.fmt_dt_local(first)))
-    if last:
-        rows.append(("Last end", core.fmt_dt_local(last)))
-    rows.append(("Span", span))
 
+def _end_summary_stats_rows(rows: list[tuple[str, str]], chain: list[dict], now_utc) -> None:
     stats = _lateness_stats(chain)
     rows.append(
         (
@@ -3704,6 +3663,8 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
     rows.append(("Best early", _fmt_secs_delta(now_utc, stats["best_early"])))
     rows.append(("Worst late", _fmt_secs_delta(now_utc, stats["worst_late"])))
 
+
+def _end_summary_limits_row(rows: list[tuple[str, str]], current: dict) -> None:
     cpmax = core.coerce_int(current.get("chainMax"), 0)
     until = _dtparse(current.get("chainUntil"))
     lims = []
@@ -3712,6 +3673,53 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
     if until:
         lims.append(f"until {core.fmt_dt_local(until)}")
     rows.append(("Limits", " | ".join(lims) if lims else "–"))
+
+
+def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict = None) -> None:
+    actual_current = _end_summary_current(current, current_task)
+    kind_anchor = bool((actual_current.get("anchor") or "").strip())
+    kind = "anchor" if kind_anchor else "cp"
+
+    chain_id = _end_summary_chain_id_row(actual_current)
+    if not chain_id:
+        _panel(
+            "⚠ Chain summary skipped",
+            [
+                ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
+                ("Fix", "Run tools/nautical_backfill_chainid.py."),
+            ],
+            kind="warning",
+        )
+        return
+
+    chain = _end_summary_sorted_chain(chain_id, actual_current)
+
+    L = core.coerce_int(current.get("link"), len(chain))
+    root = _short(_root_uuid_from(current))
+    cur_s = _short(current.get("uuid"))
+    first, last, span = _end_summary_span_fields(chain_id, chain)
+
+    rows = []
+    rows.append(("Reason", reason))
+    rows.append(("Root", _format_root_and_age(current, now_utc)))
+
+    chain_display = f"{root} … {cur_s}  [dim](#{L}, {len(chain)} tasks"
+    if len(chain) >= _MAX_CHAIN_WALK:
+        chain_display += f", truncated at {_MAX_CHAIN_WALK})"
+    else:
+        chain_display += ")"
+    rows.append(("Chain", chain_display))
+
+    _end_summary_kind_rows(rows, kind, current)
+
+    if first:
+        rows.append(("First due", core.fmt_dt_local(first)))
+    if last:
+        rows.append(("Last end", core.fmt_dt_local(last)))
+    rows.append(("Span", span))
+
+    _end_summary_stats_rows(rows, chain, now_utc)
+    _end_summary_limits_row(rows, current)
 
     tail = _last_n_timeline(chain, n=6)
     if tail:

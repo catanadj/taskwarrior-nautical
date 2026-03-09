@@ -2255,6 +2255,20 @@ def test_quarters_window():
         msg = str(e).lower()
         expect("ambiguous" in msg and "quarter" in msg, f"Unexpected error: {e}")
 
+def test_quarter_alias_unambiguous_month_selectors():
+    """Quarter aliases should work with unambiguous monthly start/end selectors."""
+    p_start = build_preview("m:1bd + y:q4")
+    expect(p_start["upcoming"], "Expected upcoming dates for start-month quarter selector")
+    for d in p_start["upcoming"][:6]:
+        m = datetime.fromisoformat(d).month
+        expect(m == 10, f"{d} should resolve to Q4 start month (October)")
+
+    p_end = build_preview("m:-1bd + y:q4")
+    expect(p_end["upcoming"], "Expected upcoming dates for end-month quarter selector")
+    for d in p_end["upcoming"][:6]:
+        m = datetime.fromisoformat(d).month
+        expect(m == 12, f"{d} should resolve to Q4 end month (December)")
+
 def test_yearly_month_names():
     """Test month name constraints (Mar..Sep)"""
     # y:mar..sep must constrain to Mar..Sep
@@ -5186,6 +5200,7 @@ TESTS = [
     test_monthly_valid_months_m2_5th_mon,
     test_leap_year_29feb,
     test_quarters_window,
+    test_quarter_alias_unambiguous_month_selectors,
     test_yearly_month_names,
     test_rand_with_year_window,
     test_weekly_rand_N_gate,

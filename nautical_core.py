@@ -3491,6 +3491,115 @@ def _rewrite_quarter_spec_mode(spec: str, mode: str, meta_out: dict | None = Non
 
 
 
+_MONTH_SELECTOR_MAX_LEN = 64
+
+
+def _quarter_atom_spec(atom: dict) -> str:
+    return (atom.get("spec") or atom.get("value") or "").lower()
+
+
+def _has_quarter_tokens(spec: str) -> bool:
+    for t in _split_csv_lower(spec):
+        if re.fullmatch(r"q[1-4][sme]?(?:\.\.q[1-4][sme]?)?", t):
+            return True
+    return False
+
+
+def _has_plain_quarter_tokens(spec: str) -> bool:
+    for t in _split_csv_lower(spec):
+        if re.fullmatch(r"q[1-4](?:\.\.q[1-4])?", t):
+            return True
+    return False
+
+
+def _is_negative_ascii_int(tok: str) -> bool:
+    if len(tok) < 2 or tok[0] != "-":
+        return False
+    rest = tok[1:]
+    return rest.isascii() and rest.isdigit()
+
+
+def _is_start_month_selector(tok: str) -> bool:
+    t = (tok or "").strip().lower()
+    if len(t) > _MONTH_SELECTOR_MAX_LEN:
+        raise ParseError("Monthly selector too long (max 64 characters).")
+    if t in ("1", "1bd"):
+        return True
+    m = _safe_match(_nth_weekday_re, t, max_len=_MONTH_SELECTOR_MAX_LEN)
+    if not m:
+        return False
+    n_raw = (m.group(1) or "").lower()
+    return n_raw in ("1", "1st")
+
+
+def _is_end_month_selector(tok: str) -> bool:
+    t = (tok or "").strip().lower()
+    if len(t) > _MONTH_SELECTOR_MAX_LEN:
+        raise ParseError("Monthly selector too long (max 64 characters).")
+    if _is_negative_ascii_int(t):
+        return True
+    m_bd = _safe_match(_bd_re, t, max_len=_MONTH_SELECTOR_MAX_LEN)
+    if m_bd and int(m_bd.group(1)) < 0:
+        return True
+    m = _safe_match(_nth_weekday_re, t, max_len=_MONTH_SELECTOR_MAX_LEN)
+    if not m:
+        return False
+    n_raw = (m.group(1) or "").lower()
+    return n_raw == "last" or n_raw.startswith("-")
+
+
+def _quarter_month_selector_mode(m_atoms: list[dict]) -> str:
+    if len(m_atoms) != 1:
+        raise ParseError(
+            "Quarter aliases (y:q1..q4) cannot be combined with multiple monthly atoms in the same term. "
+            "Use a single m:* selector or replace y:q* with explicit months (e.g. y:oct..dec)."
+        )
+    mspec = (m_atoms[0].get("spec") or m_atoms[0].get("value") or "").strip().lower()
+    mspec = _expand_monthly_aliases(mspec)
+    if mspec == "rand":
+        raise ParseError(
+            "Quarter aliases (y:q1..q4) cannot be combined with m:rand. "
+            "Use explicit months if you need randomness within a quarter-like window."
+        )
+    mtoks = _split_csv_tokens(mspec)
+    if len(mtoks) != 1:
+        raise ParseError(
+            "Quarter aliases (y:q1..q4) require a single monthly selector token when used with m:*. "
+            "Examples: m:1bd + y:q4 (start month) OR m:-1bd + y:q4 (end month). "
+            "If you meant a specific month of the quarter, use y:q4s/y:q4m/y:q4e."
+        )
+
+    mt = mtoks[0]
+    if _is_end_month_selector(mt):
+        return "quarter_end"
+    if _is_start_month_selector(mt):
+        return "quarter_start"
+    raise ParseError(
+        "Quarter aliases (y:q1..q4) paired with m:* are ambiguous here. "
+        "Use y:qNs/y:qNm/y:qNe to target start/mid/end month, or use explicit months (e.g. y:oct..dec)."
+    )
+
+
+def _term_quarter_rewrite_mode(y_atoms: list[dict], m_atoms: list[dict]) -> str:
+    if not m_atoms:
+        return "first_month"
+    has_plain_quarters = any(_has_plain_quarter_tokens(_quarter_atom_spec(a)) for a in y_atoms)
+    if not has_plain_quarters:
+        return "first_month"
+    return _quarter_month_selector_mode(m_atoms)
+
+
+def _rewrite_quarter_year_atoms(y_atoms: list[dict], mode: str) -> None:
+    for ya in y_atoms:
+        spec = _quarter_atom_spec(ya)
+        if not _has_quarter_tokens(spec):
+            continue
+        qmeta: dict[str, str] = {}
+        ya["spec"] = _rewrite_quarter_spec_mode(spec, mode, meta_out=qmeta)
+        if qmeta:
+            ya["_qmap"] = qmeta
+
+
 def _rewrite_quarters_in_context(dnf):
     """
     Walk DNF (list of AND-terms). For each term:
@@ -3516,119 +3625,15 @@ def _rewrite_quarters_in_context(dnf):
       Anything else (e.g. m:15, m:2bd, m:rand, m:1,15, multiple m atoms) is rejected.
       For mid-month semantics inside a quarter, use explicit months (e.g. y:dec).
     """
-
-    def _has_quarter_tokens(spec: str) -> bool:
-        for t in _split_csv_lower(spec):
-            if re.fullmatch(r"q[1-4][sme]?(?:\.\.q[1-4][sme]?)?", t):
-                return True
-        return False
-
-    def _has_plain_quarter_tokens(spec: str) -> bool:
-        for t in _split_csv_lower(spec):
-            if re.fullmatch(r"q[1-4](?:\.\.q[1-4])?", t):
-                return True
-        return False
-
-    _MONTH_SELECTOR_MAX_LEN = 64
-
-    def _is_negative_ascii_int(tok: str) -> bool:
-        if len(tok) < 2 or tok[0] != "-":
-            return False
-        rest = tok[1:]
-        return rest.isascii() and rest.isdigit()
-
-    def _is_start_month_selector(tok: str) -> bool:
-        t = (tok or "").strip().lower()
-        if len(t) > _MONTH_SELECTOR_MAX_LEN:
-            raise ParseError("Monthly selector too long (max 64 characters).")
-        if t in ("1", "1bd"):
-            return True
-        m = _safe_match(_nth_weekday_re, t, max_len=_MONTH_SELECTOR_MAX_LEN)
-        if m:
-            n_raw = (m.group(1) or "").lower()
-            return n_raw in ("1", "1st")
-        return False
-
-    def _is_end_month_selector(tok: str) -> bool:
-        t = (tok or "").strip().lower()
-        if len(t) > _MONTH_SELECTOR_MAX_LEN:
-            raise ParseError("Monthly selector too long (max 64 characters).")
-        # -N
-        if _is_negative_ascii_int(t):
-            return True
-        # -Nbd
-        m_bd = _safe_match(_bd_re, t, max_len=_MONTH_SELECTOR_MAX_LEN)
-        if m_bd and int(m_bd.group(1)) < 0:
-            return True
-        # last-fri / -Nfri
-        m = _safe_match(_nth_weekday_re, t, max_len=_MONTH_SELECTOR_MAX_LEN)
-        if m:
-            n_raw = (m.group(1) or "").lower()
-            return n_raw == "last" or n_raw.startswith("-")
-        return False
-
     for term in dnf:
         y_atoms = [a for a in term if (a.get("typ") or a.get("type") or "").lower() == "y"]
         if not y_atoms:
             continue
-
-        # Only engage quarter logic if at least one yearly atom actually contains q-tokens
-        if not any(_has_quarter_tokens((a.get("spec") or a.get("value") or "").lower()) for a in y_atoms):
+        if not any(_has_quarter_tokens(_quarter_atom_spec(a)) for a in y_atoms):
             continue
-
-        mode = "first_month"  # default when no monthly disambiguator is present
-
         m_atoms = [a for a in term if (a.get("typ") or a.get("type") or "").lower() == "m"]
-        has_plain_quarters = any(
-            _has_plain_quarter_tokens((a.get("spec") or a.get("value") or "").lower())
-            for a in y_atoms
-        )
-        if m_atoms and has_plain_quarters:
-            if len(m_atoms) != 1:
-                raise ParseError(
-                    "Quarter aliases (y:q1..q4) cannot be combined with multiple monthly atoms in the same term. "
-                    "Use a single m:* selector or replace y:q* with explicit months (e.g. y:oct..dec)."
-                )
-
-            mspec = (m_atoms[0].get("spec") or m_atoms[0].get("value") or "").strip().lower()
-            mspec = _expand_monthly_aliases(mspec)
-            if mspec == "rand":
-                raise ParseError(
-                    "Quarter aliases (y:q1..q4) cannot be combined with m:rand. "
-                    "Use explicit months if you need randomness within a quarter-like window."
-                )
-
-            mtoks = _split_csv_tokens(mspec)
-            if len(mtoks) != 1:
-                raise ParseError(
-                    "Quarter aliases (y:q1..q4) require a single monthly selector token when used with m:*. "
-                    "Examples: m:1bd + y:q4 (start month) OR m:-1bd + y:q4 (end month). "
-                    "If you meant a specific month of the quarter, use y:q4s/y:q4m/y:q4e."
-                )
-
-            mt = mtoks[0]
-            if _is_end_month_selector(mt):
-                mode = "quarter_end"
-            elif _is_start_month_selector(mt):
-                mode = "quarter_start"
-            else:
-                mode = "quarter_window"
-                raise ParseError(
-                    "Quarter aliases (y:q1..q4) paired with m:* are ambiguous here. "
-                    "Use y:qNs/y:qNm/y:qNe to target start/mid/end month, or use explicit months (e.g. y:oct..dec)."
-                )
-
-        # Rewrite each yearly atom; attach metadata so Natural can disclose interpretation
-        for ya in y_atoms:
-            spec = (ya.get("spec") or ya.get("value") or "").lower()
-            if not _has_quarter_tokens(spec):
-                continue
-
-            qmeta: dict[str, str] = {}
-            ya["spec"] = _rewrite_quarter_spec_mode(spec, mode, meta_out=qmeta)
-            if qmeta:
-                ya["_qmap"] = qmeta
-
+        mode = _term_quarter_rewrite_mode(y_atoms, m_atoms)
+        _rewrite_quarter_year_atoms(y_atoms, mode)
     return dnf
 
 

@@ -6633,6 +6633,103 @@ def _simple_weekly_next(after_date: date, weekdays: list) -> date:
     return after_date + timedelta(days=7)
 
 
+def _pick_earlier_candidate(
+    best: date | None,
+    best_meta: dict | None,
+    cand: date | None,
+    meta: dict | None,
+):
+    if cand and (best is None or cand < best):
+        return cand, meta
+    return best, best_meta
+
+
+def _next_after_expr_monthly_rand_candidate(
+    term: list[dict],
+    term_id: int,
+    info: dict,
+    after_date: date,
+    default_seed: date | None,
+    seed_base: str | None,
+):
+    if any(_atype(a) == "y" for a in term):
+        cand = _next_for_and(term, after_date, default_seed)
+        if cand:
+            return cand, {"basis": "rand+yearly"}
+        return None, None
+
+    seed_key_base = seed_base if seed_base is not None else "preview"
+    mods = info.get("mods") or {}
+    bd_only = bool(mods.get("bd"))
+    ival = int(info.get("ival") or 1)
+
+    seed_loc = default_seed or after_date
+    y, m = after_date.year, after_date.month
+
+    for _ in range(24):  # up to 24 months ahead
+        if ival > 1 and ((_months_since(seed_loc, y, m) % ival) != 0):
+            m = 1 if m == 12 else m + 1
+            if m == 1:
+                y += 1
+            continue
+
+        cands = _term_candidates_in_month(term, y, m, info["atom_idx"], bd_only)
+        if cands:
+            period_key = f"{y:04d}{m:02d}"
+            seed_key = f"{seed_key_base}|m|{term_id}|{period_key}"
+            idx = _sha_pick(len(cands), seed_key)
+            choice = cands[idx]
+            if choice > after_date:
+                return choice, {"basis": "rand", "rand_period": period_key}
+        m = 1 if m == 12 else m + 1
+        if m == 1:
+            y += 1
+
+    return None, None
+
+
+def _next_after_expr_yearly_rand_candidate(
+    term: list[dict],
+    term_id: int,
+    info: dict,
+    after_date: date,
+    seed_base: str | None,
+):
+    seed_key_base = seed_base if seed_base is not None else "preview"
+    mods = info.get("mods") or {}
+    bd_only = bool(mods.get("bd"))
+    target_m = info.get("month", None)
+    y = after_date.year
+
+    for _ in range(10):  # up to 10 years ahead
+        if target_m is None:
+            # plain y:rand -> gather all monthly candidates for this year
+            cands = []
+            for mm in range(1, 13):
+                cands.extend(_term_candidates_in_month(term, y, mm, info["atom_idx"], bd_only))
+            period_key = f"{y:04d}"
+        else:
+            cands = _term_candidates_in_month(term, y, int(target_m), info["atom_idx"], bd_only)
+            period_key = f"{y:04d}-{int(target_m):02d}"
+
+        if cands:
+            seed_key = f"{seed_key_base}|y|{term_id}|{period_key}"
+            idx = _sha_pick(len(cands), seed_key)
+            choice = cands[idx]
+            if choice > after_date:
+                return choice, {"basis": "rand", "rand_period": period_key}
+        y += 1
+
+    return None, None
+
+
+def _next_after_expr_term_candidate(term: list[dict], after_date: date, default_seed: date | None):
+    cand, _ = next_after_term(term, after_date, default_seed)
+    if cand:
+        return cand, {"basis": "term"}
+    return None, None
+
+
 def next_after_expr(dnf, after_date, default_seed=None, seed_base=None):
     """
     Return the next matching *local date* strictly > after_date.
@@ -6652,82 +6749,21 @@ def next_after_expr(dnf, after_date, default_seed=None, seed_base=None):
         rk, info = _term_rand_info(term)
 
         if rk == "m":
-            if any(_atype(a) == "y" for a in term):
-                cand = _next_for_and(term, after_date, default_seed)
-                if cand and (best is None or cand < best):
-                    best, best_meta = cand, {"basis": "rand+yearly"}
-                continue
-
-            if seed_base is None:
-                seed_base = "preview"
-            mods = info.get("mods") or {}
-            bd_only = bool(mods.get("bd"))  # <-- only business day flag
-            ival = int(info.get("ival") or 1)
-
-            seed_loc = default_seed or after_date
-            y, m = after_date.year, after_date.month
-
-            for _ in range(24):  # up to 24 months ahead
-                if ival > 1 and ((_months_since(seed_loc, y, m) % ival) != 0):
-                    m = 1 if m == 12 else m + 1
-                    if m == 1:
-                        y += 1
-                    continue
-
-                cands = _term_candidates_in_month(term, y, m, info["atom_idx"], bd_only)
-                if cands:
-                    period_key = f"{y:04d}{m:02d}"
-                    seed_key = f"{seed_base}|m|{term_id}|{period_key}"
-                    idx = _sha_pick(len(cands), seed_key)
-                    choice = cands[idx]
-                    if choice > after_date:
-                        cand, meta = choice, {
-                            "basis": "rand",
-                            "rand_period": period_key,
-                        }
-                        if best is None or cand < best:
-                            best, best_meta = cand, meta
-                        break
-                m = 1 if m == 12 else m + 1
-                if m == 1:
-                    y += 1
+            cand, meta = _next_after_expr_monthly_rand_candidate(
+                term, term_id, info, after_date, default_seed, seed_base
+            )
+            best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
             continue
 
         if rk == "y":
-            if seed_base is None:
-                seed_base = "preview"
-            mods = info.get("mods") or {}
-            bd_only = bool(mods.get("bd"))
-            target_m = info.get("month", None)
-            y = after_date.year
-
-            for _ in range(10):  # up to 10 years ahead
-                if target_m is None:
-                    # NEW: plain y:rand → gather all monthly candidates for this year
-                    cands = []
-                    for mm in range(1, 13):
-                        cands.extend(_term_candidates_in_month(term, y, mm, info["atom_idx"], bd_only))
-                    period_key = f"{y:04d}"
-                else:
-                    cands = _term_candidates_in_month(term, y, int(target_m), info["atom_idx"], bd_only)
-                    period_key = f"{y:04d}-{int(target_m):02d}"
-
-                if cands:
-                    seed_key = f"{seed_base}|y|{term_id}|{period_key}"
-                    idx = _sha_pick(len(cands), seed_key)
-                    choice = cands[idx]
-                    if choice > after_date:
-                        cand, meta = choice, {"basis": "rand", "rand_period": period_key}
-                        if best is None or cand < best:
-                            best, best_meta = cand, meta
-                        break
-                y += 1
+            cand, meta = _next_after_expr_yearly_rand_candidate(
+                term, term_id, info, after_date, seed_base
+            )
+            best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
             continue
 
-        # normal term
-        cand, _ = next_after_term(term, after_date, default_seed)
-        if cand and (best is None or cand < best):
-            best, best_meta = cand, {"basis": "term"}
+        cand, meta = _next_after_expr_term_candidate(term, after_date, default_seed)
+        best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
 
     return best, best_meta
 

@@ -4341,6 +4341,42 @@ def test_rand_determinism_with_seed():
     a2, _meta2 = core.next_after_expr(dnf, after, seed_base="test-seed")
     expect(a1 == a2, f"rand picks should match: {a1} vs {a2}")
 
+def test_next_after_expr_branch_characterization():
+    """next_after_expr should preserve basis/meta behavior across major branches."""
+    # Simple weekly fast path.
+    dnf_simple = core.parse_anchor_expr_to_dnf_cached("w:mon")
+    d_simple, m_simple = core.next_after_expr(dnf_simple, date(2024, 12, 11))
+    expect(d_simple == date(2024, 12, 16), f"unexpected simple weekly date: {d_simple}")
+    expect((m_simple or {}).get("basis") == "simple_weekly", f"unexpected simple basis: {m_simple}")
+
+    # Normal term path.
+    dnf_term = core.parse_anchor_expr_to_dnf_cached("w:mon + m:1")
+    d_term, m_term = core.next_after_expr(dnf_term, date(2024, 12, 1))
+    expect(d_term == date(2025, 9, 1), f"unexpected term date: {d_term}")
+    expect((m_term or {}).get("basis") == "term", f"unexpected term basis: {m_term}")
+
+    # Monthly random path.
+    dnf_mrand = core.parse_anchor_expr_to_dnf_cached("m:rand")
+    d_mrand, m_mrand = core.next_after_expr(dnf_mrand, date(2025, 1, 1), seed_base="branch-seed")
+    expect((m_mrand or {}).get("basis") == "rand", f"unexpected m:rand basis: {m_mrand}")
+    period_m = (m_mrand or {}).get("rand_period") or ""
+    expect(bool(re.fullmatch(r"\d{6}", period_m)), f"unexpected m:rand period: {period_m!r}")
+    expect(d_mrand > date(2025, 1, 1), f"m:rand should be strictly after start, got {d_mrand}")
+
+    # Yearly random path with target month.
+    dnf_yrand = core.parse_anchor_expr_to_dnf_cached("y:rand-07")
+    d_yrand, m_yrand = core.next_after_expr(dnf_yrand, date(2025, 1, 1), seed_base="branch-seed")
+    expect((m_yrand or {}).get("basis") == "rand", f"unexpected y:rand basis: {m_yrand}")
+    period_y = (m_yrand or {}).get("rand_period") or ""
+    expect(bool(re.fullmatch(r"\d{4}-\d{2}", period_y)), f"unexpected y:rand period: {period_y!r}")
+    expect(d_yrand.month == 7, f"y:rand-07 should stay in July, got {d_yrand}")
+
+    # Monthly random constrained by yearly window.
+    dnf_rand_year = core.parse_anchor_expr_to_dnf_cached("m:rand + y:01-01..01-31")
+    d_rand_year, m_rand_year = core.next_after_expr(dnf_rand_year, date(2025, 1, 1), seed_base="branch-seed")
+    expect((m_rand_year or {}).get("basis") == "rand+yearly", f"unexpected rand+yearly basis: {m_rand_year}")
+    expect(d_rand_year.month == 1, f"rand+yearly should stay in January, got {d_rand_year}")
+
 
 def test_on_exit_lock_failure_keeps_queue():
     """Queue should remain intact if on-exit lock cannot be acquired."""
@@ -5126,6 +5162,7 @@ TESTS = [
     test_cache_save_writes_all_bytes,
     test_parse_anchor_expr_fuzz_inputs,
     test_rand_determinism_with_seed,
+    test_next_after_expr_branch_characterization,
     test_on_exit_lock_failure_keeps_queue,
     test_on_exit_queue_streaming_line_cap,
     test_on_exit_queue_rotate_then_drain,

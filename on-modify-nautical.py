@@ -21,7 +21,7 @@ from functools import lru_cache
 import re
 import time as _time
 import threading
-from typing import Optional
+from typing import Any, Optional
 import stat
 
 _MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -30,9 +30,10 @@ NAUTICAL_HOOK_VERSION = "updateE-20260126"
 
 # Optional: DST-aware local TZ helpers (used by some carry-forward variants)
 try:
-    from zoneinfo import ZoneInfo
+    import zoneinfo as _zoneinfo
 except Exception:  # pragma: no cover
-    ZoneInfo = None
+    _zoneinfo = None
+ZoneInfo = _zoneinfo.ZoneInfo if _zoneinfo is not None else None
 
 
 # set config show_analytics=false to disable analytics panel entry.
@@ -79,9 +80,9 @@ def _env_float(name: str, default: float) -> float:
 _PANEL_CHAIN_BY_LINK = None
 _PANEL_CHAIN_BY_SHORT = None
 _CHAIN_CACHE_CHAIN_ID = ""
-_CHAIN_CACHE = []
-_CHAIN_BY_SHORT = {}
-_CHAIN_BY_UUID = {}
+_CHAIN_CACHE: list[dict[str, Any]] = []
+_CHAIN_BY_SHORT: dict[str, dict[str, Any]] = {}
+_CHAIN_BY_UUID: dict[str, dict[str, Any]] = {}
 _CHAIN_CACHE_LOCK = threading.RLock()
 _DIAG_STATS = {
     "run_task_calls": 0,
@@ -102,7 +103,7 @@ _DIAG_START_TS = _ptime.perf_counter()
 # Set debug_wait_sched=true to include carry computations in the feedback panel.
 # ------------------------------------------------------------------------------
 _DEFAULT_DEBUG_WAIT_SCHED = False
-_LAST_WAIT_SCHED_DEBUG = OrderedDict()
+_LAST_WAIT_SCHED_DEBUG: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _MAX_WAIT_SCHED_DEBUG = 32
 _WARNED_SPAWN_QUEUE_GROWTH = False
 _WARNED_CHAIN_EXPORT: set[str] = set()
@@ -640,7 +641,7 @@ def _decode_latest_task_from_raw(raw: str) -> dict | None:
 
 
 def _panic_passthrough() -> None:
-    fallback = {}
+    fallback: dict[str, Any] = {}
     task = _PARSED_NEW if isinstance(_PARSED_NEW, dict) else None
     if task is None:
         task = _decode_latest_task_from_raw(_RAW_INPUT_TEXT)
@@ -1598,7 +1599,7 @@ def _spawn_child(child_task: dict) -> tuple[str, set[str]]:
     _normalise_datetime_fields(obj)
 
     attempts = 0
-    stripped_accum = set()
+    stripped_accum: set[str] = set()
     last_stderr = ""
     last_category = ""
 
@@ -2327,10 +2328,10 @@ def _norm_hhmm_list(v) -> list[tuple[int, int]]:
                 out.append(t)
         return out
     if isinstance(v, list):
-        out: list[tuple[int, int]] = []
+        out_list: list[tuple[int, int]] = []
         for it in v:
-            out.extend(_norm_hhmm_list(it))
-        return out
+            out_list.extend(_norm_hhmm_list(it))
+        return out_list
     return []
 
 
@@ -2405,15 +2406,15 @@ def _skip_reference_dt_local(
         return due_local
 
     hh, mm = prev_slots[-1]
-    tz = end_local.tzinfo or _local_tz()
+    tz = end_local.tzinfo or _nautical_local_tz()
     return datetime.combine(end_local.date(), time(hh, mm), tzinfo=tz)
 
 def _as_local_dt(d: datetime | None) -> datetime | None:
     if d is None:
         return None
     if d.tzinfo is None:
-        return d.replace(tzinfo=timezone.utc).astimezone(_local_tz())
-    return d.astimezone(_local_tz())
+        return d.replace(tzinfo=timezone.utc).astimezone(_nautical_local_tz())
+    return d.astimezone(_nautical_local_tz())
 
 
 def _next_occurrence_after_local_dt(
@@ -2427,7 +2428,7 @@ def _next_occurrence_after_local_dt(
 
     This is hook-level logic because core recurrence is date-based.
     """
-    tz = after_local_dt.tzinfo or _local_tz()
+    tz = after_local_dt.tzinfo or _nautical_local_tz()
     slots = _extract_time_slots_from_dnf(dnf)
 
     # same-day: only if the expression hits on that date
@@ -2678,7 +2679,7 @@ def _anchor_due_mode_all(
     seed_base,
     fallback_hhmm,
 ) -> tuple[object, dict]:
-    info = {"mode": "all", "basis": None, "missed_count": 0, "missed_preview": []}
+    info: dict[str, object] = {"mode": "all", "basis": None, "missed_count": 0, "missed_preview": []}
     missed_dts = _collect_missed_occurrences(
         dnf,
         after_local_dt=due_local,

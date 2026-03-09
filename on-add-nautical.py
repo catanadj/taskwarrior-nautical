@@ -27,6 +27,7 @@ from contextlib import contextmanager
 import shlex, subprocess
 import tempfile
 from collections import OrderedDict
+from typing import Any
  # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
  # Python's json.dumps() defaults to ensure_ascii=True, which escapes non-ASCII
  # as "\\uXXXX". We prefer human-readable UTF-8 JSON for hook passthrough.
@@ -248,7 +249,7 @@ def _to_local_cached(dt):
 # Default on; set NAUTICAL_DNF_DISK_CACHE=0 to disable.
 _DNF_DISK_CACHE_ENABLED = (os.getenv("NAUTICAL_DNF_DISK_CACHE") or "1").strip().lower() in ("1", "true", "yes", "on")
 _DNF_DISK_CACHE_PATH = HOOK_DIR / ".nautical_cache" / "dnf_cache.jsonl"
-_DNF_DISK_CACHE = None  # OrderedDict[str, object]
+_DNF_DISK_CACHE: OrderedDict[str, Any] | None = None
 _DNF_DISK_CACHE_DIRTY = False
 _DNF_DISK_CACHE_MAX = 256
 _DNF_DISK_CACHE_LOCK = _DNF_DISK_CACHE_PATH.with_suffix(".lock")
@@ -828,7 +829,7 @@ _PARSED_TASK = None
 
 def _panic_passthrough() -> None:
     """Emit a valid fallback JSON task on unexpected errors."""
-    fallback = {}
+    fallback: dict[str, Any] = {}
     task = _PARSED_TASK if isinstance(_PARSED_TASK, dict) else None
     if task is None and _RAW_INPUT_TEXT:
         try:
@@ -1686,7 +1687,7 @@ def _handle_anchor_preview_on_add(
     past_due_warning: str | None,
     prof,
 ) -> None:
-    rows = []
+    rows: list[tuple[str, str]] = []
 
     def _fmt(dt):
         return core.fmt_dt_local(dt)

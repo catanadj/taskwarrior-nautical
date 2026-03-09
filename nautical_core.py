@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Any, TypeAlias, TypedDict, cast
 from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache, wraps
-from calendar import month_name
+from calendar import month_name, monthrange
 from datetime import date as _date
 import json, zlib, base64, hashlib, tempfile, time, random, subprocess
 import difflib
@@ -101,8 +101,12 @@ class AnchorHintsPayload(TypedDict, total=False):
 try:
     import tomllib  # Python 3.11+
 except Exception:
+    tomllib = None
+if tomllib is None:
     try:
-        import tomli as tomllib  # Python 3.10 and earlier (pip install tomli)
+        import tomli
+
+        tomllib = tomli  # Python 3.10 and earlier (pip install tomli)
     except Exception:
         tomllib = None
 
@@ -1655,53 +1659,6 @@ def _rewrite_year_month_aliases_in_context(dnf: list[list[dict]]) -> list[list[d
 
     return dnf
 
-# --- helpers used by the monthly /N branch ---
-def _month_doms_for_spec(spec: str, y: date, m: int) -> list[int]:
-    # must return day-of-month integers that match 'spec' in (y,m)
-    try:
-        return sorted(expand_monthly_cached(spec, y.year if isinstance(y, date) else y, m))
-    except Exception:
-        return []
-
-def _month_has_hit(spec: str, y: int, m: int) -> bool:
-    return bool(_month_doms_for_spec(spec, date(y, m, 1), m))
-
-def _first_hit_after_probe_in_month(spec: str, y: int, m: int, probe: date) -> date | None:
-    doms = _month_doms_for_spec(spec, date(y, m, 1), m)
-    for d in doms:
-        try:
-            dt = date(y, m, d)
-            if dt > probe:
-                return dt
-        except ValueError:
-            continue
-    return None
-
-def _next_valid_month_on_or_after(spec: str, y: int, m: int) -> tuple[int, int]:
-    yy, mm = y, m
-    for _ in range(480):  # upper bound for safety
-        if _month_has_hit(spec, yy, mm):
-            return yy, mm
-        mm += 1
-        if mm > 12:
-            yy += 1
-            mm = 1
-    return y, m  # fallback (should never hit)
-
-def _advance_k_valid_months(spec: str, y: int, m: int, k: int) -> tuple[int, int]:
-    """Advance forward by k valid months (k>=0)."""
-    yy, mm = y, m
-    steps = max(k, 0)
-    while steps >= 0:
-        # hop to the next calendar month first
-        mm += 1
-        if mm > 12:
-            yy += 1
-            mm = 1
-        yy, mm = _next_valid_month_on_or_after(spec, yy, mm)
-        steps -= 1
-    return yy, mm
-
 # --- Anchor Canonical Form (ACF) ----------------------------------------------
 
 
@@ -1805,7 +1762,7 @@ def build_acf(expr: str) -> str:
         atoms = []
         for a in term:
             typ = (a.get("typ") or "").lower()
-            ival = int(a.get("ival") or 1)
+            ival = int(coerce_int(a.get("ival"), 1) or 1)
             spec = a.get("spec") or ""
             mods = a.get("mods") or {}
             
@@ -2018,7 +1975,7 @@ def _year_pair(a: int, b: int) -> tuple[int, int]:
 
 def _mods_to_acf(mods: dict) -> dict:
     """Keep only active modifiers in a compact, stable shape for ACF."""
-    out = {}
+    out: dict[str, object] = {}
     if not mods:
         return out
     t = mods.get("t")
@@ -3058,7 +3015,7 @@ def cache_key_for_task(anchor_expr: str, anchor_mode: str) -> str:
 _NTH_RE  = re.compile(r"^(?:(\d)(?:st|nd|rd|th)|last)-(" + "|".join(_WD_ABBR) + r")$")
 
 def _days_in_month(y:int, m:int) -> int:
-    return calendar.monthrange(y, m)[1]
+    return monthrange(y, m)[1]
 
 def _wd_idx(s: str) -> int | None:
     s = (s or "").strip().lower()
@@ -3236,7 +3193,7 @@ def _doms_allowed_by_year(y:int, m:int, y_specs: list[str]) -> set[int]:
     if not ranges:
         return set()
     dim = _days_in_month(y,m)
-    allowed = set()
+    allowed: set[int] = set()
     for (m1,d1,m2,d2) in ranges:
         if m1 == m2:
             if m == m1:
@@ -4837,6 +4794,8 @@ def _try_bucket_rand_monthly(dnf: list[list[dict]], task: dict) -> str | None:
 
     ranges = sorted(ranges, key=_start_val)
 
+    if sig is None:
+        return None
     ival, time_str, bd_flag = sig
     parts = []
     lead = "one random "
@@ -4861,8 +4820,8 @@ def _split_inline_items_respecting_t_lists(s: str) -> list[str]:
     """Split comma-list items, but keep commas inside '@t=HH:MM,HH:MM' values."""
     if not s:
         return []
-    out = []
-    buf = []
+    out: list[str] = []
+    buf: list[str] = []
     in_t_value = False
     i, n = 0, len(s)
 
@@ -5123,13 +5082,6 @@ def _weekly_rand_pick(iso_year: int, iso_week: int, mods: dict) -> int:
     return pool[n % len(pool)]
 
 
-def _days_in_month(y, m):
-    """Get number of days in month (optimized)."""
-    if m == 12:
-        return 31
-    return (date(y, m + 1, 1) - timedelta(days=1)).day
-
-
 def _is_bd(dt: _date):  # business day
     return dt.weekday() < 5
 
@@ -5180,7 +5132,7 @@ def _month_tokens_for_atom_cached(y: int, m: int, spec: str) -> set[int]:
     """
     spec = _expand_monthly_aliases(spec)
     ndays = _days_in_month(y, m)
-    out = set()
+    out: set[int] = set()
 
     # business-day like '5bd' or '-2bd'
     m2 = _bd_re.match(spec)
@@ -6319,7 +6271,7 @@ def _normalize_anchor_input_to_dnf(expr) -> AnchorDNF:
     # Defensive compatibility for legacy tuple-style parser errors.
     if isinstance(dnf, tuple) and len(dnf) == 2 and isinstance(dnf[0], str):
         raise ParseError(dnf[0])
-    return cast(AnchorDNF, dnf)
+    return dnf
 
 
 def _assert_dnf_structure_strict(dnf):
@@ -6744,6 +6696,9 @@ def base_next_after_atom(atom, ref_d: date) -> date:
             y += 1
         # safe fallback (avoid .replace on 29-Feb)
         return ref_d + timedelta(days=366)
+
+    # Unknown type should not happen after strict validation; keep deterministic fallback.
+    return ref_d + timedelta(days=365)
 
 
 # ------------------------------------------------------------------------------

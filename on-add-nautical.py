@@ -556,89 +556,111 @@ def _panel(title, rows, kind: str = "info"):
         label_width_max=28,
     )
 
-def _format_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
-    """Compact layout for anchor preview .
-    """
-    # Upcoming numbering to match the *chain link* index:
-    #   link #1 → First due
-    #   link #2 → Next anchor (if present)
-    #   link #3+→ Upcoming list
-    has_next_anchor = any(k == "Next anchor" for k, _ in rows)
-    upcoming_start = 3 if has_next_anchor else 2
+def _anchor_has_next_anchor(rows: list[tuple[str, str]]) -> bool:
+    return any(k == "Next anchor" for k, _ in rows)
 
-    # Extract delta row; later we inline it into "First due"
-    delta_text = None
+
+def _anchor_delta_text(rows: list[tuple[str, str]]) -> str | None:
     for k, v in rows:
         if k == "Delta":
-            delta_text = v
-            break
+            return v
+    return None
 
+
+def _anchor_upcoming_numbered(v: str, start_idx: int) -> str:
+    if not v or v == "[dim]–[/]":
+        return v
+    lines = v.splitlines()
+    new_lines = []
+    idx = start_idx
+    for line in lines:
+        new_lines.append(f"[dim]{idx:>2} ▸[/] {line}")
+        idx += 1
+    return "\n".join(new_lines)
+
+
+def _anchor_classify_rows(
+    rows: list[tuple[str, str]],
+    *,
+    delta_text: str | None,
+    upcoming_start: int,
+) -> dict[str, list[tuple[str, str]]]:
     config_keys = {"Pattern", "Natural"}
     schedule_keys = {"First due", "Next anchor", "Scheduled", "Wait", "[auto-due]", "Upcoming"}
     limits_keys = {"Limits", "Final (until)"}
-
-    config: list[tuple[str, str]] = []
-    schedule: list[tuple[str, str]] = []
-    limits: list[tuple[str, str]] = []
-    warnings: list[tuple[str, str]] = []
-    rand: list[tuple[str, str]] = []
-    chain: list[tuple[str, str]] = []
-    others: list[tuple[str, str]] = []
+    grouped: dict[str, list[tuple[str, str]]] = {
+        "config": [],
+        "schedule": [],
+        "limits": [],
+        "warnings": [],
+        "rand": [],
+        "chain": [],
+        "others": [],
+    }
 
     for k, v in rows:
-        # Skip standalone Delta row; we embed it into "First due"
         if k == "Delta":
             continue
-
         if k == "First due" and delta_text:
             v = f"{v}  [dim](Δ {delta_text})[/]"
 
         lk = (str(k).lower() if k is not None else "")
-
         if k in config_keys:
-            config.append((k, v))
-        elif k in schedule_keys:
-            if k == "Upcoming" and v and v != "[dim]–[/]":
-                # Add correct link numbers: 3,4,... if Next anchor present; else 2,3,...
-                lines = v.splitlines()
-                new_lines = []
-                idx = upcoming_start
-                for line in lines:
-                    new_lines.append(f"[dim]{idx:>2} ▸[/] {line}")
-                    idx += 1
-                v = "\n".join(new_lines)
-            schedule.append((k, v))
-        elif k in limits_keys:
-            limits.append((k, v))
-        elif lk.startswith("warning") or lk.startswith("note"):
-            warnings.append((k, v))
-        elif k == "Rand":
-            rand.append((k, v))
-        elif k == "Chain":
-            chain.append((k, v))
-        else:
-            others.append((k, v))
+            grouped["config"].append((k, v))
+            continue
+        if k in schedule_keys:
+            if k == "Upcoming":
+                v = _anchor_upcoming_numbered(v, upcoming_start)
+            grouped["schedule"].append((k, v))
+            continue
+        if k in limits_keys:
+            grouped["limits"].append((k, v))
+            continue
+        if lk.startswith("warning") or lk.startswith("note"):
+            grouped["warnings"].append((k, v))
+            continue
+        if k == "Rand":
+            grouped["rand"].append((k, v))
+            continue
+        if k == "Chain":
+            grouped["chain"].append((k, v))
+            continue
+        grouped["others"].append((k, v))
+    return grouped
 
-    # Any unknown rows → CONFIG so they don't vanish
-    config.extend(others)
 
+def _anchor_compose_rows(grouped: dict[str, list[tuple[str, str]]]) -> list[tuple[str | None, str]]:
     out: list[tuple[str | None, str]] = []
 
-    def _add(group: list[tuple[str, str]]):
-        nonlocal out
+    def _add(group: list[tuple[str, str]]) -> None:
         if not group:
             return
         if out:
-            out.append((None, ""))  # spacer line
+            out.append((None, ""))
         out.extend(group)
 
-    _add(config)
-    _add(schedule)
-    _add(limits)
-    _add(warnings)
-    _add(rand)
-    _add(chain)
+    grouped["config"].extend(grouped["others"])
+    _add(grouped["config"])
+    _add(grouped["schedule"])
+    _add(grouped["limits"])
+    _add(grouped["warnings"])
+    _add(grouped["rand"])
+    _add(grouped["chain"])
+    return out
 
+
+def _format_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
+    """Compact layout for anchor preview .
+    """
+    has_next_anchor = _anchor_has_next_anchor(rows)
+    upcoming_start = 3 if has_next_anchor else 2
+    delta_text = _anchor_delta_text(rows)
+    grouped = _anchor_classify_rows(
+        rows,
+        delta_text=delta_text,
+        upcoming_start=upcoming_start,
+    )
+    out = _anchor_compose_rows(grouped)
     return out or rows
 
 

@@ -4241,6 +4241,47 @@ def test_on_add_profiler_lazy_init():
     expect(not called["ok"], "profiler should not register when disabled")
 
 
+def test_on_add_format_anchor_rows_numbers_upcoming_from_three_with_next_anchor():
+    """on-add anchor formatting should number upcoming entries from 3 when Next anchor exists."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_format_rows_next_anchor_test")
+    if not hasattr(mod, "_format_anchor_rows"):
+        raise AssertionError("on-add hook does not expose _format_anchor_rows")
+
+    rows = [
+        ("Pattern", "w:mon"),
+        ("First due", "2025-01-01 09:00"),
+        ("Next anchor", "2025-01-08 09:00"),
+        ("Upcoming", "[cyan]2025-01-15 09:00[/]\n[cyan]2025-01-22 09:00[/]"),
+        ("Delta", "+7d"),
+        ("Chain", "enabled"),
+    ]
+    out = mod._format_anchor_rows(rows)
+    txt = _strip_markup("\n".join(v for _, v in out if isinstance(v, str)))
+    expect(" 3 ▸ 2025-01-15 09:00" in txt, f"expected #3 upcoming marker, got: {txt!r}")
+    expect(" 4 ▸ 2025-01-22 09:00" in txt, f"expected #4 upcoming marker, got: {txt!r}")
+
+
+def test_on_add_format_anchor_rows_numbers_upcoming_from_two_without_next_anchor():
+    """on-add anchor formatting should number upcoming entries from 2 without Next anchor."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_format_rows_no_next_anchor_test")
+    if not hasattr(mod, "_format_anchor_rows"):
+        raise AssertionError("on-add hook does not expose _format_anchor_rows")
+
+    rows = [
+        ("Pattern", "w:mon"),
+        ("First due", "2025-01-01 09:00"),
+        ("Upcoming", "[cyan]2025-01-08 09:00[/]"),
+        ("Delta", "+7d"),
+        ("Other", "x"),
+    ]
+    out = mod._format_anchor_rows(rows)
+    txt = _strip_markup("\n".join(v for _, v in out if isinstance(v, str)))
+    expect(" 2 ▸ 2025-01-08 09:00" in txt, f"expected #2 upcoming marker, got: {txt!r}")
+    expect("Δ +7d" in txt, f"expected inline delta in first-due row, got: {txt!r}")
+
+
 def test_on_modify_panel_fallback():
     """on-modify panel should fall back to plain output on errors."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -5223,6 +5264,8 @@ TESTS = [
     test_on_add_preview_hard_cap,
     test_on_add_flushes_stdout,
     test_on_add_profiler_lazy_init,
+    test_on_add_format_anchor_rows_numbers_upcoming_from_three_with_next_anchor,
+    test_on_add_format_anchor_rows_numbers_upcoming_from_two_without_next_anchor,
     test_on_modify_panel_fallback,
     test_on_exit_import_error_but_child_exists,
     test_on_exit_parent_nextlink_changed_dead_letter,

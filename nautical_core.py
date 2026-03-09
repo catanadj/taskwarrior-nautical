@@ -2088,6 +2088,180 @@ def _cache_lock_path(key: str) -> str:
     return os.path.join(base, f".{key}.lock")
 
 @contextmanager
+def _safe_lock_sleep_once(sleep_base: float, jitter: float) -> None:
+    try:
+        delay = float(sleep_base or 0.0)
+    except Exception:
+        delay = 0.0
+    if jitter:
+        try:
+            delay += random.uniform(0.0, float(jitter))
+        except Exception:
+            pass
+    if delay > 0:
+        time.sleep(delay)
+
+
+def _safe_lock_ensure_parent(path_str: str, mkdir: bool) -> None:
+    if not mkdir:
+        return
+    try:
+        parent = os.path.dirname(path_str)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+    except Exception:
+        pass
+
+
+def _safe_lock_age(path_str: str) -> float | None:
+    try:
+        with open(path_str, "r", encoding="utf-8") as f:
+            head = f.read(64)
+        parts = head.strip().split()
+        if len(parts) >= 2:
+            return time.time() - float(parts[1])
+    except Exception:
+        pass
+    try:
+        st = os.stat(path_str)
+        return time.time() - float(st.st_mtime)
+    except Exception:
+        return None
+
+
+def _safe_lock_stale_pid(path_str: str, stale_after: float | None) -> bool:
+    try:
+        with open(path_str, "r", encoding="utf-8") as f:
+            head = f.read(64)
+        parts = head.strip().split()
+        pid_str = parts[0] if parts else ""
+        pid = int(pid_str)
+        if pid <= 0:
+            return True
+        if stale_after is not None and len(parts) >= 2:
+            try:
+                age = time.time() - float(parts[1])
+                if age < float(stale_after):
+                    return False
+            except Exception:
+                pass
+        try:
+            os.kill(pid, 0)
+            return False
+        except PermissionError:
+            return False
+        except ProcessLookupError:
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+@contextmanager
+def _safe_lock_fcntl_context(
+    path_str: str,
+    *,
+    tries: int,
+    sleep_base: float,
+    jitter: float,
+    mode: int,
+    mkdir: bool,
+):
+    lf = None
+    acquired = False
+    _safe_lock_ensure_parent(path_str, mkdir)
+    try:
+        fd = os.open(path_str, os.O_CREAT | os.O_RDWR, mode)
+        try:
+            os.fchmod(fd, mode)
+        except Exception:
+            pass
+        lf = os.fdopen(fd, "a", encoding="utf-8")
+        for _ in range(tries):
+            try:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except Exception:
+                _safe_lock_sleep_once(sleep_base, jitter)
+    except Exception:
+        lf = None
+    try:
+        yield acquired
+    finally:
+        try:
+            if acquired and lf is not None:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            if lf is not None:
+                lf.close()
+        except Exception:
+            pass
+
+
+@contextmanager
+def _safe_lock_excl_context(
+    path_str: str,
+    *,
+    tries: int,
+    sleep_base: float,
+    jitter: float,
+    mode: int,
+    mkdir: bool,
+    stale_after: float | None,
+):
+    fd = None
+    acquired = False
+    for _ in range(tries):
+        _safe_lock_ensure_parent(path_str, mkdir)
+        try:
+            fd = os.open(path_str, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+            try:
+                os.fchmod(fd, mode)
+            except Exception:
+                pass
+            try:
+                payload = f"{os.getpid()} {int(time.time())}\n"
+                os.write(fd, payload.encode("ascii", "replace"))
+            except Exception:
+                pass
+            acquired = True
+            break
+        except FileExistsError:
+            pid_stale = _safe_lock_stale_pid(path_str, stale_after)
+            age_stale = False
+            if stale_after is not None:
+                age = _safe_lock_age(path_str)
+                if age is not None and age >= float(stale_after):
+                    age_stale = True
+            if pid_stale and age_stale:
+                try:
+                    os.unlink(path_str)
+                except Exception:
+                    pass
+            else:
+                _safe_lock_sleep_once(sleep_base, jitter)
+        except Exception:
+            break
+    try:
+        yield acquired
+    finally:
+        try:
+            if acquired and fd is not None:
+                os.close(fd)
+        except Exception:
+            pass
+        try:
+            if acquired and fd is not None:
+                os.unlink(path_str)
+        except Exception:
+            pass
+
+
+@contextmanager
 def safe_lock(
     path: str | os.PathLike,
     *,
@@ -2104,155 +2278,30 @@ def safe_lock(
         yield False
         return
 
-    def _sleep_once():
-        try:
-            delay = float(sleep_base or 0.0)
-        except Exception:
-            delay = 0.0
-        if jitter:
-            try:
-                delay += random.uniform(0.0, float(jitter))
-            except Exception:
-                pass
-        if delay > 0:
-            time.sleep(delay)
-
-    def _ensure_parent():
-        if not mkdir:
-            return
-        try:
-            parent = os.path.dirname(path_str)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-        except Exception:
-            pass
-
-    def _lock_age(path: str) -> float | None:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                head = f.read(64)
-            parts = head.strip().split()
-            if len(parts) >= 2:
-                return time.time() - float(parts[1])
-        except Exception:
-            pass
-        try:
-            st = os.stat(path)
-            return time.time() - float(st.st_mtime)
-        except Exception:
-            return None
-
-    def _lock_stale_pid(path: str) -> bool:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                head = f.read(64)
-            parts = head.strip().split()
-            pid_str = parts[0] if parts else ""
-            pid = int(pid_str)
-            if pid <= 0:
-                return True
-            if stale_after is not None and len(parts) >= 2:
-                try:
-                    age = time.time() - float(parts[1])
-                    if age < float(stale_after):
-                        return False
-                except Exception:
-                    pass
-            try:
-                os.kill(pid, 0)
-                return False
-            except PermissionError:
-                return False
-            except ProcessLookupError:
-                return True
-            except Exception:
-                return False
-        except Exception:
-            return False
-
     tries = max(1, int(retries or 0))
 
     if fcntl is not None:
-        lf = None
-        acquired = False
-        _ensure_parent()
-        try:
-            fd = os.open(path_str, os.O_CREAT | os.O_RDWR, mode)
-            try:
-                os.fchmod(fd, mode)
-            except Exception:
-                pass
-            lf = os.fdopen(fd, "a", encoding="utf-8")
-            for _ in range(tries):
-                try:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    acquired = True
-                    break
-                except Exception:
-                    _sleep_once()
-        except Exception:
-            lf = None
-        try:
+        with _safe_lock_fcntl_context(
+            path_str,
+            tries=tries,
+            sleep_base=sleep_base,
+            jitter=jitter,
+            mode=mode,
+            mkdir=mkdir,
+        ) as acquired:
             yield acquired
-        finally:
-            try:
-                if acquired and lf is not None:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
-            try:
-                if lf is not None:
-                    lf.close()
-            except Exception:
-                pass
         return
 
-    fd = None
-    acquired = False
-    for _ in range(tries):
-        _ensure_parent()
-        try:
-            fd = os.open(path_str, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
-            try:
-                os.fchmod(fd, mode)
-            except Exception:
-                pass
-            try:
-                payload = f"{os.getpid()} {int(time.time())}\n"
-                os.write(fd, payload.encode("ascii", "replace"))
-            except Exception:
-                pass
-            acquired = True
-            break
-        except FileExistsError:
-            pid_stale = _lock_stale_pid(path_str)
-            age_stale = False
-            if stale_after is not None:
-                age = _lock_age(path_str)
-                if age is not None and age >= float(stale_after):
-                    age_stale = True
-            if pid_stale and age_stale:
-                try:
-                    os.unlink(path_str)
-                except Exception:
-                    pass
-            else:
-                _sleep_once()
-        except Exception:
-            break
-    try:
+    with _safe_lock_excl_context(
+        path_str,
+        tries=tries,
+        sleep_base=sleep_base,
+        jitter=jitter,
+        mode=mode,
+        mkdir=mkdir,
+        stale_after=stale_after,
+    ) as acquired:
         yield acquired
-    finally:
-        try:
-            if acquired and fd is not None:
-                os.close(fd)
-        except Exception:
-            pass
-        try:
-            if acquired and fd is not None:
-                os.unlink(path_str)
-        except Exception:
-            pass
 
 @contextmanager
 def _cache_lock(key: str):

@@ -1081,20 +1081,20 @@ def _safe_parse_duration(s, field_name) -> tuple[timedelta | None, str | None]:
         return (None, f"{field_name}: Unexpected parsing error")
 
 
-def _validate_anchor_syntax_strict(expr) -> tuple[bool, str | None]:
+def _validate_anchor_syntax_strict(expr) -> tuple[object | None, str | None]:
     """
     Strictly validate an anchor. Accepts string or DNF.
-    Returns (True, None) on success, (False, message) on failure.
+    Returns (dnf, None) on success, (None, message) on failure.
     """
     try:
-        core.validate_anchor_expr_strict(expr)
-        return True, None
+        dnf = _validate_anchor_expr_cached(expr)
+        return dnf, None
     except Exception as e:
         parse_err_t = getattr(core, "ParseError", None)
         if parse_err_t is not None and isinstance(e, parse_err_t):
-            return False, str(e)
+            return None, str(e)
         _diag(f"anchor validation unexpected error: {e}")
-        return False, "anchor syntax error"
+        return None, "anchor syntax error"
 
 
 def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
@@ -1511,31 +1511,15 @@ def _handle_cp_preview_on_add(
 
 
 def _anchor_preview_prepare_dnf(task: dict, anchor_str: str, due_dt: datetime, rows: list[tuple[str, str]], prof):
-    is_valid, err = _validate_anchor_syntax_strict(anchor_str)
-    if not is_valid:
-        _error_and_exit([("Invalid anchor", err)])
-
-    anchor_mode = ((task.get("anchor_mode") or "").strip().upper() or "ALL")
     t0 = time.perf_counter()
-    if core.ENABLE_ANCHOR_CACHE:
-        pkg = core.build_and_cache_hints(anchor_str, anchor_mode, default_due_dt=due_dt)
-        natural = pkg.get("natural") or core.describe_anchor_expr(anchor_str, default_due_dt=due_dt)
-        dnf = pkg.get("dnf")
-    else:
-        natural = core.describe_anchor_expr(anchor_str, default_due_dt=task.get("due"))
-        dnf = core.validate_anchor_expr_strict(anchor_str)
-    _ = natural
+    dnf, err = _validate_anchor_syntax_strict(anchor_str)
+    if dnf is None:
+        _error_and_exit([("Invalid anchor", err)])
 
     mode, warn_msg = _validate_anchor_mode(task.get("anchor_mode"))
     task["anchor_mode"] = mode
     if warn_msg:
         rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
-
-    try:
-        dnf = _validate_anchor_expr_cached(anchor_str)
-    except Exception as e:
-        _diag(f"anchor cache/validation failed: {e}")
-        _fail_and_exit("Invalid anchor", "anchor syntax error")
     prof.add_ms("anchor:dnf", (time.perf_counter() - t0) * 1000.0)
 
     tag = {

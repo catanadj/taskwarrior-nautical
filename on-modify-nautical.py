@@ -4758,9 +4758,6 @@ def _non_completion_validate_anchor(old: dict, new: dict, new_anchor: str) -> No
     except Exception as e:
         _got_anchor_invalid(_non_completion_anchor_error_message(new_anchor, str(e)))
 
-    if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
-        _validate_anchor_on_modify(new_anchor)
-
 
 def _non_completion_reject_conflicting_types(new_anchor: str, new_cp: str) -> None:
     if new_anchor and new_cp:

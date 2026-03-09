@@ -3363,12 +3363,7 @@ def build_and_cache_hints(anchor_expr: str,
     key = cache_key_for_task(anchor_expr, anchor_mode)
     cached = cache_load(key)
     if cached:
-        if "dnf" in cached:
-            cached["dnf"] = _normalize_dnf_cached(cached.get("dnf"))
-            if not _is_dnf_like(cached.get("dnf")):
-                cached = None
-        if cached:
-            return cached
+        return cached
 
     dnf = validate_anchor_expr_strict(anchor_expr)
     natural = _describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)

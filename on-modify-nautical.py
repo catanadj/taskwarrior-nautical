@@ -4097,10 +4097,13 @@ def _chain_export_timeout(chain_id: str) -> float:
         timeout = max_t
     return timeout
 
-def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None, limit: int | None = None) -> list[dict]:
-    global _CHAIN_EXPORT_TIMEOUT_FLOOR
-    if not chain_id:
-        return []
+def _tw_export_chain_args(
+    chain_id: str,
+    *,
+    since: datetime | None,
+    extra: str | None,
+    limit: int | None,
+) -> list[str] | None:
     args = _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
     if since:
         args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
@@ -4109,9 +4112,57 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     if extra:
         if not _extra_safe(extra):
             _diag(f"tw_export_chain rejected extra: {extra!r}")
-            return []
+            return None
         args += shlex.split(extra)
     args.append("export")
+    return args
+
+
+def _tw_export_chain_success(elapsed: float) -> None:
+    global _CHAIN_EXPORT_TIMEOUT_FLOOR
+    if elapsed > 0:
+        _CHAIN_EXPORT_TIMES.append(elapsed)
+        if len(_CHAIN_EXPORT_TIMES) > _CHAIN_EXPORT_TIMES_MAX:
+            del _CHAIN_EXPORT_TIMES[:len(_CHAIN_EXPORT_TIMES) - _CHAIN_EXPORT_TIMES_MAX]
+    if _CHAIN_EXPORT_TIMEOUT_FLOOR > _CHAIN_EXPORT_TIMEOUT_BASE:
+        _CHAIN_EXPORT_TIMEOUT_FLOOR = max(_CHAIN_EXPORT_TIMEOUT_BASE, _CHAIN_EXPORT_TIMEOUT_FLOOR * 0.9)
+
+
+def _tw_export_chain_failure(chain_id: str, err: str, timeout: float) -> None:
+    global _CHAIN_EXPORT_TIMEOUT_FLOOR
+    if "timeout" in (err or "").lower():
+        _CHAIN_EXPORT_TIMEOUT_FLOOR = min(
+            _CHAIN_EXPORT_TIMEOUT_MAX,
+            max(_CHAIN_EXPORT_TIMEOUT_FLOOR, timeout * 1.5),
+        )
+    _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
+    if chain_id and chain_id in _WARNED_CHAIN_EXPORT:
+        return
+    if chain_id:
+        _WARNED_CHAIN_EXPORT.add(chain_id)
+    if _is_lock_error(err):
+        reason = "Taskwarrior lock active"
+    else:
+        reason = (err or "").strip() or "task export failed"
+    _panel("⚠ Chain export failed", [("ChainID", chain_id), ("Reason", reason)], kind="warning")
+
+
+def _tw_export_chain_parse(out: str) -> list[dict]:
+    try:
+        data = json.loads(out.strip() or "[]")
+        return data if isinstance(data, list) else [data]
+    except Exception as e:
+        _diag(f"tw_export_chain JSON parse failed: {e}")
+        return []
+
+
+def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None, limit: int | None = None) -> list[dict]:
+    if not chain_id:
+        return []
+    args = _tw_export_chain_args(chain_id, since=since, extra=extra, limit=limit)
+    if args is None:
+        return []
+
     start = _time.perf_counter()
     timeout = _chain_export_timeout(chain_id)
     ok, out, err = _run_task(
@@ -4123,30 +4174,10 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     )
     elapsed = _time.perf_counter() - start
     if ok:
-        if elapsed > 0:
-            _CHAIN_EXPORT_TIMES.append(elapsed)
-            if len(_CHAIN_EXPORT_TIMES) > _CHAIN_EXPORT_TIMES_MAX:
-                del _CHAIN_EXPORT_TIMES[:len(_CHAIN_EXPORT_TIMES) - _CHAIN_EXPORT_TIMES_MAX]
-        if _CHAIN_EXPORT_TIMEOUT_FLOOR > _CHAIN_EXPORT_TIMEOUT_BASE:
-            _CHAIN_EXPORT_TIMEOUT_FLOOR = max(_CHAIN_EXPORT_TIMEOUT_BASE, _CHAIN_EXPORT_TIMEOUT_FLOOR * 0.9)
-    if not ok:
-        if "timeout" in (err or "").lower():
-            _CHAIN_EXPORT_TIMEOUT_FLOOR = min(_CHAIN_EXPORT_TIMEOUT_MAX, max(_CHAIN_EXPORT_TIMEOUT_FLOOR, timeout * 1.5))
-        _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
-        if chain_id and chain_id not in _WARNED_CHAIN_EXPORT:
-            _WARNED_CHAIN_EXPORT.add(chain_id)
-            if _is_lock_error(err):
-                reason = "Taskwarrior lock active"
-            else:
-                reason = (err or "").strip() or "task export failed"
-            _panel("⚠ Chain export failed", [("ChainID", chain_id), ("Reason", reason)], kind="warning")
-        return []
-    try:
-        data = json.loads(out.strip() or "[]")
-        return data if isinstance(data, list) else [data]
-    except Exception as e:
-        _diag(f"tw_export_chain JSON parse failed: {e}")
-        return []
+        _tw_export_chain_success(elapsed)
+        return _tw_export_chain_parse(out)
+    _tw_export_chain_failure(chain_id, err, timeout)
+    return []
 
 
 def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:

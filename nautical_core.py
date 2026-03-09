@@ -2994,93 +2994,109 @@ def _choose_rand_dom(y:int, m:int, doms: set[int]) -> int | None:
     idx = int.from_bytes(h[:8], "big") % len(pool)
     return pool[idx]
 
-def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
-    """
-    Find the next date > ref_d satisfying ALL atoms in 'term'.
-    Rand-aware: if the term contains m:rand and any y:, choose the random
-    day from the intersection of ALL constraints for each candidate month.
-    Otherwise, fall back to the fast alignment loop.
-    """
-    # Detect rand + yearly presence
-    has_m_rand = any((a.get("typ") or a.get("type")) == "m" and "rand" in str(a.get("spec") or "").lower()
-                     for a in term)
-    y_specs = [str(a.get("spec") or "") for a in term if (a.get("typ") or a.get("type")) == "y"]
 
-    if has_m_rand and y_specs:
-        # Month-by-month scan, pick deterministic random from allowed set
-        y, m = ref_d.year, ref_d.month
-        # step starts at ref day + 1
-        probe = ref_d + timedelta(days=1)
-        for _ in range(60):  # scan up to 5 years (60 months)
-            y, m = probe.year, probe.month
-            dim = _days_in_month(y,m)
+def _term_has_monthly_rand(term: list[dict]) -> bool:
+    return any(
+        (a.get("typ") or a.get("type")) == "m"
+        and "rand" in str(a.get("spec") or "").lower()
+        for a in term
+    )
 
-            # Start with all days in month
-            allowed = set(range(1, dim+1))
 
-            # Intersect with yearly windows
-            allowed &= _doms_allowed_by_year(y,m, y_specs)
-            if not allowed:
-                # jump to first day of next month
-                probe = (date(y,m,1) + timedelta(days=dim))  # first day next month
-                continue
+def _term_year_specs(term: list[dict]) -> list[str]:
+    return [str(a.get("spec") or "") for a in term if (a.get("typ") or a.get("type")) == "y"]
 
-            # Intersect with all monthly atoms (except 'rand', which we resolve after)
-            for a in term:
-                typ = (a.get("typ") or a.get("type") or "").lower()
-                spec = str(a.get("spec") or "")
-                if typ != "m":
-                    continue
-                toks = _split_csv_lower(spec)
-                if not toks:
-                    continue
-                # union across tokens in this atom, then intersect across atoms
-                u: set[int] = set()
-                for tok in toks:
-                    if tok == "rand":
-                        # defer to final choose-from-allowed
-                        u.update(range(1, dim+1))
-                    else:
-                        u.update(_doms_for_monthly_token(tok, y, m))
-                allowed &= u
-                if not allowed:
-                    break
-            if not allowed:
-                probe = (date(y,m,1) + timedelta(days=dim))
-                continue
 
-            # Intersect with weekly atoms
-            for a in term:
-                typ = (a.get("typ") or a.get("type") or "").lower()
-                if typ != "w":
-                    continue
-                spec = str(a.get("spec") or "")
-                wdom = _doms_for_weekly_spec(spec, y, m)
-                if not wdom:
-                    allowed = set()
-                else:
-                    allowed &= wdom
-                if not allowed:
-                    break
-            if not allowed:
-                probe = (date(y,m,1) + timedelta(days=dim))
-                continue
+def _first_day_next_month(y: int, m: int) -> date:
+    return date(y, m, 1) + timedelta(days=_days_in_month(y, m))
 
-            # Choose deterministic random day from allowed set
-            pick = _choose_rand_dom(y, m, allowed)
-            if pick is None:
-                probe = (date(y,m,1) + timedelta(days=dim))
-                continue
 
-            cand = date(y, m, pick)
-            if cand > ref_d:
-                return cand
-            # else move to next month if pick ≤ ref
-            probe = (date(y,m,1) + timedelta(days=dim))
-        # fallback
-        return ref_d + timedelta(days=365)
+def _month_allowed_doms_for_monthly_atom(atom: dict, y: int, m: int, dim: int) -> set[int]:
+    spec = str(atom.get("spec") or "")
+    toks = _split_csv_lower(spec)
+    if not toks:
+        return set(range(1, dim + 1))
+    doms: set[int] = set()
+    for tok in toks:
+        if tok == "rand":
+            doms.update(range(1, dim + 1))
+        else:
+            doms.update(_doms_for_monthly_token(tok, y, m))
+    return doms
 
-    # -------- Fast path (no rand+yearly combo) ----------
+
+def _intersect_monthly_atoms_allowed(
+    term: list[dict],
+    *,
+    y: int,
+    m: int,
+    dim: int,
+    allowed: set[int],
+) -> set[int]:
+    out = set(allowed)
+    for atom in term:
+        typ = (atom.get("typ") or atom.get("type") or "").lower()
+        if typ != "m":
+            continue
+        out &= _month_allowed_doms_for_monthly_atom(atom, y, m, dim)
+        if not out:
+            return set()
+    return out
+
+
+def _intersect_weekly_atoms_allowed(
+    term: list[dict],
+    *,
+    y: int,
+    m: int,
+    allowed: set[int],
+) -> set[int]:
+    out = set(allowed)
+    for atom in term:
+        typ = (atom.get("typ") or atom.get("type") or "").lower()
+        if typ != "w":
+            continue
+        spec = str(atom.get("spec") or "")
+        wdom = _doms_for_weekly_spec(spec, y, m)
+        out = out & wdom if wdom else set()
+        if not out:
+            return set()
+    return out
+
+
+def _next_for_and_rand_yearly(term: list[dict], ref_d: date, y_specs: list[str]) -> date | None:
+    probe = ref_d + timedelta(days=1)
+    for _ in range(60):  # scan up to 5 years (60 months)
+        y, m = probe.year, probe.month
+        dim = _days_in_month(y, m)
+        allowed = set(range(1, dim + 1))
+        allowed &= _doms_allowed_by_year(y, m, y_specs)
+        if not allowed:
+            probe = _first_day_next_month(y, m)
+            continue
+
+        allowed = _intersect_monthly_atoms_allowed(term, y=y, m=m, dim=dim, allowed=allowed)
+        if not allowed:
+            probe = _first_day_next_month(y, m)
+            continue
+
+        allowed = _intersect_weekly_atoms_allowed(term, y=y, m=m, allowed=allowed)
+        if not allowed:
+            probe = _first_day_next_month(y, m)
+            continue
+
+        pick = _choose_rand_dom(y, m, allowed)
+        if pick is None:
+            probe = _first_day_next_month(y, m)
+            continue
+        cand = date(y, m, pick)
+        if cand > ref_d:
+            return cand
+        probe = _first_day_next_month(y, m)
+    return None
+
+
+def _next_for_and_fast_path(term: list[dict], ref_d: date, seed: date) -> date:
     probe = ref_d
     for _ in range(MAX_ANCHOR_ITER):
         cands = [next_after_atom_with_mods(atom, probe, seed) for atom in term]
@@ -3092,7 +3108,6 @@ def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
                     "[nautical] _next_for_and made no progress; failing fast. Check anchor spec.",
                 )
             raise ParseError("Anchor evaluation made no forward progress; check anchor spec.")
-        # Verify target matches all atoms (handles modifiers like @bd)
         if all(atom_matches_on(atom, target, seed) for atom in term):
             return target
         probe = target
@@ -3102,6 +3117,23 @@ def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
             f"[nautical] _next_for_and fallback after {MAX_ANCHOR_ITER} iterations.",
         )
     return ref_d + timedelta(days=365)
+
+
+def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
+    """
+    Find the next date > ref_d satisfying ALL atoms in 'term'.
+    Rand-aware: if the term contains m:rand and any y:, choose the random
+    day from the intersection of ALL constraints for each candidate month.
+    Otherwise, fall back to the fast alignment loop.
+    """
+    has_m_rand = _term_has_monthly_rand(term)
+    y_specs = _term_year_specs(term)
+    if has_m_rand and y_specs:
+        rand_yearly = _next_for_and_rand_yearly(term, ref_d, y_specs)
+        if rand_yearly is not None:
+            return rand_yearly
+        return ref_d + timedelta(days=365)
+    return _next_for_and_fast_path(term, ref_d, seed)
 
 
 def _next_for_or(dnf: list[list[dict]], ref_d: date, seed: date) -> date:

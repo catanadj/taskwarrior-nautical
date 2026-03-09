@@ -4557,8 +4557,7 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
     return new_cp, new_anchor
 
 
-def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
-    parent_short = _short(new.get("uuid"))
+def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:
     base_no = core.coerce_int(new.get("link"), 1)
     if base_no < 1 or base_no > core.MAX_LINK_NUMBER:
         _panel(
@@ -4581,15 +4580,14 @@ def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
         )
         _print_task(new)
         return None
+    return base_no, next_no
 
-    # Determine whether chaining is effectively enabled
+
+def _completion_kind_or_stop(new: dict, now_utc: datetime) -> str | None:
     raw_ch = (new.get("chain") or "").strip().lower()
     has_anchor = bool((new.get("anchor") or "").strip())
     has_cp = bool((new.get("cp") or "").strip())
-
-    # Back-compat default: if chain is unset AND it's a chainable task, treat as on.
     effective_on = (raw_ch == "on") or (raw_ch == "" and (has_anchor or has_cp))
-
     if not effective_on:
         if has_anchor or has_cp:
             _panel(
@@ -4600,47 +4598,67 @@ def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
             _print_task(new)
             _end_chain_summary(new, "Manual stop.", now_utc)
         else:
-            # Not a chain task at all → just pass it through quietly.
             _print_task(new)
         return None
 
-    has_anchor = bool((new.get("anchor") or "").strip())
-    has_cp = bool((new.get("cp") or "").strip())
     kind = "anchor" if has_anchor else ("cp" if has_cp else None)
     if not kind:
         _print_task(new)
         return None
+    return kind
 
+
+def _completion_chain_id_or_fail(new: dict) -> str | None:
     chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
-    if not chain_id:
-        _panel(
-            "⛔ ChainID missing",
-            [
-                ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
-                ("Fix", "Run tools/nautical_backfill_chainid.py, then retry."),
-            ],
-            kind="error",
-        )
-        _print_task(new)
+    if chain_id:
+        return chain_id
+    _panel(
+        "⛔ ChainID missing",
+        [
+            ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
+            ("Fix", "Run tools/nautical_backfill_chainid.py, then retry."),
+        ],
+        kind="error",
+    )
+    _print_task(new)
+    return None
+
+
+def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
+    existing_next = _existing_next_task(new, next_no)
+    if not existing_next:
+        return True
+    ex_uuid = (existing_next.get("uuid") or "").strip()
+    ex_short = _short(ex_uuid)
+    ex_status = ((existing_next.get("status") or "").strip() or "unknown").lower()
+    _panel(
+        "ℹ Spawn skipped",
+        [
+            ("Reason", "Next link already exists for this completed task."),
+            ("Existing", f"#{next_no} {ex_short} ({ex_status})"),
+        ],
+        kind="note",
+    )
+    _print_task(new)
+    return False
+
+
+def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
+    parent_short = _short(new.get("uuid"))
+    nums = _completion_link_numbers_or_fail(new)
+    if nums is None:
+        return None
+    base_no, next_no = nums
+
+    kind = _completion_kind_or_stop(new, now_utc)
+    if not kind:
         return None
 
-    # Idempotency guard:
-    # If this completed link already has a spawned next task (typical done->pending->done),
-    # do not enqueue a duplicate spawn.
-    existing_next = _existing_next_task(new, next_no)
-    if existing_next:
-        ex_uuid = (existing_next.get("uuid") or "").strip()
-        ex_short = _short(ex_uuid)
-        ex_status = ((existing_next.get("status") or "").strip() or "unknown").lower()
-        _panel(
-            "ℹ Spawn skipped",
-            [
-                ("Reason", "Next link already exists for this completed task."),
-                ("Existing", f"#{next_no} {ex_short} ({ex_status})"),
-            ],
-            kind="note",
-        )
-        _print_task(new)
+    chain_id = _completion_chain_id_or_fail(new)
+    if not chain_id:
+        return None
+
+    if not _completion_existing_next_or_fail(new, next_no):
         return None
 
     return {

@@ -192,6 +192,9 @@ _LOCK_STORM_THRESHOLD = _env_int("NAUTICAL_LOCK_STORM_THRESHOLD", 8)
 _LOCK_BACKOFF_BASE = _env_float("NAUTICAL_LOCK_BACKOFF_BASE", 0.05)
 _LOCK_BACKOFF_MAX = _env_float("NAUTICAL_LOCK_BACKOFF_MAX", 1.0)
 _QUEUE_PROCESSING_STALE_AFTER = _env_float("NAUTICAL_QUEUE_PROCESSING_STALE_AFTER", 300.0)
+_QUEUE_DB_CONNECT_RETRIES = _env_int("NAUTICAL_QUEUE_DB_CONNECT_RETRIES", 3)
+_QUEUE_DB_CONNECT_TIMEOUT_MAX = _env_float("NAUTICAL_QUEUE_DB_CONNECT_TIMEOUT_MAX", 60.0)
+_QUEUE_DB_CONNECT_BACKOFF_BASE = _env_float("NAUTICAL_QUEUE_DB_CONNECT_BACKOFF_BASE", 0.05)
 
 
 def _local_lock_sleep_once(sleep_base: float) -> None:
@@ -253,6 +256,58 @@ def _local_lock_ensure_parent(path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
+
+
+def _mount_path_unescape(path: str) -> str:
+    return (
+        str(path or "")
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
+    )
+
+
+def _path_looks_network_mount(path: Path) -> bool:
+    network_fs = {
+        "nfs",
+        "nfs4",
+        "cifs",
+        "smbfs",
+        "fuse.sshfs",
+        "9p",
+        "afpfs",
+        "davfs",
+        "glusterfs",
+        "ceph",
+    }
+    try:
+        target = str(path.resolve())
+    except Exception:
+        target = str(path)
+    if not target:
+        return False
+    best_mount = ""
+    best_fs = ""
+    try:
+        with open("/proc/mounts", "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                mount_point = _mount_path_unescape(parts[1]).rstrip("/") or "/"
+                fs_type = str(parts[2] or "").strip().lower()
+                if not fs_type:
+                    continue
+                if target == mount_point or target.startswith(mount_point + "/"):
+                    if len(mount_point) > len(best_mount):
+                        best_mount = mount_point
+                        best_fs = fs_type
+    except Exception:
+        return False
+    if not best_fs:
+        return False
+    return best_fs in network_fs or best_fs.startswith("nfs")
 
 
 @contextmanager
@@ -356,6 +411,10 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, 
         return
 
     tries = max(1, int(retries or 0))
+    if fcntl is None and _path_looks_network_mount(path):
+        _diag(f"queue lock fallback disabled on network mount: {path}")
+        yield False
+        return
     if fcntl is not None:
         with _local_lock_fcntl_context(path, path_str, tries=tries, sleep_base=sleep_base) as acquired:
             yield acquired
@@ -371,12 +430,37 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, 
         yield acquired
 
 
+_DIAG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
+
+
+def _diag_redact_msg(msg: object) -> str:
+    raw = msg if isinstance(msg, str) else str(msg)
+    redactor = getattr(core, "diag_log_redact", None) if core is not None else None
+    if callable(redactor):
+        try:
+            red = redactor(raw)
+            return red if isinstance(red, str) else str(red)
+        except Exception:
+            pass
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            for k in list(data.keys()):
+                if k in _DIAG_REDACT_KEYS:
+                    data[k] = "[redacted]"
+            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        pass
+    return raw
+
+
 def _diag(msg: str) -> None:
+    safe_msg = _diag_redact_msg(msg)
     if core is not None:
-        core.diag(msg, "on-exit", str(TW_DATA_DIR))
+        core.diag(safe_msg, "on-exit", str(TW_DATA_DIR))
     elif os.environ.get("NAUTICAL_DIAG") == "1":
         try:
-            sys.stderr.write(f"[nautical] {msg}\n")
+            sys.stderr.write(f"[nautical] {safe_msg}\n")
         except Exception:
             pass
 
@@ -1105,21 +1189,37 @@ def _queue_db_connect() -> sqlite3.Connection | None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
-    try:
-        conn = sqlite3.connect(str(db_path), timeout=max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=1500")
+    attempts = max(1, int(_QUEUE_DB_CONNECT_RETRIES or 1))
+    timeout_base = max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0)
+    timeout_max = max(timeout_base, float(_QUEUE_DB_CONNECT_TIMEOUT_MAX or timeout_base))
+    last_err = None
+    for attempt in range(1, attempts + 1):
+        connect_timeout = min(timeout_max, timeout_base * (2 ** (attempt - 1)))
+        busy_timeout_ms = int(min(60_000, max(1_500, connect_timeout * 1000.0 * 2.0)))
         try:
-            if db_path.exists():
-                os.chmod(db_path, 0o600)
-        except Exception:
-            pass
-        return conn
-    except Exception as e:
-        _diag(f"queue db connect failed: {e}")
-        return None
+            conn = sqlite3.connect(str(db_path), timeout=connect_timeout)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+            try:
+                if db_path.exists():
+                    os.chmod(db_path, 0o600)
+            except Exception:
+                pass
+            return conn
+        except sqlite3.OperationalError as e:
+            last_err = e
+            if attempt >= attempts:
+                break
+            delay = max(0.0, float(_QUEUE_DB_CONNECT_BACKOFF_BASE or 0.0)) * (2 ** (attempt - 1))
+            jitter = random.uniform(0.0, max(0.001, delay)) if delay > 0 else 0.0
+            _sleep(delay + jitter)
+        except Exception as e:
+            last_err = e
+            break
+    _diag(f"queue db connect failed: {last_err}")
+    return None
 
 
 def _queue_db_init(conn: sqlite3.Connection) -> None:

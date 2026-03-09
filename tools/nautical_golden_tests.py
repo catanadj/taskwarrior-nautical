@@ -792,6 +792,83 @@ def test_on_exit_timeouts_configurable():
             else:
                 os.environ["NAUTICAL_TASK_TIMEOUT_MODIFY"] = prev_modify
 
+
+def test_on_exit_queue_db_connect_retries_and_scales_busy_timeout():
+    """on-exit queue DB connect should retry once and scale busy_timeout from connect timeout."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        prev_retry = os.environ.get("NAUTICAL_QUEUE_DB_CONNECT_RETRIES")
+        prev_sleep = os.environ.get("NAUTICAL_QUEUE_LOCK_SLEEP_BASE")
+        prev_lock_retry = os.environ.get("NAUTICAL_QUEUE_LOCK_RETRIES")
+        try:
+            os.environ["TASKDATA"] = td
+            os.environ["NAUTICAL_QUEUE_DB_CONNECT_RETRIES"] = "3"
+            os.environ["NAUTICAL_QUEUE_LOCK_SLEEP_BASE"] = "0.2"
+            os.environ["NAUTICAL_QUEUE_LOCK_RETRIES"] = "8"
+            mod = _load_hook_module(hook, "_nautical_on_exit_db_connect_retry_test")
+
+            attempts = {"n": 0}
+            timeouts: list[float] = []
+            sleeps: list[float] = []
+            seen_sql: list[str] = []
+
+            class _FakeConn:
+                row_factory = None
+
+                def execute(self, sql):
+                    seen_sql.append(str(sql))
+                    return self
+
+            fake_conn = _FakeConn()
+            saved_connect = mod.sqlite3.connect
+            saved_sleep_fn = mod._sleep
+            try:
+                def _fake_connect(_path, timeout=0.0):
+                    attempts["n"] += 1
+                    timeouts.append(float(timeout))
+                    if attempts["n"] == 1:
+                        raise mod.sqlite3.OperationalError("database is locked")
+                    return fake_conn
+
+                mod.sqlite3.connect = _fake_connect
+                mod._sleep = lambda secs: sleeps.append(float(secs))
+                conn = mod._queue_db_connect()
+            finally:
+                mod.sqlite3.connect = saved_connect
+                mod._sleep = saved_sleep_fn
+
+            expect(conn is fake_conn, "expected second connect attempt to succeed")
+            expect(attempts["n"] == 2, f"expected one retry, got attempts={attempts['n']}")
+            expect(bool(sleeps) and sleeps[0] > 0.0, f"expected positive backoff sleep, got {sleeps}")
+            expect(timeouts[1] >= timeouts[0], f"expected non-decreasing connect timeout, got {timeouts}")
+            busy_sql = [s for s in seen_sql if s.startswith("PRAGMA busy_timeout=")]
+            expect(bool(busy_sql), f"busy_timeout pragma was not set; SQL={seen_sql}")
+            busy_ms = int(busy_sql[-1].split("=", 1)[1])
+            expect(busy_ms >= 1500, f"busy_timeout too small: {busy_ms}")
+            expect(
+                busy_ms >= int(timeouts[-1] * 1000.0),
+                f"busy_timeout should scale with timeout. busy_ms={busy_ms}, timeout={timeouts[-1]}",
+            )
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+            if prev_retry is None:
+                os.environ.pop("NAUTICAL_QUEUE_DB_CONNECT_RETRIES", None)
+            else:
+                os.environ["NAUTICAL_QUEUE_DB_CONNECT_RETRIES"] = prev_retry
+            if prev_sleep is None:
+                os.environ.pop("NAUTICAL_QUEUE_LOCK_SLEEP_BASE", None)
+            else:
+                os.environ["NAUTICAL_QUEUE_LOCK_SLEEP_BASE"] = prev_sleep
+            if prev_lock_retry is None:
+                os.environ.pop("NAUTICAL_QUEUE_LOCK_RETRIES", None)
+            else:
+                os.environ["NAUTICAL_QUEUE_LOCK_RETRIES"] = prev_lock_retry
+
+
 def test_diag_log_rotation_bounds():
     """Persistent diag log should rotate when exceeding max size."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -851,6 +928,36 @@ def test_diag_log_redacts_sensitive_fields():
                 os.environ.pop("NAUTICAL_DIAG_LOG", None)
             else:
                 os.environ["NAUTICAL_DIAG_LOG"] = prev_diag_log
+
+
+def test_hook_diag_redact_msg_masks_sensitive_json_fields():
+    """Hook-level diag redaction helper should mask sensitive JSON fields."""
+    hook_add = _find_hook_file("on-add-nautical.py")
+    hook_exit = _find_hook_file("on-exit-nautical.py")
+    mod_add = _load_hook_module(hook_add, "_nautical_on_add_diag_redact_msg_test")
+    mod_exit = _load_hook_module(hook_exit, "_nautical_on_exit_diag_redact_msg_test")
+    raw = json.dumps(
+        {
+            "description": "sensitive text",
+            "annotations": "top secret",
+            "note": "private",
+            "safe": "ok",
+        },
+        ensure_ascii=False,
+    )
+    red_add = mod_add._diag_redact_msg(raw)
+    red_exit = mod_exit._diag_redact_msg(raw)
+    obj_add = json.loads(red_add)
+    obj_exit = json.loads(red_exit)
+    expect(obj_add.get("description") == "[redacted]", f"on-add description not redacted: {obj_add}")
+    expect(obj_add.get("annotations") == "[redacted]", f"on-add annotations not redacted: {obj_add}")
+    expect(obj_add.get("note") == "[redacted]", f"on-add note not redacted: {obj_add}")
+    expect(obj_add.get("safe") == "ok", f"on-add non-sensitive key changed: {obj_add}")
+    expect(obj_exit.get("description") == "[redacted]", f"on-exit description not redacted: {obj_exit}")
+    expect(obj_exit.get("annotations") == "[redacted]", f"on-exit annotations not redacted: {obj_exit}")
+    expect(obj_exit.get("note") == "[redacted]", f"on-exit note not redacted: {obj_exit}")
+    expect(obj_exit.get("safe") == "ok", f"on-exit non-sensitive key changed: {obj_exit}")
+
 
 def test_diag_log_structured_fields():
     """Persistent diag log should include structured fields for dict messages."""
@@ -1922,6 +2029,23 @@ def test_tw_export_chain_extra_rejects_dash_prefixed_tokens():
     out = mod.tw_export_chain("cid", extra="status:pending -rc.hooks=on")
     expect(out == [], "dash-prefixed token should be rejected")
     expect(not called["run"], "rejected extra must not execute task")
+
+
+def test_on_add_tw_export_chain_extra_validation():
+    """on-add tw_export_chain should reject unsafe extra arguments."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_chain_export_extra_test")
+    called = {"run": False}
+
+    def _fake_run_task(_cmd, env=None, timeout=0.0, retries=0, **_kwargs):
+        _ = (env, timeout, retries)
+        called["run"] = True
+        return True, "[]", ""
+
+    mod._run_task = _fake_run_task
+    out = mod.tw_export_chain("cid", extra="status:pending; rm -rf /")
+    expect(out == [], "unsafe extra should return empty list")
+    expect(not called["run"], "unsafe extra should not call task")
 
 
 def test_on_modify_chain_cache_thread_safety_smoke():
@@ -3322,6 +3446,35 @@ def test_hook_run_task_falls_back_when_core_load_fails():
     finally:
         mod._load_core = saved_load_core
         mod.core = saved_core
+
+
+def test_on_add_run_task_falls_back_when_core_load_fails():
+    """on-add _run_task should fall back to subprocess if core load fails."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_run_task_fallback_test")
+    saved_load_core = mod._load_core
+    saved_core = mod.core
+    saved_diag = mod._diag
+    try:
+        mod.core = None
+        diag_calls = {"n": 0}
+
+        def _boom():
+            raise RuntimeError("core unavailable")
+
+        def _diag_stub(_msg):
+            diag_calls["n"] += 1
+
+        mod._load_core = _boom
+        mod._diag = _diag_stub
+        ok, out, _err = mod._run_task([sys.executable, "-c", "print('fallback-ok')"], timeout=2, retries=1)
+        expect(ok, "_run_task fallback path should succeed for simple subprocess command")
+        expect(out.strip() == "fallback-ok", f"unexpected fallback stdout: {out!r}")
+        expect(diag_calls["n"] >= 1, "fallback path should emit a diagnostic once")
+    finally:
+        mod._load_core = saved_load_core
+        mod.core = saved_core
+        mod._diag = saved_diag
 
 
 def test_spawn_child_verifies_even_when_verify_import_disabled():
@@ -5044,6 +5197,25 @@ def test_on_exit_lock_failure_keeps_queue():
 
         expect(got == [], "lock failure should return empty entries")
         expect(mod._QUEUE_PATH.exists() and mod._QUEUE_PATH.read_text(encoding="utf-8"), "queue should remain on lock failure")
+
+
+def test_on_exit_local_safe_lock_fails_closed_on_network_mount_without_fcntl():
+    """on-exit local lock fallback should fail closed on network mounts when fcntl is unavailable."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_network_lock_fail_closed_test")
+    with tempfile.TemporaryDirectory() as td:
+        lock_path = Path(td) / "network.lock"
+        saved_fcntl = mod.fcntl
+        saved_path_probe = mod._path_looks_network_mount
+        try:
+            mod.fcntl = None
+            mod._path_looks_network_mount = lambda _p: True
+            with mod._local_safe_lock(lock_path, retries=1, sleep_base=0.0) as acquired:
+                expect(not acquired, "expected lock acquisition to fail closed")
+            expect(not lock_path.exists(), "fail-closed path should not create lock files")
+        finally:
+            mod.fcntl = saved_fcntl
+            mod._path_looks_network_mount = saved_path_probe
 
 
 def test_on_exit_queue_streaming_line_cap():

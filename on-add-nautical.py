@@ -24,7 +24,7 @@ from pathlib import Path
 from datetime import timedelta, timezone, datetime
 from functools import lru_cache
 from contextlib import contextmanager
-import shlex, subprocess
+import subprocess
 import tempfile
 from collections import OrderedDict
 from typing import Any
@@ -665,16 +665,41 @@ def _format_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, s
     return out or rows
 
 
+_DIAG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
+
+
+def _diag_redact_msg(msg: object) -> str:
+    raw = msg if isinstance(msg, str) else str(msg)
+    redactor = getattr(core, "diag_log_redact", None) if core is not None else None
+    if callable(redactor):
+        try:
+            red = redactor(raw)
+            return red if isinstance(red, str) else str(red)
+        except Exception:
+            pass
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            for k in list(data.keys()):
+                if k in _DIAG_REDACT_KEYS:
+                    data[k] = "[redacted]"
+            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        pass
+    return raw
+
+
 def _diag(msg: str) -> None:
+    safe_msg = _diag_redact_msg(msg)
     try:
         _load_core()
     except Exception:
         pass
     if core is not None:
-        core.diag(msg, "on-add", str(TW_DATA_DIR))
+        core.diag(safe_msg, "on-add", str(TW_DATA_DIR))
     elif os.environ.get("NAUTICAL_DIAG") == "1":
         try:
-            sys.stderr.write(f"[nautical] {msg}\n")
+            sys.stderr.write(f"[nautical] {safe_msg}\n")
         except Exception:
             pass
 
@@ -688,12 +713,15 @@ def _run_task(
     retries: int = 2,
     retry_delay: float = 0.15,
 ) -> tuple[bool, str, str]:
-    try:
-        _load_core()
-    except Exception:
-        pass
-    if core is not None:
-        return core.run_task(
+    load_err: Exception | None = None
+    if core is None:
+        try:
+            _load_core()
+        except Exception as e:
+            load_err = e
+    core_runner = getattr(core, "run_task", None) if core is not None else None
+    if callable(core_runner):
+        return core_runner(
             cmd,
             env=env,
             input_text=input_text,
@@ -701,6 +729,8 @@ def _run_task(
             retries=retries,
             retry_delay=retry_delay,
         )
+    if load_err is not None:
+        _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
     env = env or os.environ.copy()
     proc = None
     try:
@@ -1112,6 +1142,38 @@ def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
 
     return (mode, None)
 
+
+def _parse_extra_tokens(extra: str | None) -> list[str] | None:
+    """Parse extra Taskwarrior filters in strict token form: key:value."""
+    if extra is None:
+        return []
+    if not isinstance(extra, str):
+        return None
+    s = extra.strip()
+    if not s:
+        return []
+    out: list[str] = []
+    for tok in s.split():
+        if tok.startswith("+"):
+            tag = tok[1:]
+            if not tag or re.fullmatch(r"[A-Za-z0-9_.-]+", tag) is None:
+                return None
+            out.append(tok)
+            continue
+        if tok.startswith("-"):
+            return None
+        if ":" not in tok:
+            return None
+        key, value = tok.split(":", 1)
+        if not key or not value:
+            return None
+        if re.fullmatch(r"[A-Za-z0-9_.-]+", key) is None:
+            return None
+        if re.fullmatch(r"[A-Za-z0-9_.:@%+,-]+", value) is None:
+            return None
+        out.append(f"{key}:{value}")
+    return out
+
 def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None) -> list[dict]:
     if not chain_id:
         return []
@@ -1122,7 +1184,11 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     if since:
         args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
     if extra:
-        args += shlex.split(extra)
+        extra_tokens = _parse_extra_tokens(extra)
+        if extra_tokens is None:
+            _diag(f"tw_export_chain rejected extra: {extra!r}")
+            return []
+        args += extra_tokens
     args.append("export")
     ok, out, err = _run_task(args, timeout=3.0, retries=2)
     if not ok:

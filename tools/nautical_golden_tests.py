@@ -16,6 +16,7 @@ Optional:
 
 import importlib
 import sys, os, re, json, io, contextlib, stat
+import random
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -4598,6 +4599,115 @@ def test_parse_anchor_expr_fuzz_inputs():
             raise AssertionError(f"unexpected exception for {s!r}: {e}")
 
 
+def _random_anchor_expr(rng: random.Random) -> str:
+    """Generate deterministic mixed-quality anchor expressions for fuzz/property tests."""
+    w_specs = ["mon", "fri", "mon..fri", "mon,tue", "rand", "rand,mon", "bad"]
+    m_specs = ["1", "-1", "2nd-mon", "last-fri", "rand", "1..15", "35", "bad"]
+    y_specs = ["01-01", "12-31", "01-01..01-31", "q1", "rand-07", "13-01", "bad"]
+    mods = ["", "@t=09:00", "@bd", "@wd", "@nbd", "@pbd", "@nw", "@t=99:99", "@@@"]
+    sep = [" + ", " | ", "  ", ""]
+
+    def atom() -> str:
+        typ = rng.choice(["w", "m", "y", "x"])
+        if typ == "w":
+            spec = rng.choice(w_specs)
+        elif typ == "m":
+            spec = rng.choice(m_specs)
+        elif typ == "y":
+            spec = rng.choice(y_specs)
+        else:
+            spec = rng.choice(["bad", "noop", ""])
+        intv = rng.choice(["", "/2", "/3", "/0"])
+        mod = rng.choice(mods)
+        return f"{typ}{intv}:{spec}{mod}"
+
+    mode = rng.randint(0, 4)
+    if mode == 0:
+        return atom()
+    if mode == 1:
+        return atom() + rng.choice(sep) + atom()
+    if mode == 2:
+        return "(" + atom() + rng.choice(sep) + atom() + ")"
+    if mode == 3:
+        noise = "".join(rng.choice("()|+@:,- abcXYZ0123") for _ in range(rng.randint(1, 40)))
+        return noise
+    return " " + atom() + " "
+
+
+def test_anchor_parse_validate_fuzz_no_unexpected_exceptions():
+    """Fuzz parse/validate/normalize surfaces; only ParseError is allowed for invalid input."""
+    import nautical_core as core
+
+    rng = random.Random(20260309)
+    for _ in range(250):
+        expr = _random_anchor_expr(rng)
+        try:
+            dnf = core.validate_anchor_expr_strict(expr)
+        except core.ParseError:
+            continue
+        except Exception as e:
+            raise AssertionError(f"unexpected exception for {expr!r}: {type(e).__name__}: {e}")
+
+        expect(isinstance(dnf, list), f"validate should return DNF list for {expr!r}")
+        try:
+            dnf2 = core.validate_anchor_expr_strict(dnf)
+        except Exception as e:
+            raise AssertionError(f"validate should accept parsed DNF for {expr!r}: {e}")
+        expect(isinstance(dnf2, list), f"DNF re-validation should return list for {expr!r}")
+
+
+def test_anchor_validate_roundtrip_preserves_next_occurrence():
+    """Validating parsed DNF should preserve next-occurrence behavior vs validating source string."""
+    import nautical_core as core
+
+    anchors = [
+        "w:mon",
+        "w:mon,tue,wed",
+        "w/2:fri",
+        "m:15",
+        "m:last-fri",
+        "m:rand",
+        "y:01-01..01-31",
+        "w:mon + m:1",
+        "m:rand + y:01-01..01-31",
+    ]
+    start = date(2025, 1, 1)
+    for expr in anchors:
+        dnf_from_str = core.validate_anchor_expr_strict(expr)
+        dnf_from_dnf = core.validate_anchor_expr_strict(dnf_from_str)
+        ref_a = start
+        ref_b = start
+        for _ in range(5):
+            nxt_a, _ = core.next_after_expr(dnf_from_str, ref_a, seed_base="roundtrip")
+            nxt_b, _ = core.next_after_expr(dnf_from_dnf, ref_b, seed_base="roundtrip")
+            expect(nxt_a == nxt_b, f"round-trip mismatch for {expr!r}: {nxt_a} vs {nxt_b}")
+            ref_a = nxt_a
+            ref_b = nxt_b
+
+
+def test_anchor_parse_deep_nesting_guard():
+    """Deeply nested expressions should fail with ParseError, not recursion/runtime failures."""
+    import nautical_core as core
+
+    expr = "(" * 64 + "w:mon" + ")" * 64
+    try:
+        core.parse_anchor_expr_to_dnf_cached(expr)
+        raise AssertionError("expected ParseError for deep nesting")
+    except core.ParseError as e:
+        expect("nesting too deep" in str(e).lower(), f"unexpected deep nesting message: {e}")
+
+
+def test_anchor_validate_rejects_legacy_tuple_error_payload():
+    """Legacy tuple-style parse error payloads should be rejected defensively."""
+    import nautical_core as core
+
+    try:
+        core.validate_anchor_expr_strict(("legacy parser error", None))
+        raise AssertionError("expected ParseError for tuple error payload")
+    except core.ParseError as e:
+        expect(str(e) == "legacy parser error", f"unexpected tuple payload message: {e!r}")
+
+
 def test_rand_determinism_with_seed():
     """Random anchors should be deterministic with the same seed."""
     import nautical_core as core
@@ -5439,6 +5549,10 @@ TESTS = [
     test_clear_all_caches_env,
     test_cache_save_writes_all_bytes,
     test_parse_anchor_expr_fuzz_inputs,
+    test_anchor_parse_validate_fuzz_no_unexpected_exceptions,
+    test_anchor_validate_roundtrip_preserves_next_occurrence,
+    test_anchor_parse_deep_nesting_guard,
+    test_anchor_validate_rejects_legacy_tuple_error_payload,
     test_rand_determinism_with_seed,
     test_next_after_expr_branch_characterization,
     test_on_exit_lock_failure_keeps_queue,

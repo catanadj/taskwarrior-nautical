@@ -2686,6 +2686,8 @@ def _is_atom_like(atom) -> bool:
 
 
 def _clone_mod_value(v):
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
     if isinstance(v, list):
         out = []
         for item in v:
@@ -2706,20 +2708,42 @@ def _clone_mod_value(v):
 def _clone_mods(mods):
     if not isinstance(mods, dict):
         return {}
-    return {k: _clone_mod_value(v) for k, v in mods.items()}
+    out = {}
+    for k, v in mods.items():
+        if v is None or isinstance(v, (str, int, float, bool)):
+            out[k] = v
+        elif k == "t" and isinstance(v, tuple):
+            out[k] = (v[0], v[1]) if len(v) == 2 else tuple(v)
+        elif k == "t" and isinstance(v, list):
+            tv = []
+            for item in v:
+                if isinstance(item, tuple):
+                    tv.append((item[0], item[1]) if len(item) == 2 else tuple(item))
+                elif isinstance(item, list):
+                    tv.append((item[0], item[1]) if len(item) == 2 else list(item))
+                else:
+                    tv.append(item)
+            out[k] = tv
+        else:
+            out[k] = _clone_mod_value(v)
+    return out
 
 
 def _clone_atom(atom):
     if not isinstance(atom, dict):
         return atom
-    out = {}
+    out = dict(atom)
+    mods = atom.get("mods")
+    if isinstance(mods, dict):
+        out["mods"] = _clone_mods(mods)
+    qmap = atom.get("_qmap")
+    if isinstance(qmap, dict):
+        out["_qmap"] = dict(qmap)
     for k, v in atom.items():
-        if k == "mods" and isinstance(v, dict):
-            out[k] = _clone_mods(v)
-        elif isinstance(v, (dict, list, tuple)):
+        if k in ("mods", "_qmap"):
+            continue
+        if isinstance(v, (dict, list, tuple)):
             out[k] = _clone_mod_value(v)
-        else:
-            out[k] = v
     return out
 
 
@@ -2742,6 +2766,16 @@ def _clone_cache_payload(obj: dict) -> dict:
     for k, v in obj.items():
         if k == "dnf":
             out[k] = _clone_dnf(v)
+        elif isinstance(v, list):
+            out[k] = list(v)
+        elif isinstance(v, dict):
+            inner = {}
+            for ik, iv in v.items():
+                if isinstance(iv, (dict, list, tuple)):
+                    inner[ik] = _clone_mod_value(iv)
+                else:
+                    inner[ik] = iv
+            out[k] = inner
         elif isinstance(v, (dict, list, tuple)):
             out[k] = _clone_mod_value(v)
         else:
@@ -3337,7 +3371,7 @@ def build_and_cache_hints(anchor_expr: str,
             return cached
 
     dnf = validate_anchor_expr_strict(anchor_expr)
-    natural = describe_anchor_expr(anchor_expr, default_due_dt=default_due_dt)
+    natural = _describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)
     hints = precompute_hints(dnf, start_dt=default_due_dt, anchor_mode=anchor_mode)
 
     payload = {
@@ -4356,21 +4390,9 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
     txt = _describe_inject_schedule_suffixes(txt or "any day", term)
     return txt or "any day"
 
-def describe_anchor_expr(anchor_expr: str, default_due_dt=None) -> str:
-    """
-    Natural text for a full anchor expression (OR of AND terms).
-    Reuses describe_anchor_term(...) for each AND term and joins them with 'or'.
-    """
-    if not anchor_expr or not str(anchor_expr).strip():
-        return ""
-    try:
-        dnf = parse_anchor_expr_to_dnf_cached(anchor_expr)
-    except Exception:
-        return ""
-
-    # Build natural text for each AND term
+def _describe_anchor_expr_from_dnf(dnf: list, default_due_dt=None) -> str:
     nat_terms = []
-    for term in dnf:
+    for term in (dnf or []):
         try:
             t = describe_anchor_term(term, default_due_dt=default_due_dt)
         except Exception:
@@ -4387,9 +4409,21 @@ def describe_anchor_expr(anchor_expr: str, default_due_dt=None) -> str:
         if t not in seen:
             seen.add(t)
             ordered.append(t)
-
-    # Single vs multiple terms
     return ordered[0] if len(ordered) == 1 else " or ".join(ordered)
+
+
+def describe_anchor_expr(anchor_expr: str, default_due_dt=None) -> str:
+    """
+    Natural text for a full anchor expression (OR of AND terms).
+    Reuses describe_anchor_term(...) for each AND term and joins them with 'or'.
+    """
+    if not anchor_expr or not str(anchor_expr).strip():
+        return ""
+    try:
+        dnf = parse_anchor_expr_to_dnf_cached(anchor_expr)
+    except Exception:
+        return ""
+    return _describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)
 
 
 

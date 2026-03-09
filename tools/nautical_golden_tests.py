@@ -2459,6 +2459,30 @@ def test_cache_key_for_task_caches_build_acf_results():
         if hasattr(core, "_cache_key_for_task_cached"):
             core._cache_key_for_task_cached.cache_clear()
 
+def test_build_and_cache_hints_parses_once_per_miss():
+    """build_and_cache_hints should avoid an extra parse for natural text on cache miss."""
+    calls = {"n": 0}
+    saved_parse = core.parse_anchor_expr_to_dnf_cached
+    saved_load = core.cache_load
+    saved_save = core.cache_save
+    try:
+        def _counting_parse(expr: str):
+            calls["n"] += 1
+            return saved_parse(expr)
+
+        core.parse_anchor_expr_to_dnf_cached = _counting_parse
+        core.cache_load = lambda _k: None
+        core.cache_save = lambda _k, _v: None
+        payload = core.build_and_cache_hints("w:thu@t=08:45", "skip")
+        expect(payload and payload.get("dnf"), "expected build_and_cache_hints payload on miss")
+        # One parse is for cache key canonicalization (build_acf), one for dnf validation.
+        # The natural text path should reuse that dnf instead of parsing a third time.
+        expect(calls["n"] == 2, f"expected two parses on miss, got {calls['n']}")
+    finally:
+        core.parse_anchor_expr_to_dnf_cached = saved_parse
+        core.cache_load = saved_load
+        core.cache_save = saved_save
+
 def test_parser_validation():
     """Test parser validation and error messages"""
     # Valid expressions that should parse
@@ -5283,6 +5307,7 @@ TESTS = [
     test_parse_cache_returns_isolated_dnf_instances,
     test_build_and_cache_hints_returns_isolated_cached_payload,
     test_cache_key_for_task_caches_build_acf_results,
+    test_build_and_cache_hints_parses_once_per_miss,
     test_yearly_rand_natural_and_bounds,
     test_yearly_month_aliases_and_ranges,
     test_business_day_bd_skip_semantics,

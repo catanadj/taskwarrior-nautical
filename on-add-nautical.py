@@ -1658,26 +1658,34 @@ def _handle_anchor_preview_on_add(
     print(json.dumps(task, ensure_ascii=False), end="")
     sys.stdout.flush()
     prof.add_ms("stdout:emit", (time.perf_counter() - _t_out) * 1000.0)
-# --------------------------------------------------------------------------------------
-# Main
-# --------------------------------------------------------------------------------------
-def main():
-    class _NoopProfiler:
-        enabled = False
-        @contextmanager
-        def section(self, _name):
-            yield
-        def add_ms(self, _name, _ms):
-            return None
-        def emit(self):
-            return None
 
+
+class _NoopProfiler:
+    enabled = False
+
+    @contextmanager
+    def section(self, _name):
+        yield
+
+    def add_ms(self, _name, _ms):
+        return None
+
+    def emit(self):
+        return None
+
+
+def _build_profiler():
     prof = _NoopProfiler()
-    if _PROFILE_LEVEL > 0:
-        prof = _Profiler(level=_PROFILE_LEVEL, import_ms=_IMPORT_MS)
-        if prof.enabled:
-            atexit.register(prof.emit)
-    with prof.section('read:stdin'):
+    if _PROFILE_LEVEL <= 0:
+        return prof
+    prof = _Profiler(level=_PROFILE_LEVEL, import_ms=_IMPORT_MS)
+    if prof.enabled:
+        atexit.register(prof.emit)
+    return prof
+
+
+def _read_on_add_task(prof) -> dict:
+    with prof.section("read:stdin"):
         raw_bytes = sys.stdin.buffer.read(_MAX_JSON_BYTES + 1)
         raw_text = raw_bytes.decode("utf-8", errors="replace")
         global _RAW_INPUT_TEXT
@@ -1688,19 +1696,94 @@ def main():
     if not raw:
         _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
     try:
-        with prof.section('parse:json'):
+        with prof.section("parse:json"):
             task = json.loads(raw)
             global _PARSED_TASK
             _PARSED_TASK = task
+            return task
     except Exception:
         _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
+    return {}
+
+
+def _emit_task_json(task: dict, *, sanitize: bool = False, prof=None) -> None:
+    t_out = time.perf_counter()
+    if sanitize and core is not None and core.SANITIZE_UDA:
+        core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
+    print(json.dumps(task, ensure_ascii=False), end="")
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    if prof is not None:
+        prof.add_ms("stdout:emit", (time.perf_counter() - t_out) * 1000.0)
+
+
+def _kind_and_defaults_on_add(task: dict, cp_str: str, anchor_str: str) -> tuple[str | None, str]:
+    has_cp = bool(cp_str)
+    has_anchor = bool(anchor_str)
+    kind = "anchor" if has_anchor else ("cp" if has_cp else None)
+
+    ch = (task.get("chain") or "").strip().lower()
+    if (has_cp or has_anchor) and (not ch or ch == "off"):
+        task["chain"] = "on"
+        ch = "on"
+
+    if has_cp or has_anchor:
+        linked_already = bool((task.get("prevLink") or "").strip() or (task.get("nextLink") or "").strip())
+        if not linked_already:
+            link_no = core.coerce_int(task.get("link"), 0)
+            if link_no <= 0:
+                task["link"] = 1
+    return kind, ch
+
+
+def _validate_chain_limits_on_add(task: dict, now_utc: datetime) -> datetime | None:
+    cpmax = core.coerce_int(task.get("chainMax"), 0)
+    if cpmax:
+        is_valid, err = _validate_cpmax_positive(cpmax)
+        if not is_valid:
+            _error_and_exit([("Invalid chainMax", err)])
+
+    until_dt, err = _safe_parse_datetime(task.get("chainUntil"), "chainUntil")
+    if err:
+        _error_and_exit([("Invalid chainUntil", err)])
+    if until_dt:
+        is_valid, err = _validate_until_not_past(until_dt, now_utc)
+        if not is_valid:
+            _error_and_exit([("Invalid chainUntil", err)])
+    return until_dt
+
+
+def _due_context_on_add(task: dict, now_utc: datetime) -> tuple[bool, datetime, str | None, object, tuple[int, int]]:
+    user_provided_due = bool(task.get("due"))
+    due_dt = None
+    past_due_warning = None
+    if user_provided_due:
+        due_dt, err = _safe_parse_datetime(task.get("due"), "due")
+        if err:
+            _error_and_exit([("Invalid due", err)])
+        is_past, warn_msg = _check_due_in_past(due_dt, now_utc)
+        if is_past:
+            past_due_warning = warn_msg
+    if due_dt is None:
+        due_dt = now_utc
+
+    due_local = core.to_local(due_dt)
+    due_day = due_local.date()
+    due_hhmm = (due_local.hour, due_local.minute)
+    return user_provided_due, due_dt, past_due_warning, due_day, due_hhmm
+
+
+# --------------------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------------------
+def main():
+    prof = _build_profiler()
+    task = _read_on_add_task(prof)
 
     if not _task_has_nautical_fields(task):
-        print(json.dumps(task, ensure_ascii=False), end="")
-        try:
-            sys.stdout.flush()
-        except Exception:
-            pass
+        _emit_task_json(task, sanitize=False)
         return
 
     try:
@@ -1727,78 +1810,15 @@ def main():
     if not is_valid:
         _error_and_exit([("Invalid chain config", err)])
 
-    # Normalize
-    has_cp = bool(cp_str)
-    has_anchor = bool(anchor_str)
-    kind = "anchor" if has_anchor else ("cp" if has_cp else None)
-
-    # Default enable chain if cp/anchor present (respect explicit 'off')
-    ch = (task.get("chain") or "").strip().lower()
-    if (has_cp or has_anchor) and (not ch or ch == "off"):
-        task["chain"] = "on"
-        ch = "on"
-        # Transparent notice to the user about the auto-enable:
-        # _panel("Enabled chain", [("Reason", "cp/anchor present on add → set chain:on")], style="yellow")
-
-    # Default link index for new Nautical roots.
-    # Users rarely set this manually; it's Nautical bookkeeping.
-    # Only set when missing/invalid AND task isn't already linked into a chain.
-    if has_cp or has_anchor:
-        linked_already = bool((task.get("prevLink") or "").strip() or (task.get("nextLink") or "").strip())
-        if not linked_already:
-            link_no = core.coerce_int(task.get("link"), 0)
-            if link_no <= 0:
-                task["link"] = 1
-        # Transparent notice to the user about the auto-enable:
-        # _panel("Enabled chain", [("Reason", "cp/anchor present on add → set chain:on")], style="yellow")
+    kind, ch = _kind_and_defaults_on_add(task, cp_str, anchor_str)
 
     # If nothing chain-related, just pass through
     if not kind:
-        _t_out = time.perf_counter()
-        if core.SANITIZE_UDA:
-            core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
-        print(json.dumps(task, ensure_ascii=False), end="")
-        sys.stdout.flush()
-        prof.add_ms('stdout:emit', (time.perf_counter() - _t_out) * 1000.0)
+        _emit_task_json(task, sanitize=True, prof=prof)
         return
 
-    # ========== EDGE CASE 2: chainMax validation ==========
-    cpmax = core.coerce_int(task.get("chainMax"), 0)
-    if cpmax:
-        is_valid, err = _validate_cpmax_positive(cpmax)
-        if not is_valid:
-            _error_and_exit([("Invalid chainMax", err)])
-
-    # ========== EDGE CASE 3: Parse and validate chainUntil ==========
-    until_dt, err = _safe_parse_datetime(task.get("chainUntil"), "chainUntil")
-    if err:
-        _error_and_exit([("Invalid chainUntil", err)])
-
-    if until_dt:
-        is_valid, err = _validate_until_not_past(until_dt, now_utc)
-        if not is_valid:
-            _error_and_exit([("Invalid chainUntil", err)])
-
-    # Due seed (may be overwritten by auto-due)
-    user_provided_due = bool(task.get("due"))
-    due_dt = None
-    past_due_warning = None
-    if user_provided_due:
-        due_dt, err = _safe_parse_datetime(task.get("due"), "due")
-        if err:
-            _error_and_exit([("Invalid due", err)])
-
-        # ========== EDGE CASE 4: User due in past (warning only) ==========
-        is_past, warn_msg = _check_due_in_past(due_dt, now_utc)
-        if is_past:
-            past_due_warning = warn_msg
-
-    if due_dt is None:
-        due_dt = now_utc
-
-    due_local = core.to_local(due_dt)
-    due_day = due_local.date()
-    due_hhmm = (due_local.hour, due_local.minute)
+    until_dt = _validate_chain_limits_on_add(task, now_utc)
+    user_provided_due, due_dt, past_due_warning, due_day, due_hhmm = _due_context_on_add(task, now_utc)
 
     _stamp_chain_id_on_add(task)
 

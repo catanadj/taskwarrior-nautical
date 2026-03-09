@@ -622,9 +622,91 @@ def _lock_parent_nextlink(parent_uuid: str):
         yield acquired
 
 
+def _intent_log_collect_final_states(path: Path) -> dict[str, str] | None:
+    final_states: dict[str, str] = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                ln = line.strip()
+                if not ln:
+                    continue
+                try:
+                    obj = json.loads(ln)
+                except Exception:
+                    continue
+                sid = (obj.get("spawn_intent_id") or "").strip()
+                status = (obj.get("status") or "").strip().lower()
+                if not sid or status not in {"done", "dead"}:
+                    continue
+                if sid in final_states:
+                    final_states.pop(sid, None)
+                final_states[sid] = status
+        return final_states
+    except Exception as e:
+        _diag(f"intent log read failed: {e}")
+        return None
+
+
+def _intent_log_needs_compact(path: Path, final_states: dict[str, str]) -> bool:
+    try:
+        st_size = path.stat().st_size
+    except Exception:
+        st_size = 0
+    return bool(
+        (_INTENT_LOG_MAX_BYTES > 0 and st_size > _INTENT_LOG_MAX_BYTES)
+        or (_INTENT_LOG_MAX_ENTRIES > 0 and len(final_states) > _INTENT_LOG_MAX_ENTRIES)
+    )
+
+
+def _intent_log_trim_states(final_states: dict[str, str]) -> None:
+    if _INTENT_LOG_MAX_ENTRIES <= 0:
+        return
+    if len(final_states) <= _INTENT_LOG_MAX_ENTRIES:
+        return
+    drop_n = len(final_states) - _INTENT_LOG_MAX_ENTRIES
+    for sid in list(final_states.keys())[:drop_n]:
+        final_states.pop(sid, None)
+
+
+def _intent_log_compact(path: Path, final_states: dict[str, str]) -> None:
+    tmp_path = path.with_suffix(".staging")
+    try:
+        fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for sid, status in final_states.items():
+                payload = {
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "hook": "on-exit",
+                    "hook_version": NAUTICAL_HOOK_VERSION,
+                    "status": status,
+                    "spawn_intent_id": sid,
+                    "reason": "compacted",
+                }
+                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+            if _DURABLE_QUEUE:
+                try:
+                    f.flush()
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+        os.replace(tmp_path, path)
+        if _DURABLE_QUEUE:
+            _fsync_dir(path.parent)
+    except Exception as e:
+        _diag(f"intent log compaction failed: {e}")
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+
+
 def _load_finalized_intents() -> tuple[set[str], bool]:
     """Return finalized spawn_intent_id set, with best-effort compaction."""
-    final_states: dict[str, str] = {}
     p = _intent_log_path()
     with _lock_intent_log() as locked:
         if not locked:
@@ -635,74 +717,14 @@ def _load_finalized_intents() -> tuple[set[str], bool]:
                 return set(), True
         except Exception:
             return set(), True
-        try:
-            with open(p, "r", encoding="utf-8") as f:
-                for line in f:
-                    ln = line.strip()
-                    if not ln:
-                        continue
-                    try:
-                        obj = json.loads(ln)
-                    except Exception:
-                        continue
-                    sid = (obj.get("spawn_intent_id") or "").strip()
-                    status = (obj.get("status") or "").strip().lower()
-                    if not sid or status not in {"done", "dead"}:
-                        continue
-                    if sid in final_states:
-                        final_states.pop(sid, None)
-                    final_states[sid] = status
-        except Exception as e:
-            _diag(f"intent log read failed: {e}")
+        final_states = _intent_log_collect_final_states(p)
+        if final_states is None:
             return set(), False
 
-        try:
-            st_size = p.stat().st_size
-        except Exception:
-            st_size = 0
-        needs_compact = bool(
-            (_INTENT_LOG_MAX_BYTES > 0 and st_size > _INTENT_LOG_MAX_BYTES)
-            or (_INTENT_LOG_MAX_ENTRIES > 0 and len(final_states) > _INTENT_LOG_MAX_ENTRIES)
-        )
-        if _INTENT_LOG_MAX_ENTRIES > 0 and len(final_states) > _INTENT_LOG_MAX_ENTRIES:
-            drop_n = len(final_states) - _INTENT_LOG_MAX_ENTRIES
-            for sid in list(final_states.keys())[:drop_n]:
-                final_states.pop(sid, None)
+        needs_compact = _intent_log_needs_compact(p, final_states)
+        _intent_log_trim_states(final_states)
         if needs_compact:
-            tmp_path = p.with_suffix(".staging")
-            try:
-                fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-                try:
-                    os.fchmod(fd, 0o600)
-                except Exception:
-                    pass
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    for sid, status in final_states.items():
-                        payload = {
-                            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                            "hook": "on-exit",
-                            "hook_version": NAUTICAL_HOOK_VERSION,
-                            "status": status,
-                            "spawn_intent_id": sid,
-                            "reason": "compacted",
-                        }
-                        f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-                    if _DURABLE_QUEUE:
-                        try:
-                            f.flush()
-                            os.fsync(f.fileno())
-                        except Exception:
-                            pass
-                os.replace(tmp_path, p)
-                if _DURABLE_QUEUE:
-                    _fsync_dir(p.parent)
-            except Exception as e:
-                _diag(f"intent log compaction failed: {e}")
-                try:
-                    if tmp_path.exists():
-                        tmp_path.unlink()
-                except Exception:
-                    pass
+            _intent_log_compact(p, final_states)
     return set(final_states.keys()), True
 
 

@@ -389,6 +389,71 @@ def _emit_exit_feedback(msg: str) -> None:
     except Exception:
         pass
 
+
+def _run_task_retry_or_stop(attempt: int, attempts: int, delay: float) -> bool:
+    if attempt >= attempts or delay <= 0:
+        return False
+    jitter = random.uniform(0.0, delay)
+    _sleep(delay * (2 ** (attempt - 1)) + jitter)
+    return True
+
+
+def _run_task_terminate(proc: subprocess.Popen | None) -> None:
+    if proc is None:
+        return
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=1.0)
+    except Exception:
+        pass
+
+
+def _run_task_attempt(
+    cmd: list[str],
+    *,
+    env: dict[str, str],
+    input_text: str | None,
+    timeout: float,
+) -> tuple[bool, str, str]:
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            close_fds=True,
+            env=env,
+        )
+        try:
+            out, err = proc.communicate(input=input_text, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if proc is not None:
+                proc.kill()
+            try:
+                out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
+            except Exception:
+                out, err = "", ""
+            return False, out or "", "timeout"
+        out = out or ""
+        err = err or ""
+        if proc.returncode == 0:
+            return True, out, err
+        return False, out, err
+    except subprocess.TimeoutExpired:
+        _run_task_terminate(proc)
+        return False, "", "timeout"
+    except Exception as e:
+        _run_task_terminate(proc)
+        return False, "", str(e)
+
+
 def _run_task(
     cmd: list[str],
     *,
@@ -413,69 +478,17 @@ def _run_task(
     last_out = ""
     last_err = ""
     for attempt in range(1, attempts + 1):
-        proc = None
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                close_fds=True,
-                env=env,
-            )
-            try:
-                out, err = proc.communicate(input=input_text, timeout=timeout)
-            except subprocess.TimeoutExpired:
-                if proc is not None:
-                    proc.kill()
-                try:
-                    out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
-                except Exception:
-                    out, err = "", ""
-                last_out = out or ""
-                last_err = "timeout"
-                if attempt < attempts and delay > 0:
-                    jitter = random.uniform(0.0, delay)
-                    _sleep(delay * (2 ** (attempt - 1)) + jitter)
-                    continue
-                return (False, last_out, last_err)
-            last_out = out or ""
-            last_err = err or ""
-            if proc.returncode == 0:
-                return (True, last_out, last_err)
-            if attempt < attempts and delay > 0:
-                jitter = random.uniform(0.0, delay)
-                _sleep(delay * (2 ** (attempt - 1)) + jitter)
-                continue
-            return (False, last_out, last_err)
-        except subprocess.TimeoutExpired:
-            if proc is not None:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                try:
-                    proc.wait(timeout=1.0)
-                except Exception:
-                    pass
-            last_err = "timeout"
-        except Exception as e:
-            if proc is not None:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                try:
-                    proc.wait(timeout=1.0)
-                except Exception:
-                    pass
-            last_err = str(e)
-        if attempt < attempts and delay > 0:
-            jitter = random.uniform(0.0, delay)
-            _sleep(delay * (2 ** (attempt - 1)) + jitter)
+        ok, out, err = _run_task_attempt(
+            cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+        )
+        last_out = out or ""
+        last_err = err or ""
+        if ok:
+            return True, last_out, last_err
+        if _run_task_retry_or_stop(attempt, attempts, delay):
             continue
         return (False, last_out, last_err)
     return (False, last_out, last_err)

@@ -4470,6 +4470,22 @@ def _normalize_range_token(tok: str) -> str | None:
     return f"{a}–{b}"
 
 
+def _rand_bucket_time_from_mods(mods: dict) -> str | None:
+    tmod = mods.get("t")
+    if isinstance(tmod, tuple):
+        return f"{tmod[0]:02d}:{tmod[1]:02d}"
+    if isinstance(tmod, str) and tmod:
+        return tmod
+    return None
+
+
+def _rand_bucket_merge_mods(mods: dict, time_str: str | None, bd_flag: bool) -> tuple[str | None, bool]:
+    if time_str is None:
+        time_str = _rand_bucket_time_from_mods(mods)
+    bd_flag = bd_flag or bool(mods.get("bd") or (mods.get("wd") is True))
+    return time_str, bd_flag
+
+
 def _rand_bucket_signature(term: list[dict]) -> tuple | None:
     """
     For a term shaped like (m:range + m:rand) with optional @t and @bd,
@@ -4484,48 +4500,24 @@ def _rand_bucket_signature(term: list[dict]) -> tuple | None:
     time_str = None
     bd_flag = False
 
-    # Reject weekly or yearly atoms in this special compression
     for a in term:
         typ = (a.get("typ") or a.get("type") or "").lower()
-        if typ in ("w", "y"):
+        if typ in ("w", "y") or typ != "m":
             return None
-
-    for a in term:
-        typ = (a.get("typ") or a.get("type") or "").lower()
         spec = str(a.get("spec") or a.get("value") or "").lower()
         ival = int(a.get("ival") or a.get("intv") or 1)
-        if typ != "m":
-            return None
+        ival_seen = ival if ival_seen is None else ival_seen
+        mods = a.get("mods") or {}
+        time_str, bd_flag = _rand_bucket_merge_mods(mods, time_str, bd_flag)
         if spec == "rand":
             has_rand = True
-            ival_seen = ival if ival_seen is None else ival_seen
-            # time / bd from this atom's mods (or the range atom—must be identical across terms)
-            mods = a.get("mods") or {}
-            if time_str is None:
-                tmod = mods.get("t")
-                if isinstance(tmod, tuple):
-                    time_str = f"{tmod[0]:02d}:{tmod[1]:02d}"
-                elif isinstance(tmod, str) and tmod:
-                    time_str = tmod
-            bd_flag = bd_flag or bool(mods.get("bd") or (mods.get("wd") is True))
-        else:
-            # must be exactly one monthly range token like '1..7'
-            rn = _normalize_range_token(spec)
-            if not rn:
-                return None
-            if range_norm and rn != range_norm:
-                # multiple different ranges inside the same term → not a bucket term
-                return None
-            range_norm = rn
-            ival_seen = ival if ival_seen is None else ival_seen
-            mods = a.get("mods") or {}
-            if time_str is None:
-                tmod = mods.get("t")
-                if isinstance(tmod, tuple):
-                    time_str = f"{tmod[0]:02d}:{tmod[1]:02d}"
-                elif isinstance(tmod, str) and tmod:
-                    time_str = tmod
-            bd_flag = bd_flag or bool(mods.get("bd") or (mods.get("wd") is True))
+            continue
+        rn = _normalize_range_token(spec)
+        if not rn:
+            return None
+        if range_norm and rn != range_norm:
+            return None
+        range_norm = rn
 
     if not (has_rand and range_norm):
         return None

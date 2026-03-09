@@ -2531,6 +2531,29 @@ def test_natural_compresses_repeated_fall_on_variants():
     assert "the 1st" in low and "the 3rd day of each month" in low, f"Natural lost monthly endpoints: {nat!r}"
     assert "skip missed anchors" in low, f"Natural should include mode tail: {nat!r}"
 
+def test_rand_bucket_signature_characterization():
+    """Bucket signature should remain stable for canonical monthly rand/range terms."""
+    term = [
+        {"typ": "m", "spec": "1..7", "mods": {"t": (9, 30)}},
+        {"typ": "m", "spec": "rand", "mods": {"bd": True}},
+    ]
+    got = core._rand_bucket_signature(term)
+    expect(got == (1, "09:30", True, "1–7"), f"unexpected rand bucket signature: {got!r}")
+
+    mixed = term + [{"typ": "w", "spec": "mon"}]
+    expect(core._rand_bucket_signature(mixed) is None, "weekly atoms should disable rand bucket compression")
+
+    bad_range = [
+        {"typ": "m", "spec": "1..7"},
+        {"typ": "m", "spec": "8..14"},
+        {"typ": "m", "spec": "rand"},
+    ]
+    expect(
+        core._rand_bucket_signature(bad_range) is None,
+        "multiple monthly ranges in a term should not produce a bucket signature",
+    )
+
+
 def test_edge_cases():
     """Test edge cases and boundary conditions"""
     test_cases = [
@@ -5188,6 +5211,7 @@ TESTS = [
     test_natural_anchor_characterization_for_complex_terms,
     test_natural_compresses_repeated_within_variants,
     test_natural_compresses_repeated_fall_on_variants,
+    test_rand_bucket_signature_characterization,
     test_parser_validation,
     test_yearly_token_format_characterization,
     test_cache_consistency,

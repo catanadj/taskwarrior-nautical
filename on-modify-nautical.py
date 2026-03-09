@@ -23,7 +23,6 @@ import shlex
 import time as _time
 from typing import Optional
 import stat
-from nautical_types import AnchorDNF
 
 _MAX_JSON_BYTES = 10 * 1024 * 1024
 NAUTICAL_HOOK_VERSION = "updateE-20260126"
@@ -474,7 +473,7 @@ def _to_local_cached(dt):
 
 
 @lru_cache(maxsize=256)
-def _validate_anchor_expr_cached(expr: str) -> AnchorDNF:
+def _validate_anchor_expr_cached(expr: str) -> list[list[dict]]:
     return core.validate_anchor_expr_strict(expr)
 
 

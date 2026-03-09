@@ -9,7 +9,7 @@ import os, re, sys
 import copy
 import math
 from types import MappingProxyType
-from typing import cast
+from typing import Any, TypeAlias, TypedDict, cast
 from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache, wraps
 from calendar import month_name
@@ -17,11 +17,68 @@ from datetime import date as _date
 import json, zlib, base64, hashlib, tempfile, time, random, subprocess
 import difflib
 from contextlib import contextmanager
-from nautical_types import AnchorDNF, AnchorHintsPayload
 try:
     import fcntl  # POSIX advisory lock
 except Exception:
     fcntl = None
+
+
+class AnchorMods(TypedDict, total=False):
+    t: str
+    bd: bool
+    wd: bool
+    pbd: int
+    nbd: int
+    nw: bool
+
+
+class AnchorAtom(TypedDict, total=False):
+    typ: str
+    type: str
+    spec: str
+    value: str
+    interval: int
+    mods: AnchorMods
+
+
+AnchorTerm: TypeAlias = list[AnchorAtom]
+AnchorDNF: TypeAlias = list[AnchorTerm]
+TaskDict: TypeAlias = dict[str, Any]
+AnchorValidationResult: TypeAlias = tuple[AnchorDNF | None, str | None]
+
+
+class HintMetaCfg(TypedDict, total=False):
+    fmt: str
+    salt: str
+    tz: str
+    hol: str
+
+
+class HintMeta(TypedDict, total=False):
+    created: int
+    cfg: HintMetaCfg
+
+
+class HintPerYear(TypedDict, total=False):
+    est: int
+    first: str
+    last: str
+
+
+class HintLimits(TypedDict, total=False):
+    stop: str
+    max_left: int
+    until: str
+
+
+class AnchorHintsPayload(TypedDict, total=False):
+    meta: HintMeta
+    dnf: AnchorDNF
+    natural: str
+    next_dates: list[str]
+    per_year: HintPerYear
+    limits: HintLimits
+    rand_preview: list[str]
 
 
 # ==============================================================================

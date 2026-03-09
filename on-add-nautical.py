@@ -27,7 +27,6 @@ from contextlib import contextmanager
 import shlex, subprocess
 import tempfile
 from collections import OrderedDict
-from nautical_types import AnchorDNF, AnchorValidationResult, TaskDict
  # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
  # Python's json.dumps() defaults to ensure_ascii=True, which escapes non-ASCII
  # as "\\uXXXX". We prefer human-readable UTF-8 JSON for hook passthrough.
@@ -464,7 +463,7 @@ if _DNF_DISK_CACHE_ENABLED:
     atexit.register(_save_dnf_disk_cache_signal_safe)
 
 @lru_cache(maxsize=256)
-def _validate_anchor_expr_cached(expr: str) -> AnchorDNF:
+def _validate_anchor_expr_cached(expr: str) -> list[list[dict]]:
     """
     Validate + parse anchor expression to DNF.
 
@@ -1082,7 +1081,7 @@ def _safe_parse_duration(s, field_name) -> tuple[timedelta | None, str | None]:
         return (None, f"{field_name}: Unexpected parsing error")
 
 
-def _validate_anchor_syntax_strict(expr: str | AnchorDNF) -> AnchorValidationResult:
+def _validate_anchor_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[list[dict]] | None, str | None]:
     """
     Strictly validate an anchor. Accepts string or DNF.
     Returns (dnf, None) on success, (None, message) on failure.
@@ -1511,7 +1510,7 @@ def _handle_cp_preview_on_add(
     sys.stdout.flush()
 
 
-def _anchor_preview_prepare_dnf(task: TaskDict, anchor_str: str, due_dt: datetime, rows: list[tuple[str, str]], prof) -> tuple[AnchorDNF, str]:
+def _anchor_preview_prepare_dnf(task: dict[str, object], anchor_str: str, due_dt: datetime, rows: list[tuple[str, str]], prof) -> tuple[list[list[dict]], str]:
     t0 = time.perf_counter()
     dnf, err = _validate_anchor_syntax_strict(anchor_str)
     if dnf is None:

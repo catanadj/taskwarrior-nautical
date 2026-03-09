@@ -1,0 +1,25 @@
+{
+  "version": "1",
+  "workload": {
+    "expressions": [
+      "w:mon..fri@t=09:00",
+      "m:1bd + y:q1..q4",
+      "(w:mon + m:1..7) | (w:fri + m:-7..-1)",
+      "w/2:mon,tue,wed,thu,fri",
+      "m:rand + y:04-20..05-15"
+    ],
+    "repeats": 5,
+    "parse_validate_rounds": 220,
+    "describe_expr_rounds": 220,
+    "next_after_rounds": 220,
+    "build_hints_rounds": 180,
+    "cache_key_rounds": 2500
+  },
+  "budgets_seconds": {
+    "parse_validate": 1.25,
+    "describe_expr": 1.25,
+    "next_after": 1.2,
+    "build_hints": 1.0,
+    "cache_key_hot": 0.2
+  }
+}

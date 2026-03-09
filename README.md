@@ -172,6 +172,10 @@ Operational knobs, performance checklist, and load-testing guidance are now in t
 - Deferred spawn queue is SQLite-first at `TASKDATA/.nautical_queue.db`; legacy JSONL queue files remain supported for mixed-version compatibility/recovery.
 - `tools/nautical_health_check.py` monitors both JSONL + SQLite queue pressure (for example `--queue-db-crit-rows 200`).
 
+CI performance budget:
+- Run locally: `python3 tools/nautical_perf_budget.py --budget-file tools/perf_budget.json --enforce`
+- CI enforces the same budgets via `.github/workflows/perf-budget.yml`.
+
 ## Requirements
 
 - Taskwarrior ≥ 2.6

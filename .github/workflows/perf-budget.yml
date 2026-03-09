@@ -1,0 +1,26 @@
+name: Performance Budget
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  perf-budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show Python version
+        run: python3 --version
+
+      - name: Enforce performance budgets
+        run: python3 tools/nautical_perf_budget.py --json --enforce --budget-file tools/perf_budget.json

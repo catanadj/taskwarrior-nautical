@@ -3353,20 +3353,14 @@ def _chain_health_advice(
     )
 
 
-def _chain_integrity_warnings(chain: list[dict], expected_chain_id: str | None = None) -> list[str]:
-    if core is None:
-        try:
-            _load_core()
-        except Exception:
-            return []
+def _chain_integrity_collect(
+    chain: list[dict],
+    expected_chain_id: str | None,
+) -> tuple[dict[str, dict], dict[int, dict], list[str], list[str]]:
     warnings: list[str] = []
-    if not isinstance(chain, list) or not chain:
-        return warnings
-
     short_map: dict[str, dict] = {}
     link_map: dict[int, dict] = {}
     missing_link: list[str] = []
-
     for t in chain:
         if not isinstance(t, dict):
             continue
@@ -3382,9 +3376,8 @@ def _chain_integrity_warnings(chain: list[dict], expected_chain_id: str | None =
                 )
             else:
                 link_map[link] = t
-        else:
-            if uid:
-                missing_link.append(_short(uid))
+        elif uid:
+            missing_link.append(_short(uid))
 
         if expected_chain_id is not None:
             cid = (t.get("chainID") or t.get("chainid") or "").strip()
@@ -3392,23 +3385,35 @@ def _chain_integrity_warnings(chain: list[dict], expected_chain_id: str | None =
                 warnings.append(f"missing chainID on {_short(uid)}")
             elif cid != expected_chain_id:
                 warnings.append(f"chainID mismatch on {_short(uid)}")
+    return short_map, link_map, missing_link, warnings
 
-    if missing_link:
-        sample = ", ".join(missing_link[:3])
-        tail = "…" if len(missing_link) > 3 else ""
-        warnings.append(f"missing link number on {sample}{tail}")
 
-    if link_map:
-        links_sorted = sorted(link_map.keys())
-        if links_sorted[0] != 1:
-            warnings.append(f"chain starts at link #{links_sorted[0]} (expected #1)")
-        expected = set(range(links_sorted[0], links_sorted[-1] + 1))
-        gaps = sorted(expected - set(links_sorted))
-        if gaps:
-            gap_list = ", ".join(str(g) for g in gaps[:5])
-            tail = "…" if len(gaps) > 5 else ""
-            warnings.append(f"missing link(s): {gap_list}{tail}")
+def _chain_integrity_missing_link_warning(missing_link: list[str]) -> list[str]:
+    if not missing_link:
+        return []
+    sample = ", ".join(missing_link[:3])
+    tail = "…" if len(missing_link) > 3 else ""
+    return [f"missing link number on {sample}{tail}"]
 
+
+def _chain_integrity_link_sequence_warnings(link_map: dict[int, dict]) -> list[str]:
+    if not link_map:
+        return []
+    warnings: list[str] = []
+    links_sorted = sorted(link_map.keys())
+    if links_sorted[0] != 1:
+        warnings.append(f"chain starts at link #{links_sorted[0]} (expected #1)")
+    expected = set(range(links_sorted[0], links_sorted[-1] + 1))
+    gaps = sorted(expected - set(links_sorted))
+    if gaps:
+        gap_list = ", ".join(str(g) for g in gaps[:5])
+        tail = "…" if len(gaps) > 5 else ""
+        warnings.append(f"missing link(s): {gap_list}{tail}")
+    return warnings
+
+
+def _chain_integrity_reciprocal_warnings(chain: list[dict], short_map: dict[str, dict]) -> list[str]:
+    warnings: list[str] = []
     for t in chain:
         if not isinstance(t, dict):
             continue
@@ -3418,26 +3423,44 @@ def _chain_integrity_warnings(chain: list[dict], expected_chain_id: str | None =
             prev_task = short_map.get(prev_link)
             if not prev_task:
                 warnings.append(f"{cur_short} prevLink {prev_link} not found")
-            else:
-                if (prev_task.get("nextLink") or "").strip() != cur_short:
-                    warnings.append(f"{cur_short} prevLink {prev_link} not reciprocal")
+            elif (prev_task.get("nextLink") or "").strip() != cur_short:
+                warnings.append(f"{cur_short} prevLink {prev_link} not reciprocal")
 
         next_link = (t.get("nextLink") or "").strip()
         if next_link:
             next_task = short_map.get(next_link)
             if not next_task:
                 warnings.append(f"{cur_short} nextLink {next_link} not found")
-            else:
-                if (next_task.get("prevLink") or "").strip() != cur_short:
-                    warnings.append(f"{cur_short} nextLink {next_link} not reciprocal")
+            elif (next_task.get("prevLink") or "").strip() != cur_short:
+                warnings.append(f"{cur_short} nextLink {next_link} not reciprocal")
+    return warnings
 
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
     deduped: list[str] = []
     seen = set()
-    for w in warnings:
-        if w not in seen:
-            seen.add(w)
-            deduped.append(w)
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
     return deduped
+
+
+def _chain_integrity_warnings(chain: list[dict], expected_chain_id: str | None = None) -> list[str]:
+    if core is None:
+        try:
+            _load_core()
+        except Exception:
+            return []
+    if not isinstance(chain, list) or not chain:
+        return []
+
+    short_map, link_map, missing_link, warnings = _chain_integrity_collect(chain, expected_chain_id)
+    warnings.extend(_chain_integrity_missing_link_warning(missing_link))
+    warnings.extend(_chain_integrity_link_sequence_warnings(link_map))
+    warnings.extend(_chain_integrity_reciprocal_warnings(chain, short_map))
+    return _dedupe_preserve_order(warnings)
 
 
 def _fmt_secs_delta(now_ref, secs: float | None) -> str:

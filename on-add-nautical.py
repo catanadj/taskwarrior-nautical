@@ -1411,32 +1411,13 @@ def _handle_cp_preview_on_add(
     sys.stdout.flush()
 
 
-def _handle_anchor_preview_on_add(
-    task: dict,
-    anchor_str: str,
-    ch: str,
-    now_utc: datetime,
-    now_local: datetime,
-    user_provided_due: bool,
-    due_dt: datetime,
-    due_day,
-    due_hhmm: tuple[int, int],
-    until_dt: datetime | None,
-    past_due_warning: str | None,
-    prof,
-) -> None:
-    rows = []
-
-    def _fmt(dt):
-        return core.fmt_dt_local(dt)
-
-    # ========== EDGE CASE 5: Invalid anchor expression ==========
+def _anchor_preview_prepare_dnf(task: dict, anchor_str: str, due_dt: datetime, rows: list[tuple[str, str]], prof):
     is_valid, err = _validate_anchor_syntax_strict(anchor_str)
     if not is_valid:
         _error_and_exit([("Invalid anchor", err)])
 
     anchor_mode = ((task.get("anchor_mode") or "").strip().upper() or "ALL")
-    _t0 = time.perf_counter()
+    t0 = time.perf_counter()
     if core.ENABLE_ANCHOR_CACHE:
         pkg = core.build_and_cache_hints(anchor_str, anchor_mode, default_due_dt=due_dt)
         natural = pkg.get("natural") or core.describe_anchor_expr(anchor_str, default_due_dt=due_dt)
@@ -1444,21 +1425,19 @@ def _handle_anchor_preview_on_add(
     else:
         natural = core.describe_anchor_expr(anchor_str, default_due_dt=task.get("due"))
         dnf = core.validate_anchor_expr_strict(anchor_str)
-    _ = natural  # keep side effects/behavior unchanged; natural is intentionally best-effort
+    _ = natural
 
-    # ========== EDGE CASE 6: Invalid anchor_mode ==========
     mode, warn_msg = _validate_anchor_mode(task.get("anchor_mode"))
     task["anchor_mode"] = mode
     if warn_msg:
         rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
 
-    # Safe validate
     try:
         dnf = _validate_anchor_expr_cached(anchor_str)
     except Exception as e:
         _diag(f"anchor cache/validation failed: {e}")
         _fail_and_exit("Invalid anchor", "anchor syntax error")
-    prof.add_ms("anchor:dnf", (time.perf_counter() - _t0) * 1000.0)
+    prof.add_ms("anchor:dnf", (time.perf_counter() - t0) * 1000.0)
 
     tag = {
         "skip": "[bold bright_cyan]SKIP[/]",
@@ -1470,29 +1449,34 @@ def _handle_anchor_preview_on_add(
         rows.append(("Natural", f"[white]{core.describe_anchor_dnf(dnf, task)}[/]"))
     except Exception:
         pass
+    return dnf, mode
 
+
+def _anchor_preview_seed_context(task: dict, due_day, now_local: datetime, user_provided_due: bool):
     base_local_date = due_day if user_provided_due else now_local.date()
     seed_base = (task.get("chainID") or "").strip() or _root_uuid_from(task) or "preview"
+    interval_seed = base_local_date
+    return base_local_date, interval_seed, seed_base
 
-    # Fix: use a stable default_seed for /N gating
-    interval_seed = base_local_date  # or first anchor day if you prefer
 
-    first_date_local = _anchor_step_once(dnf, base_local_date - timedelta(days=1), interval_seed, seed_base)
+def _anchor_preview_first_due(
+    task: dict,
+    dnf,
+    *,
+    now_local: datetime,
+    due_dt: datetime,
+    user_provided_due: bool,
+    due_hhmm: tuple[int, int],
+    interval_seed,
+    seed_base: str,
+    rows: list[tuple[str, str]],
+    prof,
+):
+    def _fmt(dt):
+        return core.fmt_dt_local(dt)
 
-    # ========== EDGE CASE 7: Anchor pattern doesn't match (no future dates) ==========
-    if not first_date_local:
-        _error_and_exit(
-            [
-                (
-                    "anchor pattern",
-                    "No matching anchor dates found. Pattern may be invalid, non-advancing, or too restrictive.",
-                )
-            ]
-        )
-
-    fallback_hhmm = (due_hhmm if user_provided_due else (9, 0))
-
-    _t_first = time.perf_counter()
+    fallback_hhmm = due_hhmm if user_provided_due else (9, 0)
+    t_first = time.perf_counter()
     if user_provided_due:
         due_local_dt = _to_local_cached(due_dt)
         first_due_local_dt = _anchor_pick_occurrence_local(
@@ -1516,7 +1500,7 @@ def _handle_anchor_preview_on_add(
         )
         if not first_due_local_dt:
             _error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])
-    prof.add_ms("anchor:first_occurrence", (time.perf_counter() - _t_first) * 1000.0)
+    prof.add_ms("anchor:first_occurrence", (time.perf_counter() - t_first) * 1000.0)
 
     first_hhmm = (first_due_local_dt.hour, first_due_local_dt.minute)
     first_date_local = first_due_local_dt.date()
@@ -1535,33 +1519,142 @@ def _handle_anchor_preview_on_add(
                 "Due date was not explicitly set; assigned to first anchor match.",
             )
         )
+    return first_due_local_dt, first_due_utc, display_first_due_utc, first_date_local, first_hhmm
 
-    # Scheduled/Wait preview (relative to First due)
+
+def _anchor_preview_misaligned_due_warning(
+    rows: list[tuple[str, str]],
+    *,
+    dnf,
+    due_dt: datetime,
+    interval_seed,
+    seed_base: str,
+) -> None:
+    due_local_date = _to_local_cached(due_dt).date()
+    first_after_due_date = _anchor_step_once(
+        dnf,
+        due_local_date - timedelta(days=1),
+        interval_seed,
+        seed_base,
+    )
+    if first_after_due_date != due_local_date:
+        rows.append(
+            (
+                "Note",
+                "[italic yellow]Your due is not an anchor day; chain follows anchors."
+                " To align, set due to a matching anchor day or omit due to auto-assign.[/]",
+            )
+        )
+
+
+def _anchor_preview_lint_and_validate(anchor_str: str, prof) -> None:
+    t_lint = time.perf_counter()
+    _, warns = core.lint_anchor_expr(anchor_str)
+    prof.add_ms("anchor:lint", (time.perf_counter() - t_lint) * 1000.0)
+    if warns:
+        _panel("ℹ️  Lint", [("Hint", w) for w in warns], kind="note")
+
+    t_val = time.perf_counter()
+    core.validate_anchor_expr_strict(anchor_str)
+    prof.add_ms("anchor:validate_strict", (time.perf_counter() - t_val) * 1000.0)
+
+
+def _anchor_preview_limit_rows(
+    rows: list[tuple[str, str]],
+    *,
+    cpmax: int,
+    until_dt: datetime | None,
+    exact_until_count: int | None,
+    final_until_dt: datetime | None,
+    now_utc: datetime,
+) -> None:
+    def _fmt(dt):
+        return core.fmt_dt_local(dt)
+
+    lim_parts = []
+    if cpmax and cpmax > 0:
+        lim_parts.append(f"max [bold yellow]{cpmax}[/]")
+    if until_dt:
+        lim_parts.append(f"until [bold yellow]{_fmt(until_dt)}[/]")
+        if exact_until_count is not None:
+            lim_parts.append(f"[white]{exact_until_count} more[/]")
+    if lim_parts:
+        rows.append(("Limits", " [dim]|[/] ".join(lim_parts)))
+    if final_until_dt:
+        rows.append(
+            (
+                "Final (until)",
+                f"[bright_magenta]{_fmt(final_until_dt)}[/]  [dim]({_human_delta(now_utc, final_until_dt, True)})[/]",
+            )
+        )
+
+
+def _handle_anchor_preview_on_add(
+    task: dict,
+    anchor_str: str,
+    ch: str,
+    now_utc: datetime,
+    now_local: datetime,
+    user_provided_due: bool,
+    due_dt: datetime,
+    due_day,
+    due_hhmm: tuple[int, int],
+    until_dt: datetime | None,
+    past_due_warning: str | None,
+    prof,
+) -> None:
+    rows = []
+
+    def _fmt(dt):
+        return core.fmt_dt_local(dt)
+
+    dnf, _ = _anchor_preview_prepare_dnf(task, anchor_str, due_dt, rows, prof)
+    base_local_date, interval_seed, seed_base = _anchor_preview_seed_context(
+        task, due_day, now_local, user_provided_due
+    )
+
+    first_date_local = _anchor_step_once(dnf, base_local_date - timedelta(days=1), interval_seed, seed_base)
+    if not first_date_local:
+        _error_and_exit(
+            [
+                (
+                    "anchor pattern",
+                    "No matching anchor dates found. Pattern may be invalid, non-advancing, or too restrictive.",
+                )
+            ]
+        )
+
+    (
+        first_due_local_dt,
+        first_due_utc,
+        display_first_due_utc,
+        first_date_local,
+        first_hhmm,
+    ) = _anchor_preview_first_due(
+        task,
+        dnf,
+        now_local=now_local,
+        due_dt=due_dt,
+        user_provided_due=user_provided_due,
+        due_hhmm=due_hhmm,
+        interval_seed=interval_seed,
+        seed_base=seed_base,
+        rows=rows,
+        prof=prof,
+    )
+
     _append_wait_sched_rows(rows, task, display_first_due_utc, auto_due=(not user_provided_due))
-
-    # Show past due warning if applicable
     if past_due_warning:
         rows.append(("Warning", f"[yellow]{past_due_warning}[/]"))
-
     if user_provided_due and ANCHOR_WARN:
-        due_local_date = _to_local_cached(due_dt).date()
-        first_after_due_date = _anchor_step_once(
-            dnf,
-            due_local_date - timedelta(days=1),
-            interval_seed,
-            seed_base,
+        _anchor_preview_misaligned_due_warning(
+            rows,
+            dnf=dnf,
+            due_dt=due_dt,
+            interval_seed=interval_seed,
+            seed_base=seed_base,
         )
-        is_on_anchor_day = first_after_due_date == due_local_date
-        if not is_on_anchor_day:
-            rows.append(
-                (
-                    "Note",
-                    "[italic yellow]Your due is not an anchor day; chain follows anchors."
-                    " To align, set due to a matching anchor day or omit due to auto-assign.[/]",
-                )
-            )
 
-    # ========== EDGE CASE 8: Chain duration warning ==========
     if until_dt:
         is_reasonable, warn_msg = _validate_chain_duration_reasonable(
             until_dt, now_utc, first_due_utc, "anchor"
@@ -1570,7 +1663,6 @@ def _handle_anchor_preview_on_add(
             rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
 
     cpmax = core.coerce_int(task.get("chainMax"), 0)
-
     exact_until_count, final_until_dt = _anchor_until_summary(
         dnf,
         until_dt,
@@ -1583,17 +1675,7 @@ def _handle_anchor_preview_on_add(
     allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
     allow_by_until = exact_until_count if exact_until_count is not None else 10**9
 
-    # Lint for *hints only*; do not fail on linter
-    _t_lint = time.perf_counter()
-    _, warns = core.lint_anchor_expr(anchor_str)
-    prof.add_ms("anchor:lint", (time.perf_counter() - _t_lint) * 1000.0)
-    if warns:
-        _panel("ℹ️  Lint", [("Hint", w) for w in warns], kind="note")
-
-    # Validator is the single source of truth
-    _t_val = time.perf_counter()
-    core.validate_anchor_expr_strict(anchor_str)
-    prof.add_ms("anchor:validate_strict", (time.perf_counter() - _t_val) * 1000.0)
+    _anchor_preview_lint_and_validate(anchor_str, prof)
 
     preview_limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until, _PREVIEW_HARD_CAP))
     fallback_hhmm = first_hhmm
@@ -1616,22 +1698,14 @@ def _handle_anchor_preview_on_add(
         )
     )
 
-    lim_parts = []
-    if cpmax and cpmax > 0:
-        lim_parts.append(f"max [bold yellow]{cpmax}[/]")
-    if until_dt:
-        lim_parts.append(f"until [bold yellow]{_fmt(until_dt)}[/]")
-        if exact_until_count is not None:
-            lim_parts.append(f"[white]{exact_until_count} more[/]")
-    if lim_parts:
-        rows.append(("Limits", " [dim]|[/] ".join(lim_parts)))
-    if final_until_dt:
-        rows.append(
-            (
-                "Final (until)",
-                f"[bright_magenta]{_fmt(final_until_dt)}[/]  [dim]({_human_delta(now_utc, final_until_dt, True)})[/]",
-            )
-        )
+    _anchor_preview_limit_rows(
+        rows,
+        cpmax=cpmax,
+        until_dt=until_dt,
+        exact_until_count=exact_until_count,
+        final_until_dt=final_until_dt,
+        now_utc=now_utc,
+    )
 
     if "rand" in anchor_str.lower():
         base = _short(_root_uuid_from(task))
@@ -1652,12 +1726,7 @@ def _handle_anchor_preview_on_add(
     )
     prof.add_ms("render:anchor_panel", (time.perf_counter() - _t_panel) * 1000.0)
 
-    _t_out = time.perf_counter()
-    if core.SANITIZE_UDA:
-        core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
-    print(json.dumps(task, ensure_ascii=False), end="")
-    sys.stdout.flush()
-    prof.add_ms("stdout:emit", (time.perf_counter() - _t_out) * 1000.0)
+    _emit_task_json(task, sanitize=True, prof=prof)
 
 
 class _NoopProfiler:

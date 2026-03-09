@@ -193,109 +193,117 @@ _LOCK_BACKOFF_BASE = _env_float("NAUTICAL_LOCK_BACKOFF_BASE", 0.05)
 _LOCK_BACKOFF_MAX = _env_float("NAUTICAL_LOCK_BACKOFF_MAX", 1.0)
 _QUEUE_PROCESSING_STALE_AFTER = _env_float("NAUTICAL_QUEUE_PROCESSING_STALE_AFTER", 300.0)
 
-@contextmanager
-def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, stale_after: float | None = 60.0):
-    path_str = str(path) if path else ""
-    if not path_str:
-        yield False
-        return
-    def _sleep_once():
-        try:
-            delay = float(sleep_base or 0.0)
-        except Exception:
-            delay = 0.0
-        if delay > 0:
-            time.sleep(delay)
 
-    tries = max(1, int(retries or 0))
-    if fcntl is not None:
-        lf = None
-        acquired = False
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        try:
-            fd = os.open(path_str, os.O_CREAT | os.O_RDWR, 0o600)
+def _local_lock_sleep_once(sleep_base: float) -> None:
+    try:
+        delay = float(sleep_base or 0.0)
+    except Exception:
+        delay = 0.0
+    if delay > 0:
+        time.sleep(delay)
+
+
+def _local_lock_age(path_str: str) -> float | None:
+    try:
+        with open(path_str, "r", encoding="utf-8") as f:
+            head = f.read(64)
+        parts = head.strip().split()
+        if len(parts) >= 2:
+            return time.time() - float(parts[1])
+    except Exception:
+        pass
+    try:
+        st = os.stat(path_str)
+        return time.time() - float(st.st_mtime)
+    except Exception:
+        return None
+
+
+def _local_lock_stale_pid(path_str: str, stale_after: float | None) -> bool:
+    try:
+        with open(path_str, "r", encoding="utf-8") as f:
+            head = f.read(64)
+        parts = head.strip().split()
+        pid_str = parts[0] if parts else ""
+        pid = int(pid_str)
+        if pid <= 0:
+            return True
+        if stale_after is not None and len(parts) >= 2:
             try:
-                os.fchmod(fd, 0o600)
+                age = time.time() - float(parts[1])
+                if age < float(stale_after):
+                    return False
             except Exception:
                 pass
-            lf = os.fdopen(fd, "a", encoding="utf-8")
-            for _ in range(tries):
-                try:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    acquired = True
-                    break
-                except Exception:
-                    _sleep_once()
-        except Exception:
-            lf = None
         try:
-            yield acquired
-        finally:
-            try:
-                if acquired and lf is not None:
-                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
-            try:
-                if lf is not None:
-                    lf.close()
-            except Exception:
-                pass
-        return
-
-    fd = None
-    acquired = False
-    def _lock_age(path_str: str) -> float | None:
-        try:
-            with open(path_str, "r", encoding="utf-8") as f:
-                head = f.read(64)
-            parts = head.strip().split()
-            if len(parts) >= 2:
-                return time.time() - float(parts[1])
-        except Exception:
-            pass
-        try:
-            st = os.stat(path_str)
-            return time.time() - float(st.st_mtime)
-        except Exception:
-            return None
-
-    def _lock_stale_pid(path_str: str) -> bool:
-        try:
-            with open(path_str, "r", encoding="utf-8") as f:
-                head = f.read(64)
-            parts = head.strip().split()
-            pid_str = parts[0] if parts else ""
-            pid = int(pid_str)
-            if pid <= 0:
-                return True
-            if stale_after is not None and len(parts) >= 2:
-                try:
-                    age = time.time() - float(parts[1])
-                    if age < float(stale_after):
-                        return False
-                except Exception:
-                    pass
-            try:
-                os.kill(pid, 0)
-                return False
-            except PermissionError:
-                return False
-            except ProcessLookupError:
-                return True
-            except Exception:
-                return False
+            os.kill(pid, 0)
+            return False
+        except PermissionError:
+            return False
+        except ProcessLookupError:
+            return True
         except Exception:
             return False
+    except Exception:
+        return False
 
-    for _ in range(tries):
+
+def _local_lock_ensure_parent(path: Path) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+
+@contextmanager
+def _local_lock_fcntl_context(path: Path, path_str: str, *, tries: int, sleep_base: float):
+    lf = None
+    acquired = False
+    _local_lock_ensure_parent(path)
+    try:
+        fd = os.open(path_str, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            os.fchmod(fd, 0o600)
         except Exception:
             pass
+        lf = os.fdopen(fd, "a", encoding="utf-8")
+        for _ in range(tries):
+            try:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except Exception:
+                _local_lock_sleep_once(sleep_base)
+    except Exception:
+        lf = None
+    try:
+        yield acquired
+    finally:
+        try:
+            if acquired and lf is not None:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            if lf is not None:
+                lf.close()
+        except Exception:
+            pass
+
+
+@contextmanager
+def _local_lock_excl_context(
+    path: Path,
+    path_str: str,
+    *,
+    tries: int,
+    sleep_base: float,
+    stale_after: float | None,
+):
+    fd = None
+    acquired = False
+    for _ in range(tries):
+        _local_lock_ensure_parent(path)
         try:
             fd = os.open(path_str, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             try:
@@ -310,10 +318,10 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, 
             acquired = True
             break
         except FileExistsError:
-            pid_stale = _lock_stale_pid(path_str)
+            pid_stale = _local_lock_stale_pid(path_str, stale_after)
             age_stale = False
             if stale_after is not None:
-                age = _lock_age(path_str)
+                age = _local_lock_age(path_str)
                 if age is not None and age >= float(stale_after):
                     age_stale = True
             if pid_stale and age_stale:
@@ -322,7 +330,7 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, 
                 except Exception:
                     pass
             else:
-                _sleep_once()
+                _local_lock_sleep_once(sleep_base)
         except Exception:
             break
     try:
@@ -338,6 +346,29 @@ def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, 
                 os.unlink(path_str)
         except Exception:
             pass
+
+
+@contextmanager
+def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, stale_after: float | None = 60.0):
+    path_str = str(path) if path else ""
+    if not path_str:
+        yield False
+        return
+
+    tries = max(1, int(retries or 0))
+    if fcntl is not None:
+        with _local_lock_fcntl_context(path, path_str, tries=tries, sleep_base=sleep_base) as acquired:
+            yield acquired
+        return
+
+    with _local_lock_excl_context(
+        path,
+        path_str,
+        tries=tries,
+        sleep_base=sleep_base,
+        stale_after=stale_after,
+    ) as acquired:
+        yield acquired
 
 
 def _diag(msg: str) -> None:

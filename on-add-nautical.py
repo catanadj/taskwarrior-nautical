@@ -289,6 +289,89 @@ def _dnf_cache_lock():
     ) as acquired:
         yield acquired
 
+def _dnf_cache_remove_oversized_file() -> tuple[bool, int | None]:
+    try:
+        st = _DNF_DISK_CACHE_PATH.stat()
+        file_size = st.st_size
+    except Exception:
+        return False, None
+    if file_size <= _DNF_DISK_CACHE_MAX_BYTES:
+        return False, file_size
+    _diag(f"DNF cache too large; resetting: {_DNF_DISK_CACHE_PATH}")
+    try:
+        _DNF_DISK_CACHE_PATH.unlink()
+    except Exception:
+        pass
+    return True, file_size
+
+
+def _dnf_cache_read_nonempty_lines() -> list[str]:
+    with open(_DNF_DISK_CACHE_PATH, "r", encoding="utf-8") as f:
+        return [ln.strip() for ln in f if ln.strip()]
+
+
+def _dnf_cache_split_header(lines: list[str]) -> tuple[list[str], bool]:
+    soft_error = False
+    data_lines = lines
+    try:
+        first_obj = json.loads(lines[0])
+    except Exception:
+        first_obj = None
+    if isinstance(first_obj, dict) and "version" in first_obj:
+        if int(first_obj.get("version") or 0) != _DNF_DISK_CACHE_VERSION:
+            soft_error = True
+        checksum = (first_obj.get("checksum") or "").strip()
+        data_lines = lines[1:]
+        if checksum:
+            payload = "\n".join(data_lines)
+            calc = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+            if checksum != calc:
+                soft_error = True
+    return data_lines, soft_error
+
+
+def _dnf_cache_extract_kv(obj: object) -> tuple[str | None, object]:
+    key = None
+    val = None
+    if isinstance(obj, dict):
+        if "key" in obj and "value" in obj:
+            key = obj.get("key")
+            val = obj.get("value")
+        elif "k" in obj and "v" in obj:
+            key = obj.get("k")
+            val = obj.get("v")
+    if key is None:
+        return None, None
+    return str(key), val
+
+
+def _dnf_cache_ingest_lines(data_lines: list[str], cache: OrderedDict) -> tuple[bool, bool]:
+    parsed_any = False
+    soft_error = False
+    for line in data_lines:
+        try:
+            obj = json.loads(line)
+        except Exception:
+            soft_error = True
+            continue
+        key, val = _dnf_cache_extract_kv(obj)
+        if key is None:
+            continue
+        cache[key] = val
+        parsed_any = True
+    return parsed_any, soft_error
+
+
+def _dnf_cache_quarantine_current() -> None:
+    try:
+        ts = int(time.time())
+        bad = _DNF_DISK_CACHE_PATH.with_suffix(f".corrupt.{ts}.jsonl")
+        os.replace(_DNF_DISK_CACHE_PATH, bad)
+        _diag(f"DNF cache quarantined: {bad}")
+    except Exception:
+        pass
+
+
 def _load_dnf_disk_cache() -> OrderedDict:
     global _DNF_DISK_CACHE, _DNF_DISK_CACHE_DIRTY
     if _DNF_DISK_CACHE is not None:
@@ -302,70 +385,22 @@ def _load_dnf_disk_cache() -> OrderedDict:
                 return _DNF_DISK_CACHE
             _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
             if _DNF_DISK_CACHE_PATH.exists():
-                try:
-                    st = _DNF_DISK_CACHE_PATH.stat()
-                    if st.st_size > _DNF_DISK_CACHE_MAX_BYTES:
-                        _diag(f"DNF cache too large; resetting: {_DNF_DISK_CACHE_PATH}")
-                        try:
-                            _DNF_DISK_CACHE_PATH.unlink()
-                        except Exception:
-                            pass
-                        return _DNF_DISK_CACHE
-                    file_size = st.st_size
-                except Exception:
-                    file_size = None
-                    pass
-                with open(_DNF_DISK_CACHE_PATH, "r", encoding="utf-8") as f:
-                    parsed_any = False
-                    soft_error = False
-                    lines = [ln.strip() for ln in f if ln.strip()]
-                    if not lines:
-                        return _DNF_DISK_CACHE
-                    try:
-                        first_obj = json.loads(lines[0])
-                    except Exception:
-                        first_obj = None
-                    data_lines = lines
-                    if isinstance(first_obj, dict) and "version" in first_obj:
-                        if int(first_obj.get("version") or 0) != _DNF_DISK_CACHE_VERSION:
-                            soft_error = True
-                        checksum = (first_obj.get("checksum") or "").strip()
-                        data_lines = lines[1:]
-                        if checksum:
-                            payload = "\n".join(data_lines)
-                            calc = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-                            if checksum != calc:
-                                soft_error = True
-                    for line in data_lines:
-                        try:
-                            obj = json.loads(line)
-                        except Exception:
-                            soft_error = True
-                            continue
-                        key = None
-                        val = None
-                        if isinstance(obj, dict):
-                            if "key" in obj and "value" in obj:
-                                key = obj.get("key")
-                                val = obj.get("value")
-                            elif "k" in obj and "v" in obj:
-                                key = obj.get("k")
-                                val = obj.get("v")
-                        if key is not None:
-                            _DNF_DISK_CACHE[str(key)] = val
-                            parsed_any = True
-                    if soft_error and parsed_any:
-                        _DNF_DISK_CACHE_DIRTY = True
-                    if not parsed_any and (file_size or 0) > 0:
-                        try:
-                            ts = int(time.time())
-                            bad = _DNF_DISK_CACHE_PATH.with_suffix(f".corrupt.{ts}.jsonl")
-                            os.replace(_DNF_DISK_CACHE_PATH, bad)
-                            _diag(f"DNF cache quarantined: {bad}")
-                        except Exception:
-                            pass
-                        _DNF_DISK_CACHE = OrderedDict()
-                        return _DNF_DISK_CACHE
+                was_oversized, file_size = _dnf_cache_remove_oversized_file()
+                if was_oversized:
+                    return _DNF_DISK_CACHE
+                lines = _dnf_cache_read_nonempty_lines()
+                if not lines:
+                    return _DNF_DISK_CACHE
+                data_lines, soft_error = _dnf_cache_split_header(lines)
+                parsed_any, ingest_soft_error = _dnf_cache_ingest_lines(data_lines, _DNF_DISK_CACHE)
+                if ingest_soft_error:
+                    soft_error = True
+                if soft_error and parsed_any:
+                    _DNF_DISK_CACHE_DIRTY = True
+                if not parsed_any and (file_size or 0) > 0:
+                    _dnf_cache_quarantine_current()
+                    _DNF_DISK_CACHE = OrderedDict()
+                    return _DNF_DISK_CACHE
     except Exception as e:
         _DNF_DISK_CACHE = OrderedDict()
     return _DNF_DISK_CACHE

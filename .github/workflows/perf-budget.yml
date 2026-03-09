@@ -22,13 +22,44 @@ jobs:
       - name: Show Python version
         run: python3 --version
 
-      - name: Enforce performance budgets
+      - name: Enforce performance budgets (head)
         run: |
-          python3 tools/nautical_perf_budget.py --json --enforce --budget-file tools/perf_budget.json | tee perf-budget-report.json
+          python3 tools/nautical_perf_budget.py --json --enforce --budget-file tools/perf_budget.json | tee perf-budget-report-head.json
 
-      - name: Upload performance report artifact
+      - name: Upload performance report artifact (head)
         uses: actions/upload-artifact@v4
         with:
-          name: perf-budget-report
-          path: perf-budget-report.json
+          name: perf-budget-report-head
+          path: perf-budget-report-head.json
           if-no-files-found: error
+
+      - name: Prepare base worktree (PR only)
+        if: github.event_name == 'pull_request'
+        run: git worktree add ../perf-base "${{ github.event.pull_request.base.sha }}"
+
+      - name: Measure performance budgets (base, PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 ../perf-base/tools/nautical_perf_budget.py --json --budget-file ../perf-base/tools/perf_budget.json > perf-budget-report-base.json
+
+      - name: Compare head vs base trend (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 tools/nautical_perf_compare.py --base perf-budget-report-base.json --head perf-budget-report-head.json > perf-trend-report.md
+          cat perf-trend-report.md >> "$GITHUB_STEP_SUMMARY"
+          python3 tools/nautical_perf_compare.py --base perf-budget-report-base.json --head perf-budget-report-head.json --json --enforce > perf-trend-report.json
+
+      - name: Upload performance report artifacts (PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-budget-report-base-and-trend
+          path: |
+            perf-budget-report-base.json
+            perf-trend-report.json
+            perf-trend-report.md
+          if-no-files-found: error
+
+      - name: Cleanup base worktree (PR only)
+        if: github.event_name == 'pull_request'
+        run: git worktree remove ../perf-base --force

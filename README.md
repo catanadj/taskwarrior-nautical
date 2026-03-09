@@ -175,6 +175,7 @@ Operational knobs, performance checklist, and load-testing guidance are now in t
 CI performance budget:
 - Run locally: `python3 tools/nautical_perf_budget.py --budget-file tools/perf_budget.json --enforce`
 - CI enforces the same budgets via `.github/workflows/perf-budget.yml`.
+- Compare two reports locally: `python3 tools/nautical_perf_compare.py --base base.json --head head.json --enforce`
 
 ## Requirements
 

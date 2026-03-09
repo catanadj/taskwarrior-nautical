@@ -2129,6 +2129,29 @@ def test_next_for_and_no_progress_fails_fast():
     finally:
         core.next_after_atom_with_mods = saved
 
+
+def test_next_for_and_transient_stall_recovers():
+    """_next_for_and should recover from brief no-progress stalls."""
+    saved_next = core.next_after_atom_with_mods
+    saved_match = core.atom_matches_on
+    try:
+        calls = {"n": 0}
+
+        def _stub(_atom, ref_d, _seed):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return ref_d
+            return ref_d + timedelta(days=1)
+
+        core.next_after_atom_with_mods = _stub
+        core.atom_matches_on = lambda _a, _d, _s: True
+        term = [{"typ": "w", "spec": "mon"}]
+        got = core._next_for_and(term, date(2025, 1, 1), date(2025, 1, 1))
+        expect(got > date(2025, 1, 1), f"expected forward progress after transient stall, got {got}")
+    finally:
+        core.next_after_atom_with_mods = saved_next
+        core.atom_matches_on = saved_match
+
 def test_roll_apply_has_guard():
     """roll_apply should fail fast if weekday never converges."""
     class WeirdDate(date):
@@ -3299,6 +3322,45 @@ def test_hook_run_task_falls_back_when_core_load_fails():
     finally:
         mod._load_core = saved_load_core
         mod.core = saved_core
+
+
+def test_spawn_child_verifies_even_when_verify_import_disabled():
+    """_spawn_child should verify child existence even when verify_import is disabled."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_spawn_verify_enforced_test")
+
+    saved_reserve = mod._reserve_child_uuid
+    saved_run_task = mod._run_task
+    saved_exists = mod._task_exists_by_uuid
+    saved_verify = mod._VERIFY_IMPORT
+    try:
+        mod._VERIFY_IMPORT = False
+        mod._reserve_child_uuid = lambda _env: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        calls = {"import": 0, "exists": 0}
+
+        def _run_task_stub(cmd, *, env=None, input_text=None, timeout=0.0, retries=0, use_tempfiles=False):
+            _ = (env, input_text, timeout, retries, use_tempfiles)
+            if isinstance(cmd, list) and "import" in cmd:
+                calls["import"] += 1
+                return True, "", ""
+            return False, "", "unexpected"
+
+        def _exists_stub(_uuid, _env):
+            calls["exists"] += 1
+            return calls["exists"] >= 2
+
+        mod._run_task = _run_task_stub
+        mod._task_exists_by_uuid = _exists_stub
+
+        short, _stripped = mod._spawn_child({"description": "verify-enforced"})
+        expect(short == "aaaaaaaa", f"unexpected child short uuid: {short}")
+        expect(calls["import"] == 2, f"expected retry after failed verify, got imports={calls['import']}")
+        expect(calls["exists"] == 2, f"expected verification on each import, got checks={calls['exists']}")
+    finally:
+        mod._reserve_child_uuid = saved_reserve
+        mod._run_task = saved_run_task
+        mod._task_exists_by_uuid = saved_exists
+        mod._VERIFY_IMPORT = saved_verify
 
 
 def test_core_run_task_tempfiles_accepts_text_input():
@@ -4714,6 +4776,30 @@ def test_cache_save_returns_false_when_lock_busy():
         core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
 
 
+def test_cache_save_returns_false_when_atomic_replace_fails():
+    """cache_save should return False when atomic replace fails."""
+    import nautical_core as core
+
+    saved_enabled = core.ENABLE_ANCHOR_CACHE
+    saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
+    saved_replace = core._cache_atomic_replace
+    try:
+        core.ENABLE_ANCHOR_CACHE = True
+        with tempfile.TemporaryDirectory() as td:
+            core.ANCHOR_CACHE_DIR_OVERRIDE = td
+
+            def _raise_replace(_src: str, _dst: str) -> None:
+                raise OSError("replace failed")
+
+            core._cache_atomic_replace = _raise_replace
+            ok = core.cache_save("replacefail", {"dnf": [[{"typ": "w", "spec": "mon", "mods": {}}]]})
+            expect(ok is False, f"expected cache_save False on replace failure, got {ok!r}")
+    finally:
+        core._cache_atomic_replace = saved_replace
+        core.ENABLE_ANCHOR_CACHE = saved_enabled
+        core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
+
+
 def test_cache_load_rejects_invalid_payload_shape():
     """cache_load should reject cached payloads with invalid field types."""
     import nautical_core as core
@@ -5602,6 +5688,7 @@ TESTS = [
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_task_runner_handles_nonzero,
     test_hook_run_task_falls_back_when_core_load_fails,
+    test_spawn_child_verifies_even_when_verify_import_disabled,
     test_core_run_task_tempfiles_accepts_text_input,
     test_core_run_task_timeout_reports_timeout_with_tempfiles,
     test_core_run_task_nonzero_retries_use_expected_backoff,
@@ -5647,6 +5734,7 @@ TESTS = [
     test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
     test_on_modify_chain_cache_thread_safety_smoke,
     test_next_for_and_no_progress_fails_fast,
+    test_next_for_and_transient_stall_recovers,
     test_roll_apply_has_guard,
     test_anchor_cache_cleans_stale_tmp_files,
     test_weeks_between_iso_boundary,
@@ -5724,6 +5812,7 @@ TESTS = [
     test_clear_all_caches_env,
     test_cache_save_writes_all_bytes,
     test_cache_save_returns_false_when_lock_busy,
+    test_cache_save_returns_false_when_atomic_replace_fails,
     test_cache_load_rejects_invalid_payload_shape,
     test_parse_anchor_expr_fuzz_inputs,
     test_anchor_parse_validate_fuzz_no_unexpected_exceptions,

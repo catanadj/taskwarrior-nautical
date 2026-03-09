@@ -417,7 +417,7 @@ _SHOW_ANALYTICS = False
 _ANALYTICS_STYLE = "compact"
 _ANALYTICS_ONTIME_TOL_SECS = 3600
 _CHECK_CHAIN_INTEGRITY = False
-_VERIFY_IMPORT = False
+_VERIFY_IMPORT = True
 _DEBUG_WAIT_SCHED = _DEFAULT_DEBUG_WAIT_SCHED
 _RECURRENCE_UPDATE_UDAS: tuple[str, ...] = ()
 _SPAWN_QUEUE_MAX_BYTES = _DEFAULT_SPAWN_QUEUE_MAX_BYTES
@@ -1619,13 +1619,16 @@ def _spawn_child(child_task: dict) -> tuple[str, set[str]]:
             continue
 
         if ok:
-            if not _VERIFY_IMPORT:
-                return child_uuid[:8], stripped_accum
+            # Always verify existence to avoid reporting success on partial import failures.
             if _task_exists_by_uuid(child_uuid, env):
                 return child_uuid[:8], stripped_accum
-
-        last_stderr = err or ""
-        category, is_retryable = _categorize_spawn_error(0 if ok else 1, last_stderr)
+            if not _VERIFY_IMPORT:
+                _diag("verify_import=false configured, but strict child existence verification is enforced")
+            last_stderr = "task import reported success but child task was not found by UUID"
+            category, is_retryable = ("taskwarrior", True)
+        else:
+            last_stderr = err or ""
+            category, is_retryable = _categorize_spawn_error(1, last_stderr)
         last_category = category
 
         if category == "attribute":

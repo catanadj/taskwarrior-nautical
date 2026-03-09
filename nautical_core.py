@@ -2913,6 +2913,27 @@ def _cache_payload_shape_ok(obj: dict) -> bool:
         return False
     return True
 
+
+def _cache_atomic_replace(src: str, dst: str) -> None:
+    """Best-effort atomic replace across platforms."""
+    try:
+        os.replace(src, dst)
+        return
+    except OSError:
+        if os.name != "nt":
+            raise
+    try:
+        import ctypes
+
+        flags = 0x1 | 0x8  # MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        ok = ctypes.windll.kernel32.MoveFileExW(str(src), str(dst), flags)
+        if ok:
+            return
+        err = ctypes.GetLastError()
+        raise OSError(err, "MoveFileExW failed")
+    except Exception:
+        raise
+
 def cache_load(key: str) -> dict | None:
     if not ENABLE_ANCHOR_CACHE:
         return None
@@ -3005,7 +3026,7 @@ def cache_save(key: str, obj: dict) -> bool:
                     os.close(fd)
                 except Exception:
                     pass
-            os.replace(tmpf, path)
+            _cache_atomic_replace(tmpf, path)
             ok_saved = True
     except (OSError, ValueError, json.JSONDecodeError, zlib.error) as e:
         if os.environ.get("NAUTICAL_DIAG") == "1":
@@ -3346,16 +3367,24 @@ def _next_for_and_rand_yearly(term: list[dict], ref_d: date, y_specs: list[str])
 
 def _next_for_and_fast_path(term: list[dict], ref_d: date, seed: date) -> date:
     probe = ref_d
+    stalled = 0
     for _ in range(MAX_ANCHOR_ITER):
         cands = [next_after_atom_with_mods(atom, probe, seed) for atom in term]
+        if not cands:
+            raise ParseError("Anchor evaluation term is empty; check anchor spec.")
         target = max(cands)
         if target <= probe:
+            stalled += 1
+            if stalled < 3:
+                probe = probe + timedelta(days=1)
+                continue
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 _warn_once_per_day(
                     "next_for_and_no_progress",
                     "[nautical] _next_for_and made no progress; failing fast. Check anchor spec.",
                 )
             raise ParseError("Anchor evaluation made no forward progress; check anchor spec.")
+        stalled = 0
         if all(atom_matches_on(atom, target, seed) for atom in term):
             return target
         probe = target

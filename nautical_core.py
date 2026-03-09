@@ -9,6 +9,7 @@ import os, re, sys
 import copy
 import math
 from types import MappingProxyType
+from typing import cast
 from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache, wraps
 from calendar import month_name
@@ -16,6 +17,7 @@ from datetime import date as _date
 import json, zlib, base64, hashlib, tempfile, time, random, subprocess
 import difflib
 from contextlib import contextmanager
+from nautical_types import AnchorDNF, AnchorHintsPayload
 try:
     import fcntl  # POSIX advisory lock
 except Exception:
@@ -3359,11 +3361,11 @@ def precompute_hints(dnf: list[list[dict]],
 
 def build_and_cache_hints(anchor_expr: str,
                           anchor_mode: str = "ALL",
-                          default_due_dt=None) -> dict:
+                          default_due_dt=None) -> AnchorHintsPayload:
     key = cache_key_for_task(anchor_expr, anchor_mode)
     cached = cache_load(key)
     if cached:
-        return cached
+        return cast(AnchorHintsPayload, cached)
 
     dnf = validate_anchor_expr_strict(anchor_expr)
     natural = _describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)
@@ -3377,7 +3379,7 @@ def build_and_cache_hints(anchor_expr: str,
         **hints,
     }
     cache_save(key, payload)
-    return payload
+    return cast(AnchorHintsPayload, payload)
 
 
 # ───────────────── Quarter helpers ─────────────────
@@ -5435,7 +5437,7 @@ def _parse_anchor_atom_at(s: str, i: int, n: int):
     return _build_anchor_atom_dnf(head, full_tail), i
 
 
-def parse_anchor_expr_to_dnf(s: str):
+def parse_anchor_expr_to_dnf(s: str) -> AnchorDNF:
     """Parse anchor expression into Disjunctive Normal Form."""
     s = _normalize_anchor_expr_input(s)
     _raise_on_bad_colon_year_tokens(s)
@@ -5506,11 +5508,11 @@ def parse_anchor_expr_to_dnf(s: str):
 
 
 @_ttl_lru_cache(maxsize=256)
-def _parse_anchor_expr_to_dnf_cached_obj(s: str, fmt: str):
+def _parse_anchor_expr_to_dnf_cached_obj(s: str, fmt: str) -> AnchorDNF:
     return parse_anchor_expr_to_dnf(s)
 
 
-def parse_anchor_expr_to_dnf_cached(s: str):
+def parse_anchor_expr_to_dnf_cached(s: str) -> AnchorDNF:
     """Cached parse returning a fresh object (avoid shared mutable structures)."""
     if not s:
         return []
@@ -6152,7 +6154,7 @@ def _validate_yearly_spec(spec: str):
             )
 
 
-def _normalize_anchor_input_to_dnf(expr):
+def _normalize_anchor_input_to_dnf(expr) -> AnchorDNF:
     """Normalize user input to parsed DNF, preserving current error messages."""
     if isinstance(expr, str):
         s = (expr or "").strip()
@@ -6170,7 +6172,7 @@ def _normalize_anchor_input_to_dnf(expr):
     # Defensive compatibility for legacy tuple-style parser errors.
     if isinstance(dnf, tuple) and len(dnf) == 2 and isinstance(dnf[0], str):
         raise ParseError(dnf[0])
-    return dnf
+    return cast(AnchorDNF, dnf)
 
 
 def _assert_dnf_structure_strict(dnf):
@@ -6230,13 +6232,13 @@ def _validate_anchor_atom_strict(a: dict) -> None:
     raise ParseError(f"Unknown anchor type '{typ}'")
 
 
-def _validate_anchor_dnf_atoms_strict(dnf) -> None:
+def _validate_anchor_dnf_atoms_strict(dnf: AnchorDNF) -> None:
     for term in dnf:
         for a in term:
             _validate_anchor_atom_strict(a)
 
 
-def validate_anchor_expr_strict(expr):
+def validate_anchor_expr_strict(expr) -> AnchorDNF:
     """
     Validate an anchor expression. Accepts:
       - str  (e.g., "w/2:sun + m:1st-mon"), parsed to DNF

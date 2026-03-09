@@ -1,0 +1,28 @@
+name: Type Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  mypy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install mypy
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install mypy
+
+      - name: Run mypy
+        run: python3 -m mypy --config-file mypy.ini

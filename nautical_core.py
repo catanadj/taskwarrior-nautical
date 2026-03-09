@@ -8,6 +8,7 @@ from __future__ import annotations
 import os, re, sys
 import copy
 import math
+from collections import OrderedDict
 from types import MappingProxyType
 from typing import Any, TypeAlias, TypedDict, cast
 from datetime import datetime, timedelta, timezone, date
@@ -122,7 +123,8 @@ _CACHE_LOCK_SLEEP_BASE = 0.05
 _CACHE_LOCK_JITTER = 0.0
 _CACHE_LOCK_STALE_AFTER = 300.0
 _CACHE_LOAD_MEM_MAX = 128
-_CACHE_LOAD_MEM: dict[str, tuple[int, int, dict]] = {}
+_CACHE_LOAD_MEM_TTL = 300
+_CACHE_LOAD_MEM: OrderedDict[str, tuple[int, int, dict, float]] = OrderedDict()
 
 def _env_flag_true(name: str, env_map: dict | None = None) -> bool:
     src = env_map if env_map is not None else os.environ
@@ -1167,6 +1169,8 @@ SANITIZE_UDA_MAX_LEN = _conf_int("sanitize_uda_max_len", 1024, min_value=64, max
 MAX_JSON_BYTES = _conf_int("max_json_bytes", 10 * 1024 * 1024, min_value=1024, max_value=100 * 1024 * 1024)
 RECURRENCE_UPDATE_UDAS = tuple(_conf_uda_field_list("recurrence_update_udas"))
 _CACHE_TTL_SECS = _conf_int("cache_ttl_secs", 3600, min_value=0)
+_CACHE_LOAD_MEM_MAX = _conf_int("cache_load_mem_max", _CACHE_LOAD_MEM_MAX, min_value=16, max_value=4096)
+_CACHE_LOAD_MEM_TTL = _conf_int("cache_load_mem_ttl", _CACHE_LOAD_MEM_TTL, min_value=0, max_value=86400)
 
 def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
     ttl_val = _CACHE_TTL_SECS if ttl is None else ttl
@@ -2586,6 +2590,20 @@ def _run_task_prepare_tempfiles(use_tempfiles: bool):
             out_path = out_f.name
             err_path = err_f.name
         except Exception:
+            try:
+                if out_f is not None:
+                    out_f.close()
+                    if out_f.name:
+                        os.unlink(out_f.name)
+            except Exception:
+                pass
+            try:
+                if err_f is not None:
+                    err_f.close()
+                    if err_f.name:
+                        os.unlink(err_f.name)
+            except Exception:
+                pass
             out_f = err_f = None
             out_path = err_path = None
     return out_f, err_f, out_path, err_path
@@ -2866,6 +2884,35 @@ def _normalize_dnf_cached(dnf):
                     mods["t"] = [(x[0], x[1]) for x in tval]
     return dnf
 
+
+def _cache_payload_shape_ok(obj: dict) -> bool:
+    """Validate cached payload shape defensively to avoid downstream type errors."""
+    try:
+        if "dnf" in obj and not _is_dnf_like(obj.get("dnf")):
+            return False
+        natural = obj.get("natural")
+        if natural is not None and not isinstance(natural, str):
+            return False
+        next_dates = obj.get("next_dates")
+        if next_dates is not None:
+            if not isinstance(next_dates, list):
+                return False
+            for item in next_dates:
+                if not isinstance(item, str):
+                    return False
+        meta = obj.get("meta")
+        if meta is not None and not isinstance(meta, dict):
+            return False
+        per_year = obj.get("per_year")
+        if per_year is not None and not isinstance(per_year, dict):
+            return False
+        limits = obj.get("limits")
+        if limits is not None and not isinstance(limits, dict):
+            return False
+    except Exception:
+        return False
+    return True
+
 def cache_load(key: str) -> dict | None:
     if not ENABLE_ANCHOR_CACHE:
         return None
@@ -2877,49 +2924,61 @@ def cache_load(key: str) -> dict | None:
         if ANCHOR_CACHE_TTL and (time.time() - st.st_mtime) > ANCHOR_CACHE_TTL:
             return None
         stamp = (int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))), int(st.st_size))
+        now = time.time()
+        if _CACHE_LOAD_MEM_TTL > 0 and _CACHE_LOAD_MEM:
+            expired = [
+                k for k, (_mt, _sz, _obj, loaded_at) in _CACHE_LOAD_MEM.items()
+                if (now - loaded_at) > _CACHE_LOAD_MEM_TTL
+            ]
+            for k in expired:
+                _CACHE_LOAD_MEM.pop(k, None)
         memo = _CACHE_LOAD_MEM.get(key)
         if memo and memo[0] == stamp[0] and memo[1] == stamp[1]:
-            return _clone_cache_payload(memo[2])
+            if _CACHE_LOAD_MEM_TTL <= 0 or (now - memo[3]) <= _CACHE_LOAD_MEM_TTL:
+                _CACHE_LOAD_MEM.move_to_end(key)
+                return _clone_cache_payload(memo[2])
+            _CACHE_LOAD_MEM.pop(key, None)
         with open(path, "rb") as f:
             blob = f.read()
         data = zlib.decompress(base64.b85decode(blob))
         obj = json.loads(data.decode("utf-8"))
         if isinstance(obj, dict) and "dnf" in obj:
             obj["dnf"] = _normalize_dnf_cached(obj.get("dnf"))
-            if not _is_dnf_like(obj.get("dnf")):
-                return None
         if isinstance(obj, dict):
-            _CACHE_LOAD_MEM[key] = (stamp[0], stamp[1], obj)
+            if not _cache_payload_shape_ok(obj):
+                if os.environ.get("NAUTICAL_DIAG") == "1":
+                    diag(f"cache_load rejected invalid payload shape for key={key}")
+                return None
+            _CACHE_LOAD_MEM[key] = (stamp[0], stamp[1], obj, now)
+            _CACHE_LOAD_MEM.move_to_end(key)
             if len(_CACHE_LOAD_MEM) > _CACHE_LOAD_MEM_MAX:
-                try:
-                    oldest = next(iter(_CACHE_LOAD_MEM))
-                    if oldest != key:
-                        _CACHE_LOAD_MEM.pop(oldest, None)
-                except Exception:
-                    pass
+                _CACHE_LOAD_MEM.popitem(last=False)
             return _clone_cache_payload(obj)
-        return obj
+        return None
     except (OSError, ValueError, json.JSONDecodeError, zlib.error) as e:
         if os.environ.get("NAUTICAL_DIAG") == "1":
             diag(f"cache_load failed: {e}")
         return None
 
-def cache_save(key: str, obj: dict) -> None:
+def cache_save(key: str, obj: dict) -> bool:
     if not ENABLE_ANCHOR_CACHE:
-        return
+        return False
     data = json.dumps(obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
     blob = base64.b85encode(zlib.compress(data, 9))
     path = _cache_path(key)
     if not path:
-        return
+        return False
     tmpf = None
+    ok_saved = False
     try:
         base = _cache_dir()
         if not base:
-            return
+            return False
         with _cache_lock(key) as locked:
             if not locked:
-                return
+                if os.environ.get("NAUTICAL_DIAG") == "1":
+                    diag(f"cache_save lock busy for key={key}")
+                return False
             try:
                 for name in os.listdir(base):
                     if name.startswith(f".{key}.") and name.endswith(".tmp"):
@@ -2947,6 +3006,7 @@ def cache_save(key: str, obj: dict) -> None:
                 except Exception:
                     pass
             os.replace(tmpf, path)
+            ok_saved = True
     except (OSError, ValueError, json.JSONDecodeError, zlib.error) as e:
         if os.environ.get("NAUTICAL_DIAG") == "1":
             diag(f"cache_save failed: {e}")
@@ -2957,6 +3017,7 @@ def cache_save(key: str, obj: dict) -> None:
                 os.unlink(tmpf)
             except Exception:
                 pass
+    return ok_saved
 
 @_ttl_lru_cache(maxsize=1024)
 def _cache_key_for_task_cached(anchor_expr: str, anchor_mode: str, fmt: str) -> str:
@@ -7069,16 +7130,22 @@ def anchors_between_expr(dnf, start_excl, end_excl, default_seed, seed_base=None
 
     acc = []
     cur = start_excl
-    # More conservative iteration limit
-    while len(acc) < min(UNTIL_COUNT_CAP, 500):
+    while len(acc) < UNTIL_COUNT_CAP:
         d, _ = next_after_expr(dnf, cur, default_seed, seed_base=seed_base)
         if d is None or d >= end_excl:
+            break
+        if d <= cur:
+            if os.environ.get("NAUTICAL_DIAG") == "1":
+                _warn_once_per_day(
+                    "anchors_between_no_progress",
+                    "[nautical] anchors_between_expr made no progress; stopping early.",
+                )
             break
         if acc and d <= acc[-1]:
             cur = acc[-1] + timedelta(days=1)
             continue
         acc.append(d)
-        cur = d
+        cur = d + timedelta(days=1)
     return acc
 
 

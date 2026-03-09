@@ -19,8 +19,8 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 import re
-import shlex
 import time as _time
+import threading
 from typing import Optional
 import stat
 
@@ -82,6 +82,7 @@ _CHAIN_CACHE_CHAIN_ID = ""
 _CHAIN_CACHE = []
 _CHAIN_BY_SHORT = {}
 _CHAIN_BY_UUID = {}
+_CHAIN_CACHE_LOCK = threading.RLock()
 _DIAG_STATS = {
     "run_task_calls": 0,
     "run_task_failures": 0,
@@ -1104,13 +1105,15 @@ def _spawn_queue_db_connect() -> sqlite3.Connection | None:
     except Exception:
         pass
     try:
+        connect_timeout = max(1.0, _SPAWN_LOCK_SLEEP_BASE * max(1, _SPAWN_LOCK_RETRIES) * 4.0)
+        busy_timeout_ms = int(min(60_000, max(1_500, connect_timeout * 1000.0 * 2.0)))
         conn = sqlite3.connect(
             str(_SPAWN_QUEUE_DB_PATH),
-            timeout=max(1.0, _SPAWN_LOCK_SLEEP_BASE * max(1, _SPAWN_LOCK_RETRIES) * 4.0),
+            timeout=connect_timeout,
         )
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=1500")
+        conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
         try:
             if _SPAWN_QUEUE_DB_PATH.exists():
                 os.chmod(_SPAWN_QUEUE_DB_PATH, 0o600)
@@ -1339,13 +1342,15 @@ def _run_task(
     retry_delay: float = 0.15,
     use_tempfiles: bool = False,
 ) -> tuple[bool, str, str]:
+    load_err = None
     try:
         _load_core()
-    except Exception:
-        pass
+    except Exception as e:
+        load_err = e
     _diag_count("run_task_calls")
     t0 = _ptime.perf_counter()
-    if core is not None:
+    core_runner = getattr(core, "run_task", None) if core is not None else None
+    if callable(core_runner):
         ok, out, err = core.run_task(
             cmd,
             env=env,
@@ -1356,6 +1361,8 @@ def _run_task(
             use_tempfiles=use_tempfiles,
         )
     else:
+        if load_err is not None:
+            _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
         env = env or os.environ.copy()
         proc = None
         try:
@@ -1398,14 +1405,18 @@ def _run_task(
 
 
 def _export_uuid_short(u_short: str, env=None):
-    if env is None and u_short and u_short in _CHAIN_BY_SHORT:
-        # Return a shallow copy to avoid accidental mutation of cache.
-        _diag_count("export_uuid_cache_hits")
-        return dict(_CHAIN_BY_SHORT[u_short])
+    cache_chain_id = ""
+    if env is None and u_short:
+        with _CHAIN_CACHE_LOCK:
+            cached = _CHAIN_BY_SHORT.get(u_short)
+            cache_chain_id = _CHAIN_CACHE_CHAIN_ID
+        if isinstance(cached, dict):
+            _diag_count("export_uuid_cache_hits")
+            return dict(cached)
     if env is None:
-        if _CHAIN_CACHE_CHAIN_ID:
+        if cache_chain_id:
             _diag_count("unexpected_cache_misses")
-            _diag(f"cache miss: short uuid {u_short} (chainID={_CHAIN_CACHE_CHAIN_ID})")
+            _diag(f"cache miss: short uuid {u_short} (chainID={cache_chain_id})")
         else:
             _diag_count("export_uuid_cache_misses")
     env = env or os.environ.copy()
@@ -1828,14 +1839,18 @@ def _export_uuid_full_cached(u: str) -> dict | None:
 
 
 def _export_uuid_full_uncached(u: str, env=None) -> dict | None:
-    if env is None and u and u in _CHAIN_BY_UUID:
-        # Return a shallow copy to avoid accidental mutation of cache.
-        _diag_count("export_full_cache_hits")
-        return dict(_CHAIN_BY_UUID[u])
+    cache_chain_id = ""
+    if env is None and u:
+        with _CHAIN_CACHE_LOCK:
+            cached = _CHAIN_BY_UUID.get(u)
+            cache_chain_id = _CHAIN_CACHE_CHAIN_ID
+        if isinstance(cached, dict):
+            _diag_count("export_full_cache_hits")
+            return dict(cached)
     if env is None:
-        if _CHAIN_CACHE_CHAIN_ID:
+        if cache_chain_id:
             _diag_count("unexpected_cache_misses")
-            _diag(f"cache miss: full uuid {u} (chainID={_CHAIN_CACHE_CHAIN_ID})")
+            _diag(f"cache miss: full uuid {u} (chainID={cache_chain_id})")
         else:
             _diag_count("export_full_cache_misses")
     try:
@@ -1864,12 +1879,15 @@ def _tw_get_cached(ref: str) -> str:
     try:
         if ref.endswith(".entry"):
             short = ref[:-6].strip()
-            if short and short in _CHAIN_BY_SHORT:
+            with _CHAIN_CACHE_LOCK:
+                cached = _CHAIN_BY_SHORT.get(short) if short else None
+                cache_chain_id = _CHAIN_CACHE_CHAIN_ID
+            if short and isinstance(cached, dict):
                 _diag_count("tw_get_cache_hits")
-                return (str(_CHAIN_BY_SHORT[short].get("entry") or "")).strip()
-            if short and _CHAIN_CACHE_CHAIN_ID:
+                return (str(cached.get("entry") or "")).strip()
+            if short and cache_chain_id:
                 _diag_count("unexpected_cache_misses")
-                _diag(f"cache miss: _get {ref} (chainID={_CHAIN_CACHE_CHAIN_ID})")
+                _diag(f"cache miss: _get {ref} (chainID={cache_chain_id})")
         out = _task(["rc.verbose=nothing", "_get", ref], env=None)
         return (out or "").strip()
     except Exception:
@@ -2155,8 +2173,9 @@ def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str, l
     """Cached chain export keyed by stable parameters."""
     since = datetime.fromisoformat(since_key) if since_key else None
     extra = extra_key or None
-    if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
-        return tuple(_CHAIN_CACHE or [])
+    with _CHAIN_CACHE_LOCK:
+        if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
+            return tuple(_CHAIN_CACHE or [])
     return tuple(tw_export_chain(chain_id, since=since, extra=extra, env=None, limit=limit) or [])
 
 
@@ -2172,8 +2191,9 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
         return []
     if env is not None:
         return tw_export_chain(chain_id, since=since, extra=extra, env=env, limit=_MAX_CHAIN_WALK)
-    if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
-        return list(_CHAIN_CACHE)
+    with _CHAIN_CACHE_LOCK:
+        if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
+            return list(_CHAIN_CACHE)
     cached = _tw_export_chain_cached(chain_id, since, extra, _MAX_CHAIN_WALK)
     return list(cached)
 
@@ -2225,13 +2245,16 @@ def _build_chain_indexes(chain: list[dict]) -> tuple[dict[int, list[dict]], dict
 def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
     """Set per-run chain cache to avoid repeated task exports."""
     global _CHAIN_CACHE_CHAIN_ID, _CHAIN_CACHE, _CHAIN_BY_SHORT, _CHAIN_BY_UUID
-    _CHAIN_CACHE_CHAIN_ID = chain_id or ""
-    _CHAIN_CACHE = list(chain or [])
-    _, by_short = _build_chain_indexes(_CHAIN_CACHE)
-    _CHAIN_BY_SHORT = by_short
-    _CHAIN_BY_UUID = {
-        t.get("uuid"): t for t in _CHAIN_CACHE if isinstance(t.get("uuid"), str) and t.get("uuid")
+    chain_copy = list(chain or [])
+    _, by_short = _build_chain_indexes(chain_copy)
+    by_uuid = {
+        t.get("uuid"): t for t in chain_copy if isinstance(t.get("uuid"), str) and t.get("uuid")
     }
+    with _CHAIN_CACHE_LOCK:
+        _CHAIN_CACHE_CHAIN_ID = chain_id or ""
+        _CHAIN_CACHE = chain_copy
+        _CHAIN_BY_SHORT = by_short
+        _CHAIN_BY_UUID = by_uuid
     _diag_count("chain_cache_seeded")
 
 
@@ -4191,12 +4214,39 @@ def _safe_dt(v):
         return None
 
 def _extra_safe(extra: str) -> bool:
+    return _parse_extra_tokens(extra) is not None
+
+
+def _parse_extra_tokens(extra: str | None) -> list[str] | None:
+    """Parse extra Taskwarrior filters in strict token form: key:value."""
+    if extra is None:
+        return []
     if not isinstance(extra, str):
-        return False
+        return None
     s = extra.strip()
     if not s:
-        return True
-    return re.match(r"^[\w\.\-:,=\s]+$", s) is not None
+        return []
+    out: list[str] = []
+    for tok in s.split():
+        if tok.startswith("+"):
+            tag = tok[1:]
+            if not tag or re.fullmatch(r"[A-Za-z0-9_.-]+", tag) is None:
+                return None
+            out.append(tok)
+            continue
+        if tok.startswith("-"):
+            return None
+        if ":" not in tok:
+            return None
+        key, value = tok.split(":", 1)
+        if not key or not value:
+            return None
+        if re.fullmatch(r"[A-Za-z0-9_.-]+", key) is None:
+            return None
+        if re.fullmatch(r"[A-Za-z0-9_.:@%+,-]+", value) is None:
+            return None
+        out.append(f"{key}:{value}")
+    return out
 
 def _chain_export_timeout(chain_id: str) -> float:
     global _CHAIN_EXPORT_TIMEOUT_FLOOR
@@ -4204,8 +4254,11 @@ def _chain_export_timeout(chain_id: str) -> float:
     per_100 = float(_CHAIN_EXPORT_TIMEOUT_PER_100)
     max_t = float(_CHAIN_EXPORT_TIMEOUT_MAX)
     est = base
-    if chain_id and _CHAIN_CACHE_CHAIN_ID == chain_id and _CHAIN_CACHE:
-        extra = max(0, len(_CHAIN_CACHE) // 100)
+    with _CHAIN_CACHE_LOCK:
+        cache_match = bool(chain_id and _CHAIN_CACHE_CHAIN_ID == chain_id and _CHAIN_CACHE)
+        cache_len = len(_CHAIN_CACHE) if cache_match else 0
+    if cache_match:
+        extra = max(0, cache_len // 100)
         est = base + (extra * per_100)
     adaptive = 0.0
     if _CHAIN_EXPORT_TIMES:
@@ -4241,10 +4294,11 @@ def _tw_export_chain_args(
     if limit and isinstance(limit, int) and limit > 0:
         args.append(f"limit:{limit}")
     if extra:
-        if not _extra_safe(extra):
+        extra_tokens = _parse_extra_tokens(extra)
+        if extra_tokens is None:
             _diag(f"tw_export_chain rejected extra: {extra!r}")
             return None
-        args += shlex.split(extra)
+        args += extra_tokens
     args.append("export")
     return args
 

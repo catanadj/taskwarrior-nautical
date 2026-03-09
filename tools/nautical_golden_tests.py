@@ -1906,6 +1906,79 @@ def test_tw_export_chain_extra_validation():
     expect(out == [], "unsafe extra should return empty list")
     expect(not called["run"], "unsafe extra should not call task")
 
+
+def test_tw_export_chain_extra_rejects_dash_prefixed_tokens():
+    """tw_export_chain extra parser should reject dash-prefixed tokens."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_chain_export_extra_dash_test")
+    mod._tw_lock_recent = lambda: False
+    called = {"run": False}
+
+    def _fake_run_task(_cmd, env=None, timeout=0.0, retries=0):
+        called["run"] = True
+        return True, "[]", ""
+
+    mod._run_task = _fake_run_task
+    out = mod.tw_export_chain("cid", extra="status:pending -rc.hooks=on")
+    expect(out == [], "dash-prefixed token should be rejected")
+    expect(not called["run"], "rejected extra must not execute task")
+
+
+def test_on_modify_chain_cache_thread_safety_smoke():
+    """Concurrent chain cache set/read paths should not crash or return invalid shapes."""
+    import threading
+
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_chain_cache_thread_safety_test")
+
+    full_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    mod._set_chain_cache(
+        "cid-a",
+        [{"uuid": full_uuid, "link": 1, "entry": "2026-01-01T00:00:00Z"}],
+    )
+    mod._task = lambda *_args, **_kwargs: "[]"
+
+    errs = []
+    hits = {"short": 0, "full": 0}
+
+    def _writer(chain_id: str):
+        try:
+            for i in range(300):
+                mod._set_chain_cache(
+                    chain_id,
+                    [{"uuid": full_uuid, "link": 1, "entry": f"2026-01-01T00:00:{i % 60:02d}Z"}],
+                )
+        except Exception as e:
+            errs.append(f"writer:{e}")
+
+    def _reader():
+        try:
+            for _ in range(600):
+                s = mod._export_uuid_short("aaaaaaaa")
+                if s is not None:
+                    expect(isinstance(s, dict), f"short cache read should return dict, got {type(s)}")
+                    hits["short"] += 1
+                f = mod._export_uuid_full(full_uuid)
+                if f is not None:
+                    expect(isinstance(f, dict), f"full cache read should return dict, got {type(f)}")
+                    hits["full"] += 1
+        except Exception as e:
+            errs.append(f"reader:{e}")
+
+    threads = [
+        threading.Thread(target=_writer, args=("cid-a",)),
+        threading.Thread(target=_writer, args=("cid-b",)),
+        threading.Thread(target=_reader),
+        threading.Thread(target=_reader),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    expect(not errs, f"concurrent chain cache access raised errors: {errs}")
+    expect(hits["short"] > 0 and hits["full"] > 0, f"expected cache hits, got {hits}")
+
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -2299,6 +2372,32 @@ def test_weekday_weekend_single_time():
         key = (d.year, d.month, d.day)
         expect(key not in seen, f"Duplicate date produced: {d}")
         seen.add(key)
+
+
+def test_anchors_between_expr_stops_on_no_progress():
+    """anchors_between_expr should stop safely when next_after_expr does not advance."""
+    import nautical_core as core
+
+    saved_next = core.next_after_expr
+    calls = {"n": 0}
+    try:
+        def _stuck_next(_dnf, cur, _seed, seed_base=None):
+            _ = seed_base
+            calls["n"] += 1
+            return cur, {"basis": "stuck"}
+
+        core.next_after_expr = _stuck_next
+        out = core.anchors_between_expr(
+            [[{"typ": "w", "spec": "mon", "mods": {}}]],
+            start_excl=date(2026, 1, 1),
+            end_excl=date(2026, 1, 15),
+            default_seed=date(2026, 1, 1),
+            seed_base="stuck",
+        )
+        expect(out == [], f"expected no anchors for no-progress engine, got {out}")
+        expect(calls["n"] == 1, f"expected single call on no-progress, got {calls['n']}")
+    finally:
+        core.next_after_expr = saved_next
 
 def test_rand_with_year_window():
     """Test random pattern with yearly window constraint"""
@@ -3179,6 +3278,27 @@ def test_hook_task_runner_handles_nonzero():
         retries=1,
     )
     expect(not ok2, "_run_task expected non-zero exit to return ok=False")
+
+
+def test_hook_run_task_falls_back_when_core_load_fails():
+    """on-modify _run_task should fall back to subprocess if core load fails."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_run_task_fallback_test")
+    saved_load_core = mod._load_core
+    saved_core = mod.core
+    try:
+        mod.core = None
+
+        def _boom():
+            raise RuntimeError("core unavailable")
+
+        mod._load_core = _boom
+        ok, out, _err = mod._run_task([sys.executable, "-c", "print('fallback-ok')"], timeout=2, retries=1)
+        expect(ok, "_run_task fallback path should succeed for simple subprocess command")
+        expect(out.strip() == "fallback-ok", f"unexpected fallback stdout: {out!r}")
+    finally:
+        mod._load_core = saved_load_core
+        mod.core = saved_core
 
 
 def test_core_run_task_tempfiles_accepts_text_input():
@@ -4569,6 +4689,57 @@ def test_cache_save_writes_all_bytes():
         expect(st.st_size > 0, "cache file should not be empty")
 
 
+def test_cache_save_returns_false_when_lock_busy():
+    """cache_save should return False when cache lock is unavailable."""
+    import nautical_core as core
+
+    saved_enabled = core.ENABLE_ANCHOR_CACHE
+    saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
+    saved_lock = core._cache_lock
+    try:
+        core.ENABLE_ANCHOR_CACHE = True
+        with tempfile.TemporaryDirectory() as td:
+            core.ANCHOR_CACHE_DIR_OVERRIDE = td
+
+            @contextlib.contextmanager
+            def _busy_lock(_key: str):
+                yield False
+
+            core._cache_lock = _busy_lock
+            ok = core.cache_save("busylock", {"dnf": [[{"typ": "w", "spec": "mon", "mods": {}}]]})
+            expect(ok is False, f"expected cache_save False on busy lock, got {ok!r}")
+    finally:
+        core._cache_lock = saved_lock
+        core.ENABLE_ANCHOR_CACHE = saved_enabled
+        core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
+
+
+def test_cache_load_rejects_invalid_payload_shape():
+    """cache_load should reject cached payloads with invalid field types."""
+    import nautical_core as core
+
+    with tempfile.TemporaryDirectory() as td:
+        saved_enabled = core.ENABLE_ANCHOR_CACHE
+        saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
+        try:
+            core.ENABLE_ANCHOR_CACHE = True
+            core.ANCHOR_CACHE_DIR_OVERRIDE = td
+            key = "invalidshape"
+            core.cache_save(
+                key,
+                {
+                    "dnf": [[{"typ": "w", "spec": "mon", "mods": {}}]],
+                    "natural": ["wrong-type"],
+                    "next_dates": ["2026-01-05T00:00"],
+                },
+            )
+            loaded = core.cache_load(key)
+            expect(loaded is None, f"invalid payload shape should be rejected, got {loaded!r}")
+        finally:
+            core.ENABLE_ANCHOR_CACHE = saved_enabled
+            core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
+
+
 def test_parse_anchor_expr_fuzz_inputs():
     """Parser should not crash on mixed valid/invalid inputs."""
     import nautical_core as core
@@ -5398,6 +5569,7 @@ TESTS = [
     test_weekly_rand_N_gate_spacing,
     test_prev_weekday_natural_text,
     test_weekly_multi_days_every_2weeks_spacing_and_days,
+    test_anchors_between_expr_stops_on_no_progress,
     test_inline_time_mods_split_ok,
     test_anchor_date_calculations,
     test_interval_patterns,
@@ -5429,6 +5601,7 @@ TESTS = [
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_task_runner_handles_nonzero,
+    test_hook_run_task_falls_back_when_core_load_fails,
     test_core_run_task_tempfiles_accepts_text_input,
     test_core_run_task_timeout_reports_timeout_with_tempfiles,
     test_core_run_task_nonzero_retries_use_expected_backoff,
@@ -5471,6 +5644,8 @@ TESTS = [
     test_on_modify_enqueue_uses_sqlite_even_with_legacy_jsonl_backlog,
     test_on_modify_chain_export_timeout_scales,
     test_tw_export_chain_extra_validation,
+    test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
+    test_on_modify_chain_cache_thread_safety_smoke,
     test_next_for_and_no_progress_fails_fast,
     test_roll_apply_has_guard,
     test_anchor_cache_cleans_stale_tmp_files,
@@ -5548,6 +5723,8 @@ TESTS = [
     test_sanitize_task_strings_removes_controls,
     test_clear_all_caches_env,
     test_cache_save_writes_all_bytes,
+    test_cache_save_returns_false_when_lock_busy,
+    test_cache_load_rejects_invalid_payload_shape,
     test_parse_anchor_expr_fuzz_inputs,
     test_anchor_parse_validate_fuzz_no_unexpected_exceptions,
     test_anchor_validate_roundtrip_preserves_next_occurrence,

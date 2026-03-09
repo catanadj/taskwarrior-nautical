@@ -4449,71 +4449,76 @@ def _render_cp_completion_feedback(
         _panel(title, fb, kind="preview_cp")
 
 
+def _non_completion_anchor_error_message(anchor_expr: str, default_msg: str) -> str:
+    has_type_colon = bool(
+        re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", anchor_expr, re.IGNORECASE)
+    )
+    if has_type_colon:
+        return default_msg
+    if re.match(r"^(mon|tue|wed|thu|fri|sat|sun)\b", anchor_expr, re.IGNORECASE):
+        return (
+            "Weekly anchors must start with 'w:'. "
+            "Examples: 'w:mon..fri' or 'w:mon,tue,wed,thu,fri'."
+        )
+    return (
+        "Anchors must start with 'w:', 'm:' or 'y:'. "
+        "Examples: 'w:mon', 'm:-1', 'y:06-01'."
+    )
+
+
+def _non_completion_anchor_mode(old: dict, new: dict) -> str:
+    anchor_mode_raw = (new.get("anchor_mode") or old.get("anchor_mode") or "").strip()
+    mode_norm, warn_msg = _validate_anchor_mode(anchor_mode_raw)
+    if warn_msg:
+        _panel("⚠ Anchor mode", [("Warning", warn_msg)], kind="warning")
+        new["anchor_mode"] = mode_norm
+    elif (new.get("anchor_mode") or "").strip():
+        new["anchor_mode"] = mode_norm
+    return ((mode_norm or anchor_mode_raw or "").strip().upper() or "ALL")
+
+
+def _non_completion_validate_anchor_cache(new: dict, old: dict, anchor_expr: str) -> None:
+    _, warns = core.lint_anchor_expr(anchor_expr)
+    if warns:
+        _panel("ℹ️  Lint", [("Hint", w) for w in warns], kind="note")
+
+    anchor_mode = _non_completion_anchor_mode(old, new)
+    due_dt = _safe_dt(new.get("due") or old.get("due"))
+    if core.ENABLE_ANCHOR_CACHE:
+        _ = core.build_and_cache_hints(anchor_expr, anchor_mode, default_due_dt=due_dt)
+    else:
+        _ = core.validate_anchor_expr_strict(anchor_expr)
+
+
+def _non_completion_validate_anchor(old: dict, new: dict, new_anchor: str) -> None:
+    try:
+        _non_completion_validate_anchor_cache(new, old, new_anchor)
+    except TypeError:
+        _ = core.validate_anchor_expr_strict(new_anchor)
+    except Exception as e:
+        _got_anchor_invalid(_non_completion_anchor_error_message(new_anchor, str(e)))
+
+    if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
+        _validate_anchor_on_modify(new_anchor)
+
+
+def _non_completion_reject_conflicting_types(new_anchor: str, new_cp: str) -> None:
+    if new_anchor and new_cp:
+        _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
+
+
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
-    # This is a non-completion modification
     anchor_raw = (new.get("anchor") or "").strip()
     new_anchor = _strip_quotes(anchor_raw)
 
     if new_anchor:
-        # Anchor validation on modification (catch errors early)
-        try:
-            # Lint only for non-blocking hints
-            _, warns = core.lint_anchor_expr(new_anchor)
-            if warns:
-                _panel("ℹ️  Lint", [("Hint", w) for w in warns], kind="note")
+        _non_completion_validate_anchor(old, new, new_anchor)
 
-            anchor_mode_raw = (new.get("anchor_mode") or old.get("anchor_mode") or "").strip()
-            mode_norm, warn_msg = _validate_anchor_mode(anchor_mode_raw)
-            if warn_msg:
-                _panel("⚠ Anchor mode", [("Warning", warn_msg)], kind="warning")
-                new["anchor_mode"] = mode_norm
-            elif (new.get("anchor_mode") or "").strip():
-                new["anchor_mode"] = mode_norm
-            anchor_mode = ((mode_norm or anchor_mode_raw or "").strip().upper() or "ALL")
-            due_dt = _safe_dt(new.get("due") or old.get("due"))
-
-            if core.ENABLE_ANCHOR_CACHE:
-                # precompute; if core trips over timedelta formatting, fall back
-                _ = core.build_and_cache_hints(new_anchor, anchor_mode, default_due_dt=due_dt)
-            else:
-                _ = core.validate_anchor_expr_strict(new_anchor)
-        except TypeError:
-            _ = core.validate_anchor_expr_strict(new_anchor)
-        except Exception as e:
-            emsg = str(e)
-            has_type_colon = bool(
-                re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", new_anchor, re.IGNORECASE)
-            )
-            if not has_type_colon:
-                # Common pitfall: user typed a weekday pattern without the leading `w:`
-                if re.match(r"^(mon|tue|wed|thu|fri|sat|sun)\b", new_anchor, re.IGNORECASE):
-                    emsg = (
-                        "Weekly anchors must start with 'w:'. "
-                        "Examples: 'w:mon..fri' or 'w:mon,tue,wed,thu,fri'."
-                    )
-                else:
-                    emsg = (
-                        "Anchors must start with 'w:', 'm:' or 'y:'. "
-                        "Examples: 'w:mon', 'm:-1', 'y:06-01'."
-                    )
-            _got_anchor_invalid(emsg)
-
-        # Deep checks only if anchor field changed
-        if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
-            _validate_anchor_on_modify(new_anchor)
-            # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
-
-    # Reject conflicting chain types on modify: anchor + cp both set.
     cp_raw = (new.get("cp") or "").strip()
     new_cp = _strip_quotes(cp_raw)
-    if new_anchor and new_cp:
-        _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
-
-    # CP validation only happens on completion, NOT on modification
-    # because taskwarrior already validates the duration format
+    _non_completion_reject_conflicting_types(new_anchor, new_cp)
 
     _stamp_chain_id_if_new_nautical(old, new)
-
     _print_task(new)
 
 

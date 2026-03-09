@@ -16,10 +16,10 @@
     "cache_key_rounds": 2500
   },
   "budgets_seconds": {
-    "parse_validate": 1.25,
-    "describe_expr": 1.25,
-    "next_after": 1.2,
-    "build_hints": 1.0,
-    "cache_key_hot": 0.2
+    "parse_validate": 0.2,
+    "describe_expr": 0.25,
+    "next_after": 0.35,
+    "build_hints": 0.15,
+    "cache_key_hot": 0.08
   }
 }

@@ -62,6 +62,8 @@ _CACHE_LOCK_RETRIES = 6
 _CACHE_LOCK_SLEEP_BASE = 0.05
 _CACHE_LOCK_JITTER = 0.0
 _CACHE_LOCK_STALE_AFTER = 300.0
+_CACHE_LOAD_MEM_MAX = 128
+_CACHE_LOAD_MEM: dict[str, tuple[int, int, dict]] = {}
 
 def _env_flag_true(name: str, env_map: dict | None = None) -> bool:
     src = env_map if env_map is not None else os.environ
@@ -513,6 +515,10 @@ def _emit_cache_metrics() -> None:
 
 def _clear_all_caches() -> None:
     """Clear all LRU caches (for long-running contexts)."""
+    try:
+        _CACHE_LOAD_MEM.clear()
+    except Exception:
+        pass
     try:
         _normalize_spec_for_acf_cached.cache_clear()
     except Exception:
@@ -2675,6 +2681,70 @@ def _is_atom_like(atom) -> bool:
     return True
 
 
+def _clone_mod_value(v):
+    if isinstance(v, list):
+        out = []
+        for item in v:
+            if isinstance(item, tuple):
+                out.append((item[0], item[1]) if len(item) == 2 else tuple(item))
+            elif isinstance(item, list):
+                out.append((item[0], item[1]) if len(item) == 2 else list(item))
+            else:
+                out.append(item)
+        return out
+    if isinstance(v, tuple):
+        return (v[0], v[1]) if len(v) == 2 else tuple(v)
+    if isinstance(v, dict):
+        return {k: _clone_mod_value(val) for k, val in v.items()}
+    return v
+
+
+def _clone_mods(mods):
+    if not isinstance(mods, dict):
+        return {}
+    return {k: _clone_mod_value(v) for k, v in mods.items()}
+
+
+def _clone_atom(atom):
+    if not isinstance(atom, dict):
+        return atom
+    out = {}
+    for k, v in atom.items():
+        if k == "mods" and isinstance(v, dict):
+            out[k] = _clone_mods(v)
+        elif isinstance(v, (dict, list, tuple)):
+            out[k] = _clone_mod_value(v)
+        else:
+            out[k] = v
+    return out
+
+
+def _clone_dnf(dnf):
+    if not isinstance(dnf, (list, tuple)):
+        return dnf
+    out = []
+    for term in dnf:
+        if isinstance(term, (list, tuple)):
+            out.append([_clone_atom(atom) for atom in term])
+        else:
+            out.append(term)
+    return out
+
+
+def _clone_cache_payload(obj: dict) -> dict:
+    if not isinstance(obj, dict):
+        return obj
+    out = {}
+    for k, v in obj.items():
+        if k == "dnf":
+            out[k] = _clone_dnf(v)
+        elif isinstance(v, (dict, list, tuple)):
+            out[k] = _clone_mod_value(v)
+        else:
+            out[k] = v
+    return out
+
+
 def _normalize_dnf_cached(dnf):
     """Normalize cached DNF to match parser types (tuple for single time)."""
     if not isinstance(dnf, (list, tuple)):
@@ -2709,6 +2779,10 @@ def cache_load(key: str) -> dict | None:
         st = os.stat(path)
         if ANCHOR_CACHE_TTL and (time.time() - st.st_mtime) > ANCHOR_CACHE_TTL:
             return None
+        stamp = (int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))), int(st.st_size))
+        memo = _CACHE_LOAD_MEM.get(key)
+        if memo and memo[0] == stamp[0] and memo[1] == stamp[1]:
+            return _clone_cache_payload(memo[2])
         with open(path, "rb") as f:
             blob = f.read()
         data = zlib.decompress(base64.b85decode(blob))
@@ -2717,6 +2791,16 @@ def cache_load(key: str) -> dict | None:
             obj["dnf"] = _normalize_dnf_cached(obj.get("dnf"))
             if not _is_dnf_like(obj.get("dnf")):
                 return None
+        if isinstance(obj, dict):
+            _CACHE_LOAD_MEM[key] = (stamp[0], stamp[1], obj)
+            if len(_CACHE_LOAD_MEM) > _CACHE_LOAD_MEM_MAX:
+                try:
+                    oldest = next(iter(_CACHE_LOAD_MEM))
+                    if oldest != key:
+                        _CACHE_LOAD_MEM.pop(oldest, None)
+                except Exception:
+                    pass
+            return _clone_cache_payload(obj)
         return obj
     except (OSError, ValueError, json.JSONDecodeError, zlib.error) as e:
         if os.environ.get("NAUTICAL_DIAG") == "1":
@@ -2770,6 +2854,7 @@ def cache_save(key: str, obj: dict) -> None:
         if os.environ.get("NAUTICAL_DIAG") == "1":
             diag(f"cache_save failed: {e}")
     finally:
+        _CACHE_LOAD_MEM.pop(key, None)
         if tmpf and os.path.exists(tmpf):
             try:
                 os.unlink(tmpf)
@@ -3239,7 +3324,8 @@ def build_and_cache_hints(anchor_expr: str,
             cached["dnf"] = _normalize_dnf_cached(cached.get("dnf"))
             if not _is_dnf_like(cached.get("dnf")):
                 cached = None
-        return cached
+        if cached:
+            return cached
 
     dnf = validate_anchor_expr_strict(anchor_expr)
     natural = describe_anchor_expr(anchor_expr, default_due_dt=default_due_dt)
@@ -3275,6 +3361,9 @@ _Q_FIRST_MONTH_TOKEN = {
 _Q_START_DAY = {1: "01-01", 2: "01-04", 3: "01-07", 4: "01-10"}
 # Quarter end day tokens
 _Q_END_DAY = {1: "31-03", 2: "30-06", 3: "30-09", 4: "31-12"}
+_Q_FIRST_MONTH_TOKEN_REV = {v: k for k, v in _Q_FIRST_MONTH_TOKEN.items()}
+_Q_START_DAY_REV = {v: k for k, v in _Q_START_DAY.items()}
+_Q_END_DAY_REV = {v: k for k, v in _Q_END_DAY.items()}
 
 
 def _yearly_tokens(term):
@@ -3319,9 +3408,8 @@ def _quarters_from_first_month_tokens(y_toks):
     """Return sorted unique quarters implied by first-month full ranges."""
     qs = []
     for tok in y_toks:
-        if tok in _Q_FIRST_MONTH_TOKEN.values():
-            # reverse map: token -> quarter
-            q = {v: k for k, v in _Q_FIRST_MONTH_TOKEN.items()}[tok]
+        q = _Q_FIRST_MONTH_TOKEN_REV.get(tok)
+        if q:
             qs.append(q)
     return sorted(set(qs))
 
@@ -3329,8 +3417,8 @@ def _quarters_from_first_month_tokens(y_toks):
 def _quarters_from_start_day_tokens(y_toks):
     qs = []
     for tok in y_toks:
-        if tok in _Q_START_DAY.values():
-            q = {v: k for k, v in _Q_START_DAY.items()}[tok]
+        q = _Q_START_DAY_REV.get(tok)
+        if q:
             qs.append(q)
     return sorted(set(qs))
 
@@ -3338,8 +3426,8 @@ def _quarters_from_start_day_tokens(y_toks):
 def _quarters_from_end_day_tokens(y_toks):
     qs = []
     for tok in y_toks:
-        if tok in _Q_END_DAY.values():
-            q = {v: k for k, v in _Q_END_DAY.items()}[tok]
+        q = _Q_END_DAY_REV.get(tok)
+        if q:
             qs.append(q)
     return sorted(set(qs))
 
@@ -5391,7 +5479,7 @@ def parse_anchor_expr_to_dnf_cached(s: str):
     key = _unwrap_quotes(s or "").strip()
     if not key:
         return []
-    res = copy.deepcopy(_parse_anchor_expr_to_dnf_cached_obj(key, _yearfmt()))
+    res = _clone_dnf(_parse_anchor_expr_to_dnf_cached_obj(key, _yearfmt()))
     _emit_cache_metrics()
     if os.environ.get("NAUTICAL_CLEAR_CACHES") == "1":
         _clear_all_caches()

@@ -2409,6 +2409,28 @@ def test_cache_consistency():
             cached_natural = cached.get("natural")
             assert cached_natural == natural_uncached, f"{expr}: cached natural doesn't match"
 
+def test_parse_cache_returns_isolated_dnf_instances():
+    """Cached parse should return independent DNF objects across calls."""
+    expr = "w:mon@t=09:00 + m:1"
+    dnf_a = core.parse_anchor_expr_to_dnf_cached(expr)
+    dnf_b = core.parse_anchor_expr_to_dnf_cached(expr)
+    expect(dnf_a is not dnf_b, "cached parse should return a new top-level object")
+    dnf_a[0][0]["spec"] = "tue"
+    expect(dnf_b[0][0]["spec"] == "mon", "mutating one parsed DNF should not affect later reads")
+
+
+def test_build_and_cache_hints_returns_isolated_cached_payload():
+    """build_and_cache_hints should return an isolated payload copy on cache hits."""
+    expr = "w:mon@t=09:00"
+    first = core.build_and_cache_hints(expr, "skip")
+    second = core.build_and_cache_hints(expr, "skip")
+    expect(first is not second, "cached hints should not return the same object identity")
+    first_dnf = first.get("dnf") or []
+    second_dnf = second.get("dnf") or []
+    if first_dnf and second_dnf:
+        first_dnf[0][0]["spec"] = "fri"
+        expect(second_dnf[0][0]["spec"] == "mon", "cached hint payload should be isolated per call")
+
 def test_parser_validation():
     """Test parser validation and error messages"""
     # Valid expressions that should parse
@@ -5230,6 +5252,8 @@ TESTS = [
     test_parser_validation,
     test_yearly_token_format_characterization,
     test_cache_consistency,
+    test_parse_cache_returns_isolated_dnf_instances,
+    test_build_and_cache_hints_returns_isolated_cached_payload,
     test_yearly_rand_natural_and_bounds,
     test_yearly_month_aliases_and_ranges,
     test_business_day_bd_skip_semantics,

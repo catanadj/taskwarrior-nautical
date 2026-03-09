@@ -1082,6 +1082,38 @@ def test_core_cache_lock_contention_matches_safe_lock():
         finally:
             mod.fcntl = prev
 
+
+def test_core_cache_dir_rejects_symlink_override():
+    """_cache_dir should reject symlink override paths and choose a real directory."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    with tempfile.TemporaryDirectory() as td:
+        target = os.path.join(td, "real-cache")
+        symlink = os.path.join(td, "cache-link")
+        os.makedirs(target, exist_ok=True)
+        os.symlink(target, symlink)
+
+        prev_xdg = os.environ.get("XDG_CACHE_HOME")
+        prev_tmp = os.environ.get("NAUTICAL_ALLOW_TMP_CACHE")
+        os.environ["XDG_CACHE_HOME"] = td
+        os.environ["NAUTICAL_ALLOW_TMP_CACHE"] = "1"
+        try:
+            mod = _load_hook_module(core_path, "_nautical_core_cache_symlink_guard_test")
+            mod._CACHE_DIR = None
+            mod.ANCHOR_CACHE_DIR_OVERRIDE = symlink
+            chosen = mod._cache_dir()
+            expect(chosen != symlink, f"symlink override should be rejected, got {chosen}")
+            expect(chosen and os.path.isdir(chosen), f"cache dir should fall back to valid dir, got {chosen!r}")
+            expect(not os.path.islink(chosen), f"cache dir should not be symlink, got {chosen}")
+        finally:
+            if prev_xdg is None:
+                os.environ.pop("XDG_CACHE_HOME", None)
+            else:
+                os.environ["XDG_CACHE_HOME"] = prev_xdg
+            if prev_tmp is None:
+                os.environ.pop("NAUTICAL_ALLOW_TMP_CACHE", None)
+            else:
+                os.environ["NAUTICAL_ALLOW_TMP_CACHE"] = prev_tmp
+
 def test_on_exit_large_queue_bounded_drain():
     """Large queues should drain in bounded batches and leave remainder."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -2233,6 +2265,36 @@ def test_dst_round_trip_noon_preserves_local_date():
             expect(back.hour == 12 and back.minute == 0, f"DST round-trip time mismatch: {back}")
 
 
+def test_core_invalid_timezone_warns_and_falls_back_to_utc():
+    """Invalid timezone config should fall back to UTC and emit diagnostic warning when enabled."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    with tempfile.TemporaryDirectory() as td:
+        cfg = os.path.join(td, "nautical.toml")
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write('tz = "Invalid/Timezone"\n')
+
+        prev_diag = os.environ.get("NAUTICAL_DIAG")
+        prev_xdg = os.environ.get("XDG_CACHE_HOME")
+        os.environ["NAUTICAL_DIAG"] = "1"
+        os.environ["XDG_CACHE_HOME"] = td
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                mod = _load_core_module(core_path, "_nautical_core_bad_tz_fallback_test", cfg)
+            expect(getattr(mod, "_LOCAL_TZ", None) is None, "invalid timezone should use UTC fallback")
+            stderr_text = buf.getvalue().lower()
+            expect("utc fallback" in stderr_text, f"expected timezone fallback warning in stderr, got: {stderr_text!r}")
+        finally:
+            if prev_diag is None:
+                os.environ.pop("NAUTICAL_DIAG", None)
+            else:
+                os.environ["NAUTICAL_DIAG"] = prev_diag
+            if prev_xdg is None:
+                os.environ.pop("XDG_CACHE_HOME", None)
+            else:
+                os.environ["XDG_CACHE_HOME"] = prev_xdg
+
+
 def test_core_recurrence_update_udas_config_aliases():
     """recurrence UDA carry config should accept top-level and [recurrence] alias forms."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
@@ -2363,6 +2425,17 @@ def test_anchor_expr_length_limit():
         expect(False, "long anchor should raise ParseError")
     except core.ParseError:
         pass
+
+
+def test_anchor_parse_term_explosion_guard():
+    """Parser should reject DNF Cartesian explosions before exhausting memory."""
+    group = "(w:mon|w:tue|w:wed|w:thu|w:fri|w:sat)"
+    expr = "+".join([group] * 6)  # 6^6 = 46,656 combined terms
+    try:
+        core.parse_anchor_expr_to_dnf(expr)
+        expect(False, "expected ParseError for excessive combined terms")
+    except core.ParseError as e:
+        expect("too complex" in str(e).lower(), f"unexpected error for term explosion guard: {e}")
 
 def test_coerce_int_bounds():
     """coerce_int should return default for out-of-bounds values."""
@@ -5947,6 +6020,7 @@ TESTS = [
     test_on_exit_requeues_when_task_lock_recent,
     test_core_cache_dir_and_lock_permissions,
     test_core_cache_lock_contention_matches_safe_lock,
+    test_core_cache_dir_rejects_symlink_override,
     test_on_modify_invalid_json_passthrough,
     test_on_modify_read_two_invalid_trailing,
     test_on_modify_read_two_array_uuid_mismatch_fails,
@@ -5975,6 +6049,7 @@ TESTS = [
     test_weeks_between_iso_boundary,
     test_short_uuid_invalid_inputs,
     test_anchor_expr_length_limit,
+    test_anchor_parse_term_explosion_guard,
     test_build_local_datetime_dst_gap_and_ambiguous,
     test_on_modify_chain_export_cache_key_includes_params,
     test_on_modify_chain_export_skips_when_locked,
@@ -6084,6 +6159,7 @@ TESTS = [
     test_chain_health_advice_coach_low_ontime_issue,
     test_chain_health_advice_clinical_drift_and_style_normalization,
     test_dst_round_trip_noon_preserves_local_date,
+    test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_core_recurrence_update_udas_config_aliases,
     test_warn_rate_limited_any,
     test_on_modify_build_child_carries_configured_uda_datetime,

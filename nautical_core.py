@@ -8,6 +8,7 @@ from __future__ import annotations
 import os, re, sys
 import copy
 import math
+import stat
 from collections import OrderedDict
 from types import MappingProxyType
 from typing import Any, TypeAlias, TypedDict, cast
@@ -1216,11 +1217,25 @@ def should_stamp_chain_id(task: dict) -> bool:
 # SECTION: Time & timezone helpers
 # ==============================================================================
 try:
-    from zoneinfo import ZoneInfo
-
-    _LOCAL_TZ = ZoneInfo(LOCAL_TZ_NAME)
+    import zoneinfo as _zoneinfo
 except Exception:
+    _zoneinfo = None
+
+if _zoneinfo is None:
     _LOCAL_TZ = None
+    _warn_once_per_day(
+        "timezone_zoneinfo_unavailable",
+        "[nautical] timezone support unavailable (zoneinfo import failed); using UTC fallback.",
+    )
+else:
+    try:
+        _LOCAL_TZ = _zoneinfo.ZoneInfo(LOCAL_TZ_NAME)
+    except Exception:
+        _LOCAL_TZ = None
+        _warn_once_per_day(
+            "timezone_local_invalid",
+            f"[nautical] timezone '{LOCAL_TZ_NAME}' is invalid/unavailable; using UTC fallback.",
+        )
 
 def now_utc():
     """Get current UTC time without microseconds."""
@@ -1256,6 +1271,7 @@ DATE_FORMATS = ("%Y%m%dT%H%M%SZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y
 UNTIL_COUNT_CAP = 1000
 INTERSECTION_GUARD_STEPS = 256
 DEFAULT_DUE_HOUR = 11
+MAX_ANCHOR_DNF_TERMS = _conf_int("max_anchor_dnf_terms", 10_000, min_value=64, max_value=200_000)
 
 # --- Weekday constants ---
 _WEEKDAYS = {
@@ -2080,12 +2096,31 @@ def _cache_dir() -> str:
     def _ensure_cache_dir(path: str) -> bool:
         try:
             os.makedirs(path, mode=0o700, exist_ok=True)
-            if os.path.isdir(path):
+            st_before = os.lstat(path)
+            if stat.S_ISLNK(st_before.st_mode) or (not stat.S_ISDIR(st_before.st_mode)):
+                return False
+            flags = os.O_RDONLY
+            if hasattr(os, "O_DIRECTORY"):
+                flags |= os.O_DIRECTORY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(path, flags)
+            try:
+                st_fd = os.fstat(fd)
+                if not stat.S_ISDIR(st_fd.st_mode):
+                    return False
+                if (st_before.st_dev, st_before.st_ino) != (st_fd.st_dev, st_fd.st_ino):
+                    return False
                 try:
-                    os.chmod(path, 0o700)
+                    os.fchmod(fd, 0o700)
                 except Exception:
-                    pass
-            return os.path.isdir(path) and os.access(path, os.W_OK)
+                    try:
+                        os.chmod(path, 0o700)
+                    except Exception:
+                        pass
+            finally:
+                os.close(fd)
+            return os.access(path, os.W_OK)
         except Exception:
             return False
 
@@ -5565,7 +5600,15 @@ def parse_anchor_expr_to_dnf(s: str) -> AnchorDNF:
         return parse_atom()
 
     def and_merge(A, B):
-        return [ta + tb for ta in A for tb in B]
+        out: list[list[dict]] = []
+        for ta in A:
+            for tb in B:
+                out.append(ta + tb)
+                if len(out) > MAX_ANCHOR_DNF_TERMS:
+                    raise ParseError(
+                        f"Expression too complex: more than {MAX_ANCHOR_DNF_TERMS} combined terms."
+                    )
+        return out
 
     def parse_term(depth: int = 0):
         nonlocal i
@@ -5592,6 +5635,10 @@ def parse_anchor_expr_to_dnf(s: str) -> AnchorDNF:
                 break
             i += 1
             right = parse_term(depth)
+            if len(left) + len(right) > MAX_ANCHOR_DNF_TERMS:
+                raise ParseError(
+                    f"Expression too complex: more than {MAX_ANCHOR_DNF_TERMS} OR terms."
+                )
             left = left + right
         return left
 

@@ -4670,14 +4670,14 @@ def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
     }
 
 
-def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime) -> dict | None:
-    # Compute next due
+def _completion_compute_child_due(new: dict, kind: str):
     try:
         if kind == "anchor":
             child_due, meta, dnf = _compute_anchor_child_due(new)
         else:
             child_due, meta = _compute_cp_child_due(new)
             dnf = None
+        return child_due, meta, dnf
     except ValueError as e:
         _panel(
             "⛔ Chain error",
@@ -4696,16 +4696,16 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
         _print_task(new)
         return None
 
-    # Parse chainUntil once (you already do this later; do it early too or reuse)
+
+def _completion_until_or_fail(new: dict, now_utc: datetime) -> datetime | None | object:
     until_dt, err = _safe_parse_datetime(new.get("chainUntil"))
     if err:
         _panel(
             "⛔ Chain error", [("Reason", f"Invalid chainUntil: {err}")], kind="error"
         )
         _print_task(new)
-        return None
+        return False
 
-    # GUARD: chainUntil must be in future
     if until_dt:
         is_valid, err_msg = _validate_until_not_past(until_dt, now_utc)
         if not is_valid:
@@ -4715,39 +4715,47 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
                 kind="error",
             )
             _print_task(new)
-            return None
+            return False
+    return until_dt
 
-    # GUARD: if the computed next due would exceed chainUntil, stop here.
+
+def _completion_until_guard_or_stop(new: dict, child_due, until_dt, now_utc: datetime) -> bool:
     if until_dt and child_due > until_dt:
         _end_chain_summary(new, "Reached 'until' limit", now_utc)
         new["chain"] = "off"
         _print_task(new)
-        return None
+        return False
+    return True
 
-    if not child_due:
-        _panel(
-            "⛔ Chain error",
-            [("Reason", "Could not compute next due (no end date on parent)")],
-            kind="error",
-        )
-        _print_task(new)
-        return None
 
-    # GUARD: Warn if chain extends unreasonably far
-    if until_dt:
-        is_reasonable, warn_msg = _validate_chain_duration_reasonable(
-            child_due, until_dt, now_utc
-        )
-        if warn_msg and not is_reasonable:
-            _panel("⚠ Chain duration warning", [("Warning", warn_msg)], kind="warning")
+def _completion_require_child_due_or_fail(new: dict, child_due) -> bool:
+    if child_due:
+        return True
+    _panel(
+        "⛔ Chain error",
+        [("Reason", "Could not compute next due (no end date on parent)")],
+        kind="error",
+    )
+    _print_task(new)
+    return False
 
-    # Effective cap (max/until) -> numeric cap_no and finals for panel
+
+def _completion_warn_unreasonable_duration(new: dict, child_due, until_dt, now_utc: datetime) -> None:
+    if not until_dt:
+        return
+    is_reasonable, warn_msg = _validate_chain_duration_reasonable(
+        child_due, until_dt, now_utc
+    )
+    if warn_msg and not is_reasonable:
+        _panel("⚠ Chain duration warning", [("Warning", warn_msg)], kind="warning")
+
+
+def _completion_caps(kind: str, new: dict, child_due, dnf):
     cpmax = core.coerce_int(new.get("chainMax"), 0)
     until_dt = _dtparse(new.get("chainUntil"))
     cap_no = cpmax if cpmax else None
     finals = []
 
-    # Final (max) for cp
     if kind == "cp" and cpmax:
         try:
             fmax = _estimate_cp_final_by_max(new, child_due)
@@ -4755,7 +4763,6 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
                 finals.append(("max", fmax))
         except Exception:
             pass
-    # Final (max) for anchor
     if kind == "anchor" and cpmax:
         try:
             fmax = _estimate_anchor_final_by_max(new, child_due, dnf)
@@ -4775,12 +4782,38 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
             cap_no = min(cap_no, u_no) if cap_no else u_no
         if u_dt:
             finals.append(("until", u_dt))
+    return cpmax, until_dt, cap_no, finals, until_cap_no
 
-    # Stop if next would exceed cap
+
+def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, now_utc: datetime) -> bool:
     if cap_no and next_no > cap_no:
         _end_chain_summary(new, f"Reached cap #{cap_no}", now_utc, current_task=new)
         new["chain"] = "off"
         _print_task(new)
+        return False
+    return True
+
+
+def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime) -> dict | None:
+    computed = _completion_compute_child_due(new, kind)
+    if computed is None:
+        return None
+    child_due, meta, dnf = computed
+
+    until_dt = _completion_until_or_fail(new, now_utc)
+    if until_dt is False:
+        return None
+
+    if not _completion_until_guard_or_stop(new, child_due, until_dt, now_utc):
+        return None
+
+    if not _completion_require_child_due_or_fail(new, child_due):
+        return None
+
+    _completion_warn_unreasonable_duration(new, child_due, until_dt, now_utc)
+    cpmax, until_dt, cap_no, finals, until_cap_no = _completion_caps(kind, new, child_due, dnf)
+
+    if not _completion_cap_guard_or_stop(new, next_no, cap_no, now_utc):
         return None
 
     return {

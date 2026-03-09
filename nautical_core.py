@@ -5322,6 +5322,119 @@ class YearTokenFormatError(ParseError):
     pass
 
 
+def _yearly_pair_from_fmt(a: int, b: int, fmt: str) -> tuple[int, int]:
+    # returns (day, month)
+    return (b, a) if fmt == "MD" else (a, b)
+
+
+def _yearly_mmdd_error(mm: int, dd: int) -> str | None:
+    if not (1 <= mm <= 12):
+        return f"month '{mm:02d}' is invalid"
+    if not (1 <= dd <= 31):
+        return f"day '{dd:02d}' is invalid"
+    return None
+
+
+def _validate_yearly_token_allowlist(tok: str, fmt: str) -> None:
+    s = tok
+
+    # Allow 'rand' and 'rand-XX'
+    if s == "rand" or re.fullmatch(r"rand-\d{2}", s):
+        return
+
+    # FATAL: numeric with ':' (e.g., '05:15' or '05:01:06:30')
+    if re.fullmatch(r"\d{2}:\d{2}(?::\d{2}:\d{2})?", s):
+        example = "06-01" if fmt == "MD" else "01-06"
+        raise YearTokenFormatError(
+            f"Yearly token '{tok}' uses ':' between numbers. "
+            f"Use '-' and order per ANCHOR_YEAR_FMT={fmt}. Example: '{example}'."
+        )
+
+    # Accept standard numeric day-month (single or range) — parser ensures order (MD/DM)
+    if re.fullmatch(r"\d{2}-\d{2}(?:\.\.\d{2}-\d{2})?", s):
+        return
+
+    # Accept month aliases and month..month; rewritten downstream
+    if re.fullmatch(r"(?:[a-z]{3}|\d{2})\.\.(?:[a-z]{3}|\d{2})", s):
+        return
+    if re.fullmatch(r"[a-z]{3}", s):  # 'apr', 'jul'
+        return
+
+    # Accept quarters (rewritten earlier)
+    if re.fullmatch(r"q[1-4](?:\.\.q[1-4])?", s):
+        return
+
+    # Everything else is invalid
+    raise YearTokenFormatError(f"Unknown yearly token '{tok}'. Expected day-month, month alias, or quarter.")
+
+
+def _validate_yearly_token_detailed(tok: str, fmt: str) -> tuple[str, str] | None:
+    s = tok.strip().lower()
+
+    if s == "rand":
+        return None
+
+    m_randm = re.fullmatch(r"rand-(\d{2})", s)
+    if m_randm:
+        mm = int(m_randm.group(1))
+        if 1 <= mm <= 12:
+            return None
+        raise YearTokenFormatError(f"Invalid month in yearly token '{tok}'. Expected 01..12.")
+
+    # Proper numeric tokens: DD-MM or MM-DD, with optional range tail (V2 '..')
+    m = re.fullmatch(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$", s)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        d1, m1 = _yearly_pair_from_fmt(a, b, fmt)
+        err = _yearly_mmdd_error(m1, d1)
+        if err:
+            return tok, err
+        if m.group(3):
+            c, d = int(m.group(3)), int(m.group(4))
+            d2, m2 = _yearly_pair_from_fmt(c, d, fmt)
+            err2 = _yearly_mmdd_error(m2, d2)
+            if err2:
+                return tok, err2
+            if (m2, d2) < (m1, d1):
+                return tok, "end precedes start"
+        return None
+
+    # colon-only separators like '05:15' or '05:15:06:20' -> friendly error
+    m_col1 = re.fullmatch(r"(\d{2}):(\d{2})$", s)
+    m_col2 = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2}):(\d{2})$", s)
+    if m_col1 or m_col2:
+        if m_col1:
+            A, B = int(m_col1.group(1)), int(m_col1.group(2))
+            ex = f"{A:02d}-{B:02d}" if fmt == "MD" else f"{B:02d}-{A:02d}"
+        else:
+            A, B, C, D = map(int, m_col2.groups())
+            ex = (
+                f"{A:02d}-{B:02d}..{C:02d}-{D:02d}"
+                if fmt == "MD"
+                else f"{B:02d}-{A:02d}..{D:02d}-{C:02d}"
+            )
+        raise YearTokenFormatError(
+            f"Yearly token '{tok}' uses ':' between numbers. "
+            f"Use '-' and order per ANCHOR_YEAR_FMT={fmt}. Example: '{ex}'."
+        )
+
+    if ":" in s:
+        raise YearTokenFormatError(
+            "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."
+        )
+
+    # If it looks numeric-ish but didn’t match the proper pattern, nudge with a general hint.
+    if any(ch.isdigit() for ch in s) and any(ch in s for ch in "-:"):
+        ex = "MM-DD" if fmt == "MD" else "DD-MM"
+        raise YearTokenFormatError(
+            f"Yearly token '{tok}' doesn’t match ANCHOR_YEAR_FMT={fmt}. "
+            f"Expected {ex} or {ex}..{ex}."
+        )
+
+    # Non-numeric tokens (e.g., month names/quarters) are rewritten earlier and can pass here.
+    return None
+
+
 def _validate_yearly_token_format(spec: str):
     """
     Enforce yearly numeric format and known allowances.
@@ -5334,108 +5447,13 @@ def _validate_yearly_token_format(spec: str):
     tokens = _split_csv_lower(spec)
 
     for tok in tokens:
-        s = tok
-
-        # Allow 'rand' and 'rand-XX'
-        if s == "rand" or re.fullmatch(r"rand-\d{2}", s):
-            continue
-
-        # FATAL: numeric with ':' (e.g., '05:15' or '05:01:06:30')
-        if re.fullmatch(r"\d{2}:\d{2}(?::\d{2}:\d{2})?", s):
-            example = "06-01" if fmt == "MD" else "01-06"
-            raise YearTokenFormatError(
-                f"Yearly token '{tok}' uses ':' between numbers. "
-                f"Use '-' and order per ANCHOR_YEAR_FMT={fmt}. Example: '{example}'."
-            )
-
-        # Accept standard numeric day-month (single or range) — parser ensures order (MD/DM)
-        if re.fullmatch(r"\d{2}-\d{2}(?:\.\.\d{2}-\d{2})?", s):
-            continue
-
-        # Accept month aliases and month..month; rewritten downstream
-        if re.fullmatch(r"(?:[a-z]{3}|\d{2})\.\.(?:[a-z]{3}|\d{2})", s):
-            continue
-        if re.fullmatch(r"[a-z]{3}", s):  # 'apr', 'jul'
-            continue
-
-        # Accept quarters (rewritten earlier)
-        if re.fullmatch(r"q[1-4](?:\.\.q[1-4])?", s):
-            continue
-
-        # Everything else is invalid
-        raise YearTokenFormatError(f"Unknown yearly token '{tok}'. Expected day-month, month alias, or quarter.")
+        _validate_yearly_token_allowlist(tok, fmt)
     bad = None
 
-    def _pair(a:int, b:int) -> tuple[int,int]:  # returns (day, month)
-        return (b, a) if fmt == "MD" else (a, b)
-
-    def _check(mm:int, dd:int) -> str | None:
-        if not (1 <= mm <= 12):
-            return f"month '{mm:02d}' is invalid"
-        if not (1 <= dd <= 31):
-            return f"day '{dd:02d}' is invalid"
-        return None
-
     for tok in tokens:
-        s = tok.strip().lower()
-
-        if s == "rand":
-            continue
-        m_randm = re.fullmatch(r"rand-(\d{2})", s)
-        if m_randm:
-            mm = int(m_randm.group(1))
-            if 1 <= mm <= 12:
-                continue
-            raise YearTokenFormatError(f"Invalid month in yearly token '{tok}'. Expected 01..12.")
-
-
-        # Proper numeric tokens: DD-MM or MM-DD, with optional range tail (V2 '..')
-        m = re.fullmatch(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$", s)
-        if m:
-            a, b = int(m.group(1)), int(m.group(2))
-            d1, m1 = _pair(a, b)
-            err = _check(m1, d1)
-            if err:
-                bad = (tok, err); break
-            if m.group(3):
-                c, d = int(m.group(3)), int(m.group(4))
-                d2, m2 = _pair(c, d)
-                err2 = _check(m2, d2)
-                if err2:
-                    bad = (tok, err2); break
-                if (m2, d2) < (m1, d1):
-                    bad = (tok, "end precedes start"); break
-            continue
-
-        # NEW: colon-only separators like '05:15' or '05:15:06:20' → friendly error
-        m_col1 = re.fullmatch(r"(\d{2}):(\d{2})$", s)
-        m_col2 = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2}):(\d{2})$", s)
-        if m_col1 or m_col2:
-            if m_col1:
-                A, B = int(m_col1.group(1)), int(m_col1.group(2))
-                ex = f"{A:02d}-{B:02d}" if fmt == "MD" else f"{B:02d}-{A:02d}"
-            else:
-                A, B, C, D = map(int, m_col2.groups())
-                ex = (f"{A:02d}-{B:02d}..{C:02d}-{D:02d}" if fmt == "MD"
-                      else f"{B:02d}-{A:02d}..{D:02d}-{C:02d}")
-            raise YearTokenFormatError(
-                f"Yearly token '{tok}' uses ':' between numbers. "
-                f"Use '-' and order per ANCHOR_YEAR_FMT={fmt}. Example: '{ex}'."
-            )
-
-        if ":" in s:
-            raise YearTokenFormatError(
-                f"Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."
-            )
-
-        # If it looks numeric-ish but didn’t match the proper pattern, nudge with a general hint
-        if any(ch.isdigit() for ch in s) and any(ch in s for ch in "-:"):
-            ex = "MM-DD" if fmt == "MD" else "DD-MM"
-            raise YearTokenFormatError(
-                f"Yearly token '{tok}' doesn’t match ANCHOR_YEAR_FMT={fmt}. "
-                f"Expected {ex} or {ex}..{ex}."
-            )
-        # Non-numeric tokens (e.g., month names/quarters) are rewritten earlier and can pass here
+        bad = _validate_yearly_token_detailed(tok, fmt)
+        if bad:
+            break
 
     if bad:
         tok, reason = bad

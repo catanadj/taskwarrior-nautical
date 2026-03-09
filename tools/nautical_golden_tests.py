@@ -2392,6 +2392,28 @@ def test_parser_validation():
             assert expected_error.lower() in str(e).lower(), \
                 f"{expr}: wrong error message. Got: {e}"
 
+def test_yearly_token_format_characterization():
+    """Yearly token format validator should preserve key error surfaces and allowances."""
+    cases = [
+        ("y:05:15", "Yearly token '05:15' uses ':' between numbers. Use '-' and order per ANCHOR_YEAR_FMT=MD. Example: '06-01'."),
+        ("y:01-01:12-31", "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."),
+        ("y:13-01", "Yearly token '13-01' doesn’t match ANCHOR_YEAR_FMT=MD. month '13' is invalid. Did you mean MM-DD? e.g., '04-20'."),
+        ("y:01-32", "Yearly token '01-32' doesn’t match ANCHOR_YEAR_FMT=MD. day '32' is invalid. Did you mean MM-DD? e.g., '04-20'."),
+        ("y:04-20..03-10", "Yearly token '04-20..03-10' doesn’t match ANCHOR_YEAR_FMT=MD. end precedes start. Did you mean MM-DD? e.g., '04-20'."),
+        ("y:rand-13", "Invalid month in yearly token 'rand-13'. Expected 01..12."),
+    ]
+    for expr, expected in cases:
+        try:
+            core.validate_anchor_expr_strict(expr)
+            raise AssertionError(f"{expr}: expected ParseError")
+        except core.ParseError as e:
+            msg = str(e)
+            expect(msg.startswith(expected), f"{expr}: expected prefix {expected!r}, got {msg!r}")
+
+    # Existing permissive behavior for three-letter aliases/quarters should remain.
+    _must_parse("y:foo")
+    _must_parse("y:q1..q2")
+
 def test_natural_language_comprehensive():
     """Test natural language generation for various patterns"""
     test_cases = [
@@ -5033,6 +5055,7 @@ TESTS = [
     test_natural_compresses_repeated_within_variants,
     test_natural_compresses_repeated_fall_on_variants,
     test_parser_validation,
+    test_yearly_token_format_characterization,
     test_cache_consistency,
     test_yearly_rand_natural_and_bounds,
     test_yearly_month_aliases_and_ranges,

@@ -1845,6 +1845,38 @@ def test_health_check_critical_queue_db_rows():
         metrics = obj.get("metrics") or {}
         expect(int(metrics.get("queue_db_rows") or 0) == 1, f"expected queue_db_rows=1, got {metrics}")
 
+
+def test_perf_budget_config_covers_cache_io_checks():
+    """Perf budget config should include explicit cache save/load check budgets."""
+    cfg_path = Path(ROOT) / "tools" / "perf_budget.json"
+    obj = json.loads(cfg_path.read_text(encoding="utf-8"))
+    budgets = obj.get("budgets_seconds") if isinstance(obj, dict) else None
+    workload = obj.get("workload") if isinstance(obj, dict) else None
+    expect(isinstance(budgets, dict), "budgets_seconds must be present")
+    expect(isinstance(workload, dict), "workload must be present")
+    expect("cache_save" in budgets, "cache_save budget missing")
+    expect("cache_load_hot" in budgets, "cache_load_hot budget missing")
+    expect("cache_save_rounds" in workload, "cache_save_rounds missing from workload")
+    expect("cache_load_rounds" in workload, "cache_load_rounds missing from workload")
+
+
+def test_deploy_sanity_script_reports_ok():
+    """Deployment sanity script should pass on repo-local hooks/core."""
+    path = os.path.join(ROOT, "tools", "nautical_deploy_sanity.py")
+    p = subprocess.run(
+        [sys.executable, path, "--json"],
+        text=True,
+        capture_output=True,
+        timeout=12.0,
+    )
+    expect(p.returncode == 0, f"deploy sanity returned {p.returncode}: stderr={p.stderr!r}")
+    obj = json.loads((p.stdout or "").strip() or "{}")
+    expect(obj.get("status") == "ok", f"unexpected deploy sanity status: {obj}")
+    results = obj.get("results") if isinstance(obj.get("results"), list) else []
+    expect(results, "deploy sanity should report per-check results")
+    expect(all(bool(r.get("ok")) for r in results if isinstance(r, dict)), f"failing sanity result: {results}")
+
+
 def test_ops_templates_present_and_runner_executable():
     """ops templates should exist and runner script should be executable."""
     ops = os.path.join(ROOT, "tools", "ops")
@@ -2778,6 +2810,29 @@ def test_parser_validation():
         except core.ParseError as e:
             assert expected_error.lower() in str(e).lower(), \
                 f"{expr}: wrong error message. Got: {e}"
+
+
+def test_yearly_spec_token_helper_accepts_known_valid_tokens():
+    """Yearly token helper should accept canonical quarter/date forms."""
+    for tok in ("q1", "q2s", "q1..q2", "q1s..q2s", "01-01", "01-01..31-12"):
+        core._validate_yearly_spec_token(tok)
+
+
+def test_yearly_spec_token_helper_rejects_bad_ranges():
+    """Yearly token helper should reject malformed or cross-year-like tokens."""
+    bad = (
+        ("3..4", "incomplete"),
+        ("13", "Invalid month"),
+        ("q3..q1", "end quarter precedes start quarter"),
+        ("20-04..10-03", "cross-year ranges"),
+    )
+    for tok, expected in bad:
+        try:
+            core._validate_yearly_spec_token(tok)
+            raise AssertionError(f"{tok}: expected ParseError")
+        except core.ParseError as e:
+            expect(expected.lower() in str(e).lower(), f"{tok}: unexpected message: {e}")
+
 
 def test_yearly_token_format_characterization():
     """Yearly token format validator should preserve key error surfaces and allowances."""
@@ -5842,6 +5897,8 @@ TESTS = [
     test_natural_compresses_repeated_fall_on_variants,
     test_rand_bucket_signature_characterization,
     test_parser_validation,
+    test_yearly_spec_token_helper_accepts_known_valid_tokens,
+    test_yearly_spec_token_helper_rejects_bad_ranges,
     test_yearly_token_format_characterization,
     test_cache_consistency,
     test_parse_cache_returns_isolated_dnf_instances,
@@ -5860,6 +5917,7 @@ TESTS = [
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_task_runner_handles_nonzero,
     test_hook_run_task_falls_back_when_core_load_fails,
+    test_on_add_run_task_falls_back_when_core_load_fails,
     test_spawn_child_verifies_even_when_verify_import_disabled,
     test_core_run_task_tempfiles_accepts_text_input,
     test_core_run_task_timeout_reports_timeout_with_tempfiles,
@@ -5881,8 +5939,10 @@ TESTS = [
     test_on_modify_queue_repairs_permissions,
     test_on_exit_repairs_queue_and_dead_letter_permissions,
     test_on_exit_timeouts_configurable,
+    test_on_exit_queue_db_connect_retries_and_scales_busy_timeout,
     test_diag_log_rotation_bounds,
     test_diag_log_redacts_sensitive_fields,
+    test_hook_diag_redact_msg_masks_sensitive_json_fields,
     test_diag_log_structured_fields,
     test_on_exit_requeues_when_task_lock_recent,
     test_core_cache_dir_and_lock_permissions,
@@ -5897,6 +5957,8 @@ TESTS = [
     test_health_check_json_ok_empty_taskdata,
     test_health_check_critical_queue_bytes,
     test_health_check_critical_queue_db_rows,
+    test_perf_budget_config_covers_cache_io_checks,
+    test_deploy_sanity_script_reports_ok,
     test_ops_templates_present_and_runner_executable,
     test_on_modify_queue_full_drops_with_dead_letter,
     test_on_modify_enqueue_uses_sqlite_when_legacy_empty,
@@ -5904,6 +5966,7 @@ TESTS = [
     test_on_modify_chain_export_timeout_scales,
     test_tw_export_chain_extra_validation,
     test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
+    test_on_add_tw_export_chain_extra_validation,
     test_on_modify_chain_cache_thread_safety_smoke,
     test_next_for_and_no_progress_fails_fast,
     test_next_for_and_transient_stall_recovers,
@@ -5994,6 +6057,7 @@ TESTS = [
     test_rand_determinism_with_seed,
     test_next_after_expr_branch_characterization,
     test_on_exit_lock_failure_keeps_queue,
+    test_on_exit_local_safe_lock_fails_closed_on_network_mount_without_fcntl,
     test_on_exit_queue_streaming_line_cap,
     test_on_exit_queue_rotate_then_drain,
     test_on_exit_dead_letter_rotation,

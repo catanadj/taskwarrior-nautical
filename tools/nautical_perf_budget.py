@@ -18,7 +18,9 @@ import json
 import os
 import statistics
 import sys
+import tempfile
 import time
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
@@ -99,6 +101,69 @@ def _bench_cache_key_hot(exprs: list[str], rounds: int) -> float:
     return time.perf_counter() - t0
 
 
+@contextmanager
+def _perf_cache_context():
+    """Isolate cache I/O benchmarks from user cache directories."""
+    saved_enable = bool(getattr(core, "ENABLE_ANCHOR_CACHE", False))
+    saved_override = str(getattr(core, "ANCHOR_CACHE_DIR_OVERRIDE", "") or "")
+    saved_cache_dir = getattr(core, "_CACHE_DIR", None)
+    saved_ttl = int(getattr(core, "ANCHOR_CACHE_TTL", 0) or 0)
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-cache-") as td:
+        try:
+            core.ENABLE_ANCHOR_CACHE = True
+            core.ANCHOR_CACHE_DIR_OVERRIDE = td
+            core.ANCHOR_CACHE_TTL = 0
+            core._CACHE_DIR = None
+            _clear_caches()
+            yield td
+        finally:
+            core.ENABLE_ANCHOR_CACHE = saved_enable
+            core.ANCHOR_CACHE_DIR_OVERRIDE = saved_override
+            core.ANCHOR_CACHE_TTL = saved_ttl
+            core._CACHE_DIR = saved_cache_dir
+            _clear_caches()
+
+
+def _cache_payload(expr: str, idx: int) -> dict:
+    return {
+        "natural": expr,
+        "next_dates": ["2026-01-01", "2026-01-08", "2026-01-15"],
+        "meta": {"i": idx},
+        # Keep payload shape aligned with cache schema checks.
+        "dnf": [[{"typ": "w", "spec": "mon", "mods": {}}]],
+    }
+
+
+def _bench_cache_save(exprs: list[str], rounds: int) -> float:
+    with _perf_cache_context():
+        keys = [f"perf-save-{i}" for i in range(max(1, len(exprs)))]
+        t0 = time.perf_counter()
+        idx = 0
+        for _ in range(rounds):
+            for i, expr in enumerate(exprs):
+                payload = _cache_payload(expr, idx)
+                if not core.cache_save(keys[i], payload):
+                    raise RuntimeError("cache_save benchmark write failed")
+                idx += 1
+        return time.perf_counter() - t0
+
+
+def _bench_cache_load_hot(exprs: list[str], rounds: int) -> float:
+    with _perf_cache_context():
+        keys = [f"perf-load-{i}" for i in range(max(1, len(exprs)))]
+        for i, expr in enumerate(exprs):
+            if not core.cache_save(keys[i], _cache_payload(expr, i)):
+                raise RuntimeError("cache_load benchmark setup write failed")
+        _clear_caches()
+        t0 = time.perf_counter()
+        for _ in range(rounds):
+            for key in keys:
+                obj = core.cache_load(key)
+                if not isinstance(obj, dict):
+                    raise RuntimeError("cache_load benchmark read failed")
+        return time.perf_counter() - t0
+
+
 def _measure(name: str, fn, repeats: int) -> dict:
     samples = []
     # Warmup once for interpreter/cache stabilization.
@@ -135,6 +200,8 @@ def main() -> int:
     next_after_rounds = int(workload.get("next_after_rounds", 220))
     hints_rounds = int(workload.get("build_hints_rounds", 180))
     cache_key_rounds = int(workload.get("cache_key_rounds", 2500))
+    cache_save_rounds = int(workload.get("cache_save_rounds", 120))
+    cache_load_rounds = int(workload.get("cache_load_rounds", 300))
 
     checks = [
         ("parse_validate", lambda: _bench_parse_validate(exprs, parse_rounds)),
@@ -142,6 +209,8 @@ def main() -> int:
         ("next_after", lambda: _bench_next_after(exprs, next_after_rounds)),
         ("build_hints", lambda: _bench_build_hints(exprs, hints_rounds)),
         ("cache_key_hot", lambda: _bench_cache_key_hot(exprs, cache_key_rounds)),
+        ("cache_save", lambda: _bench_cache_save(exprs, cache_save_rounds)),
+        ("cache_load_hot", lambda: _bench_cache_load_hot(exprs, cache_load_rounds)),
     ]
 
     results = {}

@@ -6087,6 +6087,158 @@ def _validate_yearly_token(tok: str):
         raise ParseError(f"Unknown yearly token '{tok}'")
 
 
+_YEARLY_MONTH_MAX = {
+    1: 31,
+    2: 29,
+    3: 31,
+    4: 30,
+    5: 31,
+    6: 30,
+    7: 31,
+    8: 31,
+    9: 30,
+    10: 31,
+    11: 30,
+    12: 31,
+}
+_YEARLY_QUARTER_RE = re.compile(r"^q[1-4][sme]?$")
+_YEARLY_QUARTER_RANGE_RE = re.compile(r"^(q[1-4])([sme])?\.\.(q[1-4])([sme])?$")
+_YEARLY_MONTH_ONLY_RE = re.compile(r"^\d{1,2}$")  # '3' or '03'
+_YEARLY_MONTH_RANGE_ONLY_RE = re.compile(r"^\d{1,2}\.\.\d{1,2}$")  # '3..4'
+_YEARLY_NON_PADDED_DM_RE = re.compile(r"^\d{1,2}-\d{1,2}(?:\.\.\d{1,2}-\d{1,2})?$")
+_YEARLY_PADDED_DM_RE = re.compile(
+    r"^(?P<d1>\d{2})-(?P<m1>\d{2})(?:\.\.(?P<d2>\d{2})-(?P<m2>\d{2}))?$"
+)
+
+
+def _yearly_last_day(mm: int) -> int:
+    return _YEARLY_MONTH_MAX.get(mm, 31)
+
+
+def _yearly_check_day_month(dd: int, mm: int, label: str, tok: str) -> None:
+    if mm < 1 or mm > 12:
+        raise ParseError(
+            f"Invalid month '{mm:02d}' in '{tok}' ({label}). Months must be 01..12."
+        )
+    maxd = _yearly_last_day(mm)
+    if dd < 1 or dd > maxd:
+        near = maxd if dd > maxd else 1
+        hint = f" {_MONTH_FULL[mm]} has {maxd} days."
+        sug1 = f"{near:02d}-{mm:02d}"
+        sug2 = f"01-{mm:02d}..{maxd:02d}-{mm:02d}"
+        raise ParseError(
+            f"Invalid day '{dd:02d}' for month '{mm:02d}' in '{tok}' ({label}).{hint} "
+            f"Try '{sug1}' or '{sug2}'."
+        )
+
+
+def _validate_yearly_spec_token(tok: str) -> None:
+    if ":" in tok:
+        raise ParseError(
+            "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."
+        )
+    # --- Quarters (single) ---
+    if _YEARLY_QUARTER_RE.fullmatch(tok):
+        return
+
+    # --- Quarter ranges like 'q1..q2' (monotonic only) ---
+    m = _YEARLY_QUARTER_RANGE_RE.fullmatch(tok)
+    if m:
+        q_from = int(m.group(1)[1])
+        q_to = int(m.group(3)[1])
+        suf_from = m.group(2) or ""
+        suf_to = m.group(4) or ""
+        if suf_from != suf_to:
+            raise ParseError(
+                f"Invalid quarter range '{tok}': suffixes must match "
+                "(use q1s..q2s or q1..q2)."
+            )
+        if q_to < q_from:
+            raise ParseError(
+                f"Invalid quarter range '{tok}': end quarter precedes start quarter. "
+                f"Split across the year boundary, e.g., 'q{q_from}, q{q_to}'."
+            )
+        return
+
+    # --- Month-only like '03' → suggest full month ---
+    if _YEARLY_MONTH_ONLY_RE.match(tok):
+        mm = int(tok)
+        if not (1 <= mm <= 12):
+            raise ParseError(
+                f"Invalid month '{tok}'. Months must be 01..12. "
+                f"Try '{mm:02d}' or the full-month form '01-{mm:02d}..{_yearly_last_day(mm):02d}-{mm:02d}'."
+            )
+        raise ParseError(
+            f"Yearly token '{tok}' is incomplete. Did you mean the full month? "
+            f"Try '01-{mm:02d}..{_yearly_last_day(mm):02d}-{mm:02d}'."
+        )
+
+    # --- 'MM..MM' → suggest full multi-month range with proper end day ---
+    if _YEARLY_MONTH_RANGE_ONLY_RE.match(tok):
+        m1, m2 = (int(x) for x in tok.split("..", 1))
+        if not (1 <= m1 <= 12 and 1 <= m2 <= 12):
+            raise ParseError(
+                f"Invalid month range '{tok}'. Months must be 01..12. "
+                f"Try '01-{m1:02d}..{_yearly_last_day(m2):02d}-{m2:02d}'."
+            )
+        if m2 < m1:
+            left = f"01-{m1:02d}..31-12"
+            right = f"01-01..{_yearly_last_day(m2):02d}-{m2:02d}"
+            raise ParseError(
+                f"Invalid month range '{tok}': end month is before start month. "
+                f"Split across years, e.g., '{left}, {right}'."
+            )
+        raise ParseError(
+            f"Yearly token '{tok}' is incomplete. Did you mean a full multi-month range? "
+            f"Try '01-{m1:02d}..{_yearly_last_day(m2):02d}-{m2:02d}'."
+        )
+
+    # --- Zero-padding guidance for DM or DM..DM ---
+    if _YEARLY_NON_PADDED_DM_RE.match(tok) and not _YEARLY_PADDED_DM_RE.match(tok):
+        pieces = re.split(r"-|\\.\\.", tok)
+        padded = "..".join(
+            [f"{int(pieces[0]):02d}-{int(pieces[1]):02d}"]
+            + (
+                [f"{int(pieces[2]):02d}-{int(pieces[3]):02d}"]
+                if len(pieces) == 4
+                else []
+            )
+        )
+        raise ParseError(
+            f"Invalid yearly token '{tok}'. Use zero-padded 'DD-MM' or 'DD-MM..DD-MM'. "
+            f"Try '{padded}'."
+        )
+
+    # --- Fully padded DM or DM..DM → validate content/order ---
+    m = _YEARLY_PADDED_DM_RE.match(tok)
+    if not m:
+        raise ParseError(
+            f"Unknown yearly token '{tok}'. Expected 'DD-MM', 'DD-MM..DD-MM', "
+            f"or quarter aliases 'q1..q4'/'q1s/q1m/q1e' (e.g., 'q1', 'q1s', 'q1..q2')."
+        )
+
+    d1 = int(m.group("d1"))
+    m1 = int(m.group("m1"))
+    d2g = m.group("d2")
+    m2g = m.group("m2")
+
+    if d2g is None and m2g is None:
+        _yearly_check_day_month(d1, m1, "single day", tok)
+        return
+
+    d2 = int(d2g)
+    m2 = int(m2g)
+    _yearly_check_day_month(d1, m1, "range start", tok)
+    _yearly_check_day_month(d2, m2, "range end", tok)
+    if (m2, d2) < (m1, d1):
+        left = f"{d1:02d}-{m1:02d}..31-12"
+        right = f"01-01..{d2:02d}-{m2:02d}"
+        raise ParseError(
+            f"Invalid range '{tok}': start must be on/before end; cross-year ranges "
+            f"aren't supported. Try splitting: '{left}, {right}'."
+        )
+
+
 def _validate_yearly_spec(spec: str):
     """
     Valid yearly tokens (comma-separated):
@@ -6102,155 +6254,8 @@ def _validate_yearly_spec(spec: str):
     toks = _split_csv_lower(spec)
     if not toks:
         raise ParseError("Empty yearly spec")
-
-    MONTH_MAX = {
-        1: 31,
-        2: 29,
-        3: 31,
-        4: 30,
-        5: 31,
-        6: 30,
-        7: 31,
-        8: 31,
-        9: 30,
-        10: 31,
-        11: 30,
-        12: 31,
-    }
-    _quarter_re = re.compile(r"^q[1-4][sme]?$")
-    _quarter_range_re = re.compile(r"^(q[1-4])([sme])?\.\.(q[1-4])([sme])?$")
-
-    def _last_day(mm: int) -> int:
-        return MONTH_MAX.get(mm, 31)
-
-    def _check_day_month(dd: int, mm: int, label: str, tok: str):
-        if mm < 1 or mm > 12:
-            raise ParseError(
-                f"Invalid month '{mm:02d}' in '{tok}' ({label}). Months must be 01..12."
-            )
-        maxd = _last_day(mm)
-        if dd < 1 or dd > maxd:
-            near = maxd if dd > maxd else 1
-            hint = f" {_MONTH_FULL[mm]} has {maxd} days."
-            sug1 = f"{near:02d}-{mm:02d}"
-            sug2 = f"01-{mm:02d}..{maxd:02d}-{mm:02d}"
-            raise ParseError(
-                f"Invalid day '{dd:02d}' for month '{mm:02d}' in '{tok}' ({label}).{hint} "
-                f"Try '{sug1}' or '{sug2}'."
-            )
-
-    _month_only = re.compile(r"^\d{1,2}$")  # '3' or '03'
-    _month_range_only = re.compile(r"^\d{1,2}\.\.\d{1,2}$")  # '3..4'
-    _non_padded_dm = re.compile(r"^\d{1,2}-\d{1,2}(?:\.\.\d{1,2}-\d{1,2})?$")
-    _padded_dm = re.compile(
-        r"^(?P<d1>\d{2})-(?P<m1>\d{2})(?:\.\.(?P<d2>\d{2})-(?P<m2>\d{2}))?$"
-    )
-
     for tok in toks:
-        if ":" in tok:
-            raise ParseError(
-                "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."
-            )
-        # --- Quarters (single) ---
-        if _quarter_re.fullmatch(tok):
-            continue
-
-        # --- Quarter ranges like 'q1..q2' (monotonic only) ---
-        m = _quarter_range_re.fullmatch(tok)
-        if m:
-            q_from = int(m.group(1)[1])
-            q_to = int(m.group(3)[1])
-            suf_from = m.group(2) or ""
-            suf_to = m.group(4) or ""
-            if suf_from != suf_to:
-                raise ParseError(
-                    f"Invalid quarter range '{tok}': suffixes must match "
-                    "(use q1s..q2s or q1..q2)."
-                )
-            if q_to < q_from:
-                raise ParseError(
-                    f"Invalid quarter range '{tok}': end quarter precedes start quarter. "
-                    f"Split across the year boundary, e.g., 'q{q_from}, q{q_to}'."
-                )
-            continue
-
-        # --- Month-only like '03' → suggest full month ---
-        if _month_only.match(tok):
-            mm = int(tok)
-            if not (1 <= mm <= 12):
-                raise ParseError(
-                    f"Invalid month '{tok}'. Months must be 01..12. "
-                    f"Try '{mm:02d}' or the full-month form '01-{mm:02d}..{_last_day(mm):02d}-{mm:02d}'."
-                )
-            raise ParseError(
-                f"Yearly token '{tok}' is incomplete. Did you mean the full month? "
-                f"Try '01-{mm:02d}..{_last_day(mm):02d}-{mm:02d}'."
-            )
-
-        # --- 'MM..MM' → suggest full multi-month range with proper end day ---
-        if _month_range_only.match(tok):
-            m1, m2 = (int(x) for x in tok.split("..", 1))
-            if not (1 <= m1 <= 12 and 1 <= m2 <= 12):
-                raise ParseError(
-                    f"Invalid month range '{tok}'. Months must be 01..12. "
-                    f"Try '01-{m1:02d}..{_last_day(m2):02d}-{m2:02d}'."
-                )
-            if m2 < m1:
-                left = f"01-{m1:02d}..31-12"
-                right = f"01-01..{_last_day(m2):02d}-{m2:02d}"
-                raise ParseError(
-                    f"Invalid month range '{tok}': end month is before start month. "
-                    f"Split across years, e.g., '{left}, {right}'."
-                )
-            raise ParseError(
-                f"Yearly token '{tok}' is incomplete. Did you mean a full multi-month range? "
-                f"Try '01-{m1:02d}..{_last_day(m2):02d}-{m2:02d}'."
-            )
-
-        # --- Zero-padding guidance for DM or DM..DM ---
-        if _non_padded_dm.match(tok) and not _padded_dm.match(tok):
-            pieces = re.split(r"-|\\.\\.", tok)
-            padded = "..".join(
-                [f"{int(pieces[0]):02d}-{int(pieces[1]):02d}"]
-                + (
-                    [f"{int(pieces[2]):02d}-{int(pieces[3]):02d}"]
-                    if len(pieces) == 4
-                    else []
-                )
-            )
-            raise ParseError(
-                f"Invalid yearly token '{tok}'. Use zero-padded 'DD-MM' or 'DD-MM..DD-MM'. "
-                f"Try '{padded}'."
-            )
-
-        # --- Fully padded DM or DM..DM → validate content/order ---
-        m = _padded_dm.match(tok)
-        if not m:
-            raise ParseError(
-                f"Unknown yearly token '{tok}'. Expected 'DD-MM', 'DD-MM..DD-MM', "
-                f"or quarter aliases 'q1..q4'/'q1s/q1m/q1e' (e.g., 'q1', 'q1s', 'q1..q2')."
-            )
-
-        d1 = int(m.group("d1"))
-        m1 = int(m.group("m1"))
-        d2g = m.group("d2")
-        m2g = m.group("m2")
-
-        if d2g is None and m2g is None:
-            _check_day_month(d1, m1, "single day", tok)
-            continue
-
-        d2 = int(d2g)
-        m2 = int(m2g)
-        _check_day_month(d1, m1, "range start", tok)
-        _check_day_month(d2, m2, "range end", tok)
-        if (m2, d2) < (m1, d1):
-            left = f"{d1:02d}-{m1:02d}..31-12"
-            right = f"01-01..{d2:02d}-{m2:02d}"
-            raise ParseError(
-                f"Invalid range '{tok}': start must be on/before end; cross-year ranges "
-                f"aren't supported. Try splitting: '{left}, {right}'."
-            )
+        _validate_yearly_spec_token(tok)
 
 
 def _normalize_anchor_input_to_dnf(expr) -> AnchorDNF:

@@ -4304,6 +4304,47 @@ def test_on_modify_panel_fallback():
     expect("Test Panel" in out, "fallback panel should emit title")
 
 
+def test_core_render_panel_line_mode_uses_panel_line():
+    calls = []
+    orig_panel_line = core.panel_line
+    try:
+        def _fake_panel_line(title, line, **kwargs):
+            calls.append((title, line, kwargs.get("kind")))
+        core.panel_line = _fake_panel_line
+        core.render_panel("Title", [("Key", "Value")], kind="info", panel_mode="line")
+    finally:
+        core.panel_line = orig_panel_line
+
+    expect(len(calls) == 1, "line mode should route through panel_line once")
+    expect(calls[0][1] == "Title — Key: Value", f"unexpected line payload: {calls[0][1]!r}")
+
+
+def test_core_render_panel_line_force_rich_kind_skips_panel_line():
+    calls = []
+    orig_panel_line = core.panel_line
+    stderr = io.StringIO()
+    orig_stderr = sys.stderr
+    try:
+        def _fake_panel_line(title, line, **kwargs):
+            calls.append((title, line, kwargs.get("kind")))
+        core.panel_line = _fake_panel_line
+        sys.stderr = stderr
+        core.render_panel(
+            "Title",
+            [("Key", "Value")],
+            kind="preview_anchor",
+            panel_mode="line",
+            line_force_rich_kinds={"preview_anchor"},
+        )
+    finally:
+        sys.stderr = orig_stderr
+        core.panel_line = orig_panel_line
+
+    expect(not calls, "line-forced rich kind should bypass panel_line")
+    out = stderr.getvalue()
+    expect("Title" in out and "Key" in out, "promoted rich/fast path should emit fallback panel text")
+
+
 def test_on_exit_import_error_but_child_exists():
     """on-exit should proceed if import reports failure but child exists."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -5267,6 +5308,8 @@ TESTS = [
     test_on_add_format_anchor_rows_numbers_upcoming_from_three_with_next_anchor,
     test_on_add_format_anchor_rows_numbers_upcoming_from_two_without_next_anchor,
     test_on_modify_panel_fallback,
+    test_core_render_panel_line_mode_uses_panel_line,
+    test_core_render_panel_line_force_rich_kind_skips_panel_line,
     test_on_exit_import_error_but_child_exists,
     test_on_exit_parent_nextlink_changed_dead_letter,
     test_on_exit_parent_update_lock_busy_requeues,

@@ -671,6 +671,174 @@ def panel_line(
     )
 
 
+def _normalize_panel_mode(
+    panel_mode: str,
+    *,
+    kind: str,
+    allow_line: bool,
+    line_force_rich_kinds: set[str] | None,
+) -> str:
+    mode = str(panel_mode or "").strip().lower()
+    if mode in {"plain"}:
+        mode = "fast"
+    if mode == "line" and not allow_line:
+        mode = "rich"
+    if mode == "line" and line_force_rich_kinds and kind in line_force_rich_kinds:
+        mode = "rich"
+    return mode
+
+
+def _panel_label_width(rows, label_width_min: int, label_width_max: int) -> int:
+    label_w = 0
+    for k, _v in rows:
+        if k is None:
+            continue
+        klen = len(str(k))
+        if klen > label_w:
+            label_w = klen
+    return min(label_width_max, max(label_width_min, label_w))
+
+
+def _panel_style_for_row(k: str, v: str, *, palette: dict[str, str]) -> str | None:
+    lk = k.lower()
+    lsv = (v or "").lower()
+    if k.strip().lower() == "pattern":
+        return palette["CYAN"]
+    if "natural" in lk:
+        return palette["DIM"]
+    if k.strip().lower() in {"basis", "root"}:
+        return palette["DIM"]
+    if k.strip().lower() in {"first due", "next due"}:
+        if "overdue" in lsv or "late" in lsv:
+            return palette["RED"]
+        return palette["GREEN"]
+    if "warning" in lk:
+        return palette["YELLOW"]
+    if "error" in lk:
+        return palette["RED"]
+    if lk.startswith("chain"):
+        return palette["DIM"] + palette["GREEN"]
+    return None
+
+
+def _panel_emit_timeline_row(label: str, value: str, width: int, label_w: int) -> None:
+    prefix0 = f"{label:<{label_w}} "
+    lines = [ln for ln in value.splitlines() if ln.strip()] if "\n" in value else ([value] if value else [])
+    if lines:
+        emit_wrapped(prefix0, lines[0], width, style=None)
+        for ln in lines[1:]:
+            emit_wrapped(" " * len(prefix0), ln, width, style=None)
+        return
+    emit_wrapped(prefix0, "", width, style=None)
+
+
+def _render_panel_fast(
+    title,
+    rows,
+    *,
+    fast_color: bool,
+    label_width_min: int,
+    label_width_max: int,
+    force_color: bool | None = None,
+) -> None:
+    width = term_width_stderr()
+    use_color = fast_color_enabled(force=force_color, fast_color=fast_color)
+    palette = {
+        "RESET": ansi("0"),
+        "BOLD": ansi("1") if use_color else "",
+        "DIM": ansi("2") if use_color else "",
+        "CYAN": ansi("36") if use_color else "",
+        "GREEN": ansi("32") if use_color else "",
+        "RED": ansi("31") if use_color else "",
+        "YELLOW": ansi("33") if use_color else "",
+    }
+
+    delim = "─" * width
+    sys.stderr.write(delim + "\n")
+    sys.stderr.write(
+        (
+            palette["BOLD"]
+            + palette["CYAN"]
+            + strip_rich_markup(str(title))
+            + palette["RESET"]
+        )
+        + "\n"
+    )
+
+    label_w = _panel_label_width(rows, label_width_min, label_width_max)
+    for k, v in rows:
+        if k is None:
+            sys.stderr.write("\n")
+            continue
+
+        label = strip_rich_markup(str(k))
+        text = "" if v is None else strip_rich_markup(str(v))
+        if label.lower().startswith("timeline"):
+            _panel_emit_timeline_row(label, text, width, label_w)
+            continue
+
+        prefix = f"{label:<{label_w}} "
+        style = _panel_style_for_row(label, text, palette=palette)
+        emit_wrapped(prefix, text, width, style=style)
+
+    sys.stderr.write(delim + "\n")
+
+
+def _render_panel_rich(
+    title,
+    rows,
+    *,
+    kind: str,
+    themes: dict | None,
+) -> bool:
+    try:
+        if not sys.stderr.isatty():
+            raise RuntimeError("no tty")
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.text import Text
+    except Exception:
+        return False
+
+    theme = (themes or {}).get(kind) or (themes or {}).get("info") or {}
+    border = theme.get("border", "blue")
+    tstyle = theme.get("title", "cyan")
+    lstyle = theme.get("label", "cyan")
+
+    console = Console(file=sys.stderr, force_terminal=True)
+    t = Table.grid(padding=(0, 1), expand=False)
+    t.add_column(style=f"bold {lstyle}", no_wrap=True, justify="right")
+    t.add_column(style="white")
+
+    for k, v in rows:
+        if k is None:
+            t.add_row("", v or "")
+            continue
+
+        label_text = Text(str(k))
+        lk = str(k).lower()
+        if "warning" in lk:
+            label_text.stylize("bold yellow")
+        elif "error" in lk:
+            label_text.stylize("bold red")
+        elif "note" in lk:
+            label_text.stylize("italic cyan")
+
+        t.add_row(label_text, "" if v is None else str(v))
+
+    console.print(
+        Panel(
+            t,
+            title=Text(title, style=f"bold {tstyle}"),
+            border_style=border,
+            expand=False,
+            padding=(0, 1),
+        )
+    )
+    return True
+
+
 def render_panel(
     title,
     rows,
@@ -688,13 +856,12 @@ def render_panel(
     Render a panel using Rich or a fast fallback.
     """
     try:
-        mode = str(panel_mode or "").strip().lower()
-        if mode in {"plain"}:
-            mode = "fast"
-        if mode == "line" and not allow_line:
-            mode = "rich"
-        if mode == "line" and line_force_rich_kinds and kind in line_force_rich_kinds:
-            mode = "rich"
+        mode = _normalize_panel_mode(
+            panel_mode,
+            kind=kind,
+            allow_line=allow_line,
+            line_force_rich_kinds=line_force_rich_kinds,
+        )
 
         if mode == "line":
             line = panel_line_from_rows(title, rows)
@@ -703,187 +870,26 @@ def render_panel(
             return
 
         if mode == "fast":
-            width = term_width_stderr()
-            use_color = fast_color_enabled(fast_color=fast_color)
-            RESET = ansi("0")
-            BOLD = ansi("1") if use_color else ""
-            DIM = ansi("2") if use_color else ""
-            CYAN = ansi("36") if use_color else ""
-            GREEN = ansi("32") if use_color else ""
-            RED = ansi("31") if use_color else ""
-            YELLOW = ansi("33") if use_color else ""
-
-            delim = "─" * width
-            sys.stderr.write(delim + "\n")
-            sys.stderr.write((BOLD + CYAN + strip_rich_markup(str(title)) + RESET) + "\n")
-
-            keys = [str(k) for (k, _v) in rows if k is not None]
-            label_w = 0
-            for k in keys:
-                if len(k) > label_w:
-                    label_w = len(k)
-            label_w = min(label_width_max, max(label_width_min, label_w))
-
-            def _style_for_row(k: str, v: str) -> str | None:
-                lk = k.lower()
-                sv = (v or "")
-                lsv = sv.lower()
-                if k.strip().lower() == "pattern":
-                    return CYAN
-                if "natural" in lk:
-                    return DIM
-                if k.strip().lower() in {"basis", "root"}:
-                    return DIM
-                if k.strip().lower() in {"first due", "next due"}:
-                    if "overdue" in lsv or "late" in lsv:
-                        return RED
-                    return GREEN
-                if "warning" in lk:
-                    return YELLOW
-                if "error" in lk:
-                    return RED
-                if lk.startswith("chain"):
-                    return DIM + GREEN
-                return None
-
-            for k, v in rows:
-                if k is None:
-                    sys.stderr.write("\n")
-                    continue
-
-                k = strip_rich_markup(str(k))
-                v = "" if v is None else strip_rich_markup(str(v))
-
-                if k.lower().startswith("timeline"):
-                    prefix0 = f"{k:<{label_w}} "
-                    lines = [ln for ln in v.splitlines() if ln.strip() != ""] if "\n" in v else ([v] if v else [])
-                    if lines:
-                        emit_wrapped(prefix0, lines[0], width, style=None)
-                        for ln in lines[1:]:
-                            emit_wrapped(" " * len(prefix0), ln, width, style=None)
-                    else:
-                        emit_wrapped(prefix0, "", width, style=None)
-                    continue
-
-                prefix = f"{k:<{label_w}} "
-                style = _style_for_row(k, v)
-                emit_wrapped(prefix, v, width, style=style)
-
-            sys.stderr.write(delim + "\n")
+            _render_panel_fast(
+                title,
+                rows,
+                fast_color=fast_color,
+                label_width_min=label_width_min,
+                label_width_max=label_width_max,
+                force_color=None,
+            )
             return
 
         # Rich mode (default)
-        try:
-            if not sys.stderr.isatty():
-                raise RuntimeError("no tty")
-            from rich.console import Console
-            from rich.panel import Panel
-            from rich.table import Table
-            from rich.text import Text
-        except Exception:
-            width = term_width_stderr()
-            use_color = fast_color_enabled(force=False, fast_color=fast_color)
-            RESET = ansi("0")
-            BOLD = ansi("1") if use_color else ""
-            DIM = ansi("2") if use_color else ""
-            CYAN = ansi("36") if use_color else ""
-            GREEN = ansi("32") if use_color else ""
-            RED = ansi("31") if use_color else ""
-            YELLOW = ansi("33") if use_color else ""
-
-            delim = "─" * width
-            sys.stderr.write(delim + "\n")
-            sys.stderr.write((BOLD + CYAN + strip_rich_markup(str(title)) + RESET) + "\n")
-
-            keys = [str(k) for (k, _v) in rows if k is not None]
-            label_w = 0
-            for k in keys:
-                if len(k) > label_w:
-                    label_w = len(k)
-            label_w = min(label_width_max, max(label_width_min, label_w))
-
-            def _style_for_row(k: str, v: str) -> str | None:
-                lk = k.lower()
-                sv = (v or "")
-                lsv = sv.lower()
-                if k.strip().lower() == "pattern":
-                    return CYAN
-                if "natural" in lk:
-                    return DIM
-                if k.strip().lower() in {"basis", "root"}:
-                    return DIM
-                if k.strip().lower() in {"first due", "next due"}:
-                    if "overdue" in lsv or "late" in lsv:
-                        return RED
-                    return GREEN
-                if "warning" in lk:
-                    return YELLOW
-                if "error" in lk:
-                    return RED
-                if lk.startswith("chain"):
-                    return DIM + GREEN
-                return None
-
-            for k, v in rows:
-                if k is None:
-                    sys.stderr.write("\n")
-                    continue
-
-                k = strip_rich_markup(str(k))
-                v = "" if v is None else strip_rich_markup(str(v))
-
-                if k.lower().startswith("timeline"):
-                    prefix0 = f"{k:<{label_w}} "
-                    lines = [ln for ln in v.splitlines() if ln.strip() != ""] if "\n" in v else ([v] if v else [])
-                    if lines:
-                        emit_wrapped(prefix0, lines[0], width, style=None)
-                        for ln in lines[1:]:
-                            emit_wrapped(" " * len(prefix0), ln, width, style=None)
-                    else:
-                        emit_wrapped(prefix0, "", width, style=None)
-                    continue
-
-                prefix = f"{k:<{label_w}} "
-                style = _style_for_row(k, v)
-                emit_wrapped(prefix, v, width, style=style)
-
-            sys.stderr.write(delim + "\n")
+        if _render_panel_rich(title, rows, kind=kind, themes=themes):
             return
-
-        theme = (themes or {}).get(kind) or (themes or {}).get("info") or {}
-        border = theme.get("border", "blue")
-        tstyle = theme.get("title", "cyan")
-        lstyle = theme.get("label", "cyan")
-
-        console = Console(file=sys.stderr, force_terminal=True)
-        t = Table.grid(padding=(0, 1), expand=False)
-        t.add_column(style=f"bold {lstyle}", no_wrap=True, justify="right")
-        t.add_column(style="white")
-
-        for k, v in rows:
-            if k is None:
-                t.add_row("", v or "")
-                continue
-
-            label_text = Text(str(k))
-            lk = str(k).lower()
-            if "warning" in lk:
-                label_text.stylize("bold yellow")
-            elif "error" in lk:
-                label_text.stylize("bold red")
-            elif "note" in lk:
-                label_text.stylize("italic cyan")
-
-            t.add_row(label_text, "" if v is None else str(v))
-
-        console.print(
-            Panel(
-                t,
-                title=Text(title, style=f"bold {tstyle}"),
-                border_style=border,
-                expand=False,
-                padding=(0, 1),
-            )
+        _render_panel_fast(
+            title,
+            rows,
+            fast_color=fast_color,
+            label_width_min=label_width_min,
+            label_width_max=label_width_max,
+            force_color=False,
         )
     except Exception as e:
         try:

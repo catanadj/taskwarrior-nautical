@@ -539,6 +539,10 @@ def _clear_all_caches() -> None:
         expand_weekly_cached.cache_clear()
     except Exception:
         pass
+    try:
+        _cache_key_for_task_cached.cache_clear()
+    except Exception:
+        pass
 
 
 # -------- UI helpers ----------------------------------------------------------
@@ -1866,7 +1870,7 @@ def _normalize_spec_for_acf(typ: str, spec: str):
     """Comprehensive spec normalization (cached)."""
     res = _normalize_spec_for_acf_cached((typ or "").lower(), spec or "", _yearfmt())
     if isinstance(res, (list, dict)):
-        return copy.deepcopy(res)
+        return _clone_mod_value(res)
     return res
 
 def is_valid_acf(acf_str: str) -> bool:
@@ -2861,13 +2865,18 @@ def cache_save(key: str, obj: dict) -> None:
             except Exception:
                 pass
 
-def cache_key_for_task(anchor_expr: str, anchor_mode: str) -> str:
-    # Ephemeral canonical: never stored on the task, used only to build a stable key
+@_ttl_lru_cache(maxsize=1024)
+def _cache_key_for_task_cached(anchor_expr: str, anchor_mode: str, fmt: str) -> str:
+    _ = fmt  # cache key dimension; keeps keys correct across DM/MD flips
     try:
         acf = build_acf(anchor_expr)
     except Exception:
         acf = (anchor_expr or "").strip()
     return _cache_key(acf, anchor_mode or "")
+
+
+def cache_key_for_task(anchor_expr: str, anchor_mode: str) -> str:
+    return _cache_key_for_task_cached(anchor_expr or "", anchor_mode or "", _yearfmt())
 
 
 # ---- Core iterator over DNF ---------------------------------------------------

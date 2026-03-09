@@ -2431,6 +2431,34 @@ def test_build_and_cache_hints_returns_isolated_cached_payload():
         first_dnf[0][0]["spec"] = "fri"
         expect(second_dnf[0][0]["spec"] == "mon", "cached hint payload should be isolated per call")
 
+def test_cache_key_for_task_caches_build_acf_results():
+    """cache_key_for_task should memoize ACF work for repeated (expr, mode, fmt)."""
+    if hasattr(core, "_cache_key_for_task_cached"):
+        core._cache_key_for_task_cached.cache_clear()
+    calls = {"n": 0}
+    saved = core.build_acf
+    try:
+        def _stub_build_acf(expr: str) -> str:
+            calls["n"] += 1
+            return f"acf:{expr}"
+
+        core.build_acf = _stub_build_acf
+        k1 = core.cache_key_for_task("w:mon", "skip")
+        k2 = core.cache_key_for_task("w:mon", "skip")
+        expect(k1 == k2, "cache key should be stable for repeated inputs")
+        expect(calls["n"] == 1, f"expected one build_acf call, got {calls['n']}")
+
+        _ = core.cache_key_for_task("w:tue", "skip")
+        expect(calls["n"] == 2, "different expression should invoke build_acf once")
+
+        core._clear_all_caches()
+        _ = core.cache_key_for_task("w:mon", "skip")
+        expect(calls["n"] == 3, "clear-all-caches should reset cache_key_for_task memoization")
+    finally:
+        core.build_acf = saved
+        if hasattr(core, "_cache_key_for_task_cached"):
+            core._cache_key_for_task_cached.cache_clear()
+
 def test_parser_validation():
     """Test parser validation and error messages"""
     # Valid expressions that should parse
@@ -5254,6 +5282,7 @@ TESTS = [
     test_cache_consistency,
     test_parse_cache_returns_isolated_dnf_instances,
     test_build_and_cache_hints_returns_isolated_cached_payload,
+    test_cache_key_for_task_caches_build_acf_results,
     test_yearly_rand_natural_and_bounds,
     test_yearly_month_aliases_and_ranges,
     test_business_day_bd_skip_semantics,

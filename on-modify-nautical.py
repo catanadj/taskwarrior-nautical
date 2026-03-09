@@ -1150,85 +1150,121 @@ def _spawn_queue_db_init(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
-    if _SPAWN_QUEUE_MAX_BYTES > 0:
+def _spawn_queue_capacity_guard(task_obj: dict) -> tuple[bool, str] | None:
+    if _SPAWN_QUEUE_MAX_BYTES <= 0:
+        return None
+    try:
+        if _spawn_queue_total_bytes() > _SPAWN_QUEUE_MAX_BYTES:
+            _write_dead_letter(task_obj, "spawn queue full")
+            _diag("spawn queue full; intent dropped")
+            return False, "spawn queue full"
+    except Exception:
+        pass
+    return None
+
+
+def _spawn_queue_db_rollback(conn: sqlite3.Connection) -> None:
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
+
+def _spawn_queue_payload(task_obj: dict) -> tuple[str, float, str]:
+    payload = json.dumps(task_obj, ensure_ascii=False, separators=(",", ":"))
+    now = _time.time()
+    spawn_intent_id = (task_obj.get("spawn_intent_id") or "").strip() if isinstance(task_obj, dict) else ""
+    return payload, now, spawn_intent_id
+
+
+def _spawn_queue_upsert(
+    conn: sqlite3.Connection,
+    *,
+    payload: str,
+    now: float,
+    spawn_intent_id: str,
+) -> None:
+    if spawn_intent_id:
+        cur = conn.execute(
+            "UPDATE queue_entries SET payload=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
+            "WHERE spawn_intent_id=?",
+            (payload, now, spawn_intent_id),
+        )
+        if int(getattr(cur, "rowcount", 0) or 0) > 0:
+            return
         try:
-            if _spawn_queue_total_bytes() > _SPAWN_QUEUE_MAX_BYTES:
-                _write_dead_letter(task_obj, "spawn queue full")
-                _diag("spawn queue full; intent dropped")
-                return False, "spawn queue full"
-        except Exception:
-            pass
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+                "VALUES (?, ?, 0, 'queued', NULL, NULL, ?, ?)",
+                (spawn_intent_id, payload, now, now),
+            )
+            return
+        except sqlite3.IntegrityError:
+            conn.execute(
+                "UPDATE queue_entries SET payload=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
+                "WHERE spawn_intent_id=?",
+                (payload, now, spawn_intent_id),
+            )
+            return
+    conn.execute(
+        "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+        "VALUES (NULL, ?, 0, 'queued', NULL, NULL, ?, ?)",
+        (payload, now, now),
+    )
+
+
+def _spawn_queue_repair_permissions() -> None:
+    try:
+        if _SPAWN_QUEUE_DB_PATH.exists():
+            os.chmod(_SPAWN_QUEUE_DB_PATH, 0o600)
+        wal = Path(str(_SPAWN_QUEUE_DB_PATH) + "-wal")
+        if wal.exists():
+            os.chmod(wal, 0o600)
+        shm = Path(str(_SPAWN_QUEUE_DB_PATH) + "-shm")
+        if shm.exists():
+            os.chmod(shm, 0o600)
+    except Exception:
+        pass
+
+
+def _spawn_queue_write_failure(task_obj: dict, err: Exception) -> tuple[bool, str]:
+    fail_reason = f"spawn queue write failed: {err}"
+    _write_dead_letter(task_obj, fail_reason)
+    _diag(fail_reason)
+    return False, fail_reason
+
+
+def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
+    guard = _spawn_queue_capacity_guard(task_obj)
+    if guard is not None:
+        return guard
 
     conn = _spawn_queue_db_connect()
     if conn is None:
         return False, "spawn queue db unavailable"
     try:
         _spawn_queue_db_init(conn)
-        payload = json.dumps(task_obj, ensure_ascii=False, separators=(",", ":"))
-        now = _time.time()
-        spawn_intent_id = (task_obj.get("spawn_intent_id") or "").strip() if isinstance(task_obj, dict) else ""
+        payload, now, spawn_intent_id = _spawn_queue_payload(task_obj)
         conn.execute("BEGIN IMMEDIATE")
-        if spawn_intent_id:
-            cur = conn.execute(
-                "UPDATE queue_entries SET payload=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
-                "WHERE spawn_intent_id=?",
-                (payload, now, spawn_intent_id),
-            )
-            if int(getattr(cur, "rowcount", 0) or 0) <= 0:
-                try:
-                    conn.execute(
-                        "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
-                        "VALUES (?, ?, 0, 'queued', NULL, NULL, ?, ?)",
-                        (spawn_intent_id, payload, now, now),
-                    )
-                except sqlite3.IntegrityError:
-                    conn.execute(
-                        "UPDATE queue_entries SET payload=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
-                        "WHERE spawn_intent_id=?",
-                        (payload, now, spawn_intent_id),
-                    )
-        else:
-            conn.execute(
-                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
-                "VALUES (NULL, ?, 0, 'queued', NULL, NULL, ?, ?)",
-                (payload, now, now),
-            )
+        _spawn_queue_upsert(
+            conn,
+            payload=payload,
+            now=now,
+            spawn_intent_id=spawn_intent_id,
+        )
         conn.commit()
-        try:
-            if _SPAWN_QUEUE_DB_PATH.exists():
-                os.chmod(_SPAWN_QUEUE_DB_PATH, 0o600)
-            wal = Path(str(_SPAWN_QUEUE_DB_PATH) + "-wal")
-            if wal.exists():
-                os.chmod(wal, 0o600)
-            shm = Path(str(_SPAWN_QUEUE_DB_PATH) + "-shm")
-            if shm.exists():
-                os.chmod(shm, 0o600)
-        except Exception:
-            pass
+        _spawn_queue_repair_permissions()
         _spawn_queue_warn_growth(_SPAWN_QUEUE_DB_PATH, _spawn_queue_db_size_bytes())
         return True, ""
     except sqlite3.OperationalError as e:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
+        _spawn_queue_db_rollback(conn)
         msg = str(e).lower()
         if "locked" in msg or "busy" in msg:
             return _handle_enqueue_lock_busy(task_obj)
-        fail_reason = f"spawn queue write failed: {e}"
-        _write_dead_letter(task_obj, fail_reason)
-        _diag(fail_reason)
-        return False, fail_reason
+        return _spawn_queue_write_failure(task_obj, e)
     except Exception as e:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        fail_reason = f"spawn queue write failed: {e}"
-        _write_dead_letter(task_obj, fail_reason)
-        _diag(fail_reason)
-        return False, fail_reason
+        _spawn_queue_db_rollback(conn)
+        return _spawn_queue_write_failure(task_obj, e)
     finally:
         try:
             conn.close()
@@ -2573,33 +2609,29 @@ def _safe_parse_cp_duration(duration_str: str) -> tuple[timedelta | None, str | 
         return (None, "Unexpected error parsing duration")
 
 
-def _compute_anchor_child_due(parent: dict):
-    """Return (next_due_utc, meta, dnf).
-
-    The core recurrence engine computes *dates*; the hook expands into *datetimes* to
-    respect multi-time lists: @t=HH:MM[,HH:MM...].
-    """
-
-    expr_str = (parent.get("anchor") or "").strip()
-    if not expr_str:
-        return (None, None, None)
-
+def _anchor_mode_from_parent(parent: dict) -> str:
     mode = (parent.get("anchor_mode") or "skip").strip().lower()
     if mode not in ("skip", "all", "flex"):
-        raise ValueError(
-            f"anchor_mode must be 'skip', 'all', or 'flex', got '{mode}'"
-        )
+        raise ValueError(f"anchor_mode must be 'skip', 'all', or 'flex', got '{mode}'")
+    return mode
 
+
+def _anchor_dnf_from_parent(parent: dict) -> tuple[str, list[list[dict]] | None]:
+    expr_str = (parent.get("anchor") or "").strip()
+    if not expr_str:
+        return "", None
     try:
-        dnf = _validate_anchor_expr_cached(expr_str)
+        return expr_str, _validate_anchor_expr_cached(expr_str)
     except Exception as e:
         raise ValueError(f"Invalid anchor expression '{expr_str}': {str(e)}")
 
+
+def _anchor_parent_local_times(parent: dict):
     end_dt_utc, err = _safe_parse_datetime(parent.get("end"))
     if err:
         raise ValueError(f"end field: {err}")
     if not end_dt_utc:
-        return (None, None, None)
+        return None, None, None
 
     due_dt_utc, err = _safe_parse_datetime(parent.get("due"))
     if err:
@@ -2607,16 +2639,65 @@ def _compute_anchor_child_due(parent: dict):
 
     end_local = _tolocal(end_dt_utc)
     due_local = _tolocal(due_dt_utc) if due_dt_utc else end_local
+    return end_local, due_local, due_dt_utc
 
-    default_seed = due_local.date()
-    seed_base = (parent.get("chainID") or "").strip() or "preview"
 
-    # Fallback time if the pattern carries no explicit @t
-    fallback_hhmm = (due_local.hour, due_local.minute)
+def _anchor_due_mode_all(
+    *,
+    dnf,
+    due_local,
+    end_local,
+    due_dt_utc,
+    default_seed,
+    seed_base,
+    fallback_hhmm,
+) -> tuple[object, dict]:
+    info = {"mode": "all", "basis": None, "missed_count": 0, "missed_preview": []}
+    missed_dts = _collect_missed_occurrences(
+        dnf,
+        after_local_dt=due_local,
+        until_local_dt=end_local,
+        default_seed_date=default_seed,
+        seed_base=seed_base,
+        fallback_hhmm=fallback_hhmm,
+        limit=25,
+    )
+    if missed_dts:
+        info.update(
+            basis="missed",
+            missed_count=len(missed_dts),
+            missed_preview=[x.isoformat() for x in missed_dts[:5]],
+        )
+        return missed_dts[0], info
+    ref_local = _skip_reference_dt_local(
+        dnf,
+        end_local=end_local,
+        due_local=(due_local if due_dt_utc else None),
+        default_seed_date=default_seed,
+    )
+    nxt_local = _next_occurrence_after_local_dt(
+        dnf,
+        after_local_dt=ref_local,
+        default_seed_date=default_seed,
+        seed_base=seed_base,
+        fallback_hhmm=fallback_hhmm,
+    )
+    info["basis"] = "after_due"
+    return nxt_local, info
 
-    info = {"mode": mode, "basis": None, "missed_count": 0, "missed_preview": []}
 
-    if mode == "all":
+def _anchor_due_mode_flex(
+    *,
+    dnf,
+    due_local,
+    end_local,
+    due_dt_utc,
+    default_seed,
+    seed_base,
+    fallback_hhmm,
+) -> tuple[object, dict]:
+    missed_dts = []
+    if due_dt_utc and end_local > due_local:
         missed_dts = _collect_missed_occurrences(
             dnf,
             after_local_dt=due_local,
@@ -2626,61 +2707,111 @@ def _compute_anchor_child_due(parent: dict):
             fallback_hhmm=fallback_hhmm,
             limit=25,
         )
-        if missed_dts:
-            nxt_local = missed_dts[0]
-            info.update(
-                basis="missed",
-                missed_count=len(missed_dts),
-                missed_preview=[x.isoformat() for x in missed_dts[:5]],
-            )
-        else:
-            ref_local = _skip_reference_dt_local(
-                dnf,
-                end_local=end_local,
-                due_local=(due_local if due_dt_utc else None),
-                default_seed_date=default_seed,
-            )
-            nxt_local = _next_occurrence_after_local_dt(
-                dnf,
-                after_local_dt=ref_local,
-                default_seed_date=default_seed,
-                seed_base=seed_base,
-                fallback_hhmm=fallback_hhmm,
-            )
-            info["basis"] = "after_due"
-    elif mode == "flex":
-        missed_dts = []
-        if due_dt_utc and end_local > due_local:
-            missed_dts = _collect_missed_occurrences(
-                dnf,
-                after_local_dt=due_local,
-                until_local_dt=end_local,
-                default_seed_date=default_seed,
-                seed_base=seed_base,
-                fallback_hhmm=fallback_hhmm,
-                limit=25,
-            )
-        nxt_local = _next_occurrence_after_local_dt(
-            dnf,
-            after_local_dt=end_local,
-            default_seed_date=default_seed,
+    nxt_local = _next_occurrence_after_local_dt(
+        dnf,
+        after_local_dt=end_local,
+        default_seed_date=default_seed,
+        seed_base=seed_base,
+        fallback_hhmm=fallback_hhmm,
+    )
+    info = {
+        "mode": "flex",
+        "basis": "flex",
+        "missed_count": len(missed_dts),
+        "missed_preview": [x.isoformat() for x in missed_dts[:5]],
+    }
+    return nxt_local, info
+
+
+def _anchor_due_mode_skip(
+    *,
+    dnf,
+    due_local,
+    end_local,
+    default_seed,
+    seed_base,
+    fallback_hhmm,
+) -> tuple[object, dict]:
+    nxt_local = _next_occurrence_after_local_dt(
+        dnf,
+        after_local_dt=(max(end_local, due_local) if due_local else end_local),
+        default_seed_date=default_seed,
+        seed_base=seed_base,
+        fallback_hhmm=fallback_hhmm,
+    )
+    info = {"mode": "skip", "basis": "after_end", "missed_count": 0, "missed_preview": []}
+    return nxt_local, info
+
+
+def _anchor_due_for_mode(
+    mode: str,
+    *,
+    dnf,
+    due_local,
+    end_local,
+    due_dt_utc,
+    default_seed,
+    seed_base,
+    fallback_hhmm,
+) -> tuple[object, dict]:
+    if mode == "all":
+        return _anchor_due_mode_all(
+            dnf=dnf,
+            due_local=due_local,
+            end_local=end_local,
+            due_dt_utc=due_dt_utc,
+            default_seed=default_seed,
             seed_base=seed_base,
             fallback_hhmm=fallback_hhmm,
         )
-        info.update(
-            basis="flex",
-            missed_count=len(missed_dts),
-            missed_preview=[x.isoformat() for x in missed_dts[:5]],
-        )
-    else:
-        nxt_local = _next_occurrence_after_local_dt(
-            dnf,
-            after_local_dt=(max(end_local, due_local) if due_local else end_local),
-            default_seed_date=default_seed,
+    if mode == "flex":
+        return _anchor_due_mode_flex(
+            dnf=dnf,
+            due_local=due_local,
+            end_local=end_local,
+            due_dt_utc=due_dt_utc,
+            default_seed=default_seed,
             seed_base=seed_base,
             fallback_hhmm=fallback_hhmm,
         )
-        info["basis"] = "after_end"
+    return _anchor_due_mode_skip(
+        dnf=dnf,
+        due_local=due_local,
+        end_local=end_local,
+        default_seed=default_seed,
+        seed_base=seed_base,
+        fallback_hhmm=fallback_hhmm,
+    )
+
+
+def _compute_anchor_child_due(parent: dict):
+    """Return (next_due_utc, meta, dnf).
+
+    The core recurrence engine computes *dates*; the hook expands into *datetimes* to
+    respect multi-time lists: @t=HH:MM[,HH:MM...].
+    """
+    expr_str, dnf = _anchor_dnf_from_parent(parent)
+    if not expr_str or not dnf:
+        return (None, None, None)
+
+    mode = _anchor_mode_from_parent(parent)
+    end_local, due_local, due_dt_utc = _anchor_parent_local_times(parent)
+    if not end_local:
+        return (None, None, None)
+
+    default_seed = due_local.date()
+    seed_base = (parent.get("chainID") or "").strip() or "preview"
+    fallback_hhmm = (due_local.hour, due_local.minute)
+    nxt_local, info = _anchor_due_for_mode(
+        mode,
+        dnf=dnf,
+        due_local=due_local,
+        end_local=end_local,
+        due_dt_utc=due_dt_utc,
+        default_seed=default_seed,
+        seed_base=seed_base,
+        fallback_hhmm=fallback_hhmm,
+    )
 
     if not nxt_local:
         raise ValueError("Could not compute next anchor occurrence")
@@ -4236,6 +4367,169 @@ def _resolve_child_id(child_short: str, deferred_spawn: bool, chain_by_short: di
     return child_id
 
 
+def _anchor_mode_tag(new: dict) -> str:
+    return {
+        "skip": "[cyan]SKIP[/]",
+        "all": "[yellow]ALL[/]",
+        "flex": "[magenta]FLEX[/]",
+    }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
+
+
+def _append_wait_sched_feedback_rows(fb: list[tuple[str, object]]) -> None:
+    if not (_DEBUG_WAIT_SCHED and _LAST_WAIT_SCHED_DEBUG):
+        return
+    for _fld in ("scheduled", "wait"):
+        d = _LAST_WAIT_SCHED_DEBUG.get(_fld)
+        if not d:
+            continue
+        if d.get("ok"):
+            fb.append(
+                (
+                    f"{_fld} carry",
+                    f"Δ {d.get('delta')}  parent {d.get('parent_val')} vs {d.get('parent_due')}  →  child {d.get('child_val')}",
+                )
+            )
+        else:
+            fb.append(
+                (
+                    f"{_fld} carry",
+                    f"[yellow]skip[/] ({d.get('reason')})  parent {d.get('parent_val')} vs {d.get('parent_due')}",
+                )
+            )
+
+
+def _append_sanitised_fields_row(fb: list[tuple[str, object]], stripped_attrs: list[str]) -> None:
+    if stripped_attrs:
+        fb.append(
+            (
+                "Sanitised",
+                f"Removed unknown fields: {', '.join(sorted(stripped_attrs))}",
+            )
+        )
+
+
+def _append_integrity_warnings_row(
+    fb: list[tuple[str, object]],
+    integrity_warnings: list[str] | None,
+) -> None:
+    if not integrity_warnings:
+        return
+    warn_list = integrity_warnings[:4]
+    if len(integrity_warnings) > 4:
+        warn_list.append(f"...and {len(integrity_warnings) - 4} more")
+    fb.append(("Integrity", "\n".join(warn_list)))
+
+
+def _append_link_status_rows(fb: list[tuple[str, object]], cap_no: int | None, base_no: int) -> None:
+    if not cap_no:
+        return
+    if base_no >= cap_no:
+        fb.append(("Link status", "[bold red]This was the last link[/]"))
+    elif base_no == cap_no - 1:
+        fb.append(("Link status", "[yellow]This was the second-to-last link[/]"))
+    fb.append(("Links left", f"{max(0, cap_no - base_no)} left (cap #{cap_no})"))
+
+
+def _append_final_rows(
+    fb: list[tuple[str, object]],
+    finals: list[tuple[str, object]],
+    now_utc,
+) -> None:
+    for label, when in finals:
+        fb.append(
+            (
+                f"Final ({label})",
+                f"{core.fmt_dt_local(when)}  ({_human_delta(now_utc, when, True)})",
+            )
+        )
+
+
+def _append_anchor_intent_row(
+    fb: list[tuple[str, object]],
+    *,
+    child_short: str,
+    deferred_spawn: bool,
+    chain_by_short: dict | None,
+    spawn_intent_id: str | None,
+) -> None:
+    _ = _resolve_child_id(child_short, deferred_spawn, chain_by_short)
+    if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
+        fb.append(("Intent", spawn_intent_id))
+
+
+def _append_anchor_timeline_rows(
+    fb: list[tuple[str, object]],
+    *,
+    new: dict,
+    child_due,
+    child_short: str,
+    dnf,
+    cap_no: int | None,
+    base_no: int,
+    expr_str: str,
+) -> None:
+    tl = _timeline_lines(
+        "anchor",
+        new,
+        child_due,
+        child_short,
+        dnf,
+        next_count=3,
+        cap_no=cap_no,
+        cur_no=base_no,
+        show_gaps=_SHOW_TIMELINE_GAPS,
+        round_anchor_gaps=True,  # Round to nearest day
+    )
+    if tl:
+        fb.append(("Timeline", "\n".join(tl)))
+    if "rand" in expr_str.lower():
+        fb.append(
+            (
+                "Rand",
+                f"[dim]Deterministic picks seeded by root {_short(_root_uuid_from(new))}[/]",
+            )
+        )
+
+
+def _emit_anchor_completion_panel(
+    *,
+    title: str,
+    fb: list[tuple[str, object]],
+    base_no: int,
+    new: dict,
+    child_due,
+    child_short: str,
+    now_utc,
+    cap_no: int | None,
+    until_dt,
+    until_cap_no: int | None,
+) -> None:
+    if (core.PANEL_MODE or "").strip().lower() == "line":
+        line = _format_line_preview(
+            base_no,
+            new,
+            child_due,
+            child_short,
+            now_utc,
+            cap_no=cap_no,
+            until_dt=until_dt,
+            until_no=until_cap_no,
+        )
+        _panel_line(title, line, kind="preview_anchor")
+        return
+    if _CHAIN_COLOR_PER_CHAIN:
+        chain_colour = _chain_colour_for_task(new, "anchor")
+        _panel(
+            title,
+            fb,
+            kind="preview_anchor",
+            border_style=chain_colour,
+            title_style=chain_colour,
+        )
+        return
+    _panel(title, fb, kind="preview_anchor")
+
+
 def _render_anchor_completion_feedback(
     *,
     new: dict,
@@ -4262,122 +4556,57 @@ def _render_anchor_completion_feedback(
     fb = []
     anchor_raw = (new.get("anchor") or "").strip()
     expr_str = _strip_quotes(anchor_raw)
-    mode_tag = {
-        "skip": "[cyan]SKIP[/]",
-        "all": "[yellow]ALL[/]",
-        "flex": "[magenta]FLEX[/]",
-    }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
+    mode_tag = _anchor_mode_tag(new)
     fb.append(("Pattern", f"{expr_str}  {mode_tag}"))
     fb.append(("Natural", core.describe_anchor_dnf(dnf, new)))
     fb.append(("Basis", _pretty_basis_anchor(meta, new)))
     fb.append(("Root", _format_root_and_age(new, now_utc)))
 
-    if _DEBUG_WAIT_SCHED and _LAST_WAIT_SCHED_DEBUG:
-        for _fld in ("scheduled", "wait"):
-            d = _LAST_WAIT_SCHED_DEBUG.get(_fld)
-            if not d:
-                continue
-            if d.get("ok"):
-                fb.append(
-                    (
-                        f"{_fld} carry",
-                        f"Δ {d.get('delta')}  parent {d.get('parent_val')} vs {d.get('parent_due')}  →  child {d.get('child_val')}",
-                    )
-                )
-            else:
-                fb.append(
-                    (
-                        f"{_fld} carry",
-                        f"[yellow]skip[/] ({d.get('reason')})  parent {d.get('parent_val')} vs {d.get('parent_due')}",
-                    )
-                )
-    if stripped_attrs:
-        fb.append(
-            (
-                "Sanitised",
-                f"Removed unknown fields: {', '.join(sorted(stripped_attrs))}",
-            )
-        )
+    _append_wait_sched_feedback_rows(fb)
+    _append_sanitised_fields_row(fb, stripped_attrs)
 
     delta = core.humanize_delta(now_utc, child_due, use_months_days=core.expr_has_m_or_y(dnf))
     fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
     if analytics_advice:
         fb.append(("Analytics", analytics_advice))
-    if integrity_warnings:
-        warn_list = integrity_warnings[:4]
-        if len(integrity_warnings) > 4:
-            warn_list.append(f"...and {len(integrity_warnings) - 4} more")
-        fb.append(("Integrity", "\n".join(warn_list)))
+    _append_integrity_warnings_row(fb, integrity_warnings)
     _append_next_wait_sched_rows(fb, child, child_due)
 
-    if cap_no:
-        if base_no >= cap_no:
-            fb.append(("Link status", "[bold red]This was the last link[/]"))
-        elif base_no == cap_no - 1:
-            fb.append(("Link status", "[yellow]This was the second-to-last link[/]"))
-        fb.append(("Links left", f"{max(0, cap_no - base_no)} left (cap #{cap_no})"))
-
-    for label, when in finals:
-        fb.append(
-            (
-                f"Final ({label})",
-                f"{core.fmt_dt_local(when)}  ({_human_delta(now_utc, when, True)})",
-            )
-        )
-
-    _ = _resolve_child_id(child_short, deferred_spawn, chain_by_short)
-    if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
-        fb.append(("Intent", spawn_intent_id))
+    _append_link_status_rows(fb, cap_no, base_no)
+    _append_final_rows(fb, finals, now_utc)
+    _append_anchor_intent_row(
+        fb,
+        child_short=child_short,
+        deferred_spawn=deferred_spawn,
+        chain_by_short=chain_by_short,
+        spawn_intent_id=spawn_intent_id,
+    )
 
     title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short}"
-    tl = _timeline_lines(
-        "anchor",
-        new,
-        child_due,
-        child_short,
-        dnf,
-        next_count=3,
+    _append_anchor_timeline_rows(
+        fb,
+        new=new,
+        child_due=child_due,
+        child_short=child_short,
+        dnf=dnf,
         cap_no=cap_no,
-        cur_no=base_no,
-        show_gaps=_SHOW_TIMELINE_GAPS,
-        round_anchor_gaps=True,  # Round to nearest day
+        base_no=base_no,
+        expr_str=expr_str,
     )
-    if tl:
-        fb.append(("Timeline", "\n".join(tl)))
-    if "rand" in expr_str.lower():
-        fb.append(
-            (
-                "Rand",
-                f"[dim]Deterministic picks seeded by root {_short(_root_uuid_from(new))}[/]",
-            )
-        )
 
     fb = _format_next_anchor_rows(fb)
-
-    if (core.PANEL_MODE or "").strip().lower() == "line":
-        line = _format_line_preview(
-            base_no,
-            new,
-            child_due,
-            child_short,
-            now_utc,
-            cap_no=cap_no,
-            until_dt=until_dt,
-            until_no=until_cap_no,
-        )
-        _panel_line(title, line, kind="preview_anchor")
-    elif _CHAIN_COLOR_PER_CHAIN:
-        chain_colour = _chain_colour_for_task(new, "anchor")
-        _panel(
-            title,
-            fb,
-            kind="preview_anchor",
-            border_style=chain_colour,
-            title_style=chain_colour,
-        )
-    else:
-        # Fast path: use the static theme colours
-        _panel(title, fb, kind="preview_anchor")
+    _emit_anchor_completion_panel(
+        title=title,
+        fb=fb,
+        base_no=base_no,
+        new=new,
+        child_due=child_due,
+        child_short=child_short,
+        now_utc=now_utc,
+        cap_no=cap_no,
+        until_dt=until_dt,
+        until_cap_no=until_cap_no,
+    )
 
 
 def _render_cp_completion_feedback(

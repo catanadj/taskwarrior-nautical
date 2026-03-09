@@ -3157,17 +3157,22 @@ def _sort_chain_for_analytics(chain: list[dict]) -> list[dict]:
         return chain[:]
 
 
-def _chain_health_advice(
-    chain: list[dict],
-    kind: str,
-    task: dict,
-    tol_secs: int = _ANALYTICS_ONTIME_TOL_SECS,
-    style: str = _ANALYTICS_STYLE,
-) -> str | None:
-    if not chain:
-        return None
+def _chain_health_streak(completed_with_dates: list[dict], tol_secs: int) -> int:
+    streak = 0
+    for t in reversed(completed_with_dates):
+        due = _dtparse(t.get("due"))
+        end = _dtparse(t.get("end"))
+        if not (due and end):
+            continue
+        diff = abs((end - due).total_seconds())
+        if diff <= tol_secs:
+            streak += 1
+        else:
+            break
+    return streak
 
-    ordered = _sort_chain_for_analytics(chain)
+
+def _chain_health_completed_metrics(ordered: list[dict], tol_secs: int) -> dict:
     completed = [
         t for t in ordered
         if (t.get("status") or "").strip().lower() == "completed"
@@ -3188,25 +3193,22 @@ def _chain_health_advice(
     if deltas:
         stats = _lateness_stats(completed_with_dates, tol_secs=tol_secs)
         on_time_rate = stats["on_time"] / max(1, stats["count"])
-
         if len(deltas) >= 2:
             try:
                 import statistics
                 vol = statistics.pstdev(deltas)
             except Exception:
                 vol = None
+        streak = _chain_health_streak(completed_with_dates, tol_secs)
 
-        for t in reversed(completed_with_dates):
-            due = _dtparse(t.get("due"))
-            end = _dtparse(t.get("end"))
-            if not (due and end):
-                continue
-            diff = abs((end - due).total_seconds())
-            if diff <= tol_secs:
-                streak += 1
-            else:
-                break
+    return {
+        "on_time_rate": on_time_rate,
+        "streak": streak,
+        "vol": vol,
+    }
 
+
+def _chain_health_drift(ordered: list[dict], kind: str, task: dict) -> tuple[float | None, float | None]:
     drift_secs = None
     median_gap = None
     due_list = []
@@ -3214,39 +3216,59 @@ def _chain_health_advice(
         due = _dtparse(t.get("due"))
         if due:
             due_list.append(due)
-    if len(due_list) >= 2:
-        gaps = [
-            (due_list[i] - due_list[i - 1]).total_seconds()
-            for i in range(1, len(due_list))
-            if due_list[i] and due_list[i - 1]
-        ]
-        gaps = [g for g in gaps if g > 0]
-        if gaps:
-            median_gap = _median(gaps)
-            if kind == "cp":
-                td = core.parse_cp_duration(task.get("cp") or "")
-                if td:
-                    drift_secs = median_gap - td.total_seconds()
-            else:
-                if len(gaps) >= 2:
-                    drift_secs = gaps[-1] - median_gap
 
-    style = (style or "coach").strip().lower()
+    if len(due_list) < 2:
+        return drift_secs, median_gap
+
+    gaps = [
+        (due_list[i] - due_list[i - 1]).total_seconds()
+        for i in range(1, len(due_list))
+        if due_list[i] and due_list[i - 1]
+    ]
+    gaps = [g for g in gaps if g > 0]
+    if not gaps:
+        return drift_secs, median_gap
+
+    median_gap = _median(gaps)
+    if kind == "cp":
+        td = core.parse_cp_duration(task.get("cp") or "")
+        if td:
+            drift_secs = median_gap - td.total_seconds()
+    elif len(gaps) >= 2:
+        drift_secs = gaps[-1] - median_gap
+    return drift_secs, median_gap
+
+
+def _chain_health_clinical_text(
+    on_time_rate: float | None,
+    drift_secs: float | None,
+    streak: int,
+    vol: float | None,
+) -> str | None:
+    parts = []
+    if on_time_rate is not None:
+        parts.append(f"OT {int(round(100.0 * on_time_rate))}%")
+    if drift_secs is not None:
+        parts.append(f"Drift {_fmt_td_dd_hhmm(timedelta(seconds=drift_secs))}")
+    if streak:
+        parts.append(f"Streak {streak}")
+    if isinstance(vol, (int, float)):
+        parts.append(f"Vol {_fmt_td_compact_abs(timedelta(seconds=abs(vol)))}")
+    return " | ".join(parts) if parts else None
+
+
+def _chain_health_coach_text(
+    kind: str,
+    task: dict,
+    on_time_rate: float | None,
+    drift_secs: float | None,
+    median_gap: float | None,
+    streak: int,
+    vol: float | None,
+) -> str | None:
     issues = []
     tips = []
     positives = []
-
-    if style == "clinical":
-        parts = []
-        if on_time_rate is not None:
-            parts.append(f"OT {int(round(100.0 * on_time_rate))}%")
-        if drift_secs is not None:
-            parts.append(f"Drift {_fmt_td_dd_hhmm(timedelta(seconds=drift_secs))}")
-        if streak:
-            parts.append(f"Streak {streak}")
-        if isinstance(vol, (int, float)):
-            parts.append(f"Vol {_fmt_td_compact_abs(timedelta(seconds=abs(vol)))}")
-        return " | ".join(parts) if parts else None
 
     if on_time_rate is not None:
         if on_time_rate < 0.6:
@@ -3298,6 +3320,37 @@ def _chain_health_advice(
             f"{streak}-link on-time streak going."
         )
     return f"Chain needs attention ({issue_txt}); {tip_txt}."
+
+
+def _chain_health_advice(
+    chain: list[dict],
+    kind: str,
+    task: dict,
+    tol_secs: int = _ANALYTICS_ONTIME_TOL_SECS,
+    style: str = _ANALYTICS_STYLE,
+) -> str | None:
+    if not chain:
+        return None
+
+    ordered = _sort_chain_for_analytics(chain)
+    metrics = _chain_health_completed_metrics(ordered, tol_secs)
+    on_time_rate = metrics["on_time_rate"]
+    streak = metrics["streak"]
+    vol = metrics["vol"]
+    drift_secs, median_gap = _chain_health_drift(ordered, kind, task)
+
+    style = (style or "coach").strip().lower()
+    if style == "clinical":
+        return _chain_health_clinical_text(on_time_rate, drift_secs, streak, vol)
+    return _chain_health_coach_text(
+        kind,
+        task,
+        on_time_rate,
+        drift_secs,
+        median_gap,
+        streak,
+        vol,
+    )
 
 
 def _chain_integrity_warnings(chain: list[dict], expected_chain_id: str | None = None) -> list[str]:

@@ -1927,6 +1927,58 @@ def test_chain_integrity_warnings_detects_issues():
     expect(any("missing link(s): 2" in w for w in warnings), f"expected link gap warning, got {warnings}")
     expect(any("missing chainID" in w for w in warnings), f"expected chainID warning, got {warnings}")
 
+
+def test_chain_health_advice_coach_healthy_streak():
+    """Chain health advice should report healthy streak for steady on-time completions."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_health_advice_healthy_test")
+    chain = [
+        {"uuid": "a", "link": 1, "status": "completed", "due": "20250101T090000Z", "end": "20250101T090500Z"},
+        {"uuid": "b", "link": 2, "status": "completed", "due": "20250104T090000Z", "end": "20250104T091000Z"},
+        {"uuid": "c", "link": 3, "status": "completed", "due": "20250107T090000Z", "end": "20250107T090800Z"},
+        {"uuid": "d", "link": 4, "status": "pending", "due": "20250110T090000Z"},
+    ]
+    got = mod._chain_health_advice(chain, "cp", {"cp": "3d"}, style="coach")
+    expect(
+        got == "Chain looks healthy with a 3-link on-time streak; keep the current cadence.",
+        f"unexpected healthy advice: {got!r}",
+    )
+
+
+def test_chain_health_advice_coach_low_ontime_issue():
+    """Chain health advice should flag low on-time rate with actionable guidance."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_health_advice_issue_test")
+    chain = [
+        {"uuid": "a", "link": 1, "status": "completed", "due": "20250101T090000Z", "end": "20250102T120000Z"},
+        {"uuid": "b", "link": 2, "status": "completed", "due": "20250102T090000Z", "end": "20250103T140000Z"},
+        {"uuid": "c", "link": 3, "status": "completed", "due": "20250103T090000Z", "end": "20250103T093000Z"},
+        {"uuid": "d", "link": 4, "status": "pending", "due": "20250105T090000Z"},
+    ]
+    got = mod._chain_health_advice(chain, "cp", {"cp": "1d"}, style="coach")
+    expect(
+        got == "Chain needs attention (on-time rate is low); try smaller scopes or later due times.",
+        f"unexpected issue advice: {got!r}",
+    )
+
+
+def test_chain_health_advice_clinical_drift_and_style_normalization():
+    """Clinical style should include OT, drift, streak, and volatility with normalized style input."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_health_advice_clinical_test")
+    chain = [
+        {"uuid": "a", "link": 1, "status": "completed", "due": "20250101T090000Z", "end": "20250101T100000Z"},
+        {"uuid": "b", "link": 2, "status": "completed", "due": "20250102T090000Z", "end": "20250102T090500Z"},
+        {"uuid": "c", "link": 3, "status": "completed", "due": "20250103T090000Z", "end": "20250103T090500Z"},
+        {"uuid": "d", "link": 4, "status": "completed", "due": "20250105T090000Z", "end": "20250105T090500Z"},
+    ]
+    got = mod._chain_health_advice(chain, "anchor", {}, style=" Clinical ")
+    expect(
+        got == "OT 100% | Drift +1d 00h:00m | Streak 4 | Vol 0d 00h:23m",
+        f"unexpected clinical advice: {got!r}",
+    )
+
+
 def test_dst_round_trip_noon_preserves_local_date():
     """Local date+time should round-trip through UTC across DST boundaries."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
@@ -5209,6 +5261,9 @@ TESTS = [
     test_on_modify_missing_taskdata_uses_tw_dir,
     test_hooks_no_direct_subprocess_run,
     test_chain_integrity_warnings_detects_issues,
+    test_chain_health_advice_coach_healthy_streak,
+    test_chain_health_advice_coach_low_ontime_issue,
+    test_chain_health_advice_clinical_drift_and_style_normalization,
     test_dst_round_trip_noon_preserves_local_date,
     test_core_recurrence_update_udas_config_aliases,
     test_warn_rate_limited_any,

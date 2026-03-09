@@ -1137,21 +1137,28 @@ def _queue_db_init(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _take_queue_entries_sqlite() -> list[dict]:
-    conn = _queue_db_connect()
-    if conn is None:
-        return []
-    try:
-        _queue_db_init(conn)
-    except Exception as e:
-        _diag(f"queue db init failed: {e}")
+def _queue_select_queued_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    q = "SELECT id, payload, attempts FROM queue_entries WHERE state='queued' ORDER BY id"
+    params: tuple = ()
+    if _QUEUE_MAX_LINES > 0:
+        q += " LIMIT ?"
+        params = (_QUEUE_MAX_LINES,)
+    return list(conn.execute(q, params))
+
+
+def _queue_row_ids(rows: list[sqlite3.Row]) -> list[int]:
+    ids: list[int] = []
+    for r in rows:
         try:
-            conn.close()
+            rid = int(r["id"])
         except Exception:
-            pass
-        return []
-    token = f"drain-{os.getpid()}-{int(time.time() * 1000)}"
-    now = time.time()
+            continue
+        if rid > 0:
+            ids.append(rid)
+    return ids
+
+
+def _queue_claim_rows_sqlite(conn: sqlite3.Connection, token: str, now: float) -> list[sqlite3.Row]:
     rows: list[sqlite3.Row] = []
     try:
         if _QUEUE_PROCESSING_STALE_AFTER > 0:
@@ -1162,29 +1169,18 @@ def _take_queue_entries_sqlite() -> list[dict]:
                 (now, cutoff),
             )
             conn.commit()
+
         conn.execute("BEGIN IMMEDIATE")
-        q = "SELECT id, payload, attempts FROM queue_entries WHERE state='queued' ORDER BY id"
-        params: tuple = ()
-        if _QUEUE_MAX_LINES > 0:
-            q += " LIMIT ?"
-            params = (_QUEUE_MAX_LINES,)
-        rows = list(conn.execute(q, params))
-        if rows:
-            ids: list[int] = []
-            for r in rows:
-                try:
-                    rid = int(r["id"])
-                except Exception:
-                    continue
-                if rid > 0:
-                    ids.append(rid)
-            if ids:
-                conn.executemany(
-                    "UPDATE queue_entries SET state='processing', claim_token=?, claimed_at=?, updated_at=? "
-                    "WHERE id=?",
-                    [(token, now, now, rid) for rid in ids],
-                )
+        rows = _queue_select_queued_rows(conn)
+        ids = _queue_row_ids(rows)
+        if ids:
+            conn.executemany(
+                "UPDATE queue_entries SET state='processing', claim_token=?, claimed_at=?, updated_at=? "
+                "WHERE id=?",
+                [(token, now, now, rid) for rid in ids],
+            )
         conn.commit()
+        return rows
     except sqlite3.OperationalError as e:
         try:
             conn.rollback()
@@ -1194,15 +1190,17 @@ def _take_queue_entries_sqlite() -> list[dict]:
             _record_queue_lock_failure()
         else:
             _diag(f"queue db claim failed: {e}")
-        rows = []
+        return []
     except Exception as e:
         try:
             conn.rollback()
         except Exception:
             pass
         _diag(f"queue db claim failed: {e}")
-        rows = []
+        return []
 
+
+def _queue_rows_to_entries(rows: list[sqlite3.Row]) -> list[dict]:
     entries: list[dict] = []
     for r in rows:
         rid = int(r["id"])
@@ -1219,10 +1217,31 @@ def _take_queue_entries_sqlite() -> list[dict]:
         obj["__queue_backend"] = "sqlite"
         obj["__queue_id"] = rid
         entries.append(obj)
+    return entries
+
+
+def _queue_close_silent(conn: sqlite3.Connection) -> None:
     try:
         conn.close()
     except Exception:
         pass
+
+
+def _take_queue_entries_sqlite() -> list[dict]:
+    conn = _queue_db_connect()
+    if conn is None:
+        return []
+    try:
+        _queue_db_init(conn)
+    except Exception as e:
+        _diag(f"queue db init failed: {e}")
+        _queue_close_silent(conn)
+        return []
+    token = f"drain-{os.getpid()}-{int(time.time() * 1000)}"
+    now = time.time()
+    rows = _queue_claim_rows_sqlite(conn, token, now)
+    entries = _queue_rows_to_entries(rows)
+    _queue_close_silent(conn)
     return entries
 
 

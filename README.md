@@ -157,26 +157,13 @@ Links left: 8 left (cap #10)
 ## Performance & Safety
 
 - **≤ 50 ms** on Termux / old phones
-- No network, no cloud, 100 % local JSON
+- No network, no cloud, 100 % local
 - Atomic import - never orphans a task
 - DST-safe, leap-second-safe, 64-bit time
 - Plain-text backup - grep your rules!
 
 ---
 
-## Operations
-
-Operational knobs, performance checklist, and load-testing guidance are now in the manual:
-
-- `Manual.md` - see "Operational Knobs", "Performance Checklist", and "Load Testing".
-- Deferred spawn queue is SQLite-first at `TASKDATA/.nautical_queue.db`; legacy JSONL queue files remain supported for mixed-version compatibility/recovery.
-- `tools/nautical_health_check.py` monitors both JSONL + SQLite queue pressure (for example `--queue-db-crit-rows 200`).
-- Deployment sanity (runtime files + strict hook stdout contracts): `python3 tools/nautical_deploy_sanity.py --json`
-
-CI performance budget:
-- Run locally: `python3 tools/nautical_perf_budget.py --budget-file tools/perf_budget.json --enforce`
-- CI enforces the same budgets via `.github/workflows/perf-budget.yml`.
-- Compare two reports locally: `python3 tools/nautical_perf_compare.py --base base.json --head head.json --enforce`
 
 ## Requirements
 

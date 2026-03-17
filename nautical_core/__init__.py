@@ -786,6 +786,7 @@ from . import quarter_helpers as _quarter_helpers
 from . import quarter_rewrite as _quarter_rewrite
 from . import quarter_selector as _quarter_selector
 from . import satisfiability as _satisfiability
+from . import scheduler_atom as _scheduler_atom
 from . import tokenutil as _tokenutil
 from . import yearly_parse as _yearly_parse
 from . import yearly_validation as _yearly_validation
@@ -4656,110 +4657,43 @@ def apply_day_offset(d: date, mods: dict) -> date:
 
 
 def base_next_after_atom(atom, ref_d: date) -> date:
-    """Find next date after ref_d that matches atom (without mods)."""
-    typ = (atom.get("typ") or "").lower()
-    spec = (atom.get("spec") or "").lower()
-    mods = atom.get("mods") or {}
-
-    # Handle weekly random first
-    if typ == "w" and "rand" in spec:
-        # Pick exactly one deterministic day per ISO week, strictly after ref_d
-        p = ref_d + timedelta(days=1)
-        for _ in range(366):  # safety
-            iso = p.isocalendar()
-            dow = _weekly_rand_pick(iso.year, iso.week, mods)
-            mon = _week_monday(p)
-            dt = mon + timedelta(days=dow)
-            if dt > ref_d:
-                return dt
-            # move to next ISO week
-            p = mon + timedelta(days=7, seconds=1)
-        return ref_d + timedelta(days=7)  # fallback
-
-    # Normal weekly path (non-rand)
-    if typ == "w":
-        bd_only = bool(mods.get("bd") or (mods.get("wd") is True))
-        days = expand_weekly_cached_mods(spec, bd_only)
-        if not days:  # No weekdays in spec
-            # Fallback: return far future to avoid infinite loop
-            return ref_d + timedelta(days=365)
-        
-        for i in range(1, 15):  # next 2 weeks is plenty
-            cand = ref_d + timedelta(days=i)
-            if cand.weekday() in days:
-                return cand
-        return ref_d + timedelta(days=7)
-
-    if typ == "m":
-        y, m = ref_d.year, ref_d.month
-        # Union across comma-separated monthly tokens (each token → a set of DOMs)
-        tokens = _split_csv_tokens(spec)
-        for _ in range(24):  # scan up to 24 months out
-            doms_union = set()
-            for tok in tokens:
-                try:
-                    for d0 in expand_monthly_cached(tok, y, m):
-                        doms_union.add(d0)
-                except Exception:
-                    # ignore a single bad token here; validation should have blocked already
-                    pass
-            for d0 in sorted(doms_union):
-                cand = date(y, m, d0)
-                if cand > ref_d:
-                    return cand
-            # advance month
-            m = 1 if m == 12 else (m + 1)
-            if m == 1:
-                y += 1
-        # safe fallback
-        return ref_d + timedelta(days=365)
-
-    if typ == "y":
-        y = ref_d.year
-        # Look far enough ahead to catch leap windows etc.
-        for _ in range(12):
-            days = expand_yearly_cached(spec, y)
-            for cand in days:
-                if cand > ref_d:
-                    return cand
-            y += 1
-        # safe fallback (avoid .replace on 29-Feb)
-        return ref_d + timedelta(days=366)
-
-    # Unknown type should not happen after strict validation; keep deterministic fallback.
-    return ref_d + timedelta(days=365)
+    return _scheduler_atom.base_next_after_atom(
+        atom,
+        ref_d,
+        expand_weekly_cached_mods=expand_weekly_cached_mods,
+        split_csv_tokens=_split_csv_tokens,
+        expand_monthly_cached=expand_monthly_cached,
+        expand_yearly_cached=expand_yearly_cached,
+        weekly_rand_pick=_weekly_rand_pick,
+        week_monday=_week_monday,
+        date_cls=date,
+    )
 
 
 # ------------------------------------------------------------------------------
 # Anchor scheduling & iteration helpers
 # ------------------------------------------------------------------------------
 def _interval_allowed_for_atom(typ: str, ival: int, seed: date, cand: date) -> bool:
-    if ival <= 1:
-        return True
-    if typ == "w":
-        weeks_diff = _weeks_between(seed, cand)
-        return weeks_diff % ival == 0
-    if typ == "y":
-        return (_year_index(cand) - _year_index(seed)) % ival == 0
-    return True
+    return _scheduler_atom.interval_allowed_for_atom(
+        typ,
+        ival,
+        seed,
+        cand,
+        weeks_between=_weeks_between,
+        year_index=_year_index,
+    )
 
 
 def _advance_probe_for_interval_bucket(typ: str, ival: int, seed: date, cand: date) -> date:
-    if ival <= 1:
-        return cand
-    if typ == "w":
-        cur_monday = cand - timedelta(days=cand.weekday())
-        weeks_from_seed = _weeks_between(seed, cur_monday)
-        diff = weeks_from_seed % ival
-        add_weeks = (ival - diff) if diff != 0 else 0
-        next_allowed_monday = cur_monday + timedelta(weeks=add_weeks or ival)
-        return next_allowed_monday - timedelta(days=1)
-    if typ == "y":
-        diff = (_year_index(cand) - _year_index(seed)) % ival
-        add_y = (ival - diff) if diff != 0 else 0
-        next_jan1 = date(cand.year + (add_y or ival), 1, 1)
-        return next_jan1 - timedelta(days=1)
-    return cand
+    return _scheduler_atom.advance_probe_for_interval_bucket(
+        typ,
+        ival,
+        seed,
+        cand,
+        weeks_between=_weeks_between,
+        year_index=_year_index,
+        date_cls=date,
+    )
 
 
 def _month_doms_safe(spec: str, y: int, m: int) -> list[int]:
@@ -4825,83 +4759,37 @@ def _monthly_align_base_for_interval(spec: str, base: date, probe: date, seed: d
 
 
 def _accept_roll_candidate(ref_d: date, base: date, cand: date, roll_kind: str | None) -> bool:
-    if roll_kind in ("pbd", "nbd", "nw"):
-        # For business-day rolls, rolled candidate may land on ref_d.
-        return base > ref_d and cand >= ref_d
-    return cand > ref_d
+    return _scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
 
 
 def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
-    """
-    Strictly-after guard + /N gating by buckets:
-      - Weekly: ISO week buckets
-      - Monthly: *valid-month* buckets (months that actually have a match for 'spec')
-      - Yearly: calendar year buckets
-    Then applies roll + day offsets.
-    """
-    ival = int(atom.get("ival", 1) or 1)
-    if ival > 100:
-        ival = 100
-
-    seed = default_seed or ref_d
-    probe = ref_d
-    typ = atom["typ"]
-    mods = atom.get("mods") or {}
-    spec = atom.get("spec") or ""
-
-    # Fast path: ival==1 and no modifiers
-    if ival == 1 and not _active_mod_keys(mods):
-        candidate = base_next_after_atom(atom, ref_d)
-        if candidate > ref_d:
-            return candidate
-
-    # ---- guarded iteration ----
-    for _ in range(MAX_ANCHOR_ITER):
-        base = base_next_after_atom(atom, probe)
-
-        # @bd modifier: weekdays only - skip weekends entirely (move to next bucket)
-        if mods.get("bd") and base.weekday() > 4:  # 5=Saturday, 6=Sunday
-            probe = base + timedelta(days=1)
-            continue
-
-        # weekly/yearly gating first
-        if typ in ("w", "y") and not _interval_allowed_for_atom(typ, ival, seed, base):
-            probe = _advance_probe_for_interval_bucket(typ, ival, seed, base)
-            continue
-
-        # monthly special-case: /N by *valid months*
-        if typ == "m" and ival > 1:
-            base = _monthly_align_base_for_interval(spec, base, probe, seed, ival)
-
-        # --- apply roll + offsets and decide acceptance ---
-        rolled = roll_apply(base, mods)
-        cand = apply_day_offset(rolled, mods)
-
-        roll_kind = mods.get("roll")
-        if _accept_roll_candidate(ref_d, base, cand, roll_kind):
-            return cand
-
-        # advance probe for next iteration
-        probe = base + timedelta(days=1)
-
-    # fallback
-    if os.environ.get("NAUTICAL_DIAG") == "1":
-        _warn_once_per_day(
-            "next_after_atom_fallback",
-            f"[nautical] next_after_atom_with_mods fallback after {MAX_ANCHOR_ITER} iterations.",
-        )
-    return ref_d + timedelta(days=365)
+    return _scheduler_atom.next_after_atom_with_mods(
+        atom,
+        ref_d,
+        default_seed,
+        active_mod_keys=_active_mod_keys,
+        base_next_after_atom=base_next_after_atom,
+        interval_allowed_for_atom=_interval_allowed_for_atom,
+        advance_probe_for_interval_bucket=_advance_probe_for_interval_bucket,
+        monthly_align_base_for_interval=_monthly_align_base_for_interval,
+        roll_apply=roll_apply,
+        apply_day_offset=apply_day_offset,
+        accept_roll_candidate=_accept_roll_candidate,
+        max_anchor_iter=MAX_ANCHOR_ITER,
+        warn_once_per_day=_warn_once_per_day,
+        os_mod=os,
+    )
 
 
 
 
 def atom_matches_on(atom, d: date, default_seed: date) -> bool:
-    """Check if atom matches on specific date (with roll window)."""
-    # Reduced window from 7 to 5 days
-    for k in range(1, 6):
-        if next_after_atom_with_mods(atom, d - timedelta(days=k), default_seed) == d:
-            return True
-    return False
+    return _scheduler_atom.atom_matches_on(
+        atom,
+        d,
+        default_seed,
+        next_after_atom_with_mods=next_after_atom_with_mods,
+    )
 
 
 def next_after_term(term, ref_d: date, default_seed: date):

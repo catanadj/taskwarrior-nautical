@@ -3476,6 +3476,20 @@ def test_next_after_atom_with_mods_characterization():
         got = core.next_after_atom_with_mods(atom, ref_d, seed_d)
         expect(got == expected, f"{expr} from {ref_d} seed={seed_d}: got {got}, expected {expected}")
 
+
+def test_scheduler_atom_helpers_characterization():
+    """Direct scheduler helpers should preserve interval-bucket and acceptance behavior."""
+    atom = core.validate_anchor_expr_strict("w:mon")[0][0]
+    expect(core.base_next_after_atom(atom, date(2024, 12, 9)) == date(2024, 12, 16), "base weekly next date should stay stable")
+    expect(core._interval_allowed_for_atom("w", 2, date(2024, 12, 9), date(2024, 12, 23)), "weekly /2 bucket should allow two-week jump")
+    expect(not core._interval_allowed_for_atom("w", 2, date(2024, 12, 9), date(2024, 12, 16)), "weekly /2 bucket should reject one-week jump")
+    expect(
+        core._advance_probe_for_interval_bucket("w", 2, date(2024, 12, 9), date(2024, 12, 16)) == date(2024, 12, 22),
+        "weekly probe advance should jump to day before next allowed week",
+    )
+    expect(core._accept_roll_candidate(date(2024, 6, 14), date(2024, 6, 15), date(2024, 6, 14), "nw"), "business-day roll may accept cand equal to ref_d")
+    expect(not core._accept_roll_candidate(date(2024, 6, 14), date(2024, 6, 14), date(2024, 6, 14), "nw"), "roll acceptance still requires future base")
+
 def test_complex_dnf_expressions():
     """Test complex DNF expressions with OR and AND"""
     test_cases = [
@@ -6204,6 +6218,7 @@ TESTS = [
     test_yearly_rand_natural_and_bounds,
     test_yearly_month_aliases_and_ranges,
     test_business_day_bd_skip_semantics,
+    test_scheduler_atom_helpers_characterization,
     test_inline_time_mods_natural_contains_both_times,
     test_guard_commas_between_atoms_after_mods_fatal,
     test_heads_with_slashN_parse_ok_again,

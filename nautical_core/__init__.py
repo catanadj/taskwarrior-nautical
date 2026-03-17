@@ -778,6 +778,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 from . import common as _common
 from . import nth_monthly as _nth_monthly
 from . import parser_atoms as _parser_atoms
+from . import parser_dnf as _parser_dnf
 from . import parser_frontend as _parser_frontend
 from . import quarter_helpers as _quarter_helpers
 from . import quarter_rewrite as _quarter_rewrite
@@ -4081,85 +4082,20 @@ def _parse_anchor_atom_at(s: str, i: int, n: int):
 
 
 def parse_anchor_expr_to_dnf(s: str) -> AnchorDNF:
-    """Parse anchor expression into Disjunctive Normal Form."""
-    s = _normalize_anchor_expr_input(s)
-    _raise_on_bad_colon_year_tokens(s)
-
-    i = 0
-    n = len(s)
-
-    def parse_atom():
-        nonlocal i
-        node, i = _parse_anchor_atom_at(s, i, n)
-        return node
-
-    def parse_factor(depth: int = 0):
-        nonlocal i
-        if depth > 50:
-            raise ParseError("Expression nesting too deep")
-        i = _skip_ws_pos(s, i, n)
-        if i < n and s[i] == "(":
-            i += 1
-            res = parse_expr(depth + 1)
-            i = _skip_ws_pos(s, i, n)
-            if i >= n or s[i] != ")":
-                raise ParseError("Unclosed '('")
-            i += 1
-            return res
-        return parse_atom()
-
-    def and_merge(A, B):
-        out: list[list[dict]] = []
-        for ta in A:
-            for tb in B:
-                out.append(ta + tb)
-                if len(out) > MAX_ANCHOR_DNF_TERMS:
-                    raise ParseError(
-                        f"Expression too complex: more than {MAX_ANCHOR_DNF_TERMS} combined terms."
-                    )
-        return out
-
-    def parse_term(depth: int = 0):
-        nonlocal i
-        left = parse_factor(depth)
-        while True:
-            pos = i
-            i = _skip_ws_pos(s, i, n)
-            if i >= n or s[i] != "+":
-                i = pos
-                break
-            i += 1
-            right = parse_factor(depth)
-            left = and_merge(left, right)
-        return left
-
-    def parse_expr(depth: int = 0):
-        nonlocal i
-        left = parse_term(depth)
-        while True:
-            pos = i
-            i = _skip_ws_pos(s, i, n)
-            if i >= n or s[i] != "|":
-                i = pos
-                break
-            i += 1
-            right = parse_term(depth)
-            if len(left) + len(right) > MAX_ANCHOR_DNF_TERMS:
-                raise ParseError(
-                    f"Expression too complex: more than {MAX_ANCHOR_DNF_TERMS} OR terms."
-                )
-            left = left + right
-        return left
-
-    res = parse_expr(0)
-    i = _skip_ws_pos(s, i, n)
-    if i != n:
-        raise ParseError("Unexpected trailing characters")
-    dnf = _rewrite_quarters_in_context(res)
-    dnf = _rewrite_year_month_aliases_in_context(dnf)   # NEW
-    _validate_year_tokens_in_dnf(dnf)
-    _validate_and_terms_satisfiable(dnf, ref_d=date.today())
-    return dnf
+    return _parser_dnf.parse_anchor_expr_to_dnf(
+        s,
+        normalize_anchor_expr_input=_normalize_anchor_expr_input,
+        raise_on_bad_colon_year_tokens=_raise_on_bad_colon_year_tokens,
+        parse_anchor_atom_at=_parse_anchor_atom_at,
+        skip_ws_pos=_skip_ws_pos,
+        rewrite_quarters_in_context=_rewrite_quarters_in_context,
+        rewrite_year_month_aliases_in_context=_rewrite_year_month_aliases_in_context,
+        validate_year_tokens_in_dnf=_validate_year_tokens_in_dnf,
+        validate_and_terms_satisfiable=_validate_and_terms_satisfiable,
+        max_anchor_dnf_terms=MAX_ANCHOR_DNF_TERMS,
+        parse_error_cls=ParseError,
+        today=date.today,
+    )
 
 
 @_ttl_lru_cache(maxsize=256)

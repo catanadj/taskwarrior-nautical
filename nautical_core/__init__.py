@@ -778,6 +778,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 from . import common as _common
 from . import nth_monthly as _nth_monthly
 from . import expansion_support as _expansion_support
+from . import monthly_support as _monthly_support
 from . import parser_atoms as _parser_atoms
 from . import parser_dnf as _parser_dnf
 from . import parser_frontend as _parser_frontend
@@ -2036,42 +2037,16 @@ def _doms_for_weekly_spec(spec:str, y:int, m:int) -> set[int]:
     )
 
 def _doms_for_monthly_token(tok: str, y:int, m:int) -> set[int]:
-    """Support: 'rand' -> full month; '10..20'; '31'; '-1'; '2nd-mon'; 'last-fri'."""
-    tok = (tok or "").strip().lower()
-    if tok in _MONTHLY_ALIAS:
-        tok = _MONTHLY_ALIAS[tok]
-    dim = _days_in_month(y,m)
-    if tok == "rand":
-        return set(range(1, dim+1))
-    # range a..b
-    m2 = re.fullmatch(r"(\-?\d{1,2})\.\.(\-?\d{1,2})", tok)
-    if m2:
-        a, b = int(m2.group(1)), int(m2.group(2))
-        if a < 0: a = dim + 1 + a  # -1 -> dim
-        if b < 0: b = dim + 1 + b
-        a = max(1, min(dim, a)); b = max(1, min(dim, b))
-        lo, hi = (a,b) if a <= b else (b,a)
-        return set(range(lo, hi+1))
-    # single int (may be negative)
-    if re.fullmatch(r"\-?\d{1,2}", tok):
-        d = int(tok)
-        if d < 0: d = dim + 1 + d
-        if 1 <= d <= dim: return {d}
-        return set()
-    # nth/last weekday
-    m3 = _NTH_RE.fullmatch(tok)
-    if m3:
-        nth_s, wd_s = m3.group(1), m3.group(2)
-        wd = _wd_idx(wd_s)
-        if wd is None: return set()
-        days = [d for d in range(1, dim+1) if date(y,m,d).weekday() == wd]
-        if nth_s:
-            idx = int(nth_s)-1
-            return {days[idx]} if 0 <= idx < len(days) else set()
-        else:  # last-*
-            return {days[-1]} if days else set()
-    # unknown monthly token -> empty set (parser should have validated earlier)
-    return set()
+    return _monthly_support.doms_for_monthly_token(
+        tok,
+        y,
+        m,
+        monthly_alias=_MONTHLY_ALIAS,
+        days_in_month=_days_in_month,
+        re_mod=re,
+        nth_re=_NTH_RE,
+        wd_idx=_wd_idx,
+    )
 
 def _y_ranges_from_spec(spec: str) -> list[tuple[int,int,int,int]]:
     return _expansion_support.y_ranges_from_spec(
@@ -2118,17 +2093,14 @@ def _first_day_next_month(y: int, m: int) -> date:
 
 
 def _month_allowed_doms_for_monthly_atom(atom: dict, y: int, m: int, dim: int) -> set[int]:
-    spec = str(atom.get("spec") or "")
-    toks = _split_csv_lower(spec)
-    if not toks:
-        return set(range(1, dim + 1))
-    doms: set[int] = set()
-    for tok in toks:
-        if tok == "rand":
-            doms.update(range(1, dim + 1))
-        else:
-            doms.update(_doms_for_monthly_token(tok, y, m))
-    return doms
+    return _monthly_support.month_allowed_doms_for_monthly_atom(
+        atom,
+        y,
+        m,
+        dim,
+        split_csv_lower=_split_csv_lower,
+        doms_for_monthly_token=_doms_for_monthly_token,
+    )
 
 
 def _intersect_monthly_atoms_allowed(
@@ -2139,15 +2111,14 @@ def _intersect_monthly_atoms_allowed(
     dim: int,
     allowed: set[int],
 ) -> set[int]:
-    out = set(allowed)
-    for atom in term:
-        typ = (atom.get("typ") or atom.get("type") or "").lower()
-        if typ != "m":
-            continue
-        out &= _month_allowed_doms_for_monthly_atom(atom, y, m, dim)
-        if not out:
-            return set()
-    return out
+    return _monthly_support.intersect_monthly_atoms_allowed(
+        term,
+        y=y,
+        m=m,
+        dim=dim,
+        allowed=allowed,
+        month_allowed_doms_for_monthly_atom=_month_allowed_doms_for_monthly_atom,
+    )
 
 
 def _intersect_weekly_atoms_allowed(
@@ -4792,88 +4763,65 @@ def _advance_probe_for_interval_bucket(typ: str, ival: int, seed: date, cand: da
 
 
 def _month_doms_safe(spec: str, y: int, m: int) -> list[int]:
-    try:
-        return sorted(expand_monthly_cached(spec, y, m))
-    except Exception:
-        return []
+    return _monthly_support.month_doms_safe(
+        spec,
+        y,
+        m,
+        expand_monthly_cached=expand_monthly_cached,
+    )
 
 
 def _month_has_hit(spec: str, y: int, m: int) -> bool:
-    return bool(_month_doms_safe(spec, y, m))
+    return _monthly_support.month_has_hit(
+        spec,
+        y,
+        m,
+        month_doms_safe=_month_doms_safe,
+    )
 
 
 def _first_hit_after_probe_in_month(spec: str, y: int, m: int, probe: date) -> date | None:
-    for d0 in _month_doms_safe(spec, y, m):
-        dt = date(y, m, d0)
-        if dt > probe:
-            return dt
-    return None
+    return _monthly_support.first_hit_after_probe_in_month(
+        spec,
+        y,
+        m,
+        probe,
+        month_doms_safe=_month_doms_safe,
+    )
 
 
 def _next_valid_month_on_or_after(spec: str, y: int, m: int) -> tuple[int, int]:
-    yy, mm = y, m
-    for _ in range(480):
-        if _month_has_hit(spec, yy, mm):
-            return yy, mm
-        mm += 1
-        if mm > 12:
-            yy += 1
-            mm = 1
-    return y, m
+    return _monthly_support.next_valid_month_on_or_after(
+        spec,
+        y,
+        m,
+        month_has_hit=_month_has_hit,
+    )
 
 
 def _advance_k_valid_months(spec: str, start_y: int, start_m: int, k: int) -> tuple[int, int]:
-    yy, mm = start_y, start_m
-    steps = max(k, 0)
-    while steps >= 0:
-        mm += 1
-        if mm > 12:
-            mm = 1
-            yy += 1
-        yy, mm = _next_valid_month_on_or_after(spec, yy, mm)
-        steps -= 1
-    return yy, mm
+    return _monthly_support.advance_k_valid_months(
+        spec,
+        start_y,
+        start_m,
+        k,
+        next_valid_month_on_or_after=_next_valid_month_on_or_after,
+    )
 
 
 def _monthly_align_base_for_interval(spec: str, base: date, probe: date, seed: date, ival: int) -> date:
-    by, bm = base.year, base.month
-
-    # Seed bucket = first valid month on/after seed.
-    sy, sm = _next_valid_month_on_or_after(spec, seed.year, seed.month)
-
-    # Ensure base is in a valid month and strictly > probe.
-    if not _month_has_hit(spec, by, bm):
-        by, bm = _next_valid_month_on_or_after(spec, by, bm)
-        nxt = _first_hit_after_probe_in_month(spec, by, bm, probe)
-        if nxt is None:
-            ny, nm = _advance_k_valid_months(spec, by, bm, 0)
-            doms = _month_doms_safe(spec, ny, nm)
-            base = date(ny, nm, doms[0])
-        else:
-            base = nxt
-    elif base <= probe:
-        nxt = _first_hit_after_probe_in_month(spec, by, bm, probe)
-        if nxt is None:
-            ny, nm = _advance_k_valid_months(spec, by, bm, 0)
-            doms = _month_doms_safe(spec, ny, nm)
-            base = date(ny, nm, doms[0])
-        else:
-            base = nxt
-
-    # Count valid-month steps from (sy, sm) to base(y, m).
-    cnt = 0
-    ty, tm = sy, sm
-    while (ty, tm) != (base.year, base.month) and cnt < 480:
-        ty, tm = _advance_k_valid_months(spec, ty, tm, 0)
-        cnt += 1
-
-    if (cnt % ival) != 0:
-        steps = ival - (cnt % ival)
-        ny, nm = _advance_k_valid_months(spec, base.year, base.month, steps - 1)
-        doms = _month_doms_safe(spec, ny, nm)
-        base = date(ny, nm, doms[0])
-
-    return base
+    return _monthly_support.monthly_align_base_for_interval(
+        spec,
+        base,
+        probe,
+        seed,
+        ival,
+        month_has_hit=_month_has_hit,
+        next_valid_month_on_or_after=_next_valid_month_on_or_after,
+        first_hit_after_probe_in_month=_first_hit_after_probe_in_month,
+        advance_k_valid_months=_advance_k_valid_months,
+        month_doms_safe=_month_doms_safe,
+    )
 
 
 def _accept_roll_candidate(ref_d: date, base: date, cand: date, roll_kind: str | None) -> bool:

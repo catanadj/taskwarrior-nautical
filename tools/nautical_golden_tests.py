@@ -2641,6 +2641,17 @@ def test_monthly_valid_months_m2_5th_mon():
     for d in p["upcoming"][:6]:
         expect(datetime.fromisoformat(d).weekday() == 0, f"{d} must be Monday")
 
+
+def test_monthly_support_helpers_characterization():
+    """Monthly DOM and valid-month support helpers should preserve current behavior."""
+    expect(core._doms_for_monthly_token("last-fri", 2026, 1) == {30}, "last-fri in Jan 2026 should resolve to the 30th")
+    expect(core._month_has_hit("5th-mon", 2026, 2) is False, "Feb 2026 should not have a 5th Monday")
+    expect(core._month_has_hit("5th-mon", 2026, 3) is True, "Mar 2026 should have a 5th Monday")
+    expect(core._next_valid_month_on_or_after("5th-mon", 2026, 2) == (2026, 3), "next valid month after Feb 2026 should be Mar 2026")
+    probe = date(2026, 3, 1)
+    nxt = core._first_hit_after_probe_in_month("5th-mon", 2026, 3, probe)
+    expect(nxt == date(2026, 3, 30), f"Unexpected first hit in Mar 2026: {nxt!r}")
+
 def test_leap_year_29feb():
     """Test leap year handling for Feb 29"""
     p = build_preview("y:02-29")
@@ -6141,6 +6152,7 @@ TESTS = [
     test_lint_anchor_expr_characterization,
     test_last_weekday,
     test_monthly_valid_months_m2_5th_mon,
+    test_monthly_support_helpers_characterization,
     test_leap_year_29feb,
     test_quarters_window,
     test_quarter_alias_unambiguous_month_selectors,

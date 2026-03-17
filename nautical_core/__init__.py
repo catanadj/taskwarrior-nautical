@@ -787,6 +787,7 @@ from . import quarter_rewrite as _quarter_rewrite
 from . import quarter_selector as _quarter_selector
 from . import satisfiability as _satisfiability
 from . import scheduler_atom as _scheduler_atom
+from . import scheduler_expr as _scheduler_expr
 from . import tokenutil as _tokenutil
 from . import yearly_parse as _yearly_parse
 from . import yearly_validation as _yearly_validation
@@ -2067,32 +2068,6 @@ def _doms_allowed_by_year(y:int, m:int, y_specs: list[str]) -> set[int]:
         days_in_month=_days_in_month,
     )
 
-def _choose_rand_dom(y:int, m:int, doms: set[int]) -> int | None:
-    """Deterministic pick of one day from 'doms' using WRAND_SALT."""
-    if not doms:
-        return None
-    pool = sorted(doms)
-    h = hashlib.sha256(f"{WRAND_SALT}|{y:04d}-{m:02d}".encode("utf-8")).digest()
-    idx = int.from_bytes(h[:8], "big") % len(pool)
-    return pool[idx]
-
-
-def _term_has_monthly_rand(term: list[dict]) -> bool:
-    return any(
-        (a.get("typ") or a.get("type")) == "m"
-        and "rand" in str(a.get("spec") or "").lower()
-        for a in term
-    )
-
-
-def _term_year_specs(term: list[dict]) -> list[str]:
-    return [str(a.get("spec") or "") for a in term if (a.get("typ") or a.get("type")) == "y"]
-
-
-def _first_day_next_month(y: int, m: int) -> date:
-    return date(y, m, 1) + timedelta(days=_days_in_month(y, m))
-
-
 def _month_allowed_doms_for_monthly_atom(atom: dict, y: int, m: int, dim: int) -> set[int]:
     return _monthly_support.month_allowed_doms_for_monthly_atom(
         atom,
@@ -2122,113 +2097,56 @@ def _intersect_monthly_atoms_allowed(
     )
 
 
-def _intersect_weekly_atoms_allowed(
-    term: list[dict],
-    *,
-    y: int,
-    m: int,
-    allowed: set[int],
-) -> set[int]:
-    out = set(allowed)
-    for atom in term:
-        typ = (atom.get("typ") or atom.get("type") or "").lower()
-        if typ != "w":
-            continue
-        spec = str(atom.get("spec") or "")
-        wdom = _doms_for_weekly_spec(spec, y, m)
-        out = out & wdom if wdom else set()
-        if not out:
-            return set()
-    return out
-
-
 def _next_for_and_rand_yearly(term: list[dict], ref_d: date, y_specs: list[str]) -> date | None:
-    probe = ref_d + timedelta(days=1)
-    for _ in range(60):  # scan up to 5 years (60 months)
-        y, m = probe.year, probe.month
-        dim = _days_in_month(y, m)
-        allowed = set(range(1, dim + 1))
-        allowed &= _doms_allowed_by_year(y, m, y_specs)
-        if not allowed:
-            probe = _first_day_next_month(y, m)
-            continue
-
-        allowed = _intersect_monthly_atoms_allowed(term, y=y, m=m, dim=dim, allowed=allowed)
-        if not allowed:
-            probe = _first_day_next_month(y, m)
-            continue
-
-        allowed = _intersect_weekly_atoms_allowed(term, y=y, m=m, allowed=allowed)
-        if not allowed:
-            probe = _first_day_next_month(y, m)
-            continue
-
-        pick = _choose_rand_dom(y, m, allowed)
-        if pick is None:
-            probe = _first_day_next_month(y, m)
-            continue
-        cand = date(y, m, pick)
-        if cand > ref_d:
-            return cand
-        probe = _first_day_next_month(y, m)
-    return None
+    return _scheduler_expr.next_for_and_rand_yearly(
+        term,
+        ref_d,
+        y_specs,
+        wrand_salt=WRAND_SALT,
+        days_in_month=_days_in_month,
+        doms_allowed_by_year=_doms_allowed_by_year,
+        intersect_monthly_atoms_allowed=_intersect_monthly_atoms_allowed,
+        doms_for_weekly_spec=_doms_for_weekly_spec,
+        date_cls=date,
+    )
 
 
 def _next_for_and_fast_path(term: list[dict], ref_d: date, seed: date) -> date:
-    probe = ref_d
-    stalled = 0
-    for _ in range(MAX_ANCHOR_ITER):
-        cands = [next_after_atom_with_mods(atom, probe, seed) for atom in term]
-        if not cands:
-            raise ParseError("Anchor evaluation term is empty; check anchor spec.")
-        target = max(cands)
-        if target <= probe:
-            stalled += 1
-            if stalled < 3:
-                probe = probe + timedelta(days=1)
-                continue
-            if os.environ.get("NAUTICAL_DIAG") == "1":
-                _warn_once_per_day(
-                    "next_for_and_no_progress",
-                    "[nautical] _next_for_and made no progress; failing fast. Check anchor spec.",
-                )
-            raise ParseError("Anchor evaluation made no forward progress; check anchor spec.")
-        stalled = 0
-        if all(atom_matches_on(atom, target, seed) for atom in term):
-            return target
-        probe = target
-    if os.environ.get("NAUTICAL_DIAG") == "1":
-        _warn_once_per_day(
-            "next_for_and_fallback",
-            f"[nautical] _next_for_and fallback after {MAX_ANCHOR_ITER} iterations.",
-        )
-    return ref_d + timedelta(days=365)
+    return _scheduler_expr.next_for_and_fast_path(
+        term,
+        ref_d,
+        seed,
+        next_after_atom_with_mods=next_after_atom_with_mods,
+        atom_matches_on=atom_matches_on,
+        max_anchor_iter=MAX_ANCHOR_ITER,
+        warn_once_per_day=_warn_once_per_day,
+        parse_error_cls=ParseError,
+        os_mod=os,
+    )
 
 
 def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
-    """
-    Find the next date > ref_d satisfying ALL atoms in 'term'.
-    Rand-aware: if the term contains m:rand and any y:, choose the random
-    day from the intersection of ALL constraints for each candidate month.
-    Otherwise, fall back to the fast alignment loop.
-    """
-    has_m_rand = _term_has_monthly_rand(term)
-    y_specs = _term_year_specs(term)
-    if has_m_rand and y_specs:
-        rand_yearly = _next_for_and_rand_yearly(term, ref_d, y_specs)
-        if rand_yearly is not None:
-            return rand_yearly
-        return ref_d + timedelta(days=365)
-    return _next_for_and_fast_path(term, ref_d, seed)
+    return _scheduler_expr.next_for_and(
+        term,
+        ref_d,
+        seed,
+        wrand_salt=WRAND_SALT,
+        days_in_month=_days_in_month,
+        doms_allowed_by_year=_doms_allowed_by_year,
+        intersect_monthly_atoms_allowed=_intersect_monthly_atoms_allowed,
+        doms_for_weekly_spec=_doms_for_weekly_spec,
+        next_after_atom_with_mods=next_after_atom_with_mods,
+        atom_matches_on=atom_matches_on,
+        max_anchor_iter=MAX_ANCHOR_ITER,
+        warn_once_per_day=_warn_once_per_day,
+        parse_error_cls=ParseError,
+        os_mod=os,
+        date_cls=date,
+    )
 
 
 def _next_for_or(dnf: list[list[dict]], ref_d: date, seed: date) -> date:
-    best = None
-    for term in dnf:
-        d = _next_for_and(term, ref_d, seed)
-        if d and d > ref_d and (best is None or d < best):
-            best = d
-    return best or (ref_d + timedelta(days=365))
+    return _scheduler_expr.next_for_or(dnf, ref_d, seed, next_for_and=_next_for_and)
 
 # ---- Public precompute --------------------------------------------------------
 
@@ -4793,205 +4711,32 @@ def atom_matches_on(atom, d: date, default_seed: date) -> bool:
 
 
 def next_after_term(term, ref_d: date, default_seed: date):
-    """Find next date after ref_d that matches all atoms in term.
-
-    Fast path for single-atom terms to avoid unnecessary intersection logic
-    and /N-gating artifacts.
-    """
-    # ---------- Fast path: single atom ----------
-    if len(term) == 1:
-        atom = term[0]
-        nxt = next_after_atom_with_mods(atom, ref_d, default_seed)
-        mods = atom.get("mods") or {}
-        hhmm = mods.get("t")
-        return nxt, hhmm
-
-    # ---------- General case: intersection of multiple atoms ----------
-    cur = ref_d
-    for _ in range(min(INTERSECTION_GUARD_STEPS, 100)):
-        # For each atom, find its next candidate >= cur
-        cands = [next_after_atom_with_mods(a, cur, default_seed) for a in term]
-        nxt = max(cands)
-
-        # Check that all atoms "match" on this day (with roll window, etc.)
-        if all(atom_matches_on(a, nxt, default_seed) for a in term):
-            hhmm = None
-            for a in term:
-                mods = a.get("mods") or {}
-                if mods.get("t"):
-                    tval = mods["t"]
-                    if isinstance(tval, list):
-                        hhmm = tval[0] if tval else None
-                    else:
-                        hhmm = tval
-                    break
-            return nxt, hhmm
-
-        # Otherwise advance the search window
-        cur = nxt
-
-    # Guard-rail fallback to avoid infinite loops on pathological patterns
-    return ref_d + timedelta(days=365), None
-
-
-
-def _is_simple_weekly(dnf):
-    """Fast path check for simple weekly expressions."""
-    if len(dnf) != 1 or len(dnf[0]) != 1:
-        return False
-    atom = dnf[0][0]
-    return (
-        atom["typ"] == "w"
-        and "rand" not in (atom.get("spec") or "")
-        and atom.get("ival", 1) == 1
-        and not _active_mod_keys(atom.get("mods"))
+    return _scheduler_expr.next_after_term(
+        term,
+        ref_d,
+        default_seed,
+        next_after_atom_with_mods=next_after_atom_with_mods,
+        atom_matches_on=atom_matches_on,
+        intersection_guard_steps=INTERSECTION_GUARD_STEPS,
     )
 
 
-def _simple_weekly_next(after_date: date, weekdays: list) -> date:
-    """Optimized next date calculation for simple weekly patterns."""
-    current_wd = after_date.weekday()
-    for offset in range(1, 8):  # Check next 7 days
-        cand = after_date + timedelta(days=offset)
-        if cand.weekday() in weekdays:
-            return cand
-    # Fallback: should not happen with proper weekdays list
-    return after_date + timedelta(days=7)
-
-
-def _pick_earlier_candidate(
-    best: date | None,
-    best_meta: dict | None,
-    cand: date | None,
-    meta: dict | None,
-):
-    if cand and (best is None or cand < best):
-        return cand, meta
-    return best, best_meta
-
-
-def _next_after_expr_monthly_rand_candidate(
-    term: list[dict],
-    term_id: int,
-    info: dict,
-    after_date: date,
-    default_seed: date | None,
-    seed_base: str | None,
-):
-    if any(_atype(a) == "y" for a in term):
-        cand = _next_for_and(term, after_date, default_seed)
-        if cand:
-            return cand, {"basis": "rand+yearly"}
-        return None, None
-
-    seed_key_base = seed_base if seed_base is not None else "preview"
-    mods = info.get("mods") or {}
-    bd_only = bool(mods.get("bd"))
-    ival = int(info.get("ival") or 1)
-
-    seed_loc = default_seed or after_date
-    y, m = after_date.year, after_date.month
-
-    for _ in range(24):  # up to 24 months ahead
-        if ival > 1 and ((_months_since(seed_loc, y, m) % ival) != 0):
-            m = 1 if m == 12 else m + 1
-            if m == 1:
-                y += 1
-            continue
-
-        cands = _term_candidates_in_month(term, y, m, info["atom_idx"], bd_only)
-        if cands:
-            period_key = f"{y:04d}{m:02d}"
-            seed_key = f"{seed_key_base}|m|{term_id}|{period_key}"
-            idx = _sha_pick(len(cands), seed_key)
-            choice = cands[idx]
-            if choice > after_date:
-                return choice, {"basis": "rand", "rand_period": period_key}
-        m = 1 if m == 12 else m + 1
-        if m == 1:
-            y += 1
-
-    return None, None
-
-
-def _next_after_expr_yearly_rand_candidate(
-    term: list[dict],
-    term_id: int,
-    info: dict,
-    after_date: date,
-    seed_base: str | None,
-):
-    seed_key_base = seed_base if seed_base is not None else "preview"
-    mods = info.get("mods") or {}
-    bd_only = bool(mods.get("bd"))
-    target_m = info.get("month", None)
-    y = after_date.year
-
-    for _ in range(10):  # up to 10 years ahead
-        if target_m is None:
-            # plain y:rand -> gather all monthly candidates for this year
-            cands = []
-            for mm in range(1, 13):
-                cands.extend(_term_candidates_in_month(term, y, mm, info["atom_idx"], bd_only))
-            period_key = f"{y:04d}"
-        else:
-            cands = _term_candidates_in_month(term, y, int(target_m), info["atom_idx"], bd_only)
-            period_key = f"{y:04d}-{int(target_m):02d}"
-
-        if cands:
-            seed_key = f"{seed_key_base}|y|{term_id}|{period_key}"
-            idx = _sha_pick(len(cands), seed_key)
-            choice = cands[idx]
-            if choice > after_date:
-                return choice, {"basis": "rand", "rand_period": period_key}
-        y += 1
-
-    return None, None
-
-
-def _next_after_expr_term_candidate(term: list[dict], after_date: date, default_seed: date | None):
-    cand, _ = next_after_term(term, after_date, default_seed)
-    if cand:
-        return cand, {"basis": "term"}
-    return None, None
-
-
 def next_after_expr(dnf, after_date, default_seed=None, seed_base=None):
-    """
-    Return the next matching *local date* strictly > after_date.
-    Uses optimized paths for common cases.
-    """
-
-    # Fast path for simple weekly expressions
-    if _is_simple_weekly(dnf):
-        atom = dnf[0][0]
-        days = expand_weekly_cached(atom["spec"])
-        return _simple_weekly_next(after_date, days), {"basis": "simple_weekly"}
-
-    best = None
-    best_meta = None
-
-    for term_id, term in enumerate(dnf):
-        rk, info = _term_rand_info(term)
-
-        if rk == "m":
-            cand, meta = _next_after_expr_monthly_rand_candidate(
-                term, term_id, info, after_date, default_seed, seed_base
-            )
-            best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
-            continue
-
-        if rk == "y":
-            cand, meta = _next_after_expr_yearly_rand_candidate(
-                term, term_id, info, after_date, seed_base
-            )
-            best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
-            continue
-
-        cand, meta = _next_after_expr_term_candidate(term, after_date, default_seed)
-        best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
-
-    return best, best_meta
+    return _scheduler_expr.next_after_expr(
+        dnf,
+        after_date,
+        default_seed=default_seed,
+        seed_base=seed_base,
+        active_mod_keys=_active_mod_keys,
+        expand_weekly_cached=expand_weekly_cached,
+        term_rand_info=_term_rand_info,
+        atype=_atype,
+        next_for_and=_next_for_and,
+        months_since=_months_since,
+        term_candidates_in_month=_term_candidates_in_month,
+        sha_pick=_sha_pick,
+        next_after_term=next_after_term,
+    )
 
 
 def anchors_between_expr(dnf, start_excl, end_excl, default_seed, seed_base=None):

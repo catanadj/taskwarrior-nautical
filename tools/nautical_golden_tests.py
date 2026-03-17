@@ -2540,6 +2540,35 @@ def test_weekly_and_unsat():
     fatal, _ = core.lint_anchor_expr("w:sat + w:mon")
     expect(bool(fatal), "Weekly A+B must be unsatisfiable (Sat AND Mon)")
 
+
+def test_satisfiability_helpers_characterization():
+    """Direct satisfiability helpers should preserve fast weekly/yearly failures."""
+    try:
+        core._quick_weekly_and_check(
+            [{"typ": "w", "spec": "sat", "mods": {}}, {"typ": "w", "spec": "mon", "mods": {}}]
+        )
+        raise AssertionError("expected weekly AND helper to fail")
+    except core.AndTermUnsatisfiable as e:
+        expect("never coincide" in str(e), f"unexpected weekly unsat message: {e}")
+
+    try:
+        core._quick_yearly_and_check(
+            [{"typ": "y", "spec": "01-01"}, {"typ": "y", "spec": "12-25"}]
+        )
+        raise AssertionError("expected yearly AND helper to fail")
+    except core.AndTermUnsatisfiable as e:
+        expect("never overlap within a year" in str(e), f"unexpected yearly unsat message: {e}")
+
+    expect(
+        core._term_has_any_match_within(
+            [{"typ": "w", "spec": "mon", "mods": {}}, {"typ": "m", "spec": "1", "mods": {}}],
+            date(2026, 1, 1),
+            date(2026, 1, 1),
+            years=2,
+        ),
+        "simple satisfiable term should have a match within scan window",
+    )
+
 def test_nth_weekday_range():
     """Test nth weekday range validation (1..5 or last)"""
     fatal, _ = core.lint_anchor_expr("m:6th-mon")
@@ -6085,6 +6114,7 @@ def test_hooks_no_direct_subprocess_run():
 TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
+    test_satisfiability_helpers_characterization,
     test_nth_weekday_range,
     test_lint_anchor_expr_characterization,
     test_last_weekday,

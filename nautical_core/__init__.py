@@ -783,6 +783,7 @@ from . import parser_frontend as _parser_frontend
 from . import quarter_helpers as _quarter_helpers
 from . import quarter_rewrite as _quarter_rewrite
 from . import quarter_selector as _quarter_selector
+from . import satisfiability as _satisfiability
 from . import tokenutil as _tokenutil
 from . import yearly_parse as _yearly_parse
 from . import yearly_validation as _yearly_validation
@@ -4174,132 +4175,61 @@ _LEAP_YEAR_FOR_CHECKS = 2028
 
 
 def _weekday_set_from_weekly_atom(a) -> set[int]:
-    """Return {0..6} weekday set for a 'w' atom.
-
-    Handles canonical V2 ranges ('..').
-    """
-    if (a.get("typ") or "").lower() != "w":
-        return set()
-    spec = (a.get("spec") or "")
-    mods = a.get("mods") or {}
-    return _weekly_spec_to_wset(spec, mods=mods)
+    return _satisfiability.weekday_set_from_weekly_atom(
+        a,
+        weekly_spec_to_wset=_weekly_spec_to_wset,
+    )
 
 
 def _md_pairs_from_yearly_spec(spec: str) -> set[tuple[int, int]]:
-    """Expand a yearly spec in a leap year and return {(month, day),...}."""
-    if not spec:
-        return set()
-    try:
-        dates = expand_yearly_cached(spec, _LEAP_YEAR_FOR_CHECKS)
-    except Exception:
-        return set()
-    return {(d.month, d.day) for d in dates}
+    return _satisfiability.md_pairs_from_yearly_spec(
+        spec,
+        expand_yearly_cached=expand_yearly_cached,
+        leap_year_for_checks=_LEAP_YEAR_FOR_CHECKS,
+    )
 
 
 def _quick_weekly_and_check(term: list[dict]) -> None:
-    """w + w: if weekday intersection is empty, fail immediately."""
-    w_sets = [
-        _weekday_set_from_weekly_atom(a)
-        for a in term
-        if (a.get("typ") or "").lower() == "w"
-    ]
-    if len(w_sets) >= 2:
-        inter = set.intersection(*w_sets) if all(w_sets) else set()
-        if not inter:
-            raise AndTermUnsatisfiable(
-                "Weekly anchors joined with '+' never coincide (e.g., Saturday AND Monday). "
-                "Use ',' (OR) or '|' instead."
-            )
+    _satisfiability.quick_weekly_and_check(
+        term,
+        weekday_set_from_weekly_atom=_weekday_set_from_weekly_atom,
+        and_term_unsatisfiable_cls=AndTermUnsatisfiable,
+    )
 
 
 def _quick_yearly_and_check(term: list[dict]) -> None:
-    """y + y: if per-year date set intersection is empty, fail."""
-    y_atoms = [a for a in term if (a.get("typ") or "").lower() == "y"]
-    if len(y_atoms) < 2:
-        return
-    md_sets = []
-    for ya in y_atoms:
-        spec = (ya.get("spec") or "").strip().lower()
-        s = _md_pairs_from_yearly_spec(spec)
-        if s:
-            md_sets.append(s)
-    if len(md_sets) >= 2:
-        inter = set.intersection(*md_sets)
-        if not inter:
-            # Build a hint using the normalized specs we just saw
-            joined = ", ".join((ya.get("spec") or "").strip().lower() for ya in y_atoms)
-            raise AndTermUnsatisfiable(
-                "Yearly anchors joined with '+' never overlap within a year. "
-                f"If you intended 'either/or', join them with commas: y:{joined}"
-            )
+    _satisfiability.quick_yearly_and_check(
+        term,
+        md_pairs_from_yearly_spec=_md_pairs_from_yearly_spec,
+        and_term_unsatisfiable_cls=AndTermUnsatisfiable,
+    )
 
 
 def _term_has_any_match_within(
     term: list[dict], start: date, seed: date, years: int = 8
 ) -> bool:
-    """
-    If any atom uses 'rand' (weekly or monthly), treat that atom as 'can match this bucket'
-    for satisfiability purposes. Actual random is resolved in the scheduler, not here.
-    """
-
-    def _matches_or_flexible(a, d):
-        typ = (a.get("typ") or "").lower()
-        spec = (a.get("spec") or "").lower()
-        if typ in ("w", "m") and "rand" in spec:
-            return True  # flexible for the validator
-        return atom_matches_on(a, d, seed)
-
-    limit = start + timedelta(days=366 * max(1, years))
-    d = start
-    while d <= limit:
-        if all(_matches_or_flexible(a, d) for a in term):
-            return True
-        d += timedelta(days=1)
-    return False
+    return _satisfiability.term_has_any_match_within(
+        term,
+        start,
+        seed,
+        atom_matches_on=atom_matches_on,
+        years=years,
+    )
 
 
 # ------------------------------------------------------------------------------
 # Anchor satisfiability checks
 # ------------------------------------------------------------------------------
 def _validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d: date):
-    """
-    For each AND-term (inside a DNF expression), ensure it's satisfiable.
-    - Fast rejections for weekly+weekly and yearly+yearly.
-    - Otherwise, bounded look-ahead scan (8y) using atom_matches_on.
-    """
-    seed = (
-        ref_d  # use now as seed for gating; scheduler will re-evaluate with chain seed
+    _satisfiability.validate_and_terms_satisfiable(
+        dnf,
+        ref_d,
+        quick_weekly_and_check=_quick_weekly_and_check,
+        quick_yearly_and_check=_quick_yearly_and_check,
+        term_has_any_match_within=_term_has_any_match_within,
+        normalize_spec_for_acf=_normalize_spec_for_acf,
+        and_term_unsatisfiable_cls=AndTermUnsatisfiable,
     )
-    for term in dnf:
-        if len(term) < 2:
-            continue  # single-atom terms are trivially satisfiable
-
-        # Fast, structure-aware checks
-        _quick_weekly_and_check(term)
-        _quick_yearly_and_check(term)
-
-        # Bounded scan for everything else (m+m, m+y, mixes, etc.)
-        if not _term_has_any_match_within(term, ref_d, seed, years=8):
-            # Build a friendly suggestion by showing a comma-joined alternative
-            # like: y:01-03,15-08  or  w:sat,mon  or  m:1,5
-            pieces = []
-            for a in term:
-                typ = (a.get("typ") or "").lower()
-                spec = (a.get("spec") or "").strip()
-                # For user-facing examples, prefer canonical V2 delimiters where possible.
-                if typ in ("w", "m"):
-                    try:
-                        spec = _normalize_spec_for_acf(typ, spec) or spec
-                    except Exception:
-                        pass
-                if typ:
-                    pieces.append(f"{typ}:{spec}" if spec else typ)
-            hint = ", ".join(pieces)
-            raise AndTermUnsatisfiable(
-                "These anchors joined with '+' don't share any possible date. "
-                "If you meant 'either/or', join them with ',' (OR) or use '|'. "
-                f"Example: {hint.replace(' + ', ', ')}"
-            )
 
 
 # ===== Strict validators (raise ParseError) ==================================

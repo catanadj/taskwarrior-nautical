@@ -2990,6 +2990,19 @@ def test_parser_validation():
                 f"{expr}: wrong error message. Got: {e}"
 
 
+def test_parser_atom_helpers_characterization():
+    """Direct atom helper behavior should stay stable for common heads, mods, and single atoms."""
+    expect(core._parse_atom_head("w/2") == ("w", 2), f"Unexpected head parse: {core._parse_atom_head('w/2')!r}")
+    mods = core._parse_atom_mods("t=09:00,12:00@+1d")
+    expect(mods["t"] == [(9, 0), (12, 0)], f"Unexpected time mods: {mods!r}")
+    expect(mods["day_offset"] == 1, f"Unexpected day offset: {mods!r}")
+    dnf = core._build_anchor_atom_dnf("m", "1st-mon@t=09:00")
+    expect(dnf == [[{"typ": "m", "spec": "1mon", "ival": 1, "mods": {"t": (9, 0), "roll": None, "wd": None, "bd": False, "day_offset": 0}}]], f"Unexpected atom dnf: {dnf!r}")
+    node, next_i = core._parse_anchor_atom_at("w:mon@t=09:00 + m:1", 0, len("w:mon@t=09:00 + m:1"))
+    expect(node == [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {"t": (9, 0), "roll": None, "wd": None, "bd": False, "day_offset": 0}}]], f"Unexpected parsed node: {node!r}")
+    expect(next_i > 0, "Parser should advance index for single atom")
+
+
 def test_yearly_spec_token_helper_accepts_known_valid_tokens():
     """Yearly token helper should accept canonical quarter/date forms."""
     for tok in ("q1", "q2s", "q1..q2", "q1s..q2s", "01-01", "01-01..31-12"):
@@ -6112,6 +6125,7 @@ TESTS = [
     test_natural_compresses_repeated_fall_on_variants,
     test_rand_bucket_signature_characterization,
     test_parser_validation,
+    test_parser_atom_helpers_characterization,
     test_yearly_spec_token_helper_accepts_known_valid_tokens,
     test_yearly_spec_token_helper_rejects_bad_ranges,
     test_yearly_token_format_characterization,

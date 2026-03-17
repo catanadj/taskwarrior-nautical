@@ -777,6 +777,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 # ==============================================================================
 from . import common as _common
 from . import nth_monthly as _nth_monthly
+from . import parser_atoms as _parser_atoms
 from . import parser_frontend as _parser_frontend
 from . import quarter_helpers as _quarter_helpers
 from . import quarter_rewrite as _quarter_rewrite
@@ -3971,98 +3972,25 @@ class ParseError(Exception):
 
 
 def _parse_hhmm(s: str):
-    """Parse HH:MM time string."""
-    m = _hhmm_re.match(s)
-    if not m:
-        return None
-    return (int(m.group(1)), int(m.group(2)))
+    return _parser_atoms.parse_hhmm(s, hhmm_re=_hhmm_re)
 
 
 def _parse_atom_head(head: str) -> tuple[str, int]:
-    """
-    Parse the atom head:  'w' | 'm' | 'y'  with optional '/N' (1..100).
-    Examples: 'w', 'w/2', 'm', 'm/3', 'y/4'
-    Returns (typ, ival).
-    """
-    h = (head or "").strip().lower()
-    m = re.fullmatch(r'(w|m|y)(?:/(\d{1,3}))?$', h)
-    if not m:
-        raise ParseError(
-            f"Invalid anchor head '{head}'. Expected 'w', 'm', or 'y' with optional '/N', "
-            "e.g., 'w/2', 'm/3', 'y/4'."
-        )
-    typ = m.group(1)
-    ival = int(m.group(2) or 1)
-    if ival < 1:
-        ival = 1
-    if ival > 100:
-        ival = 100
-    return typ, ival
+    return _parser_atoms.parse_atom_head(head, re_mod=re, parse_error_cls=ParseError)
 
 
 
 
 def _parse_atom_mods(mods_str: str):
-    """Parse atom modifiers (e.g., @t=09:00 or @t=09:00,12:00,18:00, @+1d)."""
-    mods = {"t": None, "roll": None, "wd": None, "bd": False, "day_offset": 0}
-    if not mods_str:
-        return mods
-
-    def _parse_time_list(v: str):
-        parts = _split_csv_tokens(v)
-        if not parts:
-            return None
-        out = []
-        seen = set()
-        for p in parts:
-            hhmm = _parse_hhmm(p)
-            if not hhmm:
-                raise ParseError(f"Invalid time in @t=HH:MM[,HH:MM...]: '{p}'")
-            if hhmm not in seen:
-                out.append(hhmm)
-                seen.add(hhmm)
-        return out
-
-    for raw in mods_str.split("@"):
-        tok = raw.strip().lower()
-        if not tok:
-            continue
-
-        if tok in ("nw", "pbd", "nbd"):
-            mods["roll"] = tok
-            continue
-
-        if tok == "bd":
-            # business day filter (weekdays only) — distinct from wd=int
-            mods["bd"] = True
-            continue
-
-        m = _next_prev_wd_re.match(tok)
-        if m:
-            mods["roll"] = f"{m.group(1)}-wd"
-            mods["wd"] = _WEEKDAYS[m.group(2)]  # 0..6 target weekday
-            continue
-
-        # Time modifier: support a single @t=... per atom, with comma-separated HH:MM list.
-        if tok.startswith("t="):
-            if mods["t"] is not None:
-                raise ParseError(
-                    "Duplicate '@t=' modifier. Use a single '@t=HH:MM,HH:MM,...' list."
-                )
-            tval = tok.split("=", 1)[1].strip()
-            tlist = _parse_time_list(tval)
-            if not tlist:
-                raise ParseError(f"Invalid time in @t=HH:MM[,HH:MM...]: '{tok}'")
-            mods["t"] = tlist[0] if len(tlist) == 1 else tlist
-            continue
-
-        m = _day_offset_re.match(tok)
-        if m:
-            mods["day_offset"] += int(m.group(1))
-            continue
-
-        raise ParseError(f"Unknown modifier '@{tok}'")
-    return mods
+    return _parser_atoms.parse_atom_mods(
+        mods_str,
+        split_csv_tokens=_split_csv_tokens,
+        parse_hhmm=_parse_hhmm,
+        next_prev_wd_re=_next_prev_wd_re,
+        weekdays=_WEEKDAYS,
+        day_offset_re=_day_offset_re,
+        parse_error_cls=ParseError,
+    )
 
 
 @_ttl_lru_cache(maxsize=512)
@@ -4125,68 +4053,31 @@ def _raise_if_comma_joined_anchors(full_tail: str) -> None:
 
 
 def _normalize_monthly_ordinal_spec(spec: str) -> str:
-    def _ord_norm(mo: re.Match) -> str:
-        return f"{mo.group(1)}{mo.group(3).lower()}"
-
-    return re.sub(
-        r"\b([1-5])\s*(st|nd|rd|th)\s*-\s*(mon|tue|wed|thu|fri|sat|sun)\b",
-        _ord_norm,
-        spec,
-        flags=re.IGNORECASE,
-    )
+    return _parser_atoms.normalize_monthly_ordinal_spec(spec, re_mod=re)
 
 
 def _build_anchor_atom_dnf(head: str, full_tail: str):
-    """Build DNF node for one parsed atom head/tail pair."""
-    typ, ival = _parse_atom_head(head)
-    tlo = (typ or "").lower()
-
-    dnf_or = _parse_group_with_inline_mods(tlo, ival, full_tail, "")
-    if dnf_or is not None:
-        return dnf_or
-
-    spec, mods_str = (full_tail.split("@", 1) + [""])[:2]
-    if tlo == "m":
-        spec = _normalize_monthly_ordinal_spec(spec)
-
-    if tlo == "w":
-        toks = _split_csv_lower(spec)
-        if "rand" in toks and len(toks) > 1:
-            mods = _parse_atom_mods(mods_str)
-            return [
-                [{"typ": "w", "spec": t, "ival": ival, "mods": mods}]
-                for t in toks
-            ]
-
-    mods = _parse_atom_mods(mods_str)
-    return [[{"typ": tlo, "spec": spec.strip().lower(), "ival": ival, "mods": mods}]]
+    return _parser_atoms.build_anchor_atom_dnf(
+        head,
+        full_tail,
+        parse_atom_head=_parse_atom_head,
+        parse_group_with_inline_mods=_parse_group_with_inline_mods,
+        normalize_monthly_ordinal_spec=_normalize_monthly_ordinal_spec,
+        split_csv_lower=_split_csv_lower,
+        parse_atom_mods=_parse_atom_mods,
+    )
 
 
 def _parse_anchor_atom_at(s: str, i: int, n: int):
-    """Parse one atom at position i and return (dnf_node, next_i)."""
-    i = _skip_ws_pos(s, i, n)
-
-    start = i
-    while i < n and s[i] not in ":()+|":
-        i += 1
-    head = s[start:i].strip()
-
-    if i >= n or s[i] != ":":
-        raise ParseError("Expected ':' after anchor type. Example 'w:mon', 'm:-1', 'y:06-01'")
-    i += 1
-
-    start = i
-    while i < n:
-        ch = s[i]
-        if ch in ")|":
-            break
-        if ch == "+" and not (i > start and s[i - 1] == "@"):
-            break
-        i += 1
-
-    full_tail = s[start:i].strip()
-    _raise_if_comma_joined_anchors(full_tail)
-    return _build_anchor_atom_dnf(head, full_tail), i
+    return _parser_atoms.parse_anchor_atom_at(
+        s,
+        i,
+        n,
+        skip_ws_pos=_skip_ws_pos,
+        raise_if_comma_joined_anchors=_raise_if_comma_joined_anchors,
+        build_anchor_atom_dnf=_build_anchor_atom_dnf,
+        parse_error_cls=ParseError,
+    )
 
 
 def parse_anchor_expr_to_dnf(s: str) -> AnchorDNF:

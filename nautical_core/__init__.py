@@ -777,6 +777,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 # ==============================================================================
 from . import common as _common
 from . import tokenutil as _tokenutil
+from . import year_tokens as _year_tokens
 
 short_uuid = _common.short_uuid
 should_stamp_chain_id = _common.should_stamp_chain_id
@@ -1001,41 +1002,11 @@ def _month_from_alias(tok: str) -> int | None:
 
 
 def _year_full_months_span_token(m1: int, m2: int) -> str:
-    """Full span across months [m1..m2], respecting ANCHOR_YEAR_FMT.
-
-    V2 delimiter contract: use '..' for ranges.
-    """
-    return _tok_range(1, int(m1), 31, int(m2))
+    return _year_tokens.year_full_months_span_token(m1, m2, tok_range=_tok_range)
 
 
 def _rewrite_month_names_to_ranges(spec: str) -> str:
-    if not spec:
-        return spec
-
-    out = []
-    for raw in _split_csv_tokens(spec):
-        s = raw.lower()
-        if ".." in s:
-            a, b = [x.strip() for x in s.split("..", 1)]
-            if a in _MONTH_ALIAS and b in _MONTH_ALIAS:
-                m1, m2 = _MONTH_ALIAS[a], _MONTH_ALIAS[b]
-                if m1 <= m2:
-                    out.append(_tok_range(1, m1, _static_month_last_day(m2), m2))
-                else:
-                    out.append(raw)  # let validator complain about decreasing ranges
-                continue
-        if s in _MONTH_ALIAS:
-            mm = _MONTH_ALIAS[s]
-            out.append(_tok_range(1, mm, _static_month_last_day(mm), mm))
-            continue
-        out.append(raw)
-
-    seen, dedup = set(), []
-    for t in out:
-        if t not in seen:
-            dedup.append(t)
-            seen.add(t)
-    return ",".join(dedup)
+    return _year_tokens.rewrite_month_names_to_ranges(spec, tok_range=_tok_range)
 
 
 # --- helpers for nth-weekday monthly /N gating ---
@@ -1098,66 +1069,14 @@ def _unwrap_quotes(s: str) -> str:
     return _tokenutil.unwrap_quotes(s)
 
 def _year_full_month_range_token(mm: int) -> str:
-    """
-    Return a yearly range token that covers the entire month `mm`
-    formatted according to ANCHOR_YEAR_FMT.
-    MD: 'MM-01..MM-31' ; DM: '01-MM..31-MM' (31 will be clamped later)
-    """
-    mm = int(mm)
-    return _tok_range(1, mm, 31, mm)
+    return _year_tokens.year_full_month_range_token(mm, tok_range=_tok_range)
 
 def _mon_to_int(tok: str) -> int | None:
     return _tokenutil.mon_to_int(tok)
 
 
 def _rewrite_year_month_aliases_in_context(dnf: list[list[dict]]) -> list[list[dict]]:
-    """
-    In-place normalize yearly specs that are pure month references into
-    full-month numeric ranges that the yearly gate understands.
-      - 'y:04'           -> 'y:MM-01..MM-31'
-      - 'y:jan'          -> 'y:MM-01..MM-31'
-      - 'y:jan..apr'     -> 'y:01-MM..MM-31' (DM variant analogous)
-      - 'y:04..06'       -> 'y:MM-01..MM-31'
-      - 'y:apr,aug,12'   -> list of full-month ranges
-    Quarters/other names should be rewritten earlier already; only
-    handle obvious “month-only” forms here.
-    """
-    for term in dnf:
-        for atom in term:
-            if (atom.get("typ") or atom.get("type") or "").lower() != "y":
-                continue
-            spec = (atom.get("spec") or atom.get("value") or "").strip().lower()
-            if not spec:
-                continue
-
-            new_tokens: list[str] = []
-            changed = False
-            for tok in _split_csv_tokens(spec):
-
-                # 'mon1..mon2' or 'MM1..MM2' → full-month range
-                if ".." in tok and "-" not in tok:
-                    left, right = [x.strip() for x in tok.split("..", 1)]
-                    m1, m2 = _mon_to_int(left), _mon_to_int(right)
-                    if m1 and m2:
-                        # Build a single cross-month range token; downstream clamping handles month-end.
-                        new_tokens.append(_tok_range(1, m1, 31, m2))
-                        changed = True
-                        continue  # handled
-
-                # Single month token (name or two-digit) → full-month
-                m_single = _mon_to_int(tok)
-                if m_single:
-                    new_tokens.append(_year_full_month_range_token(m_single))
-                    changed = True
-                    continue
-
-                # Else leave it as-is (numeric 'DD-MM' or 'DD-MM..DD-MM', 'rand', 'rand-MM', etc.)
-                new_tokens.append(tok)
-
-            if changed:
-                atom["spec"] = ",".join(new_tokens)
-
-    return dnf
+    return _year_tokens.rewrite_year_month_aliases_in_context(dnf, tok_range=_tok_range)
 
 # --- Anchor Canonical Form (ACF) ----------------------------------------------
 

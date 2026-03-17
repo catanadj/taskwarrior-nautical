@@ -3,7 +3,7 @@
 
 """
 Nautical Golden Tests
- - Imports local nautical_core.py
+ - Imports local nautical_core/__init__.py
  - Verifies parsing, lint, natural, and next-occurrence properties
  - Covers prior regressions: leap day, quarters, /N monthly valid-month gating, last-<dow>,
    weekly AND unsatisfiable, @bd/@nbd/@nw natural text + date effects, rand with yearly window, etc.
@@ -193,7 +193,7 @@ def _find_hook_file(name: str) -> str:
 def _run_hook_script(path: str, task_obj: dict, env_extra: dict | None = None, timeout_s: float = 8.0):
     _force_tz_utc()
     env = os.environ.copy()
-    # Ensure the hook can import local nautical_core.py
+    # Ensure the hook can import local nautical_core/__init__.py
     env["PYTHONPATH"] = HERE + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env.setdefault("TZ", "UTC")
     if env_extra:
@@ -211,7 +211,7 @@ def _run_hook_script(path: str, task_obj: dict, env_extra: dict | None = None, t
 def _run_hook_script_raw(path: str, raw_input: str, env_extra: dict | None = None, timeout_s: float = 8.0):
     _force_tz_utc()
     env = os.environ.copy()
-    # Ensure the hook can import local nautical_core.py
+    # Ensure the hook can import local nautical_core/__init__.py
     env["PYTHONPATH"] = HERE + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env.setdefault("TZ", "UTC")
     if env_extra:
@@ -555,7 +555,7 @@ def test_hook_files_are_private_permissions():
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
         try:
-            core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+            core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
             mod_core = _load_hook_module(core_path, "_nautical_core_perm_test")
             lock_path = os.path.join(td, ".nautical_perm_test.lock")
             with mod_core.safe_lock(lock_path, retries=2, sleep_base=0.01, jitter=0.0) as ok:
@@ -588,7 +588,7 @@ def test_hook_files_are_private_permissions():
 
 def test_safe_lock_fcntl_contention():
     """safe_lock should fail to acquire when another process holds the lock."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     mod_core = _load_hook_module(core_path, "_nautical_core_lock_fcntl_test")
     if getattr(mod_core, "fcntl", None) is None:
         return
@@ -626,7 +626,7 @@ def test_safe_lock_fcntl_contention():
 
 def test_safe_lock_fallback_contention():
     """safe_lock should fail to acquire when fallback lockfile exists."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     mod_core = _load_hook_module(core_path, "_nautical_core_lock_fallback_test")
     prev_fcntl = getattr(mod_core, "fcntl", None)
     mod_core.fcntl = None
@@ -644,7 +644,7 @@ def test_safe_lock_fallback_contention():
 
 def test_safe_lock_fallback_stale_cleanup():
     """safe_lock fallback should clear stale lockfiles."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     mod_core = _load_hook_module(core_path, "_nautical_core_lock_stale_test")
     prev_fcntl = getattr(mod_core, "fcntl", None)
     mod_core.fcntl = None
@@ -661,7 +661,7 @@ def test_safe_lock_fallback_stale_cleanup():
 
 def test_safe_lock_fallback_stale_pid_cleanup():
     """safe_lock fallback should clear lockfiles with dead PIDs."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     mod_core = _load_hook_module(core_path, "_nautical_core_lock_pid_stale_test")
     prev_fcntl = getattr(mod_core, "fcntl", None)
     mod_core.fcntl = None
@@ -1043,7 +1043,7 @@ def test_on_exit_requeues_when_task_lock_recent():
 
 def test_core_cache_dir_and_lock_permissions():
     """Core cache dir and lock files should have restricted permissions."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     with tempfile.TemporaryDirectory() as td:
         cache_dir = os.path.join(td, "cache")
         mod = _load_hook_module(core_path, "_nautical_core_cache_perm_test")
@@ -1061,7 +1061,7 @@ def test_core_cache_dir_and_lock_permissions():
 
 def test_core_cache_lock_contention_matches_safe_lock():
     """_cache_lock should block contention similarly to safe_lock."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     with tempfile.TemporaryDirectory() as td:
         cache_dir = os.path.join(td, "cache")
         mod = _load_hook_module(core_path, "_nautical_core_cache_lock_test")
@@ -1085,7 +1085,7 @@ def test_core_cache_lock_contention_matches_safe_lock():
 
 def test_core_cache_dir_rejects_symlink_override():
     """_cache_dir should reject symlink override paths and choose a real directory."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     with tempfile.TemporaryDirectory() as td:
         target = os.path.join(td, "real-cache")
         symlink = os.path.join(td, "cache-link")
@@ -1625,7 +1625,7 @@ def _assert_hook_requires_core_data_context(hook_name: str, module_name: str):
     prev_core = os.environ.get("NAUTICAL_CORE_PATH")
     prev_argv = list(sys.argv)
     with tempfile.TemporaryDirectory() as td:
-        fake_core = Path(td) / "nautical_core.py"
+        fake_core = Path(td) / "nautical_core/__init__.py"
         fake_core.write_text(
             "def _warn_once_per_day_any(*_args, **_kwargs):\n"
             "    return None\n",
@@ -2243,7 +2243,7 @@ def test_chain_health_advice_clinical_drift_and_style_normalization():
 
 def test_dst_round_trip_noon_preserves_local_date():
     """Local date+time should round-trip through UTC across DST boundaries."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     with tempfile.TemporaryDirectory() as td:
         cfg = os.path.join(td, "nautical.toml")
         with open(cfg, "w", encoding="utf-8") as f:
@@ -2267,7 +2267,7 @@ def test_dst_round_trip_noon_preserves_local_date():
 
 def test_core_invalid_timezone_warns_and_falls_back_to_utc():
     """Invalid timezone config should fall back to UTC and emit diagnostic warning when enabled."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     with tempfile.TemporaryDirectory() as td:
         cfg = os.path.join(td, "nautical.toml")
         with open(cfg, "w", encoding="utf-8") as f:
@@ -2297,7 +2297,7 @@ def test_core_invalid_timezone_warns_and_falls_back_to_utc():
 
 def test_core_recurrence_update_udas_config_aliases():
     """recurrence UDA carry config should accept top-level and [recurrence] alias forms."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
 
     with tempfile.TemporaryDirectory() as td:
         cfg = os.path.join(td, "nautical.toml")
@@ -2384,7 +2384,7 @@ def test_roll_apply_has_guard():
 
 def test_anchor_cache_cleans_stale_tmp_files():
     """cache_save should remove stale temp files for the same key."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     with tempfile.TemporaryDirectory() as td:
         cfg = os.path.join(td, "nautical.toml")
         with open(cfg, "w", encoding="utf-8") as f:
@@ -2445,7 +2445,7 @@ def test_coerce_int_bounds():
 
 def test_build_local_datetime_dst_gap_and_ambiguous():
     """build_local_datetime should handle DST gaps and ambiguities deterministically."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core.py"))
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     with tempfile.TemporaryDirectory() as td:
         cfg = os.path.join(td, "nautical.toml")
         with open(cfg, "w", encoding="utf-8") as f:
@@ -3871,7 +3871,7 @@ def test_on_add_dnf_cache_skips_non_jsonable_values():
 def test_core_import_deterministic():
     """Hooks should ignore TASKDATA unless NAUTICAL_DEV=1."""
     with tempfile.TemporaryDirectory() as td:
-        bad_core = Path(td) / "nautical_core.py"
+        bad_core = Path(td) / "nautical_core/__init__.py"
         bad_core.write_text("raise RuntimeError('bad core')\n", encoding="utf-8")
         os.environ["TASKDATA"] = td
         os.environ.pop("NAUTICAL_DEV", None)

@@ -7,7 +7,7 @@ What’s new:
 - Fuzzy search across ALL chained tasks (any status), plus a Chain picker (Active vs Finished).
 - Builds chains by walking prevLink; shows a finished-chain brief (totals, span, cadence, anchor adherence).
 - Calendar now shows completed dates (green) AND upcoming link dates (blue) and pending due dates (yellow).
-- Graceful fallback if nautical_core.py isn't available: cp analysis still works; anchors show a helpful note.
+- Graceful fallback if the nautical_core package isn't available: cp analysis still works; anchors show a helpful note.
 
 Original base (ref): Enhanced Taskwarrior Chain Analyzer.  # Cited in chat
 """
@@ -344,9 +344,9 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
             if not nxt:
                 break
             hhmm = core.pick_hhmm_from_dnf_for_date(dnf, nxt, seed)
-                if hhmm:
-                    dt_utc = core.build_local_datetime(nxt, hhmm)
-                    next_dates.append(core.fmt_dt_local(dt_utc))
+            if hhmm:
+                dt_utc = core.build_local_datetime(nxt, hhmm)
+                next_dates.append(core.fmt_dt_local(dt_utc))
             else:
                 next_dates.append(str(nxt))
             after_date = nxt
@@ -2608,7 +2608,7 @@ def main():
 
     args = parser.parse_args()
     if not core:
-        console.print(f"[{COLORS['error']}]Error: nautical_core.py not found.[/]")
+        console.print(f"[{COLORS['error']}]Error: nautical_core package not found.[/]")
         sys.exit(1)
 
     if args.self_check or args.explain or args.validate or args.recover_dead_letter:

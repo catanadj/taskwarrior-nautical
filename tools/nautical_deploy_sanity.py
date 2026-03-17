@@ -18,7 +18,6 @@ ROOT = HERE.parent
 
 
 REQUIRED_RUNTIME_FILES = (
-    "nautical_core.py",
     "on-add-nautical.py",
     "on-modify-nautical.py",
     "on-exit-nautical.py",
@@ -54,6 +53,15 @@ def _run_hook(path: Path, raw_input: str, env: dict[str, str], timeout_s: float 
 
 def _check_required_files(root: Path, require_exec: bool) -> list[dict]:
     out: list[dict] = []
+    core_pkg = root / "nautical_core" / "__init__.py"
+    out.append(
+        {
+            "kind": "file",
+            "path": "nautical_core/__init__.py",
+            "ok": bool(core_pkg.exists() and core_pkg.is_file()),
+            "message": "ok" if core_pkg.exists() and core_pkg.is_file() else "missing",
+        }
+    )
     for rel in REQUIRED_RUNTIME_FILES:
         p = root / rel
         ok = p.exists() and p.is_file()

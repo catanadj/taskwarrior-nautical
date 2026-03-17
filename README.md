@@ -41,16 +41,19 @@ Nautical gives you a **single line that just works**, keeps your data **local**,
 cd ~/.task/hooks
 curl -LO https://github.com/catanadj/taskwarrior-nautical/raw/main/on-{add,modify,exit}-nautical.py
 chmod +x on-*.py
-cd ..
-curl -LO https://github.com/catanadj/taskwarrior-nautical/raw/main/nautical_core.py
 
-# 2. Add UDAs (copy/paste block)
+# 2. Install the shared Nautical package next to your Taskwarrior data
+cd ..
+curl -L https://github.com/catanadj/taskwarrior-nautical/archive/refs/heads/main.tar.gz \
+  | tar -xz --strip-components=1 taskwarrior-nautical-main/nautical_core
+
+# 3. Add UDAs (copy/paste block)
 curl -s https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/uda.conf >> ~/.taskrc
 
-# 3. Optional pretty panels
+# 4. Optional pretty panels
 pip install rich
 
-# 4. Test drive
+# 5. Test drive
 task add "System test" anchor:"m:2mon" due:today
 ```
 

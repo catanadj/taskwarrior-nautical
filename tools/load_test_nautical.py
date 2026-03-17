@@ -45,12 +45,13 @@ def _install_hooks(hooks_dir: Path) -> None:
     hooks_dir.mkdir(parents=True, exist_ok=True)
     src_on_add = REPO_ROOT / "on-add-nautical.py"
     src_on_modify = REPO_ROOT / "on-modify-nautical.py"
-    src_core = REPO_ROOT / "nautical_core.py"
+    src_core_pkg = REPO_ROOT / "nautical_core"
     dst_on_add = hooks_dir / "on-add"
     dst_on_modify = hooks_dir / "on-modify"
+    task_root = hooks_dir.parent
     shutil.copy2(src_on_add, dst_on_add)
     shutil.copy2(src_on_modify, dst_on_modify)
-    shutil.copy2(src_core, hooks_dir / "nautical_core.py")
+    shutil.copytree(src_core_pkg, task_root / "nautical_core", dirs_exist_ok=True)
     for p in (dst_on_add, dst_on_modify):
         try:
             p.chmod(0o755)

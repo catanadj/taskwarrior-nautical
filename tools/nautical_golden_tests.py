@@ -2595,6 +2595,42 @@ def test_quarter_alias_unambiguous_month_selectors():
         m = datetime.fromisoformat(d).month
         expect(m == 12, f"{d} should resolve to Q4 end month (December)")
 
+
+def test_quarter_selector_mode_characterization():
+    """Quarter selector mode should stay stable for accepted start/end monthly selectors."""
+    expect(core._quarter_month_selector_mode([{"spec": "1bd"}]) == "quarter_start", "1bd should map to quarter_start")
+    expect(core._quarter_month_selector_mode([{"spec": "1st-mon"}]) == "quarter_start", "1st-mon should map to quarter_start")
+    expect(core._quarter_month_selector_mode([{"spec": "-1bd"}]) == "quarter_end", "-1bd should map to quarter_end")
+    expect(core._quarter_month_selector_mode([{"spec": "last-fri"}]) == "quarter_end", "last-fri should map to quarter_end")
+
+
+def test_quarter_selector_mode_rejections():
+    """Quarter selector mode should keep rejecting ambiguous monthly combinations."""
+    cases = [
+        ([{"spec": "rand"}], "cannot be combined with m:rand"),
+        ([{"spec": "1,15"}], "require a single monthly selector token"),
+        ([{"spec": "15"}], "ambiguous"),
+        ([{"spec": "1bd"}, {"spec": "-1bd"}], "cannot be combined with multiple monthly atoms"),
+    ]
+    for m_atoms, needle in cases:
+        try:
+            core._quarter_month_selector_mode(m_atoms)
+            raise AssertionError(f"Expected ParseError for {m_atoms!r}")
+        except core.ParseError as e:
+            expect(needle in str(e), f"Unexpected error for {m_atoms!r}: {e}")
+
+
+def test_term_quarter_rewrite_mode_characterization():
+    """Plain quarter aliases should still consult monthly disambiguation, but suffixed ones should not."""
+    expect(
+        core._term_quarter_rewrite_mode([{"typ": "y", "spec": "q4"}], [{"typ": "m", "spec": "-1bd"}]) == "quarter_end",
+        "Plain q4 with -1bd should resolve to quarter_end",
+    )
+    expect(
+        core._term_quarter_rewrite_mode([{"typ": "y", "spec": "q4s"}], [{"typ": "m", "spec": "-1bd"}]) == "first_month",
+        "Suffixed q4s should not invoke monthly quarter disambiguation",
+    )
+
 def test_yearly_month_names():
     """Test month name constraints (Mar..Sep)"""
     # y:mar..sep must constrain to Mar..Sep
@@ -5942,6 +5978,9 @@ TESTS = [
     test_leap_year_29feb,
     test_quarters_window,
     test_quarter_alias_unambiguous_month_selectors,
+    test_quarter_selector_mode_characterization,
+    test_quarter_selector_mode_rejections,
+    test_term_quarter_rewrite_mode_characterization,
     test_yearly_month_names,
     test_rand_with_year_window,
     test_weekly_rand_N_gate,

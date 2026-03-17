@@ -1593,6 +1593,18 @@ def _bump_attempts(entry: dict) -> int:
     entry["attempts"] = attempts
     return attempts
 
+def _short_uuid(value: str) -> str:
+    if core is not None and hasattr(core, "short_uuid"):
+        try:
+            return str(core.short_uuid(value) or "")
+        except Exception:
+            pass
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    return raw.split("-")[0] if "-" in raw else raw[:8]
+
+
 def _export_uuid(uuid_str: str) -> dict:
     if not uuid_str:
         return {"exists": False, "retryable": False, "err": "missing uuid", "obj": None}
@@ -1613,6 +1625,65 @@ def _export_uuid(uuid_str: str) -> dict:
         if uuid_str in out:
             return {"exists": True, "retryable": False, "err": "", "obj": {"uuid": uuid_str}}
         return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
+
+
+def _existing_equivalent_child(child: dict, parent_uuid: str = "") -> dict:
+    if not isinstance(child, dict):
+        return {"exists": False, "retryable": False, "err": "missing child", "obj": None}
+    chain_id = (child.get("chainID") or child.get("chainid") or "").strip()
+    link_no = child.get("link")
+    if not chain_id or link_no in (None, ""):
+        return {"exists": False, "retryable": False, "err": "missing chain slot", "obj": None}
+    try:
+        link_token = str(int(link_no))
+    except Exception:
+        return {"exists": False, "retryable": False, "err": "invalid link", "obj": None}
+
+    prev_link = (child.get("prevLink") or "").strip()
+    if not prev_link and parent_uuid:
+        prev_link = _short_uuid(parent_uuid)
+
+    cmd = _task_cmd_prefix() + [
+        "rc.hooks=off",
+        "rc.json.array=1",
+        "rc.verbose=nothing",
+        "rc.color=off",
+        f"chainID:{chain_id}",
+        f"link:{link_token}",
+    ]
+    if prev_link:
+        cmd.append(f"prevLink:{prev_link}")
+    cmd.extend(["status.not:deleted", "export"])
+
+    ok, out, err = _run_task(
+        cmd,
+        timeout=_TASK_TIMEOUT_EXPORT,
+        retries=_TASK_RETRIES_EXPORT,
+        retry_delay=_TASK_RETRY_DELAY,
+    )
+    if not ok:
+        return {"exists": False, "retryable": _is_lock_error(err), "err": err or "", "obj": None}
+    try:
+        rows = json.loads(out.strip() or "[]")
+    except Exception:
+        return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
+
+    for wanted in ("pending", "waiting", "completed"):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if (row.get("status") or "").strip().lower() != wanted:
+                continue
+            if (row.get("uuid") or "").strip():
+                return {"exists": True, "retryable": False, "err": "", "obj": row}
+    for row in rows:
+        if isinstance(row, dict) and (row.get("uuid") or "").strip():
+            return {"exists": True, "retryable": False, "err": "", "obj": row}
+    return {"exists": False, "retryable": False, "err": "not found", "obj": None}
 
 
 def _import_child(obj: dict) -> tuple[bool, str]:
@@ -1948,6 +2019,25 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     child = entry.get("child") or {}
     child_short = (entry.get("child_short") or "").strip()
     child_uuid = (child.get("uuid") or "").strip()
+    exact_child = _export_uuid(child_uuid)
+    if exact_child.get("retryable"):
+        return _requeue_or_dead_letter_for_lock(entry, idx, state)
+    if not exact_child.get("exists"):
+        equivalent = _existing_equivalent_child(child, parent_uuid)
+        if equivalent.get("retryable"):
+            return _requeue_or_dead_letter_for_lock(entry, idx, state)
+        existing_obj = equivalent.get("obj") if isinstance(equivalent, dict) else None
+        if isinstance(existing_obj, dict):
+            child_uuid = (existing_obj.get("uuid") or "").strip()
+            child_short = _short_uuid(child_uuid)
+            if child_short:
+                if spawn_intent_id:
+                    _diag(
+                        f"equivalent child already exists; binding intent {spawn_intent_id} "
+                        f"to child {child_short}"
+                    )
+                else:
+                    _diag(f"equivalent child already exists; binding to child {child_short}")
 
     link_action, parent_linked_already = _precheck_parent_link_state(
         entry,

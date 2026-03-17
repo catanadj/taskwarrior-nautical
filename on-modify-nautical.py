@@ -61,6 +61,7 @@ _MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
 
 _MAX_SPAWN_ATTEMPTS = 3
 _SPAWN_RETRY_DELAY = 0.1  # seconds between retries
+_STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
 # Spawn intent queue guards (override via env for heavy workloads).
 # spawn_queue_max_bytes: warn when queue exceeds this size (on-exit drains).
 _DEFAULT_SPAWN_QUEUE_MAX_BYTES = 524288
@@ -1483,6 +1484,45 @@ def _reserve_child_uuid(env: dict) -> str:
         return candidate
 
 
+def _stable_child_uuid(parent_task: dict | None, child_task: dict | None) -> str:
+    """Return a cross-device-stable UUID for a child slot when possible."""
+    if not isinstance(parent_task, dict) or not isinstance(child_task, dict):
+        return ""
+    parent_uuid = _task_uuid_or_empty(parent_task)
+    if not parent_uuid:
+        return ""
+    link_no = core.coerce_int(child_task.get("link"), None)
+    if link_no is None:
+        return ""
+    chain_id = (
+        child_task.get("chainID")
+        or child_task.get("chainid")
+        or parent_task.get("chainID")
+        or parent_task.get("chainid")
+        or ""
+    )
+    kind = "anchor" if (parent_task.get("anchor") or "").strip() else "cp" if (parent_task.get("cp") or "").strip() else ""
+    slot_key = json.dumps(
+        {
+            "chain_id": str(chain_id).strip().lower(),
+            "kind": kind,
+            "link": int(link_no),
+            "parent_uuid": parent_uuid.lower(),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return str(uuid.uuid5(_STABLE_CHILD_UUID_NAMESPACE, slot_key))
+
+
+def _child_uuid_for_spawn(parent_task: dict | None, child_task: dict | None, env: dict) -> str:
+    stable = _stable_child_uuid(parent_task, child_task)
+    if stable:
+        return stable
+    return _reserve_child_uuid(env)
+
+
 def _sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
     removed = set()
     for m in _UNREC_ATTR_RE.finditer(stderr or ""):
@@ -1579,14 +1619,14 @@ def _format_line_preview(
     return line.strip()
 
 
-def _spawn_child(child_task: dict) -> tuple[str, set[str]]:
+def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str, set[str]]:
     """
     Create child via `task import -`, preserving annotation entries.
     Returns (short_uuid, stripped_attrs).
     Raises RuntimeError with detailed context on failure.
     """
     env = os.environ.copy()
-    child_uuid = _reserve_child_uuid(env)
+    child_uuid = _child_uuid_for_spawn(parent_task, child_task, env)
     obj = dict(child_task)
     obj["uuid"] = child_uuid
     if "entry" not in obj:
@@ -1755,8 +1795,8 @@ def _spawn_child_atomic(
     """
     env = os.environ.copy()
 
-    # Prepare child with a stable UUID (so retries cannot fork).
-    child_uuid = _reserve_child_uuid(env)
+    # Prepare child with a stable UUID so retries and cross-device completions converge.
+    child_uuid = _child_uuid_for_spawn(parent_task_with_nextlink, child_task, env)
     spawn_intent_id = f"si_{uuid.uuid4().hex[:12]}"
     child_obj = dict(child_task)
     child_obj["uuid"] = child_uuid

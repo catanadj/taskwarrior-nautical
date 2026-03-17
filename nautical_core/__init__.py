@@ -781,6 +781,7 @@ from . import quarter_helpers as _quarter_helpers
 from . import quarter_rewrite as _quarter_rewrite
 from . import quarter_selector as _quarter_selector
 from . import tokenutil as _tokenutil
+from . import yearly_parse as _yearly_parse
 from . import yearly_validation as _yearly_validation
 from . import year_tokens as _year_tokens
 
@@ -4065,37 +4066,14 @@ def _parse_atom_mods(mods_str: str):
 
 @_ttl_lru_cache(maxsize=512)
 def _parse_y_token_cached(tok: str, fmt: str):
-    """Parse yearly token (e.g., '15-02' or 'q1')."""
-    tok = tok.strip().lower()
-    if tok in _QUARTERS:
-        return ("quarter", tok)
-    m = re.fullmatch(r"q([1-4])([sme])", tok)
-    if m:
-        return ("quarter", tok)
-    m = _y_token_re.match(tok)
-    if not m:
-        return None
-    a, b = m.group(1), m.group(2)
-    if b.isalpha():
-        if b not in _MONTHS:
-            return None
-        b = _MONTHS[b]
-    else:
-        b = int(b)
-    a = int(a)
-    if fmt == "DM":
-        d, mn = a, b
-    else:
-        mn, d = a, b
-    if not (1 <= mn <= 12):
-        return None
-    if mn in (4, 6, 9, 11) and d == 31:
-        return None
-    if mn == 2 and d > 29:
-        return None
-    if not (1 <= d <= 31):
-        return None
-    return ("day", (mn, d))
+    return _yearly_parse.parse_y_token(
+        tok,
+        fmt,
+        quarters=_QUARTERS,
+        months=_MONTHS,
+        y_token_re=_y_token_re,
+        re_mod=re,
+    )
 
 
 def _parse_y_token(tok: str):

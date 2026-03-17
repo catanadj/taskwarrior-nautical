@@ -3024,6 +3024,16 @@ def test_validate_year_tokens_in_dnf_characterization():
     except core.YearTokenFormatError as e:
         expect("uses ':' between numbers" in str(e), f"Unexpected message: {e}")
 
+
+def test_parse_y_token_characterization():
+    """Direct yearly token parsing should preserve known quarter/day interpretations."""
+    expect(core._parse_y_token("q1") == ("quarter", "q1"), f"Unexpected parse for q1: {core._parse_y_token('q1')!r}")
+    expect(core._parse_y_token("q2s") == ("quarter", "q2s"), f"Unexpected parse for q2s: {core._parse_y_token('q2s')!r}")
+    expect(core._parse_y_token("01-06") == ("day", (1, 6)), f"Unexpected parse for 01-06: {core._parse_y_token('01-06')!r}")
+    expect(core._parse_y_token("06-jan") == ("day", (6, 1)), f"Unexpected parse for 06-jan: {core._parse_y_token('06-jan')!r}")
+    expect(core._parse_y_token("13-01") is None, "Invalid month should not parse")
+    expect(core._parse_y_token("31-04") is None, "April 31 should not parse")
+
 def test_natural_language_comprehensive():
     """Test natural language generation for various patterns"""
     test_cases = [
@@ -6075,6 +6085,7 @@ TESTS = [
     test_yearly_token_format_characterization,
     test_yearly_token_format_helper_characterization,
     test_validate_year_tokens_in_dnf_characterization,
+    test_parse_y_token_characterization,
     test_cache_consistency,
     test_parse_cache_returns_isolated_dnf_instances,
     test_build_and_cache_hints_returns_isolated_cached_payload,

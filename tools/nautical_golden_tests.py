@@ -3002,6 +3002,28 @@ def test_yearly_token_format_characterization():
     _must_parse("y:foo")
     _must_parse("y:q1..q2")
 
+
+def test_yearly_token_format_helper_characterization():
+    """Direct yearly format helper should preserve accepted tokens and friendly failures."""
+    core._validate_yearly_token_format("01-01..12-31")
+    core._validate_yearly_token_format("rand-07")
+    core._validate_yearly_token_format("q1..q2")
+    try:
+        core._validate_yearly_token_format("13-01")
+        raise AssertionError("13-01: expected YearTokenFormatError")
+    except core.YearTokenFormatError as e:
+        expect("month '13' is invalid" in str(e), f"Unexpected message: {e}")
+
+
+def test_validate_year_tokens_in_dnf_characterization():
+    """DNF-level yearly validation should keep surfacing yearly format problems."""
+    core._validate_year_tokens_in_dnf([[{"typ": "y", "spec": "01-01"}]])
+    try:
+        core._validate_year_tokens_in_dnf([[{"typ": "y", "spec": "05:15"}]])
+        raise AssertionError("Expected YearTokenFormatError for bad yearly token in DNF")
+    except core.YearTokenFormatError as e:
+        expect("uses ':' between numbers" in str(e), f"Unexpected message: {e}")
+
 def test_natural_language_comprehensive():
     """Test natural language generation for various patterns"""
     test_cases = [
@@ -6051,6 +6073,8 @@ TESTS = [
     test_yearly_spec_token_helper_accepts_known_valid_tokens,
     test_yearly_spec_token_helper_rejects_bad_ranges,
     test_yearly_token_format_characterization,
+    test_yearly_token_format_helper_characterization,
+    test_validate_year_tokens_in_dnf_characterization,
     test_cache_consistency,
     test_parse_cache_returns_isolated_dnf_instances,
     test_build_and_cache_hints_returns_isolated_cached_payload,

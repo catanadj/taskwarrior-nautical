@@ -1237,33 +1237,26 @@ else:
             f"[nautical] timezone '{LOCAL_TZ_NAME}' is invalid/unavailable; using UTC fallback.",
         )
 
+from . import timeutil as _timeutil
+
 def now_utc():
-    """Get current UTC time without microseconds."""
-    return datetime.now(timezone.utc).replace(microsecond=0)
+    return _timeutil.now_utc()
 
 
 def to_local(dt_utc: datetime) -> datetime:
-    """Convert UTC datetime to local timezone."""
-    dt_utc = _ensure_utc(dt_utc)
-    return dt_utc.astimezone(_LOCAL_TZ) if _LOCAL_TZ else dt_utc
+    return _timeutil.to_local(dt_utc, _LOCAL_TZ)
 
 
 def fmt_dt_local(dt_utc: datetime) -> str:
-    """Format UTC datetime as local time string."""
-    d = to_local(dt_utc)
-    return d.strftime("%a %Y-%m-%d %H:%M %Z")
+    return _timeutil.fmt_dt_local(dt_utc, _LOCAL_TZ)
 
 
 def fmt_isoz(dt_utc: datetime) -> str:
-    """Format UTC datetime as ISO 8601 with Zulu time."""
-    return _ensure_utc(dt_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _timeutil.fmt_isoz(dt_utc)
 
 
 def _ensure_utc(dt_utc: datetime) -> datetime:
-    """Return a timezone-aware UTC datetime."""
-    if dt_utc.tzinfo is None:
-        return dt_utc.replace(tzinfo=timezone.utc)
-    return dt_utc.astimezone(timezone.utc)
+    return _timeutil.ensure_utc(dt_utc)
 
 
 # --- Date/time config ---
@@ -4675,20 +4668,7 @@ def coerce_int(v, default=None):
 
 
 def parse_dt_any(s: str):
-    """Parse datetime from string using multiple formats."""
-    if not s:
-        return None
-    s = str(s)
-    for fmt in DATE_FORMATS:
-        try:
-            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
-        except Exception:
-            pass
-    try:
-        d = datetime.strptime(s[:10], "%Y-%m-%d")
-        return d.replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
+    return _timeutil.parse_dt_any(s, DATE_FORMATS)
 
 
 def month_len(y, m):
@@ -6921,33 +6901,7 @@ def pick_hhmm_from_dnf_for_date(dnf, target: date, default_seed: date):
 # Datetime construction (local wall-clock -> UTC)
 # ------------------------------------------------------------------------------
 def build_local_datetime(d: date, hhmm=(DEFAULT_DUE_HOUR, 0)) -> datetime:
-    """Build a UTC datetime from local wall-clock date+time with DST handling."""
-    hh, mm = hhmm
-    naive = datetime(d.year, d.month, d.day, hh, mm, 0)
-    if not _LOCAL_TZ:
-        return naive.replace(tzinfo=timezone.utc)
-
-    candidates = []
-    for fold in (0, 1):
-        aware = naive.replace(tzinfo=_LOCAL_TZ, fold=fold)
-        back = aware.astimezone(timezone.utc).astimezone(_LOCAL_TZ)
-        if back.replace(tzinfo=None) == naive:
-            candidates.append(aware)
-    if candidates:
-        # Ambiguous time: choose the earlier UTC instant for determinism.
-        best = min(candidates, key=lambda dt: dt.astimezone(timezone.utc))
-        return best.astimezone(timezone.utc)
-
-    # Non-existent time (spring forward): shift forward by 1 hour, then to next valid minute.
-    cand = naive + timedelta(hours=1)
-    for _ in range(180):
-        for fold in (0, 1):
-            aware = cand.replace(tzinfo=_LOCAL_TZ, fold=fold)
-            back = aware.astimezone(timezone.utc).astimezone(_LOCAL_TZ)
-            if back.replace(tzinfo=None) == cand:
-                return aware.astimezone(timezone.utc)
-        cand += timedelta(minutes=1)
-    return naive.replace(tzinfo=_LOCAL_TZ, fold=0).astimezone(timezone.utc)
+    return _timeutil.build_local_datetime(d, hhmm, _LOCAL_TZ)
 
 
 

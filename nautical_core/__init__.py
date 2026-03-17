@@ -777,6 +777,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 # ==============================================================================
 from . import common as _common
 from . import nth_monthly as _nth_monthly
+from . import quarter_helpers as _quarter_helpers
 from . import tokenutil as _tokenutil
 from . import year_tokens as _year_tokens
 
@@ -2490,21 +2491,11 @@ _Q_END_DAY_REV = {v: k for k, v in _Q_END_DAY.items()}
 
 
 def _yearly_tokens(term):
-    out = []
-    for a in term:
-        if (a.get("typ") or a.get("type") or "").lower() == "y":
-            spec = (a.get("spec") or a.get("value") or "").lower()
-            out.extend(_split_csv_tokens(spec))
-    return out
+    return _quarter_helpers.yearly_tokens(term, split_csv_tokens=_split_csv_tokens)
 
 
 def _monthly_tokens(term):
-    out = []
-    for a in term:
-        if (a.get("typ") or a.get("type") or "").lower() == "m":
-            spec = (a.get("spec") or a.get("value") or "").lower()
-            out.extend(_split_csv_tokens(spec))
-    return out
+    return _quarter_helpers.monthly_tokens(term, split_csv_tokens=_split_csv_tokens)
 
 
 # def _extract_single_nth_weekday(term):
@@ -2528,48 +2519,19 @@ def _monthly_tokens(term):
 
 
 def _quarters_from_first_month_tokens(y_toks):
-    """Return sorted unique quarters implied by first-month full ranges."""
-    qs = []
-    for tok in y_toks:
-        q = _Q_FIRST_MONTH_TOKEN_REV.get(tok)
-        if q:
-            qs.append(q)
-    return sorted(set(qs))
+    return _quarter_helpers.quarters_from_tokens(y_toks, token_rev=_Q_FIRST_MONTH_TOKEN_REV)
 
 
 def _quarters_from_start_day_tokens(y_toks):
-    qs = []
-    for tok in y_toks:
-        q = _Q_START_DAY_REV.get(tok)
-        if q:
-            qs.append(q)
-    return sorted(set(qs))
+    return _quarter_helpers.quarters_from_tokens(y_toks, token_rev=_Q_START_DAY_REV)
 
 
 def _quarters_from_end_day_tokens(y_toks):
-    qs = []
-    for tok in y_toks:
-        q = _Q_END_DAY_REV.get(tok)
-        if q:
-            qs.append(q)
-    return sorted(set(qs))
+    return _quarter_helpers.quarters_from_tokens(y_toks, token_rev=_Q_END_DAY_REV)
 
 
 def _format_quarter_set(qs):
-    """Return ('each quarter' | 'Q2' | 'Q1–Q2' | 'Q1 and Q3')."""
-    if not qs:
-        return None
-    if qs == [1, 2, 3, 4]:
-        return "each quarter"
-    # contiguous?
-    if max(qs) - min(qs) + 1 == len(qs):
-        if len(qs) == 2:
-            return f"Q{qs[0]}–Q{qs[1]}"
-        return ", ".join(f"Q{x}" for x in qs[:-1]) + f" and Q{qs[-1]}"
-    # non-contiguous
-    if len(qs) == 1:
-        return f"Q{qs[0]}"
-    return ", ".join(f"Q{x}" for x in qs[:-1]) + f" and Q{qs[-1]}"
+    return _quarter_helpers.format_quarter_set(qs)
 
 
 def _rewrite_quarter_spec_mode(spec: str, mode: str, meta_out: dict | None = None) -> str:

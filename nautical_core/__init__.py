@@ -1196,22 +1196,10 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 # ==============================================================================
 # SECTION: Taskwarrior helpers
 # ==============================================================================
-def short_uuid(u: str | None) -> str:
-    """Taskwarrior-style short uuid (first 8 hex)."""
-    if not u or not isinstance(u, str):
-        return ""
-    s = u.strip().lower()
-    if not s:
-        return ""
-    return s.split("-")[0] if "-" in s else s[:8]
+from . import common as _common
 
-def should_stamp_chain_id(task: dict) -> bool:
-    """We stamp a chainID when task becomes/starts a nautical chain."""
-    if not isinstance(task, dict): return False
-    has_anchor = bool((task.get("anchor") or "").strip())
-    has_cp     = bool((task.get("cp") or "").strip())
-    already    = bool((task.get("chainID") or "").strip())
-    return (has_anchor or has_cp) and not already
+short_uuid = _common.short_uuid
+should_stamp_chain_id = _common.should_stamp_chain_id
 
 # ==============================================================================
 # SECTION: Time & timezone helpers
@@ -1384,7 +1372,7 @@ def _tok_range(d1: int, m1: int, d2: int, m2: int) -> str:
 
 
 # -------- Pre-compiled Regex Patterns ----------
-_int_floatish_re = re.compile(r"^[+-]?\d+(?:\.0+)?$")
+_int_floatish_re = _common._INT_FLOATISH_RE
 _cp_re = re.compile(
     r"^P(?:(?P<w>\d+)W)?(?:(?P<d>\d+)D)?(?:T(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?(?:(?P<s>\d+)S)?)?$",
     re.I,
@@ -1407,7 +1395,7 @@ _md_range_re = re.compile(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$")
 _rand_mm_re = re.compile(r"^rand-(\d{2})$")
 _year_range_colon_re = re.compile(r"^(\d{2})-(\d{2})\.\.(\d{2})-(\d{2})$")
 _int_range_re = re.compile(r"^-?\d+\s*\.\.\s*-?\d+$")
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_CONTROL_CHARS_RE = _common._CONTROL_CHARS_RE
 
 def _safe_match(pattern: re.Pattern, text: str, max_len: int = 256):
     """Defensive regex match to avoid pathological backtracking."""
@@ -1419,41 +1407,19 @@ def _safe_match(pattern: re.Pattern, text: str, max_len: int = 256):
 
 
 def sanitize_text(v: str, max_len: int = 1024) -> str:
-    """Remove control chars and clamp length for UDA safety."""
-    if not isinstance(v, str):
-        return v
-    s = _CONTROL_CHARS_RE.sub("", v)
-    if max_len > 0 and len(s) > max_len:
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            try:
-                print(f"[nautical] UDA value truncated from {len(s)} to {max_len} chars", file=sys.stderr)
-            except Exception:
-                pass
-        s = s[:max_len]
-    return s
+    return _common.sanitize_text(v, max_len=max_len)
 
 
 def sanitize_task_strings(task: dict, max_len: int = 1024) -> None:
-    """In-place sanitize of string values in a task payload."""
-    if not isinstance(task, dict):
-        return
-    for k, v in list(task.items()):
-        if isinstance(v, str):
-            cleaned = sanitize_text(v, max_len=max_len)
-            if cleaned != v and os.environ.get("NAUTICAL_DIAG") == "1":
-                try:
-                    print(f"[nautical] UDA field truncated: {k}", file=sys.stderr)
-                except Exception:
-                    pass
-            task[k] = cleaned
+    _common.sanitize_task_strings(task, max_len=max_len)
 
 
 def _split_csv_tokens(spec: str) -> list[str]:
-    return [t.strip() for t in str(spec or "").split(",") if t.strip()]
+    return _common.split_csv_tokens(spec)
 
 
 def _split_csv_lower(spec: str) -> list[str]:
-    return [t.lower() for t in _split_csv_tokens(spec)]
+    return _common.split_csv_lower(spec)
 
 
 # --- Interval bucket ---
@@ -4644,27 +4610,7 @@ def _parse_group_with_inline_mods(typ: str, ival: int, spec: str, outer_mods_str
 # Date/time parsing & humanization
 # ------------------------------------------------------------------------------
 def coerce_int(v, default=None):
-    """Safely convert value to int, handling floats and strings."""
-    try:
-        if v is None:
-            return default
-        if isinstance(v, bool):
-            return default
-        if isinstance(v, int):
-            return v if abs(v) <= (2**63 - 1) else default
-        if isinstance(v, float):
-            if not math.isfinite(v):
-                return default
-            iv = int(round(v))
-            return iv if abs(iv) <= (2**63 - 1) else default
-        s = str(v).strip()
-        if _int_floatish_re.fullmatch(s):
-            iv = int(float(s))
-            return iv if abs(iv) <= (2**63 - 1) else default
-        iv = int(s)
-        return iv if abs(iv) <= (2**63 - 1) else default
-    except Exception:
-        return default
+    return _common.coerce_int(v, default=default)
 
 
 def parse_dt_any(s: str):

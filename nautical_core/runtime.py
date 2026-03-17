@@ -11,7 +11,9 @@ import time
 from . import _normalized_abspath, _validated_user_dir
 
 
-DIAG_LOG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
+DIAG_LOG_REDACT_KEYS: frozenset[str] = frozenset(
+    {"description", "annotation", "annotations", "note", "notes"}
+)
 
 
 def hook_arg_value(argv: list[str], keys: tuple[str, ...]) -> str:

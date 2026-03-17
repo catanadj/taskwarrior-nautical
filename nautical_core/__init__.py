@@ -1663,7 +1663,7 @@ def _cache_lock(key: str):
 # ==============================================================================
 from . import runtime as _runtime
 
-_DIAG_LOG_REDACT_KEYS = _runtime.DIAG_LOG_REDACT_KEYS
+_DIAG_LOG_REDACT_KEYS: frozenset[str] = _runtime.DIAG_LOG_REDACT_KEYS
 _hook_arg_value = _runtime.hook_arg_value
 resolve_task_data_context = _runtime.resolve_task_data_context
 diag_log_redact = _runtime.diag_log_redact

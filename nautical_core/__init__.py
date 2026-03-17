@@ -777,6 +777,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 # ==============================================================================
 from . import common as _common
 from . import nth_monthly as _nth_monthly
+from . import parser_frontend as _parser_frontend
 from . import quarter_helpers as _quarter_helpers
 from . import quarter_rewrite as _quarter_rewrite
 from . import quarter_selector as _quarter_selector
@@ -4084,60 +4085,43 @@ def _parse_y_token(tok: str):
 # Anchor DNF parser
 # ------------------------------------------------------------------------------
 def _normalize_anchor_expr_input(s: str) -> str:
-    """Normalize user anchor expression before parsing."""
-    s = _unwrap_quotes(s or "").strip()
-    if len(s) > 1024:
-        raise ParseError("Anchor expression too long (max 1024 characters).")
-    s = re.sub(r"\b(\d{2})-rand\b", r"rand-\1", s)
-    s = _rewrite_weekly_multi_time_atoms(s)
-    return s
+    return _parser_frontend.normalize_anchor_expr_input(
+        s,
+        unwrap_quotes=_unwrap_quotes,
+        rewrite_weekly_multi_time_atoms=_rewrite_weekly_multi_time_atoms,
+        re_mod=re,
+        parse_error_cls=ParseError,
+    )
 
 
 def _fatal_bad_colon_in_year_tail(tail: str) -> str | None:
-    head = tail.split("@", 1)[0]
-    for tok in _split_csv_tokens(head):
-        if re.fullmatch(r"\d{2}:\d{2}(?::\d{2}:\d{2})?", tok):
-            fmt = (globals().get("ANCHOR_YEAR_FMT") or "DM").upper()
-            example = "06-01" if fmt == "MD" else "01-06"
-            return (
-                f"Yearly token '{tok}' uses ':' between numbers. "
-                f"Use '-' and order per ANCHOR_YEAR_FMT={fmt}. Example: '{example}'."
-            )
-        if ":" in tok:
-            return "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."
-    return None
+    return _parser_frontend.fatal_bad_colon_in_year_tail(
+        tail,
+        split_csv_tokens=_split_csv_tokens,
+        re_mod=re,
+        yearfmt=_yearfmt,
+    )
 
 
 def _raise_on_bad_colon_year_tokens(s: str) -> None:
-    # Find every 'y' atom head (with optional /N) then validate its tail.
-    for m in re.finditer(r"\by\s*(?:/\d+)?\s*:", s):
-        j = m.end()
-        k = j
-        while k < len(s) and s[k] not in "+|)":
-            k += 1
-        tail = s[j:k]
-        fatal_msg = _fatal_bad_colon_in_year_tail(tail)
-        if fatal_msg:
-            raise ParseError(fatal_msg)
+    _parser_frontend.raise_on_bad_colon_year_tokens(
+        s,
+        re_mod=re,
+        fatal_bad_colon_in_year_tail=_fatal_bad_colon_in_year_tail,
+        parse_error_cls=ParseError,
+    )
 
 
 def _skip_ws_pos(s: str, i: int, n: int) -> int:
-    while i < n and s[i].isspace():
-        i += 1
-    return i
+    return _parser_frontend.skip_ws_pos(s, i, n)
 
 
 def _raise_if_comma_joined_anchors(full_tail: str) -> None:
-    if re.search(r"@[^)]*?,\s*(?:w|m|y)(?:/|:)", full_tail):
-        raise ParseError(
-            "It looks like you used a comma to join anchors. "
-            "Use '+' (AND) or '|' (OR), e.g. 'm:31@t=14:00 | w:sun@t=22:00'."
-        )
-    if re.search(r",\s*(?:w|m|y)(?:/|:)", full_tail):
-        raise ParseError(
-            "Anchors must be joined with '+' (AND) or '|' (OR). "
-            "For example: 'm:31 + w:sun' or 'm:31 | w:sun'."
-        )
+    _parser_frontend.raise_if_comma_joined_anchors(
+        full_tail,
+        re_mod=re,
+        parse_error_cls=ParseError,
+    )
 
 
 def _normalize_monthly_ordinal_spec(spec: str) -> str:

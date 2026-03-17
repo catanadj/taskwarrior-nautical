@@ -2427,6 +2427,38 @@ def test_anchor_expr_length_limit():
         pass
 
 
+def test_parser_frontend_normalization_characterization():
+    """Parser frontend normalization should preserve current pre-parse rewrites."""
+    expect(
+        core._normalize_anchor_expr_input('"07-rand"') == "rand-07",
+        "mm-rand alias should normalize to rand-mm after quote stripping",
+    )
+
+
+def test_parser_frontend_year_colon_guard_characterization():
+    """Year-token colon guard should preserve its friendly error text."""
+    msg = core._fatal_bad_colon_in_year_tail("05:15")
+    expect(msg is not None and "uses ':' between numbers" in msg, f"unexpected colon guard message: {msg!r}")
+    try:
+        core._raise_on_bad_colon_year_tokens("y:05:15")
+        raise AssertionError("expected ParseError for colon year token")
+    except core.ParseError as e:
+        expect("uses ':' between numbers" in str(e), f"unexpected error: {e}")
+
+
+def test_parser_frontend_comma_join_guard_characterization():
+    """Frontend should keep rejecting comma-joined anchors with current guidance."""
+    for tail, needle in (
+        ("31, w:sun", "Anchors must be joined with '+'"),
+        ("31@t=14:00, w:sun", "It looks like you used a comma to join anchors."),
+    ):
+        try:
+            core._raise_if_comma_joined_anchors(tail)
+            raise AssertionError(f"expected ParseError for {tail!r}")
+        except core.ParseError as e:
+            expect(needle in str(e), f"unexpected message for {tail!r}: {e}")
+
+
 def test_anchor_parse_term_explosion_guard():
     """Parser should reject DNF Cartesian explosions before exhausting memory."""
     group = "(w:mon|w:tue|w:wed|w:thu|w:fri|w:sat)"
@@ -6162,6 +6194,9 @@ TESTS = [
     test_weeks_between_iso_boundary,
     test_short_uuid_invalid_inputs,
     test_anchor_expr_length_limit,
+    test_parser_frontend_normalization_characterization,
+    test_parser_frontend_year_colon_guard_characterization,
+    test_parser_frontend_comma_join_guard_characterization,
     test_anchor_parse_term_explosion_guard,
     test_build_local_datetime_dst_gap_and_ambiguous,
     test_on_modify_chain_export_cache_key_includes_params,

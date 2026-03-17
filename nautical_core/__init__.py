@@ -776,6 +776,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 # SECTION: Taskwarrior helpers
 # ==============================================================================
 from . import common as _common
+from . import nth_monthly as _nth_monthly
 from . import tokenutil as _tokenutil
 from . import year_tokens as _year_tokens
 
@@ -1011,59 +1012,25 @@ def _rewrite_month_names_to_ranges(spec: str) -> str:
 
 # --- helpers for nth-weekday monthly /N gating ---
 def _parse_nth_wd_tokens(spec: str):
-    """Return list of (k, wd) for pure nth-weekday spec, else None.
-    k is int in [-5..-1] ∪ [1..5], or -1 for 'last'."""
-    toks = _split_csv_lower(spec)
-    out = []
-    for tok in toks:
-        m = _nth_weekday_re.match(tok)
-        if not m:
-            return None
-        n_raw, wd_s = m.group(1), m.group(2)
-        if n_raw == "last":
-            k = -1
-        else:
-            n_txt = re.sub(r"(st|nd|rd|th)$", "", n_raw)
-            k = int(n_txt)
-            if k == 0 or abs(k) > 5:  # safety;
-                return None
-        out.append((k, _WEEKDAYS[wd_s]))
-    return out
+    return _nth_monthly.parse_nth_wd_tokens(
+        spec,
+        split_csv_lower=_split_csv_lower,
+        nth_weekday_re=_nth_weekday_re,
+        weekdays=_WEEKDAYS,
+    )
 
 
 def _month_has_any_nth(y: int, m: int, pairs: list[tuple[int, int]]) -> bool:
-    """Does month (y,m) have ANY of the requested nth-weekdays?"""
-    last = month_len(y, m)
-
-    def kth(n, wd):
-        if n == 0:
-            return None
-        if n > 0:
-            d = date(y, m, 1)
-            off = (wd - d.weekday()) % 7
-            d = d + timedelta(days=off + (n - 1) * 7)
-            return d.day if d.month == m else None
-        d = date(y, m, last)
-        off = (d.weekday() - wd) % 7
-        d = d - timedelta(days=off + (abs(n) - 1) * 7)
-        return d.day if d.month == m else None
-
-    for n, wd in pairs:
-        if kth(n, wd):
-            return True
-    return False
+    return _nth_monthly.month_has_any_nth(y, m, pairs, month_len=month_len)
 
 
 def _advance_to_next_allowed_month(y: int, m: int, pairs) -> tuple[int, int]:
-    """Next (including current) month that has an nth-weekday match."""
-    yy, mm = y, m
-    for _ in range(24):  # guard
-        if _month_has_any_nth(yy, mm, pairs):
-            return (yy, mm)
-        mm = 1 if mm == 12 else mm + 1
-        if mm == 1:
-            yy += 1
-    return (y, m)  # fallback
+    return _nth_monthly.advance_to_next_allowed_month(
+        y,
+        m,
+        pairs,
+        month_has_any_nth=_month_has_any_nth,
+    )
 
 def _unwrap_quotes(s: str) -> str:
     return _tokenutil.unwrap_quotes(s)

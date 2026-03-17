@@ -2631,6 +2631,43 @@ def test_term_quarter_rewrite_mode_characterization():
         "Suffixed q4s should not invoke monthly quarter disambiguation",
     )
 
+
+def test_quarter_spec_rewrite_characterization():
+    """Quarter rewrite output and qmap annotations should stay stable."""
+    qmap = {}
+    expect(
+        core._rewrite_quarter_spec_mode("q4", "quarter_end", meta_out=qmap) == "12-01..12-31",
+        "q4 quarter_end should rewrite to the Q4 end-month window in MD format",
+    )
+    expect(qmap == {"12-01..12-31": "Q4 end month"}, f"Unexpected qmap: {qmap}")
+
+    qmap = {}
+    expect(
+        core._rewrite_quarter_spec_mode("q1..q2", "first_month", meta_out=qmap) == "01-01..01-31,04-01..04-30",
+        "q1..q2 first_month should expand to Q1/Q2 first-month windows",
+    )
+    expect(
+        qmap == {
+            "01-01..01-31": "Q1 first month",
+            "04-01..04-30": "Q2 first month",
+        },
+        f"Unexpected qmap: {qmap}",
+    )
+
+    expect(
+        core._rewrite_quarter_spec_mode("q1s..q2s", "first_month") == "01-01..01-31,04-01..04-30",
+        "q1s..q2s should expand to explicit start-month windows",
+    )
+
+
+def test_rewrite_quarters_in_context_characterization():
+    """Quarter rewrite should update yearly atoms and preserve per-atom qmap notes."""
+    dnf = [[{"typ": "m", "spec": "-1bd"}, {"typ": "y", "spec": "q4"}]]
+    out = core._rewrite_quarters_in_context(dnf)
+    y_atom = out[0][1]
+    expect(y_atom["spec"] == "12-01..12-31", f"Unexpected rewritten y spec: {y_atom['spec']}")
+    expect(y_atom.get("_qmap") == {"12-01..12-31": "Q4 end month"}, f"Unexpected qmap: {y_atom.get('_qmap')}")
+
 def test_yearly_month_names():
     """Test month name constraints (Mar..Sep)"""
     # y:mar..sep must constrain to Mar..Sep
@@ -5981,6 +6018,8 @@ TESTS = [
     test_quarter_selector_mode_characterization,
     test_quarter_selector_mode_rejections,
     test_term_quarter_rewrite_mode_characterization,
+    test_quarter_spec_rewrite_characterization,
+    test_rewrite_quarters_in_context_characterization,
     test_yearly_month_names,
     test_rand_with_year_window,
     test_weekly_rand_N_gate,

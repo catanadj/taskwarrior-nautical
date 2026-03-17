@@ -778,6 +778,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 from . import common as _common
 from . import nth_monthly as _nth_monthly
 from . import quarter_helpers as _quarter_helpers
+from . import quarter_rewrite as _quarter_rewrite
 from . import quarter_selector as _quarter_selector
 from . import tokenutil as _tokenutil
 from . import year_tokens as _year_tokens
@@ -2536,132 +2537,16 @@ def _format_quarter_set(qs):
 
 
 def _rewrite_quarter_spec_mode(spec: str, mode: str, meta_out: dict | None = None) -> str:
-    """
-    Rewrite q1..q4 tokens in a yearly spec into concrete y:* tokens.
-
-    Important:
-      - quarter_start / first_month rewrite to the *first month window* (Jan/Apr/Jul/Oct)
-      - quarter_end rewrites to the *last month window* (Mar/Jun/Sep/Dec)
-
-    Rationale: quarter_end MUST be a month-window (not a fixed day like 31-12),
-    otherwise selectors like m:-1bd cannot express "last business day of the quarter".
-
-    If meta_out is provided, it is filled with { rewritten_token -> quarter_note } so
-    the Natural layer can disclose interpretation (e.g. "Oct each year (Q4 start month)").
-    """
-    if not spec:
-        return spec
-
-    qmap: dict[str, str] = {}
-
-    def _first_month_window(q: int) -> str:
-        mm = {1: 1, 2: 4, 3: 7, 4: 10}[q]
-        return _tok_range(1, mm, _static_month_last_day(mm), mm)
-
-    def _last_month_window(q: int) -> str:
-        mm = {1: 3, 2: 6, 3: 9, 4: 12}[q]
-        return _tok_range(1, mm, _static_month_last_day(mm), mm)
-
-    def _mid_month_window(q: int) -> str:
-        mm = {1: 2, 2: 5, 3: 8, 4: 11}[q]
-        return _tok_range(1, mm, _static_month_last_day(mm), mm)
-
-    def _pos_month_window(q: int, pos: str) -> str | None:
-        mm = _QUARTER_POS_MONTH.get(q, {}).get(pos)
-        if not mm:
-            return None
-        return _tok_range(1, mm, _static_month_last_day(mm), mm)
-
-    def _emit(q: int) -> str:
-        if mode == "quarter_end":
-            return _last_month_window(q)
-        if mode == "quarter_mid":
-            return _mid_month_window(q)
-        if mode == "quarter_window":
-            start = {1: 1, 2: 4, 3: 7, 4: 10}[q]
-            end = {1: 3, 2: 6, 3: 9, 4: 12}[q]
-            return _tok_range(1, start, 31, end)
-        # quarter_start and first_month both select the quarter's first month window
-        return _first_month_window(q)
-
-    def _note(q: int) -> str:
-        if mode == "quarter_end":
-            return f"Q{q} end month"
-        if mode == "quarter_mid":
-            return f"Q{q} mid month"
-        if mode == "quarter_start":
-            return f"Q{q} start month"
-        if mode == "quarter_window":
-            return f"Q{q} window"
-        # default (no monthly disambiguator present)
-        return f"Q{q} first month"
-
-    out = []
-    toks = _split_csv_lower(spec)
-
-    for tok in toks:
-        m = re.fullmatch(r"q([1-4])([sme])", tok)
-        if m:
-            q = int(m.group(1))
-            pos = m.group(2)
-            w = _pos_month_window(q, pos)
-            if w:
-                out.append(w)
-                pos_note = {"s": "start", "m": "mid", "e": "end"}[pos]
-                qmap[w] = f"Q{q} {pos_note} month"
-            continue
-
-        m = re.fullmatch(r"q([1-4])([sme])\.\.q([1-4])([sme])", tok)
-        if m:
-            qa, qb = int(m.group(1)), int(m.group(3))
-            posa, posb = m.group(2), m.group(4)
-            if posa != posb:
-                out.append(tok)
-                continue
-            if qa > qb:
-                out.append(tok)  # leave as-is so the validator can raise nicely elsewhere
-            else:
-                for q in range(qa, qb + 1):
-                    w = _pos_month_window(q, posa)
-                    if w:
-                        out.append(w)
-                        pos_note = {"s": "start", "m": "mid", "e": "end"}[posa]
-                        qmap[w] = f"Q{q} {pos_note} month"
-            continue
-
-        m = re.fullmatch(r"q([1-4])", tok)
-        if m:
-            q = int(m.group(1))
-            w = _emit(q)
-            out.append(w)
-            qmap[w] = _note(q)
-            continue
-
-        m = re.fullmatch(r"q([1-4])\.\.q([1-4])", tok)
-        if m:
-            qa, qb = int(m.group(1)), int(m.group(2))
-            if qa > qb:
-                out.append(tok)  # leave as-is so the validator can raise nicely elsewhere
-            else:
-                for q in range(qa, qb + 1):
-                    w = _emit(q)
-                    out.append(w)
-                    qmap[w] = _note(q)
-            continue
-
-        out.append(tok)
-
-    # De-dup while preserving order
-    seen, dedup = set(), []
-    for t in out:
-        if t not in seen:
-            dedup.append(t)
-            seen.add(t)
-
-    if meta_out is not None and qmap:
-        meta_out.update(qmap)
-
-    return ",".join(dedup)
+    return _quarter_rewrite.rewrite_quarter_spec_mode(
+        spec,
+        mode,
+        meta_out=meta_out,
+        split_csv_lower=_split_csv_lower,
+        tok_range=_tok_range,
+        static_month_last_day=_static_month_last_day,
+        quarter_pos_month=_QUARTER_POS_MONTH,
+        re_mod=re,
+    )
 
 
 
@@ -2725,51 +2610,23 @@ def _term_quarter_rewrite_mode(y_atoms: list[dict], m_atoms: list[dict]) -> str:
 
 
 def _rewrite_quarter_year_atoms(y_atoms: list[dict], mode: str) -> None:
-    for ya in y_atoms:
-        spec = _quarter_atom_spec(ya)
-        if not _has_quarter_tokens(spec):
-            continue
-        qmeta: dict[str, str] = {}
-        ya["spec"] = _rewrite_quarter_spec_mode(spec, mode, meta_out=qmeta)
-        if qmeta:
-            ya["_qmap"] = qmeta
+    _quarter_rewrite.rewrite_quarter_year_atoms(
+        y_atoms,
+        mode,
+        quarter_atom_spec=_quarter_atom_spec,
+        has_quarter_tokens=_has_quarter_tokens,
+        rewrite_quarter_spec_mode=_rewrite_quarter_spec_mode,
+    )
 
 
 def _rewrite_quarters_in_context(dnf):
-    """
-    Walk DNF (list of AND-terms). For each term:
-      - if it contains quarter aliases in a y:* atom (q1..q4, q1..q4 ranges),
-      - choose rewrite mode based on monthly context,
-      - enforce strict rules to prevent ambiguous quarter meaning,
-      - rewrite y:* and attach a per-atom _qmap (rewritten_token -> note) for Natural output.
-
-    Strict rule:
-      If a term uses y:q* together with m:* then m:* must be a SINGLE token that
-      unambiguously indicates *quarter start month* or *quarter end month*.
-
-      Start-month selectors (allowed):
-        - 1
-        - 1bd
-        - 1mon / 1st-mon (first weekday-of-month)
-
-      End-month selectors (allowed):
-        - -N or -Nbd (e.g. -1, -1bd, -2bd)
-        - last-fri (or last<weekday>)
-        - -Nfri (or -N<weekday>)
-
-      Anything else (e.g. m:15, m:2bd, m:rand, m:1,15, multiple m atoms) is rejected.
-      For mid-month semantics inside a quarter, use explicit months (e.g. y:dec).
-    """
-    for term in dnf:
-        y_atoms = [a for a in term if (a.get("typ") or a.get("type") or "").lower() == "y"]
-        if not y_atoms:
-            continue
-        if not any(_has_quarter_tokens(_quarter_atom_spec(a)) for a in y_atoms):
-            continue
-        m_atoms = [a for a in term if (a.get("typ") or a.get("type") or "").lower() == "m"]
-        mode = _term_quarter_rewrite_mode(y_atoms, m_atoms)
-        _rewrite_quarter_year_atoms(y_atoms, mode)
-    return dnf
+    return _quarter_rewrite.rewrite_quarters_in_context(
+        dnf,
+        has_quarter_tokens=_has_quarter_tokens,
+        quarter_atom_spec=_quarter_atom_spec,
+        term_quarter_rewrite_mode=_term_quarter_rewrite_mode,
+        rewrite_quarter_year_atoms=_rewrite_quarter_year_atoms,
+    )
 
 
 def _rewrite_year_month_aliases_in_dnf(dnf: list[list[dict]]) -> list[list[dict]]:

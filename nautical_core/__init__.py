@@ -777,6 +777,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 # ==============================================================================
 from . import common as _common
 from . import nth_monthly as _nth_monthly
+from . import expansion_support as _expansion_support
 from . import parser_atoms as _parser_atoms
 from . import parser_dnf as _parser_dnf
 from . import parser_frontend as _parser_frontend
@@ -2003,104 +2004,36 @@ def cache_key_for_task(anchor_expr: str, anchor_mode: str) -> str:
 _NTH_RE  = re.compile(r"^(?:(\d)(?:st|nd|rd|th)|last)-(" + "|".join(_WD_ABBR) + r")$")
 
 def _days_in_month(y:int, m:int) -> int:
-    return monthrange(y, m)[1]
+    return _expansion_support.days_in_month(y, m, monthrange=monthrange)
 
 def _wd_idx(s: str) -> int | None:
-    s = (s or "").strip().lower()
-    if s in _WD_ABBR: return _WD_ABBR.index(s)
-    try:
-        n = int(s)
-        if 1 <= n <= 7: return n-1
-    except Exception:
-        pass
-    return None
+    return _expansion_support.wd_idx(s, wd_abbr=_WD_ABBR)
 
 
 @_ttl_lru_cache(maxsize=128)
 def _wday_idx_any(s: str) -> int | None:
-    """Weekday index for weekly specs.
-
-    Accepts:
-      - abbreviations: mon..sun
-      - full names:    monday..sunday
-      - numeric:       1..7 (Mon=1)
-    """
-    s = (s or "").strip().lower()
-    if not s:
-        return None
-    if s in _WEEKDAYS:
-        return _WEEKDAYS[s]
-    return _wd_idx(s)
+    return _expansion_support.wday_idx_any(s, weekdays=_WEEKDAYS, wd_idx=_wd_idx)
 
 
 def _weekly_spec_to_wset(spec: str, mods: dict | None = None) -> set[int]:
-    """Expand a weekly spec into a weekday set {0..6}.
-
-    Supports canonical V2 ranges ("..").
-
-    If the spec contains 'rand', treat it as the full weekday pool (or Mon–Fri
-    if @bd/@wd is active). If 'rand' is combined with explicit tokens (should
-    be rejected by strict validation), we return the union for resilience.
-    """
-    spec = _expand_weekly_aliases(spec)
-    if not spec:
-        return set()
-
-    toks = _split_csv_lower(spec)
-    out: set[int] = set()
-
-    if any(t == "rand" for t in toks):
-        pool = (
-            {0, 1, 2, 3, 4}
-            if ((mods or {}).get("bd") or (mods or {}).get("wd") is True)
-            else {0, 1, 2, 3, 4, 5, 6}
-        )
-        out |= pool
-
-    for tok in toks:
-        if tok == "rand":
-            continue
-        if ".." in tok:
-            a, b = tok.split("..", 1)
-            ia, ib = _wday_idx_any(a), _wday_idx_any(b)
-            if ia is None or ib is None:
-                continue
-            rng = (
-                list(range(ia, ib + 1))
-                if ia <= ib
-                else (list(range(ia, 7)) + list(range(0, ib + 1)))
-            )
-            out.update(rng)
-        else:
-            i = _wday_idx_any(tok)
-            if i is not None:
-                out.add(i)
-
-    return out
+    return _expansion_support.weekly_spec_to_wset(
+        spec,
+        mods=mods,
+        expand_weekly_aliases=_expand_weekly_aliases,
+        split_csv_lower=_split_csv_lower,
+        wday_idx_any=_wday_idx_any,
+    )
 
 def _doms_for_weekly_spec(spec:str, y:int, m:int) -> set[int]:
-    """Return DOMs in month (y,m) whose weekday matches any in spec (e.g., 'mon,thu' or 'mon..fri')."""
-    spec = _expand_weekly_aliases(spec)
-    if not spec: return set()
-    allowed: set[int] = set()
-    # expand tokens and ranges
-    wset: set[int] = set()
-    for tok in _split_csv_tokens(spec):
-        if ".." in tok:
-            a, b = tok.split("..", 1)
-            ia, ib = _wd_idx(a), _wd_idx(b)
-            if ia is None or ib is None: continue
-            rng = list(range(ia, ib+1)) if ia <= ib else (list(range(ia,7))+list(range(0,ib+1)))
-            wset.update(rng)
-        else:
-            i = _wd_idx(tok)
-            if i is not None: wset.add(i)
-    if not wset: return set()
-    dim = _days_in_month(y,m)
-    for d in range(1, dim+1):
-        if date(y,m,d).weekday() in wset:
-            allowed.add(d)
-    return allowed
+    return _expansion_support.doms_for_weekly_spec(
+        spec,
+        y,
+        m,
+        expand_weekly_aliases=_expand_weekly_aliases,
+        split_csv_tokens=_split_csv_tokens,
+        wd_idx=_wd_idx,
+        days_in_month=_days_in_month,
+    )
 
 def _doms_for_monthly_token(tok: str, y:int, m:int) -> set[int]:
     """Support: 'rand' -> full month; '10..20'; '31'; '-1'; '2nd-mon'; 'last-fri'."""
@@ -2141,63 +2074,22 @@ def _doms_for_monthly_token(tok: str, y:int, m:int) -> set[int]:
     return set()
 
 def _y_ranges_from_spec(spec: str) -> list[tuple[int,int,int,int]]:
-    out = []
-    for tok in _split_csv_lower(spec):
-
-        # NEW: support 'rand-MM' → entire month (clamped later)
-        m_randm = re.fullmatch(r"rand-(\d{2})", tok)
-        if m_randm:
-            mm = int(m_randm.group(1))
-            if 1 <= mm <= 12:
-                out.append((mm, 1, mm, 31))  # end will be clamped downstream
-            continue
-
-        m = re.fullmatch(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$", tok)
-        if not m:
-            continue
-        a,b = int(m.group(1)), int(m.group(2))
-        d1, m1 = _year_pair(a,b)
-        if m.group(3):
-            c,d = int(m.group(3)), int(m.group(4))
-            d2, m2 = _year_pair(c,d)
-        else:
-            d2, m2 = d1, m1
-        out.append((m1,d1,m2,d2))
-    return out
+    return _expansion_support.y_ranges_from_spec(
+        spec,
+        split_csv_lower=_split_csv_lower,
+        re_mod=re,
+        year_pair=_year_pair,
+    )
 
 
 def _doms_allowed_by_year(y:int, m:int, y_specs: list[str]) -> set[int]:
-    """Return DOMs in month (y,m) that are inside ANY yearly range/day specified across all y atoms of the term."""
-    if not y_specs:
-        return set(range(1, _days_in_month(y,m)+1))
-    # plain 'rand' means "no yearly restriction"
-    if any((sp or "").strip().lower() == "rand" for sp in y_specs):
-        return set(range(1, _days_in_month(y,m)+1))
-
-    # Collect all ranges from all y atoms, then union the DOMs in (y,m)
-    ranges = []
-    for sp in y_specs:
-        ranges.extend(_y_ranges_from_spec(sp))
-    if not ranges:
-        return set()
-    dim = _days_in_month(y,m)
-    allowed: set[int] = set()
-    for (m1,d1,m2,d2) in ranges:
-        if m1 == m2:
-            if m == m1:
-                lo, hi = max(1, d1), min(dim, d2)
-                allowed.update(range(lo, hi+1))
-        else:
-            # spans months
-            if m < m1 or m > m2:
-                continue
-            if m == m1:
-                allowed.update(range(max(1,d1), dim+1))
-            elif m == m2:
-                allowed.update(range(1, min(dim,d2)+1))
-            elif m1 < m < m2:
-                allowed.update(range(1, dim+1))
-    return allowed
+    return _expansion_support.doms_allowed_by_year(
+        y,
+        m,
+        y_specs,
+        y_ranges_from_spec=_y_ranges_from_spec,
+        days_in_month=_days_in_month,
+    )
 
 def _choose_rand_dom(y:int, m:int, doms: set[int]) -> int | None:
     """Deterministic pick of one day from 'doms' using WRAND_SALT."""

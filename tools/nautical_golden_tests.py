@@ -2569,6 +2569,27 @@ def test_satisfiability_helpers_characterization():
         "simple satisfiable term should have a match within scan window",
     )
 
+
+def test_expansion_helpers_characterization():
+    """Weekly/yearly expansion helpers should preserve core support behavior."""
+    expect(core._weekly_spec_to_wset("mon..wed") == {0, 1, 2}, "weekly range should expand to Mon-Wed")
+    expect(
+        core._weekly_spec_to_wset("rand", mods={"bd": True}) == {0, 1, 2, 3, 4},
+        "weekly rand with bd should restrict to business days",
+    )
+    expect(
+        core._doms_for_weekly_spec("mon", 2026, 1) == {5, 12, 19, 26},
+        "weekly DOM expansion for January 2026 Mondays should stay stable",
+    )
+    expect(
+        core._y_ranges_from_spec("rand-07,01-10..01-12") == [(7, 1, 7, 31), (1, 10, 1, 12)],
+        "yearly ranges should preserve rand-month and numeric range expansion",
+    )
+    expect(
+        core._doms_allowed_by_year(2026, 7, ["rand-07"]) == set(range(1, 32)),
+        "rand-07 should allow the full July DOM range",
+    )
+
 def test_nth_weekday_range():
     """Test nth weekday range validation (1..5 or last)"""
     fatal, _ = core.lint_anchor_expr("m:6th-mon")
@@ -6115,6 +6136,7 @@ TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
     test_satisfiability_helpers_characterization,
+    test_expansion_helpers_characterization,
     test_nth_weekday_range,
     test_lint_anchor_expr_characterization,
     test_last_weekday,

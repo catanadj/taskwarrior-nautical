@@ -776,6 +776,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 # SECTION: Taskwarrior helpers
 # ==============================================================================
 from . import common as _common
+from . import tokenutil as _tokenutil
 
 short_uuid = _common.short_uuid
 should_stamp_chain_id = _common.should_stamp_chain_id
@@ -869,32 +870,7 @@ _MONTHS = {
     "dec": 12,
 }
 
-_MONTH_ALIAS = {
-    "jan": 1,
-    "january": 1,
-    "feb": 2,
-    "february": 2,
-    "mar": 3,
-    "march": 3,
-    "apr": 4,
-    "april": 4,
-    "may": 5,
-    "jun": 6,
-    "june": 6,
-    "jul": 7,
-    "july": 7,
-    "aug": 8,
-    "august": 8,
-    "sep": 9,
-    "sept": 9,
-    "september": 9,
-    "oct": 10,
-    "october": 10,
-    "nov": 11,
-    "november": 11,
-    "dec": 12,
-    "december": 12,
-}
+_MONTH_ALIAS = _tokenutil.MONTH_ALIAS
 
 
 
@@ -1017,29 +993,11 @@ def _year_index(d: date) -> int:
 
 # --- full-month helpers ---
 def _static_month_last_day(mm: int) -> int:
-    # Use 29 for February so leap years are fully covered; clamp at expansion time.
-    return {
-        1: 31,
-        2: 29,
-        3: 31,
-        4: 30,
-        5: 31,
-        6: 30,
-        7: 31,
-        8: 31,
-        9: 30,
-        10: 31,
-        11: 30,
-        12: 31,
-    }[mm]
+    return _tokenutil.static_month_last_day(mm)
 
 
 def _month_from_alias(tok: str) -> int | None:
-    s = (tok or "").strip().lower()
-    if s.isdigit() and len(s) == 2:
-        mm = int(s)
-        return mm if 1 <= mm <= 12 else None
-    return _MONTH_ALIAS.get(s)
+    return _tokenutil.month_from_alias(tok)
 
 
 def _year_full_months_span_token(m1: int, m2: int) -> str:
@@ -1137,13 +1095,7 @@ def _advance_to_next_allowed_month(y: int, m: int, pairs) -> tuple[int, int]:
     return (y, m)  # fallback
 
 def _unwrap_quotes(s: str) -> str:
-    """Trim one pair of wrapping quotes ('...' or "...") if present."""
-    if not s:
-        return s
-    s = str(s).strip()
-    if len(s) >= 2 and ((s[0] == s[-1] == "'") or (s[0] == s[-1] == '"')):
-        return s[1:-1].strip()
-    return s
+    return _tokenutil.unwrap_quotes(s)
 
 def _year_full_month_range_token(mm: int) -> str:
     """
@@ -1155,13 +1107,7 @@ def _year_full_month_range_token(mm: int) -> str:
     return _tok_range(1, mm, 31, mm)
 
 def _mon_to_int(tok: str) -> int | None:
-    s = (tok or "").strip().lower()
-    if not s:
-        return None
-    if s.isdigit() and len(s) == 2:
-        mm = int(s)
-        return mm if 1 <= mm <= 12 else None
-    return _MONTH_ALIAS.get(s)
+    return _tokenutil.mon_to_int(tok)
 
 
 def _rewrite_year_month_aliases_in_context(dnf: list[list[dict]]) -> list[list[dict]]:
@@ -1222,30 +1168,12 @@ ACF_CHECKSUM_LEN = 8   # 8 chars = 32 bits of entropy
 
 
 # Weekday normalize, with rand / rand*
-_WD_ABBR = ["mon","tue","wed","thu","fri","sat","sun"]
-_WEEKLY_ALIAS = {
-    "wk": "mon..fri",
-    "we": "sat..sun",
-    "wd": "mon..fri",
-}
-_MONTHLY_ALIAS = {
-    "ld": "-1",
-    "lbd": "-1bd",
-}
+_WD_ABBR = _tokenutil.WD_ABBR
+_WEEKLY_ALIAS = _tokenutil.WEEKLY_ALIAS
+_MONTHLY_ALIAS = _tokenutil.MONTHLY_ALIAS
 
 def _expand_weekly_aliases(spec: str) -> str:
-    spec = (spec or "").strip().lower()
-    if not spec:
-        return spec
-    toks = _split_csv_tokens(spec)
-    out = []
-    for tok in toks:
-        t = (tok or "").strip().lower()
-        if t in _WEEKLY_ALIAS:
-            out.append(_WEEKLY_ALIAS[t])
-        else:
-            out.append(t)
-    return ",".join([t for t in out if t])
+    return _tokenutil.expand_weekly_aliases(spec)
 
 
 # ==============================================================================
@@ -1253,34 +1181,9 @@ def _expand_weekly_aliases(spec: str) -> str:
 # ==============================================================================
 # --- Token normalization ---
 def _expand_monthly_aliases(spec: str) -> str:
-    spec = (spec or "").strip().lower()
-    if not spec:
-        return spec
-    toks = _split_csv_tokens(spec)
-    out = []
-    for tok in toks:
-        t = (tok or "").strip().lower()
-        if t in _MONTHLY_ALIAS:
-            out.append(_MONTHLY_ALIAS[t])
-        else:
-            out.append(t)
-    return ",".join([t for t in out if t])
+    return _tokenutil.expand_monthly_aliases(spec)
 def _normalize_weekday(s: str) -> str | None:
-    s = (s or "").strip().lower()
-    if not s:
-        return None
-    if s in ("rand", "rand*"):
-        return s
-    if s in _WD_ABBR:
-        return s
-    # allow numeric 1..7 (Mon..Sun)
-    try:
-        n = int(s)
-        if 1 <= n <= 7:
-            return _WD_ABBR[n-1]
-    except Exception:
-        pass
-    return None
+    return _tokenutil.normalize_weekday(s)
 
 # ------------------------------------------------------------------------------
 # ACF (Anchor Canonical Form) helpers

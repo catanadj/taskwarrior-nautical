@@ -466,58 +466,25 @@ def _nautical_cache_dir() -> str:
 
 
 def _warn_once_per_day(key: str, message: str) -> None:
-    """Persist a tiny sentinel so we do not spam hook output."""
-    if os.environ.get("NAUTICAL_DIAG") != "1":
-        return
-    try:
-        d = _nautical_cache_dir()
-        os.makedirs(d, exist_ok=True)
-        stamp_path = os.path.join(d, f".diag_{key}.stamp")
+    from . import warnings as _warnings
 
-        today = date.today().isoformat()
-        if os.path.exists(stamp_path):
-            try:
-                with open(stamp_path, "r", encoding="utf-8") as f:
-                    if f.read().strip() == today:
-                        return
-            except Exception:
-                pass
-
-        with open(stamp_path, "w", encoding="utf-8") as f:
-            f.write(today)
-        try:
-            print(message, file=sys.stderr)
-        except Exception:
-            pass
-    except Exception:
-        pass
+    _warnings.warn_once_per_day(
+        key,
+        message,
+        cache_dir=_nautical_cache_dir(),
+        require_diag=True,
+    )
 
 
 def _warn_once_per_day_any(key: str, message: str) -> None:
-    """Persist a tiny sentinel so we do not spam hook output (always on)."""
-    try:
-        d = _nautical_cache_dir()
-        os.makedirs(d, exist_ok=True)
-        stamp_path = os.path.join(d, f".diag_{key}.stamp")
+    from . import warnings as _warnings
 
-        today = date.today().isoformat()
-        if os.path.exists(stamp_path):
-            try:
-                with open(stamp_path, "r", encoding="utf-8") as f:
-                    if f.read().strip() == today:
-                        return
-            except Exception:
-                pass
-
-        with open(stamp_path, "w", encoding="utf-8") as f:
-            f.write(today)
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            try:
-                print(message, file=sys.stderr)
-            except Exception:
-                pass
-    except Exception:
-        pass
+    _warnings.warn_once_per_day(
+        key,
+        message,
+        cache_dir=_nautical_cache_dir(),
+        require_diag=False,
+    )
 
 
 def _warn_rate_limited_any(key: str, message: str, min_interval_s: float = 3600.0) -> None:

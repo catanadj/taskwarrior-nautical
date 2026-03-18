@@ -319,6 +319,8 @@ _MODIFY_SPAWN_PREP = None
 _MODIFY_SPAWN_PREP_LOAD_FAILED = False
 _MODIFY_COMPLETION_PREFLIGHT = None
 _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED = False
+_MODIFY_COMPLETION_COMPUTE = None
+_MODIFY_COMPLETION_COMPUTE_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -547,6 +549,44 @@ def _load_modify_completion_preflight():
     except Exception:
         pass
     _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED = True
+    return None
+
+
+def _modify_completion_compute_target_from_base(base: Path) -> Path | None:
+    try:
+        if base.is_file():
+            if base.name == "__init__.py" and base.parent.name == "nautical_core":
+                target = base.parent / "modify_completion_compute.py"
+                return target if target.is_file() else None
+            return None
+    except Exception:
+        return None
+    target = base / "nautical_core" / "modify_completion_compute.py"
+    return target if target.is_file() else None
+
+
+def _load_modify_completion_compute():
+    global _MODIFY_COMPLETION_COMPUTE, _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED
+    if _MODIFY_COMPLETION_COMPUTE is not None:
+        return _MODIFY_COMPLETION_COMPUTE
+    if _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED:
+        return None
+    base = _CORE_IMPORT_TARGET or _CORE_BASE
+    target = _modify_completion_compute_target_from_base(base)
+    if not target:
+        _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED = True
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("nautical_modify_completion_compute", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_modify_completion_compute"] = module
+            spec.loader.exec_module(module)
+            _MODIFY_COMPLETION_COMPUTE = module
+            return module
+    except Exception:
+        pass
+    _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED = True
     return None
 
 
@@ -5459,6 +5499,18 @@ def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
 
 
 def _completion_compute_child_due(new: dict, kind: str):
+    modify_completion_compute = _load_modify_completion_compute()
+    if modify_completion_compute is not None:
+        return modify_completion_compute.completion_compute_child_due(
+            new,
+            kind,
+            compute_anchor_child_due=_compute_anchor_child_due,
+            compute_cp_child_due=_compute_cp_child_due,
+            panel=_panel,
+            print_task=_print_task,
+            diag=_diag,
+        )
+
     try:
         if kind == "anchor":
             child_due, meta, dnf = _compute_anchor_child_due(new)
@@ -5486,6 +5538,17 @@ def _completion_compute_child_due(new: dict, kind: str):
 
 
 def _completion_until_or_fail(new: dict, now_utc: datetime) -> datetime | None | object:
+    modify_completion_compute = _load_modify_completion_compute()
+    if modify_completion_compute is not None:
+        return modify_completion_compute.completion_until_or_fail(
+            new,
+            now_utc,
+            safe_parse_datetime=_safe_parse_datetime,
+            validate_until_not_past=_validate_until_not_past,
+            panel=_panel,
+            print_task=_print_task,
+        )
+
     until_dt, err = _safe_parse_datetime(new.get("chainUntil"))
     if err:
         _panel(
@@ -5508,6 +5571,17 @@ def _completion_until_or_fail(new: dict, now_utc: datetime) -> datetime | None |
 
 
 def _completion_until_guard_or_stop(new: dict, child_due, until_dt, now_utc: datetime) -> bool:
+    modify_completion_compute = _load_modify_completion_compute()
+    if modify_completion_compute is not None:
+        return modify_completion_compute.completion_until_guard_or_stop(
+            new,
+            child_due,
+            until_dt,
+            now_utc,
+            end_chain_summary=_end_chain_summary,
+            print_task=_print_task,
+        )
+
     if until_dt and child_due > until_dt:
         _end_chain_summary(new, "Reached 'until' limit", now_utc)
         new["chain"] = "off"
@@ -5517,6 +5591,15 @@ def _completion_until_guard_or_stop(new: dict, child_due, until_dt, now_utc: dat
 
 
 def _completion_require_child_due_or_fail(new: dict, child_due) -> bool:
+    modify_completion_compute = _load_modify_completion_compute()
+    if modify_completion_compute is not None:
+        return modify_completion_compute.completion_require_child_due_or_fail(
+            new,
+            child_due,
+            panel=_panel,
+            print_task=_print_task,
+        )
+
     if child_due:
         return True
     _panel(
@@ -5529,6 +5612,18 @@ def _completion_require_child_due_or_fail(new: dict, child_due) -> bool:
 
 
 def _completion_warn_unreasonable_duration(new: dict, child_due, until_dt, now_utc: datetime) -> None:
+    modify_completion_compute = _load_modify_completion_compute()
+    if modify_completion_compute is not None:
+        modify_completion_compute.completion_warn_unreasonable_duration(
+            new,
+            child_due,
+            until_dt,
+            now_utc,
+            validate_chain_duration_reasonable=_validate_chain_duration_reasonable,
+            panel=_panel,
+        )
+        return
+
     if not until_dt:
         return
     is_reasonable, warn_msg = _validate_chain_duration_reasonable(
@@ -5539,6 +5634,21 @@ def _completion_warn_unreasonable_duration(new: dict, child_due, until_dt, now_u
 
 
 def _completion_caps(kind: str, new: dict, child_due, dnf):
+    modify_completion_compute = _load_modify_completion_compute()
+    if modify_completion_compute is not None:
+        return modify_completion_compute.completion_caps(
+            kind,
+            new,
+            child_due,
+            dnf,
+            coerce_int=core.coerce_int,
+            dtparse=_dtparse,
+            estimate_cp_final_by_max=_estimate_cp_final_by_max,
+            estimate_anchor_final_by_max=_estimate_anchor_final_by_max,
+            cap_from_until_cp=_cap_from_until_cp,
+            cap_from_until_anchor=_cap_from_until_anchor,
+        )
+
     cpmax = core.coerce_int(new.get("chainMax"), 0)
     until_dt = _dtparse(new.get("chainUntil"))
     cap_no = cpmax if cpmax else None
@@ -5574,6 +5684,17 @@ def _completion_caps(kind: str, new: dict, child_due, dnf):
 
 
 def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, now_utc: datetime) -> bool:
+    modify_completion_compute = _load_modify_completion_compute()
+    if modify_completion_compute is not None:
+        return modify_completion_compute.completion_cap_guard_or_stop(
+            new,
+            next_no,
+            cap_no,
+            now_utc,
+            end_chain_summary=_end_chain_summary,
+            print_task=_print_task,
+        )
+
     if cap_no and next_no > cap_no:
         _end_chain_summary(new, f"Reached cap #{cap_no}", now_utc, current_task=new)
         new["chain"] = "off"
@@ -5583,6 +5704,22 @@ def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, n
 
 
 def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime) -> dict | None:
+    modify_completion_compute = _load_modify_completion_compute()
+    if modify_completion_compute is not None:
+        return modify_completion_compute.completion_compute_next_and_limits(
+            new,
+            kind,
+            next_no,
+            now_utc,
+            completion_compute_child_due=_completion_compute_child_due,
+            completion_until_or_fail=_completion_until_or_fail,
+            completion_until_guard_or_stop=_completion_until_guard_or_stop,
+            completion_require_child_due_or_fail=_completion_require_child_due_or_fail,
+            completion_warn_unreasonable_duration=_completion_warn_unreasonable_duration,
+            completion_caps=_completion_caps,
+            completion_cap_guard_or_stop=_completion_cap_guard_or_stop,
+        )
+
     computed = _completion_compute_child_due(new, kind)
     if computed is None:
         return None

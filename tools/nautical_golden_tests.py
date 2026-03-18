@@ -5022,6 +5022,34 @@ def test_on_modify_completion_preflight_context_happy_path():
     expect(ctx.get("chain_id") == "abcd1234", f"unexpected chain id: {ctx}")
 
 
+def test_on_modify_completion_compute_next_and_limits_happy_path():
+    """completion compute should assemble child due and cap metadata from helper results."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_compute_next_limits_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    child_due = mod.core.now_utc() + timedelta(days=1)
+    until_dt = child_due + timedelta(days=10)
+    finals = [("max", child_due + timedelta(days=5))]
+
+    mod._completion_compute_child_due = lambda _new, _kind: (child_due, {"basis": "stub"}, None)
+    mod._completion_until_or_fail = lambda _new, _now: until_dt
+    mod._completion_until_guard_or_stop = lambda _new, _child_due, _until_dt, _now: True
+    mod._completion_require_child_due_or_fail = lambda _new, _child_due: True
+    mod._completion_warn_unreasonable_duration = lambda *_a, **_k: None
+    mod._completion_caps = lambda _kind, _new, _child_due, _dnf: (3, until_dt, 3, finals, 3)
+    mod._completion_cap_guard_or_stop = lambda _new, _next_no, _cap_no, _now: True
+
+    out = mod._completion_compute_next_and_limits({"chainUntil": "ignored"}, "cp", 2, mod.core.now_utc())
+    expect(bool(out), f"expected computed payload, got {out}")
+    expect(out.get("child_due") == child_due, f"unexpected child_due: {out}")
+    expect(out.get("meta") == {"basis": "stub"}, f"unexpected meta: {out}")
+    expect(out.get("until_dt") == until_dt, f"unexpected until_dt: {out}")
+    expect(out.get("cpmax") == 3 and out.get("cap_no") == 3, f"unexpected cap data: {out}")
+    expect(out.get("finals") == finals and out.get("until_cap_no") == 3, f"unexpected finals: {out}")
+
+
 def test_on_add_preview_hard_cap():
     """on-add preview loop should respect hard cap even with large preview setting."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -6413,6 +6441,7 @@ TESTS = [
     test_normalize_spec_for_acf_cache_guards,
     test_on_modify_link_limit,
     test_on_modify_completion_preflight_context_happy_path,
+    test_on_modify_completion_compute_next_and_limits_happy_path,
     test_on_add_preview_hard_cap,
     test_on_add_flushes_stdout,
     test_on_add_profiler_lazy_init,

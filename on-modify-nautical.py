@@ -313,6 +313,8 @@ _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
 _MODIFY_QUERIES = None
 _MODIFY_QUERIES_LOAD_FAILED = False
+_MODIFY_CHAIN_READS = None
+_MODIFY_CHAIN_READS_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -427,6 +429,44 @@ def _load_modify_queries():
     except Exception:
         pass
     _MODIFY_QUERIES_LOAD_FAILED = True
+    return None
+
+
+def _modify_chain_reads_target_from_base(base: Path) -> Path | None:
+    try:
+        if base.is_file():
+            if base.name == "__init__.py" and base.parent.name == "nautical_core":
+                target = base.parent / "modify_chain_reads.py"
+                return target if target.is_file() else None
+            return None
+    except Exception:
+        return None
+    target = base / "nautical_core" / "modify_chain_reads.py"
+    return target if target.is_file() else None
+
+
+def _load_modify_chain_reads():
+    global _MODIFY_CHAIN_READS, _MODIFY_CHAIN_READS_LOAD_FAILED
+    if _MODIFY_CHAIN_READS is not None:
+        return _MODIFY_CHAIN_READS
+    if _MODIFY_CHAIN_READS_LOAD_FAILED:
+        return None
+    base = _CORE_IMPORT_TARGET or _CORE_BASE
+    target = _modify_chain_reads_target_from_base(base)
+    if not target:
+        _MODIFY_CHAIN_READS_LOAD_FAILED = True
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("nautical_modify_chain_reads", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_modify_chain_reads"] = module
+            spec.loader.exec_module(module)
+            _MODIFY_CHAIN_READS = module
+            return module
+    except Exception:
+        pass
+    _MODIFY_CHAIN_READS_LOAD_FAILED = True
     return None
 
 
@@ -2324,7 +2364,15 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
 
 
 def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] | None = None) -> list[dict]:
-    """Return up to two previous tasks (older first) using chainID export only."""
+    modify_chain_reads = _load_modify_chain_reads()
+    if modify_chain_reads is not None:
+        return modify_chain_reads.collect_prev_two(
+            current_task,
+            coerce_int=core.coerce_int,
+            get_chain_export=_get_chain_export,
+            panel_chain_by_link=_PANEL_CHAIN_BY_LINK,
+            chain_by_link=chain_by_link,
+        )
 
     chain_id = (current_task.get("chainID") or "").strip()
     if not chain_id:
@@ -2334,7 +2382,6 @@ def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] |
     if not cur_no or cur_no <= 1:
         return []
 
-    # Choose tasks by link index. In the unlikely event of duplicates, prefer non-deleted tasks.
     def _pick_best(candidates: list[dict]) -> dict | None:
         if not candidates:
             return None
@@ -2401,18 +2448,24 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
 
 
 def _existing_next_task(parent_task: dict, next_no: int) -> dict | None:
-    """Return an existing next-link task for idempotent re-completion handling."""
+    modify_chain_reads = _load_modify_chain_reads()
+    if modify_chain_reads is not None:
+        return modify_chain_reads.existing_next_task(
+            parent_task,
+            next_no,
+            export_uuid_short_cached=_export_uuid_short_cached,
+            get_chain_export=_get_chain_export,
+        )
+
     if not isinstance(parent_task, dict):
         return None
 
-    # Fast path: explicit nextLink pointer on parent.
     next_ref = (parent_task.get("nextLink") or "").strip()
     if next_ref:
         obj = _export_uuid_short_cached(next_ref)
         if isinstance(obj, dict) and (obj.get("status") or "").strip().lower() != "deleted":
             return obj
 
-    # Fallback: any non-deleted task already occupying next link number in this chain.
     chain_id = (parent_task.get("chainID") or parent_task.get("chainid") or "").strip()
     if not chain_id:
         return None

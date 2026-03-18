@@ -2535,6 +2535,26 @@ def test_on_modify_chain_export_skips_when_locked():
     expect(out == [], "expected empty export when lock is active")
     expect(len(calls) == 1, "tw_export_chain should attempt task once")
 
+
+def test_on_modify_collect_prev_two_prefers_live_statuses():
+    """Previous-link lookup should prefer live tasks over deleted duplicates."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_collect_prev_two_test")
+    current = {"chainID": "abcd1234", "link": 4}
+    chain_by_link = {
+        2: [
+            {"uuid": "deleted-2", "status": "deleted", "link": 2},
+            {"uuid": "pending-2", "status": "pending", "link": 2},
+        ],
+        3: [
+            {"uuid": "deleted-3", "status": "deleted", "link": 3},
+            {"uuid": "completed-3", "status": "completed", "link": 3},
+        ],
+    }
+
+    prevs = mod._collect_prev_two(current, chain_by_link=chain_by_link)
+    expect([t.get("uuid") for t in prevs] == ["pending-2", "completed-3"], f"unexpected prevs: {prevs}")
+
 def test_weekly_and_unsat():
     """Test weekly AND (Sat AND Mon) must be unsatisfiable"""
     fatal, _ = core.lint_anchor_expr("w:sat + w:mon")
@@ -6294,6 +6314,7 @@ TESTS = [
     test_build_local_datetime_dst_gap_and_ambiguous,
     test_on_modify_chain_export_cache_key_includes_params,
     test_on_modify_chain_export_skips_when_locked,
+    test_on_modify_collect_prev_two_prefers_live_statuses,
     test_coerce_int_bounds,
     test_on_add_fail_and_exit_emits_json,
     test_on_add_panic_passthrough_emits_valid_json,

@@ -474,6 +474,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 # ==============================================================================
 from . import common as _common
 from . import cache_payload as _cache_payload
+from . import acf_support as _acf_support
 from . import nth_monthly as _nth_monthly
 from . import expansion_support as _expansion_support
 from . import monthly_support as _monthly_support
@@ -788,148 +789,43 @@ def _normalize_weekday(s: str) -> str | None:
 # ACF (Anchor Canonical Form) helpers
 # ------------------------------------------------------------------------------
 def _atom_sort_key(x: dict) -> tuple:
-    # Stable order by (type, interval, spec-json, mods-json)
-    sj = json.dumps(x.get("s"), separators=(",", ":"), sort_keys=True)
-    mj = json.dumps(x.get("m"), separators=(",", ":"), sort_keys=True)
-    return (x.get("t",""), int(x.get("i",1) or 1), sj, mj)
+    return _acf_support.atom_sort_key(x, json_mod=json)
 
 # Unpack function your validators call
 def _acf_unpack(packed: str) -> dict:
-    raw = base64.b85decode(packed.encode("ascii"))
-    return json.loads(zlib.decompress(raw).decode("utf-8"))
+    return _acf_support.acf_unpack(
+        packed,
+        base64_mod=base64,
+        zlib_mod=zlib,
+        json_mod=json,
+    )
 
 def build_acf(expr: str) -> str:
-    """
-    Build canonical form with integrity protection.
-    Format: "sha256:base85(zlib(json))"
-    """
-    if not expr or not expr.strip():
-        return ""
-    
-    try:
-        dnf = parse_anchor_expr_to_dnf_cached(expr)
-    except Exception:
-        # Parse failed - return sentinel
-        return "!PARSE_ERROR"
-    
-    # Build canonical structure
-    terms = []
-    for term in dnf:
-        atoms = []
-        for a in term:
-            typ = (a.get("typ") or "").lower()
-            ival = int(coerce_int(a.get("ival"), 1) or 1)
-            spec = a.get("spec") or ""
-            mods = a.get("mods") or {}
-            
-            # Normalize spec
-            norm_spec = _normalize_spec_for_acf(typ, spec)
-            if norm_spec is None:
-                continue  # Skip invalid atom
-                
-            # Build atom
-            atom_obj = {
-                "t": typ,
-                "s": norm_spec,
-                "m": _mods_to_acf(mods)
-            }
-            if ival != 1:
-                atom_obj["i"] = ival
-                
-            atoms.append(atom_obj)
-        
-        if atoms:
-            atoms.sort(key=lambda x: _atom_sort_key(x))
-            terms.append(atoms)
-    
-    if not terms:
-        return ""
-    
-    # Sort terms
-    terms.sort(key=lambda x: json.dumps(x, sort_keys=True))
-    
-    # Pack with compression
-    structure = {"terms": terms}
-    json_str = json.dumps(structure, separators=(",", ":"), sort_keys=True)
-    
-    # Always compress
-    compressed = zlib.compress(json_str.encode(), level=9)
-    packed = base64.b85encode(compressed).decode("ascii")
-    
-    # Add checksum
-    checksum = hashlib.sha256(packed.encode()).hexdigest()[:ACF_CHECKSUM_LEN]
-    
-    return f"{checksum}:{packed}"
+    return _acf_support.build_acf(
+        expr,
+        parse_anchor_expr_to_dnf_cached=parse_anchor_expr_to_dnf_cached,
+        coerce_int=coerce_int,
+        normalize_spec_for_acf=_normalize_spec_for_acf,
+        mods_to_acf=_mods_to_acf,
+        atom_sort_key=_atom_sort_key,
+        json_mod=json,
+        zlib_mod=zlib,
+        base64_mod=base64,
+        hashlib_mod=hashlib,
+        acf_checksum_len=ACF_CHECKSUM_LEN,
+    )
 
 def _normalize_spec_for_acf_uncached(typ: str, spec: str):
-    """Comprehensive spec normalization (uncached)."""
-    spec = (spec or "").strip().lower()
-    
-    if typ == "w":
-        spec = _expand_weekly_aliases(spec)
-        tokens = []
-        for token in _split_csv_tokens(spec):
-            if not token:
-                continue
-            if ".." in token:
-                start, end = token.split("..", 1)
-                s1 = _normalize_weekday(start)
-                s2 = _normalize_weekday(end)
-                if s1 and s2:
-                    # Canonicalize all weekly ranges to V2 '..'.
-                    tokens.append(f"{s1}..{s2}")
-            else:
-                s = _normalize_weekday(token)
-                if s:
-                    tokens.append(s)
-        if not tokens:
-            return None
-        # keep distinct; ranges before singles for stability
-        ranges = sorted([t for t in tokens if ".." in t])
-        singles = sorted([t for t in tokens if ".." not in t])
-        return ",".join(ranges + singles)
-
-    
-    elif typ == "m":
-        # Monthly: canonicalize range delimiter to V2 '..' for cache stability.
-        spec = _expand_monthly_aliases(spec)
-        toks = []
-        for token in _split_csv_tokens(spec):
-            if not token:
-                continue
-            if ".." in token:
-                a, b = [x.strip() for x in token.split("..", 1)]
-                if a and b:
-                    toks.append(f"{a}..{b}")
-                else:
-                    toks.append(token)
-            else:
-                toks.append(token)
-        if not toks:
-            return None
-        ranges = sorted([t for t in toks if ".." in t])
-        singles = sorted([t for t in toks if ".." not in t])
-        return ",".join(ranges + singles)
-    
-    elif typ == "y":
-        out = []
-        for token in _split_csv_tokens(spec):
-            m = re.fullmatch(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$", token)
-            if not m:
-                # assume already rewritten; if not, keep as string (worst case)
-                out.append(token)
-                continue
-            a, b = int(m.group(1)), int(m.group(2))
-            d1, m1 = _year_pair(a, b)
-            if m.group(3):
-                c, d = int(m.group(3)), int(m.group(4))
-                d2, m2 = _year_pair(c, d)
-                out.append({"m": m1, "d": d1, "to": {"m": m2, "d": d2}})
-            else:
-                out.append({"m": m1, "d": d1})
-        return out
-
-    return None
+    return _acf_support.normalize_spec_for_acf_uncached(
+        typ,
+        spec,
+        expand_weekly_aliases=_expand_weekly_aliases,
+        split_csv_tokens=_split_csv_tokens,
+        normalize_weekday=_normalize_weekday,
+        expand_monthly_aliases=_expand_monthly_aliases,
+        re_mod=re,
+        year_pair=_year_pair,
+    )
 
 
 @_ttl_lru_cache(maxsize=512)
@@ -943,81 +839,31 @@ def _normalize_spec_for_acf_cached(typ: str, spec: str, fmt: str):
 
 
 def _normalize_spec_for_acf(typ: str, spec: str):
-    """Comprehensive spec normalization (cached)."""
-    res = _normalize_spec_for_acf_cached((typ or "").lower(), spec or "", _yearfmt())
-    if isinstance(res, (list, dict)):
-        return _clone_mod_value(res)
-    return res
+    return _acf_support.normalize_spec_for_acf(
+        typ,
+        spec,
+        normalize_spec_for_acf_cached=lambda t, s: _normalize_spec_for_acf_cached(t, s, _yearfmt()),
+        clone_mod_value=_clone_mod_value,
+    )
 
 def is_valid_acf(acf_str: str) -> bool:
-    if not acf_str:
-        return False
-    parts = acf_str.split(":", 2)  # c8, checksum, payload
-    if len(parts) == 3 and parts[0].startswith("c"):
-        _, checksum, payload = parts
-    else:
-        # legacy "checksum:payload"
-        if ":" not in acf_str:
-            return False
-        checksum, payload = acf_str.split(":", 1)
-
-    if len(checksum) != ACF_CHECKSUM_LEN:
-        return False
-    if hashlib.sha256(payload.encode()).hexdigest()[:ACF_CHECKSUM_LEN] != checksum:
-        return False
-    try:
-        obj = _acf_unpack(payload)
-        return bool(obj and "terms" in obj)
-    except Exception:
-        return False
+    return _acf_support.is_valid_acf(
+        acf_str,
+        hashlib_mod=hashlib,
+        acf_checksum_len=ACF_CHECKSUM_LEN,
+        acf_unpack=_acf_unpack,
+    )
 
 
 
 def acf_to_original_format(acf_str: str) -> str:
-    """
-    Convert ACF back to approximate original expression.
-    Useful for debugging and migration.
-    """
-    if not is_valid_acf(acf_str):
-        return ""
-    parts = acf_str.split(":", 2)
-    if len(parts) == 3 and parts[0].startswith("c"):
-        packed = parts[2]          # cN:checksum:payload
-    else:
-        packed = acf_str.split(":", 1)[1]  # checksum:payload
-    obj = _acf_unpack(packed)
-    if not obj:
-        return ""
-    
-    terms_str = []
-    for term in obj.get("terms", []):
-        atoms_str = []
-        for atom in term:
-            typ = atom["t"]
-            spec = atom["s"]
-            ival = atom.get("i", 1)
-            mods = atom.get("m", {})
-            
-            # Convert spec back to string
-            spec_str = _acf_spec_to_string(typ, spec)
-            
-            # Build atom string
-            atom_str = f"{typ}"
-            if ival != 1:
-                atom_str += f"/{ival}"
-            atom_str += f":{spec_str}"
-            
-            # Add modifiers
-            if mods:
-                mods_str = _acf_mods_to_string(mods)
-                if mods_str:
-                    atom_str += mods_str
-            
-            atoms_str.append(atom_str)
-        
-        terms_str.append("+".join(sorted(atoms_str)))
-    
-    return " | ".join(sorted(terms_str))
+    return _acf_support.acf_to_original_format(
+        acf_str,
+        is_valid_acf=is_valid_acf,
+        acf_unpack=_acf_unpack,
+        acf_spec_to_string=_acf_spec_to_string,
+        acf_mods_to_string=_acf_mods_to_string,
+    )
 
 
 @_ttl_lru_cache(maxsize=512)
@@ -1030,63 +876,18 @@ def _year_pair(a: int, b: int) -> tuple[int, int]:
     return _year_pair_cached(a, b, _yearfmt())
 
 def _mods_to_acf(mods: dict) -> dict:
-    """Keep only active modifiers in a compact, stable shape for ACF."""
-    out: dict[str, object] = {}
-    if not mods:
-        return out
-    t = mods.get("t")
-    if t:
-        if isinstance(t, tuple):
-            out["t"] = f"{t[0]:02d}:{t[1]:02d}"
-        elif isinstance(t, str) and _hhmm_re.fullmatch(t):
-            out["t"] = t
-    roll = mods.get("roll")
-    if roll in ("pbd", "nbd", "nw", "next-wd", "prev-wd"):
-        out["roll"] = roll
-    if mods.get("bd"):
-        out["bd"] = True
-    if isinstance(mods.get("wd"), int):
-        out["wd"] = int(mods["wd"])
-    off = int(mods.get("day_offset") or 0)
-    if off:
-        out["+d"] = off
-    return out
+    return _acf_support.mods_to_acf(mods, hhmm_re=_hhmm_re)
 
 def _acf_mods_to_string(m: dict) -> str:
-    """Turn ACF mods back into @-mod strings (best-effort, stable order)."""
-    parts = []
-    if m.get("t"):
-        parts.append(f"@t={m['t']}")
-    roll = m.get("roll")
-    if roll in ("pbd", "nbd", "nw"):
-        parts.append(f"@{roll}")
-    elif roll in ("next-wd", "prev-wd"):
-        wd = m.get("wd")
-        wd_s = _WD_ABBR[wd] if isinstance(wd, int) and 0 <= wd < 7 else None
-        if wd_s:
-            parts.append(f"@{roll.split('-')[0]}-{wd_s}")
-    if m.get("bd"):
-        parts.append("@bd")
-    if isinstance(m.get("+d"), int) and m["+d"]:
-        parts.append(f"@{m['+d']:+d}d")
-    return "".join(parts)
+    return _acf_support.acf_mods_to_string(m, wd_abbr=_WD_ABBR)
 
 def _acf_spec_to_string(typ: str, spec) -> str:
-    """Inverse of ACF spec normalization, back to anchor text."""
-    if typ == "y" and isinstance(spec, list):
-        out = []
-        for item in spec:
-            if isinstance(item, dict) and "m" in item and "d" in item:
-                d1, m1 = item["d"], item["m"]
-                if "to" in item and item["to"]:
-                    d2, m2 = item["to"]["d"], item["to"]["m"]
-                    out.append(_tok_range(d1, m1, d2, m2))
-                else:
-                    out.append(_tok(d1, m1))
-            else:
-                out.append(str(item))
-        return ",".join(out)
-    return str(spec)
+    return _acf_support.acf_spec_to_string(
+        typ,
+        spec,
+        tok=_tok,
+        tok_range=_tok_range,
+    )
 
 
 # ==============================================================================

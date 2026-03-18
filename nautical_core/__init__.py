@@ -473,6 +473,7 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 # SECTION: Taskwarrior helpers
 # ==============================================================================
 from . import common as _common
+from . import cache_payload as _cache_payload
 from . import nth_monthly as _nth_monthly
 from . import expansion_support as _expansion_support
 from . import monthly_support as _monthly_support
@@ -1387,315 +1388,90 @@ is_lock_error = _runtime.is_lock_error
 
 
 def _is_dnf_like(dnf) -> bool:
-    """Defensive: ensure DNF looks like list[list[dict]]."""
-    if not isinstance(dnf, (list, tuple)):
-        return False
-    for term in dnf:
-        if not isinstance(term, (list, tuple)):
-            return False
-        for atom in term:
-            if not isinstance(atom, dict):
-                return False
-    return True
+    return _cache_payload.is_dnf_like(dnf, is_atom_like=_is_atom_like)
 
 def _is_atom_like(atom) -> bool:
-    if not isinstance(atom, dict):
-        return False
-    typ = (atom.get("typ") or atom.get("type") or "").strip()
-    if not typ:
-        return False
-    mods = atom.get("mods", {})
-    if mods is not None and not isinstance(mods, dict):
-        return False
-    return True
+    return _cache_payload.is_atom_like(atom)
 
 
 def _clone_mod_value(v):
-    if v is None or isinstance(v, (str, int, float, bool)):
-        return v
-    if isinstance(v, list):
-        out = []
-        for item in v:
-            if isinstance(item, tuple):
-                out.append((item[0], item[1]) if len(item) == 2 else tuple(item))
-            elif isinstance(item, list):
-                out.append((item[0], item[1]) if len(item) == 2 else list(item))
-            else:
-                out.append(item)
-        return out
-    if isinstance(v, tuple):
-        return (v[0], v[1]) if len(v) == 2 else tuple(v)
-    if isinstance(v, dict):
-        return {k: _clone_mod_value(val) for k, val in v.items()}
-    return v
+    return _cache_payload.clone_mod_value(v)
 
 
 def _clone_mods(mods):
-    if not isinstance(mods, dict):
-        return {}
-    out = {}
-    for k, v in mods.items():
-        if v is None or isinstance(v, (str, int, float, bool)):
-            out[k] = v
-        elif k == "t" and isinstance(v, tuple):
-            out[k] = (v[0], v[1]) if len(v) == 2 else tuple(v)
-        elif k == "t" and isinstance(v, list):
-            tv = []
-            for item in v:
-                if isinstance(item, tuple):
-                    tv.append((item[0], item[1]) if len(item) == 2 else tuple(item))
-                elif isinstance(item, list):
-                    tv.append((item[0], item[1]) if len(item) == 2 else list(item))
-                else:
-                    tv.append(item)
-            out[k] = tv
-        else:
-            out[k] = _clone_mod_value(v)
-    return out
+    return _cache_payload.clone_mods(mods)
 
 
 def _clone_atom(atom):
-    if not isinstance(atom, dict):
-        return atom
-    out = dict(atom)
-    mods = atom.get("mods")
-    if isinstance(mods, dict):
-        out["mods"] = _clone_mods(mods)
-    qmap = atom.get("_qmap")
-    if isinstance(qmap, dict):
-        out["_qmap"] = dict(qmap)
-    for k, v in atom.items():
-        if k in ("mods", "_qmap"):
-            continue
-        if isinstance(v, (dict, list, tuple)):
-            out[k] = _clone_mod_value(v)
-    return out
+    return _cache_payload.clone_atom(atom)
 
 
 def _clone_dnf(dnf):
-    if not isinstance(dnf, (list, tuple)):
-        return dnf
-    out = []
-    for term in dnf:
-        if isinstance(term, (list, tuple)):
-            out.append([_clone_atom(atom) for atom in term])
-        else:
-            out.append(term)
-    return out
+    return _cache_payload.clone_dnf(dnf)
 
 
 def _clone_cache_payload(obj: dict) -> dict:
-    if not isinstance(obj, dict):
-        return obj
-    out = {}
-    for k, v in obj.items():
-        if k == "dnf":
-            out[k] = _clone_dnf(v)
-        elif isinstance(v, list):
-            out[k] = list(v)
-        elif isinstance(v, dict):
-            inner = {}
-            for ik, iv in v.items():
-                if isinstance(iv, (dict, list, tuple)):
-                    inner[ik] = _clone_mod_value(iv)
-                else:
-                    inner[ik] = iv
-            out[k] = inner
-        elif isinstance(v, (dict, list, tuple)):
-            out[k] = _clone_mod_value(v)
-        else:
-            out[k] = v
-    return out
+    return _cache_payload.clone_cache_payload(obj)
 
 
 def _normalize_dnf_cached(dnf):
-    """Normalize cached DNF to match parser types (tuple for single time)."""
-    if not isinstance(dnf, (list, tuple)):
-        return dnf
-    for term in dnf:
-        if not isinstance(term, (list, tuple)):
-            continue
-        for atom in term:
-            if not isinstance(atom, dict):
-                continue
-            mods = atom.get("mods")
-            if not isinstance(mods, dict):
-                continue
-            tval = mods.get("t")
-            if isinstance(tval, list):
-                if len(tval) == 2 and all(isinstance(x, int) for x in tval):
-                    mods["t"] = (tval[0], tval[1])
-                elif tval and all(
-                    isinstance(x, list) and len(x) == 2 and all(isinstance(y, int) for y in x)
-                    for x in tval
-                ):
-                    mods["t"] = [(x[0], x[1]) for x in tval]
-    return dnf
+    return _cache_payload.normalize_dnf_cached(dnf)
 
 
 def _cache_payload_shape_ok(obj: dict) -> bool:
-    """Validate cached payload shape defensively to avoid downstream type errors."""
-    try:
-        if "dnf" in obj and not _is_dnf_like(obj.get("dnf")):
-            return False
-        natural = obj.get("natural")
-        if natural is not None and not isinstance(natural, str):
-            return False
-        next_dates = obj.get("next_dates")
-        if next_dates is not None:
-            if not isinstance(next_dates, list):
-                return False
-            for item in next_dates:
-                if not isinstance(item, str):
-                    return False
-        meta = obj.get("meta")
-        if meta is not None and not isinstance(meta, dict):
-            return False
-        per_year = obj.get("per_year")
-        if per_year is not None and not isinstance(per_year, dict):
-            return False
-        limits = obj.get("limits")
-        if limits is not None and not isinstance(limits, dict):
-            return False
-    except Exception:
-        return False
-    return True
+    return _cache_payload.cache_payload_shape_ok(obj, is_dnf_like=_is_dnf_like)
 
 
 def _cache_atomic_replace(src: str, dst: str) -> None:
-    """Best-effort atomic replace across platforms."""
-    try:
-        os.replace(src, dst)
-        return
-    except OSError:
-        if os.name != "nt":
-            raise
-    try:
-        import ctypes
-
-        flags = 0x1 | 0x8  # MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
-        ok = ctypes.windll.kernel32.MoveFileExW(str(src), str(dst), flags)
-        if ok:
-            return
-        err = ctypes.GetLastError()
-        raise OSError(err, "MoveFileExW failed")
-    except Exception:
-        raise
+    _cache_payload.cache_atomic_replace(src, dst, os_mod=os)
 
 def cache_load(key: str) -> dict | None:
-    if not ENABLE_ANCHOR_CACHE:
-        return None
-    path = _cache_path(key)
-    if not path:
-        return None
-    try:
-        st = os.stat(path)
-        if ANCHOR_CACHE_TTL and (time.time() - st.st_mtime) > ANCHOR_CACHE_TTL:
-            return None
-        stamp = (int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))), int(st.st_size))
-        now = time.time()
-        if _CACHE_LOAD_MEM_TTL > 0 and _CACHE_LOAD_MEM:
-            expired = [
-                k for k, (_mt, _sz, _obj, loaded_at) in _CACHE_LOAD_MEM.items()
-                if (now - loaded_at) > _CACHE_LOAD_MEM_TTL
-            ]
-            for k in expired:
-                _CACHE_LOAD_MEM.pop(k, None)
-        memo = _CACHE_LOAD_MEM.get(key)
-        if memo and memo[0] == stamp[0] and memo[1] == stamp[1]:
-            if _CACHE_LOAD_MEM_TTL <= 0 or (now - memo[3]) <= _CACHE_LOAD_MEM_TTL:
-                _CACHE_LOAD_MEM.move_to_end(key)
-                return _clone_cache_payload(memo[2])
-            _CACHE_LOAD_MEM.pop(key, None)
-        with open(path, "rb") as f:
-            blob = f.read()
-        data = zlib.decompress(base64.b85decode(blob))
-        obj = json.loads(data.decode("utf-8"))
-        if isinstance(obj, dict) and "dnf" in obj:
-            obj["dnf"] = _normalize_dnf_cached(obj.get("dnf"))
-        if isinstance(obj, dict):
-            if not _cache_payload_shape_ok(obj):
-                if os.environ.get("NAUTICAL_DIAG") == "1":
-                    diag(f"cache_load rejected invalid payload shape for key={key}")
-                return None
-            _CACHE_LOAD_MEM[key] = (stamp[0], stamp[1], obj, now)
-            _CACHE_LOAD_MEM.move_to_end(key)
-            if len(_CACHE_LOAD_MEM) > _CACHE_LOAD_MEM_MAX:
-                _CACHE_LOAD_MEM.popitem(last=False)
-            return _clone_cache_payload(obj)
-        return None
-    except (OSError, ValueError, json.JSONDecodeError, zlib.error) as e:
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            diag(f"cache_load failed: {e}")
-        return None
+    return _cache_payload.cache_load(
+        key,
+        enable_anchor_cache=ENABLE_ANCHOR_CACHE,
+        cache_path=_cache_path,
+        anchor_cache_ttl=ANCHOR_CACHE_TTL,
+        time_mod=time,
+        cache_load_mem=_CACHE_LOAD_MEM,
+        cache_load_mem_ttl=_CACHE_LOAD_MEM_TTL,
+        clone_cache_payload=_clone_cache_payload,
+        normalize_dnf_cached=_normalize_dnf_cached,
+        cache_payload_shape_ok=_cache_payload_shape_ok,
+        cache_load_mem_max=_CACHE_LOAD_MEM_MAX,
+        diag=diag,
+        os_mod=os,
+        json_mod=json,
+        zlib_mod=zlib,
+        base64_mod=base64,
+    )
 
 def cache_save(key: str, obj: dict) -> bool:
-    if not ENABLE_ANCHOR_CACHE:
-        return False
-    data = json.dumps(obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    blob = base64.b85encode(zlib.compress(data, 9))
-    path = _cache_path(key)
-    if not path:
-        return False
-    tmpf = None
-    ok_saved = False
-    try:
-        base = _cache_dir()
-        if not base:
-            return False
-        with _cache_lock(key) as locked:
-            if not locked:
-                if os.environ.get("NAUTICAL_DIAG") == "1":
-                    diag(f"cache_save lock busy for key={key}")
-                return False
-            try:
-                for name in os.listdir(base):
-                    if name.startswith(f".{key}.") and name.endswith(".tmp"):
-                        try:
-                            os.unlink(os.path.join(base, name))
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-            fd, tmpf = tempfile.mkstemp(dir=base, prefix=f".{key}.", suffix=".tmp")
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            try:
-                written = 0
-                while written < len(blob):
-                    n = os.write(fd, blob[written:])
-                    if n == 0:
-                        raise OSError("write returned 0")
-                    written += n
-            finally:
-                try:
-                    os.close(fd)
-                except Exception:
-                    pass
-            _cache_atomic_replace(tmpf, path)
-            ok_saved = True
-    except (OSError, ValueError, json.JSONDecodeError, zlib.error) as e:
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            diag(f"cache_save failed: {e}")
-    finally:
-        _CACHE_LOAD_MEM.pop(key, None)
-        if tmpf and os.path.exists(tmpf):
-            try:
-                os.unlink(tmpf)
-            except Exception:
-                pass
-    return ok_saved
+    return _cache_payload.cache_save(
+        key,
+        obj,
+        enable_anchor_cache=ENABLE_ANCHOR_CACHE,
+        json_mod=json,
+        zlib_mod=zlib,
+        base64_mod=base64,
+        cache_path=_cache_path,
+        cache_dir=_cache_dir,
+        cache_lock=_cache_lock,
+        diag=diag,
+        os_mod=os,
+        tempfile_mod=tempfile,
+        cache_atomic_replace=_cache_atomic_replace,
+        cache_load_mem=_CACHE_LOAD_MEM,
+    )
 
 @_ttl_lru_cache(maxsize=1024)
 def _cache_key_for_task_cached(anchor_expr: str, anchor_mode: str, fmt: str) -> str:
-    _ = fmt  # cache key dimension; keeps keys correct across DM/MD flips
-    try:
-        acf = build_acf(anchor_expr)
-    except Exception:
-        acf = (anchor_expr or "").strip()
-    return _cache_key(acf, anchor_mode or "")
+    return _cache_payload.cache_key_for_task_cached(
+        anchor_expr,
+        anchor_mode,
+        fmt,
+        build_acf=build_acf,
+        cache_key=_cache_key,
+    )
 
 
 def cache_key_for_task(anchor_expr: str, anchor_mode: str) -> str:

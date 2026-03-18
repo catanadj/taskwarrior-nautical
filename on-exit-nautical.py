@@ -84,6 +84,8 @@ def _core_target_from_base(base: Path) -> Path | None:
 core = None
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
+_HOOK_SUPPORT = None
+_HOOK_SUPPORT_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -139,7 +141,51 @@ def _tw_data_dir_path() -> Path:
         return Path(".")
 
 
+def _hook_support_target_from_base(base: Path) -> Path | None:
+    try:
+        if base.is_file():
+            if base.name == "__init__.py" and base.parent.name == "nautical_core":
+                target = base.parent / "hook_support.py"
+                return target if target.is_file() else None
+            return None
+    except Exception:
+        return None
+    target = base / "nautical_core" / "hook_support.py"
+    return target if target.is_file() else None
+
+
+def _load_hook_support():
+    global _HOOK_SUPPORT, _HOOK_SUPPORT_LOAD_FAILED
+    if _HOOK_SUPPORT is not None:
+        return _HOOK_SUPPORT
+    if _HOOK_SUPPORT_LOAD_FAILED:
+        return None
+    base = _CORE_IMPORT_TARGET or _CORE_BASE
+    target = _hook_support_target_from_base(base)
+    if not target:
+        _HOOK_SUPPORT_LOAD_FAILED = True
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("nautical_hook_support", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_hook_support"] = module
+            spec.loader.exec_module(module)
+            _HOOK_SUPPORT = module
+            return module
+    except Exception:
+        pass
+    _HOOK_SUPPORT_LOAD_FAILED = True
+    return None
+
+
 def _task_cmd_prefix() -> list[str]:
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.build_task_cmd_prefix(
+            use_rc_data_location=_USE_RC_DATA_LOCATION,
+            tw_data_dir=TW_DATA_DIR,
+        )
     cmd = ["task"]
     if _USE_RC_DATA_LOCATION:
         cmd.append(f"rc.data.location={TW_DATA_DIR}")
@@ -547,6 +593,17 @@ def _run_task(
     retry_delay: float = 0.0,
 ) -> tuple[bool, str, str]:
     run_fn = core.run_task if core is not None else None
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.run_task(
+            cmd,
+            core_run_task=run_fn,
+            env=os.environ.copy(),
+            input_text=input_text,
+            timeout=timeout,
+            retries=max(1, int(retries)),
+            retry_delay=max(0.0, float(retry_delay)),
+        )
     if run_fn is not None:
         return run_fn(
             cmd,

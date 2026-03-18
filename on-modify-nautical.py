@@ -309,6 +309,8 @@ core = None
 _CORE_READY = False
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
+_HOOK_SUPPORT = None
+_HOOK_SUPPORT_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -350,7 +352,51 @@ _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
 TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
 
 
+def _hook_support_target_from_base(base: Path) -> Path | None:
+    try:
+        if base.is_file():
+            if base.name == "__init__.py" and base.parent.name == "nautical_core":
+                target = base.parent / "hook_support.py"
+                return target if target.is_file() else None
+            return None
+    except Exception:
+        return None
+    target = base / "nautical_core" / "hook_support.py"
+    return target if target.is_file() else None
+
+
+def _load_hook_support():
+    global _HOOK_SUPPORT, _HOOK_SUPPORT_LOAD_FAILED
+    if _HOOK_SUPPORT is not None:
+        return _HOOK_SUPPORT
+    if _HOOK_SUPPORT_LOAD_FAILED:
+        return None
+    base = _CORE_IMPORT_TARGET or _CORE_BASE
+    target = _hook_support_target_from_base(base)
+    if not target:
+        _HOOK_SUPPORT_LOAD_FAILED = True
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("nautical_hook_support", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_hook_support"] = module
+            spec.loader.exec_module(module)
+            _HOOK_SUPPORT = module
+            return module
+    except Exception:
+        pass
+    _HOOK_SUPPORT_LOAD_FAILED = True
+    return None
+
+
 def _task_cmd_prefix() -> list[str]:
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.build_task_cmd_prefix(
+            use_rc_data_location=_USE_RC_DATA_LOCATION,
+            tw_data_dir=TW_DATA_DIR,
+        )
     cmd = ["task"]
     if _USE_RC_DATA_LOCATION:
         cmd.append(f"rc.data.location={TW_DATA_DIR}")
@@ -1352,9 +1398,13 @@ def _run_task(
     _diag_count("run_task_calls")
     t0 = _ptime.perf_counter()
     core_runner = getattr(core, "run_task", None) if core is not None else None
-    if callable(core_runner):
-        ok, out, err = core.run_task(
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        if load_err is not None and not callable(core_runner):
+            _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
+        ok, out, err = hook_support.run_task(
             cmd,
+            core_run_task=core_runner,
             env=env,
             input_text=input_text,
             timeout=timeout,
@@ -1363,43 +1413,54 @@ def _run_task(
             use_tempfiles=use_tempfiles,
         )
     else:
-        if load_err is not None:
-            _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
-        env = env or os.environ.copy()
-        proc = None
-        try:
-            proc = subprocess.Popen(
+        if callable(core_runner):
+            ok, out, err = core.run_task(
                 cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                close_fds=True,
                 env=env,
+                input_text=input_text,
+                timeout=timeout,
+                retries=retries,
+                retry_delay=retry_delay,
+                use_tempfiles=use_tempfiles,
             )
-            out, err = proc.communicate(input=input_text, timeout=timeout)
-            ok, out, err = (proc.returncode == 0, out or "", err or "")
-        except subprocess.TimeoutExpired:
-            if proc is not None:
-                proc.kill()
+        else:
+            if load_err is not None:
+                _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
+            env = env or os.environ.copy()
+            proc = None
             try:
-                out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
-            except Exception:
-                out, err = "", ""
-            ok, out, err = (False, out or "", "timeout")
-        except Exception as e:
-            if proc is not None:
-                try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    close_fds=True,
+                    env=env,
+                )
+                out, err = proc.communicate(input=input_text, timeout=timeout)
+                ok, out, err = (proc.returncode == 0, out or "", err or "")
+            except subprocess.TimeoutExpired:
+                if proc is not None:
                     proc.kill()
-                except Exception:
-                    pass
                 try:
-                    proc.wait(timeout=1.0)
+                    out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
                 except Exception:
-                    pass
-            ok, out, err = (False, "", str(e))
+                    out, err = "", ""
+                ok, out, err = (False, out or "", "timeout")
+            except Exception as e:
+                if proc is not None:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=1.0)
+                    except Exception:
+                        pass
+                ok, out, err = (False, "", str(e))
     _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
     if not ok:
         _diag_count("run_task_failures")

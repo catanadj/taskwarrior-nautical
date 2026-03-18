@@ -108,6 +108,8 @@ core = None
 _CORE_READY = False
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
+_HOOK_SUPPORT = None
+_HOOK_SUPPORT_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -148,6 +150,44 @@ def _resolve_task_data_context() -> tuple[str, bool]:
 _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
 TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
 _IMPORT_MS = None
+
+
+def _hook_support_target_from_base(base: Path) -> Path | None:
+    try:
+        if base.is_file():
+            if base.name == "__init__.py" and base.parent.name == "nautical_core":
+                target = base.parent / "hook_support.py"
+                return target if target.is_file() else None
+            return None
+    except Exception:
+        return None
+    target = base / "nautical_core" / "hook_support.py"
+    return target if target.is_file() else None
+
+
+def _load_hook_support():
+    global _HOOK_SUPPORT, _HOOK_SUPPORT_LOAD_FAILED
+    if _HOOK_SUPPORT is not None:
+        return _HOOK_SUPPORT
+    if _HOOK_SUPPORT_LOAD_FAILED:
+        return None
+    base = _CORE_IMPORT_TARGET or _CORE_BASE
+    target = _hook_support_target_from_base(base)
+    if not target:
+        _HOOK_SUPPORT_LOAD_FAILED = True
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("nautical_hook_support", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_hook_support"] = module
+            spec.loader.exec_module(module)
+            _HOOK_SUPPORT = module
+            return module
+    except Exception:
+        pass
+    _HOOK_SUPPORT_LOAD_FAILED = True
+    return None
 
 def _load_core() -> None:
     global core, _IMPORT_MS, _MAX_JSON_BYTES, _CORE_READY
@@ -1145,6 +1185,9 @@ def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
 
 def _parse_extra_tokens(extra: str | None) -> list[str] | None:
     """Parse extra Taskwarrior filters in strict token form: key:value."""
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.parse_extra_tokens(extra)
     if extra is None:
         return []
     if not isinstance(extra, str):

@@ -5,6 +5,7 @@ import random
 import subprocess
 import time
 import json
+import re
 
 
 def build_task_cmd_prefix(*, use_rc_data_location: bool, tw_data_dir) -> list[str]:
@@ -244,3 +245,35 @@ def export_uuid_status(
         if tolerate_noisy_stdout and uuid_str in (out or ""):
             return {"exists": True, "retryable": False, "err": "", "obj": {"uuid": uuid_str}}
         return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
+
+
+def parse_extra_tokens(extra: str | None) -> list[str] | None:
+    """Parse extra Taskwarrior filters in strict token form: key:value."""
+    if extra is None:
+        return []
+    if not isinstance(extra, str):
+        return None
+    s = extra.strip()
+    if not s:
+        return []
+    out: list[str] = []
+    for tok in s.split():
+        if tok.startswith("+"):
+            tag = tok[1:]
+            if not tag or re.fullmatch(r"[A-Za-z0-9_.-]+", tag) is None:
+                return None
+            out.append(tok)
+            continue
+        if tok.startswith("-"):
+            return None
+        if ":" not in tok:
+            return None
+        key, value = tok.split(":", 1)
+        if not key or not value:
+            return None
+        if re.fullmatch(r"[A-Za-z0-9_.-]+", key) is None:
+            return None
+        if re.fullmatch(r"[A-Za-z0-9_.:@%+,-]+", value) is None:
+            return None
+        out.append(f"{key}:{value}")
+    return out

@@ -4357,6 +4357,9 @@ def _extra_safe(extra: str) -> bool:
 
 def _parse_extra_tokens(extra: str | None) -> list[str] | None:
     """Parse extra Taskwarrior filters in strict token form: key:value."""
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.parse_extra_tokens(extra)
     if extra is None:
         return []
     if not isinstance(extra, str):

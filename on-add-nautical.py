@@ -189,6 +189,19 @@ def _load_hook_support():
     _HOOK_SUPPORT_LOAD_FAILED = True
     return None
 
+
+def _task_cmd_prefix() -> list[str]:
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.build_task_cmd_prefix(
+            use_rc_data_location=_USE_RC_DATA_LOCATION,
+            tw_data_dir=TW_DATA_DIR,
+        )
+    cmd = ["task"]
+    if _USE_RC_DATA_LOCATION:
+        cmd.append(f"rc.data.location={TW_DATA_DIR}")
+    return cmd
+
 def _load_core() -> None:
     global core, _IMPORT_MS, _MAX_JSON_BYTES, _CORE_READY
     if core is not None and _CORE_READY:
@@ -760,6 +773,19 @@ def _run_task(
         except Exception as e:
             load_err = e
     core_runner = getattr(core, "run_task", None) if core is not None else None
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        if load_err is not None and not callable(core_runner):
+            _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
+        return hook_support.run_task(
+            cmd,
+            core_run_task=core_runner,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+        )
     if callable(core_runner):
         return core_runner(
             cmd,
@@ -1224,7 +1250,7 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     args = None
     if hook_support is not None:
         args = hook_support.build_chain_export_args(
-            task_cmd_prefix=(["task", f"rc.data.location={TW_DATA_DIR}"] if _USE_RC_DATA_LOCATION else ["task"]),
+            task_cmd_prefix=_task_cmd_prefix(),
             chain_id=chain_id,
             since=since,
             extra=extra,
@@ -1233,9 +1259,7 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
             diag=_diag,
         )
     if args is None and hook_support is None:
-        args = ["task"]
-        if _USE_RC_DATA_LOCATION:
-            args.append(f"rc.data.location={TW_DATA_DIR}")
+        args = _task_cmd_prefix()
         args += ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
         if since:
             args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")

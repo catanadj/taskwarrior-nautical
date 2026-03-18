@@ -498,6 +498,7 @@ _common = _import_sibling("common")
 _cache_payload = _import_sibling("cache_payload")
 _cache_locking = _import_sibling("cache_locking")
 _acf_support = _import_sibling("acf_support")
+_cached_expansion = _import_sibling("cached_expansion")
 _nth_monthly = _import_sibling("nth_monthly")
 _expansion_support = _import_sibling("expansion_support")
 _monthly_support = _import_sibling("monthly_support")
@@ -2009,13 +2010,7 @@ def humanize_delta(from_dt: datetime, to_dt: datetime, use_months_days: bool):
 
 
 def _active_mod_keys(mods: dict) -> set:
-    """Return only modifiers that are actually 'used' (truthy / non-zero)."""
-    act = set()
-    for k, v in (mods or {}).items():
-        if v in (None, False, 0, 0.0, "", []):  # all 'inactive' values
-            continue
-        act.add(k)
-    return act
+    return _cached_expansion.active_mod_keys(mods)
 
 
 # --- Atom helpers (robust field access) ---
@@ -2044,191 +2039,87 @@ _WD = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
 def _week_monday(d: date) -> date:
-    return d - timedelta(days=d.weekday())  # Monday of ISO week
+    return _cached_expansion.week_monday(d)
 
 
 def _seeded_int(key: str) -> int:
-    return int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:4], "big")
+    return _cached_expansion.seeded_int(key)
 
 
 def _weekly_rand_pick(iso_year: int, iso_week: int, mods: dict) -> int:
-    """Return a deterministic weekday 0..6 for (year, week). @bd limits pool to Mon–Fri."""
-    pool = (
-        [0, 1, 2, 3, 4]
-        if (mods.get("bd") or mods.get("wd") is True)
-        else [0, 1, 2, 3, 4, 5, 6]
+    return _cached_expansion.weekly_rand_pick(
+        iso_year,
+        iso_week,
+        mods,
+        wrand_salt=WRAND_SALT,
+        seeded_int=_seeded_int,
     )
-    key = f"{WRAND_SALT}|{iso_year}|{iso_week}|{'bd' if len(pool)==5 else 'all'}"
-    n = _seeded_int(key)
-    return pool[n % len(pool)]
 
 
 def _is_bd(dt: _date):  # business day
-    return dt.weekday() < 5
+    return _cached_expansion.is_bd(dt)
 
 
 def _sha_pick(seq_len: int, seed_key: str) -> int:
-    """Deterministic random selection using SHA-256."""
-    h = hashlib.sha256(seed_key.encode("utf-8")).digest()
-    return int.from_bytes(h[:8], "big") % seq_len
+    return _cached_expansion.sha_pick(seq_len, seed_key)
 
 
 def _term_rand_info(term):
-    for i, a in enumerate(term):
-        typ = (a.get("typ") or a.get("type") or "").lower()
-        spec = str(a.get("spec") or a.get("value") or "").lower()
-        if typ == "m" and spec == "rand":
-            return ("m", {"mods": a.get("mods") or {}, "ival": int(a.get("ival") or a.get("intv") or 1), "atom_idx": i})
-        if typ == "y":
-            if spec == "rand":
-                return ("y", {"mods": a.get("mods") or {}, "month": None, "atom_idx": i})
-            if spec.startswith("rand-"):
-                mm = int(spec.split("-", 1)[1])
-                return ("y", {"mods": a.get("mods") or {}, "month": mm, "atom_idx": i})
-    return (None, None)
+    return _cached_expansion.term_rand_info(term)
 
 
 
 def _filter_by_w(dt_list: list[_date], term: list[dict]):
-    """Filter dates by weekday constraints in term."""
-    allowed = None
-    for a in term:
-        if _atype(a) != "w":
-            continue
-        spec = (_aspec(a) or "").lower()
-        wset = _weekly_spec_to_wset(spec, mods=a.get("mods") or {})
-        allowed = wset if allowed is None else (allowed & wset)
-    if allowed is None:
-        return dt_list
-    if not allowed:
-        return []
-    return [d for d in dt_list if d.weekday() in allowed]
+    return _cached_expansion.filter_by_w(
+        dt_list,
+        term,
+        atype=_atype,
+        aspec=_aspec,
+        weekly_spec_to_wset=_weekly_spec_to_wset,
+    )
 
 
 @_ttl_lru_cache(maxsize=128)
 def _month_tokens_for_atom_cached(y: int, m: int, spec: str) -> set[int]:
-    """
-    Cached version of month token expansion.
-    For a monthly atom, return set of day numbers in (y,m) that match the spec.
-    """
-    spec = _expand_monthly_aliases(spec)
-    ndays = _days_in_month(y, m)
-    out: set[int] = set()
-
-    # business-day like '5bd' or '-2bd'
-    m2 = _bd_re.match(spec)
-    if m2:
-        k = int(m2.group(1))
-        # build list of business days
-        bds = [d for d in range(1, ndays + 1) if _date(y, m, d).weekday() < 5]
-        if not bds:
-            return out
-        if k > 0:
-            if k <= len(bds):
-                out.add(bds[k - 1])
-        else:
-            k = -k
-            if k <= len(bds):
-                out.add(bds[-k])
-        return out
-
-    # nth-weekday: '2mon', 'last-fri', '-1fri'
-    m3 = _nth_weekday_re.match(spec)
-    if m3:
-        idx, wd = m3.group(1), _WD[m3.group(2)]
-        # all days of that weekday in month
-        days = [d for d in range(1, ndays + 1) if _date(y, m, d).weekday() == wd]
-        if not days:
-            return out
-        if idx == "last":
-            out.add(days[-1])
-            return out
-        k = int(re.sub(r"(st|nd|rd|th)$", "", idx))
-        if k > 0 and k <= len(days):
-            out.add(days[k - 1])
-        elif k < 0 and -k <= len(days):
-            out.add(days[k])
-        return out
-
-    # range A..B (A or B may be negative)
-    if ".." in spec:
-        a_s, b_s = spec.split("..", 1)
-        try:
-            a_i = int(a_s)
-            b_i = int(b_s)
-        except:
-            return out
-
-        def norm(n):
-            return ndays + n + 1 if n < 0 else n
-
-        lo, hi = norm(a_i), norm(b_i)
-        lo = max(1, lo)
-        hi = min(ndays, hi)
-        if lo <= hi:
-            out.update(range(lo, hi + 1))
-        return out
-
-    # single int (may be negative)
-    try:
-        k = int(spec)
-        if k < 0:
-            k = _days_in_month(y, m) + k + 1
-        if 1 <= k <= ndays:
-            out.add(k)
-    except:
-        pass
-    return out
+    return _cached_expansion.month_tokens_for_atom_values(
+        y,
+        m,
+        spec,
+        expand_monthly_aliases=_expand_monthly_aliases,
+        days_in_month=_days_in_month,
+        bd_re=_bd_re,
+        nth_weekday_re=_nth_weekday_re,
+        weekday_map=_WD,
+        re_mod=re,
+    )
 
 
 def _month_tokens_for_atom(a: dict, y: int, m: int) -> set[int]:
-    """Wrapper for cached month token expansion."""
-    spec = str(a.get("spec")).lower().strip()
-    return _month_tokens_for_atom_cached(y, m, spec)
+    return _cached_expansion.month_tokens_for_atom(
+        a,
+        y,
+        m,
+        month_tokens_for_atom_cached=_month_tokens_for_atom_cached,
+    )
 
 
 def _term_candidates_in_month(
     term: list[dict], y: int, m: int, rand_atom_idx: int, bd_only: bool
 ):
-    """
-    Build candidate dates in (y,m) that satisfy all *other* atoms in 'term',
-    ignoring the rand atom itself.
-    """
-    days = list(range(1, _days_in_month(y, m) + 1))
-    dates = [_date(y, m, d) for d in days]
-
-    # filter business days if requested on the rand atom
-    if bd_only:
-        dates = [d for d in dates if _is_bd(d)]
-
-    # apply w: filters (weekdays)
-    dates = _filter_by_w(dates, term)
-
-    # apply other monthly tokens in this term
-    msets = []
-    for idx, a in enumerate(term):
-        if idx == rand_atom_idx:
-            continue
-        if _atype(a) != "m":
-            continue
-        sp = _aspec(a)
-        if sp == "rand":  # already handled
-            continue
-        msets.append(_month_tokens_for_atom(a, y, m))
-    if msets:
-        allowed_days = set.intersection(*msets) if msets else set()
-        dates = [d for d in dates if d.day in allowed_days]
-
-    # Yearly gating (e.g., y:04-20..05-15) — keep only DOMs allowed by the y: windows
-    y_specs = [str(a.get("spec") or "") for a in term if _atype(a) == "y"]
-    if y_specs:
-        allowed_dom = _doms_allowed_by_year(y, m, y_specs)
-        if allowed_dom:
-            dates = [d for d in dates if d.day in allowed_dom]
-        else:
-            dates = []
-
-    return dates
+    return _cached_expansion.term_candidates_in_month(
+        term,
+        y,
+        m,
+        rand_atom_idx,
+        bd_only,
+        days_in_month=_days_in_month,
+        is_bd=_is_bd,
+        filter_by_w=_filter_by_w,
+        atype=_atype,
+        aspec=_aspec,
+        month_tokens_for_atom=_month_tokens_for_atom,
+        doms_allowed_by_year=_doms_allowed_by_year,
+    )
 
 
 def _months_since(seed_local: _date, y: int, m: int) -> int:
@@ -2750,185 +2641,49 @@ def validate_anchor_expr_strict(expr) -> AnchorDNF:
 # -------- Cached Expansion Functions ----------
 @_ttl_lru_cache(maxsize=128)
 def expand_weekly_cached(spec: str):
-    """Cached expansion of weekly specification to weekday numbers.
-
-    Note: This function is used as a performance primitive; keep it aligned with
-    the strict '..' range delimiter contract.
-    """
-    return sorted(_weekly_spec_to_wset(spec, mods=None))
+    return _cached_expansion.expand_weekly(
+        spec,
+        weekly_spec_to_wset=_weekly_spec_to_wset,
+    )
 
 
 @_ttl_lru_cache(maxsize=128)
 def expand_weekly_cached_mods(spec: str, bd_only: bool):
-    """Cached expansion of weekly specification with bd/wd filtering applied."""
-    days = expand_weekly_cached(spec)
-    if bd_only:
-        days = [d for d in days if d < 5]
-    return days
+    return _cached_expansion.expand_weekly_mods(
+        spec,
+        bd_only,
+        expand_weekly_cached=expand_weekly_cached,
+    )
 
 
 @_ttl_lru_cache(maxsize=128)
 def expand_yearly_cached(spec: str, y: int):
-    """
-    Expand yearly tokens into concrete dates for year y.
-    Honors ANCHOR_YEAR_FMT == 'DM' or 'MD'.
-    - Single dates (e.g., 02-29) are STRICT: if invalid in year y → no date.
-    - Ranges (e.g., 01-02..03-31) clamp endpoints to that year's month lengths,
-      so whole-month windows stay sensible in non-leap years.
-    """
-    # Normalize month-name tokens ('mar', 'sep', 'mar..may') to numeric DM/MD ranges
-    spec = _rewrite_month_names_to_ranges(spec)
-    if not spec:
-        return []
-
-    def _mlen(mm: int) -> int:
-        return month_len(y, mm)
-
-    def _strict_date(d: int, m: int) -> date | None:
-        # For single dates: do NOT clamp; skip invalid combos (e.g., 29 Feb in non-leap years).
-        if not (1 <= m <= 12): return None
-        if not (1 <= d <= _mlen(m)): return None
-        try:
-            return date(y, m, d)
-        except Exception:
-            return None
-
-    def _clamped_date(d: int, m: int) -> date | None:
-        # For range endpoints only: clamp inside valid month length.
-        if not (1 <= m <= 12): return None
-        d = max(1, min(d, _mlen(m)))
-        try:
-            return date(y, m, d)
-        except Exception:
-            return None
-
-    def _pair(a: int, b: int) -> tuple[int, int]:
-        # Interpret according to ANCHOR_YEAR_FMT; return (day, month)
-        return (b, a) if _yearfmt() == "MD" else (a, b)
-
-    days = []
-    tokens = _split_csv_lower(spec)
-
-    for tok in tokens:
-        m = re.fullmatch(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$", tok)
-        if not m:
-            # Quarters and month-name windows should be rewritten earlier; ignore others.
-            continue
-
-        a, b = int(m.group(1)), int(m.group(2))
-        if m.group(3):
-            # Range: clamp endpoints
-            c, d = int(m.group(3)), int(m.group(4))
-            d1, m1 = _pair(a, b)
-            d2, m2 = _pair(c, d)
-            start = _clamped_date(d1, m1)
-            end   = _clamped_date(d2, m2)
-            if not start or not end or end < start:
-                continue
-            cur = start
-            while cur <= end:
-                days.append(cur)
-                cur += timedelta(days=1)
-        else:
-            # Single date: strict
-            d1, m1 = _pair(a, b)
-            dd = _strict_date(d1, m1)
-            if dd:
-                days.append(dd)
-
-    return sorted(days)
+    return _cached_expansion.expand_yearly(
+        spec,
+        y,
+        rewrite_month_names_to_ranges=_rewrite_month_names_to_ranges,
+        split_csv_lower=_split_csv_lower,
+        re_mod=re,
+        month_len=month_len,
+        yearfmt=_yearfmt,
+    )
 
 
 
 @_ttl_lru_cache(maxsize=128)
 def expand_monthly_cached(spec: str, y: int, m: int):
-    """Cached expansion of monthly specification for given month."""
-    out = set()
-    last = month_len(y, m)
-    spec = _expand_monthly_aliases(spec)
-
-    def resolve_num(n):
-        if n < 0:
-            k = last + 1 + n
-            return k if 1 <= k <= last else None
-        return n if 1 <= n <= last else None
-
-    def nth_weekday(n: int, wd: int):
-        if n == 0:
-            return None
-        if n > 0:
-            d = date(y, m, 1)
-            off = (wd - d.weekday()) % 7
-            d = d + timedelta(days=off + (n - 1) * 7)
-            return d.day if d.month == m else None
-        d = date(y, m, last)
-        off = (d.weekday() - wd) % 7
-        d = d - timedelta(days=off + (abs(n) - 1) * 7)
-        return d.day if d.month == m else None
-
-    def nth_business_day(n: int):
-        if n == 0:
-            return None
-        if n > 0:
-            cnt = 0
-            d = date(y, m, 1)
-            while d.month == m:
-                if d.weekday() < 5:
-                    cnt += 1
-                    if cnt == n:
-                        return d.day
-                d = d + timedelta(days=1)
-            return None
-        cnt = 0
-        d = date(y, m, last)
-        while d.month == m:
-            if d.weekday() < 5:
-                cnt += 1
-                if cnt == abs(n):
-                    return d.day
-            d = d - timedelta(days=1)
-        return None
-
-    for tok in _split_csv_lower(spec):
-        m1 = _nth_weekday_re.match(tok)
-        if m1:
-            n_raw, wd_s = m1.group(1), m1.group(2)
-            if n_raw == "last":
-                n = -1
-            else:
-                n_txt = re.sub(r"(st|nd|rd|th)$", "", n_raw)
-                n = int(n_txt)
-            d0 = nth_weekday(n, _WEEKDAYS[wd_s])
-            if d0:
-                out.add(d0)
-            continue
-        m2 = _bd_re.match(tok)
-        if m2:
-            n = int(m2.group(1))
-            d0 = nth_business_day(n)
-            if d0:
-                out.add(d0)
-                continue
-        if ".." in tok:
-            a_raw, b_raw = tok.split("..", 1)
-            a_raw = int(a_raw)
-            b_raw = int(b_raw)
-            a = resolve_num(a_raw)
-            b = resolve_num(b_raw)
-            if a is None or b is None:
-                continue
-            step = 1 if a <= b else -1
-            for r in range(a, b + step, step):
-                out.add(r)
-        else:
-            try:
-                n = int(tok)
-                r = resolve_num(n)
-                if r:
-                    out.add(r)
-            except:
-                pass
-    return sorted(out)
+    return _cached_expansion.expand_monthly(
+        spec,
+        y,
+        m,
+        month_len=month_len,
+        expand_monthly_aliases=_expand_monthly_aliases,
+        split_csv_lower=_split_csv_lower,
+        nth_weekday_re=_nth_weekday_re,
+        bd_re=_bd_re,
+        weekday_map=_WEEKDAYS,
+        re_mod=re,
+    )
 
 
 def expand_monthly_for_month(spec: str, y: int, m: int):

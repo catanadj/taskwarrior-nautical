@@ -779,6 +779,7 @@ from . import common as _common
 from . import nth_monthly as _nth_monthly
 from . import expansion_support as _expansion_support
 from . import monthly_support as _monthly_support
+from . import natural_language as _natural_language
 from . import parser_atoms as _parser_atoms
 from . import parser_dnf as _parser_dnf
 from . import parser_frontend as _parser_frontend
@@ -2437,182 +2438,40 @@ def _bd_shift_suffix(kind: str) -> str:
     )
 
 
-# ───────────────── Natural language for anchor ─────────────────
-
-_WDNAME = {
-    0: "Monday",
-    1: "Tuesday",
-    2: "Wednesday",
-    3: "Thursday",
-    4: "Friday",
-    5: "Saturday",
-    6: "Sunday",
-}
-_MONTH_ABBR = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-]
-_MONTH_FULL = list(month_name)
-_WD_INDEX = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
-_WD_FULL = {
-    "mon": "Monday",
-    "tue": "Tuesday",
-    "wed": "Wednesday",
-    "thu": "Thursday",
-    "fri": "Friday",
-    "sat": "Saturday",
-    "sun": "Sunday",
-}
-
-
 def _ordinal(n: int) -> str:
-    n = int(n)
-    if 10 <= n % 100 <= 20:
-        suf = "th"
-    else:
-        suf = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suf}"
+    return _natural_language.ordinal(n)
 
 
 def _term_collect_mods(term: list) -> dict:
-    """Collapse per-atom mods into one dict for prose purposes (last writer wins)."""
-    merged = {}
-    for a in term:
-        mods = a.get("mods") or {}
-        for k, v in mods.items():
-            merged[k] = v
-    return merged
+    return _natural_language.term_collect_mods(term)
 
 
 def _fmt_hhmm_for_term(term: list, default_due_dt):
-    """Return HH:MM (or 'HH:MM, HH:MM, ...') for prose only when explicitly set via @t."""
-    mods = _term_collect_mods(term)
-    tmod = mods.get("t")
-    if isinstance(tmod, tuple):
-        return f"{tmod[0]:02d}:{tmod[1]:02d}"
-    if isinstance(tmod, list):
-        parts = []
-        for x in tmod:
-            if isinstance(x, tuple) and len(x) == 2:
-                parts.append(f"{x[0]:02d}:{x[1]:02d}")
-        return ", ".join(parts) if parts else None
-    if isinstance(tmod, str) and tmod:
-        return tmod
-    return None
+    return _natural_language.fmt_hhmm_for_term(term, default_due_dt)
 
 
 def _fmt_weekdays_list(spec: str) -> str:
-    spec = _expand_weekly_aliases(spec)
-    tokens = _split_csv_lower(spec)
-    if not tokens:
-        return ""
-
-    plural = {
-        0: "Mondays",
-        1: "Tuesdays",
-        2: "Wednesdays",
-        3: "Thursdays",
-        4: "Fridays",
-        5: "Saturdays",
-        6: "Sundays",
-    }
-
-    names: list[str] = []
-    for t in tokens:
-        if t == "rand":
-            names.append("one random day each week")
-            continue
-
-    # Range tokens: mon..fri (canonical)
-        if ".." in t:
-            a, b = t.split("..", 1)
-            ia, ib = _wday_idx_any(a), _wday_idx_any(b)
-            if ia is None or ib is None:
-                continue
-            if ia == ib:
-                names.append(plural[ia])
-            else:
-                names.append(f"{plural[ia]} through {plural[ib]}")
-            continue
-
-        i = _wday_idx_any(t)
-        if i is not None:
-            names.append(plural[i])
-
-    if not names:
-        return ""
-    if len(names) == 1:
-        return names[0]
-    return ", ".join(names[:-1]) + " or " + names[-1]
+    return _natural_language.fmt_weekdays_list(
+        spec,
+        expand_weekly_aliases=_expand_weekly_aliases,
+        split_csv_lower=_split_csv_lower,
+        wday_idx_any=_wday_idx_any,
+    )
 
 
 def _fmt_monthly_atom(spec: str) -> str:
-    s = (spec or "").lower().strip()
-    if s in _MONTHLY_ALIAS:
-        s = _MONTHLY_ALIAS[s]
-    if s == "rand":
-        return "one random day each month"
-
-    m = _safe_match(_nth_wd_re, s)
-    if m:
-        idx, wd = m.group(1), m.group(2)
-        name = _WDNAME[_WD_INDEX[wd]]  # Title Case (Monday, Friday…)
-        if idx == "last":
-            return f"the last {name} of each month"
-        k = int(re.sub(r"(st|nd|rd|th)$", "", idx))
-        if k < 0:
-            return f"the {_ordinal(abs(k))} last {name} of each month"
-        return f"the {_ordinal(k)} {name} of each month"
-    m = _bd_re.match(s)
-    if m:
-        k = int(m.group(1))
-        if k > 0:
-            return f"the {_ordinal(k)} business day of each month"
-        if k == -1:
-            return "the last business day of each month"
-        return f"the {_ordinal(abs(k))} last business day of each month"
-    if ".." in s:
-        a, b = s.split("..", 1)
-        try:
-            ai = int(a)
-            bi = int(b)
-            if ai > 0 and bi > 0:
-                return f"days {ai}–{bi} of each month"
-
-            def dword(x):
-                return (
-                    "last day"
-                    if x == -1
-                    else (_ordinal(x) if x > 0 else f"{_ordinal(abs(x))} last day")
-                )
-
-            return f"days {dword(ai)}–{dword(bi)} of each month"
-        except:
-            pass
-    try:
-        k = int(s)
-        if k == -1:
-            return "the last day of each month"
-        if k < 0:
-            return f"the {_ordinal(abs(k))} last day of each month"
-        return f"the {_ordinal(k)} day of each month"
-    except:
-        return f"[unknown monthly token '{spec}']"
+    return _natural_language.fmt_monthly_atom(
+        spec,
+        monthly_alias=_MONTHLY_ALIAS,
+        safe_match=_safe_match,
+        nth_wd_re=_nth_wd_re,
+        bd_re=_bd_re,
+    )
 
 
 def _fmt_md(d: int, m: int) -> str:
     fmt = (globals().get("ANCHOR_YEAR_FMT") or "DM").upper()
-    name = _MONTH_ABBR[m - 1]
+    name = _natural_language._MONTH_ABBR[m - 1]
     return f"{d} {name}" if fmt == "DM" else f"{name} {d}"
 
 
@@ -2625,215 +2484,64 @@ def _is_full_month(d1, m1, d2, m2) -> int | None:
 
 
 def _fmt_yearly_atom(tok: str) -> str:
-    s = (tok or "").strip().lower()
-
-    # NEW: yearly random phrasing
-    if s == "rand":
-        return "one random day each year"
-
-    m_randm = _rand_mm_re.fullmatch(s)
-    if m_randm:
-        mm = int(m_randm.group(1))
-        if 1 <= mm <= 12:
-            return f"one random day in {_MONTH_ABBR[mm-1]} each year"
-        # fall through to generic handling if somehow invalid
-
-    # Existing numeric handling (single or range), respecting ANCHOR_YEAR_FMT
-    m = _md_range_re.fullmatch(s)
-    if not m:
-        return tok
-
-    def _pair(a: int, b: int) -> tuple[int, int]:
-        # returns (day, month) according to current FMT
-        return (b, a) if _yearfmt() == "MD" else (a, b)
-
-    a, b = int(m.group(1)), int(m.group(2))
-    if m.group(3):
-        c, d = int(m.group(3)), int(m.group(4))
-        d1, m1 = _pair(a, b)
-        d2, m2 = _pair(c, d)
-        # full-month?
-        if m1 == m2 and d1 == 1 and 28 <= d2 <= 31:
-            # Example: '04-01..04-30' (or DM equivalent) → "Apr each year"
-            return f"{_MONTH_ABBR[m1-1]} each year"
-        if m1 == m2:
-            # Same month, day range
-            if _yearfmt() == "DM":
-                return f"{d1}\u2013{d2} {_MONTH_ABBR[m1-1]} each year"
-            else:
-                return f"{_MONTH_ABBR[m1-1]} {d1}\u2013{d2} each year"
-        # Cross-month range
-        # If both ends cover full months (1..31), prefer "Jan–Jun each year".
-        if d1 == 1 and 28 <= d2 <= 31:
-            return f"{_MONTH_ABBR[m1-1]}\u2013{_MONTH_ABBR[m2-1]} each year"
-
-        if _yearfmt() == "DM":
-            left = f"{d1} {_MONTH_ABBR[m1-1]}"
-            right = f"{d2} {_MONTH_ABBR[m2-1]}"
-        else:
-            left = f"{_MONTH_ABBR[m1-1]} {d1}"
-            right = f"{_MONTH_ABBR[m2-1]} {d2}"
-        return f"{left}\u2013{right} each year"
-    else:
-        # Single day
-        d1, m1 = _pair(a, b)
-        # Special-case Feb 29 phrasing remains
-        if m1 == 2 and d1 == 29:
-            return "Feb 29 each leap year"
-        if _yearfmt() == "DM":
-            return f"{d1} {_MONTH_ABBR[m1-1]} each year"
-        else:
-            return f"{_MONTH_ABBR[m1-1]} {d1} each year"
+    return _natural_language.fmt_yearly_atom(
+        tok,
+        rand_mm_re=_rand_mm_re,
+        md_range_re=_md_range_re,
+        yearfmt=_yearfmt,
+    )
 
 
 
 
 def _describe_monthly_tokens(spec: str):
-    return _split_csv_lower(spec)
+    return _natural_language.describe_monthly_tokens(spec, split_csv_lower=_split_csv_lower)
 
 
 def _describe_is_pure_nth_weekday_spec(spec: str):
-    toks = _describe_monthly_tokens(spec)
-    if not toks:
-        return False, []
-    out = []
-    for t in toks:
-        m = _safe_match(_nth_wd_re, t)
-        if not m:
-            return False, []
-        n_raw, wd = m.group(1), m.group(2)
-        if n_raw == "last":
-            k = -1
-        else:
-            k = int(re.sub(r"(st|nd|rd|th)$", "", n_raw))
-        out.append((k, wd))
-    return True, out
+    return _natural_language.describe_is_pure_nth_weekday_spec(
+        spec,
+        split_csv_lower=_split_csv_lower,
+        safe_match=_safe_match,
+        nth_wd_re=_nth_wd_re,
+    )
 
 
 def _describe_is_pure_dom_spec(spec: str):
-    toks = _describe_monthly_tokens(spec)
-    if not toks:
-        return False, []
-    out = []
-    for t in toks:
-        if not t.isdigit():
-            return False, []
-        d = int(t)
-        if d < 1 or d > 31:
-            return False, []
-        out.append(d)
-    return True, out
+    return _natural_language.describe_is_pure_dom_spec(spec, split_csv_lower=_split_csv_lower)
 
 
 def _describe_single_full_month_from_yearly_spec(spec: str):
-    m = _year_range_colon_re.match(str(spec or "").strip())
-    if not m:
-        return None
-    d1, m1, d2, m2 = map(int, m.groups())
-    if m1 != m2 or d1 != 1:
-        return None
-    if d2 < 28 or d2 > 31:
-        return None
-    return m1
+    return _natural_language.describe_single_full_month_from_yearly_spec(
+        spec,
+        year_range_colon_re=_year_range_colon_re,
+    )
 
 
 def _describe_term_roll_shift(term) -> str | None:
-    saw = set()
-    for a in term:
-        roll = (a.get("mods") or {}).get("roll")
-        if roll in ("nw", "pbd", "nbd"):
-            saw.add(roll)
-    if "nw" in saw:
-        return "nw"
-    if "pbd" in saw:
-        return "pbd"
-    if "nbd" in saw:
-        return "nbd"
-    return None
+    return _natural_language.describe_term_roll_shift(term)
 
 
 def _describe_term_bd_filter(term) -> bool:
-    return any((a.get("mods") or {}).get("bd") for a in term)
+    return _natural_language.describe_term_bd_filter(term)
 
 
 def _describe_roll_suffix(roll: str) -> str:
-    if roll == "pbd":
-        return " if business day; otherwise the previous business day"
-    if roll == "nbd":
-        return " if business day; otherwise the next business day"
-    if roll == "nw":
-        return " if business day; otherwise the nearest business day (Fri if Saturday, Mon if Sunday)"
-    return ""
+    return _natural_language.describe_roll_suffix(roll)
 
 
 def _describe_inject_schedule_suffixes(txt: str, term) -> str:
-    roll = _describe_term_roll_shift(term)
-    if roll:
-        suffix = _describe_roll_suffix(roll)
-    elif _describe_term_bd_filter(term):
-        suffix = " only if a business day (skipped if weekend)"
-    else:
-        suffix = ""
-
-    if not suffix:
-        return txt
-
-    targets = [
-        "the last day of each month",
-        "the first day of each month",
-        "the last day of the month",
-        "the first day of the month",
-        "the last day of each quarter",
-        "the first day of each quarter",
-    ]
-    for t in targets:
-        if t in txt:
-            return txt.replace(t, t + suffix)
-
-    if " at " in txt:
-        head, _sep, tail = txt.partition(" at ")
-        return f"{head}{suffix} at {tail}"
-    return txt + suffix
+    return _natural_language.describe_inject_schedule_suffixes(txt, term)
 
 
 def _describe_anchor_term_collect(term):
-    m_parts = []
-    y_parts = []
-    w_phrase = None
-    bd_filter = False
-    wk_ival = mo_ival = yr_ival = 1
-    monthly_specs = []
-    yearly_specs = []
-
-    for a in term:
-        typ = (a.get("typ") or a.get("type") or "").lower()
-        spec = str(a.get("spec") or a.get("value") or "").strip().lower()
-        ival = int(a.get("ival") or a.get("intv") or 1)
-
-        if typ == "w":
-            wk_ival = max(wk_ival, ival)
-            w_phrase = _fmt_weekdays_list(spec)
-            if wk_ival > 1 and spec == "rand":
-                w_phrase = f"one random day every {wk_ival} weeks"
-        elif typ == "m":
-            mo_ival = max(mo_ival, ival)
-            monthly_specs.append(spec)
-            for tok in _split_csv_tokens(spec):
-                m_parts.append(_fmt_monthly_atom(tok))
-        elif typ == "y":
-            yr_ival = max(yr_ival, ival)
-            yearly_specs.append(spec)
-            qmap = a.get("_qmap") or {}
-            for tok in _split_csv_tokens(spec):
-                phr = _fmt_yearly_atom(tok)
-                if phr and qmap and tok in qmap and not phr.startswith("one random day"):
-                    phr = f"{phr} ({qmap[tok]})"
-                y_parts.append(phr)
-
-        mods = a.get("mods") or {}
-        bd_filter = bd_filter or bool(mods.get("bd") or (mods.get("wd") is True))
-
-    return w_phrase, m_parts, y_parts, bd_filter, wk_ival, mo_ival, yr_ival, monthly_specs, yearly_specs
+    return _natural_language.describe_anchor_term_collect(
+        term,
+        fmt_weekdays_list=_fmt_weekdays_list,
+        split_csv_tokens=_split_csv_tokens,
+        fmt_monthly_atom=_fmt_monthly_atom,
+        fmt_yearly_atom=_fmt_yearly_atom,
+    )
 
 
 def _describe_anchor_term_fused_month_year(
@@ -2845,459 +2553,130 @@ def _describe_anchor_term_fused_month_year(
     bd_filter: bool,
     m_parts: list[str],
 ) -> str | None:
-    if len(monthly_specs) != 1 or len(yearly_specs) != 1:
-        return None
-    mspec = monthly_specs[0]
-    yspec = yearly_specs[0]
-    is_nth, pairs = _describe_is_pure_nth_weekday_spec(mspec)
-    fuse_month = _describe_single_full_month_from_yearly_spec(yspec)
-    if not (is_nth and fuse_month and len(pairs) == 1):
-        return None
-    k, wd = pairs[0]
-    if k < 0:
-        k_txt = "last" if k == -1 else f"{_ordinal(abs(k))} last"
-    else:
-        k_txt = _ordinal(k)
-    main = f"the {k_txt} {_WD_FULL[wd]} of {_MONTH_FULL[fuse_month]}"
-    hhmm = _fmt_hhmm_for_term(term, default_due_dt)
-    if yr_ival > 1:
-        main = f"{main} every {yr_ival} years"
-    if hhmm:
-        main = f"{main} at {hhmm}"
-    if bd_filter and any("random day each month" in p for p in m_parts):
-        main = f"{main} on a business day"
-    return _describe_inject_schedule_suffixes(main, term)
+    return _natural_language.describe_anchor_term_fused_month_year(
+        term,
+        default_due_dt,
+        monthly_specs,
+        yearly_specs,
+        yr_ival,
+        bd_filter,
+        m_parts,
+        describe_is_pure_nth_weekday_spec=_describe_is_pure_nth_weekday_spec,
+        describe_single_full_month_from_yearly_spec=_describe_single_full_month_from_yearly_spec,
+        fmt_hhmm_for_term=_fmt_hhmm_for_term,
+    )
 
 
 def _describe_anchor_term_interval_prefix(wk_ival, mo_ival, yr_ival, monthly_specs):
-    interval_prefix = None
-    suppress_tail = False
-
-    if wk_ival > 1:
-        interval_prefix = f"every {wk_ival} weeks: "
-    elif mo_ival > 1:
-        monthly_prefix = f"every {mo_ival} months"
-        clarifier = ""
-        if len(monthly_specs) == 1:
-            mspec = monthly_specs[0]
-            is_nth, pairs = _describe_is_pure_nth_weekday_spec(mspec)
-            if is_nth:
-                if len(pairs) == 1:
-                    k, wd = pairs[0]
-                    if k < 0:
-                        k_txt = "last" if k == -1 else f"{_ordinal(abs(k))} last"
-                    else:
-                        k_txt = _ordinal(k)
-                    clarifier = f" among months that have the {k_txt} {_WD_FULL[wd]}"
-                else:
-                    clarifier = " among months that satisfy the specified nth-weekdays"
-            else:
-                is_dom, doms = _describe_is_pure_dom_spec(mspec)
-                if is_dom and any(d >= 29 for d in doms):
-                    clarifier = (
-                        f" among months that have day {doms[0]}"
-                        if len(doms) == 1
-                        else " among months that have those days"
-                    )
-
-        if clarifier:
-            interval_prefix = monthly_prefix + clarifier
-            suppress_tail = True
-        else:
-            interval_prefix = monthly_prefix + ": "
-    elif yr_ival > 1:
-        interval_prefix = f"every {yr_ival} years: "
-
-    return interval_prefix, suppress_tail
-
-
-def _describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter: bool) -> list[str]:
-    parts = []
-    if w_phrase:
-        parts.append(w_phrase)
-
-    if m_parts:
-        mp = ", ".join(m_parts)
-        if not w_phrase:
-            parts.append(mp)
-        else:
-            parts.append(f"that fall on {mp}")
-
-    if y_parts:
-        yp = " or ".join(y_parts) if len(y_parts) > 1 else y_parts[0]
-        if yp.startswith("one random day"):
-            parts.append(yp)
-        elif w_phrase or m_parts:
-            parts.append(f"and within {yp}")
-        else:
-            parts.append(yp)
-
-    if bd_filter and any("random day each month" in p for p in m_parts):
-        parts.append("on a business day")
-    return parts
-
-
-def describe_anchor_term(term: list, default_due_dt=None) -> str:
-    (
-        w_phrase,
-        m_parts,
-        y_parts,
-        bd_filter,
+    return _natural_language.describe_anchor_term_interval_prefix(
         wk_ival,
         mo_ival,
         yr_ival,
         monthly_specs,
-        yearly_specs,
-    ) = _describe_anchor_term_collect(term)
-
-    fused = _describe_anchor_term_fused_month_year(
-        term, default_due_dt, monthly_specs, yearly_specs, yr_ival, bd_filter, m_parts
+        describe_is_pure_nth_weekday_spec=_describe_is_pure_nth_weekday_spec,
+        describe_is_pure_dom_spec=_describe_is_pure_dom_spec,
     )
-    if fused is not None:
-        return fused
 
-    interval_prefix, suppress_tail = _describe_anchor_term_interval_prefix(
-        wk_ival, mo_ival, yr_ival, monthly_specs
+
+def _describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter: bool) -> list[str]:
+    return _natural_language.describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter)
+
+
+def describe_anchor_term(term: list, default_due_dt=None) -> str:
+    return _natural_language.describe_anchor_term(
+        term,
+        default_due_dt=default_due_dt,
+        fmt_weekdays_list=_fmt_weekdays_list,
+        split_csv_tokens=_split_csv_tokens,
+        fmt_monthly_atom=_fmt_monthly_atom,
+        fmt_yearly_atom=_fmt_yearly_atom,
+        describe_is_pure_nth_weekday_spec=_describe_is_pure_nth_weekday_spec,
+        describe_single_full_month_from_yearly_spec=_describe_single_full_month_from_yearly_spec,
+        fmt_hhmm_for_term=_fmt_hhmm_for_term,
+        describe_is_pure_dom_spec=_describe_is_pure_dom_spec,
     )
-    parts = _describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter)
-    hhmm = _fmt_hhmm_for_term(term, default_due_dt)
-
-    if suppress_tail:
-        txt = interval_prefix
-        if hhmm:
-            txt = f"{txt} at {hhmm}"
-        return _describe_inject_schedule_suffixes(txt or "any day", term)
-
-    if hhmm:
-        parts.append(f"at {hhmm}")
-    txt = " ".join(p for p in parts if p)
-    if interval_prefix:
-        txt = interval_prefix + txt
-
-    txt = _inject_prevnext_phrase(txt, term)
-    txt = _describe_inject_schedule_suffixes(txt or "any day", term)
-    return txt or "any day"
 
 def _describe_anchor_expr_from_dnf(dnf: list, default_due_dt=None) -> str:
-    nat_terms = []
-    for term in (dnf or []):
-        try:
-            t = describe_anchor_term(term, default_due_dt=default_due_dt)
-        except Exception:
-            t = ""
-        if t:
-            nat_terms.append(t)
-
-    if not nat_terms:
-        return ""
-
-    # Deduplicate while preserving order
-    seen, ordered = set(), []
-    for t in nat_terms:
-        if t not in seen:
-            seen.add(t)
-            ordered.append(t)
-    return ordered[0] if len(ordered) == 1 else " or ".join(ordered)
+    return _natural_language.describe_anchor_expr_from_dnf(
+        dnf,
+        default_due_dt=default_due_dt,
+        describe_anchor_term=describe_anchor_term,
+    )
 
 
 def describe_anchor_expr(anchor_expr: str, default_due_dt=None) -> str:
-    """
-    Natural text for a full anchor expression (OR of AND terms).
-    Reuses describe_anchor_term(...) for each AND term and joins them with 'or'.
-    """
-    if not anchor_expr or not str(anchor_expr).strip():
-        return ""
-    try:
-        dnf = parse_anchor_expr_to_dnf_cached(anchor_expr)
-    except Exception:
-        return ""
-    return _describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)
+    return _natural_language.describe_anchor_expr(
+        anchor_expr,
+        default_due_dt=default_due_dt,
+        parse_anchor_expr_to_dnf_cached=parse_anchor_expr_to_dnf_cached,
+        describe_anchor_expr_from_dnf=_describe_anchor_expr_from_dnf,
+    )
 
 
 
 def _term_prevnext_wd(term):
-    """Return ('next'|'prev', 'Friday') if a prev/next weekday modifier exists, else None."""
-    for a in term:
-        mods = a.get("mods") or {}
-        roll = mods.get("roll")
-        if roll in ("next-wd", "prev-wd"):
-            wd = mods.get("wd")
-            if wd is not None:
-                return ("next" if roll == "next-wd" else "prev", _WDNAME.get(wd, ""))
-    return None
+    return _natural_language.term_prevnext_wd(term, wdname=_natural_language._WDNAME)
 
 
 def _inject_prevnext_phrase(txt: str, term) -> str:
-    """
-    Prefer rewriting:
-      'the last day of each month'   -> 'the previous Friday before the last day of each month'
-      'the first day of each month'  -> 'the next Monday after the first day of each month'
-    (and the '... of the month/quarter' variants)
-    If no known base phrase is found, fall back to ', then the previous/next <Weekday>'.
-    """
-    tup = _term_prevnext_wd(term)
-    if not tup:
-        return txt
-
-    dir_word, dayname = tup  # 'prev'|'next', 'Friday'
-    rel = "before" if dir_word == "prev" else "after"
-    adj = "previous" if dir_word == "prev" else "next"
-
-    # Targets we know how to elegantly rewrite
-    targets = [
-        "the last day of each month",
-        "the first day of each month",
-        "the last day of the month",
-        "the first day of the month",
-        "the last day of each quarter",
-        "the first day of each quarter",
-    ]
-
-    for target in targets:
-        if target in txt:
-            pretty = f"the {adj} {dayname} {rel} {target}"
-            return txt.replace(target, pretty)
-
-    # Fallback: insert succinctly before any time tail
-    phrase = f", then the {adj} {dayname}"
-    if " at " in txt:
-        head, sep, tail = txt.partition(" at ")
-        return f"{head}{phrase} at {tail}"
-    return txt + phrase
+    return _natural_language.inject_prevnext_phrase(
+        txt,
+        term,
+        wdname=_natural_language._WDNAME,
+    )
 
 
 def _join_natural_or_terms(terms: list[str]) -> str:
-    if not terms:
-        return ""
-    if len(terms) == 1:
-        return terms[0]
-    if len(terms) == 2:
-        return f"either {terms[0]} or {terms[1]}"
-    return "either " + ", ".join(terms[:-1]) + ", or " + terms[-1]
+    return _natural_language.join_natural_or_terms(terms)
 
 
 def _longest_common_suffix(parts: list[str]) -> str:
-    if not parts:
-        return ""
-    rev = [p[::-1] for p in parts if isinstance(p, str)]
-    if not rev:
-        return ""
-    prefix = os.path.commonprefix(rev)
-    return prefix[::-1]
+    return _natural_language.longest_common_suffix(parts)
 
 
 def _compress_or_terms_by_clause(terms: list[str], delim: str) -> str | None:
-    """Compact repeated OR terms of the form '<shared><delim><variant><shared-tail>'."""
-    if not terms or len(terms) < 2:
-        return None
-
-    if not isinstance(delim, str) or not delim:
-        return None
-    split: list[tuple[str, str]] = []
-    for t in terms:
-        if not isinstance(t, str):
-            return None
-        idx = t.find(delim)
-        if idx <= 0:
-            return None
-        prefix = t[:idx]
-        rest = t[idx + len(delim):]
-        if not rest:
-            return None
-        split.append((prefix, rest))
-
-    prefixes = {p for p, _ in split}
-    if len(prefixes) != 1:
-        return None
-    prefix = split[0][0]
-    rests = [r for _, r in split]
-    if len(set(rests)) <= 1:
-        return None
-
-    common_tail = _longest_common_suffix(rests)
-    if delim == " and within ":
-        # Avoid over-compressing calendar-day yearly phrases into "Jan, Feb, ... Oct 1 each year".
-        # Prefer keeping day with each variant: "Jan 1, Feb 1, ... Oct 1 each year".
-        if (
-            common_tail
-            and re.match(r"^\s+\d{1,2}\b", common_tail)
-            and "each year" in common_tail
-        ):
-            alt_tail = " each year"
-            if all(r.endswith(alt_tail) for r in rests):
-                common_tail = alt_tail
-    variants: list[str] = []
-    for r in rests:
-        v = r[:-len(common_tail)] if common_tail else r
-        v = v.strip(" ,")
-        if not v:
-            return None
-        variants.append(v)
-
-    joined = _join_natural_or_terms(variants)
-    return f"{prefix}{delim}{joined}{common_tail}"
+    return _natural_language.compress_or_terms_by_clause(terms, delim)
 
 
 def describe_anchor_dnf(dnf: list, task: dict) -> str:
-    """
-    Render the whole expression (OR of AND-terms) into one sentence and append mode.
-    First, try special compressions (bucketed monthly rand), else fall back.
-    """
-    def _mode_tail(mode: str) -> str:
-        if mode == "all":
-            return "backfill all missed anchors"
-        if mode == "flex":
-            return "skip past anchors; respect future anchors"
-        if mode == "skip":
-            return "skip missed anchors"
-        return ""
-
-    # Special-case compression
-    bucket = _try_bucket_rand_monthly(dnf, task)
-    if bucket:
-        mode = (task.get("anchor_mode") or "skip").lower()
-        tail = _mode_tail(mode)
-        return f"{bucket}; {tail}" if tail else bucket
-
-    # Fallback: per-term descriptions OR-joined
-    due_dt = parse_dt_any(task.get("due")) if task else None
-    terms = [describe_anchor_term(term, due_dt) for term in (dnf or [])]
-    if not terms:
-        return ""
-    # Deduplicate while preserving order before joining/compression.
-    seen = set()
-    uniq_terms = []
-    for t in terms:
-        if t and t not in seen:
-            seen.add(t)
-            uniq_terms.append(t)
-    if not uniq_terms:
-        return ""
-    sentence = (
-        _compress_or_terms_by_clause(uniq_terms, " and within ")
-        or _compress_or_terms_by_clause(uniq_terms, " that fall on ")
-        or _join_natural_or_terms(uniq_terms)
+    return _natural_language.describe_anchor_dnf(
+        dnf,
+        task,
+        try_bucket_rand_monthly=_try_bucket_rand_monthly,
+        parse_dt_any=parse_dt_any,
+        describe_anchor_term=describe_anchor_term,
     )
-    mode = (task.get("anchor_mode") or "skip").lower()
-    tail = _mode_tail(mode)
-    return f"{sentence}; {tail}" if tail else sentence
 
 
 def _normalize_range_token(tok: str) -> str | None:
-    """Return 'A–B' for monthly range tokens like '1..7'; else None."""
-    s = (tok or "").strip().lower()
-    m = _safe_match(_int_range_re, s)
-    if not m:
-        return None
-    a, b = [int(x) for x in s.split("..")]
-    # Keep presentation simple; negatives allowed (already validated upstream)
-    return f"{a}–{b}"
+    return _natural_language.normalize_range_token(
+        tok,
+        safe_match=_safe_match,
+        int_range_re=_int_range_re,
+    )
 
 
 def _rand_bucket_time_from_mods(mods: dict) -> str | None:
-    tmod = mods.get("t")
-    if isinstance(tmod, tuple):
-        return f"{tmod[0]:02d}:{tmod[1]:02d}"
-    if isinstance(tmod, str) and tmod:
-        return tmod
-    return None
+    return _natural_language.rand_bucket_time_from_mods(mods)
 
 
 def _rand_bucket_merge_mods(mods: dict, time_str: str | None, bd_flag: bool) -> tuple[str | None, bool]:
-    if time_str is None:
-        time_str = _rand_bucket_time_from_mods(mods)
-    bd_flag = bd_flag or bool(mods.get("bd") or (mods.get("wd") is True))
-    return time_str, bd_flag
+    return _natural_language.rand_bucket_merge_mods(mods, time_str, bd_flag)
 
 
 def _rand_bucket_signature(term: list[dict]) -> tuple | None:
-    """
-    For a term shaped like (m:range + m:rand) with optional @t and @bd,
-    return a signature tuple for grouping across OR terms:
-      (interval, time_str, bd_flag)
-    and the normalized single range 'A–B'.
-    Returns None if the term doesn't match this pattern exactly.
-    """
-    has_rand = False
-    range_norm = None
-    ival_seen = None
-    time_str = None
-    bd_flag = False
-
-    for a in term:
-        typ = (a.get("typ") or a.get("type") or "").lower()
-        if typ in ("w", "y") or typ != "m":
-            return None
-        spec = str(a.get("spec") or a.get("value") or "").lower()
-        ival = int(a.get("ival") or a.get("intv") or 1)
-        ival_seen = ival if ival_seen is None else ival_seen
-        mods = a.get("mods") or {}
-        time_str, bd_flag = _rand_bucket_merge_mods(mods, time_str, bd_flag)
-        if spec == "rand":
-            has_rand = True
-            continue
-        rn = _normalize_range_token(spec)
-        if not rn:
-            return None
-        if range_norm and rn != range_norm:
-            return None
-        range_norm = rn
-
-    if not (has_rand and range_norm):
-        return None
-
-    return (ival_seen or 1, time_str, bd_flag, range_norm)
+    return _natural_language.rand_bucket_signature(
+        term,
+        normalize_range_token=_normalize_range_token,
+    )
 
 
 def _try_bucket_rand_monthly(dnf: list[list[dict]], task: dict) -> str | None:
-    """
-    If all OR-terms are '(m:A..B + m:rand)' with the same modifiers/interval,
-    compress to: 'one random [business] day in each monthly bucket (days A–B, ...)[ at HH:MM]'.
-    Returns a sentence or None if not applicable.
-    """
-    if not dnf or any(len(term) == 0 for term in dnf):
-        return None
-
-    sig = None
-    ranges = []
-    for term in dnf:
-        res = _rand_bucket_signature(term)
-        if not res:
-            return None
-        s = (res[0], res[1], res[2])  # (ival, time, bd)
-        if sig is None:
-            sig = s
-        elif s != sig:
-            return None
-        ranges.append(res[3])
-
-    # Sort ranges by their numeric start to make the prose nice
-    def _start_val(r):
-        a = r.split("–", 1)[0]
-        try:
-            return int(a)
-        except:
-            return 0
-
-    ranges = sorted(ranges, key=_start_val)
-
-    if sig is None:
-        return None
-    ival, time_str, bd_flag = sig
-    parts = []
-    lead = "one random "
-    if bd_flag:
-        lead += "business "
-    lead += "day"
-    if ival and int(ival) > 1:
-        lead = f"every {ival} months: " + lead
-    parts.append(lead + " in each monthly bucket")
-    # Join buckets compactly
-    buckets = ", ".join([f"days {r}" for r in ranges])
-    parts.append(f"({buckets})")
-    if time_str:
-        parts.append(f"at {time_str}")
-    return " ".join(parts)
+    return _natural_language.try_bucket_rand_monthly(
+        dnf,
+        task,
+        rand_bucket_signature=_rand_bucket_signature,
+    )
 
 
 # -------- ----------
@@ -4119,7 +3498,7 @@ def _yearly_check_day_month(dd: int, mm: int, label: str, tok: str) -> None:
         label,
         tok,
         parse_error_cls=ParseError,
-        month_full=_MONTH_FULL,
+        month_full=_natural_language._MONTH_FULL,
     )
 
 
@@ -4127,7 +3506,7 @@ def _validate_yearly_spec_token(tok: str) -> None:
     _yearly_validation.validate_yearly_spec_token(
         tok,
         parse_error_cls=ParseError,
-        month_full=_MONTH_FULL,
+        month_full=_natural_language._MONTH_FULL,
     )
 
 

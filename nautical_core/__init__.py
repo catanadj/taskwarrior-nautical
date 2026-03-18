@@ -782,6 +782,7 @@ from . import monthly_support as _monthly_support
 from . import parser_atoms as _parser_atoms
 from . import parser_dnf as _parser_dnf
 from . import parser_frontend as _parser_frontend
+from . import precompute as _precompute
 from . import quarter_helpers as _quarter_helpers
 from . import quarter_rewrite as _quarter_rewrite
 from . import quarter_selector as _quarter_selector
@@ -2156,79 +2157,17 @@ def precompute_hints(dnf: list[list[dict]],
                      rand_seed: str | None = None,
                      k_next: int = 24,
                      sample_days_for_year: int = 366) -> dict:
-
-    # Operate in local dates; let hooks add times if they prefer.
-    today = datetime.now().date()
-    start_d = (start_dt.date() if isinstance(start_dt, datetime) else start_dt) or today
-
-    # If any rand atom exists, the optimized _next_for_or/_next_for_and path is not sufficient
-    # (notably for yearly rand windows like y:rand-07). Use next_after_expr which is authoritative.
-    has_rand = any(
-        "rand" in str((a.get("spec") or "")).lower()
-        for term in (dnf or [])
-        for a in (term or [])
+    _ = anchor_mode
+    return _precompute.precompute_hints(
+        dnf,
+        start_dt=start_dt,
+        rand_seed=rand_seed,
+        k_next=k_next,
+        sample_days_for_year=sample_days_for_year,
+        now_local=datetime.now,
+        next_after_expr=next_after_expr,
+        next_for_or=_next_for_or,
     )
-
-    out_next: list[str] = []
-    ref = start_d
-
-    # Keep /N gating stable relative to preview start.
-    default_seed = ref
-    seed_base = rand_seed or "preview"
-
-    safety_limit = 366 * 5
-    steps = 0
-    while len(out_next) < k_next and steps < safety_limit:
-        if has_rand:
-            nxt, _ = next_after_expr(dnf, ref, default_seed=default_seed, seed_base=seed_base)
-        else:
-            nxt = _next_for_or(dnf, ref, default_seed)
-
-        if not nxt or nxt <= ref:
-            break
-
-        out_next.append(nxt.isoformat() + "T00:00")
-        ref = nxt + timedelta(days=1)
-        steps += 1
-
-    # Estimate per-year by scanning ~1 year ahead
-    year_hits = 0
-    first_hit = last_hit = ""
-    ref = today
-    steps = 0
-    seen: set[date] = set()
-
-    while steps < sample_days_for_year:
-        if has_rand:
-            nxt, _ = next_after_expr(dnf, ref, default_seed=default_seed, seed_base=seed_base)
-        else:
-            nxt = _next_for_or(dnf, ref, default_seed)
-
-        if not nxt or nxt <= ref:
-            break
-
-        iso_s = nxt.isoformat() + "T00:00"
-        if not first_hit:
-            first_hit = iso_s
-        last_hit = iso_s
-
-        if nxt not in seen:
-            seen.add(nxt)
-            year_hits += 1
-
-        ref = nxt + timedelta(days=1)
-        steps += 1
-
-    per_year = {"est": year_hits, "first": first_hit, "last": last_hit}
-    limits = {"stop": "none", "max_left": 0, "until": ""}
-    rand_preview = out_next[:10]
-
-    return {
-        "next_dates": out_next,
-        "per_year": per_year,
-        "limits": limits,
-        "rand_preview": rand_preview,
-    }
 
 
 # ───────────────── Cache writer ───────────────── 
@@ -2236,24 +2175,24 @@ def precompute_hints(dnf: list[list[dict]],
 def build_and_cache_hints(anchor_expr: str,
                           anchor_mode: str = "ALL",
                           default_due_dt=None) -> AnchorHintsPayload:
-    key = cache_key_for_task(anchor_expr, anchor_mode)
-    cached = cache_load(key)
-    if cached:
-        return cast(AnchorHintsPayload, cached)
-
-    dnf = validate_anchor_expr_strict(anchor_expr)
-    natural = _describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)
-    hints = precompute_hints(dnf, start_dt=default_due_dt, anchor_mode=anchor_mode)
-
-    payload = {
-        "meta": {"created": int(time.time()),
-                 "cfg": {"fmt": ANCHOR_YEAR_FMT, "salt": WRAND_SALT, "tz": LOCAL_TZ_NAME, "hol": HOLIDAY_REGION}},
-        "dnf": dnf,
-        "natural": natural,
-        **hints,
-    }
-    cache_save(key, payload)
-    return cast(AnchorHintsPayload, payload)
+    return cast(
+        AnchorHintsPayload,
+        _precompute.build_and_cache_hints(
+            anchor_expr,
+            anchor_mode=anchor_mode,
+            default_due_dt=default_due_dt,
+            cache_key_for_task=cache_key_for_task,
+            cache_load=cache_load,
+            validate_anchor_expr_strict=validate_anchor_expr_strict,
+            describe_anchor_expr_from_dnf=_describe_anchor_expr_from_dnf,
+            precompute_hints=precompute_hints,
+            cache_save=cache_save,
+            anchor_year_fmt=ANCHOR_YEAR_FMT,
+            wrand_salt=WRAND_SALT,
+            local_tz_name=LOCAL_TZ_NAME,
+            holiday_region=HOLIDAY_REGION,
+        ),
+    )
 
 
 # ───────────────── Quarter helpers ─────────────────
@@ -4740,58 +4679,32 @@ def next_after_expr(dnf, after_date, default_seed=None, seed_base=None):
 
 
 def anchors_between_expr(dnf, start_excl, end_excl, default_seed, seed_base=None):
-    """Find all matching dates between start_excl and end_excl."""
-    # Fast path for empty or very large ranges
-    if start_excl >= end_excl:
-        return []
-
-    # Use more efficient approach for large date ranges
-    if (end_excl - start_excl).days > 365 * 2:
-        return _anchors_between_large_range(
-            dnf, start_excl, end_excl, default_seed, seed_base
-        )
-
-    acc = []
-    cur = start_excl
-    while len(acc) < UNTIL_COUNT_CAP:
-        d, _ = next_after_expr(dnf, cur, default_seed, seed_base=seed_base)
-        if d is None or d >= end_excl:
-            break
-        if d <= cur:
-            if os.environ.get("NAUTICAL_DIAG") == "1":
-                _warn_once_per_day(
-                    "anchors_between_no_progress",
-                    "[nautical] anchors_between_expr made no progress; stopping early.",
-                )
-            break
-        if acc and d <= acc[-1]:
-            cur = acc[-1] + timedelta(days=1)
-            continue
-        acc.append(d)
-        cur = d + timedelta(days=1)
-    return acc
+    return _precompute.anchors_between_expr(
+        dnf,
+        start_excl,
+        end_excl,
+        default_seed,
+        seed_base=seed_base,
+        until_count_cap=UNTIL_COUNT_CAP,
+        next_after_expr=next_after_expr,
+        anchors_between_large_range=_anchors_between_large_range,
+        warn_once_per_day=_warn_once_per_day,
+        os_mod=os,
+    )
 
 
 def _anchors_between_large_range(
     dnf, start_excl, end_excl, default_seed, seed_base=None
 ):
-    """Optimized version for large date ranges."""
-    acc = []
-    cur = start_excl
-    batch_size = min(100, UNTIL_COUNT_CAP)
-
-    while len(acc) < UNTIL_COUNT_CAP and cur < end_excl:
-        d, _ = next_after_expr(dnf, cur, default_seed, seed_base=seed_base)
-        if d is None or d >= end_excl:
-            break
-        acc.append(d)
-        cur = d + timedelta(days=1)  # Small optimization
-
-        # Safety check for too many iterations
-        if len(acc) >= batch_size:
-            break
-
-    return acc
+    return _precompute.anchors_between_large_range(
+        dnf,
+        start_excl,
+        end_excl,
+        default_seed,
+        seed_base=seed_base,
+        until_count_cap=UNTIL_COUNT_CAP,
+        next_after_expr=next_after_expr,
+    )
 
 
 def expr_has_m_or_y(dnf) -> bool:

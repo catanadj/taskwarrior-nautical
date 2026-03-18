@@ -5050,6 +5050,40 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
     expect(out.get("finals") == finals and out.get("until_cap_no") == 3, f"unexpected finals: {out}")
 
 
+def test_on_modify_completion_build_and_spawn_child_happy_path():
+    """completion spawn wrapper should return child info and stamp nextLink when verified."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_completion_spawn_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    new = {
+        "uuid": "00000000-0000-0000-0000-000000000111",
+        "status": "completed",
+        "chainID": "abcd1234",
+        "link": 1,
+    }
+    child = {"uuid": "00000000-0000-0000-0000-000000000222", "link": 2}
+    mod._build_child_from_parent = lambda *_a, **_k: dict(child)
+    mod._spawn_child_atomic = lambda _child, _parent: ("deadbeef", set(), True, False, None, "si_test")
+
+    out = mod._completion_build_and_spawn_child(
+        new,
+        child_due=mod.core.now_utc(),
+        next_no=2,
+        parent_short="00000000",
+        kind="cp",
+        cpmax=0,
+        until_dt=None,
+    )
+    expect(bool(out), f"expected spawn result, got {out}")
+    expect(out.get("child") == child, f"unexpected child payload: {out}")
+    expect(out.get("child_short") == "deadbeef", f"unexpected child short: {out}")
+    expect(out.get("verified") is True and out.get("deferred_spawn") is False, f"unexpected verification state: {out}")
+    expect(out.get("spawn_intent_id") == "si_test", f"unexpected spawn intent id: {out}")
+    expect(new.get("nextLink") == "deadbeef", f"verified spawn should stamp nextLink: {new}")
+
+
 def test_on_add_preview_hard_cap():
     """on-add preview loop should respect hard cap even with large preview setting."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -6442,6 +6476,7 @@ TESTS = [
     test_on_modify_link_limit,
     test_on_modify_completion_preflight_context_happy_path,
     test_on_modify_completion_compute_next_and_limits_happy_path,
+    test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_add_preview_hard_cap,
     test_on_add_flushes_stdout,
     test_on_add_profiler_lazy_init,

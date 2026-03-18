@@ -321,6 +321,8 @@ _MODIFY_COMPLETION_PREFLIGHT = None
 _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED = False
 _MODIFY_COMPLETION_COMPUTE = None
 _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED = False
+_MODIFY_COMPLETION_SPAWN = None
+_MODIFY_COMPLETION_SPAWN_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -587,6 +589,44 @@ def _load_modify_completion_compute():
     except Exception:
         pass
     _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED = True
+    return None
+
+
+def _modify_completion_spawn_target_from_base(base: Path) -> Path | None:
+    try:
+        if base.is_file():
+            if base.name == "__init__.py" and base.parent.name == "nautical_core":
+                target = base.parent / "modify_completion_spawn.py"
+                return target if target.is_file() else None
+            return None
+    except Exception:
+        return None
+    target = base / "nautical_core" / "modify_completion_spawn.py"
+    return target if target.is_file() else None
+
+
+def _load_modify_completion_spawn():
+    global _MODIFY_COMPLETION_SPAWN, _MODIFY_COMPLETION_SPAWN_LOAD_FAILED
+    if _MODIFY_COMPLETION_SPAWN is not None:
+        return _MODIFY_COMPLETION_SPAWN
+    if _MODIFY_COMPLETION_SPAWN_LOAD_FAILED:
+        return None
+    base = _CORE_IMPORT_TARGET or _CORE_BASE
+    target = _modify_completion_spawn_target_from_base(base)
+    if not target:
+        _MODIFY_COMPLETION_SPAWN_LOAD_FAILED = True
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("nautical_modify_completion_spawn", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_modify_completion_spawn"] = module
+            spec.loader.exec_module(module)
+            _MODIFY_COMPLETION_SPAWN = module
+            return module
+    except Exception:
+        pass
+    _MODIFY_COMPLETION_SPAWN_LOAD_FAILED = True
     return None
 
 
@@ -5763,7 +5803,23 @@ def _completion_build_and_spawn_child(
     cpmax: int,
     until_dt,
 ) -> dict | None:
-    # Build child payload & spawn
+    modify_completion_spawn = _load_modify_completion_spawn()
+    if modify_completion_spawn is not None:
+        return modify_completion_spawn.completion_build_and_spawn_child(
+            new,
+            child_due=child_due,
+            next_no=next_no,
+            parent_short=parent_short,
+            kind=kind,
+            cpmax=cpmax,
+            until_dt=until_dt,
+            build_child_from_parent=_build_child_from_parent,
+            spawn_child_atomic=_spawn_child_atomic,
+            panel=_panel,
+            print_task=_print_task,
+            diag=_diag,
+        )
+
     try:
         child = _build_child_from_parent(
             new, child_due, next_no, parent_short, kind, cpmax, until_dt
@@ -5807,7 +5863,6 @@ def _completion_build_and_spawn_child(
         _print_task(new)
         return None
 
-    # Reflect link on parent only when child is confirmed.
     if verified:
         new["nextLink"] = child_short
 

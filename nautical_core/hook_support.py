@@ -4,6 +4,7 @@ import os
 import random
 import subprocess
 import time
+import json
 
 
 def build_task_cmd_prefix(*, use_rc_data_location: bool, tw_data_dir) -> list[str]:
@@ -113,3 +114,133 @@ def run_task(
         jitter = random.uniform(0.0, delay)
         time.sleep(delay * (2 ** (attempt - 1)) + jitter)
     return False, last_out, last_err
+
+
+def export_uuid_short(
+    *,
+    run_task,
+    task_cmd_prefix,
+    uuid_short: str,
+    env=None,
+    timeout: float = 2.5,
+    retries: int = 2,
+    diag=None,
+):
+    ok, out, err = run_task(
+        list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=off", f"uuid:{uuid_short}", "export"],
+        env=env,
+        timeout=timeout,
+        retries=retries,
+    )
+    if not ok:
+        if callable(diag):
+            diag(f"export uuid:{uuid_short} failed: {(err or '').strip()}")
+        return None
+    try:
+        obj = json.loads((out or "").strip() or "{}")
+        if not obj.get("uuid"):
+            return None
+        if not str(obj.get("uuid") or "").lower().startswith((uuid_short or "").lower()):
+            if callable(diag):
+                diag(f"uuid prefix mismatch for {uuid_short}")
+            return None
+        return obj
+    except Exception:
+        return None
+
+
+def task_exists_by_uuid_uncached(
+    *,
+    run_task,
+    task_cmd_prefix,
+    uuid_str: str,
+    env=None,
+    timeout: float = 2.5,
+    retries: int = 2,
+    diag=None,
+) -> bool:
+    ok, out, err = run_task(
+        list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=off", f"uuid:{uuid_str}", "export"],
+        env=env,
+        timeout=timeout,
+        retries=retries,
+    )
+    if not ok:
+        if callable(diag):
+            diag(f"task exists check failed (uuid={uuid_str[:8]}): {(err or '').strip()}")
+        return False
+    try:
+        data = json.loads((out or "").strip() or "{}")
+    except Exception:
+        data = {}
+    return bool(data.get("uuid"))
+
+
+def export_uuid_full(
+    *,
+    run_task,
+    task_cmd_prefix,
+    uuid_str: str,
+    env=None,
+    timeout: float = 3.0,
+    retries: int = 2,
+    diag=None,
+):
+    ok, out, err = run_task(
+        list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=1", f"export uuid:{uuid_str}"],
+        env=env,
+        timeout=timeout,
+        retries=retries,
+    )
+    if not ok:
+        if callable(diag):
+            diag(f"task export uuid:{uuid_str} failed: {(err or '').strip()}")
+        return None
+    try:
+        arr = json.loads(out) if out and out.strip().startswith("[") else []
+        return arr[0] if arr else None
+    except Exception:
+        return None
+
+
+def export_uuid_status(
+    *,
+    run_task,
+    task_cmd_prefix,
+    uuid_str: str,
+    timeout: float,
+    retries: int,
+    retry_delay: float = 0.0,
+    env=None,
+    is_lock_error=None,
+    tolerate_noisy_stdout: bool = False,
+):
+    if not uuid_str:
+        return {"exists": False, "retryable": False, "err": "missing uuid", "obj": None}
+    cmd = list(task_cmd_prefix) + [
+        "rc.hooks=off",
+        "rc.json.array=off",
+        "rc.verbose=nothing",
+        "rc.color=off",
+        f"uuid:{uuid_str}",
+        "export",
+    ]
+    ok, out, err = run_task(
+        cmd,
+        env=env,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+    )
+    if not ok:
+        retryable = bool(is_lock_error(err)) if callable(is_lock_error) else False
+        return {"exists": False, "retryable": retryable, "err": err or "", "obj": None}
+    try:
+        obj = json.loads((out or "").strip() or "{}")
+        if obj.get("uuid"):
+            return {"exists": True, "retryable": False, "err": "", "obj": obj}
+        return {"exists": False, "retryable": False, "err": "not found", "obj": None}
+    except Exception:
+        if tolerate_noisy_stdout and uuid_str in (out or ""):
+            return {"exists": True, "retryable": False, "err": "", "obj": {"uuid": uuid_str}}
+        return {"exists": False, "retryable": False, "err": "parse error", "obj": None}

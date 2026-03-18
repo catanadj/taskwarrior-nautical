@@ -1663,6 +1663,18 @@ def _short_uuid(value: str) -> str:
 
 
 def _export_uuid(uuid_str: str) -> dict:
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.export_uuid_status(
+            run_task=_run_task,
+            task_cmd_prefix=_task_cmd_prefix(),
+            uuid_str=uuid_str,
+            timeout=_TASK_TIMEOUT_EXPORT,
+            retries=_TASK_RETRIES_EXPORT,
+            retry_delay=_TASK_RETRY_DELAY,
+            is_lock_error=_is_lock_error,
+            tolerate_noisy_stdout=True,
+        )
     if not uuid_str:
         return {"exists": False, "retryable": False, "err": "missing uuid", "obj": None}
     ok, out, err = _run_task(

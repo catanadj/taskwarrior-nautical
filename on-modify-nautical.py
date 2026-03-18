@@ -1482,6 +1482,17 @@ def _export_uuid_short(u_short: str, env=None):
             _diag(f"cache miss: short uuid {u_short} (chainID={cache_chain_id})")
         else:
             _diag_count("export_uuid_cache_misses")
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.export_uuid_short(
+            run_task=_run_task,
+            task_cmd_prefix=_task_cmd_prefix(),
+            uuid_short=u_short,
+            env=(env or os.environ.copy()),
+            timeout=2.5,
+            retries=2,
+            diag=_diag,
+        )
     env = env or os.environ.copy()
     ok, out, err = _run_task(
         _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{u_short}", "export"],
@@ -1516,6 +1527,17 @@ def _task_exists_by_uuid_cached(u: str) -> bool:
 
 
 def _task_exists_by_uuid_uncached(u: str, env: dict | None) -> bool:
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.task_exists_by_uuid_uncached(
+            run_task=_run_task,
+            task_cmd_prefix=_task_cmd_prefix(),
+            uuid_str=u,
+            env=env,
+            timeout=2.5,
+            retries=2,
+            diag=_diag,
+        )
     q = _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{u}", "export"]
     ok, out, err = _run_task(q, env=env, timeout=2.5, retries=2)
     if not ok:
@@ -1958,6 +1980,17 @@ def _export_uuid_full_uncached(u: str, env=None) -> dict | None:
             _diag(f"cache miss: full uuid {u} (chainID={cache_chain_id})")
         else:
             _diag_count("export_full_cache_misses")
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.export_uuid_full(
+            run_task=_run_task,
+            task_cmd_prefix=_task_cmd_prefix(),
+            uuid_str=u,
+            env=env,
+            timeout=3.0,
+            retries=2,
+            diag=_diag,
+        )
     try:
         out = _task(["rc.json.array=1", f"export uuid:{u}"], env=env)  # uses existing _task()
         arr = json.loads(out) if out and out.strip().startswith("[") else []

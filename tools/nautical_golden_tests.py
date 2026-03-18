@@ -4998,6 +4998,30 @@ def test_on_modify_link_limit():
     expect(out.get("link") == 3, "should pass task through unchanged")
 
 
+def test_on_modify_completion_preflight_context_happy_path():
+    """completion preflight should derive link numbers, kind, and chain id for a valid chain task."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_preflight_context_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    mod._existing_next_task = lambda _task, _next_no: None
+    new = {
+        "uuid": "00000000-0000-0000-0000-000000000111",
+        "status": "completed",
+        "cp": "P1D",
+        "chainID": "abcd1234",
+        "link": 2,
+    }
+
+    ctx = mod._completion_preflight_context(new, mod.core.now_utc())
+    expect(bool(ctx), f"expected preflight context, got {ctx}")
+    expect(ctx.get("parent_short") == "00000000", f"unexpected parent_short: {ctx}")
+    expect(ctx.get("base_no") == 2 and ctx.get("next_no") == 3, f"unexpected link numbers: {ctx}")
+    expect(ctx.get("kind") == "cp", f"unexpected kind: {ctx}")
+    expect(ctx.get("chain_id") == "abcd1234", f"unexpected chain id: {ctx}")
+
+
 def test_on_add_preview_hard_cap():
     """on-add preview loop should respect hard cap even with large preview setting."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -6388,6 +6412,7 @@ TESTS = [
     test_on_modify_carry_wall_clock_across_dst,
     test_normalize_spec_for_acf_cache_guards,
     test_on_modify_link_limit,
+    test_on_modify_completion_preflight_context_happy_path,
     test_on_add_preview_hard_cap,
     test_on_add_flushes_stdout,
     test_on_add_profiler_lazy_init,

@@ -317,6 +317,8 @@ _MODIFY_CHAIN_READS = None
 _MODIFY_CHAIN_READS_LOAD_FAILED = False
 _MODIFY_SPAWN_PREP = None
 _MODIFY_SPAWN_PREP_LOAD_FAILED = False
+_MODIFY_COMPLETION_PREFLIGHT = None
+_MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -507,6 +509,44 @@ def _load_modify_spawn_prep():
     except Exception:
         pass
     _MODIFY_SPAWN_PREP_LOAD_FAILED = True
+    return None
+
+
+def _modify_completion_preflight_target_from_base(base: Path) -> Path | None:
+    try:
+        if base.is_file():
+            if base.name == "__init__.py" and base.parent.name == "nautical_core":
+                target = base.parent / "modify_completion_preflight.py"
+                return target if target.is_file() else None
+            return None
+    except Exception:
+        return None
+    target = base / "nautical_core" / "modify_completion_preflight.py"
+    return target if target.is_file() else None
+
+
+def _load_modify_completion_preflight():
+    global _MODIFY_COMPLETION_PREFLIGHT, _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED
+    if _MODIFY_COMPLETION_PREFLIGHT is not None:
+        return _MODIFY_COMPLETION_PREFLIGHT
+    if _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED:
+        return None
+    base = _CORE_IMPORT_TARGET or _CORE_BASE
+    target = _modify_completion_preflight_target_from_base(base)
+    if not target:
+        _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED = True
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("nautical_modify_completion_preflight", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_modify_completion_preflight"] = module
+            spec.loader.exec_module(module)
+            _MODIFY_COMPLETION_PREFLIGHT = module
+            return module
+    except Exception:
+        pass
+    _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED = True
     return None
 
 
@@ -5255,6 +5295,16 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
 
 
 def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:
+    modify_completion_preflight = _load_modify_completion_preflight()
+    if modify_completion_preflight is not None:
+        return modify_completion_preflight.completion_link_numbers_or_fail(
+            new,
+            coerce_int=core.coerce_int,
+            max_link_number=core.MAX_LINK_NUMBER,
+            panel=_panel,
+            print_task=_print_task,
+        )
+
     base_no = core.coerce_int(new.get("link"), 1)
     if base_no < 1 or base_no > core.MAX_LINK_NUMBER:
         _panel(
@@ -5281,6 +5331,16 @@ def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:
 
 
 def _completion_kind_or_stop(new: dict, now_utc: datetime) -> str | None:
+    modify_completion_preflight = _load_modify_completion_preflight()
+    if modify_completion_preflight is not None:
+        return modify_completion_preflight.completion_kind_or_stop(
+            new,
+            now_utc,
+            panel=_panel,
+            print_task=_print_task,
+            end_chain_summary=_end_chain_summary,
+        )
+
     raw_ch = (new.get("chain") or "").strip().lower()
     has_anchor = bool((new.get("anchor") or "").strip())
     has_cp = bool((new.get("cp") or "").strip())
@@ -5306,6 +5366,14 @@ def _completion_kind_or_stop(new: dict, now_utc: datetime) -> str | None:
 
 
 def _completion_chain_id_or_fail(new: dict) -> str | None:
+    modify_completion_preflight = _load_modify_completion_preflight()
+    if modify_completion_preflight is not None:
+        return modify_completion_preflight.completion_chain_id_or_fail(
+            new,
+            panel=_panel,
+            print_task=_print_task,
+        )
+
     chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
     if chain_id:
         return chain_id
@@ -5322,6 +5390,17 @@ def _completion_chain_id_or_fail(new: dict) -> str | None:
 
 
 def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
+    modify_completion_preflight = _load_modify_completion_preflight()
+    if modify_completion_preflight is not None:
+        return modify_completion_preflight.completion_existing_next_or_fail(
+            new,
+            next_no,
+            existing_next_task=_existing_next_task,
+            short=_short,
+            panel=_panel,
+            print_task=_print_task,
+        )
+
     existing_next = _existing_next_task(new, next_no)
     if not existing_next:
         return True
@@ -5341,6 +5420,18 @@ def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
 
 
 def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
+    modify_completion_preflight = _load_modify_completion_preflight()
+    if modify_completion_preflight is not None:
+        return modify_completion_preflight.completion_preflight_context(
+            new,
+            now_utc,
+            short=_short,
+            completion_link_numbers_or_fail=_completion_link_numbers_or_fail,
+            completion_kind_or_stop=_completion_kind_or_stop,
+            completion_chain_id_or_fail=_completion_chain_id_or_fail,
+            completion_existing_next_or_fail=_completion_existing_next_or_fail,
+        )
+
     parent_short = _short(new.get("uuid"))
     nums = _completion_link_numbers_or_fail(new)
     if nums is None:

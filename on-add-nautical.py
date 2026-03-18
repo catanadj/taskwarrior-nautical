@@ -1220,24 +1220,41 @@ def _parse_extra_tokens(extra: str | None) -> list[str] | None:
 def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None) -> list[dict]:
     if not chain_id:
         return []
-    args = ["task"]
-    if _USE_RC_DATA_LOCATION:
-        args.append(f"rc.data.location={TW_DATA_DIR}")
-    args += ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
-    if since:
-        args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
-    if extra:
-        extra_tokens = _parse_extra_tokens(extra)
-        if extra_tokens is None:
-            _diag(f"tw_export_chain rejected extra: {extra!r}")
-            return []
-        args += extra_tokens
-    args.append("export")
+    hook_support = _load_hook_support()
+    args = None
+    if hook_support is not None:
+        args = hook_support.build_chain_export_args(
+            task_cmd_prefix=(["task", f"rc.data.location={TW_DATA_DIR}"] if _USE_RC_DATA_LOCATION else ["task"]),
+            chain_id=chain_id,
+            since=since,
+            extra=extra,
+            limit=None,
+            parse_extra_tokens=_parse_extra_tokens,
+            diag=_diag,
+        )
+    if args is None and hook_support is None:
+        args = ["task"]
+        if _USE_RC_DATA_LOCATION:
+            args.append(f"rc.data.location={TW_DATA_DIR}")
+        args += ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
+        if since:
+            args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
+        if extra:
+            extra_tokens = _parse_extra_tokens(extra)
+            if extra_tokens is None:
+                _diag(f"tw_export_chain rejected extra: {extra!r}")
+                return []
+            args += extra_tokens
+        args.append("export")
+    if args is None:
+        return []
     ok, out, err = _run_task(args, timeout=3.0, retries=2)
     if not ok:
         _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
         return []
     try:
+        if hook_support is not None:
+            return hook_support.parse_export_array(out, diag=_diag)
         data = json.loads(out.strip() or "[]")
         return data if isinstance(data, list) else [data]
     except Exception as e:

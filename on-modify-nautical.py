@@ -4429,6 +4429,17 @@ def _tw_export_chain_args(
     extra: str | None,
     limit: int | None,
 ) -> list[str] | None:
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.build_chain_export_args(
+            task_cmd_prefix=_task_cmd_prefix(),
+            chain_id=chain_id,
+            since=since,
+            extra=extra,
+            limit=limit,
+            parse_extra_tokens=_parse_extra_tokens,
+            diag=_diag,
+        )
     args = _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
     if since:
         args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
@@ -4474,6 +4485,9 @@ def _tw_export_chain_failure(chain_id: str, err: str, timeout: float) -> None:
 
 
 def _tw_export_chain_parse(out: str) -> list[dict]:
+    hook_support = _load_hook_support()
+    if hook_support is not None:
+        return hook_support.parse_export_array(out, diag=_diag)
     try:
         data = json.loads(out.strip() or "[]")
         return data if isinstance(data, list) else [data]

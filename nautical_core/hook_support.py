@@ -277,3 +277,39 @@ def parse_extra_tokens(extra: str | None) -> list[str] | None:
             return None
         out.append(f"{key}:{value}")
     return out
+
+
+def build_chain_export_args(
+    *,
+    task_cmd_prefix,
+    chain_id: str,
+    since=None,
+    extra: str | None = None,
+    limit: int | None = None,
+    parse_extra_tokens,
+    diag=None,
+) -> list[str] | None:
+    args = list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
+    if since:
+        args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
+    if limit and isinstance(limit, int) and limit > 0:
+        args.append(f"limit:{limit}")
+    if extra:
+        extra_tokens = parse_extra_tokens(extra)
+        if extra_tokens is None:
+            if callable(diag):
+                diag(f"tw_export_chain rejected extra: {extra!r}")
+            return None
+        args += extra_tokens
+    args.append("export")
+    return args
+
+
+def parse_export_array(out: str, *, diag=None) -> list[dict]:
+    try:
+        data = json.loads((out or "").strip() or "[]")
+        return data if isinstance(data, list) else [data]
+    except Exception as exc:
+        if callable(diag):
+            diag(f"tw_export_chain JSON parse failed: {exc}")
+        return []

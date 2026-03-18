@@ -311,6 +311,8 @@ _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
 _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
+_MODIFY_QUERIES = None
+_MODIFY_QUERIES_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -387,6 +389,44 @@ def _load_hook_support():
     except Exception:
         pass
     _HOOK_SUPPORT_LOAD_FAILED = True
+    return None
+
+
+def _modify_queries_target_from_base(base: Path) -> Path | None:
+    try:
+        if base.is_file():
+            if base.name == "__init__.py" and base.parent.name == "nautical_core":
+                target = base.parent / "modify_queries.py"
+                return target if target.is_file() else None
+            return None
+    except Exception:
+        return None
+    target = base / "nautical_core" / "modify_queries.py"
+    return target if target.is_file() else None
+
+
+def _load_modify_queries():
+    global _MODIFY_QUERIES, _MODIFY_QUERIES_LOAD_FAILED
+    if _MODIFY_QUERIES is not None:
+        return _MODIFY_QUERIES
+    if _MODIFY_QUERIES_LOAD_FAILED:
+        return None
+    base = _CORE_IMPORT_TARGET or _CORE_BASE
+    target = _modify_queries_target_from_base(base)
+    if not target:
+        _MODIFY_QUERIES_LOAD_FAILED = True
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("nautical_modify_queries", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_modify_queries"] = module
+            spec.loader.exec_module(module)
+            _MODIFY_QUERIES = module
+            return module
+    except Exception:
+        pass
+    _MODIFY_QUERIES_LOAD_FAILED = True
     return None
 
 
@@ -1941,6 +1981,17 @@ def _task(args, env=None) -> str:
     Thin wrapper around 'task' returning stdout as text.
     Always disables hooks; caller should provide rc.json.array flag when needed.
     """
+    modify_queries = _load_modify_queries()
+    if modify_queries is not None:
+        return modify_queries.task_text(
+            args,
+            run_task=_run_task,
+            task_cmd_prefix=_task_cmd_prefix(),
+            env=(env or os.environ.copy()),
+            timeout=3.0,
+            retries=2,
+            diag=_diag,
+        )
     env = env or os.environ.copy()
     ok, out, err = _run_task(
         _task_cmd_prefix() + ["rc.hooks=off"] + list(args),
@@ -2026,6 +2077,12 @@ def _tw_get_cached(ref: str) -> str:
             if short and cache_chain_id:
                 _diag_count("unexpected_cache_misses")
                 _diag(f"cache miss: _get {ref} (chainID={cache_chain_id})")
+        modify_queries = _load_modify_queries()
+        if modify_queries is not None:
+            return modify_queries.tw_get(
+                ref,
+                task_text=lambda args: _task(args, env=None),
+            )
         out = _task(["rc.verbose=nothing", "_get", ref], env=None)
         return (out or "").strip()
     except Exception:
@@ -2034,24 +2091,28 @@ def _tw_get_cached(ref: str) -> str:
 def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]:
     """Get chain root (chainID) and age in days.
     Returns (root_short, age_days). age_days is None if unavailable."""
+    modify_queries = _load_modify_queries()
+    if modify_queries is not None:
+        return modify_queries.chain_root_and_age(
+            task,
+            now_utc,
+            root_uuid_from=_root_uuid_from,
+            tw_get_cached=_tw_get_cached,
+            dtparse=_dtparse,
+            tolocal=_tolocal,
+        )
     try:
-        # Get root short ID (chainID)
         root_short = _root_uuid_from(task)
-        
-        # Get age if we have a root
         age_days = None
         if root_short:
             root_entry = _tw_get_cached(f"{root_short}.entry")
             entry_dt = _dtparse(root_entry)
-            
             if entry_dt:
                 entry_local = _tolocal(entry_dt).date()
                 today_local = _tolocal(now_utc).date()
                 age_days = (today_local - entry_local).days
-                
                 if age_days < 0:
                     age_days = 0
-        
         return root_short or "—", age_days
     except Exception:
         return "—", None
@@ -2059,15 +2120,18 @@ def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]
 def _format_root_and_age(task: dict, now_utc: datetime) -> str:
     """Format root and age as a single string.
     Returns root (age) or just root if age is 0 or unavailable."""
+    modify_queries = _load_modify_queries()
+    if modify_queries is not None:
+        return modify_queries.format_root_and_age(
+            task,
+            now_utc,
+            chain_root_and_age=_chain_root_and_age,
+        )
     root_short, age_days = _chain_root_and_age(task, now_utc)
-    
     if not root_short or root_short == "—":
         return "—"
-    
-    # Only show age if it's > 0
     if age_days is not None and age_days > 0:
         return f"{root_short} ▻ {age_days}d"
-    
     return root_short
 
 # ------------------------------------------------------------------------------
@@ -4522,6 +4586,20 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
 
 def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
     """Return the first/last chain task using a minimal export."""
+    modify_queries = _load_modify_queries()
+    if modify_queries is not None:
+        hook_support = _load_hook_support()
+        parser = (hook_support.parse_export_array if hook_support is not None else _tw_export_chain_parse)
+        return modify_queries.export_chain_endpoint(
+            chain_id,
+            direction,
+            run_task=_run_task,
+            task_cmd_prefix=_task_cmd_prefix(),
+            parse_export_array=parser,
+            diag=_diag,
+            timeout=3.0,
+            retries=1,
+        )
     if not chain_id:
         return None
     sort_dir = "+" if direction == "first" else "-"

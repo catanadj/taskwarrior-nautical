@@ -512,6 +512,7 @@ _quarter_selector = _import_sibling("quarter_selector")
 _satisfiability = _import_sibling("satisfiability")
 _scheduler_atom = _import_sibling("scheduler_atom")
 _scheduler_expr = _import_sibling("scheduler_expr")
+_strict_validation = _import_sibling("strict_validation")
 _tokenutil = _import_sibling("tokenutil")
 _yearly_parse = _import_sibling("yearly_parse")
 _yearly_validation = _import_sibling("yearly_validation")
@@ -2703,101 +2704,46 @@ def _validate_yearly_spec(spec: str):
 
 
 def _normalize_anchor_input_to_dnf(expr) -> AnchorDNF:
-    """Normalize user input to parsed DNF, preserving current error messages."""
-    if isinstance(expr, str):
-        s = (expr or "").strip()
-        if not s:
-            raise ParseError("Empty anchor expression.")
-        try:
-            dnf = parse_anchor_expr_to_dnf_cached(s)
-        except ParseError as e:
-            raise ParseError(f"{e} (expr: {s})")
-    elif isinstance(expr, (list, tuple)):
-        dnf = expr
-    else:
-        raise ParseError(f"Invalid anchor type {type(expr).__name__}; expected string or parsed DNF.")
-
-    # Defensive compatibility for legacy tuple-style parser errors.
-    if isinstance(dnf, tuple) and len(dnf) == 2 and isinstance(dnf[0], str):
-        raise ParseError(dnf[0])
-    return dnf
+    return _strict_validation.normalize_anchor_input_to_dnf(
+        expr,
+        parse_anchor_expr_to_dnf_cached=parse_anchor_expr_to_dnf_cached,
+        parse_error_cls=ParseError,
+    )
 
 
 def _assert_dnf_structure_strict(dnf):
-    if not isinstance(dnf, (list, tuple)):
-        raise ParseError("Internal error: DNF must be a list of terms.")
-    for term in dnf:
-        if not isinstance(term, (list, tuple)):
-            raise ParseError("Internal error: each term must be a list of atoms.")
-        for atom in term:
-            if not isinstance(atom, dict):
-                raise ParseError("Internal error: each atom must be a dict.")
-            if not _is_atom_like(atom):
-                raise ParseError("Internal error: atom missing required fields (typ/spec/mods).")
+    _strict_validation.assert_dnf_structure_strict(
+        dnf,
+        is_atom_like=_is_atom_like,
+        parse_error_cls=ParseError,
+    )
 
 
 def _validate_anchor_atom_strict(a: dict) -> None:
-    typ = (a.get("typ") or a.get("type") or "").lower()
-    spec = (a.get("spec") or a.get("value") or "").lower()
-    ival = int(a.get("ival") or a.get("intv") or 1)
-    mods = a.get("mods") or {}
-    active = None
-
-    if typ == "w":
-        _validate_weekly_spec(spec)
-        return
-
-    if typ == "m":
-        if spec == "rand":
-            active = _active_mod_keys(mods)
-            bad = [k for k in active if k not in ("t", "bd", "wd")]
-            if bad:
-                raise ParseError(f"m:rand does not support @{', '.join(bad)}")
-            if ival < 1:
-                raise ParseError("Monthly interval (/N) must be >= 1")
-        else:
-            _validate_monthly_spec(spec)
-        return
-
-    if typ == "y":
-        if spec == "rand" or spec.startswith("rand-"):
-            if spec.startswith("rand-"):
-                try:
-                    mm = int(spec.split("-", 1)[1])
-                except Exception:
-                    raise ParseError(f"Invalid token 'y:{spec}'")
-                if not (1 <= mm <= 12):
-                    raise ParseError(f"Invalid month in y:{spec}")
-            if active is None:
-                active = _active_mod_keys(mods)
-            bad = [k for k in active if k not in ("t", "bd", "wd")]
-            if bad:
-                raise ParseError(f"y:{spec} does not support @{', '.join(bad)}")
-        else:
-            _validate_yearly_token_format(spec)
-        return
-
-    raise ParseError(f"Unknown anchor type '{typ}'")
+    _strict_validation.validate_anchor_atom_strict(
+        a,
+        validate_weekly_spec=_validate_weekly_spec,
+        validate_monthly_spec=_validate_monthly_spec,
+        active_mod_keys=_active_mod_keys,
+        validate_yearly_token_format=_validate_yearly_token_format,
+        parse_error_cls=ParseError,
+    )
 
 
 def _validate_anchor_dnf_atoms_strict(dnf: AnchorDNF) -> None:
-    for term in dnf:
-        for a in term:
-            _validate_anchor_atom_strict(a)
+    _strict_validation.validate_anchor_dnf_atoms_strict(
+        dnf,
+        validate_anchor_atom_strict=_validate_anchor_atom_strict,
+    )
 
 
 def validate_anchor_expr_strict(expr) -> AnchorDNF:
-    """
-    Validate an anchor expression. Accepts:
-      - str  (e.g., "w/2:sun + m:1st-mon"), parsed to DNF
-      - DNF  (list[list[dict]]), already parsed
-
-    Returns the normalized DNF on success; raises ParseError on failure.
-    """
-    dnf = _normalize_anchor_input_to_dnf(expr)
-    _assert_dnf_structure_strict(dnf)
-    _validate_anchor_dnf_atoms_strict(dnf)
-    return dnf
+    return _strict_validation.validate_anchor_expr_strict(
+        expr,
+        normalize_anchor_input_to_dnf=_normalize_anchor_input_to_dnf,
+        assert_dnf_structure_strict=_assert_dnf_structure_strict,
+        validate_anchor_dnf_atoms_strict=_validate_anchor_dnf_atoms_strict,
+    )
 
 
 # -------- Cached Expansion Functions ----------

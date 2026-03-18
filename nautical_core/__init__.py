@@ -18,11 +18,33 @@ from calendar import month_name, monthrange
 from datetime import date as _date
 import json, zlib, base64, hashlib, tempfile, time, random, subprocess
 import difflib
+import importlib
+import types
 from contextlib import contextmanager
 try:
     import fcntl  # POSIX advisory lock
 except Exception:
     fcntl = None
+
+_PKG_BASENAME = os.path.basename(os.path.dirname(__file__))
+_PKG_DIR = os.path.dirname(__file__)
+
+if not __package__:
+    __package__ = (__name__ if __name__ != _PKG_BASENAME else _PKG_BASENAME)
+
+_PKG_IMPORT_ROOT = str(__package__ or _PKG_BASENAME)
+_PKG_PROXY = sys.modules.get(_PKG_IMPORT_ROOT)
+if _PKG_PROXY is None:
+    _PKG_PROXY = types.ModuleType(_PKG_IMPORT_ROOT)
+    sys.modules[_PKG_IMPORT_ROOT] = _PKG_PROXY
+_PKG_PROXY.__file__ = __file__
+_PKG_PROXY.__package__ = _PKG_IMPORT_ROOT
+_PKG_PROXY.__path__ = [_PKG_DIR]
+
+
+def _import_sibling(module_name: str):
+    _PKG_PROXY.__dict__.update(globals())
+    return importlib.import_module(f"{_PKG_IMPORT_ROOT}.{module_name}")
 
 
 class AnchorMods(TypedDict, total=False):
@@ -119,7 +141,7 @@ _DEFAULTS = {
     "holiday_region": "",               # reserved for future holiday features
 }
 
-from . import config_support as _config_support
+_config_support = _import_sibling("config_support")
 
 # --- Config cache ---
 _CONF_CACHE = None
@@ -207,13 +229,13 @@ def _load_config() -> dict:
 
 
 def _nautical_cache_dir() -> str:
-    from . import cache_support as _cache_support
+    _cache_support = _import_sibling("cache_support")
 
     return _cache_support.nautical_cache_dir(validated_user_dir=_validated_user_dir)
 
 
 def _warn_once_per_day(key: str, message: str) -> None:
-    from . import warnings as _warnings
+    _warnings = _import_sibling("warnings")
 
     _warnings.warn_once_per_day(
         key,
@@ -224,7 +246,7 @@ def _warn_once_per_day(key: str, message: str) -> None:
 
 
 def _warn_once_per_day_any(key: str, message: str) -> None:
-    from . import warnings as _warnings
+    _warnings = _import_sibling("warnings")
 
     _warnings.warn_once_per_day(
         key,
@@ -235,7 +257,7 @@ def _warn_once_per_day_any(key: str, message: str) -> None:
 
 
 def _warn_rate_limited_any(key: str, message: str, min_interval_s: float = 3600.0) -> None:
-    from . import warnings as _warnings
+    _warnings = _import_sibling("warnings")
 
     _warnings.warn_rate_limited_any(
         key,
@@ -309,7 +331,7 @@ def _clear_all_caches() -> None:
 
 
 # -------- UI helpers ----------------------------------------------------------
-from . import ui as _ui
+_ui = _import_sibling("ui")
 
 strip_rich_markup = _ui.strip_rich_markup
 term_width_stderr = _ui.term_width_stderr
@@ -324,7 +346,7 @@ render_panel = _ui.render_panel
 
 
 def _warn_missing_toml_parser(config_path: str) -> None:
-    from . import warnings as _warnings
+    _warnings = _import_sibling("warnings")
 
     _warnings.warn_missing_toml_parser(
         config_path,
@@ -334,7 +356,7 @@ def _warn_missing_toml_parser(config_path: str) -> None:
 
 
 def _warn_toml_parse_error(config_path: str, err: Exception) -> None:
-    from . import warnings as _warnings
+    _warnings = _import_sibling("warnings")
 
     _warnings.warn_toml_parse_error(
         config_path,
@@ -472,27 +494,28 @@ def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
 # ==============================================================================
 # SECTION: Taskwarrior helpers
 # ==============================================================================
-from . import common as _common
-from . import cache_payload as _cache_payload
-from . import acf_support as _acf_support
-from . import nth_monthly as _nth_monthly
-from . import expansion_support as _expansion_support
-from . import monthly_support as _monthly_support
-from . import natural_language as _natural_language
-from . import parser_atoms as _parser_atoms
-from . import parser_dnf as _parser_dnf
-from . import parser_frontend as _parser_frontend
-from . import precompute as _precompute
-from . import quarter_helpers as _quarter_helpers
-from . import quarter_rewrite as _quarter_rewrite
-from . import quarter_selector as _quarter_selector
-from . import satisfiability as _satisfiability
-from . import scheduler_atom as _scheduler_atom
-from . import scheduler_expr as _scheduler_expr
-from . import tokenutil as _tokenutil
-from . import yearly_parse as _yearly_parse
-from . import yearly_validation as _yearly_validation
-from . import year_tokens as _year_tokens
+_common = _import_sibling("common")
+_cache_payload = _import_sibling("cache_payload")
+_cache_locking = _import_sibling("cache_locking")
+_acf_support = _import_sibling("acf_support")
+_nth_monthly = _import_sibling("nth_monthly")
+_expansion_support = _import_sibling("expansion_support")
+_monthly_support = _import_sibling("monthly_support")
+_natural_language = _import_sibling("natural_language")
+_parser_atoms = _import_sibling("parser_atoms")
+_parser_dnf = _import_sibling("parser_dnf")
+_parser_frontend = _import_sibling("parser_frontend")
+_precompute = _import_sibling("precompute")
+_quarter_helpers = _import_sibling("quarter_helpers")
+_quarter_rewrite = _import_sibling("quarter_rewrite")
+_quarter_selector = _import_sibling("quarter_selector")
+_satisfiability = _import_sibling("satisfiability")
+_scheduler_atom = _import_sibling("scheduler_atom")
+_scheduler_expr = _import_sibling("scheduler_expr")
+_tokenutil = _import_sibling("tokenutil")
+_yearly_parse = _import_sibling("yearly_parse")
+_yearly_validation = _import_sibling("yearly_validation")
+_year_tokens = _import_sibling("year_tokens")
 
 short_uuid = _common.short_uuid
 should_stamp_chain_id = _common.should_stamp_chain_id
@@ -521,7 +544,7 @@ else:
             f"[nautical] timezone '{LOCAL_TZ_NAME}' is invalid/unavailable; using UTC fallback.",
         )
 
-from . import timeutil as _timeutil
+_timeutil = _import_sibling("timeutil")
 
 def now_utc():
     return _timeutil.now_utc()
@@ -898,20 +921,20 @@ _CACHE_DIR = None
 
 def _cache_dir() -> str:
     global _CACHE_DIR
-    if _CACHE_DIR is not None:
-        return _CACHE_DIR
-    from . import cache_support as _cache_support
+    _cache_support = _import_sibling("cache_support")
 
-    chosen = _cache_support.select_cache_dir(
+    chosen = _cache_locking.cache_dir(
+        _CACHE_DIR,
         anchor_cache_dir_override=ANCHOR_CACHE_DIR_OVERRIDE,
         nautical_cache_dir_path=_nautical_cache_dir(),
         validated_user_dir=_validated_user_dir,
+        select_cache_dir=_cache_support.select_cache_dir,
     )
     _CACHE_DIR = chosen
     return chosen
 
 def _cache_key(acf: str, anchor_mode: str) -> str:
-    from . import cache_support as _cache_support
+    _cache_support = _import_sibling("cache_support")
 
     return _cache_support.cache_key(
         acf,
@@ -923,84 +946,40 @@ def _cache_key(acf: str, anchor_mode: str) -> str:
     )
 
 def _cache_path(key: str) -> str:
-    from . import cache_support as _cache_support
+    _cache_support = _import_sibling("cache_support")
 
     return _cache_support.cache_path(_cache_dir(), key)
 
 def _cache_lock_path(key: str) -> str:
-    from . import cache_support as _cache_support
+    _cache_support = _import_sibling("cache_support")
 
     return _cache_support.cache_lock_path(_cache_dir(), key)
 
 @contextmanager
 def _safe_lock_sleep_once(sleep_base: float, jitter: float) -> None:
-    try:
-        delay = float(sleep_base or 0.0)
-    except Exception:
-        delay = 0.0
-    if jitter:
-        try:
-            delay += random.uniform(0.0, float(jitter))
-        except Exception:
-            pass
-    if delay > 0:
-        time.sleep(delay)
+    _cache_locking.safe_lock_sleep_once(
+        sleep_base,
+        jitter,
+        time_mod=time,
+        random_mod=random,
+    )
 
 
 def _safe_lock_ensure_parent(path_str: str, mkdir: bool) -> None:
-    if not mkdir:
-        return
-    try:
-        parent = os.path.dirname(path_str)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-    except Exception:
-        pass
+    _cache_locking.safe_lock_ensure_parent(path_str, mkdir, os_mod=os)
 
 
 def _safe_lock_age(path_str: str) -> float | None:
-    try:
-        with open(path_str, "r", encoding="utf-8") as f:
-            head = f.read(64)
-        parts = head.strip().split()
-        if len(parts) >= 2:
-            return time.time() - float(parts[1])
-    except Exception:
-        pass
-    try:
-        st = os.stat(path_str)
-        return time.time() - float(st.st_mtime)
-    except Exception:
-        return None
+    return _cache_locking.safe_lock_age(path_str, time_mod=time, os_mod=os)
 
 
 def _safe_lock_stale_pid(path_str: str, stale_after: float | None) -> bool:
-    try:
-        with open(path_str, "r", encoding="utf-8") as f:
-            head = f.read(64)
-        parts = head.strip().split()
-        pid_str = parts[0] if parts else ""
-        pid = int(pid_str)
-        if pid <= 0:
-            return True
-        if stale_after is not None and len(parts) >= 2:
-            try:
-                age = time.time() - float(parts[1])
-                if age < float(stale_after):
-                    return False
-            except Exception:
-                pass
-        try:
-            os.kill(pid, 0)
-            return False
-        except PermissionError:
-            return False
-        except ProcessLookupError:
-            return True
-        except Exception:
-            return False
-    except Exception:
-        return False
+    return _cache_locking.safe_lock_stale_pid(
+        path_str,
+        stale_after,
+        time_mod=time,
+        os_mod=os,
+    )
 
 
 @contextmanager
@@ -1013,38 +992,19 @@ def _safe_lock_fcntl_context(
     mode: int,
     mkdir: bool,
 ):
-    lf = None
-    acquired = False
-    _safe_lock_ensure_parent(path_str, mkdir)
-    try:
-        fd = os.open(path_str, os.O_CREAT | os.O_RDWR, mode)
-        try:
-            os.fchmod(fd, mode)
-        except Exception:
-            pass
-        lf = os.fdopen(fd, "a", encoding="utf-8")
-        for _ in range(tries):
-            try:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-                break
-            except Exception:
-                _safe_lock_sleep_once(sleep_base, jitter)
-    except Exception:
-        lf = None
-    try:
+    with _cache_locking.safe_lock_fcntl_context(
+        path_str,
+        tries=tries,
+        sleep_base=sleep_base,
+        jitter=jitter,
+        mode=mode,
+        mkdir=mkdir,
+        safe_lock_ensure_parent=_safe_lock_ensure_parent,
+        safe_lock_sleep_once=_safe_lock_sleep_once,
+        fcntl_mod=fcntl,
+        os_mod=os,
+    ) as acquired:
         yield acquired
-    finally:
-        try:
-            if acquired and lf is not None:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
-        try:
-            if lf is not None:
-                lf.close()
-        except Exception:
-            pass
 
 
 @contextmanager
@@ -1058,52 +1018,22 @@ def _safe_lock_excl_context(
     mkdir: bool,
     stale_after: float | None,
 ):
-    fd = None
-    acquired = False
-    for _ in range(tries):
-        _safe_lock_ensure_parent(path_str, mkdir)
-        try:
-            fd = os.open(path_str, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
-            try:
-                os.fchmod(fd, mode)
-            except Exception:
-                pass
-            try:
-                payload = f"{os.getpid()} {int(time.time())}\n"
-                os.write(fd, payload.encode("ascii", "replace"))
-            except Exception:
-                pass
-            acquired = True
-            break
-        except FileExistsError:
-            pid_stale = _safe_lock_stale_pid(path_str, stale_after)
-            age_stale = False
-            if stale_after is not None:
-                age = _safe_lock_age(path_str)
-                if age is not None and age >= float(stale_after):
-                    age_stale = True
-            if pid_stale and age_stale:
-                try:
-                    os.unlink(path_str)
-                except Exception:
-                    pass
-            else:
-                _safe_lock_sleep_once(sleep_base, jitter)
-        except Exception:
-            break
-    try:
+    with _cache_locking.safe_lock_excl_context(
+        path_str,
+        tries=tries,
+        sleep_base=sleep_base,
+        jitter=jitter,
+        mode=mode,
+        mkdir=mkdir,
+        stale_after=stale_after,
+        safe_lock_ensure_parent=_safe_lock_ensure_parent,
+        safe_lock_stale_pid=_safe_lock_stale_pid,
+        safe_lock_age=_safe_lock_age,
+        safe_lock_sleep_once=_safe_lock_sleep_once,
+        os_mod=os,
+        time_mod=time,
+    ) as acquired:
         yield acquired
-    finally:
-        try:
-            if acquired and fd is not None:
-                os.close(fd)
-        except Exception:
-            pass
-        try:
-            if acquired and fd is not None:
-                os.unlink(path_str)
-        except Exception:
-            pass
 
 
 @contextmanager
@@ -1117,52 +1047,31 @@ def safe_lock(
     mkdir: bool = True,
     stale_after: float | None = 60.0,
 ):
-    """Best-effort lock helper with fcntl (non-blocking) or O_EXCL fallback."""
-    path_str = str(path) if path else ""
-    if not path_str:
-        yield False
-        return
-
-    tries = max(1, int(retries or 0))
-
-    if fcntl is not None:
-        with _safe_lock_fcntl_context(
-            path_str,
-            tries=tries,
-            sleep_base=sleep_base,
-            jitter=jitter,
-            mode=mode,
-            mkdir=mkdir,
-        ) as acquired:
-            yield acquired
-        return
-
-    with _safe_lock_excl_context(
-        path_str,
-        tries=tries,
+    with _cache_locking.safe_lock(
+        path,
+        retries=retries,
         sleep_base=sleep_base,
         jitter=jitter,
         mode=mode,
         mkdir=mkdir,
         stale_after=stale_after,
+        fcntl_mod=fcntl,
+        os_mod=os,
+        time_mod=time,
+        random_mod=random,
     ) as acquired:
         yield acquired
 
 @contextmanager
 def _cache_lock(key: str):
-    """Best-effort per-key lock for cache writes. Yields True if acquired."""
-    lock_path = _cache_lock_path(key)
-    if not lock_path:
-        yield False
-        return
-    with safe_lock(
-        lock_path,
-        retries=_CACHE_LOCK_RETRIES,
-        sleep_base=_CACHE_LOCK_SLEEP_BASE,
-        jitter=_CACHE_LOCK_JITTER,
-        mode=0o600,
-        mkdir=True,
-        stale_after=_CACHE_LOCK_STALE_AFTER,
+    with _cache_locking.cache_lock(
+        key,
+        cache_lock_path=_cache_lock_path,
+        safe_lock=safe_lock,
+        cache_lock_retries=_CACHE_LOCK_RETRIES,
+        cache_lock_sleep_base=_CACHE_LOCK_SLEEP_BASE,
+        cache_lock_jitter=_CACHE_LOCK_JITTER,
+        cache_lock_stale_after=_CACHE_LOCK_STALE_AFTER,
     ) as acquired:
         yield acquired
 
@@ -1170,7 +1079,7 @@ def _cache_lock(key: str):
 # ==============================================================================
 # SECTION: Hook utilities (diag, run_task)
 # ==============================================================================
-from . import runtime as _runtime
+_runtime = _import_sibling("runtime")
 
 _DIAG_LOG_REDACT_KEYS: frozenset[str] = _runtime.DIAG_LOG_REDACT_KEYS
 _hook_arg_value = _runtime.hook_arg_value
@@ -2078,7 +1987,7 @@ def coerce_int(v, default=None):
 def parse_dt_any(s: str):
     return _timeutil.parse_dt_any(s, DATE_FORMATS)
 
-from . import dates as _dates
+_dates = _import_sibling("dates")
 
 
 def month_len(y, m):

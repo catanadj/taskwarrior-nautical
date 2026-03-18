@@ -119,6 +119,8 @@ _DEFAULTS = {
     "holiday_region": "",               # reserved for future holiday features
 }
 
+from . import config_support as _config_support
+
 # --- Config cache ---
 _CONF_CACHE = None
 
@@ -132,91 +134,27 @@ _CACHE_LOAD_MEM_TTL = 300
 _CACHE_LOAD_MEM: OrderedDict[str, tuple[int, int, dict, float]] = OrderedDict()
 
 def _env_flag_true(name: str, env_map: dict | None = None) -> bool:
-    src = env_map if env_map is not None else os.environ
-    try:
-        raw = src.get(name, "") if hasattr(src, "get") else ""
-    except Exception:
-        raw = ""
-    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+    return _config_support.env_flag_true(name, env_map=env_map)
 
 
 def _path_input_error(path_value: str) -> str | None:
-    raw = str(path_value or "").strip()
-    if not raw:
-        return "empty path"
-    if "\x00" in raw:
-        return "NUL byte in path"
-    # Block traversal segments before normalization.
-    parts = raw.replace("\\", "/").split("/")
-    if any(p == ".." for p in parts):
-        return "parent traversal ('..') is not allowed"
-    return None
+    return _config_support.path_input_error(path_value)
 
 
 def _normalized_abspath(path_value: str) -> str:
-    return os.path.abspath(os.path.expanduser(str(path_value or "").strip()))
+    return _config_support.normalized_abspath(path_value)
 
 
 def _nearest_existing_dir(path_value: str) -> str | None:
-    cur = _normalized_abspath(path_value)
-    while cur:
-        if os.path.isdir(cur):
-            return cur
-        parent = os.path.dirname(cur)
-        if not parent or parent == cur:
-            return None
-        cur = parent
-    return None
+    return _config_support.nearest_existing_dir(path_value)
 
 
 def _world_writable_without_sticky(mode: int) -> bool:
-    return bool(mode & 0o002) and not bool(mode & 0o1000)
+    return _config_support.world_writable_without_sticky(mode)
 
 
 def _path_safety_error(path_value: str, *, expect_dir: bool = True) -> str | None:
-    """
-    Return a short error string when path is unsafe for filesystem operations.
-
-    Rules:
-      - Existing target dirs must be owned by current user (when getuid is available).
-      - Existing target/ancestor must not be world-writable unless sticky bit is set.
-      - Path must resolve to / under a writable+searchable existing ancestor.
-    """
-    ap = _normalized_abspath(path_value)
-    if not ap:
-        return "empty path"
-    try:
-        target_exists = os.path.exists(ap)
-        if target_exists:
-            if expect_dir and not os.path.isdir(ap):
-                return "not a directory"
-            probe = ap
-        else:
-            probe = _nearest_existing_dir(ap)
-            if not probe:
-                return "no existing parent directory"
-
-        st = os.stat(probe)
-        if target_exists:
-            uid_fn = getattr(os, "getuid", None)
-            if callable(uid_fn):
-                uid = uid_fn()
-                if st.st_uid != uid:
-                    return "owner mismatch"
-        if _world_writable_without_sticky(st.st_mode):
-            return "world-writable path without sticky bit"
-        if expect_dir:
-            if not os.access(probe, os.W_OK | os.X_OK):
-                return "path is not writable/searchable"
-        else:
-            if target_exists and not os.path.isdir(ap):
-                if not os.access(ap, os.R_OK):
-                    return "path is not readable"
-            elif not os.access(probe, os.W_OK | os.X_OK):
-                return "parent path is not writable/searchable"
-    except Exception as e:
-        return str(e)
-    return None
+    return _config_support.path_safety_error(path_value, expect_dir=expect_dir)
 
 
 def _validated_user_dir(
@@ -227,229 +165,44 @@ def _validated_user_dir(
     env_map: dict | None = None,
     warn_on_error: bool = True,
 ) -> str:
-    raw = str(path_value or "").strip()
-    in_err = _path_input_error(raw)
-    if in_err:
-        if warn_on_error and _env_flag_true("NAUTICAL_DIAG", env_map):
-            try:
-                sys.stderr.write(f"[nautical] Ignoring unsafe {label} '{raw}': {in_err}\n")
-            except Exception:
-                pass
-        return ""
-    ap = _normalized_abspath(raw)
-    if trust_env and _env_flag_true(trust_env, env_map):
-        return ap
-    err = _path_safety_error(ap, expect_dir=True)
-    if err:
-        if warn_on_error and _env_flag_true("NAUTICAL_DIAG", env_map):
-            try:
-                sys.stderr.write(f"[nautical] Ignoring unsafe {label} '{path_value}': {err}\n")
-            except Exception:
-                pass
-        return ""
-    return ap
+    return _config_support.validated_user_dir(
+        path_value,
+        label=label,
+        trust_env=trust_env,
+        env_map=env_map,
+        warn_on_error=warn_on_error,
+    )
 
 
 def _read_toml(path: str) -> dict:
-    # Fast path: missing file => no config here
-    try:
-        if not path or not os.path.exists(path):
-            return {}
-    except Exception:
-        return {}
-
-    env_path = os.environ.get("NAUTICAL_CONFIG") or ""
-    env_abs = os.path.abspath(os.path.expanduser(env_path)) if env_path else ""
-    is_env_path = bool(env_abs and path == env_abs)
-    trust_config_path = _env_flag_true("NAUTICAL_TRUST_CONFIG_PATH")
-
-    if not trust_config_path:
-        in_err = _path_input_error(path)
-        if in_err:
-            if os.environ.get("NAUTICAL_DIAG") == "1":
-                try:
-                    sys.stderr.write(f"[nautical] Ignoring unsafe config path '{path}': {in_err}\n")
-                except Exception:
-                    pass
-            return {}
-        safety_err = _path_safety_error(path, expect_dir=False)
-        if safety_err:
-            if os.environ.get("NAUTICAL_DIAG") == "1":
-                try:
-                    sys.stderr.write(f"[nautical] Ignoring unsafe config path '{path}': {safety_err}\n")
-                except Exception:
-                    pass
-            return {}
-
-    # File exists, but cannot parse TOML (Python < 3.11 and no tomli)
-    if tomllib is None:
-        if is_env_path:
-            raise RuntimeError(
-                f"NAUTICAL_CONFIG is set but TOML parser is unavailable for {path}. "
-                "Install tomli or upgrade to Python 3.11+."
-            )
-        _warn_missing_toml_parser(path)
-        return {}
-
-    try:
-        with open(path, "rb") as f:
-            return tomllib.load(f) or {}
-    except Exception as e:
-        if is_env_path:
-            raise RuntimeError(f"NAUTICAL_CONFIG parse failed for {path}: {e}")
-        # Either show full details in explicit diagnostic mode
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            print(f"[nautical] Failed to parse TOML: {path}: {e}", file=sys.stderr)
-        else:
-            _warn_toml_parse_error(path, e)
-        return {}
+    return _config_support.read_toml(
+        path,
+        tomllib_mod=tomllib,
+        warn_missing_toml_parser=_warn_missing_toml_parser,
+        warn_toml_parse_error=_warn_toml_parse_error,
+    )
 
 
 def _config_paths() -> list[str]:
-    env_path = os.environ.get("NAUTICAL_CONFIG")
-    if env_path:
-        raw_env = str(env_path).strip()
-        in_err = _path_input_error(raw_env)
-        if in_err and not _env_flag_true("NAUTICAL_TRUST_CONFIG_PATH"):
-            if os.environ.get("NAUTICAL_DIAG") == "1":
-                try:
-                    sys.stderr.write(f"[nautical] Ignoring unsafe NAUTICAL_CONFIG '{raw_env}': {in_err}\n")
-                except Exception:
-                    pass
-            return []
-        ap = os.path.abspath(os.path.expanduser(raw_env))
-        if (not os.path.exists(ap)) or os.path.isdir(ap):
-            _warn_env_config_missing(env_path)
-        return [ap]
-
-    def _dedup(paths: list[str]) -> list[str]:
-        seen = set()
-        out = []
-        for p in paths:
-            if not p:
-                continue
-            ap = os.path.abspath(os.path.expanduser(p))
-            if ap in seen:
-                continue
-            seen.add(ap)
-            out.append(ap)
-        return out
-
-    def _candidates_in_dir(d: str) -> list[str]:
-        d = os.path.abspath(os.path.expanduser(d))
-        return [
-            os.path.join(d, "config-nautical.toml"),
-            os.path.join(d, "nautical.toml"),
-        ]
-
-    paths: list[str] = []
-
-    # TASKRC contexts
-    trc = os.environ.get("TASKRC")
-    if trc:
-        trc_abs = os.path.abspath(os.path.expanduser(trc))
-        trc_dir = os.path.dirname(trc_abs)
-
-        # next to TASKRC
-        paths.extend(_candidates_in_dir(trc_dir))
-
-        # sibling ".task" next to TASKRC directory (portable layouts)
-        paths.extend(_candidates_in_dir(os.path.join(trc_dir, ".task")))
-
-        # if TASKRC directory itself is ".task"
-        if os.path.basename(trc_dir) == ".task":
-            paths.extend(_candidates_in_dir(trc_dir))
-
-    # module-adjacent
-    moddir = os.path.dirname(os.path.abspath(__file__))
-    paths.extend(_candidates_in_dir(moddir))
-
-    # XDG config (explicit, then default)
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    if xdg:
-        paths.extend(_candidates_in_dir(os.path.join(xdg, "nautical")))
-    paths.extend(_candidates_in_dir(os.path.expanduser("~/.config/nautical")))
-
-    # Taskwarrior-centric placement
-    paths.extend(_candidates_in_dir(os.path.expanduser("~/.task")))
-
-    out = _dedup(paths)
-
-    if os.environ.get("NAUTICAL_DIAG") == "1":
-        try:
-            print("[nautical] Config search order:", file=sys.stderr)
-            for p in out:
-                print(f"  - {p}", file=sys.stderr)
-        except Exception:
-            pass
-
-    return out
+    return _config_support.config_paths(warn_env_config_missing=_warn_env_config_missing)
 
 def _warn_env_config_missing(env_path: str) -> None:
-    _warn_once_per_day_any(
-        "config_missing",
-        "[nautical] NAUTICAL_CONFIG path missing; using defaults.",
-    )
-    if os.environ.get("NAUTICAL_DIAG") != "1":
-        return
-    ap = os.path.abspath(os.path.expanduser(env_path))
-    print(
-        "[nautical] NAUTICAL_CONFIG is set but the file is missing or invalid; defaults will be used.\n"
-        f"          Resolved path: {ap}\n"
-        "          Fix: create the file at that path or update NAUTICAL_CONFIG.\n",
-        file=sys.stderr,
+    _config_support.warn_env_config_missing(
+        env_path,
+        warn_once_per_day_any=_warn_once_per_day_any,
     )
 
 
 def _normalize_keys(d: dict) -> dict:
-    # allow users to write keys in any case
-    out = {}
-    for k, v in (d or {}).items():
-        kk = str(k).strip().lower()
-        out[kk] = v
-    return out
+    return _config_support.normalize_keys(d)
 
 def _load_config() -> dict:
-    cfg = dict(_DEFAULTS)
-    chosen = None
-
-    paths = _config_paths()
-    for p in paths:
-        data = _read_toml(p)
-        if data:
-            cfg.update(_normalize_keys(data))
-            chosen = p
-            break
-
-    if os.environ.get("NAUTICAL_DIAG") == "1":
-        try:
-            if chosen:
-                print(f"[nautical] Using config: {chosen}", file=sys.stderr)
-            else:
-                print("[nautical] No config file found; using defaults.", file=sys.stderr)
-                print("[nautical] Search order:", file=sys.stderr)
-                for p in paths:
-                    print(f"  - {p}", file=sys.stderr)
-        except Exception:
-            pass
-
-    # normalize values
-    cfg["wrand_salt"]      = str(cfg.get("wrand_salt") or _DEFAULTS["wrand_salt"])
-    cfg["tz"]              = str(cfg.get("tz") or _DEFAULTS["tz"])
-    cfg["holiday_region"]  = str(cfg.get("holiday_region") or "")
-    # Alias support:
-    #   recurrence_update_udas = [...]
-    #   [recurrence] update_udas = [...]
-    #   recurrence.update_udas = "..."
-    if cfg.get("recurrence_update_udas") is None:
-        rec = cfg.get("recurrence")
-        if isinstance(rec, dict):
-            rec_norm = _normalize_keys(rec)
-            if rec_norm.get("update_udas") is not None:
-                cfg["recurrence_update_udas"] = rec_norm.get("update_udas")
-    if cfg.get("recurrence_update_udas") is None and cfg.get("recurrence.update_udas") is not None:
-        cfg["recurrence_update_udas"] = cfg.get("recurrence.update_udas")
-    return cfg
+    return _config_support.load_config(
+        defaults=_DEFAULTS,
+        config_paths=_config_paths,
+        read_toml=_read_toml,
+        normalize_keys=_normalize_keys,
+    )
 
 
 
@@ -593,22 +346,16 @@ def _warn_toml_parse_error(config_path: str, err: Exception) -> None:
 
 def _get_config() -> dict:
     global _CONF_CACHE
-    if _CONF_CACHE is None:
-        # Cache an internal mutable copy, but never expose it directly.
-        _CONF_CACHE = copy.deepcopy(_load_config())
-    return copy.deepcopy(_CONF_CACHE)
+    out, _CONF_CACHE = _config_support.get_config(_CONF_CACHE, load_config=_load_config)
+    return out
 
 _CONF = MappingProxyType(_get_config())
 
 def _conf_raw(key: str):
-    return _CONF.get(key)
+    return _config_support.conf_raw(_CONF, key)
 
 def _conf_str(key: str, default: str) -> str:
-    v = _conf_raw(key)
-    if v is None:
-        return str(default)
-    s = str(v).strip()
-    return s if s else str(default)
+    return _config_support.conf_str(_CONF, key, default)
 
 def _conf_int(
     key: str,
@@ -616,16 +363,13 @@ def _conf_int(
     min_value: int | None = None,
     max_value: int | None = None,
 ) -> int:
-    v = _conf_raw(key)
-    try:
-        out = int(str(v).strip())
-    except Exception:
-        out = int(default)
-    if min_value is not None and out < min_value:
-        out = int(min_value)
-    if max_value is not None and out > max_value:
-        out = int(max_value)
-    return out
+    return _config_support.conf_int(
+        _CONF,
+        key,
+        default,
+        min_value=min_value,
+        max_value=max_value,
+    )
 
 def _conf_bool(
     key: str,
@@ -633,71 +377,24 @@ def _conf_bool(
     true_values: set[str] | None = None,
     false_values: set[str] | None = None,
 ) -> bool:
-    v = _conf_raw(key)
-    if v is None:
-        return bool(default)
-    s = str(v).strip().lower()
-    if not s:
-        return bool(default)
-    if true_values and s in true_values:
-        return True
-    if false_values and s in false_values:
-        return False
-    if s in ("1", "true", "yes", "on"):
-        return True
-    if s in ("0", "false", "no", "off", "none"):
-        return False
-    return bool(default)
+    return _config_support.conf_bool(
+        _CONF,
+        key,
+        default=default,
+        true_values=true_values,
+        false_values=false_values,
+    )
 
 
 def _conf_csv_or_list(key: str, default: list[str] | None = None, lower: bool = False) -> list[str]:
-    v = _conf_raw(key)
-    if v is None:
-        return list(default or [])
-    if isinstance(v, str):
-        raw_items = v.split(",")
-    elif isinstance(v, (list, tuple, set)):
-        raw_items = list(v)
-    else:
-        raw_items = [v]
-
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in raw_items:
-        s = str(item).strip()
-        if not s:
-            continue
-        if lower:
-            s = s.lower()
-        if s in seen:
-            continue
-        seen.add(s)
-        out.append(s)
-    return out if out else list(default or [])
-
-
-_UDA_ATTR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+    return _config_support.conf_csv_or_list(_CONF, key, default=default, lower=lower)
 
 
 def _conf_uda_field_list(key: str) -> list[str]:
-    fields = _conf_csv_or_list(key, default=[], lower=True)
-    out: list[str] = []
-    for f in fields:
-        if _UDA_ATTR_NAME_RE.fullmatch(f):
-            out.append(f)
-            continue
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            try:
-                print(f"[nautical] Ignoring invalid UDA field in {key}: {f!r}", file=sys.stderr)
-            except Exception:
-                pass
-    return out
+    return _config_support.conf_uda_field_list(_CONF, key)
 
 def _trueish(v, default=False):
-    if v is None:
-        return default
-    s = str(v).strip().lower()
-    return s in ("1", "true", "yes", "on")
+    return _config_support.trueish(v, default=default)
 
 ANCHOR_YEAR_FMT = "MD"
 WRAND_SALT      = _CONF["wrand_salt"]

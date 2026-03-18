@@ -512,6 +512,7 @@ _quarter_helpers = _import_sibling("quarter_helpers")
 _quarter_rewrite = _import_sibling("quarter_rewrite")
 _quarter_selector = _import_sibling("quarter_selector")
 _satisfiability = _import_sibling("satisfiability")
+_schedule_utils = _import_sibling("schedule_utils")
 _scheduler_atom = _import_sibling("scheduler_atom")
 _scheduler_expr = _import_sibling("scheduler_expr")
 _strict_validation = _import_sibling("strict_validation")
@@ -2703,78 +2704,13 @@ def expand_yearly_for_year_strict(spec: str, y: int):
 
 # -------- Rolls / atoms ----------
 def roll_apply(dt: date, mods: dict) -> date:
-    roll = mods.get("roll")  # 'pbd' | 'nbd' | 'nw' | 'next-wd' | 'prev-wd' | None
-
-    if roll in ("pbd", "nbd", "nw"):
-        if dt.weekday() > 4:  # weekend
-            if roll == "pbd":
-                for _ in range(8):
-                    if dt.weekday() <= 4:
-                        break
-                    dt -= timedelta(days=1)
-                else:
-                    raise ParseError("roll_apply: failed to reach business day (pbd)")
-            elif roll == "nbd":
-                for _ in range(8):
-                    if dt.weekday() <= 4:
-                        break
-                    dt += timedelta(days=1)
-                else:
-                    raise ParseError("roll_apply: failed to reach business day (nbd)")
-            else:  # 'nw'
-                prev_dt = dt
-                next_dt = dt
-                for _ in range(8):
-                    if prev_dt.weekday() <= 4:
-                        break
-                    prev_dt -= timedelta(days=1)
-                else:
-                    raise ParseError("roll_apply: failed to reach business day (nw prev)")
-                for _ in range(8):
-                    if next_dt.weekday() <= 4:
-                        break
-                    next_dt += timedelta(days=1)
-                else:
-                    raise ParseError("roll_apply: failed to reach business day (nw next)")
-                if (dt - prev_dt) <= (next_dt - dt):
-                    dt = prev_dt
-                else:
-                    dt = next_dt
-
-    elif roll in ("next-wd", "prev-wd"):
-        tgt = mods.get("wd")
-        if tgt is not None:
-            if roll == "next-wd":
-                for _ in range(8):
-                    if dt.weekday() == tgt:
-                        break
-                    dt += timedelta(days=1)
-                else:
-                    raise ParseError("roll_apply: failed to reach target weekday (next-wd)")
-            else:  # 'prev-wd'
-                for _ in range(8):
-                    if dt.weekday() == tgt:
-                        break
-                    dt -= timedelta(days=1)
-                else:
-                    raise ParseError("roll_apply: failed to reach target weekday (prev-wd)")
-
-    return dt
+    return _schedule_utils.roll_apply(dt, mods, parse_error_cls=ParseError)
 
 def _weeks_between(d1: date, d2: date) -> int:
-    """Return number of ISO weeks between two dates (d2 - d1)."""
-    # Convert both dates to Monday of their ISO week
-    iso1 = d1.isocalendar()
-    iso2 = d2.isocalendar()
-    mon1 = date.fromisocalendar(iso1.year, iso1.week, 1)
-    mon2 = date.fromisocalendar(iso2.year, iso2.week, 1)
-    # Compute difference in weeks
-    return (mon2 - mon1).days // 7
+    return _schedule_utils.weeks_between(d1, d2)
 
 def apply_day_offset(d: date, mods: dict) -> date:
-    """Apply day offset modifier."""
-    off = int(mods.get("day_offset", 0) or 0)
-    return d + timedelta(days=off) if off else d
+    return _schedule_utils.apply_day_offset(d, mods)
 
 
 def base_next_after_atom(atom, ref_d: date) -> date:
@@ -2972,29 +2908,16 @@ def _anchors_between_large_range(
 
 
 def expr_has_m_or_y(dnf) -> bool:
-    """Check if expression contains monthly or yearly atoms."""
-    for term in dnf:
-        for a in term:
-            if a["typ"] in ("m", "y"):
-                return True
-    return False
+    return _schedule_utils.expr_has_m_or_y(dnf)
 
 
 def pick_hhmm_from_dnf_for_date(dnf, target: date, default_seed: date):
-    """Extract HH:MM time from DNF for given date.
-
-    If @t contains multiple times, returns the earliest-listed time.
-    """
-    for term in dnf:
-        if all(atom_matches_on(a, target, default_seed) for a in term):
-            for a in term:
-                tval = a["mods"].get("t")
-                if not tval:
-                    continue
-                if isinstance(tval, list):
-                    return tval[0] if tval else None
-                return tval
-    return None
+    return _schedule_utils.pick_hhmm_from_dnf_for_date(
+        dnf,
+        target,
+        default_seed,
+        atom_matches_on=atom_matches_on,
+    )
 
 
 # ------------------------------------------------------------------------------

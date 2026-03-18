@@ -4915,6 +4915,30 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
         mod._RECURRENCE_UPDATE_UDAS = prev_cfg
 
 
+def test_on_modify_stable_child_uuid_is_slot_deterministic():
+    """stable child UUID should be deterministic for the same parent slot and change with link."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_stable_child_uuid_test")
+
+    parent = {
+        "uuid": "00000000-0000-0000-0000-000000000111",
+        "cp": "P1D",
+        "chainID": "cid12345",
+        "link": 1,
+    }
+    child_a = {"chainID": "cid12345", "link": 2}
+    child_b = {"chainID": "cid12345", "link": 2}
+    child_c = {"chainID": "cid12345", "link": 3}
+
+    uuid_a = mod._stable_child_uuid(parent, child_a)
+    uuid_b = mod._stable_child_uuid(parent, child_b)
+    uuid_c = mod._stable_child_uuid(parent, child_c)
+
+    expect(bool(uuid_a), "stable child uuid should not be empty")
+    expect(uuid_a == uuid_b, "same chain slot should yield same stable uuid")
+    expect(uuid_a != uuid_c, "different link slot should yield different stable uuid")
+
+
 def test_normalize_spec_for_acf_cache_guards():
     """normalize spec cache should bound inputs before caching."""
     import nautical_core as core
@@ -6414,6 +6438,7 @@ TESTS = [
     test_on_modify_export_uuid_short_invalid_json,
     test_on_modify_export_uuid_short_prefix_mismatch,
     test_on_modify_export_uuid_full_cached,
+    test_on_modify_stable_child_uuid_is_slot_deterministic,
     test_on_modify_missing_taskdata_uses_tw_dir,
     test_hooks_no_direct_subprocess_run,
     test_chain_integrity_warnings_detects_issues,

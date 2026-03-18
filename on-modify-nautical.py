@@ -315,6 +315,8 @@ _MODIFY_QUERIES = None
 _MODIFY_QUERIES_LOAD_FAILED = False
 _MODIFY_CHAIN_READS = None
 _MODIFY_CHAIN_READS_LOAD_FAILED = False
+_MODIFY_SPAWN_PREP = None
+_MODIFY_SPAWN_PREP_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -467,6 +469,44 @@ def _load_modify_chain_reads():
     except Exception:
         pass
     _MODIFY_CHAIN_READS_LOAD_FAILED = True
+    return None
+
+
+def _modify_spawn_prep_target_from_base(base: Path) -> Path | None:
+    try:
+        if base.is_file():
+            if base.name == "__init__.py" and base.parent.name == "nautical_core":
+                target = base.parent / "modify_spawn_prep.py"
+                return target if target.is_file() else None
+            return None
+    except Exception:
+        return None
+    target = base / "nautical_core" / "modify_spawn_prep.py"
+    return target if target.is_file() else None
+
+
+def _load_modify_spawn_prep():
+    global _MODIFY_SPAWN_PREP, _MODIFY_SPAWN_PREP_LOAD_FAILED
+    if _MODIFY_SPAWN_PREP is not None:
+        return _MODIFY_SPAWN_PREP
+    if _MODIFY_SPAWN_PREP_LOAD_FAILED:
+        return None
+    base = _CORE_IMPORT_TARGET or _CORE_BASE
+    target = _modify_spawn_prep_target_from_base(base)
+    if not target:
+        _MODIFY_SPAWN_PREP_LOAD_FAILED = True
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("nautical_modify_spawn_prep", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["nautical_modify_spawn_prep"] = module
+            spec.loader.exec_module(module)
+            _MODIFY_SPAWN_PREP = module
+            return module
+    except Exception:
+        pass
+    _MODIFY_SPAWN_PREP_LOAD_FAILED = True
     return None
 
 
@@ -1648,7 +1688,16 @@ def _reserve_child_uuid(env: dict) -> str:
 
 
 def _stable_child_uuid(parent_task: dict | None, child_task: dict | None) -> str:
-    """Return a cross-device-stable UUID for a child slot when possible."""
+    modify_spawn_prep = _load_modify_spawn_prep()
+    if modify_spawn_prep is not None:
+        return modify_spawn_prep.stable_child_uuid(
+            parent_task,
+            child_task,
+            task_uuid_or_empty=_task_uuid_or_empty,
+            coerce_int=core.coerce_int,
+            stable_child_uuid_namespace=_STABLE_CHILD_UUID_NAMESPACE,
+        )
+
     if not isinstance(parent_task, dict) or not isinstance(child_task, dict):
         return ""
     parent_uuid = _task_uuid_or_empty(parent_task)
@@ -1680,6 +1729,15 @@ def _stable_child_uuid(parent_task: dict | None, child_task: dict | None) -> str
 
 
 def _child_uuid_for_spawn(parent_task: dict | None, child_task: dict | None, env: dict) -> str:
+    modify_spawn_prep = _load_modify_spawn_prep()
+    if modify_spawn_prep is not None:
+        return modify_spawn_prep.child_uuid_for_spawn(
+            parent_task,
+            child_task,
+            env,
+            stable_child_uuid=_stable_child_uuid,
+            reserve_child_uuid=_reserve_child_uuid,
+        )
     stable = _stable_child_uuid(parent_task, child_task)
     if stable:
         return stable
@@ -1789,17 +1847,28 @@ def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str
     Raises RuntimeError with detailed context on failure.
     """
     env = os.environ.copy()
-    child_uuid = _child_uuid_for_spawn(parent_task, child_task, env)
-    obj = dict(child_task)
-    obj["uuid"] = child_uuid
-    if "entry" not in obj:
-        obj["entry"] = core.fmt_isoz(core.now_utc())
-    if "modified" not in obj:
-        obj["modified"] = obj["entry"]
-
-
-    obj = _strip_none_and_cast(obj)
-    _normalise_datetime_fields(obj)
+    modify_spawn_prep = _load_modify_spawn_prep()
+    if modify_spawn_prep is not None:
+        obj, child_uuid, _child_short = modify_spawn_prep.prepare_spawn_child_payload(
+            child_task,
+            parent_task,
+            env,
+            child_uuid_for_spawn=_child_uuid_for_spawn,
+            fmt_isoz=core.fmt_isoz,
+            now_utc=core.now_utc,
+            strip_none_and_cast=_strip_none_and_cast,
+            normalise_datetime_fields=_normalise_datetime_fields,
+        )
+    else:
+        child_uuid = _child_uuid_for_spawn(parent_task, child_task, env)
+        obj = dict(child_task)
+        obj["uuid"] = child_uuid
+        if "entry" not in obj:
+            obj["entry"] = core.fmt_isoz(core.now_utc())
+        if "modified" not in obj:
+            obj["modified"] = obj["entry"]
+        obj = _strip_none_and_cast(obj)
+        _normalise_datetime_fields(obj)
 
     attempts = 0
     stripped_accum: set[str] = set()
@@ -1957,22 +2026,30 @@ def _spawn_child_atomic(
     We enqueue the child for the on-exit hook to import, then update the parent link.
     """
     env = os.environ.copy()
-
-    # Prepare child with a stable UUID so retries and cross-device completions converge.
-    child_uuid = _child_uuid_for_spawn(parent_task_with_nextlink, child_task, env)
     spawn_intent_id = f"si_{uuid.uuid4().hex[:12]}"
-    child_obj = dict(child_task)
-    child_obj["uuid"] = child_uuid
-    if "entry" not in child_obj:
-        child_obj["entry"] = core.fmt_isoz(core.now_utc())
-    if "modified" not in child_obj:
-        child_obj["modified"] = child_obj["entry"]
-
-    child_short = child_uuid[:8]
-
-    # Normalise
-    child_obj = _strip_none_and_cast(child_obj)
-    _normalise_datetime_fields(child_obj)
+    modify_spawn_prep = _load_modify_spawn_prep()
+    if modify_spawn_prep is not None:
+        child_obj, child_uuid, child_short = modify_spawn_prep.prepare_spawn_child_payload(
+            child_task,
+            parent_task_with_nextlink,
+            env,
+            child_uuid_for_spawn=_child_uuid_for_spawn,
+            fmt_isoz=core.fmt_isoz,
+            now_utc=core.now_utc,
+            strip_none_and_cast=_strip_none_and_cast,
+            normalise_datetime_fields=_normalise_datetime_fields,
+        )
+    else:
+        child_uuid = _child_uuid_for_spawn(parent_task_with_nextlink, child_task, env)
+        child_obj = dict(child_task)
+        child_obj["uuid"] = child_uuid
+        if "entry" not in child_obj:
+            child_obj["entry"] = core.fmt_isoz(core.now_utc())
+        if "modified" not in child_obj:
+            child_obj["modified"] = child_obj["entry"]
+        child_short = child_uuid[:8]
+        child_obj = _strip_none_and_cast(child_obj)
+        _normalise_datetime_fields(child_obj)
 
     stripped_attrs: set[str] = set()
     last_stderr = ""
@@ -3407,6 +3484,27 @@ def _build_child_from_parent(
     cpmax: int,
     until_dt,
 ):
+    modify_spawn_prep = _load_modify_spawn_prep()
+    if modify_spawn_prep is not None:
+        return modify_spawn_prep.build_child_from_parent(
+            parent,
+            child_due_utc,
+            next_link_no,
+            parent_short,
+            kind,
+            cpmax,
+            until_dt,
+            reserved_drop=_RESERVED_DROP,
+            reserved_override=_RESERVED_OVERRIDE,
+            debug_wait_sched=_DEBUG_WAIT_SCHED,
+            clear_wait_sched_debug=_LAST_WAIT_SCHED_DEBUG.clear,
+            fmt_isoz=core.fmt_isoz,
+            now_utc=core.now_utc,
+            carry_relative_datetime=_carry_relative_datetime,
+            configured_recurrence_uda_fields=_configured_recurrence_uda_fields,
+            short_uuid=core.short_uuid,
+        )
+
     child = {k: v for k, v in parent.items() if k not in _RESERVED_DROP}
     if _DEBUG_WAIT_SCHED:
         _LAST_WAIT_SCHED_DEBUG.clear()
@@ -3431,8 +3529,6 @@ def _build_child_from_parent(
         child.pop("anchor", None)
         child.pop("anchor_mode", None)
 
-
-    # Carry wait/scheduled forward relative to due (local wall-clock delta).
     _carry_relative_datetime(parent, child, child_due_utc, "wait")
     _carry_relative_datetime(parent, child, child_due_utc, "scheduled")
     for uda_field in _configured_recurrence_uda_fields(parent):
@@ -3443,7 +3539,6 @@ def _build_child_from_parent(
     if until_dt:
         child["chainUntil"] = core.fmt_isoz(until_dt)
 
-    # [CHAINID] Inherit parent chainID (fallback to parent's short uuid)
     try:
         parent_chain = (parent.get("chainID") or "").strip()
         if not parent_chain:

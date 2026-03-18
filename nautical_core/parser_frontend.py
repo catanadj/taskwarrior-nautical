@@ -1,6 +1,68 @@
 from __future__ import annotations
 
 
+def rewrite_weekly_multi_time_atoms(s: str, *, split_csv_tokens, re_mod) -> str:
+    """
+    Rewrite patterns like:
+        w:mon@t=09:00,fri@t=15:00
+    into:
+        w:mon@t=09:00 | w:fri@t=15:00
+
+    Rules:
+      - Only triggers inside a single weekly atom (starts with 'w:').
+      - Splits on top-level commas, but keeps each token's @t with it.
+      - Leaves existing '|' and '+' structure intact.
+    """
+    out = []
+    i, n = 0, len(s)
+
+    def flush_atom(prefix: str, body: str):
+        parts = split_csv_tokens(body)
+        if len(parts) <= 1:
+            out.append(prefix + body)
+            return
+        pat = re_mod.compile(r"^(mon|tue|wed|thu|fri|sat|sun)(@t=\d{2}:\d{2})?$", re_mod.I)
+        if all(pat.match(p) for p in parts):
+            out.append(" | ".join(f"{prefix}{p}" for p in parts))
+        else:
+            out.append(prefix + body)
+
+    while i < n:
+        if s[i] == "w":
+            colon = -1
+            k = i + 1
+            while k < n:
+                if s[k] == ":":
+                    colon = k
+                    break
+                if s[k] in "|+)(":
+                    break
+                k += 1
+            if colon == -1:
+                out.append(s[i])
+                i += 1
+                continue
+            j = colon + 1
+            depth = 0
+            while j < n:
+                c = s[j]
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif depth == 0 and c in "|+":
+                    break
+                j += 1
+            flush_atom(s[i:colon + 1], s[colon + 1:j])
+            i = j
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
 def normalize_anchor_expr_input(
     s: str,
     *,

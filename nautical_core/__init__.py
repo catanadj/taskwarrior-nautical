@@ -3337,72 +3337,8 @@ def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
 
 
 def _rewrite_weekly_multi_time_atoms(s: str) -> str:
-    """
-    Rewrite patterns like:
-        w:mon@t=09:00,fri@t=15:00
-    into:
-        w:mon@t=09:00 | w:fri@t=15:00
-
-    Rules:
-      - Only triggers inside a single weekly atom (starts with 'w:').
-      - Splits on top-level commas, but keeps each token's @t with it.
-      - Leaves existing '|' and '+' structure intact.
-    """
-    out = []
-    i, n = 0, len(s)
-
-    def flush_atom(prefix: str, body: str):
-        # body like "mon@t=09:00,fri@t=15:00"
-        parts = _split_csv_tokens(body)
-        if len(parts) <= 1:
-            out.append(prefix + body)
-            return
-        # if every part looks like <dow>(@t=..)? then expand with OR
-        pat = re.compile(r"^(mon|tue|wed|thu|fri|sat|sun)(@t=\d{2}:\d{2})?$", re.I)
-        if all(pat.match(p) for p in parts):
-            expanded = " | ".join(f"{prefix}{p}" for p in parts)
-            out.append(expanded)
-        else:
-            out.append(prefix + body)
-
-    while i < n:
-        if s[i] == "w":
-            # Find the ':' that terminates the weekly head (supports 'w:' and 'w/2:')
-            j = i
-            depth = 0
-            # First, find the colon that ends the head
-            colon = -1
-            k = i + 1
-            while k < n:
-                if s[k] == ":":
-                    colon = k
-                    break
-                if s[k] in "|+)(":
-                    break
-                k += 1
-            if colon == -1:
-                out.append(s[i])
-                i += 1
-                continue
-            # Now find the end of this atom at top level
-            j = colon + 1
-            depth = 0
-            while j < n:
-                c = s[j]
-                if c == "(":
-                    depth += 1
-                elif c == ")":
-                    if depth == 0:
-                        break
-                    depth -= 1
-                elif depth == 0 and c in "|+":
-                    break
-                j += 1
-            prefix = s[i:colon+1]    # e.g., "w:" or "w/2:"
-            body   = s[colon+1:j]    # after the colon up to op/end
-            flush_atom(prefix, body)
-            i = j
-        else:
-            out.append(s[i])
-            i += 1
-    return "".join(out)
+    return _parser_frontend.rewrite_weekly_multi_time_atoms(
+        s,
+        split_csv_tokens=_split_csv_tokens,
+        re_mod=re,
+    )

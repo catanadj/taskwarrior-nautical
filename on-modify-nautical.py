@@ -471,6 +471,43 @@ def _require_loaded_module(module, rel_name: str):
     return module
 
 
+def _hook_support_module():
+    return _require_loaded_module(_load_hook_support(), "hook_support.py")
+
+
+def _modify_queries_module():
+    return _require_loaded_module(_load_modify_queries(), "modify_queries.py")
+
+
+def _modify_chain_reads_module():
+    return _require_loaded_module(_load_modify_chain_reads(), "modify_chain_reads.py")
+
+
+def _modify_spawn_prep_module():
+    return _require_loaded_module(_load_modify_spawn_prep(), "modify_spawn_prep.py")
+
+
+def _modify_completion_preflight_module():
+    return _require_loaded_module(
+        _load_modify_completion_preflight(),
+        "modify_completion_preflight.py",
+    )
+
+
+def _modify_completion_compute_module():
+    return _require_loaded_module(
+        _load_modify_completion_compute(),
+        "modify_completion_compute.py",
+    )
+
+
+def _modify_completion_spawn_module():
+    return _require_loaded_module(
+        _load_modify_completion_spawn(),
+        "modify_completion_spawn.py",
+    )
+
+
 def _task_cmd_prefix() -> list[str]:
     hook_support = _load_hook_support()
     if hook_support is not None:
@@ -1649,10 +1686,7 @@ def _reserve_child_uuid(env: dict) -> str:
 
 
 def _stable_child_uuid(parent_task: dict | None, child_task: dict | None) -> str:
-    modify_spawn_prep = _require_loaded_module(
-        _load_modify_spawn_prep(),
-        "modify_spawn_prep.py",
-    )
+    modify_spawn_prep = _modify_spawn_prep_module()
     return modify_spawn_prep.stable_child_uuid(
         parent_task,
         child_task,
@@ -1663,10 +1697,7 @@ def _stable_child_uuid(parent_task: dict | None, child_task: dict | None) -> str
 
 
 def _child_uuid_for_spawn(parent_task: dict | None, child_task: dict | None, env: dict) -> str:
-    modify_spawn_prep = _require_loaded_module(
-        _load_modify_spawn_prep(),
-        "modify_spawn_prep.py",
-    )
+    modify_spawn_prep = _modify_spawn_prep_module()
     return modify_spawn_prep.child_uuid_for_spawn(
         parent_task,
         child_task,
@@ -1779,10 +1810,7 @@ def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str
     Raises RuntimeError with detailed context on failure.
     """
     env = os.environ.copy()
-    modify_spawn_prep = _require_loaded_module(
-        _load_modify_spawn_prep(),
-        "modify_spawn_prep.py",
-    )
+    modify_spawn_prep = _modify_spawn_prep_module()
     obj, child_uuid, _child_short = modify_spawn_prep.prepare_spawn_child_payload(
         child_task,
         parent_task,
@@ -1951,10 +1979,7 @@ def _spawn_child_atomic(
     """
     env = os.environ.copy()
     spawn_intent_id = f"si_{uuid.uuid4().hex[:12]}"
-    modify_spawn_prep = _require_loaded_module(
-        _load_modify_spawn_prep(),
-        "modify_spawn_prep.py",
-    )
+    modify_spawn_prep = _modify_spawn_prep_module()
     child_obj, child_uuid, child_short = modify_spawn_prep.prepare_spawn_child_payload(
         child_task,
         parent_task_with_nextlink,
@@ -2013,10 +2038,7 @@ def _task(args, env=None) -> str:
     Thin wrapper around 'task' returning stdout as text.
     Always disables hooks; caller should provide rc.json.array flag when needed.
     """
-    modify_queries = _require_loaded_module(
-        _load_modify_queries(),
-        "modify_queries.py",
-    )
+    modify_queries = _modify_queries_module()
     return modify_queries.task_text(
         args,
         run_task=_run_task,
@@ -2101,10 +2123,7 @@ def _tw_get_cached(ref: str) -> str:
             if short and cache_chain_id:
                 _diag_count("unexpected_cache_misses")
                 _diag(f"cache miss: _get {ref} (chainID={cache_chain_id})")
-        modify_queries = _require_loaded_module(
-            _load_modify_queries(),
-            "modify_queries.py",
-        )
+        modify_queries = _modify_queries_module()
         return modify_queries.tw_get(
             ref,
             task_text=lambda args: _task(args, env=None),
@@ -2115,10 +2134,7 @@ def _tw_get_cached(ref: str) -> str:
 def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]:
     """Get chain root (chainID) and age in days.
     Returns (root_short, age_days). age_days is None if unavailable."""
-    modify_queries = _require_loaded_module(
-        _load_modify_queries(),
-        "modify_queries.py",
-    )
+    modify_queries = _modify_queries_module()
     return modify_queries.chain_root_and_age(
         task,
         now_utc,
@@ -2131,10 +2147,7 @@ def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]
 def _format_root_and_age(task: dict, now_utc: datetime) -> str:
     """Format root and age as a single string.
     Returns root (age) or just root if age is 0 or unavailable."""
-    modify_queries = _require_loaded_module(
-        _load_modify_queries(),
-        "modify_queries.py",
-    )
+    modify_queries = _modify_queries_module()
     return modify_queries.format_root_and_age(
         task,
         now_utc,
@@ -2331,10 +2344,7 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
 
 
 def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] | None = None) -> list[dict]:
-    modify_chain_reads = _require_loaded_module(
-        _load_modify_chain_reads(),
-        "modify_chain_reads.py",
-    )
+    modify_chain_reads = _modify_chain_reads_module()
     return modify_chain_reads.collect_prev_two(
         current_task,
         coerce_int=core.coerce_int,
@@ -2375,10 +2385,7 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
 
 
 def _existing_next_task(parent_task: dict, next_no: int) -> dict | None:
-    modify_chain_reads = _require_loaded_module(
-        _load_modify_chain_reads(),
-        "modify_chain_reads.py",
-    )
+    modify_chain_reads = _modify_chain_reads_module()
     return modify_chain_reads.existing_next_task(
         parent_task,
         next_no,
@@ -3311,10 +3318,7 @@ def _build_child_from_parent(
     cpmax: int,
     until_dt,
 ):
-    modify_spawn_prep = _require_loaded_module(
-        _load_modify_spawn_prep(),
-        "modify_spawn_prep.py",
-    )
+    modify_spawn_prep = _modify_spawn_prep_module()
     return modify_spawn_prep.build_child_from_parent(
         parent,
         child_due_utc,
@@ -4519,43 +4523,19 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
 
 def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
     """Return the first/last chain task using a minimal export."""
-    modify_queries = _load_modify_queries()
-    if modify_queries is not None:
-        hook_support = _load_hook_support()
-        parser = (hook_support.parse_export_array if hook_support is not None else _tw_export_chain_parse)
-        return modify_queries.export_chain_endpoint(
-            chain_id,
-            direction,
-            run_task=_run_task,
-            task_cmd_prefix=_task_cmd_prefix(),
-            parse_export_array=parser,
-            diag=_diag,
-            timeout=3.0,
-            retries=1,
-        )
-    if not chain_id:
-        return None
-    sort_dir = "+" if direction == "first" else "-"
-    args = _task_cmd_prefix() + [
-        "rc.hooks=off",
-        "rc.json.array=on",
-        "rc.verbose=nothing",
-        f"chainID:{chain_id}",
-        f"sort:link{sort_dir}",
-        "limit:1",
-        "export",
-    ]
-    ok, out, err = _run_task(args, env=None, timeout=3.0, retries=1)
-    if not ok:
-        _diag(f"chain endpoint export failed ({direction}): {err.strip()}")
-        return None
-    try:
-        data = json.loads(out.strip() or "[]")
-        if isinstance(data, list) and data:
-            return data[0]
-    except Exception:
-        pass
-    return None
+    modify_queries = _modify_queries_module()
+    hook_support = _load_hook_support()
+    parser = (hook_support.parse_export_array if hook_support is not None else _tw_export_chain_parse)
+    return modify_queries.export_chain_endpoint(
+        chain_id,
+        direction,
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        parse_export_array=parser,
+        diag=_diag,
+        timeout=3.0,
+        retries=1,
+    )
 
 # ------------------------------------------------------------------------------
 # Main
@@ -5040,10 +5020,7 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
 
 
 def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:
-    modify_completion_preflight = _require_loaded_module(
-        _load_modify_completion_preflight(),
-        "modify_completion_preflight.py",
-    )
+    modify_completion_preflight = _modify_completion_preflight_module()
     return modify_completion_preflight.completion_link_numbers_or_fail(
         new,
         coerce_int=core.coerce_int,
@@ -5054,10 +5031,7 @@ def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:
 
 
 def _completion_kind_or_stop(new: dict, now_utc: datetime) -> str | None:
-    modify_completion_preflight = _require_loaded_module(
-        _load_modify_completion_preflight(),
-        "modify_completion_preflight.py",
-    )
+    modify_completion_preflight = _modify_completion_preflight_module()
     return modify_completion_preflight.completion_kind_or_stop(
         new,
         now_utc,
@@ -5068,10 +5042,7 @@ def _completion_kind_or_stop(new: dict, now_utc: datetime) -> str | None:
 
 
 def _completion_chain_id_or_fail(new: dict) -> str | None:
-    modify_completion_preflight = _require_loaded_module(
-        _load_modify_completion_preflight(),
-        "modify_completion_preflight.py",
-    )
+    modify_completion_preflight = _modify_completion_preflight_module()
     return modify_completion_preflight.completion_chain_id_or_fail(
         new,
         panel=_panel,
@@ -5080,10 +5051,7 @@ def _completion_chain_id_or_fail(new: dict) -> str | None:
 
 
 def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
-    modify_completion_preflight = _require_loaded_module(
-        _load_modify_completion_preflight(),
-        "modify_completion_preflight.py",
-    )
+    modify_completion_preflight = _modify_completion_preflight_module()
     return modify_completion_preflight.completion_existing_next_or_fail(
         new,
         next_no,
@@ -5095,10 +5063,7 @@ def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
 
 
 def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
-    modify_completion_preflight = _require_loaded_module(
-        _load_modify_completion_preflight(),
-        "modify_completion_preflight.py",
-    )
+    modify_completion_preflight = _modify_completion_preflight_module()
     return modify_completion_preflight.completion_preflight_context(
         new,
         now_utc,
@@ -5111,10 +5076,7 @@ def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
 
 
 def _completion_compute_child_due(new: dict, kind: str):
-    modify_completion_compute = _require_loaded_module(
-        _load_modify_completion_compute(),
-        "modify_completion_compute.py",
-    )
+    modify_completion_compute = _modify_completion_compute_module()
     return modify_completion_compute.completion_compute_child_due(
         new,
         kind,
@@ -5127,10 +5089,7 @@ def _completion_compute_child_due(new: dict, kind: str):
 
 
 def _completion_until_or_fail(new: dict, now_utc: datetime) -> datetime | None | object:
-    modify_completion_compute = _require_loaded_module(
-        _load_modify_completion_compute(),
-        "modify_completion_compute.py",
-    )
+    modify_completion_compute = _modify_completion_compute_module()
     return modify_completion_compute.completion_until_or_fail(
         new,
         now_utc,
@@ -5142,10 +5101,7 @@ def _completion_until_or_fail(new: dict, now_utc: datetime) -> datetime | None |
 
 
 def _completion_until_guard_or_stop(new: dict, child_due, until_dt, now_utc: datetime) -> bool:
-    modify_completion_compute = _require_loaded_module(
-        _load_modify_completion_compute(),
-        "modify_completion_compute.py",
-    )
+    modify_completion_compute = _modify_completion_compute_module()
     return modify_completion_compute.completion_until_guard_or_stop(
         new,
         child_due,
@@ -5157,10 +5113,7 @@ def _completion_until_guard_or_stop(new: dict, child_due, until_dt, now_utc: dat
 
 
 def _completion_require_child_due_or_fail(new: dict, child_due) -> bool:
-    modify_completion_compute = _require_loaded_module(
-        _load_modify_completion_compute(),
-        "modify_completion_compute.py",
-    )
+    modify_completion_compute = _modify_completion_compute_module()
     return modify_completion_compute.completion_require_child_due_or_fail(
         new,
         child_due,
@@ -5170,10 +5123,7 @@ def _completion_require_child_due_or_fail(new: dict, child_due) -> bool:
 
 
 def _completion_warn_unreasonable_duration(new: dict, child_due, until_dt, now_utc: datetime) -> None:
-    modify_completion_compute = _require_loaded_module(
-        _load_modify_completion_compute(),
-        "modify_completion_compute.py",
-    )
+    modify_completion_compute = _modify_completion_compute_module()
     modify_completion_compute.completion_warn_unreasonable_duration(
         new,
         child_due,
@@ -5185,10 +5135,7 @@ def _completion_warn_unreasonable_duration(new: dict, child_due, until_dt, now_u
 
 
 def _completion_caps(kind: str, new: dict, child_due, dnf):
-    modify_completion_compute = _require_loaded_module(
-        _load_modify_completion_compute(),
-        "modify_completion_compute.py",
-    )
+    modify_completion_compute = _modify_completion_compute_module()
     return modify_completion_compute.completion_caps(
         kind,
         new,
@@ -5204,10 +5151,7 @@ def _completion_caps(kind: str, new: dict, child_due, dnf):
 
 
 def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, now_utc: datetime) -> bool:
-    modify_completion_compute = _require_loaded_module(
-        _load_modify_completion_compute(),
-        "modify_completion_compute.py",
-    )
+    modify_completion_compute = _modify_completion_compute_module()
     return modify_completion_compute.completion_cap_guard_or_stop(
         new,
         next_no,
@@ -5219,10 +5163,7 @@ def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, n
 
 
 def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime) -> dict | None:
-    modify_completion_compute = _require_loaded_module(
-        _load_modify_completion_compute(),
-        "modify_completion_compute.py",
-    )
+    modify_completion_compute = _modify_completion_compute_module()
     return modify_completion_compute.completion_compute_next_and_limits(
         new,
         kind,
@@ -5248,10 +5189,7 @@ def _completion_build_and_spawn_child(
     cpmax: int,
     until_dt,
 ) -> dict | None:
-    modify_completion_spawn = _require_loaded_module(
-        _load_modify_completion_spawn(),
-        "modify_completion_spawn.py",
-    )
+    modify_completion_spawn = _modify_completion_spawn_module()
     return modify_completion_spawn.completion_build_and_spawn_child(
         new,
         child_due=child_due,

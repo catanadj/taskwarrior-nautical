@@ -88,6 +88,8 @@ _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
 _EXIT_QUERIES = None
 _EXIT_QUERIES_LOAD_FAILED = False
+_EXIT_SIDE_EFFECTS = None
+_EXIT_SIDE_EFFECTS_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -199,6 +201,15 @@ def _load_exit_queries():
     )
 
 
+def _load_exit_side_effects():
+    return _load_optional_sibling_module(
+        "_EXIT_SIDE_EFFECTS",
+        "_EXIT_SIDE_EFFECTS_LOAD_FAILED",
+        "exit_side_effects.py",
+        "nautical_exit_side_effects",
+    )
+
+
 def _task_cmd_prefix() -> list[str]:
     hook_support = _load_hook_support()
     if hook_support is not None:
@@ -220,6 +231,10 @@ def _require_loaded_module(module, rel_name: str):
 
 def _exit_queries_module():
     return _require_loaded_module(_load_exit_queries(), "exit_queries.py")
+
+
+def _exit_side_effects_module():
+    return _require_loaded_module(_load_exit_side_effects(), "exit_side_effects.py")
 
 _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _QUEUE_PROCESSING_PATH = TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"
@@ -1716,82 +1731,55 @@ def _existing_equivalent_child(child: dict, parent_uuid: str = "") -> dict:
 
 
 def _import_child(obj: dict) -> tuple[bool, str]:
-    payload = json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n"
-    max_retries = 4
-    last_err = ""
-    for attempt in range(max_retries):
-        ok, _out, err = _run_task(
-            _task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "import", "-"],
-            input_text=payload,
-            timeout=_TASK_TIMEOUT_IMPORT,
-        )
-        if ok:
-            return True, ""
-        last_err = err or ""
-        if not _is_lock_error(last_err):
-            return False, last_err
-        if attempt < max_retries - 1:
-            base = 0.2 * (2 ** attempt)
-            jitter = random.uniform(0.0, 0.1)
-            _sleep(base + jitter)
-    return False, last_err
+    exit_side_effects = _exit_side_effects_module()
+    return exit_side_effects.import_child(
+        obj,
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        timeout_import=_TASK_TIMEOUT_IMPORT,
+        is_lock_error=_is_lock_error,
+        sleep=_sleep,
+        random_uniform=random.uniform,
+    )
 
 def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[bool, str]:
-    if not parent_uuid or not child_short:
-        return False, "missing parent or child"
-    with _lock_parent_nextlink(parent_uuid) as locked:
-        if not locked:
-            return False, "parent lock busy"
-        state, msg = _parent_nextlink_state(parent_uuid, child_short, expected_prev)
-        if state == "ok":
-            ok, _out, err = _run_task(
-                _task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", f"uuid:{parent_uuid}", "modify", f"nextLink:{child_short}"],
-                timeout=_TASK_TIMEOUT_MODIFY,
-                retries=_TASK_RETRIES_MODIFY,
-                retry_delay=_TASK_RETRY_DELAY,
-            )
-            return ok, err or ""
-        if state == "already":
-            return True, ""
-        return False, msg
+    exit_side_effects = _exit_side_effects_module()
+    return exit_side_effects.update_parent_nextlink(
+        parent_uuid,
+        child_short,
+        expected_prev=expected_prev,
+        lock_parent_nextlink=_lock_parent_nextlink,
+        parent_nextlink_state_fn=_parent_nextlink_state,
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        timeout_modify=_TASK_TIMEOUT_MODIFY,
+        retries_modify=_TASK_RETRIES_MODIFY,
+        retry_delay=_TASK_RETRY_DELAY,
+    )
 
 
 def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[str, str]:
-    if not parent_uuid or not child_short:
-        return "invalid", "missing parent or child"
-    res = _export_uuid(parent_uuid)
-    if res.get("retryable"):
-        return "locked", "parent export locked"
-    parent = res.get("obj") if isinstance(res, dict) else None
-    if not parent:
-        return "missing", "parent missing"
-    current = (parent.get("nextLink") or "").strip()
-    expected = (expected_prev or "").strip()
-    if current == child_short:
-        return "already", ""
-    if expected:
-        if current != expected:
-            return "conflict", "parent nextLink changed"
-    else:
-        if current:
-            return "conflict", "parent nextLink already set"
-    return "ok", ""
+    exit_side_effects = _exit_side_effects_module()
+    return exit_side_effects.parent_nextlink_state(
+        parent_uuid,
+        child_short,
+        expected_prev=expected_prev,
+        export_uuid=_export_uuid,
+    )
 
 
 def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
-    if not child_uuid:
-        return
-    ok, _out, err = _run_task(
-        _task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", f"uuid:{child_uuid}", "modify", "status:deleted"],
-        timeout=_TASK_TIMEOUT_MODIFY,
-        retries=_TASK_RETRIES_MODIFY,
+    exit_side_effects = _exit_side_effects_module()
+    exit_side_effects.cleanup_orphan_child(
+        child_uuid,
+        spawn_intent_id=spawn_intent_id,
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        timeout_modify=_TASK_TIMEOUT_MODIFY,
+        retries_modify=_TASK_RETRIES_MODIFY,
         retry_delay=_TASK_RETRY_DELAY,
+        diag=_diag,
     )
-    if not ok:
-        if spawn_intent_id:
-            _diag(f"orphan cleanup failed (intent={spawn_intent_id} child={child_uuid[:8]}): {err}")
-        else:
-            _diag(f"orphan cleanup failed (child={child_uuid[:8]}): {err}")
 
 
 class _DrainState:

@@ -4138,6 +4138,20 @@ def test_on_modify_spawn_intent_id_in_entry():
     entry = mod._spawn_intent_entry("parent", {"uuid": "child"}, "deadbeef", "", "si_test")
     expect(entry.get("spawn_intent_id") == "si_test", "spawn_intent_id should be preserved in queue entry")
 
+
+def test_on_modify_spawn_intent_entry_rejects_missing_child_uuid():
+    """on-modify spawn intent builder should reject invalid child payloads."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_spawn_intent_validate_test")
+
+    try:
+        mod._spawn_intent_entry("parent", {}, "deadbeef", "", "si_test")
+    except Exception as exc:
+        expect("missing child uuid" in str(exc), f"unexpected error: {exc}")
+        return
+    raise AssertionError("expected spawn intent entry validation failure")
+
+
 def test_on_exit_spawn_intents_drain():
     """on-exit should import child and update parent from spawn intents."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -6309,6 +6323,30 @@ def test_on_exit_run_task_accepts_env():
     expect(out.strip() == "env-ok", f"_run_task should honor env override, got {out!r}")
 
 
+def test_on_exit_normalize_queue_entry_strips_fields():
+    """on-exit queue normalization should canonicalize queue entry fields."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_queue_normalize_test")
+
+    entry = mod._normalize_queue_entry(
+        {
+            "parent_uuid": " 00000000-0000-0000-0000-000000000111 ",
+            "parent_nextlink": " deadbeef ",
+            "child_short": " deadbeef ",
+            "child": {"uuid": " 00000000-0000-0000-0000-000000000999 "},
+            "spawn_intent_id": " si_test ",
+            "attempts": "2",
+        }
+    )
+
+    expect(entry["parent_uuid"] == "00000000-0000-0000-0000-000000000111", f"unexpected parent_uuid: {entry}")
+    expect(entry["parent_nextlink"] == "deadbeef", f"unexpected parent_nextlink: {entry}")
+    expect(entry["child_short"] == "deadbeef", f"unexpected child_short: {entry}")
+    expect(entry["child"]["uuid"] == "00000000-0000-0000-0000-000000000999", f"unexpected child uuid: {entry}")
+    expect(entry["spawn_intent_id"] == "si_test", f"unexpected spawn_intent_id: {entry}")
+    expect(entry["attempts"] == 2, f"unexpected attempts: {entry}")
+
+
 def test_on_modify_export_uuid_short_invalid_json():
     """on-modify _export_uuid_short returns None on invalid JSON."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -6659,8 +6697,10 @@ TESTS = [
     test_on_exit_parent_nextlink_lock_uses_dedicated_dir,
     test_on_exit_state_files_use_dedicated_dir,
     test_on_exit_run_task_accepts_env,
+    test_on_exit_normalize_queue_entry_strips_fields,
     test_core_import_deterministic,
     test_on_modify_spawn_intent_id_in_entry,
+    test_on_modify_spawn_intent_entry_rejects_missing_child_uuid,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_on_modify_cp_completion_spawns_next_link,

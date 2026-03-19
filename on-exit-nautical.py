@@ -92,6 +92,8 @@ _EXIT_SIDE_EFFECTS = None
 _EXIT_SIDE_EFFECTS_LOAD_FAILED = False
 _EXIT_ENTRY_FLOW = None
 _EXIT_ENTRY_FLOW_LOAD_FAILED = False
+_QUEUE_MODELS = None
+_QUEUE_MODELS_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -116,6 +118,12 @@ _MODULE_SPECS = {
         "_EXIT_ENTRY_FLOW_LOAD_FAILED",
         "exit_entry_flow.py",
         "nautical_exit_entry_flow",
+    ),
+    "queue_models": (
+        "_QUEUE_MODELS",
+        "_QUEUE_MODELS_LOAD_FAILED",
+        "queue_models.py",
+        "nautical_queue_models",
     ),
 }
 try:
@@ -1732,19 +1740,17 @@ def _requeue_entries(entries: list[dict]) -> bool:
     return ok_claimed and ok_fresh
 
 
+def _normalize_queue_entry(entry: dict) -> dict:
+    queue_models = _module("queue_models")
+    return queue_models.normalize_spawn_queue_entry(entry)
+
+
 def _validate_queue_entry(entry: dict) -> tuple[bool, str]:
-    if not isinstance(entry, dict):
-        return False, "entry not object"
-    spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
-    if not spawn_intent_id:
-        return False, "missing spawn_intent_id"
-    child = entry.get("child")
-    if not isinstance(child, dict):
-        return False, "missing child object"
-    child_uuid = (child.get("uuid") or "").strip()
-    if not child_uuid:
-        return False, "missing child uuid"
-    return True, ""
+    try:
+        _normalize_queue_entry(entry)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 def _bump_attempts(entry: dict) -> int:
     try:
@@ -2066,6 +2072,7 @@ def _apply_parent_update_for_entry(
 def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     if _handle_entry_gate(entry, state):
         return False
+    entry = _normalize_queue_entry(entry)
 
     spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
     parent_uuid = (entry.get("parent_uuid") or "").strip()

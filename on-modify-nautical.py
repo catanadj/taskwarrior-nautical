@@ -327,6 +327,8 @@ _MODIFY_FEEDBACK = None
 _MODIFY_FEEDBACK_LOAD_FAILED = False
 _MODIFY_TIMELINE = None
 _MODIFY_TIMELINE_LOAD_FAILED = False
+_QUEUE_MODELS = None
+_QUEUE_MODELS_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -381,6 +383,12 @@ _MODULE_SPECS = {
         "_MODIFY_TIMELINE_LOAD_FAILED",
         "modify_timeline.py",
         "nautical_modify_timeline",
+    ),
+    "queue_models": (
+        "_QUEUE_MODELS",
+        "_QUEUE_MODELS_LOAD_FAILED",
+        "queue_models.py",
+        "nautical_queue_models",
     ),
 }
 try:
@@ -1952,19 +1960,27 @@ def _spawn_intent_entry(
     intent_id = (spawn_intent_id or "").strip()
     if not intent_id:
         intent_id = f"si_{uuid.uuid4().hex[:12]}"
-    return {
-        "parent_uuid": parent_uuid,
-        "parent_nextlink": (parent_nextlink or "").strip(),
-        "child_short": child_short,
-        "child": child_obj,
-        "spawn_intent_id": intent_id,
-    }
+    queue_models = _module("queue_models")
+    return queue_models.normalize_spawn_queue_entry(
+        {
+            "parent_uuid": parent_uuid,
+            "parent_nextlink": (parent_nextlink or "").strip(),
+            "child_short": child_short,
+            "child": child_obj,
+            "spawn_intent_id": intent_id,
+        }
+    )
 
 
 def _enqueue_spawn_intent(entry: dict) -> tuple[bool, str]:
     if not isinstance(entry, dict):
         return False, "invalid spawn intent"
-    return _enqueue_deferred_spawn(entry)
+    queue_models = _module("queue_models")
+    try:
+        normalized = queue_models.normalize_spawn_queue_entry(entry)
+    except Exception as e:
+        return False, str(e)
+    return _enqueue_deferred_spawn(normalized)
 
 
 def _spawn_child_atomic(

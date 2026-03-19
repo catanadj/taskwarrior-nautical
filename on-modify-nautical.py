@@ -327,6 +327,62 @@ _MODIFY_FEEDBACK = None
 _MODIFY_FEEDBACK_LOAD_FAILED = False
 _MODIFY_TIMELINE = None
 _MODIFY_TIMELINE_LOAD_FAILED = False
+_MODULE_SPECS = {
+    "hook_support": (
+        "_HOOK_SUPPORT",
+        "_HOOK_SUPPORT_LOAD_FAILED",
+        "hook_support.py",
+        "nautical_hook_support",
+    ),
+    "modify_queries": (
+        "_MODIFY_QUERIES",
+        "_MODIFY_QUERIES_LOAD_FAILED",
+        "modify_queries.py",
+        "nautical_modify_queries",
+    ),
+    "modify_chain_reads": (
+        "_MODIFY_CHAIN_READS",
+        "_MODIFY_CHAIN_READS_LOAD_FAILED",
+        "modify_chain_reads.py",
+        "nautical_modify_chain_reads",
+    ),
+    "modify_spawn_prep": (
+        "_MODIFY_SPAWN_PREP",
+        "_MODIFY_SPAWN_PREP_LOAD_FAILED",
+        "modify_spawn_prep.py",
+        "nautical_modify_spawn_prep",
+    ),
+    "modify_completion_preflight": (
+        "_MODIFY_COMPLETION_PREFLIGHT",
+        "_MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED",
+        "modify_completion_preflight.py",
+        "nautical_modify_completion_preflight",
+    ),
+    "modify_completion_compute": (
+        "_MODIFY_COMPLETION_COMPUTE",
+        "_MODIFY_COMPLETION_COMPUTE_LOAD_FAILED",
+        "modify_completion_compute.py",
+        "nautical_modify_completion_compute",
+    ),
+    "modify_completion_spawn": (
+        "_MODIFY_COMPLETION_SPAWN",
+        "_MODIFY_COMPLETION_SPAWN_LOAD_FAILED",
+        "modify_completion_spawn.py",
+        "nautical_modify_completion_spawn",
+    ),
+    "modify_feedback": (
+        "_MODIFY_FEEDBACK",
+        "_MODIFY_FEEDBACK_LOAD_FAILED",
+        "modify_feedback.py",
+        "nautical_modify_feedback",
+    ),
+    "modify_timeline": (
+        "_MODIFY_TIMELINE",
+        "_MODIFY_TIMELINE_LOAD_FAILED",
+        "modify_timeline.py",
+        "nautical_modify_timeline",
+    ),
+}
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -406,85 +462,9 @@ def _load_optional_sibling_module(cache_attr: str, failed_attr: str, rel_name: s
     return None
 
 
-def _load_hook_support():
-    return _load_optional_sibling_module(
-        "_HOOK_SUPPORT",
-        "_HOOK_SUPPORT_LOAD_FAILED",
-        "hook_support.py",
-        "nautical_hook_support",
-    )
-
-
-def _load_modify_queries():
-    return _load_optional_sibling_module(
-        "_MODIFY_QUERIES",
-        "_MODIFY_QUERIES_LOAD_FAILED",
-        "modify_queries.py",
-        "nautical_modify_queries",
-    )
-
-
-def _load_modify_chain_reads():
-    return _load_optional_sibling_module(
-        "_MODIFY_CHAIN_READS",
-        "_MODIFY_CHAIN_READS_LOAD_FAILED",
-        "modify_chain_reads.py",
-        "nautical_modify_chain_reads",
-    )
-
-
-def _load_modify_spawn_prep():
-    return _load_optional_sibling_module(
-        "_MODIFY_SPAWN_PREP",
-        "_MODIFY_SPAWN_PREP_LOAD_FAILED",
-        "modify_spawn_prep.py",
-        "nautical_modify_spawn_prep",
-    )
-
-
-def _load_modify_completion_preflight():
-    return _load_optional_sibling_module(
-        "_MODIFY_COMPLETION_PREFLIGHT",
-        "_MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED",
-        "modify_completion_preflight.py",
-        "nautical_modify_completion_preflight",
-    )
-
-
-def _load_modify_completion_compute():
-    return _load_optional_sibling_module(
-        "_MODIFY_COMPLETION_COMPUTE",
-        "_MODIFY_COMPLETION_COMPUTE_LOAD_FAILED",
-        "modify_completion_compute.py",
-        "nautical_modify_completion_compute",
-    )
-
-
-def _load_modify_completion_spawn():
-    return _load_optional_sibling_module(
-        "_MODIFY_COMPLETION_SPAWN",
-        "_MODIFY_COMPLETION_SPAWN_LOAD_FAILED",
-        "modify_completion_spawn.py",
-        "nautical_modify_completion_spawn",
-    )
-
-
-def _load_modify_feedback():
-    return _load_optional_sibling_module(
-        "_MODIFY_FEEDBACK",
-        "_MODIFY_FEEDBACK_LOAD_FAILED",
-        "modify_feedback.py",
-        "nautical_modify_feedback",
-    )
-
-
-def _load_modify_timeline():
-    return _load_optional_sibling_module(
-        "_MODIFY_TIMELINE",
-        "_MODIFY_TIMELINE_LOAD_FAILED",
-        "modify_timeline.py",
-        "nautical_modify_timeline",
-    )
+def _load_named_module(name: str):
+    cache_attr, failed_attr, rel_name, module_name = _MODULE_SPECS[name]
+    return _load_optional_sibling_module(cache_attr, failed_attr, rel_name, module_name)
 
 
 def _require_loaded_module(module, rel_name: str):
@@ -493,59 +473,16 @@ def _require_loaded_module(module, rel_name: str):
     return module
 
 
-def _hook_support_module():
-    return _require_loaded_module(_load_hook_support(), "hook_support.py")
-
-
-def _modify_queries_module():
-    return _require_loaded_module(_load_modify_queries(), "modify_queries.py")
-
-
-def _modify_chain_reads_module():
-    return _require_loaded_module(_load_modify_chain_reads(), "modify_chain_reads.py")
-
-
-def _modify_spawn_prep_module():
-    return _require_loaded_module(_load_modify_spawn_prep(), "modify_spawn_prep.py")
-
-
-def _modify_completion_preflight_module():
-    return _require_loaded_module(
-        _load_modify_completion_preflight(),
-        "modify_completion_preflight.py",
-    )
-
-
-def _modify_completion_compute_module():
-    return _require_loaded_module(
-        _load_modify_completion_compute(),
-        "modify_completion_compute.py",
-    )
-
-
-def _modify_completion_spawn_module():
-    return _require_loaded_module(
-        _load_modify_completion_spawn(),
-        "modify_completion_spawn.py",
-    )
-
-
-def _modify_feedback_module():
-    return _require_loaded_module(
-        _load_modify_feedback(),
-        "modify_feedback.py",
-    )
-
-
-def _modify_timeline_module():
-    return _require_loaded_module(
-        _load_modify_timeline(),
-        "modify_timeline.py",
-    )
+def _module(name: str, *, required: bool = True):
+    module = _load_named_module(name)
+    if not required:
+        return module
+    rel_name = _MODULE_SPECS[name][2]
+    return _require_loaded_module(module, rel_name)
 
 
 def _task_cmd_prefix() -> list[str]:
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.build_task_cmd_prefix(
             use_rc_data_location=_USE_RC_DATA_LOCATION,
@@ -1552,7 +1489,7 @@ def _run_task(
     _diag_count("run_task_calls")
     t0 = _ptime.perf_counter()
     core_runner = getattr(core, "run_task", None) if core is not None else None
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         if load_err is not None and not callable(core_runner):
             _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
@@ -1636,7 +1573,7 @@ def _export_uuid_short(u_short: str, env=None):
             _diag(f"cache miss: short uuid {u_short} (chainID={cache_chain_id})")
         else:
             _diag_count("export_uuid_cache_misses")
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.export_uuid_short(
             run_task=_run_task,
@@ -1681,7 +1618,7 @@ def _task_exists_by_uuid_cached(u: str) -> bool:
 
 
 def _task_exists_by_uuid_uncached(u: str, env: dict | None) -> bool:
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.task_exists_by_uuid_uncached(
             run_task=_run_task,
@@ -1722,7 +1659,7 @@ def _reserve_child_uuid(env: dict) -> str:
 
 
 def _stable_child_uuid(parent_task: dict | None, child_task: dict | None) -> str:
-    modify_spawn_prep = _modify_spawn_prep_module()
+    modify_spawn_prep = _module("modify_spawn_prep")
     return modify_spawn_prep.stable_child_uuid(
         parent_task,
         child_task,
@@ -1733,7 +1670,7 @@ def _stable_child_uuid(parent_task: dict | None, child_task: dict | None) -> str
 
 
 def _child_uuid_for_spawn(parent_task: dict | None, child_task: dict | None, env: dict) -> str:
-    modify_spawn_prep = _modify_spawn_prep_module()
+    modify_spawn_prep = _module("modify_spawn_prep")
     return modify_spawn_prep.child_uuid_for_spawn(
         parent_task,
         child_task,
@@ -1846,7 +1783,7 @@ def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str
     Raises RuntimeError with detailed context on failure.
     """
     env = os.environ.copy()
-    modify_spawn_prep = _modify_spawn_prep_module()
+    modify_spawn_prep = _module("modify_spawn_prep")
     obj, child_uuid, _child_short = modify_spawn_prep.prepare_spawn_child_payload(
         child_task,
         parent_task,
@@ -2015,7 +1952,7 @@ def _spawn_child_atomic(
     """
     env = os.environ.copy()
     spawn_intent_id = f"si_{uuid.uuid4().hex[:12]}"
-    modify_spawn_prep = _modify_spawn_prep_module()
+    modify_spawn_prep = _module("modify_spawn_prep")
     child_obj, child_uuid, child_short = modify_spawn_prep.prepare_spawn_child_payload(
         child_task,
         parent_task_with_nextlink,
@@ -2074,7 +2011,7 @@ def _task(args, env=None) -> str:
     Thin wrapper around 'task' returning stdout as text.
     Always disables hooks; caller should provide rc.json.array flag when needed.
     """
-    modify_queries = _modify_queries_module()
+    modify_queries = _module("modify_queries")
     return modify_queries.task_text(
         args,
         run_task=_run_task,
@@ -2113,7 +2050,7 @@ def _export_uuid_full_uncached(u: str, env=None) -> dict | None:
             _diag(f"cache miss: full uuid {u} (chainID={cache_chain_id})")
         else:
             _diag_count("export_full_cache_misses")
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.export_uuid_full(
             run_task=_run_task,
@@ -2159,7 +2096,7 @@ def _tw_get_cached(ref: str) -> str:
             if short and cache_chain_id:
                 _diag_count("unexpected_cache_misses")
                 _diag(f"cache miss: _get {ref} (chainID={cache_chain_id})")
-        modify_queries = _modify_queries_module()
+        modify_queries = _module("modify_queries")
         return modify_queries.tw_get(
             ref,
             task_text=lambda args: _task(args, env=None),
@@ -2170,7 +2107,7 @@ def _tw_get_cached(ref: str) -> str:
 def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]:
     """Get chain root (chainID) and age in days.
     Returns (root_short, age_days). age_days is None if unavailable."""
-    modify_queries = _modify_queries_module()
+    modify_queries = _module("modify_queries")
     return modify_queries.chain_root_and_age(
         task,
         now_utc,
@@ -2183,7 +2120,7 @@ def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]
 def _format_root_and_age(task: dict, now_utc: datetime) -> str:
     """Format root and age as a single string.
     Returns root (age) or just root if age is 0 or unavailable."""
-    modify_queries = _modify_queries_module()
+    modify_queries = _module("modify_queries")
     return modify_queries.format_root_and_age(
         task,
         now_utc,
@@ -2380,7 +2317,7 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
 
 
 def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] | None = None) -> list[dict]:
-    modify_chain_reads = _modify_chain_reads_module()
+    modify_chain_reads = _module("modify_chain_reads")
     return modify_chain_reads.collect_prev_two(
         current_task,
         coerce_int=core.coerce_int,
@@ -2421,7 +2358,7 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
 
 
 def _existing_next_task(parent_task: dict, next_no: int) -> dict | None:
-    modify_chain_reads = _modify_chain_reads_module()
+    modify_chain_reads = _module("modify_chain_reads")
     return modify_chain_reads.existing_next_task(
         parent_task,
         next_no,
@@ -3318,7 +3255,7 @@ def _build_child_from_parent(
     cpmax: int,
     until_dt,
 ):
-    modify_spawn_prep = _modify_spawn_prep_module()
+    modify_spawn_prep = _module("modify_spawn_prep")
     return modify_spawn_prep.build_child_from_parent(
         parent,
         child_due_utc,
@@ -4042,7 +3979,7 @@ def _timeline_lines(
     """Compact timeline with inline gaps."""
     if not _require_core():
         return []
-    modify_timeline = _modify_timeline_module()
+    modify_timeline = _module("modify_timeline")
     return modify_timeline.timeline_lines(
         kind,
         task,
@@ -4168,7 +4105,7 @@ def _extra_safe(extra: str) -> bool:
 
 def _parse_extra_tokens(extra: str | None) -> list[str] | None:
     """Parse extra Taskwarrior filters in strict token form: key:value."""
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.parse_extra_tokens(extra)
     if extra is None:
@@ -4240,7 +4177,7 @@ def _tw_export_chain_args(
     extra: str | None,
     limit: int | None,
 ) -> list[str] | None:
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.build_chain_export_args(
             task_cmd_prefix=_task_cmd_prefix(),
@@ -4296,7 +4233,7 @@ def _tw_export_chain_failure(chain_id: str, err: str, timeout: float) -> None:
 
 
 def _tw_export_chain_parse(out: str) -> list[dict]:
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.parse_export_array(out, diag=_diag)
     try:
@@ -4333,8 +4270,8 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
 
 def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
     """Return the first/last chain task using a minimal export."""
-    modify_queries = _modify_queries_module()
-    hook_support = _load_hook_support()
+    modify_queries = _module("modify_queries")
+    hook_support = _module("hook_support", required=False)
     parser = (hook_support.parse_export_array if hook_support is not None else _tw_export_chain_parse)
     return modify_queries.export_chain_endpoint(
         chain_id,
@@ -4390,7 +4327,7 @@ def _render_anchor_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
-    modify_feedback = _modify_feedback_module()
+    modify_feedback = _module("modify_feedback")
     modify_feedback.render_anchor_completion_feedback(
         new=new,
         child=child,
@@ -4465,7 +4402,7 @@ def _render_cp_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
-    modify_feedback = _modify_feedback_module()
+    modify_feedback = _module("modify_feedback")
     modify_feedback.render_cp_completion_feedback(
         new=new,
         child=child,
@@ -4624,7 +4561,7 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
 
 
 def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:
-    modify_completion_preflight = _modify_completion_preflight_module()
+    modify_completion_preflight = _module("modify_completion_preflight")
     return modify_completion_preflight.completion_link_numbers_or_fail(
         new,
         coerce_int=core.coerce_int,
@@ -4635,7 +4572,7 @@ def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:
 
 
 def _completion_kind_or_stop(new: dict, now_utc: datetime) -> str | None:
-    modify_completion_preflight = _modify_completion_preflight_module()
+    modify_completion_preflight = _module("modify_completion_preflight")
     return modify_completion_preflight.completion_kind_or_stop(
         new,
         now_utc,
@@ -4646,7 +4583,7 @@ def _completion_kind_or_stop(new: dict, now_utc: datetime) -> str | None:
 
 
 def _completion_chain_id_or_fail(new: dict) -> str | None:
-    modify_completion_preflight = _modify_completion_preflight_module()
+    modify_completion_preflight = _module("modify_completion_preflight")
     return modify_completion_preflight.completion_chain_id_or_fail(
         new,
         panel=_panel,
@@ -4655,7 +4592,7 @@ def _completion_chain_id_or_fail(new: dict) -> str | None:
 
 
 def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
-    modify_completion_preflight = _modify_completion_preflight_module()
+    modify_completion_preflight = _module("modify_completion_preflight")
     return modify_completion_preflight.completion_existing_next_or_fail(
         new,
         next_no,
@@ -4667,7 +4604,7 @@ def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
 
 
 def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
-    modify_completion_preflight = _modify_completion_preflight_module()
+    modify_completion_preflight = _module("modify_completion_preflight")
     return modify_completion_preflight.completion_preflight_context(
         new,
         now_utc,
@@ -4680,7 +4617,7 @@ def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
 
 
 def _completion_compute_child_due(new: dict, kind: str):
-    modify_completion_compute = _modify_completion_compute_module()
+    modify_completion_compute = _module("modify_completion_compute")
     return modify_completion_compute.completion_compute_child_due(
         new,
         kind,
@@ -4693,7 +4630,7 @@ def _completion_compute_child_due(new: dict, kind: str):
 
 
 def _completion_until_or_fail(new: dict, now_utc: datetime) -> datetime | None | object:
-    modify_completion_compute = _modify_completion_compute_module()
+    modify_completion_compute = _module("modify_completion_compute")
     return modify_completion_compute.completion_until_or_fail(
         new,
         now_utc,
@@ -4705,7 +4642,7 @@ def _completion_until_or_fail(new: dict, now_utc: datetime) -> datetime | None |
 
 
 def _completion_until_guard_or_stop(new: dict, child_due, until_dt, now_utc: datetime) -> bool:
-    modify_completion_compute = _modify_completion_compute_module()
+    modify_completion_compute = _module("modify_completion_compute")
     return modify_completion_compute.completion_until_guard_or_stop(
         new,
         child_due,
@@ -4717,7 +4654,7 @@ def _completion_until_guard_or_stop(new: dict, child_due, until_dt, now_utc: dat
 
 
 def _completion_require_child_due_or_fail(new: dict, child_due) -> bool:
-    modify_completion_compute = _modify_completion_compute_module()
+    modify_completion_compute = _module("modify_completion_compute")
     return modify_completion_compute.completion_require_child_due_or_fail(
         new,
         child_due,
@@ -4727,7 +4664,7 @@ def _completion_require_child_due_or_fail(new: dict, child_due) -> bool:
 
 
 def _completion_warn_unreasonable_duration(new: dict, child_due, until_dt, now_utc: datetime) -> None:
-    modify_completion_compute = _modify_completion_compute_module()
+    modify_completion_compute = _module("modify_completion_compute")
     modify_completion_compute.completion_warn_unreasonable_duration(
         new,
         child_due,
@@ -4739,7 +4676,7 @@ def _completion_warn_unreasonable_duration(new: dict, child_due, until_dt, now_u
 
 
 def _completion_caps(kind: str, new: dict, child_due, dnf):
-    modify_completion_compute = _modify_completion_compute_module()
+    modify_completion_compute = _module("modify_completion_compute")
     return modify_completion_compute.completion_caps(
         kind,
         new,
@@ -4755,7 +4692,7 @@ def _completion_caps(kind: str, new: dict, child_due, dnf):
 
 
 def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, now_utc: datetime) -> bool:
-    modify_completion_compute = _modify_completion_compute_module()
+    modify_completion_compute = _module("modify_completion_compute")
     return modify_completion_compute.completion_cap_guard_or_stop(
         new,
         next_no,
@@ -4767,7 +4704,7 @@ def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, n
 
 
 def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime) -> dict | None:
-    modify_completion_compute = _modify_completion_compute_module()
+    modify_completion_compute = _module("modify_completion_compute")
     return modify_completion_compute.completion_compute_next_and_limits(
         new,
         kind,
@@ -4793,7 +4730,7 @@ def _completion_build_and_spawn_child(
     cpmax: int,
     until_dt,
 ) -> dict | None:
-    modify_completion_spawn = _modify_completion_spawn_module()
+    modify_completion_spawn = _module("modify_completion_spawn")
     return modify_completion_spawn.completion_build_and_spawn_child(
         new,
         child_due=child_due,

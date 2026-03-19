@@ -92,6 +92,32 @@ _EXIT_SIDE_EFFECTS = None
 _EXIT_SIDE_EFFECTS_LOAD_FAILED = False
 _EXIT_ENTRY_FLOW = None
 _EXIT_ENTRY_FLOW_LOAD_FAILED = False
+_MODULE_SPECS = {
+    "hook_support": (
+        "_HOOK_SUPPORT",
+        "_HOOK_SUPPORT_LOAD_FAILED",
+        "hook_support.py",
+        "nautical_hook_support",
+    ),
+    "exit_queries": (
+        "_EXIT_QUERIES",
+        "_EXIT_QUERIES_LOAD_FAILED",
+        "exit_queries.py",
+        "nautical_exit_queries",
+    ),
+    "exit_side_effects": (
+        "_EXIT_SIDE_EFFECTS",
+        "_EXIT_SIDE_EFFECTS_LOAD_FAILED",
+        "exit_side_effects.py",
+        "nautical_exit_side_effects",
+    ),
+    "exit_entry_flow": (
+        "_EXIT_ENTRY_FLOW",
+        "_EXIT_ENTRY_FLOW_LOAD_FAILED",
+        "exit_entry_flow.py",
+        "nautical_exit_entry_flow",
+    ),
+}
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -185,44 +211,13 @@ def _load_optional_sibling_module(cache_attr: str, failed_attr: str, rel_name: s
     return None
 
 
-def _load_hook_support():
-    return _load_optional_sibling_module(
-        "_HOOK_SUPPORT",
-        "_HOOK_SUPPORT_LOAD_FAILED",
-        "hook_support.py",
-        "nautical_hook_support",
-    )
-
-
-def _load_exit_queries():
-    return _load_optional_sibling_module(
-        "_EXIT_QUERIES",
-        "_EXIT_QUERIES_LOAD_FAILED",
-        "exit_queries.py",
-        "nautical_exit_queries",
-    )
-
-
-def _load_exit_side_effects():
-    return _load_optional_sibling_module(
-        "_EXIT_SIDE_EFFECTS",
-        "_EXIT_SIDE_EFFECTS_LOAD_FAILED",
-        "exit_side_effects.py",
-        "nautical_exit_side_effects",
-    )
-
-
-def _load_exit_entry_flow():
-    return _load_optional_sibling_module(
-        "_EXIT_ENTRY_FLOW",
-        "_EXIT_ENTRY_FLOW_LOAD_FAILED",
-        "exit_entry_flow.py",
-        "nautical_exit_entry_flow",
-    )
+def _load_named_module(name: str):
+    cache_attr, failed_attr, rel_name, module_name = _MODULE_SPECS[name]
+    return _load_optional_sibling_module(cache_attr, failed_attr, rel_name, module_name)
 
 
 def _task_cmd_prefix() -> list[str]:
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.build_task_cmd_prefix(
             use_rc_data_location=_USE_RC_DATA_LOCATION,
@@ -240,16 +235,12 @@ def _require_loaded_module(module, rel_name: str):
     return module
 
 
-def _exit_queries_module():
-    return _require_loaded_module(_load_exit_queries(), "exit_queries.py")
-
-
-def _exit_side_effects_module():
-    return _require_loaded_module(_load_exit_side_effects(), "exit_side_effects.py")
-
-
-def _exit_entry_flow_module():
-    return _require_loaded_module(_load_exit_entry_flow(), "exit_entry_flow.py")
+def _module(name: str, *, required: bool = True):
+    module = _load_named_module(name)
+    if not required:
+        return module
+    rel_name = _MODULE_SPECS[name][2]
+    return _require_loaded_module(module, rel_name)
 
 _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _QUEUE_PROCESSING_PATH = TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"
@@ -653,7 +644,7 @@ def _run_task(
     retry_delay: float = 0.0,
 ) -> tuple[bool, str, str]:
     run_fn = core.run_task if core is not None else None
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.run_task(
             cmd,
@@ -1711,13 +1702,13 @@ def _bump_attempts(entry: dict) -> int:
     return attempts
 
 def _short_uuid(value: str) -> str:
-    exit_queries = _exit_queries_module()
+    exit_queries = _module("exit_queries")
     return exit_queries.short_uuid(value, core=core)
 
 
 def _export_uuid(uuid_str: str) -> dict:
-    exit_queries = _exit_queries_module()
-    hook_support = _load_hook_support()
+    exit_queries = _module("exit_queries")
+    hook_support = _module("hook_support", required=False)
     return exit_queries.export_uuid(
         uuid_str,
         hook_support=hook_support,
@@ -1731,7 +1722,7 @@ def _export_uuid(uuid_str: str) -> dict:
 
 
 def _existing_equivalent_child(child: dict, parent_uuid: str = "") -> dict:
-    exit_queries = _exit_queries_module()
+    exit_queries = _module("exit_queries")
     return exit_queries.existing_equivalent_child(
         child,
         parent_uuid=parent_uuid,
@@ -1746,7 +1737,7 @@ def _existing_equivalent_child(child: dict, parent_uuid: str = "") -> dict:
 
 
 def _import_child(obj: dict) -> tuple[bool, str]:
-    exit_side_effects = _exit_side_effects_module()
+    exit_side_effects = _module("exit_side_effects")
     return exit_side_effects.import_child(
         obj,
         run_task=_run_task,
@@ -1758,7 +1749,7 @@ def _import_child(obj: dict) -> tuple[bool, str]:
     )
 
 def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[bool, str]:
-    exit_side_effects = _exit_side_effects_module()
+    exit_side_effects = _module("exit_side_effects")
     return exit_side_effects.update_parent_nextlink(
         parent_uuid,
         child_short,
@@ -1774,7 +1765,7 @@ def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: s
 
 
 def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[str, str]:
-    exit_side_effects = _exit_side_effects_module()
+    exit_side_effects = _module("exit_side_effects")
     return exit_side_effects.parent_nextlink_state(
         parent_uuid,
         child_short,
@@ -1784,7 +1775,7 @@ def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: st
 
 
 def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
-    exit_side_effects = _exit_side_effects_module()
+    exit_side_effects = _module("exit_side_effects")
     exit_side_effects.cleanup_orphan_child(
         child_uuid,
         spawn_intent_id=spawn_intent_id,
@@ -1947,7 +1938,7 @@ def _precheck_parent_link_state(
     child_short: str,
     expected_parent_nextlink: str,
 ) -> tuple[str, bool]:
-    exit_entry_flow = _exit_entry_flow_module()
+    exit_entry_flow = _module("exit_entry_flow")
     return exit_entry_flow.precheck_parent_link_state(
         entry,
         idx,
@@ -1969,7 +1960,7 @@ def _ensure_child_exists_for_entry(
     child_uuid: str,
     spawn_intent_id: str,
 ) -> tuple[str, bool]:
-    exit_entry_flow = _exit_entry_flow_module()
+    exit_entry_flow = _module("exit_entry_flow")
     return exit_entry_flow.ensure_child_exists_for_entry(
         entry,
         idx,
@@ -1998,7 +1989,7 @@ def _apply_parent_update_for_entry(
     parent_linked_already: bool,
     imported: bool,
 ) -> str:
-    exit_entry_flow = _exit_entry_flow_module()
+    exit_entry_flow = _module("exit_entry_flow")
     return exit_entry_flow.apply_parent_update_for_entry(
         entry,
         idx,

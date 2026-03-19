@@ -86,6 +86,8 @@ _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
 _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
+_EXIT_QUERIES = None
+_EXIT_QUERIES_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -141,42 +143,60 @@ def _tw_data_dir_path() -> Path:
         return Path(".")
 
 
-def _hook_support_target_from_base(base: Path) -> Path | None:
+def _optional_sibling_module_target(base: Path, rel_name: str) -> Path | None:
     try:
         if base.is_file():
             if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "hook_support.py"
+                target = base.parent / rel_name
                 return target if target.is_file() else None
             return None
     except Exception:
         return None
-    target = base / "nautical_core" / "hook_support.py"
+    target = base / "nautical_core" / rel_name
     return target if target.is_file() else None
 
 
-def _load_hook_support():
-    global _HOOK_SUPPORT, _HOOK_SUPPORT_LOAD_FAILED
-    if _HOOK_SUPPORT is not None:
-        return _HOOK_SUPPORT
-    if _HOOK_SUPPORT_LOAD_FAILED:
+def _load_optional_sibling_module(cache_attr: str, failed_attr: str, rel_name: str, module_name: str):
+    module = globals().get(cache_attr)
+    if module is not None:
+        return module
+    if globals().get(failed_attr):
         return None
     base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _hook_support_target_from_base(base)
+    target = _optional_sibling_module_target(base, rel_name)
     if not target:
-        _HOOK_SUPPORT_LOAD_FAILED = True
+        globals()[failed_attr] = True
         return None
     try:
-        spec = importlib.util.spec_from_file_location("nautical_hook_support", target)
+        spec = importlib.util.spec_from_file_location(module_name, target)
         if spec and spec.loader:
             module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_hook_support"] = module
+            sys.modules[module_name] = module
             spec.loader.exec_module(module)
-            _HOOK_SUPPORT = module
+            globals()[cache_attr] = module
             return module
     except Exception:
         pass
-    _HOOK_SUPPORT_LOAD_FAILED = True
+    globals()[failed_attr] = True
     return None
+
+
+def _load_hook_support():
+    return _load_optional_sibling_module(
+        "_HOOK_SUPPORT",
+        "_HOOK_SUPPORT_LOAD_FAILED",
+        "hook_support.py",
+        "nautical_hook_support",
+    )
+
+
+def _load_exit_queries():
+    return _load_optional_sibling_module(
+        "_EXIT_QUERIES",
+        "_EXIT_QUERIES_LOAD_FAILED",
+        "exit_queries.py",
+        "nautical_exit_queries",
+    )
 
 
 def _task_cmd_prefix() -> list[str]:
@@ -190,6 +210,16 @@ def _task_cmd_prefix() -> list[str]:
     if _USE_RC_DATA_LOCATION:
         cmd.append(f"rc.data.location={TW_DATA_DIR}")
     return cmd
+
+
+def _require_loaded_module(module, rel_name: str):
+    if module is None:
+        raise RuntimeError(f"nautical_core/{rel_name} is required")
+    return module
+
+
+def _exit_queries_module():
+    return _require_loaded_module(_load_exit_queries(), "exit_queries.py")
 
 _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _QUEUE_PROCESSING_PATH = TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"
@@ -1651,108 +1681,38 @@ def _bump_attempts(entry: dict) -> int:
     return attempts
 
 def _short_uuid(value: str) -> str:
-    if core is not None and hasattr(core, "short_uuid"):
-        try:
-            return str(core.short_uuid(value) or "")
-        except Exception:
-            pass
-    raw = str(value or "").strip().lower()
-    if not raw:
-        return ""
-    return raw.split("-")[0] if "-" in raw else raw[:8]
+    exit_queries = _exit_queries_module()
+    return exit_queries.short_uuid(value, core=core)
 
 
 def _export_uuid(uuid_str: str) -> dict:
+    exit_queries = _exit_queries_module()
     hook_support = _load_hook_support()
-    if hook_support is not None:
-        return hook_support.export_uuid_status(
-            run_task=_run_task,
-            task_cmd_prefix=_task_cmd_prefix(),
-            uuid_str=uuid_str,
-            timeout=_TASK_TIMEOUT_EXPORT,
-            retries=_TASK_RETRIES_EXPORT,
-            retry_delay=_TASK_RETRY_DELAY,
-            is_lock_error=_is_lock_error,
-            tolerate_noisy_stdout=True,
-        )
-    if not uuid_str:
-        return {"exists": False, "retryable": False, "err": "missing uuid", "obj": None}
-    ok, out, err = _run_task(
-        _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", "rc.verbose=nothing", "rc.color=off", f"uuid:{uuid_str}", "export"],
+    return exit_queries.export_uuid(
+        uuid_str,
+        hook_support=hook_support,
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
         timeout=_TASK_TIMEOUT_EXPORT,
         retries=_TASK_RETRIES_EXPORT,
         retry_delay=_TASK_RETRY_DELAY,
+        is_lock_error=_is_lock_error,
     )
-    if not ok:
-        return {"exists": False, "retryable": _is_lock_error(err), "err": err or "", "obj": None}
-    try:
-        obj = json.loads(out.strip() or "{}")
-        if obj.get("uuid"):
-            return {"exists": True, "retryable": False, "err": "", "obj": obj}
-        return {"exists": False, "retryable": False, "err": "not found", "obj": None}
-    except Exception:
-        if uuid_str in out:
-            return {"exists": True, "retryable": False, "err": "", "obj": {"uuid": uuid_str}}
-        return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
 
 
 def _existing_equivalent_child(child: dict, parent_uuid: str = "") -> dict:
-    if not isinstance(child, dict):
-        return {"exists": False, "retryable": False, "err": "missing child", "obj": None}
-    chain_id = (child.get("chainID") or child.get("chainid") or "").strip()
-    link_no = child.get("link")
-    if not chain_id or link_no in (None, ""):
-        return {"exists": False, "retryable": False, "err": "missing chain slot", "obj": None}
-    try:
-        link_token = str(int(link_no))
-    except Exception:
-        return {"exists": False, "retryable": False, "err": "invalid link", "obj": None}
-
-    prev_link = (child.get("prevLink") or "").strip()
-    if not prev_link and parent_uuid:
-        prev_link = _short_uuid(parent_uuid)
-
-    cmd = _task_cmd_prefix() + [
-        "rc.hooks=off",
-        "rc.json.array=1",
-        "rc.verbose=nothing",
-        "rc.color=off",
-        f"chainID:{chain_id}",
-        f"link:{link_token}",
-    ]
-    if prev_link:
-        cmd.append(f"prevLink:{prev_link}")
-    cmd.extend(["status.not:deleted", "export"])
-
-    ok, out, err = _run_task(
-        cmd,
+    exit_queries = _exit_queries_module()
+    return exit_queries.existing_equivalent_child(
+        child,
+        parent_uuid=parent_uuid,
+        task_cmd_prefix=_task_cmd_prefix(),
+        run_task=_run_task,
         timeout=_TASK_TIMEOUT_EXPORT,
         retries=_TASK_RETRIES_EXPORT,
         retry_delay=_TASK_RETRY_DELAY,
+        is_lock_error=_is_lock_error,
+        short_uuid_fn=_short_uuid,
     )
-    if not ok:
-        return {"exists": False, "retryable": _is_lock_error(err), "err": err or "", "obj": None}
-    try:
-        rows = json.loads(out.strip() or "[]")
-    except Exception:
-        return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
-    if isinstance(rows, dict):
-        rows = [rows]
-    if not isinstance(rows, list):
-        return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
-
-    for wanted in ("pending", "waiting", "completed"):
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            if (row.get("status") or "").strip().lower() != wanted:
-                continue
-            if (row.get("uuid") or "").strip():
-                return {"exists": True, "retryable": False, "err": "", "obj": row}
-    for row in rows:
-        if isinstance(row, dict) and (row.get("uuid") or "").strip():
-            return {"exists": True, "retryable": False, "err": "", "obj": row}
-    return {"exists": False, "retryable": False, "err": "not found", "obj": None}
 
 
 def _import_child(obj: dict) -> tuple[bool, str]:

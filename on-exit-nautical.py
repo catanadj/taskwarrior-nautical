@@ -92,6 +92,8 @@ _EXIT_SIDE_EFFECTS = None
 _EXIT_SIDE_EFFECTS_LOAD_FAILED = False
 _EXIT_ENTRY_FLOW = None
 _EXIT_ENTRY_FLOW_LOAD_FAILED = False
+_QUEUE_STORE = None
+_QUEUE_STORE_LOAD_FAILED = False
 _QUEUE_MODELS = None
 _QUEUE_MODELS_LOAD_FAILED = False
 _MODULE_SPECS = {
@@ -118,6 +120,12 @@ _MODULE_SPECS = {
         "_EXIT_ENTRY_FLOW_LOAD_FAILED",
         "exit_entry_flow.py",
         "nautical_exit_entry_flow",
+    ),
+    "queue_store": (
+        "_QUEUE_STORE",
+        "_QUEUE_STORE_LOAD_FAILED",
+        "queue_store.py",
+        "nautical_queue_store",
     ),
     "queue_models": (
         "_QUEUE_MODELS",
@@ -251,9 +259,15 @@ def _module(name: str, *, required: bool = True):
     return _require_loaded_module(module, rel_name)
 
 def _nautical_state_dir_path() -> Path:
+    queue_store = _module("queue_store", required=False)
+    if queue_store is not None:
+        return queue_store.nautical_state_dir_path(TW_DATA_DIR)
     return TW_DATA_DIR / ".nautical-state"
 
 def _nautical_lock_dir_path() -> Path:
+    queue_store = _module("queue_store", required=False)
+    if queue_store is not None:
+        return queue_store.nautical_lock_dir_path(TW_DATA_DIR)
     return TW_DATA_DIR / ".nautical-locks"
 
 _QUEUE_PATH = _nautical_state_dir_path() / ".nautical_spawn_queue.jsonl"
@@ -276,39 +290,41 @@ _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 # When set, exit 1 if any spawns were dead-lettered or errored (for scripting/monitoring).
 _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in ("1", "true", "yes", "on")
 
-def _legacy_state_path(name: str) -> Path:
-    return TW_DATA_DIR / name
-
-def _maybe_migrate_state_file(current: Path, legacy: Path) -> None:
-    try:
-        if current.exists() or not legacy.exists():
-            return
-        current.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(legacy, current)
-    except Exception:
-        pass
-
-def _maybe_migrate_state_sidecars(current: Path, legacy: Path) -> None:
-    for suffix in ("-wal", "-shm"):
-        _maybe_migrate_state_file(Path(str(current) + suffix), Path(str(legacy) + suffix))
-
 def _migrate_legacy_nautical_state() -> None:
-    _maybe_migrate_state_file(_QUEUE_PATH, _legacy_state_path(".nautical_spawn_queue.jsonl"))
-    _maybe_migrate_state_file(
-        _QUEUE_PROCESSING_PATH,
-        _legacy_state_path(".nautical_spawn_queue.processing.jsonl"),
+    queue_store = _module("queue_store", required=False)
+    file_pairs = (
+        (_QUEUE_PATH, TW_DATA_DIR / ".nautical_spawn_queue.jsonl"),
+        (_QUEUE_PROCESSING_PATH, TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"),
+        (_QUEUE_DB_PATH, TW_DATA_DIR / ".nautical_queue.db"),
+        (_DEAD_LETTER_PATH, TW_DATA_DIR / ".nautical_dead_letter.jsonl"),
+        (_QUEUE_QUARANTINE_PATH, TW_DATA_DIR / ".nautical_spawn_queue.bad.jsonl"),
+        (_intent_log_path(), TW_DATA_DIR / ".nautical_spawn_intents.jsonl"),
     )
-    _maybe_migrate_state_file(_QUEUE_DB_PATH, _legacy_state_path(".nautical_queue.db"))
-    _maybe_migrate_state_sidecars(_QUEUE_DB_PATH, _legacy_state_path(".nautical_queue.db"))
-    _maybe_migrate_state_file(_DEAD_LETTER_PATH, _legacy_state_path(".nautical_dead_letter.jsonl"))
-    _maybe_migrate_state_file(
-        _QUEUE_QUARANTINE_PATH,
-        _legacy_state_path(".nautical_spawn_queue.bad.jsonl"),
+    db_sidecars = (
+        (_QUEUE_DB_PATH, TW_DATA_DIR / ".nautical_queue.db"),
     )
-    _maybe_migrate_state_file(
-        _intent_log_path(),
-        _legacy_state_path(".nautical_spawn_intents.jsonl"),
-    )
+    if queue_store is not None:
+        queue_store.migrate_legacy_state(file_pairs=file_pairs, db_sidecars=db_sidecars)
+        return
+    for current, legacy in file_pairs:
+        try:
+            if current.exists() or not legacy.exists():
+                continue
+            current.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(legacy, current)
+        except Exception:
+            pass
+    for current, legacy in db_sidecars:
+        for suffix in ("-wal", "-shm"):
+            try:
+                sidecar_current = Path(str(current) + suffix)
+                sidecar_legacy = Path(str(legacy) + suffix)
+                if sidecar_current.exists() or not sidecar_legacy.exists():
+                    continue
+                sidecar_current.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(sidecar_legacy, sidecar_current)
+            except Exception:
+                pass
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -1142,6 +1158,10 @@ def _quarantine_queue_line(raw_line: str, reason: str) -> None:
         pass
 
 def _fsync_dir(path: Path) -> None:
+    queue_store = _module("queue_store", required=False)
+    if queue_store is not None:
+        queue_store.fsync_dir(path)
+        return
     try:
         fd = os.open(str(path), os.O_DIRECTORY)
     except Exception:
@@ -1347,137 +1367,47 @@ def _queue_jsonl_has_data() -> bool:
 
 
 def _queue_db_connect() -> sqlite3.Connection | None:
-    db_path = _QUEUE_DB_PATH
-    try:
-        # Follow an overridden queue JSONL path in tests/mixed setups when DB path wasn't updated.
-        if isinstance(_QUEUE_PATH, Path) and isinstance(_QUEUE_DB_PATH, Path):
-            if not _QUEUE_DB_PATH.exists() and _QUEUE_DB_PATH.parent != _QUEUE_PATH.parent:
-                db_path = _QUEUE_PATH.parent / _QUEUE_DB_PATH.name
-    except Exception:
-        db_path = _QUEUE_DB_PATH
-    try:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    attempts = max(1, int(_QUEUE_DB_CONNECT_RETRIES or 1))
+    queue_store = _module("queue_store")
+    db_path = queue_store.resolve_queue_db_path(_QUEUE_PATH, _QUEUE_DB_PATH)
     timeout_base = max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0)
     timeout_max = max(timeout_base, float(_QUEUE_DB_CONNECT_TIMEOUT_MAX or timeout_base))
-    last_err = None
-    recovered_corrupt = False
-    for attempt in range(1, attempts + 1):
-        connect_timeout = min(timeout_max, timeout_base * (2 ** (attempt - 1)))
-        busy_timeout_ms = int(min(60_000, max(1_500, connect_timeout * 1000.0 * 2.0)))
-        try:
-            conn = sqlite3.connect(str(db_path), timeout=connect_timeout)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
-            try:
-                if db_path.exists():
-                    os.chmod(db_path, 0o600)
-            except Exception:
-                pass
-            return conn
-        except sqlite3.OperationalError as e:
-            if _sqlite_error_looks_corrupt(e) and not recovered_corrupt and _queue_db_quarantine_current(db_path, e):
-                recovered_corrupt = True
-                last_err = e
-                continue
-            last_err = e
-            if attempt >= attempts:
-                break
-            delay = max(0.0, float(_QUEUE_DB_CONNECT_BACKOFF_BASE or 0.0)) * (2 ** (attempt - 1))
-            jitter = random.uniform(0.0, max(0.001, delay)) if delay > 0 else 0.0
-            _sleep(delay + jitter)
-        except Exception as e:
-            if _sqlite_error_looks_corrupt(e) and not recovered_corrupt and _queue_db_quarantine_current(db_path, e):
-                recovered_corrupt = True
-                last_err = e
-                continue
-            last_err = e
-            break
-    _diag(f"queue db connect failed: {last_err}")
-    return None
+    return queue_store.connect_queue_db(
+        db_path,
+        attempts=max(1, int(_QUEUE_DB_CONNECT_RETRIES or 1)),
+        timeout_base=timeout_base,
+        timeout_max=timeout_max,
+        backoff_base=float(_QUEUE_DB_CONNECT_BACKOFF_BASE or 0.0),
+        row_factory=sqlite3.Row,
+        diag=_diag,
+        sleep_fn=_sleep,
+    )
 
 
 def _sqlite_error_looks_corrupt(exc: Exception) -> bool:
-    msg = str(exc or "").lower()
-    return (
-        "database disk image is malformed" in msg
-        or "file is not a database" in msg
-        or "malformed database schema" in msg
-        or "database corrupted" in msg
-    )
+    queue_store = _module("queue_store")
+    return queue_store.sqlite_error_looks_corrupt(exc)
 
 
 def _queue_db_quarantine_current(path: Path, reason: Exception | str) -> bool:
-    ts = int(time.time())
-    moved = False
-    for candidate in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm")):
-        try:
-            if not candidate.exists():
-                continue
-            bad = candidate.with_name(f"{candidate.name}.corrupt.{ts}")
-            os.replace(candidate, bad)
-            moved = True
-        except Exception:
-            continue
-    if moved:
-        _diag(f"queue db quarantined after corruption: {reason}")
-    return moved
+    queue_store = _module("queue_store")
+    return queue_store.quarantine_sqlite_db(path, reason, diag=_diag)
 
 
 def _queue_db_init(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS queue_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            spawn_intent_id TEXT,
-            payload TEXT NOT NULL,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            state TEXT NOT NULL DEFAULT 'queued',
-            claim_token TEXT,
-            claimed_at REAL,
-            created_at REAL NOT NULL,
-            updated_at REAL NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_entries_spawn_intent
-        ON queue_entries (spawn_intent_id)
-        WHERE spawn_intent_id IS NOT NULL AND spawn_intent_id <> ''
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_state_id ON queue_entries (state, id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_claimed_at ON queue_entries (claimed_at)")
-    conn.commit()
+    queue_store = _module("queue_store")
+    queue_store.init_queue_db(conn)
 
 
 def _queue_db_open_ready() -> sqlite3.Connection | None:
-    db_path = _QUEUE_DB_PATH
-    try:
-        if isinstance(_QUEUE_PATH, Path) and isinstance(_QUEUE_DB_PATH, Path):
-            if not _QUEUE_DB_PATH.exists() and _QUEUE_DB_PATH.parent != _QUEUE_PATH.parent:
-                db_path = _QUEUE_PATH.parent / _QUEUE_DB_PATH.name
-    except Exception:
-        db_path = _QUEUE_DB_PATH
-    for _ in range(2):
-        conn = _queue_db_connect()
-        if conn is None:
-            return None
-        try:
-            _queue_db_init(conn)
-            return conn
-        except Exception as e:
-            _queue_close_silent(conn)
-            if _sqlite_error_looks_corrupt(e) and _queue_db_quarantine_current(db_path, e):
-                continue
-            _diag(f"queue db init failed: {e}")
-            return None
-    return None
+    queue_store = _module("queue_store")
+    db_path = queue_store.resolve_queue_db_path(_QUEUE_PATH, _QUEUE_DB_PATH)
+    return queue_store.open_ready_queue_db(
+        db_path,
+        connect_fn=_queue_db_connect,
+        init_fn=_queue_db_init,
+        close_fn=_queue_close_silent,
+        diag=_diag,
+    )
 
 
 def _queue_select_queued_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:

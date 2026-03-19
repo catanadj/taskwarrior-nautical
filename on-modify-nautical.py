@@ -327,6 +327,8 @@ _MODIFY_FEEDBACK = None
 _MODIFY_FEEDBACK_LOAD_FAILED = False
 _MODIFY_TIMELINE = None
 _MODIFY_TIMELINE_LOAD_FAILED = False
+_QUEUE_STORE = None
+_QUEUE_STORE_LOAD_FAILED = False
 _QUEUE_MODELS = None
 _QUEUE_MODELS_LOAD_FAILED = False
 _MODULE_SPECS = {
@@ -383,6 +385,12 @@ _MODULE_SPECS = {
         "_MODIFY_TIMELINE_LOAD_FAILED",
         "modify_timeline.py",
         "nautical_modify_timeline",
+    ),
+    "queue_store": (
+        "_QUEUE_STORE",
+        "_QUEUE_STORE_LOAD_FAILED",
+        "queue_store.py",
+        "nautical_queue_store",
     ),
     "queue_models": (
         "_QUEUE_MODELS",
@@ -505,9 +513,15 @@ def _task_cmd_prefix() -> list[str]:
 # Deferred next-link spawn queue (used when nested `task import` times out due to TW lock)
 # ------------------------------------------------------------------------------
 def _nautical_state_dir_path() -> Path:
+    queue_store = _module("queue_store", required=False)
+    if queue_store is not None:
+        return queue_store.nautical_state_dir_path(TW_DATA_DIR)
     return TW_DATA_DIR / ".nautical-state"
 
 def _nautical_lock_dir_path() -> Path:
+    queue_store = _module("queue_store", required=False)
+    if queue_store is not None:
+        return queue_store.nautical_lock_dir_path(TW_DATA_DIR)
     return TW_DATA_DIR / ".nautical-locks"
 
 _SPAWN_QUEUE_PATH = _nautical_state_dir_path() / ".nautical_spawn_queue.jsonl"
@@ -523,27 +537,38 @@ _DEAD_LETTER_LOCK_SLEEP_BASE = _SPAWN_LOCK_SLEEP_BASE
 _WARNED_SPAWN_QUEUE_LOCK = False
 _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 
-def _legacy_state_path(name: str) -> Path:
-    return TW_DATA_DIR / name
-
-def _maybe_migrate_state_file(current: Path, legacy: Path) -> None:
-    try:
-        if current.exists() or not legacy.exists():
-            return
-        current.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(legacy, current)
-    except Exception:
-        pass
-
-def _maybe_migrate_state_sidecars(current: Path, legacy: Path) -> None:
-    for suffix in ("-wal", "-shm"):
-        _maybe_migrate_state_file(Path(str(current) + suffix), Path(str(legacy) + suffix))
-
 def _migrate_legacy_nautical_state() -> None:
-    _maybe_migrate_state_file(_SPAWN_QUEUE_PATH, _legacy_state_path(".nautical_spawn_queue.jsonl"))
-    _maybe_migrate_state_file(_SPAWN_QUEUE_DB_PATH, _legacy_state_path(".nautical_queue.db"))
-    _maybe_migrate_state_sidecars(_SPAWN_QUEUE_DB_PATH, _legacy_state_path(".nautical_queue.db"))
-    _maybe_migrate_state_file(_DEAD_LETTER_PATH, _legacy_state_path(".nautical_dead_letter.jsonl"))
+    queue_store = _module("queue_store", required=False)
+    file_pairs = (
+        (_SPAWN_QUEUE_PATH, TW_DATA_DIR / ".nautical_spawn_queue.jsonl"),
+        (_SPAWN_QUEUE_DB_PATH, TW_DATA_DIR / ".nautical_queue.db"),
+        (_DEAD_LETTER_PATH, TW_DATA_DIR / ".nautical_dead_letter.jsonl"),
+    )
+    db_sidecars = (
+        (_SPAWN_QUEUE_DB_PATH, TW_DATA_DIR / ".nautical_queue.db"),
+    )
+    if queue_store is not None:
+        queue_store.migrate_legacy_state(file_pairs=file_pairs, db_sidecars=db_sidecars)
+        return
+    for current, legacy in file_pairs:
+        try:
+            if current.exists() or not legacy.exists():
+                continue
+            current.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(legacy, current)
+        except Exception:
+            pass
+    for current, legacy in db_sidecars:
+        for suffix in ("-wal", "-shm"):
+            try:
+                sidecar_current = Path(str(current) + suffix)
+                sidecar_legacy = Path(str(legacy) + suffix)
+                if sidecar_current.exists() or not sidecar_legacy.exists():
+                    continue
+                sidecar_current.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(sidecar_legacy, sidecar_current)
+            except Exception:
+                pass
 
 _migrate_legacy_nautical_state()
 
@@ -1200,6 +1225,10 @@ _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
 
 
 def _fsync_dir(path: Path) -> None:
+    queue_store = _module("queue_store", required=False)
+    if queue_store is not None:
+        queue_store.fsync_dir(path)
+        return
     try:
         fd = os.open(str(path), os.O_DIRECTORY)
     except Exception:
@@ -1277,112 +1306,42 @@ def _handle_enqueue_lock_busy(task_obj: dict) -> tuple[bool, str]:
 
 
 def _spawn_queue_db_connect() -> sqlite3.Connection | None:
-    try:
-        _SPAWN_QUEUE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    for _ in range(2):
-        try:
-            connect_timeout = max(1.0, _SPAWN_LOCK_SLEEP_BASE * max(1, _SPAWN_LOCK_RETRIES) * 4.0)
-            busy_timeout_ms = int(min(60_000, max(1_500, connect_timeout * 1000.0 * 2.0)))
-            conn = sqlite3.connect(
-                str(_SPAWN_QUEUE_DB_PATH),
-                timeout=connect_timeout,
-            )
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
-            try:
-                if _SPAWN_QUEUE_DB_PATH.exists():
-                    os.chmod(_SPAWN_QUEUE_DB_PATH, 0o600)
-            except Exception:
-                pass
-            return conn
-        except Exception as e:
-            if _sqlite_error_looks_corrupt(e) and _spawn_queue_db_quarantine_current(e):
-                continue
-            _diag(f"queue db connect failed: {e}")
-            return None
-    return None
+    queue_store = _module("queue_store")
+    timeout_base = max(1.0, _SPAWN_LOCK_SLEEP_BASE * max(1, _SPAWN_LOCK_RETRIES) * 4.0)
+    return queue_store.connect_queue_db(
+        _SPAWN_QUEUE_DB_PATH,
+        attempts=2,
+        timeout_base=timeout_base,
+        timeout_max=timeout_base,
+        backoff_base=0.0,
+        diag=_diag,
+    )
 
 
 def _sqlite_error_looks_corrupt(exc: Exception) -> bool:
-    msg = str(exc or "").lower()
-    return (
-        "database disk image is malformed" in msg
-        or "file is not a database" in msg
-        or "malformed database schema" in msg
-        or "database corrupted" in msg
-    )
+    queue_store = _module("queue_store")
+    return queue_store.sqlite_error_looks_corrupt(exc)
 
 
 def _spawn_queue_db_quarantine_current(reason: Exception | str) -> bool:
-    ts = int(_time.time())
-    moved = False
-    for path in (
-        _SPAWN_QUEUE_DB_PATH,
-        Path(str(_SPAWN_QUEUE_DB_PATH) + "-wal"),
-        Path(str(_SPAWN_QUEUE_DB_PATH) + "-shm"),
-    ):
-        try:
-            if not path.exists():
-                continue
-            bad = path.with_name(f"{path.name}.corrupt.{ts}")
-            os.replace(path, bad)
-            moved = True
-        except Exception:
-            continue
-    if moved:
-        _diag(f"queue db quarantined after corruption: {reason}")
-    return moved
+    queue_store = _module("queue_store")
+    return queue_store.quarantine_sqlite_db(_SPAWN_QUEUE_DB_PATH, reason, diag=_diag)
 
 
 def _spawn_queue_db_init(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS queue_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            spawn_intent_id TEXT,
-            payload TEXT NOT NULL,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            state TEXT NOT NULL DEFAULT 'queued',
-            claim_token TEXT,
-            claimed_at REAL,
-            created_at REAL NOT NULL,
-            updated_at REAL NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_entries_spawn_intent
-        ON queue_entries (spawn_intent_id)
-        WHERE spawn_intent_id IS NOT NULL AND spawn_intent_id <> ''
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_state_id ON queue_entries (state, id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_claimed_at ON queue_entries (claimed_at)")
-    conn.commit()
+    queue_store = _module("queue_store")
+    queue_store.init_queue_db(conn)
 
 
 def _spawn_queue_db_open_ready() -> sqlite3.Connection | None:
-    for _ in range(2):
-        conn = _spawn_queue_db_connect()
-        if conn is None:
-            return None
-        try:
-            _spawn_queue_db_init(conn)
-            return conn
-        except Exception as e:
-            try:
-                conn.close()
-            except Exception:
-                pass
-            if _sqlite_error_looks_corrupt(e) and _spawn_queue_db_quarantine_current(e):
-                continue
-            _diag(f"queue db init failed: {e}")
-            return None
-    return None
+    queue_store = _module("queue_store")
+    return queue_store.open_ready_queue_db(
+        _SPAWN_QUEUE_DB_PATH,
+        connect_fn=_spawn_queue_db_connect,
+        init_fn=_spawn_queue_db_init,
+        close_fn=lambda conn: conn.close(),
+        diag=_diag,
+    )
 
 
 def _spawn_queue_capacity_guard(task_obj: dict) -> tuple[bool, str] | None:

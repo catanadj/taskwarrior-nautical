@@ -5962,6 +5962,36 @@ def test_on_exit_export_uuid_noisy_stdout():
     expect(obj and obj.get("exists"), "noisy stdout should still be treated as exists")
 
 
+def test_on_exit_emit_exit_feedback_reaches_stdout_contract():
+    """on-exit failing-hook feedback should still reach stdout even after stdout redirection."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_emit_feedback_test")
+
+    class _DevNullLike:
+        def write(self, _s):
+            return None
+        def flush(self):
+            return None
+
+    fake_stdout = io.StringIO()
+    fake_stderr = io.StringIO()
+    orig_stdout = sys.stdout
+    orig_stderr = sys.stderr
+    orig_dunder_stdout = sys.__stdout__
+    try:
+        sys.stdout = _DevNullLike()
+        sys.stderr = fake_stderr
+        sys.__stdout__ = fake_stdout
+        mod._emit_exit_feedback("[nautical] test feedback")
+    finally:
+        sys.stdout = orig_stdout
+        sys.stderr = orig_stderr
+        sys.__stdout__ = orig_dunder_stdout
+
+    expect("[nautical] test feedback" in fake_stdout.getvalue(), "feedback should reach stdout contract stream")
+    expect("[nautical] test feedback" in fake_stderr.getvalue(), "feedback should also remain visible on stderr")
+
+
 def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
     """Re-completing a reactivated task should not spawn when nextLink already exists."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -6566,6 +6596,7 @@ TESTS = [
     test_on_exit_dead_letter_carries_spawn_intent_id,
     test_on_exit_requeue_failure_leaves_sqlite_entry_processing,
     test_on_exit_export_uuid_noisy_stdout,
+    test_on_exit_emit_exit_feedback_reaches_stdout_contract,
     test_core_import_deterministic,
     test_on_modify_spawn_intent_id_in_entry,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,

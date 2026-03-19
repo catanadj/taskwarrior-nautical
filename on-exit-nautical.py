@@ -563,12 +563,20 @@ def _diag(msg: str) -> None:
 
 
 def _emit_exit_feedback(msg: str) -> None:
-    """Write required feedback to stderr when exiting non-zero (Taskwarrior hook contract)."""
-    try:
-        sys.stderr.write(msg + "\n")
-        sys.stderr.flush()
-    except Exception:
-        pass
+    """Write failing-hook feedback for Taskwarrior and keep stderr diagnostics."""
+    seen: set[int] = set()
+    for stream in (getattr(sys, "__stdout__", None), getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
+        if stream is None:
+            continue
+        ident = id(stream)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        try:
+            stream.write(msg + "\n")
+            stream.flush()
+        except Exception:
+            pass
 
 
 def _run_task_retry_or_stop(attempt: int, attempts: int, delay: float) -> bool:
@@ -2171,7 +2179,8 @@ if __name__ == "__main__":
         raise
     except Exception as e:
         _diag(f"on-exit unexpected error: {e}")
-        _emit_exit_feedback("[nautical] on-exit: unexpected error")
+        err_text = _diag_redact_msg(f"{type(e).__name__}: {e}")
+        _emit_exit_feedback(f"[nautical] on-exit: unexpected error: {err_text}")
         try:
             _write_dead_letter({"error": "unexpected_error"}, "on-exit exception")
         except Exception:

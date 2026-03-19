@@ -4245,7 +4245,8 @@ def test_on_exit_drain_skips_finalized_sqlite_intent():
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
 
         mod._QUEUE_PATH.write_text("", encoding="utf-8")
-        intent_log = mod._QUEUE_PATH.parent / ".nautical_spawn_intents.jsonl"
+        intent_log = mod._intent_log_path()
+        intent_log.parent.mkdir(parents=True, exist_ok=True)
         intent_log.write_text(
             json.dumps(
                 {
@@ -6008,6 +6009,30 @@ def test_on_exit_parent_nextlink_lock_uses_dedicated_dir():
     )
 
 
+def test_on_exit_state_files_use_dedicated_dir():
+    """on-exit queue/dead-letter state should live under .nautical-state."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_state_dir_test")
+
+    expect(mod._QUEUE_PATH.parent.name == ".nautical-state", f"unexpected queue dir: {mod._QUEUE_PATH}")
+    expect(mod._QUEUE_DB_PATH.parent.name == ".nautical-state", f"unexpected queue db dir: {mod._QUEUE_DB_PATH}")
+    expect(mod._DEAD_LETTER_PATH.parent.name == ".nautical-state", f"unexpected dead-letter dir: {mod._DEAD_LETTER_PATH}")
+    expect(mod._QUEUE_QUARANTINE_PATH.parent.name == ".nautical-state", f"unexpected quarantine dir: {mod._QUEUE_QUARANTINE_PATH}")
+    expect(mod._intent_log_path().parent.name == ".nautical-state", f"unexpected intent log dir: {mod._intent_log_path()}")
+
+
+def test_on_modify_state_files_use_dedicated_dir():
+    """on-modify queue/dead-letter state should live under .nautical-state."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_state_dir_test")
+
+    expect(mod._SPAWN_QUEUE_PATH.parent.name == ".nautical-state", f"unexpected queue dir: {mod._SPAWN_QUEUE_PATH}")
+    expect(mod._SPAWN_QUEUE_DB_PATH.parent.name == ".nautical-state", f"unexpected queue db dir: {mod._SPAWN_QUEUE_DB_PATH}")
+    expect(mod._DEAD_LETTER_PATH.parent.name == ".nautical-state", f"unexpected dead-letter dir: {mod._DEAD_LETTER_PATH}")
+    expect(mod._SPAWN_QUEUE_LOCK.parent.name == ".nautical-locks", f"unexpected queue lock dir: {mod._SPAWN_QUEUE_LOCK}")
+    expect(mod._DEAD_LETTER_LOCK.parent.name == ".nautical-locks", f"unexpected dead-letter lock dir: {mod._DEAD_LETTER_LOCK}")
+
+
 def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
     """Re-completing a reactivated task should not spawn when nextLink already exists."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -6632,6 +6657,7 @@ TESTS = [
     test_on_exit_export_uuid_noisy_stdout,
     test_on_exit_emit_exit_feedback_reaches_stdout_contract,
     test_on_exit_parent_nextlink_lock_uses_dedicated_dir,
+    test_on_exit_state_files_use_dedicated_dir,
     test_on_exit_run_task_accepts_env,
     test_core_import_deterministic,
     test_on_modify_spawn_intent_id_in_entry,
@@ -6644,6 +6670,7 @@ TESTS = [
     test_on_modify_export_uuid_short_invalid_json,
     test_on_modify_export_uuid_short_prefix_mismatch,
     test_on_modify_export_uuid_full_cached,
+    test_on_modify_state_files_use_dedicated_dir,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
     test_on_modify_missing_taskdata_uses_tw_dir,
     test_hooks_no_direct_subprocess_run,

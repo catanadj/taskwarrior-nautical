@@ -496,11 +496,17 @@ def _task_cmd_prefix() -> list[str]:
 # ------------------------------------------------------------------------------
 # Deferred next-link spawn queue (used when nested `task import` times out due to TW lock)
 # ------------------------------------------------------------------------------
-_SPAWN_QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
-_SPAWN_QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
-_SPAWN_QUEUE_DB_PATH = TW_DATA_DIR / ".nautical_queue.db"
-_DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical_dead_letter.jsonl"
-_DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
+def _nautical_state_dir_path() -> Path:
+    return TW_DATA_DIR / ".nautical-state"
+
+def _nautical_lock_dir_path() -> Path:
+    return TW_DATA_DIR / ".nautical-locks"
+
+_SPAWN_QUEUE_PATH = _nautical_state_dir_path() / ".nautical_spawn_queue.jsonl"
+_SPAWN_QUEUE_LOCK = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock"
+_SPAWN_QUEUE_DB_PATH = _nautical_state_dir_path() / ".nautical_queue.db"
+_DEAD_LETTER_PATH = _nautical_state_dir_path() / ".nautical_dead_letter.jsonl"
+_DEAD_LETTER_LOCK = _nautical_lock_dir_path() / ".nautical_dead_letter.lock"
 _SPAWN_LOCK_RETRIES = 6
 _SPAWN_LOCK_SLEEP_BASE = 0.03
 _SPAWN_LOCK_STALE_AFTER = 30.0
@@ -508,6 +514,30 @@ _DEAD_LETTER_LOCK_RETRIES = _SPAWN_LOCK_RETRIES
 _DEAD_LETTER_LOCK_SLEEP_BASE = _SPAWN_LOCK_SLEEP_BASE
 _WARNED_SPAWN_QUEUE_LOCK = False
 _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
+
+def _legacy_state_path(name: str) -> Path:
+    return TW_DATA_DIR / name
+
+def _maybe_migrate_state_file(current: Path, legacy: Path) -> None:
+    try:
+        if current.exists() or not legacy.exists():
+            return
+        current.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(legacy, current)
+    except Exception:
+        pass
+
+def _maybe_migrate_state_sidecars(current: Path, legacy: Path) -> None:
+    for suffix in ("-wal", "-shm"):
+        _maybe_migrate_state_file(Path(str(current) + suffix), Path(str(legacy) + suffix))
+
+def _migrate_legacy_nautical_state() -> None:
+    _maybe_migrate_state_file(_SPAWN_QUEUE_PATH, _legacy_state_path(".nautical_spawn_queue.jsonl"))
+    _maybe_migrate_state_file(_SPAWN_QUEUE_DB_PATH, _legacy_state_path(".nautical_queue.db"))
+    _maybe_migrate_state_sidecars(_SPAWN_QUEUE_DB_PATH, _legacy_state_path(".nautical_queue.db"))
+    _maybe_migrate_state_file(_DEAD_LETTER_PATH, _legacy_state_path(".nautical_dead_letter.jsonl"))
+
+_migrate_legacy_nautical_state()
 
 def _load_core() -> None:
     global core, _MAX_JSON_BYTES, _CORE_READY

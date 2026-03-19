@@ -242,20 +242,23 @@ def _module(name: str, *, required: bool = True):
     rel_name = _MODULE_SPECS[name][2]
     return _require_loaded_module(module, rel_name)
 
+def _nautical_state_dir_path() -> Path:
+    return TW_DATA_DIR / ".nautical-state"
+
 def _nautical_lock_dir_path() -> Path:
     return TW_DATA_DIR / ".nautical-locks"
 
-_QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
-_QUEUE_PROCESSING_PATH = TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"
+_QUEUE_PATH = _nautical_state_dir_path() / ".nautical_spawn_queue.jsonl"
+_QUEUE_PROCESSING_PATH = _nautical_state_dir_path() / ".nautical_spawn_queue.processing.jsonl"
 _QUEUE_LOCK = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock"
-_QUEUE_DB_PATH = TW_DATA_DIR / ".nautical_queue.db"
-_DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical_dead_letter.jsonl"
+_QUEUE_DB_PATH = _nautical_state_dir_path() / ".nautical_queue.db"
+_DEAD_LETTER_PATH = _nautical_state_dir_path() / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = _nautical_lock_dir_path() / ".nautical_dead_letter.lock"
 _DEAD_LETTER_RETENTION_DAYS = int(os.environ.get("NAUTICAL_DEAD_LETTER_RETENTION_DAYS") or 30)
 _QUEUE_MAX_BYTES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_BYTES") or 524288)
 _QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000)
 _DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)
-_QUEUE_QUARANTINE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.bad.jsonl"
+_QUEUE_QUARANTINE_PATH = _nautical_state_dir_path() / ".nautical_spawn_queue.bad.jsonl"
 _QUEUE_QUARANTINE_MAX_BYTES = int(os.environ.get("NAUTICAL_QUEUE_BAD_MAX_BYTES") or 262144)
 NAUTICAL_HOOK_VERSION = "updateE-20260126"
 _QUEUE_RETRY_MAX = int(os.environ.get("NAUTICAL_QUEUE_RETRY_MAX") or 6)
@@ -264,6 +267,40 @@ _QUEUE_LOCK_FAIL_COUNT = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock
 _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 # When set, exit 1 if any spawns were dead-lettered or errored (for scripting/monitoring).
 _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in ("1", "true", "yes", "on")
+
+def _legacy_state_path(name: str) -> Path:
+    return TW_DATA_DIR / name
+
+def _maybe_migrate_state_file(current: Path, legacy: Path) -> None:
+    try:
+        if current.exists() or not legacy.exists():
+            return
+        current.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(legacy, current)
+    except Exception:
+        pass
+
+def _maybe_migrate_state_sidecars(current: Path, legacy: Path) -> None:
+    for suffix in ("-wal", "-shm"):
+        _maybe_migrate_state_file(Path(str(current) + suffix), Path(str(legacy) + suffix))
+
+def _migrate_legacy_nautical_state() -> None:
+    _maybe_migrate_state_file(_QUEUE_PATH, _legacy_state_path(".nautical_spawn_queue.jsonl"))
+    _maybe_migrate_state_file(
+        _QUEUE_PROCESSING_PATH,
+        _legacy_state_path(".nautical_spawn_queue.processing.jsonl"),
+    )
+    _maybe_migrate_state_file(_QUEUE_DB_PATH, _legacy_state_path(".nautical_queue.db"))
+    _maybe_migrate_state_sidecars(_QUEUE_DB_PATH, _legacy_state_path(".nautical_queue.db"))
+    _maybe_migrate_state_file(_DEAD_LETTER_PATH, _legacy_state_path(".nautical_dead_letter.jsonl"))
+    _maybe_migrate_state_file(
+        _QUEUE_QUARANTINE_PATH,
+        _legacy_state_path(".nautical_spawn_queue.bad.jsonl"),
+    )
+    _maybe_migrate_state_file(
+        _intent_log_path(),
+        _legacy_state_path(".nautical_spawn_intents.jsonl"),
+    )
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -800,11 +837,14 @@ def _lock_dead_letter():
 
 
 def _intent_log_path() -> Path:
-    return _tw_data_dir_path() / ".nautical_spawn_intents.jsonl"
+    return _nautical_state_dir_path() / ".nautical_spawn_intents.jsonl"
 
 
 def _intent_log_lock_path() -> Path:
     return _nautical_lock_dir_path() / ".nautical_spawn_intents.lock"
+
+
+_migrate_legacy_nautical_state()
 
 
 @contextmanager
@@ -2172,7 +2212,7 @@ def main() -> int:
     if _EXIT_STRICT and (errors > 0 or dead_lettered > 0 or queue_lock_failures > 0):
         _emit_exit_feedback(
             f"[nautical] on-exit: {dead_lettered} dead-lettered, {errors} errors, {queue_lock_failures} queue lock failures. "
-            "Check .nautical_dead_letter.jsonl (set NAUTICAL_EXIT_STRICT=0 to disable)"
+            "Check .nautical-state/.nautical_dead_letter.jsonl (set NAUTICAL_EXIT_STRICT=0 to disable)"
         )
         return 1
     return 0

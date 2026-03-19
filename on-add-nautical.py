@@ -110,6 +110,8 @@ _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
 _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
+_ADD_FORMATTING = None
+_ADD_FORMATTING_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -152,42 +154,60 @@ TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
 _IMPORT_MS = None
 
 
-def _hook_support_target_from_base(base: Path) -> Path | None:
+def _optional_sibling_module_target(base: Path, rel_name: str) -> Path | None:
     try:
         if base.is_file():
             if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "hook_support.py"
+                target = base.parent / rel_name
                 return target if target.is_file() else None
             return None
     except Exception:
         return None
-    target = base / "nautical_core" / "hook_support.py"
+    target = base / "nautical_core" / rel_name
     return target if target.is_file() else None
 
 
-def _load_hook_support():
-    global _HOOK_SUPPORT, _HOOK_SUPPORT_LOAD_FAILED
-    if _HOOK_SUPPORT is not None:
-        return _HOOK_SUPPORT
-    if _HOOK_SUPPORT_LOAD_FAILED:
+def _load_optional_sibling_module(cache_attr: str, failed_attr: str, rel_name: str, module_name: str):
+    module = globals().get(cache_attr)
+    if module is not None:
+        return module
+    if globals().get(failed_attr):
         return None
     base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _hook_support_target_from_base(base)
+    target = _optional_sibling_module_target(base, rel_name)
     if not target:
-        _HOOK_SUPPORT_LOAD_FAILED = True
+        globals()[failed_attr] = True
         return None
     try:
-        spec = importlib.util.spec_from_file_location("nautical_hook_support", target)
+        spec = importlib.util.spec_from_file_location(module_name, target)
         if spec and spec.loader:
             module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_hook_support"] = module
+            sys.modules[module_name] = module
             spec.loader.exec_module(module)
-            _HOOK_SUPPORT = module
+            globals()[cache_attr] = module
             return module
     except Exception:
         pass
-    _HOOK_SUPPORT_LOAD_FAILED = True
+    globals()[failed_attr] = True
     return None
+
+
+def _load_hook_support():
+    return _load_optional_sibling_module(
+        "_HOOK_SUPPORT",
+        "_HOOK_SUPPORT_LOAD_FAILED",
+        "hook_support.py",
+        "nautical_hook_support",
+    )
+
+
+def _load_add_formatting():
+    return _load_optional_sibling_module(
+        "_ADD_FORMATTING",
+        "_ADD_FORMATTING_LOAD_FAILED",
+        "add_formatting.py",
+        "nautical_add_formatting",
+    )
 
 
 def _task_cmd_prefix() -> list[str]:
@@ -201,6 +221,16 @@ def _task_cmd_prefix() -> list[str]:
     if _USE_RC_DATA_LOCATION:
         cmd.append(f"rc.data.location={TW_DATA_DIR}")
     return cmd
+
+
+def _require_loaded_module(module, rel_name: str):
+    if module is None:
+        raise RuntimeError(f"nautical_core/{rel_name} is required")
+    return module
+
+
+def _add_formatting_module():
+    return _require_loaded_module(_load_add_formatting(), "add_formatting.py")
 
 def _load_core() -> None:
     global core, _IMPORT_MS, _MAX_JSON_BYTES, _CORE_READY
@@ -610,112 +640,10 @@ def _panel(title, rows, kind: str = "info"):
         label_width_max=28,
     )
 
-def _anchor_has_next_anchor(rows: list[tuple[str, str]]) -> bool:
-    return any(k == "Next anchor" for k, _ in rows)
-
-
-def _anchor_delta_text(rows: list[tuple[str, str]]) -> str | None:
-    for k, v in rows:
-        if k == "Delta":
-            return v
-    return None
-
-
-def _anchor_upcoming_numbered(v: str, start_idx: int) -> str:
-    if not v or v == "[dim]–[/]":
-        return v
-    lines = v.splitlines()
-    new_lines = []
-    idx = start_idx
-    for line in lines:
-        new_lines.append(f"[dim]{idx:>2} ▸[/] {line}")
-        idx += 1
-    return "\n".join(new_lines)
-
-
-def _anchor_classify_rows(
-    rows: list[tuple[str, str]],
-    *,
-    delta_text: str | None,
-    upcoming_start: int,
-) -> dict[str, list[tuple[str, str]]]:
-    config_keys = {"Pattern", "Natural"}
-    schedule_keys = {"First due", "Next anchor", "Scheduled", "Wait", "[auto-due]", "Upcoming"}
-    limits_keys = {"Limits", "Final (until)"}
-    grouped: dict[str, list[tuple[str, str]]] = {
-        "config": [],
-        "schedule": [],
-        "limits": [],
-        "warnings": [],
-        "rand": [],
-        "chain": [],
-        "others": [],
-    }
-
-    for k, v in rows:
-        if k == "Delta":
-            continue
-        if k == "First due" and delta_text:
-            v = f"{v}  [dim](Δ {delta_text})[/]"
-
-        lk = (str(k).lower() if k is not None else "")
-        if k in config_keys:
-            grouped["config"].append((k, v))
-            continue
-        if k in schedule_keys:
-            if k == "Upcoming":
-                v = _anchor_upcoming_numbered(v, upcoming_start)
-            grouped["schedule"].append((k, v))
-            continue
-        if k in limits_keys:
-            grouped["limits"].append((k, v))
-            continue
-        if lk.startswith("warning") or lk.startswith("note"):
-            grouped["warnings"].append((k, v))
-            continue
-        if k == "Rand":
-            grouped["rand"].append((k, v))
-            continue
-        if k == "Chain":
-            grouped["chain"].append((k, v))
-            continue
-        grouped["others"].append((k, v))
-    return grouped
-
-
-def _anchor_compose_rows(grouped: dict[str, list[tuple[str, str]]]) -> list[tuple[str | None, str]]:
-    out: list[tuple[str | None, str]] = []
-
-    def _add(group: list[tuple[str, str]]) -> None:
-        if not group:
-            return
-        if out:
-            out.append((None, ""))
-        out.extend(group)
-
-    grouped["config"].extend(grouped["others"])
-    _add(grouped["config"])
-    _add(grouped["schedule"])
-    _add(grouped["limits"])
-    _add(grouped["warnings"])
-    _add(grouped["rand"])
-    _add(grouped["chain"])
-    return out
-
-
 def _format_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
-    """Compact layout for anchor preview .
-    """
-    has_next_anchor = _anchor_has_next_anchor(rows)
-    upcoming_start = 3 if has_next_anchor else 2
-    delta_text = _anchor_delta_text(rows)
-    grouped = _anchor_classify_rows(
-        rows,
-        delta_text=delta_text,
-        upcoming_start=upcoming_start,
-    )
-    out = _anchor_compose_rows(grouped)
-    return out or rows
+    """Compact layout for anchor preview."""
+    add_formatting = _add_formatting_module()
+    return add_formatting.format_anchor_rows(rows)
 
 
 _DIAG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
@@ -836,78 +764,9 @@ def _run_task(
 
 
 def _format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
-    """Compact layout for classic cp preview.
-    """
-    # For cp chains, First due is link #1, Upcoming are 2,3,...
-    upcoming_start = 2
-
-    # Extract delta row; later we inline it into "First due"
-    delta_text = None
-    for k, v in rows:
-        if k == "Delta":
-            delta_text = v
-            break
-
-    config_keys = {"Period"}
-    schedule_keys = {"First due", "Scheduled", "Wait", "[auto-due]", "Upcoming"}
-    limits_keys = {"Limits", "Final (max)", "Final (until)"}
-
-    config: list[tuple[str, str]] = []
-    schedule: list[tuple[str, str]] = []
-    limits: list[tuple[str, str]] = []
-    warnings: list[tuple[str, str]] = []
-    chain: list[tuple[str, str]] = []
-    others: list[tuple[str, str]] = []
-
-    for k, v in rows:
-        if k == "Delta":
-            continue
-
-        if k == "First due" and delta_text:
-            v = f"{v}  [dim](Δ {delta_text})[/]"
-
-        lk = (str(k).lower() if k is not None else "")
-
-        if k in config_keys:
-            config.append((k, v))
-        elif k in schedule_keys:
-            if k == "Upcoming" and v and v != "[dim]–[/]":
-                lines = v.splitlines()
-                new_lines = []
-                idx = upcoming_start
-                for line in lines:
-                    new_lines.append(f"[dim]{idx:>2} ▸[/] {line}")
-                    idx += 1
-                v = "\n".join(new_lines)
-            schedule.append((k, v))
-        elif k in limits_keys:
-            limits.append((k, v))
-        elif lk.startswith("warning") or lk.startswith("note"):
-            warnings.append((k, v))
-        elif k == "Chain":
-            chain.append((k, v))
-        else:
-            others.append((k, v))
-
-    config.extend(others)
-
-    out: list[tuple[str | None, str]] = []
-
-    def _add(group: list[tuple[str, str]]):
-        nonlocal out
-        if not group:
-            return
-        if out:
-            out.append((None, ""))  # spacer line
-        out.extend(group)
-
-    _add(config)
-    _add(schedule)
-    _add(limits)
-    _add(warnings)
-    _add(chain)
-
-    return out or rows
+    """Compact layout for classic cp preview."""
+    add_formatting = _add_formatting_module()
+    return add_formatting.format_cp_rows(rows)
 
 
 def _fail_and_exit(title: str, msg: str) -> None:

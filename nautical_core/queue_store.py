@@ -503,3 +503,265 @@ def enqueue_entries_sqlite(
         if callable(diag):
             diag(f"queue db migrate enqueue failed: {exc}")
     return False
+
+
+def recover_processing_file(
+    *,
+    queue_processing_path: Path,
+    queue_path: Path,
+    durable_queue: bool,
+    fsync_dir_fn: Callable[[Path], None],
+) -> bool:
+    try:
+        if not queue_processing_path.exists():
+            return True
+        if not queue_path.exists():
+            os.replace(queue_processing_path, queue_path)
+            return True
+        with open(queue_processing_path, "r", encoding="utf-8") as f_in:
+            fd = os.open(str(queue_path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
+            with os.fdopen(fd, "a", encoding="utf-8") as f_out:
+                for line in f_in:
+                    f_out.write(line)
+                if durable_queue:
+                    try:
+                        f_out.flush()
+                        os.fsync(f_out.fileno())
+                    except Exception:
+                        pass
+        os.unlink(queue_processing_path)
+        if durable_queue:
+            fsync_dir_fn(queue_path.parent)
+        return True
+    except Exception:
+        return False
+
+
+def source_path_with_overflow(
+    *,
+    queue_path: Path,
+    queue_max_bytes: int,
+    diag: Callable[[str], None] | None = None,
+) -> tuple[Path, Path | None]:
+    overflow_path = None
+    try:
+        st = queue_path.stat()
+        if queue_max_bytes > 0 and st.st_size > queue_max_bytes:
+            try:
+                ts = int(time.time())
+                overflow_path = queue_path.with_suffix(f".overflow.{ts}.jsonl")
+                os.replace(queue_path, overflow_path)
+                if callable(diag):
+                    diag(f"queue rotated: {overflow_path}")
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return (overflow_path or queue_path), overflow_path
+
+
+def split_source_to_staging(
+    *,
+    src_path: Path,
+    tmp_path: Path,
+    tmp_processing: Path,
+    queue_max_lines: int,
+    durable_queue: bool,
+    quarantine_line: Callable[[str, str], None],
+    write_dead_letter: Callable[[dict[str, Any], str], None],
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    fd_out = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    fd_proc = os.open(str(tmp_processing), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    with open(src_path, "r", encoding="utf-8") as f_in, os.fdopen(fd_out, "w", encoding="utf-8") as f_out, os.fdopen(fd_proc, "w", encoding="utf-8") as f_proc:
+        for line in f_in:
+            ln = line.strip()
+            if not ln:
+                continue
+            if queue_max_lines > 0 and len(entries) >= queue_max_lines:
+                f_out.write(line)
+                continue
+            try:
+                obj = json.loads(ln)
+            except Exception:
+                quarantine_line(line, "queue json parse")
+                write_dead_letter({"raw": line}, "queue json parse")
+                continue
+            if isinstance(obj, dict):
+                entries.append(obj)
+                f_proc.write(line)
+                continue
+            quarantine_line(line, "queue json not object")
+            write_dead_letter({"raw": line}, "queue json not object")
+        if durable_queue:
+            try:
+                f_out.flush()
+                os.fsync(f_out.fileno())
+                f_proc.flush()
+                os.fsync(f_proc.fileno())
+            except Exception:
+                pass
+    return entries
+
+
+def commit_staging(
+    *,
+    queue_path: Path,
+    queue_processing_path: Path,
+    tmp_path: Path,
+    tmp_processing: Path,
+    entries: Sequence[dict[str, Any]],
+    overflow_path: Path | None,
+    durable_queue: bool,
+    fsync_dir_fn: Callable[[Path], None],
+) -> None:
+    os.replace(tmp_path, queue_path)
+    if entries:
+        os.replace(tmp_processing, queue_processing_path)
+    else:
+        try:
+            tmp_processing.unlink()
+        except Exception:
+            pass
+    if durable_queue:
+        fsync_dir_fn(queue_path.parent)
+    if overflow_path:
+        try:
+            overflow_path.unlink()
+        except Exception:
+            pass
+
+
+def cleanup_staging(tmp_path: Path, tmp_processing: Path) -> None:
+    try:
+        if tmp_path.exists():
+            tmp_path.unlink()
+    except Exception:
+        pass
+    try:
+        if tmp_processing.exists():
+            tmp_processing.unlink()
+    except Exception:
+        pass
+
+
+def take_queue_entries_jsonl(
+    *,
+    queue_path: Path,
+    queue_processing_path: Path,
+    queue_max_bytes: int,
+    queue_max_lines: int,
+    durable_queue: bool,
+    lock_queue: Callable[[], Any],
+    record_lock_failure: Callable[[], None],
+    quarantine_line: Callable[[str, str], None],
+    write_dead_letter: Callable[[dict[str, Any], str], None],
+    fsync_dir_fn: Callable[[Path], None],
+    diag: Callable[[str], None] | None = None,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    with lock_queue() as locked:
+        if not locked:
+            record_lock_failure()
+            return entries
+        if not recover_processing_file(
+            queue_processing_path=queue_processing_path,
+            queue_path=queue_path,
+            durable_queue=durable_queue,
+            fsync_dir_fn=fsync_dir_fn,
+        ):
+            return entries
+        try:
+            if not queue_path.exists():
+                return entries
+        except Exception:
+            return entries
+        src_path, overflow_path = source_path_with_overflow(
+            queue_path=queue_path,
+            queue_max_bytes=queue_max_bytes,
+            diag=diag,
+        )
+        tmp_path = queue_path.with_suffix(".staging")
+        tmp_processing = queue_processing_path.with_suffix(".staging")
+        try:
+            entries = split_source_to_staging(
+                src_path=src_path,
+                tmp_path=tmp_path,
+                tmp_processing=tmp_processing,
+                queue_max_lines=queue_max_lines,
+                durable_queue=durable_queue,
+                quarantine_line=quarantine_line,
+                write_dead_letter=write_dead_letter,
+            )
+            commit_staging(
+                queue_path=queue_path,
+                queue_processing_path=queue_processing_path,
+                tmp_path=tmp_path,
+                tmp_processing=tmp_processing,
+                entries=entries,
+                overflow_path=overflow_path,
+                durable_queue=durable_queue,
+                fsync_dir_fn=fsync_dir_fn,
+            )
+        except Exception:
+            cleanup_staging(tmp_path, tmp_processing)
+    return entries
+
+
+def requeue_entries_jsonl(
+    *,
+    queue_path: Path,
+    entries: Sequence[dict[str, Any]],
+    durable_queue: bool,
+    lock_queue: Callable[[], Any],
+    record_lock_failure: Callable[[], None],
+    fsync_dir_fn: Callable[[Path], None],
+    diag: Callable[[str], None] | None = None,
+) -> bool:
+    items = [entry for entry in (entries or []) if isinstance(entry, dict)]
+    if not items:
+        return True
+    with lock_queue() as locked:
+        if not locked:
+            record_lock_failure()
+            return False
+        try:
+            fd = os.open(str(queue_path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                for obj in items:
+                    f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
+                if durable_queue:
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                        fsync_dir_fn(queue_path.parent)
+                    except Exception:
+                        pass
+            return True
+        except Exception as exc:
+            if callable(diag):
+                diag(f"requeue write failed: {exc}")
+            return False
+
+
+def queue_jsonl_has_data(*paths: Path) -> bool:
+    for path in paths:
+        try:
+            if not path.exists():
+                continue
+            try:
+                if path.stat().st_size > 0:
+                    return True
+            except Exception:
+                return True
+        except Exception:
+            continue
+    return False

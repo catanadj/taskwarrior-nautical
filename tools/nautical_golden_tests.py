@@ -5992,6 +5992,22 @@ def test_on_exit_emit_exit_feedback_reaches_stdout_contract():
     expect("[nautical] test feedback" in fake_stderr.getvalue(), "feedback should also remain visible on stderr")
 
 
+def test_on_exit_parent_nextlink_lock_uses_dedicated_dir():
+    """on-exit parent-nextlink locks should live under .nautical-locks."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_parent_lock_dir_test")
+
+    with tempfile.TemporaryDirectory() as td:
+        mod.TW_DATA_DIR = Path(td)
+        path = mod._parent_nextlink_lock_path("ef31dca6-310c-401a-bf6c-301908755048")
+
+    expect(path.parent.name == ".nautical-locks", f"unexpected lock dir: {path}")
+    expect(
+        path.name == ".nautical_parent_nextlink.ef31dca6310c401abf6c301908755048.lock",
+        f"unexpected lock file name: {path.name}",
+    )
+
+
 def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
     """Re-completing a reactivated task should not spawn when nextLink already exists."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -6615,6 +6631,7 @@ TESTS = [
     test_on_exit_requeue_failure_leaves_sqlite_entry_processing,
     test_on_exit_export_uuid_noisy_stdout,
     test_on_exit_emit_exit_feedback_reaches_stdout_contract,
+    test_on_exit_parent_nextlink_lock_uses_dedicated_dir,
     test_on_exit_run_task_accepts_env,
     test_core_import_deterministic,
     test_on_modify_spawn_intent_id_in_entry,

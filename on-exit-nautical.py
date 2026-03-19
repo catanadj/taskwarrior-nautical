@@ -242,12 +242,15 @@ def _module(name: str, *, required: bool = True):
     rel_name = _MODULE_SPECS[name][2]
     return _require_loaded_module(module, rel_name)
 
+def _nautical_lock_dir_path() -> Path:
+    return TW_DATA_DIR / ".nautical-locks"
+
 _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _QUEUE_PROCESSING_PATH = TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"
-_QUEUE_LOCK = TW_DATA_DIR / ".nautical_spawn_queue.lock"
+_QUEUE_LOCK = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock"
 _QUEUE_DB_PATH = TW_DATA_DIR / ".nautical_queue.db"
 _DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical_dead_letter.jsonl"
-_DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical_dead_letter.lock"
+_DEAD_LETTER_LOCK = _nautical_lock_dir_path() / ".nautical_dead_letter.lock"
 _DEAD_LETTER_RETENTION_DAYS = int(os.environ.get("NAUTICAL_DEAD_LETTER_RETENTION_DAYS") or 30)
 _QUEUE_MAX_BYTES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_BYTES") or 524288)
 _QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000)
@@ -256,8 +259,8 @@ _QUEUE_QUARANTINE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.bad.jsonl"
 _QUEUE_QUARANTINE_MAX_BYTES = int(os.environ.get("NAUTICAL_QUEUE_BAD_MAX_BYTES") or 262144)
 NAUTICAL_HOOK_VERSION = "updateE-20260126"
 _QUEUE_RETRY_MAX = int(os.environ.get("NAUTICAL_QUEUE_RETRY_MAX") or 6)
-_QUEUE_LOCK_FAIL_MARKER = TW_DATA_DIR / ".nautical_spawn_queue.lock_failed"
-_QUEUE_LOCK_FAIL_COUNT = TW_DATA_DIR / ".nautical_spawn_queue.lock_failed.count"
+_QUEUE_LOCK_FAIL_MARKER = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock_failed"
+_QUEUE_LOCK_FAIL_COUNT = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock_failed.count"
 _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 # When set, exit 1 if any spawns were dead-lettered or errored (for scripting/monitoring).
 _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in ("1", "true", "yes", "on")
@@ -737,6 +740,7 @@ def _record_queue_lock_failure() -> None:
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "reason": "queue lock busy",
         }
+        _QUEUE_LOCK_FAIL_MARKER.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(_QUEUE_LOCK_FAIL_MARKER), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
         try:
             os.fchmod(fd, 0o600)
@@ -759,6 +763,7 @@ def _record_queue_lock_failure() -> None:
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "count": count,
         }
+        _QUEUE_LOCK_FAIL_COUNT.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(_QUEUE_LOCK_FAIL_COUNT), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
         try:
             os.fchmod(fd, 0o600)
@@ -799,7 +804,7 @@ def _intent_log_path() -> Path:
 
 
 def _intent_log_lock_path() -> Path:
-    return _tw_data_dir_path() / ".nautical_spawn_intents.lock"
+    return _nautical_lock_dir_path() / ".nautical_spawn_intents.lock"
 
 
 @contextmanager
@@ -821,7 +826,7 @@ def _parent_nextlink_lock_path(parent_uuid: str) -> Path:
         safe = "unknown"
     if len(safe) > 64:
         safe = safe[:64]
-    return _tw_data_dir_path() / f".nautical_parent_nextlink.{safe}.lock"
+    return _nautical_lock_dir_path() / f".nautical_parent_nextlink.{safe}.lock"
 
 
 @contextmanager

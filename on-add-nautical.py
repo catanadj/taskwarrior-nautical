@@ -116,6 +116,8 @@ _ADD_VALIDATION = None
 _ADD_VALIDATION_LOAD_FAILED = False
 _ADD_ANCHOR_COMPUTE = None
 _ADD_ANCHOR_COMPUTE_LOAD_FAILED = False
+_ADD_ANCHOR_PREVIEW = None
+_ADD_ANCHOR_PREVIEW_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -232,6 +234,15 @@ def _load_add_anchor_compute():
     )
 
 
+def _load_add_anchor_preview():
+    return _load_optional_sibling_module(
+        "_ADD_ANCHOR_PREVIEW",
+        "_ADD_ANCHOR_PREVIEW_LOAD_FAILED",
+        "add_anchor_preview.py",
+        "nautical_add_anchor_preview",
+    )
+
+
 def _task_cmd_prefix() -> list[str]:
     hook_support = _load_hook_support()
     if hook_support is not None:
@@ -261,6 +272,10 @@ def _add_validation_module():
 
 def _add_anchor_compute_module():
     return _require_loaded_module(_load_add_anchor_compute(), "add_anchor_compute.py")
+
+
+def _add_anchor_preview_module():
+    return _require_loaded_module(_load_add_anchor_preview(), "add_anchor_preview.py")
 
 def _load_core() -> None:
     global core, _IMPORT_MS, _MAX_JSON_BYTES, _CORE_READY
@@ -1364,35 +1379,29 @@ def _handle_cp_preview_on_add(
 
 
 def _anchor_preview_prepare_dnf(task: dict[str, object], anchor_str: str, due_dt: datetime, rows: list[tuple[str, str]], prof) -> tuple[list[list[dict]], str]:
-    t0 = time.perf_counter()
-    dnf, err = _validate_anchor_syntax_strict(anchor_str)
-    if dnf is None:
-        _error_and_exit([("Invalid anchor", err)])
-
-    mode, warn_msg = _validate_anchor_mode(task.get("anchor_mode"))
-    task["anchor_mode"] = mode
-    if warn_msg:
-        rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
-    prof.add_ms("anchor:dnf", (time.perf_counter() - t0) * 1000.0)
-
-    tag = {
-        "skip": "[bold bright_cyan]SKIP[/]",
-        "all": "[bold yellow]ALL[/]",
-        "flex": "[bold magenta]FLEX[/]",
-    }.get(mode, "[bold bright_cyan]SKIP[/]")
-    rows.append(("Pattern", f"[white]{anchor_str}[/]  {tag}"))
-    try:
-        rows.append(("Natural", f"[white]{core.describe_anchor_dnf(dnf, task)}[/]"))
-    except Exception:
-        pass
-    return dnf, mode
+    add_anchor_preview = _add_anchor_preview_module()
+    return add_anchor_preview.anchor_preview_prepare_dnf(
+        task,
+        anchor_str,
+        due_dt,
+        rows,
+        prof,
+        core=core,
+        validate_anchor_syntax_strict=_validate_anchor_syntax_strict,
+        validate_anchor_mode=_validate_anchor_mode,
+        error_and_exit=_error_and_exit,
+    )
 
 
 def _anchor_preview_seed_context(task: dict, due_day, now_local: datetime, user_provided_due: bool):
-    base_local_date = due_day if user_provided_due else now_local.date()
-    seed_base = (task.get("chainID") or "").strip() or _root_uuid_from(task) or "preview"
-    interval_seed = base_local_date
-    return base_local_date, interval_seed, seed_base
+    add_anchor_preview = _add_anchor_preview_module()
+    return add_anchor_preview.anchor_preview_seed_context(
+        task,
+        due_day,
+        now_local,
+        user_provided_due,
+        root_uuid_from=_root_uuid_from,
+    )
 
 
 def _anchor_preview_first_due(
@@ -1408,54 +1417,24 @@ def _anchor_preview_first_due(
     rows: list[tuple[str, str]],
     prof,
 ):
-    def _fmt(dt):
-        return core.fmt_dt_local(dt)
-
-    fallback_hhmm = due_hhmm if user_provided_due else (9, 0)
-    t_first = time.perf_counter()
-    if user_provided_due:
-        due_local_dt = _to_local_cached(due_dt)
-        first_due_local_dt = _anchor_pick_occurrence_local(
-            dnf,
-            due_local_dt,
-            inclusive=False,
-            fallback_hhmm=fallback_hhmm,
-            interval_seed=interval_seed,
-            seed_base=seed_base,
-        )
-        if not first_due_local_dt:
-            _error_and_exit([("anchor pattern", "No matching anchor occurrences found after the provided due.")])
-    else:
-        first_due_local_dt = _anchor_pick_occurrence_local(
-            dnf,
-            now_local,
-            inclusive=True,
-            fallback_hhmm=fallback_hhmm,
-            interval_seed=interval_seed,
-            seed_base=seed_base,
-        )
-        if not first_due_local_dt:
-            _error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])
-    prof.add_ms("anchor:first_occurrence", (time.perf_counter() - t_first) * 1000.0)
-
-    first_hhmm = (first_due_local_dt.hour, first_due_local_dt.minute)
-    first_date_local = first_due_local_dt.date()
-    first_due_utc = first_due_local_dt.astimezone(timezone.utc)
-    if user_provided_due:
-        display_first_due_utc = due_dt
-        rows.append(("First due", f"[bold bright_green]{_fmt(display_first_due_utc)}[/]"))
-        rows.append(("Next anchor", f"[white]{_fmt(first_due_utc)}[/]"))
-    else:
-        display_first_due_utc = first_due_utc
-        rows.append(("First due", f"[bold bright_green]{_fmt(display_first_due_utc)}[/]"))
-        task["due"] = _fmt_local_for_task(first_due_utc)
-        rows.append(
-            (
-                "[auto-due]",
-                "Due date was not explicitly set; assigned to first anchor match.",
-            )
-        )
-    return first_due_local_dt, first_due_utc, display_first_due_utc, first_date_local, first_hhmm
+    add_anchor_preview = _add_anchor_preview_module()
+    return add_anchor_preview.anchor_preview_first_due(
+        task,
+        dnf,
+        now_local=now_local,
+        due_dt=due_dt,
+        user_provided_due=user_provided_due,
+        due_hhmm=due_hhmm,
+        interval_seed=interval_seed,
+        seed_base=seed_base,
+        rows=rows,
+        prof=prof,
+        core=core,
+        to_local_cached=_to_local_cached,
+        anchor_pick_occurrence_local=_anchor_pick_occurrence_local,
+        error_and_exit=_error_and_exit,
+        fmt_local_for_task=_fmt_local_for_task,
+    )
 
 
 def _anchor_preview_misaligned_due_warning(
@@ -1466,33 +1445,26 @@ def _anchor_preview_misaligned_due_warning(
     interval_seed,
     seed_base: str,
 ) -> None:
-    due_local_date = _to_local_cached(due_dt).date()
-    first_after_due_date = _anchor_step_once(
-        dnf,
-        due_local_date - timedelta(days=1),
-        interval_seed,
-        seed_base,
+    add_anchor_preview = _add_anchor_preview_module()
+    add_anchor_preview.anchor_preview_misaligned_due_warning(
+        rows,
+        dnf=dnf,
+        due_dt=due_dt,
+        interval_seed=interval_seed,
+        seed_base=seed_base,
+        to_local_cached=_to_local_cached,
+        anchor_step_once=_anchor_step_once,
     )
-    if first_after_due_date != due_local_date:
-        rows.append(
-            (
-                "Note",
-                "[italic yellow]Your due is not an anchor day; chain follows anchors."
-                " To align, set due to a matching anchor day or omit due to auto-assign.[/]",
-            )
-        )
 
 
 def _anchor_preview_lint_and_validate(anchor_str: str, prof) -> None:
-    t_lint = time.perf_counter()
-    _, warns = core.lint_anchor_expr(anchor_str)
-    prof.add_ms("anchor:lint", (time.perf_counter() - t_lint) * 1000.0)
-    if warns:
-        _panel("ℹ️  Lint", [("Hint", w) for w in warns], kind="note")
-
-    t_val = time.perf_counter()
-    core.validate_anchor_expr_strict(anchor_str)
-    prof.add_ms("anchor:validate_strict", (time.perf_counter() - t_val) * 1000.0)
+    add_anchor_preview = _add_anchor_preview_module()
+    add_anchor_preview.anchor_preview_lint_and_validate(
+        anchor_str,
+        prof,
+        core=core,
+        panel=_panel,
+    )
 
 
 def _anchor_preview_limit_rows(
@@ -1504,25 +1476,17 @@ def _anchor_preview_limit_rows(
     final_until_dt: datetime | None,
     now_utc: datetime,
 ) -> None:
-    def _fmt(dt):
-        return core.fmt_dt_local(dt)
-
-    lim_parts = []
-    if cpmax and cpmax > 0:
-        lim_parts.append(f"max [bold yellow]{cpmax}[/]")
-    if until_dt:
-        lim_parts.append(f"until [bold yellow]{_fmt(until_dt)}[/]")
-        if exact_until_count is not None:
-            lim_parts.append(f"[white]{exact_until_count} more[/]")
-    if lim_parts:
-        rows.append(("Limits", " [dim]|[/] ".join(lim_parts)))
-    if final_until_dt:
-        rows.append(
-            (
-                "Final (until)",
-                f"[bright_magenta]{_fmt(final_until_dt)}[/]  [dim]({_human_delta(now_utc, final_until_dt, True)})[/]",
-            )
-        )
+    add_anchor_preview = _add_anchor_preview_module()
+    add_anchor_preview.anchor_preview_limit_rows(
+        rows,
+        cpmax=cpmax,
+        until_dt=until_dt,
+        exact_until_count=exact_until_count,
+        final_until_dt=final_until_dt,
+        now_utc=now_utc,
+        core=core,
+        human_delta=_human_delta,
+    )
 
 
 def _handle_anchor_preview_on_add(
@@ -1539,130 +1503,42 @@ def _handle_anchor_preview_on_add(
     past_due_warning: str | None,
     prof,
 ) -> None:
-    rows: list[tuple[str, str]] = []
-
-    def _fmt(dt):
-        return core.fmt_dt_local(dt)
-
-    dnf, _ = _anchor_preview_prepare_dnf(task, anchor_str, due_dt, rows, prof)
-    base_local_date, interval_seed, seed_base = _anchor_preview_seed_context(
-        task, due_day, now_local, user_provided_due
-    )
-
-    first_date_local = _anchor_step_once(dnf, base_local_date - timedelta(days=1), interval_seed, seed_base)
-    if not first_date_local:
-        _error_and_exit(
-            [
-                (
-                    "anchor pattern",
-                    "No matching anchor dates found. Pattern may be invalid, non-advancing, or too restrictive.",
-                )
-            ]
-        )
-
-    (
-        first_due_local_dt,
-        first_due_utc,
-        display_first_due_utc,
-        first_date_local,
-        first_hhmm,
-    ) = _anchor_preview_first_due(
-        task,
-        dnf,
-        now_local=now_local,
-        due_dt=due_dt,
-        user_provided_due=user_provided_due,
-        due_hhmm=due_hhmm,
-        interval_seed=interval_seed,
-        seed_base=seed_base,
-        rows=rows,
-        prof=prof,
-    )
-
-    _append_wait_sched_rows(rows, task, display_first_due_utc, auto_due=(not user_provided_due))
-    if past_due_warning:
-        rows.append(("Warning", f"[yellow]{past_due_warning}[/]"))
-    if user_provided_due and ANCHOR_WARN:
-        _anchor_preview_misaligned_due_warning(
-            rows,
-            dnf=dnf,
-            due_dt=due_dt,
-            interval_seed=interval_seed,
-            seed_base=seed_base,
-        )
-
-    if until_dt:
-        is_reasonable, warn_msg = _validate_chain_duration_reasonable(
-            until_dt, now_utc, first_due_utc, "anchor"
-        )
-        if not is_reasonable and warn_msg:
-            rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
-
-    cpmax = core.coerce_int(task.get("chainMax"), 0)
-    exact_until_count, final_until_dt = _anchor_until_summary(
-        dnf,
-        until_dt,
-        first_date_local,
-        first_hhmm,
-        interval_seed,
-        seed_base,
-    )
-
-    allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
-    allow_by_until = exact_until_count if exact_until_count is not None else 10**9
-
-    _anchor_preview_lint_and_validate(anchor_str, prof)
-
-    preview_limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until, _PREVIEW_HARD_CAP))
-    fallback_hhmm = first_hhmm
-    _t_prev = time.perf_counter()
-    preview = _anchor_build_preview(
-        dnf,
-        first_due_local_dt,
-        preview_limit,
-        until_dt,
-        fallback_hhmm,
-        interval_seed,
-        seed_base,
-    )
-    prof.add_ms("anchor:preview_occurrences", (time.perf_counter() - _t_prev) * 1000.0)
-    rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
-    rows.append(
-        (
-            "Delta",
-            f"[bright_yellow]{_human_delta(now_utc, display_first_due_utc, core.expr_has_m_or_y(dnf))}[/]",
-        )
-    )
-
-    _anchor_preview_limit_rows(
-        rows,
-        cpmax=cpmax,
-        until_dt=until_dt,
-        exact_until_count=exact_until_count,
-        final_until_dt=final_until_dt,
+    add_anchor_preview = _add_anchor_preview_module()
+    add_anchor_preview.handle_anchor_preview_on_add(
+        task=task,
+        anchor_str=anchor_str,
+        ch=ch,
         now_utc=now_utc,
+        now_local=now_local,
+        user_provided_due=user_provided_due,
+        due_dt=due_dt,
+        due_day=due_day,
+        due_hhmm=due_hhmm,
+        until_dt=until_dt,
+        past_due_warning=past_due_warning,
+        prof=prof,
+        anchor_warn=ANCHOR_WARN,
+        upcoming_preview=UPCOMING_PREVIEW,
+        preview_hard_cap=_PREVIEW_HARD_CAP,
+        core=core,
+        root_uuid_from=_root_uuid_from,
+        short=_short,
+        validate_anchor_syntax_strict=_validate_anchor_syntax_strict,
+        validate_anchor_mode=_validate_anchor_mode,
+        validate_chain_duration_reasonable=_validate_chain_duration_reasonable,
+        append_wait_sched_rows=_append_wait_sched_rows,
+        anchor_step_once=_anchor_step_once,
+        anchor_pick_occurrence_local=_anchor_pick_occurrence_local,
+        anchor_until_summary=_anchor_until_summary,
+        anchor_build_preview=_anchor_build_preview,
+        to_local_cached=_to_local_cached,
+        fmt_local_for_task=_fmt_local_for_task,
+        format_anchor_rows=_format_anchor_rows,
+        panel=_panel,
+        emit_task_json=_emit_task_json,
+        human_delta=_human_delta,
+        error_and_exit=_error_and_exit,
     )
-
-    if "rand" in anchor_str.lower():
-        base = _short(_root_uuid_from(task))
-        rows.append(
-            (
-                "Rand",
-                f"[dim italic]Preview uses provisional seed; final picks are chain-bound to {base}[/]",
-            )
-        )
-
-    rows.append(("Chain", "[bold green]enabled[/]" if ch == "on" else "[bold red]disabled[/]"))
-    rows = _format_anchor_rows(rows)
-    _t_panel = time.perf_counter()
-    _panel(
-        "⚓︎ Anchor Preview",
-        rows,
-        kind="preview_anchor",
-    )
-    prof.add_ms("render:anchor_panel", (time.perf_counter() - _t_panel) * 1000.0)
-
-    _emit_task_json(task, sanitize=True, prof=prof)
 
 
 class _NoopProfiler:

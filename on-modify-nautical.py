@@ -1281,25 +1281,60 @@ def _spawn_queue_db_connect() -> sqlite3.Connection | None:
         _SPAWN_QUEUE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
-    try:
-        connect_timeout = max(1.0, _SPAWN_LOCK_SLEEP_BASE * max(1, _SPAWN_LOCK_RETRIES) * 4.0)
-        busy_timeout_ms = int(min(60_000, max(1_500, connect_timeout * 1000.0 * 2.0)))
-        conn = sqlite3.connect(
-            str(_SPAWN_QUEUE_DB_PATH),
-            timeout=connect_timeout,
-        )
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+    for _ in range(2):
         try:
-            if _SPAWN_QUEUE_DB_PATH.exists():
-                os.chmod(_SPAWN_QUEUE_DB_PATH, 0o600)
+            connect_timeout = max(1.0, _SPAWN_LOCK_SLEEP_BASE * max(1, _SPAWN_LOCK_RETRIES) * 4.0)
+            busy_timeout_ms = int(min(60_000, max(1_500, connect_timeout * 1000.0 * 2.0)))
+            conn = sqlite3.connect(
+                str(_SPAWN_QUEUE_DB_PATH),
+                timeout=connect_timeout,
+            )
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+            try:
+                if _SPAWN_QUEUE_DB_PATH.exists():
+                    os.chmod(_SPAWN_QUEUE_DB_PATH, 0o600)
+            except Exception:
+                pass
+            return conn
+        except Exception as e:
+            if _sqlite_error_looks_corrupt(e) and _spawn_queue_db_quarantine_current(e):
+                continue
+            _diag(f"queue db connect failed: {e}")
+            return None
+    return None
+
+
+def _sqlite_error_looks_corrupt(exc: Exception) -> bool:
+    msg = str(exc or "").lower()
+    return (
+        "database disk image is malformed" in msg
+        or "file is not a database" in msg
+        or "malformed database schema" in msg
+        or "database corrupted" in msg
+    )
+
+
+def _spawn_queue_db_quarantine_current(reason: Exception | str) -> bool:
+    ts = int(_time.time())
+    moved = False
+    for path in (
+        _SPAWN_QUEUE_DB_PATH,
+        Path(str(_SPAWN_QUEUE_DB_PATH) + "-wal"),
+        Path(str(_SPAWN_QUEUE_DB_PATH) + "-shm"),
+    ):
+        try:
+            if not path.exists():
+                continue
+            bad = path.with_name(f"{path.name}.corrupt.{ts}")
+            os.replace(path, bad)
+            moved = True
         except Exception:
-            pass
-        return conn
-    except Exception as e:
-        _diag(f"queue db connect failed: {e}")
-        return None
+            continue
+    if moved:
+        _diag(f"queue db quarantined after corruption: {reason}")
+    return moved
 
 
 def _spawn_queue_db_init(conn: sqlite3.Connection) -> None:
@@ -1328,6 +1363,26 @@ def _spawn_queue_db_init(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_state_id ON queue_entries (state, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_claimed_at ON queue_entries (claimed_at)")
     conn.commit()
+
+
+def _spawn_queue_db_open_ready() -> sqlite3.Connection | None:
+    for _ in range(2):
+        conn = _spawn_queue_db_connect()
+        if conn is None:
+            return None
+        try:
+            _spawn_queue_db_init(conn)
+            return conn
+        except Exception as e:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            if _sqlite_error_looks_corrupt(e) and _spawn_queue_db_quarantine_current(e):
+                continue
+            _diag(f"queue db init failed: {e}")
+            return None
+    return None
 
 
 def _spawn_queue_capacity_guard(task_obj: dict) -> tuple[bool, str] | None:
@@ -1419,11 +1474,10 @@ def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
     if guard is not None:
         return guard
 
-    conn = _spawn_queue_db_connect()
+    conn = _spawn_queue_db_open_ready()
     if conn is None:
         return False, "spawn queue db unavailable"
     try:
-        _spawn_queue_db_init(conn)
         payload, now, spawn_intent_id = _spawn_queue_payload(task_obj)
         conn.execute("BEGIN IMMEDIATE")
         _spawn_queue_upsert(

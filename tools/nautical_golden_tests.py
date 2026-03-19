@@ -2123,6 +2123,43 @@ def test_on_modify_enqueue_uses_sqlite_even_with_legacy_jsonl_backlog():
             else:
                 os.environ["TASKDATA"] = prev_taskdata
 
+
+def test_on_modify_enqueue_recovers_from_corrupt_sqlite_db():
+    """on-modify enqueue should quarantine a corrupt sqlite queue db and recreate it."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        prev_taskdata = os.environ.get("TASKDATA")
+        os.environ["TASKDATA"] = td
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_modify_enqueue_corrupt_sqlite_test")
+            if hasattr(mod, "_load_core"):
+                mod._load_core()
+            mod._SPAWN_QUEUE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            mod._SPAWN_QUEUE_DB_PATH.write_bytes(b"not-a-sqlite-db")
+
+            ok, reason = mod._enqueue_deferred_spawn(
+                {
+                    "spawn_intent_id": "si_corrupt_recover",
+                    "parent_uuid": "00000000-0000-0000-0000-000000000111",
+                    "child_short": "deadbeef",
+                    "child": {"uuid": "00000000-0000-0000-0000-000000000999"},
+                }
+            )
+            expect(ok, f"enqueue should recover from corrupt sqlite db: {reason}")
+            with sqlite3.connect(str(mod._SPAWN_QUEUE_DB_PATH)) as conn:
+                row = conn.execute(
+                    "SELECT payload FROM queue_entries WHERE spawn_intent_id=?",
+                    ("si_corrupt_recover",),
+                ).fetchone()
+            expect(row is not None, "recreated sqlite queue row missing")
+            quarantined = [p.name for p in mod._SPAWN_QUEUE_DB_PATH.parent.iterdir() if p.name.startswith(".nautical_queue.db.corrupt.")]
+            expect(quarantined, "corrupt sqlite queue db should be quarantined")
+        finally:
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+
 def test_on_modify_chain_export_timeout_scales():
     """tw_export_chain should scale timeout based on cached chain size."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -4339,6 +4376,31 @@ def test_on_exit_take_queue_migrates_legacy_processing_backlog_to_sqlite():
                 "SELECT COUNT(1) FROM queue_entries WHERE spawn_intent_id='si_legacy_processing' AND state='processing'"
             ).fetchone()[0]
         expect(int(still_processing) == 1, "migrated sqlite entry should be claimed as processing")
+
+
+def test_on_exit_take_queue_recovers_from_corrupt_sqlite_db():
+    """on-exit queue drain should quarantine a corrupt sqlite queue db and continue."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_take_queue_corrupt_sqlite_test")
+    if not hasattr(mod, "_take_queue_entries"):
+        raise AssertionError("on-exit hook does not expose queue helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
+        mod._QUEUE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        mod._QUEUE_DB_PATH.write_bytes(b"not-a-sqlite-db")
+
+        entries = mod._take_queue_entries()
+        expect(entries == [], f"take_queue should recover from corrupt sqlite db without entries, got: {entries}")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            conn.execute("SELECT 1")
+        quarantined = [p.name for p in mod._QUEUE_DB_PATH.parent.iterdir() if p.name.startswith(".nautical_queue.db.corrupt.")]
+        expect(quarantined, "corrupt sqlite queue db should be quarantined on exit recovery")
 
 def test_on_exit_drain_skips_finalized_sqlite_intent():
     """on-exit should skip and ack SQLite entries already finalized in intent log."""
@@ -6995,6 +7057,7 @@ TESTS = [
     test_on_modify_queue_full_drops_with_dead_letter,
     test_on_modify_enqueue_uses_sqlite_when_legacy_empty,
     test_on_modify_enqueue_uses_sqlite_even_with_legacy_jsonl_backlog,
+    test_on_modify_enqueue_recovers_from_corrupt_sqlite_db,
     test_on_modify_chain_export_timeout_scales,
     test_tw_export_chain_extra_validation,
     test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
@@ -7031,6 +7094,7 @@ TESTS = [
     test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,
     test_on_exit_take_queue_migrates_legacy_processing_backlog_to_sqlite,
+    test_on_exit_take_queue_recovers_from_corrupt_sqlite_db,
     test_on_exit_drain_skips_finalized_sqlite_intent,
     test_on_exit_queue_drain_is_transactional,
     test_on_exit_queue_stat_failure_does_not_crash,

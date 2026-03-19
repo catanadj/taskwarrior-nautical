@@ -1363,6 +1363,7 @@ def _queue_db_connect() -> sqlite3.Connection | None:
     timeout_base = max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0)
     timeout_max = max(timeout_base, float(_QUEUE_DB_CONNECT_TIMEOUT_MAX or timeout_base))
     last_err = None
+    recovered_corrupt = False
     for attempt in range(1, attempts + 1):
         connect_timeout = min(timeout_max, timeout_base * (2 ** (attempt - 1)))
         busy_timeout_ms = int(min(60_000, max(1_500, connect_timeout * 1000.0 * 2.0)))
@@ -1379,6 +1380,10 @@ def _queue_db_connect() -> sqlite3.Connection | None:
                 pass
             return conn
         except sqlite3.OperationalError as e:
+            if _sqlite_error_looks_corrupt(e) and not recovered_corrupt and _queue_db_quarantine_current(db_path, e):
+                recovered_corrupt = True
+                last_err = e
+                continue
             last_err = e
             if attempt >= attempts:
                 break
@@ -1386,10 +1391,41 @@ def _queue_db_connect() -> sqlite3.Connection | None:
             jitter = random.uniform(0.0, max(0.001, delay)) if delay > 0 else 0.0
             _sleep(delay + jitter)
         except Exception as e:
+            if _sqlite_error_looks_corrupt(e) and not recovered_corrupt and _queue_db_quarantine_current(db_path, e):
+                recovered_corrupt = True
+                last_err = e
+                continue
             last_err = e
             break
     _diag(f"queue db connect failed: {last_err}")
     return None
+
+
+def _sqlite_error_looks_corrupt(exc: Exception) -> bool:
+    msg = str(exc or "").lower()
+    return (
+        "database disk image is malformed" in msg
+        or "file is not a database" in msg
+        or "malformed database schema" in msg
+        or "database corrupted" in msg
+    )
+
+
+def _queue_db_quarantine_current(path: Path, reason: Exception | str) -> bool:
+    ts = int(time.time())
+    moved = False
+    for candidate in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm")):
+        try:
+            if not candidate.exists():
+                continue
+            bad = candidate.with_name(f"{candidate.name}.corrupt.{ts}")
+            os.replace(candidate, bad)
+            moved = True
+        except Exception:
+            continue
+    if moved:
+        _diag(f"queue db quarantined after corruption: {reason}")
+    return moved
 
 
 def _queue_db_init(conn: sqlite3.Connection) -> None:
@@ -1418,6 +1454,30 @@ def _queue_db_init(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_state_id ON queue_entries (state, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_claimed_at ON queue_entries (claimed_at)")
     conn.commit()
+
+
+def _queue_db_open_ready() -> sqlite3.Connection | None:
+    db_path = _QUEUE_DB_PATH
+    try:
+        if isinstance(_QUEUE_PATH, Path) and isinstance(_QUEUE_DB_PATH, Path):
+            if not _QUEUE_DB_PATH.exists() and _QUEUE_DB_PATH.parent != _QUEUE_PATH.parent:
+                db_path = _QUEUE_PATH.parent / _QUEUE_DB_PATH.name
+    except Exception:
+        db_path = _QUEUE_DB_PATH
+    for _ in range(2):
+        conn = _queue_db_connect()
+        if conn is None:
+            return None
+        try:
+            _queue_db_init(conn)
+            return conn
+        except Exception as e:
+            _queue_close_silent(conn)
+            if _sqlite_error_looks_corrupt(e) and _queue_db_quarantine_current(db_path, e):
+                continue
+            _diag(f"queue db init failed: {e}")
+            return None
+    return None
 
 
 def _queue_select_queued_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1514,14 +1574,8 @@ def _queue_close_silent(conn: sqlite3.Connection) -> None:
 
 
 def _take_queue_entries_sqlite() -> list[dict]:
-    conn = _queue_db_connect()
+    conn = _queue_db_open_ready()
     if conn is None:
-        return []
-    try:
-        _queue_db_init(conn)
-    except Exception as e:
-        _diag(f"queue db init failed: {e}")
-        _queue_close_silent(conn)
         return []
     token = f"drain-{os.getpid()}-{int(time.time() * 1000)}"
     now = time.time()
@@ -1542,11 +1596,10 @@ def _ack_queue_entries_sqlite(entry_ids: list[int]) -> bool:
             ids.append(rid)
     if not ids:
         return True
-    conn = _queue_db_connect()
+    conn = _queue_db_open_ready()
     if conn is None:
         return False
     try:
-        _queue_db_init(conn)
         conn.execute("BEGIN IMMEDIATE")
         conn.executemany(
             "DELETE FROM queue_entries WHERE id=?",
@@ -1581,12 +1634,11 @@ def _requeue_entries_sqlite(entries: list[dict]) -> bool:
     items = [e for e in (entries or []) if isinstance(e, dict) and e.get("__queue_backend") == "sqlite" and e.get("__queue_id")]
     if not items:
         return True
-    conn = _queue_db_connect()
+    conn = _queue_db_open_ready()
     if conn is None:
         return False
     now = time.time()
     try:
-        _queue_db_init(conn)
         conn.execute("BEGIN IMMEDIATE")
         for e in items:
             rid = int(e.get("__queue_id") or 0)
@@ -1634,12 +1686,11 @@ def _enqueue_entries_sqlite(entries: list[dict]) -> bool:
     items = [e for e in (entries or []) if isinstance(e, dict)]
     if not items:
         return True
-    conn = _queue_db_connect()
+    conn = _queue_db_open_ready()
     if conn is None:
         return False
     now = time.time()
     try:
-        _queue_db_init(conn)
         conn.execute("BEGIN IMMEDIATE")
         for e in items:
             out = dict(e)

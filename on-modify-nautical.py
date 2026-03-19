@@ -323,6 +323,8 @@ _MODIFY_COMPLETION_COMPUTE = None
 _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED = False
 _MODIFY_COMPLETION_SPAWN = None
 _MODIFY_COMPLETION_SPAWN_LOAD_FAILED = False
+_MODIFY_FEEDBACK = None
+_MODIFY_FEEDBACK_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -465,6 +467,15 @@ def _load_modify_completion_spawn():
     )
 
 
+def _load_modify_feedback():
+    return _load_optional_sibling_module(
+        "_MODIFY_FEEDBACK",
+        "_MODIFY_FEEDBACK_LOAD_FAILED",
+        "modify_feedback.py",
+        "nautical_modify_feedback",
+    )
+
+
 def _require_loaded_module(module, rel_name: str):
     if module is None:
         raise RuntimeError(f"nautical_core/{rel_name} is required")
@@ -505,6 +516,13 @@ def _modify_completion_spawn_module():
     return _require_loaded_module(
         _load_modify_completion_spawn(),
         "modify_completion_spawn.py",
+    )
+
+
+def _modify_feedback_module():
+    return _require_loaded_module(
+        _load_modify_feedback(),
+        "modify_feedback.py",
     )
 
 
@@ -2422,42 +2440,6 @@ def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
         _CHAIN_BY_SHORT = by_short
         _CHAIN_BY_UUID = by_uuid
     _diag_count("chain_cache_seeded")
-
-
-def _pretty_basis_cp(task: dict, meta: dict) -> str:
-    td = core.parse_cp_duration(task.get("cp") or "")
-    if not td:
-        return "end + cp"
-    secs = int(td.total_seconds())
-    rem = secs % 86400
-    if rem != 0:
-        hrs, rems = divmod(rem, 3600)
-        mins, _ = divmod(rems, 60)
-        hint = []
-        if hrs:
-            hint.append(f"{hrs}h")
-        if mins:
-            hint.append(f"{mins}m")
-        rem_s = " ".join(hint) if hint else f"{rem}s"
-        return f"Exact end + cp (remainder {rem_s} vs 24h)"
-    return "Preserve wall clock (period is multiple of 24h)"
-
-
-def _pretty_basis_anchor(meta: dict, task: dict) -> str:
-    mode = (meta.get("mode") or "skip").lower()
-    basis = meta.get("basis")
-    missed = int(meta.get("missed_count") or 0)
-    due0 = core.parse_dt_any(task.get("due"))
-    due_s = core.fmt_dt_local(due0) if due0 else "(no due)"
-    if mode == "skip":
-        return "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)"
-    if mode == "flex":
-        return f"FLEX — Skip missed up to now; next after completion ({missed} missed since {due_s})"
-    if basis == "missed":
-        return f"ALL — Backfilling first of {missed} missed anchor(s) since {due_s}"
-    if basis == "after_due":
-        return "ALL (no missed) — Next anchor after original due"
-    return "ALL — Next anchor after completion"
 
 
 # ------------------------------------------------------------------------------
@@ -4557,179 +4539,6 @@ def _stamp_chain_id_if_new_nautical(old: dict, new: dict) -> None:
         pass
 
 
-def _resolve_child_id(child_short: str, deferred_spawn: bool, chain_by_short: dict | None) -> str:
-    child_id = ""
-    if not deferred_spawn and chain_by_short:
-        child_id = str(chain_by_short.get(child_short, {}).get("id", "") or "")
-    if not deferred_spawn and not child_id:
-        child_obj = _export_uuid_short_cached(child_short)
-        child_id = child_obj.get("id", "") if child_obj else ""
-    return child_id
-
-
-def _anchor_mode_tag(new: dict) -> str:
-    return {
-        "skip": "[cyan]SKIP[/]",
-        "all": "[yellow]ALL[/]",
-        "flex": "[magenta]FLEX[/]",
-    }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
-
-
-def _append_wait_sched_feedback_rows(fb: list[tuple[str, object]]) -> None:
-    if not (_DEBUG_WAIT_SCHED and _LAST_WAIT_SCHED_DEBUG):
-        return
-    for _fld in ("scheduled", "wait"):
-        d = _LAST_WAIT_SCHED_DEBUG.get(_fld)
-        if not d:
-            continue
-        if d.get("ok"):
-            fb.append(
-                (
-                    f"{_fld} carry",
-                    f"Δ {d.get('delta')}  parent {d.get('parent_val')} vs {d.get('parent_due')}  →  child {d.get('child_val')}",
-                )
-            )
-        else:
-            fb.append(
-                (
-                    f"{_fld} carry",
-                    f"[yellow]skip[/] ({d.get('reason')})  parent {d.get('parent_val')} vs {d.get('parent_due')}",
-                )
-            )
-
-
-def _append_sanitised_fields_row(fb: list[tuple[str, object]], stripped_attrs: list[str]) -> None:
-    if stripped_attrs:
-        fb.append(
-            (
-                "Sanitised",
-                f"Removed unknown fields: {', '.join(sorted(stripped_attrs))}",
-            )
-        )
-
-
-def _append_integrity_warnings_row(
-    fb: list[tuple[str, object]],
-    integrity_warnings: list[str] | None,
-) -> None:
-    if not integrity_warnings:
-        return
-    warn_list = integrity_warnings[:4]
-    if len(integrity_warnings) > 4:
-        warn_list.append(f"...and {len(integrity_warnings) - 4} more")
-    fb.append(("Integrity", "\n".join(warn_list)))
-
-
-def _append_link_status_rows(fb: list[tuple[str, object]], cap_no: int | None, base_no: int) -> None:
-    if not cap_no:
-        return
-    if base_no >= cap_no:
-        fb.append(("Link status", "[bold red]This was the last link[/]"))
-    elif base_no == cap_no - 1:
-        fb.append(("Link status", "[yellow]This was the second-to-last link[/]"))
-    fb.append(("Links left", f"{max(0, cap_no - base_no)} left (cap #{cap_no})"))
-
-
-def _append_final_rows(
-    fb: list[tuple[str, object]],
-    finals: list[tuple[str, object]],
-    now_utc,
-) -> None:
-    for label, when in finals:
-        fb.append(
-            (
-                f"Final ({label})",
-                f"{core.fmt_dt_local(when)}  ({_human_delta(now_utc, when, True)})",
-            )
-        )
-
-
-def _append_anchor_intent_row(
-    fb: list[tuple[str, object]],
-    *,
-    child_short: str,
-    deferred_spawn: bool,
-    chain_by_short: dict | None,
-    spawn_intent_id: str | None,
-) -> None:
-    _ = _resolve_child_id(child_short, deferred_spawn, chain_by_short)
-    if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
-        fb.append(("Intent", spawn_intent_id))
-
-
-def _append_anchor_timeline_rows(
-    fb: list[tuple[str, object]],
-    *,
-    new: dict,
-    child_due,
-    child_short: str,
-    dnf,
-    cap_no: int | None,
-    base_no: int,
-    expr_str: str,
-) -> None:
-    tl = _timeline_lines(
-        "anchor",
-        new,
-        child_due,
-        child_short,
-        dnf,
-        next_count=3,
-        cap_no=cap_no,
-        cur_no=base_no,
-        show_gaps=_SHOW_TIMELINE_GAPS,
-        round_anchor_gaps=True,  # Round to nearest day
-    )
-    if tl:
-        fb.append(("Timeline", "\n".join(tl)))
-    if "rand" in expr_str.lower():
-        fb.append(
-            (
-                "Rand",
-                f"[dim]Deterministic picks seeded by root {_short(_root_uuid_from(new))}[/]",
-            )
-        )
-
-
-def _emit_anchor_completion_panel(
-    *,
-    title: str,
-    fb: list[tuple[str, object]],
-    base_no: int,
-    new: dict,
-    child_due,
-    child_short: str,
-    now_utc,
-    cap_no: int | None,
-    until_dt,
-    until_cap_no: int | None,
-) -> None:
-    if (core.PANEL_MODE or "").strip().lower() == "line":
-        line = _format_line_preview(
-            base_no,
-            new,
-            child_due,
-            child_short,
-            now_utc,
-            cap_no=cap_no,
-            until_dt=until_dt,
-            until_no=until_cap_no,
-        )
-        _panel_line(title, line, kind="preview_anchor")
-        return
-    if _CHAIN_COLOR_PER_CHAIN:
-        chain_colour = _chain_colour_for_task(new, "anchor")
-        _panel(
-            title,
-            fb,
-            kind="preview_anchor",
-            border_style=chain_colour,
-            title_style=chain_colour,
-        )
-        return
-    _panel(title, fb, kind="preview_anchor")
-
-
 def _render_anchor_completion_feedback(
     *,
     new: dict,
@@ -4753,59 +4562,57 @@ def _render_anchor_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
-    fb = []
-    anchor_raw = (new.get("anchor") or "").strip()
-    expr_str = _strip_quotes(anchor_raw)
-    mode_tag = _anchor_mode_tag(new)
-    fb.append(("Pattern", f"{expr_str}  {mode_tag}"))
-    fb.append(("Natural", core.describe_anchor_dnf(dnf, new)))
-    fb.append(("Basis", _pretty_basis_anchor(meta, new)))
-    fb.append(("Root", _format_root_and_age(new, now_utc)))
-
-    _append_wait_sched_feedback_rows(fb)
-    _append_sanitised_fields_row(fb, stripped_attrs)
-
-    delta = core.humanize_delta(now_utc, child_due, use_months_days=core.expr_has_m_or_y(dnf))
-    fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
-    if analytics_advice:
-        fb.append(("Analytics", analytics_advice))
-    _append_integrity_warnings_row(fb, integrity_warnings)
-    _append_next_wait_sched_rows(fb, child, child_due)
-
-    _append_link_status_rows(fb, cap_no, base_no)
-    _append_final_rows(fb, finals, now_utc)
-    _append_anchor_intent_row(
-        fb,
-        child_short=child_short,
-        deferred_spawn=deferred_spawn,
-        chain_by_short=chain_by_short,
-        spawn_intent_id=spawn_intent_id,
-    )
-
-    title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short}"
-    _append_anchor_timeline_rows(
-        fb,
+    modify_feedback = _modify_feedback_module()
+    modify_feedback.render_anchor_completion_feedback(
         new=new,
+        child=child,
         child_due=child_due,
         child_short=child_short,
-        dnf=dnf,
+        next_no=next_no,
+        parent_short=parent_short,
         cap_no=cap_no,
-        base_no=base_no,
-        expr_str=expr_str,
-    )
-
-    fb = _format_next_anchor_rows(fb)
-    _emit_anchor_completion_panel(
-        title=title,
-        fb=fb,
-        base_no=base_no,
-        new=new,
-        child_due=child_due,
-        child_short=child_short,
+        finals=finals,
         now_utc=now_utc,
-        cap_no=cap_no,
         until_dt=until_dt,
         until_cap_no=until_cap_no,
+        dnf=dnf,
+        meta=meta,
+        stripped_attrs=stripped_attrs,
+        deferred_spawn=deferred_spawn,
+        spawn_intent_id=spawn_intent_id,
+        chain_by_short=chain_by_short,
+        analytics_advice=analytics_advice,
+        integrity_warnings=integrity_warnings,
+        base_no=base_no,
+        core=core,
+        debug_wait_sched=_DEBUG_WAIT_SCHED,
+        last_wait_sched_debug=_LAST_WAIT_SCHED_DEBUG,
+        diag_enabled=os.environ.get("NAUTICAL_DIAG") == "1",
+        format_root_and_age=_format_root_and_age,
+        append_next_wait_sched_rows=_append_next_wait_sched_rows,
+        timeline_lines=lambda kind, task, child_due, child_short, dnf, *, next_count, cap_no, cur_no, show_gaps: _timeline_lines(
+            kind,
+            task,
+            child_due,
+            child_short,
+            dnf,
+            next_count=next_count,
+            cap_no=cap_no,
+            cur_no=cur_no,
+            show_gaps=show_gaps,
+            round_anchor_gaps=True,
+        ),
+        show_timeline_gaps=_SHOW_TIMELINE_GAPS,
+        root_uuid_from=_root_uuid_from,
+        short=_short,
+        format_next_anchor_rows=_format_next_anchor_rows,
+        format_line_preview=_format_line_preview,
+        panel_line=_panel_line,
+        panel=_panel,
+        chain_color_per_chain=_CHAIN_COLOR_PER_CHAIN,
+        chain_colour_for_task=_chain_colour_for_task,
+        strip_quotes=_strip_quotes,
+        human_delta=_human_delta,
     )
 
 
@@ -4830,83 +4637,52 @@ def _render_cp_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
-    fb = []
-    delta = core.humanize_delta(now_utc, child_due, use_months_days=False)
-    fb.append(("Period", new.get("cp")))
-    fb.append(("Basis", _pretty_basis_cp(new, meta)))
-    fb.append(("Root", _format_root_and_age(new, now_utc)))
-    fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
-    if analytics_advice:
-        fb.append(("Analytics", analytics_advice))
-    if integrity_warnings:
-        warn_list = integrity_warnings[:4]
-        if len(integrity_warnings) > 4:
-            warn_list.append(f"...and {len(integrity_warnings) - 4} more")
-        fb.append(("Integrity", "\n".join(warn_list)))
-    _append_next_wait_sched_rows(fb, child, child_due)
-
-    if cap_no:
-        if base_no >= cap_no:
-            fb.append(("Link status", "[bold red]This was the last link[/]"))
-        elif base_no == cap_no - 1:
-            fb.append(("Link status", "[yellow]Next link is the last in the chain.[/]"))
-        fb.append(("Links left", f"{max(0, cap_no - base_no)} left (cap #{cap_no})"))
-    else:
-        fb.append(("Limits", "—"))
-
-    for label, when in finals:
-        fb.append(
-            (
-                f"Final ({label})",
-                f"{core.fmt_dt_local(when)}  ({_human_delta(now_utc, when, True)})",
-            )
-        )
-
-    child_id = _resolve_child_id(child_short, deferred_spawn, chain_by_short)
-    if deferred_spawn and os.environ.get("NAUTICAL_DIAG") == "1" and spawn_intent_id:
-        fb.append(("Intent", spawn_intent_id))
-
-    title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short} [{child_id}]"
-    tl = _timeline_lines(
-        "cp",
-        new,
-        child_due,
-        child_short,
-        None,
-        next_count=3,
+    modify_feedback = _modify_feedback_module()
+    modify_feedback.render_cp_completion_feedback(
+        new=new,
+        child=child,
+        child_due=child_due,
+        child_short=child_short,
+        next_no=next_no,
+        parent_short=parent_short,
         cap_no=cap_no,
-        cur_no=base_no,
-        show_gaps=_SHOW_TIMELINE_GAPS,
-        round_anchor_gaps=False,  # CP gaps are exact
-    )
-    if tl:
-        fb.append(("Timeline", "\n".join(tl)))
-
-    fb = _format_next_cp_rows(fb)
-
-    if (core.PANEL_MODE or "").strip().lower() == "line":
-        line = _format_line_preview(
-            base_no,
-            new,
+        finals=finals,
+        now_utc=now_utc,
+        until_dt=until_dt,
+        until_cap_no=until_cap_no,
+        meta=meta,
+        deferred_spawn=deferred_spawn,
+        spawn_intent_id=spawn_intent_id,
+        chain_by_short=chain_by_short,
+        analytics_advice=analytics_advice,
+        integrity_warnings=integrity_warnings,
+        base_no=base_no,
+        core=core,
+        diag_enabled=os.environ.get("NAUTICAL_DIAG") == "1",
+        format_root_and_age=_format_root_and_age,
+        append_next_wait_sched_rows=_append_next_wait_sched_rows,
+        timeline_lines=lambda kind, task, child_due, child_short, dnf, *, next_count, cap_no, cur_no, show_gaps: _timeline_lines(
+            kind,
+            task,
             child_due,
             child_short,
-            now_utc,
+            dnf,
+            next_count=next_count,
             cap_no=cap_no,
-            until_dt=until_dt,
-            until_no=until_cap_no,
-        )
-        _panel_line(title, line, kind="preview_cp")
-    elif _CHAIN_COLOR_PER_CHAIN:
-        chain_colour = _chain_colour_for_task(new, "cp")
-        _panel(
-            title,
-            fb,
-            kind="preview_cp",
-            border_style=chain_colour,
-            title_style=chain_colour,
-        )
-    else:
-        _panel(title, fb, kind="preview_cp")
+            cur_no=cur_no,
+            show_gaps=show_gaps,
+            round_anchor_gaps=False,
+        ),
+        show_timeline_gaps=_SHOW_TIMELINE_GAPS,
+        format_next_cp_rows=_format_next_cp_rows,
+        format_line_preview=_format_line_preview,
+        panel_line=_panel_line,
+        panel=_panel,
+        chain_color_per_chain=_CHAIN_COLOR_PER_CHAIN,
+        chain_colour_for_task=_chain_colour_for_task,
+        human_delta=_human_delta,
+        export_uuid_short_cached=_export_uuid_short_cached,
+    )
 
 
 def _non_completion_anchor_error_message(anchor_expr: str, default_msg: str) -> str:

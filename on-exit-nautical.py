@@ -90,6 +90,8 @@ _EXIT_QUERIES = None
 _EXIT_QUERIES_LOAD_FAILED = False
 _EXIT_SIDE_EFFECTS = None
 _EXIT_SIDE_EFFECTS_LOAD_FAILED = False
+_EXIT_ENTRY_FLOW = None
+_EXIT_ENTRY_FLOW_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -210,6 +212,15 @@ def _load_exit_side_effects():
     )
 
 
+def _load_exit_entry_flow():
+    return _load_optional_sibling_module(
+        "_EXIT_ENTRY_FLOW",
+        "_EXIT_ENTRY_FLOW_LOAD_FAILED",
+        "exit_entry_flow.py",
+        "nautical_exit_entry_flow",
+    )
+
+
 def _task_cmd_prefix() -> list[str]:
     hook_support = _load_hook_support()
     if hook_support is not None:
@@ -235,6 +246,10 @@ def _exit_queries_module():
 
 def _exit_side_effects_module():
     return _require_loaded_module(_load_exit_side_effects(), "exit_side_effects.py")
+
+
+def _exit_entry_flow_module():
+    return _require_loaded_module(_load_exit_entry_flow(), "exit_entry_flow.py")
 
 _QUEUE_PATH = TW_DATA_DIR / ".nautical_spawn_queue.jsonl"
 _QUEUE_PROCESSING_PATH = TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"
@@ -1932,19 +1947,17 @@ def _precheck_parent_link_state(
     child_short: str,
     expected_parent_nextlink: str,
 ) -> tuple[str, bool]:
-    if not (parent_uuid and child_short):
-        return "ok", False
-
-    link_state, link_err = _parent_nextlink_state(parent_uuid, child_short, expected_parent_nextlink)
-    if link_state == "locked":
-        return ("break", False) if _requeue_or_dead_letter_for_lock(entry, idx, state) else ("continue", False)
-    if link_state in {"conflict", "missing", "invalid"}:
-        state.dead_letter(entry, f"parent update failed: {link_err}")
-        state.reset_lock_streak()
-        return "continue", False
-    if link_state == "already":
-        return "ok", True
-    return "ok", False
+    exit_entry_flow = _exit_entry_flow_module()
+    return exit_entry_flow.precheck_parent_link_state(
+        entry,
+        idx,
+        state,
+        parent_uuid=parent_uuid,
+        child_short=child_short,
+        expected_parent_nextlink=expected_parent_nextlink,
+        parent_nextlink_state=_parent_nextlink_state,
+        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
+    )
 
 
 def _ensure_child_exists_for_entry(
@@ -1956,41 +1969,20 @@ def _ensure_child_exists_for_entry(
     child_uuid: str,
     spawn_intent_id: str,
 ) -> tuple[str, bool]:
-    export_res = _export_uuid(child_uuid)
-    imported = False
-    if not export_res.get("exists"):
-        if export_res.get("retryable"):
-            if spawn_intent_id:
-                _diag(f"task lock active; requeue (intent={spawn_intent_id})")
-            return ("break", False) if _requeue_or_dead_letter_for_lock(entry, idx, state) else ("continue", False)
-        ok, err = _import_child(child)
-        if not ok:
-            if _is_lock_error(err):
-                return ("break", False) if _requeue_or_dead_letter_for_lock(entry, idx, state) else ("continue", False)
-            # If import reported failure but the child exists, continue.
-            if not _export_uuid(child_uuid).get("exists"):
-                if spawn_intent_id:
-                    _diag(f"child import failed (intent={spawn_intent_id}): {err}")
-                else:
-                    _diag(f"child import failed: {err}")
-                state.dead_letter(entry, f"child import failed: {err}")
-                state.reset_lock_streak()
-                return "continue", False
-        imported = True
-
-    if imported:
-        # Confirm child exists before touching parent only when we just imported.
-        confirm_res = _export_uuid(child_uuid)
-        if not confirm_res.get("exists"):
-            if confirm_res.get("retryable"):
-                return ("break", False) if _requeue_or_dead_letter_for_lock(entry, idx, state) else ("continue", False)
-            if spawn_intent_id:
-                _diag(f"child missing after import (intent={spawn_intent_id})")
-            state.dead_letter(entry, "child missing after import")
-            state.reset_lock_streak()
-            return "continue", False
-
-    return "ok", imported
+    exit_entry_flow = _exit_entry_flow_module()
+    return exit_entry_flow.ensure_child_exists_for_entry(
+        entry,
+        idx,
+        state,
+        child=child,
+        child_uuid=child_uuid,
+        spawn_intent_id=spawn_intent_id,
+        export_uuid=_export_uuid,
+        import_child=_import_child,
+        is_lock_error=_is_lock_error,
+        diag=_diag,
+        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
+    )
 
 
 def _apply_parent_update_for_entry(
@@ -2006,24 +1998,24 @@ def _apply_parent_update_for_entry(
     parent_linked_already: bool,
     imported: bool,
 ) -> str:
-    if not (parent_uuid and child_short) or parent_linked_already:
-        return "ok"
-
-    ok, err = _update_parent_nextlink(parent_uuid, child_short, expected_parent_nextlink)
-    if ok:
-        return "ok"
-
-    if spawn_intent_id:
-        _diag(f"parent update failed (intent={spawn_intent_id}): {parent_uuid}")
-    else:
-        _diag(f"parent update failed: {parent_uuid}")
-    if err in {"parent export locked", "parent lock busy"} or _is_lock_error(err):
-        return "break" if _requeue_or_dead_letter_for_lock(entry, idx, state) else "continue"
-    if imported:
-        _cleanup_orphan_child(child_uuid, spawn_intent_id)
-    state.dead_letter(entry, f"parent update failed: {err}")
-    state.reset_lock_streak()
-    return "continue"
+    exit_entry_flow = _exit_entry_flow_module()
+    return exit_entry_flow.apply_parent_update_for_entry(
+        entry,
+        idx,
+        state,
+        parent_uuid=parent_uuid,
+        child_short=child_short,
+        expected_parent_nextlink=expected_parent_nextlink,
+        child_uuid=child_uuid,
+        spawn_intent_id=spawn_intent_id,
+        parent_linked_already=parent_linked_already,
+        imported=imported,
+        update_parent_nextlink=_update_parent_nextlink,
+        is_lock_error=_is_lock_error,
+        cleanup_orphan_child=_cleanup_orphan_child,
+        diag=_diag,
+        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
+    )
 
 
 def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:

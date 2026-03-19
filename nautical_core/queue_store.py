@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import random
 import sqlite3
@@ -226,3 +227,279 @@ def open_ready_queue_db(
                     pass
             return None
     return None
+
+
+def close_silent(conn: sqlite3.Connection) -> None:
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def select_queued_rows(conn: sqlite3.Connection, *, max_lines: int) -> list[sqlite3.Row]:
+    query = "SELECT id, spawn_intent_id, payload, attempts FROM queue_entries WHERE state='queued' ORDER BY id"
+    params: tuple[Any, ...] = ()
+    if max_lines > 0:
+        query += " LIMIT ?"
+        params = (int(max_lines),)
+    return list(conn.execute(query, params))
+
+
+def row_ids(rows: list[sqlite3.Row]) -> list[int]:
+    ids: list[int] = []
+    for row in rows:
+        try:
+            rid = int(row["id"])
+        except Exception:
+            continue
+        if rid > 0:
+            ids.append(rid)
+    return ids
+
+
+def claim_rows_sqlite(
+    conn: sqlite3.Connection,
+    *,
+    token: str,
+    now: float,
+    processing_stale_after: float,
+    max_lines: int,
+    diag: Callable[[str], None] | None = None,
+    on_lock_busy: Callable[[], None] | None = None,
+) -> list[sqlite3.Row]:
+    rows: list[sqlite3.Row] = []
+    try:
+        if processing_stale_after > 0:
+            cutoff = now - processing_stale_after
+            conn.execute(
+                "UPDATE queue_entries SET state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
+                "WHERE state='processing' AND claimed_at IS NOT NULL AND claimed_at < ?",
+                (now, cutoff),
+            )
+            conn.commit()
+
+        conn.execute("BEGIN IMMEDIATE")
+        rows = select_queued_rows(conn, max_lines=max_lines)
+        ids = row_ids(rows)
+        if ids:
+            conn.executemany(
+                "UPDATE queue_entries SET state='processing', claim_token=?, claimed_at=?, updated_at=? "
+                "WHERE id=?",
+                [(token, now, now, rid) for rid in ids],
+            )
+        conn.commit()
+        return rows
+    except sqlite3.OperationalError as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        msg = str(exc).lower()
+        if "locked" in msg or "busy" in msg:
+            if callable(on_lock_busy):
+                on_lock_busy()
+        elif callable(diag):
+            diag(f"queue db claim failed: {exc}")
+        return []
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if callable(diag):
+            diag(f"queue db claim failed: {exc}")
+        return []
+
+
+def rows_to_entries(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        rid = int(row["id"])
+        spawn_intent_id = str(row["spawn_intent_id"] or "").strip()
+        payload = (row["payload"] or "").strip()
+        attempts_db = int(row["attempts"] or 0)
+        try:
+            obj = json.loads(payload) if payload else {}
+        except Exception:
+            obj = {"raw": payload}
+        if not isinstance(obj, dict):
+            obj = {"raw": payload}
+        if spawn_intent_id and not str(obj.get("spawn_intent_id") or "").strip():
+            obj["spawn_intent_id"] = spawn_intent_id
+        if "attempts" not in obj:
+            obj["attempts"] = attempts_db
+        obj["__queue_backend"] = "sqlite"
+        obj["__queue_id"] = rid
+        entries.append(obj)
+    return entries
+
+
+def ack_entry_ids_sqlite(
+    conn: sqlite3.Connection,
+    entry_ids: Sequence[Any],
+    *,
+    diag: Callable[[str], None] | None = None,
+    on_lock_busy: Callable[[], None] | None = None,
+) -> bool:
+    ids: list[int] = []
+    for raw in entry_ids or ():
+        try:
+            rid = int(raw)
+        except Exception:
+            continue
+        if rid > 0:
+            ids.append(rid)
+    if not ids:
+        return True
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.executemany("DELETE FROM queue_entries WHERE id=?", [(rid,) for rid in ids])
+        conn.commit()
+        return True
+    except sqlite3.OperationalError as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        msg = str(exc).lower()
+        if "locked" in msg or "busy" in msg:
+            if callable(on_lock_busy):
+                on_lock_busy()
+        elif callable(diag):
+            diag(f"queue db ack failed: {exc}")
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if callable(diag):
+            diag(f"queue db ack failed: {exc}")
+    return False
+
+
+def requeue_entries_sqlite(
+    conn: sqlite3.Connection,
+    entries: Sequence[dict[str, Any]],
+    *,
+    now: float,
+    diag: Callable[[str], None] | None = None,
+    on_lock_busy: Callable[[], None] | None = None,
+) -> bool:
+    items = [
+        entry
+        for entry in (entries or [])
+        if isinstance(entry, dict) and entry.get("__queue_backend") == "sqlite" and entry.get("__queue_id")
+    ]
+    if not items:
+        return True
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for entry in items:
+            rid = int(entry.get("__queue_id") or 0)
+            if rid <= 0:
+                continue
+            out = dict(entry)
+            out.pop("__queue_backend", None)
+            out.pop("__queue_id", None)
+            try:
+                attempts = int(out.get("attempts") or 0)
+            except Exception:
+                attempts = 0
+            payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+            conn.execute(
+                "UPDATE queue_entries SET state='queued', claim_token=NULL, claimed_at=NULL, attempts=?, payload=?, updated_at=? "
+                "WHERE id=?",
+                (attempts, payload, now, rid),
+            )
+        conn.commit()
+        return True
+    except sqlite3.OperationalError as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        msg = str(exc).lower()
+        if "locked" in msg or "busy" in msg:
+            if callable(on_lock_busy):
+                on_lock_busy()
+        elif callable(diag):
+            diag(f"queue db requeue failed: {exc}")
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if callable(diag):
+            diag(f"queue db requeue failed: {exc}")
+    return False
+
+
+def enqueue_entries_sqlite(
+    conn: sqlite3.Connection,
+    entries: Sequence[dict[str, Any]],
+    *,
+    now: float,
+    diag: Callable[[str], None] | None = None,
+    on_lock_busy: Callable[[], None] | None = None,
+) -> bool:
+    items = [entry for entry in (entries or []) if isinstance(entry, dict)]
+    if not items:
+        return True
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for entry in items:
+            out = dict(entry)
+            out.pop("__queue_backend", None)
+            out.pop("__queue_id", None)
+            try:
+                attempts = int(out.get("attempts") or 0)
+            except Exception:
+                attempts = 0
+            payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+            sid = (out.get("spawn_intent_id") or "").strip()
+            if sid:
+                cur = conn.execute(
+                    "UPDATE queue_entries SET payload=?, attempts=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
+                    "WHERE spawn_intent_id=?",
+                    (payload, attempts, now, sid),
+                )
+                if int(getattr(cur, "rowcount", 0) or 0) <= 0:
+                    try:
+                        conn.execute(
+                            "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+                            "VALUES (?, ?, ?, 'queued', NULL, NULL, ?, ?)",
+                            (sid, payload, attempts, now, now),
+                        )
+                    except sqlite3.IntegrityError:
+                        conn.execute(
+                            "UPDATE queue_entries SET payload=?, attempts=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
+                            "WHERE spawn_intent_id=?",
+                            (payload, attempts, now, sid),
+                        )
+            else:
+                conn.execute(
+                    "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+                    "VALUES (NULL, ?, ?, 'queued', NULL, NULL, ?, ?)",
+                    (payload, attempts, now, now),
+                )
+        conn.commit()
+        return True
+    except sqlite3.OperationalError as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        msg = str(exc).lower()
+        if "locked" in msg or "busy" in msg:
+            if callable(on_lock_busy):
+                on_lock_busy()
+        elif callable(diag):
+            diag(f"queue db migrate enqueue failed: {exc}")
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if callable(diag):
+            diag(f"queue db migrate enqueue failed: {exc}")
+    return False

@@ -1649,60 +1649,31 @@ def _reserve_child_uuid(env: dict) -> str:
 
 
 def _stable_child_uuid(parent_task: dict | None, child_task: dict | None) -> str:
-    modify_spawn_prep = _load_modify_spawn_prep()
-    if modify_spawn_prep is not None:
-        return modify_spawn_prep.stable_child_uuid(
-            parent_task,
-            child_task,
-            task_uuid_or_empty=_task_uuid_or_empty,
-            coerce_int=core.coerce_int,
-            stable_child_uuid_namespace=_STABLE_CHILD_UUID_NAMESPACE,
-        )
-
-    if not isinstance(parent_task, dict) or not isinstance(child_task, dict):
-        return ""
-    parent_uuid = _task_uuid_or_empty(parent_task)
-    if not parent_uuid:
-        return ""
-    link_no = core.coerce_int(child_task.get("link"), None)
-    if link_no is None:
-        return ""
-    chain_id = (
-        child_task.get("chainID")
-        or child_task.get("chainid")
-        or parent_task.get("chainID")
-        or parent_task.get("chainid")
-        or ""
+    modify_spawn_prep = _require_loaded_module(
+        _load_modify_spawn_prep(),
+        "modify_spawn_prep.py",
     )
-    kind = "anchor" if (parent_task.get("anchor") or "").strip() else "cp" if (parent_task.get("cp") or "").strip() else ""
-    slot_key = json.dumps(
-        {
-            "chain_id": str(chain_id).strip().lower(),
-            "kind": kind,
-            "link": int(link_no),
-            "parent_uuid": parent_uuid.lower(),
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
+    return modify_spawn_prep.stable_child_uuid(
+        parent_task,
+        child_task,
+        task_uuid_or_empty=_task_uuid_or_empty,
+        coerce_int=core.coerce_int,
+        stable_child_uuid_namespace=_STABLE_CHILD_UUID_NAMESPACE,
     )
-    return str(uuid.uuid5(_STABLE_CHILD_UUID_NAMESPACE, slot_key))
 
 
 def _child_uuid_for_spawn(parent_task: dict | None, child_task: dict | None, env: dict) -> str:
-    modify_spawn_prep = _load_modify_spawn_prep()
-    if modify_spawn_prep is not None:
-        return modify_spawn_prep.child_uuid_for_spawn(
-            parent_task,
-            child_task,
-            env,
-            stable_child_uuid=_stable_child_uuid,
-            reserve_child_uuid=_reserve_child_uuid,
-        )
-    stable = _stable_child_uuid(parent_task, child_task)
-    if stable:
-        return stable
-    return _reserve_child_uuid(env)
+    modify_spawn_prep = _require_loaded_module(
+        _load_modify_spawn_prep(),
+        "modify_spawn_prep.py",
+    )
+    return modify_spawn_prep.child_uuid_for_spawn(
+        parent_task,
+        child_task,
+        env,
+        stable_child_uuid=_stable_child_uuid,
+        reserve_child_uuid=_reserve_child_uuid,
+    )
 
 
 def _sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
@@ -1808,28 +1779,20 @@ def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str
     Raises RuntimeError with detailed context on failure.
     """
     env = os.environ.copy()
-    modify_spawn_prep = _load_modify_spawn_prep()
-    if modify_spawn_prep is not None:
-        obj, child_uuid, _child_short = modify_spawn_prep.prepare_spawn_child_payload(
-            child_task,
-            parent_task,
-            env,
-            child_uuid_for_spawn=_child_uuid_for_spawn,
-            fmt_isoz=core.fmt_isoz,
-            now_utc=core.now_utc,
-            strip_none_and_cast=_strip_none_and_cast,
-            normalise_datetime_fields=_normalise_datetime_fields,
-        )
-    else:
-        child_uuid = _child_uuid_for_spawn(parent_task, child_task, env)
-        obj = dict(child_task)
-        obj["uuid"] = child_uuid
-        if "entry" not in obj:
-            obj["entry"] = core.fmt_isoz(core.now_utc())
-        if "modified" not in obj:
-            obj["modified"] = obj["entry"]
-        obj = _strip_none_and_cast(obj)
-        _normalise_datetime_fields(obj)
+    modify_spawn_prep = _require_loaded_module(
+        _load_modify_spawn_prep(),
+        "modify_spawn_prep.py",
+    )
+    obj, child_uuid, _child_short = modify_spawn_prep.prepare_spawn_child_payload(
+        child_task,
+        parent_task,
+        env,
+        child_uuid_for_spawn=_child_uuid_for_spawn,
+        fmt_isoz=core.fmt_isoz,
+        now_utc=core.now_utc,
+        strip_none_and_cast=_strip_none_and_cast,
+        normalise_datetime_fields=_normalise_datetime_fields,
+    )
 
     attempts = 0
     stripped_accum: set[str] = set()
@@ -1988,29 +1951,20 @@ def _spawn_child_atomic(
     """
     env = os.environ.copy()
     spawn_intent_id = f"si_{uuid.uuid4().hex[:12]}"
-    modify_spawn_prep = _load_modify_spawn_prep()
-    if modify_spawn_prep is not None:
-        child_obj, child_uuid, child_short = modify_spawn_prep.prepare_spawn_child_payload(
-            child_task,
-            parent_task_with_nextlink,
-            env,
-            child_uuid_for_spawn=_child_uuid_for_spawn,
-            fmt_isoz=core.fmt_isoz,
-            now_utc=core.now_utc,
-            strip_none_and_cast=_strip_none_and_cast,
-            normalise_datetime_fields=_normalise_datetime_fields,
-        )
-    else:
-        child_uuid = _child_uuid_for_spawn(parent_task_with_nextlink, child_task, env)
-        child_obj = dict(child_task)
-        child_obj["uuid"] = child_uuid
-        if "entry" not in child_obj:
-            child_obj["entry"] = core.fmt_isoz(core.now_utc())
-        if "modified" not in child_obj:
-            child_obj["modified"] = child_obj["entry"]
-        child_short = child_uuid[:8]
-        child_obj = _strip_none_and_cast(child_obj)
-        _normalise_datetime_fields(child_obj)
+    modify_spawn_prep = _require_loaded_module(
+        _load_modify_spawn_prep(),
+        "modify_spawn_prep.py",
+    )
+    child_obj, child_uuid, child_short = modify_spawn_prep.prepare_spawn_child_payload(
+        child_task,
+        parent_task_with_nextlink,
+        env,
+        child_uuid_for_spawn=_child_uuid_for_spawn,
+        fmt_isoz=core.fmt_isoz,
+        now_utc=core.now_utc,
+        strip_none_and_cast=_strip_none_and_cast,
+        normalise_datetime_fields=_normalise_datetime_fields,
+    )
 
     stripped_attrs: set[str] = set()
     last_stderr = ""
@@ -2059,27 +2013,19 @@ def _task(args, env=None) -> str:
     Thin wrapper around 'task' returning stdout as text.
     Always disables hooks; caller should provide rc.json.array flag when needed.
     """
-    modify_queries = _load_modify_queries()
-    if modify_queries is not None:
-        return modify_queries.task_text(
-            args,
-            run_task=_run_task,
-            task_cmd_prefix=_task_cmd_prefix(),
-            env=(env or os.environ.copy()),
-            timeout=3.0,
-            retries=2,
-            diag=_diag,
-        )
-    env = env or os.environ.copy()
-    ok, out, err = _run_task(
-        _task_cmd_prefix() + ["rc.hooks=off"] + list(args),
-        env=env,
+    modify_queries = _require_loaded_module(
+        _load_modify_queries(),
+        "modify_queries.py",
+    )
+    return modify_queries.task_text(
+        args,
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        env=(env or os.environ.copy()),
         timeout=3.0,
         retries=2,
+        diag=_diag,
     )
-    if not ok:
-        _diag(f"task {' '.join(args)} failed: {err.strip()}")
-    return out or ""
 
 def _export_uuid_full(u: str, env=None) -> dict | None:
     """Export a single task by full UUID."""
@@ -2155,62 +2101,45 @@ def _tw_get_cached(ref: str) -> str:
             if short and cache_chain_id:
                 _diag_count("unexpected_cache_misses")
                 _diag(f"cache miss: _get {ref} (chainID={cache_chain_id})")
-        modify_queries = _load_modify_queries()
-        if modify_queries is not None:
-            return modify_queries.tw_get(
-                ref,
-                task_text=lambda args: _task(args, env=None),
-            )
-        out = _task(["rc.verbose=nothing", "_get", ref], env=None)
-        return (out or "").strip()
+        modify_queries = _require_loaded_module(
+            _load_modify_queries(),
+            "modify_queries.py",
+        )
+        return modify_queries.tw_get(
+            ref,
+            task_text=lambda args: _task(args, env=None),
+        )
     except Exception:
         return ""
 
 def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]:
     """Get chain root (chainID) and age in days.
     Returns (root_short, age_days). age_days is None if unavailable."""
-    modify_queries = _load_modify_queries()
-    if modify_queries is not None:
-        return modify_queries.chain_root_and_age(
-            task,
-            now_utc,
-            root_uuid_from=_root_uuid_from,
-            tw_get_cached=_tw_get_cached,
-            dtparse=_dtparse,
-            tolocal=_tolocal,
-        )
-    try:
-        root_short = _root_uuid_from(task)
-        age_days = None
-        if root_short:
-            root_entry = _tw_get_cached(f"{root_short}.entry")
-            entry_dt = _dtparse(root_entry)
-            if entry_dt:
-                entry_local = _tolocal(entry_dt).date()
-                today_local = _tolocal(now_utc).date()
-                age_days = (today_local - entry_local).days
-                if age_days < 0:
-                    age_days = 0
-        return root_short or "—", age_days
-    except Exception:
-        return "—", None
+    modify_queries = _require_loaded_module(
+        _load_modify_queries(),
+        "modify_queries.py",
+    )
+    return modify_queries.chain_root_and_age(
+        task,
+        now_utc,
+        root_uuid_from=_root_uuid_from,
+        tw_get_cached=_tw_get_cached,
+        dtparse=_dtparse,
+        tolocal=_tolocal,
+    )
 
 def _format_root_and_age(task: dict, now_utc: datetime) -> str:
     """Format root and age as a single string.
     Returns root (age) or just root if age is 0 or unavailable."""
-    modify_queries = _load_modify_queries()
-    if modify_queries is not None:
-        return modify_queries.format_root_and_age(
-            task,
-            now_utc,
-            chain_root_and_age=_chain_root_and_age,
-        )
-    root_short, age_days = _chain_root_and_age(task, now_utc)
-    if not root_short or root_short == "—":
-        return "—"
-    if age_days is not None and age_days > 0:
-        return f"{root_short} ▻ {age_days}d"
-    return root_short
+    modify_queries = _require_loaded_module(
+        _load_modify_queries(),
+        "modify_queries.py",
+    )
+    return modify_queries.format_root_and_age(
+        task,
+        now_utc,
+        chain_root_and_age=_chain_root_and_age,
+    )
 
 # ------------------------------------------------------------------------------
 # On modify-without-completion helpers
@@ -2402,57 +2331,17 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
 
 
 def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] | None = None) -> list[dict]:
-    modify_chain_reads = _load_modify_chain_reads()
-    if modify_chain_reads is not None:
-        return modify_chain_reads.collect_prev_two(
-            current_task,
-            coerce_int=core.coerce_int,
-            get_chain_export=_get_chain_export,
-            panel_chain_by_link=_PANEL_CHAIN_BY_LINK,
-            chain_by_link=chain_by_link,
-        )
-
-    chain_id = (current_task.get("chainID") or "").strip()
-    if not chain_id:
-        return []
-
-    cur_no = core.coerce_int(current_task.get("link"), None)
-    if not cur_no or cur_no <= 1:
-        return []
-
-    def _pick_best(candidates: list[dict]) -> dict | None:
-        if not candidates:
-            return None
-        for st in ("pending", "completed", "deleted"):
-            for t in candidates:
-                if (t.get("status") or "").strip().lower() == st:
-                    return t
-        return candidates[0]
-
-    if chain_by_link is None:
-        if _PANEL_CHAIN_BY_LINK:
-            chain_by_link = _PANEL_CHAIN_BY_LINK
-        else:
-            chain_by_link = {}
-    if not chain_by_link:
-        try:
-            chain = _get_chain_export(chain_id)
-        except Exception:
-            return []
-        for t in chain:
-            ln = core.coerce_int(t.get("link"), None)
-            if ln is None:
-                continue
-            chain_by_link.setdefault(ln, []).append(t)
-
-    prevs: list[dict] = []
-    for want in (cur_no - 2, cur_no - 1):
-        if want < 1:
-            continue
-        obj = _pick_best(chain_by_link.get(want, []))
-        if obj:
-            prevs.append(obj)
-    return prevs
+    modify_chain_reads = _require_loaded_module(
+        _load_modify_chain_reads(),
+        "modify_chain_reads.py",
+    )
+    return modify_chain_reads.collect_prev_two(
+        current_task,
+        coerce_int=core.coerce_int,
+        get_chain_export=_get_chain_export,
+        panel_chain_by_link=_PANEL_CHAIN_BY_LINK,
+        chain_by_link=chain_by_link,
+    )
 
 
 @lru_cache(maxsize=32)
@@ -2486,39 +2375,16 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
 
 
 def _existing_next_task(parent_task: dict, next_no: int) -> dict | None:
-    modify_chain_reads = _load_modify_chain_reads()
-    if modify_chain_reads is not None:
-        return modify_chain_reads.existing_next_task(
-            parent_task,
-            next_no,
-            export_uuid_short_cached=_export_uuid_short_cached,
-            get_chain_export=_get_chain_export,
-        )
-
-    if not isinstance(parent_task, dict):
-        return None
-
-    next_ref = (parent_task.get("nextLink") or "").strip()
-    if next_ref:
-        obj = _export_uuid_short_cached(next_ref)
-        if isinstance(obj, dict) and (obj.get("status") or "").strip().lower() != "deleted":
-            return obj
-
-    chain_id = (parent_task.get("chainID") or parent_task.get("chainid") or "").strip()
-    if not chain_id:
-        return None
-    try:
-        rows = _get_chain_export(chain_id, extra=f"link:{int(next_no)} status.not:deleted")
-    except Exception:
-        rows = []
-    if not rows:
-        return None
-
-    for st in ("pending", "waiting", "completed"):
-        for row in rows:
-            if (row.get("status") or "").strip().lower() == st:
-                return row
-    return rows[0]
+    modify_chain_reads = _require_loaded_module(
+        _load_modify_chain_reads(),
+        "modify_chain_reads.py",
+    )
+    return modify_chain_reads.existing_next_task(
+        parent_task,
+        next_no,
+        export_uuid_short_cached=_export_uuid_short_cached,
+        get_chain_export=_get_chain_export,
+    )
 
 
 def _build_chain_indexes(chain: list[dict]) -> tuple[dict[int, list[dict]], dict[str, dict]]:
@@ -3445,70 +3311,28 @@ def _build_child_from_parent(
     cpmax: int,
     until_dt,
 ):
-    modify_spawn_prep = _load_modify_spawn_prep()
-    if modify_spawn_prep is not None:
-        return modify_spawn_prep.build_child_from_parent(
-            parent,
-            child_due_utc,
-            next_link_no,
-            parent_short,
-            kind,
-            cpmax,
-            until_dt,
-            reserved_drop=_RESERVED_DROP,
-            reserved_override=_RESERVED_OVERRIDE,
-            debug_wait_sched=_DEBUG_WAIT_SCHED,
-            clear_wait_sched_debug=_LAST_WAIT_SCHED_DEBUG.clear,
-            fmt_isoz=core.fmt_isoz,
-            now_utc=core.now_utc,
-            carry_relative_datetime=_carry_relative_datetime,
-            configured_recurrence_uda_fields=_configured_recurrence_uda_fields,
-            short_uuid=core.short_uuid,
-        )
-
-    child = {k: v for k, v in parent.items() if k not in _RESERVED_DROP}
-    if _DEBUG_WAIT_SCHED:
-        _LAST_WAIT_SCHED_DEBUG.clear()
-    for k in _RESERVED_OVERRIDE:
-        child.pop(k, None)
-    child.update(
-        {
-            "status": "pending",
-            "due": core.fmt_isoz(child_due_utc),
-            "entry": core.fmt_isoz(core.now_utc()),
-            "chain": "on",
-            "prevLink": parent_short,
-            "link": next_link_no,
-        }
+    modify_spawn_prep = _require_loaded_module(
+        _load_modify_spawn_prep(),
+        "modify_spawn_prep.py",
     )
-    if kind == "anchor":
-        child["anchor"] = parent.get("anchor")
-        child["anchor_mode"] = parent.get("anchor_mode") or "skip"
-        child.pop("cp", None)
-    else:
-        child["cp"] = parent.get("cp")
-        child.pop("anchor", None)
-        child.pop("anchor_mode", None)
-
-    _carry_relative_datetime(parent, child, child_due_utc, "wait")
-    _carry_relative_datetime(parent, child, child_due_utc, "scheduled")
-    for uda_field in _configured_recurrence_uda_fields(parent):
-        _carry_relative_datetime(parent, child, child_due_utc, uda_field)
-
-    if cpmax:
-        child["chainMax"] = int(cpmax)
-    if until_dt:
-        child["chainUntil"] = core.fmt_isoz(until_dt)
-
-    try:
-        parent_chain = (parent.get("chainID") or "").strip()
-        if not parent_chain:
-            parent_chain = core.short_uuid(parent.get("uuid"))
-        child["chainID"] = parent_chain
-    except Exception:
-        pass
-
-    return child
+    return modify_spawn_prep.build_child_from_parent(
+        parent,
+        child_due_utc,
+        next_link_no,
+        parent_short,
+        kind,
+        cpmax,
+        until_dt,
+        reserved_drop=_RESERVED_DROP,
+        reserved_override=_RESERVED_OVERRIDE,
+        debug_wait_sched=_DEBUG_WAIT_SCHED,
+        clear_wait_sched_debug=_LAST_WAIT_SCHED_DEBUG.clear,
+        fmt_isoz=core.fmt_isoz,
+        now_utc=core.now_utc,
+        carry_relative_datetime=_carry_relative_datetime,
+        configured_recurrence_uda_fields=_configured_recurrence_uda_fields,
+        short_uuid=core.short_uuid,
+    )
 
 def _carry_rel_dt_utc(parent: dict, child: dict, child_due_utc: datetime, field: str) -> None:
     """Carry a datetime field forward relative to due using a UTC timedelta.

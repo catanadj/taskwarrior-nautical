@@ -112,6 +112,8 @@ _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
 _ADD_FORMATTING = None
 _ADD_FORMATTING_LOAD_FAILED = False
+_ADD_VALIDATION = None
+_ADD_VALIDATION_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -210,6 +212,15 @@ def _load_add_formatting():
     )
 
 
+def _load_add_validation():
+    return _load_optional_sibling_module(
+        "_ADD_VALIDATION",
+        "_ADD_VALIDATION_LOAD_FAILED",
+        "add_validation.py",
+        "nautical_add_validation",
+    )
+
+
 def _task_cmd_prefix() -> list[str]:
     hook_support = _load_hook_support()
     if hook_support is not None:
@@ -231,6 +242,10 @@ def _require_loaded_module(module, rel_name: str):
 
 def _add_formatting_module():
     return _require_loaded_module(_load_add_formatting(), "add_formatting.py")
+
+
+def _add_validation_module():
+    return _require_loaded_module(_load_add_validation(), "add_validation.py")
 
 def _load_core() -> None:
     global core, _IMPORT_MS, _MAX_JSON_BYTES, _CORE_READY
@@ -881,191 +896,70 @@ def _append_wait_sched_rows(rows: list, task: dict, due_utc: datetime, auto_due:
 
 # Helper to validate chainUntil is in the future
 def _validate_until_not_past(until_dt, now_utc) -> tuple[bool, str | None]:
-    """Check if chainUntil is in the past. Returns (is_valid, error_msg)."""
-    if not until_dt:
-        return (True, None)
-
-    grace = timedelta(minutes=1)
-    if until_dt < (now_utc - grace):
-        past_by = now_utc - until_dt
-        past_s = core.humanize_delta(until_dt, now_utc, use_months_days=False)
-        return (False, f"chainUntil is in the past (was {past_s} ago)")
-
-    return (True, None)
+    add_validation = _add_validation_module()
+    return add_validation.validate_until_not_past(until_dt, now_utc, core=core)
 
 
 # Helper to check if due is in the past (warning only)
 def _check_due_in_past(due_dt, now_utc) -> tuple[bool, str | None]:
-    """
-    Check if user-provided due is in the past.
-    Returns (is_past, warning_msg).
-    This is a warning only - allows backlog tasks.
-    """
-    if not due_dt:
-        return (False, None)
-
-    grace = timedelta(minutes=1)
-    if due_dt < (now_utc - grace):
-        ago = now_utc - due_dt
-        ago_s = core.humanize_delta(due_dt, now_utc, use_months_days=False)
-        return (True, f"Due date is in the past ({ago_s} ago).")
-
-    return (False, None)
+    add_validation = _add_validation_module()
+    return add_validation.check_due_in_past(due_dt, now_utc, core=core)
 
 
 # Helper to warn if chain extends unreasonably far
 def _validate_chain_duration_reasonable(
     until_dt, now_utc, first_due, kind
 ) -> tuple[bool, str | None]:
-    """
-    Warn if chain extends too far into future.
-    Returns (is_reasonable, warning_msg).
-    """
-    if not until_dt:
-        return (True, None)
-
-    span = until_dt - now_utc
-    years = span.days / 365.25
-
-    if years > _MAX_CHAIN_DURATION_YEARS:
-        return (False, f"Chain extends {years:.1f} years into future.")
-
-    return (True, None)
+    add_validation = _add_validation_module()
+    return add_validation.validate_chain_duration_reasonable(
+        until_dt,
+        now_utc,
+        first_due,
+        kind,
+        max_chain_duration_years=_MAX_CHAIN_DURATION_YEARS,
+    )
 
 
 # Helper to validate cp/anchor not missing
 def _validate_kind_not_conflicting(cp_str, anchor_str) -> tuple[bool, str | None]:
-    """
-    Check if both cp and anchor are set (invalid).
-    Returns (is_valid, error_msg).
-    """
-    has_cp = bool((cp_str or "").strip())
-    has_anchor = bool((anchor_str or "").strip())
-
-    if has_cp and has_anchor:
-        return (False, "Cannot set both 'cp' and 'anchor'. Choose one.")
-
-    return (True, None)
+    add_validation = _add_validation_module()
+    return add_validation.validate_kind_not_conflicting(cp_str, anchor_str)
 
 
 # Helper to validate chainMax > 0
 def _validate_cpmax_positive(cpmax) -> tuple[bool, str | None]:
-    """Check if chainMax is valid (positive). Returns (is_valid, error_msg)."""
-    if cpmax <= 0:
-        return (False, "chainMax must be > 0")
-
-    return (True, None)
+    add_validation = _add_validation_module()
+    return add_validation.validate_cpmax_positive(cpmax)
 
 
 # Helper to safely parse with context
 def _safe_parse_datetime(s, field_name) -> tuple[datetime | None, str | None]:
-    """
-    Parse datetime with error context.
-    Returns (datetime, error_msg).
-    """
-    if not s:
-        return (None, None)
-
-    try:
-        dt = core.parse_dt_any(s)
-        if dt is None:
-            return (None, f"{field_name}: Unrecognized datetime format '{s}'")
-        return (dt, None)
-    except ValueError as e:
-        _diag(f"{field_name} parse value error: {e}")
-        return (None, f"{field_name}: Invalid datetime value")
-    except Exception as e:
-        _diag(f"{field_name} parse unexpected error: {e}")
-        return (None, f"{field_name}: Unexpected parsing error")
+    add_validation = _add_validation_module()
+    return add_validation.safe_parse_datetime(s, field_name, core=core, diag=_diag)
 
 
 def _validate_no_legacy_colon_ranges(expr: str) -> tuple[bool, str | None]:
-    """
-    Detect legacy weekly range syntax and reject it.
-    V2 delimiter contract requires '..' for ranges (e.g., 'w:mon..fri').
-    Returns (is_valid, error_msg).
-    """
-    if not expr:
-        return (True, None)
-    
-    expr = expr.strip()
-    
-    # Check for colon-separated day patterns (legacy format)
-    # Patterns like: mon:wed:fri, mon:wed, tue:thu
-    day_names = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
-    
-    # Split by spaces first to handle DNF terms
-    terms = expr.split()
-    for term in terms:
-        # Remove optional parentheses for DNF
-        clean_term = term.strip("()")
-        
-        # Check if this looks like a legacy range/day list
-        if ":" in clean_term or "-" in clean_term:
-            parts = re.split(r"[:\-]", clean_term)
-            # Check if all parts look like day abbreviations
-            if len(parts) >= 2 and all(p.lower() in day_names for p in parts):
-                legacy_example = clean_term
-                return (
-                    False,
-                    f"Legacy weekly range '{legacy_example}' is not supported. Use '..' (e.g., 'w:mon..fri').",
-                )
-    
-    return (True, None)
+    add_validation = _add_validation_module()
+    return add_validation.validate_no_legacy_colon_ranges(expr)
 
 def _safe_parse_duration(s, field_name) -> tuple[timedelta | None, str | None]:
-    """
-    Parse duration with error context.
-    Returns (timedelta, error_msg).
-    """
-    if not s:
-        return (None, None)
-
-    try:
-        td = core.parse_cp_duration(s)
-        if td is None:
-            return (
-                None,
-                f"{field_name}: Invalid duration format '{s}' (expected: 3d, 2w, 1h, etc.)",
-            )
-        return (td, None)
-    except ValueError as e:
-        _diag(f"{field_name} duration parse value error: {e}")
-        return (None, f"{field_name}: Invalid duration value")
-    except Exception as e:
-        _diag(f"{field_name} duration parse unexpected error: {e}")
-        return (None, f"{field_name}: Unexpected parsing error")
+    add_validation = _add_validation_module()
+    return add_validation.safe_parse_duration(s, field_name, core=core, diag=_diag)
 
 
 def _validate_anchor_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[list[dict]] | None, str | None]:
-    """
-    Strictly validate an anchor. Accepts string or DNF.
-    Returns (dnf, None) on success, (None, message) on failure.
-    """
-    try:
-        dnf = _validate_anchor_expr_cached(expr)
-        return dnf, None
-    except Exception as e:
-        parse_err_t = getattr(core, "ParseError", None)
-        if parse_err_t is not None and isinstance(e, parse_err_t):
-            return None, str(e)
-        _diag(f"anchor validation unexpected error: {e}")
-        return None, "anchor syntax error"
+    add_validation = _add_validation_module()
+    return add_validation.validate_anchor_syntax_strict(
+        expr,
+        validate_anchor_expr_cached=_validate_anchor_expr_cached,
+        core=core,
+        diag=_diag,
+    )
 
 
 def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
-    """
-    Validate and normalize anchor_mode. Returns (normalized_mode, error_msg).
-    """
-    mode = (mode_str or "skip").strip().lower()
-
-    if mode not in ("skip", "all", "flex"):
-        return (
-            "skip",
-            f"anchor_mode must be 'skip', 'all', or 'flex' (got '{mode}'). Defaulting to 'skip'.",
-        )
-
-    return (mode, None)
+    add_validation = _add_validation_module()
+    return add_validation.validate_anchor_mode(mode_str)
 
 
 def _parse_extra_tokens(extra: str | None) -> list[str] | None:

@@ -465,6 +465,12 @@ def _load_modify_completion_spawn():
     )
 
 
+def _require_loaded_module(module, rel_name: str):
+    if module is None:
+        raise RuntimeError(f"nautical_core/{rel_name} is required")
+    return module
+
+
 def _task_cmd_prefix() -> list[str]:
     hook_support = _load_hook_support()
     if hook_support is not None:
@@ -5210,422 +5216,202 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
 
 
 def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:
-    modify_completion_preflight = _load_modify_completion_preflight()
-    if modify_completion_preflight is not None:
-        return modify_completion_preflight.completion_link_numbers_or_fail(
-            new,
-            coerce_int=core.coerce_int,
-            max_link_number=core.MAX_LINK_NUMBER,
-            panel=_panel,
-            print_task=_print_task,
-        )
-
-    base_no = core.coerce_int(new.get("link"), 1)
-    if base_no < 1 or base_no > core.MAX_LINK_NUMBER:
-        _panel(
-            "⛔ Link number invalid",
-            [
-                ("Reason", f"Link number {base_no} is outside 1..{core.MAX_LINK_NUMBER}."),
-            ],
-            kind="error",
-        )
-        _print_task(new)
-        return None
-    next_no = base_no + 1
-    if next_no > core.MAX_LINK_NUMBER:
-        _panel(
-            "⛔ Link limit exceeded",
-            [
-                ("Reason", f"Link number {next_no} exceeds max_link_number={core.MAX_LINK_NUMBER}."),
-            ],
-            kind="error",
-        )
-        _print_task(new)
-        return None
-    return base_no, next_no
+    modify_completion_preflight = _require_loaded_module(
+        _load_modify_completion_preflight(),
+        "modify_completion_preflight.py",
+    )
+    return modify_completion_preflight.completion_link_numbers_or_fail(
+        new,
+        coerce_int=core.coerce_int,
+        max_link_number=core.MAX_LINK_NUMBER,
+        panel=_panel,
+        print_task=_print_task,
+    )
 
 
 def _completion_kind_or_stop(new: dict, now_utc: datetime) -> str | None:
-    modify_completion_preflight = _load_modify_completion_preflight()
-    if modify_completion_preflight is not None:
-        return modify_completion_preflight.completion_kind_or_stop(
-            new,
-            now_utc,
-            panel=_panel,
-            print_task=_print_task,
-            end_chain_summary=_end_chain_summary,
-        )
-
-    raw_ch = (new.get("chain") or "").strip().lower()
-    has_anchor = bool((new.get("anchor") or "").strip())
-    has_cp = bool((new.get("cp") or "").strip())
-    effective_on = (raw_ch == "on") or (raw_ch == "" and (has_anchor or has_cp))
-    if not effective_on:
-        if has_anchor or has_cp:
-            _panel(
-                "Chain disabled (chain:off) — no next link will be spawned.",
-                [],
-                kind="disabled",
-            )
-            _print_task(new)
-            _end_chain_summary(new, "Manual stop.", now_utc)
-        else:
-            _print_task(new)
-        return None
-
-    kind = "anchor" if has_anchor else ("cp" if has_cp else None)
-    if not kind:
-        _print_task(new)
-        return None
-    return kind
+    modify_completion_preflight = _require_loaded_module(
+        _load_modify_completion_preflight(),
+        "modify_completion_preflight.py",
+    )
+    return modify_completion_preflight.completion_kind_or_stop(
+        new,
+        now_utc,
+        panel=_panel,
+        print_task=_print_task,
+        end_chain_summary=_end_chain_summary,
+    )
 
 
 def _completion_chain_id_or_fail(new: dict) -> str | None:
-    modify_completion_preflight = _load_modify_completion_preflight()
-    if modify_completion_preflight is not None:
-        return modify_completion_preflight.completion_chain_id_or_fail(
-            new,
-            panel=_panel,
-            print_task=_print_task,
-        )
-
-    chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
-    if chain_id:
-        return chain_id
-    _panel(
-        "⛔ ChainID missing",
-        [
-            ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
-            ("Fix", "Run tools/nautical_backfill_chainid.py, then retry."),
-        ],
-        kind="error",
+    modify_completion_preflight = _require_loaded_module(
+        _load_modify_completion_preflight(),
+        "modify_completion_preflight.py",
     )
-    _print_task(new)
-    return None
+    return modify_completion_preflight.completion_chain_id_or_fail(
+        new,
+        panel=_panel,
+        print_task=_print_task,
+    )
 
 
 def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
-    modify_completion_preflight = _load_modify_completion_preflight()
-    if modify_completion_preflight is not None:
-        return modify_completion_preflight.completion_existing_next_or_fail(
-            new,
-            next_no,
-            existing_next_task=_existing_next_task,
-            short=_short,
-            panel=_panel,
-            print_task=_print_task,
-        )
-
-    existing_next = _existing_next_task(new, next_no)
-    if not existing_next:
-        return True
-    ex_uuid = (existing_next.get("uuid") or "").strip()
-    ex_short = _short(ex_uuid)
-    ex_status = ((existing_next.get("status") or "").strip() or "unknown").lower()
-    _panel(
-        "ℹ Spawn skipped",
-        [
-            ("Reason", "Next link already exists for this completed task."),
-            ("Existing", f"#{next_no} {ex_short} ({ex_status})"),
-        ],
-        kind="note",
+    modify_completion_preflight = _require_loaded_module(
+        _load_modify_completion_preflight(),
+        "modify_completion_preflight.py",
     )
-    _print_task(new)
-    return False
+    return modify_completion_preflight.completion_existing_next_or_fail(
+        new,
+        next_no,
+        existing_next_task=_existing_next_task,
+        short=_short,
+        panel=_panel,
+        print_task=_print_task,
+    )
 
 
 def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
-    modify_completion_preflight = _load_modify_completion_preflight()
-    if modify_completion_preflight is not None:
-        return modify_completion_preflight.completion_preflight_context(
-            new,
-            now_utc,
-            short=_short,
-            completion_link_numbers_or_fail=_completion_link_numbers_or_fail,
-            completion_kind_or_stop=_completion_kind_or_stop,
-            completion_chain_id_or_fail=_completion_chain_id_or_fail,
-            completion_existing_next_or_fail=_completion_existing_next_or_fail,
-        )
-
-    parent_short = _short(new.get("uuid"))
-    nums = _completion_link_numbers_or_fail(new)
-    if nums is None:
-        return None
-    base_no, next_no = nums
-
-    kind = _completion_kind_or_stop(new, now_utc)
-    if not kind:
-        return None
-
-    chain_id = _completion_chain_id_or_fail(new)
-    if not chain_id:
-        return None
-
-    if not _completion_existing_next_or_fail(new, next_no):
-        return None
-
-    return {
-        "parent_short": parent_short,
-        "base_no": base_no,
-        "next_no": next_no,
-        "kind": kind,
-        "chain_id": chain_id,
-    }
+    modify_completion_preflight = _require_loaded_module(
+        _load_modify_completion_preflight(),
+        "modify_completion_preflight.py",
+    )
+    return modify_completion_preflight.completion_preflight_context(
+        new,
+        now_utc,
+        short=_short,
+        completion_link_numbers_or_fail=_completion_link_numbers_or_fail,
+        completion_kind_or_stop=_completion_kind_or_stop,
+        completion_chain_id_or_fail=_completion_chain_id_or_fail,
+        completion_existing_next_or_fail=_completion_existing_next_or_fail,
+    )
 
 
 def _completion_compute_child_due(new: dict, kind: str):
-    modify_completion_compute = _load_modify_completion_compute()
-    if modify_completion_compute is not None:
-        return modify_completion_compute.completion_compute_child_due(
-            new,
-            kind,
-            compute_anchor_child_due=_compute_anchor_child_due,
-            compute_cp_child_due=_compute_cp_child_due,
-            panel=_panel,
-            print_task=_print_task,
-            diag=_diag,
-        )
-
-    try:
-        if kind == "anchor":
-            child_due, meta, dnf = _compute_anchor_child_due(new)
-        else:
-            child_due, meta = _compute_cp_child_due(new)
-            dnf = None
-        return child_due, meta, dnf
-    except ValueError as e:
-        _panel(
-            "⛔ Chain error",
-            [("Reason", f"Invalid task field: {str(e)}")],
-            kind="error",
-        )
-        _print_task(new)
-        return None
-    except Exception as e:
-        _diag(f"compute next due failed: {e}")
-        _panel(
-            "⛔ Chain error",
-            [("Reason", "Could not compute next due")],
-            kind="error",
-        )
-        _print_task(new)
-        return None
+    modify_completion_compute = _require_loaded_module(
+        _load_modify_completion_compute(),
+        "modify_completion_compute.py",
+    )
+    return modify_completion_compute.completion_compute_child_due(
+        new,
+        kind,
+        compute_anchor_child_due=_compute_anchor_child_due,
+        compute_cp_child_due=_compute_cp_child_due,
+        panel=_panel,
+        print_task=_print_task,
+        diag=_diag,
+    )
 
 
 def _completion_until_or_fail(new: dict, now_utc: datetime) -> datetime | None | object:
-    modify_completion_compute = _load_modify_completion_compute()
-    if modify_completion_compute is not None:
-        return modify_completion_compute.completion_until_or_fail(
-            new,
-            now_utc,
-            safe_parse_datetime=_safe_parse_datetime,
-            validate_until_not_past=_validate_until_not_past,
-            panel=_panel,
-            print_task=_print_task,
-        )
-
-    until_dt, err = _safe_parse_datetime(new.get("chainUntil"))
-    if err:
-        _panel(
-            "⛔ Chain error", [("Reason", f"Invalid chainUntil: {err}")], kind="error"
-        )
-        _print_task(new)
-        return False
-
-    if until_dt:
-        is_valid, err_msg = _validate_until_not_past(until_dt, now_utc)
-        if not is_valid:
-            _panel(
-                "⛔ Chain error",
-                [("Reason", f"Invalid chainUntil: {err_msg}")],
-                kind="error",
-            )
-            _print_task(new)
-            return False
-    return until_dt
+    modify_completion_compute = _require_loaded_module(
+        _load_modify_completion_compute(),
+        "modify_completion_compute.py",
+    )
+    return modify_completion_compute.completion_until_or_fail(
+        new,
+        now_utc,
+        safe_parse_datetime=_safe_parse_datetime,
+        validate_until_not_past=_validate_until_not_past,
+        panel=_panel,
+        print_task=_print_task,
+    )
 
 
 def _completion_until_guard_or_stop(new: dict, child_due, until_dt, now_utc: datetime) -> bool:
-    modify_completion_compute = _load_modify_completion_compute()
-    if modify_completion_compute is not None:
-        return modify_completion_compute.completion_until_guard_or_stop(
-            new,
-            child_due,
-            until_dt,
-            now_utc,
-            end_chain_summary=_end_chain_summary,
-            print_task=_print_task,
-        )
-
-    if until_dt and child_due > until_dt:
-        _end_chain_summary(new, "Reached 'until' limit", now_utc)
-        new["chain"] = "off"
-        _print_task(new)
-        return False
-    return True
+    modify_completion_compute = _require_loaded_module(
+        _load_modify_completion_compute(),
+        "modify_completion_compute.py",
+    )
+    return modify_completion_compute.completion_until_guard_or_stop(
+        new,
+        child_due,
+        until_dt,
+        now_utc,
+        end_chain_summary=_end_chain_summary,
+        print_task=_print_task,
+    )
 
 
 def _completion_require_child_due_or_fail(new: dict, child_due) -> bool:
-    modify_completion_compute = _load_modify_completion_compute()
-    if modify_completion_compute is not None:
-        return modify_completion_compute.completion_require_child_due_or_fail(
-            new,
-            child_due,
-            panel=_panel,
-            print_task=_print_task,
-        )
-
-    if child_due:
-        return True
-    _panel(
-        "⛔ Chain error",
-        [("Reason", "Could not compute next due (no end date on parent)")],
-        kind="error",
+    modify_completion_compute = _require_loaded_module(
+        _load_modify_completion_compute(),
+        "modify_completion_compute.py",
     )
-    _print_task(new)
-    return False
+    return modify_completion_compute.completion_require_child_due_or_fail(
+        new,
+        child_due,
+        panel=_panel,
+        print_task=_print_task,
+    )
 
 
 def _completion_warn_unreasonable_duration(new: dict, child_due, until_dt, now_utc: datetime) -> None:
-    modify_completion_compute = _load_modify_completion_compute()
-    if modify_completion_compute is not None:
-        modify_completion_compute.completion_warn_unreasonable_duration(
-            new,
-            child_due,
-            until_dt,
-            now_utc,
-            validate_chain_duration_reasonable=_validate_chain_duration_reasonable,
-            panel=_panel,
-        )
-        return
-
-    if not until_dt:
-        return
-    is_reasonable, warn_msg = _validate_chain_duration_reasonable(
-        child_due, until_dt, now_utc
+    modify_completion_compute = _require_loaded_module(
+        _load_modify_completion_compute(),
+        "modify_completion_compute.py",
     )
-    if warn_msg and not is_reasonable:
-        _panel("⚠ Chain duration warning", [("Warning", warn_msg)], kind="warning")
+    modify_completion_compute.completion_warn_unreasonable_duration(
+        new,
+        child_due,
+        until_dt,
+        now_utc,
+        validate_chain_duration_reasonable=_validate_chain_duration_reasonable,
+        panel=_panel,
+    )
 
 
 def _completion_caps(kind: str, new: dict, child_due, dnf):
-    modify_completion_compute = _load_modify_completion_compute()
-    if modify_completion_compute is not None:
-        return modify_completion_compute.completion_caps(
-            kind,
-            new,
-            child_due,
-            dnf,
-            coerce_int=core.coerce_int,
-            dtparse=_dtparse,
-            estimate_cp_final_by_max=_estimate_cp_final_by_max,
-            estimate_anchor_final_by_max=_estimate_anchor_final_by_max,
-            cap_from_until_cp=_cap_from_until_cp,
-            cap_from_until_anchor=_cap_from_until_anchor,
-        )
-
-    cpmax = core.coerce_int(new.get("chainMax"), 0)
-    until_dt = _dtparse(new.get("chainUntil"))
-    cap_no = cpmax if cpmax else None
-    finals = []
-
-    if kind == "cp" and cpmax:
-        try:
-            fmax = _estimate_cp_final_by_max(new, child_due)
-            if fmax:
-                finals.append(("max", fmax))
-        except Exception:
-            pass
-    if kind == "anchor" and cpmax:
-        try:
-            fmax = _estimate_anchor_final_by_max(new, child_due, dnf)
-            if fmax:
-                finals.append(("max", fmax))
-        except Exception:
-            pass
-
-    until_cap_no = None
-    if until_dt:
-        if kind == "cp":
-            u_no, u_dt = _cap_from_until_cp(new, child_due)
-        else:
-            u_no, u_dt = _cap_from_until_anchor(new, child_due, dnf)
-        if u_no:
-            until_cap_no = u_no
-            cap_no = min(cap_no, u_no) if cap_no else u_no
-        if u_dt:
-            finals.append(("until", u_dt))
-    return cpmax, until_dt, cap_no, finals, until_cap_no
+    modify_completion_compute = _require_loaded_module(
+        _load_modify_completion_compute(),
+        "modify_completion_compute.py",
+    )
+    return modify_completion_compute.completion_caps(
+        kind,
+        new,
+        child_due,
+        dnf,
+        coerce_int=core.coerce_int,
+        dtparse=_dtparse,
+        estimate_cp_final_by_max=_estimate_cp_final_by_max,
+        estimate_anchor_final_by_max=_estimate_anchor_final_by_max,
+        cap_from_until_cp=_cap_from_until_cp,
+        cap_from_until_anchor=_cap_from_until_anchor,
+    )
 
 
 def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, now_utc: datetime) -> bool:
-    modify_completion_compute = _load_modify_completion_compute()
-    if modify_completion_compute is not None:
-        return modify_completion_compute.completion_cap_guard_or_stop(
-            new,
-            next_no,
-            cap_no,
-            now_utc,
-            end_chain_summary=_end_chain_summary,
-            print_task=_print_task,
-        )
-
-    if cap_no and next_no > cap_no:
-        _end_chain_summary(new, f"Reached cap #{cap_no}", now_utc, current_task=new)
-        new["chain"] = "off"
-        _print_task(new)
-        return False
-    return True
+    modify_completion_compute = _require_loaded_module(
+        _load_modify_completion_compute(),
+        "modify_completion_compute.py",
+    )
+    return modify_completion_compute.completion_cap_guard_or_stop(
+        new,
+        next_no,
+        cap_no,
+        now_utc,
+        end_chain_summary=_end_chain_summary,
+        print_task=_print_task,
+    )
 
 
 def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime) -> dict | None:
-    modify_completion_compute = _load_modify_completion_compute()
-    if modify_completion_compute is not None:
-        return modify_completion_compute.completion_compute_next_and_limits(
-            new,
-            kind,
-            next_no,
-            now_utc,
-            completion_compute_child_due=_completion_compute_child_due,
-            completion_until_or_fail=_completion_until_or_fail,
-            completion_until_guard_or_stop=_completion_until_guard_or_stop,
-            completion_require_child_due_or_fail=_completion_require_child_due_or_fail,
-            completion_warn_unreasonable_duration=_completion_warn_unreasonable_duration,
-            completion_caps=_completion_caps,
-            completion_cap_guard_or_stop=_completion_cap_guard_or_stop,
-        )
-
-    computed = _completion_compute_child_due(new, kind)
-    if computed is None:
-        return None
-    child_due, meta, dnf = computed
-
-    until_dt = _completion_until_or_fail(new, now_utc)
-    if until_dt is False:
-        return None
-
-    if not _completion_until_guard_or_stop(new, child_due, until_dt, now_utc):
-        return None
-
-    if not _completion_require_child_due_or_fail(new, child_due):
-        return None
-
-    _completion_warn_unreasonable_duration(new, child_due, until_dt, now_utc)
-    cpmax, until_dt, cap_no, finals, until_cap_no = _completion_caps(kind, new, child_due, dnf)
-
-    if not _completion_cap_guard_or_stop(new, next_no, cap_no, now_utc):
-        return None
-
-    return {
-        "child_due": child_due,
-        "meta": meta,
-        "dnf": dnf,
-        "until_dt": until_dt,
-        "cpmax": cpmax,
-        "cap_no": cap_no,
-        "finals": finals,
-        "until_cap_no": until_cap_no,
-    }
+    modify_completion_compute = _require_loaded_module(
+        _load_modify_completion_compute(),
+        "modify_completion_compute.py",
+    )
+    return modify_completion_compute.completion_compute_next_and_limits(
+        new,
+        kind,
+        next_no,
+        now_utc,
+        completion_compute_child_due=_completion_compute_child_due,
+        completion_until_or_fail=_completion_until_or_fail,
+        completion_until_guard_or_stop=_completion_until_guard_or_stop,
+        completion_require_child_due_or_fail=_completion_require_child_due_or_fail,
+        completion_warn_unreasonable_duration=_completion_warn_unreasonable_duration,
+        completion_caps=_completion_caps,
+        completion_cap_guard_or_stop=_completion_cap_guard_or_stop,
+    )
 
 
 def _completion_build_and_spawn_child(
@@ -5638,77 +5424,24 @@ def _completion_build_and_spawn_child(
     cpmax: int,
     until_dt,
 ) -> dict | None:
-    modify_completion_spawn = _load_modify_completion_spawn()
-    if modify_completion_spawn is not None:
-        return modify_completion_spawn.completion_build_and_spawn_child(
-            new,
-            child_due=child_due,
-            next_no=next_no,
-            parent_short=parent_short,
-            kind=kind,
-            cpmax=cpmax,
-            until_dt=until_dt,
-            build_child_from_parent=_build_child_from_parent,
-            spawn_child_atomic=_spawn_child_atomic,
-            panel=_panel,
-            print_task=_print_task,
-            diag=_diag,
-        )
-
-    try:
-        child = _build_child_from_parent(
-            new, child_due, next_no, parent_short, kind, cpmax, until_dt
-        )
-    except Exception as e:
-        _diag(f"build child failed: {e}")
-        _panel(
-            "⛓ Chain error",
-            [("Reason", "Failed to build next link")],
-            kind="error",
-        )
-        _print_task(new)
-        return None
-
-    deferred_spawn = False
-    spawn_intent_id = None
-    try:
-        (
-            child_short,
-            stripped_attrs,
-            verified,
-            deferred_spawn,
-            defer_reason,
-            spawn_intent_id,
-        ) = _spawn_child_atomic(child, new)
-        if not verified and not deferred_spawn:
-            _panel(
-                "⛓ Chain warning",
-                [("Reason", defer_reason or "Child spawn could not be verified; parent not updated")],
-                kind="warning",
-            )
-            _print_task(new)
-            return None
-    except Exception as e:
-        _diag(f"spawn child failed: {e}")
-        _panel(
-            "⛓ Chain error",
-            [("Reason", "Failed to spawn next link")],
-            kind="error",
-        )
-        _print_task(new)
-        return None
-
-    if verified:
-        new["nextLink"] = child_short
-
-    return {
-        "child": child,
-        "child_short": child_short,
-        "stripped_attrs": stripped_attrs,
-        "verified": verified,
-        "deferred_spawn": deferred_spawn,
-        "spawn_intent_id": spawn_intent_id,
-    }
+    modify_completion_spawn = _require_loaded_module(
+        _load_modify_completion_spawn(),
+        "modify_completion_spawn.py",
+    )
+    return modify_completion_spawn.completion_build_and_spawn_child(
+        new,
+        child_due=child_due,
+        next_no=next_no,
+        parent_short=parent_short,
+        kind=kind,
+        cpmax=cpmax,
+        until_dt=until_dt,
+        build_child_from_parent=_build_child_from_parent,
+        spawn_child_atomic=_spawn_child_atomic,
+        panel=_panel,
+        print_task=_print_task,
+        diag=_diag,
+    )
 
 
 def _handle_completion_modify(old: dict, new: dict) -> None:

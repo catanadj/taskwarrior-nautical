@@ -325,6 +325,8 @@ _MODIFY_COMPLETION_SPAWN = None
 _MODIFY_COMPLETION_SPAWN_LOAD_FAILED = False
 _MODIFY_FEEDBACK = None
 _MODIFY_FEEDBACK_LOAD_FAILED = False
+_MODIFY_TIMELINE = None
+_MODIFY_TIMELINE_LOAD_FAILED = False
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -476,6 +478,15 @@ def _load_modify_feedback():
     )
 
 
+def _load_modify_timeline():
+    return _load_optional_sibling_module(
+        "_MODIFY_TIMELINE",
+        "_MODIFY_TIMELINE_LOAD_FAILED",
+        "modify_timeline.py",
+        "nautical_modify_timeline",
+    )
+
+
 def _require_loaded_module(module, rel_name: str):
     if module is None:
         raise RuntimeError(f"nautical_core/{rel_name} is required")
@@ -523,6 +534,13 @@ def _modify_feedback_module():
     return _require_loaded_module(
         _load_modify_feedback(),
         "modify_feedback.py",
+    )
+
+
+def _modify_timeline_module():
+    return _require_loaded_module(
+        _load_modify_timeline(),
+        "modify_timeline.py",
     )
 
 
@@ -4009,167 +4027,6 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
 # Timeline (capped) — no dependency on core.next_anchor_after
 # ------------------------------------------------------------------------------
 
-def _timeline_styles(task: dict, kind: str) -> tuple[str, str, str, str]:
-    if kind == "cp":
-        prev_style = "dim green"
-        cur_style = "spring_green1"
-        next_style = "bold yellow"
-    else:
-        prev_style = "sky_blue3"
-        cur_style = "spring_green1"
-        next_style = "bold yellow"
-    future_style = _future_style_for_chain(task, kind)
-    return prev_style, cur_style, next_style, future_style
-
-
-def _timeline_initial_items(task: dict, cur_no: int, nxt_no: int, child_due_utc, child_short: str):
-    items = []
-    prevs = _collect_prev_two(task)
-    prev_count = len(prevs)
-    for idx, obj in enumerate(prevs):
-        no = core.coerce_int(obj.get("link"), None) or (cur_no - (prev_count - idx))
-        end_dt = _dtparse(obj.get("end"))
-        items.append((no, end_dt, obj, "prev"))
-    cur_end = _dtparse(task.get("end"))
-    items.append((cur_no, cur_end, task, "current"))
-    items.append((nxt_no, child_due_utc, {"uuid": child_short}, "next"))
-    return items
-
-
-def _timeline_future_cp_items(task: dict, child_due_utc, *, start_no: int, allowed_future: int, cap_no: int | None):
-    td = core.parse_cp_duration(task.get("cp") or "")
-    if not td:
-        return []
-    items = []
-    fut_dt = child_due_utc
-    fut_no = start_no
-    secs = int(td.total_seconds())
-    iterations = 0
-    for _ in range(allowed_future):
-        if iterations >= _MAX_ITERATIONS:
-            break
-        iterations += 1
-        fut_no += 1
-        if secs % 86400 == 0:
-            dl = _tolocal(fut_dt)
-            fut_dt = core.build_local_datetime(
-                (dl + timedelta(days=int(secs // 86400))).date(),
-                (dl.hour, dl.minute),
-            ).astimezone(timezone.utc)
-        else:
-            fut_dt = fut_dt + td
-        if cap_no is not None and fut_no > cap_no:
-            break
-        items.append((fut_no, fut_dt, {"is_future": True}, "future"))
-    return items
-
-
-def _timeline_future_anchor_items(
-    task: dict,
-    dnf,
-    child_due_utc,
-    *,
-    start_no: int,
-    allowed_future: int,
-    cap_no: int | None,
-):
-    items = []
-    fut_no = start_no
-    seed_base = (task.get("chainID") or "").strip() or "preview"
-    nxt_local = _to_local_cached(child_due_utc)
-    fallback_hhmm = (nxt_local.hour, nxt_local.minute)
-    due0, _ = _safe_parse_datetime(task.get("due"))
-    default_seed = _to_local_cached(due0 or child_due_utc).date()
-    after_local = nxt_local
-    iterations = 0
-    for _ in range(allowed_future):
-        if iterations >= _MAX_ITERATIONS:
-            break
-        iterations += 1
-        fut_no += 1
-        try:
-            next_local = _next_occurrence_after_local_dt(
-                dnf,
-                after_local,
-                default_seed_date=default_seed,
-                seed_base=seed_base,
-                fallback_hhmm=fallback_hhmm,
-            )
-        except Exception:
-            break
-        if not next_local:
-            break
-        fut_dt = next_local.astimezone(timezone.utc)
-        after_local = next_local
-        if cap_no is not None and fut_no > cap_no:
-            break
-        items.append((fut_no, fut_dt, {"is_future": True}, "future"))
-    return items
-
-
-def _timeline_base_line(
-    no: int,
-    dt,
-    obj: dict,
-    item_type: str,
-    *,
-    task: dict,
-    cap_no: int | None,
-    prev_style: str,
-    cur_style: str,
-    next_style: str,
-    future_style: str,
-) -> str:
-    if item_type == "prev":
-        end_dt = _dtparse(obj.get("end"))
-        due_dt = _dtparse(obj.get("due"))
-        delta = _fmt_on_time_delta(due_dt, end_dt)
-        end_s = _fmtlocal(end_dt) if end_dt else "(no end)"
-        short = _short(obj.get("uuid"))
-        return f"[{prev_style}]{no:>2} {'✓':<2}{end_s} {delta} {short}[/]"
-
-    if item_type == "current":
-        cur_end = _dtparse(task.get("end"))
-        cur_due = _dtparse(task.get("due"))
-        cur_delta = _fmt_on_time_delta(cur_due, cur_end)
-        cur_end_s = _fmtlocal(cur_end) if cur_end else "(no end)"
-        return f"[{cur_style}]{no:>2} {'✓':<2}{cur_end_s} {cur_delta} {_short(task.get('uuid'))}[/]"
-
-    if item_type == "next":
-        is_last = cap_no is not None and no == cap_no
-        next_text = f"{no:>2} {'►':<2}{core.fmt_dt_local(dt)} {_short(obj.get('uuid'))}"
-        if is_last:
-            return f"[{next_style}]{next_text} [bold red](last link)[/][/]"
-        return f"[{next_style}]{next_text}[/]"
-
-    is_last = cap_no is not None and no == cap_no
-    future_text = f"{no:>2} {'»':<2}{core.fmt_dt_local(dt)}"
-    if is_last:
-        return f"[{future_style}]{future_text} [bold red](last link)[/][/]"
-    return f"[{future_style}]{future_text}[/]"
-
-
-def _timeline_with_gap(
-    base_line: str,
-    *,
-    idx: int,
-    items: list[tuple[int, object, dict, str]],
-    show_gaps: bool,
-    kind: str,
-    round_anchor_gaps: bool,
-) -> str:
-    if not show_gaps or idx >= len(items) - 1:
-        return base_line
-    dt = items[idx][1]
-    next_dt = items[idx + 1][1]
-    if not (dt and next_dt):
-        return base_line
-    gap_text = _format_gap(dt, next_dt, kind, round_anchor_gaps)
-    if not gap_text:
-        return base_line
-    return f"{base_line}{gap_text}"
-
-
 def _timeline_lines(
     kind: str,
     task: dict,
@@ -4180,66 +4037,37 @@ def _timeline_lines(
     cap_no: int | None = None,
     cur_no: int | None = None,
     show_gaps: bool = True,
-    round_anchor_gaps: bool = True,  # Round anchor gaps to nearest day
+    round_anchor_gaps: bool = True,
 ) -> list[str]:
-    """
-    Compact timeline with inline gaps.
-    """
+    """Compact timeline with inline gaps."""
     if not _require_core():
         return []
-    cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
-    nxt_no = cur_no + 1
-    allowed_future = next_count if cap_no is None else max(0, min(next_count, cap_no - nxt_no))
-    prev_style, cur_style, next_style, future_style = _timeline_styles(task, kind)
-    items = _timeline_initial_items(task, cur_no, nxt_no, child_due_utc, child_short)
-    if allowed_future > 0:
-        if kind == "cp":
-            items.extend(
-                _timeline_future_cp_items(
-                    task,
-                    child_due_utc,
-                    start_no=nxt_no,
-                    allowed_future=allowed_future,
-                    cap_no=cap_no,
-                )
-            )
-        else:
-            items.extend(
-                _timeline_future_anchor_items(
-                    task,
-                    dnf,
-                    child_due_utc,
-                    start_no=nxt_no,
-                    allowed_future=allowed_future,
-                    cap_no=cap_no,
-                )
-            )
-
-    lines = []
-    for i, (no, dt, obj, item_type) in enumerate(items):
-        base_line = _timeline_base_line(
-            no,
-            dt,
-            obj,
-            item_type,
-            task=task,
-            cap_no=cap_no,
-            prev_style=prev_style,
-            cur_style=cur_style,
-            next_style=next_style,
-            future_style=future_style,
-        )
-        lines.append(
-            _timeline_with_gap(
-                base_line,
-                idx=i,
-                items=items,
-                show_gaps=show_gaps,
-                kind=kind,
-                round_anchor_gaps=round_anchor_gaps,
-            )
-        )
-    return lines
+    modify_timeline = _modify_timeline_module()
+    return modify_timeline.timeline_lines(
+        kind,
+        task,
+        child_due_utc,
+        child_short,
+        dnf,
+        next_count=next_count,
+        cap_no=cap_no,
+        cur_no=cur_no,
+        show_gaps=show_gaps,
+        round_anchor_gaps=round_anchor_gaps,
+        core=core,
+        max_iterations=_MAX_ITERATIONS,
+        future_style_for_chain=_future_style_for_chain,
+        collect_prev_two=_collect_prev_two,
+        dtparse=_dtparse,
+        fmt_on_time_delta=_fmt_on_time_delta,
+        fmtlocal=_fmtlocal,
+        short=_short,
+        tolocal=_tolocal,
+        next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
+        to_local_cached=_to_local_cached,
+        safe_parse_datetime=_safe_parse_datetime,
+        format_gap=_format_gap,
+    )
 
 def _got_anchor_invalid(msg: str) -> None:
     _fail_and_exit("Invalid anchor", msg)

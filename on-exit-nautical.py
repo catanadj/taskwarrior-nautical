@@ -1351,7 +1351,7 @@ def _queue_db_connect() -> sqlite3.Connection | None:
     try:
         # Follow an overridden queue JSONL path in tests/mixed setups when DB path wasn't updated.
         if isinstance(_QUEUE_PATH, Path) and isinstance(_QUEUE_DB_PATH, Path):
-            if _QUEUE_DB_PATH.parent != _QUEUE_PATH.parent:
+            if not _QUEUE_DB_PATH.exists() and _QUEUE_DB_PATH.parent != _QUEUE_PATH.parent:
                 db_path = _QUEUE_PATH.parent / _QUEUE_DB_PATH.name
     except Exception:
         db_path = _QUEUE_DB_PATH

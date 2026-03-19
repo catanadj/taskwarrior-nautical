@@ -17,6 +17,7 @@ Optional:
 import importlib
 import sys, os, re, json, io, contextlib, stat
 import random
+import time
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -4321,6 +4322,203 @@ def test_on_exit_drain_skips_finalized_sqlite_intent():
         expect(int(remaining) == 0, f"sqlite entry should be acked/deleted, remaining={remaining}")
 
 
+def test_on_exit_take_queue_reclaims_stale_sqlite_processing_row():
+    """on-exit should reclaim stale sqlite processing rows back into the drain."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_reclaim_stale_test")
+    if not hasattr(mod, "_take_queue_entries"):
+        raise AssertionError("on-exit hook does not expose queue helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
+        mod._QUEUE_PROCESSING_STALE_AFTER = 10.0
+
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+                "VALUES (?, ?, 2, 'processing', 'old-claim', 1.0, 1.0, 1.0)",
+                (
+                    "si_stale_processing",
+                    json.dumps(
+                        {
+                            "spawn_intent_id": "si_stale_processing",
+                            "parent_uuid": "00000000-0000-0000-0000-000000000111",
+                            "child_short": "deadbeef",
+                            "child": {"uuid": "00000000-0000-0000-0000-000000000999"},
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
+            conn.commit()
+
+        entries = mod._take_queue_entries()
+        expect(len(entries) == 1, f"expected one reclaimed stale sqlite entry, got: {entries}")
+        expect(entries[0].get("spawn_intent_id") == "si_stale_processing", f"unexpected entry: {entries}")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            row = conn.execute(
+                "SELECT state, claim_token, claimed_at FROM queue_entries WHERE spawn_intent_id='si_stale_processing'"
+            ).fetchone()
+        expect(row is not None and row[0] == "processing", f"stale entry should be re-claimed as processing: {row}")
+        expect(bool(row[1]) and row[1] != "old-claim", f"stale entry should get new claim token: {row}")
+        expect(float(row[2] or 0.0) > 1.0, f"stale entry should get refreshed claimed_at: {row}")
+
+
+def test_on_exit_take_queue_skips_fresh_sqlite_processing_row():
+    """on-exit should not reclaim sqlite processing rows that are still fresh."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_skip_fresh_test")
+    if not hasattr(mod, "_take_queue_entries"):
+        raise AssertionError("on-exit hook does not expose queue helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
+        mod._QUEUE_PROCESSING_STALE_AFTER = 3600.0
+        now = time.time()
+
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+                "VALUES (?, ?, 1, 'processing', 'fresh-claim', ?, ?, ?)",
+                (
+                    "si_fresh_processing",
+                    json.dumps(
+                        {
+                            "spawn_intent_id": "si_fresh_processing",
+                            "child_short": "deadbeef",
+                            "child": {"uuid": "00000000-0000-0000-0000-000000000888"},
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+        entries = mod._take_queue_entries()
+        expect(entries == [], f"fresh processing row should not be reclaimed, got: {entries}")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            row = conn.execute(
+                "SELECT state, claim_token FROM queue_entries WHERE spawn_intent_id='si_fresh_processing'"
+            ).fetchone()
+        expect(row == ("processing", "fresh-claim"), f"fresh row should remain unchanged: {row}")
+
+
+def test_on_exit_requeue_sqlite_clears_claim_metadata():
+    """on-exit sqlite requeue should clear claim_token and claimed_at."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_requeue_claims_test")
+    if not hasattr(mod, "_requeue_entries_sqlite"):
+        raise AssertionError("on-exit hook does not expose sqlite requeue helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
+
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+                "VALUES (?, ?, 2, 'processing', 'claim-a', 12.0, 1.0, 1.0)",
+                (
+                    "si_requeue_sqlite",
+                    json.dumps(
+                        {
+                            "spawn_intent_id": "si_requeue_sqlite",
+                            "child_short": "deadbeef",
+                            "child": {"uuid": "00000000-0000-0000-0000-000000000777"},
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
+            rid = int(conn.execute("SELECT id FROM queue_entries WHERE spawn_intent_id='si_requeue_sqlite'").fetchone()[0])
+            conn.commit()
+
+        ok = mod._requeue_entries_sqlite(
+            [
+                {
+                    "__queue_backend": "sqlite",
+                    "__queue_id": rid,
+                    "spawn_intent_id": "si_requeue_sqlite",
+                    "child_short": "deadbeef",
+                    "child": {"uuid": "00000000-0000-0000-0000-000000000777"},
+                    "attempts": 3,
+                }
+            ]
+        )
+        expect(ok, "sqlite requeue should succeed")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            row = conn.execute(
+                "SELECT state, claim_token, claimed_at, attempts FROM queue_entries WHERE id=?",
+                (rid,),
+            ).fetchone()
+        expect(row is not None and row[0] == "queued", f"requeued row should be queued: {row}")
+        expect(row[1] is None, f"claim_token should be cleared on requeue: {row}")
+        expect(row[2] is None, f"claimed_at should be cleared on requeue: {row}")
+        expect(int(row[3]) == 3, f"attempt count should persist on requeue: {row}")
+
+
 def test_on_exit_queue_drain_is_transactional():
     """on-exit should not truncate queue if staging replace fails."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -6786,6 +6984,9 @@ TESTS = [
     test_on_exit_idempotent_skip_for_finalized_intent,
     test_on_exit_sqlite_payload_uses_row_spawn_intent_id_for_finalized_skip,
     test_on_exit_sqlite_malformed_payload_dead_letter_keeps_spawn_intent_id,
+    test_on_exit_take_queue_reclaims_stale_sqlite_processing_row,
+    test_on_exit_take_queue_skips_fresh_sqlite_processing_row,
+    test_on_exit_requeue_sqlite_clears_claim_metadata,
     test_on_exit_lock_storm_circuit_requeues_remaining,
     test_cache_metrics_emits_when_enabled,
     test_sanitize_task_strings_removes_controls,

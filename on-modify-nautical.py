@@ -364,270 +364,105 @@ _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
 TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
 
 
-def _hook_support_target_from_base(base: Path) -> Path | None:
+def _optional_sibling_module_target(base: Path, rel_name: str) -> Path | None:
     try:
         if base.is_file():
             if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "hook_support.py"
+                target = base.parent / rel_name
                 return target if target.is_file() else None
             return None
     except Exception:
         return None
-    target = base / "nautical_core" / "hook_support.py"
+    target = base / "nautical_core" / rel_name
     return target if target.is_file() else None
+
+
+def _load_optional_sibling_module(cache_attr: str, failed_attr: str, rel_name: str, module_name: str):
+    module = globals().get(cache_attr)
+    if module is not None:
+        return module
+    if globals().get(failed_attr):
+        return None
+    base = _CORE_IMPORT_TARGET or _CORE_BASE
+    target = _optional_sibling_module_target(base, rel_name)
+    if not target:
+        globals()[failed_attr] = True
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location(module_name, target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+            globals()[cache_attr] = module
+            return module
+    except Exception:
+        pass
+    globals()[failed_attr] = True
+    return None
 
 
 def _load_hook_support():
-    global _HOOK_SUPPORT, _HOOK_SUPPORT_LOAD_FAILED
-    if _HOOK_SUPPORT is not None:
-        return _HOOK_SUPPORT
-    if _HOOK_SUPPORT_LOAD_FAILED:
-        return None
-    base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _hook_support_target_from_base(base)
-    if not target:
-        _HOOK_SUPPORT_LOAD_FAILED = True
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("nautical_hook_support", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_hook_support"] = module
-            spec.loader.exec_module(module)
-            _HOOK_SUPPORT = module
-            return module
-    except Exception:
-        pass
-    _HOOK_SUPPORT_LOAD_FAILED = True
-    return None
-
-
-def _modify_queries_target_from_base(base: Path) -> Path | None:
-    try:
-        if base.is_file():
-            if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "modify_queries.py"
-                return target if target.is_file() else None
-            return None
-    except Exception:
-        return None
-    target = base / "nautical_core" / "modify_queries.py"
-    return target if target.is_file() else None
+    return _load_optional_sibling_module(
+        "_HOOK_SUPPORT",
+        "_HOOK_SUPPORT_LOAD_FAILED",
+        "hook_support.py",
+        "nautical_hook_support",
+    )
 
 
 def _load_modify_queries():
-    global _MODIFY_QUERIES, _MODIFY_QUERIES_LOAD_FAILED
-    if _MODIFY_QUERIES is not None:
-        return _MODIFY_QUERIES
-    if _MODIFY_QUERIES_LOAD_FAILED:
-        return None
-    base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _modify_queries_target_from_base(base)
-    if not target:
-        _MODIFY_QUERIES_LOAD_FAILED = True
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("nautical_modify_queries", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_modify_queries"] = module
-            spec.loader.exec_module(module)
-            _MODIFY_QUERIES = module
-            return module
-    except Exception:
-        pass
-    _MODIFY_QUERIES_LOAD_FAILED = True
-    return None
-
-
-def _modify_chain_reads_target_from_base(base: Path) -> Path | None:
-    try:
-        if base.is_file():
-            if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "modify_chain_reads.py"
-                return target if target.is_file() else None
-            return None
-    except Exception:
-        return None
-    target = base / "nautical_core" / "modify_chain_reads.py"
-    return target if target.is_file() else None
+    return _load_optional_sibling_module(
+        "_MODIFY_QUERIES",
+        "_MODIFY_QUERIES_LOAD_FAILED",
+        "modify_queries.py",
+        "nautical_modify_queries",
+    )
 
 
 def _load_modify_chain_reads():
-    global _MODIFY_CHAIN_READS, _MODIFY_CHAIN_READS_LOAD_FAILED
-    if _MODIFY_CHAIN_READS is not None:
-        return _MODIFY_CHAIN_READS
-    if _MODIFY_CHAIN_READS_LOAD_FAILED:
-        return None
-    base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _modify_chain_reads_target_from_base(base)
-    if not target:
-        _MODIFY_CHAIN_READS_LOAD_FAILED = True
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("nautical_modify_chain_reads", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_modify_chain_reads"] = module
-            spec.loader.exec_module(module)
-            _MODIFY_CHAIN_READS = module
-            return module
-    except Exception:
-        pass
-    _MODIFY_CHAIN_READS_LOAD_FAILED = True
-    return None
-
-
-def _modify_spawn_prep_target_from_base(base: Path) -> Path | None:
-    try:
-        if base.is_file():
-            if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "modify_spawn_prep.py"
-                return target if target.is_file() else None
-            return None
-    except Exception:
-        return None
-    target = base / "nautical_core" / "modify_spawn_prep.py"
-    return target if target.is_file() else None
+    return _load_optional_sibling_module(
+        "_MODIFY_CHAIN_READS",
+        "_MODIFY_CHAIN_READS_LOAD_FAILED",
+        "modify_chain_reads.py",
+        "nautical_modify_chain_reads",
+    )
 
 
 def _load_modify_spawn_prep():
-    global _MODIFY_SPAWN_PREP, _MODIFY_SPAWN_PREP_LOAD_FAILED
-    if _MODIFY_SPAWN_PREP is not None:
-        return _MODIFY_SPAWN_PREP
-    if _MODIFY_SPAWN_PREP_LOAD_FAILED:
-        return None
-    base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _modify_spawn_prep_target_from_base(base)
-    if not target:
-        _MODIFY_SPAWN_PREP_LOAD_FAILED = True
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("nautical_modify_spawn_prep", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_modify_spawn_prep"] = module
-            spec.loader.exec_module(module)
-            _MODIFY_SPAWN_PREP = module
-            return module
-    except Exception:
-        pass
-    _MODIFY_SPAWN_PREP_LOAD_FAILED = True
-    return None
-
-
-def _modify_completion_preflight_target_from_base(base: Path) -> Path | None:
-    try:
-        if base.is_file():
-            if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "modify_completion_preflight.py"
-                return target if target.is_file() else None
-            return None
-    except Exception:
-        return None
-    target = base / "nautical_core" / "modify_completion_preflight.py"
-    return target if target.is_file() else None
+    return _load_optional_sibling_module(
+        "_MODIFY_SPAWN_PREP",
+        "_MODIFY_SPAWN_PREP_LOAD_FAILED",
+        "modify_spawn_prep.py",
+        "nautical_modify_spawn_prep",
+    )
 
 
 def _load_modify_completion_preflight():
-    global _MODIFY_COMPLETION_PREFLIGHT, _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED
-    if _MODIFY_COMPLETION_PREFLIGHT is not None:
-        return _MODIFY_COMPLETION_PREFLIGHT
-    if _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED:
-        return None
-    base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _modify_completion_preflight_target_from_base(base)
-    if not target:
-        _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED = True
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("nautical_modify_completion_preflight", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_modify_completion_preflight"] = module
-            spec.loader.exec_module(module)
-            _MODIFY_COMPLETION_PREFLIGHT = module
-            return module
-    except Exception:
-        pass
-    _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED = True
-    return None
-
-
-def _modify_completion_compute_target_from_base(base: Path) -> Path | None:
-    try:
-        if base.is_file():
-            if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "modify_completion_compute.py"
-                return target if target.is_file() else None
-            return None
-    except Exception:
-        return None
-    target = base / "nautical_core" / "modify_completion_compute.py"
-    return target if target.is_file() else None
+    return _load_optional_sibling_module(
+        "_MODIFY_COMPLETION_PREFLIGHT",
+        "_MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED",
+        "modify_completion_preflight.py",
+        "nautical_modify_completion_preflight",
+    )
 
 
 def _load_modify_completion_compute():
-    global _MODIFY_COMPLETION_COMPUTE, _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED
-    if _MODIFY_COMPLETION_COMPUTE is not None:
-        return _MODIFY_COMPLETION_COMPUTE
-    if _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED:
-        return None
-    base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _modify_completion_compute_target_from_base(base)
-    if not target:
-        _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED = True
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("nautical_modify_completion_compute", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_modify_completion_compute"] = module
-            spec.loader.exec_module(module)
-            _MODIFY_COMPLETION_COMPUTE = module
-            return module
-    except Exception:
-        pass
-    _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED = True
-    return None
-
-
-def _modify_completion_spawn_target_from_base(base: Path) -> Path | None:
-    try:
-        if base.is_file():
-            if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "modify_completion_spawn.py"
-                return target if target.is_file() else None
-            return None
-    except Exception:
-        return None
-    target = base / "nautical_core" / "modify_completion_spawn.py"
-    return target if target.is_file() else None
+    return _load_optional_sibling_module(
+        "_MODIFY_COMPLETION_COMPUTE",
+        "_MODIFY_COMPLETION_COMPUTE_LOAD_FAILED",
+        "modify_completion_compute.py",
+        "nautical_modify_completion_compute",
+    )
 
 
 def _load_modify_completion_spawn():
-    global _MODIFY_COMPLETION_SPAWN, _MODIFY_COMPLETION_SPAWN_LOAD_FAILED
-    if _MODIFY_COMPLETION_SPAWN is not None:
-        return _MODIFY_COMPLETION_SPAWN
-    if _MODIFY_COMPLETION_SPAWN_LOAD_FAILED:
-        return None
-    base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _modify_completion_spawn_target_from_base(base)
-    if not target:
-        _MODIFY_COMPLETION_SPAWN_LOAD_FAILED = True
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("nautical_modify_completion_spawn", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_modify_completion_spawn"] = module
-            spec.loader.exec_module(module)
-            _MODIFY_COMPLETION_SPAWN = module
-            return module
-    except Exception:
-        pass
-    _MODIFY_COMPLETION_SPAWN_LOAD_FAILED = True
-    return None
+    return _load_optional_sibling_module(
+        "_MODIFY_COMPLETION_SPAWN",
+        "_MODIFY_COMPLETION_SPAWN_LOAD_FAILED",
+        "modify_completion_spawn.py",
+        "nautical_modify_completion_spawn",
+    )
 
 
 def _task_cmd_prefix() -> list[str]:

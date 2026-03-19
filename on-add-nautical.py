@@ -118,6 +118,38 @@ _ADD_ANCHOR_COMPUTE = None
 _ADD_ANCHOR_COMPUTE_LOAD_FAILED = False
 _ADD_ANCHOR_PREVIEW = None
 _ADD_ANCHOR_PREVIEW_LOAD_FAILED = False
+_MODULE_SPECS = {
+    "hook_support": (
+        "_HOOK_SUPPORT",
+        "_HOOK_SUPPORT_LOAD_FAILED",
+        "hook_support.py",
+        "nautical_hook_support",
+    ),
+    "add_formatting": (
+        "_ADD_FORMATTING",
+        "_ADD_FORMATTING_LOAD_FAILED",
+        "add_formatting.py",
+        "nautical_add_formatting",
+    ),
+    "add_validation": (
+        "_ADD_VALIDATION",
+        "_ADD_VALIDATION_LOAD_FAILED",
+        "add_validation.py",
+        "nautical_add_validation",
+    ),
+    "add_anchor_compute": (
+        "_ADD_ANCHOR_COMPUTE",
+        "_ADD_ANCHOR_COMPUTE_LOAD_FAILED",
+        "add_anchor_compute.py",
+        "nautical_add_anchor_compute",
+    ),
+    "add_anchor_preview": (
+        "_ADD_ANCHOR_PREVIEW",
+        "_ADD_ANCHOR_PREVIEW_LOAD_FAILED",
+        "add_anchor_preview.py",
+        "nautical_add_anchor_preview",
+    ),
+}
 try:
     target = _core_target_from_base(_CORE_BASE)
     _CORE_IMPORT_TARGET = target
@@ -198,53 +230,13 @@ def _load_optional_sibling_module(cache_attr: str, failed_attr: str, rel_name: s
     return None
 
 
-def _load_hook_support():
-    return _load_optional_sibling_module(
-        "_HOOK_SUPPORT",
-        "_HOOK_SUPPORT_LOAD_FAILED",
-        "hook_support.py",
-        "nautical_hook_support",
-    )
-
-
-def _load_add_formatting():
-    return _load_optional_sibling_module(
-        "_ADD_FORMATTING",
-        "_ADD_FORMATTING_LOAD_FAILED",
-        "add_formatting.py",
-        "nautical_add_formatting",
-    )
-
-
-def _load_add_validation():
-    return _load_optional_sibling_module(
-        "_ADD_VALIDATION",
-        "_ADD_VALIDATION_LOAD_FAILED",
-        "add_validation.py",
-        "nautical_add_validation",
-    )
-
-
-def _load_add_anchor_compute():
-    return _load_optional_sibling_module(
-        "_ADD_ANCHOR_COMPUTE",
-        "_ADD_ANCHOR_COMPUTE_LOAD_FAILED",
-        "add_anchor_compute.py",
-        "nautical_add_anchor_compute",
-    )
-
-
-def _load_add_anchor_preview():
-    return _load_optional_sibling_module(
-        "_ADD_ANCHOR_PREVIEW",
-        "_ADD_ANCHOR_PREVIEW_LOAD_FAILED",
-        "add_anchor_preview.py",
-        "nautical_add_anchor_preview",
-    )
+def _load_named_module(name: str):
+    cache_attr, failed_attr, rel_name, module_name = _MODULE_SPECS[name]
+    return _load_optional_sibling_module(cache_attr, failed_attr, rel_name, module_name)
 
 
 def _task_cmd_prefix() -> list[str]:
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.build_task_cmd_prefix(
             use_rc_data_location=_USE_RC_DATA_LOCATION,
@@ -262,20 +254,12 @@ def _require_loaded_module(module, rel_name: str):
     return module
 
 
-def _add_formatting_module():
-    return _require_loaded_module(_load_add_formatting(), "add_formatting.py")
-
-
-def _add_validation_module():
-    return _require_loaded_module(_load_add_validation(), "add_validation.py")
-
-
-def _add_anchor_compute_module():
-    return _require_loaded_module(_load_add_anchor_compute(), "add_anchor_compute.py")
-
-
-def _add_anchor_preview_module():
-    return _require_loaded_module(_load_add_anchor_preview(), "add_anchor_preview.py")
+def _module(name: str, *, required: bool = True):
+    module = _load_named_module(name)
+    if not required:
+        return module
+    rel_name = _MODULE_SPECS[name][2]
+    return _require_loaded_module(module, rel_name)
 
 def _load_core() -> None:
     global core, _IMPORT_MS, _MAX_JSON_BYTES, _CORE_READY
@@ -687,7 +671,7 @@ def _panel(title, rows, kind: str = "info"):
 
 def _format_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
     """Compact layout for anchor preview."""
-    add_formatting = _add_formatting_module()
+    add_formatting = _module("add_formatting")
     return add_formatting.format_anchor_rows(rows)
 
 
@@ -746,7 +730,7 @@ def _run_task(
         except Exception as e:
             load_err = e
     core_runner = getattr(core, "run_task", None) if core is not None else None
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         if load_err is not None and not callable(core_runner):
             _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
@@ -810,7 +794,7 @@ def _run_task(
 
 def _format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
     """Compact layout for classic cp preview."""
-    add_formatting = _add_formatting_module()
+    add_formatting = _module("add_formatting")
     return add_formatting.format_cp_rows(rows)
 
 
@@ -926,13 +910,13 @@ def _append_wait_sched_rows(rows: list, task: dict, due_utc: datetime, auto_due:
 
 # Helper to validate chainUntil is in the future
 def _validate_until_not_past(until_dt, now_utc) -> tuple[bool, str | None]:
-    add_validation = _add_validation_module()
+    add_validation = _module("add_validation")
     return add_validation.validate_until_not_past(until_dt, now_utc, core=core)
 
 
 # Helper to check if due is in the past (warning only)
 def _check_due_in_past(due_dt, now_utc) -> tuple[bool, str | None]:
-    add_validation = _add_validation_module()
+    add_validation = _module("add_validation")
     return add_validation.check_due_in_past(due_dt, now_utc, core=core)
 
 
@@ -940,7 +924,7 @@ def _check_due_in_past(due_dt, now_utc) -> tuple[bool, str | None]:
 def _validate_chain_duration_reasonable(
     until_dt, now_utc, first_due, kind
 ) -> tuple[bool, str | None]:
-    add_validation = _add_validation_module()
+    add_validation = _module("add_validation")
     return add_validation.validate_chain_duration_reasonable(
         until_dt,
         now_utc,
@@ -952,33 +936,33 @@ def _validate_chain_duration_reasonable(
 
 # Helper to validate cp/anchor not missing
 def _validate_kind_not_conflicting(cp_str, anchor_str) -> tuple[bool, str | None]:
-    add_validation = _add_validation_module()
+    add_validation = _module("add_validation")
     return add_validation.validate_kind_not_conflicting(cp_str, anchor_str)
 
 
 # Helper to validate chainMax > 0
 def _validate_cpmax_positive(cpmax) -> tuple[bool, str | None]:
-    add_validation = _add_validation_module()
+    add_validation = _module("add_validation")
     return add_validation.validate_cpmax_positive(cpmax)
 
 
 # Helper to safely parse with context
 def _safe_parse_datetime(s, field_name) -> tuple[datetime | None, str | None]:
-    add_validation = _add_validation_module()
+    add_validation = _module("add_validation")
     return add_validation.safe_parse_datetime(s, field_name, core=core, diag=_diag)
 
 
 def _validate_no_legacy_colon_ranges(expr: str) -> tuple[bool, str | None]:
-    add_validation = _add_validation_module()
+    add_validation = _module("add_validation")
     return add_validation.validate_no_legacy_colon_ranges(expr)
 
 def _safe_parse_duration(s, field_name) -> tuple[timedelta | None, str | None]:
-    add_validation = _add_validation_module()
+    add_validation = _module("add_validation")
     return add_validation.safe_parse_duration(s, field_name, core=core, diag=_diag)
 
 
 def _validate_anchor_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[list[dict]] | None, str | None]:
-    add_validation = _add_validation_module()
+    add_validation = _module("add_validation")
     return add_validation.validate_anchor_syntax_strict(
         expr,
         validate_anchor_expr_cached=_validate_anchor_expr_cached,
@@ -988,13 +972,13 @@ def _validate_anchor_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[l
 
 
 def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
-    add_validation = _add_validation_module()
+    add_validation = _module("add_validation")
     return add_validation.validate_anchor_mode(mode_str)
 
 
 def _parse_extra_tokens(extra: str | None) -> list[str] | None:
     """Parse extra Taskwarrior filters in strict token form: key:value."""
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.parse_extra_tokens(extra)
     if extra is None:
@@ -1029,7 +1013,7 @@ def _parse_extra_tokens(extra: str | None) -> list[str] | None:
 def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None) -> list[dict]:
     if not chain_id:
         return []
-    hook_support = _load_hook_support()
+    hook_support = _module("hook_support", required=False)
     args = None
     if hook_support is not None:
         args = hook_support.build_chain_export_args(
@@ -1102,28 +1086,28 @@ def _norm_t_mod(v):
 
 
 def _anchor_step_once(dnf, prev_local_date, interval_seed, seed_base):
-    add_anchor_compute = _add_anchor_compute_module()
+    add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_step_once(
         dnf, prev_local_date, interval_seed, seed_base, core=core
     )
 
 
 def _anchor_term_fires_on_date(term, d, interval_seed, seed_base):
-    add_anchor_compute = _add_anchor_compute_module()
+    add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_term_fires_on_date(
         term, d, interval_seed, seed_base, core=core
     )
 
 
 def _anchor_expr_fires_on_date(dnf, d, interval_seed, seed_base):
-    add_anchor_compute = _add_anchor_compute_module()
+    add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_expr_fires_on_date(
         dnf, d, interval_seed, seed_base, core=core
     )
 
 
 def _anchor_times_for_date(dnf, d, interval_seed, seed_base):
-    add_anchor_compute = _add_anchor_compute_module()
+    add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_times_for_date(
         dnf,
         d,
@@ -1135,7 +1119,7 @@ def _anchor_times_for_date(dnf, d, interval_seed, seed_base):
 
 
 def _anchor_pick_occurrence_local(dnf, ref_dt_local, inclusive: bool, fallback_hhmm, interval_seed, seed_base):
-    add_anchor_compute = _add_anchor_compute_module()
+    add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_pick_occurrence_local(
         dnf,
         ref_dt_local,
@@ -1149,7 +1133,7 @@ def _anchor_pick_occurrence_local(dnf, ref_dt_local, inclusive: bool, fallback_h
 
 
 def _anchor_next_occurrence_after_local_dt(dnf, after_dt_local, fallback_hhmm, interval_seed, seed_base):
-    add_anchor_compute = _add_anchor_compute_module()
+    add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_next_occurrence_after_local_dt(
         dnf,
         after_dt_local,
@@ -1162,7 +1146,7 @@ def _anchor_next_occurrence_after_local_dt(dnf, after_dt_local, fallback_hhmm, i
 
 
 def _anchor_until_summary(dnf, until_dt, first_date_local, first_hhmm, interval_seed, seed_base):
-    add_anchor_compute = _add_anchor_compute_module()
+    add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_until_summary(
         dnf,
         until_dt,
@@ -1186,7 +1170,7 @@ def _anchor_build_preview(
     interval_seed,
     seed_base,
 ):
-    add_anchor_compute = _add_anchor_compute_module()
+    add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_build_preview(
         dnf,
         first_due_local_dt,
@@ -1379,7 +1363,7 @@ def _handle_cp_preview_on_add(
 
 
 def _anchor_preview_prepare_dnf(task: dict[str, object], anchor_str: str, due_dt: datetime, rows: list[tuple[str, str]], prof) -> tuple[list[list[dict]], str]:
-    add_anchor_preview = _add_anchor_preview_module()
+    add_anchor_preview = _module("add_anchor_preview")
     return add_anchor_preview.anchor_preview_prepare_dnf(
         task,
         anchor_str,
@@ -1394,7 +1378,7 @@ def _anchor_preview_prepare_dnf(task: dict[str, object], anchor_str: str, due_dt
 
 
 def _anchor_preview_seed_context(task: dict, due_day, now_local: datetime, user_provided_due: bool):
-    add_anchor_preview = _add_anchor_preview_module()
+    add_anchor_preview = _module("add_anchor_preview")
     return add_anchor_preview.anchor_preview_seed_context(
         task,
         due_day,
@@ -1417,7 +1401,7 @@ def _anchor_preview_first_due(
     rows: list[tuple[str, str]],
     prof,
 ):
-    add_anchor_preview = _add_anchor_preview_module()
+    add_anchor_preview = _module("add_anchor_preview")
     return add_anchor_preview.anchor_preview_first_due(
         task,
         dnf,
@@ -1445,7 +1429,7 @@ def _anchor_preview_misaligned_due_warning(
     interval_seed,
     seed_base: str,
 ) -> None:
-    add_anchor_preview = _add_anchor_preview_module()
+    add_anchor_preview = _module("add_anchor_preview")
     add_anchor_preview.anchor_preview_misaligned_due_warning(
         rows,
         dnf=dnf,
@@ -1458,7 +1442,7 @@ def _anchor_preview_misaligned_due_warning(
 
 
 def _anchor_preview_lint_and_validate(anchor_str: str, prof) -> None:
-    add_anchor_preview = _add_anchor_preview_module()
+    add_anchor_preview = _module("add_anchor_preview")
     add_anchor_preview.anchor_preview_lint_and_validate(
         anchor_str,
         prof,
@@ -1476,7 +1460,7 @@ def _anchor_preview_limit_rows(
     final_until_dt: datetime | None,
     now_utc: datetime,
 ) -> None:
-    add_anchor_preview = _add_anchor_preview_module()
+    add_anchor_preview = _module("add_anchor_preview")
     add_anchor_preview.anchor_preview_limit_rows(
         rows,
         cpmax=cpmax,
@@ -1503,7 +1487,7 @@ def _handle_anchor_preview_on_add(
     past_due_warning: str | None,
     prof,
 ) -> None:
-    add_anchor_preview = _add_anchor_preview_module()
+    add_anchor_preview = _module("add_anchor_preview")
     add_anchor_preview.handle_anchor_preview_on_add(
         task=task,
         anchor_str=anchor_str,

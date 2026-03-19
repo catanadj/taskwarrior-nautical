@@ -646,18 +646,20 @@ def _run_task_attempt(
 def _run_task(
     cmd: list[str],
     *,
+    env: dict[str, str] | None = None,
     input_text: str | None = None,
     timeout: float = 6.0,
     retries: int = 1,
     retry_delay: float = 0.0,
 ) -> tuple[bool, str, str]:
+    env_map = env or os.environ.copy()
     run_fn = core.run_task if core is not None else None
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.run_task(
             cmd,
             core_run_task=run_fn,
-            env=os.environ.copy(),
+            env=env_map,
             input_text=input_text,
             timeout=timeout,
             retries=max(1, int(retries)),
@@ -666,13 +668,12 @@ def _run_task(
     if run_fn is not None:
         return run_fn(
             cmd,
-            env=os.environ.copy(),
+            env=env_map,
             input_text=input_text,
             timeout=timeout,
             retries=max(1, int(retries)),
             retry_delay=max(0.0, float(retry_delay)),
         )
-    env = os.environ.copy()
     attempts = max(1, int(retries))
     delay = max(0.0, float(retry_delay))
     last_out = ""
@@ -680,7 +681,7 @@ def _run_task(
     for attempt in range(1, attempts + 1):
         ok, out, err = _run_task_attempt(
             cmd,
-            env=env,
+            env=env_map,
             input_text=input_text,
             timeout=timeout,
         )

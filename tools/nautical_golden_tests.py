@@ -6250,6 +6250,24 @@ def test_on_modify_run_task_timeout():
     expect(err == "timeout", f"_run_task should report timeout, got {err!r}")
 
 
+def test_on_exit_run_task_accepts_env():
+    """on-exit _run_task should accept env and pass it through."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_run_task_env_test")
+    if not hasattr(mod, "_run_task"):
+        raise AssertionError("on-exit hook does not expose _run_task")
+
+    ok, out, _err = mod._run_task(
+        [sys.executable, "-c", "import os; print(os.environ.get('NAUTICAL_TEST_ENV', ''))"],
+        env={**os.environ, "NAUTICAL_TEST_ENV": "env-ok"},
+        timeout=2,
+        retries=1,
+    )
+
+    expect(ok, "_run_task expected success with explicit env")
+    expect(out.strip() == "env-ok", f"_run_task should honor env override, got {out!r}")
+
+
 def test_on_modify_export_uuid_short_invalid_json():
     """on-modify _export_uuid_short returns None on invalid JSON."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -6597,6 +6615,7 @@ TESTS = [
     test_on_exit_requeue_failure_leaves_sqlite_entry_processing,
     test_on_exit_export_uuid_noisy_stdout,
     test_on_exit_emit_exit_feedback_reaches_stdout_contract,
+    test_on_exit_run_task_accepts_env,
     test_core_import_deterministic,
     test_on_modify_spawn_intent_id_in_entry,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,

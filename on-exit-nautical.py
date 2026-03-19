@@ -1421,7 +1421,7 @@ def _queue_db_init(conn: sqlite3.Connection) -> None:
 
 
 def _queue_select_queued_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    q = "SELECT id, payload, attempts FROM queue_entries WHERE state='queued' ORDER BY id"
+    q = "SELECT id, spawn_intent_id, payload, attempts FROM queue_entries WHERE state='queued' ORDER BY id"
     params: tuple = ()
     if _QUEUE_MAX_LINES > 0:
         q += " LIMIT ?"
@@ -1487,6 +1487,7 @@ def _queue_rows_to_entries(rows: list[sqlite3.Row]) -> list[dict]:
     entries: list[dict] = []
     for r in rows:
         rid = int(r["id"])
+        spawn_intent_id = str(r["spawn_intent_id"] or "").strip()
         payload = (r["payload"] or "").strip()
         attempts_db = int(r["attempts"] or 0)
         try:
@@ -1495,6 +1496,8 @@ def _queue_rows_to_entries(rows: list[sqlite3.Row]) -> list[dict]:
             obj = {"raw": payload}
         if not isinstance(obj, dict):
             obj = {"raw": payload}
+        if spawn_intent_id and not str(obj.get("spawn_intent_id") or "").strip():
+            obj["spawn_intent_id"] = spawn_intent_id
         if "attempts" not in obj:
             obj["attempts"] = attempts_db
         obj["__queue_backend"] = "sqlite"

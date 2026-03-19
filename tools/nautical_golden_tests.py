@@ -4714,6 +4714,7 @@ def test_on_exit_idempotent_skip_for_finalized_intent():
             "spawn_intent_id": sid,
             "reason": "processed",
         }
+        mod._intent_log_path().parent.mkdir(parents=True, exist_ok=True)
         mod._intent_log_path().write_text(json.dumps(intent_payload) + "\n", encoding="utf-8")
 
         def _run_task_should_not_call(*_a, **_k):
@@ -4724,6 +4725,121 @@ def test_on_exit_idempotent_skip_for_finalized_intent():
         expect(stats.get("processed") == 1, f"expected one processed (skipped) entry, got: {stats}")
         expect(stats.get("entries_skipped_idempotent") == 1, f"expected one idempotent skip, got: {stats}")
         expect(stats.get("errors") == 0, f"expected no errors, got: {stats}")
+
+
+def test_on_exit_sqlite_payload_uses_row_spawn_intent_id_for_finalized_skip():
+    """on-exit should preserve sqlite spawn_intent_id even when payload JSON is malformed."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_finalized_sid_test")
+    if not hasattr(mod, "_drain_queue"):
+        raise AssertionError("on-exit hook does not expose drain helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        sid = "si_sqlite_done"
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+                "VALUES (?, ?, 0, 'queued', 1.0, 1.0)",
+                (sid, "{not-json"),
+            )
+            conn.commit()
+
+        mod._intent_log_path().parent.mkdir(parents=True, exist_ok=True)
+        mod._intent_log_path().write_text(
+            json.dumps(
+                {
+                    "ts": "2026-01-01T00:00:00Z",
+                    "hook": "on-exit",
+                    "status": "done",
+                    "spawn_intent_id": sid,
+                    "reason": "processed",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        def _run_task_should_not_call(*_a, **_k):
+            raise AssertionError("task subprocess should not be called for finalized sqlite intent")
+
+        mod._run_task = _run_task_should_not_call
+        stats = mod._drain_queue()
+        expect(stats.get("processed") == 1, f"expected one processed sqlite skip, got: {stats}")
+        expect(stats.get("entries_skipped_idempotent") == 1, f"expected one sqlite idempotent skip, got: {stats}")
+        expect(stats.get("errors") == 0, f"expected no sqlite errors, got: {stats}")
+
+
+def test_on_exit_sqlite_malformed_payload_dead_letter_keeps_spawn_intent_id():
+    """on-exit dead-letter payloads from sqlite should retain the row spawn_intent_id."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_bad_payload_test")
+    if not hasattr(mod, "_drain_queue"):
+        raise AssertionError("on-exit hook does not expose drain helper")
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
+        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
+        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        sid = "si_sqlite_bad_payload"
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+                "VALUES (?, ?, 0, 'queued', 1.0, 1.0)",
+                (sid, "[]"),
+            )
+            conn.commit()
+
+        stats = mod._drain_queue()
+        expect(stats.get("errors") == 1, f"expected one sqlite payload error, got: {stats}")
+        expect(mod._DEAD_LETTER_PATH.exists(), "dead letter file not created for sqlite bad payload")
+        payload = json.loads(mod._DEAD_LETTER_PATH.read_text(encoding="utf-8").splitlines()[0])
+        expect(payload.get("spawn_intent_id") == sid, f"missing sqlite spawn_intent_id in dead letter: {payload}")
+        expect(payload.get("reason") == "missing child object", f"unexpected sqlite bad payload reason: {payload}")
 
 
 def test_on_exit_lock_storm_circuit_requeues_remaining():
@@ -6668,6 +6784,8 @@ TESTS = [
     test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter,
     test_on_exit_post_import_parent_conflict_cleans_orphan,
     test_on_exit_idempotent_skip_for_finalized_intent,
+    test_on_exit_sqlite_payload_uses_row_spawn_intent_id_for_finalized_skip,
+    test_on_exit_sqlite_malformed_payload_dead_letter_keeps_spawn_intent_id,
     test_on_exit_lock_storm_circuit_requeues_remaining,
     test_cache_metrics_emits_when_enabled,
     test_sanitize_task_strings_removes_controls,

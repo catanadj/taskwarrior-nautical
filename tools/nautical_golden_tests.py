@@ -1879,6 +1879,104 @@ def test_health_check_critical_queue_db_rows():
         expect(int(metrics.get("queue_db_rows") or 0) == 1, f"expected queue_db_rows=1, got {metrics}")
 
 
+def test_queue_status_json_ok_empty_taskdata():
+    """queue status should report ok for empty taskdata."""
+    path = os.path.join(ROOT, "tools", "nautical_queue_status.py")
+    with tempfile.TemporaryDirectory() as td:
+        p = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--json"],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(p.returncode == 0, f"queue status returned {p.returncode}: {p.stderr!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        expect(obj.get("status") == "ok", f"unexpected queue status: {obj}")
+        expect((obj.get("queue") or {}).get("queued") == 0, f"unexpected queued count: {obj}")
+        expect((obj.get("queue") or {}).get("processing") == 0, f"unexpected processing count: {obj}")
+
+
+def test_queue_status_warns_on_stale_processing_and_dead_letters():
+    """queue status should report stale processing, dead letters, and lock failures."""
+    path = os.path.join(ROOT, "tools", "nautical_queue_status.py")
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        state_dir = td_path / ".nautical-state"
+        lock_dir = td_path / ".nautical-locks"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        lock_dir.mkdir(parents=True, exist_ok=True)
+
+        db = state_dir / ".nautical_queue.db"
+        with sqlite3.connect(str(db)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+                "VALUES (?, ?, 1, 'queued', 1.0, 1.0)",
+                ("si_qs_queued", json.dumps({"spawn_intent_id": "si_qs_queued"})),
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+                "VALUES (?, ?, 3, 'processing', 'old-claim', 1.0, 1.0, 1.0)",
+                ("si_qs_processing", json.dumps({"spawn_intent_id": "si_qs_processing"})),
+            )
+            conn.commit()
+
+        (state_dir / ".nautical_dead_letter.jsonl").write_text(
+            json.dumps({"ts": "2026-01-01T00:00:00Z", "reason": "test"}) + "\n",
+            encoding="utf-8",
+        )
+        (lock_dir / ".nautical_spawn_queue.lock_failed.count").write_text(
+            json.dumps({"count": 2}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (lock_dir / ".nautical_parent_nextlink.abcd.lock").write_text("", encoding="utf-8")
+
+        p = subprocess.run(
+            [
+                sys.executable,
+                path,
+                "--taskdata",
+                td,
+                "--stale-after-seconds",
+                "10",
+                "--limit",
+                "3",
+                "--json",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(p.returncode == 1, f"expected warn exit 1, got {p.returncode}: {p.stderr!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        expect(obj.get("status") == "warn", f"unexpected queue status: {obj}")
+        queue = obj.get("queue") or {}
+        expect(int(queue.get("queued") or 0) == 1, f"unexpected queued count: {queue}")
+        expect(int(queue.get("processing") or 0) == 1, f"unexpected processing count: {queue}")
+        expect(int(queue.get("stale_processing") or 0) == 1, f"unexpected stale count: {queue}")
+        expect(int(queue.get("max_attempts") or 0) == 3, f"unexpected max attempts: {queue}")
+        locks = obj.get("locks") or {}
+        expect(int(locks.get("queue_lock_failure_count") or 0) == 2, f"unexpected lock fail count: {locks}")
+        expect(int(locks.get("parent_nextlink_lock_files") or 0) == 1, f"unexpected parent lock count: {locks}")
+        files = obj.get("files") or {}
+        expect(int((files.get("dead_letter") or {}).get("lines") or 0) == 1, f"unexpected dead letter metrics: {files}")
+        expect(len(queue.get("sample") or []) >= 1, f"expected sample rows: {queue}")
+
+
 def test_perf_budget_config_covers_cache_io_checks():
     """Perf budget config should include explicit cache save/load check budgets."""
     cfg_path = Path(ROOT) / "tools" / "perf_budget.json"
@@ -6889,6 +6987,8 @@ TESTS = [
     test_health_check_json_ok_empty_taskdata,
     test_health_check_critical_queue_bytes,
     test_health_check_critical_queue_db_rows,
+    test_queue_status_json_ok_empty_taskdata,
+    test_queue_status_warns_on_stale_processing_and_dead_letters,
     test_perf_budget_config_covers_cache_io_checks,
     test_deploy_sanity_script_reports_ok,
     test_ops_templates_present_and_runner_executable,

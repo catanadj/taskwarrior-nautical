@@ -12,6 +12,20 @@ import time
 from pathlib import Path
 
 
+def _prefer_path(primary: Path, legacy: Path) -> Path:
+    try:
+        if primary.exists():
+            return primary
+    except Exception:
+        pass
+    try:
+        if legacy.exists():
+            return legacy
+    except Exception:
+        pass
+    return primary
+
+
 def _safe_read_lines(path: Path) -> int:
     try:
         if not path.exists():
@@ -143,14 +157,25 @@ def main() -> int:
     args = ap.parse_args()
 
     td = Path(args.taskdata).expanduser().resolve()
-    queue = td / ".nautical_spawn_queue.jsonl"
-    processing = td / ".nautical_spawn_queue.processing.jsonl"
-    queue_db = td / ".nautical_queue.db"
+    state_dir = td / ".nautical-state"
+    lock_dir = td / ".nautical-locks"
+    queue = _prefer_path(state_dir / ".nautical_spawn_queue.jsonl", td / ".nautical_spawn_queue.jsonl")
+    processing = _prefer_path(
+        state_dir / ".nautical_spawn_queue.processing.jsonl",
+        td / ".nautical_spawn_queue.processing.jsonl",
+    )
+    queue_db = _prefer_path(state_dir / ".nautical_queue.db", td / ".nautical_queue.db")
     queue_db_wal = td / ".nautical_queue.db-wal"
     queue_db_shm = td / ".nautical_queue.db-shm"
-    dead = td / ".nautical_dead_letter.jsonl"
-    bad = td / ".nautical_spawn_queue.bad.jsonl"
-    lock_fail_count = td / ".nautical_spawn_queue.lock_failed.count"
+    if queue_db.parent == state_dir:
+        queue_db_wal = state_dir / ".nautical_queue.db-wal"
+        queue_db_shm = state_dir / ".nautical_queue.db-shm"
+    dead = _prefer_path(state_dir / ".nautical_dead_letter.jsonl", td / ".nautical_dead_letter.jsonl")
+    bad = _prefer_path(state_dir / ".nautical_spawn_queue.bad.jsonl", td / ".nautical_spawn_queue.bad.jsonl")
+    lock_fail_count = _prefer_path(
+        lock_dir / ".nautical_spawn_queue.lock_failed.count",
+        td / ".nautical_spawn_queue.lock_failed.count",
+    )
     diag_log = td / ".nautical_diag.jsonl"
 
     queue_jsonl_bytes, queue_mtime = _safe_stat(queue)

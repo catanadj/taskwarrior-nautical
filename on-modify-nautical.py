@@ -1375,13 +1375,18 @@ def _spawn_queue_db_init(conn: sqlite3.Connection) -> None:
     queue_store.init_queue_db(conn)
 
 
+def _queue_close_silent(conn: sqlite3.Connection) -> None:
+    queue_store = _module("queue_store")
+    queue_store.close_silent(conn)
+
+
 def _spawn_queue_db_open_ready() -> sqlite3.Connection | None:
     queue_store = _module("queue_store")
     return queue_store.open_ready_queue_db(
         _SPAWN_QUEUE_DB_PATH,
         connect_fn=_spawn_queue_db_connect,
         init_fn=_spawn_queue_db_init,
-        close_fn=lambda conn: conn.close(),
+        close_fn=_queue_close_silent,
         diag=_diag,
     )
 
@@ -1398,71 +1403,6 @@ def _spawn_queue_capacity_guard(task_obj: dict) -> tuple[bool, str] | None:
         pass
     return None
 
-
-def _spawn_queue_db_rollback(conn: sqlite3.Connection) -> None:
-    try:
-        conn.rollback()
-    except Exception:
-        pass
-
-
-def _spawn_queue_payload(task_obj: dict) -> tuple[str, float, str]:
-    payload = json.dumps(task_obj, ensure_ascii=False, separators=(",", ":"))
-    now = _time.time()
-    spawn_intent_id = (task_obj.get("spawn_intent_id") or "").strip() if isinstance(task_obj, dict) else ""
-    return payload, now, spawn_intent_id
-
-
-def _spawn_queue_upsert(
-    conn: sqlite3.Connection,
-    *,
-    payload: str,
-    now: float,
-    spawn_intent_id: str,
-) -> None:
-    if spawn_intent_id:
-        cur = conn.execute(
-            "UPDATE queue_entries SET payload=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
-            "WHERE spawn_intent_id=?",
-            (payload, now, spawn_intent_id),
-        )
-        if int(getattr(cur, "rowcount", 0) or 0) > 0:
-            return
-        try:
-            conn.execute(
-                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
-                "VALUES (?, ?, 0, 'queued', NULL, NULL, ?, ?)",
-                (spawn_intent_id, payload, now, now),
-            )
-            return
-        except sqlite3.IntegrityError:
-            conn.execute(
-                "UPDATE queue_entries SET payload=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
-                "WHERE spawn_intent_id=?",
-                (payload, now, spawn_intent_id),
-            )
-            return
-    conn.execute(
-        "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
-        "VALUES (NULL, ?, 0, 'queued', NULL, NULL, ?, ?)",
-        (payload, now, now),
-    )
-
-
-def _spawn_queue_repair_permissions() -> None:
-    try:
-        if _SPAWN_QUEUE_DB_PATH.exists():
-            os.chmod(_SPAWN_QUEUE_DB_PATH, 0o600)
-        wal = Path(str(_SPAWN_QUEUE_DB_PATH) + "-wal")
-        if wal.exists():
-            os.chmod(wal, 0o600)
-        shm = Path(str(_SPAWN_QUEUE_DB_PATH) + "-shm")
-        if shm.exists():
-            os.chmod(shm, 0o600)
-    except Exception:
-        pass
-
-
 def _spawn_queue_write_failure(task_obj: dict, err: Exception) -> tuple[bool, str]:
     fail_reason = f"spawn queue write failed: {err}"
     _write_dead_letter(task_obj, fail_reason)
@@ -1478,33 +1418,27 @@ def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
     conn = _spawn_queue_db_open_ready()
     if conn is None:
         return False, "spawn queue db unavailable"
+    lock_busy = {"value": False}
+    errors: list[str] = []
     try:
-        payload, now, spawn_intent_id = _spawn_queue_payload(task_obj)
-        conn.execute("BEGIN IMMEDIATE")
-        _spawn_queue_upsert(
+        queue_store = _module("queue_store")
+        ok = queue_store.enqueue_entries_sqlite(
             conn,
-            payload=payload,
-            now=now,
-            spawn_intent_id=spawn_intent_id,
+            [task_obj],
+            now=_time.time(),
+            diag=lambda msg: errors.append(str(msg)),
+            on_lock_busy=lambda: lock_busy.__setitem__("value", True),
         )
-        conn.commit()
-        _spawn_queue_repair_permissions()
-        _spawn_queue_warn_growth(_SPAWN_QUEUE_DB_PATH, _spawn_queue_db_size_bytes())
-        return True, ""
-    except sqlite3.OperationalError as e:
-        _spawn_queue_db_rollback(conn)
-        msg = str(e).lower()
-        if "locked" in msg or "busy" in msg:
+        if ok:
+            queue_store.repair_sqlite_permissions(_SPAWN_QUEUE_DB_PATH)
+            _spawn_queue_warn_growth(_SPAWN_QUEUE_DB_PATH, _spawn_queue_db_size_bytes())
+            return True, ""
+        if lock_busy["value"]:
             return _handle_enqueue_lock_busy(task_obj)
-        return _spawn_queue_write_failure(task_obj, e)
-    except Exception as e:
-        _spawn_queue_db_rollback(conn)
-        return _spawn_queue_write_failure(task_obj, e)
+        err = errors[-1] if errors else "spawn queue write failed"
+        return _spawn_queue_write_failure(task_obj, RuntimeError(err))
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        _queue_close_silent(conn)
 
 
 def _enqueue_deferred_spawn(task_obj: dict) -> tuple[bool, str]:

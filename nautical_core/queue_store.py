@@ -235,6 +235,20 @@ def close_silent(conn: sqlite3.Connection) -> None:
         pass
 
 
+def repair_sqlite_permissions(db_path: Path) -> None:
+    try:
+        if db_path.exists():
+            os.chmod(db_path, 0o600)
+        wal = Path(str(db_path) + "-wal")
+        if wal.exists():
+            os.chmod(wal, 0o600)
+        shm = Path(str(db_path) + "-shm")
+        if shm.exists():
+            os.chmod(shm, 0o600)
+    except Exception:
+        pass
+
+
 def select_queued_rows(conn: sqlite3.Connection, *, max_lines: int) -> list[sqlite3.Row]:
     query = "SELECT id, spawn_intent_id, payload, attempts FROM queue_entries WHERE state='queued' ORDER BY id"
     params: tuple[Any, ...] = ()
@@ -493,14 +507,14 @@ def enqueue_entries_sqlite(
             if callable(on_lock_busy):
                 on_lock_busy()
         elif callable(diag):
-            diag(f"queue db migrate enqueue failed: {exc}")
+            diag(f"queue db enqueue failed: {exc}")
     except Exception as exc:
         try:
             conn.rollback()
         except Exception:
             pass
         if callable(diag):
-            diag(f"queue db migrate enqueue failed: {exc}")
+            diag(f"queue db enqueue failed: {exc}")
     return False
 
 

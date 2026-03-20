@@ -41,7 +41,7 @@ except Exception:
     pass
 
 # ========= User-togglable constants =========================================
-NAUTICAL_HOOK_VERSION = "updateE-20260126"
+NAUTICAL_HOOK_VERSION = "updateE-20260319"
 ANCHOR_WARN = True  # If True, warn when a user-provided due is not on an anchor day
 UPCOMING_PREVIEW = 5  # How many future dates to preview.
 _PREVIEW_HARD_CAP = 100
@@ -98,7 +98,7 @@ def _core_target_from_base(base: Path) -> Path | None:
         return None
     pyfile = base / "nautical_core.py"
     pkgini = base / "nautical_core" / "__init__.py"
-    return pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+    return pkgini if pkgini.is_file() else pyfile if pyfile.is_file() else None
 
 # --- Optional micro-profiler (stderr-only; enable with NAUTICAL_PROFILE=1 or 2)
 _PROFILE_LEVEL = int(os.environ.get('NAUTICAL_PROFILE', '0') or '0')

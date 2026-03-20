@@ -79,7 +79,7 @@ def _core_target_from_base(base: Path) -> Path | None:
         return None
     pyfile = base / "nautical_core.py"
     pkgini = base / "nautical_core" / "__init__.py"
-    return pyfile if pyfile.is_file() else pkgini if pkgini.is_file() else None
+    return pkgini if pkgini.is_file() else pyfile if pyfile.is_file() else None
 
 core = None
 _CORE_IMPORT_ERROR: Exception | None = None

@@ -3996,10 +3996,14 @@ def _end_summary_sorted_chain(chain_id: str, actual_current: dict) -> list[dict]
 
 
 def _end_summary_span_fields(chain_id: str, chain: list[dict]) -> tuple[datetime | None, datetime | None, str]:
-    first_task = _export_chain_endpoint(chain_id, "first")
-    last_task = _export_chain_endpoint(chain_id, "last")
-    first = _dtparse((first_task or {}).get("due")) if first_task else (_dtparse(chain[0].get("due")) if chain else None)
-    last = _dtparse((last_task or {}).get("end")) if last_task else (_dtparse(chain[-1].get("end")) if chain else None)
+    first_task = chain[0] if chain else None
+    last_task = chain[-1] if chain else None
+    if not first_task and chain_id:
+        first_task = _export_chain_endpoint(chain_id, "first")
+    if not last_task and chain_id:
+        last_task = _export_chain_endpoint(chain_id, "last")
+    first = _dtparse((first_task or {}).get("due")) if first_task else None
+    last = _dtparse((last_task or {}).get("end")) if last_task else None
     span = "–"
     if first and last:
         span = (

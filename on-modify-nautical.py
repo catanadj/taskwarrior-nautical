@@ -93,9 +93,23 @@ _DIAG_STATS = {
     "export_full_cache_hits": 0,
     "export_full_cache_misses": 0,
     "tw_get_cache_hits": 0,
+    "tw_get_cache_misses": 0,
+    "task_text_cache_hits": 0,
+    "task_text_cache_misses": 0,
+    "chain_root_age_cache_hits": 0,
+    "chain_root_age_cache_misses": 0,
+    "format_root_age_cache_hits": 0,
+    "format_root_age_cache_misses": 0,
     "unexpected_cache_misses": 0,
     "chain_cache_seeded": 0,
     "run_task_seconds": 0.0,
+}
+
+_RUN_QUERY_CTX: dict[str, dict[object, object]] = {
+    "task_text": {},
+    "tw_get": {},
+    "chain_root_age": {},
+    "format_root_age": {},
 }
 
 _DIAG_START_TS = _ptime.perf_counter()
@@ -182,6 +196,34 @@ def _dump_diag_stats() -> None:
             sys.stderr.write("[nautical] diag stats: " + ", ".join(parts) + "\n")
         except Exception:
             pass
+
+
+def _query_ctx_get(bucket: str, key):
+    try:
+        store = _RUN_QUERY_CTX.get(bucket)
+        if isinstance(store, dict):
+            return store.get(key)
+    except Exception:
+        pass
+    return None
+
+
+def _query_ctx_set(bucket: str, key, value) -> None:
+    try:
+        store = _RUN_QUERY_CTX.get(bucket)
+        if isinstance(store, dict):
+            store[key] = value
+            _DIAG_STATS[f"query_ctx_{bucket}_entries"] = len(store)
+    except Exception:
+        pass
+
+
+def _task_args_cacheable(args) -> bool:
+    try:
+        parts = tuple(str(a) for a in (args or ()))
+    except Exception:
+        return False
+    return ('_get' in parts) or ('export' in parts) or ('count' in parts)
 
 
 def _diag_summary() -> None:
@@ -2070,8 +2112,20 @@ def _task(args, env=None) -> str:
     Thin wrapper around 'task' returning stdout as text.
     Always disables hooks; caller should provide rc.json.array flag when needed.
     """
+    cache_key = None
+    if env is None and _task_args_cacheable(args):
+        try:
+            cache_key = tuple(str(a) for a in args)
+        except Exception:
+            cache_key = None
+        if cache_key is not None:
+            cached = _query_ctx_get("task_text", cache_key)
+            if isinstance(cached, str):
+                _diag_count("task_text_cache_hits")
+                return cached
+            _diag_count("task_text_cache_misses")
     modify_queries = _module("modify_queries")
-    return modify_queries.task_text(
+    out = modify_queries.task_text(
         args,
         run_task=_run_task,
         task_cmd_prefix=_task_cmd_prefix(),
@@ -2080,6 +2134,9 @@ def _task(args, env=None) -> str:
         retries=2,
         diag=_diag,
     )
+    if cache_key is not None:
+        _query_ctx_set("task_text", cache_key, out or "")
+    return out
 
 def _export_uuid_full(u: str, env=None) -> dict | None:
     """Export a single task by full UUID."""
@@ -2155,19 +2212,36 @@ def _tw_get_cached(ref: str) -> str:
             if short and cache_chain_id:
                 _diag_count("unexpected_cache_misses")
                 _diag(f"cache miss: _get {ref} (chainID={cache_chain_id})")
+        cached = _query_ctx_get("tw_get", ref)
+        if isinstance(cached, str):
+            _diag_count("tw_get_cache_hits")
+            return cached
+        _diag_count("tw_get_cache_misses")
         modify_queries = _module("modify_queries")
-        return modify_queries.tw_get(
+        out = modify_queries.tw_get(
             ref,
             task_text=lambda args: _task(args, env=None),
         )
+        _query_ctx_set("tw_get", ref, out or "")
+        return out
     except Exception:
         return ""
 
 def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]:
     """Get chain root (chainID) and age in days.
     Returns (root_short, age_days). age_days is None if unavailable."""
+    try:
+        cache_key = (_root_uuid_from(task), str(_tolocal(now_utc).date()))
+    except Exception:
+        cache_key = None
+    if cache_key is not None:
+        cached = _query_ctx_get("chain_root_age", cache_key)
+        if isinstance(cached, tuple) and len(cached) == 2:
+            _diag_count("chain_root_age_cache_hits")
+            return cached
+        _diag_count("chain_root_age_cache_misses")
     modify_queries = _module("modify_queries")
-    return modify_queries.chain_root_and_age(
+    result = modify_queries.chain_root_and_age(
         task,
         now_utc,
         root_uuid_from=_root_uuid_from,
@@ -2175,16 +2249,32 @@ def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]
         dtparse=_dtparse,
         tolocal=_tolocal,
     )
+    if cache_key is not None:
+        _query_ctx_set("chain_root_age", cache_key, result)
+    return result
 
 def _format_root_and_age(task: dict, now_utc: datetime) -> str:
     """Format root and age as a single string.
     Returns root (age) or just root if age is 0 or unavailable."""
+    try:
+        cache_key = (_root_uuid_from(task), str(_tolocal(now_utc).date()))
+    except Exception:
+        cache_key = None
+    if cache_key is not None:
+        cached = _query_ctx_get("format_root_age", cache_key)
+        if isinstance(cached, str):
+            _diag_count("format_root_age_cache_hits")
+            return cached
+        _diag_count("format_root_age_cache_misses")
     modify_queries = _module("modify_queries")
-    return modify_queries.format_root_and_age(
+    result = modify_queries.format_root_and_age(
         task,
         now_utc,
         chain_root_and_age=_chain_root_and_age,
     )
+    if cache_key is not None:
+        _query_ctx_set("format_root_age", cache_key, result)
+    return result
 
 # ------------------------------------------------------------------------------
 # On modify-without-completion helpers

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import sqlite3
 import time
 from pathlib import Path
@@ -180,7 +179,7 @@ def connect_queue_db(
             if attempt >= max_attempts:
                 break
             delay = max(0.0, float(backoff_base or 0.0)) * (2 ** (attempt - 1))
-            jitter = random.uniform(0.0, max(0.001, delay)) if delay > 0 else 0.0
+            jitter = ((time.monotonic_ns() % 1_000_000) / 1_000_000.0) * max(0.001, delay) if delay > 0 else 0.0
             if callable(sleep_fn):
                 sleep_fn(delay + jitter)
         except Exception as exc:

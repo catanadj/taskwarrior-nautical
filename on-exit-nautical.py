@@ -357,6 +357,30 @@ _QUEUE_DB_CONNECT_RETRIES = _env_int("NAUTICAL_QUEUE_DB_CONNECT_RETRIES", 3)
 _QUEUE_DB_CONNECT_TIMEOUT_MAX = _env_float("NAUTICAL_QUEUE_DB_CONNECT_TIMEOUT_MAX", 60.0)
 _QUEUE_DB_CONNECT_BACKOFF_BASE = _env_float("NAUTICAL_QUEUE_DB_CONNECT_BACKOFF_BASE", 0.05)
 
+_RUN_QUEUE_DB_CONN: sqlite3.Connection | None = None
+_RUN_QUEUE_DB_ACTIVE = False
+_QUEUE_DB_OPEN_COUNT = 0
+_QUEUE_DB_REUSE_COUNT = 0
+
+
+def _queue_db_begin_run() -> None:
+    global _RUN_QUEUE_DB_ACTIVE, _QUEUE_DB_OPEN_COUNT, _QUEUE_DB_REUSE_COUNT
+    _RUN_QUEUE_DB_ACTIVE = True
+    _QUEUE_DB_OPEN_COUNT = 0
+    _QUEUE_DB_REUSE_COUNT = 0
+
+
+def _queue_db_end_run() -> None:
+    global _RUN_QUEUE_DB_ACTIVE, _RUN_QUEUE_DB_CONN
+    _RUN_QUEUE_DB_ACTIVE = False
+    conn = _RUN_QUEUE_DB_CONN
+    _RUN_QUEUE_DB_CONN = None
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 
 def _local_lock_sleep_once(sleep_base: float) -> None:
     try:
@@ -1268,11 +1292,12 @@ def _queue_jsonl_has_data() -> bool:
 
 
 def _queue_db_connect() -> sqlite3.Connection | None:
+    global _QUEUE_DB_OPEN_COUNT
     queue_store = _module("queue_store")
     db_path = queue_store.resolve_queue_db_path(_QUEUE_PATH, _QUEUE_DB_PATH)
     timeout_base = max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0)
     timeout_max = max(timeout_base, float(_QUEUE_DB_CONNECT_TIMEOUT_MAX or timeout_base))
-    return queue_store.connect_queue_db(
+    conn = queue_store.connect_queue_db(
         db_path,
         attempts=max(1, int(_QUEUE_DB_CONNECT_RETRIES or 1)),
         timeout_base=timeout_base,
@@ -1282,6 +1307,9 @@ def _queue_db_connect() -> sqlite3.Connection | None:
         diag=_diag,
         sleep_fn=_sleep,
     )
+    if conn is not None:
+        _QUEUE_DB_OPEN_COUNT += 1
+    return conn
 
 
 def _sqlite_error_looks_corrupt(exc: Exception) -> bool:
@@ -1300,15 +1328,27 @@ def _queue_db_init(conn: sqlite3.Connection) -> None:
 
 
 def _queue_db_open_ready() -> sqlite3.Connection | None:
+    global _RUN_QUEUE_DB_CONN, _QUEUE_DB_REUSE_COUNT
+    if _RUN_QUEUE_DB_ACTIVE and _RUN_QUEUE_DB_CONN is not None:
+        try:
+            _RUN_QUEUE_DB_CONN.execute("SELECT 1")
+            _QUEUE_DB_REUSE_COUNT += 1
+            return _RUN_QUEUE_DB_CONN
+        except Exception:
+            _queue_close_silent(_RUN_QUEUE_DB_CONN)
+            _RUN_QUEUE_DB_CONN = None
     queue_store = _module("queue_store")
     db_path = queue_store.resolve_queue_db_path(_QUEUE_PATH, _QUEUE_DB_PATH)
-    return queue_store.open_ready_queue_db(
+    conn = queue_store.open_ready_queue_db(
         db_path,
         connect_fn=_queue_db_connect,
         init_fn=_queue_db_init,
         close_fn=_queue_close_silent,
         diag=_diag,
     )
+    if _RUN_QUEUE_DB_ACTIVE and conn is not None:
+        _RUN_QUEUE_DB_CONN = conn
+    return conn
 
 
 def _queue_select_queued_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1340,6 +1380,10 @@ def _queue_rows_to_entries(rows: list[sqlite3.Row]) -> list[dict]:
 
 
 def _queue_close_silent(conn: sqlite3.Connection) -> None:
+    if conn is None:
+        return
+    if _RUN_QUEUE_DB_ACTIVE and conn is _RUN_QUEUE_DB_CONN:
+        return
     queue_store = _module("queue_store")
     queue_store.close_silent(conn)
 
@@ -1670,6 +1714,8 @@ class _DrainState:
             "intent_log_load_ms": round(self.intent_log_load_ms, 3),
             "intent_mark_ok": self.intent_mark_ok,
             "intent_mark_fail": self.intent_mark_fail,
+            "queue_db_opens": _QUEUE_DB_OPEN_COUNT,
+            "queue_db_reuses": _QUEUE_DB_REUSE_COUNT,
             "drain_ms": round((time.perf_counter() - drain_t0) * 1000.0, 3),
         }
 
@@ -1861,39 +1907,43 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
 
 
 def _drain_queue() -> dict:
-    drain_t0 = time.perf_counter()
-    entries = _take_queue_entries()
-    entries_total = len(entries)
-    intent_t0 = time.perf_counter()
-    finalized_intents, intent_log_ready = _load_finalized_intents()
-    intent_log_load_ms = (time.perf_counter() - intent_t0) * 1000.0
-    state = _DrainState(
-        entries=entries,
-        entries_total=entries_total,
-        finalized_intents=finalized_intents,
-        intent_log_ready=bool(intent_log_ready),
-        intent_log_load_ms=float(intent_log_load_ms),
-    )
+    _queue_db_begin_run()
+    try:
+        drain_t0 = time.perf_counter()
+        entries = _take_queue_entries()
+        entries_total = len(entries)
+        intent_t0 = time.perf_counter()
+        finalized_intents, intent_log_ready = _load_finalized_intents()
+        intent_log_load_ms = (time.perf_counter() - intent_t0) * 1000.0
+        state = _DrainState(
+            entries=entries,
+            entries_total=entries_total,
+            finalized_intents=finalized_intents,
+            intent_log_ready=bool(intent_log_ready),
+            intent_log_load_ms=float(intent_log_load_ms),
+        )
 
-    for idx, entry in enumerate(entries):
-        if _process_queue_entry(idx, entry, state):
-            break
+        for idx, entry in enumerate(entries):
+            if _process_queue_entry(idx, entry, state):
+                break
 
-    requeue_failed = 0
-    requeue_ok = True
-    if state.requeue:
-        requeue_ok = _requeue_entries(state.requeue)
-        if not requeue_ok:
-            requeue_failed = len(state.requeue)
-            state.errors += requeue_failed
-            _diag(f"requeue failed for {requeue_failed} entries")
+        requeue_failed = 0
+        requeue_ok = True
+        if state.requeue:
+            requeue_ok = _requeue_entries(state.requeue)
+            if not requeue_ok:
+                requeue_failed = len(state.requeue)
+                state.errors += requeue_failed
+                _diag(f"requeue failed for {requeue_failed} entries")
 
-    if state.sqlite_acked_ids:
-        if not _ack_queue_entries_sqlite(sorted(state.sqlite_acked_ids)):
-            state.errors += len(state.sqlite_acked_ids)
-            _diag(f"queue db ack failed for {len(state.sqlite_acked_ids)} entries")
+        if state.sqlite_acked_ids:
+            if not _ack_queue_entries_sqlite(sorted(state.sqlite_acked_ids)):
+                state.errors += len(state.sqlite_acked_ids)
+                _diag(f"queue db ack failed for {len(state.sqlite_acked_ids)} entries")
 
-    return state.to_stats(drain_t0, requeue_ok, requeue_failed)
+        return state.to_stats(drain_t0, requeue_ok, requeue_failed)
+    finally:
+        _queue_db_end_run()
 
 
 def main() -> int:
@@ -1921,6 +1971,8 @@ def main() -> int:
             f"intent_mark_ok={stats.get('intent_mark_ok', 0)} "
             f"intent_mark_fail={stats.get('intent_mark_fail', 0)} "
             f"intent_log_load_ms={stats.get('intent_log_load_ms', 0)} "
+            f"queue_db_opens={stats.get('queue_db_opens', 0)} "
+            f"queue_db_reuses={stats.get('queue_db_reuses', 0)} "
             f"drain_ms={stats.get('drain_ms', 0)}"
         )
     errors = stats.get("errors", 0)

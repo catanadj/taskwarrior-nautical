@@ -120,6 +120,17 @@ def _append_final_rows(
         fb.append((f"Final ({label})", f"{fmt_dt_local(when)}  ({human_delta(now_utc, when, True)})"))
 
 
+def _cp_status_summary(base_no: int, cap_no: int | None) -> str | None:
+    if not cap_no:
+        return None
+    left = max(0, cap_no - base_no)
+    if base_no >= cap_no:
+        return f"last link (cap #{cap_no})"
+    if base_no == cap_no - 1:
+        return f"1 left (cap #{cap_no})"
+    return f"{left} left (cap #{cap_no})"
+
+
 def render_anchor_completion_feedback(
     *,
     new: dict,
@@ -275,9 +286,12 @@ def render_cp_completion_feedback(
     fb = []
     delta = core.humanize_delta(now_utc, child_due, use_months_days=False)
     fb.append(("Period", new.get("cp")))
+    fb.append(("Next", f"#{next_no} → {core.fmt_dt_local(child_due)}  ({delta})"))
+    status_summary = _cp_status_summary(base_no, cap_no)
+    if status_summary:
+        fb.append(("Status", status_summary))
     fb.append(("Basis", _pretty_basis_cp(new, meta, parse_cp_duration=core.parse_cp_duration)))
     fb.append(("Root", format_root_and_age(new, now_utc)))
-    fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
     if analytics_advice:
         fb.append(("Analytics", analytics_advice))
     _append_integrity_warnings_row(fb, integrity_warnings)

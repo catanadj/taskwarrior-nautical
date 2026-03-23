@@ -1798,6 +1798,7 @@ def _format_line_preview(
     if due_delta:
         segments.append(f"[dim]({due_delta})[/]")
     line = " · ".join(seg for seg in segments if seg)
+    line = line.replace("✓ · ", "✓ ", 1)
     cap_txt = _format_line_cap(link_no, cap_no, until_dt, until_no)
     if cap_txt:
         line += f"[dim]{cap_txt}[/]"

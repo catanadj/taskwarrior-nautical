@@ -934,8 +934,8 @@ def _print_task(task):
 
 
 _PANEL_THEMES = {
-    "preview_anchor": {"border": "turquoise2", "title": "bright_cyan", "label": "light_sea_green"},
-    "preview_cp": {"border": "deep_pink1", "title": "deep_pink1", "label": "deep_pink3"},
+    "preview_anchor": {"border": "turquoise2", "title": "bright_cyan", "label": "sea_green2"},
+    "preview_cp": {"border": "dark_orange", "title": "orange_red1", "label": "gold3"},
     "summary": {"border": "indian_red", "title": "indian_red", "label": "red"},
     "disabled": {"border": "yellow", "title": "yellow", "label": "yellow"},
     "error": {"border": "red", "title": "red", "label": "red"},
@@ -2316,31 +2316,31 @@ def _chain_colour_root(kind: str, root_uuid: str) -> str:
     """
     # Palettes chosen to match / complement the panel edge colours
     anchor_palette = [
-            "bright_cyan",
-            "cyan",
-            "turquoise2",
-            "deep_sky_blue1",
-            "light_sky_blue1",
-            "medium_turquoise",
-            "dark_turquoise",
-            "cyan3",
-            "sky_blue1",
-            "dodger_blue1",
-            "steel_blue1",
-            "cornflower_blue",
-        ]
+        "bright_cyan",
+        "cyan",
+        "turquoise2",
+        "medium_turquoise",
+        "dark_turquoise",
+        "cyan3",
+        "deep_sky_blue1",
+        "sky_blue1",
+        "dodger_blue1",
+        "steel_blue1",
+        "spring_green3",
+        "sea_green2",
+    ]
     cp_palette = [
-        "indian_red1",
-        "deep_pink3",
-        "medium_orchid",
-        "orchid1",
         "orange_red1",
-        "hot_pink",
-        "pink3",
+        "dark_orange",
+        "orange3",
+        "gold3",
+        "indian_red1",
         "light_coral",
         "salmon1",
-        "light_pink3",
-        "pale_violet_red1",
+        "tomato",
+        "firebrick1",
+        "deep_pink3",
+        "hot_pink",
         "medium_violet_red",
     ]
 
@@ -2379,7 +2379,7 @@ def _future_style_for_chain(task: dict, kind: str) -> str:
     """
     if not _CHAIN_COLOR_PER_CHAIN:
         # Static behaviour
-        return "medium_violet_red" if kind == "cp" else "cyan"
+        return "dark_orange" if kind == "cp" else "cyan"
 
     return _chain_colour_for_task(task, kind)
 

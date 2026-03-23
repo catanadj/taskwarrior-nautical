@@ -86,6 +86,46 @@ def emit_line(msg: str) -> None:
         pass
 
 
+def _wrap_prefixed_lines(prefix: str, text: str, width: int) -> list[str]:
+    text = strip_rich_markup("" if text is None else str(text))
+    avail = max(10, width - len(prefix))
+    parts = text.splitlines() if "\n" in text else [text]
+    out: list[str] = []
+    current_prefix = prefix
+    for raw_line in parts:
+        line = raw_line.rstrip("\n")
+        if not line:
+            out.append(current_prefix.rstrip())
+            current_prefix = " " * len(prefix)
+            avail = max(10, width - len(current_prefix))
+            continue
+        cur = ""
+        for token in line.split(" "):
+            if not cur:
+                cur = token
+            elif len(cur) + 1 + len(token) <= avail:
+                cur += " " + token
+            else:
+                out.append(current_prefix + cur)
+                current_prefix = " " * len(prefix)
+                avail = max(10, width - len(current_prefix))
+                cur = token
+        if cur:
+            out.append(current_prefix + cur)
+        current_prefix = " " * len(prefix)
+        avail = max(10, width - len(current_prefix))
+    return out or [prefix.rstrip()]
+
+
+def _box_write_line(text: str, inner_width: int, style: str | None = None) -> None:
+    raw = strip_rich_markup(text)
+    pad = max(0, inner_width - len(raw))
+    if style:
+        sys.stderr.write(f"│ {style}{raw}{ansi('0')}{' ' * pad} │\n")
+    else:
+        sys.stderr.write(f"│ {raw}{' ' * pad} │\n")
+
+
 def panel_line_from_rows(title, rows) -> str:
     title_txt = strip_rich_markup(str(title))
     if not rows:
@@ -188,15 +228,18 @@ def _panel_style_for_row(k: str, v: str, *, palette: dict[str, str]) -> str | No
     return None
 
 
-def _panel_emit_timeline_row(label: str, value: str, width: int, label_w: int) -> None:
+def _panel_emit_timeline_row(label: str, value: str, inner_width: int, label_w: int) -> None:
     prefix0 = f"{label:<{label_w}} "
     lines = [ln for ln in value.splitlines() if ln.strip()] if "\n" in value else ([value] if value else [])
-    if lines:
-        emit_wrapped(prefix0, lines[0], width, style=None)
-        for ln in lines[1:]:
-            emit_wrapped(" " * len(prefix0), ln, width, style=None)
+    if not lines:
+        for wrapped in _wrap_prefixed_lines(prefix0, "", inner_width):
+            _box_write_line(wrapped, inner_width)
         return
-    emit_wrapped(prefix0, "", width, style=None)
+    for wrapped in _wrap_prefixed_lines(prefix0, lines[0], inner_width):
+        _box_write_line(wrapped, inner_width)
+    for ln in lines[1:]:
+        for wrapped in _wrap_prefixed_lines(" " * len(prefix0), ln, inner_width):
+            _box_write_line(wrapped, inner_width)
 
 
 def _render_panel_fast(
@@ -220,35 +263,33 @@ def _render_panel_fast(
         "YELLOW": ansi("33") if use_color else "",
     }
 
-    delim = "─" * width
-    sys.stderr.write(delim + "\n")
-    sys.stderr.write(
-        (
-            palette["BOLD"]
-            + palette["CYAN"]
-            + strip_rich_markup(str(title))
-            + palette["RESET"]
-        )
-        + "\n"
-    )
+    inner_width = max(20, width - 4)
+    title_txt = strip_rich_markup(str(title))
+    top_inner = f"─ {title_txt} "
+    if len(top_inner) < inner_width:
+        top_inner += "─" * (inner_width - len(top_inner))
+    else:
+        top_inner = top_inner[:inner_width]
+    sys.stderr.write(f"┌{top_inner}┐\n")
 
     label_w = _panel_label_width(rows, label_width_min, label_width_max)
     for k, v in rows:
         if k is None:
-            sys.stderr.write("\n")
+            _box_write_line("", inner_width)
             continue
 
         label = strip_rich_markup(str(k))
         text = "" if v is None else strip_rich_markup(str(v))
         if label.lower().startswith("timeline"):
-            _panel_emit_timeline_row(label, text, width, label_w)
+            _panel_emit_timeline_row(label, text, inner_width, label_w)
             continue
 
         prefix = f"{label:<{label_w}} "
         style = _panel_style_for_row(label, text, palette=palette)
-        emit_wrapped(prefix, text, width, style=style)
+        for wrapped in _wrap_prefixed_lines(prefix, text, inner_width):
+            _box_write_line(wrapped, inner_width, style=style)
 
-    sys.stderr.write(delim + "\n")
+    sys.stderr.write(f"└{'─' * inner_width}┘\n")
 
 
 def _render_panel_rich(

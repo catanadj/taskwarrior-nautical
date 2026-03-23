@@ -291,7 +291,11 @@ def _render_panel_rich(
             continue
 
         label_text = Text(str(k))
-        value_text = Text("" if v is None else str(v))
+        value_raw = "" if v is None else str(v)
+        try:
+            value_text = Text.from_markup(value_raw)
+        except Exception:
+            value_text = Text(value_raw)
         lk = str(k).lower()
         if "warning" in lk:
             label_text.stylize("bold yellow")
@@ -300,7 +304,7 @@ def _render_panel_rich(
         elif "note" in lk:
             label_text.stylize("italic cyan")
 
-        row_style = _panel_style_for_row(str(k), "" if v is None else str(v), palette=palette)
+        row_style = _panel_style_for_row(str(k), value_raw, palette=palette)
         if row_style:
             value_text.stylize(row_style)
             if lk in {"basis", "root"}:

@@ -290,8 +290,6 @@ def render_cp_completion_feedback(
             base_no,
             second_to_last_text="[yellow]Next link is the last in the chain.[/]",
         )
-    else:
-        fb.append(("Limits", "—"))
 
     _append_final_rows(fb, finals, now_utc, fmt_dt_local=core.fmt_dt_local, human_delta=human_delta)
 

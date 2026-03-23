@@ -995,6 +995,7 @@ def _panel_line(
     kind: str = "info",
     border_style: str | None = None,
     title_style: str | None = None,
+    markup_body: bool = False,
 ) -> None:
     core.panel_line(
         title,
@@ -1003,6 +1004,7 @@ def _panel_line(
         themes=_PANEL_THEMES,
         border_style=border_style,
         title_style=title_style,
+        markup_body=markup_body,
     )
 
 def _strip_quotes(s: str) -> str:
@@ -1790,13 +1792,16 @@ def _format_line_preview(
     lead = f"#{link_no} ✓"
     segments = [lead]
     if delta_txt:
-        segments.append(delta_txt)
+        segments.append(f"[dim]{delta_txt}[/]")
     segments.append(f"next {next_glyph}")
     segments.append(due_local)
     if due_delta:
-        segments.append(f"({due_delta})")
+        segments.append(f"[dim]({due_delta})[/]")
     line = " · ".join(seg for seg in segments if seg)
-    return (line + _format_line_cap(link_no, cap_no, until_dt, until_no)).strip()
+    cap_txt = _format_line_cap(link_no, cap_no, until_dt, until_no)
+    if cap_txt:
+        line += f"[dim]{cap_txt}[/]"
+    return line.strip()
 
 
 def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str, set[str]]:

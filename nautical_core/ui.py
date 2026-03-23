@@ -109,6 +109,7 @@ def panel_line(
     themes: dict | None = None,
     border_style: str | None = None,
     title_style: str | None = None,
+    markup_body: bool = False,
 ) -> None:
     try:
         if not sys.stderr.isatty():
@@ -117,7 +118,7 @@ def panel_line(
         from rich.panel import Panel
         from rich.text import Text
     except Exception:
-        emit_line(line)
+        emit_line(strip_rich_markup(line) if markup_body else line)
         return
 
     theme = (themes or {}).get(kind) or (themes or {}).get("info") or {}
@@ -125,7 +126,7 @@ def panel_line(
     tstyle = title_style or theme.get("title", "cyan")
 
     console = Console(file=sys.stderr, force_terminal=True)
-    body = Text(line)
+    body = Text.from_markup(line) if markup_body else Text(line)
     console.print(
         Panel(
             body,

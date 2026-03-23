@@ -222,7 +222,7 @@ def render_anchor_completion_feedback(
             kind="anchor",
         )
         title_style = chain_colour_for_task(new, "anchor") if chain_color_per_chain else None
-        panel_line(title, line, kind="preview_anchor", border_style=title_style, title_style=title_style)
+        panel_line(title, line, kind="preview_anchor", border_style=title_style, title_style=title_style, markup_body=True)
         return
     if chain_color_per_chain:
         chain_colour = chain_colour_for_task(new, "anchor")
@@ -334,7 +334,7 @@ def render_cp_completion_feedback(
             kind="cp",
         )
         title_style = chain_colour_for_task(new, "cp") if chain_color_per_chain else None
-        panel_line(title, line, kind="preview_cp", border_style=title_style, title_style=title_style)
+        panel_line(title, line, kind="preview_cp", border_style=title_style, title_style=title_style, markup_body=True)
     elif chain_color_per_chain:
         chain_colour = chain_colour_for_task(new, "cp")
         panel(

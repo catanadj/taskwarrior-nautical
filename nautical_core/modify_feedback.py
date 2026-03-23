@@ -290,7 +290,9 @@ def render_cp_completion_feedback(
     status_summary = _cp_status_summary(base_no, cap_no)
     if status_summary:
         fb.append(("Status", status_summary))
-    fb.append(("Basis", _pretty_basis_cp(new, meta, parse_cp_duration=core.parse_cp_duration)))
+    basis_text = _pretty_basis_cp(new, meta, parse_cp_duration=core.parse_cp_duration)
+    if basis_text != "Preserve wall clock (period is multiple of 24h)":
+        fb.append(("Basis", basis_text))
     fb.append(("Root", format_root_and_age(new, now_utc)))
     if analytics_advice:
         fb.append(("Analytics", analytics_advice))

@@ -272,6 +272,13 @@ def _render_panel_rich(
     border = theme.get("border", "blue")
     tstyle = theme.get("title", "cyan")
     lstyle = theme.get("label", "cyan")
+    palette = {
+        "DIM": "dim",
+        "CYAN": "cyan",
+        "GREEN": "green",
+        "RED": "red",
+        "YELLOW": "yellow",
+    }
 
     console = Console(file=sys.stderr, force_terminal=True)
     t = Table.grid(padding=(0, 1), expand=False)
@@ -284,6 +291,7 @@ def _render_panel_rich(
             continue
 
         label_text = Text(str(k))
+        value_text = Text("" if v is None else str(v))
         lk = str(k).lower()
         if "warning" in lk:
             label_text.stylize("bold yellow")
@@ -292,7 +300,13 @@ def _render_panel_rich(
         elif "note" in lk:
             label_text.stylize("italic cyan")
 
-        t.add_row(label_text, "" if v is None else str(v))
+        row_style = _panel_style_for_row(str(k), "" if v is None else str(v), palette=palette)
+        if row_style:
+            value_text.stylize(row_style)
+            if lk in {"basis", "root"}:
+                label_text.stylize(row_style)
+
+        t.add_row(label_text, value_text)
 
     console.print(
         Panel(

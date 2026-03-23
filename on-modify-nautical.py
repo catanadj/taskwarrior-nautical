@@ -1757,11 +1757,12 @@ def _format_line_cap(base_no: int, cap_no: int | None, until_dt: datetime | None
     parts = []
     if cap_no:
         left = max(0, cap_no - base_no)
-        parts.append(f"cap {cap_no}, left {left}")
+        parts.append(f"cap #{cap_no}")
+        parts.append(f"{left} left")
     if until_dt:
         until_txt = core.fmt_dt_local(until_dt)
         parts.append(f"until {until_txt}")
-    return f" ({'; '.join(parts)})" if parts else ""
+    return (" · " + " · ".join(parts)) if parts else ""
 
 def _format_line_preview(
     link_no: int,
@@ -1772,35 +1773,29 @@ def _format_line_preview(
     cap_no: int | None = None,
     until_dt: datetime | None = None,
     until_no: int | None = None,
+    kind: str = "cp",
 ) -> str:
     cur_due = _dtparse(task.get("due"))
     cur_end = _dtparse(task.get("end"))
     delta_txt = core.strip_rich_markup(_fmt_on_time_delta(cur_due, cur_end) or "").strip()
     if delta_txt.startswith("(") and delta_txt.endswith(")"):
         delta_txt = delta_txt[1:-1].strip()
-    if delta_txt:
-        if not delta_txt.endswith(","):
-            delta_txt = f"{delta_txt},"
     due_local = core.fmt_dt_local(child_due_utc) if child_due_utc else "—"
     due_delta = _human_delta(now_utc, child_due_utc, False)
     if due_delta.startswith("in "):
         due_delta = "due " + due_delta
-    elif due_delta.startswith("overdue by "):
-        due_delta = due_delta
-    else:
+    elif not due_delta.startswith("overdue by "):
         due_delta = "due " + due_delta
-    cap_txt = _format_line_cap(link_no, cap_no, until_dt, until_no)
-    parts = [str(link_no), "✓"]
+    next_glyph = "⚓" if str(kind or "").lower() == "anchor" else "⛓"
+    segments = [f"#{link_no}", "✓"]
     if delta_txt:
-        parts.append(delta_txt)
-    parts.append("next")
-    parts.append("►")
-    parts.append(due_local)
-    parts.append(due_delta)
-    line = " ".join(p for p in parts if p)
-    if cap_txt:
-        line = line + cap_txt
-    return line.strip()
+        segments.append(delta_txt)
+    segments.append(f"next {next_glyph}")
+    segments.append(due_local)
+    if due_delta:
+        segments.append(f"({due_delta})")
+    line = " · ".join(seg for seg in segments if seg)
+    return (line + _format_line_cap(link_no, cap_no, until_dt, until_no)).strip()
 
 
 def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str, set[str]]:

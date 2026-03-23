@@ -166,15 +166,16 @@ def render_anchor_completion_feedback(
     expr_str = strip_quotes(anchor_raw)
     mode_tag = _anchor_mode_tag(new)
     fb.append(("Pattern", f"{expr_str}  {mode_tag}"))
+    delta = core.humanize_delta(now_utc, child_due, use_months_days=core.expr_has_m_or_y(dnf))
+    fb.append(("Next", f"#{next_no} → {core.fmt_dt_local(child_due)}  ({delta})"))
     fb.append(("Natural", core.describe_anchor_dnf(dnf, new)))
-    fb.append(("Basis", _pretty_basis_anchor(meta, new, parse_dt_any=core.parse_dt_any, fmt_dt_local=core.fmt_dt_local)))
+    basis_text = _pretty_basis_anchor(meta, new, parse_dt_any=core.parse_dt_any, fmt_dt_local=core.fmt_dt_local)
+    if basis_text != "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)":
+        fb.append(("Basis", basis_text))
     fb.append(("Root", format_root_and_age(new, now_utc)))
 
     _append_wait_sched_feedback_rows(fb, debug_wait_sched=debug_wait_sched, last_wait_sched_debug=last_wait_sched_debug)
     _append_sanitised_fields_row(fb, stripped_attrs)
-
-    delta = core.humanize_delta(now_utc, child_due, use_months_days=core.expr_has_m_or_y(dnf))
-    fb.append(("Next Due", f"{core.fmt_dt_local(child_due)}  ({delta})"))
     if analytics_advice:
         fb.append(("Analytics", analytics_advice))
     _append_integrity_warnings_row(fb, integrity_warnings)

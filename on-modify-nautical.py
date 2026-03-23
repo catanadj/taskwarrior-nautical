@@ -1787,7 +1787,8 @@ def _format_line_preview(
     elif not due_delta.startswith("overdue by "):
         due_delta = "due " + due_delta
     next_glyph = "⚓" if str(kind or "").lower() == "anchor" else "⛓"
-    segments = [f"#{link_no}", "✓"]
+    lead = f"#{link_no} ✓"
+    segments = [lead]
     if delta_txt:
         segments.append(delta_txt)
     segments.append(f"next {next_glyph}")

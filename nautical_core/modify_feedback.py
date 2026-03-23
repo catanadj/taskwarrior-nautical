@@ -302,7 +302,7 @@ def render_cp_completion_feedback(
     if deferred_spawn and diag_enabled and spawn_intent_id:
         fb.append(("Intent", spawn_intent_id))
 
-    title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short} [{child_id}]"
+    title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short}"
     tl = timeline_lines(
         "cp",
         new,

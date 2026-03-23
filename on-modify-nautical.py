@@ -2317,7 +2317,11 @@ def _chain_colour_root(kind: str, root_uuid: str) -> str:
     # Palettes chosen to match / complement the panel edge colours
     anchor_palette = [
         "bright_cyan",
+        "bright_green",
         "cyan",
+        "cyan1",
+        "cyan2",
+        "cyan3",
         "turquoise2",
         "medium_turquoise",
         "dark_turquoise",
@@ -2328,6 +2332,10 @@ def _chain_colour_root(kind: str, root_uuid: str) -> str:
         "steel_blue1",
         "spring_green3",
         "sea_green2",
+        "green1",
+        "green3",
+        "green4",
+        "green_yellow",
     ]
     cp_palette = [
         "orange_red1",
@@ -2342,6 +2350,12 @@ def _chain_colour_root(kind: str, root_uuid: str) -> str:
         "deep_pink3",
         "hot_pink",
         "medium_violet_red",
+        "red",
+        "red1",
+        "red3",
+        "pale_violet_red1",
+        "orchid",
+        "orchid1",
     ]
 
     palette = cp_palette if kind == "cp" else anchor_palette

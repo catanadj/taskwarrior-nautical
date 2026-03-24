@@ -120,6 +120,54 @@ def _append_final_rows(
         fb.append((f"Final ({label})", f"{fmt_dt_local(when)}  ({human_delta(now_utc, when, True)})"))
 
 
+def _display_mode_name(core) -> str:
+    return str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
+
+
+def _rows_are_notable(rows: list[tuple[str, object]]) -> bool:
+    notable_labels = {"integrity", "warning", "error", "link status", "links left", "sanitised", "intent"}
+    for k, v in rows:
+        if k is None:
+            continue
+        lk = str(k).strip().lower()
+        if lk in notable_labels or lk.startswith("final"):
+            return True
+        if lk == "basis":
+            return True
+        if lk == "analytics" and str(v or "").strip():
+            return True
+    return False
+
+
+def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: bool = True) -> list[tuple[str, object]]:
+    keep_labels = {
+        "pattern",
+        "period",
+        "next",
+        "natural",
+        "basis",
+        "root",
+        "link status",
+        "links left",
+        "integrity",
+        "timeline",
+        "sanitised",
+        "warning",
+        "error",
+        "intent",
+    }
+    out: list[tuple[str, object]] = []
+    for k, v in rows:
+        if k is None:
+            continue
+        lk = str(k).strip().lower()
+        if lk == "timeline" and not include_timeline:
+            continue
+        if lk in keep_labels or lk.startswith("final"):
+            out.append((k, v))
+    return out
+
+
 def render_anchor_completion_feedback(
     *,
     new: dict,
@@ -210,7 +258,8 @@ def render_anchor_completion_feedback(
 
     fb = format_next_anchor_rows(fb)
 
-    if (core.PANEL_MODE or "").strip().lower() == "line":
+    mode = _display_mode_name(core)
+    if mode in {"line", "minimal"}:
         line = format_line_preview(
             base_no,
             new,
@@ -221,10 +270,29 @@ def render_anchor_completion_feedback(
             until_dt=until_dt,
             until_no=until_cap_no,
             kind="anchor",
+            minimal=(mode == "minimal"),
         )
         title_style = chain_colour_for_task(new, "anchor") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_anchor", border_style=title_style, title_style=title_style, markup_body=True)
         return
+    if mode == "quiet" and not _rows_are_notable(fb):
+        line = format_line_preview(
+            base_no,
+            new,
+            child_due,
+            child_short,
+            now_utc,
+            cap_no=cap_no,
+            until_dt=until_dt,
+            until_no=until_cap_no,
+            kind="anchor",
+            minimal=True,
+        )
+        title_style = chain_colour_for_task(new, "anchor") if chain_color_per_chain else None
+        panel_line(title, line, kind="preview_anchor", border_style=title_style, title_style=title_style, markup_body=True)
+        return
+    if mode in {"compact", "quiet"}:
+        fb = _compact_feedback_rows(fb, include_timeline=True)
     if chain_color_per_chain:
         chain_colour = chain_colour_for_task(new, "anchor")
         panel(
@@ -322,7 +390,8 @@ def render_cp_completion_feedback(
 
     fb = format_next_cp_rows(fb)
 
-    if (core.PANEL_MODE or "").strip().lower() == "line":
+    mode = _display_mode_name(core)
+    if mode in {"line", "minimal"}:
         line = format_line_preview(
             base_no,
             new,
@@ -333,10 +402,30 @@ def render_cp_completion_feedback(
             until_dt=until_dt,
             until_no=until_cap_no,
             kind="cp",
+            minimal=(mode == "minimal"),
         )
         title_style = chain_colour_for_task(new, "cp") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_cp", border_style=title_style, title_style=title_style, markup_body=True)
-    elif chain_color_per_chain:
+        return
+    if mode == "quiet" and not _rows_are_notable(fb):
+        line = format_line_preview(
+            base_no,
+            new,
+            child_due,
+            child_short,
+            now_utc,
+            cap_no=cap_no,
+            until_dt=until_dt,
+            until_no=until_cap_no,
+            kind="cp",
+            minimal=True,
+        )
+        title_style = chain_colour_for_task(new, "cp") if chain_color_per_chain else None
+        panel_line(title, line, kind="preview_cp", border_style=title_style, title_style=title_style, markup_body=True)
+        return
+    if mode in {"compact", "quiet"}:
+        fb = _compact_feedback_rows(fb, include_timeline=True)
+    if chain_color_per_chain:
         chain_colour = chain_colour_for_task(new, "cp")
         panel(
             title,

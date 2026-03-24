@@ -1776,6 +1776,7 @@ def _format_line_preview(
     until_dt: datetime | None = None,
     until_no: int | None = None,
     kind: str = "cp",
+    minimal: bool = False,
 ) -> str:
     cur_due = _dtparse(task.get("due"))
     cur_end = _dtparse(task.get("end"))
@@ -1790,6 +1791,10 @@ def _format_line_preview(
         due_delta = "due " + due_delta
     next_glyph = "⚓" if str(kind or "").lower() == "anchor" else "⛓"
     lead = f"#{link_no} ✓"
+    if minimal:
+        segments = [lead, f"next {next_glyph}", due_local]
+        line = " ".join(seg for seg in segments if seg)
+        return line.strip()
     segments = [lead]
     if delta_txt:
         segments.append(f"[dim]{delta_txt}[/]")

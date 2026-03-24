@@ -188,6 +188,8 @@ def _normalize_panel_mode(
     mode = str(panel_mode or "").strip().lower()
     if mode in {"plain"}:
         mode = "fast"
+    if mode in {"minimal", "quiet"}:
+        mode = "line"
     if mode == "line" and not allow_line:
         mode = "rich"
     if mode == "line" and line_force_rich_kinds and kind in line_force_rich_kinds:

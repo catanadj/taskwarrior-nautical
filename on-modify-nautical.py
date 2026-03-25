@@ -117,6 +117,8 @@ _HOOK_CONTEXT = None
 _HOOK_CONTEXT_LOAD_FAILED = False
 _HOOK_ENGINE = None
 _HOOK_ENGINE_LOAD_FAILED = False
+_HOOK_RESULTS = None
+_HOOK_RESULTS_LOAD_FAILED = False
 # ------------------------------------------------------------------------------
 # Debug: wait/scheduled carry-forward
 # Set debug_wait_sched=true to include carry computations in the feedback panel.
@@ -457,6 +459,12 @@ _MODULE_SPECS = {
         "_HOOK_ENGINE_LOAD_FAILED",
         "hook_engine.py",
         "nautical_hook_engine",
+    ),
+    "hook_results": (
+        "_HOOK_RESULTS",
+        "_HOOK_RESULTS_LOAD_FAILED",
+        "hook_results.py",
+        "nautical_hook_results",
     ),
 }
 try:
@@ -924,21 +932,12 @@ def _decode_latest_task_from_raw(raw: str) -> dict | None:
 
 
 def _panic_passthrough() -> None:
-    fallback: dict[str, Any] = {}
-    task = _PARSED_NEW if isinstance(_PARSED_NEW, dict) else None
-    if task is None:
-        task = _decode_latest_task_from_raw(_RAW_INPUT_TEXT)
-    try:
-        print(json.dumps(task if isinstance(task, dict) else fallback, ensure_ascii=False), end="")
-    except Exception:
-        try:
-            print("{}", end="")
-        except Exception:
-            pass
-    try:
-        sys.stdout.flush()
-    except Exception:
-        pass
+    hook_results = _module("hook_results")
+    hook_results.panic_passthrough(
+        _RAW_INPUT_TEXT,
+        _PARSED_NEW,
+        decode_latest_task_from_raw=_decode_latest_task_from_raw,
+    )
 
 
 def _task_has_nautical_fields(old: dict, new: dict) -> bool:
@@ -5024,7 +5023,8 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
 
 
 def _emit_modify_passthrough(task: dict) -> None:
-    print(json.dumps(task, ensure_ascii=False))
+    hook_results = _module("hook_results")
+    hook_results.emit_passthrough_json(task)
 
 
 def main():

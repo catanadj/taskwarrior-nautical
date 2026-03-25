@@ -2343,17 +2343,19 @@ def _chain_colour_root(kind: str, root_uuid: str) -> str:
         "green3",
         "green4",
         "green_yellow",
+        "dark_sea_green",
     ]
     cp_palette = [
         "orange_red1",
+        "light_salmon1",
+        "light_pink3",
+        "light_coral",
         "dark_orange",
         "orange3",
         "gold3",
         "indian_red1",
         "light_coral",
         "salmon1",
-        "tomato",
-        "firebrick1",
         "deep_pink3",
         "hot_pink",
         "medium_violet_red",
@@ -2363,6 +2365,7 @@ def _chain_colour_root(kind: str, root_uuid: str) -> str:
         "pale_violet_red1",
         "orchid",
         "orchid1",
+        "dark_violet",
     ]
 
     palette = cp_palette if kind == "cp" else anchor_palette

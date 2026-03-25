@@ -108,6 +108,8 @@ core = None
 _CORE_READY = False
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
+_HOOK_LOADER = None
+_HOOK_LOADER_LOAD_FAILED = False
 _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
 _ADD_FORMATTING = None
@@ -216,48 +218,72 @@ TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
 _IMPORT_MS = None
 
 
-def _optional_sibling_module_target(base: Path, rel_name: str) -> Path | None:
+def _hook_loader_target(base: Path) -> Path | None:
     try:
         if base.is_file():
             if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / rel_name
+                target = base.parent / "hook_loader.py"
                 return target if target.is_file() else None
             return None
     except Exception:
         return None
-    target = base / "nautical_core" / rel_name
+    target = base / "nautical_core" / "hook_loader.py"
     return target if target.is_file() else None
 
 
-def _load_optional_sibling_module(cache_attr: str, failed_attr: str, rel_name: str, module_name: str):
-    module = globals().get(cache_attr)
-    if module is not None:
-        return module
-    if globals().get(failed_attr):
+def _load_hook_loader():
+    global _HOOK_LOADER, _HOOK_LOADER_LOAD_FAILED
+    if _HOOK_LOADER is not None:
+        return _HOOK_LOADER
+    if _HOOK_LOADER_LOAD_FAILED:
         return None
     base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _optional_sibling_module_target(base, rel_name)
+    target = _hook_loader_target(base)
     if not target:
-        globals()[failed_attr] = True
+        _HOOK_LOADER_LOAD_FAILED = True
         return None
     try:
-        spec = importlib.util.spec_from_file_location(module_name, target)
+        spec = importlib.util.spec_from_file_location("nautical_hook_loader", target)
         if spec and spec.loader:
             module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
+            sys.modules["nautical_hook_loader"] = module
             spec.loader.exec_module(module)
-            globals()[cache_attr] = module
+            _HOOK_LOADER = module
             return module
     except Exception:
         pass
-    globals()[failed_attr] = True
+    _HOOK_LOADER_LOAD_FAILED = True
     return None
 
 
 def _load_named_module(name: str):
-    cache_attr, failed_attr, rel_name, module_name = _MODULE_SPECS[name]
-    return _load_optional_sibling_module(cache_attr, failed_attr, rel_name, module_name)
+    hook_loader = _load_hook_loader()
+    if hook_loader is None:
+        return None
+    return hook_loader.load_named_module(
+        name,
+        _MODULE_SPECS,
+        globals(),
+        globals(),
+        base=_CORE_IMPORT_TARGET or _CORE_BASE,
+    )
 
+
+def _require_loaded_module(module, rel_name: str):
+    hook_loader = _load_hook_loader()
+    if hook_loader is not None:
+        return hook_loader.require_loaded_module(module, rel_name)
+    if module is None:
+        raise RuntimeError(f"nautical_core/{rel_name} is required")
+    return module
+
+
+def _module(name: str, *, required: bool = True):
+    module = _load_named_module(name)
+    if not required:
+        return module
+    rel_name = _MODULE_SPECS[name][2]
+    return _require_loaded_module(module, rel_name)
 
 def _task_cmd_prefix() -> list[str]:
     hook_support = _module("hook_support", required=False)
@@ -272,18 +298,6 @@ def _task_cmd_prefix() -> list[str]:
     return cmd
 
 
-def _require_loaded_module(module, rel_name: str):
-    if module is None:
-        raise RuntimeError(f"nautical_core/{rel_name} is required")
-    return module
-
-
-def _module(name: str, *, required: bool = True):
-    module = _load_named_module(name)
-    if not required:
-        return module
-    rel_name = _MODULE_SPECS[name][2]
-    return _require_loaded_module(module, rel_name)
 
 def _load_core() -> None:
     global core, _IMPORT_MS, _MAX_JSON_BYTES, _CORE_READY

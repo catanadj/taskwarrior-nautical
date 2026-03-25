@@ -113,6 +113,10 @@ _RUN_QUERY_CTX: dict[str, dict[object, object]] = {
 }
 
 _DIAG_START_TS = _ptime.perf_counter()
+_HOOK_CONTEXT = None
+_HOOK_CONTEXT_LOAD_FAILED = False
+_HOOK_ENGINE = None
+_HOOK_ENGINE_LOAD_FAILED = False
 # ------------------------------------------------------------------------------
 # Debug: wait/scheduled carry-forward
 # Set debug_wait_sched=true to include carry computations in the feedback panel.
@@ -440,6 +444,18 @@ _MODULE_SPECS = {
         "queue_models.py",
         "nautical_queue_models",
     ),
+    "hook_context": (
+        "_HOOK_CONTEXT",
+        "_HOOK_CONTEXT_LOAD_FAILED",
+        "hook_context.py",
+        "nautical_hook_context",
+    ),
+    "hook_engine": (
+        "_HOOK_ENGINE",
+        "_HOOK_ENGINE_LOAD_FAILED",
+        "hook_engine.py",
+        "nautical_hook_engine",
+    ),
 }
 try:
     target = _core_target_from_base(_CORE_BASE)
@@ -537,6 +553,17 @@ def _module(name: str, *, required: bool = True):
         return module
     rel_name = _MODULE_SPECS[name][2]
     return _require_loaded_module(module, rel_name)
+
+
+def _build_hook_runtime_context():
+    hook_context = _module("hook_context")
+    return hook_context.build_hook_runtime_context(
+        hook_name="on-modify",
+        taskdata_dir=str(TW_DATA_DIR),
+        use_rc_data_location=_USE_RC_DATA_LOCATION,
+        tw_dir=str(TW_DIR),
+        hook_dir=str(HOOK_DIR),
+    )
 
 
 def _task_cmd_prefix() -> list[str]:
@@ -4983,29 +5010,24 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     _diag_summary()
 
 
+def _emit_modify_passthrough(task: dict) -> None:
+    print(json.dumps(task, ensure_ascii=False))
+
+
 def main():
-    old, new = _read_two()
-
-    # Skip all Nautical logic when task is being deleted
-    if (new.get("status") or "").lower() == "deleted":
-        print(json.dumps(new, ensure_ascii=False))
-        return
-
-    if not _task_has_nautical_fields(old, new):
-        print(json.dumps(new, ensure_ascii=False))
-        return
-
-    try:
-        _load_core()
-    except Exception as e:
-        _diag(f"core load failed: {e}")
-        _fail_and_exit("Hook misconfigured", "Failed to initialize nautical core")
-
-    if _is_non_completion_modify(old, new):
-        _handle_non_completion_modify(old, new)
-        return
-
-    _handle_completion_modify(old, new)
+    hook_engine = _module("hook_engine")
+    hook_engine.handle_on_modify(
+        runtime=_build_hook_runtime_context(),
+        read_two=_read_two,
+        emit_passthrough=_emit_modify_passthrough,
+        task_has_nautical_fields=_task_has_nautical_fields,
+        load_core=_load_core,
+        diag=_diag,
+        fail_and_exit=_fail_and_exit,
+        is_non_completion_modify=_is_non_completion_modify,
+        handle_non_completion_modify=_handle_non_completion_modify,
+        handle_completion_modify=_handle_completion_modify,
+    )
 
 
 # ------------------------------------------------------------------------------

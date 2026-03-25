@@ -68,3 +68,40 @@ def handle_on_exit(
         emit_exit_feedback(strict_msg)
         return 1
     return 0
+
+
+
+def handle_on_modify(
+    *,
+    runtime,
+    read_two,
+    emit_passthrough,
+    task_has_nautical_fields,
+    load_core,
+    diag,
+    fail_and_exit,
+    is_non_completion_modify,
+    handle_non_completion_modify,
+    handle_completion_modify,
+) -> None:
+    old, new = read_two()
+
+    if (new.get('status') or '').lower() == 'deleted':
+        emit_passthrough(new)
+        return
+
+    if not task_has_nautical_fields(old, new):
+        emit_passthrough(new)
+        return
+
+    try:
+        load_core()
+    except Exception as exc:
+        diag(f'core load failed: {exc}')
+        fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
+
+    if is_non_completion_modify(old, new):
+        handle_non_completion_modify(old, new)
+        return
+
+    handle_completion_modify(old, new)

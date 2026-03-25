@@ -96,6 +96,10 @@ _QUEUE_STORE = None
 _QUEUE_STORE_LOAD_FAILED = False
 _QUEUE_MODELS = None
 _QUEUE_MODELS_LOAD_FAILED = False
+_HOOK_CONTEXT = None
+_HOOK_CONTEXT_LOAD_FAILED = False
+_HOOK_ENGINE = None
+_HOOK_ENGINE_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -132,6 +136,18 @@ _MODULE_SPECS = {
         "_QUEUE_MODELS_LOAD_FAILED",
         "queue_models.py",
         "nautical_queue_models",
+    ),
+    "hook_context": (
+        "_HOOK_CONTEXT",
+        "_HOOK_CONTEXT_LOAD_FAILED",
+        "hook_context.py",
+        "nautical_hook_context",
+    ),
+    "hook_engine": (
+        "_HOOK_ENGINE",
+        "_HOOK_ENGINE_LOAD_FAILED",
+        "hook_engine.py",
+        "nautical_hook_engine",
     ),
 }
 try:
@@ -257,6 +273,18 @@ def _module(name: str, *, required: bool = True):
         return module
     rel_name = _MODULE_SPECS[name][2]
     return _require_loaded_module(module, rel_name)
+
+
+
+def _build_hook_runtime_context():
+    hook_context = _module("hook_context")
+    return hook_context.build_hook_runtime_context(
+        hook_name="on-exit",
+        taskdata_dir=str(TW_DATA_DIR),
+        use_rc_data_location=_USE_RC_DATA_LOCATION,
+        tw_dir=str(TW_DIR),
+        hook_dir=str(HOOK_DIR),
+    )
 
 def _nautical_state_dir_path() -> Path:
     queue_store = _module("queue_store", required=False)
@@ -1946,45 +1974,62 @@ def _drain_queue() -> dict:
         _queue_db_end_run()
 
 
-def main() -> int:
+def _redirect_stdout_to_devnull() -> None:
     try:
         sys.stdout = open(os.devnull, "w", encoding="utf-8")
     except Exception:
         pass
-    stats = _drain_queue()
-    if os.environ.get("NAUTICAL_DIAG") == "1":
-        _diag(
-            "on-exit drain: "
-            f"entries_total={stats.get('entries_total', 0)} "
-            f"idempotent_skipped={stats.get('entries_skipped_idempotent', 0)} "
-            f"processed={stats.get('processed', 0)} "
-            f"errors={stats.get('errors', 0)} "
-            f"requeued={stats.get('requeued', 0)} "
-            f"requeue_failed={stats.get('requeue_failed', 0)} "
-            f"dead_lettered={stats.get('dead_lettered', 0)} "
-            f"queue_lock_failures={stats.get('queue_lock_failures', 0)} "
-            f"lock_events={stats.get('lock_events', 0)} "
-            f"lock_streak_max={stats.get('lock_streak_max', 0)} "
-            f"circuit_breaks={stats.get('circuit_breaks', 0)} "
-            f"intent_log_ready={stats.get('intent_log_ready', 0)} "
-            f"intent_log_size={stats.get('intent_log_size', 0)} "
-            f"intent_mark_ok={stats.get('intent_mark_ok', 0)} "
-            f"intent_mark_fail={stats.get('intent_mark_fail', 0)} "
-            f"intent_log_load_ms={stats.get('intent_log_load_ms', 0)} "
-            f"queue_db_opens={stats.get('queue_db_opens', 0)} "
-            f"queue_db_reuses={stats.get('queue_db_reuses', 0)} "
-            f"drain_ms={stats.get('drain_ms', 0)}"
-        )
+
+
+def _emit_drain_stats_diag(stats: dict) -> None:
+    if os.environ.get("NAUTICAL_DIAG") != "1":
+        return
+    _diag(
+        "on-exit drain: "
+        f"entries_total={stats.get('entries_total', 0)} "
+        f"idempotent_skipped={stats.get('entries_skipped_idempotent', 0)} "
+        f"processed={stats.get('processed', 0)} "
+        f"errors={stats.get('errors', 0)} "
+        f"requeued={stats.get('requeued', 0)} "
+        f"requeue_failed={stats.get('requeue_failed', 0)} "
+        f"dead_lettered={stats.get('dead_lettered', 0)} "
+        f"queue_lock_failures={stats.get('queue_lock_failures', 0)} "
+        f"lock_events={stats.get('lock_events', 0)} "
+        f"lock_streak_max={stats.get('lock_streak_max', 0)} "
+        f"circuit_breaks={stats.get('circuit_breaks', 0)} "
+        f"intent_log_ready={stats.get('intent_log_ready', 0)} "
+        f"intent_log_size={stats.get('intent_log_size', 0)} "
+        f"intent_mark_ok={stats.get('intent_mark_ok', 0)} "
+        f"intent_mark_fail={stats.get('intent_mark_fail', 0)} "
+        f"intent_log_load_ms={stats.get('intent_log_load_ms', 0)} "
+        f"queue_db_opens={stats.get('queue_db_opens', 0)} "
+        f"queue_db_reuses={stats.get('queue_db_reuses', 0)} "
+        f"drain_ms={stats.get('drain_ms', 0)}"
+    )
+
+
+def _strict_exit_feedback_message(stats: dict) -> str | None:
     errors = stats.get("errors", 0)
     dead_lettered = stats.get("dead_lettered", 0)
     queue_lock_failures = stats.get("queue_lock_failures", 0)
-    if _EXIT_STRICT and (errors > 0 or dead_lettered > 0 or queue_lock_failures > 0):
-        _emit_exit_feedback(
-            f"[nautical] on-exit: {dead_lettered} dead-lettered, {errors} errors, {queue_lock_failures} queue lock failures. "
-            "Check .nautical-state/.nautical_dead_letter.jsonl (set NAUTICAL_EXIT_STRICT=0 to disable)"
-        )
-        return 1
-    return 0
+    if not (_EXIT_STRICT and (errors > 0 or dead_lettered > 0 or queue_lock_failures > 0)):
+        return None
+    return (
+        f"[nautical] on-exit: {dead_lettered} dead-lettered, {errors} errors, {queue_lock_failures} queue lock failures. "
+        "Check .nautical-state/.nautical_dead_letter.jsonl (set NAUTICAL_EXIT_STRICT=0 to disable)"
+    )
+
+
+def main() -> int:
+    hook_engine = _module("hook_engine")
+    return hook_engine.handle_on_exit(
+        runtime=_build_hook_runtime_context(),
+        redirect_stdout_to_devnull=_redirect_stdout_to_devnull,
+        drain_queue=_drain_queue,
+        emit_stats_diag=_emit_drain_stats_diag,
+        strict_exit_result=_strict_exit_feedback_message,
+        emit_exit_feedback=_emit_exit_feedback,
+    )
 
 
 if __name__ == "__main__":

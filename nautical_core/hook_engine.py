@@ -48,3 +48,23 @@ def handle_on_add(
         return
 
     handle_cp_preview_on_add(ctx, prof=prof)
+
+
+
+def handle_on_exit(
+    *,
+    runtime,
+    redirect_stdout_to_devnull,
+    drain_queue,
+    emit_stats_diag,
+    strict_exit_result,
+    emit_exit_feedback,
+) -> int:
+    redirect_stdout_to_devnull()
+    stats = drain_queue()
+    emit_stats_diag(stats)
+    strict_msg = strict_exit_result(stats)
+    if strict_msg:
+        emit_exit_feedback(strict_msg)
+        return 1
+    return 0

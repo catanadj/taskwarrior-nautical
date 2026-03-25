@@ -118,6 +118,12 @@ _ADD_ANCHOR_COMPUTE = None
 _ADD_ANCHOR_COMPUTE_LOAD_FAILED = False
 _ADD_ANCHOR_PREVIEW = None
 _ADD_ANCHOR_PREVIEW_LOAD_FAILED = False
+_HOOK_CONTEXT = None
+_HOOK_CONTEXT_LOAD_FAILED = False
+_HOOK_RESULTS = None
+_HOOK_RESULTS_LOAD_FAILED = False
+_HOOK_ENGINE = None
+_HOOK_ENGINE_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -148,6 +154,24 @@ _MODULE_SPECS = {
         "_ADD_ANCHOR_PREVIEW_LOAD_FAILED",
         "add_anchor_preview.py",
         "nautical_add_anchor_preview",
+    ),
+    "hook_context": (
+        "_HOOK_CONTEXT",
+        "_HOOK_CONTEXT_LOAD_FAILED",
+        "hook_context.py",
+        "nautical_hook_context",
+    ),
+    "hook_results": (
+        "_HOOK_RESULTS",
+        "_HOOK_RESULTS_LOAD_FAILED",
+        "hook_results.py",
+        "nautical_hook_results",
+    ),
+    "hook_engine": (
+        "_HOOK_ENGINE",
+        "_HOOK_ENGINE_LOAD_FAILED",
+        "hook_engine.py",
+        "nautical_hook_engine",
     ),
 }
 try:
@@ -813,26 +837,8 @@ _PARSED_TASK = None
 
 def _panic_passthrough() -> None:
     """Emit a valid fallback JSON task on unexpected errors."""
-    fallback: dict[str, Any] = {}
-    task = _PARSED_TASK if isinstance(_PARSED_TASK, dict) else None
-    if task is None and _RAW_INPUT_TEXT:
-        try:
-            parsed = json.loads(_RAW_INPUT_TEXT.strip())
-            if isinstance(parsed, dict):
-                task = parsed
-        except Exception:
-            task = None
-    try:
-        print(json.dumps(task if isinstance(task, dict) else fallback, ensure_ascii=False), end="")
-    except Exception:
-        try:
-            print("{}", end="")
-        except Exception:
-            pass
-    try:
-        sys.stdout.flush()
-    except Exception:
-        pass
+    hook_results = _module("hook_results")
+    hook_results.panic_passthrough(_RAW_INPUT_TEXT, _PARSED_TASK)
 
 
 
@@ -1572,16 +1578,71 @@ def _read_on_add_task(prof) -> dict:
 
 
 def _emit_task_json(task: dict, *, sanitize: bool = False, prof=None) -> None:
-    t_out = time.perf_counter()
-    if sanitize and core is not None and core.SANITIZE_UDA:
-        core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
-    print(json.dumps(task, ensure_ascii=False), end="")
+    hook_results = _module("hook_results")
+    hook_results.emit_task_json(task, sanitize=sanitize, core=core, prof=prof)
+
+
+def _build_hook_runtime_context():
+    hook_context = _module("hook_context")
+    return hook_context.build_hook_runtime_context(
+        hook_name="on-add",
+        taskdata_dir=str(TW_DATA_DIR),
+        use_rc_data_location=_USE_RC_DATA_LOCATION,
+        tw_dir=str(TW_DIR),
+        hook_dir=str(HOOK_DIR),
+        profile_level=_PROFILE_LEVEL,
+        import_ms=_IMPORT_MS,
+    )
+
+
+def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *, prof=None):
+    hook_context = _module("hook_context")
+    _t_conf = time.perf_counter()
     try:
-        sys.stdout.flush()
-    except Exception:
-        pass
-    if prof is not None:
-        prof.add_ms("stdout:emit", (time.perf_counter() - t_out) * 1000.0)
+        return hook_context.build_on_add_context(
+            task,
+            now_utc,
+            now_local,
+            validate_kind_not_conflicting=_validate_kind_not_conflicting,
+            kind_and_defaults_on_add=_kind_and_defaults_on_add,
+            validate_chain_limits_on_add=_validate_chain_limits_on_add,
+            due_context_on_add=_due_context_on_add,
+        )
+    except ValueError as exc:
+        _error_and_exit([('Invalid chain config', str(exc))])
+        raise
+    finally:
+        if prof is not None:
+            prof.add_ms('validate:cp_vs_anchor', (time.perf_counter() - _t_conf) * 1000.0)
+
+
+def _handle_anchor_preview_on_add_context(ctx, *, prof) -> None:
+    _handle_anchor_preview_on_add(
+        task=ctx.task,
+        anchor_str=ctx.anchor_str,
+        ch=ctx.chain_state,
+        now_utc=ctx.now_utc,
+        now_local=ctx.now_local,
+        user_provided_due=ctx.user_provided_due,
+        due_dt=ctx.due_dt,
+        due_day=ctx.due_day,
+        due_hhmm=ctx.due_hhmm,
+        until_dt=ctx.until_dt,
+        past_due_warning=ctx.past_due_warning,
+        prof=prof,
+    )
+
+
+def _handle_cp_preview_on_add_context(ctx, *, prof) -> None:
+    _handle_cp_preview_on_add(
+        task=ctx.task,
+        cp_str=ctx.cp_str,
+        ch=ctx.chain_state,
+        now_utc=ctx.now_utc,
+        user_provided_due=ctx.user_provided_due,
+        due_dt=ctx.due_dt,
+        until_dt=ctx.until_dt,
+    )
 
 
 def _kind_and_defaults_on_add(task: dict, cp_str: str, anchor_str: str) -> tuple[str | None, str]:
@@ -1646,79 +1707,21 @@ def _due_context_on_add(task: dict, now_utc: datetime) -> tuple[bool, datetime, 
 def main():
     prof = _build_profiler()
     task = _read_on_add_task(prof)
-
-    if not _task_has_nautical_fields(task):
-        _emit_task_json(task, sanitize=False)
-        return
-
-    try:
-        _load_core()
-    except Exception as e:
-        _diag(f"core load failed: {e}")
-        _fail_and_exit("Hook misconfigured", "Failed to initialize nautical core")
-    try:
-        if getattr(prof, "enabled", False) and _IMPORT_MS is not None:
-            prof.import_ms = _IMPORT_MS
-    except Exception:
-        pass
-
-    with prof.section('clock:now'):
-        now_utc = core.now_utc()
-        now_local = core.to_local(now_utc)
-
-    # ========== EDGE CASE 1: Both cp and anchor set ==========
-    cp_str = (task.get("cp") or "").strip()
-    anchor_str = (task.get("anchor") or "").strip()
-    _t_conf = time.perf_counter()
-    is_valid, err = _validate_kind_not_conflicting(cp_str, anchor_str)
-    prof.add_ms('validate:cp_vs_anchor', (time.perf_counter() - _t_conf) * 1000.0)
-    if not is_valid:
-        _error_and_exit([("Invalid chain config", err)])
-
-    kind, ch = _kind_and_defaults_on_add(task, cp_str, anchor_str)
-
-    # If nothing chain-related, just pass through
-    if not kind:
-        _emit_task_json(task, sanitize=True, prof=prof)
-        return
-
-    until_dt = _validate_chain_limits_on_add(task, now_utc)
-    user_provided_due, due_dt, past_due_warning, due_day, due_hhmm = _due_context_on_add(task, now_utc)
-
-    _stamp_chain_id_on_add(task)
-
-    # ==================================================================================
-    # ANCHOR PREVIEW
-    # ==================================================================================
-    if kind == "anchor":
-        _handle_anchor_preview_on_add(
-            task=task,
-            anchor_str=anchor_str,
-            ch=ch,
-            now_utc=now_utc,
-            now_local=now_local,
-            user_provided_due=user_provided_due,
-            due_dt=due_dt,
-            due_day=due_day,
-            due_hhmm=due_hhmm,
-            until_dt=until_dt,
-            past_due_warning=past_due_warning,
-            prof=prof,
-        )
-        return
-
-
-    # ==================================================================================
-    # CLASSIC CP PREVIEW
-    # ==================================================================================
-    _handle_cp_preview_on_add(
-        task=task,
-        cp_str=cp_str,
-        ch=ch,
-        now_utc=now_utc,
-        user_provided_due=user_provided_due,
-        due_dt=due_dt,
-        until_dt=until_dt,
+    hook_engine = _module("hook_engine")
+    hook_engine.handle_on_add(
+        task,
+        prof=prof,
+        runtime=_build_hook_runtime_context(),
+        core_ref=lambda: core,
+        task_has_nautical_fields=_task_has_nautical_fields,
+        load_core=_load_core,
+        diag=_diag,
+        fail_and_exit=_fail_and_exit,
+        emit_task_json=_emit_task_json,
+        build_on_add_context=_build_on_add_context,
+        stamp_chain_id_on_add=_stamp_chain_id_on_add,
+        handle_anchor_preview_on_add=_handle_anchor_preview_on_add_context,
+        handle_cp_preview_on_add=_handle_cp_preview_on_add_context,
     )
 
 

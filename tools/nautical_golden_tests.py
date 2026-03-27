@@ -5655,9 +5655,9 @@ def test_on_modify_render_cp_completion_feedback_text_mode():
 
     mod._SHOW_TIMELINE_GAPS = False
     mod._CHAIN_COLOR_PER_CHAIN = False
-    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
-    mod._format_next_cp_rows = lambda fb: fb
-    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
+    mod._append_next_wait_sched_rows = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("wait-schedule rows should not be built in text mode"))
+    mod._format_next_cp_rows = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("feedback row formatting should not run in text mode"))
+    mod._format_root_and_age = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("root formatting should not run in text mode"))
     mod._timeline_lines = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("timeline should not be built in text mode"))
     mod._export_uuid_short_cached = lambda _short: {}
 

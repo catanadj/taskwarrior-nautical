@@ -241,57 +241,11 @@ def render_anchor_completion_feedback(
     chain_colour_for_task = services.chain_colour_for_task
     strip_quotes = services.strip_quotes
     human_delta = services.human_delta
-    fb = []
     anchor_raw = (feedback.new.get("anchor") or "").strip()
     expr_str = strip_quotes(anchor_raw)
     mode_tag = _anchor_mode_tag(feedback.new)
-    fb.append(("Pattern", f"{expr_str}  {mode_tag}"))
-    delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=core.expr_has_m_or_y(feedback.dnf))
-    fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
-    fb.append(("Natural", core.describe_anchor_dnf(feedback.dnf, feedback.new)))
-    basis_text = _pretty_basis_anchor(feedback.meta, feedback.new, parse_dt_any=core.parse_dt_any, fmt_dt_local=core.fmt_dt_local)
-    if basis_text != "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)":
-        fb.append(("Basis", basis_text))
-    fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))
-
-    _append_wait_sched_feedback_rows(fb, debug_wait_sched=debug_wait_sched, last_wait_sched_debug=last_wait_sched_debug)
-    _append_sanitised_fields_row(fb, feedback.stripped_attrs)
-    if feedback.analytics_advice:
-        fb.append(("Analytics", feedback.analytics_advice))
-    _append_integrity_warnings_row(fb, feedback.integrity_warnings)
-    append_next_wait_sched_rows(fb, feedback.child, feedback.child_due)
-
-    _append_link_status_rows(
-        fb,
-        feedback.cap_no,
-        feedback.base_no,
-        second_to_last_text="[yellow]This was the second-to-last link[/]",
-    )
-    _append_final_rows(fb, feedback.finals, feedback.now_utc, fmt_dt_local=core.fmt_dt_local, human_delta=human_delta)
-    if feedback.deferred_spawn and diag_enabled and feedback.spawn_intent_id:
-        fb.append(("Intent", feedback.spawn_intent_id))
-
     title = f"⚓︎ Next anchor  #{feedback.next_no}  {feedback.parent_short} → {feedback.child_short}"
     mode = _display_mode_name(core)
-    if mode not in {"line", "minimal", "text"}:
-        tl = timeline_lines(
-            "anchor",
-            feedback.new,
-            feedback.child_due,
-            feedback.child_short,
-            feedback.dnf,
-            next_count=3,
-            cap_no=feedback.cap_no,
-            cur_no=feedback.base_no,
-            show_gaps=show_timeline_gaps,
-        )
-        if tl:
-            fb.append(("Timeline", "\n".join(tl)))
-    if "rand" in expr_str.lower():
-        fb.append(("Rand", f"[dim]Deterministic picks seeded by root {short(root_uuid_from(feedback.new))}[/]"))
-
-    fb = format_next_anchor_rows(fb)
-
     if mode in {"line", "minimal"}:
         line = format_line_preview(
             feedback.base_no,
@@ -338,6 +292,52 @@ def render_anchor_completion_feedback(
             markup_body=True,
         )
         return
+
+    fb = []
+    fb.append(("Pattern", f"{expr_str}  {mode_tag}"))
+    delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=core.expr_has_m_or_y(feedback.dnf))
+    fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
+    fb.append(("Natural", core.describe_anchor_dnf(feedback.dnf, feedback.new)))
+    basis_text = _pretty_basis_anchor(feedback.meta, feedback.new, parse_dt_any=core.parse_dt_any, fmt_dt_local=core.fmt_dt_local)
+    if basis_text != "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)":
+        fb.append(("Basis", basis_text))
+    fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))
+
+    _append_wait_sched_feedback_rows(fb, debug_wait_sched=debug_wait_sched, last_wait_sched_debug=last_wait_sched_debug)
+    _append_sanitised_fields_row(fb, feedback.stripped_attrs)
+    if feedback.analytics_advice:
+        fb.append(("Analytics", feedback.analytics_advice))
+    _append_integrity_warnings_row(fb, feedback.integrity_warnings)
+    append_next_wait_sched_rows(fb, feedback.child, feedback.child_due)
+
+    _append_link_status_rows(
+        fb,
+        feedback.cap_no,
+        feedback.base_no,
+        second_to_last_text="[yellow]This was the second-to-last link[/]",
+    )
+    _append_final_rows(fb, feedback.finals, feedback.now_utc, fmt_dt_local=core.fmt_dt_local, human_delta=human_delta)
+    if feedback.deferred_spawn and diag_enabled and feedback.spawn_intent_id:
+        fb.append(("Intent", feedback.spawn_intent_id))
+
+    if mode not in {"line", "minimal", "text"}:
+        tl = timeline_lines(
+            "anchor",
+            feedback.new,
+            feedback.child_due,
+            feedback.child_short,
+            feedback.dnf,
+            next_count=3,
+            cap_no=feedback.cap_no,
+            cur_no=feedback.base_no,
+            show_gaps=show_timeline_gaps,
+        )
+        if tl:
+            fb.append(("Timeline", "\n".join(tl)))
+    if "rand" in expr_str.lower():
+        fb.append(("Rand", f"[dim]Deterministic picks seeded by root {short(root_uuid_from(feedback.new))}[/]"))
+
+    fb = format_next_anchor_rows(fb)
     if mode == "compact":
         fb = _compact_feedback_rows(fb, include_timeline=True)
     if chain_color_per_chain:
@@ -372,51 +372,8 @@ def render_cp_completion_feedback(
     chain_color_per_chain = services.chain_color_per_chain
     chain_colour_for_task = services.chain_colour_for_task
     human_delta = services.human_delta
-    fb = []
-    delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
-    fb.append(("Period", feedback.new.get("cp")))
-    fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
-    basis_text = _pretty_basis_cp(feedback.new, feedback.meta, parse_cp_duration=core.parse_cp_duration)
-    if basis_text != "Preserve wall clock (period is multiple of 24h)":
-        fb.append(("Basis", basis_text))
-    fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))
-    if feedback.analytics_advice:
-        fb.append(("Analytics", feedback.analytics_advice))
-    _append_integrity_warnings_row(fb, feedback.integrity_warnings)
-    append_next_wait_sched_rows(fb, feedback.child, feedback.child_due)
-
-    if feedback.cap_no:
-        _append_link_status_rows(
-            fb,
-            feedback.cap_no,
-            feedback.base_no,
-            second_to_last_text="[yellow]Next link is the last in the chain.[/]",
-        )
-
-    _append_final_rows(fb, feedback.finals, feedback.now_utc, fmt_dt_local=core.fmt_dt_local, human_delta=human_delta)
-
-    if feedback.deferred_spawn and diag_enabled and feedback.spawn_intent_id:
-        fb.append(("Intent", feedback.spawn_intent_id))
-
     title = f"⛓ Next link  #{feedback.next_no}  {feedback.parent_short} → {feedback.child_short}"
     mode = _display_mode_name(core)
-    if mode not in {"line", "minimal", "text"}:
-        tl = timeline_lines(
-            "cp",
-            feedback.new,
-            feedback.child_due,
-            feedback.child_short,
-            None,
-            next_count=3,
-            cap_no=feedback.cap_no,
-            cur_no=feedback.base_no,
-            show_gaps=show_timeline_gaps,
-        )
-        if tl:
-            fb.append(("Timeline", "\n".join(tl)))
-
-    fb = format_next_cp_rows(fb)
-
     if mode in {"line", "minimal"}:
         line = format_line_preview(
             feedback.base_no,
@@ -463,6 +420,49 @@ def render_cp_completion_feedback(
             markup_body=True,
         )
         return
+
+    fb = []
+    delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
+    fb.append(("Period", feedback.new.get("cp")))
+    fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
+    basis_text = _pretty_basis_cp(feedback.new, feedback.meta, parse_cp_duration=core.parse_cp_duration)
+    if basis_text != "Preserve wall clock (period is multiple of 24h)":
+        fb.append(("Basis", basis_text))
+    fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))
+    if feedback.analytics_advice:
+        fb.append(("Analytics", feedback.analytics_advice))
+    _append_integrity_warnings_row(fb, feedback.integrity_warnings)
+    append_next_wait_sched_rows(fb, feedback.child, feedback.child_due)
+
+    if feedback.cap_no:
+        _append_link_status_rows(
+            fb,
+            feedback.cap_no,
+            feedback.base_no,
+            second_to_last_text="[yellow]Next link is the last in the chain.[/]",
+        )
+
+    _append_final_rows(fb, feedback.finals, feedback.now_utc, fmt_dt_local=core.fmt_dt_local, human_delta=human_delta)
+
+    if feedback.deferred_spawn and diag_enabled and feedback.spawn_intent_id:
+        fb.append(("Intent", feedback.spawn_intent_id))
+
+    if mode not in {"line", "minimal", "text"}:
+        tl = timeline_lines(
+            "cp",
+            feedback.new,
+            feedback.child_due,
+            feedback.child_short,
+            None,
+            next_count=3,
+            cap_no=feedback.cap_no,
+            cur_no=feedback.base_no,
+            show_gaps=show_timeline_gaps,
+        )
+        if tl:
+            fb.append(("Timeline", "\n".join(tl)))
+
+    fb = format_next_cp_rows(fb)
     if mode == "compact":
         fb = _compact_feedback_rows(fb, include_timeline=True)
     if chain_color_per_chain:

@@ -354,8 +354,6 @@ core = None
 _CORE_READY = False
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
-_HOOK_LOADER = None
-_HOOK_LOADER_LOAD_FAILED = False
 _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
 _MODIFY_QUERIES = None
@@ -385,91 +383,91 @@ _MODULE_SPECS = {
         "_HOOK_SUPPORT",
         "_HOOK_SUPPORT_LOAD_FAILED",
         "hook_support.py",
-        "nautical_hook_support",
+        "nautical_core.hook_support",
     ),
     "modify_queries": (
         "_MODIFY_QUERIES",
         "_MODIFY_QUERIES_LOAD_FAILED",
         "modify_queries.py",
-        "nautical_modify_queries",
+        "nautical_core.modify_queries",
     ),
     "modify_chain_reads": (
         "_MODIFY_CHAIN_READS",
         "_MODIFY_CHAIN_READS_LOAD_FAILED",
         "modify_chain_reads.py",
-        "nautical_modify_chain_reads",
+        "nautical_core.modify_chain_reads",
     ),
     "modify_spawn_prep": (
         "_MODIFY_SPAWN_PREP",
         "_MODIFY_SPAWN_PREP_LOAD_FAILED",
         "modify_spawn_prep.py",
-        "nautical_modify_spawn_prep",
+        "nautical_core.modify_spawn_prep",
     ),
     "modify_completion_preflight": (
         "_MODIFY_COMPLETION_PREFLIGHT",
         "_MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED",
         "modify_completion_preflight.py",
-        "nautical_modify_completion_preflight",
+        "nautical_core.modify_completion_preflight",
     ),
     "modify_completion_compute": (
         "_MODIFY_COMPLETION_COMPUTE",
         "_MODIFY_COMPLETION_COMPUTE_LOAD_FAILED",
         "modify_completion_compute.py",
-        "nautical_modify_completion_compute",
+        "nautical_core.modify_completion_compute",
     ),
     "modify_completion_spawn": (
         "_MODIFY_COMPLETION_SPAWN",
         "_MODIFY_COMPLETION_SPAWN_LOAD_FAILED",
         "modify_completion_spawn.py",
-        "nautical_modify_completion_spawn",
+        "nautical_core.modify_completion_spawn",
     ),
     "modify_models": (
         "_MODIFY_MODELS",
         "_MODIFY_MODELS_LOAD_FAILED",
         "modify_models.py",
-        "nautical_modify_models",
+        "nautical_core.modify_models",
     ),
     "modify_feedback": (
         "_MODIFY_FEEDBACK",
         "_MODIFY_FEEDBACK_LOAD_FAILED",
         "modify_feedback.py",
-        "nautical_modify_feedback",
+        "nautical_core.modify_feedback",
     ),
     "modify_timeline": (
         "_MODIFY_TIMELINE",
         "_MODIFY_TIMELINE_LOAD_FAILED",
         "modify_timeline.py",
-        "nautical_modify_timeline",
+        "nautical_core.modify_timeline",
     ),
     "queue_store": (
         "_QUEUE_STORE",
         "_QUEUE_STORE_LOAD_FAILED",
         "queue_store.py",
-        "nautical_queue_store",
+        "nautical_core.queue_store",
     ),
     "queue_models": (
         "_QUEUE_MODELS",
         "_QUEUE_MODELS_LOAD_FAILED",
         "queue_models.py",
-        "nautical_queue_models",
+        "nautical_core.queue_models",
     ),
     "hook_context": (
         "_HOOK_CONTEXT",
         "_HOOK_CONTEXT_LOAD_FAILED",
         "hook_context.py",
-        "nautical_hook_context",
+        "nautical_core.hook_context",
     ),
     "hook_engine": (
         "_HOOK_ENGINE",
         "_HOOK_ENGINE_LOAD_FAILED",
         "hook_engine.py",
-        "nautical_hook_engine",
+        "nautical_core.hook_engine",
     ),
     "hook_results": (
         "_HOOK_RESULTS",
         "_HOOK_RESULTS_LOAD_FAILED",
         "hook_results.py",
-        "nautical_hook_results",
+        "nautical_core.hook_results",
     ),
 }
 try:
@@ -513,61 +511,23 @@ _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
 TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
 
 
-def _hook_loader_target(base: Path) -> Path | None:
-    try:
-        if base.is_file():
-            if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "hook_loader.py"
-                return target if target.is_file() else None
-            return None
-    except Exception:
-        return None
-    target = base / "nautical_core" / "hook_loader.py"
-    return target if target.is_file() else None
-
-
-def _load_hook_loader():
-    global _HOOK_LOADER, _HOOK_LOADER_LOAD_FAILED
-    if _HOOK_LOADER is not None:
-        return _HOOK_LOADER
-    if _HOOK_LOADER_LOAD_FAILED:
-        return None
-    base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _hook_loader_target(base)
-    if not target:
-        _HOOK_LOADER_LOAD_FAILED = True
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("nautical_hook_loader", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_hook_loader"] = module
-            spec.loader.exec_module(module)
-            _HOOK_LOADER = module
-            return module
-    except Exception:
-        pass
-    _HOOK_LOADER_LOAD_FAILED = True
-    return None
-
-
 def _load_named_module(name: str):
-    hook_loader = _load_hook_loader()
-    if hook_loader is None:
+    cache_attr, failed_attr, rel_name, import_name = _MODULE_SPECS[name]
+    module = globals().get(cache_attr)
+    if module is not None:
+        return module
+    if globals().get(failed_attr):
         return None
-    return hook_loader.load_named_module(
-        name,
-        _MODULE_SPECS,
-        globals(),
-        globals(),
-        base=_CORE_IMPORT_TARGET or _CORE_BASE,
-    )
+    try:
+        module = importlib.import_module(import_name)
+        globals()[cache_attr] = module
+        return module
+    except Exception:
+        globals()[failed_attr] = True
+        return None
 
 
 def _require_loaded_module(module, rel_name: str):
-    hook_loader = _load_hook_loader()
-    if hook_loader is not None:
-        return hook_loader.require_loaded_module(module, rel_name)
     if module is None:
         raise RuntimeError(f"nautical_core/{rel_name} is required")
     return module

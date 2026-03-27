@@ -16,6 +16,7 @@ import time
 import subprocess
 import random
 import sqlite3
+import importlib
 import importlib.util
 from pathlib import Path
 from contextlib import contextmanager
@@ -82,8 +83,6 @@ def _core_target_from_base(base: Path) -> Path | None:
 core = None
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
-_HOOK_LOADER = None
-_HOOK_LOADER_LOAD_FAILED = False
 _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
 _EXIT_QUERIES = None
@@ -109,61 +108,61 @@ _MODULE_SPECS = {
         "_HOOK_SUPPORT",
         "_HOOK_SUPPORT_LOAD_FAILED",
         "hook_support.py",
-        "nautical_hook_support",
+        "nautical_core.hook_support",
     ),
     "exit_queries": (
         "_EXIT_QUERIES",
         "_EXIT_QUERIES_LOAD_FAILED",
         "exit_queries.py",
-        "nautical_exit_queries",
+        "nautical_core.exit_queries",
     ),
     "exit_side_effects": (
         "_EXIT_SIDE_EFFECTS",
         "_EXIT_SIDE_EFFECTS_LOAD_FAILED",
         "exit_side_effects.py",
-        "nautical_exit_side_effects",
+        "nautical_core.exit_side_effects",
     ),
     "exit_entry_flow": (
         "_EXIT_ENTRY_FLOW",
         "_EXIT_ENTRY_FLOW_LOAD_FAILED",
         "exit_entry_flow.py",
-        "nautical_exit_entry_flow",
+        "nautical_core.exit_entry_flow",
     ),
     "queue_store": (
         "_QUEUE_STORE",
         "_QUEUE_STORE_LOAD_FAILED",
         "queue_store.py",
-        "nautical_queue_store",
+        "nautical_core.queue_store",
     ),
     "queue_models": (
         "_QUEUE_MODELS",
         "_QUEUE_MODELS_LOAD_FAILED",
         "queue_models.py",
-        "nautical_queue_models",
+        "nautical_core.queue_models",
     ),
     "exit_models": (
         "_EXIT_MODELS",
         "_EXIT_MODELS_LOAD_FAILED",
         "exit_models.py",
-        "nautical_exit_models",
+        "nautical_core.exit_models",
     ),
     "hook_context": (
         "_HOOK_CONTEXT",
         "_HOOK_CONTEXT_LOAD_FAILED",
         "hook_context.py",
-        "nautical_hook_context",
+        "nautical_core.hook_context",
     ),
     "hook_engine": (
         "_HOOK_ENGINE",
         "_HOOK_ENGINE_LOAD_FAILED",
         "hook_engine.py",
-        "nautical_hook_engine",
+        "nautical_core.hook_engine",
     ),
     "hook_results": (
         "_HOOK_RESULTS",
         "_HOOK_RESULTS_LOAD_FAILED",
         "hook_results.py",
-        "nautical_hook_results",
+        "nautical_core.hook_results",
     ),
 }
 try:
@@ -221,61 +220,23 @@ def _tw_data_dir_path() -> Path:
         return Path(".")
 
 
-def _hook_loader_target(base: Path) -> Path | None:
-    try:
-        if base.is_file():
-            if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "hook_loader.py"
-                return target if target.is_file() else None
-            return None
-    except Exception:
-        return None
-    target = base / "nautical_core" / "hook_loader.py"
-    return target if target.is_file() else None
-
-
-def _load_hook_loader():
-    global _HOOK_LOADER, _HOOK_LOADER_LOAD_FAILED
-    if _HOOK_LOADER is not None:
-        return _HOOK_LOADER
-    if _HOOK_LOADER_LOAD_FAILED:
-        return None
-    base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _hook_loader_target(base)
-    if not target:
-        _HOOK_LOADER_LOAD_FAILED = True
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("nautical_hook_loader", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_hook_loader"] = module
-            spec.loader.exec_module(module)
-            _HOOK_LOADER = module
-            return module
-    except Exception:
-        pass
-    _HOOK_LOADER_LOAD_FAILED = True
-    return None
-
-
 def _load_named_module(name: str):
-    hook_loader = _load_hook_loader()
-    if hook_loader is None:
+    cache_attr, failed_attr, rel_name, import_name = _MODULE_SPECS[name]
+    module = globals().get(cache_attr)
+    if module is not None:
+        return module
+    if globals().get(failed_attr):
         return None
-    return hook_loader.load_named_module(
-        name,
-        _MODULE_SPECS,
-        globals(),
-        globals(),
-        base=_CORE_IMPORT_TARGET or _CORE_BASE,
-    )
+    try:
+        module = importlib.import_module(import_name)
+        globals()[cache_attr] = module
+        return module
+    except Exception:
+        globals()[failed_attr] = True
+        return None
 
 
 def _require_loaded_module(module, rel_name: str):
-    hook_loader = _load_hook_loader()
-    if hook_loader is not None:
-        return hook_loader.require_loaded_module(module, rel_name)
     if module is None:
         raise RuntimeError(f"nautical_core/{rel_name} is required")
     return module

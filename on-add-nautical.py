@@ -105,8 +105,6 @@ core = None
 _CORE_READY = False
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
-_HOOK_LOADER = None
-_HOOK_LOADER_LOAD_FAILED = False
 _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
 _ADD_FORMATTING = None
@@ -128,49 +126,49 @@ _MODULE_SPECS = {
         "_HOOK_SUPPORT",
         "_HOOK_SUPPORT_LOAD_FAILED",
         "hook_support.py",
-        "nautical_hook_support",
+        "nautical_core.hook_support",
     ),
     "add_formatting": (
         "_ADD_FORMATTING",
         "_ADD_FORMATTING_LOAD_FAILED",
         "add_formatting.py",
-        "nautical_add_formatting",
+        "nautical_core.add_formatting",
     ),
     "add_validation": (
         "_ADD_VALIDATION",
         "_ADD_VALIDATION_LOAD_FAILED",
         "add_validation.py",
-        "nautical_add_validation",
+        "nautical_core.add_validation",
     ),
     "add_anchor_compute": (
         "_ADD_ANCHOR_COMPUTE",
         "_ADD_ANCHOR_COMPUTE_LOAD_FAILED",
         "add_anchor_compute.py",
-        "nautical_add_anchor_compute",
+        "nautical_core.add_anchor_compute",
     ),
     "add_anchor_preview": (
         "_ADD_ANCHOR_PREVIEW",
         "_ADD_ANCHOR_PREVIEW_LOAD_FAILED",
         "add_anchor_preview.py",
-        "nautical_add_anchor_preview",
+        "nautical_core.add_anchor_preview",
     ),
     "hook_context": (
         "_HOOK_CONTEXT",
         "_HOOK_CONTEXT_LOAD_FAILED",
         "hook_context.py",
-        "nautical_hook_context",
+        "nautical_core.hook_context",
     ),
     "hook_results": (
         "_HOOK_RESULTS",
         "_HOOK_RESULTS_LOAD_FAILED",
         "hook_results.py",
-        "nautical_hook_results",
+        "nautical_core.hook_results",
     ),
     "hook_engine": (
         "_HOOK_ENGINE",
         "_HOOK_ENGINE_LOAD_FAILED",
         "hook_engine.py",
-        "nautical_hook_engine",
+        "nautical_core.hook_engine",
     ),
 }
 try:
@@ -215,61 +213,23 @@ TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
 _IMPORT_MS = None
 
 
-def _hook_loader_target(base: Path) -> Path | None:
-    try:
-        if base.is_file():
-            if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                target = base.parent / "hook_loader.py"
-                return target if target.is_file() else None
-            return None
-    except Exception:
-        return None
-    target = base / "nautical_core" / "hook_loader.py"
-    return target if target.is_file() else None
-
-
-def _load_hook_loader():
-    global _HOOK_LOADER, _HOOK_LOADER_LOAD_FAILED
-    if _HOOK_LOADER is not None:
-        return _HOOK_LOADER
-    if _HOOK_LOADER_LOAD_FAILED:
-        return None
-    base = _CORE_IMPORT_TARGET or _CORE_BASE
-    target = _hook_loader_target(base)
-    if not target:
-        _HOOK_LOADER_LOAD_FAILED = True
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("nautical_hook_loader", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_hook_loader"] = module
-            spec.loader.exec_module(module)
-            _HOOK_LOADER = module
-            return module
-    except Exception:
-        pass
-    _HOOK_LOADER_LOAD_FAILED = True
-    return None
-
-
 def _load_named_module(name: str):
-    hook_loader = _load_hook_loader()
-    if hook_loader is None:
+    cache_attr, failed_attr, rel_name, import_name = _MODULE_SPECS[name]
+    module = globals().get(cache_attr)
+    if module is not None:
+        return module
+    if globals().get(failed_attr):
         return None
-    return hook_loader.load_named_module(
-        name,
-        _MODULE_SPECS,
-        globals(),
-        globals(),
-        base=_CORE_IMPORT_TARGET or _CORE_BASE,
-    )
+    try:
+        module = importlib.import_module(import_name)
+        globals()[cache_attr] = module
+        return module
+    except Exception:
+        globals()[failed_attr] = True
+        return None
 
 
 def _require_loaded_module(module, rel_name: str):
-    hook_loader = _load_hook_loader()
-    if hook_loader is not None:
-        return hook_loader.require_loaded_module(module, rel_name)
     if module is None:
         raise RuntimeError(f"nautical_core/{rel_name} is required")
     return module

@@ -1745,6 +1745,18 @@ def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
     )
 
 
+def _take_queue_batch():
+    exit_models = _module("exit_models")
+    return exit_models.ExitQueueBatch(entries=_take_queue_entries())
+
+
+def _requeue_entries_result(entries: list[dict]):
+    exit_models = _module("exit_models")
+    ok = _requeue_entries(entries)
+    failed = 0 if ok else len(entries)
+    return exit_models.ExitRequeueResult(ok=ok, failed=failed)
+
+
 class _DrainState:
     def __init__(
         self,
@@ -1839,28 +1851,29 @@ class _DrainState:
     def reset_lock_streak(self) -> None:
         self.lock_streak = 0
 
-    def to_stats(self, drain_t0: float, requeue_ok: bool, requeue_failed: int) -> dict:
-        return {
-            "processed": self.processed,
-            "errors": self.errors,
-            "requeued": len(self.requeue) if requeue_ok else 0,
-            "requeue_failed": requeue_failed,
-            "dead_lettered": self.dead_lettered,
-            "queue_lock_failures": _QUEUE_LOCK_FAILURES_THIS_RUN,
-            "entries_total": self.entries_total,
-            "entries_skipped_idempotent": self.skipped_idempotent,
-            "lock_events": self.lock_events,
-            "lock_streak_max": self.lock_streak_max,
-            "circuit_breaks": self.circuit_breaks,
-            "intent_log_ready": 1 if self.intent_log_ready else 0,
-            "intent_log_size": len(self.finalized_intents),
-            "intent_log_load_ms": round(self.intent_log_load_ms, 3),
-            "intent_mark_ok": self.intent_mark_ok,
-            "intent_mark_fail": self.intent_mark_fail,
-            "queue_db_opens": _QUEUE_DB_OPEN_COUNT,
-            "queue_db_reuses": _QUEUE_DB_REUSE_COUNT,
-            "drain_ms": round((time.perf_counter() - drain_t0) * 1000.0, 3),
-        }
+    def to_stats_model(self, drain_t0: float, requeue_ok: bool, requeue_failed: int):
+        exit_models = _module("exit_models")
+        return exit_models.ExitDrainStats(
+            processed=self.processed,
+            errors=self.errors,
+            requeued=len(self.requeue) if requeue_ok else 0,
+            requeue_failed=requeue_failed,
+            dead_lettered=self.dead_lettered,
+            queue_lock_failures=_QUEUE_LOCK_FAILURES_THIS_RUN,
+            entries_total=self.entries_total,
+            entries_skipped_idempotent=self.skipped_idempotent,
+            lock_events=self.lock_events,
+            lock_streak_max=self.lock_streak_max,
+            circuit_breaks=self.circuit_breaks,
+            intent_log_ready=1 if self.intent_log_ready else 0,
+            intent_log_size=len(self.finalized_intents),
+            intent_log_load_ms=round(self.intent_log_load_ms, 3),
+            intent_mark_ok=self.intent_mark_ok,
+            intent_mark_fail=self.intent_mark_fail,
+            queue_db_opens=_QUEUE_DB_OPEN_COUNT,
+            queue_db_reuses=_QUEUE_DB_REUSE_COUNT,
+            drain_ms=round((time.perf_counter() - drain_t0) * 1000.0, 3),
+        )
 
 
 def _requeue_or_dead_letter_for_lock(entry: dict, idx: int, state: _DrainState) -> bool:
@@ -2036,18 +2049,18 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     return False
 
 
-def _drain_queue() -> dict:
+def _drain_queue_result():
     _queue_db_begin_run()
     try:
         drain_t0 = time.perf_counter()
-        entries = _take_queue_entries()
-        entries_total = len(entries)
+        batch = _take_queue_batch()
+        entries = batch.entries
         intent_t0 = time.perf_counter()
         finalized_intents, intent_log_ready = _load_finalized_intents()
         intent_log_load_ms = (time.perf_counter() - intent_t0) * 1000.0
         state = _DrainState(
             entries=entries,
-            entries_total=entries_total,
+            entries_total=batch.entries_total,
             finalized_intents=finalized_intents,
             intent_log_ready=bool(intent_log_ready),
             intent_log_load_ms=float(intent_log_load_ms),
@@ -2057,23 +2070,23 @@ def _drain_queue() -> dict:
             if _process_queue_entry(idx, entry, state):
                 break
 
-        requeue_failed = 0
-        requeue_ok = True
-        if state.requeue:
-            requeue_ok = _requeue_entries(state.requeue)
-            if not requeue_ok:
-                requeue_failed = len(state.requeue)
-                state.errors += requeue_failed
-                _diag(f"requeue failed for {requeue_failed} entries")
+        requeue_result = _requeue_entries_result(state.requeue) if state.requeue else _module("exit_models").ExitRequeueResult(ok=True, failed=0)
+        if not requeue_result.ok:
+            state.errors += requeue_result.failed
+            _diag(f"requeue failed for {requeue_result.failed} entries")
 
         if state.sqlite_acked_ids:
             if not _ack_queue_entries_sqlite(sorted(state.sqlite_acked_ids)):
                 state.errors += len(state.sqlite_acked_ids)
                 _diag(f"queue db ack failed for {len(state.sqlite_acked_ids)} entries")
 
-        return state.to_stats(drain_t0, requeue_ok, requeue_failed)
+        return state.to_stats_model(drain_t0, requeue_result.ok, requeue_result.failed)
     finally:
         _queue_db_end_run()
+
+
+def _drain_queue() -> dict:
+    return _drain_queue_result().to_dict()
 
 
 def _redirect_stdout_to_devnull() -> None:

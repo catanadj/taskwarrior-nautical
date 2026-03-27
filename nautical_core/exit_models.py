@@ -73,3 +73,64 @@ class ExitParentNextlinkStateResult:
 class ExitParentUpdateResult:
     ok: bool
     err: str
+
+
+@dataclass(slots=True)
+class ExitQueueBatch:
+    entries: list[dict[str, Any]]
+
+    @property
+    def entries_total(self) -> int:
+        return len(self.entries)
+
+
+@dataclass(slots=True)
+class ExitRequeueResult:
+    ok: bool
+    failed: int
+
+
+@dataclass(slots=True)
+class ExitDrainStats:
+    processed: int
+    errors: int
+    requeued: int
+    requeue_failed: int
+    dead_lettered: int
+    queue_lock_failures: int
+    entries_total: int
+    entries_skipped_idempotent: int
+    lock_events: int
+    lock_streak_max: int
+    circuit_breaks: int
+    intent_log_ready: int
+    intent_log_size: int
+    intent_log_load_ms: float
+    intent_mark_ok: int
+    intent_mark_fail: int
+    queue_db_opens: int
+    queue_db_reuses: int
+    drain_ms: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "processed": self.processed,
+            "errors": self.errors,
+            "requeued": self.requeued,
+            "requeue_failed": self.requeue_failed,
+            "dead_lettered": self.dead_lettered,
+            "queue_lock_failures": self.queue_lock_failures,
+            "entries_total": self.entries_total,
+            "entries_skipped_idempotent": self.entries_skipped_idempotent,
+            "lock_events": self.lock_events,
+            "lock_streak_max": self.lock_streak_max,
+            "circuit_breaks": self.circuit_breaks,
+            "intent_log_ready": self.intent_log_ready,
+            "intent_log_size": self.intent_log_size,
+            "intent_log_load_ms": self.intent_log_load_ms,
+            "intent_mark_ok": self.intent_mark_ok,
+            "intent_mark_fail": self.intent_mark_fail,
+            "queue_db_opens": self.queue_db_opens,
+            "queue_db_reuses": self.queue_db_reuses,
+            "drain_ms": self.drain_ms,
+        }

@@ -4911,8 +4911,17 @@ def _completion_build_and_spawn_child(
     kind: str,
     cpmax: int,
     until_dt,
-) -> dict | None:
+):
     modify_completion_spawn = _module("modify_completion_spawn")
+    modify_models = _module("modify_models")
+    services = modify_models.CompletionSpawnServices(
+        build_child_from_parent=_build_child_from_parent,
+        spawn_child_atomic=_spawn_child_atomic,
+        panel=_panel,
+        print_task=_print_task,
+        diag=_diag,
+        spawn_result_cls=modify_models.CompletionSpawnResult,
+    )
     return modify_completion_spawn.completion_build_and_spawn_child(
         new,
         child_due=child_due,
@@ -4921,11 +4930,7 @@ def _completion_build_and_spawn_child(
         kind=kind,
         cpmax=cpmax,
         until_dt=until_dt,
-        build_child_from_parent=_build_child_from_parent,
-        spawn_child_atomic=_spawn_child_atomic,
-        panel=_panel,
-        print_task=_print_task,
-        diag=_diag,
+        services=services,
     )
 
 
@@ -4964,11 +4969,11 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     )
     if spawned is None:
         return
-    child = spawned["child"]
-    child_short = spawned["child_short"]
-    stripped_attrs = spawned["stripped_attrs"]
-    deferred_spawn = spawned["deferred_spawn"]
-    spawn_intent_id = spawned["spawn_intent_id"]
+    child = spawned.child
+    child_short = spawned.child_short
+    stripped_attrs = spawned.stripped_attrs
+    deferred_spawn = spawned.deferred_spawn
+    spawn_intent_id = spawned.spawn_intent_id
 
     # Build an in-memory chain index once for panel/timeline lookups.
     chain = []

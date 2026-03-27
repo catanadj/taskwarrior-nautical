@@ -95,6 +95,28 @@ class AnchorCompletionFeedbackModel:
     base_no: int
 
 
+
+
+@dataclass(slots=True)
+class CompletionSpawnResult:
+    child: dict[str, Any]
+    child_short: str
+    stripped_attrs: Any
+    verified: bool
+    deferred_spawn: bool
+    spawn_intent_id: str | None
+
+
+@dataclass(slots=True)
+class CompletionSpawnServices:
+    build_child_from_parent: Any
+    spawn_child_atomic: Any
+    panel: Any
+    print_task: Any
+    diag: Any
+    spawn_result_cls: Any
+
+
 @dataclass(slots=True)
 class AnchorFeedbackServices:
     core: Any

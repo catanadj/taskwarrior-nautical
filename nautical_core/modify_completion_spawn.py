@@ -10,12 +10,14 @@ def completion_build_and_spawn_child(
     kind: str,
     cpmax: int,
     until_dt,
-    build_child_from_parent,
-    spawn_child_atomic,
-    panel,
-    print_task,
-    diag=None,
-) -> dict | None:
+    services,
+):
+    build_child_from_parent = services.build_child_from_parent
+    spawn_child_atomic = services.spawn_child_atomic
+    panel = services.panel
+    print_task = services.print_task
+    diag = services.diag
+    spawn_result_cls = services.spawn_result_cls
     try:
         child = build_child_from_parent(new, child_due, next_no, parent_short, kind, cpmax, until_dt)
     except Exception as exc:
@@ -62,11 +64,11 @@ def completion_build_and_spawn_child(
     if verified:
         new["nextLink"] = child_short
 
-    return {
-        "child": child,
-        "child_short": child_short,
-        "stripped_attrs": stripped_attrs,
-        "verified": verified,
-        "deferred_spawn": deferred_spawn,
-        "spawn_intent_id": spawn_intent_id,
-    }
+    return spawn_result_cls(
+        child=child,
+        child_short=child_short,
+        stripped_attrs=stripped_attrs,
+        verified=verified,
+        deferred_spawn=deferred_spawn,
+        spawn_intent_id=spawn_intent_id,
+    )

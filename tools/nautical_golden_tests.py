@@ -5566,10 +5566,10 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
         until_dt=None,
     )
     expect(bool(out), f"expected spawn result, got {out}")
-    expect(out.get("child") == child, f"unexpected child payload: {out}")
-    expect(out.get("child_short") == "deadbeef", f"unexpected child short: {out}")
-    expect(out.get("verified") is True and out.get("deferred_spawn") is False, f"unexpected verification state: {out}")
-    expect(out.get("spawn_intent_id") == "si_test", f"unexpected spawn intent id: {out}")
+    expect(out.child == child, f"unexpected child payload: {out}")
+    expect(out.child_short == "deadbeef", f"unexpected child short: {out}")
+    expect(out.verified is True and out.deferred_spawn is False, f"unexpected verification state: {out}")
+    expect(out.spawn_intent_id == "si_test", f"unexpected spawn intent id: {out}")
     expect(new.get("nextLink") == "deadbeef", f"verified spawn should stamp nextLink: {new}")
 
 

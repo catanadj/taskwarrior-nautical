@@ -1769,7 +1769,7 @@ def _format_line_cap(base_no: int, cap_no: int | None, until_dt: datetime | None
         parts.append(f"cap #{cap_no}")
         parts.append(f"{left} left")
     if until_dt:
-        until_txt = core.fmt_dt_local(until_dt)
+        until_txt = _fmtlocal(until_dt)
         parts.append(f"until {until_txt}")
     return (" · " + " · ".join(parts)) if parts else ""
 
@@ -1785,23 +1785,23 @@ def _format_line_preview(
     kind: str = "cp",
     minimal: bool = False,
 ) -> str:
-    cur_due = _dtparse(task.get("due"))
-    cur_end = _dtparse(task.get("end"))
-    delta_txt = core.strip_rich_markup(_fmt_on_time_delta(cur_due, cur_end) or "").strip()
-    if delta_txt.startswith("(") and delta_txt.endswith(")"):
-        delta_txt = delta_txt[1:-1].strip()
-    due_local = core.fmt_dt_local(child_due_utc) if child_due_utc else "—"
-    due_delta = _human_delta(now_utc, child_due_utc, False)
-    if due_delta.startswith("in "):
-        due_delta = "due " + due_delta
-    elif not due_delta.startswith("overdue by "):
-        due_delta = "due " + due_delta
+    due_local = _fmtlocal(child_due_utc) if child_due_utc else "—"
     next_glyph = "⚓" if str(kind or "").lower() == "anchor" else "⛓"
     lead = f"#{link_no} ✓"
     if minimal:
         segments = [lead, f"next {next_glyph}", due_local]
         line = " ".join(seg for seg in segments if seg)
         return line.strip()
+    cur_due = _dtparse(task.get("due"))
+    cur_end = _dtparse(task.get("end"))
+    delta_txt = core.strip_rich_markup(_fmt_on_time_delta(cur_due, cur_end) or "").strip()
+    if delta_txt.startswith("(") and delta_txt.endswith(")"):
+        delta_txt = delta_txt[1:-1].strip()
+    due_delta = _human_delta(now_utc, child_due_utc, False)
+    if due_delta.startswith("in "):
+        due_delta = "due " + due_delta
+    elif not due_delta.startswith("overdue by "):
+        due_delta = "due " + due_delta
     segments = [lead]
     if delta_txt:
         segments.append(f"[dim]{delta_txt}[/]")

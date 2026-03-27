@@ -134,3 +134,9 @@ class ExitDrainStats:
             "queue_db_reuses": self.queue_db_reuses,
             "drain_ms": self.drain_ms,
         }
+
+
+@dataclass(slots=True)
+class ExitQueueWriteResult:
+    ok: bool
+    count: int

@@ -1314,34 +1314,48 @@ def _queue_cleanup_staging(tmp_path: Path, tmp_processing: Path) -> None:
     queue_store.cleanup_staging(tmp_path, tmp_processing)
 
 
-def _take_queue_entries_jsonl() -> list[dict]:
+def _take_queue_entries_jsonl_batch():
     queue_store = _module("queue_store")
-    return queue_store.take_queue_entries_jsonl(
+    exit_models = _module("exit_models")
+    return exit_models.ExitQueueBatch(
+        entries=queue_store.take_queue_entries_jsonl(
+            queue_path=_QUEUE_PATH,
+            queue_processing_path=_QUEUE_PROCESSING_PATH,
+            queue_max_bytes=_QUEUE_MAX_BYTES,
+            queue_max_lines=_QUEUE_MAX_LINES,
+            durable_queue=_DURABLE_QUEUE,
+            lock_queue=_lock_queue,
+            record_lock_failure=_record_queue_lock_failure,
+            quarantine_line=_quarantine_queue_line,
+            write_dead_letter=_write_dead_letter,
+            fsync_dir_fn=_fsync_dir,
+            diag=_diag,
+        )
+    )
+
+
+def _take_queue_entries_jsonl() -> list[dict]:
+    return _take_queue_entries_jsonl_batch().entries
+
+
+def _requeue_entries_jsonl_result(entries: list[dict]):
+    queue_store = _module("queue_store")
+    exit_models = _module("exit_models")
+    items = [e for e in (entries or []) if isinstance(e, dict)]
+    ok = queue_store.requeue_entries_jsonl(
         queue_path=_QUEUE_PATH,
-        queue_processing_path=_QUEUE_PROCESSING_PATH,
-        queue_max_bytes=_QUEUE_MAX_BYTES,
-        queue_max_lines=_QUEUE_MAX_LINES,
+        entries=items,
         durable_queue=_DURABLE_QUEUE,
         lock_queue=_lock_queue,
         record_lock_failure=_record_queue_lock_failure,
-        quarantine_line=_quarantine_queue_line,
-        write_dead_letter=_write_dead_letter,
         fsync_dir_fn=_fsync_dir,
         diag=_diag,
     )
+    return exit_models.ExitQueueWriteResult(ok=ok, count=len(items))
 
 
 def _requeue_entries_jsonl(entries: list[dict]) -> bool:
-    queue_store = _module("queue_store")
-    return queue_store.requeue_entries_jsonl(
-        queue_path=_QUEUE_PATH,
-        entries=entries,
-        durable_queue=_DURABLE_QUEUE,
-        lock_queue=_lock_queue,
-        record_lock_failure=_record_queue_lock_failure,
-        fsync_dir_fn=_fsync_dir,
-        diag=_diag,
-    )
+    return _requeue_entries_jsonl_result(entries).ok
 
 
 def _queue_jsonl_has_data() -> bool:
@@ -1446,78 +1460,107 @@ def _queue_close_silent(conn: sqlite3.Connection) -> None:
     queue_store.close_silent(conn)
 
 
-def _take_queue_entries_sqlite() -> list[dict]:
+def _take_queue_entries_sqlite_batch():
     conn = _queue_db_open_ready()
+    exit_models = _module("exit_models")
     if conn is None:
-        return []
+        return exit_models.ExitQueueBatch(entries=[])
     token = f"drain-{os.getpid()}-{int(time.time() * 1000)}"
     now = time.time()
     rows = _queue_claim_rows_sqlite(conn, token, now)
     entries = _queue_rows_to_entries(rows)
     _queue_close_silent(conn)
-    return entries
+    return exit_models.ExitQueueBatch(entries=entries)
+
+
+def _take_queue_entries_sqlite() -> list[dict]:
+    return _take_queue_entries_sqlite_batch().entries
+
+
+def _ack_queue_entries_sqlite_result(entry_ids: list[int]):
+    conn = _queue_db_open_ready()
+    exit_models = _module("exit_models")
+    ids = [int(raw) for raw in (entry_ids or []) if str(raw).isdigit() and int(raw) > 0]
+    if conn is None:
+        return exit_models.ExitQueueWriteResult(ok=False, count=len(ids))
+    try:
+        queue_store = _module("queue_store")
+        ok = queue_store.ack_entry_ids_sqlite(
+            conn,
+            ids,
+            diag=_diag,
+            on_lock_busy=_record_queue_lock_failure,
+        )
+        return exit_models.ExitQueueWriteResult(ok=ok, count=len(ids))
+    finally:
+        _queue_close_silent(conn)
 
 
 def _ack_queue_entries_sqlite(entry_ids: list[int]) -> bool:
+    return _ack_queue_entries_sqlite_result(entry_ids).ok
+
+
+def _requeue_entries_sqlite_result(entries: list[dict]):
     conn = _queue_db_open_ready()
+    exit_models = _module("exit_models")
+    items = [
+        entry
+        for entry in (entries or [])
+        if isinstance(entry, dict) and entry.get("__queue_backend") == "sqlite" and entry.get("__queue_id")
+    ]
     if conn is None:
-        return False
+        return exit_models.ExitQueueWriteResult(ok=False, count=len(items))
     try:
         queue_store = _module("queue_store")
-        return queue_store.ack_entry_ids_sqlite(
+        ok = queue_store.requeue_entries_sqlite(
             conn,
-            entry_ids,
+            items,
+            now=time.time(),
             diag=_diag,
             on_lock_busy=_record_queue_lock_failure,
         )
+        return exit_models.ExitQueueWriteResult(ok=ok, count=len(items))
     finally:
         _queue_close_silent(conn)
-    
 
 
 def _requeue_entries_sqlite(entries: list[dict]) -> bool:
+    return _requeue_entries_sqlite_result(entries).ok
+
+
+def _enqueue_entries_sqlite_result(entries: list[dict]):
     conn = _queue_db_open_ready()
+    exit_models = _module("exit_models")
+    items = [entry for entry in (entries or []) if isinstance(entry, dict)]
     if conn is None:
-        return False
+        return exit_models.ExitQueueWriteResult(ok=False, count=len(items))
     try:
         queue_store = _module("queue_store")
-        return queue_store.requeue_entries_sqlite(
+        ok = queue_store.enqueue_entries_sqlite(
             conn,
-            entries,
+            items,
             now=time.time(),
             diag=_diag,
             on_lock_busy=_record_queue_lock_failure,
         )
+        return exit_models.ExitQueueWriteResult(ok=ok, count=len(items))
     finally:
         _queue_close_silent(conn)
-    
 
 
 def _enqueue_entries_sqlite(entries: list[dict]) -> bool:
-    conn = _queue_db_open_ready()
-    if conn is None:
-        return False
-    try:
-        queue_store = _module("queue_store")
-        return queue_store.enqueue_entries_sqlite(
-            conn,
-            entries,
-            now=time.time(),
-            diag=_diag,
-            on_lock_busy=_record_queue_lock_failure,
-        )
-    finally:
-        _queue_close_silent(conn)
-    
+    return _enqueue_entries_sqlite_result(entries).ok
 
 
 def _migrate_legacy_jsonl_to_sqlite() -> None:
     if not _queue_jsonl_has_data():
         return
-    legacy_entries = _take_queue_entries_jsonl()
+    legacy_batch = _take_queue_entries_jsonl_batch()
+    legacy_entries = legacy_batch.entries
     if not legacy_entries:
         return
-    if _enqueue_entries_sqlite(legacy_entries):
+    enqueue_result = _enqueue_entries_sqlite_result(legacy_entries)
+    if enqueue_result.ok:
         try:
             if _QUEUE_PROCESSING_PATH.exists():
                 _QUEUE_PROCESSING_PATH.unlink()
@@ -1525,15 +1568,15 @@ def _migrate_legacy_jsonl_to_sqlite() -> None:
                     _fsync_dir(_QUEUE_PROCESSING_PATH.parent)
         except Exception:
             pass
-        _diag(f"migrated {len(legacy_entries)} legacy queue entries to sqlite")
+        _diag(f"migrated {legacy_batch.entries_total} legacy queue entries to sqlite")
         return
-    _diag(f"legacy queue migration failed; restoring {len(legacy_entries)} entries to JSONL")
+    _diag(f"legacy queue migration failed; restoring {legacy_batch.entries_total} entries to JSONL")
     _requeue_entries_jsonl(legacy_entries)
 
 
 def _take_queue_entries() -> list[dict]:
     _migrate_legacy_jsonl_to_sqlite()
-    return _take_queue_entries_sqlite()
+    return _take_queue_entries_sqlite_batch().entries
 
 
 def _requeue_entries(entries: list[dict]) -> bool:
@@ -1547,9 +1590,9 @@ def _requeue_entries(entries: list[dict]) -> bool:
             claimed.append(e)
         else:
             fresh.append(e)
-    ok_claimed = _requeue_entries_sqlite(claimed) if claimed else True
-    ok_fresh = _enqueue_entries_sqlite(fresh) if fresh else True
-    return ok_claimed and ok_fresh
+    claimed_result = _requeue_entries_sqlite_result(claimed) if claimed else _module("exit_models").ExitQueueWriteResult(ok=True, count=0)
+    fresh_result = _enqueue_entries_sqlite_result(fresh) if fresh else _module("exit_models").ExitQueueWriteResult(ok=True, count=0)
+    return claimed_result.ok and fresh_result.ok
 
 
 def _normalize_queue_entry(entry: dict) -> dict:

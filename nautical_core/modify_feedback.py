@@ -142,11 +142,44 @@ def _rows_are_notable(rows: list[tuple[str, object]]) -> bool:
     return False
 
 
-def _build_text_feedback(title: str, summary: str | None, preview_line: str) -> str:
-    lines = [title]
+def _build_text_feedback(
+    core,
+    *,
+    kind: str,
+    parent_short: str,
+    next_no: int,
+    child_short: str,
+    summary: str | None,
+    preview_line: str,
+    cap_no: int | None,
+    base_no: int,
+    until_dt,
+) -> str:
+    text = core.strip_rich_markup(preview_line or "")
+    parts = [part.strip() for part in text.split("·") if part and part.strip()]
+    lead = parts[0] if parts else ""
+    due_part = parts[2] if len(parts) >= 3 else ""
+    status_tail = lead.split(" ", 1)[1].strip() if " " in lead else ""
+    line1 = f"{parent_short} {status_tail}".strip() if status_tail else str(parent_short or "").strip()
+
+    due_part = due_part.replace("(due in ", "in ").replace("(due overdue by ", "overdue by ").replace("(", "").replace(")", "").strip()
+    glyph = "⚓︎" if str(kind or "").lower() == "anchor" else "⛓"
+    line2 = f"Next {glyph} #{next_no} {child_short}"
+    if due_part:
+        line2 += f" → {due_part}"
+
+    lines = [line1, line2]
     if summary and str(summary).strip():
         lines.append(str(summary).strip())
-    lines.append(preview_line)
+
+    limit_parts = []
+    if cap_no:
+        limit_parts.append(f"cap #{cap_no}")
+        limit_parts.append(f"{max(0, cap_no - base_no)} left")
+    if until_dt:
+        limit_parts.append(f"until {core.fmt_dt_local(until_dt)}")
+    if limit_parts:
+        lines.append("Limits: " + " · ".join(limit_parts))
     return "\n".join(line for line in lines if line)
 
 
@@ -283,7 +316,18 @@ def render_anchor_completion_feedback(
             minimal=False,
         )
         text_line(
-            _build_text_feedback(title, f"Pattern: {expr_str}  {mode_tag}", line),
+            _build_text_feedback(
+                core,
+                kind="anchor",
+                parent_short=feedback.parent_short,
+                next_no=feedback.next_no,
+                child_short=feedback.child_short,
+                summary=f"Pattern: {expr_str}  {mode_tag}",
+                preview_line=line,
+                cap_no=feedback.cap_no,
+                base_no=feedback.base_no,
+                until_dt=feedback.until_dt,
+            ),
             kind="preview_anchor",
             markup_body=True,
         )
@@ -403,7 +447,18 @@ def render_cp_completion_feedback(
             minimal=False,
         )
         text_line(
-            _build_text_feedback(title, f"Period: {feedback.new.get('cp')}", line),
+            _build_text_feedback(
+                core,
+                kind="cp",
+                parent_short=feedback.parent_short,
+                next_no=feedback.next_no,
+                child_short=feedback.child_short,
+                summary=f"Period: {feedback.new.get('cp')}",
+                preview_line=line,
+                cap_no=feedback.cap_no,
+                base_no=feedback.base_no,
+                until_dt=feedback.until_dt,
+            ),
             kind="preview_cp",
             markup_body=True,
         )

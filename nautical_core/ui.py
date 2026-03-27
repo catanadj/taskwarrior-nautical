@@ -86,35 +86,18 @@ def emit_line(msg: str) -> None:
         pass
 
 
-def _ascii_report_lines(text: str) -> list[str]:
-    replacements = {
-        "⚓︎": "anchor",
-        "⚓": "anchor",
-        "⛓": "cp",
-        "✓": "ok",
-        "→": "->",
-        "—": "-",
-        "·": "|",
-    }
+def _text_report_lines(text: str) -> list[str]:
     parts = str(text or "").splitlines() if "\n" in str(text or "") else [str(text or "")]
     out: list[str] = []
     for part in parts:
         line = strip_rich_markup(part)
-        for src, dst in replacements.items():
-            line = line.replace(src, dst)
-        line = re.sub(r"\s*\|\s*", " | ", line)
         line = re.sub(r"\s+", " ", line).strip()
-        if line.startswith("anchor Next anchor "):
-            line = line[len("anchor "):]
-        elif line.startswith("cp Next link "):
-            line = line[len("cp "):]
         if line:
             out.append(line)
     return out
 
-
 def text_line(line: str, *, kind: str = "info", markup_body: bool = False) -> None:
-    lines = _ascii_report_lines(line if markup_body else str(line))
+    lines = _text_report_lines(line if markup_body else str(line))
     if not lines:
         return
     if not fast_color_enabled():

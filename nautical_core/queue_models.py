@@ -34,6 +34,20 @@ def _clean_attempts(value: Any) -> int:
     return attempts
 
 
+def _mapping_value(mapping: Any, key: str, default: Any = None) -> Any:
+    if mapping is None:
+        return default
+    try:
+        if isinstance(mapping, Mapping):
+            return mapping.get(key, default)
+    except Exception:
+        pass
+    try:
+        return mapping[key]
+    except Exception:
+        return default
+
+
 @dataclass(frozen=True)
 class SpawnQueueEntry:
     parent_uuid: str
@@ -94,16 +108,16 @@ class QueueStoredRow:
     attempts: int
 
     @classmethod
-    def from_mapping(cls, row: Mapping[str, Any]) -> "QueueStoredRow":
+    def from_mapping(cls, row: Mapping[str, Any] | sqlite3.Row) -> "QueueStoredRow":
         try:
-            row_id = int(row.get("id") or 0)
+            row_id = int(_mapping_value(row, "id") or 0)
         except Exception:
             row_id = 0
         return cls(
             id=max(0, row_id),
-            spawn_intent_id=str(row.get("spawn_intent_id") or "").strip(),
-            payload=str(row.get("payload") or "").strip(),
-            attempts=_clean_attempts(row.get("attempts")),
+            spawn_intent_id=str(_mapping_value(row, "spawn_intent_id") or "").strip(),
+            payload=str(_mapping_value(row, "payload") or "").strip(),
+            attempts=_clean_attempts(_mapping_value(row, "attempts")),
         )
 
 

@@ -622,7 +622,6 @@ def _nautical_lock_dir_path() -> Path:
         return queue_store.nautical_lock_dir_path(TW_DATA_DIR)
     return TW_DATA_DIR / ".nautical-locks"
 
-_SPAWN_QUEUE_PATH = _nautical_state_dir_path() / ".nautical_spawn_queue.jsonl"
 _SPAWN_QUEUE_LOCK = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock"
 _SPAWN_QUEUE_DB_PATH = _nautical_state_dir_path() / ".nautical_queue.db"
 _DEAD_LETTER_PATH = _nautical_state_dir_path() / ".nautical_dead_letter.jsonl"
@@ -638,7 +637,6 @@ _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 def _migrate_legacy_nautical_state() -> None:
     queue_store = _module("queue_store", required=False)
     file_pairs = (
-        (_SPAWN_QUEUE_PATH, TW_DATA_DIR / ".nautical_spawn_queue.jsonl"),
         (_SPAWN_QUEUE_DB_PATH, TW_DATA_DIR / ".nautical_queue.db"),
         (_DEAD_LETTER_PATH, TW_DATA_DIR / ".nautical_dead_letter.jsonl"),
     )

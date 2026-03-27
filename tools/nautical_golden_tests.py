@@ -113,6 +113,54 @@ def expect(cond, msg):
 def has_function(name):
     return hasattr(core, name)
 
+
+def _seed_sqlite_queue(db_path: Path, entries):
+    items = entries if isinstance(entries, list) else [entries]
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS queue_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                spawn_intent_id TEXT,
+                payload TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'queued',
+                claim_token TEXT,
+                claimed_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            payload = dict(item)
+            state = str(payload.pop("__queue_state", "queued") or "queued")
+            claim_token = payload.pop("__claim_token", None)
+            claimed_at = payload.pop("__claimed_at", None)
+            created_at = float(payload.pop("__created_at", 1.0) or 1.0)
+            updated_at = float(payload.pop("__updated_at", created_at) or created_at)
+            try:
+                attempts = int(payload.get("attempts") or 0)
+            except Exception:
+                attempts = 0
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(payload.get("spawn_intent_id") or "").strip() or None,
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                    attempts,
+                    state,
+                    claim_token,
+                    claimed_at,
+                    created_at,
+                    updated_at,
+                ),
+            )
+        conn.commit()
+
 def _must_parse(expr):
     """Parse expression and return DNF, raising AssertionError on failure."""
     try:
@@ -2082,22 +2130,19 @@ def test_on_modify_enqueue_uses_sqlite_when_legacy_empty():
             else:
                 os.environ["TASKDATA"] = prev_taskdata
 
-def test_on_modify_enqueue_uses_sqlite_even_with_legacy_jsonl_backlog():
-    """on-modify should enqueue to SQLite even if a legacy JSONL backlog file exists."""
+def test_on_modify_enqueue_uses_sqlite_only_queue_backend():
+    """on-modify should enqueue directly to SQLite as the only live queue backend."""
     hook = _find_hook_file("on-modify-nautical.py")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
         try:
-            mod = _load_hook_module(hook, "_nautical_on_modify_enqueue_sqlite_with_jsonl_backlog_test")
+            mod = _load_hook_module(hook, "_nautical_on_modify_enqueue_sqlite_only_test")
             if hasattr(mod, "_load_core"):
                 mod._load_core()
-            q_path = mod._SPAWN_QUEUE_PATH
-            q_path.parent.mkdir(parents=True, exist_ok=True)
-            q_path.write_text('{"spawn_intent_id":"legacy_1"}\n', encoding="utf-8")
 
             entry = {
-                "spawn_intent_id": "legacy_2",
+                "spawn_intent_id": "sqlite_only_2",
                 "parent_uuid": "00000000-0000-0000-0000-000000000003",
                 "child_short": "00000003",
                 "child": {"uuid": "00000000-0000-0000-0000-000000000004"},
@@ -2109,14 +2154,11 @@ def test_on_modify_enqueue_uses_sqlite_even_with_legacy_jsonl_backlog():
             with sqlite3.connect(str(db_path)) as conn:
                 row = conn.execute(
                     "SELECT payload FROM queue_entries WHERE spawn_intent_id=?",
-                    ("legacy_2",),
+                    ("sqlite_only_2",),
                 ).fetchone()
-            expect(row is not None, "sqlite queue row missing when legacy backlog exists")
+            expect(row is not None, "sqlite queue row missing")
             payload = json.loads((row[0] or "").strip() or "{}")
-            expect(payload.get("spawn_intent_id") == "legacy_2", f"unexpected sqlite payload: {payload}")
-            txt = q_path.read_text(encoding="utf-8")
-            expect('"spawn_intent_id":"legacy_1"' in txt, f"legacy entry should remain untouched: {txt!r}")
-            expect('"spawn_intent_id":"legacy_2"' not in txt, f"new entry should not be appended to JSONL backlog: {txt!r}")
+            expect(payload.get("spawn_intent_id") == "sqlite_only_2", f"unexpected sqlite payload: {payload}")
         finally:
             if prev_taskdata is None:
                 os.environ.pop("TASKDATA", None)
@@ -4303,6 +4345,7 @@ def test_on_exit_spawn_intents_drain():
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
         mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
 
         child_uuid = "00000000-0000-0000-0000-000000000999"
         parent_uuid = "00000000-0000-0000-0000-000000000111"
@@ -4312,7 +4355,7 @@ def test_on_exit_spawn_intents_drain():
             "child": {"uuid": child_uuid, "description": "test"},
             "spawn_intent_id": "si_test",
         }
-        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        _seed_sqlite_queue(mod._QUEUE_DB_PATH, entry)
 
         imported = {"ok": False}
         parent_updated = {"ok": False}
@@ -4341,41 +4384,6 @@ def test_on_exit_spawn_intents_drain():
         expect(stats.get("processed") == 1, f"unexpected drain processed: {stats}")
         expect(imported["ok"], "child import did not run")
         expect(parent_updated["ok"], "parent update did not run")
-
-def test_on_exit_take_queue_migrates_legacy_processing_backlog_to_sqlite():
-    """on-exit should migrate legacy processing backlog into sqlite and then claim from sqlite."""
-    hook = _find_hook_file("on-exit-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_exit_processing_migration_test")
-    if not hasattr(mod, "_take_queue_entries"):
-        raise AssertionError("on-exit hook does not expose queue helper")
-
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        mod.TW_DATA_DIR = td_path
-        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
-        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
-        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
-
-        legacy = {
-            "spawn_intent_id": "si_legacy_processing",
-            "parent_uuid": "00000000-0000-0000-0000-000000000101",
-            "child_short": "abcd0001",
-            "child": {"uuid": "00000000-0000-0000-0000-000000000102"},
-        }
-        mod._QUEUE_PATH.write_text("", encoding="utf-8")
-        mod._QUEUE_PROCESSING_PATH.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
-
-        entries = mod._take_queue_entries()
-        expect(len(entries) == 1, f"expected one migrated entry, got: {entries}")
-        expect(entries[0].get("spawn_intent_id") == "si_legacy_processing", f"wrong entry claimed: {entries}")
-        expect(entries[0].get("__queue_backend") == "sqlite", f"entry should be sqlite-backed: {entries}")
-        expect(not mod._QUEUE_PROCESSING_PATH.exists(), "legacy processing backlog should be cleared after migration")
-        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
-            still_processing = conn.execute(
-                "SELECT COUNT(1) FROM queue_entries WHERE spawn_intent_id='si_legacy_processing' AND state='processing'"
-            ).fetchone()[0]
-        expect(int(still_processing) == 1, "migrated sqlite entry should be claimed as processing")
 
 
 def test_on_exit_take_queue_recovers_from_corrupt_sqlite_db():
@@ -4679,105 +4687,7 @@ def test_on_exit_requeue_sqlite_clears_claim_metadata():
         expect(int(row[3]) == 3, f"attempt count should persist on requeue: {row}")
 
 
-def test_on_exit_queue_drain_is_transactional():
-    """on-exit should not truncate queue if staging replace fails."""
-    hook = _find_hook_file("on-exit-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_exit_queue_txn_test")
-    if not hasattr(mod, "_take_queue_entries"):
-        raise AssertionError("on-exit hook does not expose queue helper")
 
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        mod.TW_DATA_DIR = td_path
-        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
-        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
-
-        child_uuid = "00000000-0000-0000-0000-000000000123"
-        valid = json.dumps({"child": {"uuid": child_uuid}})
-        invalid = "{bad-json"
-        original = valid + "\n" + invalid + "\n"
-        mod._QUEUE_PATH.write_text(original, encoding="utf-8")
-
-        orig_replace = mod.os.replace
-
-        def _replace_fail(*_args, **_kwargs):
-            raise OSError("replace failed")
-
-        mod.os.replace = _replace_fail
-        try:
-            entries = mod._take_queue_entries()
-        finally:
-            mod.os.replace = orig_replace
-
-        expect(len(entries) == 1, f"unexpected entries: {entries}")
-        after = mod._QUEUE_PATH.read_text(encoding="utf-8")
-        expect(after == original, "queue should remain unchanged on replace failure")
-
-
-def test_on_exit_queue_stat_failure_does_not_crash():
-    """on-exit should handle queue stat failures without crashing."""
-    hook = _find_hook_file("on-exit-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_exit_queue_stat_failure_test")
-    if not hasattr(mod, "_take_queue_entries"):
-        raise AssertionError("on-exit hook does not expose queue helper")
-
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        mod.TW_DATA_DIR = td_path
-        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
-        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
-        mod._QUEUE_PATH.write_text(
-            json.dumps({"spawn_intent_id": "si_stat", "child": {"uuid": "00000000-0000-0000-0000-000000000123"}}) + "\n",
-            encoding="utf-8",
-        )
-
-        orig_stat = mod.Path.stat
-        orig_exists = mod.Path.exists
-
-        def _stat_fail(path_obj):
-            if path_obj == mod._QUEUE_PATH:
-                raise OSError("stat failed")
-            return orig_stat(path_obj)
-
-        def _exists_override(path_obj):
-            if path_obj == mod._QUEUE_PATH:
-                return True
-            return orig_exists(path_obj)
-
-        mod.Path.stat = _stat_fail
-        mod.Path.exists = _exists_override
-        try:
-            entries = mod._take_queue_entries()
-        finally:
-            mod.Path.stat = orig_stat
-            mod.Path.exists = orig_exists
-
-        expect(len(entries) == 1, f"expected one entry despite stat failure, got: {entries}")
-
-
-def test_on_exit_quarantines_bad_queue_lines():
-    """on-exit should quarantine invalid queue JSON lines."""
-    hook = _find_hook_file("on-exit-nautical.py")
-    with tempfile.TemporaryDirectory() as td:
-        prev_taskdata = os.environ.get("TASKDATA")
-        os.environ["TASKDATA"] = td
-        try:
-            mod = _load_hook_module(hook, "_nautical_on_exit_quarantine_test")
-            q_path = mod._QUEUE_PATH
-            q_path.parent.mkdir(parents=True, exist_ok=True)
-            q_path.write_text("{bad-json}\n", encoding="utf-8")
-            mod._take_queue_entries()
-            bad_path = mod._QUEUE_QUARANTINE_PATH
-            expect(bad_path.exists(), "queue quarantine file not created")
-        finally:
-            if prev_taskdata is None:
-                os.environ.pop("TASKDATA", None)
-            else:
-                os.environ["TASKDATA"] = prev_taskdata
 
 
 def test_on_exit_dead_letter_on_missing_fields():
@@ -4793,6 +4703,7 @@ def test_on_exit_dead_letter_on_missing_fields():
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
         mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
 
@@ -4805,10 +4716,7 @@ def test_on_exit_dead_letter_on_missing_fields():
             "spawn_intent_id": "si_missing_child_uuid",
             "child": {},
         }
-        mod._QUEUE_PATH.write_text(
-            json.dumps(entry_missing_spawn) + "\n" + json.dumps(entry_missing_child_uuid) + "\n",
-            encoding="utf-8",
-        )
+        _seed_sqlite_queue(mod._QUEUE_DB_PATH, [entry_missing_spawn, entry_missing_child_uuid])
 
         stats = mod._drain_queue()
         expect(stats.get("errors") == 2, f"expected 2 errors, got: {stats}")
@@ -4822,29 +4730,6 @@ def test_on_exit_dead_letter_on_missing_fields():
         expect("missing spawn_intent_id" in reasons, f"missing spawn_intent_id not in reasons: {reasons}")
         expect("missing child uuid" in reasons, f"missing child uuid not in reasons: {reasons}")
 
-
-def test_on_exit_processing_file_merges_into_queue():
-    """on-exit should merge .processing queue back into main queue when both exist."""
-    hook = _find_hook_file("on-exit-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_exit_processing_merge_test")
-    if not hasattr(mod, "_take_queue_entries"):
-        raise AssertionError("on-exit hook does not expose queue helper")
-
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        mod.TW_DATA_DIR = td_path
-        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
-        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
-
-        entry_a = {"spawn_intent_id": "si_a", "child": {"uuid": "00000000-0000-0000-0000-000000000aaa"}}
-        entry_b = {"spawn_intent_id": "si_b", "child": {"uuid": "00000000-0000-0000-0000-000000000bbb"}}
-        mod._QUEUE_PATH.write_text(json.dumps(entry_a) + "\n", encoding="utf-8")
-        mod._QUEUE_PROCESSING_PATH.write_text(json.dumps(entry_b) + "\n", encoding="utf-8")
-
-        entries = mod._take_queue_entries()
-        ids = sorted([e.get("spawn_intent_id") for e in entries if isinstance(e, dict)])
-        expect(ids == ["si_a", "si_b"], f"unexpected merged ids: {ids}")
 
 
 def test_on_exit_parent_nextlink_changed_dead_letter():
@@ -4873,7 +4758,7 @@ def test_on_exit_parent_nextlink_changed_dead_letter():
             "child_short": "deadbeef",
             "child": {"uuid": child_uuid},
         }
-        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        _seed_sqlite_queue(mod._QUEUE_DB_PATH, entry)
 
         calls = {"import": 0}
 
@@ -4914,9 +4799,6 @@ def test_on_exit_parent_update_lock_busy_requeues():
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         mod.TW_DATA_DIR = td_path
-        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
-        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
         mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
@@ -4930,7 +4812,27 @@ def test_on_exit_parent_update_lock_busy_requeues():
             "child_short": child_uuid[:8],
             "child": {"uuid": child_uuid},
         }
-        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) VALUES (?, ?, 0, 'queued', 1.0, 1.0)",
+                (entry["spawn_intent_id"], json.dumps(entry)),
+            )
+            conn.commit()
 
         # Precheck passes and child is considered present; contention happens at parent update lock.
         mod._parent_nextlink_state = lambda *_args, **_kwargs: ("ok", "")
@@ -4960,6 +4862,7 @@ def test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter():
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
         mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
 
@@ -4969,7 +4872,7 @@ def test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter():
             "attempts": mod._QUEUE_RETRY_MAX,
             "child": {"uuid": child_uuid},
         }
-        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        _seed_sqlite_queue(mod._QUEUE_DB_PATH, entry)
 
         calls = {"child_export": 0}
 
@@ -5003,6 +4906,7 @@ def test_on_exit_post_import_parent_conflict_cleans_orphan():
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
         mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
 
@@ -5015,7 +4919,7 @@ def test_on_exit_post_import_parent_conflict_cleans_orphan():
             "child_short": child_uuid[:8],
             "child": {"uuid": child_uuid},
         }
-        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        _seed_sqlite_queue(mod._QUEUE_DB_PATH, entry)
 
         state = {"parent_exports": 0, "child_exports": 0, "cleanup_called": False}
 
@@ -5028,7 +4932,7 @@ def test_on_exit_post_import_parent_conflict_cleans_orphan():
                 return True, json.dumps({"uuid": parent_uuid, "nextLink": "other"}), ""
             if f"uuid:{child_uuid}" in cmd_s and "export" in cmd_s:
                 state["child_exports"] += 1
-                if state["child_exports"] == 1:
+                if state["child_exports"] < 3:
                     return True, "{}", ""
                 return True, json.dumps({"uuid": child_uuid}), ""
             if " import " in f" {cmd_s} ":
@@ -5058,15 +4962,13 @@ def test_on_exit_idempotent_skip_for_finalized_intent():
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
         mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
 
         sid = "si_done_skip"
         child_uuid = "00000000-0000-0000-0000-000000000909"
-        mod._QUEUE_PATH.write_text(
-            json.dumps({"spawn_intent_id": sid, "child": {"uuid": child_uuid}, "child_short": child_uuid[:8]}) + "\n",
-            encoding="utf-8",
-        )
+        _seed_sqlite_queue(mod._QUEUE_DB_PATH, {"spawn_intent_id": sid, "child": {"uuid": child_uuid}, "child_short": child_uuid[:8]})
         intent_payload = {
             "ts": "2026-01-01T00:00:00Z",
             "hook": "on-exit",
@@ -5215,6 +5117,7 @@ def test_on_exit_lock_storm_circuit_requeues_remaining():
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
         mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
 
@@ -5227,7 +5130,7 @@ def test_on_exit_lock_storm_circuit_requeues_remaining():
                     "child": {"uuid": f"00000000-0000-0000-0000-0000000009{i}{i}"},
                 }
             )
-        mod._QUEUE_PATH.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
+        _seed_sqlite_queue(mod._QUEUE_DB_PATH, entries)
 
         mod._LOCK_STORM_THRESHOLD = 2
         mod._LOCK_BACKOFF_BASE = 0.0
@@ -5288,9 +5191,6 @@ def test_on_exit_dead_letter_on_import_failure():
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         mod.TW_DATA_DIR = td_path
-        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
-        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
         mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
@@ -5302,7 +5202,27 @@ def test_on_exit_dead_letter_on_import_failure():
             "child": {"uuid": child_uuid, "description": "test"},
             "spawn_intent_id": "si_test",
         }
-        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) VALUES (?, ?, 0, 'queued', 1.0, 1.0)",
+                (entry["spawn_intent_id"], json.dumps(entry)),
+            )
+            conn.commit()
 
         def _run_task_stub(cmd, **_kwargs):
             cmd_s = " ".join(cmd)
@@ -5879,6 +5799,7 @@ def test_on_exit_import_error_but_child_exists():
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
         mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
 
@@ -5889,7 +5810,7 @@ def test_on_exit_import_error_but_child_exists():
             "child": {"uuid": child_uuid, "description": "test"},
             "spawn_intent_id": "si_test",
         }
-        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        _seed_sqlite_queue(mod._QUEUE_DB_PATH, entry)
 
         state = {"export": 0}
         parent_next = {"value": ""}
@@ -6239,39 +6160,6 @@ def test_next_after_expr_branch_characterization():
     expect(d_rand_year.month == 1, f"rand+yearly should stay in January, got {d_rand_year}")
 
 
-def test_on_exit_lock_failure_keeps_queue():
-    """Queue should remain intact if on-exit lock cannot be acquired."""
-    hook = _find_hook_file("on-exit-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_exit_lock_fail_queue_test")
-
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        mod.TW_DATA_DIR = td_path
-        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
-        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
-
-        entry = {"child": {"uuid": "00000000-0000-0000-0000-000000000999"}}
-        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
-
-        class _FakeLock:
-            def __enter__(self):
-                return False
-            def __exit__(self, *args):
-                return False
-
-        orig_lock = mod._lock_queue
-        mod._lock_queue = lambda: _FakeLock()
-        try:
-            got = mod._take_queue_entries()
-        finally:
-            mod._lock_queue = orig_lock
-
-        expect(got == [], "lock failure should return empty entries")
-        expect(mod._QUEUE_PATH.exists() and mod._QUEUE_PATH.read_text(encoding="utf-8"), "queue should remain on lock failure")
-
 
 def test_on_exit_local_safe_lock_fails_closed_on_network_mount_without_fcntl():
     """on-exit local lock fallback should fail closed on network mounts when fcntl is unavailable."""
@@ -6292,53 +6180,6 @@ def test_on_exit_local_safe_lock_fails_closed_on_network_mount_without_fcntl():
             mod._path_looks_network_mount = saved_path_probe
 
 
-def test_on_exit_queue_streaming_line_cap():
-    """on-exit should stream queue and honor line cap."""
-    hook = _find_hook_file("on-exit-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_exit_queue_line_cap_test")
-
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        mod.TW_DATA_DIR = td_path
-        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
-        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
-        mod._QUEUE_MAX_LINES = 1
-
-        entry1 = {"child": {"uuid": "00000000-0000-0000-0000-000000000111"}}
-        entry2 = {"child": {"uuid": "00000000-0000-0000-0000-000000000222"}}
-        mod._QUEUE_PATH.write_text(json.dumps(entry1) + "\n" + json.dumps(entry2) + "\n", encoding="utf-8")
-
-        entries = mod._take_queue_entries()
-        expect(len(entries) == 1, f"unexpected entries length: {entries}")
-        remaining = mod._QUEUE_PATH.read_text(encoding="utf-8").strip().splitlines()
-        expect(len(remaining) == 1, "queue should keep remainder lines")
-
-
-def test_on_exit_queue_rotate_then_drain():
-    """on-exit should drain overflow queue after rotation."""
-    hook = _find_hook_file("on-exit-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_exit_queue_rotate_drain_test")
-
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        mod.TW_DATA_DIR = td_path
-        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
-        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
-        mod._QUEUE_MAX_BYTES = 1
-        mod._QUEUE_MAX_LINES = 10
-
-        entry = {"child": {"uuid": "00000000-0000-0000-0000-000000000999"}}
-        mod._QUEUE_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
-
-        entries = mod._take_queue_entries()
-        expect(len(entries) == 1, f"unexpected entries after rotate: {entries}")
-        expect(mod._QUEUE_PATH.exists(), "queue path should remain")
 
 
 def test_on_exit_dead_letter_rotation():
@@ -6389,50 +6230,7 @@ def test_on_exit_dead_letter_carries_spawn_intent_id():
         expect(payload.get("spawn_intent_id") == "si_test", "dead-letter should carry spawn_intent_id")
 
 
-def test_queue_json_parse_dead_letter():
-    """Invalid queue JSON should go to dead-letter and be removed from queue."""
-    hook = _find_hook_file("on-exit-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_exit_queue_json_dead_letter_test")
 
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        mod.TW_DATA_DIR = td_path
-        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
-        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
-        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
-        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
-
-        mod._QUEUE_PATH.write_text("{bad\n", encoding="utf-8")
-        entries = mod._take_queue_entries()
-        expect(entries == [], "bad JSON should not yield entries")
-        expect(mod._DEAD_LETTER_PATH.exists(), "dead-letter should be created")
-        remaining = mod._QUEUE_PATH.read_text(encoding="utf-8").strip()
-        expect(remaining == "", "queue should be cleared of bad line")
-
-def test_queue_json_non_object_dead_letter_removed():
-    """Non-object queue JSON should be dead-lettered and removed from queue."""
-    hook = _find_hook_file("on-exit-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_exit_queue_json_non_object_test")
-
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        mod.TW_DATA_DIR = td_path
-        mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
-        mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
-        mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
-        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
-        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
-        mod._QUEUE_QUARANTINE_PATH = td_path / ".nautical_spawn_queue.bad.jsonl"
-
-        mod._QUEUE_PATH.write_text('"not-an-object"\n', encoding="utf-8")
-        entries = mod._take_queue_entries()
-        expect(entries == [], "non-object JSON should not yield entries")
-        expect(mod._DEAD_LETTER_PATH.exists(), "dead-letter should be created for non-object JSON")
-        remaining = mod._QUEUE_PATH.read_text(encoding="utf-8").strip()
-        expect(remaining == "", "queue should be cleared of non-object line")
 
 def test_on_exit_requeue_failure_leaves_sqlite_entry_processing():
     """on-exit should report requeue failure and keep sqlite claim state for investigation."""
@@ -6555,10 +6353,8 @@ def test_on_exit_state_files_use_dedicated_dir():
     hook = _find_hook_file("on-exit-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_exit_state_dir_test")
 
-    expect(mod._QUEUE_PATH.parent.name == ".nautical-state", f"unexpected queue dir: {mod._QUEUE_PATH}")
     expect(mod._QUEUE_DB_PATH.parent.name == ".nautical-state", f"unexpected queue db dir: {mod._QUEUE_DB_PATH}")
     expect(mod._DEAD_LETTER_PATH.parent.name == ".nautical-state", f"unexpected dead-letter dir: {mod._DEAD_LETTER_PATH}")
-    expect(mod._QUEUE_QUARANTINE_PATH.parent.name == ".nautical-state", f"unexpected quarantine dir: {mod._QUEUE_QUARANTINE_PATH}")
     expect(mod._intent_log_path().parent.name == ".nautical-state", f"unexpected intent log dir: {mod._intent_log_path()}")
 
 
@@ -6567,7 +6363,6 @@ def test_on_modify_state_files_use_dedicated_dir():
     hook = _find_hook_file("on-modify-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_modify_state_dir_test")
 
-    expect(mod._SPAWN_QUEUE_PATH.parent.name == ".nautical-state", f"unexpected queue dir: {mod._SPAWN_QUEUE_PATH}")
     expect(mod._SPAWN_QUEUE_DB_PATH.parent.name == ".nautical-state", f"unexpected queue db dir: {mod._SPAWN_QUEUE_DB_PATH}")
     expect(mod._DEAD_LETTER_PATH.parent.name == ".nautical-state", f"unexpected dead-letter dir: {mod._DEAD_LETTER_PATH}")
     expect(mod._SPAWN_QUEUE_LOCK.parent.name == ".nautical-locks", f"unexpected queue lock dir: {mod._SPAWN_QUEUE_LOCK}")
@@ -7109,7 +6904,7 @@ TESTS = [
     test_ops_templates_present_and_runner_executable,
     test_on_modify_queue_full_drops_with_dead_letter,
     test_on_modify_enqueue_uses_sqlite_when_legacy_empty,
-    test_on_modify_enqueue_uses_sqlite_even_with_legacy_jsonl_backlog,
+    test_on_modify_enqueue_uses_sqlite_only_queue_backend,
     test_on_modify_enqueue_recovers_from_corrupt_sqlite_db,
     test_on_modify_chain_export_timeout_scales,
     test_tw_export_chain_extra_validation,
@@ -7146,14 +6941,9 @@ TESTS = [
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,
-    test_on_exit_take_queue_migrates_legacy_processing_backlog_to_sqlite,
     test_on_exit_take_queue_recovers_from_corrupt_sqlite_db,
     test_on_exit_drain_skips_finalized_sqlite_intent,
-    test_on_exit_queue_drain_is_transactional,
-    test_on_exit_queue_stat_failure_does_not_crash,
-    test_on_exit_quarantines_bad_queue_lines,
     test_on_exit_dead_letter_on_missing_fields,
-    test_on_exit_processing_file_merges_into_queue,
     test_on_exit_import_child_retries_on_lock,
     test_on_exit_dead_letter_on_import_failure,
     test_on_exit_large_queue_bounded_drain,
@@ -7220,13 +7010,8 @@ TESTS = [
     test_anchor_validate_rejects_legacy_tuple_error_payload,
     test_rand_determinism_with_seed,
     test_next_after_expr_branch_characterization,
-    test_on_exit_lock_failure_keeps_queue,
     test_on_exit_local_safe_lock_fails_closed_on_network_mount_without_fcntl,
-    test_on_exit_queue_streaming_line_cap,
-    test_on_exit_queue_rotate_then_drain,
     test_on_exit_dead_letter_rotation,
-    test_queue_json_parse_dead_letter,
-    test_queue_json_non_object_dead_letter_removed,
     test_on_exit_dead_letter_carries_spawn_intent_id,
     test_on_exit_requeue_failure_leaves_sqlite_entry_processing,
     test_on_exit_export_uuid_noisy_stdout,

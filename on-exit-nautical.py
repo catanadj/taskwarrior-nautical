@@ -329,18 +329,12 @@ def _nautical_lock_dir_path() -> Path:
         return queue_store.nautical_lock_dir_path(TW_DATA_DIR)
     return TW_DATA_DIR / ".nautical-locks"
 
-_QUEUE_PATH = _nautical_state_dir_path() / ".nautical_spawn_queue.jsonl"
-_QUEUE_PROCESSING_PATH = _nautical_state_dir_path() / ".nautical_spawn_queue.processing.jsonl"
-_QUEUE_LOCK = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock"
 _QUEUE_DB_PATH = _nautical_state_dir_path() / ".nautical_queue.db"
 _DEAD_LETTER_PATH = _nautical_state_dir_path() / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = _nautical_lock_dir_path() / ".nautical_dead_letter.lock"
 _DEAD_LETTER_RETENTION_DAYS = int(os.environ.get("NAUTICAL_DEAD_LETTER_RETENTION_DAYS") or 30)
-_QUEUE_MAX_BYTES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_BYTES") or 524288)
 _QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000)
 _DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)
-_QUEUE_QUARANTINE_PATH = _nautical_state_dir_path() / ".nautical_spawn_queue.bad.jsonl"
-_QUEUE_QUARANTINE_MAX_BYTES = int(os.environ.get("NAUTICAL_QUEUE_BAD_MAX_BYTES") or 262144)
 NAUTICAL_HOOK_VERSION = "updateE-20260126"
 _QUEUE_RETRY_MAX = int(os.environ.get("NAUTICAL_QUEUE_RETRY_MAX") or 6)
 _QUEUE_LOCK_FAIL_MARKER = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock_failed"
@@ -352,11 +346,8 @@ _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in
 def _migrate_legacy_nautical_state() -> None:
     queue_store = _module("queue_store", required=False)
     file_pairs = (
-        (_QUEUE_PATH, TW_DATA_DIR / ".nautical_spawn_queue.jsonl"),
-        (_QUEUE_PROCESSING_PATH, TW_DATA_DIR / ".nautical_spawn_queue.processing.jsonl"),
         (_QUEUE_DB_PATH, TW_DATA_DIR / ".nautical_queue.db"),
         (_DEAD_LETTER_PATH, TW_DATA_DIR / ".nautical_dead_letter.jsonl"),
-        (_QUEUE_QUARANTINE_PATH, TW_DATA_DIR / ".nautical_spawn_queue.bad.jsonl"),
         (_intent_log_path(), TW_DATA_DIR / ".nautical_spawn_intents.jsonl"),
     )
     db_sidecars = (
@@ -920,18 +911,6 @@ def _record_queue_lock_failure() -> None:
 
 
 @contextmanager
-def _lock_queue():
-    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(
-        _QUEUE_LOCK,
-        retries=_QUEUE_LOCK_RETRIES,
-        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
-        stale_after=_QUEUE_LOCK_STALE_AFTER,
-    ) as acquired:
-        yield acquired
-
-
-@contextmanager
 def _lock_dead_letter():
     lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
     with lock_fn(
@@ -1207,39 +1186,6 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
         except Exception:
             pass
 
-def _quarantine_queue_line(raw_line: str, reason: str) -> None:
-    if not raw_line:
-        return
-    try:
-        _QUEUE_QUARANTINE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    try:
-        if _QUEUE_QUARANTINE_MAX_BYTES > 0 and _QUEUE_QUARANTINE_PATH.exists():
-            try:
-                st = _QUEUE_QUARANTINE_PATH.stat()
-                if st.st_size > _QUEUE_QUARANTINE_MAX_BYTES:
-                    ts = int(time.time())
-                    overflow = _QUEUE_QUARANTINE_PATH.with_suffix(f".overflow.{ts}.jsonl")
-                    os.replace(_QUEUE_QUARANTINE_PATH, overflow)
-                    _diag(f"queue quarantine rotated: {overflow}")
-            except Exception:
-                pass
-        payload = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "reason": reason,
-            "raw": raw_line,
-        }
-        fd = os.open(str(_QUEUE_QUARANTINE_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-    except Exception:
-        pass
-
 def _fsync_dir(path: Path) -> None:
     queue_store = _module("queue_store", required=False)
     if queue_store is not None:
@@ -1259,115 +1205,10 @@ def _fsync_dir(path: Path) -> None:
         except Exception:
             pass
 
-def _queue_recover_processing_file() -> bool:
-    queue_store = _module("queue_store")
-    return queue_store.recover_processing_file(
-        queue_processing_path=_QUEUE_PROCESSING_PATH,
-        queue_path=_QUEUE_PATH,
-        durable_queue=_DURABLE_QUEUE,
-        fsync_dir_fn=_fsync_dir,
-    )
-
-
-def _queue_source_path_with_overflow() -> tuple[Path, Path | None]:
-    queue_store = _module("queue_store")
-    return queue_store.source_path_with_overflow(
-        queue_path=_QUEUE_PATH,
-        queue_max_bytes=_QUEUE_MAX_BYTES,
-        diag=_diag,
-    )
-
-
-def _queue_split_source_to_staging(src_path: Path, tmp_path: Path, tmp_processing: Path) -> list[dict]:
-    queue_store = _module("queue_store")
-    return queue_store.split_source_to_staging(
-        src_path=src_path,
-        tmp_path=tmp_path,
-        tmp_processing=tmp_processing,
-        queue_max_lines=_QUEUE_MAX_LINES,
-        durable_queue=_DURABLE_QUEUE,
-        quarantine_line=_quarantine_queue_line,
-        write_dead_letter=_write_dead_letter,
-    )
-
-
-def _queue_commit_staging(
-    tmp_path: Path,
-    tmp_processing: Path,
-    entries: list[dict],
-    overflow_path: Path | None,
-) -> None:
-    queue_store = _module("queue_store")
-    queue_store.commit_staging(
-        queue_path=_QUEUE_PATH,
-        queue_processing_path=_QUEUE_PROCESSING_PATH,
-        tmp_path=tmp_path,
-        tmp_processing=tmp_processing,
-        entries=entries,
-        overflow_path=overflow_path,
-        durable_queue=_DURABLE_QUEUE,
-        fsync_dir_fn=_fsync_dir,
-    )
-
-
-def _queue_cleanup_staging(tmp_path: Path, tmp_processing: Path) -> None:
-    queue_store = _module("queue_store")
-    queue_store.cleanup_staging(tmp_path, tmp_processing)
-
-
-def _take_queue_entries_jsonl_batch():
-    queue_store = _module("queue_store")
-    exit_models = _module("exit_models")
-    return exit_models.ExitQueueBatch(
-        entries=queue_store.take_queue_entries_jsonl_result(
-            queue_path=_QUEUE_PATH,
-            queue_processing_path=_QUEUE_PROCESSING_PATH,
-            queue_max_bytes=_QUEUE_MAX_BYTES,
-            queue_max_lines=_QUEUE_MAX_LINES,
-            durable_queue=_DURABLE_QUEUE,
-            lock_queue=_lock_queue,
-            record_lock_failure=_record_queue_lock_failure,
-            quarantine_line=_quarantine_queue_line,
-            write_dead_letter=_write_dead_letter,
-            fsync_dir_fn=_fsync_dir,
-            diag=_diag,
-        ).entries
-    )
-
-
-def _take_queue_entries_jsonl() -> list[dict]:
-    return _take_queue_entries_jsonl_batch().entries
-
-
-def _requeue_entries_jsonl_result(entries: list[dict]):
-    queue_store = _module("queue_store")
-    exit_models = _module("exit_models")
-    items = [e for e in (entries or []) if isinstance(e, dict)]
-    result = queue_store.requeue_entries_jsonl_result(
-        queue_path=_QUEUE_PATH,
-        entries=items,
-        durable_queue=_DURABLE_QUEUE,
-        lock_queue=_lock_queue,
-        record_lock_failure=_record_queue_lock_failure,
-        fsync_dir_fn=_fsync_dir,
-        diag=_diag,
-    )
-    return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
-
-
-def _requeue_entries_jsonl(entries: list[dict]) -> bool:
-    return _requeue_entries_jsonl_result(entries).ok
-
-
-def _queue_jsonl_has_data() -> bool:
-    queue_store = _module("queue_store")
-    return queue_store.queue_jsonl_has_data(_QUEUE_PATH, _QUEUE_PROCESSING_PATH)
-
-
 def _queue_db_connect_result():
     global _QUEUE_DB_OPEN_COUNT
     queue_store = _module("queue_store")
-    db_path = queue_store.resolve_queue_db_path(_QUEUE_PATH, _QUEUE_DB_PATH)
+    db_path = _QUEUE_DB_PATH
     timeout_base = max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0)
     timeout_max = max(timeout_base, float(_QUEUE_DB_CONNECT_TIMEOUT_MAX or timeout_base))
     result = queue_store.connect_queue_db_result(
@@ -1415,7 +1256,7 @@ def _queue_db_open_ready() -> sqlite3.Connection | None:
             _queue_close_silent(_RUN_QUEUE_DB_CONN)
             _RUN_QUEUE_DB_CONN = None
     queue_store = _module("queue_store")
-    db_path = queue_store.resolve_queue_db_path(_QUEUE_PATH, _QUEUE_DB_PATH)
+    db_path = _QUEUE_DB_PATH
     conn = queue_store.open_ready_queue_db(
         db_path,
         connect_fn=_queue_db_connect_result,
@@ -1557,30 +1398,7 @@ def _enqueue_entries_sqlite(entries: list[dict]) -> bool:
     return _enqueue_entries_sqlite_result(entries).ok
 
 
-def _migrate_legacy_jsonl_to_sqlite() -> None:
-    if not _queue_jsonl_has_data():
-        return
-    legacy_batch = _take_queue_entries_jsonl_batch()
-    legacy_entries = legacy_batch.entries
-    if not legacy_entries:
-        return
-    enqueue_result = _enqueue_entries_sqlite_result(legacy_entries)
-    if enqueue_result.ok:
-        try:
-            if _QUEUE_PROCESSING_PATH.exists():
-                _QUEUE_PROCESSING_PATH.unlink()
-                if _DURABLE_QUEUE:
-                    _fsync_dir(_QUEUE_PROCESSING_PATH.parent)
-        except Exception:
-            pass
-        _diag(f"migrated {legacy_batch.entries_total} legacy queue entries to sqlite")
-        return
-    _diag(f"legacy queue migration failed; restoring {legacy_batch.entries_total} entries to JSONL")
-    _requeue_entries_jsonl(legacy_entries)
-
-
 def _take_queue_entries() -> list[dict]:
-    _migrate_legacy_jsonl_to_sqlite()
     return _take_queue_entries_sqlite_batch().entries
 
 

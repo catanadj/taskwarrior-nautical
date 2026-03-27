@@ -1721,22 +1721,26 @@ def _due_context_on_add(task: dict, now_utc: datetime) -> tuple[bool, datetime, 
 def main():
     prof = _build_profiler()
     task = _read_on_add_task(prof)
+    hook_context = _module("hook_context")
+    hook_results = _module("hook_results")
     hook_engine = _module("hook_engine")
-    hook_engine.handle_on_add(
-        task,
-        prof=prof,
-        runtime=_build_hook_runtime_context(),
+    runtime = _build_hook_runtime_context()
+    request = hook_context.build_on_add_request(runtime=runtime, task=task, prof=prof)
+    result = hook_engine.handle_on_add(
+        request,
+        json_result_cls=hook_results.HookJsonResult,
         core_ref=lambda: core,
         task_has_nautical_fields=_task_has_nautical_fields,
         load_core=_load_core,
         diag=_diag,
         fail_and_exit=_fail_and_exit,
-        emit_task_json=_emit_task_json,
         build_on_add_context=_build_on_add_context,
         stamp_chain_id_on_add=_stamp_chain_id_on_add,
         handle_anchor_preview_on_add=_handle_anchor_preview_on_add_context,
         handle_cp_preview_on_add=_handle_cp_preview_on_add_context,
     )
+    if result is not None:
+        hook_results.emit_json_result(result, core=core)
 
 
 

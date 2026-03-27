@@ -17,6 +17,25 @@ class HookRuntimeContext:
 
 
 @dataclass(slots=True)
+class OnAddRequest:
+    runtime: HookRuntimeContext
+    task: dict[str, Any]
+    prof: Any | None = None
+
+
+@dataclass(slots=True)
+class OnModifyRequest:
+    runtime: HookRuntimeContext
+    old: dict[str, Any]
+    new: dict[str, Any]
+
+
+@dataclass(slots=True)
+class OnExitRequest:
+    runtime: HookRuntimeContext
+
+
+@dataclass(slots=True)
 class OnAddContext:
     task: dict[str, Any]
     now_utc: datetime
@@ -106,3 +125,15 @@ def build_on_add_context(
         due_day=due_day,
         due_hhmm=due_hhmm,
     )
+
+
+def build_on_add_request(*, runtime: HookRuntimeContext, task: dict[str, Any], prof=None) -> OnAddRequest:
+    return OnAddRequest(runtime=runtime, task=task, prof=prof)
+
+
+def build_on_modify_request(*, runtime: HookRuntimeContext, old: dict[str, Any], new: dict[str, Any]) -> OnModifyRequest:
+    return OnModifyRequest(runtime=runtime, old=old, new=new)
+
+
+def build_on_exit_request(*, runtime: HookRuntimeContext) -> OnExitRequest:
+    return OnExitRequest(runtime=runtime)

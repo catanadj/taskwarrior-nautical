@@ -4,6 +4,21 @@ import json
 import sys
 import time
 from typing import Any, Callable
+from dataclasses import dataclass
+
+
+@dataclass(slots=True)
+class HookJsonResult:
+    task: dict[str, Any]
+    sanitize: bool = False
+    prof: Any | None = None
+
+
+@dataclass(slots=True)
+class HookExitResult:
+    exit_code: int = 0
+    feedback_message: str | None = None
+    stats: dict[str, Any] | None = None
 
 
 def emit_passthrough_json(task: Any) -> None:
@@ -55,3 +70,15 @@ def panic_passthrough(
             sys.stdout.flush()
         except Exception:
             pass
+
+
+def emit_json_result(result: HookJsonResult, *, core=None) -> None:
+    emit_task_json(result.task, sanitize=result.sanitize, core=core, prof=result.prof)
+
+
+def emit_exit_result(result: HookExitResult, *, emit_exit_feedback, emit_stats_diag) -> int:
+    stats = result.stats if isinstance(result.stats, dict) else {}
+    emit_stats_diag(stats)
+    if result.feedback_message:
+        emit_exit_feedback(result.feedback_message)
+    return int(result.exit_code)

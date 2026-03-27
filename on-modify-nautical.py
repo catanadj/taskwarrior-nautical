@@ -5028,11 +5028,18 @@ def _emit_modify_passthrough(task: dict) -> None:
 
 
 def main():
+    hook_context = _module("hook_context")
+    hook_results = _module("hook_results")
     hook_engine = _module("hook_engine")
-    hook_engine.handle_on_modify(
+    old, new = _read_two()
+    request = hook_context.build_on_modify_request(
         runtime=_build_hook_runtime_context(),
-        read_two=_read_two,
-        emit_passthrough=_emit_modify_passthrough,
+        old=old,
+        new=new,
+    )
+    result = hook_engine.handle_on_modify(
+        request,
+        json_result_cls=hook_results.HookJsonResult,
         task_has_nautical_fields=_task_has_nautical_fields,
         load_core=_load_core,
         diag=_diag,
@@ -5041,6 +5048,8 @@ def main():
         handle_non_completion_modify=_handle_non_completion_modify,
         handle_completion_modify=_handle_completion_modify,
     )
+    if result is not None:
+        hook_results.emit_json_result(result, core=core)
 
 
 # ------------------------------------------------------------------------------

@@ -102,6 +102,8 @@ _HOOK_CONTEXT = None
 _HOOK_CONTEXT_LOAD_FAILED = False
 _HOOK_ENGINE = None
 _HOOK_ENGINE_LOAD_FAILED = False
+_HOOK_RESULTS = None
+_HOOK_RESULTS_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -150,6 +152,12 @@ _MODULE_SPECS = {
         "_HOOK_ENGINE_LOAD_FAILED",
         "hook_engine.py",
         "nautical_hook_engine",
+    ),
+    "hook_results": (
+        "_HOOK_RESULTS",
+        "_HOOK_RESULTS_LOAD_FAILED",
+        "hook_results.py",
+        "nautical_hook_results",
     ),
 }
 try:
@@ -2035,14 +2043,21 @@ def _strict_exit_feedback_message(stats: dict) -> str | None:
 
 
 def main() -> int:
+    hook_context = _module("hook_context")
+    hook_results = _module("hook_results")
     hook_engine = _module("hook_engine")
-    return hook_engine.handle_on_exit(
-        runtime=_build_hook_runtime_context(),
+    request = hook_context.build_on_exit_request(runtime=_build_hook_runtime_context())
+    result = hook_engine.handle_on_exit(
+        request,
+        exit_result_cls=hook_results.HookExitResult,
         redirect_stdout_to_devnull=_redirect_stdout_to_devnull,
         drain_queue=_drain_queue,
-        emit_stats_diag=_emit_drain_stats_diag,
         strict_exit_result=_strict_exit_feedback_message,
+    )
+    return hook_results.emit_exit_result(
+        result,
         emit_exit_feedback=_emit_exit_feedback,
+        emit_stats_diag=_emit_drain_stats_diag,
     )
 
 

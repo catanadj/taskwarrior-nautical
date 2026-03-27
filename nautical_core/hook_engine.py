@@ -2,24 +2,24 @@ from __future__ import annotations
 
 
 def handle_on_add(
-    task: dict,
+    request,
     *,
-    prof,
-    runtime,
+    json_result_cls,
     core_ref,
     task_has_nautical_fields,
     load_core,
     diag,
     fail_and_exit,
-    emit_task_json,
     build_on_add_context,
     stamp_chain_id_on_add,
     handle_anchor_preview_on_add,
     handle_cp_preview_on_add,
 ) -> None:
+    task = request.task
+    prof = request.prof
+    runtime = request.runtime
     if not task_has_nautical_fields(task):
-        emit_task_json(task, sanitize=False)
-        return
+        return json_result_cls(task=task, sanitize=False, prof=prof)
 
     try:
         load_core()
@@ -39,43 +39,40 @@ def handle_on_add(
 
     ctx = build_on_add_context(task, now_utc, now_local, prof=prof)
     if not ctx.kind:
-        emit_task_json(task, sanitize=True, prof=prof)
-        return
+        return json_result_cls(task=task, sanitize=True, prof=prof)
 
     stamp_chain_id_on_add(task)
     if ctx.kind == 'anchor':
         handle_anchor_preview_on_add(ctx, prof=prof)
-        return
+        return None
 
     handle_cp_preview_on_add(ctx, prof=prof)
+    return None
 
 
 
 def handle_on_exit(
+    request,
     *,
-    runtime,
+    exit_result_cls,
     redirect_stdout_to_devnull,
     drain_queue,
-    emit_stats_diag,
     strict_exit_result,
-    emit_exit_feedback,
-) -> int:
+):
+    _ = request.runtime
     redirect_stdout_to_devnull()
     stats = drain_queue()
-    emit_stats_diag(stats)
     strict_msg = strict_exit_result(stats)
     if strict_msg:
-        emit_exit_feedback(strict_msg)
-        return 1
-    return 0
+        return exit_result_cls(exit_code=1, feedback_message=strict_msg, stats=stats)
+    return exit_result_cls(exit_code=0, stats=stats)
 
 
 
 def handle_on_modify(
+    request,
     *,
-    runtime,
-    read_two,
-    emit_passthrough,
+    json_result_cls,
     task_has_nautical_fields,
     load_core,
     diag,
@@ -83,16 +80,14 @@ def handle_on_modify(
     is_non_completion_modify,
     handle_non_completion_modify,
     handle_completion_modify,
-) -> None:
-    old, new = read_two()
+):
+    old, new = request.old, request.new
 
     if (new.get('status') or '').lower() == 'deleted':
-        emit_passthrough(new)
-        return
+        return json_result_cls(task=new, sanitize=False)
 
     if not task_has_nautical_fields(old, new):
-        emit_passthrough(new)
-        return
+        return json_result_cls(task=new, sanitize=False)
 
     try:
         load_core()
@@ -102,6 +97,7 @@ def handle_on_modify(
 
     if is_non_completion_modify(old, new):
         handle_non_completion_modify(old, new)
-        return
+        return None
 
     handle_completion_modify(old, new)
+    return None

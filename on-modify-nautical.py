@@ -433,6 +433,12 @@ _MODULE_SPECS = {
         "modify_feedback.py",
         "nautical_core.modify_feedback",
     ),
+    "modify_runtime": (
+        "_MODIFY_RUNTIME",
+        "_MODIFY_RUNTIME_LOAD_FAILED",
+        "modify_runtime.py",
+        "nautical_core.modify_runtime",
+    ),
     "modify_timeline": (
         "_MODIFY_TIMELINE",
         "_MODIFY_TIMELINE_LOAD_FAILED",
@@ -4409,6 +4415,32 @@ def _stamp_chain_id_if_new_nautical(old: dict, new: dict) -> None:
         pass
 
 
+def _modify_feedback_runtime_services():
+    modify_runtime = _module("modify_runtime")
+    return modify_runtime.ModifyRuntimeServices(
+        core=core,
+        debug_wait_sched=_DEBUG_WAIT_SCHED,
+        last_wait_sched_debug=_LAST_WAIT_SCHED_DEBUG,
+        diag_enabled=os.environ.get("NAUTICAL_DIAG") == "1",
+        format_root_and_age=_format_root_and_age,
+        append_next_wait_sched_rows=_append_next_wait_sched_rows,
+        timeline_lines=_timeline_lines,
+        show_timeline_gaps=_SHOW_TIMELINE_GAPS,
+        root_uuid_from=_root_uuid_from,
+        short=_short,
+        format_next_anchor_rows=_format_next_anchor_rows,
+        format_next_cp_rows=_format_next_cp_rows,
+        format_line_preview=_format_line_preview,
+        panel_line=_panel_line,
+        panel=_panel,
+        chain_color_per_chain=_CHAIN_COLOR_PER_CHAIN,
+        chain_colour_for_task=_chain_colour_for_task,
+        strip_quotes=_strip_quotes,
+        human_delta=_human_delta,
+        export_uuid_short_cached=_export_uuid_short_cached,
+    )
+
+
 def _render_anchor_completion_feedback(
     *,
     new: dict,
@@ -4434,6 +4466,7 @@ def _render_anchor_completion_feedback(
 ) -> None:
     modify_feedback = _module("modify_feedback")
     modify_models = _module("modify_models")
+    modify_runtime = _module("modify_runtime")
     feedback = modify_models.AnchorCompletionFeedbackModel(
         new=new,
         child=child,
@@ -4456,37 +4489,8 @@ def _render_anchor_completion_feedback(
         integrity_warnings=integrity_warnings,
         base_no=base_no,
     )
-    services = modify_models.AnchorFeedbackServices(
-        core=core,
-        debug_wait_sched=_DEBUG_WAIT_SCHED,
-        last_wait_sched_debug=_LAST_WAIT_SCHED_DEBUG,
-        diag_enabled=os.environ.get("NAUTICAL_DIAG") == "1",
-        format_root_and_age=_format_root_and_age,
-        append_next_wait_sched_rows=_append_next_wait_sched_rows,
-        timeline_lines=lambda kind, task, child_due, child_short, dnf, *, next_count, cap_no, cur_no, show_gaps: _timeline_lines(
-            kind,
-            task,
-            child_due,
-            child_short,
-            dnf,
-            next_count=next_count,
-            cap_no=cap_no,
-            cur_no=cur_no,
-            show_gaps=show_gaps,
-            round_anchor_gaps=True,
-        ),
-        show_timeline_gaps=_SHOW_TIMELINE_GAPS,
-        root_uuid_from=_root_uuid_from,
-        short=_short,
-        format_next_anchor_rows=_format_next_anchor_rows,
-        format_line_preview=_format_line_preview,
-        panel_line=_panel_line,
-        panel=_panel,
-        chain_color_per_chain=_CHAIN_COLOR_PER_CHAIN,
-        chain_colour_for_task=_chain_colour_for_task,
-        strip_quotes=_strip_quotes,
-        human_delta=_human_delta,
-    )
+    runtime = _modify_feedback_runtime_services()
+    services = modify_runtime.build_anchor_feedback_services(runtime)
     modify_feedback.render_anchor_completion_feedback(
         feedback=feedback,
         services=services,
@@ -4516,6 +4520,7 @@ def _render_cp_completion_feedback(
 ) -> None:
     modify_feedback = _module("modify_feedback")
     modify_models = _module("modify_models")
+    modify_runtime = _module("modify_runtime")
     feedback = modify_models.CpCompletionFeedbackModel(
         new=new,
         child=child,
@@ -4536,33 +4541,8 @@ def _render_cp_completion_feedback(
         integrity_warnings=integrity_warnings,
         base_no=base_no,
     )
-    services = modify_models.CpFeedbackServices(
-        core=core,
-        diag_enabled=os.environ.get("NAUTICAL_DIAG") == "1",
-        format_root_and_age=_format_root_and_age,
-        append_next_wait_sched_rows=_append_next_wait_sched_rows,
-        timeline_lines=lambda kind, task, child_due, child_short, dnf, *, next_count, cap_no, cur_no, show_gaps: _timeline_lines(
-            kind,
-            task,
-            child_due,
-            child_short,
-            dnf,
-            next_count=next_count,
-            cap_no=cap_no,
-            cur_no=cur_no,
-            show_gaps=show_gaps,
-            round_anchor_gaps=False,
-        ),
-        show_timeline_gaps=_SHOW_TIMELINE_GAPS,
-        format_next_cp_rows=_format_next_cp_rows,
-        format_line_preview=_format_line_preview,
-        panel_line=_panel_line,
-        panel=_panel,
-        chain_color_per_chain=_CHAIN_COLOR_PER_CHAIN,
-        chain_colour_for_task=_chain_colour_for_task,
-        human_delta=_human_delta,
-        export_uuid_short_cached=_export_uuid_short_cached,
-    )
+    runtime = _modify_feedback_runtime_services()
+    services = modify_runtime.build_cp_feedback_services(runtime)
     modify_feedback.render_cp_completion_feedback(
         feedback=feedback,
         services=services,

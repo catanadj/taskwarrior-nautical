@@ -129,6 +129,7 @@ class AnchorFeedbackServices:
     format_next_anchor_rows: Any
     format_line_preview: Any
     panel_line: Any
+    text_line: Any
     panel: Any
     chain_color_per_chain: bool
     chain_colour_for_task: Any
@@ -147,6 +148,7 @@ class CpFeedbackServices:
     format_next_cp_rows: Any
     format_line_preview: Any
     panel_line: Any
+    text_line: Any
     panel: Any
     chain_color_per_chain: bool
     chain_colour_for_task: Any

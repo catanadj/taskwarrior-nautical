@@ -5614,6 +5614,59 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
     expect("Next link" in captured["title"], f"unexpected panel title: {captured}")
 
 
+def test_on_modify_render_cp_completion_feedback_text_mode():
+    """CP completion feedback should use concise ASCII text output in text mode."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_feedback_text_mode_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._CHAIN_COLOR_PER_CHAIN = False
+    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
+    mod._format_next_cp_rows = lambda fb: fb
+    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
+    mod._timeline_lines = lambda *_a, **_k: []
+    mod._export_uuid_short_cached = lambda _short: {}
+
+    captured = {}
+    mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("panel line should not be used in text mode"))
+    mod._panel = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("panel should not be used in text mode"))
+    mod._text_line = lambda line, **_k: captured.update({"line": line, "kwargs": dict(_k)})
+
+    prev_panel_mode = mod.core.PANEL_MODE
+    try:
+        mod.core.PANEL_MODE = "text"
+        mod._render_cp_completion_feedback(
+            new={"cp": "P1D", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            child_due=mod.core.now_utc(),
+            child_short="deadbeef",
+            next_no=2,
+            parent_short="00000000",
+            cap_no=None,
+            finals=[],
+            now_utc=mod.core.now_utc(),
+            until_dt=None,
+            until_cap_no=None,
+            meta={},
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            chain_by_short=None,
+            analytics_advice=None,
+            integrity_warnings=None,
+            base_no=1,
+        )
+    finally:
+        mod.core.PANEL_MODE = prev_panel_mode
+
+    expect("line" in captured, f"expected text-mode line emission, got {captured}")
+    txt = str(captured["line"])
+    expect("⛓" in txt, f"expected cp preview payload before ascii normalization, got {txt!r}")
+    expect(captured.get("kwargs", {}).get("kind") == "preview_cp", f"unexpected text line kwargs: {captured}")
+    expect(captured.get("kwargs", {}).get("markup_body") is True, f"unexpected markup handling: {captured}")
+
+
 def test_on_add_preview_hard_cap():
     """on-add preview loop should respect hard cap even with large preview setting."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -6996,6 +7049,7 @@ TESTS = [
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_render_anchor_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_wrapper,
+    test_on_modify_render_cp_completion_feedback_text_mode,
     test_on_add_preview_hard_cap,
     test_on_add_flushes_stdout,
     test_on_add_profiler_lazy_init,

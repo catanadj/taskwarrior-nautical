@@ -86,6 +86,44 @@ def emit_line(msg: str) -> None:
         pass
 
 
+def _ascii_report_text(text: str) -> str:
+    out = strip_rich_markup(text or "")
+    replacements = {
+        "⚓︎": "anchor",
+        "⚓": "anchor",
+        "⛓": "cp",
+        "✓": "ok",
+        "→": "->",
+        "—": "-",
+        "·": "|",
+    }
+    for src, dst in replacements.items():
+        out = out.replace(src, dst)
+    out = re.sub(r"\s*\|\s*", " | ", out)
+    out = re.sub(r"\s+", " ", out).strip()
+    return out
+
+
+def text_line(line: str, *, kind: str = "info", markup_body: bool = False) -> None:
+    text = _ascii_report_text(line if markup_body else str(line))
+    if not text:
+        return
+    if not fast_color_enabled():
+        emit_line(text)
+        return
+    color_code = {
+        "preview_anchor": "36",
+        "preview_cp": "33",
+        "warning": "33",
+        "error": "31",
+        "summary": "35",
+    }.get(str(kind or "info"), "36")
+    try:
+        sys.stderr.write(f"{ansi(color_code)}{text}{ansi('0')}\n")
+    except Exception:
+        emit_line(text)
+
+
 def _wrap_prefixed_lines(prefix: str, text: str, width: int) -> list[str]:
     text = strip_rich_markup("" if text is None else str(text))
     avail = max(10, width - len(prefix))
@@ -188,7 +226,9 @@ def _normalize_panel_mode(
     mode = str(panel_mode or "").strip().lower()
     if mode in {"plain"}:
         mode = "fast"
-    if mode in {"minimal", "quiet"}:
+    if mode == "quiet":
+        mode = "text"
+    if mode == "minimal":
         mode = "line"
     if mode == "line" and not allow_line:
         mode = "rich"
@@ -395,6 +435,12 @@ def render_panel(
             line = panel_line_from_rows(title, rows)
             if line:
                 panel_line(title, line, kind=kind, themes=themes)
+            return
+
+        if mode == "text":
+            line = panel_line_from_rows(title, rows)
+            if line:
+                text_line(line, kind=kind, markup_body=False)
             return
 
         if mode == "fast":

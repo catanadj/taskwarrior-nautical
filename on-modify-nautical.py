@@ -1003,6 +1003,19 @@ def _panel_line(
         markup_body=markup_body,
     )
 
+
+def _text_line(
+    line: str,
+    *,
+    kind: str = "info",
+    markup_body: bool = False,
+) -> None:
+    core.text_line(
+        line,
+        kind=kind,
+        markup_body=markup_body,
+    )
+
 def _strip_quotes(s: str) -> str:
     s = (s or "").strip()
     return s[1:-1] if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"') else s
@@ -4427,6 +4440,7 @@ def _modify_runtime_services():
         format_next_cp_rows=_format_next_cp_rows,
         format_line_preview=_format_line_preview,
         panel_line=_panel_line,
+        text_line=_text_line,
         panel=_panel,
         print_task=_print_task,
         diag=_diag,

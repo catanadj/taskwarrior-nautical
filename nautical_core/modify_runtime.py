@@ -76,6 +76,7 @@ class ModifyRuntimeServices:
     format_next_cp_rows: Any
     format_line_preview: Any
     panel_line: Any
+    text_line: Any
     panel: Any
     print_task: Any
     diag: Any
@@ -125,6 +126,7 @@ def build_anchor_feedback_services(runtime: ModifyRuntimeServices) -> AnchorFeed
         format_next_anchor_rows=runtime.format_next_anchor_rows,
         format_line_preview=runtime.format_line_preview,
         panel_line=runtime.panel_line,
+        text_line=runtime.text_line,
         panel=runtime.panel,
         chain_color_per_chain=runtime.chain_color_per_chain,
         chain_colour_for_task=runtime.chain_colour_for_task,
@@ -155,6 +157,7 @@ def build_cp_feedback_services(runtime: ModifyRuntimeServices) -> CpFeedbackServ
         format_next_cp_rows=runtime.format_next_cp_rows,
         format_line_preview=runtime.format_line_preview,
         panel_line=runtime.panel_line,
+        text_line=runtime.text_line,
         panel=runtime.panel,
         chain_color_per_chain=runtime.chain_color_per_chain,
         chain_colour_for_task=runtime.chain_colour_for_task,

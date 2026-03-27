@@ -121,7 +121,10 @@ def _append_final_rows(
 
 
 def _display_mode_name(core) -> str:
-    return str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
+    mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
+    if mode == "quiet":
+        return "text"
+    return mode
 
 
 def _rows_are_notable(rows: list[tuple[str, object]]) -> bool:
@@ -186,6 +189,7 @@ def render_anchor_completion_feedback(
     format_next_anchor_rows = services.format_next_anchor_rows
     format_line_preview = services.format_line_preview
     panel_line = services.panel_line
+    text_line = services.text_line
     panel = services.panel
     chain_color_per_chain = services.chain_color_per_chain
     chain_colour_for_task = services.chain_colour_for_task
@@ -257,7 +261,7 @@ def render_anchor_completion_feedback(
         title_style = chain_colour_for_task(feedback.new, "anchor") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_anchor", border_style=title_style, title_style=title_style, markup_body=True)
         return
-    if mode == "quiet" and not _rows_are_notable(fb):
+    if mode == "text":
         line = format_line_preview(
             feedback.base_no,
             feedback.new,
@@ -268,12 +272,11 @@ def render_anchor_completion_feedback(
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
             kind="anchor",
-            minimal=True,
+            minimal=False,
         )
-        title_style = chain_colour_for_task(feedback.new, "anchor") if chain_color_per_chain else None
-        panel_line(title, line, kind="preview_anchor", border_style=title_style, title_style=title_style, markup_body=True)
+        text_line(line, kind="preview_anchor", markup_body=True)
         return
-    if mode in {"compact", "quiet"}:
+    if mode == "compact":
         fb = _compact_feedback_rows(fb, include_timeline=True)
     if chain_color_per_chain:
         chain_colour = chain_colour_for_task(feedback.new, "anchor")
@@ -302,6 +305,7 @@ def render_cp_completion_feedback(
     format_next_cp_rows = services.format_next_cp_rows
     format_line_preview = services.format_line_preview
     panel_line = services.panel_line
+    text_line = services.text_line
     panel = services.panel
     chain_color_per_chain = services.chain_color_per_chain
     chain_colour_for_task = services.chain_colour_for_task
@@ -373,7 +377,7 @@ def render_cp_completion_feedback(
         title_style = chain_colour_for_task(feedback.new, "cp") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_cp", border_style=title_style, title_style=title_style, markup_body=True)
         return
-    if mode == "quiet" and not _rows_are_notable(fb):
+    if mode == "text":
         line = format_line_preview(
             feedback.base_no,
             feedback.new,
@@ -384,12 +388,11 @@ def render_cp_completion_feedback(
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
             kind="cp",
-            minimal=True,
+            minimal=False,
         )
-        title_style = chain_colour_for_task(feedback.new, "cp") if chain_color_per_chain else None
-        panel_line(title, line, kind="preview_cp", border_style=title_style, title_style=title_style, markup_body=True)
+        text_line(line, kind="preview_cp", markup_body=True)
         return
-    if mode in {"compact", "quiet"}:
+    if mode == "compact":
         fb = _compact_feedback_rows(fb, include_timeline=True)
     if chain_color_per_chain:
         chain_colour = chain_colour_for_task(feedback.new, "cp")

@@ -339,6 +339,7 @@ fast_color_enabled = _ui.fast_color_enabled
 ansi = _ui.ansi
 emit_wrapped = _ui.emit_wrapped
 emit_line = _ui.emit_line
+text_line = _ui.text_line
 panel_line_from_rows = _ui.panel_line_from_rows
 panel_line = _ui.panel_line
 render_panel = _ui.render_panel

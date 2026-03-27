@@ -34,7 +34,6 @@ class CompletionPreflightServices:
     completion_kind_or_stop: Any
     completion_chain_id_or_fail: Any
     completion_existing_next_or_fail: Any
-    preflight_context_cls: Any
 
 
 @dataclass(slots=True)
@@ -46,7 +45,6 @@ class CompletionComputeServices:
     completion_warn_unreasonable_duration: Any
     completion_caps: Any
     completion_cap_guard_or_stop: Any
-    compute_result_cls: Any
 
 
 @dataclass(slots=True)
@@ -114,7 +112,6 @@ class CompletionSpawnServices:
     panel: Any
     print_task: Any
     diag: Any
-    spawn_result_cls: Any
 
 
 @dataclass(slots=True)

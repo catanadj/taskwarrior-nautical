@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from nautical_core.modify_models import CompletionComputeResult
+
 
 def completion_compute_child_due(
     new: dict,
@@ -190,7 +192,6 @@ def completion_compute_next_and_limits(
     completion_warn_unreasonable_duration = services.completion_warn_unreasonable_duration
     completion_caps = services.completion_caps
     completion_cap_guard_or_stop = services.completion_cap_guard_or_stop
-    compute_result_cls = services.compute_result_cls
     computed = completion_compute_child_due(new, kind)
     if computed is None:
         return None
@@ -212,7 +213,7 @@ def completion_compute_next_and_limits(
     if not completion_cap_guard_or_stop(new, next_no, cap_no, now_utc):
         return None
 
-    return compute_result_cls(
+    return CompletionComputeResult(
         child_due=child_due,
         meta=meta,
         dnf=dnf,

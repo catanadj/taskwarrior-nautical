@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from nautical_core.modify_models import CompletionPreflightContext
+
 
 def completion_link_numbers_or_fail(
     new: dict,
@@ -116,7 +118,6 @@ def completion_preflight_context(
     completion_kind_or_stop = services.completion_kind_or_stop
     completion_chain_id_or_fail = services.completion_chain_id_or_fail
     completion_existing_next_or_fail = services.completion_existing_next_or_fail
-    preflight_context_cls = services.preflight_context_cls
     parent_short = short(new.get("uuid"))
     nums = completion_link_numbers_or_fail(new)
     if nums is None:
@@ -134,7 +135,7 @@ def completion_preflight_context(
     if not completion_existing_next_or_fail(new, next_no):
         return None
 
-    return preflight_context_cls(
+    return CompletionPreflightContext(
         parent_short=parent_short,
         base_no=base_no,
         next_no=next_no,

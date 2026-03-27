@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from nautical_core.modify_models import CompletionSpawnResult
+
 
 def completion_build_and_spawn_child(
     new: dict,
@@ -17,7 +19,6 @@ def completion_build_and_spawn_child(
     panel = services.panel
     print_task = services.print_task
     diag = services.diag
-    spawn_result_cls = services.spawn_result_cls
     try:
         child = build_child_from_parent(new, child_due, next_no, parent_short, kind, cpmax, until_dt)
     except Exception as exc:
@@ -64,7 +65,7 @@ def completion_build_and_spawn_child(
     if verified:
         new["nextLink"] = child_short
 
-    return spawn_result_cls(
+    return CompletionSpawnResult(
         child=child,
         child_short=child_short,
         stripped_attrs=stripped_attrs,

@@ -5661,7 +5661,7 @@ def test_on_modify_render_cp_completion_feedback_text_mode():
         mod.core.PANEL_MODE = prev_panel_mode
 
     expect("line" in captured, f"expected text-mode line emission, got {captured}")
-    txt = str(captured["line"])
+    txt = mod.core.strip_rich_markup(str(captured["line"]))
     expect("\n" in txt, f"expected stacked text payload, got {txt!r}")
     expect("00000000 ✓" in txt, f"expected parent status line in text payload, got {txt!r}")
     expect("Next ⛓ #2 deadbeef" in txt, f"expected next-link line in text payload, got {txt!r}")

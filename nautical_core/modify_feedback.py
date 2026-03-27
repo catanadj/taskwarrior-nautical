@@ -160,26 +160,41 @@ def _build_text_feedback(
     lead = parts[0] if parts else ""
     due_part = parts[2] if len(parts) >= 3 else ""
     status_tail = lead.split(" ", 1)[1].strip() if " " in lead else ""
-    line1 = f"{parent_short} {status_tail}".strip() if status_tail else str(parent_short or "").strip()
+    status_tail = status_tail.replace(" next ⚓︎", "").replace(" next ⚓", "").replace(" next ⛓", "").strip()
+
+    line1 = f"[bold white]{parent_short}[/]"
+    if status_tail:
+        status_tokens = status_tail.split(" ", 1)
+        first = status_tokens[0]
+        rest = status_tokens[1].strip() if len(status_tokens) > 1 else ""
+        if first:
+            line1 += f" [green]{first}[/]"
+        if rest:
+            line1 += f" [dim]{rest}[/]"
 
     due_part = due_part.replace("(due in ", "in ").replace("(due overdue by ", "overdue by ").replace("(", "").replace(")", "").strip()
-    glyph = "⚓︎" if str(kind or "").lower() == "anchor" else "⛓"
-    line2 = f"Next {glyph} #{next_no} {child_short}"
+    accent = "cyan" if str(kind or "").lower() == "anchor" else "yellow"
+    due_style = "red" if due_part.startswith("overdue by ") else "bright_white"
+    line2 = f"[bold {accent}]Next[/] [{accent}]" + ("⚓︎" if str(kind or "").lower() == "anchor" else "⛓") + f"[/] [bold]{'#' + str(next_no)}[/] [bold white]{child_short}[/]"
     if due_part:
-        line2 += f" → {due_part}"
+        line2 += f" [dim]→[/] [{due_style}]{due_part}[/]"
 
     lines = [line1, line2]
     if summary and str(summary).strip():
-        lines.append(str(summary).strip())
+        if str(kind or "").lower() == "anchor":
+            summary_text = f"[bold cyan]Pattern:[/] [white]{summary.split(':', 1)[1].strip() if ':' in summary else summary}[/]"
+        else:
+            summary_text = f"[bold yellow]Period:[/] [white]{summary.split(':', 1)[1].strip() if ':' in summary else summary}[/]"
+        lines.append(summary_text)
 
     limit_parts = []
     if cap_no:
-        limit_parts.append(f"cap #{cap_no}")
-        limit_parts.append(f"{max(0, cap_no - base_no)} left")
+        limit_parts.append(f"[yellow]cap #{cap_no}[/]")
+        limit_parts.append(f"[dim]{max(0, cap_no - base_no)} left[/]")
     if until_dt:
-        limit_parts.append(f"until {core.fmt_dt_local(until_dt)}")
+        limit_parts.append(f"[dim]until[/] [white]{core.fmt_dt_local(until_dt)}[/]")
     if limit_parts:
-        lines.append("Limits: " + " · ".join(limit_parts))
+        lines.append("[bold yellow]Limits:[/] " + " [dim]·[/] ".join(limit_parts))
     return "\n".join(line for line in lines if line)
 
 

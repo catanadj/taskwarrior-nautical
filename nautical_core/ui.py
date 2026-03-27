@@ -86,7 +86,7 @@ def emit_line(msg: str) -> None:
         pass
 
 
-def _text_report_lines(text: str) -> list[str]:
+def _plain_text_report_lines(text: str) -> list[str]:
     parts = str(text or "").splitlines() if "\n" in str(text or "") else [str(text or "")]
     out: list[str] = []
     for part in parts:
@@ -96,14 +96,28 @@ def _text_report_lines(text: str) -> list[str]:
             out.append(line)
     return out
 
+
 def text_line(line: str, *, kind: str = "info", markup_body: bool = False) -> None:
-    lines = _text_report_lines(line if markup_body else str(line))
-    if not lines:
+    raw_lines = str(line or "").splitlines() if "\n" in str(line or "") else [str(line or "")]
+    plain_lines = _plain_text_report_lines(line)
+    if not plain_lines:
         return
     if not fast_color_enabled():
-        for text in lines:
+        for text in plain_lines:
             emit_line(text)
         return
+    try:
+        from rich.console import Console
+        from rich.text import Text
+        console = Console(file=sys.stderr, force_terminal=True, soft_wrap=True)
+        for raw in raw_lines:
+            if not str(raw).strip():
+                continue
+            text_obj = Text.from_markup(raw) if markup_body else Text(str(raw))
+            console.print(text_obj)
+        return
+    except Exception:
+        pass
     color_code = {
         "preview_anchor": "36",
         "preview_cp": "33",
@@ -112,10 +126,10 @@ def text_line(line: str, *, kind: str = "info", markup_body: bool = False) -> No
         "summary": "35",
     }.get(str(kind or "info"), "36")
     try:
-        for text in lines:
+        for text in plain_lines:
             sys.stderr.write(f"{ansi(color_code)}{text}{ansi('0')}\n")
     except Exception:
-        for text in lines:
+        for text in plain_lines:
             emit_line(text)
 
 

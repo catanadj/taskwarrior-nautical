@@ -177,6 +177,42 @@ def _diag_count(key: str, inc: int = 1) -> None:
         pass
 
 
+def _run_task_diag_bucket(cmd: list[str]) -> str:
+    try:
+        parts = []
+        for p in (cmd or ()): 
+            parts.extend(str(p).split())
+        parts = tuple(parts)
+    except Exception:
+        return "other"
+    if not parts:
+        return "other"
+    if "_get" in parts:
+        return "get"
+    if "import" in parts:
+        return "import"
+    if "count" in parts:
+        return "count"
+    if "export" in parts:
+        if any(p.startswith("chainID:") for p in parts):
+            return "export_chain"
+        if any(p.startswith("uuid:") for p in parts):
+            if "rc.json.array=off" in parts:
+                return "export_uuid_short"
+            if "rc.json.array=1" in parts:
+                return "export_uuid_full"
+        return "other"
+    return "other"
+
+
+def _diag_record_run_task(cmd: list[str], *, ok: bool, elapsed: float) -> None:
+    bucket = _run_task_diag_bucket(cmd)
+    _diag_count(f"run_task_calls_{bucket}")
+    _diag_count(f"run_task_seconds_{bucket}", float(elapsed or 0.0))
+    if not ok:
+        _diag_count(f"run_task_failures_{bucket}")
+
+
 def _dump_diag_stats() -> None:
     if os.environ.get("NAUTICAL_DIAG") == "1":
         try:
@@ -1582,7 +1618,9 @@ def _run_task(
                     except Exception:
                         pass
                 ok, out, err = (False, "", str(e))
-    _diag_count("run_task_seconds", _ptime.perf_counter() - t0)
+    elapsed = _ptime.perf_counter() - t0
+    _diag_count("run_task_seconds", elapsed)
+    _diag_record_run_task(cmd, ok=ok, elapsed=elapsed)
     if not ok:
         _diag_count("run_task_failures")
     return ok, out, err

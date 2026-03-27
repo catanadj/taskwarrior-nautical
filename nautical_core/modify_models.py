@@ -69,3 +69,43 @@ class AnchorCompletionFeedbackModel:
     analytics_advice: str | None
     integrity_warnings: list[str] | None
     base_no: int
+
+
+@dataclass(slots=True)
+class AnchorFeedbackServices:
+    core: Any
+    debug_wait_sched: bool
+    last_wait_sched_debug: Any
+    diag_enabled: bool
+    format_root_and_age: Any
+    append_next_wait_sched_rows: Any
+    timeline_lines: Any
+    show_timeline_gaps: bool
+    root_uuid_from: Any
+    short: Any
+    format_next_anchor_rows: Any
+    format_line_preview: Any
+    panel_line: Any
+    panel: Any
+    chain_color_per_chain: bool
+    chain_colour_for_task: Any
+    strip_quotes: Any
+    human_delta: Any
+
+
+@dataclass(slots=True)
+class CpFeedbackServices:
+    core: Any
+    diag_enabled: bool
+    format_root_and_age: Any
+    append_next_wait_sched_rows: Any
+    timeline_lines: Any
+    show_timeline_gaps: bool
+    format_next_cp_rows: Any
+    format_line_preview: Any
+    panel_line: Any
+    panel: Any
+    chain_color_per_chain: bool
+    chain_colour_for_task: Any
+    human_delta: Any
+    export_uuid_short_cached: Any

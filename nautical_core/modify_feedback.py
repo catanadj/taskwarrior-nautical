@@ -171,25 +171,26 @@ def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: 
 def render_anchor_completion_feedback(
     *,
     feedback,
-    core,
-    debug_wait_sched: bool,
-    last_wait_sched_debug,
-    diag_enabled: bool,
-    format_root_and_age,
-    append_next_wait_sched_rows,
-    timeline_lines,
-    show_timeline_gaps: bool,
-    root_uuid_from,
-    short,
-    format_next_anchor_rows,
-    format_line_preview,
-    panel_line,
-    panel,
-    chain_color_per_chain: bool,
-    chain_colour_for_task,
-    strip_quotes,
-    human_delta,
+    services,
 ) -> None:
+    core = services.core
+    debug_wait_sched = services.debug_wait_sched
+    last_wait_sched_debug = services.last_wait_sched_debug
+    diag_enabled = services.diag_enabled
+    format_root_and_age = services.format_root_and_age
+    append_next_wait_sched_rows = services.append_next_wait_sched_rows
+    timeline_lines = services.timeline_lines
+    show_timeline_gaps = services.show_timeline_gaps
+    root_uuid_from = services.root_uuid_from
+    short = services.short
+    format_next_anchor_rows = services.format_next_anchor_rows
+    format_line_preview = services.format_line_preview
+    panel_line = services.panel_line
+    panel = services.panel
+    chain_color_per_chain = services.chain_color_per_chain
+    chain_colour_for_task = services.chain_colour_for_task
+    strip_quotes = services.strip_quotes
+    human_delta = services.human_delta
     fb = []
     anchor_raw = (feedback.new.get("anchor") or "").strip()
     expr_str = strip_quotes(anchor_raw)
@@ -290,21 +291,22 @@ def render_anchor_completion_feedback(
 def render_cp_completion_feedback(
     *,
     feedback,
-    core,
-    diag_enabled: bool,
-    format_root_and_age,
-    append_next_wait_sched_rows,
-    timeline_lines,
-    show_timeline_gaps: bool,
-    format_next_cp_rows,
-    format_line_preview,
-    panel_line,
-    panel,
-    chain_color_per_chain: bool,
-    chain_colour_for_task,
-    human_delta,
-    export_uuid_short_cached,
+    services,
 ) -> None:
+    core = services.core
+    diag_enabled = services.diag_enabled
+    format_root_and_age = services.format_root_and_age
+    append_next_wait_sched_rows = services.append_next_wait_sched_rows
+    timeline_lines = services.timeline_lines
+    show_timeline_gaps = services.show_timeline_gaps
+    format_next_cp_rows = services.format_next_cp_rows
+    format_line_preview = services.format_line_preview
+    panel_line = services.panel_line
+    panel = services.panel
+    chain_color_per_chain = services.chain_color_per_chain
+    chain_colour_for_task = services.chain_colour_for_task
+    human_delta = services.human_delta
+    export_uuid_short_cached = services.export_uuid_short_cached
     fb = []
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
     fb.append(("Period", feedback.new.get("cp")))

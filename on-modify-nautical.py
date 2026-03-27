@@ -4509,8 +4509,7 @@ def _render_anchor_completion_feedback(
         integrity_warnings=integrity_warnings,
         base_no=base_no,
     )
-    modify_feedback.render_anchor_completion_feedback(
-        feedback=feedback,
+    services = modify_models.AnchorFeedbackServices(
         core=core,
         debug_wait_sched=_DEBUG_WAIT_SCHED,
         last_wait_sched_debug=_LAST_WAIT_SCHED_DEBUG,
@@ -4540,6 +4539,10 @@ def _render_anchor_completion_feedback(
         chain_colour_for_task=_chain_colour_for_task,
         strip_quotes=_strip_quotes,
         human_delta=_human_delta,
+    )
+    modify_feedback.render_anchor_completion_feedback(
+        feedback=feedback,
+        services=services,
     )
 
 
@@ -4586,8 +4589,7 @@ def _render_cp_completion_feedback(
         integrity_warnings=integrity_warnings,
         base_no=base_no,
     )
-    modify_feedback.render_cp_completion_feedback(
-        feedback=feedback,
+    services = modify_models.CpFeedbackServices(
         core=core,
         diag_enabled=os.environ.get("NAUTICAL_DIAG") == "1",
         format_root_and_age=_format_root_and_age,
@@ -4613,6 +4615,10 @@ def _render_cp_completion_feedback(
         chain_colour_for_task=_chain_colour_for_task,
         human_delta=_human_delta,
         export_uuid_short_cached=_export_uuid_short_cached,
+    )
+    modify_feedback.render_cp_completion_feedback(
+        feedback=feedback,
+        services=services,
     )
 
 

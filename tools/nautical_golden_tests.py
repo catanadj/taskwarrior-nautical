@@ -5662,7 +5662,9 @@ def test_on_modify_render_cp_completion_feedback_text_mode():
 
     expect("line" in captured, f"expected text-mode line emission, got {captured}")
     txt = str(captured["line"])
-    expect("⛓" in txt, f"expected cp preview payload before ascii normalization, got {txt!r}")
+    expect("\n" in txt, f"expected stacked text payload, got {txt!r}")
+    expect("⛓ Next link" in txt, f"expected title line in text payload, got {txt!r}")
+    expect("Period:" in txt, f"expected summary line in text payload, got {txt!r}")
     expect(captured.get("kwargs", {}).get("kind") == "preview_cp", f"unexpected text line kwargs: {captured}")
     expect(captured.get("kwargs", {}).get("markup_body") is True, f"unexpected markup handling: {captured}")
 

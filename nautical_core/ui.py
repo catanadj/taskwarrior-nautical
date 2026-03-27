@@ -86,8 +86,7 @@ def emit_line(msg: str) -> None:
         pass
 
 
-def _ascii_report_text(text: str) -> str:
-    out = strip_rich_markup(text or "")
+def _ascii_report_lines(text: str) -> list[str]:
     replacements = {
         "⚓︎": "anchor",
         "⚓": "anchor",
@@ -97,19 +96,26 @@ def _ascii_report_text(text: str) -> str:
         "—": "-",
         "·": "|",
     }
-    for src, dst in replacements.items():
-        out = out.replace(src, dst)
-    out = re.sub(r"\s*\|\s*", " | ", out)
-    out = re.sub(r"\s+", " ", out).strip()
+    parts = str(text or "").splitlines() if "\n" in str(text or "") else [str(text or "")]
+    out: list[str] = []
+    for part in parts:
+        line = strip_rich_markup(part)
+        for src, dst in replacements.items():
+            line = line.replace(src, dst)
+        line = re.sub(r"\s*\|\s*", " | ", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            out.append(line)
     return out
 
 
 def text_line(line: str, *, kind: str = "info", markup_body: bool = False) -> None:
-    text = _ascii_report_text(line if markup_body else str(line))
-    if not text:
+    lines = _ascii_report_lines(line if markup_body else str(line))
+    if not lines:
         return
     if not fast_color_enabled():
-        emit_line(text)
+        for text in lines:
+            emit_line(text)
         return
     color_code = {
         "preview_anchor": "36",
@@ -119,9 +125,11 @@ def text_line(line: str, *, kind: str = "info", markup_body: bool = False) -> No
         "summary": "35",
     }.get(str(kind or "info"), "36")
     try:
-        sys.stderr.write(f"{ansi(color_code)}{text}{ansi('0')}\n")
+        for text in lines:
+            sys.stderr.write(f"{ansi(color_code)}{text}{ansi('0')}\n")
     except Exception:
-        emit_line(text)
+        for text in lines:
+            emit_line(text)
 
 
 def _wrap_prefixed_lines(prefix: str, text: str, width: int) -> list[str]:

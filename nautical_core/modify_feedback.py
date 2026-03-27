@@ -142,6 +142,14 @@ def _rows_are_notable(rows: list[tuple[str, object]]) -> bool:
     return False
 
 
+def _build_text_feedback(title: str, summary: str | None, preview_line: str) -> str:
+    lines = [title]
+    if summary and str(summary).strip():
+        lines.append(str(summary).strip())
+    lines.append(preview_line)
+    return "\n".join(line for line in lines if line)
+
+
 def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: bool = True) -> list[tuple[str, object]]:
     keep_labels = {
         "pattern",
@@ -274,7 +282,11 @@ def render_anchor_completion_feedback(
             kind="anchor",
             minimal=False,
         )
-        text_line(line, kind="preview_anchor", markup_body=True)
+        text_line(
+            _build_text_feedback(title, f"Pattern: {expr_str}  {mode_tag}", line),
+            kind="preview_anchor",
+            markup_body=True,
+        )
         return
     if mode == "compact":
         fb = _compact_feedback_rows(fb, include_timeline=True)
@@ -390,7 +402,11 @@ def render_cp_completion_feedback(
             kind="cp",
             minimal=False,
         )
-        text_line(line, kind="preview_cp", markup_body=True)
+        text_line(
+            _build_text_feedback(title, f"Period: {feedback.new.get('cp')}", line),
+            kind="preview_cp",
+            markup_body=True,
+        )
         return
     if mode == "compact":
         fb = _compact_feedback_rows(fb, include_timeline=True)

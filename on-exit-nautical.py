@@ -369,6 +369,54 @@ _RUN_QUEUE_DB_CONN: sqlite3.Connection | None = None
 _RUN_QUEUE_DB_ACTIVE = False
 _QUEUE_DB_OPEN_COUNT = 0
 _QUEUE_DB_REUSE_COUNT = 0
+_EXIT_DIAG_STATS: dict[str, float | int] = {}
+
+
+def _reset_exit_diag_stats() -> None:
+    global _EXIT_DIAG_STATS
+    _EXIT_DIAG_STATS = {}
+
+
+def _diag_count_exit(key: str, inc: float | int = 1) -> None:
+    try:
+        _EXIT_DIAG_STATS[key] = _EXIT_DIAG_STATS.get(key, 0) + inc
+    except Exception:
+        pass
+
+
+def _run_task_diag_bucket(cmd: list[str]) -> str:
+    try:
+        parts = []
+        for p in (cmd or ()):
+            parts.extend(str(p).split())
+        parts = tuple(parts)
+    except Exception:
+        return "other"
+    if not parts:
+        return "other"
+    if "import" in parts:
+        return "import"
+    if "modify" in parts:
+        if any(p.startswith("nextLink:") for p in parts):
+            return "modify_parent_nextlink"
+        if "status:deleted" in parts:
+            return "modify_cleanup"
+        return "modify_other"
+    if "export" in parts:
+        if any(p.startswith("uuid:") for p in parts):
+            return "export_uuid"
+        if any(p.startswith("chainID:") for p in parts):
+            return "export_equivalent_child"
+        return "export_other"
+    return "other"
+
+
+def _diag_record_run_task(cmd: list[str], *, ok: bool, elapsed: float) -> None:
+    bucket = _run_task_diag_bucket(cmd)
+    _diag_count_exit(f"run_task_calls_{bucket}")
+    _diag_count_exit(f"run_task_seconds_{bucket}", float(elapsed or 0.0))
+    if not ok:
+        _diag_count_exit(f"run_task_failures_{bucket}")
 
 
 def _queue_db_begin_run() -> None:
@@ -376,6 +424,7 @@ def _queue_db_begin_run() -> None:
     _RUN_QUEUE_DB_ACTIVE = True
     _QUEUE_DB_OPEN_COUNT = 0
     _QUEUE_DB_REUSE_COUNT = 0
+    _reset_exit_diag_stats()
 
 
 def _queue_db_end_run() -> None:
@@ -748,47 +797,61 @@ def _run_task(
     retries: int = 1,
     retry_delay: float = 0.0,
 ) -> tuple[bool, str, str]:
+    started = time.perf_counter()
+    ok = False
     env_map = env or os.environ.copy()
     run_fn = core.run_task if core is not None else None
     hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.run_task(
-            cmd,
-            core_run_task=run_fn,
-            env=env_map,
-            input_text=input_text,
-            timeout=timeout,
-            retries=max(1, int(retries)),
-            retry_delay=max(0.0, float(retry_delay)),
-        )
-    if run_fn is not None:
-        return run_fn(
-            cmd,
-            env=env_map,
-            input_text=input_text,
-            timeout=timeout,
-            retries=max(1, int(retries)),
-            retry_delay=max(0.0, float(retry_delay)),
-        )
-    attempts = max(1, int(retries))
-    delay = max(0.0, float(retry_delay))
-    last_out = ""
-    last_err = ""
-    for attempt in range(1, attempts + 1):
-        ok, out, err = _run_task_attempt(
-            cmd,
-            env=env_map,
-            input_text=input_text,
-            timeout=timeout,
-        )
-        last_out = out or ""
-        last_err = err or ""
-        if ok:
-            return True, last_out, last_err
-        if _run_task_retry_or_stop(attempt, attempts, delay):
-            continue
+    try:
+        if hook_support is not None:
+            result = hook_support.run_task(
+                cmd,
+                core_run_task=run_fn,
+                env=env_map,
+                input_text=input_text,
+                timeout=timeout,
+                retries=max(1, int(retries)),
+                retry_delay=max(0.0, float(retry_delay)),
+            )
+            ok = bool(result[0]) if isinstance(result, tuple) and result else False
+            return result
+        if run_fn is not None:
+            result = run_fn(
+                cmd,
+                env=env_map,
+                input_text=input_text,
+                timeout=timeout,
+                retries=max(1, int(retries)),
+                retry_delay=max(0.0, float(retry_delay)),
+            )
+            ok = bool(result[0]) if isinstance(result, tuple) and result else False
+            return result
+        attempts = max(1, int(retries))
+        delay = max(0.0, float(retry_delay))
+        last_out = ""
+        last_err = ""
+        for attempt in range(1, attempts + 1):
+            ok, out, err = _run_task_attempt(
+                cmd,
+                env=env_map,
+                input_text=input_text,
+                timeout=timeout,
+            )
+            last_out = out or ""
+            last_err = err or ""
+            if ok:
+                return True, last_out, last_err
+            if _run_task_retry_or_stop(attempt, attempts, delay):
+                continue
+            return (False, last_out, last_err)
         return (False, last_out, last_err)
-    return (False, last_out, last_err)
+    finally:
+        elapsed = time.perf_counter() - started
+        _diag_count_exit("run_task_calls")
+        _diag_count_exit("run_task_seconds", elapsed)
+        _diag_record_run_task(cmd, ok=ok, elapsed=elapsed)
+        if not ok:
+            _diag_count_exit("run_task_failures")
 
 
 def _is_lock_error(err: str) -> bool:
@@ -1807,6 +1870,36 @@ def _emit_drain_stats_diag(stats: dict) -> None:
         f"queue_db_reuses={stats.get('queue_db_reuses', 0)} "
         f"drain_ms={stats.get('drain_ms', 0)}"
     )
+    task_stats = {
+        "run_task_calls": _EXIT_DIAG_STATS.get("run_task_calls", 0),
+        "run_task_failures": _EXIT_DIAG_STATS.get("run_task_failures", 0),
+        "run_task_calls_export_uuid": _EXIT_DIAG_STATS.get("run_task_calls_export_uuid", 0),
+        "run_task_calls_export_equivalent_child": _EXIT_DIAG_STATS.get("run_task_calls_export_equivalent_child", 0),
+        "run_task_calls_import": _EXIT_DIAG_STATS.get("run_task_calls_import", 0),
+        "run_task_calls_modify_parent_nextlink": _EXIT_DIAG_STATS.get("run_task_calls_modify_parent_nextlink", 0),
+        "run_task_calls_modify_cleanup": _EXIT_DIAG_STATS.get("run_task_calls_modify_cleanup", 0),
+        "run_task_calls_modify_other": _EXIT_DIAG_STATS.get("run_task_calls_modify_other", 0),
+        "run_task_calls_export_other": _EXIT_DIAG_STATS.get("run_task_calls_export_other", 0),
+        "run_task_calls_other": _EXIT_DIAG_STATS.get("run_task_calls_other", 0),
+        "run_task_failures_export_uuid": _EXIT_DIAG_STATS.get("run_task_failures_export_uuid", 0),
+        "run_task_failures_export_equivalent_child": _EXIT_DIAG_STATS.get("run_task_failures_export_equivalent_child", 0),
+        "run_task_failures_import": _EXIT_DIAG_STATS.get("run_task_failures_import", 0),
+        "run_task_failures_modify_parent_nextlink": _EXIT_DIAG_STATS.get("run_task_failures_modify_parent_nextlink", 0),
+        "run_task_failures_modify_cleanup": _EXIT_DIAG_STATS.get("run_task_failures_modify_cleanup", 0),
+        "run_task_failures_modify_other": _EXIT_DIAG_STATS.get("run_task_failures_modify_other", 0),
+        "run_task_failures_export_other": _EXIT_DIAG_STATS.get("run_task_failures_export_other", 0),
+        "run_task_failures_other": _EXIT_DIAG_STATS.get("run_task_failures_other", 0),
+        "run_task_seconds_export_uuid": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_export_uuid", 0.0)), 4),
+        "run_task_seconds_export_equivalent_child": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_export_equivalent_child", 0.0)), 4),
+        "run_task_seconds_import": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_import", 0.0)), 4),
+        "run_task_seconds_modify_parent_nextlink": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_parent_nextlink", 0.0)), 4),
+        "run_task_seconds_modify_cleanup": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_cleanup", 0.0)), 4),
+        "run_task_seconds_modify_other": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_other", 0.0)), 4),
+        "run_task_seconds_export_other": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_export_other", 0.0)), 4),
+        "run_task_seconds_other": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_other", 0.0)), 4),
+        "run_task_seconds": round(float(_EXIT_DIAG_STATS.get("run_task_seconds", 0.0)), 4),
+    }
+    _diag("on-exit task stats: " + ", ".join(f"{k}={v}" for k, v in task_stats.items()))
 
 
 def _strict_exit_feedback_message(stats: dict) -> str | None:

@@ -2313,6 +2313,35 @@ def test_on_modify_run_task_diag_bucket_stats():
     expect(abs(float(stats.get("run_task_seconds_export_chain", 0.0)) - 0.75) < 1e-9, f"unexpected chain export seconds: {stats}")
 
 
+def test_on_exit_run_task_diag_bucket_stats():
+    """on-exit should classify Taskwarrior calls into stable diagnostic buckets."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_diag_bucket_test")
+
+    mod._reset_exit_diag_stats()
+    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "uuid:deadbeef", "export"]) == "export_uuid", "uuid export should classify correctly")
+    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "chainID:cid", "link:2", "export"]) == "export_equivalent_child", "equivalent child export should classify correctly")
+    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "import", "-"]) == "import", "import should classify correctly")
+    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "uuid:parent", "modify", "nextLink:deadbeef"]) == "modify_parent_nextlink", "parent modify should classify correctly")
+    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "uuid:child", "modify", "status:deleted"]) == "modify_cleanup", "cleanup modify should classify correctly")
+
+    mod._diag_record_run_task(["task", "uuid:deadbeef", "export"], ok=True, elapsed=0.25)
+    mod._diag_record_run_task(["task", "chainID:cid", "link:2", "export"], ok=False, elapsed=0.5)
+    mod._diag_record_run_task(["task", "import", "-"], ok=True, elapsed=0.75)
+    mod._diag_record_run_task(["task", "uuid:parent", "modify", "nextLink:deadbeef"], ok=True, elapsed=1.0)
+
+    stats = mod._EXIT_DIAG_STATS
+    expect(stats.get("run_task_calls_export_uuid") == 1, f"unexpected export uuid stats: {stats}")
+    expect(stats.get("run_task_calls_export_equivalent_child") == 1, f"unexpected equivalent child stats: {stats}")
+    expect(stats.get("run_task_calls_import") == 1, f"unexpected import stats: {stats}")
+    expect(stats.get("run_task_calls_modify_parent_nextlink") == 1, f"unexpected modify stats: {stats}")
+    expect(stats.get("run_task_failures_export_equivalent_child") == 1, f"unexpected equivalent child failures: {stats}")
+    expect(abs(float(stats.get("run_task_seconds_export_uuid", 0.0)) - 0.25) < 1e-9, f"unexpected export uuid seconds: {stats}")
+    expect(abs(float(stats.get("run_task_seconds_export_equivalent_child", 0.0)) - 0.5) < 1e-9, f"unexpected equivalent child seconds: {stats}")
+    expect(abs(float(stats.get("run_task_seconds_import", 0.0)) - 0.75) < 1e-9, f"unexpected import seconds: {stats}")
+    expect(abs(float(stats.get("run_task_seconds_modify_parent_nextlink", 0.0)) - 1.0) < 1e-9, f"unexpected modify seconds: {stats}")
+
+
 def test_on_modify_chain_cache_thread_safety_smoke():
     """Concurrent chain cache set/read paths should not crash or return invalid shapes."""
     import threading
@@ -7174,6 +7203,7 @@ TESTS = [
     test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
     test_on_add_tw_export_chain_extra_validation,
     test_on_modify_run_task_diag_bucket_stats,
+    test_on_exit_run_task_diag_bucket_stats,
     test_on_modify_chain_cache_thread_safety_smoke,
     test_on_modify_get_chain_export_filters_cached_chain_in_memory,
     test_next_for_and_no_progress_fails_fast,

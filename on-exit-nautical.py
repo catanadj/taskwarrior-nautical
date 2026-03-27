@@ -1277,10 +1277,6 @@ def _take_queue_entries_sqlite_batch():
     return exit_models.ExitQueueBatch(entries=entries)
 
 
-def _take_queue_entries_sqlite() -> list[dict]:
-    return _take_queue_entries_sqlite_batch().entries
-
-
 def _ack_queue_entries_sqlite_result(entry_ids: list[int]):
     conn = _queue_db_open_ready()
     exit_models = _module("exit_models")
@@ -1298,10 +1294,6 @@ def _ack_queue_entries_sqlite_result(entry_ids: list[int]):
         return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
     finally:
         _queue_close_silent(conn)
-
-
-def _ack_queue_entries_sqlite(entry_ids: list[int]) -> bool:
-    return _ack_queue_entries_sqlite_result(entry_ids).ok
 
 
 def _requeue_entries_sqlite_result(entries: list[dict]):
@@ -1328,10 +1320,6 @@ def _requeue_entries_sqlite_result(entries: list[dict]):
         _queue_close_silent(conn)
 
 
-def _requeue_entries_sqlite(entries: list[dict]) -> bool:
-    return _requeue_entries_sqlite_result(entries).ok
-
-
 def _enqueue_entries_sqlite_result(entries: list[dict]):
     conn = _queue_db_open_ready()
     exit_models = _module("exit_models")
@@ -1350,30 +1338,6 @@ def _enqueue_entries_sqlite_result(entries: list[dict]):
         return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
     finally:
         _queue_close_silent(conn)
-
-
-def _enqueue_entries_sqlite(entries: list[dict]) -> bool:
-    return _enqueue_entries_sqlite_result(entries).ok
-
-
-def _take_queue_entries() -> list[dict]:
-    return _take_queue_entries_sqlite_batch().entries
-
-
-def _requeue_entries(entries: list[dict]) -> bool:
-    items = [e for e in (entries or []) if isinstance(e, dict)]
-    if not items:
-        return True
-    claimed: list[dict] = []
-    fresh: list[dict] = []
-    for e in items:
-        if (e.get("__queue_backend") == "sqlite") and e.get("__queue_id"):
-            claimed.append(e)
-        else:
-            fresh.append(e)
-    claimed_result = _requeue_entries_sqlite_result(claimed) if claimed else _module("exit_models").ExitQueueWriteResult(ok=True, count=0)
-    fresh_result = _enqueue_entries_sqlite_result(fresh) if fresh else _module("exit_models").ExitQueueWriteResult(ok=True, count=0)
-    return claimed_result.ok and fresh_result.ok
 
 
 def _normalize_queue_entry(entry: dict) -> dict:
@@ -1570,14 +1534,25 @@ def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
 
 
 def _take_queue_batch():
-    exit_models = _module("exit_models")
-    return exit_models.ExitQueueBatch(entries=_take_queue_entries())
+    return _take_queue_entries_sqlite_batch()
 
 
 def _requeue_entries_result(entries: list[dict]):
     exit_models = _module("exit_models")
-    ok = _requeue_entries(entries)
-    failed = 0 if ok else len(entries)
+    items = [e for e in (entries or []) if isinstance(e, dict)]
+    if not items:
+        return exit_models.ExitRequeueResult(ok=True, failed=0)
+    claimed: list[dict] = []
+    fresh: list[dict] = []
+    for e in items:
+        if (e.get("__queue_backend") == "sqlite") and e.get("__queue_id"):
+            claimed.append(e)
+        else:
+            fresh.append(e)
+    claimed_result = _requeue_entries_sqlite_result(claimed) if claimed else exit_models.ExitQueueWriteResult(ok=True, count=0)
+    fresh_result = _enqueue_entries_sqlite_result(fresh) if fresh else exit_models.ExitQueueWriteResult(ok=True, count=0)
+    ok = claimed_result.ok and fresh_result.ok
+    failed = 0 if ok else len(items)
     return exit_models.ExitRequeueResult(ok=ok, failed=failed)
 
 
@@ -1900,9 +1875,10 @@ def _drain_queue_result():
             _diag(f"requeue failed for {requeue_result.failed} entries")
 
         if state.sqlite_acked_ids:
-            if not _ack_queue_entries_sqlite(sorted(state.sqlite_acked_ids)):
-                state.errors += len(state.sqlite_acked_ids)
-                _diag(f"queue db ack failed for {len(state.sqlite_acked_ids)} entries")
+            ack_result = _ack_queue_entries_sqlite_result(sorted(state.sqlite_acked_ids))
+            if not ack_result.ok:
+                state.errors += ack_result.count
+                _diag(f"queue db ack failed for {ack_result.count} entries")
 
         return state.to_stats_model(drain_t0, requeue_result.ok, requeue_result.failed)
     finally:

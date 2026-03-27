@@ -784,7 +784,7 @@ def test_on_exit_repairs_queue_and_dead_letter_permissions():
             dl_path.write_text("{}", encoding="utf-8")
             os.chmod(db_path, 0o666)
             os.chmod(dl_path, 0o666)
-            mod._requeue_entries([{"__queue_backend": "sqlite", "__queue_id": 1, "spawn_intent_id": "si_perm_fix"}])
+            mod._requeue_entries_result([{"__queue_backend": "sqlite", "__queue_id": 1, "spawn_intent_id": "si_perm_fix"}])
             mod._write_dead_letter({"uuid": "00000000-0000-0000-0000-000000000789"}, "perm test")
             q_mode = stat.S_IMODE(db_path.stat().st_mode)
             dl_mode = stat.S_IMODE(dl_path.stat().st_mode)
@@ -1074,7 +1074,7 @@ def test_on_exit_requeues_when_task_lock_recent():
                 "child_short": "c1",
                 "spawn_intent_id": "si_test",
             }
-            mod._requeue_entries([entry])
+            mod._requeue_entries_result([entry])
 
             def _run_task_stub(cmd, **_kwargs):
                 if "export" in cmd:
@@ -1175,7 +1175,7 @@ def test_on_exit_large_queue_bounded_drain():
         os.environ["NAUTICAL_SPAWN_QUEUE_MAX_BYTES"] = "1048576"
         try:
             mod_exit = _load_hook_module(hook, "_nautical_on_exit_large_queue_test")
-            q_path = mod_exit._QUEUE_PATH
+            db_path = mod_exit._QUEUE_DB_PATH
             entries = [
                 {
                     "child": {"uuid": f"u{i}"},
@@ -1185,14 +1185,12 @@ def test_on_exit_large_queue_bounded_drain():
                 }
                 for i in range(7)
             ]
-            with open(q_path, "w", encoding="utf-8") as f:
-                for obj in entries:
-                    f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
-            batch = mod_exit._take_queue_entries()
+            _seed_sqlite_queue(db_path, entries)
+            batch = mod_exit._take_queue_batch().entries
             expect(len(batch) == 3, f"expected bounded batch size 3, got {len(batch)}")
-            with open(q_path, "r", encoding="utf-8") as f:
-                remaining = [ln for ln in f.read().splitlines() if ln.strip()]
-            expect(len(remaining) == 4, f"expected 4 remaining lines, got {len(remaining)}")
+            with sqlite3.connect(str(db_path)) as conn:
+                remaining = conn.execute("SELECT COUNT(1) FROM queue_entries WHERE state='queued'").fetchone()[0]
+            expect(int(remaining) == 4, f"expected 4 remaining queued rows, got {remaining}")
         finally:
             if prev_taskdata is None:
                 os.environ.pop("TASKDATA", None)
@@ -4423,7 +4421,7 @@ def test_on_exit_take_queue_recovers_from_corrupt_sqlite_db():
         mod._QUEUE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         mod._QUEUE_DB_PATH.write_bytes(b"not-a-sqlite-db")
 
-        entries = mod._take_queue_entries()
+        entries = mod._take_queue_batch().entries
         expect(entries == [], f"take_queue should recover from corrupt sqlite db without entries, got: {entries}")
         with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
             conn.execute("SELECT 1")
@@ -4640,8 +4638,8 @@ def test_on_exit_requeue_sqlite_clears_claim_metadata():
     """on-exit sqlite requeue should clear claim_token and claimed_at."""
     hook = _find_hook_file("on-exit-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_requeue_claims_test")
-    if not hasattr(mod, "_requeue_entries_sqlite"):
-        raise AssertionError("on-exit hook does not expose sqlite requeue helper")
+    if not hasattr(mod, "_requeue_entries_sqlite_result"):
+        raise AssertionError("on-exit hook does not expose sqlite requeue result helper")
 
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
@@ -4683,7 +4681,7 @@ def test_on_exit_requeue_sqlite_clears_claim_metadata():
             rid = int(conn.execute("SELECT id FROM queue_entries WHERE spawn_intent_id='si_requeue_sqlite'").fetchone()[0])
             conn.commit()
 
-        ok = mod._requeue_entries_sqlite(
+        requeue_res = mod._requeue_entries_sqlite_result(
             [
                 {
                     "__queue_backend": "sqlite",
@@ -4695,7 +4693,7 @@ def test_on_exit_requeue_sqlite_clears_claim_metadata():
                 }
             ]
         )
-        expect(ok, "sqlite requeue should succeed")
+        expect(requeue_res.ok, f"sqlite requeue should succeed: {requeue_res}")
         with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
             row = conn.execute(
                 "SELECT state, claim_token, claimed_at, attempts FROM queue_entries WHERE id=?",

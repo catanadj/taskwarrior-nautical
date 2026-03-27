@@ -5948,6 +5948,57 @@ def test_core_render_panel_line_force_rich_kind_skips_panel_line():
     expect("Title" in out and "Key" in out, "promoted rich/fast path should emit fallback panel text")
 
 
+def test_on_exit_successful_import_reuses_initial_child_export():
+    """on-exit should not re-export the child after a successful import."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_import_reuse_test")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        child_uuid = "00000000-0000-0000-0000-000000000321"
+        parent_uuid = "00000000-0000-0000-0000-000000000456"
+        entry = {
+            "parent_uuid": parent_uuid,
+            "parent_nextlink": "",
+            "child_short": child_uuid[:8],
+            "child": {"uuid": child_uuid, "description": "test"},
+            "spawn_intent_id": "si_test",
+        }
+        _seed_sqlite_queue(mod._QUEUE_DB_PATH, entry)
+
+        state = {"child_export": 0, "parent_export": 0, "import": 0}
+        parent_next = {"value": ""}
+
+        def _run_task_stub(cmd, **_kwargs):
+            cmd_s = " ".join(cmd)
+            if "export" in cmd_s and f"uuid:{child_uuid}" in cmd_s:
+                state["child_export"] += 1
+                return True, "{}", ""
+            if "export" in cmd_s and f"uuid:{parent_uuid}" in cmd_s:
+                state["parent_export"] += 1
+                return True, json.dumps({"uuid": parent_uuid, "nextLink": parent_next["value"]}), ""
+            if "import" in cmd_s:
+                state["import"] += 1
+                return True, "", ""
+            if "modify" in cmd_s and f"uuid:{parent_uuid}" in cmd_s:
+                parent_next["value"] = child_uuid[:8]
+                return True, "", ""
+            return False, "", "unexpected"
+
+        mod._run_task = _run_task_stub
+        stats = mod._drain_queue()
+        expect(stats.get("processed") == 1, f"unexpected processed: {stats}")
+        expect(state["child_export"] == 1, f"child should be exported only once before import: {state}")
+        expect(state["import"] == 1, f"child should be imported once: {state}")
+
+
 def test_on_exit_import_error_but_child_exists():
     """on-exit should proceed if import reports failure but child exists."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -7240,6 +7291,7 @@ TESTS = [
     test_on_exit_drain_skips_finalized_sqlite_intent,
     test_on_exit_dead_letter_on_missing_fields,
     test_on_exit_import_child_retries_on_lock,
+    test_on_exit_successful_import_reuses_initial_child_export,
     test_on_exit_dead_letter_on_import_failure,
     test_on_exit_large_queue_bounded_drain,
     test_on_exit_queue_drain_idempotent,

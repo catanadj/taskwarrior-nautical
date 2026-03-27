@@ -1687,7 +1687,7 @@ def _precheck_parent_link_state(ctx) -> tuple[str, bool]:
     return exit_entry_flow.precheck_parent_link_state(ctx, services=services)
 
 
-def _ensure_child_exists_for_entry(ctx) -> tuple[str, bool]:
+def _ensure_child_exists_for_entry(ctx, *, initial_export_res=None) -> tuple[str, bool]:
     exit_entry_flow = _module("exit_entry_flow")
     exit_models = _module("exit_models")
     services = exit_models.ExitEnsureChildServices(
@@ -1697,7 +1697,11 @@ def _ensure_child_exists_for_entry(ctx) -> tuple[str, bool]:
         diag=_diag,
         requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
     )
-    return exit_entry_flow.ensure_child_exists_for_entry(ctx, services=services)
+    return exit_entry_flow.ensure_child_exists_for_entry(
+        ctx,
+        services=services,
+        initial_export_res=initial_export_res,
+    )
 
 
 def _apply_parent_update_for_entry(
@@ -1739,6 +1743,7 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     exact_child = _export_uuid(child_uuid)
     if exact_child.retryable:
         return _requeue_or_dead_letter_for_lock(entry, idx, state)
+    child_already_exists = bool(exact_child.exists)
     if not exact_child.exists:
         equivalent = _existing_equivalent_child(child, parent_uuid)
         if equivalent.retryable:
@@ -1747,6 +1752,7 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
         if isinstance(existing_obj, dict):
             child_uuid = (existing_obj.get("uuid") or "").strip()
             child_short = _short_uuid(child_uuid)
+            child_already_exists = bool(child_uuid)
             if child_short:
                 if spawn_intent_id:
                     _diag(
@@ -1774,7 +1780,10 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     if link_action == "continue":
         return False
 
-    child_action, imported = _ensure_child_exists_for_entry(ctx)
+    if child_already_exists:
+        child_action, imported = ("ok", False)
+    else:
+        child_action, imported = _ensure_child_exists_for_entry(ctx, initial_export_res=exact_child)
     if child_action == "break":
         return True
     if child_action == "continue":

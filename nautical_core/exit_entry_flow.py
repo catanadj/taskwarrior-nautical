@@ -39,8 +39,9 @@ def ensure_child_exists_for_entry(
     ctx: ExitEntryContext,
     *,
     services: ExitEnsureChildServices,
+    initial_export_res: Any | None = None,
 ) -> tuple[str, bool]:
-    export_res = services.export_uuid(ctx.child_uuid)
+    export_res = initial_export_res if initial_export_res is not None else services.export_uuid(ctx.child_uuid)
     imported = False
     if not export_res.exists:
         if export_res.retryable:
@@ -60,17 +61,6 @@ def ensure_child_exists_for_entry(
                 ctx.state.reset_lock_streak()
                 return "continue", False
         imported = True
-
-    if imported:
-        confirm_res = services.export_uuid(ctx.child_uuid)
-        if not confirm_res.exists:
-            if confirm_res.retryable:
-                return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
-            if ctx.spawn_intent_id:
-                services.diag(f"child missing after import (intent={ctx.spawn_intent_id})")
-            ctx.state.dead_letter(ctx.entry, "child missing after import")
-            ctx.state.reset_lock_streak()
-            return "continue", False
 
     return "ok", imported
 

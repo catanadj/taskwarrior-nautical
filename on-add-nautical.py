@@ -89,16 +89,13 @@ _CORE_BASE = _trusted_core_base(TW_DIR)
 def _core_target_from_base(base: Path) -> Path | None:
     try:
         if base.is_file():
-            if base.name == "nautical_core.py":
-                return base
             if base.name == "__init__.py" and base.parent.name == "nautical_core":
                 return base
             return None
     except Exception:
         return None
-    pyfile = base / "nautical_core.py"
     pkgini = base / "nautical_core" / "__init__.py"
-    return pkgini if pkgini.is_file() else pyfile if pyfile.is_file() else None
+    return pkgini if pkgini.is_file() else None
 
 # --- Optional micro-profiler (stderr-only; enable with NAUTICAL_PROFILE=1 or 2)
 _PROFILE_LEVEL = int(os.environ.get('NAUTICAL_PROFILE', '0') or '0')
@@ -196,13 +193,13 @@ def _resolve_task_data_context() -> tuple[str, bool]:
         if core is not None:
             raise RuntimeError("nautical_core.resolve_task_data_context is required")
         if _CORE_IMPORT_ERROR is not None:
-            target = str(_CORE_IMPORT_TARGET or (_CORE_BASE / "nautical_core.py"))
+            target = str(_CORE_IMPORT_TARGET or (_CORE_BASE / "nautical_core" / "__init__.py"))
             raise RuntimeError(
                 f"Failed to import nautical_core from {target}: "
                 f"{type(_CORE_IMPORT_ERROR).__name__}: {_CORE_IMPORT_ERROR}"
             ) from _CORE_IMPORT_ERROR
         raise ModuleNotFoundError(
-            f"nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH. "
+            f"nautical_core package not found. Expected nautical_core/__init__.py in ~/.task or NAUTICAL_CORE_PATH. "
             f"(resolved base: {_CORE_BASE})"
         )
     data_dir, use_rc, _source = resolver(
@@ -315,7 +312,7 @@ def _load_core() -> None:
                 core = module
     if core is None:
         msg = (
-            "nautical_core.py not found. Expected in ~/.task or NAUTICAL_CORE_PATH. "
+            "nautical_core package not found. Expected nautical_core/__init__.py in ~/.task or NAUTICAL_CORE_PATH. "
             f"(resolved base: {_CORE_BASE})"
         )
         raise ModuleNotFoundError(msg)

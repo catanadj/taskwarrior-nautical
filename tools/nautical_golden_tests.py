@@ -4291,10 +4291,30 @@ def test_on_add_dnf_cache_skips_non_jsonable_values():
         expect(len(mod._DNF_DISK_CACHE) == 0, "DNF cache should not store non-serializable values")
 
 
+def test_hooks_require_package_core_layout():
+    """Hooks should resolve only the package-based nautical_core layout."""
+    import tempfile
+
+    hook_names = ["on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"]
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        pkg = td_path / "nautical_core"
+        pkg.mkdir(parents=True, exist_ok=True)
+        pkg_init = pkg / "__init__.py"
+        pkg_init.write_text("# package core\n", encoding="utf-8")
+        legacy = td_path / "nautical_core.py"
+        legacy.write_text("# legacy core\n", encoding="utf-8")
+        for idx, hook_name in enumerate(hook_names):
+            mod = _load_hook_module(_find_hook_file(hook_name), f"_nautical_pkg_layout_test_{idx}")
+            resolved = mod._core_target_from_base(td_path)
+            expect(resolved == pkg_init, f"{hook_name} should prefer package core: {resolved}")
+            expect(mod._core_target_from_base(legacy) is None, f"{hook_name} should reject legacy core file")
+
 def test_core_import_deterministic():
     """Hooks should ignore TASKDATA unless NAUTICAL_DEV=1."""
     with tempfile.TemporaryDirectory() as td:
         bad_core = Path(td) / "nautical_core/__init__.py"
+        bad_core.parent.mkdir(parents=True, exist_ok=True)
         bad_core.write_text("raise RuntimeError('bad core')\n", encoding="utf-8")
         os.environ["TASKDATA"] = td
         os.environ.pop("NAUTICAL_DEV", None)
@@ -7020,6 +7040,7 @@ TESTS = [
     test_on_exit_state_files_use_dedicated_dir,
     test_on_exit_run_task_accepts_env,
     test_on_exit_normalize_queue_entry_strips_fields,
+    test_hooks_require_package_core_layout,
     test_core_import_deterministic,
     test_on_modify_spawn_intent_id_in_entry,
     test_on_modify_spawn_intent_entry_rejects_missing_child_uuid,

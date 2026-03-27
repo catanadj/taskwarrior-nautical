@@ -85,34 +85,7 @@ _CHAIN_CACHE: list[dict[str, Any]] = []
 _CHAIN_BY_SHORT: dict[str, dict[str, Any]] = {}
 _CHAIN_BY_UUID: dict[str, dict[str, Any]] = {}
 _CHAIN_CACHE_LOCK = threading.RLock()
-_DIAG_STATS = {
-    "run_task_calls": 0,
-    "run_task_failures": 0,
-    "export_uuid_cache_hits": 0,
-    "export_uuid_cache_misses": 0,
-    "export_full_cache_hits": 0,
-    "export_full_cache_misses": 0,
-    "tw_get_cache_hits": 0,
-    "tw_get_cache_misses": 0,
-    "task_text_cache_hits": 0,
-    "task_text_cache_misses": 0,
-    "chain_root_age_cache_hits": 0,
-    "chain_root_age_cache_misses": 0,
-    "format_root_age_cache_hits": 0,
-    "format_root_age_cache_misses": 0,
-    "unexpected_cache_misses": 0,
-    "chain_cache_seeded": 0,
-    "run_task_seconds": 0.0,
-}
-
-_RUN_QUERY_CTX: dict[str, dict[object, object]] = {
-    "task_text": {},
-    "tw_get": {},
-    "chain_root_age": {},
-    "format_root_age": {},
-}
-
-_DIAG_START_TS = _ptime.perf_counter()
+_MODIFY_RUNTIME_STATE = None
 _HOOK_CONTEXT = None
 _HOOK_CONTEXT_LOAD_FAILED = False
 _HOOK_ENGINE = None
@@ -185,9 +158,25 @@ def _set_wait_sched_debug(field: str, payload: dict) -> None:
         pass
 
 
+def _modify_runtime_state():
+    global _MODIFY_RUNTIME_STATE
+    if _MODIFY_RUNTIME_STATE is None:
+        modify_runtime = _module("modify_runtime")
+        _MODIFY_RUNTIME_STATE = modify_runtime.new_runtime_state()
+    return _MODIFY_RUNTIME_STATE
+
+
+def _reset_modify_runtime_state() -> None:
+    global _MODIFY_RUNTIME_STATE
+    modify_runtime = _module("modify_runtime")
+    _MODIFY_RUNTIME_STATE = modify_runtime.new_runtime_state()
+
+
 def _diag_count(key: str, inc: int = 1) -> None:
     try:
-        _DIAG_STATS[key] = _DIAG_STATS.get(key, 0) + inc
+        state = _modify_runtime_state()
+        stats = state.diag_stats
+        stats[key] = stats.get(key, 0) + inc
     except Exception:
         pass
 
@@ -195,10 +184,12 @@ def _diag_count(key: str, inc: int = 1) -> None:
 def _dump_diag_stats() -> None:
     if os.environ.get("NAUTICAL_DIAG") == "1":
         try:
-            elapsed = _ptime.perf_counter() - _DIAG_START_TS
-            _DIAG_STATS["hook_seconds"] = round(elapsed, 4)
-            _DIAG_STATS["run_task_seconds"] = round(_DIAG_STATS.get("run_task_seconds", 0.0), 4)
-            parts = [f"{k}={v}" for k, v in _DIAG_STATS.items()]
+            state = _modify_runtime_state()
+            stats = state.diag_stats
+            elapsed = _ptime.perf_counter() - state.diag_start_ts
+            stats["hook_seconds"] = round(elapsed, 4)
+            stats["run_task_seconds"] = round(stats.get("run_task_seconds", 0.0), 4)
+            parts = [f"{k}={v}" for k, v in stats.items()]
             sys.stderr.write("[nautical] diag stats: " + ", ".join(parts) + "\n")
         except Exception:
             pass
@@ -206,7 +197,7 @@ def _dump_diag_stats() -> None:
 
 def _query_ctx_get(bucket: str, key):
     try:
-        store = _RUN_QUERY_CTX.get(bucket)
+        store = _modify_runtime_state().query_ctx.get(bucket)
         if isinstance(store, dict):
             return store.get(key)
     except Exception:
@@ -216,10 +207,11 @@ def _query_ctx_get(bucket: str, key):
 
 def _query_ctx_set(bucket: str, key, value) -> None:
     try:
-        store = _RUN_QUERY_CTX.get(bucket)
+        state = _modify_runtime_state()
+        store = state.query_ctx.get(bucket)
         if isinstance(store, dict):
             store[key] = value
-            _DIAG_STATS[f"query_ctx_{bucket}_entries"] = len(store)
+            state.diag_stats[f"query_ctx_{bucket}_entries"] = len(store)
     except Exception:
         pass
 
@@ -237,8 +229,8 @@ def _diag_summary() -> None:
         return
     try:
         parts = [
-            f"spawn_deferred={_DIAG_STATS.get('spawn_deferred', 0)}",
-            f"queue_lock_failures={_DIAG_STATS.get('queue_lock_failures', 0)}",
+            f"spawn_deferred={_modify_runtime_state().diag_stats.get('spawn_deferred', 0)}",
+            f"queue_lock_failures={_modify_runtime_state().diag_stats.get('queue_lock_failures', 0)}",
         ]
         sys.stderr.write("[nautical] diag summary: " + ", ".join(parts) + "\n")
     except Exception:
@@ -4418,6 +4410,7 @@ def _stamp_chain_id_if_new_nautical(old: dict, new: dict) -> None:
 def _modify_runtime_services():
     modify_runtime = _module("modify_runtime")
     return modify_runtime.ModifyRuntimeServices(
+        state=_modify_runtime_state(),
         core=core,
         debug_wait_sched=_DEBUG_WAIT_SCHED,
         last_wait_sched_debug=_LAST_WAIT_SCHED_DEBUG,
@@ -4987,6 +4980,7 @@ def _emit_modify_passthrough(task: dict) -> None:
 
 
 def main():
+    _reset_modify_runtime_state()
     hook_context = _module("hook_context")
     hook_results = _module("hook_results")
     hook_engine = _module("hook_engine")

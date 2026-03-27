@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+import time as _time
 
 from nautical_core.modify_models import (
     AnchorFeedbackServices,
@@ -13,7 +14,46 @@ from nautical_core.modify_models import (
 
 
 @dataclass(slots=True)
+class ModifyRuntimeState:
+    query_ctx: dict[str, dict[object, object]] = field(
+        default_factory=lambda: {
+            "task_text": {},
+            "tw_get": {},
+            "chain_root_age": {},
+            "format_root_age": {},
+        }
+    )
+    diag_stats: dict[str, Any] = field(
+        default_factory=lambda: {
+            "run_task_calls": 0,
+            "run_task_failures": 0,
+            "export_uuid_cache_hits": 0,
+            "export_uuid_cache_misses": 0,
+            "export_full_cache_hits": 0,
+            "export_full_cache_misses": 0,
+            "tw_get_cache_hits": 0,
+            "tw_get_cache_misses": 0,
+            "task_text_cache_hits": 0,
+            "task_text_cache_misses": 0,
+            "chain_root_age_cache_hits": 0,
+            "chain_root_age_cache_misses": 0,
+            "format_root_age_cache_hits": 0,
+            "format_root_age_cache_misses": 0,
+            "unexpected_cache_misses": 0,
+            "chain_cache_seeded": 0,
+            "run_task_seconds": 0.0,
+        }
+    )
+    diag_start_ts: float = field(default_factory=_time.perf_counter)
+
+
+def new_runtime_state() -> ModifyRuntimeState:
+    return ModifyRuntimeState()
+
+
+@dataclass(slots=True)
 class ModifyRuntimeServices:
+    state: ModifyRuntimeState
     core: Any
     debug_wait_sched: bool
     last_wait_sched_debug: Any

@@ -1364,13 +1364,13 @@ def _queue_jsonl_has_data() -> bool:
     return queue_store.queue_jsonl_has_data(_QUEUE_PATH, _QUEUE_PROCESSING_PATH)
 
 
-def _queue_db_connect() -> sqlite3.Connection | None:
+def _queue_db_connect_result():
     global _QUEUE_DB_OPEN_COUNT
     queue_store = _module("queue_store")
     db_path = queue_store.resolve_queue_db_path(_QUEUE_PATH, _QUEUE_DB_PATH)
     timeout_base = max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0)
     timeout_max = max(timeout_base, float(_QUEUE_DB_CONNECT_TIMEOUT_MAX or timeout_base))
-    conn = queue_store.connect_queue_db(
+    result = queue_store.connect_queue_db_result(
         db_path,
         attempts=max(1, int(_QUEUE_DB_CONNECT_RETRIES or 1)),
         timeout_base=timeout_base,
@@ -1380,9 +1380,13 @@ def _queue_db_connect() -> sqlite3.Connection | None:
         diag=_diag,
         sleep_fn=_sleep,
     )
-    if conn is not None:
+    if result.conn is not None:
         _QUEUE_DB_OPEN_COUNT += 1
-    return conn
+    return result
+
+
+def _queue_db_connect() -> sqlite3.Connection | None:
+    return _queue_db_connect_result().conn
 
 
 def _sqlite_error_looks_corrupt(exc: Exception) -> bool:
@@ -1414,7 +1418,7 @@ def _queue_db_open_ready() -> sqlite3.Connection | None:
     db_path = queue_store.resolve_queue_db_path(_QUEUE_PATH, _QUEUE_DB_PATH)
     conn = queue_store.open_ready_queue_db(
         db_path,
-        connect_fn=_queue_db_connect,
+        connect_fn=_queue_db_connect_result,
         init_fn=_queue_db_init,
         close_fn=_queue_close_silent,
         diag=_diag,

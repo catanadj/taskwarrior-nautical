@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -77,9 +78,38 @@ class SpawnQueueEntry:
 def normalize_spawn_queue_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
     return SpawnQueueEntry.from_mapping(entry).to_dict()
 
+
+@dataclass(slots=True)
+class QueueOpenResult:
+    conn: sqlite3.Connection | None
+    recovered_corrupt: bool = False
+    err: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class QueueStoredRow:
+    id: int
+    spawn_intent_id: str
+    payload: str
+    attempts: int
+
+    @classmethod
+    def from_mapping(cls, row: Mapping[str, Any]) -> "QueueStoredRow":
+        try:
+            row_id = int(row.get("id") or 0)
+        except Exception:
+            row_id = 0
+        return cls(
+            id=max(0, row_id),
+            spawn_intent_id=str(row.get("spawn_intent_id") or "").strip(),
+            payload=str(row.get("payload") or "").strip(),
+            attempts=_clean_attempts(row.get("attempts")),
+        )
+
+
 @dataclass(slots=True)
 class QueueRowClaimResult:
-    rows: list[Any]
+    rows: list[QueueStoredRow]
     lock_busy: bool = False
     err: str = ""
 

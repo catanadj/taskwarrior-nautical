@@ -7,7 +7,13 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from nautical_core.queue_models import QueueEntriesBatch, QueueRowClaimResult, QueueWriteResult
+from nautical_core.queue_models import (
+    QueueEntriesBatch,
+    QueueOpenResult,
+    QueueRowClaimResult,
+    QueueStoredRow,
+    QueueWriteResult,
+)
 
 
 def nautical_state_dir_path(tw_data_dir: Path) -> Path:
@@ -136,7 +142,7 @@ def init_queue_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def connect_queue_db(
+def connect_queue_db_result(
     db_path: Path,
     *,
     attempts: int,
@@ -146,7 +152,7 @@ def connect_queue_db(
     row_factory: Any = None,
     diag: Callable[[str], None] | None = None,
     sleep_fn: Callable[[float], None] | None = None,
-) -> sqlite3.Connection | None:
+) -> QueueOpenResult:
     try:
         db_path.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
@@ -171,7 +177,7 @@ def connect_queue_db(
                     os.chmod(db_path, 0o600)
             except Exception:
                 pass
-            return conn
+            return QueueOpenResult(conn=conn, recovered_corrupt=recovered_corrupt)
         except sqlite3.OperationalError as exc:
             if sqlite_error_looks_corrupt(exc) and not recovered_corrupt and quarantine_sqlite_db(db_path, exc, diag=diag):
                 recovered_corrupt = True
@@ -196,24 +202,48 @@ def connect_queue_db(
             diag(f"queue db connect failed: {last_err}")
         except Exception:
             pass
-    return None
+    return QueueOpenResult(conn=None, recovered_corrupt=recovered_corrupt, err=str(last_err or ""))
 
 
-def open_ready_queue_db(
+def connect_queue_db(
     db_path: Path,
     *,
-    connect_fn: Callable[[], sqlite3.Connection | None],
+    attempts: int,
+    timeout_base: float,
+    timeout_max: float,
+    backoff_base: float,
+    row_factory: Any = None,
+    diag: Callable[[str], None] | None = None,
+    sleep_fn: Callable[[float], None] | None = None,
+) -> sqlite3.Connection | None:
+    return connect_queue_db_result(
+        db_path,
+        attempts=attempts,
+        timeout_base=timeout_base,
+        timeout_max=timeout_max,
+        backoff_base=backoff_base,
+        row_factory=row_factory,
+        diag=diag,
+        sleep_fn=sleep_fn,
+    ).conn
+
+
+def open_ready_queue_db_result(
+    db_path: Path,
+    *,
+    connect_fn: Callable[[], QueueOpenResult],
     init_fn: Callable[[sqlite3.Connection], None],
     close_fn: Callable[[sqlite3.Connection], None],
     diag: Callable[[str], None] | None = None,
-) -> sqlite3.Connection | None:
+) -> QueueOpenResult:
     for _ in range(2):
-        conn = connect_fn()
+        open_result = connect_fn()
+        conn = open_result.conn
         if conn is None:
-            return None
+            return open_result
         try:
             init_fn(conn)
-            return conn
+            return QueueOpenResult(conn=conn, recovered_corrupt=open_result.recovered_corrupt, err=open_result.err)
         except Exception as exc:
             try:
                 close_fn(conn)
@@ -226,8 +256,25 @@ def open_ready_queue_db(
                     diag(f"queue db init failed: {exc}")
                 except Exception:
                     pass
-            return None
-    return None
+            return QueueOpenResult(conn=None, recovered_corrupt=open_result.recovered_corrupt, err=str(exc))
+    return QueueOpenResult(conn=None)
+
+
+def open_ready_queue_db(
+    db_path: Path,
+    *,
+    connect_fn: Callable[[], QueueOpenResult],
+    init_fn: Callable[[sqlite3.Connection], None],
+    close_fn: Callable[[sqlite3.Connection], None],
+    diag: Callable[[str], None] | None = None,
+) -> sqlite3.Connection | None:
+    return open_ready_queue_db_result(
+        db_path,
+        connect_fn=connect_fn,
+        init_fn=init_fn,
+        close_fn=close_fn,
+        diag=diag,
+    ).conn
 
 
 def close_silent(conn: sqlite3.Connection) -> None:
@@ -260,11 +307,21 @@ def select_queued_rows(conn: sqlite3.Connection, *, max_lines: int) -> list[sqli
     return list(conn.execute(query, params))
 
 
-def row_ids(rows: list[sqlite3.Row]) -> list[int]:
+def queue_rows_from_sqlite(rows: list[sqlite3.Row]) -> list[QueueStoredRow]:
+    stored_rows: list[QueueStoredRow] = []
+    for row in rows:
+        try:
+            stored_rows.append(QueueStoredRow.from_mapping(row))
+        except Exception:
+            continue
+    return stored_rows
+
+
+def row_ids(rows: list[QueueStoredRow | sqlite3.Row]) -> list[int]:
     ids: list[int] = []
     for row in rows:
         try:
-            rid = int(row["id"])
+            rid = int(row.id) if isinstance(row, QueueStoredRow) else int(row["id"])
         except Exception:
             continue
         if rid > 0:
@@ -282,7 +339,7 @@ def claim_rows_sqlite_result(
     diag: Callable[[str], None] | None = None,
     on_lock_busy: Callable[[], None] | None = None,
 ) -> QueueRowClaimResult:
-    rows: list[sqlite3.Row] = []
+    rows: list[QueueStoredRow] = []
     try:
         if processing_stale_after > 0:
             cutoff = now - processing_stale_after
@@ -294,7 +351,7 @@ def claim_rows_sqlite_result(
             conn.commit()
 
         conn.execute("BEGIN IMMEDIATE")
-        rows = select_queued_rows(conn, max_lines=max_lines)
+        rows = queue_rows_from_sqlite(select_queued_rows(conn, max_lines=max_lines))
         ids = row_ids(rows)
         if ids:
             conn.executemany(
@@ -336,7 +393,7 @@ def claim_rows_sqlite(
     max_lines: int,
     diag: Callable[[str], None] | None = None,
     on_lock_busy: Callable[[], None] | None = None,
-) -> list[sqlite3.Row]:
+) -> list[QueueStoredRow]:
     return claim_rows_sqlite_result(
         conn,
         token=token,
@@ -348,13 +405,14 @@ def claim_rows_sqlite(
     ).rows
 
 
-def rows_to_entries_result(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+def rows_to_entries_result(rows: list[QueueStoredRow | sqlite3.Row]) -> QueueEntriesBatch:
     entries: list[dict[str, Any]] = []
-    for row in rows:
-        rid = int(row["id"])
-        spawn_intent_id = str(row["spawn_intent_id"] or "").strip()
-        payload = (row["payload"] or "").strip()
-        attempts_db = int(row["attempts"] or 0)
+    for raw_row in rows:
+        row = raw_row if isinstance(raw_row, QueueStoredRow) else QueueStoredRow.from_mapping(raw_row)
+        rid = row.id
+        spawn_intent_id = row.spawn_intent_id
+        payload = row.payload
+        attempts_db = row.attempts
         try:
             obj = json.loads(payload) if payload else {}
         except Exception:
@@ -371,7 +429,7 @@ def rows_to_entries_result(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
     return QueueEntriesBatch(entries=entries)
 
 
-def rows_to_entries(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+def rows_to_entries(rows: list[QueueStoredRow | sqlite3.Row]) -> list[dict[str, Any]]:
     return rows_to_entries_result(rows).entries
 
 

@@ -1396,10 +1396,10 @@ def _handle_enqueue_lock_busy(task_obj: dict) -> tuple[bool, str]:
     return False, "queue lock busy"
 
 
-def _spawn_queue_db_connect() -> sqlite3.Connection | None:
+def _spawn_queue_db_connect_result():
     queue_store = _module("queue_store")
     timeout_base = max(1.0, _SPAWN_LOCK_SLEEP_BASE * max(1, _SPAWN_LOCK_RETRIES) * 4.0)
-    return queue_store.connect_queue_db(
+    return queue_store.connect_queue_db_result(
         _SPAWN_QUEUE_DB_PATH,
         attempts=2,
         timeout_base=timeout_base,
@@ -1407,6 +1407,12 @@ def _spawn_queue_db_connect() -> sqlite3.Connection | None:
         backoff_base=0.0,
         diag=_diag,
     )
+
+
+
+
+def _spawn_queue_db_connect() -> sqlite3.Connection | None:
+    return _spawn_queue_db_connect_result().conn
 
 
 def _sqlite_error_looks_corrupt(exc: Exception) -> bool:
@@ -1433,7 +1439,7 @@ def _spawn_queue_db_open_ready() -> sqlite3.Connection | None:
     queue_store = _module("queue_store")
     return queue_store.open_ready_queue_db(
         _SPAWN_QUEUE_DB_PATH,
-        connect_fn=_spawn_queue_db_connect,
+        connect_fn=_spawn_queue_db_connect_result,
         init_fn=_spawn_queue_db_init,
         close_fn=_queue_close_silent,
         diag=_diag,

@@ -1366,20 +1366,6 @@ def _spawn_queue_db_connect_result():
 
 
 
-def _spawn_queue_db_connect() -> sqlite3.Connection | None:
-    return _spawn_queue_db_connect_result().conn
-
-
-def _sqlite_error_looks_corrupt(exc: Exception) -> bool:
-    queue_store = _module("queue_store")
-    return queue_store.sqlite_error_looks_corrupt(exc)
-
-
-def _spawn_queue_db_quarantine_current(reason: Exception | str) -> bool:
-    queue_store = _module("queue_store")
-    return queue_store.quarantine_sqlite_db(_SPAWN_QUEUE_DB_PATH, reason, diag=_diag)
-
-
 def _spawn_queue_db_init(conn: sqlite3.Connection) -> None:
     queue_store = _module("queue_store")
     queue_store.init_queue_db(conn)

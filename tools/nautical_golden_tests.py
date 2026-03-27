@@ -882,7 +882,7 @@ def test_on_exit_queue_db_connect_retries_and_scales_busy_timeout():
 
                 mod.sqlite3.connect = _fake_connect
                 mod._sleep = lambda secs: sleeps.append(float(secs))
-                conn = mod._queue_db_connect()
+                conn = mod._queue_db_connect_result().conn
             finally:
                 mod.sqlite3.connect = saved_connect
                 mod._sleep = saved_sleep_fn

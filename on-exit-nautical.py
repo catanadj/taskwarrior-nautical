@@ -1184,20 +1184,6 @@ def _queue_db_connect_result():
     return result
 
 
-def _queue_db_connect() -> sqlite3.Connection | None:
-    return _queue_db_connect_result().conn
-
-
-def _sqlite_error_looks_corrupt(exc: Exception) -> bool:
-    queue_store = _module("queue_store")
-    return queue_store.sqlite_error_looks_corrupt(exc)
-
-
-def _queue_db_quarantine_current(path: Path, reason: Exception | str) -> bool:
-    queue_store = _module("queue_store")
-    return queue_store.quarantine_sqlite_db(path, reason, diag=_diag)
-
-
 def _queue_db_init(conn: sqlite3.Connection) -> None:
     queue_store = _module("queue_store")
     queue_store.init_queue_db(conn)
@@ -1228,34 +1214,6 @@ def _queue_db_open_ready() -> sqlite3.Connection | None:
     return conn
 
 
-def _queue_select_queued_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    queue_store = _module("queue_store")
-    return queue_store.select_queued_rows(conn, max_lines=_QUEUE_MAX_LINES)
-
-
-def _queue_row_ids(rows: list[sqlite3.Row]) -> list[int]:
-    queue_store = _module("queue_store")
-    return queue_store.row_ids(rows)
-
-
-def _queue_claim_rows_sqlite(conn: sqlite3.Connection, token: str, now: float):
-    queue_store = _module("queue_store")
-    return queue_store.claim_rows_sqlite_result(
-        conn,
-        token=token,
-        now=now,
-        processing_stale_after=_QUEUE_PROCESSING_STALE_AFTER,
-        max_lines=_QUEUE_MAX_LINES,
-        diag=_diag,
-        on_lock_busy=_record_queue_lock_failure,
-    )
-
-
-def _queue_rows_to_entries(rows: list[sqlite3.Row]) -> list[dict]:
-    queue_store = _module("queue_store")
-    return queue_store.rows_to_entries_result(rows).entries
-
-
 def _queue_close_silent(conn: sqlite3.Connection) -> None:
     if conn is None:
         return
@@ -1272,8 +1230,17 @@ def _take_queue_entries_sqlite_batch():
         return exit_models.ExitQueueBatch(entries=[])
     token = f"drain-{os.getpid()}-{int(time.time() * 1000)}"
     now = time.time()
-    claim = _queue_claim_rows_sqlite(conn, token, now)
-    entries = _queue_rows_to_entries(claim.rows)
+    queue_store = _module("queue_store")
+    claim = queue_store.claim_rows_sqlite_result(
+        conn,
+        token=token,
+        now=now,
+        processing_stale_after=_QUEUE_PROCESSING_STALE_AFTER,
+        max_lines=_QUEUE_MAX_LINES,
+        diag=_diag,
+        on_lock_busy=_record_queue_lock_failure,
+    )
+    entries = queue_store.rows_to_entries_result(claim.rows).entries
     _queue_close_silent(conn)
     return exit_models.ExitQueueBatch(entries=entries)
 

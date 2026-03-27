@@ -272,25 +272,26 @@ def render_anchor_completion_feedback(
         fb.append(("Intent", feedback.spawn_intent_id))
 
     title = f"⚓︎ Next anchor  #{feedback.next_no}  {feedback.parent_short} → {feedback.child_short}"
-    tl = timeline_lines(
-        "anchor",
-        feedback.new,
-        feedback.child_due,
-        feedback.child_short,
-        feedback.dnf,
-        next_count=3,
-        cap_no=feedback.cap_no,
-        cur_no=feedback.base_no,
-        show_gaps=show_timeline_gaps,
-    )
-    if tl:
-        fb.append(("Timeline", "\n".join(tl)))
+    mode = _display_mode_name(core)
+    if mode not in {"line", "minimal", "text"}:
+        tl = timeline_lines(
+            "anchor",
+            feedback.new,
+            feedback.child_due,
+            feedback.child_short,
+            feedback.dnf,
+            next_count=3,
+            cap_no=feedback.cap_no,
+            cur_no=feedback.base_no,
+            show_gaps=show_timeline_gaps,
+        )
+        if tl:
+            fb.append(("Timeline", "\n".join(tl)))
     if "rand" in expr_str.lower():
         fb.append(("Rand", f"[dim]Deterministic picks seeded by root {short(root_uuid_from(feedback.new))}[/]"))
 
     fb = format_next_anchor_rows(fb)
 
-    mode = _display_mode_name(core)
     if mode in {"line", "minimal"}:
         line = format_line_preview(
             feedback.base_no,
@@ -398,23 +399,24 @@ def render_cp_completion_feedback(
         fb.append(("Intent", feedback.spawn_intent_id))
 
     title = f"⛓ Next link  #{feedback.next_no}  {feedback.parent_short} → {feedback.child_short}"
-    tl = timeline_lines(
-        "cp",
-        feedback.new,
-        feedback.child_due,
-        feedback.child_short,
-        None,
-        next_count=3,
-        cap_no=feedback.cap_no,
-        cur_no=feedback.base_no,
-        show_gaps=show_timeline_gaps,
-    )
-    if tl:
-        fb.append(("Timeline", "\n".join(tl)))
+    mode = _display_mode_name(core)
+    if mode not in {"line", "minimal", "text"}:
+        tl = timeline_lines(
+            "cp",
+            feedback.new,
+            feedback.child_due,
+            feedback.child_short,
+            None,
+            next_count=3,
+            cap_no=feedback.cap_no,
+            cur_no=feedback.base_no,
+            show_gaps=show_timeline_gaps,
+        )
+        if tl:
+            fb.append(("Timeline", "\n".join(tl)))
 
     fb = format_next_cp_rows(fb)
 
-    mode = _display_mode_name(core)
     if mode in {"line", "minimal"}:
         line = format_line_preview(
             feedback.base_no,

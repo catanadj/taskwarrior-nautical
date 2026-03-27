@@ -373,6 +373,8 @@ _MODIFY_COMPLETION_COMPUTE = None
 _MODIFY_COMPLETION_COMPUTE_LOAD_FAILED = False
 _MODIFY_COMPLETION_SPAWN = None
 _MODIFY_COMPLETION_SPAWN_LOAD_FAILED = False
+_MODIFY_MODELS = None
+_MODIFY_MODELS_LOAD_FAILED = False
 _MODIFY_FEEDBACK = None
 _MODIFY_FEEDBACK_LOAD_FAILED = False
 _MODIFY_TIMELINE = None
@@ -423,6 +425,12 @@ _MODULE_SPECS = {
         "_MODIFY_COMPLETION_SPAWN_LOAD_FAILED",
         "modify_completion_spawn.py",
         "nautical_modify_completion_spawn",
+    ),
+    "modify_models": (
+        "_MODIFY_MODELS",
+        "_MODIFY_MODELS_LOAD_FAILED",
+        "modify_models.py",
+        "nautical_modify_models",
     ),
     "modify_feedback": (
         "_MODIFY_FEEDBACK",
@@ -4753,8 +4761,9 @@ def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
     )
 
 
-def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
+def _completion_preflight_context(new: dict, now_utc: datetime):
     modify_completion_preflight = _module("modify_completion_preflight")
+    modify_models = _module("modify_models")
     return modify_completion_preflight.completion_preflight_context(
         new,
         now_utc,
@@ -4763,6 +4772,7 @@ def _completion_preflight_context(new: dict, now_utc: datetime) -> dict | None:
         completion_kind_or_stop=_completion_kind_or_stop,
         completion_chain_id_or_fail=_completion_chain_id_or_fail,
         completion_existing_next_or_fail=_completion_existing_next_or_fail,
+        preflight_context_cls=modify_models.CompletionPreflightContext,
     )
 
 
@@ -4853,8 +4863,9 @@ def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, n
     )
 
 
-def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime) -> dict | None:
+def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime):
     modify_completion_compute = _module("modify_completion_compute")
+    modify_models = _module("modify_models")
     return modify_completion_compute.completion_compute_next_and_limits(
         new,
         kind,
@@ -4867,6 +4878,7 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
         completion_warn_unreasonable_duration=_completion_warn_unreasonable_duration,
         completion_caps=_completion_caps,
         completion_cap_guard_or_stop=_completion_cap_guard_or_stop,
+        compute_result_cls=modify_models.CompletionComputeResult,
     )
 
 
@@ -4903,23 +4915,23 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     ctx = _completion_preflight_context(new, now_utc)
     if ctx is None:
         return
-    parent_short = ctx["parent_short"]
-    base_no = ctx["base_no"]
-    next_no = ctx["next_no"]
-    kind = ctx["kind"]
-    chain_id = ctx["chain_id"]
+    parent_short = ctx.parent_short
+    base_no = ctx.base_no
+    next_no = ctx.next_no
+    kind = ctx.kind
+    chain_id = ctx.chain_id
 
     computed = _completion_compute_next_and_limits(new, kind, next_no, now_utc)
     if computed is None:
         return
-    child_due = computed["child_due"]
-    meta = computed["meta"]
-    dnf = computed["dnf"]
-    until_dt = computed["until_dt"]
-    cpmax = computed["cpmax"]
-    cap_no = computed["cap_no"]
-    finals = computed["finals"]
-    until_cap_no = computed["until_cap_no"]
+    child_due = computed.child_due
+    meta = computed.meta
+    dnf = computed.dnf
+    until_dt = computed.until_dt
+    cpmax = computed.cpmax
+    cap_no = computed.cap_no
+    finals = computed.finals
+    until_cap_no = computed.until_cap_no
 
     spawned = _completion_build_and_spawn_child(
         new,

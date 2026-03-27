@@ -5505,10 +5505,10 @@ def test_on_modify_completion_preflight_context_happy_path():
 
     ctx = mod._completion_preflight_context(new, mod.core.now_utc())
     expect(bool(ctx), f"expected preflight context, got {ctx}")
-    expect(ctx.get("parent_short") == "00000000", f"unexpected parent_short: {ctx}")
-    expect(ctx.get("base_no") == 2 and ctx.get("next_no") == 3, f"unexpected link numbers: {ctx}")
-    expect(ctx.get("kind") == "cp", f"unexpected kind: {ctx}")
-    expect(ctx.get("chain_id") == "abcd1234", f"unexpected chain id: {ctx}")
+    expect(ctx.parent_short == "00000000", f"unexpected parent_short: {ctx}")
+    expect(ctx.base_no == 2 and ctx.next_no == 3, f"unexpected link numbers: {ctx}")
+    expect(ctx.kind == "cp", f"unexpected kind: {ctx}")
+    expect(ctx.chain_id == "abcd1234", f"unexpected chain id: {ctx}")
 
 
 def test_on_modify_completion_compute_next_and_limits_happy_path():
@@ -5532,11 +5532,11 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
 
     out = mod._completion_compute_next_and_limits({"chainUntil": "ignored"}, "cp", 2, mod.core.now_utc())
     expect(bool(out), f"expected computed payload, got {out}")
-    expect(out.get("child_due") == child_due, f"unexpected child_due: {out}")
-    expect(out.get("meta") == {"basis": "stub"}, f"unexpected meta: {out}")
-    expect(out.get("until_dt") == until_dt, f"unexpected until_dt: {out}")
-    expect(out.get("cpmax") == 3 and out.get("cap_no") == 3, f"unexpected cap data: {out}")
-    expect(out.get("finals") == finals and out.get("until_cap_no") == 3, f"unexpected finals: {out}")
+    expect(out.child_due == child_due, f"unexpected child_due: {out}")
+    expect(out.meta == {"basis": "stub"}, f"unexpected meta: {out}")
+    expect(out.until_dt == until_dt, f"unexpected until_dt: {out}")
+    expect(out.cpmax == 3 and out.cap_no == 3, f"unexpected cap data: {out}")
+    expect(out.finals == finals and out.until_cap_no == 3, f"unexpected finals: {out}")
 
 
 def test_on_modify_completion_build_and_spawn_child_happy_path():

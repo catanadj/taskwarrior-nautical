@@ -188,6 +188,7 @@ def completion_compute_next_and_limits(
     completion_warn_unreasonable_duration,
     completion_caps,
     completion_cap_guard_or_stop,
+    compute_result_cls,
 ):
     computed = completion_compute_child_due(new, kind)
     if computed is None:
@@ -210,13 +211,13 @@ def completion_compute_next_and_limits(
     if not completion_cap_guard_or_stop(new, next_no, cap_no, now_utc):
         return None
 
-    return {
-        "child_due": child_due,
-        "meta": meta,
-        "dnf": dnf,
-        "until_dt": until_dt,
-        "cpmax": cpmax,
-        "cap_no": cap_no,
-        "finals": finals,
-        "until_cap_no": until_cap_no,
-    }
+    return compute_result_cls(
+        child_due=child_due,
+        meta=meta,
+        dnf=dnf,
+        until_dt=until_dt,
+        cpmax=cpmax,
+        cap_no=cap_no,
+        finals=finals,
+        until_cap_no=until_cap_no,
+    )

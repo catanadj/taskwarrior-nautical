@@ -4486,7 +4486,8 @@ def _render_anchor_completion_feedback(
     base_no: int,
 ) -> None:
     modify_feedback = _module("modify_feedback")
-    modify_feedback.render_anchor_completion_feedback(
+    modify_models = _module("modify_models")
+    feedback = modify_models.AnchorCompletionFeedbackModel(
         new=new,
         child=child,
         child_due=child_due,
@@ -4507,6 +4508,9 @@ def _render_anchor_completion_feedback(
         analytics_advice=analytics_advice,
         integrity_warnings=integrity_warnings,
         base_no=base_no,
+    )
+    modify_feedback.render_anchor_completion_feedback(
+        feedback=feedback,
         core=core,
         debug_wait_sched=_DEBUG_WAIT_SCHED,
         last_wait_sched_debug=_LAST_WAIT_SCHED_DEBUG,

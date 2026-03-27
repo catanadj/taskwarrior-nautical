@@ -5573,6 +5573,56 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
     expect(new.get("nextLink") == "deadbeef", f"verified spawn should stamp nextLink: {new}")
 
 
+def test_on_modify_render_anchor_completion_feedback_wrapper():
+    """anchor completion feedback wrapper should delegate and emit a preview panel title."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_feedback_wrapper_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._CHAIN_COLOR_PER_CHAIN = False
+    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
+    mod._format_next_anchor_rows = lambda fb: fb
+    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
+    mod._timeline_lines = lambda *_a, **_k: []
+
+    captured = {}
+    mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
+    mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
+
+    prev_panel_mode = mod.core.PANEL_MODE
+    try:
+        mod.core.PANEL_MODE = "panel"
+        mod._render_anchor_completion_feedback(
+            new={"anchor": "w:mon", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            child_due=mod.core.now_utc(),
+            child_short="deadbeef",
+            next_no=2,
+            parent_short="00000000",
+            cap_no=None,
+            finals=[],
+            now_utc=mod.core.now_utc(),
+            until_dt=None,
+            until_cap_no=None,
+            dnf=[[{"typ": "w", "spec": "mon", "mods": {}}]],
+            meta={"mode": "skip"},
+            stripped_attrs=[],
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            chain_by_short=None,
+            analytics_advice=None,
+            integrity_warnings=None,
+            base_no=1,
+        )
+    finally:
+        mod.core.PANEL_MODE = prev_panel_mode
+
+    expect("title" in captured, "expected preview panel emission")
+    expect("Next anchor" in captured["title"], f"unexpected panel title: {captured}")
+
+
 def test_on_modify_render_cp_completion_feedback_wrapper():
     """CP completion feedback wrapper should delegate and emit a preview panel title."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -7131,6 +7181,7 @@ TESTS = [
     test_on_modify_completion_preflight_context_happy_path,
     test_on_modify_completion_compute_next_and_limits_happy_path,
     test_on_modify_completion_build_and_spawn_child_happy_path,
+    test_on_modify_render_anchor_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_wrapper,
     test_on_add_preview_hard_cap,
     test_on_add_flushes_stdout,

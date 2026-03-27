@@ -170,26 +170,7 @@ def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: 
 
 def render_anchor_completion_feedback(
     *,
-    new: dict,
-    child: dict,
-    child_due,
-    child_short: str,
-    next_no: int,
-    parent_short: str,
-    cap_no: int | None,
-    finals: list[tuple[str, object]],
-    now_utc,
-    until_dt,
-    until_cap_no: int | None,
-    dnf,
-    meta: dict,
-    stripped_attrs: list[str],
-    deferred_spawn: bool,
-    spawn_intent_id: str | None,
-    chain_by_short: dict | None,
-    analytics_advice: str | None,
-    integrity_warnings: list[str] | None,
-    base_no: int,
+    feedback,
     core,
     debug_wait_sched: bool,
     last_wait_sched_debug,
@@ -210,91 +191,91 @@ def render_anchor_completion_feedback(
     human_delta,
 ) -> None:
     fb = []
-    anchor_raw = (new.get("anchor") or "").strip()
+    anchor_raw = (feedback.new.get("anchor") or "").strip()
     expr_str = strip_quotes(anchor_raw)
-    mode_tag = _anchor_mode_tag(new)
+    mode_tag = _anchor_mode_tag(feedback.new)
     fb.append(("Pattern", f"{expr_str}  {mode_tag}"))
-    delta = core.humanize_delta(now_utc, child_due, use_months_days=core.expr_has_m_or_y(dnf))
-    fb.append(("Next", f"#{next_no} → {core.fmt_dt_local(child_due)}  ({delta})"))
-    fb.append(("Natural", core.describe_anchor_dnf(dnf, new)))
-    basis_text = _pretty_basis_anchor(meta, new, parse_dt_any=core.parse_dt_any, fmt_dt_local=core.fmt_dt_local)
+    delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=core.expr_has_m_or_y(feedback.dnf))
+    fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
+    fb.append(("Natural", core.describe_anchor_dnf(feedback.dnf, feedback.new)))
+    basis_text = _pretty_basis_anchor(feedback.meta, feedback.new, parse_dt_any=core.parse_dt_any, fmt_dt_local=core.fmt_dt_local)
     if basis_text != "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)":
         fb.append(("Basis", basis_text))
-    fb.append(("Root", format_root_and_age(new, now_utc)))
+    fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))
 
     _append_wait_sched_feedback_rows(fb, debug_wait_sched=debug_wait_sched, last_wait_sched_debug=last_wait_sched_debug)
-    _append_sanitised_fields_row(fb, stripped_attrs)
-    if analytics_advice:
-        fb.append(("Analytics", analytics_advice))
-    _append_integrity_warnings_row(fb, integrity_warnings)
-    append_next_wait_sched_rows(fb, child, child_due)
+    _append_sanitised_fields_row(fb, feedback.stripped_attrs)
+    if feedback.analytics_advice:
+        fb.append(("Analytics", feedback.analytics_advice))
+    _append_integrity_warnings_row(fb, feedback.integrity_warnings)
+    append_next_wait_sched_rows(fb, feedback.child, feedback.child_due)
 
     _append_link_status_rows(
         fb,
-        cap_no,
-        base_no,
+        feedback.cap_no,
+        feedback.base_no,
         second_to_last_text="[yellow]This was the second-to-last link[/]",
     )
-    _append_final_rows(fb, finals, now_utc, fmt_dt_local=core.fmt_dt_local, human_delta=human_delta)
-    if deferred_spawn and diag_enabled and spawn_intent_id:
-        fb.append(("Intent", spawn_intent_id))
+    _append_final_rows(fb, feedback.finals, feedback.now_utc, fmt_dt_local=core.fmt_dt_local, human_delta=human_delta)
+    if feedback.deferred_spawn and diag_enabled and feedback.spawn_intent_id:
+        fb.append(("Intent", feedback.spawn_intent_id))
 
-    title = f"⚓︎ Next anchor  #{next_no}  {parent_short} → {child_short}"
+    title = f"⚓︎ Next anchor  #{feedback.next_no}  {feedback.parent_short} → {feedback.child_short}"
     tl = timeline_lines(
         "anchor",
-        new,
-        child_due,
-        child_short,
-        dnf,
+        feedback.new,
+        feedback.child_due,
+        feedback.child_short,
+        feedback.dnf,
         next_count=3,
-        cap_no=cap_no,
-        cur_no=base_no,
+        cap_no=feedback.cap_no,
+        cur_no=feedback.base_no,
         show_gaps=show_timeline_gaps,
     )
     if tl:
         fb.append(("Timeline", "\n".join(tl)))
     if "rand" in expr_str.lower():
-        fb.append(("Rand", f"[dim]Deterministic picks seeded by root {short(root_uuid_from(new))}[/]"))
+        fb.append(("Rand", f"[dim]Deterministic picks seeded by root {short(root_uuid_from(feedback.new))}[/]"))
 
     fb = format_next_anchor_rows(fb)
 
     mode = _display_mode_name(core)
     if mode in {"line", "minimal"}:
         line = format_line_preview(
-            base_no,
-            new,
-            child_due,
-            child_short,
-            now_utc,
-            cap_no=cap_no,
-            until_dt=until_dt,
-            until_no=until_cap_no,
+            feedback.base_no,
+            feedback.new,
+            feedback.child_due,
+            feedback.child_short,
+            feedback.now_utc,
+            cap_no=feedback.cap_no,
+            until_dt=feedback.until_dt,
+            until_no=feedback.until_cap_no,
             kind="anchor",
             minimal=(mode == "minimal"),
         )
-        title_style = chain_colour_for_task(new, "anchor") if chain_color_per_chain else None
+        title_style = chain_colour_for_task(feedback.new, "anchor") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_anchor", border_style=title_style, title_style=title_style, markup_body=True)
         return
     if mode == "quiet" and not _rows_are_notable(fb):
         line = format_line_preview(
-            base_no,
-            new,
-            child_due,
-            child_short,
-            now_utc,
-            cap_no=cap_no,
-            until_dt=until_dt,
-            until_no=until_cap_no,
+            feedback.base_no,
+            feedback.new,
+            feedback.child_due,
+            feedback.child_short,
+            feedback.now_utc,
+            cap_no=feedback.cap_no,
+            until_dt=feedback.until_dt,
+            until_no=feedback.until_cap_no,
             kind="anchor",
             minimal=True,
         )
-        title_style = chain_colour_for_task(new, "anchor") if chain_color_per_chain else None
+        title_style = chain_colour_for_task(feedback.new, "anchor") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_anchor", border_style=title_style, title_style=title_style, markup_body=True)
         return
     if mode in {"compact", "quiet"}:
         fb = _compact_feedback_rows(fb, include_timeline=True)
     if chain_color_per_chain:
-        chain_colour = chain_colour_for_task(new, "anchor")
+        chain_colour = chain_colour_for_task(feedback.new, "anchor")
         panel(
             title,
             fb,

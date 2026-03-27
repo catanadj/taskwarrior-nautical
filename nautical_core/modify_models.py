@@ -45,3 +45,27 @@ class CpCompletionFeedbackModel:
     analytics_advice: str | None
     integrity_warnings: list[str] | None
     base_no: int
+
+
+@dataclass(slots=True)
+class AnchorCompletionFeedbackModel:
+    new: dict[str, Any]
+    child: dict[str, Any]
+    child_due: Any
+    child_short: str
+    next_no: int
+    parent_short: str
+    cap_no: int | None
+    finals: list[tuple[str, Any]]
+    now_utc: Any
+    until_dt: Any
+    until_cap_no: int | None
+    dnf: Any
+    meta: dict[str, Any]
+    stripped_attrs: list[str]
+    deferred_spawn: bool
+    spawn_intent_id: str | None
+    chain_by_short: dict[str, Any] | None
+    analytics_advice: str | None
+    integrity_warnings: list[str] | None
+    base_no: int

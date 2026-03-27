@@ -2510,6 +2510,29 @@ def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
     _diag_count("chain_cache_seeded")
 
 
+def _seed_runtime_lookup_task(task: dict | None) -> None:
+    if not isinstance(task, dict):
+        return
+    uuid_str = str(task.get("uuid") or "").strip()
+    if not uuid_str:
+        return
+    short = uuid_str[:8]
+    state = _modify_chain_state()
+    with state.chain_cache_lock:
+        if short and short not in state.chain_by_short:
+            state.chain_by_short[short] = task
+        if uuid_str not in state.chain_by_uuid:
+            state.chain_by_uuid[uuid_str] = task
+    entry = task.get("entry")
+    if short and entry:
+        _query_ctx_set("tw_get", f"{short}.entry", str(entry).strip())
+
+
+def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
+    for task in tasks:
+        _seed_runtime_lookup_task(task)
+
+
 # ------------------------------------------------------------------------------
 # Multi-time occurrence helpers (hook-level)
 # ------------------------------------------------------------------------------
@@ -4448,7 +4471,6 @@ def _modify_runtime_services():
         chain_colour_for_task=_chain_colour_for_task,
         strip_quotes=_strip_quotes,
         human_delta=_human_delta,
-        export_uuid_short_cached=_export_uuid_short_cached,
         completion_link_numbers_or_fail=_completion_link_numbers_or_fail,
         completion_kind_or_stop=_completion_kind_or_stop,
         completion_chain_id_or_fail=_completion_chain_id_or_fail,
@@ -4901,6 +4923,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     if spawned is None:
         return
     child = spawned.child
+    _seed_runtime_lookup_tasks(new, child)
     child_short = spawned.child_short
     stripped_attrs = spawned.stripped_attrs
     deferred_spawn = spawned.deferred_spawn
@@ -5000,6 +5023,7 @@ def main():
     hook_results = _module("hook_results")
     hook_engine = _module("hook_engine")
     old, new = _read_two()
+    _seed_runtime_lookup_tasks(old, new)
     request = hook_context.build_on_modify_request(
         runtime=_build_hook_runtime_context(),
         old=old,

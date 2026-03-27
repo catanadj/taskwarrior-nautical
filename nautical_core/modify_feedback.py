@@ -37,16 +37,6 @@ def _pretty_basis_anchor(meta: dict, task: dict, *, parse_dt_any, fmt_dt_local) 
     return "ALL — Next anchor after completion"
 
 
-def _resolve_child_id(child_short: str, deferred_spawn: bool, chain_by_short: dict | None, *, export_uuid_short_cached) -> str:
-    child_id = ""
-    if not deferred_spawn and chain_by_short:
-        child_id = str(chain_by_short.get(child_short, {}).get("id", "") or "")
-    if not deferred_spawn and not child_id:
-        child_obj = export_uuid_short_cached(child_short)
-        child_id = child_obj.get("id", "") if child_obj else ""
-    return child_id
-
-
 def _anchor_mode_tag(new: dict) -> str:
     return {
         "skip": "[cyan]SKIP[/]",
@@ -381,7 +371,6 @@ def render_cp_completion_feedback(
     chain_color_per_chain = services.chain_color_per_chain
     chain_colour_for_task = services.chain_colour_for_task
     human_delta = services.human_delta
-    export_uuid_short_cached = services.export_uuid_short_cached
     fb = []
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
     fb.append(("Period", feedback.new.get("cp")))
@@ -405,12 +394,6 @@ def render_cp_completion_feedback(
 
     _append_final_rows(fb, feedback.finals, feedback.now_utc, fmt_dt_local=core.fmt_dt_local, human_delta=human_delta)
 
-    child_id = _resolve_child_id(
-        feedback.child_short,
-        feedback.deferred_spawn,
-        feedback.chain_by_short,
-        export_uuid_short_cached=export_uuid_short_cached,
-    )
     if feedback.deferred_spawn and diag_enabled and feedback.spawn_intent_id:
         fb.append(("Intent", feedback.spawn_intent_id))
 

@@ -84,7 +84,6 @@ class ModifyRuntimeServices:
     chain_colour_for_task: Any
     strip_quotes: Any
     human_delta: Any
-    export_uuid_short_cached: Any
     completion_link_numbers_or_fail: Any
     completion_kind_or_stop: Any
     completion_chain_id_or_fail: Any
@@ -162,7 +161,6 @@ def build_cp_feedback_services(runtime: ModifyRuntimeServices) -> CpFeedbackServ
         chain_color_per_chain=runtime.chain_color_per_chain,
         chain_colour_for_task=runtime.chain_colour_for_task,
         human_delta=runtime.human_delta,
-        export_uuid_short_cached=runtime.export_uuid_short_cached,
     )
 
 

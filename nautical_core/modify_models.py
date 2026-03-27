@@ -153,4 +153,3 @@ class CpFeedbackServices:
     chain_color_per_chain: bool
     chain_colour_for_task: Any
     human_delta: Any
-    export_uuid_short_cached: Any

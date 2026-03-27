@@ -20,7 +20,6 @@ from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 import re
 import time as _time
-import threading
 from typing import Any, Optional
 import stat
 
@@ -77,14 +76,7 @@ def _env_float(name: str, default: float) -> float:
     except Exception:
         return float(default)
 
-# Panel chain index for fast timeline lookups (set per hook run)
-_PANEL_CHAIN_BY_LINK = None
-_PANEL_CHAIN_BY_SHORT = None
-_CHAIN_CACHE_CHAIN_ID = ""
-_CHAIN_CACHE: list[dict[str, Any]] = []
-_CHAIN_BY_SHORT: dict[str, dict[str, Any]] = {}
-_CHAIN_BY_UUID: dict[str, dict[str, Any]] = {}
-_CHAIN_CACHE_LOCK = threading.RLock()
+# Panel chain index and chain caches live in the per-run modify runtime state.
 _MODIFY_RUNTIME_STATE = None
 _HOOK_CONTEXT = None
 _HOOK_CONTEXT_LOAD_FAILED = False
@@ -170,6 +162,10 @@ def _reset_modify_runtime_state() -> None:
     global _MODIFY_RUNTIME_STATE
     modify_runtime = _module("modify_runtime")
     _MODIFY_RUNTIME_STATE = modify_runtime.new_runtime_state()
+
+
+def _modify_chain_state():
+    return _modify_runtime_state()
 
 
 def _diag_count(key: str, inc: int = 1) -> None:
@@ -1582,9 +1578,10 @@ def _run_task(
 def _export_uuid_short(u_short: str, env=None):
     cache_chain_id = ""
     if env is None and u_short:
-        with _CHAIN_CACHE_LOCK:
-            cached = _CHAIN_BY_SHORT.get(u_short)
-            cache_chain_id = _CHAIN_CACHE_CHAIN_ID
+        state = _modify_chain_state()
+        with state.chain_cache_lock:
+            cached = state.chain_by_short.get(u_short)
+            cache_chain_id = state.chain_cache_chain_id
         if isinstance(cached, dict):
             _diag_count("export_uuid_cache_hits")
             return dict(cached)
@@ -2087,9 +2084,10 @@ def _export_uuid_full_cached(u: str) -> dict | None:
 def _export_uuid_full_uncached(u: str, env=None) -> dict | None:
     cache_chain_id = ""
     if env is None and u:
-        with _CHAIN_CACHE_LOCK:
-            cached = _CHAIN_BY_UUID.get(u)
-            cache_chain_id = _CHAIN_CACHE_CHAIN_ID
+        state = _modify_chain_state()
+        with state.chain_cache_lock:
+            cached = state.chain_by_uuid.get(u)
+            cache_chain_id = state.chain_cache_chain_id
         if isinstance(cached, dict):
             _diag_count("export_full_cache_hits")
             return dict(cached)
@@ -2136,9 +2134,10 @@ def _tw_get_cached(ref: str) -> str:
     try:
         if ref.endswith(".entry"):
             short = ref[:-6].strip()
-            with _CHAIN_CACHE_LOCK:
-                cached = _CHAIN_BY_SHORT.get(short) if short else None
-                cache_chain_id = _CHAIN_CACHE_CHAIN_ID
+            state = _modify_chain_state()
+            with state.chain_cache_lock:
+                cached = state.chain_by_short.get(short) if short else None
+                cache_chain_id = state.chain_cache_chain_id
             if short and isinstance(cached, dict):
                 _diag_count("tw_get_cache_hits")
                 return (str(cached.get("entry") or "")).strip()
@@ -2421,7 +2420,7 @@ def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] |
         current_task,
         coerce_int=core.coerce_int,
         get_chain_export=_get_chain_export,
-        panel_chain_by_link=_PANEL_CHAIN_BY_LINK,
+        panel_chain_by_link=_modify_chain_state().panel_chain_by_link,
         chain_by_link=chain_by_link,
     )
 
@@ -2431,9 +2430,10 @@ def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str, l
     """Cached chain export keyed by stable parameters."""
     since = datetime.fromisoformat(since_key) if since_key else None
     extra = extra_key or None
-    with _CHAIN_CACHE_LOCK:
-        if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
-            return tuple(_CHAIN_CACHE or [])
+    state = _modify_chain_state()
+    with state.chain_cache_lock:
+        if state.chain_cache_chain_id and chain_id == state.chain_cache_chain_id and not since and not extra:
+            return tuple(state.chain_cache or [])
     return tuple(tw_export_chain(chain_id, since=since, extra=extra, env=None, limit=limit) or [])
 
 
@@ -2449,9 +2449,10 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
         return []
     if env is not None:
         return tw_export_chain(chain_id, since=since, extra=extra, env=env, limit=_MAX_CHAIN_WALK)
-    with _CHAIN_CACHE_LOCK:
-        if _CHAIN_CACHE_CHAIN_ID and chain_id == _CHAIN_CACHE_CHAIN_ID and not since and not extra:
-            return list(_CHAIN_CACHE)
+    state = _modify_chain_state()
+    with state.chain_cache_lock:
+        if state.chain_cache_chain_id and chain_id == state.chain_cache_chain_id and not since and not extra:
+            return list(state.chain_cache)
     cached = _tw_export_chain_cached(chain_id, since, extra, _MAX_CHAIN_WALK)
     return list(cached)
 
@@ -2482,17 +2483,17 @@ def _build_chain_indexes(chain: list[dict]) -> tuple[dict[int, list[dict]], dict
 
 def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
     """Set per-run chain cache to avoid repeated task exports."""
-    global _CHAIN_CACHE_CHAIN_ID, _CHAIN_CACHE, _CHAIN_BY_SHORT, _CHAIN_BY_UUID
     chain_copy = list(chain or [])
     _, by_short = _build_chain_indexes(chain_copy)
     by_uuid = {
         t.get("uuid"): t for t in chain_copy if isinstance(t.get("uuid"), str) and t.get("uuid")
     }
-    with _CHAIN_CACHE_LOCK:
-        _CHAIN_CACHE_CHAIN_ID = chain_id or ""
-        _CHAIN_CACHE = chain_copy
-        _CHAIN_BY_SHORT = by_short
-        _CHAIN_BY_UUID = by_uuid
+    state = _modify_chain_state()
+    with state.chain_cache_lock:
+        state.chain_cache_chain_id = chain_id or ""
+        state.chain_cache = chain_copy
+        state.chain_by_short = by_short
+        state.chain_by_uuid = by_uuid
     _diag_count("chain_cache_seeded")
 
 
@@ -4246,9 +4247,10 @@ def _chain_export_timeout(chain_id: str) -> float:
     per_100 = float(_CHAIN_EXPORT_TIMEOUT_PER_100)
     max_t = float(_CHAIN_EXPORT_TIMEOUT_MAX)
     est = base
-    with _CHAIN_CACHE_LOCK:
-        cache_match = bool(chain_id and _CHAIN_CACHE_CHAIN_ID == chain_id and _CHAIN_CACHE)
-        cache_len = len(_CHAIN_CACHE) if cache_match else 0
+    state = _modify_chain_state()
+    with state.chain_cache_lock:
+        cache_match = bool(chain_id and state.chain_cache_chain_id == chain_id and state.chain_cache)
+        cache_len = len(state.chain_cache) if cache_match else 0
     if cache_match:
         extra = max(0, cache_len // 100)
         est = base + (extra * per_100)
@@ -4905,10 +4907,9 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
                 _export_uuid_short_cached.cache_clear()
         except Exception:
             pass
-    global _PANEL_CHAIN_BY_LINK
-    _PANEL_CHAIN_BY_LINK = chain_by_link
-    global _PANEL_CHAIN_BY_SHORT
-    _PANEL_CHAIN_BY_SHORT = chain_by_short
+    state = _modify_chain_state()
+    state.panel_chain_by_link = chain_by_link
+    state.panel_chain_by_short = chain_by_short
     analytics_advice = None
     integrity_warnings = None
     if _SHOW_ANALYTICS and chain:

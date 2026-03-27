@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import threading
 from typing import Any
 import time as _time
 
@@ -45,6 +46,13 @@ class ModifyRuntimeState:
         }
     )
     diag_start_ts: float = field(default_factory=_time.perf_counter)
+    panel_chain_by_link: dict[int, list[dict[str, Any]]] | None = None
+    panel_chain_by_short: dict[str, dict[str, Any]] | None = None
+    chain_cache_chain_id: str = ""
+    chain_cache: list[dict[str, Any]] = field(default_factory=list)
+    chain_by_short: dict[str, dict[str, Any]] = field(default_factory=dict)
+    chain_by_uuid: dict[str, dict[str, Any]] = field(default_factory=dict)
+    chain_cache_lock: threading.RLock = field(default_factory=threading.RLock)
 
 
 def new_runtime_state() -> ModifyRuntimeState:

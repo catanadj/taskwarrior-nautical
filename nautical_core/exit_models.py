@@ -39,3 +39,37 @@ class ExitApplyParentUpdateServices:
     cleanup_orphan_child: Any
     diag: Any
     requeue_or_dead_letter_for_lock: Any
+
+
+@dataclass(slots=True)
+class ExitExportResult:
+    exists: bool
+    retryable: bool
+    err: str
+    obj: dict[str, Any] | None
+
+
+@dataclass(slots=True)
+class ExitEquivalentChildResult:
+    exists: bool
+    retryable: bool
+    err: str
+    obj: dict[str, Any] | None
+
+
+@dataclass(slots=True)
+class ExitImportResult:
+    ok: bool
+    err: str
+
+
+@dataclass(slots=True)
+class ExitParentNextlinkStateResult:
+    state: str
+    err: str
+
+
+@dataclass(slots=True)
+class ExitParentUpdateResult:
+    ok: bool
+    err: str

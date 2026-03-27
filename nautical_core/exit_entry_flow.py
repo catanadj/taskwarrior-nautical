@@ -19,18 +19,18 @@ def precheck_parent_link_state(
     if not (ctx.parent_uuid and ctx.child_short):
         return "ok", False
 
-    link_state, link_err = services.parent_nextlink_state(
+    state_res = services.parent_nextlink_state(
         ctx.parent_uuid,
         ctx.child_short,
         ctx.expected_parent_nextlink,
     )
-    if link_state == "locked":
+    if state_res.state == "locked":
         return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
-    if link_state in {"conflict", "missing", "invalid"}:
-        ctx.state.dead_letter(ctx.entry, f"parent update failed: {link_err}")
+    if state_res.state in {"conflict", "missing", "invalid"}:
+        ctx.state.dead_letter(ctx.entry, f"parent update failed: {state_res.err}")
         ctx.state.reset_lock_streak()
         return "continue", False
-    if link_state == "already":
+    if state_res.state == "already":
         return "ok", True
     return "ok", False
 
@@ -42,29 +42,29 @@ def ensure_child_exists_for_entry(
 ) -> tuple[str, bool]:
     export_res = services.export_uuid(ctx.child_uuid)
     imported = False
-    if not export_res.get("exists"):
-        if export_res.get("retryable"):
+    if not export_res.exists:
+        if export_res.retryable:
             if ctx.spawn_intent_id:
                 services.diag(f"task lock active; requeue (intent={ctx.spawn_intent_id})")
             return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
-        ok, err = services.import_child(ctx.child)
-        if not ok:
-            if services.is_lock_error(err):
+        import_res = services.import_child(ctx.child)
+        if not import_res.ok:
+            if services.is_lock_error(import_res.err):
                 return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
-            if not services.export_uuid(ctx.child_uuid).get("exists"):
+            if not services.export_uuid(ctx.child_uuid).exists:
                 if ctx.spawn_intent_id:
-                    services.diag(f"child import failed (intent={ctx.spawn_intent_id}): {err}")
+                    services.diag(f"child import failed (intent={ctx.spawn_intent_id}): {import_res.err}")
                 else:
-                    services.diag(f"child import failed: {err}")
-                ctx.state.dead_letter(ctx.entry, f"child import failed: {err}")
+                    services.diag(f"child import failed: {import_res.err}")
+                ctx.state.dead_letter(ctx.entry, f"child import failed: {import_res.err}")
                 ctx.state.reset_lock_streak()
                 return "continue", False
         imported = True
 
     if imported:
         confirm_res = services.export_uuid(ctx.child_uuid)
-        if not confirm_res.get("exists"):
-            if confirm_res.get("retryable"):
+        if not confirm_res.exists:
+            if confirm_res.retryable:
                 return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
             if ctx.spawn_intent_id:
                 services.diag(f"child missing after import (intent={ctx.spawn_intent_id})")
@@ -85,18 +85,18 @@ def apply_parent_update_for_entry(
     if not (ctx.parent_uuid and ctx.child_short) or parent_linked_already:
         return "ok"
 
-    ok, err = services.update_parent_nextlink(ctx.parent_uuid, ctx.child_short, ctx.expected_parent_nextlink)
-    if ok:
+    update_res = services.update_parent_nextlink(ctx.parent_uuid, ctx.child_short, ctx.expected_parent_nextlink)
+    if update_res.ok:
         return "ok"
 
     if ctx.spawn_intent_id:
         services.diag(f"parent update failed (intent={ctx.spawn_intent_id}): {ctx.parent_uuid}")
     else:
         services.diag(f"parent update failed: {ctx.parent_uuid}")
-    if err in {"parent export locked", "parent lock busy"} or services.is_lock_error(err):
+    if update_res.err in {"parent export locked", "parent lock busy"} or services.is_lock_error(update_res.err):
         return "break" if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else "continue"
     if imported:
         services.cleanup_orphan_child(ctx.child_uuid, ctx.spawn_intent_id)
-    ctx.state.dead_letter(ctx.entry, f"parent update failed: {err}")
+    ctx.state.dead_letter(ctx.entry, f"parent update failed: {update_res.err}")
     ctx.state.reset_lock_streak()
     return "continue"

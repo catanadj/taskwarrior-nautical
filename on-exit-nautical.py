@@ -1578,72 +1578,157 @@ def _short_uuid(value: str) -> str:
     return exit_queries.short_uuid(value, core=core)
 
 
+def _coerce_exit_export_result(value):
+    exit_models = _module("exit_models")
+    if hasattr(value, "exists") and hasattr(value, "retryable") and hasattr(value, "err") and hasattr(value, "obj"):
+        return exit_models.ExitExportResult(
+            bool(getattr(value, "exists")),
+            bool(getattr(value, "retryable")),
+            str(getattr(value, "err") or ""),
+            getattr(value, "obj") if isinstance(getattr(value, "obj"), dict) else None,
+        )
+    if isinstance(value, dict):
+        obj = value.get("obj") if isinstance(value.get("obj"), dict) else None
+        return exit_models.ExitExportResult(
+            bool(value.get("exists")),
+            bool(value.get("retryable")),
+            str(value.get("err") or ""),
+            obj,
+        )
+    return exit_models.ExitExportResult(False, False, "invalid export result", None)
+
+
+def _coerce_exit_equivalent_child_result(value):
+    exit_models = _module("exit_models")
+    if hasattr(value, "exists") and hasattr(value, "retryable") and hasattr(value, "err") and hasattr(value, "obj"):
+        return exit_models.ExitEquivalentChildResult(
+            bool(getattr(value, "exists")),
+            bool(getattr(value, "retryable")),
+            str(getattr(value, "err") or ""),
+            getattr(value, "obj") if isinstance(getattr(value, "obj"), dict) else None,
+        )
+    if isinstance(value, dict):
+        obj = value.get("obj") if isinstance(value.get("obj"), dict) else None
+        return exit_models.ExitEquivalentChildResult(
+            bool(value.get("exists")),
+            bool(value.get("retryable")),
+            str(value.get("err") or ""),
+            obj,
+        )
+    return exit_models.ExitEquivalentChildResult(False, False, "invalid equivalent result", None)
+
+
+def _coerce_exit_import_result(value):
+    exit_models = _module("exit_models")
+    if hasattr(value, "ok") and hasattr(value, "err"):
+        return exit_models.ExitImportResult(bool(getattr(value, "ok")), str(getattr(value, "err") or ""))
+    if isinstance(value, tuple) and len(value) >= 2:
+        return exit_models.ExitImportResult(bool(value[0]), str(value[1] or ""))
+    return exit_models.ExitImportResult(False, "invalid import result")
+
+
+def _coerce_exit_parent_nextlink_state_result(value):
+    exit_models = _module("exit_models")
+    if hasattr(value, "state") and hasattr(value, "err"):
+        return exit_models.ExitParentNextlinkStateResult(str(getattr(value, "state") or ""), str(getattr(value, "err") or ""))
+    if isinstance(value, tuple) and len(value) >= 2:
+        return exit_models.ExitParentNextlinkStateResult(str(value[0] or ""), str(value[1] or ""))
+    return exit_models.ExitParentNextlinkStateResult("invalid", "invalid parent nextLink state result")
+
+
+def _coerce_exit_parent_update_result(value):
+    exit_models = _module("exit_models")
+    if hasattr(value, "ok") and hasattr(value, "err"):
+        return exit_models.ExitParentUpdateResult(bool(getattr(value, "ok")), str(getattr(value, "err") or ""))
+    if isinstance(value, tuple) and len(value) >= 2:
+        return exit_models.ExitParentUpdateResult(bool(value[0]), str(value[1] or ""))
+    return exit_models.ExitParentUpdateResult(False, "invalid parent update result")
+
+
 def _export_uuid(uuid_str: str) -> dict:
     exit_queries = _module("exit_queries")
     hook_support = _module("hook_support", required=False)
-    return exit_queries.export_uuid(
-        uuid_str,
-        hook_support=hook_support,
-        run_task=_run_task,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout=_TASK_TIMEOUT_EXPORT,
-        retries=_TASK_RETRIES_EXPORT,
-        retry_delay=_TASK_RETRY_DELAY,
-        is_lock_error=_is_lock_error,
+    res = _coerce_exit_export_result(
+        exit_queries.export_uuid(
+            uuid_str,
+            hook_support=hook_support,
+            run_task=_run_task,
+            task_cmd_prefix=_task_cmd_prefix(),
+            timeout=_TASK_TIMEOUT_EXPORT,
+            retries=_TASK_RETRIES_EXPORT,
+            retry_delay=_TASK_RETRY_DELAY,
+            is_lock_error=_is_lock_error,
+        )
     )
+    return {"exists": res.exists, "retryable": res.retryable, "err": res.err, "obj": res.obj}
 
 
 def _existing_equivalent_child(child: dict, parent_uuid: str = "") -> dict:
     exit_queries = _module("exit_queries")
-    return exit_queries.existing_equivalent_child(
-        child,
-        parent_uuid=parent_uuid,
-        task_cmd_prefix=_task_cmd_prefix(),
-        run_task=_run_task,
-        timeout=_TASK_TIMEOUT_EXPORT,
-        retries=_TASK_RETRIES_EXPORT,
-        retry_delay=_TASK_RETRY_DELAY,
-        is_lock_error=_is_lock_error,
-        short_uuid_fn=_short_uuid,
+    res = _coerce_exit_equivalent_child_result(
+        exit_queries.existing_equivalent_child(
+            child,
+            parent_uuid=parent_uuid,
+            task_cmd_prefix=_task_cmd_prefix(),
+            run_task=_run_task,
+            timeout=_TASK_TIMEOUT_EXPORT,
+            retries=_TASK_RETRIES_EXPORT,
+            retry_delay=_TASK_RETRY_DELAY,
+            is_lock_error=_is_lock_error,
+            short_uuid_fn=_short_uuid,
+        )
     )
+    return {"exists": res.exists, "retryable": res.retryable, "err": res.err, "obj": res.obj}
 
 
 def _import_child(obj: dict) -> tuple[bool, str]:
     exit_side_effects = _module("exit_side_effects")
-    return exit_side_effects.import_child(
-        obj,
-        run_task=_run_task,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_import=_TASK_TIMEOUT_IMPORT,
-        is_lock_error=_is_lock_error,
-        sleep=_sleep,
-        random_uniform=random.uniform,
+    res = _coerce_exit_import_result(
+        exit_side_effects.import_child(
+            obj,
+            run_task=_run_task,
+            task_cmd_prefix=_task_cmd_prefix(),
+            timeout_import=_TASK_TIMEOUT_IMPORT,
+            is_lock_error=_is_lock_error,
+            sleep=_sleep,
+            random_uniform=random.uniform,
+        )
     )
+    return res.ok, res.err
+
 
 def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[bool, str]:
     exit_side_effects = _module("exit_side_effects")
-    return exit_side_effects.update_parent_nextlink(
-        parent_uuid,
-        child_short,
-        expected_prev=expected_prev,
-        lock_parent_nextlink=_lock_parent_nextlink,
-        parent_nextlink_state_fn=_parent_nextlink_state,
-        run_task=_run_task,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_modify=_TASK_TIMEOUT_MODIFY,
-        retries_modify=_TASK_RETRIES_MODIFY,
-        retry_delay=_TASK_RETRY_DELAY,
+    res = _coerce_exit_parent_update_result(
+        exit_side_effects.update_parent_nextlink(
+            parent_uuid,
+            child_short,
+            expected_prev=expected_prev,
+            lock_parent_nextlink=_lock_parent_nextlink,
+            parent_nextlink_state_fn=lambda parent_uuid, child_short, expected_prev: _coerce_exit_parent_nextlink_state_result(
+                _parent_nextlink_state(parent_uuid, child_short, expected_prev)
+            ),
+            run_task=_run_task,
+            task_cmd_prefix=_task_cmd_prefix(),
+            timeout_modify=_TASK_TIMEOUT_MODIFY,
+            retries_modify=_TASK_RETRIES_MODIFY,
+            retry_delay=_TASK_RETRY_DELAY,
+        )
     )
+    return res.ok, res.err
 
 
 def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: str | None = None) -> tuple[str, str]:
     exit_side_effects = _module("exit_side_effects")
-    return exit_side_effects.parent_nextlink_state(
-        parent_uuid,
-        child_short,
-        expected_prev=expected_prev,
-        export_uuid=_export_uuid,
+    res = _coerce_exit_parent_nextlink_state_result(
+        exit_side_effects.parent_nextlink_state(
+            parent_uuid,
+            child_short,
+            expected_prev=expected_prev,
+            export_uuid=lambda uuid_str: _coerce_exit_export_result(_export_uuid(uuid_str)),
+        )
     )
+    return res.state, res.err
 
 
 def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
@@ -1833,7 +1918,9 @@ def _precheck_parent_link_state(ctx) -> tuple[str, bool]:
     exit_entry_flow = _module("exit_entry_flow")
     exit_models = _module("exit_models")
     services = exit_models.ExitPrecheckServices(
-        parent_nextlink_state=_parent_nextlink_state,
+        parent_nextlink_state=lambda parent_uuid, child_short, expected_prev: _coerce_exit_parent_nextlink_state_result(
+            _parent_nextlink_state(parent_uuid, child_short, expected_prev)
+        ),
         requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
     )
     return exit_entry_flow.precheck_parent_link_state(ctx, services=services)
@@ -1843,8 +1930,8 @@ def _ensure_child_exists_for_entry(ctx) -> tuple[str, bool]:
     exit_entry_flow = _module("exit_entry_flow")
     exit_models = _module("exit_models")
     services = exit_models.ExitEnsureChildServices(
-        export_uuid=_export_uuid,
-        import_child=_import_child,
+        export_uuid=lambda uuid_str: _coerce_exit_export_result(_export_uuid(uuid_str)),
+        import_child=lambda obj: _coerce_exit_import_result(_import_child(obj)),
         is_lock_error=_is_lock_error,
         diag=_diag,
         requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
@@ -1861,7 +1948,9 @@ def _apply_parent_update_for_entry(
     exit_entry_flow = _module("exit_entry_flow")
     exit_models = _module("exit_models")
     services = exit_models.ExitApplyParentUpdateServices(
-        update_parent_nextlink=_update_parent_nextlink,
+        update_parent_nextlink=lambda parent_uuid, child_short, expected_prev: _coerce_exit_parent_update_result(
+            _update_parent_nextlink(parent_uuid, child_short, expected_prev)
+        ),
         is_lock_error=_is_lock_error,
         cleanup_orphan_child=_cleanup_orphan_child,
         diag=_diag,
@@ -1886,14 +1975,14 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     child = entry.get("child") or {}
     child_short = (entry.get("child_short") or "").strip()
     child_uuid = (child.get("uuid") or "").strip()
-    exact_child = _export_uuid(child_uuid)
-    if exact_child.get("retryable"):
+    exact_child = _coerce_exit_export_result(_export_uuid(child_uuid))
+    if exact_child.retryable:
         return _requeue_or_dead_letter_for_lock(entry, idx, state)
-    if not exact_child.get("exists"):
-        equivalent = _existing_equivalent_child(child, parent_uuid)
-        if equivalent.get("retryable"):
+    if not exact_child.exists:
+        equivalent = _coerce_exit_equivalent_child_result(_existing_equivalent_child(child, parent_uuid))
+        if equivalent.retryable:
             return _requeue_or_dead_letter_for_lock(entry, idx, state)
-        existing_obj = equivalent.get("obj") if isinstance(equivalent, dict) else None
+        existing_obj = equivalent.obj
         if isinstance(existing_obj, dict):
             child_uuid = (existing_obj.get("uuid") or "").strip()
             child_short = _short_uuid(child_uuid)

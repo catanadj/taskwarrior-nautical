@@ -4860,6 +4860,7 @@ def test_on_exit_parent_nextlink_changed_dead_letter():
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
         mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
 
@@ -4916,6 +4917,7 @@ def test_on_exit_parent_update_lock_busy_requeues():
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
         mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
 
@@ -5289,6 +5291,7 @@ def test_on_exit_dead_letter_on_import_failure():
         mod._QUEUE_PATH = td_path / ".nautical_spawn_queue.jsonl"
         mod._QUEUE_PROCESSING_PATH = td_path / ".nautical_spawn_queue.processing.jsonl"
         mod._QUEUE_LOCK = td_path / ".nautical_spawn_queue.lock"
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
         mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
         mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
 

@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from nautical_core.exit_models import (
+        ExitExportResult,
+        ExitImportResult,
+        ExitParentNextlinkStateResult,
+        ExitParentUpdateResult,
+    )
 
 
 def import_child(
@@ -13,7 +21,7 @@ def import_child(
     is_lock_error: Callable[[str], bool],
     sleep: Callable[[float], None],
     random_uniform: Callable[[float, float], float],
-) -> tuple[bool, str]:
+) -> ExitImportResult:
     payload = json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n"
     max_retries = 4
     last_err = ""
@@ -24,15 +32,18 @@ def import_child(
             timeout=timeout_import,
         )
         if ok:
-            return True, ""
+            from nautical_core.exit_models import ExitImportResult
+            return ExitImportResult(True, "")
         last_err = err or ""
         if not is_lock_error(last_err):
-            return False, last_err
+            from nautical_core.exit_models import ExitImportResult
+            return ExitImportResult(False, last_err)
         if attempt < max_retries - 1:
             base = 0.2 * (2 ** attempt)
             jitter = random_uniform(0.0, 0.1)
             sleep(base + jitter)
-    return False, last_err
+    from nautical_core.exit_models import ExitImportResult
+    return ExitImportResult(False, last_err)
 
 
 def parent_nextlink_state(
@@ -40,27 +51,34 @@ def parent_nextlink_state(
     child_short: str,
     *,
     expected_prev: str | None,
-    export_uuid: Callable[[str], dict[str, Any]],
-) -> tuple[str, str]:
+    export_uuid: Callable[[str], ExitExportResult],
+) -> ExitParentNextlinkStateResult:
     if not parent_uuid or not child_short:
-        return "invalid", "missing parent or child"
+        from nautical_core.exit_models import ExitParentNextlinkStateResult
+        return ExitParentNextlinkStateResult("invalid", "missing parent or child")
     res = export_uuid(parent_uuid)
-    if res.get("retryable"):
-        return "locked", "parent export locked"
-    parent = res.get("obj") if isinstance(res, dict) else None
+    if res.retryable:
+        from nautical_core.exit_models import ExitParentNextlinkStateResult
+        return ExitParentNextlinkStateResult("locked", "parent export locked")
+    parent = res.obj
     if not parent:
-        return "missing", "parent missing"
+        from nautical_core.exit_models import ExitParentNextlinkStateResult
+        return ExitParentNextlinkStateResult("missing", "parent missing")
     current = (parent.get("nextLink") or "").strip()
     expected = (expected_prev or "").strip()
     if current == child_short:
-        return "already", ""
+        from nautical_core.exit_models import ExitParentNextlinkStateResult
+        return ExitParentNextlinkStateResult("already", "")
     if expected:
         if current != expected:
-            return "conflict", "parent nextLink changed"
+            from nautical_core.exit_models import ExitParentNextlinkStateResult
+            return ExitParentNextlinkStateResult("conflict", "parent nextLink changed")
     else:
         if current:
-            return "conflict", "parent nextLink already set"
-    return "ok", ""
+            from nautical_core.exit_models import ExitParentNextlinkStateResult
+            return ExitParentNextlinkStateResult("conflict", "parent nextLink already set")
+    from nautical_core.exit_models import ExitParentNextlinkStateResult
+    return ExitParentNextlinkStateResult("ok", "")
 
 
 def update_parent_nextlink(
@@ -69,20 +87,22 @@ def update_parent_nextlink(
     *,
     expected_prev: str | None,
     lock_parent_nextlink: Callable[[str], Any],
-    parent_nextlink_state_fn: Callable[[str, str, str | None], tuple[str, str]],
+    parent_nextlink_state_fn: Callable[[str, str, str | None], ExitParentNextlinkStateResult],
     run_task: Callable[..., tuple[bool, str, str]],
     task_cmd_prefix: list[str],
     timeout_modify: float,
     retries_modify: int,
     retry_delay: float,
-) -> tuple[bool, str]:
+) -> ExitParentUpdateResult:
+    from nautical_core.exit_models import ExitParentUpdateResult
+
     if not parent_uuid or not child_short:
-        return False, "missing parent or child"
+        return ExitParentUpdateResult(False, "missing parent or child")
     with lock_parent_nextlink(parent_uuid) as locked:
         if not locked:
-            return False, "parent lock busy"
-        state, msg = parent_nextlink_state_fn(parent_uuid, child_short, expected_prev)
-        if state == "ok":
+            return ExitParentUpdateResult(False, "parent lock busy")
+        state_res = parent_nextlink_state_fn(parent_uuid, child_short, expected_prev)
+        if state_res.state == "ok":
             ok, _out, err = run_task(
                 task_cmd_prefix + [
                     "rc.hooks=off",
@@ -95,10 +115,10 @@ def update_parent_nextlink(
                 retries=retries_modify,
                 retry_delay=retry_delay,
             )
-            return ok, err or ""
-        if state == "already":
-            return True, ""
-        return False, msg
+            return ExitParentUpdateResult(ok, err or "")
+        if state_res.state == "already":
+            return ExitParentUpdateResult(True, "")
+        return ExitParentUpdateResult(False, state_res.err)
 
 
 def cleanup_orphan_child(

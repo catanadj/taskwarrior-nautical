@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from nautical_core.exit_models import ExitEquivalentChildResult, ExitExportResult
 
 
 def short_uuid(value: str, *, core: Any) -> str:
@@ -26,9 +29,11 @@ def export_uuid(
     retries: int,
     retry_delay: float,
     is_lock_error: Callable[[str], bool],
-) -> dict[str, Any]:
+) -> ExitExportResult:
+    from nautical_core.exit_models import ExitExportResult
+
     if hook_support is not None:
-        return hook_support.export_uuid_status(
+        status = hook_support.export_uuid_status(
             run_task=run_task,
             task_cmd_prefix=task_cmd_prefix,
             uuid_str=uuid_str,
@@ -38,8 +43,14 @@ def export_uuid(
             is_lock_error=is_lock_error,
             tolerate_noisy_stdout=True,
         )
+        return ExitExportResult(
+            bool(getattr(status, "get", None) and status.get("exists")),
+            bool(getattr(status, "get", None) and status.get("retryable")),
+            str(status.get("err") or "") if getattr(status, "get", None) else "",
+            status.get("obj") if getattr(status, "get", None) and isinstance(status.get("obj"), dict) else None,
+        )
     if not uuid_str:
-        return {"exists": False, "retryable": False, "err": "missing uuid", "obj": None}
+        return ExitExportResult(False, False, "missing uuid", None)
     ok, out, err = run_task(
         task_cmd_prefix + [
             "rc.hooks=off",
@@ -54,16 +65,16 @@ def export_uuid(
         retry_delay=retry_delay,
     )
     if not ok:
-        return {"exists": False, "retryable": is_lock_error(err), "err": err or "", "obj": None}
+        return ExitExportResult(False, is_lock_error(err), err or "", None)
     try:
         obj = json.loads(out.strip() or "{}")
         if obj.get("uuid"):
-            return {"exists": True, "retryable": False, "err": "", "obj": obj}
-        return {"exists": False, "retryable": False, "err": "not found", "obj": None}
+            return ExitExportResult(True, False, "", obj)
+        return ExitExportResult(False, False, "not found", None)
     except Exception:
         if uuid_str in out:
-            return {"exists": True, "retryable": False, "err": "", "obj": {"uuid": uuid_str}}
-        return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
+            return ExitExportResult(True, False, "", {"uuid": uuid_str})
+        return ExitExportResult(False, False, "parse error", None)
 
 
 def existing_equivalent_child(
@@ -77,17 +88,19 @@ def existing_equivalent_child(
     retry_delay: float,
     is_lock_error: Callable[[str], bool],
     short_uuid_fn: Callable[[str], str],
-) -> dict[str, Any]:
+) -> ExitEquivalentChildResult:
+    from nautical_core.exit_models import ExitEquivalentChildResult
+
     if not isinstance(child, dict):
-        return {"exists": False, "retryable": False, "err": "missing child", "obj": None}
+        return ExitEquivalentChildResult(False, False, "missing child", None)
     chain_id = (child.get("chainID") or child.get("chainid") or "").strip()
     link_no = child.get("link")
     if not chain_id or link_no in (None, ""):
-        return {"exists": False, "retryable": False, "err": "missing chain slot", "obj": None}
+        return ExitEquivalentChildResult(False, False, "missing chain slot", None)
     try:
         link_token = str(int(link_no))
     except Exception:
-        return {"exists": False, "retryable": False, "err": "invalid link", "obj": None}
+        return ExitEquivalentChildResult(False, False, "invalid link", None)
 
     prev_link = (child.get("prevLink") or "").strip()
     if not prev_link and parent_uuid:
@@ -112,15 +125,15 @@ def existing_equivalent_child(
         retry_delay=retry_delay,
     )
     if not ok:
-        return {"exists": False, "retryable": is_lock_error(err), "err": err or "", "obj": None}
+        return ExitEquivalentChildResult(False, is_lock_error(err), err or "", None)
     try:
         rows = json.loads(out.strip() or "[]")
     except Exception:
-        return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
+        return ExitEquivalentChildResult(False, False, "parse error", None)
     if isinstance(rows, dict):
         rows = [rows]
     if not isinstance(rows, list):
-        return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
+        return ExitEquivalentChildResult(False, False, "parse error", None)
 
     for wanted in ("pending", "waiting", "completed"):
         for row in rows:
@@ -129,8 +142,8 @@ def existing_equivalent_child(
             if (row.get("status") or "").strip().lower() != wanted:
                 continue
             if (row.get("uuid") or "").strip():
-                return {"exists": True, "retryable": False, "err": "", "obj": row}
+                return ExitEquivalentChildResult(True, False, "", row)
     for row in rows:
         if isinstance(row, dict) and (row.get("uuid") or "").strip():
-            return {"exists": True, "retryable": False, "err": "", "obj": row}
-    return {"exists": False, "retryable": False, "err": "not found", "obj": None}
+            return ExitEquivalentChildResult(True, False, "", row)
+    return ExitEquivalentChildResult(False, False, "not found", None)

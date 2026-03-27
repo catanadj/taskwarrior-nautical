@@ -5948,8 +5948,76 @@ def test_core_render_panel_line_force_rich_kind_skips_panel_line():
     expect("Title" in out and "Key" in out, "promoted rich/fast path should emit fallback panel text")
 
 
+def test_on_exit_preloads_uuid_exports_for_early_checks():
+    """on-exit should bulk-preload early parent/child exports and keep locked parent rechecks live."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_bulk_preload_test")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod.TW_DATA_DIR = td_path
+        mod._QUEUE_DB_PATH = td_path / ".nautical_queue.db"
+        mod._DEAD_LETTER_PATH = td_path / ".nautical_dead_letter.jsonl"
+        mod._DEAD_LETTER_LOCK = td_path / ".nautical_dead_letter.lock"
+
+        entries = [
+            {
+                "parent_uuid": "00000000-0000-0000-0000-000000000101",
+                "parent_nextlink": "",
+                "child_short": "00000000",
+                "child": {"uuid": "00000000-0000-0000-0000-000000000201", "description": "a"},
+                "spawn_intent_id": "si_a",
+            },
+            {
+                "parent_uuid": "00000000-0000-0000-0000-000000000102",
+                "parent_nextlink": "",
+                "child_short": "00000000",
+                "child": {"uuid": "00000000-0000-0000-0000-000000000202", "description": "b"},
+                "spawn_intent_id": "si_b",
+            },
+        ]
+        _seed_sqlite_queue(mod._QUEUE_DB_PATH, entries)
+
+        state = {"bulk": 0, "parent_live": 0, "import": 0, "modify": 0}
+        parent_next = {}
+
+        def _run_task_stub(cmd, **_kwargs):
+            cmd_s = " ".join(cmd)
+            if " export" in f" {cmd_s} " and " or " in f" {cmd_s} ":
+                state["bulk"] += 1
+                rows = []
+                for entry in entries:
+                    rows.append({"uuid": entry["parent_uuid"], "nextLink": parent_next.get(entry["parent_uuid"], "")})
+                    rows.append({"uuid": entry["child"]["uuid"]})
+                return True, json.dumps(rows), ""
+            if "export" in cmd_s and "uuid:00000000-0000-0000-0000-00000000010" in cmd_s:
+                state["parent_live"] += 1
+                parent_uuid = next(part.split(':', 1)[1] for part in cmd if part.startswith('uuid:'))
+                return True, json.dumps({"uuid": parent_uuid, "nextLink": parent_next.get(parent_uuid, "")}), ""
+            if "import" in cmd_s:
+                state["import"] += 1
+                return True, "", ""
+            if "modify" in cmd_s and "nextLink:" in cmd_s:
+                state["modify"] += 1
+                parent_uuid = next(part.split(':', 1)[1] for part in cmd if part.startswith('uuid:'))
+                child_short = next(part.split(':', 1)[1] for part in cmd if part.startswith('nextLink:'))
+                parent_next[parent_uuid] = child_short
+                return True, "", ""
+            return False, "", f"unexpected {cmd_s}"
+
+        mod._run_task = _run_task_stub
+        stats = mod._drain_queue()
+        expect(stats.get("processed") == 2, f"unexpected processed: {stats}")
+        expect(state["bulk"] == 1, f"expected one bulk preload export, got: {state}")
+        expect(state["parent_live"] == 2, f"expected one live parent recheck per entry, got: {state}")
+        expect(int(stats.get("preload_export_uuids", 0)) == 4, f"unexpected preload uuid count: {stats}")
+        expect(int(stats.get("preload_export_chunks", 0)) == 1, f"unexpected preload chunk count: {stats}")
+
+
 def test_on_exit_successful_import_reuses_initial_child_export():
-    """on-exit should not re-export the child after a successful import."""
+    """on-exit should not live-export or import the child when preload already proves it exists."""
     hook = _find_hook_file("on-exit-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_exit_import_reuse_test")
 
@@ -5973,11 +6041,17 @@ def test_on_exit_successful_import_reuses_initial_child_export():
         }
         _seed_sqlite_queue(mod._QUEUE_DB_PATH, entry)
 
-        state = {"child_export": 0, "parent_export": 0, "import": 0}
+        state = {"bulk": 0, "child_export": 0, "parent_export": 0, "import": 0}
         parent_next = {"value": ""}
 
         def _run_task_stub(cmd, **_kwargs):
             cmd_s = " ".join(cmd)
+            if " export" in f" {cmd_s} " and " or " in f" {cmd_s} ":
+                state["bulk"] += 1
+                return True, json.dumps([
+                    {"uuid": parent_uuid, "nextLink": parent_next["value"]},
+                    {"uuid": child_uuid},
+                ]), ""
             if "export" in cmd_s and f"uuid:{child_uuid}" in cmd_s:
                 state["child_export"] += 1
                 return True, "{}", ""
@@ -5995,8 +6069,9 @@ def test_on_exit_successful_import_reuses_initial_child_export():
         mod._run_task = _run_task_stub
         stats = mod._drain_queue()
         expect(stats.get("processed") == 1, f"unexpected processed: {stats}")
-        expect(state["child_export"] == 1, f"child should be exported only once before import: {state}")
-        expect(state["import"] == 1, f"child should be imported once: {state}")
+        expect(state["bulk"] == 1, f"expected one preload export: {state}")
+        expect(state["child_export"] == 0, f"child should not need a live export after preload: {state}")
+        expect(state["import"] == 0, f"child import should be skipped when preload already found it: {state}")
 
 
 def test_on_exit_import_error_but_child_exists():
@@ -7291,6 +7366,7 @@ TESTS = [
     test_on_exit_drain_skips_finalized_sqlite_intent,
     test_on_exit_dead_letter_on_missing_fields,
     test_on_exit_import_child_retries_on_lock,
+    test_on_exit_preloads_uuid_exports_for_early_checks,
     test_on_exit_successful_import_reuses_initial_child_export,
     test_on_exit_dead_letter_on_import_failure,
     test_on_exit_large_queue_bounded_drain,

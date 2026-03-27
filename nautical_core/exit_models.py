@@ -110,6 +110,10 @@ class ExitDrainStats:
     intent_mark_fail: int
     queue_db_opens: int
     queue_db_reuses: int
+    preload_export_uuids: int
+    preload_export_hits: int
+    preload_export_misses: int
+    preload_export_chunks: int
     drain_ms: float
 
     def to_dict(self) -> dict[str, Any]:
@@ -132,6 +136,10 @@ class ExitDrainStats:
             "intent_mark_fail": self.intent_mark_fail,
             "queue_db_opens": self.queue_db_opens,
             "queue_db_reuses": self.queue_db_reuses,
+            "preload_export_uuids": self.preload_export_uuids,
+            "preload_export_hits": self.preload_export_hits,
+            "preload_export_misses": self.preload_export_misses,
+            "preload_export_chunks": self.preload_export_chunks,
             "drain_ms": self.drain_ms,
         }
 

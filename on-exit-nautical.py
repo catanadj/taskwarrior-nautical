@@ -370,11 +370,18 @@ _RUN_QUEUE_DB_ACTIVE = False
 _QUEUE_DB_OPEN_COUNT = 0
 _QUEUE_DB_REUSE_COUNT = 0
 _EXIT_DIAG_STATS: dict[str, float | int] = {}
+_EXIT_EXPORT_CACHE: dict[str, Any] = {}
+_EXIT_PRELOAD_CHUNK_SIZE = 32
 
 
 def _reset_exit_diag_stats() -> None:
     global _EXIT_DIAG_STATS
     _EXIT_DIAG_STATS = {}
+
+
+def _reset_exit_export_cache() -> None:
+    global _EXIT_EXPORT_CACHE
+    _EXIT_EXPORT_CACHE = {}
 
 
 def _diag_count_exit(key: str, inc: float | int = 1) -> None:
@@ -419,12 +426,111 @@ def _diag_record_run_task(cmd: list[str], *, ok: bool, elapsed: float) -> None:
         _diag_count_exit(f"run_task_failures_{bucket}")
 
 
+def _export_cache_get(uuid_str: str):
+    key = str(uuid_str or "").strip()
+    if not key:
+        return None
+    cached = _EXIT_EXPORT_CACHE.get(key)
+    if cached is not None:
+        _diag_count_exit("preload_export_hits")
+        return cached
+    _diag_count_exit("preload_export_misses")
+    return None
+
+
+def _export_cache_set(uuid_str: str, result) -> None:
+    key = str(uuid_str or "").strip()
+    if not key or result is None:
+        return
+    _EXIT_EXPORT_CACHE[key] = result
+
+
+def _chunked(items: list[str], size: int):
+    size = max(1, int(size or 1))
+    for idx in range(0, len(items), size):
+        yield items[idx:idx + size]
+
+
+def _preload_export_uuids(entries: list[dict]) -> None:
+    exit_models = _module("exit_models")
+    hook_support = _module("hook_support", required=False)
+    uuids: list[str] = []
+    seen: set[str] = set()
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        parent_uuid = str(entry.get("parent_uuid") or "").strip()
+        child = entry.get("child") or {}
+        child_uuid = str(child.get("uuid") or "").strip() if isinstance(child, dict) else ""
+        for uuid_str in (parent_uuid, child_uuid):
+            if uuid_str and uuid_str not in seen:
+                seen.add(uuid_str)
+                uuids.append(uuid_str)
+    if not uuids:
+        return
+    prefix = _task_cmd_prefix()
+    for chunk in _chunked(uuids, _EXIT_PRELOAD_CHUNK_SIZE):
+        _diag_count_exit("preload_export_chunks")
+        cmd = list(prefix) + ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off"]
+        for idx, uuid_str in enumerate(chunk):
+            if idx:
+                cmd.append("or")
+            cmd.append(f"uuid:{uuid_str}")
+        cmd.append("export")
+        ok, out, err = _run_task(
+            cmd,
+            timeout=_TASK_TIMEOUT_EXPORT,
+            retries=_TASK_RETRIES_EXPORT,
+            retry_delay=_TASK_RETRY_DELAY,
+        )
+        if not ok:
+            if _is_lock_error(err):
+                continue
+            continue
+        rows: list[dict[str, Any]] = []
+        parsed_ok = False
+        allow_negative_cache = (out or "").lstrip().startswith("[")
+        parser = getattr(hook_support, "parse_export_array", None) if hook_support is not None else None
+        if callable(parser):
+            try:
+                parsed_rows = parser(out, diag=_diag) or []
+                if isinstance(parsed_rows, list):
+                    rows = [row for row in parsed_rows if isinstance(row, dict)]
+                    parsed_ok = True
+            except Exception:
+                rows = []
+        if not parsed_ok:
+            try:
+                parsed = json.loads((out or "").strip() or "[]")
+                if isinstance(parsed, list):
+                    rows = [row for row in parsed if isinstance(row, dict)]
+                    parsed_ok = True
+                elif isinstance(parsed, dict) and len(chunk) == 1:
+                    rows = [parsed]
+                    parsed_ok = True
+            except Exception:
+                rows = []
+        found: set[str] = set()
+        for row in rows:
+            row_uuid = str(row.get("uuid") or "").strip()
+            if not row_uuid:
+                continue
+            found.add(row_uuid)
+            _export_cache_set(row_uuid, exit_models.ExitExportResult(True, False, "", row))
+        if parsed_ok and allow_negative_cache:
+            for uuid_str in chunk:
+                _diag_count_exit("preload_export_uuids")
+                if uuid_str not in found:
+                    _export_cache_set(uuid_str, exit_models.ExitExportResult(False, False, "not found", None))
+
+
 def _queue_db_begin_run() -> None:
     global _RUN_QUEUE_DB_ACTIVE, _QUEUE_DB_OPEN_COUNT, _QUEUE_DB_REUSE_COUNT
     _RUN_QUEUE_DB_ACTIVE = True
     _QUEUE_DB_OPEN_COUNT = 0
     _QUEUE_DB_REUSE_COUNT = 0
     _reset_exit_diag_stats()
+    _reset_exit_export_cache()
 
 
 def _queue_db_end_run() -> None:
@@ -1397,10 +1503,14 @@ def _short_uuid(value: str) -> str:
     return exit_queries.short_uuid(value, core=core)
 
 
-def _export_uuid(uuid_str: str):
+def _export_uuid(uuid_str: str, *, prefer_cache: bool = True):
+    if prefer_cache:
+        cached = _export_cache_get(uuid_str)
+        if cached is not None:
+            return cached
     exit_queries = _module("exit_queries")
     hook_support = _module("hook_support", required=False)
-    return exit_queries.export_uuid(
+    result = exit_queries.export_uuid(
         uuid_str,
         hook_support=hook_support,
         run_task=_run_task,
@@ -1410,6 +1520,9 @@ def _export_uuid(uuid_str: str):
         retry_delay=_TASK_RETRY_DELAY,
         is_lock_error=_is_lock_error,
     )
+    if not result.retryable:
+        _export_cache_set(uuid_str, result)
+    return result
 
 
 def _existing_equivalent_child(child: dict, parent_uuid: str = ""):
@@ -1448,7 +1561,7 @@ def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: s
         expected_prev=expected_prev,
         lock_parent_nextlink=_lock_parent_nextlink,
         parent_nextlink_state_fn=lambda parent_uuid, child_short, expected_prev: _parent_nextlink_state(
-            parent_uuid, child_short, expected_prev
+            parent_uuid, child_short, expected_prev, prefer_cache=False
         ),
         run_task=_run_task,
         task_cmd_prefix=_task_cmd_prefix(),
@@ -1458,13 +1571,13 @@ def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: s
     )
 
 
-def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: str | None = None):
+def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: str | None = None, *, prefer_cache: bool = True):
     exit_side_effects = _module("exit_side_effects")
     return exit_side_effects.parent_nextlink_state(
         parent_uuid,
         child_short,
         expected_prev=expected_prev,
-        export_uuid=lambda uuid_str: _export_uuid(uuid_str),
+        export_uuid=lambda uuid_str: _export_uuid(uuid_str, prefer_cache=prefer_cache),
     )
 
 
@@ -1620,6 +1733,10 @@ class _DrainState:
             intent_mark_fail=self.intent_mark_fail,
             queue_db_opens=_QUEUE_DB_OPEN_COUNT,
             queue_db_reuses=_QUEUE_DB_REUSE_COUNT,
+            preload_export_uuids=int(_EXIT_DIAG_STATS.get("preload_export_uuids", 0)),
+            preload_export_hits=int(_EXIT_DIAG_STATS.get("preload_export_hits", 0)),
+            preload_export_misses=int(_EXIT_DIAG_STATS.get("preload_export_misses", 0)),
+            preload_export_chunks=int(_EXIT_DIAG_STATS.get("preload_export_chunks", 0)),
             drain_ms=round((time.perf_counter() - drain_t0) * 1000.0, 3),
         )
 
@@ -1680,7 +1797,7 @@ def _precheck_parent_link_state(ctx) -> tuple[str, bool]:
     exit_models = _module("exit_models")
     services = exit_models.ExitPrecheckServices(
         parent_nextlink_state=lambda parent_uuid, child_short, expected_prev: _parent_nextlink_state(
-            parent_uuid, child_short, expected_prev
+            parent_uuid, child_short, expected_prev, prefer_cache=True
         ),
         requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
     )
@@ -1691,7 +1808,7 @@ def _ensure_child_exists_for_entry(ctx, *, initial_export_res=None) -> tuple[str
     exit_entry_flow = _module("exit_entry_flow")
     exit_models = _module("exit_models")
     services = exit_models.ExitEnsureChildServices(
-        export_uuid=lambda uuid_str: _export_uuid(uuid_str),
+        export_uuid=lambda uuid_str, prefer_cache=True: _export_uuid(uuid_str, prefer_cache=prefer_cache),
         import_child=lambda obj: _import_child(obj),
         is_lock_error=_is_lock_error,
         diag=_diag,
@@ -1822,6 +1939,7 @@ def _drain_queue_result():
             intent_log_ready=bool(intent_log_ready),
             intent_log_load_ms=float(intent_log_load_ms),
         )
+        _preload_export_uuids(entries)
 
         for idx, entry in enumerate(entries):
             if _process_queue_entry(idx, entry, state):
@@ -1877,6 +1995,10 @@ def _emit_drain_stats_diag(stats: dict) -> None:
         f"intent_log_load_ms={stats.get('intent_log_load_ms', 0)} "
         f"queue_db_opens={stats.get('queue_db_opens', 0)} "
         f"queue_db_reuses={stats.get('queue_db_reuses', 0)} "
+        f"preload_export_uuids={stats.get('preload_export_uuids', 0)} "
+        f"preload_export_hits={stats.get('preload_export_hits', 0)} "
+        f"preload_export_misses={stats.get('preload_export_misses', 0)} "
+        f"preload_export_chunks={stats.get('preload_export_chunks', 0)} "
         f"drain_ms={stats.get('drain_ms', 0)}"
     )
     task_stats = {

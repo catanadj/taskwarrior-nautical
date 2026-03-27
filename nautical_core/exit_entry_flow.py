@@ -52,7 +52,7 @@ def ensure_child_exists_for_entry(
         if not import_res.ok:
             if services.is_lock_error(import_res.err):
                 return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
-            if not services.export_uuid(ctx.child_uuid).exists:
+            if not services.export_uuid(ctx.child_uuid, prefer_cache=False).exists:
                 if ctx.spawn_intent_id:
                     services.diag(f"child import failed (intent={ctx.spawn_intent_id}): {import_res.err}")
                 else:

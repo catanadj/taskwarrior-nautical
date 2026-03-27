@@ -2467,6 +2467,43 @@ def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | 
     return _tw_export_chain_cached_key(chain_id, since_key, extra_key, limit)
 
 
+def _cached_chain_token_match(task: dict, token: str) -> bool:
+    if not isinstance(task, dict) or not isinstance(token, str) or not token:
+        return False
+    if token.startswith("+"):
+        want = token[1:].strip().lower()
+        tags = task.get("tags")
+        if isinstance(tags, (list, tuple, set)):
+            return want in {str(t).strip().lower() for t in tags}
+        return False
+    if ":" not in token:
+        return False
+    key, value = token.split(":", 1)
+    negate = False
+    if key.endswith(".not"):
+        negate = True
+        key = key[:-4]
+    actual = task.get(key)
+    matched = False
+    if key in {"link", "id"}:
+        matched = str(core.coerce_int(actual, None) if actual is not None else "") == value
+    else:
+        matched = str(actual or "").strip().lower() == value.strip().lower()
+    return (not matched) if negate else matched
+
+
+def _filter_cached_chain_rows(chain: list[dict], *, extra: str | None, limit: int | None) -> list[dict] | None:
+    tokens = _parse_extra_tokens(extra)
+    if tokens is None:
+        return None
+    rows = list(chain or [])
+    for token in tokens:
+        rows = [task for task in rows if _cached_chain_token_match(task, token)]
+    if limit and isinstance(limit, int) and limit > 0:
+        rows = rows[:limit]
+    return rows
+
+
 def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
     """Return a safe list copy of a chain export (cached when env is None)."""
     if not chain_id:
@@ -2475,8 +2512,14 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
         return tw_export_chain(chain_id, since=since, extra=extra, env=env, limit=_MAX_CHAIN_WALK)
     state = _modify_chain_state()
     with state.chain_cache_lock:
-        if state.chain_cache_chain_id and chain_id == state.chain_cache_chain_id and not since and not extra:
-            return list(state.chain_cache)
+        cached_chain = list(state.chain_cache) if state.chain_cache_chain_id and chain_id == state.chain_cache_chain_id else []
+    if cached_chain and not since and not extra:
+        return cached_chain
+    if cached_chain and not since:
+        filtered = _filter_cached_chain_rows(cached_chain, extra=extra, limit=_MAX_CHAIN_WALK)
+        if filtered is not None:
+            _diag_count("chain_cache_filter_hits")
+            return filtered
     cached = _tw_export_chain_cached(chain_id, since, extra, _MAX_CHAIN_WALK)
     return list(cached)
 

@@ -2342,6 +2342,38 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     expect(not errs, f"concurrent chain cache access raised errors: {errs}")
     expect(hits["short"] > 0 and hits["full"] > 0, f"expected cache hits, got {hits}")
 
+def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
+    """Filtered chain reads should use the in-memory chain cache before falling back to Taskwarrior export."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_get_chain_export_cached_filter_test")
+
+    mod._set_chain_cache(
+        "cid-1",
+        [
+            {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1, "status": "completed", "entry": "2026-01-01T00:00:00Z"},
+            {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "link": 2, "status": "pending", "entry": "2026-01-02T00:00:00Z"},
+            {"uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc", "link": 2, "status": "deleted", "entry": "2026-01-03T00:00:00Z"},
+        ],
+    )
+
+    calls = {"count": 0}
+
+    def _tw_export_chain_fail(*_args, **_kwargs):
+        calls["count"] += 1
+        raise AssertionError("cached filtered chain read should not call tw_export_chain")
+
+    orig = mod.tw_export_chain
+    mod.tw_export_chain = _tw_export_chain_fail
+    try:
+        rows = mod._get_chain_export("cid-1", extra="link:2 status.not:deleted")
+    finally:
+        mod.tw_export_chain = orig
+
+    expect(calls["count"] == 0, f"expected cached filtering to avoid export, got {calls}")
+    expect(len(rows) == 1, f"expected exactly one filtered cached row, got {rows}")
+    expect(rows[0].get("uuid") == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f"unexpected filtered row: {rows}")
+
+
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -7024,6 +7056,7 @@ TESTS = [
     test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
     test_on_add_tw_export_chain_extra_validation,
     test_on_modify_chain_cache_thread_safety_smoke,
+    test_on_modify_get_chain_export_filters_cached_chain_in_memory,
     test_next_for_and_no_progress_fails_fast,
     test_next_for_and_transient_stall_recovers,
     test_roll_apply_has_guard,

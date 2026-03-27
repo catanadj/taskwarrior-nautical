@@ -4778,15 +4778,18 @@ def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
 def _completion_preflight_context(new: dict, now_utc: datetime):
     modify_completion_preflight = _module("modify_completion_preflight")
     modify_models = _module("modify_models")
-    return modify_completion_preflight.completion_preflight_context(
-        new,
-        now_utc,
+    services = modify_models.CompletionPreflightServices(
         short=_short,
         completion_link_numbers_or_fail=_completion_link_numbers_or_fail,
         completion_kind_or_stop=_completion_kind_or_stop,
         completion_chain_id_or_fail=_completion_chain_id_or_fail,
         completion_existing_next_or_fail=_completion_existing_next_or_fail,
         preflight_context_cls=modify_models.CompletionPreflightContext,
+    )
+    return modify_completion_preflight.completion_preflight_context(
+        new,
+        now_utc,
+        services=services,
     )
 
 
@@ -4880,11 +4883,7 @@ def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, n
 def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime):
     modify_completion_compute = _module("modify_completion_compute")
     modify_models = _module("modify_models")
-    return modify_completion_compute.completion_compute_next_and_limits(
-        new,
-        kind,
-        next_no,
-        now_utc,
+    services = modify_models.CompletionComputeServices(
         completion_compute_child_due=_completion_compute_child_due,
         completion_until_or_fail=_completion_until_or_fail,
         completion_until_guard_or_stop=_completion_until_guard_or_stop,
@@ -4893,6 +4892,13 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
         completion_caps=_completion_caps,
         completion_cap_guard_or_stop=_completion_cap_guard_or_stop,
         compute_result_cls=modify_models.CompletionComputeResult,
+    )
+    return modify_completion_compute.completion_compute_next_and_limits(
+        new,
+        kind,
+        next_no,
+        now_utc,
+        services=services,
     )
 
 

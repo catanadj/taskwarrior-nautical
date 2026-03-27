@@ -25,6 +25,30 @@ class CompletionComputeResult:
     until_cap_no: int | None
 
 
+
+
+@dataclass(slots=True)
+class CompletionPreflightServices:
+    short: Any
+    completion_link_numbers_or_fail: Any
+    completion_kind_or_stop: Any
+    completion_chain_id_or_fail: Any
+    completion_existing_next_or_fail: Any
+    preflight_context_cls: Any
+
+
+@dataclass(slots=True)
+class CompletionComputeServices:
+    completion_compute_child_due: Any
+    completion_until_or_fail: Any
+    completion_until_guard_or_stop: Any
+    completion_require_child_due_or_fail: Any
+    completion_warn_unreasonable_duration: Any
+    completion_caps: Any
+    completion_cap_guard_or_stop: Any
+    compute_result_cls: Any
+
+
 @dataclass(slots=True)
 class CpCompletionFeedbackModel:
     new: dict[str, Any]

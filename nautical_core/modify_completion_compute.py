@@ -181,15 +181,16 @@ def completion_compute_next_and_limits(
     next_no: int,
     now_utc,
     *,
-    completion_compute_child_due,
-    completion_until_or_fail,
-    completion_until_guard_or_stop,
-    completion_require_child_due_or_fail,
-    completion_warn_unreasonable_duration,
-    completion_caps,
-    completion_cap_guard_or_stop,
-    compute_result_cls,
+    services,
 ):
+    completion_compute_child_due = services.completion_compute_child_due
+    completion_until_or_fail = services.completion_until_or_fail
+    completion_until_guard_or_stop = services.completion_until_guard_or_stop
+    completion_require_child_due_or_fail = services.completion_require_child_due_or_fail
+    completion_warn_unreasonable_duration = services.completion_warn_unreasonable_duration
+    completion_caps = services.completion_caps
+    completion_cap_guard_or_stop = services.completion_cap_guard_or_stop
+    compute_result_cls = services.compute_result_cls
     computed = completion_compute_child_due(new, kind)
     if computed is None:
         return None

@@ -109,13 +109,14 @@ def completion_preflight_context(
     new: dict,
     now_utc,
     *,
-    short,
-    completion_link_numbers_or_fail,
-    completion_kind_or_stop,
-    completion_chain_id_or_fail,
-    completion_existing_next_or_fail,
-    preflight_context_cls,
+    services,
 ):
+    short = services.short
+    completion_link_numbers_or_fail = services.completion_link_numbers_or_fail
+    completion_kind_or_stop = services.completion_kind_or_stop
+    completion_chain_id_or_fail = services.completion_chain_id_or_fail
+    completion_existing_next_or_fail = services.completion_existing_next_or_fail
+    preflight_context_cls = services.preflight_context_cls
     parent_short = short(new.get("uuid"))
     nums = completion_link_numbers_or_fail(new)
     if nums is None:

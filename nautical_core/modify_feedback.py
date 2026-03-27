@@ -308,24 +308,7 @@ def render_anchor_completion_feedback(
 
 def render_cp_completion_feedback(
     *,
-    new: dict,
-    child: dict,
-    child_due,
-    child_short: str,
-    next_no: int,
-    parent_short: str,
-    cap_no: int | None,
-    finals: list[tuple[str, object]],
-    now_utc,
-    until_dt,
-    until_cap_no: int | None,
-    meta: dict,
-    deferred_spawn: bool,
-    spawn_intent_id: str | None,
-    chain_by_short: dict | None,
-    analytics_advice: str | None,
-    integrity_warnings: list[str] | None,
-    base_no: int,
+    feedback,
     core,
     diag_enabled: bool,
     format_root_and_age,
@@ -342,47 +325,47 @@ def render_cp_completion_feedback(
     export_uuid_short_cached,
 ) -> None:
     fb = []
-    delta = core.humanize_delta(now_utc, child_due, use_months_days=False)
-    fb.append(("Period", new.get("cp")))
-    fb.append(("Next", f"#{next_no} → {core.fmt_dt_local(child_due)}  ({delta})"))
-    basis_text = _pretty_basis_cp(new, meta, parse_cp_duration=core.parse_cp_duration)
+    delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
+    fb.append(("Period", feedback.new.get("cp")))
+    fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
+    basis_text = _pretty_basis_cp(feedback.new, feedback.meta, parse_cp_duration=core.parse_cp_duration)
     if basis_text != "Preserve wall clock (period is multiple of 24h)":
         fb.append(("Basis", basis_text))
-    fb.append(("Root", format_root_and_age(new, now_utc)))
-    if analytics_advice:
-        fb.append(("Analytics", analytics_advice))
-    _append_integrity_warnings_row(fb, integrity_warnings)
-    append_next_wait_sched_rows(fb, child, child_due)
+    fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))
+    if feedback.analytics_advice:
+        fb.append(("Analytics", feedback.analytics_advice))
+    _append_integrity_warnings_row(fb, feedback.integrity_warnings)
+    append_next_wait_sched_rows(fb, feedback.child, feedback.child_due)
 
-    if cap_no:
+    if feedback.cap_no:
         _append_link_status_rows(
             fb,
-            cap_no,
-            base_no,
+            feedback.cap_no,
+            feedback.base_no,
             second_to_last_text="[yellow]Next link is the last in the chain.[/]",
         )
 
-    _append_final_rows(fb, finals, now_utc, fmt_dt_local=core.fmt_dt_local, human_delta=human_delta)
+    _append_final_rows(fb, feedback.finals, feedback.now_utc, fmt_dt_local=core.fmt_dt_local, human_delta=human_delta)
 
     child_id = _resolve_child_id(
-        child_short,
-        deferred_spawn,
-        chain_by_short,
+        feedback.child_short,
+        feedback.deferred_spawn,
+        feedback.chain_by_short,
         export_uuid_short_cached=export_uuid_short_cached,
     )
-    if deferred_spawn and diag_enabled and spawn_intent_id:
-        fb.append(("Intent", spawn_intent_id))
+    if feedback.deferred_spawn and diag_enabled and feedback.spawn_intent_id:
+        fb.append(("Intent", feedback.spawn_intent_id))
 
-    title = f"⛓ Next link  #{next_no}  {parent_short} → {child_short}"
+    title = f"⛓ Next link  #{feedback.next_no}  {feedback.parent_short} → {feedback.child_short}"
     tl = timeline_lines(
         "cp",
-        new,
-        child_due,
-        child_short,
+        feedback.new,
+        feedback.child_due,
+        feedback.child_short,
         None,
         next_count=3,
-        cap_no=cap_no,
-        cur_no=base_no,
+        cap_no=feedback.cap_no,
+        cur_no=feedback.base_no,
         show_gaps=show_timeline_gaps,
     )
     if tl:
@@ -393,40 +376,40 @@ def render_cp_completion_feedback(
     mode = _display_mode_name(core)
     if mode in {"line", "minimal"}:
         line = format_line_preview(
-            base_no,
-            new,
-            child_due,
-            child_short,
-            now_utc,
-            cap_no=cap_no,
-            until_dt=until_dt,
-            until_no=until_cap_no,
+            feedback.base_no,
+            feedback.new,
+            feedback.child_due,
+            feedback.child_short,
+            feedback.now_utc,
+            cap_no=feedback.cap_no,
+            until_dt=feedback.until_dt,
+            until_no=feedback.until_cap_no,
             kind="cp",
             minimal=(mode == "minimal"),
         )
-        title_style = chain_colour_for_task(new, "cp") if chain_color_per_chain else None
+        title_style = chain_colour_for_task(feedback.new, "cp") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_cp", border_style=title_style, title_style=title_style, markup_body=True)
         return
     if mode == "quiet" and not _rows_are_notable(fb):
         line = format_line_preview(
-            base_no,
-            new,
-            child_due,
-            child_short,
-            now_utc,
-            cap_no=cap_no,
-            until_dt=until_dt,
-            until_no=until_cap_no,
+            feedback.base_no,
+            feedback.new,
+            feedback.child_due,
+            feedback.child_short,
+            feedback.now_utc,
+            cap_no=feedback.cap_no,
+            until_dt=feedback.until_dt,
+            until_no=feedback.until_cap_no,
             kind="cp",
             minimal=True,
         )
-        title_style = chain_colour_for_task(new, "cp") if chain_color_per_chain else None
+        title_style = chain_colour_for_task(feedback.new, "cp") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_cp", border_style=title_style, title_style=title_style, markup_body=True)
         return
     if mode in {"compact", "quiet"}:
         fb = _compact_feedback_rows(fb, include_timeline=True)
     if chain_color_per_chain:
-        chain_colour = chain_colour_for_task(new, "cp")
+        chain_colour = chain_colour_for_task(feedback.new, "cp")
         panel(
             title,
             fb,

@@ -6745,6 +6745,43 @@ def test_on_exit_normalize_queue_entry_strips_fields():
     expect(entry["attempts"] == 2, f"unexpected attempts: {entry}")
 
 
+def test_on_modify_export_uuid_short_seeds_runtime_lookup_cache():
+    """Successful short UUID export should seed runtime lookup maps and later entry lookups."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_export_uuid_seed_cache_test")
+
+    calls = {"export": 0, "get": 0}
+    uuid_full = "deadbeef-1111-2222-3333-444444444444"
+    entry = "2026-03-27T09:30:00Z"
+
+    def _run_task_stub(cmd, **_kwargs):
+        cmd_s = " ".join(cmd)
+        if "uuid:deadbeef" in cmd_s and "export" in cmd_s:
+            calls["export"] += 1
+            return True, json.dumps({"uuid": uuid_full, "entry": entry, "id": 42}), ""
+        if " _get deadbeef.entry" in f" {cmd_s}":
+            calls["get"] += 1
+            return True, entry, ""
+        return False, "", f"unexpected command: {cmd_s}"
+
+    orig = mod._run_task
+    mod._run_task = _run_task_stub
+    try:
+        obj = mod._export_uuid_short("deadbeef")
+        expect(isinstance(obj, dict), f"expected dict export result, got {obj!r}")
+        expect(obj.get("uuid") == uuid_full, f"unexpected exported uuid: {obj}")
+        state = mod._modify_chain_state()
+        with state.chain_cache_lock:
+            expect(state.chain_by_short.get("deadbeef", {}).get("uuid") == uuid_full, f"short map not seeded: {state.chain_by_short}")
+            expect(state.chain_by_uuid.get(uuid_full, {}).get("entry") == entry, f"full map not seeded: {state.chain_by_uuid}")
+        got_entry = mod._tw_get_cached("deadbeef.entry")
+    finally:
+        mod._run_task = orig
+
+    expect(got_entry == entry, f"expected cached entry lookup, got {got_entry!r}")
+    expect(calls == {"export": 1, "get": 0}, f"expected export seeding to avoid _get call, got {calls}")
+
+
 def test_on_modify_export_uuid_short_invalid_json():
     """on-modify _export_uuid_short returns None on invalid JSON."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -7107,6 +7144,7 @@ TESTS = [
     test_on_modify_spawn_intent_queue_failure_is_reported,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,
+    test_on_modify_export_uuid_short_seeds_runtime_lookup_cache,
     test_on_modify_export_uuid_short_invalid_json,
     test_on_modify_export_uuid_short_prefix_mismatch,
     test_on_modify_export_uuid_full_cached,

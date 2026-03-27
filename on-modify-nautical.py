@@ -1606,7 +1606,7 @@ def _export_uuid_short(u_short: str, env=None):
             _diag_count("export_uuid_cache_misses")
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
-        return hook_support.export_uuid_short(
+        obj = hook_support.export_uuid_short(
             run_task=_run_task,
             task_cmd_prefix=_task_cmd_prefix(),
             uuid_short=u_short,
@@ -1615,6 +1615,9 @@ def _export_uuid_short(u_short: str, env=None):
             retries=2,
             diag=_diag,
         )
+        if env is None and isinstance(obj, dict):
+            return _seed_runtime_lookup_task(obj)
+        return obj
     env = env or os.environ.copy()
     ok, out, err = _run_task(
         _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{u_short}", "export"],
@@ -1632,6 +1635,8 @@ def _export_uuid_short(u_short: str, env=None):
         if not str(obj.get("uuid") or "").lower().startswith((u_short or "").lower()):
             _diag(f"uuid prefix mismatch for {u_short}")
             return None
+        if env is None:
+            return _seed_runtime_lookup_task(obj)
         return obj
     except Exception:
         return None
@@ -2112,7 +2117,7 @@ def _export_uuid_full_uncached(u: str, env=None) -> dict | None:
             _diag_count("export_full_cache_misses")
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
-        return hook_support.export_uuid_full(
+        obj = hook_support.export_uuid_full(
             run_task=_run_task,
             task_cmd_prefix=_task_cmd_prefix(),
             uuid_str=u,
@@ -2121,10 +2126,16 @@ def _export_uuid_full_uncached(u: str, env=None) -> dict | None:
             retries=2,
             diag=_diag,
         )
+        if env is None and isinstance(obj, dict):
+            return _seed_runtime_lookup_task(obj)
+        return obj
     try:
         out = _task(["rc.json.array=1", f"export uuid:{u}"], env=env)  # uses existing _task()
         arr = json.loads(out) if out and out.strip().startswith("[") else []
-        return arr[0] if arr else None
+        obj = arr[0] if arr else None
+        if env is None and isinstance(obj, dict):
+            return _seed_runtime_lookup_task(obj)
+        return obj
     except Exception:
         return None
 
@@ -2510,22 +2521,32 @@ def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
     _diag_count("chain_cache_seeded")
 
 
-def _seed_runtime_lookup_task(task: dict | None) -> None:
+def _seed_runtime_lookup_task(task: dict | None) -> dict | None:
     if not isinstance(task, dict):
-        return
+        return None
     uuid_str = str(task.get("uuid") or "").strip()
     if not uuid_str:
-        return
+        return None
     short = uuid_str[:8]
     state = _modify_chain_state()
+    task_obj: dict = dict(task)
     with state.chain_cache_lock:
-        if short and short not in state.chain_by_short:
-            state.chain_by_short[short] = task
-        if uuid_str not in state.chain_by_uuid:
-            state.chain_by_uuid[uuid_str] = task
-    entry = task.get("entry")
+        existing = None
+        if short:
+            existing = state.chain_by_short.get(short)
+        if not isinstance(existing, dict):
+            existing = state.chain_by_uuid.get(uuid_str)
+        if isinstance(existing, dict):
+            merged = dict(existing)
+            merged.update(task)
+            task_obj = merged
+        if short:
+            state.chain_by_short[short] = task_obj
+        state.chain_by_uuid[uuid_str] = task_obj
+    entry = task_obj.get("entry")
     if short and entry:
         _query_ctx_set("tw_get", f"{short}.entry", str(entry).strip())
+    return task_obj
 
 
 def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:

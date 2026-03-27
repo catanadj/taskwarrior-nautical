@@ -25,7 +25,7 @@ from typing import Any, Optional
 import stat
 
 _MAX_JSON_BYTES = 10 * 1024 * 1024
-NAUTICAL_HOOK_VERSION = "updateE-20260126"
+NAUTICAL_HOOK_VERSION = "updateF-20260327"
 
 
 # Optional: DST-aware local TZ helpers (used by some carry-forward variants)

@@ -98,6 +98,8 @@ _QUEUE_STORE = None
 _QUEUE_STORE_LOAD_FAILED = False
 _QUEUE_MODELS = None
 _QUEUE_MODELS_LOAD_FAILED = False
+_EXIT_MODELS = None
+_EXIT_MODELS_LOAD_FAILED = False
 _HOOK_CONTEXT = None
 _HOOK_CONTEXT_LOAD_FAILED = False
 _HOOK_ENGINE = None
@@ -140,6 +142,12 @@ _MODULE_SPECS = {
         "_QUEUE_MODELS_LOAD_FAILED",
         "queue_models.py",
         "nautical_queue_models",
+    ),
+    "exit_models": (
+        "_EXIT_MODELS",
+        "_EXIT_MODELS_LOAD_FAILED",
+        "exit_models.py",
+        "nautical_exit_models",
     ),
     "hook_context": (
         "_HOOK_CONTEXT",
@@ -1795,83 +1803,75 @@ def _handle_entry_gate(entry: dict, state: _DrainState) -> bool:
     return False
 
 
-def _precheck_parent_link_state(
+def _build_exit_entry_context(
     entry: dict,
     idx: int,
     state: _DrainState,
     *,
     parent_uuid: str,
     child_short: str,
-    expected_parent_nextlink: str,
-) -> tuple[str, bool]:
-    exit_entry_flow = _module("exit_entry_flow")
-    return exit_entry_flow.precheck_parent_link_state(
-        entry,
-        idx,
-        state,
-        parent_uuid=parent_uuid,
-        child_short=child_short,
-        expected_parent_nextlink=expected_parent_nextlink,
-        parent_nextlink_state=_parent_nextlink_state,
-        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
-    )
-
-
-def _ensure_child_exists_for_entry(
-    entry: dict,
-    idx: int,
-    state: _DrainState,
-    *,
+    expected_parent_nextlink: str | None,
     child: dict,
     child_uuid: str,
     spawn_intent_id: str,
-) -> tuple[str, bool]:
-    exit_entry_flow = _module("exit_entry_flow")
-    return exit_entry_flow.ensure_child_exists_for_entry(
-        entry,
-        idx,
-        state,
+):
+    exit_models = _module("exit_models")
+    return exit_models.ExitEntryContext(
+        entry=entry,
+        idx=idx,
+        state=state,
+        parent_uuid=parent_uuid,
+        child_short=child_short,
+        expected_parent_nextlink=expected_parent_nextlink,
         child=child,
         child_uuid=child_uuid,
         spawn_intent_id=spawn_intent_id,
+    )
+
+
+def _precheck_parent_link_state(ctx) -> tuple[str, bool]:
+    exit_entry_flow = _module("exit_entry_flow")
+    exit_models = _module("exit_models")
+    services = exit_models.ExitPrecheckServices(
+        parent_nextlink_state=_parent_nextlink_state,
+        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
+    )
+    return exit_entry_flow.precheck_parent_link_state(ctx, services=services)
+
+
+def _ensure_child_exists_for_entry(ctx) -> tuple[str, bool]:
+    exit_entry_flow = _module("exit_entry_flow")
+    exit_models = _module("exit_models")
+    services = exit_models.ExitEnsureChildServices(
         export_uuid=_export_uuid,
         import_child=_import_child,
         is_lock_error=_is_lock_error,
         diag=_diag,
         requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
     )
+    return exit_entry_flow.ensure_child_exists_for_entry(ctx, services=services)
 
 
 def _apply_parent_update_for_entry(
-    entry: dict,
-    idx: int,
-    state: _DrainState,
+    ctx,
     *,
-    parent_uuid: str,
-    child_short: str,
-    expected_parent_nextlink: str,
-    child_uuid: str,
-    spawn_intent_id: str,
     parent_linked_already: bool,
     imported: bool,
 ) -> str:
     exit_entry_flow = _module("exit_entry_flow")
-    return exit_entry_flow.apply_parent_update_for_entry(
-        entry,
-        idx,
-        state,
-        parent_uuid=parent_uuid,
-        child_short=child_short,
-        expected_parent_nextlink=expected_parent_nextlink,
-        child_uuid=child_uuid,
-        spawn_intent_id=spawn_intent_id,
-        parent_linked_already=parent_linked_already,
-        imported=imported,
+    exit_models = _module("exit_models")
+    services = exit_models.ExitApplyParentUpdateServices(
         update_parent_nextlink=_update_parent_nextlink,
         is_lock_error=_is_lock_error,
         cleanup_orphan_child=_cleanup_orphan_child,
         diag=_diag,
         requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
+    )
+    return exit_entry_flow.apply_parent_update_for_entry(
+        ctx,
+        parent_linked_already=parent_linked_already,
+        imported=imported,
+        services=services,
     )
 
 
@@ -1906,41 +1906,32 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
                 else:
                     _diag(f"equivalent child already exists; binding to child {child_short}")
 
-    link_action, parent_linked_already = _precheck_parent_link_state(
+    ctx = _build_exit_entry_context(
         entry,
         idx,
         state,
         parent_uuid=parent_uuid,
         child_short=child_short,
-        expected_parent_nextlink=expected_parent_nextlink,
+        expected_parent_nextlink=expected_parent_nextlink or None,
+        child=child,
+        child_uuid=child_uuid,
+        spawn_intent_id=spawn_intent_id,
     )
+
+    link_action, parent_linked_already = _precheck_parent_link_state(ctx)
     if link_action == "break":
         return True
     if link_action == "continue":
         return False
 
-    child_action, imported = _ensure_child_exists_for_entry(
-        entry,
-        idx,
-        state,
-        child=child,
-        child_uuid=child_uuid,
-        spawn_intent_id=spawn_intent_id,
-    )
+    child_action, imported = _ensure_child_exists_for_entry(ctx)
     if child_action == "break":
         return True
     if child_action == "continue":
         return False
 
     parent_action = _apply_parent_update_for_entry(
-        entry,
-        idx,
-        state,
-        parent_uuid=parent_uuid,
-        child_short=child_short,
-        expected_parent_nextlink=expected_parent_nextlink,
-        child_uuid=child_uuid,
-        spawn_intent_id=spawn_intent_id,
+        ctx,
         parent_linked_already=parent_linked_already,
         imported=imported,
     )

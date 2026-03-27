@@ -2635,6 +2635,35 @@ def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
         _seed_runtime_lookup_task(task)
 
 
+def _merge_spawned_child_into_chain(chain: list[dict], parent_task: dict, child_task: dict, child_short: str) -> list[dict]:
+    if not chain:
+        return []
+    parent_uuid = str(parent_task.get("uuid") or "").strip()
+    parent_short = _short(parent_uuid)
+    child_uuid = str(child_task.get("uuid") or "").strip()
+    merged: list[dict] = []
+    child_present = False
+    for row in chain:
+        row_obj = dict(row)
+        row_uuid = str(row_obj.get("uuid") or "").strip()
+        if parent_uuid and row_uuid == parent_uuid and child_short:
+            row_obj["nextLink"] = child_short
+        if child_uuid and row_uuid == child_uuid:
+            child_present = True
+            row_obj.update(child_task)
+        merged.append(row_obj)
+    if child_uuid and not child_present:
+        child_obj = dict(child_task)
+        if parent_short and not str(child_obj.get("prevLink") or "").strip():
+            child_obj["prevLink"] = parent_short
+        merged.append(child_obj)
+    try:
+        merged.sort(key=lambda task: (core.coerce_int(task.get("link"), 10**9), str(task.get("uuid") or "")))
+    except Exception:
+        pass
+    return merged
+
+
 # ------------------------------------------------------------------------------
 # Multi-time occurrence helpers (hook-level)
 # ------------------------------------------------------------------------------
@@ -4992,6 +5021,22 @@ def _completion_build_and_spawn_child(
 def _handle_completion_modify(old: dict, new: dict) -> None:
     _completion_validate_cp_and_anchor(old, new)
     now_utc = core.now_utc()
+    need_chain = _SHOW_ANALYTICS or _SHOW_TIMELINE_GAPS or _CHECK_CHAIN_INTEGRITY
+    preloaded_chain: list[dict] = []
+    preloaded_chain_by_link = None
+    preloaded_chain_by_short = None
+    preload_chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
+    if preload_chain_id and need_chain:
+        try:
+            preloaded_chain = _get_chain_export(preload_chain_id)
+            if preloaded_chain:
+                preloaded_chain_by_link, preloaded_chain_by_short = _build_chain_indexes(preloaded_chain)
+                _set_chain_cache(preload_chain_id, preloaded_chain)
+                _export_uuid_short_cached.cache_clear()
+        except Exception:
+            preloaded_chain = []
+            preloaded_chain_by_link = None
+            preloaded_chain_by_short = None
     ctx = _completion_preflight_context(new, now_utc)
     if ctx is None:
         return
@@ -5032,18 +5077,23 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     spawn_intent_id = spawned.spawn_intent_id
 
     # Build an in-memory chain index once for panel/timeline lookups.
-    chain = []
-    chain_by_link = None
-    chain_by_short = None
+    chain = list(preloaded_chain)
+    chain_by_link = preloaded_chain_by_link
+    chain_by_short = preloaded_chain_by_short
     chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
-    need_chain = _SHOW_ANALYTICS or _SHOW_TIMELINE_GAPS or _CHECK_CHAIN_INTEGRITY
     if chain_id and need_chain:
         try:
-            chain = _get_chain_export(chain_id)
-            if chain:
+            if chain and spawned.verified and not deferred_spawn:
+                chain = _merge_spawned_child_into_chain(chain, new, child, child_short)
                 chain_by_link, chain_by_short = _build_chain_indexes(chain)
                 _set_chain_cache(chain_id, chain)
                 _export_uuid_short_cached.cache_clear()
+            elif not chain:
+                chain = _get_chain_export(chain_id)
+                if chain:
+                    chain_by_link, chain_by_short = _build_chain_indexes(chain)
+                    _set_chain_cache(chain_id, chain)
+                    _export_uuid_short_cached.cache_clear()
         except Exception:
             pass
     state = _modify_chain_state()

@@ -6623,6 +6623,98 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
     expect(not called["spawn"], "existing link #N+1 should prevent duplicate spawn")
 
 
+def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
+    """on-modify should reuse one full-chain export across preflight and later feedback prep when chain context is needed."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_single_chain_export_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    mod._SHOW_ANALYTICS = True
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._CHECK_CHAIN_INTEGRITY = False
+    prev_panel_mode = mod.core.PANEL_MODE
+    mod.core.PANEL_MODE = "text"
+
+    now_utc = mod.core.now_utc()
+    child_due = now_utc + timedelta(days=1)
+    export_calls = {"count": 0}
+    parent_uuid = "00000000-0000-0000-0000-000000000111"
+    child_uuid = "00000000-0000-0000-0000-000000000222"
+
+    chain_rows = [
+        {
+            "uuid": parent_uuid,
+            "status": "completed",
+            "description": "cp spawn test",
+            "cp": "P1D",
+            "chainID": "abcd1234",
+            "link": 1,
+            "due": "20250101T090000Z",
+            "entry": "2025-01-01T09:00:00Z",
+            "nextLink": "",
+        }
+    ]
+
+    def _tw_export_chain_stub(chain_id, since=None, extra=None, env=None, limit=None):
+        export_calls["count"] += 1
+        return list(chain_rows)
+
+    modify_models = mod._module("modify_models")
+    mod.tw_export_chain = _tw_export_chain_stub
+    mod._completion_compute_next_and_limits = lambda *_a, **_k: modify_models.CompletionComputeResult(
+        child_due=child_due,
+        meta={},
+        dnf=None,
+        until_dt=None,
+        cpmax=0,
+        cap_no=None,
+        finals=[],
+        until_cap_no=None,
+    )
+    mod._completion_build_and_spawn_child = lambda *_a, **_k: modify_models.CompletionSpawnResult(
+        child={
+            "uuid": child_uuid,
+            "status": "pending",
+            "description": "next cp",
+            "chainID": "abcd1234",
+            "link": 2,
+            "prevLink": parent_uuid[:8],
+            "due": mod.core.fmt_isoz(child_due),
+        },
+        child_short=child_uuid[:8],
+        stripped_attrs=[],
+        verified=True,
+        deferred_spawn=False,
+        spawn_intent_id=None,
+    )
+    mod._render_cp_completion_feedback = lambda **_k: None
+    mod._chain_health_advice = lambda *_a, **_k: None
+    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
+    mod._tw_export_chain_cached_key.cache_clear()
+    mod._export_uuid_short_cached.cache_clear()
+    mod._reset_modify_runtime_state()
+
+    old = {
+        "uuid": parent_uuid,
+        "status": "pending",
+        "description": "cp spawn test",
+        "cp": "P1D",
+        "chainID": "abcd1234",
+        "link": 1,
+        "due": "20250101T090000Z",
+    }
+    new = dict(old)
+    new.update({"status": "completed", "end": "20250102T090000Z"})
+
+    try:
+        mod._handle_completion_modify(old, new)
+    finally:
+        mod.core.PANEL_MODE = prev_panel_mode
+
+    expect(export_calls["count"] == 1, f"expected one underlying chain export, got {export_calls}")
+
+
 def test_on_modify_cp_completion_spawns_next_link():
     """on-modify should spawn the next CP link on completion."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -7200,6 +7292,7 @@ TESTS = [
     test_on_modify_spawn_intent_entry_rejects_missing_child_uuid,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
+    test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,
     test_on_add_run_task_timeout,

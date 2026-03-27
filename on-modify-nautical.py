@@ -1392,13 +1392,13 @@ def _queue_close_silent(conn: sqlite3.Connection) -> None:
 
 def _spawn_queue_db_open_ready() -> sqlite3.Connection | None:
     queue_store = _module("queue_store")
-    return queue_store.open_ready_queue_db(
+    return queue_store.open_ready_queue_db_result(
         _SPAWN_QUEUE_DB_PATH,
         connect_fn=_spawn_queue_db_connect_result,
         init_fn=_spawn_queue_db_init,
         close_fn=_queue_close_silent,
         diag=_diag,
-    )
+    ).conn
 
 
 def _spawn_queue_capacity_guard(task_obj: dict) -> tuple[bool, str] | None:

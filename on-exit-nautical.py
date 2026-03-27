@@ -1215,13 +1215,14 @@ def _queue_db_open_ready() -> sqlite3.Connection | None:
             _RUN_QUEUE_DB_CONN = None
     queue_store = _module("queue_store")
     db_path = _QUEUE_DB_PATH
-    conn = queue_store.open_ready_queue_db(
+    result = queue_store.open_ready_queue_db_result(
         db_path,
         connect_fn=_queue_db_connect_result,
         init_fn=_queue_db_init,
         close_fn=_queue_close_silent,
         diag=_diag,
     )
+    conn = result.conn
     if _RUN_QUEUE_DB_ACTIVE and conn is not None:
         _RUN_QUEUE_DB_CONN = conn
     return conn

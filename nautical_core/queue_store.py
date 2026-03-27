@@ -197,29 +197,6 @@ def connect_queue_db_result(
     return QueueOpenResult(conn=None, recovered_corrupt=recovered_corrupt, err=str(last_err or ""))
 
 
-def connect_queue_db(
-    db_path: Path,
-    *,
-    attempts: int,
-    timeout_base: float,
-    timeout_max: float,
-    backoff_base: float,
-    row_factory: Any = None,
-    diag: Callable[[str], None] | None = None,
-    sleep_fn: Callable[[float], None] | None = None,
-) -> sqlite3.Connection | None:
-    return connect_queue_db_result(
-        db_path,
-        attempts=attempts,
-        timeout_base=timeout_base,
-        timeout_max=timeout_max,
-        backoff_base=backoff_base,
-        row_factory=row_factory,
-        diag=diag,
-        sleep_fn=sleep_fn,
-    ).conn
-
-
 def open_ready_queue_db_result(
     db_path: Path,
     *,
@@ -250,23 +227,6 @@ def open_ready_queue_db_result(
                     pass
             return QueueOpenResult(conn=None, recovered_corrupt=open_result.recovered_corrupt, err=str(exc))
     return QueueOpenResult(conn=None)
-
-
-def open_ready_queue_db(
-    db_path: Path,
-    *,
-    connect_fn: Callable[[], QueueOpenResult],
-    init_fn: Callable[[sqlite3.Connection], None],
-    close_fn: Callable[[sqlite3.Connection], None],
-    diag: Callable[[str], None] | None = None,
-) -> sqlite3.Connection | None:
-    return open_ready_queue_db_result(
-        db_path,
-        connect_fn=connect_fn,
-        init_fn=init_fn,
-        close_fn=close_fn,
-        diag=diag,
-    ).conn
 
 
 def close_silent(conn: sqlite3.Connection) -> None:
@@ -376,27 +336,6 @@ def claim_rows_sqlite_result(
         return QueueRowClaimResult(rows=[], err=str(exc))
 
 
-def claim_rows_sqlite(
-    conn: sqlite3.Connection,
-    *,
-    token: str,
-    now: float,
-    processing_stale_after: float,
-    max_lines: int,
-    diag: Callable[[str], None] | None = None,
-    on_lock_busy: Callable[[], None] | None = None,
-) -> list[QueueStoredRow]:
-    return claim_rows_sqlite_result(
-        conn,
-        token=token,
-        now=now,
-        processing_stale_after=processing_stale_after,
-        max_lines=max_lines,
-        diag=diag,
-        on_lock_busy=on_lock_busy,
-    ).rows
-
-
 def rows_to_entries_result(rows: list[QueueStoredRow | sqlite3.Row]) -> QueueEntriesBatch:
     entries: list[dict[str, Any]] = []
     for raw_row in rows:
@@ -419,10 +358,6 @@ def rows_to_entries_result(rows: list[QueueStoredRow | sqlite3.Row]) -> QueueEnt
         obj["__queue_id"] = rid
         entries.append(obj)
     return QueueEntriesBatch(entries=entries)
-
-
-def rows_to_entries(rows: list[QueueStoredRow | sqlite3.Row]) -> list[dict[str, Any]]:
-    return rows_to_entries_result(rows).entries
 
 
 def ack_entry_ids_sqlite_result(
@@ -468,21 +403,6 @@ def ack_entry_ids_sqlite_result(
         if callable(diag):
             diag(f"queue db ack failed: {exc}")
         return QueueWriteResult(ok=False, count=len(ids), err=str(exc))
-
-
-def ack_entry_ids_sqlite(
-    conn: sqlite3.Connection,
-    entry_ids: Sequence[Any],
-    *,
-    diag: Callable[[str], None] | None = None,
-    on_lock_busy: Callable[[], None] | None = None,
-) -> bool:
-    return ack_entry_ids_sqlite_result(
-        conn,
-        entry_ids,
-        diag=diag,
-        on_lock_busy=on_lock_busy,
-    ).ok
 
 
 def requeue_entries_sqlite_result(
@@ -542,23 +462,6 @@ def requeue_entries_sqlite_result(
         if callable(diag):
             diag(f"queue db requeue failed: {exc}")
         return QueueWriteResult(ok=False, count=len(items), err=str(exc))
-
-
-def requeue_entries_sqlite(
-    conn: sqlite3.Connection,
-    entries: Sequence[dict[str, Any]],
-    *,
-    now: float,
-    diag: Callable[[str], None] | None = None,
-    on_lock_busy: Callable[[], None] | None = None,
-) -> bool:
-    return requeue_entries_sqlite_result(
-        conn,
-        entries,
-        now=now,
-        diag=diag,
-        on_lock_busy=on_lock_busy,
-    ).ok
 
 
 def enqueue_entries_sqlite_result(
@@ -634,19 +537,4 @@ def enqueue_entries_sqlite_result(
         return QueueWriteResult(ok=False, count=len(items), err=str(exc))
 
 
-def enqueue_entries_sqlite(
-    conn: sqlite3.Connection,
-    entries: Sequence[dict[str, Any]],
-    *,
-    now: float,
-    diag: Callable[[str], None] | None = None,
-    on_lock_busy: Callable[[], None] | None = None,
-) -> bool:
-    return enqueue_entries_sqlite_result(
-        conn,
-        entries,
-        now=now,
-        diag=diag,
-        on_lock_busy=on_lock_busy,
-    ).ok
 

@@ -104,6 +104,10 @@ def _ascii_report_lines(text: str) -> list[str]:
             line = line.replace(src, dst)
         line = re.sub(r"\s*\|\s*", " | ", line)
         line = re.sub(r"\s+", " ", line).strip()
+        if line.startswith("anchor Next anchor "):
+            line = line[len("anchor "):]
+        elif line.startswith("cp Next link "):
+            line = line[len("cp "):]
         if line:
             out.append(line)
     return out

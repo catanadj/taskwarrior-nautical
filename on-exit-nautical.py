@@ -19,6 +19,7 @@ import sqlite3
 import importlib.util
 from pathlib import Path
 from contextlib import contextmanager
+from typing import Any
 try:
     import fcntl  # POSIX advisory lock
 except Exception:
@@ -879,7 +880,7 @@ def _record_queue_lock_failure() -> None:
         _diag("queue lock not acquired; drain deferred")
         _LAST_QUEUE_LOCK_DIAG_TS = now
     try:
-        payload = {
+        payload: dict[str, Any] = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "reason": "queue lock busy",
         }
@@ -1318,7 +1319,7 @@ def _take_queue_entries_jsonl_batch():
     queue_store = _module("queue_store")
     exit_models = _module("exit_models")
     return exit_models.ExitQueueBatch(
-        entries=queue_store.take_queue_entries_jsonl(
+        entries=queue_store.take_queue_entries_jsonl_result(
             queue_path=_QUEUE_PATH,
             queue_processing_path=_QUEUE_PROCESSING_PATH,
             queue_max_bytes=_QUEUE_MAX_BYTES,
@@ -1330,7 +1331,7 @@ def _take_queue_entries_jsonl_batch():
             write_dead_letter=_write_dead_letter,
             fsync_dir_fn=_fsync_dir,
             diag=_diag,
-        )
+        ).entries
     )
 
 
@@ -1342,7 +1343,7 @@ def _requeue_entries_jsonl_result(entries: list[dict]):
     queue_store = _module("queue_store")
     exit_models = _module("exit_models")
     items = [e for e in (entries or []) if isinstance(e, dict)]
-    ok = queue_store.requeue_entries_jsonl(
+    result = queue_store.requeue_entries_jsonl_result(
         queue_path=_QUEUE_PATH,
         entries=items,
         durable_queue=_DURABLE_QUEUE,
@@ -1351,7 +1352,7 @@ def _requeue_entries_jsonl_result(entries: list[dict]):
         fsync_dir_fn=_fsync_dir,
         diag=_diag,
     )
-    return exit_models.ExitQueueWriteResult(ok=ok, count=len(items))
+    return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
 
 
 def _requeue_entries_jsonl(entries: list[dict]) -> bool:
@@ -1433,9 +1434,9 @@ def _queue_row_ids(rows: list[sqlite3.Row]) -> list[int]:
     return queue_store.row_ids(rows)
 
 
-def _queue_claim_rows_sqlite(conn: sqlite3.Connection, token: str, now: float) -> list[sqlite3.Row]:
+def _queue_claim_rows_sqlite(conn: sqlite3.Connection, token: str, now: float):
     queue_store = _module("queue_store")
-    return queue_store.claim_rows_sqlite(
+    return queue_store.claim_rows_sqlite_result(
         conn,
         token=token,
         now=now,
@@ -1448,7 +1449,7 @@ def _queue_claim_rows_sqlite(conn: sqlite3.Connection, token: str, now: float) -
 
 def _queue_rows_to_entries(rows: list[sqlite3.Row]) -> list[dict]:
     queue_store = _module("queue_store")
-    return queue_store.rows_to_entries(rows)
+    return queue_store.rows_to_entries_result(rows).entries
 
 
 def _queue_close_silent(conn: sqlite3.Connection) -> None:
@@ -1467,8 +1468,8 @@ def _take_queue_entries_sqlite_batch():
         return exit_models.ExitQueueBatch(entries=[])
     token = f"drain-{os.getpid()}-{int(time.time() * 1000)}"
     now = time.time()
-    rows = _queue_claim_rows_sqlite(conn, token, now)
-    entries = _queue_rows_to_entries(rows)
+    claim = _queue_claim_rows_sqlite(conn, token, now)
+    entries = _queue_rows_to_entries(claim.rows)
     _queue_close_silent(conn)
     return exit_models.ExitQueueBatch(entries=entries)
 
@@ -1485,13 +1486,13 @@ def _ack_queue_entries_sqlite_result(entry_ids: list[int]):
         return exit_models.ExitQueueWriteResult(ok=False, count=len(ids))
     try:
         queue_store = _module("queue_store")
-        ok = queue_store.ack_entry_ids_sqlite(
+        result = queue_store.ack_entry_ids_sqlite_result(
             conn,
             ids,
             diag=_diag,
             on_lock_busy=_record_queue_lock_failure,
         )
-        return exit_models.ExitQueueWriteResult(ok=ok, count=len(ids))
+        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
     finally:
         _queue_close_silent(conn)
 
@@ -1512,14 +1513,14 @@ def _requeue_entries_sqlite_result(entries: list[dict]):
         return exit_models.ExitQueueWriteResult(ok=False, count=len(items))
     try:
         queue_store = _module("queue_store")
-        ok = queue_store.requeue_entries_sqlite(
+        result = queue_store.requeue_entries_sqlite_result(
             conn,
             items,
             now=time.time(),
             diag=_diag,
             on_lock_busy=_record_queue_lock_failure,
         )
-        return exit_models.ExitQueueWriteResult(ok=ok, count=len(items))
+        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
     finally:
         _queue_close_silent(conn)
 
@@ -1536,14 +1537,14 @@ def _enqueue_entries_sqlite_result(entries: list[dict]):
         return exit_models.ExitQueueWriteResult(ok=False, count=len(items))
     try:
         queue_store = _module("queue_store")
-        ok = queue_store.enqueue_entries_sqlite(
+        result = queue_store.enqueue_entries_sqlite_result(
             conn,
             items,
             now=time.time(),
             diag=_diag,
             on_lock_busy=_record_queue_lock_failure,
         )
-        return exit_models.ExitQueueWriteResult(ok=ok, count=len(items))
+        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
     finally:
         _queue_close_silent(conn)
 

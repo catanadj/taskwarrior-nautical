@@ -76,3 +76,27 @@ class SpawnQueueEntry:
 
 def normalize_spawn_queue_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
     return SpawnQueueEntry.from_mapping(entry).to_dict()
+
+@dataclass(slots=True)
+class QueueRowClaimResult:
+    rows: list[Any]
+    lock_busy: bool = False
+    err: str = ""
+
+
+@dataclass(slots=True)
+class QueueEntriesBatch:
+    entries: list[dict[str, Any]]
+
+    @property
+    def entries_total(self) -> int:
+        return len(self.entries)
+
+
+@dataclass(slots=True)
+class QueueWriteResult:
+    ok: bool
+    count: int
+    lock_busy: bool = False
+    err: str = ""
+

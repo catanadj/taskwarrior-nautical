@@ -1471,14 +1471,14 @@ def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
     errors: list[str] = []
     try:
         queue_store = _module("queue_store")
-        ok = queue_store.enqueue_entries_sqlite(
+        result = queue_store.enqueue_entries_sqlite_result(
             conn,
             [task_obj],
             now=_time.time(),
             diag=lambda msg: errors.append(str(msg)),
             on_lock_busy=lambda: lock_busy.__setitem__("value", True),
         )
-        if ok:
+        if result.ok:
             queue_store.repair_sqlite_permissions(_SPAWN_QUEUE_DB_PATH)
             _spawn_queue_warn_growth(_SPAWN_QUEUE_DB_PATH, _spawn_queue_db_size_bytes())
             return True, ""

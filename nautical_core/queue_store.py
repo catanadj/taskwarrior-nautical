@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from nautical_core.queue_models import QueueEntriesBatch, QueueRowClaimResult, QueueWriteResult
+
 
 def nautical_state_dir_path(tw_data_dir: Path) -> Path:
     return tw_data_dir / ".nautical-state"
@@ -270,7 +272,7 @@ def row_ids(rows: list[sqlite3.Row]) -> list[int]:
     return ids
 
 
-def claim_rows_sqlite(
+def claim_rows_sqlite_result(
     conn: sqlite3.Connection,
     *,
     token: str,
@@ -279,7 +281,7 @@ def claim_rows_sqlite(
     max_lines: int,
     diag: Callable[[str], None] | None = None,
     on_lock_busy: Callable[[], None] | None = None,
-) -> list[sqlite3.Row]:
+) -> QueueRowClaimResult:
     rows: list[sqlite3.Row] = []
     try:
         if processing_stale_after > 0:
@@ -301,19 +303,20 @@ def claim_rows_sqlite(
                 [(token, now, now, rid) for rid in ids],
             )
         conn.commit()
-        return rows
+        return QueueRowClaimResult(rows=rows)
     except sqlite3.OperationalError as exc:
         try:
             conn.rollback()
         except Exception:
             pass
         msg = str(exc).lower()
-        if "locked" in msg or "busy" in msg:
+        lock_busy = "locked" in msg or "busy" in msg
+        if lock_busy:
             if callable(on_lock_busy):
                 on_lock_busy()
         elif callable(diag):
             diag(f"queue db claim failed: {exc}")
-        return []
+        return QueueRowClaimResult(rows=[], lock_busy=lock_busy, err=str(exc))
     except Exception as exc:
         try:
             conn.rollback()
@@ -321,10 +324,31 @@ def claim_rows_sqlite(
             pass
         if callable(diag):
             diag(f"queue db claim failed: {exc}")
-        return []
+        return QueueRowClaimResult(rows=[], err=str(exc))
 
 
-def rows_to_entries(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+def claim_rows_sqlite(
+    conn: sqlite3.Connection,
+    *,
+    token: str,
+    now: float,
+    processing_stale_after: float,
+    max_lines: int,
+    diag: Callable[[str], None] | None = None,
+    on_lock_busy: Callable[[], None] | None = None,
+) -> list[sqlite3.Row]:
+    return claim_rows_sqlite_result(
+        conn,
+        token=token,
+        now=now,
+        processing_stale_after=processing_stale_after,
+        max_lines=max_lines,
+        diag=diag,
+        on_lock_busy=on_lock_busy,
+    ).rows
+
+
+def rows_to_entries_result(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for row in rows:
         rid = int(row["id"])
@@ -344,16 +368,20 @@ def rows_to_entries(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
         obj["__queue_backend"] = "sqlite"
         obj["__queue_id"] = rid
         entries.append(obj)
-    return entries
+    return QueueEntriesBatch(entries=entries)
 
 
-def ack_entry_ids_sqlite(
+def rows_to_entries(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    return rows_to_entries_result(rows).entries
+
+
+def ack_entry_ids_sqlite_result(
     conn: sqlite3.Connection,
     entry_ids: Sequence[Any],
     *,
     diag: Callable[[str], None] | None = None,
     on_lock_busy: Callable[[], None] | None = None,
-) -> bool:
+) -> QueueWriteResult:
     ids: list[int] = []
     for raw in entry_ids or ():
         try:
@@ -363,23 +391,25 @@ def ack_entry_ids_sqlite(
         if rid > 0:
             ids.append(rid)
     if not ids:
-        return True
+        return QueueWriteResult(ok=True, count=0)
     try:
         conn.execute("BEGIN IMMEDIATE")
         conn.executemany("DELETE FROM queue_entries WHERE id=?", [(rid,) for rid in ids])
         conn.commit()
-        return True
+        return QueueWriteResult(ok=True, count=len(ids))
     except sqlite3.OperationalError as exc:
         try:
             conn.rollback()
         except Exception:
             pass
         msg = str(exc).lower()
-        if "locked" in msg or "busy" in msg:
+        lock_busy = "locked" in msg or "busy" in msg
+        if lock_busy:
             if callable(on_lock_busy):
                 on_lock_busy()
         elif callable(diag):
             diag(f"queue db ack failed: {exc}")
+        return QueueWriteResult(ok=False, count=len(ids), lock_busy=lock_busy, err=str(exc))
     except Exception as exc:
         try:
             conn.rollback()
@@ -387,24 +417,39 @@ def ack_entry_ids_sqlite(
             pass
         if callable(diag):
             diag(f"queue db ack failed: {exc}")
-    return False
+        return QueueWriteResult(ok=False, count=len(ids), err=str(exc))
 
 
-def requeue_entries_sqlite(
+def ack_entry_ids_sqlite(
+    conn: sqlite3.Connection,
+    entry_ids: Sequence[Any],
+    *,
+    diag: Callable[[str], None] | None = None,
+    on_lock_busy: Callable[[], None] | None = None,
+) -> bool:
+    return ack_entry_ids_sqlite_result(
+        conn,
+        entry_ids,
+        diag=diag,
+        on_lock_busy=on_lock_busy,
+    ).ok
+
+
+def requeue_entries_sqlite_result(
     conn: sqlite3.Connection,
     entries: Sequence[dict[str, Any]],
     *,
     now: float,
     diag: Callable[[str], None] | None = None,
     on_lock_busy: Callable[[], None] | None = None,
-) -> bool:
+) -> QueueWriteResult:
     items = [
         entry
         for entry in (entries or [])
         if isinstance(entry, dict) and entry.get("__queue_backend") == "sqlite" and entry.get("__queue_id")
     ]
     if not items:
-        return True
+        return QueueWriteResult(ok=True, count=0)
     try:
         conn.execute("BEGIN IMMEDIATE")
         for entry in items:
@@ -425,18 +470,20 @@ def requeue_entries_sqlite(
                 (attempts, payload, now, rid),
             )
         conn.commit()
-        return True
+        return QueueWriteResult(ok=True, count=len(items))
     except sqlite3.OperationalError as exc:
         try:
             conn.rollback()
         except Exception:
             pass
         msg = str(exc).lower()
-        if "locked" in msg or "busy" in msg:
+        lock_busy = "locked" in msg or "busy" in msg
+        if lock_busy:
             if callable(on_lock_busy):
                 on_lock_busy()
         elif callable(diag):
             diag(f"queue db requeue failed: {exc}")
+        return QueueWriteResult(ok=False, count=len(items), lock_busy=lock_busy, err=str(exc))
     except Exception as exc:
         try:
             conn.rollback()
@@ -444,10 +491,10 @@ def requeue_entries_sqlite(
             pass
         if callable(diag):
             diag(f"queue db requeue failed: {exc}")
-    return False
+        return QueueWriteResult(ok=False, count=len(items), err=str(exc))
 
 
-def enqueue_entries_sqlite(
+def requeue_entries_sqlite(
     conn: sqlite3.Connection,
     entries: Sequence[dict[str, Any]],
     *,
@@ -455,9 +502,26 @@ def enqueue_entries_sqlite(
     diag: Callable[[str], None] | None = None,
     on_lock_busy: Callable[[], None] | None = None,
 ) -> bool:
+    return requeue_entries_sqlite_result(
+        conn,
+        entries,
+        now=now,
+        diag=diag,
+        on_lock_busy=on_lock_busy,
+    ).ok
+
+
+def enqueue_entries_sqlite_result(
+    conn: sqlite3.Connection,
+    entries: Sequence[dict[str, Any]],
+    *,
+    now: float,
+    diag: Callable[[str], None] | None = None,
+    on_lock_busy: Callable[[], None] | None = None,
+) -> QueueWriteResult:
     items = [entry for entry in (entries or []) if isinstance(entry, dict)]
     if not items:
-        return True
+        return QueueWriteResult(ok=True, count=0)
     try:
         conn.execute("BEGIN IMMEDIATE")
         for entry in items:
@@ -496,18 +560,20 @@ def enqueue_entries_sqlite(
                     (payload, attempts, now, now),
                 )
         conn.commit()
-        return True
+        return QueueWriteResult(ok=True, count=len(items))
     except sqlite3.OperationalError as exc:
         try:
             conn.rollback()
         except Exception:
             pass
         msg = str(exc).lower()
-        if "locked" in msg or "busy" in msg:
+        lock_busy = "locked" in msg or "busy" in msg
+        if lock_busy:
             if callable(on_lock_busy):
                 on_lock_busy()
         elif callable(diag):
             diag(f"queue db enqueue failed: {exc}")
+        return QueueWriteResult(ok=False, count=len(items), lock_busy=lock_busy, err=str(exc))
     except Exception as exc:
         try:
             conn.rollback()
@@ -515,7 +581,24 @@ def enqueue_entries_sqlite(
             pass
         if callable(diag):
             diag(f"queue db enqueue failed: {exc}")
-    return False
+        return QueueWriteResult(ok=False, count=len(items), err=str(exc))
+
+
+def enqueue_entries_sqlite(
+    conn: sqlite3.Connection,
+    entries: Sequence[dict[str, Any]],
+    *,
+    now: float,
+    diag: Callable[[str], None] | None = None,
+    on_lock_busy: Callable[[], None] | None = None,
+) -> bool:
+    return enqueue_entries_sqlite_result(
+        conn,
+        entries,
+        now=now,
+        diag=diag,
+        on_lock_busy=on_lock_busy,
+    ).ok
 
 
 def recover_processing_file(
@@ -662,7 +745,7 @@ def cleanup_staging(tmp_path: Path, tmp_processing: Path) -> None:
         pass
 
 
-def take_queue_entries_jsonl(
+def take_queue_entries_jsonl_result(
     *,
     queue_path: Path,
     queue_processing_path: Path,
@@ -675,31 +758,31 @@ def take_queue_entries_jsonl(
     write_dead_letter: Callable[[dict[str, Any], str], None],
     fsync_dir_fn: Callable[[Path], None],
     diag: Callable[[str], None] | None = None,
-) -> list[dict[str, Any]]:
+) -> QueueEntriesBatch:
     entries: list[dict[str, Any]] = []
     with lock_queue() as locked:
         if not locked:
             record_lock_failure()
-            return entries
+            return QueueEntriesBatch(entries=entries)
         if not recover_processing_file(
             queue_processing_path=queue_processing_path,
             queue_path=queue_path,
             durable_queue=durable_queue,
             fsync_dir_fn=fsync_dir_fn,
         ):
-            return entries
+            return QueueEntriesBatch(entries=entries)
         try:
             if not queue_path.exists():
-                return entries
+                return QueueEntriesBatch(entries=entries)
         except Exception:
-            return entries
+            return QueueEntriesBatch(entries=entries)
         src_path, overflow_path = source_path_with_overflow(
             queue_path=queue_path,
             queue_max_bytes=queue_max_bytes,
             diag=diag,
         )
-        tmp_path = queue_path.with_suffix(".staging")
-        tmp_processing = queue_processing_path.with_suffix(".staging")
+        tmp_path = queue_path.with_suffix('.staging')
+        tmp_processing = queue_processing_path.with_suffix('.staging')
         try:
             entries = split_source_to_staging(
                 src_path=src_path,
@@ -722,7 +805,76 @@ def take_queue_entries_jsonl(
             )
         except Exception:
             cleanup_staging(tmp_path, tmp_processing)
-    return entries
+    return QueueEntriesBatch(entries=entries)
+
+
+def take_queue_entries_jsonl(
+    *,
+    queue_path: Path,
+    queue_processing_path: Path,
+    queue_max_bytes: int,
+    queue_max_lines: int,
+    durable_queue: bool,
+    lock_queue: Callable[[], Any],
+    record_lock_failure: Callable[[], None],
+    quarantine_line: Callable[[str, str], None],
+    write_dead_letter: Callable[[dict[str, Any], str], None],
+    fsync_dir_fn: Callable[[Path], None],
+    diag: Callable[[str], None] | None = None,
+) -> list[dict[str, Any]]:
+    return take_queue_entries_jsonl_result(
+        queue_path=queue_path,
+        queue_processing_path=queue_processing_path,
+        queue_max_bytes=queue_max_bytes,
+        queue_max_lines=queue_max_lines,
+        durable_queue=durable_queue,
+        lock_queue=lock_queue,
+        record_lock_failure=record_lock_failure,
+        quarantine_line=quarantine_line,
+        write_dead_letter=write_dead_letter,
+        fsync_dir_fn=fsync_dir_fn,
+        diag=diag,
+    ).entries
+
+
+def requeue_entries_jsonl_result(
+    *,
+    queue_path: Path,
+    entries: Sequence[dict[str, Any]],
+    durable_queue: bool,
+    lock_queue: Callable[[], Any],
+    record_lock_failure: Callable[[], None],
+    fsync_dir_fn: Callable[[Path], None],
+    diag: Callable[[str], None] | None = None,
+) -> QueueWriteResult:
+    items = [entry for entry in (entries or []) if isinstance(entry, dict)]
+    if not items:
+        return QueueWriteResult(ok=True, count=0)
+    with lock_queue() as locked:
+        if not locked:
+            record_lock_failure()
+            return QueueWriteResult(ok=False, count=len(items), lock_busy=True, err='queue lock busy')
+        try:
+            fd = os.open(str(queue_path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
+            with os.fdopen(fd, 'a', encoding='utf-8') as f:
+                for obj in items:
+                    f.write(json.dumps(obj, ensure_ascii=False, separators=(',', ':')) + "\n")
+                if durable_queue:
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                        fsync_dir_fn(queue_path.parent)
+                    except Exception:
+                        pass
+            return QueueWriteResult(ok=True, count=len(items))
+        except Exception as exc:
+            if callable(diag):
+                diag(f'requeue write failed: {exc}')
+            return QueueWriteResult(ok=False, count=len(items), err=str(exc))
 
 
 def requeue_entries_jsonl(
@@ -735,34 +887,15 @@ def requeue_entries_jsonl(
     fsync_dir_fn: Callable[[Path], None],
     diag: Callable[[str], None] | None = None,
 ) -> bool:
-    items = [entry for entry in (entries or []) if isinstance(entry, dict)]
-    if not items:
-        return True
-    with lock_queue() as locked:
-        if not locked:
-            record_lock_failure()
-            return False
-        try:
-            fd = os.open(str(queue_path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            with os.fdopen(fd, "a", encoding="utf-8") as f:
-                for obj in items:
-                    f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
-                if durable_queue:
-                    try:
-                        f.flush()
-                        os.fsync(f.fileno())
-                        fsync_dir_fn(queue_path.parent)
-                    except Exception:
-                        pass
-            return True
-        except Exception as exc:
-            if callable(diag):
-                diag(f"requeue write failed: {exc}")
-            return False
+    return requeue_entries_jsonl_result(
+        queue_path=queue_path,
+        entries=entries,
+        durable_queue=durable_queue,
+        lock_queue=lock_queue,
+        record_lock_failure=record_lock_failure,
+        fsync_dir_fn=fsync_dir_fn,
+        diag=diag,
+    ).ok
 
 
 def queue_jsonl_has_data(*paths: Path) -> bool:

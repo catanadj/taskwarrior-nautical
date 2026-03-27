@@ -1307,16 +1307,15 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
                 return True, "", ""
 
             mod._run_task = _fake_run_task
-            mod._import_child = lambda _obj: (False, "import failed")
-            q_path = mod._QUEUE_PATH
+            exit_models = mod._module("exit_models")
+            mod._import_child = lambda _obj: exit_models.ExitImportResult(False, "import failed")
             entry = {
                 "parent_uuid": parent_uuid,
                 "child_short": child_short,
                 "child": {"uuid": child_uuid},
                 "spawn_intent_id": "si_test",
             }
-            q_path.parent.mkdir(parents=True, exist_ok=True)
-            q_path.write_text(json.dumps(entry, ensure_ascii=False) + "\n", encoding="utf-8")
+            _seed_sqlite_queue(mod._QUEUE_DB_PATH, [entry])
             mod._drain_queue()
             expect("clear_parent" not in calls, "parent nextLink should not be updated on missing child")
         finally:
@@ -4853,8 +4852,9 @@ def test_on_exit_parent_update_lock_busy_requeues():
             conn.commit()
 
         # Precheck passes and child is considered present; contention happens at parent update lock.
-        mod._parent_nextlink_state = lambda *_args, **_kwargs: ("ok", "")
-        mod._export_uuid = lambda uuid_str: {"exists": True, "retryable": False, "err": "", "obj": {"uuid": uuid_str}}
+        exit_models = mod._module("exit_models")
+        mod._parent_nextlink_state = lambda *_args, **_kwargs: exit_models.ExitParentNextlinkStateResult("ok", "")
+        mod._export_uuid = lambda uuid_str: exit_models.ExitExportResult(True, False, "", {"uuid": uuid_str})
 
         @contextlib.contextmanager
         def _busy_parent_lock(_parent_uuid: str):
@@ -5153,15 +5153,16 @@ def test_on_exit_lock_storm_circuit_requeues_remaining():
         mod._LOCK_STORM_THRESHOLD = 2
         mod._LOCK_BACKOFF_BASE = 0.0
         mod._LOCK_BACKOFF_MAX = 0.0
-        mod._export_uuid = lambda _u: {"exists": False, "retryable": True, "err": "database is locked", "obj": None}
+        exit_models = mod._module("exit_models")
+        mod._export_uuid = lambda _u: exit_models.ExitExportResult(False, True, "database is locked", None)
 
         captured = {"count": 0}
 
         def _requeue_capture(items):
             captured["count"] = len(items)
-            return True
+            return exit_models.ExitRequeueResult(True, 0)
 
-        mod._requeue_entries = _requeue_capture
+        mod._requeue_entries_result = _requeue_capture
         stats = mod._drain_queue()
         expect(stats.get("circuit_breaks") == 1, f"expected one circuit break, got: {stats}")
         expect(stats.get("requeued") == 3, f"expected three requeued entries, got: {stats}")
@@ -5193,8 +5194,8 @@ def test_on_exit_import_child_retries_on_lock():
         mod._sleep = lambda secs: sleeps.append(secs)
         mod.random.uniform = lambda _a, _b: 0.0
 
-        ok, err = mod._import_child({"uuid": "00000000-0000-0000-0000-000000000abc"})
-        expect(ok, f"import should succeed after retries, err={err}")
+        result = mod._import_child({"uuid": "00000000-0000-0000-0000-000000000abc"})
+        expect(result.ok, f"import should succeed after retries, err={result.err}")
         expect(calls["count"] == 3, f"unexpected retry count: {calls['count']}")
         expect(len(sleeps) == 2, f"unexpected sleep calls: {sleeps}")
 
@@ -6294,8 +6295,9 @@ def test_on_exit_requeue_failure_leaves_sqlite_entry_processing():
             )
             conn.commit()
 
-        mod._export_uuid = lambda _u: {"exists": False, "retryable": True, "err": "database is locked", "obj": None}
-        mod._requeue_entries = lambda _entries: False
+        exit_models = mod._module("exit_models")
+        mod._export_uuid = lambda _u: exit_models.ExitExportResult(False, True, "database is locked", None)
+        mod._requeue_entries_result = lambda _entries: exit_models.ExitRequeueResult(False, 1)
 
         stats = mod._drain_queue()
         expect(stats.get("requeue_failed") == 1, f"expected one requeue failure, got {stats}")
@@ -6317,7 +6319,7 @@ def test_on_exit_export_uuid_noisy_stdout():
 
     mod._run_task = _run_task_noisy
     obj = mod._export_uuid("00000000-0000-0000-0000-000000000111")
-    expect(obj and obj.get("exists"), "noisy stdout should still be treated as exists")
+    expect(obj and obj.exists, "noisy stdout should still be treated as exists")
 
 
 def test_on_exit_emit_exit_feedback_reaches_stdout_contract():

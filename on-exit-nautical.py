@@ -416,6 +416,70 @@ def _diag_record_run_task(cmd: list[str], *, ok: bool, elapsed: float) -> None:
         _diag_count_exit(f"run_task_failures_{bucket}")
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.environ.get(name, "")).strip().lower()
+    if not raw:
+        return bool(default)
+    if raw in {"1", "yes", "true", "on"}:
+        return True
+    if raw in {"0", "no", "false", "off"}:
+        return False
+    return bool(default)
+
+
+def _exit_progress_enabled(entries_total: int) -> bool:
+    if int(entries_total or 0) < 2:
+        return False
+    if not sys.stderr.isatty():
+        return False
+    if str(os.environ.get("TERM") or "").strip().lower() == "dumb":
+        return False
+    return _env_bool("NAUTICAL_EXIT_PROGRESS", bool(getattr(core, "EXIT_PROGRESS", True)))
+
+
+@contextmanager
+def _exit_progress_scope(entries_total: int):
+    if not _exit_progress_enabled(entries_total):
+        yield None
+        return
+    try:
+        from rich.console import Console
+        from rich.progress import (
+            BarColumn,
+            Progress,
+            TaskProgressColumn,
+            TextColumn,
+            TimeElapsedColumn,
+            TimeRemainingColumn,
+        )
+    except Exception:
+        yield None
+        return
+    try:
+        console = Console(file=sys.stderr, force_terminal=True)
+        with Progress(
+            TextColumn("[bold cyan]Nautical drain[/]"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            transient=True,
+            refresh_per_second=10,
+        ) as progress:
+            task_id = progress.add_task("drain", total=max(1, int(entries_total or 0)))
+
+            def _advance(advance: int = 1) -> None:
+                try:
+                    progress.update(task_id, advance=max(0, int(advance or 0)))
+                except Exception:
+                    pass
+
+            yield _advance
+    except Exception:
+        yield None
+
+
 def _export_cache_get(uuid_str: str):
     key = str(uuid_str or "").strip()
     if not key:
@@ -2079,9 +2143,13 @@ def _drain_queue_result():
         _preload_export_uuids(entries)
         _preload_equivalent_child_slots(entries)
 
-        for idx, entry in enumerate(entries):
-            if _process_queue_entry(idx, entry, state):
-                break
+        with _exit_progress_scope(batch.entries_total) as progress_update:
+            for idx, entry in enumerate(entries):
+                should_break = _process_queue_entry(idx, entry, state)
+                if progress_update is not None:
+                    progress_update(1)
+                if should_break:
+                    break
 
         requeue_result = _requeue_entries_result(state.requeue) if state.requeue else _module("exit_models").ExitRequeueResult(ok=True, failed=0)
         if not requeue_result.ok:

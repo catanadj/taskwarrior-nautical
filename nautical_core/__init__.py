@@ -463,6 +463,7 @@ CHECK_CHAIN_INTEGRITY = _conf_bool(
 )
 PANEL_MODE = _conf_str("panel_mode", "rich").lower()
 FAST_COLOR = _conf_bool("fast_color", True)
+EXIT_PROGRESS = _conf_bool("exit_progress", True)
 SPAWN_QUEUE_MAX_BYTES = _conf_int("spawn_queue_max_bytes", 524288, min_value=0)
 SPAWN_QUEUE_DRAIN_MAX_ITEMS = _conf_int("spawn_queue_drain_max_items", 200, min_value=0)
 MAX_CHAIN_WALK = _conf_int("max_chain_walk", 500, min_value=1)
@@ -3046,6 +3047,7 @@ __all__ = (
     'LOCAL_TZ_NAME',
     'MAX_LINK_NUMBER',
     'PANEL_MODE',
+    'EXIT_PROGRESS',
     'DEFAULT_DUE_HOUR',
     '_LOCAL_TZ',
     '_accept_roll_candidate',

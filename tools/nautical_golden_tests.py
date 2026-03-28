@@ -2328,6 +2328,32 @@ def test_on_modify_run_task_diag_bucket_stats():
     expect(abs(float(stats.get("run_task_seconds_export_chain", 0.0)) - 0.75) < 1e-9, f"unexpected chain export seconds: {stats}")
 
 
+def test_on_exit_drain_updates_progress_per_entry():
+    """on-exit drain should advance progress once per processed queue entry."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_progress_updates_test")
+    exit_models = mod._module("exit_models")
+
+    advances: list[int] = []
+
+    @contextlib.contextmanager
+    def _fake_progress_scope(total):
+        expect(total == 2, f"expected total=2, got {total}")
+        yield lambda advance=1: advances.append(int(advance))
+
+    mod._take_queue_batch = lambda: exit_models.ExitQueueBatch(entries=[{"id": 1}, {"id": 2}])
+    mod._load_finalized_intents = lambda: (set(), True)
+    mod._preload_export_uuids = lambda _entries: None
+    mod._preload_equivalent_child_slots = lambda _entries: None
+    mod._process_queue_entry = lambda _idx, _entry, _state: False
+    mod._exit_progress_scope = _fake_progress_scope
+
+    stats = mod._drain_queue_result()
+    expect(stats.entries_total == 2, f"unexpected stats total: {stats}")
+    expect(advances == [1, 1], f"expected one progress advance per entry, got {advances}")
+
+
+
 def test_on_exit_diag_blocks_pretty_print():
     """on-exit diag output should emit indented multi-line blocks."""
     hook = _find_hook_file("on-exit-nautical.py")

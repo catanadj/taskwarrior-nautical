@@ -5948,6 +5948,32 @@ def test_core_render_panel_line_force_rich_kind_skips_panel_line():
     expect("Title" in out and "Key" in out, "promoted rich/fast path should emit fallback panel text")
 
 
+def test_on_exit_equivalent_child_cache_reuses_slot_lookup():
+    """on-exit should reuse equivalent-child lookups for the same slot within one run."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_equiv_cache_test")
+
+    mod._reset_exit_equiv_child_cache()
+    child = {"chainID": "cid-1", "link": 3, "prevLink": "abc12345"}
+    calls = {"live": 0}
+
+    def _fake_existing_equivalent_child(*_args, **_kwargs):
+        calls["live"] += 1
+        return mod._module("exit_models").ExitEquivalentChildResult(False, False, "not found", None)
+
+    exit_queries = mod._module("exit_queries")
+    orig = exit_queries.existing_equivalent_child
+    try:
+        exit_queries.existing_equivalent_child = _fake_existing_equivalent_child
+        first = mod._existing_equivalent_child(child, "")
+        second = mod._existing_equivalent_child(child, "")
+    finally:
+        exit_queries.existing_equivalent_child = orig
+
+    expect(not first.exists and not second.exists, "expected cached miss results")
+    expect(calls["live"] == 1, f"expected one live equivalent-child lookup, got: {calls}")
+
+
 def test_on_exit_preloads_uuid_exports_for_early_checks():
     """on-exit should bulk-preload early parent/child exports and keep locked parent rechecks live."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -7366,6 +7392,7 @@ TESTS = [
     test_on_exit_drain_skips_finalized_sqlite_intent,
     test_on_exit_dead_letter_on_missing_fields,
     test_on_exit_import_child_retries_on_lock,
+    test_on_exit_equivalent_child_cache_reuses_slot_lookup,
     test_on_exit_preloads_uuid_exports_for_early_checks,
     test_on_exit_successful_import_reuses_initial_child_export,
     test_on_exit_dead_letter_on_import_failure,

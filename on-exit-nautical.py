@@ -371,6 +371,7 @@ _QUEUE_DB_OPEN_COUNT = 0
 _QUEUE_DB_REUSE_COUNT = 0
 _EXIT_DIAG_STATS: dict[str, float | int] = {}
 _EXIT_EXPORT_CACHE: dict[str, Any] = {}
+_EXIT_EQUIV_CHILD_CACHE: dict[tuple[str, str, str], Any] = {}
 _EXIT_PRELOAD_CHUNK_SIZE = 32
 
 
@@ -382,6 +383,11 @@ def _reset_exit_diag_stats() -> None:
 def _reset_exit_export_cache() -> None:
     global _EXIT_EXPORT_CACHE
     _EXIT_EXPORT_CACHE = {}
+
+
+def _reset_exit_equiv_child_cache() -> None:
+    global _EXIT_EQUIV_CHILD_CACHE
+    _EXIT_EQUIV_CHILD_CACHE = {}
 
 
 def _diag_count_exit(key: str, inc: float | int = 1) -> None:
@@ -531,6 +537,7 @@ def _queue_db_begin_run() -> None:
     _QUEUE_DB_REUSE_COUNT = 0
     _reset_exit_diag_stats()
     _reset_exit_export_cache()
+    _reset_exit_equiv_child_cache()
 
 
 def _queue_db_end_run() -> None:
@@ -1503,6 +1510,55 @@ def _short_uuid(value: str) -> str:
     return exit_queries.short_uuid(value, core=core)
 
 
+def _equivalent_child_cache_key(child: dict, parent_uuid: str = "") -> tuple[str, str, str] | None:
+    if not isinstance(child, dict):
+        return None
+    chain_id = str(child.get("chainID") or child.get("chainid") or "").strip()
+    link_no = child.get("link")
+    if not chain_id or link_no in (None, ""):
+        return None
+    try:
+        link_token = str(int(link_no))
+    except Exception:
+        return None
+    prev_link = str(child.get("prevLink") or "").strip()
+    if not prev_link and parent_uuid:
+        prev_link = _short_uuid(parent_uuid)
+    return (chain_id, link_token, prev_link)
+
+
+def _equivalent_child_cache_get(child: dict, parent_uuid: str = ""):
+    key = _equivalent_child_cache_key(child, parent_uuid)
+    if key is None:
+        return None
+    cached = _EXIT_EQUIV_CHILD_CACHE.get(key)
+    if cached is not None:
+        _diag_count_exit("equivalent_child_cache_hits")
+        return cached
+    _diag_count_exit("equivalent_child_cache_misses")
+    return None
+
+
+def _equivalent_child_cache_set(child: dict, parent_uuid: str, result) -> None:
+    key = _equivalent_child_cache_key(child, parent_uuid)
+    if key is None or result is None:
+        return
+    _EXIT_EQUIV_CHILD_CACHE[key] = result
+
+
+def _seed_equivalent_child_cache(child: dict, parent_uuid: str, child_uuid: str) -> None:
+    key = _equivalent_child_cache_key(child, parent_uuid)
+    if key is None or not child_uuid:
+        return
+    exit_models = _module("exit_models")
+    row = dict(child or {}) if isinstance(child, dict) else {}
+    row["uuid"] = child_uuid
+    if not row.get("prevLink") and parent_uuid:
+        row["prevLink"] = _short_uuid(parent_uuid)
+    _EXIT_EQUIV_CHILD_CACHE[key] = exit_models.ExitEquivalentChildResult(True, False, "", row)
+    _diag_count_exit("equivalent_child_cache_seeded")
+
+
 def _export_uuid(uuid_str: str, *, prefer_cache: bool = True):
     if prefer_cache:
         cached = _export_cache_get(uuid_str)
@@ -1526,8 +1582,11 @@ def _export_uuid(uuid_str: str, *, prefer_cache: bool = True):
 
 
 def _existing_equivalent_child(child: dict, parent_uuid: str = ""):
+    cached = _equivalent_child_cache_get(child, parent_uuid)
+    if cached is not None:
+        return cached
     exit_queries = _module("exit_queries")
-    return exit_queries.existing_equivalent_child(
+    result = exit_queries.existing_equivalent_child(
         child,
         parent_uuid=parent_uuid,
         task_cmd_prefix=_task_cmd_prefix(),
@@ -1538,6 +1597,9 @@ def _existing_equivalent_child(child: dict, parent_uuid: str = ""):
         is_lock_error=_is_lock_error,
         short_uuid_fn=_short_uuid,
     )
+    if not result.retryable:
+        _equivalent_child_cache_set(child, parent_uuid, result)
+    return result
 
 
 def _import_child(obj: dict):
@@ -1916,6 +1978,7 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     if parent_action == "continue":
         return False
 
+    _seed_equivalent_child_cache(child, parent_uuid, child_uuid)
     state.processed += 1
     state.mark_final(entry, "done", "processed")
     state.ack_sqlite(entry)
@@ -2023,6 +2086,9 @@ def _emit_drain_stats_diag(stats: dict) -> None:
         "run_task_seconds_export_uuid": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_export_uuid", 0.0)), 4),
         "run_task_seconds_export_equivalent_child": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_export_equivalent_child", 0.0)), 4),
         "run_task_seconds_import": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_import", 0.0)), 4),
+        "equivalent_child_cache_hits": _EXIT_DIAG_STATS.get("equivalent_child_cache_hits", 0),
+        "equivalent_child_cache_misses": _EXIT_DIAG_STATS.get("equivalent_child_cache_misses", 0),
+        "equivalent_child_cache_seeded": _EXIT_DIAG_STATS.get("equivalent_child_cache_seeded", 0),
         "run_task_seconds_modify_parent_nextlink": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_parent_nextlink", 0.0)), 4),
         "run_task_seconds_modify_cleanup": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_cleanup", 0.0)), 4),
         "run_task_seconds_modify_other": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_other", 0.0)), 4),

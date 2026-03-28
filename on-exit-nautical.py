@@ -378,6 +378,7 @@ _EXIT_STARTUP_STATS: dict[str, float | int] = {}
 _EXIT_EXPORT_CACHE: dict[str, Any] = {}
 _EXIT_EQUIV_CHILD_CACHE: dict[tuple[str, str, str], Any] = {}
 _EXIT_PRELOAD_CHUNK_SIZE = 32
+_EXIT_EQUIV_PRELOAD_CHUNK_SIZE = 8
 
 
 def _reset_exit_diag_stats() -> None:
@@ -1545,6 +1546,87 @@ def _equivalent_child_cache_key(child: dict, parent_uuid: str = "") -> tuple[str
     return (chain_id, link_token, prev_link)
 
 
+def _pick_equivalent_child_row(rows: list[dict]) -> dict | None:
+    for wanted in ("pending", "waiting", "completed"):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if (row.get("status") or "").strip().lower() != wanted:
+                continue
+            if (row.get("uuid") or "").strip():
+                return row
+    for row in rows:
+        if isinstance(row, dict) and (row.get("uuid") or "").strip():
+            return row
+    return None
+
+
+def _preload_equivalent_child_slots(entries: list[dict]) -> None:
+    exit_models = _module("exit_models")
+    slot_specs: dict[tuple[str, str, str], list[str]] = {}
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        child = entry.get("child") or {}
+        parent_uuid = str(entry.get("parent_uuid") or "").strip()
+        key = _equivalent_child_cache_key(child, parent_uuid)
+        if key is None or key in slot_specs:
+            continue
+        chain_id, link_token, prev_link = key
+        clause = [f"chainID:{chain_id}", f"link:{link_token}"]
+        if prev_link:
+            clause.append(f"prevLink:{prev_link}")
+        clause.append("status.not:deleted")
+        slot_specs[key] = clause
+    if not slot_specs:
+        return
+    prefix = _task_cmd_prefix()
+    keys = list(slot_specs.keys())
+    _diag_count_exit("equivalent_child_preload_slots", len(keys))
+    for chunk_keys in _chunked(keys, _EXIT_EQUIV_PRELOAD_CHUNK_SIZE):
+        _diag_count_exit("equivalent_child_preload_chunks")
+        cmd = list(prefix) + ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off"]
+        first = True
+        for key in chunk_keys:
+            if not first:
+                cmd.append("or")
+            first = False
+            cmd.extend(slot_specs[key])
+        cmd.append("export")
+        ok, out, err = _run_task(
+            cmd,
+            timeout=_TASK_TIMEOUT_EXPORT,
+            retries=_TASK_RETRIES_EXPORT,
+            retry_delay=_TASK_RETRY_DELAY,
+        )
+        if not ok:
+            continue
+        try:
+            rows = json.loads((out or "").strip() or "[]")
+        except Exception:
+            continue
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list):
+            continue
+        grouped: dict[tuple[str, str, str], list[dict]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_key = _equivalent_child_cache_key(row)
+            if row_key is None:
+                continue
+            grouped.setdefault(row_key, []).append(row)
+        for key in chunk_keys:
+            selected = _pick_equivalent_child_row(grouped.get(key, []))
+            if selected is not None:
+                _EXIT_EQUIV_CHILD_CACHE[key] = exit_models.ExitEquivalentChildResult(True, False, "", selected)
+                _diag_count_exit("equivalent_child_preload_hits")
+            else:
+                _EXIT_EQUIV_CHILD_CACHE[key] = exit_models.ExitEquivalentChildResult(False, False, "not found", None)
+                _diag_count_exit("equivalent_child_preload_misses")
+
+
 def _equivalent_child_cache_get(child: dict, parent_uuid: str = ""):
     key = _equivalent_child_cache_key(child, parent_uuid)
     if key is None:
@@ -2021,6 +2103,7 @@ def _drain_queue_result():
             intent_log_load_ms=float(intent_log_load_ms),
         )
         _preload_export_uuids(entries)
+        _preload_equivalent_child_slots(entries)
 
         for idx, entry in enumerate(entries):
             if _process_queue_entry(idx, entry, state):
@@ -2109,6 +2192,10 @@ def _emit_drain_stats_diag(stats: dict) -> None:
         "equivalent_child_cache_hits": _EXIT_DIAG_STATS.get("equivalent_child_cache_hits", 0),
         "equivalent_child_cache_misses": _EXIT_DIAG_STATS.get("equivalent_child_cache_misses", 0),
         "equivalent_child_cache_seeded": _EXIT_DIAG_STATS.get("equivalent_child_cache_seeded", 0),
+        "equivalent_child_preload_slots": _EXIT_DIAG_STATS.get("equivalent_child_preload_slots", 0),
+        "equivalent_child_preload_hits": _EXIT_DIAG_STATS.get("equivalent_child_preload_hits", 0),
+        "equivalent_child_preload_misses": _EXIT_DIAG_STATS.get("equivalent_child_preload_misses", 0),
+        "equivalent_child_preload_chunks": _EXIT_DIAG_STATS.get("equivalent_child_preload_chunks", 0),
         "run_task_seconds_modify_parent_nextlink": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_parent_nextlink", 0.0)), 4),
         "run_task_seconds_modify_cleanup": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_cleanup", 0.0)), 4),
         "run_task_seconds_modify_other": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_other", 0.0)), 4),

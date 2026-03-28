@@ -6013,6 +6013,56 @@ def test_on_exit_equivalent_child_cache_reuses_slot_lookup():
     expect(calls["live"] == 1, f"expected one live equivalent-child lookup, got: {calls}")
 
 
+def test_on_exit_preloads_equivalent_child_slots_for_early_checks():
+    """on-exit should bulk-preload equivalent-child slots and satisfy early lookups from cache."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_equiv_preload_test")
+
+    mod._reset_exit_equiv_child_cache()
+    mod._reset_exit_diag_stats()
+    child_a = {"chainID": "cid-a", "link": 2}
+    child_b = {"chainID": "cid-b", "link": 3, "prevLink": "bbb22222"}
+    entries = [
+        {"parent_uuid": "aaa11111-0000-0000-0000-000000000000", "child": child_a},
+        {"parent_uuid": "", "child": child_b},
+    ]
+    calls = {"run": 0, "live": 0}
+
+    def _fake_run_task(cmd, **_kwargs):
+        calls["run"] += 1
+        expect(cmd.count("or") == 1, f"expected one OR batch for equivalent-child preload: {cmd}")
+        rows = [
+            {
+                "uuid": "11111111-0000-0000-0000-000000000000",
+                "chainID": "cid-a",
+                "link": 2,
+                "prevLink": "aaa11111",
+                "status": "pending",
+            }
+        ]
+        return True, json.dumps(rows), ""
+
+    def _fake_existing_equivalent_child(*_args, **_kwargs):
+        calls["live"] += 1
+        raise AssertionError("live equivalent-child lookup should not be used after preload")
+
+    mod._run_task = _fake_run_task
+    exit_queries = mod._module("exit_queries")
+    orig = exit_queries.existing_equivalent_child
+    try:
+        exit_queries.existing_equivalent_child = _fake_existing_equivalent_child
+        mod._preload_equivalent_child_slots(entries)
+        res_a = mod._existing_equivalent_child(child_a, "aaa11111-0000-0000-0000-000000000000")
+        res_b = mod._existing_equivalent_child(child_b, "")
+    finally:
+        exit_queries.existing_equivalent_child = orig
+
+    expect(calls["run"] == 1, f"expected one preload batch run, got: {calls}")
+    expect(calls["live"] == 0, f"expected no live equivalent-child lookup after preload, got: {calls}")
+    expect(res_a.exists and isinstance(res_a.obj, dict), f"expected positive preloaded equivalent-child match: {res_a}")
+    expect(not res_b.exists and not res_b.retryable, f"expected negative preloaded equivalent-child miss: {res_b}")
+
+
 def test_on_exit_preloads_uuid_exports_for_early_checks():
     """on-exit should bulk-preload early parent/child exports and keep locked parent rechecks live."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -7434,6 +7484,7 @@ TESTS = [
     test_on_exit_dead_letter_on_missing_fields,
     test_on_exit_import_child_retries_on_lock,
     test_on_exit_equivalent_child_cache_reuses_slot_lookup,
+    test_on_exit_preloads_equivalent_child_slots_for_early_checks,
     test_on_exit_preloads_uuid_exports_for_early_checks,
     test_on_exit_successful_import_reuses_initial_child_export,
     test_on_exit_dead_letter_on_import_failure,

@@ -7658,5 +7658,16 @@ def main():
     
     sys.exit(1 if fails else 0)
 
+def test_core_explicit_facade_all_contains_supported_symbols() -> None:
+    import nautical_core as core
+
+    exported = set(getattr(core, '__all__', ()))
+    assert 'resolve_task_data_context' in exported
+    assert 'next_after_expr' in exported
+    assert 'render_panel' in exported
+    assert '_import_sibling' not in exported
+
+
+
 if __name__ == "__main__":
     main()

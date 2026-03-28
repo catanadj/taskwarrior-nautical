@@ -437,6 +437,19 @@ def _exit_progress_enabled(entries_total: int) -> bool:
     return _env_bool("NAUTICAL_EXIT_PROGRESS", bool(getattr(core, "EXIT_PROGRESS", True)))
 
 
+def _exit_progress_counts(state: object | None) -> str:
+    if state is None:
+        return "ok:0 skip:0 rq:0 dead:0"
+    try:
+        ok = int(getattr(state, "processed", 0) or 0)
+        skip = int(getattr(state, "skipped_idempotent", 0) or 0)
+        rq = len(getattr(state, "requeue", []) or [])
+        dead = int(getattr(state, "dead_lettered", 0) or 0)
+        return f"ok:{ok} skip:{skip} rq:{rq} dead:{dead}"
+    except Exception:
+        return "ok:0 skip:0 rq:0 dead:0"
+
+
 @contextmanager
 def _exit_progress_scope(entries_total: int):
     if not _exit_progress_enabled(entries_total):
@@ -458,20 +471,33 @@ def _exit_progress_scope(entries_total: int):
     try:
         console = Console(file=sys.stderr, force_terminal=True)
         with Progress(
-            TextColumn("[bold cyan]Nautical drain[/]"),
+            TextColumn("[bold cyan]Nautical[/]"),
+            TextColumn("[dim]{task.fields[phase]}[/]"),
             BarColumn(),
             TaskProgressColumn(),
             TimeElapsedColumn(),
             TimeRemainingColumn(),
+            TextColumn("[dim]{task.fields[counts]}[/]"),
             console=console,
             transient=True,
             refresh_per_second=10,
         ) as progress:
-            task_id = progress.add_task("drain", total=max(1, int(entries_total or 0)))
+            task_id = progress.add_task(
+                "drain",
+                total=max(1, int(entries_total or 0)),
+                phase="preload",
+                counts=_exit_progress_counts(None),
+            )
 
-            def _advance(advance: int = 1) -> None:
+            def _advance(*, advance: int = 0, phase: str | None = None, state: object | None = None) -> None:
                 try:
-                    progress.update(task_id, advance=max(0, int(advance or 0)))
+                    kwargs = {
+                        "advance": max(0, int(advance or 0)),
+                        "counts": _exit_progress_counts(state),
+                    }
+                    if phase is not None:
+                        kwargs["phase"] = str(phase)
+                    progress.update(task_id, **kwargs)
                 except Exception:
                     pass
 
@@ -2140,18 +2166,25 @@ def _drain_queue_result():
             intent_log_ready=bool(intent_log_ready),
             intent_log_load_ms=float(intent_log_load_ms),
         )
-        _preload_export_uuids(entries)
-        _preload_equivalent_child_slots(entries)
-
         with _exit_progress_scope(batch.entries_total) as progress_update:
+            if progress_update is not None:
+                progress_update(phase="preload", state=state)
+            _preload_export_uuids(entries)
+            _preload_equivalent_child_slots(entries)
+            if progress_update is not None:
+                progress_update(phase="drain", state=state)
+
             for idx, entry in enumerate(entries):
                 should_break = _process_queue_entry(idx, entry, state)
                 if progress_update is not None:
-                    progress_update(1)
+                    progress_update(advance=1, phase="drain", state=state)
                 if should_break:
                     break
 
-        requeue_result = _requeue_entries_result(state.requeue) if state.requeue else _module("exit_models").ExitRequeueResult(ok=True, failed=0)
+            if progress_update is not None:
+                progress_update(phase="finalize", state=state)
+
+            requeue_result = _requeue_entries_result(state.requeue) if state.requeue else _module("exit_models").ExitRequeueResult(ok=True, failed=0)
         if not requeue_result.ok:
             state.errors += requeue_result.failed
             _diag(f"requeue failed for {requeue_result.failed} entries")

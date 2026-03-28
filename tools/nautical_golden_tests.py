@@ -2334,12 +2334,20 @@ def test_on_exit_drain_updates_progress_per_entry():
     mod = _load_hook_module(hook, "_nautical_on_exit_progress_updates_test")
     exit_models = mod._module("exit_models")
 
-    advances: list[int] = []
+    updates: list[dict[str, object]] = []
 
     @contextlib.contextmanager
     def _fake_progress_scope(total):
         expect(total == 2, f"expected total=2, got {total}")
-        yield lambda advance=1: advances.append(int(advance))
+
+        def _update(*, advance=0, phase=None, state=None):
+            updates.append({
+                "advance": int(advance),
+                "phase": phase,
+                "processed": int(getattr(state, "processed", 0) or 0) if state is not None else None,
+            })
+
+        yield _update
 
     mod._take_queue_batch = lambda: exit_models.ExitQueueBatch(entries=[{"id": 1}, {"id": 2}])
     mod._load_finalized_intents = lambda: (set(), True)
@@ -2350,7 +2358,9 @@ def test_on_exit_drain_updates_progress_per_entry():
 
     stats = mod._drain_queue_result()
     expect(stats.entries_total == 2, f"unexpected stats total: {stats}")
-    expect(advances == [1, 1], f"expected one progress advance per entry, got {advances}")
+    expect([u["phase"] for u in updates[:2]] == ["preload", "drain"], f"unexpected initial phases: {updates}")
+    expect([u["advance"] for u in updates if u["advance"]] == [1, 1], f"expected one progress advance per entry, got {updates}")
+    expect(updates[-1]["phase"] == "finalize", f"expected finalize phase, got {updates}")
 
 
 

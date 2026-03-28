@@ -90,6 +90,8 @@ _QUEUE_MODELS = None
 _QUEUE_MODELS_LOAD_FAILED = False
 _EXIT_MODELS = None
 _EXIT_MODELS_LOAD_FAILED = False
+_EXIT_RUNTIME = None
+_EXIT_RUNTIME_LOAD_FAILED = False
 _HOOK_CONTEXT = None
 _HOOK_CONTEXT_LOAD_FAILED = False
 _HOOK_ENGINE = None
@@ -138,6 +140,12 @@ _MODULE_SPECS = {
         "_EXIT_MODELS_LOAD_FAILED",
         "exit_models.py",
         "nautical_core.exit_models",
+    ),
+    "exit_runtime": (
+        "_EXIT_RUNTIME",
+        "_EXIT_RUNTIME_LOAD_FAILED",
+        "exit_runtime.py",
+        "nautical_core.exit_runtime",
     ),
     "hook_context": (
         "_HOOK_CONTEXT",
@@ -333,36 +341,42 @@ _QUEUE_DB_CONNECT_RETRIES = _env_int("NAUTICAL_QUEUE_DB_CONNECT_RETRIES", 3)
 _QUEUE_DB_CONNECT_TIMEOUT_MAX = _env_float("NAUTICAL_QUEUE_DB_CONNECT_TIMEOUT_MAX", 60.0)
 _QUEUE_DB_CONNECT_BACKOFF_BASE = _env_float("NAUTICAL_QUEUE_DB_CONNECT_BACKOFF_BASE", 0.05)
 
-_RUN_QUEUE_DB_CONN: sqlite3.Connection | None = None
-_RUN_QUEUE_DB_ACTIVE = False
-_QUEUE_DB_OPEN_COUNT = 0
-_QUEUE_DB_REUSE_COUNT = 0
-_EXIT_DIAG_STATS: dict[str, float | int] = {}
-_EXIT_STARTUP_STATS: dict[str, float | int] = {}
-_EXIT_EXPORT_CACHE: dict[str, Any] = {}
-_EXIT_EQUIV_CHILD_CACHE: dict[tuple[str, str, str], Any] = {}
+_EXIT_RUNTIME_STATE = None
 _EXIT_PRELOAD_CHUNK_SIZE = 32
 _EXIT_EQUIV_PRELOAD_CHUNK_SIZE = 8
 
 
+def _exit_runtime_state():
+    global _EXIT_RUNTIME_STATE
+    if _EXIT_RUNTIME_STATE is None:
+        exit_runtime = _module("exit_runtime")
+        _EXIT_RUNTIME_STATE = exit_runtime.new_runtime_state()
+    return _EXIT_RUNTIME_STATE
+
+
+def _reset_exit_runtime_state() -> None:
+    global _EXIT_RUNTIME_STATE
+    exit_runtime = _module("exit_runtime")
+    _EXIT_RUNTIME_STATE = exit_runtime.new_runtime_state()
+
+
 def _reset_exit_diag_stats() -> None:
-    global _EXIT_DIAG_STATS
-    _EXIT_DIAG_STATS = {}
+    _exit_runtime_state().diag_stats = {}
 
 
 def _reset_exit_export_cache() -> None:
-    global _EXIT_EXPORT_CACHE
-    _EXIT_EXPORT_CACHE = {}
+    _exit_runtime_state().export_cache = {}
 
 
 def _reset_exit_equiv_child_cache() -> None:
-    global _EXIT_EQUIV_CHILD_CACHE
-    _EXIT_EQUIV_CHILD_CACHE = {}
+    _exit_runtime_state().equiv_child_cache = {}
 
 
 def _diag_count_exit(key: str, inc: float | int = 1) -> None:
     try:
-        _EXIT_DIAG_STATS[key] = _EXIT_DIAG_STATS.get(key, 0) + inc
+        state = _exit_runtime_state()
+        stats = state.diag_stats
+        stats[key] = stats.get(key, 0) + inc
     except Exception:
         pass
 
@@ -406,7 +420,7 @@ def _export_cache_get(uuid_str: str):
     key = str(uuid_str or "").strip()
     if not key:
         return None
-    cached = _EXIT_EXPORT_CACHE.get(key)
+    cached = _exit_runtime_state().export_cache.get(key)
     if cached is not None:
         _diag_count_exit("preload_export_hits")
         return cached
@@ -418,7 +432,7 @@ def _export_cache_set(uuid_str: str, result) -> None:
     key = str(uuid_str or "").strip()
     if not key or result is None:
         return
-    _EXIT_EXPORT_CACHE[key] = result
+    _exit_runtime_state().export_cache[key] = result
 
 
 def _chunked(items: list[str], size: int):
@@ -501,20 +515,23 @@ def _preload_export_uuids(entries: list[dict]) -> None:
 
 
 def _queue_db_begin_run() -> None:
-    global _RUN_QUEUE_DB_ACTIVE, _QUEUE_DB_OPEN_COUNT, _QUEUE_DB_REUSE_COUNT
-    _RUN_QUEUE_DB_ACTIVE = True
-    _QUEUE_DB_OPEN_COUNT = 0
-    _QUEUE_DB_REUSE_COUNT = 0
+    state = _exit_runtime_state()
+    state.run_queue_db_active = True
+    state.run_queue_db_conn = None
+    state.queue_db_open_count = 0
+    state.queue_db_reuse_count = 0
+    state.queue_lock_failures_this_run = 0
+    state.last_queue_lock_diag_ts = 0.0
     _reset_exit_diag_stats()
     _reset_exit_export_cache()
     _reset_exit_equiv_child_cache()
 
 
 def _queue_db_end_run() -> None:
-    global _RUN_QUEUE_DB_ACTIVE, _RUN_QUEUE_DB_CONN
-    _RUN_QUEUE_DB_ACTIVE = False
-    conn = _RUN_QUEUE_DB_CONN
-    _RUN_QUEUE_DB_CONN = None
+    state = _exit_runtime_state()
+    state.run_queue_db_active = False
+    conn = state.run_queue_db_conn
+    state.run_queue_db_conn = None
     if conn is not None:
         try:
             conn.close()
@@ -976,17 +993,13 @@ def _tw_lock_recent(max_age_s: float = 5.0) -> bool:
 def _sleep(secs: float) -> None:
     time.sleep(secs)
 
-_LAST_QUEUE_LOCK_DIAG_TS = 0.0
-_QUEUE_LOCK_FAILURES_THIS_RUN = 0
-
 def _record_queue_lock_failure() -> None:
-    global _LAST_QUEUE_LOCK_DIAG_TS
-    global _QUEUE_LOCK_FAILURES_THIS_RUN
-    _QUEUE_LOCK_FAILURES_THIS_RUN += 1
+    state = _exit_runtime_state()
+    state.queue_lock_failures_this_run += 1
     now = time.time()
-    if now - _LAST_QUEUE_LOCK_DIAG_TS >= 60.0:
+    if now - state.last_queue_lock_diag_ts >= 60.0:
         _diag("queue lock not acquired; drain deferred")
-        _LAST_QUEUE_LOCK_DIAG_TS = now
+        state.last_queue_lock_diag_ts = now
     try:
         payload: dict[str, Any] = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -1323,7 +1336,7 @@ def _fsync_dir(path: Path) -> None:
             pass
 
 def _queue_db_connect_result():
-    global _QUEUE_DB_OPEN_COUNT
+    state = _exit_runtime_state()
     queue_store = _module("queue_store")
     db_path = _QUEUE_DB_PATH
     timeout_base = max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0)
@@ -1339,7 +1352,7 @@ def _queue_db_connect_result():
         sleep_fn=_sleep,
     )
     if result.conn is not None:
-        _QUEUE_DB_OPEN_COUNT += 1
+        state.queue_db_open_count += 1
     return result
 
 
@@ -1349,15 +1362,15 @@ def _queue_db_init(conn: sqlite3.Connection) -> None:
 
 
 def _queue_db_open_ready() -> sqlite3.Connection | None:
-    global _RUN_QUEUE_DB_CONN, _QUEUE_DB_REUSE_COUNT
-    if _RUN_QUEUE_DB_ACTIVE and _RUN_QUEUE_DB_CONN is not None:
+    state = _exit_runtime_state()
+    if state.run_queue_db_active and state.run_queue_db_conn is not None:
         try:
-            _RUN_QUEUE_DB_CONN.execute("SELECT 1")
-            _QUEUE_DB_REUSE_COUNT += 1
-            return _RUN_QUEUE_DB_CONN
+            state.run_queue_db_conn.execute("SELECT 1")
+            state.queue_db_reuse_count += 1
+            return state.run_queue_db_conn
         except Exception:
-            _queue_close_silent(_RUN_QUEUE_DB_CONN)
-            _RUN_QUEUE_DB_CONN = None
+            _queue_close_silent(state.run_queue_db_conn)
+            state.run_queue_db_conn = None
     queue_store = _module("queue_store")
     db_path = _QUEUE_DB_PATH
     result = queue_store.open_ready_queue_db_result(
@@ -1368,15 +1381,16 @@ def _queue_db_open_ready() -> sqlite3.Connection | None:
         diag=_diag,
     )
     conn = result.conn
-    if _RUN_QUEUE_DB_ACTIVE and conn is not None:
-        _RUN_QUEUE_DB_CONN = conn
+    if state.run_queue_db_active and conn is not None:
+        state.run_queue_db_conn = conn
     return conn
 
 
 def _queue_close_silent(conn: sqlite3.Connection) -> None:
     if conn is None:
         return
-    if _RUN_QUEUE_DB_ACTIVE and conn is _RUN_QUEUE_DB_CONN:
+    state = _exit_runtime_state()
+    if state.run_queue_db_active and conn is state.run_queue_db_conn:
         return
     queue_store = _module("queue_store")
     queue_store.close_silent(conn)
@@ -1584,10 +1598,10 @@ def _preload_equivalent_child_slots(entries: list[dict]) -> None:
         for key in chunk_keys:
             selected = _pick_equivalent_child_row(grouped.get(key, []))
             if selected is not None:
-                _EXIT_EQUIV_CHILD_CACHE[key] = exit_models.ExitEquivalentChildResult(True, False, "", selected)
+                _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(True, False, "", selected)
                 _diag_count_exit("equivalent_child_preload_hits")
             else:
-                _EXIT_EQUIV_CHILD_CACHE[key] = exit_models.ExitEquivalentChildResult(False, False, "not found", None)
+                _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(False, False, "not found", None)
                 _diag_count_exit("equivalent_child_preload_misses")
 
 
@@ -1595,7 +1609,7 @@ def _equivalent_child_cache_get(child: dict, parent_uuid: str = ""):
     key = _equivalent_child_cache_key(child, parent_uuid)
     if key is None:
         return None
-    cached = _EXIT_EQUIV_CHILD_CACHE.get(key)
+    cached = _exit_runtime_state().equiv_child_cache.get(key)
     if cached is not None:
         _diag_count_exit("equivalent_child_cache_hits")
         return cached
@@ -1607,7 +1621,7 @@ def _equivalent_child_cache_set(child: dict, parent_uuid: str, result) -> None:
     key = _equivalent_child_cache_key(child, parent_uuid)
     if key is None or result is None:
         return
-    _EXIT_EQUIV_CHILD_CACHE[key] = result
+    _exit_runtime_state().equiv_child_cache[key] = result
 
 
 def _seed_equivalent_child_cache(child: dict, parent_uuid: str, child_uuid: str) -> None:
@@ -1619,7 +1633,7 @@ def _seed_equivalent_child_cache(child: dict, parent_uuid: str, child_uuid: str)
     row["uuid"] = child_uuid
     if not row.get("prevLink") and parent_uuid:
         row["prevLink"] = _short_uuid(parent_uuid)
-    _EXIT_EQUIV_CHILD_CACHE[key] = exit_models.ExitEquivalentChildResult(True, False, "", row)
+    _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(True, False, "", row)
     _diag_count_exit("equivalent_child_cache_seeded")
 
 
@@ -1846,7 +1860,7 @@ class _DrainState:
             requeued=len(self.requeue) if requeue_ok else 0,
             requeue_failed=requeue_failed,
             dead_lettered=self.dead_lettered,
-            queue_lock_failures=_QUEUE_LOCK_FAILURES_THIS_RUN,
+            queue_lock_failures=_exit_runtime_state().queue_lock_failures_this_run,
             entries_total=self.entries_total,
             entries_skipped_idempotent=self.skipped_idempotent,
             lock_events=self.lock_events,
@@ -1857,12 +1871,12 @@ class _DrainState:
             intent_log_load_ms=round(self.intent_log_load_ms, 3),
             intent_mark_ok=self.intent_mark_ok,
             intent_mark_fail=self.intent_mark_fail,
-            queue_db_opens=_QUEUE_DB_OPEN_COUNT,
-            queue_db_reuses=_QUEUE_DB_REUSE_COUNT,
-            preload_export_uuids=int(_EXIT_DIAG_STATS.get("preload_export_uuids", 0)),
-            preload_export_hits=int(_EXIT_DIAG_STATS.get("preload_export_hits", 0)),
-            preload_export_misses=int(_EXIT_DIAG_STATS.get("preload_export_misses", 0)),
-            preload_export_chunks=int(_EXIT_DIAG_STATS.get("preload_export_chunks", 0)),
+            queue_db_opens=_exit_runtime_state().queue_db_open_count,
+            queue_db_reuses=_exit_runtime_state().queue_db_reuse_count,
+            preload_export_uuids=int(_exit_runtime_state().diag_stats.get("preload_export_uuids", 0)),
+            preload_export_hits=int(_exit_runtime_state().diag_stats.get("preload_export_hits", 0)),
+            preload_export_misses=int(_exit_runtime_state().diag_stats.get("preload_export_misses", 0)),
+            preload_export_chunks=int(_exit_runtime_state().diag_stats.get("preload_export_chunks", 0)),
             drain_ms=round((time.perf_counter() - drain_t0) * 1000.0, 3),
         )
 
@@ -1918,28 +1932,32 @@ def _build_exit_entry_context(
     )
 
 
+def _exit_runtime_services():
+    exit_runtime = _module("exit_runtime")
+    return exit_runtime.ExitRuntimeServices(
+        state=_exit_runtime_state(),
+        parent_nextlink_state=_parent_nextlink_state,
+        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
+        export_uuid=_export_uuid,
+        import_child=_import_child,
+        is_lock_error=_is_lock_error,
+        diag=_diag,
+        update_parent_nextlink=_update_parent_nextlink,
+        cleanup_orphan_child=_cleanup_orphan_child,
+    )
+
+
 def _precheck_parent_link_state(ctx) -> tuple[str, bool]:
     exit_entry_flow = _module("exit_entry_flow")
-    exit_models = _module("exit_models")
-    services = exit_models.ExitPrecheckServices(
-        parent_nextlink_state=lambda parent_uuid, child_short, expected_prev: _parent_nextlink_state(
-            parent_uuid, child_short, expected_prev, prefer_cache=True
-        ),
-        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
-    )
+    exit_runtime = _module("exit_runtime")
+    services = exit_runtime.build_precheck_services(_exit_runtime_services())
     return exit_entry_flow.precheck_parent_link_state(ctx, services=services)
 
 
 def _ensure_child_exists_for_entry(ctx, *, initial_export_res=None) -> tuple[str, bool]:
     exit_entry_flow = _module("exit_entry_flow")
-    exit_models = _module("exit_models")
-    services = exit_models.ExitEnsureChildServices(
-        export_uuid=lambda uuid_str, prefer_cache=True: _export_uuid(uuid_str, prefer_cache=prefer_cache),
-        import_child=lambda obj: _import_child(obj),
-        is_lock_error=_is_lock_error,
-        diag=_diag,
-        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
-    )
+    exit_runtime = _module("exit_runtime")
+    services = exit_runtime.build_ensure_child_services(_exit_runtime_services())
     return exit_entry_flow.ensure_child_exists_for_entry(
         ctx,
         services=services,
@@ -1954,16 +1972,8 @@ def _apply_parent_update_for_entry(
     imported: bool,
 ) -> str:
     exit_entry_flow = _module("exit_entry_flow")
-    exit_models = _module("exit_models")
-    services = exit_models.ExitApplyParentUpdateServices(
-        update_parent_nextlink=lambda parent_uuid, child_short, expected_prev: _update_parent_nextlink(
-            parent_uuid, child_short, expected_prev
-        ),
-        is_lock_error=_is_lock_error,
-        cleanup_orphan_child=_cleanup_orphan_child,
-        diag=_diag,
-        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
-    )
+    exit_runtime = _module("exit_runtime")
+    services = exit_runtime.build_apply_parent_update_services(_exit_runtime_services())
     return exit_entry_flow.apply_parent_update_for_entry(
         ctx,
         parent_linked_already=parent_linked_already,
@@ -2103,8 +2113,9 @@ def _redirect_stdout_to_devnull() -> None:
 def _emit_drain_stats_diag(stats: dict) -> None:
     if os.environ.get("NAUTICAL_DIAG") != "1":
         return
-    if _EXIT_STARTUP_STATS:
-        _diag_block("on-exit startup", _EXIT_STARTUP_STATS.items(), columns=2)
+    startup_stats = _exit_runtime_state().startup_stats
+    if startup_stats:
+        _diag_block("on-exit startup", startup_stats.items(), columns=2)
     drain_items = [
         ("entries_total", stats.get("entries_total", 0)),
         ("idempotent_skipped", stats.get("entries_skipped_idempotent", 0)),
@@ -2131,41 +2142,42 @@ def _emit_drain_stats_diag(stats: dict) -> None:
         ("drain_ms", stats.get("drain_ms", 0)),
     ]
     _diag_block("on-exit drain", drain_items, columns=3)
+    diag_stats = _exit_runtime_state().diag_stats
     task_stats = {
-        "run_task_calls": _EXIT_DIAG_STATS.get("run_task_calls", 0),
-        "run_task_failures": _EXIT_DIAG_STATS.get("run_task_failures", 0),
-        "run_task_calls_export_uuid": _EXIT_DIAG_STATS.get("run_task_calls_export_uuid", 0),
-        "run_task_calls_export_equivalent_child": _EXIT_DIAG_STATS.get("run_task_calls_export_equivalent_child", 0),
-        "run_task_calls_import": _EXIT_DIAG_STATS.get("run_task_calls_import", 0),
-        "run_task_calls_modify_parent_nextlink": _EXIT_DIAG_STATS.get("run_task_calls_modify_parent_nextlink", 0),
-        "run_task_calls_modify_cleanup": _EXIT_DIAG_STATS.get("run_task_calls_modify_cleanup", 0),
-        "run_task_calls_modify_other": _EXIT_DIAG_STATS.get("run_task_calls_modify_other", 0),
-        "run_task_calls_export_other": _EXIT_DIAG_STATS.get("run_task_calls_export_other", 0),
-        "run_task_calls_other": _EXIT_DIAG_STATS.get("run_task_calls_other", 0),
-        "run_task_failures_export_uuid": _EXIT_DIAG_STATS.get("run_task_failures_export_uuid", 0),
-        "run_task_failures_export_equivalent_child": _EXIT_DIAG_STATS.get("run_task_failures_export_equivalent_child", 0),
-        "run_task_failures_import": _EXIT_DIAG_STATS.get("run_task_failures_import", 0),
-        "run_task_failures_modify_parent_nextlink": _EXIT_DIAG_STATS.get("run_task_failures_modify_parent_nextlink", 0),
-        "run_task_failures_modify_cleanup": _EXIT_DIAG_STATS.get("run_task_failures_modify_cleanup", 0),
-        "run_task_failures_modify_other": _EXIT_DIAG_STATS.get("run_task_failures_modify_other", 0),
-        "run_task_failures_export_other": _EXIT_DIAG_STATS.get("run_task_failures_export_other", 0),
-        "run_task_failures_other": _EXIT_DIAG_STATS.get("run_task_failures_other", 0),
-        "run_task_seconds_export_uuid": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_export_uuid", 0.0)), 4),
-        "run_task_seconds_export_equivalent_child": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_export_equivalent_child", 0.0)), 4),
-        "run_task_seconds_import": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_import", 0.0)), 4),
-        "equivalent_child_cache_hits": _EXIT_DIAG_STATS.get("equivalent_child_cache_hits", 0),
-        "equivalent_child_cache_misses": _EXIT_DIAG_STATS.get("equivalent_child_cache_misses", 0),
-        "equivalent_child_cache_seeded": _EXIT_DIAG_STATS.get("equivalent_child_cache_seeded", 0),
-        "equivalent_child_preload_slots": _EXIT_DIAG_STATS.get("equivalent_child_preload_slots", 0),
-        "equivalent_child_preload_hits": _EXIT_DIAG_STATS.get("equivalent_child_preload_hits", 0),
-        "equivalent_child_preload_misses": _EXIT_DIAG_STATS.get("equivalent_child_preload_misses", 0),
-        "equivalent_child_preload_chunks": _EXIT_DIAG_STATS.get("equivalent_child_preload_chunks", 0),
-        "run_task_seconds_modify_parent_nextlink": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_parent_nextlink", 0.0)), 4),
-        "run_task_seconds_modify_cleanup": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_cleanup", 0.0)), 4),
-        "run_task_seconds_modify_other": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_modify_other", 0.0)), 4),
-        "run_task_seconds_export_other": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_export_other", 0.0)), 4),
-        "run_task_seconds_other": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_other", 0.0)), 4),
-        "run_task_seconds": round(float(_EXIT_DIAG_STATS.get("run_task_seconds", 0.0)), 4),
+        "run_task_calls": diag_stats.get("run_task_calls", 0),
+        "run_task_failures": diag_stats.get("run_task_failures", 0),
+        "run_task_calls_export_uuid": diag_stats.get("run_task_calls_export_uuid", 0),
+        "run_task_calls_export_equivalent_child": diag_stats.get("run_task_calls_export_equivalent_child", 0),
+        "run_task_calls_import": diag_stats.get("run_task_calls_import", 0),
+        "run_task_calls_modify_parent_nextlink": diag_stats.get("run_task_calls_modify_parent_nextlink", 0),
+        "run_task_calls_modify_cleanup": diag_stats.get("run_task_calls_modify_cleanup", 0),
+        "run_task_calls_modify_other": diag_stats.get("run_task_calls_modify_other", 0),
+        "run_task_calls_export_other": diag_stats.get("run_task_calls_export_other", 0),
+        "run_task_calls_other": diag_stats.get("run_task_calls_other", 0),
+        "run_task_failures_export_uuid": diag_stats.get("run_task_failures_export_uuid", 0),
+        "run_task_failures_export_equivalent_child": diag_stats.get("run_task_failures_export_equivalent_child", 0),
+        "run_task_failures_import": diag_stats.get("run_task_failures_import", 0),
+        "run_task_failures_modify_parent_nextlink": diag_stats.get("run_task_failures_modify_parent_nextlink", 0),
+        "run_task_failures_modify_cleanup": diag_stats.get("run_task_failures_modify_cleanup", 0),
+        "run_task_failures_modify_other": diag_stats.get("run_task_failures_modify_other", 0),
+        "run_task_failures_export_other": diag_stats.get("run_task_failures_export_other", 0),
+        "run_task_failures_other": diag_stats.get("run_task_failures_other", 0),
+        "run_task_seconds_export_uuid": round(float(diag_stats.get("run_task_seconds_export_uuid", 0.0)), 4),
+        "run_task_seconds_export_equivalent_child": round(float(diag_stats.get("run_task_seconds_export_equivalent_child", 0.0)), 4),
+        "run_task_seconds_import": round(float(diag_stats.get("run_task_seconds_import", 0.0)), 4),
+        "equivalent_child_cache_hits": diag_stats.get("equivalent_child_cache_hits", 0),
+        "equivalent_child_cache_misses": diag_stats.get("equivalent_child_cache_misses", 0),
+        "equivalent_child_cache_seeded": diag_stats.get("equivalent_child_cache_seeded", 0),
+        "equivalent_child_preload_slots": diag_stats.get("equivalent_child_preload_slots", 0),
+        "equivalent_child_preload_hits": diag_stats.get("equivalent_child_preload_hits", 0),
+        "equivalent_child_preload_misses": diag_stats.get("equivalent_child_preload_misses", 0),
+        "equivalent_child_preload_chunks": diag_stats.get("equivalent_child_preload_chunks", 0),
+        "run_task_seconds_modify_parent_nextlink": round(float(diag_stats.get("run_task_seconds_modify_parent_nextlink", 0.0)), 4),
+        "run_task_seconds_modify_cleanup": round(float(diag_stats.get("run_task_seconds_modify_cleanup", 0.0)), 4),
+        "run_task_seconds_modify_other": round(float(diag_stats.get("run_task_seconds_modify_other", 0.0)), 4),
+        "run_task_seconds_export_other": round(float(diag_stats.get("run_task_seconds_export_other", 0.0)), 4),
+        "run_task_seconds_other": round(float(diag_stats.get("run_task_seconds_other", 0.0)), 4),
+        "run_task_seconds": round(float(diag_stats.get("run_task_seconds", 0.0)), 4),
     }
     _diag_block("on-exit task stats", task_stats.items(), columns=3)
 
@@ -2183,7 +2195,7 @@ def _strict_exit_feedback_message(stats: dict) -> str | None:
 
 
 def main() -> int:
-    global _EXIT_STARTUP_STATS
+    _reset_exit_runtime_state()
     startup_t0 = time.perf_counter()
     module_t0 = time.perf_counter()
     hook_context = _module("hook_context")
@@ -2193,7 +2205,7 @@ def main() -> int:
     request_t0 = time.perf_counter()
     request = hook_context.build_on_exit_request(runtime=_build_hook_runtime_context())
     request_ms = round((time.perf_counter() - request_t0) * 1000.0, 3)
-    _EXIT_STARTUP_STATS = {
+    _exit_runtime_state().startup_stats = {
         "startup_import_ms": round(float(_IMPORT_MS or 0.0), 3),
         "startup_module_ms": module_ms,
         "startup_request_ms": request_ms,

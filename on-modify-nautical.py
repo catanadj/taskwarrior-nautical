@@ -9,8 +9,7 @@ Chained next-link spawner for Taskwarrior.
 - Timeline is capped and marks (last link).
 """
 
-import sys, json, os, uuid, subprocess, importlib, random, tempfile
-import hook_bootstrap
+import sys, json, os, uuid, subprocess, importlib, importlib.util, random, tempfile
 import atexit
 import time as _ptime
 import sqlite3
@@ -22,6 +21,31 @@ import re
 import time as _time
 from typing import Any, Optional
 import stat
+
+HOOK_DIR = Path(__file__).resolve().parent
+_TW_DIR_BOOT = HOOK_DIR.parent
+try:
+    import hook_bootstrap
+except ModuleNotFoundError:
+    hook_bootstrap = None
+    for _bootstrap_path in (
+        HOOK_DIR / 'hook_bootstrap.py',
+        HOOK_DIR / 'nautical_core' / 'hook_bootstrap.py',
+        _TW_DIR_BOOT / 'nautical_core' / 'hook_bootstrap.py',
+    ):
+        try:
+            if not _bootstrap_path.is_file():
+                continue
+            _spec = importlib.util.spec_from_file_location('hook_bootstrap', _bootstrap_path)
+            if _spec and _spec.loader:
+                _bootstrap_mod = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_bootstrap_mod)
+                hook_bootstrap = _bootstrap_mod
+                break
+        except Exception:
+            continue
+    if hook_bootstrap is None:
+        raise
 
 _IMPORT_T0 = _ptime.perf_counter()
 _IMPORT_MS = None
@@ -337,8 +361,7 @@ def _append_next_wait_sched_rows(
 # ------------------------------------------------------------------------------
 # Locate nautical_core (single fixed location: ~/.task)
 # ------------------------------------------------------------------------------
-HOOK_DIR = Path(__file__).resolve().parent
-TW_DIR = HOOK_DIR.parent
+TW_DIR = _TW_DIR_BOOT
 
 def _trusted_core_base(default_base: Path) -> Path:
     return hook_bootstrap.trusted_core_base(

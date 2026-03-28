@@ -17,10 +17,35 @@ import subprocess
 import random
 import sqlite3
 import importlib
-import hook_bootstrap
+import importlib.util
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Any
+
+HOOK_DIR = Path(__file__).resolve().parent
+_TW_DIR_BOOT = HOOK_DIR.parent
+try:
+    import hook_bootstrap
+except ModuleNotFoundError:
+    hook_bootstrap = None
+    for _bootstrap_path in (
+        HOOK_DIR / 'hook_bootstrap.py',
+        HOOK_DIR / 'nautical_core' / 'hook_bootstrap.py',
+        _TW_DIR_BOOT / 'nautical_core' / 'hook_bootstrap.py',
+    ):
+        try:
+            if not _bootstrap_path.is_file():
+                continue
+            _spec = importlib.util.spec_from_file_location('hook_bootstrap', _bootstrap_path)
+            if _spec and _spec.loader:
+                _bootstrap_mod = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_bootstrap_mod)
+                hook_bootstrap = _bootstrap_mod
+                break
+        except Exception:
+            continue
+    if hook_bootstrap is None:
+        raise
 _IMPORT_T0 = time.perf_counter()
 _IMPORT_MS: float | None = None
 try:
@@ -32,8 +57,7 @@ except Exception:
 hook_bootstrap.ensure_utf8_stdio()
 
 
-HOOK_DIR = Path(__file__).resolve().parent
-TW_DIR = HOOK_DIR.parent
+TW_DIR = _TW_DIR_BOOT
 
 def _trusted_core_base(default_base: Path) -> Path:
     return hook_bootstrap.trusted_core_base(

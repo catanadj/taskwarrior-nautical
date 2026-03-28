@@ -10,7 +10,7 @@ Chained next-link spawner for Taskwarrior.
 """
 
 import sys, json, os, uuid, subprocess, importlib, random, tempfile
-import importlib.util
+import hook_bootstrap
 import atexit
 import time as _ptime
 import sqlite3
@@ -43,14 +43,7 @@ ZoneInfo = _zoneinfo.ZoneInfo if _zoneinfo is not None else None
  # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
  # Python's json.dumps() defaults to ensure_ascii=True, which escapes non-ASCII
  # as "\\uXXXX". Prefer human-readable UTF-8 JSON for hook passthrough.
-try:
-    sys.stdout.reconfigure(encoding="utf-8")
-except Exception:
-    pass
-try:
-    sys.stderr.reconfigure(encoding="utf-8")
-except Exception:
-    pass
+hook_bootstrap.ensure_utf8_stdio()
 # ------------------------------------------------------------------------------
 # Constants
 # ------------------------------------------------------------------------------
@@ -348,44 +341,18 @@ HOOK_DIR = Path(__file__).resolve().parent
 TW_DIR = HOOK_DIR.parent
 
 def _trusted_core_base(default_base: Path) -> Path:
-    raw = (os.environ.get("NAUTICAL_CORE_PATH") or "").strip()
-    if not raw:
-        return default_base
-    try:
-        cand = Path(raw).expanduser().resolve()
-    except Exception:
-        return default_base
-    if (os.environ.get("NAUTICAL_TRUST_CORE_PATH") or "").strip().lower() in ("1", "true", "yes", "on"):
-        return cand
-    try:
-        st = os.stat(cand)
-        uid_fn = getattr(os, "getuid", None)
-        if callable(uid_fn) and st.st_uid != uid_fn():
-            raise PermissionError("owner mismatch")
-        if (st.st_mode & 0o002) != 0:
-            raise PermissionError("path is world-writable")
-        return cand
-    except Exception as e:
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            try:
-                sys.stderr.write(f"[nautical] Ignoring unsafe NAUTICAL_CORE_PATH '{raw}': {e}\n")
-            except Exception:
-                pass
-        return default_base
-
-_CORE_BASE = _trusted_core_base(TW_DIR)
+    return hook_bootstrap.trusted_core_base(
+        default_base,
+        env=os.environ,
+        diag_enabled=os.environ.get("NAUTICAL_DIAG") == "1",
+    )
 
 
 def _core_target_from_base(base: Path) -> Path | None:
-    try:
-        if base.is_file():
-            if base.name == "__init__.py" and base.parent.name == "nautical_core":
-                return base
-            return None
-    except Exception:
-        return None
-    pkgini = base / "nautical_core" / "__init__.py"
-    return pkgini if pkgini.is_file() else None
+    return hook_bootstrap.core_target_from_base(base)
+
+_CORE_BASE = _trusted_core_base(TW_DIR)
+
 
 core = None
 _CORE_READY = False
@@ -513,42 +480,19 @@ _MODULE_SPECS = {
         "nautical_core.hook_results",
     ),
 }
-try:
-    target = _core_target_from_base(_CORE_BASE)
-    _CORE_IMPORT_TARGET = target
-    if target:
-        spec = importlib.util.spec_from_file_location("nautical_core", target)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["nautical_core"] = module
-            spec.loader.exec_module(module)
-            core = module
-except Exception as e:
-    core = None
-    _CORE_IMPORT_ERROR = e
+core, _CORE_IMPORT_TARGET, _CORE_IMPORT_ERROR = hook_bootstrap.import_core_package(_CORE_BASE)
+
 
 def _resolve_task_data_context() -> tuple[str, bool]:
-    resolver = getattr(core, "resolve_task_data_context", None) if core is not None else None
-    if not callable(resolver):
-        if core is not None:
-            raise RuntimeError("nautical_core.resolve_task_data_context is required")
-        if _CORE_IMPORT_ERROR is not None:
-            target = str(_CORE_IMPORT_TARGET or (_CORE_BASE / "nautical_core" / "__init__.py"))
-            raise RuntimeError(
-                f"Failed to import nautical_core from {target}: "
-                f"{type(_CORE_IMPORT_ERROR).__name__}: {_CORE_IMPORT_ERROR}"
-            ) from _CORE_IMPORT_ERROR
-        raise ModuleNotFoundError(
-            f"nautical_core package not found. Expected nautical_core/__init__.py in ~/.task or NAUTICAL_CORE_PATH. "
-            f"(resolved base: {_CORE_BASE})"
-        )
-    data_dir, use_rc, _source = resolver(
+    return hook_bootstrap.resolve_task_data_context(
+        core=core,
+        core_import_error=_CORE_IMPORT_ERROR,
+        core_import_target=_CORE_IMPORT_TARGET,
+        core_base=_CORE_BASE,
+        tw_dir=str(TW_DIR),
         argv=sys.argv[1:],
         env=os.environ,
-        tw_dir=str(TW_DIR),
     )
-    return str(data_dir), bool(use_rc)
-
 
 _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
 TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
@@ -674,15 +618,13 @@ def _load_core() -> None:
     if core is not None and _CORE_READY:
         return
     if core is None:
-        base = _CORE_BASE
-        target = _core_target_from_base(base)
-        if target:
-            spec = importlib.util.spec_from_file_location("nautical_core", target)
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                sys.modules["nautical_core"] = module
-                spec.loader.exec_module(module)
-                core = module
+        module, target, import_error = hook_bootstrap.import_core_package(_CORE_BASE)
+        if target is not None:
+            globals()["_CORE_IMPORT_TARGET"] = target
+        if import_error is not None:
+            globals()["_CORE_IMPORT_ERROR"] = import_error
+        if module is not None:
+            core = module
     if core is None:
         msg = (
             "nautical_core package not found. Expected nautical_core/__init__.py in ~/.task or NAUTICAL_CORE_PATH. "

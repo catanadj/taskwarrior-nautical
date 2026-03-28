@@ -2287,6 +2287,21 @@ def test_on_add_tw_export_chain_extra_validation():
     expect(not called["run"], "unsafe extra should not call task")
 
 
+def test_on_modify_diag_blocks_pretty_print():
+    """on-modify diag output should emit indented multi-line blocks."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_diag_pretty_test")
+
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        mod._emit_diag_block("diag stats", [("a", 1), ("b", 2), ("c", 3), ("d", 4)], columns=2)
+
+    out = buf.getvalue()
+    expect("[nautical] diag stats:\n" in out, f"missing diag title: {out!r}")
+    expect("[nautical]   a=1  b=2\n" in out, f"missing first wrapped diag line: {out!r}")
+    expect("[nautical]   c=3  d=4\n" in out, f"missing second wrapped diag line: {out!r}")
+
+
 def test_on_modify_run_task_diag_bucket_stats():
     """on-modify should classify Taskwarrior calls into stable diagnostic buckets."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -2311,6 +2326,30 @@ def test_on_modify_run_task_diag_bucket_stats():
     expect(abs(float(stats.get("run_task_seconds_get", 0.0)) - 0.25) < 1e-9, f"unexpected get seconds: {stats}")
     expect(abs(float(stats.get("run_task_seconds_export_uuid_short", 0.0)) - 0.5) < 1e-9, f"unexpected short export seconds: {stats}")
     expect(abs(float(stats.get("run_task_seconds_export_chain", 0.0)) - 0.75) < 1e-9, f"unexpected chain export seconds: {stats}")
+
+
+def test_on_exit_diag_blocks_pretty_print():
+    """on-exit diag output should emit indented multi-line blocks."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_diag_pretty_test")
+
+    prev = os.environ.get("NAUTICAL_DIAG")
+    os.environ["NAUTICAL_DIAG"] = "1"
+    mod.core = None
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buf):
+            mod._diag_block("on-exit task stats", [("a", 1), ("b", 2), ("c", 3), ("d", 4)], columns=2)
+    finally:
+        if prev is None:
+            os.environ.pop("NAUTICAL_DIAG", None)
+        else:
+            os.environ["NAUTICAL_DIAG"] = prev
+
+    out = buf.getvalue()
+    expect("[nautical] on-exit task stats:\n" in out, f"missing exit diag title: {out!r}")
+    expect("[nautical]   a=1  b=2\n" in out, f"missing first wrapped exit diag line: {out!r}")
+    expect("[nautical]   c=3  d=4\n" in out, f"missing second wrapped exit diag line: {out!r}")
 
 
 def test_on_exit_run_task_diag_bucket_stats():
@@ -7354,7 +7393,9 @@ TESTS = [
     test_tw_export_chain_extra_validation,
     test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
     test_on_add_tw_export_chain_extra_validation,
+    test_on_modify_diag_blocks_pretty_print,
     test_on_modify_run_task_diag_bucket_stats,
+    test_on_exit_diag_blocks_pretty_print,
     test_on_exit_run_task_diag_bucket_stats,
     test_on_modify_chain_cache_thread_safety_smoke,
     test_on_modify_get_chain_export_filters_cached_chain_in_memory,

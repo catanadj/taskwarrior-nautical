@@ -213,6 +213,17 @@ def _diag_record_run_task(cmd: list[str], *, ok: bool, elapsed: float) -> None:
         _diag_count(f"run_task_failures_{bucket}")
 
 
+def _emit_diag_block(title: str, items, *, columns: int = 3) -> None:
+    try:
+        pairs = [f"{k}={v}" for k, v in (items or ())]
+        sys.stderr.write(f"[nautical] {title}:\n")
+        step = max(1, int(columns or 1))
+        for idx in range(0, len(pairs), step):
+            sys.stderr.write("[nautical]   " + "  ".join(pairs[idx:idx + step]) + "\n")
+    except Exception:
+        pass
+
+
 def _dump_diag_stats() -> None:
     if os.environ.get("NAUTICAL_DIAG") == "1":
         try:
@@ -221,8 +232,7 @@ def _dump_diag_stats() -> None:
             elapsed = _ptime.perf_counter() - state.diag_start_ts
             stats["hook_seconds"] = round(elapsed, 4)
             stats["run_task_seconds"] = round(stats.get("run_task_seconds", 0.0), 4)
-            parts = [f"{k}={v}" for k, v in stats.items()]
-            sys.stderr.write("[nautical] diag stats: " + ", ".join(parts) + "\n")
+            _emit_diag_block("diag stats", stats.items(), columns=3)
         except Exception:
             pass
 
@@ -261,10 +271,10 @@ def _diag_summary() -> None:
         return
     try:
         parts = [
-            f"spawn_deferred={_modify_runtime_state().diag_stats.get('spawn_deferred', 0)}",
-            f"queue_lock_failures={_modify_runtime_state().diag_stats.get('queue_lock_failures', 0)}",
+            ("spawn_deferred", _modify_runtime_state().diag_stats.get("spawn_deferred", 0)),
+            ("queue_lock_failures", _modify_runtime_state().diag_stats.get("queue_lock_failures", 0)),
         ]
-        sys.stderr.write("[nautical] diag summary: " + ", ".join(parts) + "\n")
+        _emit_diag_block("diag summary", parts, columns=2)
     except Exception:
         pass
 

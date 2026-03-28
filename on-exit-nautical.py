@@ -820,6 +820,19 @@ def _diag(msg: str) -> None:
             pass
 
 
+def _diag_block(title: str, items, *, columns: int = 3) -> None:
+    if os.environ.get("NAUTICAL_DIAG") != "1":
+        return
+    try:
+        pairs = [f"{k}={v}" for k, v in (items or ())]
+        _diag(f"{title}:")
+        step = max(1, int(columns or 1))
+        for idx in range(0, len(pairs), step):
+            _diag("  " + "  ".join(pairs[idx:idx + step]))
+    except Exception:
+        pass
+
+
 def _emit_exit_feedback(msg: str) -> None:
     """Write failing-hook feedback for Taskwarrior and keep stderr diagnostics."""
     seen: set[int] = set()
@@ -2038,32 +2051,32 @@ def _redirect_stdout_to_devnull() -> None:
 def _emit_drain_stats_diag(stats: dict) -> None:
     if os.environ.get("NAUTICAL_DIAG") != "1":
         return
-    _diag(
-        "on-exit drain: "
-        f"entries_total={stats.get('entries_total', 0)} "
-        f"idempotent_skipped={stats.get('entries_skipped_idempotent', 0)} "
-        f"processed={stats.get('processed', 0)} "
-        f"errors={stats.get('errors', 0)} "
-        f"requeued={stats.get('requeued', 0)} "
-        f"requeue_failed={stats.get('requeue_failed', 0)} "
-        f"dead_lettered={stats.get('dead_lettered', 0)} "
-        f"queue_lock_failures={stats.get('queue_lock_failures', 0)} "
-        f"lock_events={stats.get('lock_events', 0)} "
-        f"lock_streak_max={stats.get('lock_streak_max', 0)} "
-        f"circuit_breaks={stats.get('circuit_breaks', 0)} "
-        f"intent_log_ready={stats.get('intent_log_ready', 0)} "
-        f"intent_log_size={stats.get('intent_log_size', 0)} "
-        f"intent_mark_ok={stats.get('intent_mark_ok', 0)} "
-        f"intent_mark_fail={stats.get('intent_mark_fail', 0)} "
-        f"intent_log_load_ms={stats.get('intent_log_load_ms', 0)} "
-        f"queue_db_opens={stats.get('queue_db_opens', 0)} "
-        f"queue_db_reuses={stats.get('queue_db_reuses', 0)} "
-        f"preload_export_uuids={stats.get('preload_export_uuids', 0)} "
-        f"preload_export_hits={stats.get('preload_export_hits', 0)} "
-        f"preload_export_misses={stats.get('preload_export_misses', 0)} "
-        f"preload_export_chunks={stats.get('preload_export_chunks', 0)} "
-        f"drain_ms={stats.get('drain_ms', 0)}"
-    )
+    drain_items = [
+        ("entries_total", stats.get("entries_total", 0)),
+        ("idempotent_skipped", stats.get("entries_skipped_idempotent", 0)),
+        ("processed", stats.get("processed", 0)),
+        ("errors", stats.get("errors", 0)),
+        ("requeued", stats.get("requeued", 0)),
+        ("requeue_failed", stats.get("requeue_failed", 0)),
+        ("dead_lettered", stats.get("dead_lettered", 0)),
+        ("queue_lock_failures", stats.get("queue_lock_failures", 0)),
+        ("lock_events", stats.get("lock_events", 0)),
+        ("lock_streak_max", stats.get("lock_streak_max", 0)),
+        ("circuit_breaks", stats.get("circuit_breaks", 0)),
+        ("intent_log_ready", stats.get("intent_log_ready", 0)),
+        ("intent_log_size", stats.get("intent_log_size", 0)),
+        ("intent_mark_ok", stats.get("intent_mark_ok", 0)),
+        ("intent_mark_fail", stats.get("intent_mark_fail", 0)),
+        ("intent_log_load_ms", stats.get("intent_log_load_ms", 0)),
+        ("queue_db_opens", stats.get("queue_db_opens", 0)),
+        ("queue_db_reuses", stats.get("queue_db_reuses", 0)),
+        ("preload_export_uuids", stats.get("preload_export_uuids", 0)),
+        ("preload_export_hits", stats.get("preload_export_hits", 0)),
+        ("preload_export_misses", stats.get("preload_export_misses", 0)),
+        ("preload_export_chunks", stats.get("preload_export_chunks", 0)),
+        ("drain_ms", stats.get("drain_ms", 0)),
+    ]
+    _diag_block("on-exit drain", drain_items, columns=3)
     task_stats = {
         "run_task_calls": _EXIT_DIAG_STATS.get("run_task_calls", 0),
         "run_task_failures": _EXIT_DIAG_STATS.get("run_task_failures", 0),
@@ -2096,7 +2109,7 @@ def _emit_drain_stats_diag(stats: dict) -> None:
         "run_task_seconds_other": round(float(_EXIT_DIAG_STATS.get("run_task_seconds_other", 0.0)), 4),
         "run_task_seconds": round(float(_EXIT_DIAG_STATS.get("run_task_seconds", 0.0)), 4),
     }
-    _diag("on-exit task stats: " + ", ".join(f"{k}={v}" for k, v in task_stats.items()))
+    _diag_block("on-exit task stats", task_stats.items(), columns=3)
 
 
 def _strict_exit_feedback_message(stats: dict) -> str | None:

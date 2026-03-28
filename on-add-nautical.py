@@ -58,7 +58,7 @@ except ModuleNotFoundError:
 hook_bootstrap.ensure_utf8_stdio()
 
 # ========= User-togglable constants =========================================
-NAUTICAL_HOOK_VERSION = "updateF-20260327"
+NAUTICAL_HOOK_VERSION = "updateG-20260328"
 ANCHOR_WARN = True  # If True, warn when a user-provided due is not on an anchor day
 UPCOMING_PREVIEW = 5  # How many future dates to preview.
 _PREVIEW_HARD_CAP = 100

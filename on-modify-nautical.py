@@ -51,7 +51,7 @@ _IMPORT_T0 = _ptime.perf_counter()
 _IMPORT_MS = None
 
 _MAX_JSON_BYTES = 10 * 1024 * 1024
-NAUTICAL_HOOK_VERSION = "updateF-20260327"
+NAUTICAL_HOOK_VERSION = "updateG-20260328"
 
 
 # Optional: DST-aware local TZ helpers (used by some carry-forward variants)

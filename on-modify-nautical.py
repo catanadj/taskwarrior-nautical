@@ -23,6 +23,9 @@ import time as _time
 from typing import Any, Optional
 import stat
 
+_IMPORT_T0 = _ptime.perf_counter()
+_IMPORT_MS = None
+
 _MAX_JSON_BYTES = 10 * 1024 * 1024
 NAUTICAL_HOOK_VERSION = "updateF-20260327"
 
@@ -589,6 +592,7 @@ def _build_hook_runtime_context():
         use_rc_data_location=_USE_RC_DATA_LOCATION,
         tw_dir=str(TW_DIR),
         hook_dir=str(HOOK_DIR),
+        import_ms=_IMPORT_MS,
     )
 
 
@@ -666,7 +670,7 @@ def _migrate_legacy_nautical_state() -> None:
 _migrate_legacy_nautical_state()
 
 def _load_core() -> None:
-    global core, _MAX_JSON_BYTES, _CORE_READY
+    global core, _MAX_JSON_BYTES, _CORE_READY, _IMPORT_MS
     if core is not None and _CORE_READY:
         return
     if core is None:
@@ -694,6 +698,8 @@ def _load_core() -> None:
     except Exception:
         pass
     _apply_core_config()
+    if _IMPORT_MS is None:
+        _IMPORT_MS = (_ptime.perf_counter() - _IMPORT_T0) * 1000.0
     _CORE_READY = True
 
 def _require_core() -> bool:
@@ -5181,16 +5187,27 @@ def _emit_modify_passthrough(task: dict) -> None:
 
 def main():
     _reset_modify_runtime_state()
+    state = _modify_runtime_state()
+    startup_t0 = _ptime.perf_counter()
+    module_t0 = _ptime.perf_counter()
     hook_context = _module("hook_context")
     hook_results = _module("hook_results")
     hook_engine = _module("hook_engine")
+    state.diag_stats["startup_module_ms"] = round((_ptime.perf_counter() - module_t0) * 1000.0, 3)
+    read_t0 = _ptime.perf_counter()
     old, new = _read_two()
+    state.diag_stats["startup_read_input_ms"] = round((_ptime.perf_counter() - read_t0) * 1000.0, 3)
+    request_t0 = _ptime.perf_counter()
     _seed_runtime_lookup_tasks(old, new)
     request = hook_context.build_on_modify_request(
         runtime=_build_hook_runtime_context(),
         old=old,
         new=new,
     )
+    if _IMPORT_MS is not None:
+        state.diag_stats["startup_import_ms"] = round(float(_IMPORT_MS), 3)
+    state.diag_stats["startup_request_ms"] = round((_ptime.perf_counter() - request_t0) * 1000.0, 3)
+    state.diag_stats["startup_total_ms"] = round((_ptime.perf_counter() - startup_t0) * 1000.0, 3)
     result = hook_engine.handle_on_modify(
         request,
         json_result_cls=hook_results.HookJsonResult,

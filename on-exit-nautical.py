@@ -21,6 +21,8 @@ import importlib.util
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Any
+_IMPORT_T0 = time.perf_counter()
+_IMPORT_MS: float | None = None
 try:
     import fcntl  # POSIX advisory lock
 except Exception:
@@ -208,6 +210,7 @@ def _resolve_task_data_context() -> tuple[str, bool]:
 
 _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
 TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+_IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
 
 
 def _tw_data_dir_path() -> Path:
@@ -273,6 +276,7 @@ def _build_hook_runtime_context():
         use_rc_data_location=_USE_RC_DATA_LOCATION,
         tw_dir=str(TW_DIR),
         hook_dir=str(HOOK_DIR),
+        import_ms=_IMPORT_MS,
     )
 
 def _nautical_state_dir_path() -> Path:
@@ -370,6 +374,7 @@ _RUN_QUEUE_DB_ACTIVE = False
 _QUEUE_DB_OPEN_COUNT = 0
 _QUEUE_DB_REUSE_COUNT = 0
 _EXIT_DIAG_STATS: dict[str, float | int] = {}
+_EXIT_STARTUP_STATS: dict[str, float | int] = {}
 _EXIT_EXPORT_CACHE: dict[str, Any] = {}
 _EXIT_EQUIV_CHILD_CACHE: dict[tuple[str, str, str], Any] = {}
 _EXIT_PRELOAD_CHUNK_SIZE = 32
@@ -2051,6 +2056,8 @@ def _redirect_stdout_to_devnull() -> None:
 def _emit_drain_stats_diag(stats: dict) -> None:
     if os.environ.get("NAUTICAL_DIAG") != "1":
         return
+    if _EXIT_STARTUP_STATS:
+        _diag_block("on-exit startup", _EXIT_STARTUP_STATS.items(), columns=2)
     drain_items = [
         ("entries_total", stats.get("entries_total", 0)),
         ("idempotent_skipped", stats.get("entries_skipped_idempotent", 0)),
@@ -2125,10 +2132,22 @@ def _strict_exit_feedback_message(stats: dict) -> str | None:
 
 
 def main() -> int:
+    global _EXIT_STARTUP_STATS
+    startup_t0 = time.perf_counter()
+    module_t0 = time.perf_counter()
     hook_context = _module("hook_context")
     hook_results = _module("hook_results")
     hook_engine = _module("hook_engine")
+    module_ms = round((time.perf_counter() - module_t0) * 1000.0, 3)
+    request_t0 = time.perf_counter()
     request = hook_context.build_on_exit_request(runtime=_build_hook_runtime_context())
+    request_ms = round((time.perf_counter() - request_t0) * 1000.0, 3)
+    _EXIT_STARTUP_STATS = {
+        "startup_import_ms": round(float(_IMPORT_MS or 0.0), 3),
+        "startup_module_ms": module_ms,
+        "startup_request_ms": request_ms,
+        "startup_total_ms": round((time.perf_counter() - startup_t0) * 1000.0, 3),
+    }
     result = hook_engine.handle_on_exit(
         request,
         exit_result_cls=hook_results.HookExitResult,

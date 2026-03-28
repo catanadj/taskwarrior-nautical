@@ -1,3 +1,4 @@
+"""Runtime-owned state and service builders for hook orchestration."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -215,3 +216,15 @@ def build_spawn_services(runtime: ModifyRuntimeServices) -> CompletionSpawnServi
         print_task=runtime.print_task,
         diag=runtime.diag,
     )
+
+
+__all__ = (
+    'ModifyRuntimeState',
+    'ModifyRuntimeServices',
+    'new_runtime_state',
+    'build_anchor_feedback_services',
+    'build_cp_feedback_services',
+    'build_preflight_services',
+    'build_compute_services',
+    'build_spawn_services',
+)

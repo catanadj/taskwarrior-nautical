@@ -6,6 +6,7 @@ Load test for Nautical hooks using a disposable Taskwarrior data directory.
 Usage:
   python3 tools/load_test_nautical.py --tasks 500 --concurrency 4
   python3 tools/load_test_nautical.py --tasks 2000 --concurrency 8 --keep
+  python3 tools/load_test_nautical.py --ramp --json --enforce
 """
 
 from __future__ import annotations
@@ -139,10 +140,24 @@ def main() -> int:
     ap.add_argument("--limit-queue-bytes", type=int, default=1, help="stop when queue bytes exceeds")
     ap.add_argument("--seed", type=int, default=42, help="random seed")
     ap.add_argument("--keep", action="store_true", help="keep temp data dir")
+    ap.add_argument("--json", action="store_true", help="emit machine-readable JSON summary")
+    ap.add_argument("--enforce", action="store_true", help="exit non-zero when thresholds are exceeded")
     args = ap.parse_args()
 
+    def _print(*parts, **kwargs) -> None:
+        if not args.json:
+            print(*parts, **kwargs)
+
     if _which_task() is None:
-        print("task not found in PATH. Install Taskwarrior to run this test.")
+        summary = {
+            "ok": False,
+            "error": "task not found in PATH. Install Taskwarrior to run this test.",
+            "mode": "unavailable",
+        }
+        if args.json:
+            print(json.dumps(summary, ensure_ascii=False, separators=(",", ":"), indent=2))
+        else:
+            print(summary["error"])
         return 2
 
     random.seed(args.seed)
@@ -177,12 +192,41 @@ def main() -> int:
 
     def _summary(name: str, vals: list[float], fails: int):
         if not vals:
-            print(f"{name}: no samples")
+            _print(f"{name}: no samples")
             return
         p50 = _percentile(vals, 50)
         p95 = _percentile(vals, 95)
         avg = sum(vals) / len(vals)
-        print(f"{name}: n={len(vals)} fail={fails} avg={avg:.3f}s p50={p50:.3f}s p95={p95:.3f}s")
+        _print(f"{name}: n={len(vals)} fail={fails} avg={avg:.3f}s p50={p50:.3f}s p95={p95:.3f}s")
+
+    def _stats(vals: list[float], fails: int) -> dict:
+        if not vals:
+            return {
+                "samples": 0,
+                "fails": int(fails),
+                "fail_rate": 0.0,
+                "avg_s": 0.0,
+                "p50_s": 0.0,
+                "p95_s": 0.0,
+            }
+        return {
+            "samples": len(vals),
+            "fails": int(fails),
+            "fail_rate": float(fails) / float(len(vals)),
+            "avg_s": sum(vals) / len(vals),
+            "p50_s": _percentile(vals, 50),
+            "p95_s": _percentile(vals, 95),
+        }
+
+    def _stage_summary(label: str, res: dict) -> dict:
+        return {
+            "label": label,
+            "add": _stats(res.get("add_lat", []), int(res.get("add_fail", 0) or 0)),
+            "done": _stats(res.get("done_lat", []), int(res.get("done_fail", 0) or 0)),
+            "queue_bytes": int(res.get("queue_bytes", 0) or 0),
+            "done_targets": int(res.get("done_targets", 0) or 0),
+            "tasks_created": int(res.get("tasks_created", 0) or 0),
+        }
 
     def _run_batch(batch_tasks: int, batch_done_rate: float, measure_add: bool) -> dict:
         add_lat = []
@@ -324,151 +368,185 @@ def main() -> int:
             f"queue_bytes>{args.limit_queue_bytes}"
         )
 
+    def _stage_threshold_violations(stage: dict) -> list[str]:
+        violations = []
+        target = stage["done"] if args.done_only else stage["add"]
+        metric_prefix = "done" if args.done_only else "add"
+        if target.get("p95_s", 0.0) > args.limit_p95:
+            violations.append(f"{metric_prefix}.p95_s>{args.limit_p95}")
+        if target.get("fail_rate", 0.0) > args.limit_fail_rate:
+            violations.append(f"{metric_prefix}.fail_rate>{args.limit_fail_rate}")
+        if int(stage.get("queue_bytes", 0) or 0) > args.limit_queue_bytes:
+            violations.append(f"queue_bytes>{args.limit_queue_bytes}")
+        return violations
+
+    summary = {
+        "mode": "",
+        "done_only": bool(args.done_only),
+        "thresholds": {
+            "limit_p95_s": float(args.limit_p95),
+            "limit_fail_rate": float(args.limit_fail_rate),
+            "limit_queue_bytes": int(args.limit_queue_bytes),
+        },
+        "config": {
+            "tasks": tasks_total,
+            "done_rate": float(args.done_rate),
+            "anchor_rate": float(anchor_rate),
+            "cp_rate": float(cp_rate),
+            "concurrency": int(args.concurrency),
+            "rate_secs": int(args.rate_secs),
+            "rate_target": float(args.rate_target),
+            "rate_start": float(args.rate_start),
+            "rate_step": float(args.rate_step),
+            "rate_max": float(args.rate_max),
+            "ramp_start": int(args.ramp_start),
+            "ramp_step": int(args.ramp_step),
+            "ramp_max": int(args.ramp_max),
+            "seed": int(args.seed),
+        },
+        "temp_dir": str(temp_dir),
+        "data_dir": str(data_dir),
+        "stages": [],
+        "ok": True,
+        "violations": [],
+    }
+
     if args.rate_ramp:
-        print("\nRate Ramp Results")
-        print("-----------------")
-        stages = []
+        _print("\nRate Ramp Results")
+        _print("-----------------")
+        mode = "rate_ramp"
         cur = max(0.1, float(args.rate_start))
         step = max(0.1, float(args.rate_step))
         limit = max(cur, float(args.rate_max))
         while cur <= limit:
             res = _run_rate(args.rate_secs, cur)
-            add_lat = res["add_lat"]
-            add_fail = res["add_fail"]
-            done_lat = res["done_lat"]
-            done_fail = res["done_fail"]
-            fail_rate = (add_fail / len(add_lat)) if add_lat else 0.0
-            done_fail_rate = (done_fail / len(done_lat)) if done_lat else 0.0
-            p95 = _percentile(add_lat, 95) if add_lat else 0.0
-            done_p95 = _percentile(done_lat, 95) if done_lat else 0.0
-            stages.append({
-                "rate": cur,
-                "p95": p95,
-                "fail_rate": fail_rate,
-                "queue_bytes": res["queue_bytes"],
-                "done_p95": done_p95,
-                "done_fail_rate": done_fail_rate,
-            })
+            stage = _stage_summary(f"rate={cur:.1f}/s", res)
+            stage["rate_ops_s"] = cur
+            summary["stages"].append(stage)
             if args.done_only:
-                print(
-                    f"rate={cur:.1f}/s done_p95={done_p95:.3f}s "
-                    f"done_fail_rate={done_fail_rate:.3f} queue_bytes={res['queue_bytes']}"
+                _print(
+                    f"rate={cur:.1f}/s done_p95={stage['done']['p95_s']:.3f}s "
+                    f"done_fail_rate={stage['done']['fail_rate']:.3f} queue_bytes={res['queue_bytes']}"
                 )
             else:
-                print(
-                    f"rate={cur:.1f}/s p95={p95:.3f}s "
-                    f"fail_rate={fail_rate:.3f} queue_bytes={res['queue_bytes']}"
+                _print(
+                    f"rate={cur:.1f}/s p95={stage['add']['p95_s']:.3f}s "
+                    f"fail_rate={stage['add']['fail_rate']:.3f} queue_bytes={res['queue_bytes']}"
                 )
-            if args.done_only:
-                if done_p95 > args.limit_p95 or done_fail_rate > args.limit_fail_rate or res["queue_bytes"] > args.limit_queue_bytes:
-                    break
-            elif p95 > args.limit_p95 or fail_rate > args.limit_fail_rate or res["queue_bytes"] > args.limit_queue_bytes:
+            if _stage_threshold_violations(stage):
                 break
             cur += step
 
-        print("\nRate Ramp Summary")
-        print("-----------------")
-        if stages:
-            last = stages[-1]
+        _print("\nRate Ramp Summary")
+        _print("-----------------")
+        if summary["stages"]:
+            last = summary["stages"][-1]
             if args.done_only:
-                print(
-                    f"last_rate={last['rate']:.1f}/s done_p95={last['done_p95']:.3f}s "
-                    f"done_fail_rate={last['done_fail_rate']:.3f} queue_bytes={last['queue_bytes']}"
+                _print(
+                    f"last_rate={last['rate_ops_s']:.1f}/s done_p95={last['done']['p95_s']:.3f}s "
+                    f"done_fail_rate={last['done']['fail_rate']:.3f} queue_bytes={last['queue_bytes']}"
                 )
             else:
-                print(
-                    f"last_rate={last['rate']:.1f}/s p95={last['p95']:.3f}s "
-                    f"fail_rate={last['fail_rate']:.3f} queue_bytes={last['queue_bytes']}"
+                _print(
+                    f"last_rate={last['rate_ops_s']:.1f}/s p95={last['add']['p95_s']:.3f}s "
+                    f"fail_rate={last['add']['fail_rate']:.3f} queue_bytes={last['queue_bytes']}"
                 )
-        print(_thresholds_summary())
-        print(f"data_dir={data_dir}")
+        _print(_thresholds_summary())
+        _print(f"data_dir={data_dir}")
+        summary["mode"] = mode
     elif args.rate:
         res = _run_rate(args.rate_secs, args.rate_target)
-        print("\nRate Results")
-        print("------------")
+        _print("\nRate Results")
+        _print("------------")
         if not args.done_only:
             _summary("add", res["add_lat"], res["add_fail"])
         _summary("done", res["done_lat"], res["done_fail"])
-        print(f"queue_bytes={res['queue_bytes']}")
-        print(_thresholds_summary())
-        print(f"data_dir={data_dir}")
+        _print(f"queue_bytes={res['queue_bytes']}")
+        _print(_thresholds_summary())
+        _print(f"data_dir={data_dir}")
+        summary["mode"] = "rate"
+        stage = _stage_summary(f"rate={args.rate_target:.1f}/s", res)
+        stage["rate_ops_s"] = float(args.rate_target)
+        summary["stages"].append(stage)
     elif not args.ramp:
         res = _run_batch(tasks_total, args.done_rate, measure_add=not args.done_only)
-        print("\nResults")
-        print("-------")
+        _print("\nResults")
+        _print("-------")
         if not args.done_only:
             _summary("add", res["add_lat"], res["add_fail"])
         _summary("done", res["done_lat"], res["done_fail"])
-        print(f"queue_bytes={res['queue_bytes']}")
-        print(_thresholds_summary())
-        print(f"data_dir={data_dir}")
+        _print(f"queue_bytes={res['queue_bytes']}")
+        _print(_thresholds_summary())
+        _print(f"data_dir={data_dir}")
+        summary["mode"] = "batch"
+        stage = _stage_summary(f"tasks={tasks_total}", res)
+        stage["tasks"] = int(tasks_total)
+        summary["stages"].append(stage)
     else:
-        print("\nRamp Results")
-        print("------------")
-        stages = []
+        _print("\nRamp Results")
+        _print("------------")
+        mode = "ramp"
         cur = max(1, int(args.ramp_start))
         step = max(1, int(args.ramp_step))
         limit = max(cur, int(args.ramp_max))
         while cur <= limit:
             res = _run_batch(cur, args.done_rate, measure_add=not args.done_only)
-            add_lat = res["add_lat"]
-            add_fail = res["add_fail"]
-            done_lat = res["done_lat"]
-            done_fail = res["done_fail"]
-            fail_rate = (add_fail / len(add_lat)) if add_lat else 0.0
-            done_fail_rate = (done_fail / len(done_lat)) if done_lat else 0.0
-            p95 = _percentile(add_lat, 95) if add_lat else 0.0
-            done_p95 = _percentile(done_lat, 95) if done_lat else 0.0
-            stages.append({
-                "tasks": cur,
-                "p95": p95,
-                "fail_rate": fail_rate,
-                "queue_bytes": res["queue_bytes"],
-                "done_p95": done_p95,
-                "done_fail_rate": done_fail_rate,
-            })
+            stage = _stage_summary(f"tasks={cur}", res)
+            stage["tasks"] = cur
+            summary["stages"].append(stage)
             if args.done_only:
-                print(
-                    f"tasks={cur} done_p95={done_p95:.3f}s done_fail_rate={done_fail_rate:.3f} "
+                _print(
+                    f"tasks={cur} done_p95={stage['done']['p95_s']:.3f}s done_fail_rate={stage['done']['fail_rate']:.3f} "
                     f"queue_bytes={res['queue_bytes']}"
                 )
             else:
-                print(f"tasks={cur} p95={p95:.3f}s fail_rate={fail_rate:.3f} queue_bytes={res['queue_bytes']}")
+                _print(f"tasks={cur} p95={stage['add']['p95_s']:.3f}s fail_rate={stage['add']['fail_rate']:.3f} queue_bytes={res['queue_bytes']}")
             if args.debug:
-                print(
+                _print(
                     f"debug: created={res['tasks_created']} done_targets={res['done_targets']} "
-                    f"done_samples={len(done_lat)}"
+                    f"done_samples={stage['done']['samples']}"
                 )
-            if args.done_only:
-                if done_p95 > args.limit_p95 or done_fail_rate > args.limit_fail_rate or res["queue_bytes"] > args.limit_queue_bytes:
-                    break
-            elif p95 > args.limit_p95 or fail_rate > args.limit_fail_rate or res["queue_bytes"] > args.limit_queue_bytes:
+            if _stage_threshold_violations(stage):
                 break
             cur += step
 
-        print("\nRamp Summary")
-        print("------------")
-        if stages:
-            last = stages[-1]
+        _print("\nRamp Summary")
+        _print("------------")
+        if summary["stages"]:
+            last = summary["stages"][-1]
             if args.done_only:
-                print(
-                    f"last_stage tasks={last['tasks']} done_p95={last['done_p95']:.3f}s "
-                    f"done_fail_rate={last['done_fail_rate']:.3f} queue_bytes={last['queue_bytes']}"
+                _print(
+                    f"last_stage tasks={last['tasks']} done_p95={last['done']['p95_s']:.3f}s "
+                    f"done_fail_rate={last['done']['fail_rate']:.3f} queue_bytes={last['queue_bytes']}"
                 )
             else:
-                print(
-                    f"last_stage tasks={last['tasks']} p95={last['p95']:.3f}s "
-                    f"fail_rate={last['fail_rate']:.3f} queue_bytes={last['queue_bytes']}"
+                _print(
+                    f"last_stage tasks={last['tasks']} p95={last['add']['p95_s']:.3f}s "
+                    f"fail_rate={last['add']['fail_rate']:.3f} queue_bytes={last['queue_bytes']}"
                 )
-        print(_thresholds_summary())
-        print(f"data_dir={data_dir}")
+        _print(_thresholds_summary())
+        _print(f"data_dir={data_dir}")
+        summary["mode"] = mode
+
+    for stage in summary["stages"]:
+        violations = _stage_threshold_violations(stage)
+        if violations:
+            summary["ok"] = False
+            summary["violations"].append({
+                "label": stage["label"],
+                "checks": violations,
+            })
 
     if not args.keep:
         shutil.rmtree(temp_dir, ignore_errors=True)
     else:
-        print(f"kept temp dir: {temp_dir}")
+        _print(f"kept temp dir: {temp_dir}")
+    summary["kept_temp_dir"] = bool(args.keep)
 
-    return 0
+    if args.json:
+        print(json.dumps(summary, ensure_ascii=False, separators=(",", ":"), indent=2))
+
+    return 1 if args.enforce and not summary["ok"] else 0
 
 
 if __name__ == "__main__":

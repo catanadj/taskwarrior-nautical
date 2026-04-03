@@ -33,7 +33,7 @@ def completion_compute_child_due(
             diag(f"compute next due failed: {exc}")
         panel(
             "⛔ Chain error",
-            [("Reason", "Could not compute next due")],
+            [("Reason", "Could not compute next recurrence timestamp")],
             kind="error",
         )
         print_task(new)
@@ -90,7 +90,7 @@ def completion_require_child_due_or_fail(new: dict, child_due, *, panel, print_t
         return True
     panel(
         "⛔ Chain error",
-        [("Reason", "Could not compute next due (no end date on parent)")],
+        [("Reason", "Could not compute next recurrence timestamp (no end date on parent)")],
         kind="error",
     )
     print_task(new)

@@ -24,8 +24,9 @@ def _pretty_basis_anchor(meta: dict, task: dict, *, parse_dt_any, fmt_dt_local) 
     mode = (meta.get("mode") or "skip").lower()
     basis = meta.get("basis")
     missed = int(meta.get("missed_count") or 0)
-    due0 = parse_dt_any(task.get("due"))
-    due_s = fmt_dt_local(due0) if due0 else "(no due)"
+    target_field = "scheduled" if meta.get("target_field") == "scheduled" else "due"
+    due0 = parse_dt_any(task.get("due") or task.get("scheduled"))
+    due_s = fmt_dt_local(due0) if due0 else f"(no {target_field})"
     if mode == "skip":
         return "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)"
     if mode == "flex":
@@ -33,7 +34,7 @@ def _pretty_basis_anchor(meta: dict, task: dict, *, parse_dt_any, fmt_dt_local) 
     if basis == "missed":
         return f"ALL — Backfilling first of {missed} missed anchor(s) since {due_s}"
     if basis == "after_due":
-        return "ALL (no missed) — Next anchor after original due"
+        return f"ALL (no missed) — Next anchor after original {target_field}"
     return "ALL — Next anchor after completion"
 
 
@@ -56,14 +57,14 @@ def _append_wait_sched_feedback_rows(fb: list[tuple[str, object]], *, debug_wait
             fb.append(
                 (
                     f"{field} carry",
-                    f"Δ {data.get('delta')}  parent {data.get('parent_val')} vs {data.get('parent_due')}  →  child {data.get('child_val')}",
+                    f"Δ {data.get('delta')}  parent {data.get('parent_val')} vs {data.get('parent_anchor')}  →  child {data.get('child_val')}",
                 )
             )
         else:
             fb.append(
                 (
                     f"{field} carry",
-                    f"[yellow]skip[/] ({data.get('reason')})  parent {data.get('parent_val')} vs {data.get('parent_due')}",
+                    f"[yellow]skip[/] ({data.get('reason')})  parent {data.get('parent_val')} vs {data.get('parent_anchor')}",
                 )
             )
 
@@ -253,6 +254,7 @@ def render_anchor_completion_feedback(
             feedback.child_due,
             feedback.child_short,
             feedback.now_utc,
+            child_field=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
@@ -269,6 +271,7 @@ def render_anchor_completion_feedback(
             feedback.child_due,
             feedback.child_short,
             feedback.now_utc,
+            child_field=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
@@ -308,7 +311,12 @@ def render_anchor_completion_feedback(
     if feedback.analytics_advice:
         fb.append(("Analytics", feedback.analytics_advice))
     _append_integrity_warnings_row(fb, feedback.integrity_warnings)
-    append_next_wait_sched_rows(fb, feedback.child, feedback.child_due)
+    append_next_wait_sched_rows(
+        fb,
+        feedback.child,
+        feedback.child_due,
+        anchor_field=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
+    )
 
     _append_link_status_rows(
         fb,
@@ -381,6 +389,7 @@ def render_cp_completion_feedback(
             feedback.child_due,
             feedback.child_short,
             feedback.now_utc,
+            child_field=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
@@ -397,6 +406,7 @@ def render_cp_completion_feedback(
             feedback.child_due,
             feedback.child_short,
             feedback.now_utc,
+            child_field=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
@@ -432,7 +442,12 @@ def render_cp_completion_feedback(
     if feedback.analytics_advice:
         fb.append(("Analytics", feedback.analytics_advice))
     _append_integrity_warnings_row(fb, feedback.integrity_warnings)
-    append_next_wait_sched_rows(fb, feedback.child, feedback.child_due)
+    append_next_wait_sched_rows(
+        fb,
+        feedback.child,
+        feedback.child_due,
+        anchor_field=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
+    )
 
     if feedback.cap_no:
         _append_link_status_rows(

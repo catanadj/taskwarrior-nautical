@@ -63,6 +63,7 @@ def anchor_preview_first_due(
     now_local: datetime,
     due_dt: datetime,
     user_provided_due: bool,
+    recurrence_field: str,
     due_hhmm: tuple[int, int],
     interval_seed: Any,
     seed_base: str,
@@ -109,7 +110,8 @@ def anchor_preview_first_due(
     first_due_utc = first_due_local_dt.astimezone(timezone.utc)
     if user_provided_due:
         display_first_due_utc = due_dt
-        rows.append(("First due", f"[bold bright_green]{_fmt(display_first_due_utc)}[/]"))
+        first_label = "First scheduled" if recurrence_field == "scheduled" else "First due"
+        rows.append((first_label, f"[bold bright_green]{_fmt(display_first_due_utc)}[/]"))
         rows.append(("Next anchor", f"[white]{_fmt(first_due_utc)}[/]"))
     else:
         display_first_due_utc = first_due_utc
@@ -124,6 +126,7 @@ def anchor_preview_misaligned_due_warning(
     *,
     dnf,
     due_dt: datetime,
+    recurrence_field: str,
     interval_seed: Any,
     seed_base: str,
     to_local_cached: Callable[[datetime], datetime],
@@ -137,11 +140,12 @@ def anchor_preview_misaligned_due_warning(
         seed_base,
     )
     if first_after_due_date != due_local_date:
+        anchor_name = "scheduled" if recurrence_field == "scheduled" else "due"
         rows.append(
             (
                 "Note",
-                "[italic yellow]Your due is not an anchor day; chain follows anchors."
-                " To align, set due to a matching anchor day or omit due to auto-assign.[/]",
+                f"[italic yellow]Your {anchor_name} is not an anchor day; chain follows anchors."
+                f" To align, set {anchor_name} to a matching anchor day or omit {anchor_name} to auto-assign.[/]",
             )
         )
 
@@ -204,6 +208,7 @@ def handle_anchor_preview_on_add(
     now_utc: datetime,
     now_local: datetime,
     user_provided_due: bool,
+    recurrence_field: str,
     due_dt: datetime,
     due_day: Any,
     due_hhmm: tuple[int, int],
@@ -276,6 +281,7 @@ def handle_anchor_preview_on_add(
         now_local=now_local,
         due_dt=due_dt,
         user_provided_due=user_provided_due,
+        recurrence_field=recurrence_field,
         due_hhmm=due_hhmm,
         interval_seed=interval_seed,
         seed_base=seed_base,
@@ -288,7 +294,13 @@ def handle_anchor_preview_on_add(
         fmt_local_for_task=fmt_local_for_task,
     )
 
-    append_wait_sched_rows(rows, task, display_first_due_utc, auto_due=(not user_provided_due))
+    append_wait_sched_rows(
+        rows,
+        task,
+        display_first_due_utc,
+        auto_due=(not user_provided_due),
+        anchor_field=recurrence_field,
+    )
     if past_due_warning:
         rows.append(("Warning", f"[yellow]{past_due_warning}[/]"))
     if user_provided_due and anchor_warn:
@@ -296,6 +308,7 @@ def handle_anchor_preview_on_add(
             rows,
             dnf=dnf,
             due_dt=due_dt,
+            recurrence_field=recurrence_field,
             interval_seed=interval_seed,
             seed_base=seed_base,
             to_local_cached=to_local_cached,

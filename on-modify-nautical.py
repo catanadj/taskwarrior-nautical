@@ -321,18 +321,23 @@ def _append_next_wait_sched_rows(
     fb: list[tuple[str, str]],
     nxt: dict,
     nxt_due_utc: datetime,
+    *,
+    anchor_field: str = "due",
 ) -> None:
-    """Append Scheduled/Wait lines for the next link showing local time and Δ to due."""
+    """Append Scheduled/Wait lines for the next link showing local time and Δ to the recurrence anchor."""
     if not (isinstance(nxt_due_utc, datetime) and nxt_due_utc):
         return
 
     dt_s = _dtparse(nxt.get("scheduled"))
     dt_w = _dtparse(nxt.get("wait"))
+    anchor_label = "scheduled" if anchor_field == "scheduled" else "due"
 
     for fld, label, dt in (
         ("scheduled", "Scheduled", dt_s),
         ("wait", "Wait", dt_w),
     ):
+        if fld == anchor_field:
+            continue
         if not isinstance(dt, datetime):
             continue
         delta_s = _fmt_td_dd_hhmm(dt - nxt_due_utc)
@@ -341,17 +346,18 @@ def _append_next_wait_sched_rows(
     # Informative order validation: due > scheduled > wait
     # This can be violated when due is auto-assigned but scheduled/wait are user-specified.
     issues: list[str] = []
-    if isinstance(dt_s, datetime) and dt_s > nxt_due_utc:
-        issues.append(f"scheduled is after due by {_fmt_td_dd_hhmm(dt_s - nxt_due_utc)}")
+    if anchor_field != "scheduled" and isinstance(dt_s, datetime) and dt_s > nxt_due_utc:
+        issues.append(f"scheduled is after {anchor_label} by {_fmt_td_dd_hhmm(dt_s - nxt_due_utc)}")
     if isinstance(dt_w, datetime) and dt_w > nxt_due_utc:
-        issues.append(f"wait is after due by {_fmt_td_dd_hhmm(dt_w - nxt_due_utc)}")
-    if isinstance(dt_s, datetime) and isinstance(dt_w, datetime) and dt_w > dt_s:
+        issues.append(f"wait is after {anchor_label} by {_fmt_td_dd_hhmm(dt_w - nxt_due_utc)}")
+    if anchor_field != "scheduled" and isinstance(dt_s, datetime) and isinstance(dt_w, datetime) and dt_w > dt_s:
         issues.append(f"wait is after scheduled by {_fmt_td_dd_hhmm(dt_w - dt_s)}")
 
     if issues:
+        expected = "scheduled > wait" if anchor_field == "scheduled" else "due > scheduled > wait"
         fb.append((
             "⚠ Wait/Sched",
-            "Expected order: due > scheduled > wait. " + "; ".join(issues),
+            f"Expected order: {expected}. " + "; ".join(issues),
         ))
         fb.append((
             "⚠ Wait/Sched",
@@ -1798,6 +1804,7 @@ def _format_line_preview(
     child_due_utc: datetime,
     child_short: str,
     now_utc: datetime,
+    child_field: str = "due",
     cap_no: int | None = None,
     until_dt: datetime | None = None,
     until_no: int | None = None,
@@ -1817,10 +1824,11 @@ def _format_line_preview(
     if delta_txt.startswith("(") and delta_txt.endswith(")"):
         delta_txt = delta_txt[1:-1].strip()
     due_delta = _human_delta(now_utc, child_due_utc, False)
+    due_label = "scheduled" if child_field == "scheduled" else "due"
     if due_delta.startswith("in "):
-        due_delta = "due " + due_delta
+        due_delta = due_label + " " + due_delta
     elif not due_delta.startswith("overdue by "):
-        due_delta = "due " + due_delta
+        due_delta = due_label + " " + due_delta
     segments = [lead]
     if delta_txt:
         segments.append(f"[dim]{delta_txt}[/]")
@@ -2891,17 +2899,22 @@ def _compute_cp_child_due(parent: dict):
     due_dt0, err = _safe_parse_datetime(parent.get("due"))
     if err:
         raise ValueError(f"due field: {err}")
+    sched_dt0, err = _safe_parse_datetime(parent.get("scheduled"))
+    if err:
+        raise ValueError(f"scheduled field: {err}")
 
     td_secs = int(td.total_seconds())
     rem = td_secs % 86400
+    target_field = "scheduled" if not due_dt0 and sched_dt0 else "due"
+    anchor_dt0 = due_dt0 or sched_dt0
 
     cand = (end_dt + td).replace(microsecond=0)
     if rem != 0:
-        return cand, {"period": dur, "basis": "end+cp (exact)"}
+        return cand, {"period": dur, "basis": "end+cp (exact)", "target_field": target_field}
 
     # preserve wall clock
-    if due_dt0:
-        dl = _tolocal(due_dt0)
+    if anchor_dt0:
+        dl = _tolocal(anchor_dt0)
         hh, mm = dl.hour, dl.minute
     else:
         el = _tolocal(end_dt)
@@ -2911,6 +2924,7 @@ def _compute_cp_child_due(parent: dict):
     return due_local.astimezone(timezone.utc), {
         "period": dur,
         "basis": "end+cp (preserve clock)",
+        "target_field": target_field,
     }
 
 
@@ -3010,9 +3024,13 @@ def _anchor_parent_local_times(parent: dict):
     due_dt_utc, err = _safe_parse_datetime(parent.get("due"))
     if err:
         raise ValueError(f"due field: {err}")
+    sched_dt_utc, err = _safe_parse_datetime(parent.get("scheduled"))
+    if err:
+        raise ValueError(f"scheduled field: {err}")
 
     end_local = _tolocal(end_dt_utc)
-    due_local = _tolocal(due_dt_utc) if due_dt_utc else end_local
+    anchor_dt_utc = due_dt_utc or sched_dt_utc
+    due_local = _tolocal(anchor_dt_utc) if anchor_dt_utc else end_local
     return end_local, due_local, due_dt_utc
 
 
@@ -3176,6 +3194,7 @@ def _compute_anchor_child_due(parent: dict):
     default_seed = due_local.date()
     seed_base = (parent.get("chainID") or "").strip() or "preview"
     fallback_hhmm = (due_local.hour, due_local.minute)
+    target_field = "scheduled" if not due_dt_utc and parent.get("scheduled") else "due"
     nxt_local, info = _anchor_due_for_mode(
         mode,
         dnf=dnf,
@@ -3190,6 +3209,8 @@ def _compute_anchor_child_due(parent: dict):
     if not nxt_local:
         raise ValueError("Could not compute next anchor occurrence")
 
+    info = dict(info or {})
+    info["target_field"] = target_field
     return nxt_local.astimezone(timezone.utc), info, dnf
 
 
@@ -3423,35 +3444,47 @@ def _local_naive_to_utc(dt_local_naive: datetime) -> datetime:
     return dt_local_naive.replace(tzinfo=timezone.utc).replace(microsecond=0)
 
 
-def _carry_relative_datetime(parent: dict, child: dict, child_due_utc: datetime, field: str) -> None:
-    """Carry a datetime field forward relative to due, preserving local wall-clock offset.
+def _recurrence_anchor_field(task: dict | None) -> str:
+    if isinstance(task, dict):
+        if task.get("due"):
+            return "due"
+        if task.get("scheduled"):
+            return "scheduled"
+    return "due"
 
-    offset := (parent[field] - parent[due]) computed in local wall-clock space
-    child[field] := child_due + offset (also in local wall-clock space)
-    """
+
+def _carry_relative_datetime(
+    parent: dict,
+    child: dict,
+    child_due_utc: datetime,
+    field: str,
+    *,
+    parent_anchor_field: str = "due",
+    child_anchor_field: str = "due",
+) -> None:
+    """Carry a datetime field forward relative to the recurrence anchor, preserving local wall-clock offset."""
     if not isinstance(parent, dict) or not isinstance(child, dict):
         return
     if not _require_core():
         return
-    if not (parent.get(field) and parent.get("due")):
+    child.pop(field, None)
+    if not (parent.get(field) and parent.get(parent_anchor_field)):
         return
 
-    p_due = core.parse_dt_any(parent.get("due"))
+    p_due = core.parse_dt_any(parent.get(parent_anchor_field))
     p_val = core.parse_dt_any(parent.get(field))
     if not (p_due and p_val and isinstance(child_due_utc, datetime)):
         if _DEBUG_WAIT_SCHED:
             _set_wait_sched_debug(field, {
                 "ok": False,
                 "reason": "parse-failed",
-                "parent_due": parent.get("due"),
+                "parent_anchor": parent.get(parent_anchor_field),
                 "parent_val": parent.get(field),
-                "child_due": child.get("due") or (core.fmt_isoz(child_due_utc) if isinstance(child_due_utc, datetime) else None),
+                "child_anchor": child.get(child_anchor_field) or (core.fmt_isoz(child_due_utc) if isinstance(child_due_utc, datetime) else None),
             })
         return
 
     try:
-        # Do not carry absolute timestamps forward.
-        child.pop(field, None)
         delta = _utc_to_local_naive(p_val) - _utc_to_local_naive(p_due)
         c_due_local = _utc_to_local_naive(child_due_utc)
         c_val_local = c_due_local + delta
@@ -3460,14 +3493,14 @@ def _carry_relative_datetime(parent: dict, child: dict, child_due_utc: datetime,
         if _DEBUG_WAIT_SCHED:
             _set_wait_sched_debug(field, {
                 "ok": True,
-                "parent_due": parent.get("due"),
+                "parent_anchor": parent.get(parent_anchor_field),
                 "parent_val": parent.get(field),
                 "delta": _fmt_td_dd_hhmm(delta),
-                "child_due": child.get("due"),
+                "child_anchor": child.get(child_anchor_field),
                 "child_val": child.get(field),
             })
     except Exception:
-        # If anything goes wrong, do not mutate the child's field (leave inherited value).
+        # If anything goes wrong, leave the field cleared rather than keep a stale absolute timestamp.
         return
 
 
@@ -3497,6 +3530,7 @@ def _configured_recurrence_uda_fields(parent: dict) -> tuple[str, ...]:
 def _build_child_from_parent(
     parent: dict,
     child_due_utc,
+    child_field: str,
     next_link_no: int,
     parent_short: str,
     kind: str,
@@ -3507,6 +3541,7 @@ def _build_child_from_parent(
     return modify_spawn_prep.build_child_from_parent(
         parent,
         child_due_utc,
+        child_field,
         next_link_no,
         parent_short,
         kind,
@@ -3519,6 +3554,7 @@ def _build_child_from_parent(
         fmt_isoz=core.fmt_isoz,
         now_utc=core.now_utc,
         carry_relative_datetime=_carry_relative_datetime,
+        recurrence_anchor_field=_recurrence_anchor_field,
         configured_recurrence_uda_fields=_configured_recurrence_uda_fields,
         short_uuid=core.short_uuid,
     )
@@ -4977,6 +5013,7 @@ def _completion_build_and_spawn_child(
     new: dict,
     *,
     child_due,
+    child_field: str,
     next_no: int,
     parent_short: str,
     kind: str,
@@ -4990,6 +5027,7 @@ def _completion_build_and_spawn_child(
     return modify_completion_spawn.completion_build_and_spawn_child(
         new,
         child_due=child_due,
+        child_field=child_field,
         next_no=next_no,
         parent_short=parent_short,
         kind=kind,
@@ -5038,10 +5076,12 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     cap_no = computed.cap_no
     finals = computed.finals
     until_cap_no = computed.until_cap_no
+    child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"
 
     spawned = _completion_build_and_spawn_child(
         new,
         child_due=child_due,
+        child_field=child_field,
         next_no=next_no,
         parent_short=parent_short,
         kind=kind,

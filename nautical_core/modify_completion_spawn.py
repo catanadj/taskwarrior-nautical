@@ -7,6 +7,7 @@ def completion_build_and_spawn_child(
     new: dict,
     *,
     child_due,
+    child_field: str = "due",
     next_no: int,
     parent_short: str,
     kind: str,
@@ -20,7 +21,7 @@ def completion_build_and_spawn_child(
     print_task = services.print_task
     diag = services.diag
     try:
-        child = build_child_from_parent(new, child_due, next_no, parent_short, kind, cpmax, until_dt)
+        child = build_child_from_parent(new, child_due, child_field, next_no, parent_short, kind, cpmax, until_dt)
     except Exception as exc:
         if callable(diag):
             diag(f"build child failed: {exc}")

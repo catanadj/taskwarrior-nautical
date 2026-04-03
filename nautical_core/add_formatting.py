@@ -31,7 +31,7 @@ def _anchor_classify_rows(
     upcoming_start: int,
 ) -> dict[str, list[tuple[str, str]]]:
     config_keys = {"Pattern", "Natural"}
-    schedule_keys = {"First due", "Next anchor", "Scheduled", "Wait", "[auto-due]", "Upcoming"}
+    schedule_keys = {"First due", "First scheduled", "Next anchor", "Scheduled", "Wait", "[auto-due]", "Upcoming"}
     limits_keys = {"Limits", "Final (until)"}
     grouped: dict[str, list[tuple[str, str]]] = {
         "config": [],
@@ -46,7 +46,7 @@ def _anchor_classify_rows(
     for k, v in rows:
         if k == "Delta":
             continue
-        if k == "First due" and delta_text:
+        if k in {"First due", "First scheduled"} and delta_text:
             v = f"{v}  [dim](Δ {delta_text})[/]"
 
         lk = (str(k).lower() if k is not None else "")
@@ -116,7 +116,7 @@ def format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
             break
 
     config_keys = {"Period"}
-    schedule_keys = {"First due", "Scheduled", "Wait", "[auto-due]", "Upcoming"}
+    schedule_keys = {"First due", "First scheduled", "Scheduled", "Wait", "[auto-due]", "Upcoming"}
     limits_keys = {"Limits", "Final (max)", "Final (until)"}
 
     config: list[tuple[str, str]] = []
@@ -130,7 +130,7 @@ def format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
         if k == "Delta":
             continue
 
-        if k == "First due" and delta_text:
+        if k in {"First due", "First scheduled"} and delta_text:
             v = f"{v}  [dim](Δ {delta_text})[/]"
 
         lk = (str(k).lower() if k is not None else "")

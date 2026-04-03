@@ -4073,6 +4073,54 @@ def test_hook_on_add_multitime_preview_emits_all_slots():
     if "12:00" not in stderr_txt or "22:00" not in stderr_txt:
         raise AssertionError(f"on-add preview missing expected intra-day times. stderr={stderr_txt[:500]!r}")
 
+
+def test_hook_on_add_cp_scheduled_only_preserves_no_due():
+    """scheduled-only recurring cp tasks should remain scheduled-only on add."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000112",
+        "description": "hook test on-add cp scheduled-only",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20251217T000000Z",
+        "cp": "P7D",
+        "scheduled": "20251217T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    if p.returncode != 0:
+        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+    out_task = _extract_last_json(p.stdout)
+    expect(not out_task.get("due"), f"scheduled-only cp add should not set due: {out_task}")
+    expect(out_task.get("scheduled") == task["scheduled"], f"scheduled changed unexpectedly: {out_task}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
+    """scheduled-only anchor tasks should remain scheduled-only on add."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000113",
+        "description": "hook test on-add anchor scheduled-only",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20251217T000000Z",
+        "anchor": "w:wed",
+        "anchor_mode": "skip",
+        "scheduled": "20251217T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    if p.returncode != 0:
+        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+    out_task = _extract_last_json(p.stdout)
+    expect(not out_task.get("due"), f"scheduled-only anchor add should not set due: {out_task}")
+    expect(out_task.get("scheduled") == task["scheduled"], f"scheduled changed unexpectedly: {out_task}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
+    expect("Next anchor" in stderr_txt, f"preview should show next anchor. stderr={stderr_txt[:500]!r}")
+
 def test_hook_on_modify_timeline_multitime_includes_all_slots():
     """on-modify timeline generator must step occurrences (date+time), not only dates."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -5492,6 +5540,7 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
         child = mod._build_child_from_parent(
             parent,
             child_due_utc,
+            "due",
             2,
             "deadbeef",
             "cp",
@@ -5643,6 +5692,46 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
     expect(out.finals == finals and out.until_cap_no == 3, f"unexpected finals: {out}")
 
 
+def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
+    """scheduled-only cp chains should preserve scheduled wall clock on completion."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_sched_only_compute_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    child_due, meta = mod._compute_cp_child_due(
+        {
+            "cp": "P1D",
+            "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (9, 0))),
+            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (17, 0))),
+        }
+    )
+    child_local = mod.core.to_local(child_due)
+    expect((child_local.hour, child_local.minute) == (9, 0), f"unexpected scheduled-only child time: {child_local}")
+    expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
+
+
+def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
+    """scheduled-only anchor chains should compute missed occurrences from scheduled, not completion time."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_sched_only_compute_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    child_due, meta, _dnf = mod._compute_anchor_child_due(
+        {
+            "anchor": "w:mon..sun@t=09:00",
+            "anchor_mode": "all",
+            "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (9, 0))),
+            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 8), (10, 0))),
+            "chainID": "abcd1234",
+        }
+    )
+    expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 7), (9, 0)))
+    expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next scheduled anchor: {mod.core.fmt_isoz(child_due)}")
+    expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
+
+
 def test_on_modify_completion_build_and_spawn_child_happy_path():
     """completion spawn wrapper should return child info and stamp nextLink when verified."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -5663,6 +5752,7 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
     out = mod._completion_build_and_spawn_child(
         new,
         child_due=mod.core.now_utc(),
+        child_field="due",
         next_no=2,
         parent_short="00000000",
         kind="cp",
@@ -5675,6 +5765,38 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
     expect(out.verified is True and out.deferred_spawn is False, f"unexpected verification state: {out}")
     expect(out.spawn_intent_id == "si_test", f"unexpected spawn intent id: {out}")
     expect(new.get("nextLink") == "deadbeef", f"verified spawn should stamp nextLink: {new}")
+
+
+def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait():
+    """scheduled-only child spawn should keep due empty and carry wait from scheduled."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_build_child_sched_only_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    parent = {
+        "uuid": "00000000-0000-0000-0000-000000000333",
+        "status": "completed",
+        "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (9, 0))),
+        "wait": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (7, 0))),
+        "cp": "1d",
+        "chainID": "cid_sched",
+    }
+    child_due = mod.core.build_local_datetime(date(2025, 1, 2), (9, 0))
+    child = mod._build_child_from_parent(
+        parent,
+        child_due,
+        "scheduled",
+        2,
+        "deadbeef",
+        "cp",
+        0,
+        None,
+    )
+    expect(not child.get("due"), f"scheduled-only child should not get due: {child}")
+    expect(child.get("scheduled") == mod.core.fmt_isoz(child_due), f"unexpected child scheduled: {child}")
+    wait_local = mod.core.to_local(mod.core.parse_dt_any(child.get("wait")))
+    expect((wait_local.hour, wait_local.minute) == (7, 0), f"unexpected carried wait: {wait_local}")
 
 
 def test_on_modify_render_anchor_completion_feedback_wrapper():
@@ -7422,6 +7544,8 @@ TESTS = [
     test_monthname_and_numeric_equivalence,
     test_cp_duration_parser_and_dst_preserve_whole_days,
     test_hook_on_add_multitime_preview_emits_all_slots,
+    test_hook_on_add_cp_scheduled_only_preserves_no_due,
+    test_hook_on_add_anchor_scheduled_only_preserves_no_due,
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_task_runner_handles_nonzero,
     test_hook_run_task_falls_back_when_core_load_fails,
@@ -7551,7 +7675,10 @@ TESTS = [
     test_on_modify_link_limit,
     test_on_modify_completion_preflight_context_happy_path,
     test_on_modify_completion_compute_next_and_limits_happy_path,
+    test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
+    test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
     test_on_modify_completion_build_and_spawn_child_happy_path,
+    test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
     test_on_modify_render_anchor_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_text_mode,
@@ -7689,7 +7816,8 @@ def main():
     print(f"Total tests run: {total_tests}")
     print(f"Passed: {total_tests - fails}")
     print(f"Failed: {fails}")
-    print(f"Success rate: {((total_tests - fails) / total_tests * 100):.1f}%")
+    success_rate = ((total_tests - fails) / total_tests * 100) if total_tests else 100.0
+    print(f"Success rate: {success_rate:.1f}%")
     print(f"{'='*60}")
     
     sys.exit(1 if fails else 0)

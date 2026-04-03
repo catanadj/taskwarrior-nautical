@@ -85,6 +85,7 @@ def prepare_spawn_child_payload(
 def build_child_from_parent(
     parent: dict,
     child_due_utc,
+    child_field: str,
     next_link_no: int,
     parent_short: str,
     kind: str,
@@ -98,6 +99,7 @@ def build_child_from_parent(
     fmt_isoz,
     now_utc,
     carry_relative_datetime,
+    recurrence_anchor_field,
     configured_recurrence_uda_fields,
     short_uuid,
 ) -> dict:
@@ -109,13 +111,18 @@ def build_child_from_parent(
     child.update(
         {
             "status": "pending",
-            "due": fmt_isoz(child_due_utc),
             "entry": fmt_isoz(now_utc()),
             "chain": "on",
             "prevLink": parent_short,
             "link": next_link_no,
         }
     )
+    parent_anchor_field = recurrence_anchor_field(parent)
+    if child_field == "scheduled":
+        child.pop("due", None)
+        child["scheduled"] = fmt_isoz(child_due_utc)
+    else:
+        child["due"] = fmt_isoz(child_due_utc)
     if kind == "anchor":
         child["anchor"] = parent.get("anchor")
         child["anchor_mode"] = parent.get("anchor_mode") or "skip"
@@ -125,10 +132,32 @@ def build_child_from_parent(
         child.pop("anchor", None)
         child.pop("anchor_mode", None)
 
-    carry_relative_datetime(parent, child, child_due_utc, "wait")
-    carry_relative_datetime(parent, child, child_due_utc, "scheduled")
+    carry_relative_datetime(
+        parent,
+        child,
+        child_due_utc,
+        "wait",
+        parent_anchor_field=parent_anchor_field,
+        child_anchor_field=child_field,
+    )
+    if child_field != "scheduled":
+        carry_relative_datetime(
+            parent,
+            child,
+            child_due_utc,
+            "scheduled",
+            parent_anchor_field=parent_anchor_field,
+            child_anchor_field=child_field,
+        )
     for uda_field in configured_recurrence_uda_fields(parent):
-        carry_relative_datetime(parent, child, child_due_utc, uda_field)
+        carry_relative_datetime(
+            parent,
+            child,
+            child_due_utc,
+            uda_field,
+            parent_anchor_field=parent_anchor_field,
+            child_anchor_field=child_field,
+        )
 
     if cpmax:
         child["chainMax"] = int(cpmax)

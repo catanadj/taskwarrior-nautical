@@ -46,6 +46,7 @@ class OnAddContext:
     chain_state: str
     until_dt: datetime | None
     user_provided_due: bool
+    recurrence_field: str
     due_dt: datetime
     past_due_warning: str | None
     due_day: Any
@@ -83,7 +84,7 @@ def build_on_add_context(
     validate_chain_limits_on_add: Callable[[dict[str, Any], datetime], datetime | None],
     due_context_on_add: Callable[
         [dict[str, Any], datetime],
-        tuple[bool, datetime, str | None, Any, tuple[int, int]],
+        tuple[bool, str, datetime, str | None, Any, tuple[int, int]],
     ],
 ) -> OnAddContext:
     cp_str = (task.get('cp') or '').strip()
@@ -96,6 +97,7 @@ def build_on_add_context(
     if not kind:
         until_dt = None
         user_provided_due = bool(task.get('due'))
+        recurrence_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else "due"
         due_dt = now_utc
         past_due_warning = None
         due_local = now_local if isinstance(now_local, datetime) else now_utc
@@ -105,6 +107,7 @@ def build_on_add_context(
         until_dt = validate_chain_limits_on_add(task, now_utc)
         (
             user_provided_due,
+            recurrence_field,
             due_dt,
             past_due_warning,
             due_day,
@@ -120,6 +123,7 @@ def build_on_add_context(
         chain_state=chain_state,
         until_dt=until_dt,
         user_provided_due=user_provided_due,
+        recurrence_field=recurrence_field,
         due_dt=due_dt,
         past_due_warning=past_due_warning,
         due_day=due_day,

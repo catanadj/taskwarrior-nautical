@@ -103,7 +103,8 @@ def _timeline_future_anchor_items(
     nxt_local = to_local_cached(child_due_utc)
     fallback_hhmm = (nxt_local.hour, nxt_local.minute)
     due0, _ = safe_parse_datetime(task.get("due"))
-    default_seed = to_local_cached(due0 or child_due_utc).date()
+    sched0, _ = safe_parse_datetime(task.get("scheduled"))
+    default_seed = to_local_cached(due0 or sched0 or child_due_utc).date()
     after_local = nxt_local
     iterations = 0
     for _ in range(allowed_future):

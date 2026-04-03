@@ -799,7 +799,14 @@ def _fmt_td_no_seconds(td: timedelta) -> str:
     return f"{sign}{days}d {hours:02d}h:{minutes:02d}m"
 
 
-def _append_wait_sched_rows(rows: list, task: dict, due_utc: datetime, auto_due: bool) -> None:
+def _append_wait_sched_rows(
+    rows: list,
+    task: dict,
+    due_utc: datetime,
+    auto_due: bool,
+    *,
+    anchor_field: str = "due",
+) -> None:
     """
     Append Scheduled/Wait lines to panel using LOCAL display, with UTC deltas to due.
     Also emit warnings when order due > scheduled > wait is violated.
@@ -819,7 +826,7 @@ def _append_wait_sched_rows(rows: list, task: dict, due_utc: datetime, auto_due:
     sched_dt = _p("scheduled")
     wait_dt = _p("wait")
 
-    if sched_dt:
+    if sched_dt and anchor_field != "scheduled":
         rows.append((
             "Scheduled",
             f"[white]{core.fmt_dt_local(sched_dt)}[/]  [dim](Δ {_fmt_td_no_seconds(sched_dt - due_utc)})[/]"
@@ -831,17 +838,19 @@ def _append_wait_sched_rows(rows: list, task: dict, due_utc: datetime, auto_due:
         ))
 
     issues: list[str] = []
-    if sched_dt and sched_dt > due_utc:
-        issues.append(f"scheduled is after due by {_fmt_td_no_seconds(sched_dt - due_utc)}")
+    anchor_label = "scheduled" if anchor_field == "scheduled" else "due"
+    if sched_dt and anchor_field != "scheduled" and sched_dt > due_utc:
+        issues.append(f"scheduled is after {anchor_label} by {_fmt_td_no_seconds(sched_dt - due_utc)}")
     if wait_dt and wait_dt > due_utc:
-        issues.append(f"wait is after due by {_fmt_td_no_seconds(wait_dt - due_utc)}")
-    if wait_dt and sched_dt and wait_dt > sched_dt:
+        issues.append(f"wait is after {anchor_label} by {_fmt_td_no_seconds(wait_dt - due_utc)}")
+    if anchor_field != "scheduled" and wait_dt and sched_dt and wait_dt > sched_dt:
         issues.append(f"wait is after scheduled by {_fmt_td_no_seconds(wait_dt - sched_dt)}")
 
     if issues:
+        expected = "scheduled > wait" if anchor_field == "scheduled" else "due > scheduled > wait"
         rows.append((
             "Warning",
-            "[yellow]Wait/Sched: expected order due > scheduled > wait. " + "; ".join(issues) + ".[/]"
+            f"[yellow]Wait/Sched: expected order {expected}. " + "; ".join(issues) + ".[/]"
         ))
         if auto_due:
             rows.append((
@@ -1229,6 +1238,7 @@ def _handle_cp_preview_on_add(
     ch: str,
     now_utc: datetime,
     user_provided_due: bool,
+    recurrence_field: str,
     due_dt: datetime,
     until_dt: datetime | None,
 ) -> None:
@@ -1260,14 +1270,25 @@ def _handle_cp_preview_on_add(
         due_dt = add_period(entry_dt)
         task["due"] = _fmt_local_for_task(due_dt)
         rows.append(("[auto-due]", "Due was not set explicitly; assigned to entry+cp."))
+        first_label = "First due"
+    elif recurrence_field == "scheduled":
+        due_dt = _dt(task.get("scheduled"))
+        first_label = "First scheduled"
     else:
         due_dt = _dt(task.get("due"))
+        first_label = "First due"
 
     rows.append(("Period", f"[bold white]{cp_str}[/]"))
-    rows.append(("First due", f"[bold bright_green]{_fmt(due_dt)}[/]"))
+    rows.append((first_label, f"[bold bright_green]{_fmt(due_dt)}[/]"))
 
-    # Scheduled/Wait preview (relative to First due)
-    _append_wait_sched_rows(rows, task, due_dt, auto_due=(not user_provided_due))
+    # Scheduled/Wait preview relative to the recurrence anchor.
+    _append_wait_sched_rows(
+        rows,
+        task,
+        due_dt,
+        auto_due=(not user_provided_due),
+        anchor_field=recurrence_field,
+    )
 
     cpmax = core.coerce_int(task.get("chainMax"), 0)
     exact_until_count, final_until_dt = _cp_until_summary(due_dt, until_dt, add_period)
@@ -1337,6 +1358,7 @@ def _anchor_preview_first_due(
     now_local: datetime,
     due_dt: datetime,
     user_provided_due: bool,
+    recurrence_field: str,
     due_hhmm: tuple[int, int],
     interval_seed,
     seed_base: str,
@@ -1350,6 +1372,7 @@ def _anchor_preview_first_due(
         now_local=now_local,
         due_dt=due_dt,
         user_provided_due=user_provided_due,
+        recurrence_field=recurrence_field,
         due_hhmm=due_hhmm,
         interval_seed=interval_seed,
         seed_base=seed_base,
@@ -1368,6 +1391,7 @@ def _anchor_preview_misaligned_due_warning(
     *,
     dnf,
     due_dt: datetime,
+    recurrence_field: str,
     interval_seed,
     seed_base: str,
 ) -> None:
@@ -1376,6 +1400,7 @@ def _anchor_preview_misaligned_due_warning(
         rows,
         dnf=dnf,
         due_dt=due_dt,
+        recurrence_field=recurrence_field,
         interval_seed=interval_seed,
         seed_base=seed_base,
         to_local_cached=_to_local_cached,
@@ -1422,6 +1447,7 @@ def _handle_anchor_preview_on_add(
     now_utc: datetime,
     now_local: datetime,
     user_provided_due: bool,
+    recurrence_field: str,
     due_dt: datetime,
     due_day,
     due_hhmm: tuple[int, int],
@@ -1437,6 +1463,7 @@ def _handle_anchor_preview_on_add(
         now_utc=now_utc,
         now_local=now_local,
         user_provided_due=user_provided_due,
+        recurrence_field=recurrence_field,
         due_dt=due_dt,
         due_day=due_day,
         due_hhmm=due_hhmm,
@@ -1560,6 +1587,7 @@ def _handle_anchor_preview_on_add_context(ctx, *, prof) -> None:
         now_utc=ctx.now_utc,
         now_local=ctx.now_local,
         user_provided_due=ctx.user_provided_due,
+        recurrence_field=ctx.recurrence_field,
         due_dt=ctx.due_dt,
         due_day=ctx.due_day,
         due_hhmm=ctx.due_hhmm,
@@ -1576,6 +1604,7 @@ def _handle_cp_preview_on_add_context(ctx, *, prof) -> None:
         ch=ctx.chain_state,
         now_utc=ctx.now_utc,
         user_provided_due=ctx.user_provided_due,
+        recurrence_field=ctx.recurrence_field,
         due_dt=ctx.due_dt,
         until_dt=ctx.until_dt,
     )
@@ -1617,24 +1646,29 @@ def _validate_chain_limits_on_add(task: dict, now_utc: datetime) -> datetime | N
     return until_dt
 
 
-def _due_context_on_add(task: dict, now_utc: datetime) -> tuple[bool, datetime, str | None, object, tuple[int, int]]:
-    user_provided_due = bool(task.get("due"))
+def _due_context_on_add(task: dict, now_utc: datetime) -> tuple[bool, str, datetime, str | None, object, tuple[int, int]]:
+    recurrence_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else "due"
+    user_provided_due = recurrence_field in {"due", "scheduled"}
     due_dt = None
     past_due_warning = None
-    if user_provided_due:
+    if recurrence_field == "due":
         due_dt, err = _safe_parse_datetime(task.get("due"), "due")
         if err:
             _error_and_exit([("Invalid due", err)])
         is_past, warn_msg = _check_due_in_past(due_dt, now_utc)
         if is_past:
             past_due_warning = warn_msg
+    elif recurrence_field == "scheduled":
+        due_dt, err = _safe_parse_datetime(task.get("scheduled"), "scheduled")
+        if err:
+            _error_and_exit([("Invalid scheduled", err)])
     if due_dt is None:
         due_dt = now_utc
 
     due_local = core.to_local(due_dt)
     due_day = due_local.date()
     due_hhmm = (due_local.hour, due_local.minute)
-    return user_provided_due, due_dt, past_due_warning, due_day, due_hhmm
+    return user_provided_due, recurrence_field, due_dt, past_due_warning, due_day, due_hhmm
 
 
 # --------------------------------------------------------------------------------------

@@ -5732,6 +5732,29 @@ def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
 
 
+def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due():
+    """anchor completion should not crash when scheduled is later than due."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_sched_after_due_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    child_due, meta, _dnf = mod._compute_anchor_child_due(
+        {
+            "anchor": "w:mon..sun@t=09:00",
+            "anchor_mode": "all",
+            "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (9, 0))),
+            "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 8), (12, 0))),
+            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 8), (10, 0))),
+            "chainID": "abcd1234",
+        }
+    )
+
+    expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 7), (9, 0)))
+    expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next due with scheduled-after-due: {mod.core.fmt_isoz(child_due)}")
+    expect(meta.get("target_field") == "due", f"expected due target field when due is present: {meta}")
+
+
 def test_on_modify_completion_build_and_spawn_child_happy_path():
     """completion spawn wrapper should return child info and stamp nextLink when verified."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -7677,6 +7700,7 @@ TESTS = [
     test_on_modify_completion_compute_next_and_limits_happy_path,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
+    test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due,
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
     test_on_modify_render_anchor_completion_feedback_wrapper,

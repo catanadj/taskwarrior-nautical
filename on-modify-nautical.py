@@ -3040,7 +3040,7 @@ def _anchor_due_mode_all(
     due_local,
     end_local,
     due_dt_utc,
-    default_seed,
+    default_seed_date,
     seed_base,
     fallback_hhmm,
 ) -> tuple[object, dict]:
@@ -3049,7 +3049,7 @@ def _anchor_due_mode_all(
         dnf,
         after_local_dt=due_local,
         until_local_dt=end_local,
-        default_seed_date=default_seed,
+        default_seed_date=default_seed_date,
         seed_base=seed_base,
         fallback_hhmm=fallback_hhmm,
         limit=25,
@@ -3065,12 +3065,12 @@ def _anchor_due_mode_all(
         dnf,
         end_local=end_local,
         due_local=(due_local if due_dt_utc else None),
-        default_seed_date=default_seed,
+        default_seed_date=default_seed_date,
     )
     nxt_local = _next_occurrence_after_local_dt(
         dnf,
         after_local_dt=ref_local,
-        default_seed_date=default_seed,
+        default_seed_date=default_seed_date,
         seed_base=seed_base,
         fallback_hhmm=fallback_hhmm,
     )
@@ -3084,7 +3084,7 @@ def _anchor_due_mode_flex(
     due_local,
     end_local,
     due_dt_utc,
-    default_seed,
+    default_seed_date,
     seed_base,
     fallback_hhmm,
 ) -> tuple[object, dict]:
@@ -3094,7 +3094,7 @@ def _anchor_due_mode_flex(
             dnf,
             after_local_dt=due_local,
             until_local_dt=end_local,
-            default_seed_date=default_seed,
+            default_seed_date=default_seed_date,
             seed_base=seed_base,
             fallback_hhmm=fallback_hhmm,
             limit=25,
@@ -3102,7 +3102,7 @@ def _anchor_due_mode_flex(
     nxt_local = _next_occurrence_after_local_dt(
         dnf,
         after_local_dt=end_local,
-        default_seed_date=default_seed,
+        default_seed_date=default_seed_date,
         seed_base=seed_base,
         fallback_hhmm=fallback_hhmm,
     )
@@ -3120,14 +3120,14 @@ def _anchor_due_mode_skip(
     dnf,
     due_local,
     end_local,
-    default_seed,
+    default_seed_date,
     seed_base,
     fallback_hhmm,
 ) -> tuple[object, dict]:
     nxt_local = _next_occurrence_after_local_dt(
         dnf,
         after_local_dt=(max(end_local, due_local) if due_local else end_local),
-        default_seed_date=default_seed,
+        default_seed_date=default_seed_date,
         seed_base=seed_base,
         fallback_hhmm=fallback_hhmm,
     )
@@ -3142,7 +3142,7 @@ def _anchor_due_for_mode(
     due_local,
     end_local,
     due_dt_utc,
-    default_seed,
+    default_seed_date,
     seed_base,
     fallback_hhmm,
 ) -> tuple[object, dict]:
@@ -3152,7 +3152,7 @@ def _anchor_due_for_mode(
             due_local=due_local,
             end_local=end_local,
             due_dt_utc=due_dt_utc,
-            default_seed=default_seed,
+            default_seed_date=default_seed_date,
             seed_base=seed_base,
             fallback_hhmm=fallback_hhmm,
         )
@@ -3162,7 +3162,7 @@ def _anchor_due_for_mode(
             due_local=due_local,
             end_local=end_local,
             due_dt_utc=due_dt_utc,
-            default_seed=default_seed,
+            default_seed_date=default_seed_date,
             seed_base=seed_base,
             fallback_hhmm=fallback_hhmm,
         )
@@ -3170,7 +3170,7 @@ def _anchor_due_for_mode(
         dnf=dnf,
         due_local=due_local,
         end_local=end_local,
-        default_seed=default_seed,
+        default_seed_date=default_seed_date,
         seed_base=seed_base,
         fallback_hhmm=fallback_hhmm,
     )
@@ -3201,7 +3201,7 @@ def _compute_anchor_child_due(parent: dict):
         due_local=due_local,
         end_local=end_local,
         due_dt_utc=due_dt_utc,
-        default_seed=default_seed,
+        default_seed_date=default_seed,
         seed_base=seed_base,
         fallback_hhmm=fallback_hhmm,
     )
@@ -4360,7 +4360,7 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
         cursor = _next_occurrence_after_local_dt(
             dnf,
             cursor,
-            default_seed=default_seed,
+            default_seed_date=default_seed,
             seed_base=seed_base,
             fallback_hhmm=fallback_hhmm,
         )

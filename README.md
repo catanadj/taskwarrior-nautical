@@ -15,9 +15,8 @@ task add "Board prep" anchor:"m:2mon | m:15@pbd"
 ```
 
 
-![demo2](https://github.com/user-attachments/assets/96902e4a-2ff8-4b8f-9d4e-4d539299053d)
+![demo_nautical](https://github.com/user-attachments/assets/8420c1a8-907b-483e-86ec-4385eec892e3)
 
-![bulk_project_completion_nautical_compressed_file](https://github.com/user-attachments/assets/7320efd9-38ca-4171-ac54-3700eae49a53)
 
 
 ---

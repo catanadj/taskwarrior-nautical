@@ -141,6 +141,26 @@ def validate_anchor_syntax_strict(
         return None, "anchor syntax error"
 
 
+def validate_omit_syntax_strict(
+    expr: str | list[list[dict[str, Any]]],
+    *,
+    validate_omit_expr_cached: Callable[[str | list[list[dict[str, Any]]]], list[list[dict[str, Any]]]],
+    core: Any,
+    diag: Callable[[str], None],
+) -> tuple[list[list[dict[str, Any]]] | None, str | None]:
+    try:
+        dnf = validate_omit_expr_cached(expr)
+        return dnf, None
+    except ValueError as e:
+        return None, str(e)
+    except Exception as e:
+        parse_err_t = getattr(core, "ParseError", None)
+        if parse_err_t is not None and isinstance(e, parse_err_t):
+            return None, str(e)
+        diag(f"omit validation unexpected error: {e}")
+        return None, "omit syntax error"
+
+
 def validate_anchor_mode(mode_str: Any) -> tuple[str, str | None]:
     mode = (mode_str or "skip").strip().lower()
     if mode not in ("skip", "all", "flex"):

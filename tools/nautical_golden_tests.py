@@ -5732,6 +5732,65 @@ def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
 
 
+def test_anchor_omit_rejects_time_modifiers():
+    """omit expressions should reject @t modifiers because omit is date-based only."""
+    import nautical_core.anchor_omit as anchor_omit
+
+    try:
+        anchor_omit.validate_omit_expr_strict(
+            "w:mon@t=09:00",
+            validate_anchor_expr_cached=core.validate_anchor_expr_strict,
+        )
+        expect(False, "expected timed omit to be rejected")
+    except ValueError as e:
+        expect(
+            "omit does not support time modifiers (@t). Omit rules are date-based only." in str(e),
+            f"unexpected timed omit error: {e}",
+        )
+
+
+def test_anchor_omit_next_after_expr_skips_matching_dates():
+    """next-after helper should skip dates that match the omit expression."""
+    import nautical_core.anchor_omit as anchor_omit
+
+    dnf = core.validate_anchor_expr_strict("w:mon,wed,fri")
+    omit_dnf = anchor_omit.validate_omit_expr_strict(
+        "w:wed",
+        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
+    )
+    nxt, _meta = anchor_omit.next_after_expr_with_omit(
+        dnf,
+        date(2025, 1, 6),
+        default_seed=date(2025, 1, 6),
+        seed_base="omit-test",
+        omit_dnf=omit_dnf,
+        core=core,
+    )
+    expect(nxt == date(2025, 1, 10), f"expected Friday after omitted Wednesday, got {nxt}")
+
+
+def test_on_modify_compute_anchor_child_due_skips_omit_date():
+    """anchor completion should skip omitted anchor dates and choose the next valid one."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_omit_skip_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    child_due, meta, _dnf = mod._compute_anchor_child_due(
+        {
+            "anchor": "w:mon,wed,fri@t=09:00",
+            "omit": "w:wed",
+            "anchor_mode": "skip",
+            "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (9, 0))),
+            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (10, 0))),
+            "chainID": "omit1234",
+        }
+    )
+    expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 10), (9, 0)))
+    expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next due with omit: {mod.core.fmt_isoz(child_due)}")
+    expect(meta.get("target_field") == "due", f"expected due target field: {meta}")
+
+
 def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due():
     """anchor completion should not crash when scheduled is later than due."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -5753,6 +5812,32 @@ def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due():
     expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 7), (9, 0)))
     expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next due with scheduled-after-due: {mod.core.fmt_isoz(child_due)}")
     expect(meta.get("target_field") == "due", f"expected due target field when due is present: {meta}")
+
+
+def test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails():
+    """anchor completion should fail cleanly when omit removes every future anchor date."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_omit_unsat_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    try:
+        mod._compute_anchor_child_due(
+            {
+                "anchor": "w:mon",
+                "omit": "w:mon",
+                "anchor_mode": "skip",
+                "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (9, 0))),
+                "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (10, 0))),
+                "chainID": "omit1234",
+            }
+        )
+        expect(False, "expected unsatisfiable omit to fail")
+    except ValueError as e:
+        expect(
+            "No valid anchor occurrences found after applying omit rules." in str(e),
+            f"unexpected unsatisfiable omit error: {e}",
+        )
 
 
 def test_on_modify_completion_build_and_spawn_child_happy_path():
@@ -7700,7 +7785,11 @@ TESTS = [
     test_on_modify_completion_compute_next_and_limits_happy_path,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
+    test_anchor_omit_rejects_time_modifiers,
+    test_anchor_omit_next_after_expr_skips_matching_dates,
+    test_on_modify_compute_anchor_child_due_skips_omit_date,
     test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due,
+    test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails,
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
     test_on_modify_render_anchor_completion_feedback_wrapper,

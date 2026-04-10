@@ -478,6 +478,12 @@ _MODULE_SPECS = {
         "modify_timeline.py",
         "nautical_core.modify_timeline",
     ),
+    "anchor_omit": (
+        "_ANCHOR_OMIT",
+        "_ANCHOR_OMIT_LOAD_FAILED",
+        "anchor_omit.py",
+        "nautical_core.anchor_omit",
+    ),
     "queue_store": (
         "_QUEUE_STORE",
         "_QUEUE_STORE_LOAD_FAILED",
@@ -750,6 +756,15 @@ def _validate_anchor_expr_cached(expr: str) -> list[list[dict]]:
     return core.validate_anchor_expr_strict(expr)
 
 
+@lru_cache(maxsize=256)
+def _validate_omit_expr_cached(expr: str) -> list[list[dict]]:
+    anchor_omit = _module("anchor_omit")
+    return anchor_omit.validate_omit_expr_strict(
+        expr,
+        validate_anchor_expr_cached=_validate_anchor_expr_cached,
+    )
+
+
 @lru_cache(maxsize=512)
 def _export_uuid_short_cached(u_short: str):
     return _export_uuid_short(u_short, env=None)
@@ -921,7 +936,7 @@ def _panic_passthrough() -> None:
 
 
 def _task_has_nautical_fields(old: dict, new: dict) -> bool:
-    keys = ("anchor", "anchor_mode", "cp", "chainID", "chainid", "nextLink", "prevLink", "link")
+    keys = ("anchor", "anchor_mode", "cp", "chainID", "chainid", "nextLink", "prevLink", "link", "omit")
     for task in (old, new):
         if not isinstance(task, dict):
             continue
@@ -2318,6 +2333,15 @@ def _validate_anchor_on_modify(expr: str):
         raise ValueError(f"anchor validation failed: {str(e)}")
 
 
+def _validate_omit_on_modify(expr: str):
+    if not expr or not expr.strip():
+        return
+    try:
+        _validate_omit_expr_cached(expr)
+    except Exception as e:
+        raise ValueError(f"omit validation failed: {str(e)}")
+
+
 def _validate_cp_on_modify(cp_str: str, chain_max_val, chain_until_val):
     """
     Mirror on-add CP checks for a plain modify:
@@ -2777,6 +2801,7 @@ def _next_occurrence_after_local_dt(
     after_local_dt: datetime,
     default_seed_date,
     seed_base: str,
+    omit_dnf=None,
     fallback_hhmm: tuple[int, int] | None = None,
 ):
     """Return the next occurrence strictly after `after_local_dt`.
@@ -2789,8 +2814,17 @@ def _next_occurrence_after_local_dt(
     # same-day: only if the expression hits on that date
     adate = after_local_dt.date()
     try:
+        anchor_omit = _module("anchor_omit")
         prev = adate - timedelta(days=1)
-        nxt_date, _ = core.next_after_expr(dnf, prev, default_seed_date, seed_base=seed_base)
+        nxt_date, _ = anchor_omit.next_after_expr_with_omit(
+            dnf,
+            prev,
+            default_seed=default_seed_date,
+            seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            core=core,
+            max_skip_iterations=max(core.MAX_ANCHOR_ITER, 128),
+        )
     except Exception:
         nxt_date = None
 
@@ -2804,7 +2838,16 @@ def _next_occurrence_after_local_dt(
                 return cand
 
     # otherwise, find the next matching date strictly after adate
-    nxt_date, _ = core.next_after_expr(dnf, adate, default_seed_date, seed_base=seed_base)
+    anchor_omit = _module("anchor_omit")
+    nxt_date, _ = anchor_omit.next_after_expr_with_omit(
+        dnf,
+        adate,
+        default_seed=default_seed_date,
+        seed_base=seed_base,
+        omit_dnf=omit_dnf,
+        core=core,
+        max_skip_iterations=max(core.MAX_ANCHOR_ITER, 128),
+    )
     slots = _extract_time_slots_for_date(dnf, nxt_date, default_seed_date)
     if not slots:
         slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
@@ -2818,6 +2861,7 @@ def _missed_occurrences_between_local(
     end_local_dt: datetime,
     default_seed_date,
     seed_base: str,
+    omit_dnf=None,
     fallback_hhmm: tuple[int, int] | None = None,
     guard: int = 512,
 ):
@@ -2832,6 +2876,7 @@ def _missed_occurrences_between_local(
             probe,
             default_seed_date,
             seed_base,
+            omit_dnf=omit_dnf,
             fallback_hhmm=fallback_hhmm,
         )
         if nxt is None or nxt > end_local_dt:
@@ -2847,6 +2892,7 @@ def _collect_missed_occurrences(
     until_local_dt: datetime,
     default_seed_date,
     seed_base: str,
+    omit_dnf=None,
     fallback_hhmm: tuple[int, int] | None = None,
     limit: int = 25,
 ) -> list[datetime]:
@@ -2863,6 +2909,7 @@ def _collect_missed_occurrences(
         end_local_dt=until_local_dt,
         default_seed_date=default_seed_date,
         seed_base=seed_base,
+        omit_dnf=omit_dnf,
         fallback_hhmm=fallback_hhmm,
         guard=int(limit),
     )
@@ -3014,6 +3061,16 @@ def _anchor_dnf_from_parent(parent: dict) -> tuple[str, list[list[dict]] | None]
         raise ValueError(f"Invalid anchor expression '{expr_str}': {str(e)}")
 
 
+def _omit_dnf_from_parent(parent: dict) -> tuple[str, list[list[dict]] | None]:
+    expr_str = (parent.get("omit") or "").strip()
+    if not expr_str:
+        return "", None
+    try:
+        return expr_str, _validate_omit_expr_cached(expr_str)
+    except Exception as e:
+        raise ValueError(f"Invalid omit expression '{expr_str}': {str(e)}")
+
+
 def _anchor_parent_local_times(parent: dict):
     end_dt_utc, err = _safe_parse_datetime(parent.get("end"))
     if err:
@@ -3037,6 +3094,7 @@ def _anchor_parent_local_times(parent: dict):
 def _anchor_due_mode_all(
     *,
     dnf,
+    omit_dnf,
     due_local,
     end_local,
     due_dt_utc,
@@ -3051,6 +3109,7 @@ def _anchor_due_mode_all(
         until_local_dt=end_local,
         default_seed_date=default_seed_date,
         seed_base=seed_base,
+        omit_dnf=omit_dnf,
         fallback_hhmm=fallback_hhmm,
         limit=25,
     )
@@ -3072,6 +3131,7 @@ def _anchor_due_mode_all(
         after_local_dt=ref_local,
         default_seed_date=default_seed_date,
         seed_base=seed_base,
+        omit_dnf=omit_dnf,
         fallback_hhmm=fallback_hhmm,
     )
     info["basis"] = "after_due"
@@ -3081,6 +3141,7 @@ def _anchor_due_mode_all(
 def _anchor_due_mode_flex(
     *,
     dnf,
+    omit_dnf,
     due_local,
     end_local,
     due_dt_utc,
@@ -3096,6 +3157,7 @@ def _anchor_due_mode_flex(
             until_local_dt=end_local,
             default_seed_date=default_seed_date,
             seed_base=seed_base,
+            omit_dnf=omit_dnf,
             fallback_hhmm=fallback_hhmm,
             limit=25,
         )
@@ -3104,6 +3166,7 @@ def _anchor_due_mode_flex(
         after_local_dt=end_local,
         default_seed_date=default_seed_date,
         seed_base=seed_base,
+        omit_dnf=omit_dnf,
         fallback_hhmm=fallback_hhmm,
     )
     info = {
@@ -3118,6 +3181,7 @@ def _anchor_due_mode_flex(
 def _anchor_due_mode_skip(
     *,
     dnf,
+    omit_dnf,
     due_local,
     end_local,
     default_seed_date,
@@ -3129,6 +3193,7 @@ def _anchor_due_mode_skip(
         after_local_dt=(max(end_local, due_local) if due_local else end_local),
         default_seed_date=default_seed_date,
         seed_base=seed_base,
+        omit_dnf=omit_dnf,
         fallback_hhmm=fallback_hhmm,
     )
     info = {"mode": "skip", "basis": "after_end", "missed_count": 0, "missed_preview": []}
@@ -3139,6 +3204,7 @@ def _anchor_due_for_mode(
     mode: str,
     *,
     dnf,
+    omit_dnf,
     due_local,
     end_local,
     due_dt_utc,
@@ -3149,6 +3215,7 @@ def _anchor_due_for_mode(
     if mode == "all":
         return _anchor_due_mode_all(
             dnf=dnf,
+            omit_dnf=omit_dnf,
             due_local=due_local,
             end_local=end_local,
             due_dt_utc=due_dt_utc,
@@ -3159,6 +3226,7 @@ def _anchor_due_for_mode(
     if mode == "flex":
         return _anchor_due_mode_flex(
             dnf=dnf,
+            omit_dnf=omit_dnf,
             due_local=due_local,
             end_local=end_local,
             due_dt_utc=due_dt_utc,
@@ -3168,6 +3236,7 @@ def _anchor_due_for_mode(
         )
     return _anchor_due_mode_skip(
         dnf=dnf,
+        omit_dnf=omit_dnf,
         due_local=due_local,
         end_local=end_local,
         default_seed_date=default_seed_date,
@@ -3185,6 +3254,7 @@ def _compute_anchor_child_due(parent: dict):
     expr_str, dnf = _anchor_dnf_from_parent(parent)
     if not expr_str or not dnf:
         return (None, None, None)
+    _omit_expr, omit_dnf = _omit_dnf_from_parent(parent)
 
     mode = _anchor_mode_from_parent(parent)
     end_local, due_local, due_dt_utc = _anchor_parent_local_times(parent)
@@ -3198,6 +3268,7 @@ def _compute_anchor_child_due(parent: dict):
     nxt_local, info = _anchor_due_for_mode(
         mode,
         dnf=dnf,
+        omit_dnf=omit_dnf,
         due_local=due_local,
         end_local=end_local,
         due_dt_utc=due_dt_utc,
@@ -3270,6 +3341,7 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
     default_seed = _to_local_cached(due0 or next_due_utc).date()
 
     fallback_hhmm = (nxt_local.hour, nxt_local.minute)
+    _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
 
     fut_no = cur_no + 1
     fut_local = nxt_local
@@ -3279,6 +3351,7 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
             fut_local,
             default_seed_date=default_seed,
             seed_base=seed_base,
+            omit_dnf=omit_dnf,
             fallback_hhmm=fallback_hhmm,
         )
         fut_no += 1
@@ -4346,6 +4419,7 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
     fallback_hhmm = (nxt_local.hour, nxt_local.minute)
     due0, _ = _safe_parse_datetime(task.get("due"))
     default_seed = _to_local_cached(due0 or next_due_utc).date()
+    _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
 
     count = 0
     last_hit = None
@@ -4362,6 +4436,7 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
             cursor,
             default_seed_date=default_seed,
             seed_base=seed_base,
+            omit_dnf=omit_dnf,
             fallback_hhmm=fallback_hhmm,
         )
         if cursor is None:
@@ -4793,6 +4868,17 @@ def _non_completion_validate_anchor(old: dict, new: dict, new_anchor: str) -> No
         _got_anchor_invalid(_non_completion_anchor_error_message(new_anchor, str(e)))
 
 
+def _validate_omit_for_anchor_or_fail(anchor_expr: str, omit_expr: str) -> None:
+    if omit_expr and not anchor_expr:
+        _fail_and_exit("Invalid omit", "omit requires anchor")
+    if not omit_expr:
+        return
+    try:
+        _validate_omit_on_modify(omit_expr)
+    except Exception as e:
+        _fail_and_exit("Invalid omit", str(e))
+
+
 def _non_completion_reject_conflicting_types(new_anchor: str, new_cp: str) -> None:
     if new_anchor and new_cp:
         _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
@@ -4801,9 +4887,14 @@ def _non_completion_reject_conflicting_types(new_anchor: str, new_cp: str) -> No
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
     anchor_raw = (new.get("anchor") or "").strip()
     new_anchor = _strip_quotes(anchor_raw)
+    omit_raw = (new.get("omit") or "").strip()
+    new_omit = _strip_quotes(omit_raw)
+    if new_omit:
+        new["omit"] = new_omit
 
     if new_anchor:
         _non_completion_validate_anchor(old, new, new_anchor)
+    _validate_omit_for_anchor_or_fail(new_anchor, new_omit)
 
     cp_raw = (new.get("cp") or "").strip()
     new_cp = _strip_quotes(cp_raw)
@@ -4820,8 +4911,13 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
     new_cp = _strip_quotes(cp_raw)
     anchor_raw = (new.get("anchor") or "").strip()
     new_anchor = _strip_quotes(anchor_raw)
+    omit_raw = (new.get("omit") or "").strip()
+    new_omit = _strip_quotes(omit_raw)
+    if new_omit:
+        new["omit"] = new_omit
     if new_anchor and new_cp:
         _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
+    _validate_omit_for_anchor_or_fail(new_anchor, new_omit)
 
     if new_cp:
         # Validate CP on completion

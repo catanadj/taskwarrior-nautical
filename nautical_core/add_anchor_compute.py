@@ -5,12 +5,27 @@ from typing import Any, Callable
 
 
 def anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, *, core: Any):
+    return anchor_step_once_with_omit(
+        dnf,
+        prev_local_date,
+        interval_seed,
+        seed_base,
+        omit_dnf=None,
+        core=core,
+    )
+
+
+def anchor_step_once_with_omit(dnf, prev_local_date, interval_seed, seed_base, *, omit_dnf, core: Any):
     try:
-        nxt_date, _ = core.next_after_expr(
+        anchor_omit = core._import_sibling("anchor_omit")
+        nxt_date, _ = anchor_omit.next_after_expr_with_omit(
             dnf,
             prev_local_date,
             default_seed=interval_seed,
             seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            core=core,
+            max_skip_iterations=max(getattr(core, "MAX_ANCHOR_ITER", 128), 128),
         )
         if nxt_date is None or nxt_date <= prev_local_date:
             return None
@@ -33,7 +48,27 @@ def anchor_term_fires_on_date(term, d, interval_seed, seed_base, *, core: Any):
 
 
 def anchor_expr_fires_on_date(dnf, d, interval_seed, seed_base, *, core: Any):
+    return anchor_expr_fires_on_date_with_omit(
+        dnf,
+        d,
+        interval_seed,
+        seed_base,
+        omit_dnf=None,
+        core=core,
+    )
+
+
+def anchor_expr_fires_on_date_with_omit(dnf, d, interval_seed, seed_base, *, omit_dnf, core: Any):
     try:
+        anchor_omit = core._import_sibling("anchor_omit")
+        if anchor_omit.omit_expr_fires_on_date(
+            omit_dnf,
+            d,
+            interval_seed,
+            seed_base,
+            core=core,
+        ):
+            return False
         nxt, _ = core.next_after_expr(
             dnf,
             d - timedelta(days=1),
@@ -71,12 +106,13 @@ def anchor_pick_occurrence_local(
     fallback_hhmm,
     interval_seed,
     seed_base,
+    omit_dnf=None,
     *,
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
 ):
     d0 = ref_dt_local.date()
-    if anchor_expr_fires_on_date(dnf, d0, interval_seed, seed_base, core=core):
+    if anchor_expr_fires_on_date_with_omit(dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core):
         tlist = anchor_times_for_date(
             dnf,
             d0,
@@ -91,11 +127,15 @@ def anchor_pick_occurrence_local(
             if (cand_local >= ref_dt_local) if inclusive else (cand_local > ref_dt_local):
                 return cand_local
     try:
-        nxt_d, _ = core.next_after_expr(
+        anchor_omit = core._import_sibling("anchor_omit")
+        nxt_d, _ = anchor_omit.next_after_expr_with_omit(
             dnf,
             d0,
             default_seed=interval_seed,
             seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            core=core,
+            max_skip_iterations=max(getattr(core, "MAX_ANCHOR_ITER", 128), 128),
         )
     except Exception:
         return None
@@ -116,17 +156,22 @@ def anchor_next_occurrence_after_local_dt(
     fallback_hhmm,
     interval_seed,
     seed_base,
+    omit_dnf=None,
     *,
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
 ):
     d0 = after_dt_local.date()
     try:
-        nxt_date, _ = core.next_after_expr(
+        anchor_omit = core._import_sibling("anchor_omit")
+        nxt_date, _ = anchor_omit.next_after_expr_with_omit(
             dnf,
             d0 - timedelta(days=1),
             default_seed=interval_seed,
             seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            core=core,
+            max_skip_iterations=max(getattr(core, "MAX_ANCHOR_ITER", 128), 128),
         )
         if nxt_date == d0:
             tlist = anchor_times_for_date(
@@ -145,7 +190,7 @@ def anchor_next_occurrence_after_local_dt(
     except Exception:
         pass
 
-    nxt_d = anchor_step_once(dnf, d0, interval_seed, seed_base, core=core)
+    nxt_d = anchor_step_once_with_omit(dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core)
     if not nxt_d:
         return None
     tlist = anchor_times_for_date(
@@ -166,6 +211,7 @@ def anchor_until_summary(
     first_hhmm,
     interval_seed,
     seed_base,
+    omit_dnf=None,
     *,
     core: Any,
     to_local_cached: Callable[[Any], Any],
@@ -183,7 +229,7 @@ def anchor_until_summary(
         if iterations >= max_iterations:
             break
         iterations += 1
-        nxt = anchor_step_once(dnf, prev, interval_seed, seed_base, core=core)
+        nxt = anchor_step_once_with_omit(dnf, prev, interval_seed, seed_base, omit_dnf=omit_dnf, core=core)
         if not nxt or nxt > end_day:
             break
         count += 1
@@ -205,6 +251,7 @@ def anchor_build_preview(
     fallback_hhmm,
     interval_seed,
     seed_base,
+    omit_dnf=None,
     *,
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
@@ -219,6 +266,7 @@ def anchor_build_preview(
             fallback_hhmm,
             interval_seed,
             seed_base,
+            omit_dnf=omit_dnf,
             core=core,
             norm_t_mod=norm_t_mod,
         )

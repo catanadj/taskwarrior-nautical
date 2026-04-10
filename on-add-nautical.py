@@ -142,6 +142,12 @@ _MODULE_SPECS = {
         "add_anchor_preview.py",
         "nautical_core.add_anchor_preview",
     ),
+    "anchor_omit": (
+        "_ANCHOR_OMIT",
+        "_ANCHOR_OMIT_LOAD_FAILED",
+        "anchor_omit.py",
+        "nautical_core.anchor_omit",
+    ),
     "hook_context": (
         "_HOOK_CONTEXT",
         "_HOOK_CONTEXT_LOAD_FAILED",
@@ -568,10 +574,20 @@ def _validate_anchor_expr_cached(expr: str) -> list[list[dict]]:
 
     return dnf
 
+
+@lru_cache(maxsize=256)
+def _validate_omit_expr_cached(expr: str) -> list[list[dict]]:
+    _load_core()
+    anchor_omit = _module("anchor_omit")
+    return anchor_omit.validate_omit_expr_strict(
+        expr,
+        validate_anchor_expr_cached=_validate_anchor_expr_cached,
+    )
+
 def _task_has_nautical_fields(task: dict) -> bool:
     if not isinstance(task, dict):
         return False
-    for key in ("anchor", "anchor_mode", "cp", "chainID", "chainid", "chainMax", "chainUntil"):
+    for key in ("anchor", "anchor_mode", "cp", "chainID", "chainid", "chainMax", "chainUntil", "omit"):
         if (task.get(key) or "").strip():
             return True
     return False
@@ -922,6 +938,16 @@ def _validate_anchor_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[l
     )
 
 
+def _validate_omit_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[list[dict]] | None, str | None]:
+    add_validation = _module("add_validation")
+    return add_validation.validate_omit_syntax_strict(
+        expr,
+        validate_omit_expr_cached=_validate_omit_expr_cached,
+        core=core,
+        diag=_diag,
+    )
+
+
 def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
     add_validation = _module("add_validation")
     return add_validation.validate_anchor_mode(mode_str)
@@ -1036,10 +1062,10 @@ def _norm_t_mod(v):
     return []
 
 
-def _anchor_step_once(dnf, prev_local_date, interval_seed, seed_base):
+def _anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, omit_dnf=None):
     add_anchor_compute = _module("add_anchor_compute")
-    return add_anchor_compute.anchor_step_once(
-        dnf, prev_local_date, interval_seed, seed_base, core=core
+    return add_anchor_compute.anchor_step_once_with_omit(
+        dnf, prev_local_date, interval_seed, seed_base, omit_dnf=omit_dnf, core=core
     )
 
 
@@ -1069,7 +1095,7 @@ def _anchor_times_for_date(dnf, d, interval_seed, seed_base):
     )
 
 
-def _anchor_pick_occurrence_local(dnf, ref_dt_local, inclusive: bool, fallback_hhmm, interval_seed, seed_base):
+def _anchor_pick_occurrence_local(dnf, ref_dt_local, inclusive: bool, fallback_hhmm, interval_seed, seed_base, omit_dnf=None):
     add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_pick_occurrence_local(
         dnf,
@@ -1078,12 +1104,13 @@ def _anchor_pick_occurrence_local(dnf, ref_dt_local, inclusive: bool, fallback_h
         fallback_hhmm,
         interval_seed,
         seed_base,
+        omit_dnf=omit_dnf,
         core=core,
         norm_t_mod=_norm_t_mod,
     )
 
 
-def _anchor_next_occurrence_after_local_dt(dnf, after_dt_local, fallback_hhmm, interval_seed, seed_base):
+def _anchor_next_occurrence_after_local_dt(dnf, after_dt_local, fallback_hhmm, interval_seed, seed_base, omit_dnf=None):
     add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_next_occurrence_after_local_dt(
         dnf,
@@ -1091,12 +1118,13 @@ def _anchor_next_occurrence_after_local_dt(dnf, after_dt_local, fallback_hhmm, i
         fallback_hhmm,
         interval_seed,
         seed_base,
+        omit_dnf=omit_dnf,
         core=core,
         norm_t_mod=_norm_t_mod,
     )
 
 
-def _anchor_until_summary(dnf, until_dt, first_date_local, first_hhmm, interval_seed, seed_base):
+def _anchor_until_summary(dnf, until_dt, first_date_local, first_hhmm, interval_seed, seed_base, omit_dnf=None):
     add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_until_summary(
         dnf,
@@ -1105,6 +1133,7 @@ def _anchor_until_summary(dnf, until_dt, first_date_local, first_hhmm, interval_
         first_hhmm,
         interval_seed,
         seed_base,
+        omit_dnf=omit_dnf,
         core=core,
         to_local_cached=_to_local_cached,
         max_preview_iterations=_MAX_PREVIEW_ITERATIONS,
@@ -1120,6 +1149,7 @@ def _anchor_build_preview(
     fallback_hhmm,
     interval_seed,
     seed_base,
+    omit_dnf=None,
 ):
     add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_build_preview(
@@ -1130,6 +1160,7 @@ def _anchor_build_preview(
         fallback_hhmm,
         interval_seed,
         seed_base,
+        omit_dnf=omit_dnf,
         core=core,
         norm_t_mod=_norm_t_mod,
     )
@@ -1354,6 +1385,7 @@ def _anchor_preview_seed_context(task: dict, due_day, now_local: datetime, user_
 def _anchor_preview_first_due(
     task: dict,
     dnf,
+    omit_dnf,
     *,
     now_local: datetime,
     due_dt: datetime,
@@ -1369,6 +1401,7 @@ def _anchor_preview_first_due(
     return add_anchor_preview.anchor_preview_first_due(
         task,
         dnf,
+        omit_dnf,
         now_local=now_local,
         due_dt=due_dt,
         user_provided_due=user_provided_due,
@@ -1394,6 +1427,7 @@ def _anchor_preview_misaligned_due_warning(
     recurrence_field: str,
     interval_seed,
     seed_base: str,
+    omit_dnf,
 ) -> None:
     add_anchor_preview = _module("add_anchor_preview")
     add_anchor_preview.anchor_preview_misaligned_due_warning(
@@ -1403,6 +1437,7 @@ def _anchor_preview_misaligned_due_warning(
         recurrence_field=recurrence_field,
         interval_seed=interval_seed,
         seed_base=seed_base,
+        omit_dnf=omit_dnf,
         to_local_cached=_to_local_cached,
         anchor_step_once=_anchor_step_once,
     )
@@ -1477,6 +1512,7 @@ def _handle_anchor_preview_on_add(
         root_uuid_from=_root_uuid_from,
         short=_short,
         validate_anchor_syntax_strict=_validate_anchor_syntax_strict,
+        validate_omit_syntax_strict=_validate_omit_syntax_strict,
         validate_anchor_mode=_validate_anchor_mode,
         validate_chain_duration_reasonable=_validate_chain_duration_reasonable,
         append_wait_sched_rows=_append_wait_sched_rows,
@@ -1562,7 +1598,7 @@ def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *,
     hook_context = _module("hook_context")
     _t_conf = time.perf_counter()
     try:
-        return hook_context.build_on_add_context(
+        ctx = hook_context.build_on_add_context(
             task,
             now_utc,
             now_local,
@@ -1571,6 +1607,12 @@ def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *,
             validate_chain_limits_on_add=_validate_chain_limits_on_add,
             due_context_on_add=_due_context_on_add,
         )
+        omit_expr = _strip_quotes((task.get("omit") or "").strip())
+        if omit_expr:
+            task["omit"] = omit_expr
+            if not ((ctx.anchor_str or "").strip()):
+                _error_and_exit([("Invalid omit", "omit requires anchor")])
+        return ctx
     except ValueError as exc:
         _error_and_exit([('Invalid chain config', str(exc))])
         raise

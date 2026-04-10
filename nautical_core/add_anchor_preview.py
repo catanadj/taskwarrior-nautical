@@ -42,6 +42,23 @@ def anchor_preview_prepare_dnf(
     return dnf, mode
 
 
+def anchor_preview_prepare_omit_dnf(
+    task: dict[str, Any],
+    rows: list[tuple[str, str]],
+    *,
+    validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
+    error_and_exit: Callable[[list[tuple[str, str]]], None],
+) -> list[list[dict[str, Any]]] | None:
+    omit_str = str(task.get("omit") or "").strip()
+    if not omit_str:
+        return None
+    dnf, err = validate_omit_syntax_strict(omit_str)
+    if dnf is None:
+        error_and_exit([("Invalid omit", err or "omit syntax error")])
+    rows.append(("Omit", f"[white]{omit_str}[/]"))
+    return dnf
+
+
 def anchor_preview_seed_context(
     task: dict[str, Any],
     due_day: Any,
@@ -59,6 +76,7 @@ def anchor_preview_seed_context(
 def anchor_preview_first_due(
     task: dict[str, Any],
     dnf,
+    omit_dnf,
     *,
     now_local: datetime,
     due_dt: datetime,
@@ -89,6 +107,7 @@ def anchor_preview_first_due(
             fallback_hhmm=fallback_hhmm,
             interval_seed=interval_seed,
             seed_base=seed_base,
+            omit_dnf=omit_dnf,
         )
         if not first_due_local_dt:
             error_and_exit([("anchor pattern", "No matching anchor occurrences found after the provided due.")])
@@ -100,6 +119,7 @@ def anchor_preview_first_due(
             fallback_hhmm=fallback_hhmm,
             interval_seed=interval_seed,
             seed_base=seed_base,
+            omit_dnf=omit_dnf,
         )
         if not first_due_local_dt:
             error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])
@@ -129,6 +149,7 @@ def anchor_preview_misaligned_due_warning(
     recurrence_field: str,
     interval_seed: Any,
     seed_base: str,
+    omit_dnf,
     to_local_cached: Callable[[datetime], datetime],
     anchor_step_once: Callable[..., Any],
 ) -> None:
@@ -138,6 +159,7 @@ def anchor_preview_misaligned_due_warning(
         due_local_date - timedelta(days=1),
         interval_seed,
         seed_base,
+        omit_dnf=omit_dnf,
     )
     if first_after_due_date != due_local_date:
         anchor_name = "scheduled" if recurrence_field == "scheduled" else "due"
@@ -222,6 +244,7 @@ def handle_anchor_preview_on_add(
     root_uuid_from: Callable[[dict[str, Any]], str | None],
     short: Callable[[Any], str],
     validate_anchor_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
+    validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
     validate_anchor_mode: Callable[[Any], tuple[str, str | None]],
     validate_chain_duration_reasonable: Callable[[Any, datetime, Any, str], tuple[bool, str | None]],
     append_wait_sched_rows: Callable[..., None],
@@ -250,6 +273,12 @@ def handle_anchor_preview_on_add(
         validate_anchor_mode=validate_anchor_mode,
         error_and_exit=error_and_exit,
     )
+    omit_dnf = anchor_preview_prepare_omit_dnf(
+        task,
+        rows,
+        validate_omit_syntax_strict=validate_omit_syntax_strict,
+        error_and_exit=error_and_exit,
+    )
     base_local_date, interval_seed, seed_base = anchor_preview_seed_context(
         task,
         due_day,
@@ -258,7 +287,7 @@ def handle_anchor_preview_on_add(
         root_uuid_from=root_uuid_from,
     )
 
-    first_date_local = anchor_step_once(dnf, base_local_date - timedelta(days=1), interval_seed, seed_base)
+    first_date_local = anchor_step_once(dnf, base_local_date - timedelta(days=1), interval_seed, seed_base, omit_dnf=omit_dnf)
     if not first_date_local:
         error_and_exit(
             [
@@ -278,6 +307,7 @@ def handle_anchor_preview_on_add(
     ) = anchor_preview_first_due(
         task,
         dnf,
+        omit_dnf,
         now_local=now_local,
         due_dt=due_dt,
         user_provided_due=user_provided_due,
@@ -311,6 +341,7 @@ def handle_anchor_preview_on_add(
             recurrence_field=recurrence_field,
             interval_seed=interval_seed,
             seed_base=seed_base,
+            omit_dnf=omit_dnf,
             to_local_cached=to_local_cached,
             anchor_step_once=anchor_step_once,
         )
@@ -333,6 +364,7 @@ def handle_anchor_preview_on_add(
         first_hhmm,
         interval_seed,
         seed_base,
+        omit_dnf=omit_dnf,
     )
 
     allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
@@ -351,6 +383,7 @@ def handle_anchor_preview_on_add(
         fallback_hhmm,
         interval_seed,
         seed_base,
+        omit_dnf=omit_dnf,
     )
     prof.add_ms("anchor:preview_occurrences", (time.perf_counter() - _t_prev) * 1000.0)
     rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))

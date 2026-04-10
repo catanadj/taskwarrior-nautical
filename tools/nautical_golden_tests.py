@@ -4119,7 +4119,79 @@ def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
     expect(out_task.get("scheduled") == task["scheduled"], f"scheduled changed unexpectedly: {out_task}")
     stderr_txt = _strip_markup(p.stderr)
     expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
-    expect("Next anchor" in stderr_txt, f"preview should show next anchor. stderr={stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_anchor_preview_skips_omit_date():
+    """on-add anchor preview should skip omitted dates when selecting the next anchor."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000114",
+        "description": "hook test on-add anchor omit preview",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20250108T000000Z",
+        "anchor": "w:mon,wed,fri@t=09:00",
+        "omit": "w:wed",
+        "anchor_mode": "skip",
+        "due": "20250108T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    if p.returncode != 0:
+        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+    out_task = _extract_last_json(p.stdout)
+    expect(out_task.get("due") == task["due"], f"on-add changed explicit due: {out_task!r}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("Omit" in stderr_txt, f"expected omit row in preview. stderr={stderr_txt[:500]!r}")
+    expect("2025-01-10" in stderr_txt, f"expected next anchor to skip Wednesday and show Friday. stderr={stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_timed_omit_rejected():
+    """on-add should reject timed omit expressions with a clear error."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000115",
+        "description": "hook test on-add timed omit reject",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20250108T000000Z",
+        "anchor": "w:mon,wed,fri",
+        "omit": "w:wed@t=09:00",
+        "anchor_mode": "skip",
+        "due": "20250108T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    expect(p.returncode != 0, "on-add should fail for timed omit")
+    expect((p.stdout or "").strip() == "", f"expected no stdout on timed omit failure, got: {p.stdout!r}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect(
+        "omit does not support time modifiers (@t)." in stderr_txt and "date-based only." in stderr_txt,
+        f"expected timed omit validation message. stderr={stderr_txt[:500]!r}",
+    )
+
+
+def test_hook_on_add_unsatisfiable_omit_fails_cleanly():
+    """on-add should fail cleanly when omit removes every future anchor date."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000116",
+        "description": "hook test on-add unsat omit",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20250106T000000Z",
+        "anchor": "w:mon",
+        "omit": "w:mon",
+        "anchor_mode": "skip",
+        "due": "20250106T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    expect(p.returncode != 0, "on-add should fail for unsatisfiable omit")
+    expect((p.stdout or "").strip() == "", f"expected no stdout on unsatisfiable omit failure, got: {p.stdout!r}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("No valid anchor occurrences found after applying omit rules." in stderr_txt or "No matching anchor dates found." in stderr_txt,
+           f"expected clean unsatisfiable omit failure. stderr={stderr_txt[:500]!r}")
 
 def test_hook_on_modify_timeline_multitime_includes_all_slots():
     """on-modify timeline generator must step occurrences (date+time), not only dates."""
@@ -7654,6 +7726,9 @@ TESTS = [
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,
+    test_hook_on_add_anchor_preview_skips_omit_date,
+    test_hook_on_add_timed_omit_rejected,
+    test_hook_on_add_unsatisfiable_omit_fails_cleanly,
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_task_runner_handles_nonzero,
     test_hook_run_task_falls_back_when_core_load_fails,

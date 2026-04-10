@@ -4143,6 +4143,8 @@ def test_hook_on_add_anchor_preview_skips_omit_date():
     expect(out_task.get("due") == task["due"], f"on-add changed explicit due: {out_task!r}")
     stderr_txt = _strip_markup(p.stderr)
     expect("Omit" in stderr_txt, f"expected omit row in preview. stderr={stderr_txt[:500]!r}")
+    expect("Except" in stderr_txt, f"expected omit natural-language row in preview. stderr={stderr_txt[:500]!r}")
+    expect("Wednesdays" in stderr_txt or "Wednesday" in stderr_txt, f"expected omit natural-language wording in preview. stderr={stderr_txt[:500]!r}")
     expect("2025-01-10" in stderr_txt, f"expected next anchor to skip Wednesday and show Friday. stderr={stderr_txt[:500]!r}")
 
 
@@ -6001,7 +6003,7 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
     try:
         mod.core.PANEL_MODE = "panel"
         mod._render_anchor_completion_feedback(
-            new={"anchor": "w:mon", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            new={"anchor": "w:mon", "omit": "w:wed", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="deadbeef",
@@ -6027,6 +6029,9 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
 
     expect("title" in captured, "expected preview panel emission")
     expect("Next anchor" in captured["title"], f"unexpected panel title: {captured}")
+    fb = captured.get("fb") or []
+    expect(("Omit", "w:wed") in fb, f"expected raw omit row in anchor feedback: {fb}")
+    expect(any(k == "Except" and ("Wednesday" in str(v) or "Wednesdays" in str(v)) for k, v in fb), f"expected natural omit row in anchor feedback: {fb}")
 
 
 def test_on_modify_render_cp_completion_feedback_wrapper():

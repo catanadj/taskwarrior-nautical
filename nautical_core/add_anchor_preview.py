@@ -46,6 +46,7 @@ def anchor_preview_prepare_omit_dnf(
     task: dict[str, Any],
     rows: list[tuple[str, str]],
     *,
+    core: Any,
     validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
     error_and_exit: Callable[[list[tuple[str, str]]], None],
 ) -> list[list[dict[str, Any]]] | None:
@@ -56,6 +57,10 @@ def anchor_preview_prepare_omit_dnf(
     if dnf is None:
         error_and_exit([("Invalid omit", err or "omit syntax error")])
     rows.append(("Omit", f"[white]{omit_str}[/]"))
+    try:
+        rows.append(("Except", f"[white]{core.describe_anchor_expr(omit_str)}[/]"))
+    except Exception:
+        pass
     return dnf
 
 
@@ -276,6 +281,7 @@ def handle_anchor_preview_on_add(
     omit_dnf = anchor_preview_prepare_omit_dnf(
         task,
         rows,
+        core=core,
         validate_omit_syntax_strict=validate_omit_syntax_strict,
         error_and_exit=error_and_exit,
     )

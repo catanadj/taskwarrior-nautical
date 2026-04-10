@@ -46,6 +46,17 @@ def _anchor_mode_tag(new: dict) -> str:
     }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
 
 
+def _anchor_omit_summary(core, task: dict) -> tuple[str | None, str | None]:
+    omit_raw = str(task.get("omit") or "").strip()
+    if not omit_raw:
+        return None, None
+    try:
+        natural = core.describe_anchor_expr(omit_raw)
+    except Exception:
+        natural = None
+    return omit_raw, natural
+
+
 def _append_wait_sched_feedback_rows(fb: list[tuple[str, object]], *, debug_wait_sched: bool, last_wait_sched_debug) -> None:
     if not (debug_wait_sched and last_wait_sched_debug):
         return
@@ -145,6 +156,7 @@ def _build_text_feedback(
     cap_no: int | None,
     base_no: int,
     until_dt,
+    extra_line: str | None = None,
 ) -> str:
     text = core.strip_rich_markup(preview_line or "")
     parts = [part.strip() for part in text.split("·") if part and part.strip()]
@@ -177,6 +189,8 @@ def _build_text_feedback(
         else:
             summary_text = f"[bold yellow]Period:[/] [white]{summary.split(':', 1)[1].strip() if ':' in summary else summary}[/]"
         lines.append(summary_text)
+    if extra_line and str(extra_line).strip():
+        lines.append(extra_line)
 
     limit_parts = []
     if cap_no:
@@ -244,6 +258,7 @@ def render_anchor_completion_feedback(
     human_delta = services.human_delta
     anchor_raw = (feedback.new.get("anchor") or "").strip()
     expr_str = strip_quotes(anchor_raw)
+    omit_raw, omit_natural = _anchor_omit_summary(core, feedback.new)
     mode_tag = _anchor_mode_tag(feedback.new)
     title = f"⚓︎ Next anchor  #{feedback.next_no}  {feedback.parent_short} → {feedback.child_short}"
     mode = _display_mode_name(core)
@@ -290,6 +305,7 @@ def render_anchor_completion_feedback(
                 cap_no=feedback.cap_no,
                 base_no=feedback.base_no,
                 until_dt=feedback.until_dt,
+                extra_line=(f"[bold cyan]Except:[/] [white]{omit_natural or omit_raw}[/]" if omit_raw else None),
             ),
             kind="preview_anchor",
             markup_body=True,
@@ -298,6 +314,10 @@ def render_anchor_completion_feedback(
 
     fb = []
     fb.append(("Pattern", f"{expr_str}  {mode_tag}"))
+    if omit_raw:
+        fb.append(("Omit", omit_raw))
+        if omit_natural:
+            fb.append(("Except", omit_natural))
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=core.expr_has_m_or_y(feedback.dnf))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
     fb.append(("Natural", core.describe_anchor_dnf(feedback.dnf, feedback.new)))

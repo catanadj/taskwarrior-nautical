@@ -2979,6 +2979,27 @@ def test_lint_anchor_expr_characterization():
     expect(fatal == "Anchor expression too long (max 1024 characters).", f"unexpected length fatal: {fatal!r}")
     expect(warns == [], f"expected no warnings for long input, got {warns!r}")
 
+
+def test_month_alias_in_monthly_anchor_suggests_yearly_anchor():
+    """Month aliases in m: should point users toward y: syntax."""
+    try:
+        core.validate_anchor_expr_strict("m:jan")
+        raise AssertionError("m:jan: expected ParseError")
+    except core.ParseError as e:
+        msg = str(e)
+        expect("Month names belong to yearly anchors." in msg, f"unexpected message: {msg}")
+        expect("Use 'y:jan'" in msg, f"unexpected message: {msg}")
+
+
+def test_unsat_hint_uses_yearly_alias_for_month_name_examples():
+    """Unsat AND hints should not reinforce m:apr as valid month-name syntax."""
+    try:
+        core.validate_anchor_expr_strict("w:wed + m:apr")
+        raise AssertionError("w:wed + m:apr: expected ParseError")
+    except core.ParseError as e:
+        msg = str(e)
+        expect("Example: w:wed, y:apr" in msg, f"unexpected message: {msg}")
+
 def test_last_weekday():
     """Test last weekday of month pattern"""
     # Verify natural language mentions "last"
@@ -7668,6 +7689,8 @@ TESTS = [
     test_expansion_helpers_characterization,
     test_nth_weekday_range,
     test_lint_anchor_expr_characterization,
+    test_month_alias_in_monthly_anchor_suggests_yearly_anchor,
+    test_unsat_hint_uses_yearly_alias_for_month_name_examples,
     test_last_weekday,
     test_monthly_valid_months_m2_5th_mon,
     test_monthly_support_helpers_characterization,

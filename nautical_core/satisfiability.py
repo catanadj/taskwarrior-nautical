@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import re
 
 
 def weekday_set_from_weekly_atom(atom, *, weekly_spec_to_wset) -> set[int]:
@@ -88,6 +89,7 @@ def validate_and_terms_satisfiable(
     quick_yearly_and_check,
     term_has_any_match_within,
     normalize_spec_for_acf,
+    month_from_alias,
     and_term_unsatisfiable_cls,
 ) -> None:
     seed = ref_d
@@ -106,6 +108,12 @@ def validate_and_terms_satisfiable(
                         spec = normalize_spec_for_acf(typ, spec) or spec
                     except Exception:
                         pass
+                if typ == "m" and spec:
+                    m = re.fullmatch(r"([a-z]{3,9}|\d{2})(\.\.([a-z]{3,9}|\d{2}))?", spec.lower())
+                    if m and month_from_alias(m.group(1)) is not None:
+                        right = m.group(3)
+                        if right is None or month_from_alias(right) is not None:
+                            typ = "y"
                 if typ:
                     pieces.append(f"{typ}:{spec}" if spec else typ)
             hint = ", ".join(pieces)

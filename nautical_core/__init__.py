@@ -2407,6 +2407,7 @@ def _validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d: date):
         quick_yearly_and_check=_quick_yearly_and_check,
         term_has_any_match_within=_term_has_any_match_within,
         normalize_spec_for_acf=_normalize_spec_for_acf,
+        month_from_alias=_month_from_alias,
         and_term_unsatisfiable_cls=AndTermUnsatisfiable,
     )
 
@@ -2551,6 +2552,12 @@ def _validate_monthly_spec(spec: str):
             continue
 
         # 5) Unknown
+        if _month_from_alias(tok) is not None:
+            raise ParseError(
+                f"Unknown monthly token '{tok}'. Month names belong to yearly anchors. "
+                f"Use 'y:{tok}' for specific months, or monthly selectors like "
+                f"'m:15', 'm:last-fri', or 'm:5bd'."
+            )
         raise ParseError(
             f"Unknown monthly token '{tok}'. Examples: "
             f"'15', '-1', '1..7', '-3..-1', '2nd-mon', 'last-fri', '5bd'."

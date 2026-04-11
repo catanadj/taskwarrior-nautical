@@ -51,11 +51,16 @@ def _anchor_omit_summary(core, task: dict) -> tuple[str | None, str | None, list
     if not omit_raw:
         return None, None, []
     try:
-        natural = core.describe_anchor_expr(omit_raw)
+        anchor_omit = core._import_sibling("anchor_omit")
+        omit_norm = anchor_omit.normalize_omit_expr(omit_raw)
+    except Exception:
+        omit_norm = omit_raw
+    try:
+        natural = core.describe_anchor_expr(omit_norm)
     except Exception:
         natural = None
     try:
-        _fatal, warns = core.lint_anchor_expr(omit_raw)
+        _fatal, warns = core.lint_anchor_expr(omit_norm)
     except Exception:
         warns = []
     return omit_raw, natural, list(warns or [])

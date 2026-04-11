@@ -5912,6 +5912,20 @@ def test_anchor_omit_next_after_expr_skips_matching_dates():
     expect(nxt == date(2025, 1, 10), f"expected Friday after omitted Wednesday, got {nxt}")
 
 
+def test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items():
+    """omit should treat comma lists joined with '+' as a grouped unit."""
+    import nautical_core.anchor_omit as anchor_omit
+
+    omit_dnf = anchor_omit.validate_omit_expr_strict(
+        "w:mon,wed,fri + y:apr",
+        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
+    )
+    expect(anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 4, 13), date(2026, 4, 11), "omit-test", core=core), "April Monday should be omitted")
+    expect(anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 4, 15), date(2026, 4, 11), "omit-test", core=core), "April Wednesday should be omitted")
+    expect(not anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 5, 4), date(2026, 4, 11), "omit-test", core=core), "May Monday should not be omitted")
+    expect(not anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 5, 6), date(2026, 4, 11), "omit-test", core=core), "May Wednesday should not be omitted")
+
+
 def test_on_modify_compute_anchor_child_due_skips_omit_date():
     """anchor completion should skip omitted anchor dates and choose the next valid one."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -6104,10 +6118,10 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
 
 
 
-def test_on_modify_render_anchor_completion_feedback_warns_on_ambiguous_omit_grouping():
-    """anchor completion feedback should surface lint warnings for ambiguous omit grouping."""
+def test_on_modify_render_anchor_completion_feedback_normalizes_ambiguous_omit_grouping():
+    """anchor completion feedback should reflect grouped omit semantics for comma-list + filter."""
     hook = _find_hook_file("on-modify-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_feedback_omit_warn_test")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_feedback_omit_norm_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
@@ -6151,7 +6165,8 @@ def test_on_modify_render_anchor_completion_feedback_warns_on_ambiguous_omit_gro
         mod.core.PANEL_MODE = prev_panel_mode
 
     fb = captured.get("fb") or []
-    expect(any(k == "Warning" and "group it with parentheses" in str(v) for k, v in fb), f"expected omit grouping warning in anchor feedback: {fb}")
+    expect(not any(k == "Warning" and "group it with parentheses" in str(v) for k, v in fb), f"did not expect grouping warning in omit feedback: {fb}")
+    expect(any(k == "Except" and "within Apr each year" in str(v) for k, v in fb), f"expected normalized omit explanation in anchor feedback: {fb}")
 
 
 def test_on_modify_render_cp_completion_feedback_wrapper():
@@ -7990,6 +8005,7 @@ TESTS = [
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
     test_anchor_omit_rejects_time_modifiers,
     test_anchor_omit_next_after_expr_skips_matching_dates,
+    test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items,
     test_hook_on_modify_timeline_marks_omitted_anchor_slots,
     test_on_modify_compute_anchor_child_due_skips_omit_date,
     test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due,
@@ -7997,7 +8013,7 @@ TESTS = [
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
     test_on_modify_render_anchor_completion_feedback_wrapper,
-    test_on_modify_render_anchor_completion_feedback_warns_on_ambiguous_omit_grouping,
+    test_on_modify_render_anchor_completion_feedback_normalizes_ambiguous_omit_grouping,
     test_on_modify_render_cp_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_text_mode,
     test_on_add_preview_hard_cap,

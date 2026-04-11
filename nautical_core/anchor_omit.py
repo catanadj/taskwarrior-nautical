@@ -7,11 +7,54 @@ from typing import Any, Callable
 _OMIT_TIMED_ERROR = "omit does not support time modifiers (@t). Omit rules are date-based only."
 
 
+def _split_top_level(expr: str, delim: str) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for ch in expr:
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth > 0:
+            depth -= 1
+        if ch == delim and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def normalize_omit_expr(expr: str) -> str:
+    s = str(expr or "").strip()
+    if not s:
+        return s
+    terms = _split_top_level(s, "|")
+    out_terms: list[str] = []
+    for term in terms:
+        parts = _split_top_level(term, "+")
+        if len(parts) <= 1:
+            out_terms.append(term.strip())
+            continue
+        new_parts: list[str] = []
+        for part in parts:
+            p = part.strip()
+            if "," in p and not (p.startswith("(") and p.endswith(")")):
+                p = f"({p})"
+            new_parts.append(p)
+        out_terms.append(" + ".join(new_parts))
+    return " | ".join(t for t in out_terms if t)
+
+
 def validate_omit_expr_strict(
     expr: str | list[list[dict[str, Any]]],
     *,
     validate_anchor_expr_cached: Callable[[str | list[list[dict[str, Any]]]], list[list[dict[str, Any]]]],
 ) -> list[list[dict[str, Any]]]:
+    if isinstance(expr, str):
+        expr = normalize_omit_expr(expr)
     dnf = validate_anchor_expr_cached(expr)
     for term in dnf:
         for atom in term:

@@ -58,11 +58,16 @@ def anchor_preview_prepare_omit_dnf(
         error_and_exit([("Invalid omit", err or "omit syntax error")])
     rows.append(("Omit", f"[white]{omit_str}[/]"))
     try:
-        rows.append(("Except", f"[white]{core.describe_anchor_expr(omit_str)}[/]"))
+        anchor_omit = core._import_sibling("anchor_omit")
+        omit_norm = anchor_omit.normalize_omit_expr(omit_str)
+    except Exception:
+        omit_norm = omit_str
+    try:
+        rows.append(("Except", f"[white]{core.describe_anchor_expr(omit_norm)}[/]"))
     except Exception:
         pass
     try:
-        _fatal, warns = core.lint_anchor_expr(omit_str)
+        _fatal, warns = core.lint_anchor_expr(omit_norm)
         for w in warns or []:
             rows.append(("Warning", f"[yellow]{w}[/]"))
     except Exception:

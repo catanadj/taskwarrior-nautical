@@ -167,6 +167,11 @@ def lint_collect_warnings(s: str, *, re_mod) -> list[str]:
     warnings: list[str] = []
     if re_mod.search(r"y:[^|+)]*@t=\d{2}:\d{2},", s):
         warnings.append("Multiple @t times inside a single 'y:' atom; ensure each spec has its own @t or use '|'.")
+    if re_mod.search(r"(?<!\()\b(?:w|m|y)(?:/\d+)?\s*:\s*[^|()]*,[^|()]*\s*\+", s):
+        warnings.append(
+            "A comma list joined with '+' only applies the '+' filter to the last list item. "
+            "If you want it to apply to every item, group it with parentheses, e.g. '(w:mon,wed,fri) + y:apr'."
+        )
     return warnings
 
 

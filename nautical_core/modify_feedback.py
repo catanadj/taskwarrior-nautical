@@ -46,15 +46,19 @@ def _anchor_mode_tag(new: dict) -> str:
     }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
 
 
-def _anchor_omit_summary(core, task: dict) -> tuple[str | None, str | None]:
+def _anchor_omit_summary(core, task: dict) -> tuple[str | None, str | None, list[str]]:
     omit_raw = str(task.get("omit") or "").strip()
     if not omit_raw:
-        return None, None
+        return None, None, []
     try:
         natural = core.describe_anchor_expr(omit_raw)
     except Exception:
         natural = None
-    return omit_raw, natural
+    try:
+        _fatal, warns = core.lint_anchor_expr(omit_raw)
+    except Exception:
+        warns = []
+    return omit_raw, natural, list(warns or [])
 
 
 def _append_wait_sched_feedback_rows(fb: list[tuple[str, object]], *, debug_wait_sched: bool, last_wait_sched_debug) -> None:
@@ -258,7 +262,7 @@ def render_anchor_completion_feedback(
     human_delta = services.human_delta
     anchor_raw = (feedback.new.get("anchor") or "").strip()
     expr_str = strip_quotes(anchor_raw)
-    omit_raw, omit_natural = _anchor_omit_summary(core, feedback.new)
+    omit_raw, omit_natural, omit_warns = _anchor_omit_summary(core, feedback.new)
     mode_tag = _anchor_mode_tag(feedback.new)
     title = f"⚓︎ Next anchor  #{feedback.next_no}  {feedback.parent_short} → {feedback.child_short}"
     mode = _display_mode_name(core)
@@ -318,6 +322,8 @@ def render_anchor_completion_feedback(
         fb.append(("Omit", omit_raw))
         if omit_natural:
             fb.append(("Except", omit_natural))
+        for warn in omit_warns:
+            fb.append(("Warning", warn))
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=core.expr_has_m_or_y(feedback.dnf))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
     fb.append(("Natural", core.describe_anchor_dnf(feedback.dnf, feedback.new)))

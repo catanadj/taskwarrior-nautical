@@ -61,6 +61,12 @@ def anchor_preview_prepare_omit_dnf(
         rows.append(("Except", f"[white]{core.describe_anchor_expr(omit_str)}[/]"))
     except Exception:
         pass
+    try:
+        _fatal, warns = core.lint_anchor_expr(omit_str)
+        for w in warns or []:
+            rows.append(("Warning", f"[yellow]{w}[/]"))
+    except Exception:
+        pass
     return dnf
 
 

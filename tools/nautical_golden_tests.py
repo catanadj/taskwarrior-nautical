@@ -4178,6 +4178,38 @@ def test_hook_on_add_anchor_preview_skips_omit_date():
     expect("2025-01-10" in stderr_txt, f"expected next anchor to skip Wednesday and show Friday. stderr={stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_anchor_preview_skips_omit_file_date():
+    """on-add anchor preview should skip dates loaded from omit_file."""
+    hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        omit_dir = Path(td) / "omit"
+        omit_dir.mkdir()
+        (omit_dir / "holidays.csv").write_text('date,description\n2025-01-10,Skip Friday\n', encoding='utf-8')
+        conf = Path(td) / 'config-nautical.toml'
+        conf.write_text(f'omit_file_dir = "{omit_dir}"\n', encoding='utf-8')
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000114a",
+            "description": "hook test on-add anchor omit_file preview",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20250108T000000Z",
+            "anchor": "w:mon,wed,fri@t=09:00",
+            "omit_file": "holidays.csv",
+            "anchor_mode": "skip",
+            "due": "20250108T090000Z",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        if p.returncode != 0:
+            raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+        out_task = _extract_last_json(p.stdout)
+        expect(out_task.get("due") == task["due"], f"on-add changed explicit due: {out_task!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Omit file" in stderr_txt, f"expected omit_file row in preview. stderr={stderr_txt[:500]!r}")
+        expect("holidays.csv" in stderr_txt, f"expected omit file name in preview. stderr={stderr_txt[:500]!r}")
+        expect("2025-01-13" in stderr_txt, f"expected next anchor to skip file-blocked Friday and show Monday. stderr={stderr_txt[:500]!r}")
+
+
 def test_hook_on_add_timed_omit_rejected():
     """on-add should reject timed omit expressions with a clear error."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -4201,6 +4233,28 @@ def test_hook_on_add_timed_omit_rejected():
         "omit does not support time modifiers (@t)." in stderr_txt and "date-based only." in stderr_txt,
         f"expected timed omit validation message. stderr={stderr_txt[:500]!r}",
     )
+
+
+def test_hook_on_add_invalid_omit_file_rejected():
+    """on-add should reject omit_file values that are paths instead of basenames."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000115a",
+        "description": "hook test on-add invalid omit_file",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20250108T000000Z",
+        "anchor": "w:mon,wed,fri",
+        "omit_file": "../holidays.csv",
+        "anchor_mode": "skip",
+        "due": "20250108T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    expect(p.returncode != 0, "on-add should fail for invalid omit_file")
+    expect((p.stdout or "").strip() == "", f"expected no stdout on invalid omit_file failure, got: {p.stdout!r}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("omit_file must be a file name, not a path." in stderr_txt, f"expected basename validation message. stderr={stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_unsatisfiable_omit_fails_cleanly():
@@ -5894,6 +5948,36 @@ def test_anchor_omit_rejects_time_modifiers():
         )
 
 
+def test_omit_file_name_rejects_paths():
+    """omit_file should accept only basenames, not paths."""
+    import nautical_core.omit_files as omit_files
+
+    try:
+        omit_files.validate_omit_file_name('../holidays.csv')
+        expect(False, 'expected omit_file basename validation to fail')
+    except ValueError as e:
+        expect('omit_file must be a file name, not a path.' in str(e), f'unexpected omit_file name error: {e}')
+
+
+
+def test_omit_file_csv_header_parsing_is_order_independent_and_dedupes():
+    """omit_file CSV parsing should read the date column by header name and dedupe repeated dates."""
+    import nautical_core.omit_files as omit_files
+
+    with tempfile.TemporaryDirectory() as td:
+        omit_dir = Path(td)
+        sample = omit_dir / 'holidays.csv'
+        sample.write_text(
+            'description,region,date\n'
+            'New Year,AU,2025-01-01\n'
+            'New Year duplicate,NSW,2025-01-01\n'
+            'Holiday,AU,2025-01-26\n',
+            encoding='utf-8',
+        )
+        got = omit_files.load_omit_file_dates('holidays.csv', str(omit_dir))
+        expect(got == frozenset({date(2025, 1, 1), date(2025, 1, 26)}), f'unexpected parsed omit_file dates: {got!r}')
+
+
 def test_anchor_omit_next_after_expr_skips_matching_dates():
     """next-after helper should skip dates that match the omit expression."""
     import nautical_core.anchor_omit as anchor_omit
@@ -5912,6 +5996,23 @@ def test_anchor_omit_next_after_expr_skips_matching_dates():
         core=core,
     )
     expect(nxt == date(2025, 1, 10), f"expected Friday after omitted Wednesday, got {nxt}")
+
+
+def test_anchor_omit_next_after_expr_skips_omit_file_dates():
+    """next-after helper should skip dates loaded from omit_file state."""
+    import nautical_core.anchor_omit as anchor_omit
+
+    dnf = core.validate_anchor_expr_strict("w:mon,wed,fri")
+    omit_state = anchor_omit.combine_omit_state(omit_dates={date(2025, 1, 10)})
+    nxt, _meta = anchor_omit.next_after_expr_with_omit(
+        dnf,
+        date(2025, 1, 8),
+        default_seed=date(2025, 1, 6),
+        seed_base="omit-file-test",
+        omit_dnf=omit_state,
+        core=core,
+    )
+    expect(nxt == date(2025, 1, 13), f"expected Monday after file-blocked Friday, got {nxt}")
 
 
 def test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items():
@@ -7827,7 +7928,9 @@ TESTS = [
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,
     test_hook_on_add_anchor_preview_skips_omit_date,
+    test_hook_on_add_anchor_preview_skips_omit_file_date,
     test_hook_on_add_timed_omit_rejected,
+    test_hook_on_add_invalid_omit_file_rejected,
     test_hook_on_add_unsatisfiable_omit_fails_cleanly,
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_task_runner_handles_nonzero,
@@ -7961,7 +8064,10 @@ TESTS = [
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
     test_anchor_omit_rejects_time_modifiers,
+    test_omit_file_name_rejects_paths,
+    test_omit_file_csv_header_parsing_is_order_independent_and_dedupes,
     test_anchor_omit_next_after_expr_skips_matching_dates,
+    test_anchor_omit_next_after_expr_skips_omit_file_dates,
     test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items,
     test_hook_on_modify_timeline_marks_omitted_anchor_slots,
     test_on_modify_compute_anchor_child_due_skips_omit_date,

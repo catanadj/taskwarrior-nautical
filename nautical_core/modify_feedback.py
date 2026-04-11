@@ -46,10 +46,11 @@ def _anchor_mode_tag(new: dict) -> str:
     }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
 
 
-def _anchor_omit_summary(core, task: dict) -> tuple[str | None, str | None, list[str]]:
+def _anchor_omit_summary(core, task: dict) -> tuple[str | None, str | None, list[str], str | None]:
     omit_raw = str(task.get("omit") or "").strip()
+    omit_file = str(task.get("omit_file") or "").strip() or None
     if not omit_raw:
-        return None, None, []
+        return None, None, [], omit_file
     try:
         anchor_omit = core._import_sibling("anchor_omit")
         omit_norm = anchor_omit.normalize_omit_expr(omit_raw)
@@ -63,7 +64,7 @@ def _anchor_omit_summary(core, task: dict) -> tuple[str | None, str | None, list
         _fatal, warns = core.lint_anchor_expr(omit_norm)
     except Exception:
         warns = []
-    return omit_raw, natural, list(warns or [])
+    return omit_raw, natural, list(warns or []), omit_file
 
 
 def _append_wait_sched_feedback_rows(fb: list[tuple[str, object]], *, debug_wait_sched: bool, last_wait_sched_debug) -> None:
@@ -267,7 +268,7 @@ def render_anchor_completion_feedback(
     human_delta = services.human_delta
     anchor_raw = (feedback.new.get("anchor") or "").strip()
     expr_str = strip_quotes(anchor_raw)
-    omit_raw, omit_natural, omit_warns = _anchor_omit_summary(core, feedback.new)
+    omit_raw, omit_natural, omit_warns, omit_file = _anchor_omit_summary(core, feedback.new)
     mode_tag = _anchor_mode_tag(feedback.new)
     title = f"⚓︎ Next anchor  #{feedback.next_no}  {feedback.parent_short} → {feedback.child_short}"
     mode = _display_mode_name(core)
@@ -314,7 +315,7 @@ def render_anchor_completion_feedback(
                 cap_no=feedback.cap_no,
                 base_no=feedback.base_no,
                 until_dt=feedback.until_dt,
-                extra_line=(f"[bold cyan]Except:[/] [white]{omit_natural or omit_raw}[/]" if omit_raw else None),
+                extra_line=(f"[bold cyan]Except:[/] [white]{omit_natural or omit_raw}[/]" if omit_raw else (f"[bold cyan]Omit file:[/] [white]{omit_file}[/]" if omit_file else None)),
             ),
             kind="preview_anchor",
             markup_body=True,
@@ -329,6 +330,8 @@ def render_anchor_completion_feedback(
             fb.append(("Except", omit_natural))
         for warn in omit_warns:
             fb.append(("Warning", warn))
+    if omit_file:
+        fb.append(("Omit file", omit_file))
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=core.expr_has_m_or_y(feedback.dnf))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
     fb.append(("Natural", core.describe_anchor_dnf(feedback.dnf, feedback.new)))

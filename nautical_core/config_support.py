@@ -302,6 +302,7 @@ def load_config(
     cfg["wrand_salt"] = str(cfg.get("wrand_salt") or defaults["wrand_salt"])
     cfg["tz"] = str(cfg.get("tz") or defaults["tz"])
     cfg["holiday_region"] = str(cfg.get("holiday_region") or "")
+    cfg["omit_file_dir"] = str(cfg.get("omit_file_dir") or "")
     if cfg.get("recurrence_update_udas") is None:
         rec = cfg.get("recurrence")
         if isinstance(rec, dict):

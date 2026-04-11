@@ -587,7 +587,7 @@ def _validate_omit_expr_cached(expr: str) -> list[list[dict]]:
 def _task_has_nautical_fields(task: dict) -> bool:
     if not isinstance(task, dict):
         return False
-    for key in ("anchor", "anchor_mode", "cp", "chainID", "chainid", "chainMax", "chainUntil", "omit"):
+    for key in ("anchor", "anchor_mode", "cp", "chainID", "chainid", "chainMax", "chainUntil", "omit", "omit_file"):
         if (task.get(key) or "").strip():
             return True
     return False
@@ -946,6 +946,22 @@ def _validate_omit_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[lis
         core=core,
         diag=_diag,
     )
+
+
+def _load_omit_file_dates(name: str):
+    omit_files = core._import_sibling("omit_files")
+    return omit_files.load_omit_file_dates(name, getattr(core, "OMIT_FILE_DIR", ""))
+
+
+def _validate_omit_file_for_anchor_or_fail(anchor_str: str, omit_file: str) -> None:
+    if omit_file and not anchor_str:
+        _error_and_exit([("Invalid omit_file", "omit_file requires anchor")])
+    if not omit_file:
+        return
+    try:
+        _load_omit_file_dates(omit_file)
+    except Exception as exc:
+        _error_and_exit([("Invalid omit_file", str(exc))])
 
 
 def _validate_anchor_mode(mode_str) -> tuple[str, str | None]:
@@ -1612,6 +1628,10 @@ def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *,
             task["omit"] = omit_expr
             if not ((ctx.anchor_str or "").strip()):
                 _error_and_exit([("Invalid omit", "omit requires anchor")])
+        omit_file = _strip_quotes((task.get("omit_file") or "").strip())
+        if omit_file:
+            task["omit_file"] = omit_file
+        _validate_omit_file_for_anchor_or_fail(ctx.anchor_str or "", omit_file)
         return ctx
     except ValueError as exc:
         _error_and_exit([('Invalid chain config', str(exc))])

@@ -49,30 +49,48 @@ def anchor_preview_prepare_omit_dnf(
     core: Any,
     validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
     error_and_exit: Callable[[list[tuple[str, str]]], None],
-) -> list[list[dict[str, Any]]] | None:
+):
     omit_str = str(task.get("omit") or "").strip()
-    if not omit_str:
+    omit_file = str(task.get("omit_file") or "").strip()
+    omit_dnf = None
+    omit_dates: frozenset[Any] = frozenset()
+    if omit_str:
+        dnf, err = validate_omit_syntax_strict(omit_str)
+        if dnf is None:
+            error_and_exit([("Invalid omit", err or "omit syntax error")])
+        omit_dnf = dnf
+        rows.append(("Omit", f"[white]{omit_str}[/]"))
+        try:
+            anchor_omit = core._import_sibling("anchor_omit")
+            omit_norm = anchor_omit.normalize_omit_expr(omit_str)
+        except Exception:
+            omit_norm = omit_str
+        try:
+            rows.append(("Except", f"[white]{core.describe_anchor_expr(omit_norm)}[/]"))
+        except Exception:
+            pass
+        try:
+            _fatal, warns = core.lint_anchor_expr(omit_norm)
+            for w in warns or []:
+                rows.append(("Warning", f"[yellow]{w}[/]"))
+        except Exception:
+            pass
+    if omit_file:
+        try:
+            omit_files = core._import_sibling("omit_files")
+            omit_dates = omit_files.load_omit_file_dates(omit_file, getattr(core, "OMIT_FILE_DIR", ""))
+        except Exception as e:
+            error_and_exit([("Invalid omit_file", str(e))])
+        rows.append(("Omit file", f"[white]{omit_file}[/]"))
+    if not omit_dnf and not omit_dates:
         return None
-    dnf, err = validate_omit_syntax_strict(omit_str)
-    if dnf is None:
-        error_and_exit([("Invalid omit", err or "omit syntax error")])
-    rows.append(("Omit", f"[white]{omit_str}[/]"))
     try:
         anchor_omit = core._import_sibling("anchor_omit")
-        omit_norm = anchor_omit.normalize_omit_expr(omit_str)
+        return anchor_omit.combine_omit_state(omit_dnf=omit_dnf, omit_dates=omit_dates)
     except Exception:
-        omit_norm = omit_str
-    try:
-        rows.append(("Except", f"[white]{core.describe_anchor_expr(omit_norm)}[/]"))
-    except Exception:
-        pass
-    try:
-        _fatal, warns = core.lint_anchor_expr(omit_norm)
-        for w in warns or []:
-            rows.append(("Warning", f"[yellow]{w}[/]"))
-    except Exception:
-        pass
-    return dnf
+        if omit_dates:
+            return {"dnf": omit_dnf, "dates": frozenset(omit_dates)}
+        return omit_dnf
 
 
 def anchor_preview_seed_context(

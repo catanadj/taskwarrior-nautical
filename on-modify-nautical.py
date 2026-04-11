@@ -765,6 +765,11 @@ def _validate_omit_expr_cached(expr: str) -> list[list[dict]]:
     )
 
 
+def _load_omit_file_dates(name: str):
+    omit_files = core._import_sibling("omit_files")
+    return omit_files.load_omit_file_dates(name, getattr(core, "OMIT_FILE_DIR", ""))
+
+
 @lru_cache(maxsize=512)
 def _export_uuid_short_cached(u_short: str):
     return _export_uuid_short(u_short, env=None)
@@ -936,7 +941,7 @@ def _panic_passthrough() -> None:
 
 
 def _task_has_nautical_fields(old: dict, new: dict) -> bool:
-    keys = ("anchor", "anchor_mode", "cp", "chainID", "chainid", "nextLink", "prevLink", "link", "omit")
+    keys = ("anchor", "anchor_mode", "cp", "chainID", "chainid", "nextLink", "prevLink", "link", "omit", "omit_file")
     for task in (old, new):
         if not isinstance(task, dict):
             continue
@@ -3061,14 +3066,25 @@ def _anchor_dnf_from_parent(parent: dict) -> tuple[str, list[list[dict]] | None]
         raise ValueError(f"Invalid anchor expression '{expr_str}': {str(e)}")
 
 
-def _omit_dnf_from_parent(parent: dict) -> tuple[str, list[list[dict]] | None]:
+def _omit_dnf_from_parent(parent: dict):
     expr_str = (parent.get("omit") or "").strip()
-    if not expr_str:
+    omit_file = (parent.get("omit_file") or "").strip()
+    omit_dnf = None
+    omit_dates: frozenset[Any] = frozenset()
+    if expr_str:
+        try:
+            omit_dnf = _validate_omit_expr_cached(expr_str)
+        except Exception as e:
+            raise ValueError(f"Invalid omit expression '{expr_str}': {str(e)}")
+    if omit_file:
+        try:
+            omit_dates = _load_omit_file_dates(omit_file)
+        except Exception as e:
+            raise ValueError(f"Invalid omit_file '{omit_file}': {str(e)}")
+    if not omit_dnf and not omit_dates:
         return "", None
-    try:
-        return expr_str, _validate_omit_expr_cached(expr_str)
-    except Exception as e:
-        raise ValueError(f"Invalid omit expression '{expr_str}': {str(e)}")
+    anchor_omit = _module("anchor_omit")
+    return expr_str, anchor_omit.combine_omit_state(omit_dnf=omit_dnf, omit_dates=omit_dates)
 
 
 def _anchor_parent_local_times(parent: dict):
@@ -4875,15 +4891,21 @@ def _non_completion_validate_anchor(old: dict, new: dict, new_anchor: str) -> No
         _got_anchor_invalid(_non_completion_anchor_error_message(new_anchor, str(e)))
 
 
-def _validate_omit_for_anchor_or_fail(anchor_expr: str, omit_expr: str) -> None:
+def _validate_omit_for_anchor_or_fail(anchor_expr: str, omit_expr: str, omit_file: str) -> None:
     if omit_expr and not anchor_expr:
         _fail_and_exit("Invalid omit", "omit requires anchor")
-    if not omit_expr:
-        return
-    try:
-        _validate_omit_on_modify(omit_expr)
-    except Exception as e:
-        _fail_and_exit("Invalid omit", str(e))
+    if omit_file and not anchor_expr:
+        _fail_and_exit("Invalid omit_file", "omit_file requires anchor")
+    if omit_expr:
+        try:
+            _validate_omit_on_modify(omit_expr)
+        except Exception as e:
+            _fail_and_exit("Invalid omit", str(e))
+    if omit_file:
+        try:
+            _load_omit_file_dates(omit_file)
+        except Exception as e:
+            _fail_and_exit("Invalid omit_file", str(e))
 
 
 def _non_completion_reject_conflicting_types(new_anchor: str, new_cp: str) -> None:
@@ -4898,10 +4920,14 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     new_omit = _strip_quotes(omit_raw)
     if new_omit:
         new["omit"] = new_omit
+    omit_file_raw = (new.get("omit_file") or "").strip()
+    new_omit_file = _strip_quotes(omit_file_raw)
+    if new_omit_file:
+        new["omit_file"] = new_omit_file
 
     if new_anchor:
         _non_completion_validate_anchor(old, new, new_anchor)
-    _validate_omit_for_anchor_or_fail(new_anchor, new_omit)
+    _validate_omit_for_anchor_or_fail(new_anchor, new_omit, new_omit_file)
 
     cp_raw = (new.get("cp") or "").strip()
     new_cp = _strip_quotes(cp_raw)
@@ -4922,9 +4948,13 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
     new_omit = _strip_quotes(omit_raw)
     if new_omit:
         new["omit"] = new_omit
+    omit_file_raw = (new.get("omit_file") or "").strip()
+    new_omit_file = _strip_quotes(omit_file_raw)
+    if new_omit_file:
+        new["omit_file"] = new_omit_file
     if new_anchor and new_cp:
         _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
-    _validate_omit_for_anchor_or_fail(new_anchor, new_omit)
+    _validate_omit_for_anchor_or_fail(new_anchor, new_omit, new_omit_file)
 
     if new_cp:
         # Validate CP on completion

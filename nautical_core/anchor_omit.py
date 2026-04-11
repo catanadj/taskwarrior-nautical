@@ -7,6 +7,23 @@ from typing import Any, Callable
 _OMIT_TIMED_ERROR = "omit does not support time modifiers (@t). Omit rules are date-based only."
 
 
+def combine_omit_state(*, omit_dnf=None, omit_dates=None):
+    dates = frozenset(omit_dates or [])
+    if not omit_dnf and not dates:
+        return None
+    if not dates:
+        return omit_dnf
+    return {"dnf": omit_dnf, "dates": dates}
+
+
+def _split_omit_state(omit_state):
+    if not omit_state:
+        return None, frozenset()
+    if isinstance(omit_state, dict):
+        return omit_state.get("dnf"), frozenset(omit_state.get("dates") or [])
+    return omit_state, frozenset()
+
+
 def _split_top_level(expr: str, delim: str) -> list[str]:
     parts: list[str] = []
     buf: list[str] = []
@@ -72,11 +89,14 @@ def omit_expr_fires_on_date(
     *,
     core: Any,
 ) -> bool:
-    if not omit_dnf:
+    omit_expr_dnf, omit_dates = _split_omit_state(omit_dnf)
+    if d in omit_dates:
+        return True
+    if not omit_expr_dnf:
         return False
     try:
         nxt, _ = core.next_after_expr(
-            omit_dnf,
+            omit_expr_dnf,
             d - timedelta(days=1),
             default_seed=default_seed,
             seed_base=seed_base,
@@ -96,7 +116,8 @@ def next_after_expr_with_omit(
     core: Any,
     max_skip_iterations: int = 512,
 ):
-    if not omit_dnf:
+    omit_expr_dnf, omit_dates = _split_omit_state(omit_dnf)
+    if not omit_expr_dnf and not omit_dates:
         return core.next_after_expr(
             dnf,
             after_date,

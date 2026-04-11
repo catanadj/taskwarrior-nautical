@@ -636,7 +636,7 @@ def describe_anchor_expr_from_dnf(dnf: list, default_due_dt=None, *, describe_an
         if text not in seen:
             seen.add(text)
             ordered.append(text)
-    return ordered[0] if len(ordered) == 1 else " or ".join(ordered)
+    return ordered[0] if len(ordered) == 1 else compress_natural_or_terms(ordered)
 
 
 def describe_anchor_expr(anchor_expr: str, default_due_dt=None, *, parse_anchor_expr_to_dnf_cached, describe_anchor_expr_from_dnf) -> str:
@@ -659,6 +659,16 @@ def join_natural_or_terms(terms: list[str]) -> str:
     return "either " + ", ".join(terms[:-1]) + ", or " + terms[-1]
 
 
+def join_plain_or_terms(terms: list[str]) -> str:
+    if not terms:
+        return ""
+    if len(terms) == 1:
+        return terms[0]
+    if len(terms) == 2:
+        return f"{terms[0]} or {terms[1]}"
+    return ", ".join(terms[:-1]) + ", or " + terms[-1]
+
+
 def longest_common_suffix(parts: list[str]) -> str:
     if not parts:
         return ""
@@ -667,6 +677,39 @@ def longest_common_suffix(parts: list[str]) -> str:
         return ""
     prefix = os.path.commonprefix(rev)
     return prefix[::-1]
+
+
+def compress_or_terms_by_shared_rest(terms: list[str], delim: str) -> str | None:
+    if not terms or len(terms) < 2:
+        return None
+    if not isinstance(delim, str) or not delim:
+        return None
+
+    split: list[tuple[str, str]] = []
+    for term in terms:
+        if not isinstance(term, str):
+            return None
+        idx = term.find(delim)
+        if idx <= 0:
+            return None
+        prefix = term[:idx].strip()
+        rest = term[idx + len(delim):].strip()
+        if not prefix or not rest:
+            return None
+        split.append((prefix, rest))
+
+    rests = {rest for _, rest in split}
+    if len(rests) != 1:
+        return None
+    prefixes = [prefix for prefix, _ in split]
+    if len(set(prefixes)) <= 1:
+        return None
+    rest = split[0][1]
+    prefix_text = join_plain_or_terms(prefixes)
+    if delim == " and within ":
+        prep = "on" if re.search(r"\b\d{1,2}\b", rest) else "in"
+        return f"{prefix_text} {prep} {rest}"
+    return f"{prefix_text}{delim}{rest}"
 
 
 def compress_or_terms_by_clause(terms: list[str], delim: str) -> str | None:
@@ -712,6 +755,16 @@ def compress_or_terms_by_clause(terms: list[str], delim: str) -> str | None:
         variants.append(variant)
 
     return f"{prefix}{delim}{join_natural_or_terms(variants)}{common_tail}"
+
+
+def compress_natural_or_terms(terms: list[str]) -> str:
+    return (
+        compress_or_terms_by_shared_rest(terms, " and within ")
+        or compress_or_terms_by_shared_rest(terms, " that fall on ")
+        or compress_or_terms_by_clause(terms, " and within ")
+        or compress_or_terms_by_clause(terms, " that fall on ")
+        or join_natural_or_terms(terms)
+    )
 
 
 def normalize_range_token(tok: str, *, safe_match, int_range_re) -> str | None:
@@ -851,11 +904,7 @@ def describe_anchor_dnf(
     if not uniq_terms:
         return ""
 
-    sentence = (
-        compress_or_terms_by_clause(uniq_terms, " and within ")
-        or compress_or_terms_by_clause(uniq_terms, " that fall on ")
-        or join_natural_or_terms(uniq_terms)
-    )
+    sentence = compress_natural_or_terms(uniq_terms)
     mode = (task.get("anchor_mode") or "skip").lower()
     tail = _mode_tail(mode)
     return f"{sentence}; {tail}" if tail else sentence

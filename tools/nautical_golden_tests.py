@@ -6121,11 +6121,9 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
 
 
 def test_anchor_natural_language_normalizes_grouped_list_plus_expr():
-    """natural language should reflect grouped semantics for comma-list + filter anchors."""
+    """natural language should collapse grouped comma-list filters into one readable phrase."""
     natural = core.describe_anchor_expr("w:mon,wed,fri + y:apr")
-    expect("Mondays and within Apr each year" in natural, f"expected grouped Monday phrase, got {natural!r}")
-    expect("Wednesdays and within Apr each year" in natural, f"expected grouped Wednesday phrase, got {natural!r}")
-    expect("Fridays and within Apr each year" in natural, f"expected grouped Friday phrase, got {natural!r}")
+    expect(natural == "Mondays, Wednesdays, or Fridays in Apr each year", f"expected compact grouped phrase, got {natural!r}")
 
 
 def test_on_modify_render_cp_completion_feedback_wrapper():

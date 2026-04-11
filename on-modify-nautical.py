@@ -4341,6 +4341,8 @@ def _timeline_lines(
     if not _require_core():
         return []
     modify_timeline = _module("modify_timeline")
+    _omit_expr, omit_dnf = _omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
+    anchor_omit = _module("anchor_omit") if kind == "anchor" else None
     return modify_timeline.timeline_lines(
         kind,
         task,
@@ -4365,6 +4367,11 @@ def _timeline_lines(
         to_local_cached=_to_local_cached,
         safe_parse_datetime=_safe_parse_datetime,
         format_gap=_format_gap,
+        omit_dnf=omit_dnf,
+        omit_expr_fires_on_date=(
+            (lambda dnf_, d, default_seed, seed_base: anchor_omit.omit_expr_fires_on_date(dnf_, d, default_seed, seed_base, core=core))
+            if anchor_omit is not None else None
+        ),
     )
 
 def _got_anchor_invalid(msg: str) -> None:

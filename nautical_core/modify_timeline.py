@@ -95,9 +95,11 @@ def _timeline_future_anchor_items(
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
     next_occurrence_after_local_dt: Callable[..., Any],
+    omit_dnf,
+    omit_expr_fires_on_date: Callable[..., bool] | None,
     max_iterations: int,
-) -> list[tuple[int, datetime, dict[str, Any], str]]:
-    items: list[tuple[int, datetime, dict[str, Any], str]] = []
+) -> list[tuple[object, datetime, dict[str, Any], str]]:
+    items: list[tuple[object, datetime, dict[str, Any], str]] = []
     fut_no = start_no
     seed_base = (task.get("chainID") or "").strip() or "preview"
     nxt_local = to_local_cached(child_due_utc)
@@ -107,17 +109,18 @@ def _timeline_future_anchor_items(
     default_seed = to_local_cached(due0 or sched0 or child_due_utc).date()
     after_local = nxt_local
     iterations = 0
-    for _ in range(allowed_future):
+    actual_future = 0
+    while actual_future < allowed_future:
         if iterations >= max_iterations:
             break
         iterations += 1
-        fut_no += 1
         try:
             next_local = next_occurrence_after_local_dt(
                 dnf,
                 after_local,
                 default_seed_date=default_seed,
                 seed_base=seed_base,
+                omit_dnf=None,
                 fallback_hhmm=fallback_hhmm,
             )
         except Exception:
@@ -126,14 +129,89 @@ def _timeline_future_anchor_items(
             break
         fut_dt = next_local.astimezone(timezone.utc)
         after_local = next_local
+        if omit_dnf and omit_expr_fires_on_date is not None:
+            try:
+                if omit_expr_fires_on_date(
+                    omit_dnf,
+                    next_local.date(),
+                    default_seed,
+                    seed_base,
+                ):
+                    items.append(("··", fut_dt, {"is_omit": True}, "omitted"))
+                    continue
+            except Exception:
+                pass
+        fut_no += 1
         if cap_no is not None and fut_no > cap_no:
             break
         items.append((fut_no, fut_dt, {"is_future": True}, "future"))
+        actual_future += 1
     return items
 
 
+def _timeline_omitted_before_next_anchor_items(
+    task: dict[str, Any],
+    dnf: Any,
+    child_due_utc: datetime,
+    *,
+    dtparse: Callable[[Any], Any],
+    to_local_cached: Callable[[datetime], datetime],
+    safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
+    next_occurrence_after_local_dt: Callable[..., Any],
+    omit_dnf,
+    omit_expr_fires_on_date: Callable[..., bool] | None,
+    max_iterations: int,
+) -> list[tuple[object, datetime, dict[str, Any], str]]:
+    if not omit_dnf or omit_expr_fires_on_date is None:
+        return []
+    cur_end = dtparse(task.get("end"))
+    if not cur_end:
+        return []
+
+    items: list[tuple[object, datetime, dict[str, Any], str]] = []
+    seed_base = (task.get("chainID") or "").strip() or "preview"
+    child_local = to_local_cached(child_due_utc)
+    after_local = to_local_cached(cur_end)
+    fallback_hhmm = (child_local.hour, child_local.minute)
+    due0, _ = safe_parse_datetime(task.get("due"))
+    sched0, _ = safe_parse_datetime(task.get("scheduled"))
+    default_seed = to_local_cached(due0 or sched0 or child_due_utc).date()
+    iterations = 0
+    while iterations < max_iterations:
+        iterations += 1
+        try:
+            next_local = next_occurrence_after_local_dt(
+                dnf,
+                after_local,
+                default_seed_date=default_seed,
+                seed_base=seed_base,
+                omit_dnf=None,
+                fallback_hhmm=fallback_hhmm,
+            )
+        except Exception:
+            break
+        if not next_local or next_local >= child_local:
+            break
+        after_local = next_local
+        try:
+            if omit_expr_fires_on_date(
+                omit_dnf,
+                next_local.date(),
+                default_seed,
+                seed_base,
+            ):
+                items.append(("··", next_local.astimezone(timezone.utc), {"is_omit": True}, "omitted"))
+        except Exception:
+            continue
+    return items
+
+
+def _timeline_no_text(no: object) -> str:
+    return f"{str(no):>2}"
+
+
 def _timeline_base_line(
-    no: int,
+    no: object,
     dt: Any,
     obj: dict[str, Any],
     item_type: str,
@@ -150,30 +228,34 @@ def _timeline_base_line(
     fmtlocal: Callable[[Any], str],
     short: Callable[[Any], str],
 ) -> str:
+    no_text = _timeline_no_text(no)
     if item_type == "prev":
         end_dt = dtparse(obj.get("end"))
         due_dt = dtparse(obj.get("due"))
         delta = fmt_on_time_delta(due_dt, end_dt)
         end_s = fmtlocal(end_dt) if end_dt else "(no end)"
         short_id = short(obj.get("uuid"))
-        return f"[{prev_style}]{no:>2} {'✓':<2}{end_s} {delta} {short_id}[/]"
+        return f"[{prev_style}]{no_text} {'✓':<2}{end_s} {delta} {short_id}[/]"
 
     if item_type == "current":
         cur_end = dtparse(task.get("end"))
         cur_due = dtparse(task.get("due"))
         cur_delta = fmt_on_time_delta(cur_due, cur_end)
         cur_end_s = fmtlocal(cur_end) if cur_end else "(no end)"
-        return f"[{cur_style}]{no:>2} {'✓':<2}{cur_end_s} {cur_delta} {short(task.get('uuid'))}[/]"
+        return f"[{cur_style}]{no_text} {'✓':<2}{cur_end_s} {cur_delta} {short(task.get('uuid'))}[/]"
 
     if item_type == "next":
         is_last = cap_no is not None and no == cap_no
-        next_text = f"{no:>2} {'►':<2}{core.fmt_dt_local(dt)} {short(obj.get('uuid'))}"
+        next_text = f"{no_text} {'►':<2}{core.fmt_dt_local(dt)} {short(obj.get('uuid'))}"
         if is_last:
             return f"[{next_style}]{next_text} [bold red](last link)[/][/]"
         return f"[{next_style}]{next_text}[/]"
 
+    if item_type == "omitted":
+        return f"[dim red]{no_text} {'×':<2}{core.fmt_dt_local(dt)} [italic](omitted)[/][/]"
+
     is_last = cap_no is not None and no == cap_no
-    future_text = f"{no:>2} {'»':<2}{core.fmt_dt_local(dt)}"
+    future_text = f"{no_text} {'»':<2}{core.fmt_dt_local(dt)}"
     if is_last:
         return f"[{future_style}]{future_text} [bold red](last link)[/][/]"
     return f"[{future_style}]{future_text}[/]"
@@ -226,6 +308,8 @@ def timeline_lines(
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
     format_gap: Callable[[Any, Any, str, bool], str],
+    omit_dnf=None,
+    omit_expr_fires_on_date: Callable[..., bool] | None = None,
 ) -> list[str]:
     cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
     nxt_no = cur_no + 1
@@ -245,6 +329,21 @@ def timeline_lines(
         collect_prev_two=collect_prev_two,
         dtparse=dtparse,
     )
+    if kind == "anchor":
+        omitted_before_next = _timeline_omitted_before_next_anchor_items(
+            task,
+            dnf,
+            child_due_utc,
+            dtparse=dtparse,
+            to_local_cached=to_local_cached,
+            safe_parse_datetime=safe_parse_datetime,
+            next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+            omit_dnf=omit_dnf,
+            omit_expr_fires_on_date=omit_expr_fires_on_date,
+            max_iterations=max_iterations,
+        )
+        if omitted_before_next:
+            items = items[:-1] + omitted_before_next + items[-1:]
     if allowed_future > 0:
         if kind == "cp":
             items.extend(
@@ -271,6 +370,8 @@ def timeline_lines(
                     to_local_cached=to_local_cached,
                     safe_parse_datetime=safe_parse_datetime,
                     next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+                    omit_dnf=omit_dnf,
+                    omit_expr_fires_on_date=omit_expr_fires_on_date,
                     max_iterations=max_iterations,
                 )
             )

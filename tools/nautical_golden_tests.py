@@ -4262,6 +4262,47 @@ def test_hook_on_modify_timeline_multitime_includes_all_slots():
         raise AssertionError(f"on-modify timeline collapsed times unexpectedly: {times}. text={txt[:500]!r}")
 
 
+def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
+    """anchor timelines should mark omitted future slots instead of showing them as normal links."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_omit_timeline_test")
+    if not hasattr(mod, "_timeline_lines"):
+        raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate omit timeline handling.")
+    if hasattr(mod, "_collect_prev_two"):
+        setattr(mod, "_collect_prev_two", lambda _task: [])
+    expr = "w:mon,wed,fri"
+    dnf = core.validate_anchor_expr_strict(expr)
+    child_due_utc = datetime(2025, 1, 10, 9, 0, tzinfo=timezone.utc)
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000333",
+        "description": "hook test on-modify omit timeline",
+        "anchor": expr,
+        "omit": "w:wed",
+        "anchor_mode": "skip",
+        "link": 1,
+        "end": "20250106T090000Z",
+        "due": "20250106T090000Z",
+        "chainID": "abcd1234",
+    }
+    lines = _call_with_supported_kwargs(
+        mod._timeline_lines,
+        kind="anchor",
+        task=task,
+        child_due_utc=child_due_utc,
+        child_short="0000abcd",
+        dnf=dnf,
+        next_count=3,
+        cap_no=None,
+        cur_no=1,
+    )
+    txt = _strip_markup("\n".join(lines))
+    expect("(omitted)" in txt, f"expected omitted marker in anchor timeline: {txt!r}")
+    expect(
+        "2025-01-08" in txt or "2025-01-08 09:00" in txt or "Wed 2025-01-08" in txt,
+        f"expected omitted Wednesday slot to remain visible: {txt!r}",
+    )
+
+
 def test_hook_task_runner_handles_nonzero():
     """Hook _run_task handles success and non-zero exit codes."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -7890,6 +7931,7 @@ TESTS = [
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
     test_anchor_omit_rejects_time_modifiers,
     test_anchor_omit_next_after_expr_skips_matching_dates,
+    test_hook_on_modify_timeline_marks_omitted_anchor_slots,
     test_on_modify_compute_anchor_child_due_skips_omit_date,
     test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due,
     test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails,

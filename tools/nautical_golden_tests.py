@@ -3000,11 +3000,13 @@ def test_unsat_hint_uses_yearly_alias_for_month_name_examples():
         msg = str(e)
         expect("Example: w:wed, y:apr" in msg, f"unexpected message: {msg}")
 
-def test_lint_warns_for_unparenthesized_list_plus_expr():
-    """lint should warn when a comma list is joined with '+' without grouping."""
-    fatal, warns = core.lint_anchor_expr("w:mon,wed,fri + y:apr")
-    expect(fatal is None, f"unexpected fatal: {fatal!r}")
-    expect(any("group it with parentheses" in w for w in warns), f"expected grouping warning, got {warns!r}")
+def test_anchor_grouped_list_plus_expr_applies_filter_to_all_items():
+    """anchor should treat comma lists joined with '+' as a grouped unit."""
+    dnf = core.validate_anchor_expr_strict("w:mon,wed,fri + y:apr")
+    expect(len(dnf) == 3, f"expected grouped OR expansion, got {dnf!r}")
+    from datetime import date
+    expect(core.next_after_expr(dnf, date(2026, 4, 12), default_seed=date(2026, 4, 11), seed_base="anchor-test")[0] == date(2026, 4, 13), "April Monday should match")
+    expect(core.next_after_expr(dnf, date(2026, 4, 30), default_seed=date(2026, 4, 11), seed_base="anchor-test")[0] == date(2027, 4, 2), "May weekdays should not match; next match should be in next April")
 
 
 def test_last_weekday():
@@ -6118,55 +6120,12 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
 
 
 
-def test_on_modify_render_anchor_completion_feedback_normalizes_ambiguous_omit_grouping():
-    """anchor completion feedback should reflect grouped omit semantics for comma-list + filter."""
-    hook = _find_hook_file("on-modify-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_feedback_omit_norm_test")
-    if hasattr(mod, "_load_core"):
-        mod._load_core()
-
-    mod._SHOW_TIMELINE_GAPS = False
-    mod._CHAIN_COLOR_PER_CHAIN = False
-    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
-    mod._format_next_anchor_rows = lambda fb: fb
-    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
-    mod._timeline_lines = lambda *_a, **_k: []
-
-    captured = {}
-    mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
-    mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
-
-    prev_panel_mode = mod.core.PANEL_MODE
-    try:
-        mod.core.PANEL_MODE = "panel"
-        mod._render_anchor_completion_feedback(
-            new={"anchor": "w:mon", "omit": "w:mon,wed,fri + y:apr", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-0000-0000-000000000222"},
-            child_due=mod.core.now_utc(),
-            child_short="deadbeef",
-            next_no=2,
-            parent_short="00000000",
-            cap_no=None,
-            finals=[],
-            now_utc=mod.core.now_utc(),
-            until_dt=None,
-            until_cap_no=None,
-            dnf=[[{"typ": "w", "spec": "mon", "mods": {}}]],
-            meta={"mode": "skip"},
-            stripped_attrs=[],
-            deferred_spawn=False,
-            spawn_intent_id=None,
-            chain_by_short=None,
-            analytics_advice=None,
-            integrity_warnings=None,
-            base_no=1,
-        )
-    finally:
-        mod.core.PANEL_MODE = prev_panel_mode
-
-    fb = captured.get("fb") or []
-    expect(not any(k == "Warning" and "group it with parentheses" in str(v) for k, v in fb), f"did not expect grouping warning in omit feedback: {fb}")
-    expect(any(k == "Except" and "within Apr each year" in str(v) for k, v in fb), f"expected normalized omit explanation in anchor feedback: {fb}")
+def test_anchor_natural_language_normalizes_grouped_list_plus_expr():
+    """natural language should reflect grouped semantics for comma-list + filter anchors."""
+    natural = core.describe_anchor_expr("w:mon,wed,fri + y:apr")
+    expect("Mondays and within Apr each year" in natural, f"expected grouped Monday phrase, got {natural!r}")
+    expect("Wednesdays and within Apr each year" in natural, f"expected grouped Wednesday phrase, got {natural!r}")
+    expect("Fridays and within Apr each year" in natural, f"expected grouped Friday phrase, got {natural!r}")
 
 
 def test_on_modify_render_cp_completion_feedback_wrapper():
@@ -7803,7 +7762,7 @@ TESTS = [
     test_expansion_helpers_characterization,
     test_nth_weekday_range,
     test_lint_anchor_expr_characterization,
-    test_lint_warns_for_unparenthesized_list_plus_expr,
+    test_anchor_grouped_list_plus_expr_applies_filter_to_all_items,
     test_month_alias_in_monthly_anchor_suggests_yearly_anchor,
     test_unsat_hint_uses_yearly_alias_for_month_name_examples,
     test_last_weekday,
@@ -8013,7 +7972,7 @@ TESTS = [
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
     test_on_modify_render_anchor_completion_feedback_wrapper,
-    test_on_modify_render_anchor_completion_feedback_normalizes_ambiguous_omit_grouping,
+    test_anchor_natural_language_normalizes_grouped_list_plus_expr,
     test_on_modify_render_cp_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_text_mode,
     test_on_add_preview_hard_cap,

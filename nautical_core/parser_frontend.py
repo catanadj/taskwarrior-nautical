@@ -1,6 +1,44 @@
 from __future__ import annotations
 
 
+def split_top_level(expr: str, delim: str) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for ch in expr:
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth > 0:
+            depth -= 1
+        if ch == delim and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def normalize_grouped_list_filters(s: str) -> str:
+    terms = split_top_level(s, "|")
+    out_terms: list[str] = []
+    for term in terms:
+        parts = split_top_level(term, "+")
+        if len(parts) <= 1:
+            out_terms.append(term.strip())
+            continue
+        new_parts: list[str] = []
+        for part in parts:
+            p = part.strip()
+            if "," in p and not (p.startswith("(") and p.endswith(")")):
+                p = f"({p})"
+            new_parts.append(p)
+        out_terms.append(" + ".join(new_parts))
+    return " | ".join(t for t in out_terms if t)
+
+
 def rewrite_weekly_multi_time_atoms(s: str, *, split_csv_tokens, re_mod) -> str:
     """
     Rewrite patterns like:
@@ -75,6 +113,7 @@ def normalize_anchor_expr_input(
     if len(s) > 1024:
         raise parse_error_cls("Anchor expression too long (max 1024 characters).")
     s = re_mod.sub(r"\b(\d{2})-rand\b", r"rand-\1", s)
+    s = normalize_grouped_list_filters(s)
     s = rewrite_weekly_multi_time_atoms(s)
     return s
 

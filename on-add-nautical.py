@@ -1708,12 +1708,43 @@ def _validate_chain_limits_on_add(task: dict, now_utc: datetime) -> datetime | N
     return until_dt
 
 
+def _due_matches_entry_timestamp_on_add(task: dict) -> bool:
+    due_raw = task.get("due")
+    entry_raw = task.get("entry")
+    if not due_raw or not entry_raw:
+        return False
+    try:
+        due_dt, due_err = _safe_parse_datetime(due_raw, "due")
+    except Exception:
+        return False
+    if due_err or due_dt is None:
+        return False
+    try:
+        entry_dt, entry_err = _safe_parse_datetime(entry_raw, "entry")
+    except Exception:
+        return False
+    if entry_err or entry_dt is None:
+        return False
+    return due_dt == entry_dt
+
+
 def _due_context_on_add(task: dict, now_utc: datetime) -> tuple[bool, str, datetime, str | None, object, tuple[int, int]]:
-    recurrence_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else "due"
-    user_provided_due = recurrence_field in {"due", "scheduled"}
+    has_due = bool(task.get("due"))
+    has_scheduled = bool(task.get("scheduled"))
+    implicit_due_from_entry = has_due and _due_matches_entry_timestamp_on_add(task)
+
+    if has_scheduled and (not has_due or implicit_due_from_entry):
+        recurrence_field = "scheduled"
+        user_provided_due = True
+    elif has_due and not implicit_due_from_entry:
+        recurrence_field = "due"
+        user_provided_due = True
+    else:
+        recurrence_field = "due"
+        user_provided_due = False
     due_dt = None
     past_due_warning = None
-    if recurrence_field == "due":
+    if recurrence_field == "due" and user_provided_due:
         due_dt, err = _safe_parse_datetime(task.get("due"), "due")
         if err:
             _error_and_exit([("Invalid due", err)])

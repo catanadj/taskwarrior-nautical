@@ -3071,6 +3071,7 @@ def _omit_dnf_from_parent(parent: dict):
     omit_file = (parent.get("omit_file") or "").strip()
     omit_dnf = None
     omit_dates: frozenset[Any] = frozenset()
+    omit_descriptions: dict[Any, str] = {}
     if expr_str:
         try:
             omit_dnf = _validate_omit_expr_cached(expr_str)
@@ -3079,12 +3080,18 @@ def _omit_dnf_from_parent(parent: dict):
     if omit_file:
         try:
             omit_dates = _load_omit_file_dates(omit_file)
+            omit_files = core._import_sibling("omit_files")
+            omit_descriptions = omit_files.load_omit_file_descriptions(omit_file, getattr(core, "OMIT_FILE_DIR", ""))
         except Exception as e:
             raise ValueError(f"Invalid omit_file '{omit_file}': {str(e)}")
-    if not omit_dnf and not omit_dates:
+    if not omit_dnf and not omit_dates and not omit_descriptions:
         return "", None
     anchor_omit = _module("anchor_omit")
-    return expr_str, anchor_omit.combine_omit_state(omit_dnf=omit_dnf, omit_dates=omit_dates)
+    return expr_str, anchor_omit.combine_omit_state(
+        omit_dnf=omit_dnf,
+        omit_dates=omit_dates,
+        omit_descriptions=omit_descriptions,
+    )
 
 
 def _anchor_parent_local_times(parent: dict):
@@ -4388,6 +4395,7 @@ def _timeline_lines(
             (lambda dnf_, d, default_seed, seed_base: anchor_omit.omit_expr_fires_on_date(dnf_, d, default_seed, seed_base, core=core))
             if anchor_omit is not None else None
         ),
+        omit_description_for_date=(anchor_omit.omit_description_for_date if anchor_omit is not None else None),
     )
 
 def _got_anchor_invalid(msg: str) -> None:

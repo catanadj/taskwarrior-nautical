@@ -7,21 +7,26 @@ from typing import Any, Callable
 _OMIT_TIMED_ERROR = "omit does not support time modifiers (@t). Omit rules are date-based only."
 
 
-def combine_omit_state(*, omit_dnf=None, omit_dates=None):
+def combine_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None):
     dates = frozenset(omit_dates or [])
-    if not omit_dnf and not dates:
+    descriptions = dict(omit_descriptions or {})
+    if not omit_dnf and not dates and not descriptions:
         return None
-    if not dates:
+    if not dates and not descriptions:
         return omit_dnf
-    return {"dnf": omit_dnf, "dates": dates}
+    return {"dnf": omit_dnf, "dates": dates, "descriptions": descriptions}
 
 
 def _split_omit_state(omit_state):
     if not omit_state:
-        return None, frozenset()
+        return None, frozenset(), {}
     if isinstance(omit_state, dict):
-        return omit_state.get("dnf"), frozenset(omit_state.get("dates") or [])
-    return omit_state, frozenset()
+        return (
+            omit_state.get("dnf"),
+            frozenset(omit_state.get("dates") or []),
+            dict(omit_state.get("descriptions") or {}),
+        )
+    return omit_state, frozenset(), {}
 
 
 def _split_top_level(expr: str, delim: str) -> list[str]:
@@ -89,7 +94,7 @@ def omit_expr_fires_on_date(
     *,
     core: Any,
 ) -> bool:
-    omit_expr_dnf, omit_dates = _split_omit_state(omit_dnf)
+    omit_expr_dnf, omit_dates, _omit_descriptions = _split_omit_state(omit_dnf)
     if d in omit_dates:
         return True
     if not omit_expr_dnf:
@@ -106,6 +111,12 @@ def omit_expr_fires_on_date(
         return False
 
 
+def omit_description_for_date(omit_dnf, d) -> str | None:
+    _omit_expr_dnf, _omit_dates, omit_descriptions = _split_omit_state(omit_dnf)
+    text = str(omit_descriptions.get(d) or "").strip()
+    return text or None
+
+
 def next_after_expr_with_omit(
     dnf,
     after_date,
@@ -116,7 +127,7 @@ def next_after_expr_with_omit(
     core: Any,
     max_skip_iterations: int = 512,
 ):
-    omit_expr_dnf, omit_dates = _split_omit_state(omit_dnf)
+    omit_expr_dnf, omit_dates, _omit_descriptions = _split_omit_state(omit_dnf)
     if not omit_expr_dnf and not omit_dates:
         return core.next_after_expr(
             dnf,
@@ -148,4 +159,3 @@ def next_after_expr_with_omit(
         probe = nxt
 
     raise ValueError("No valid anchor occurrences found after applying omit rules.")
-

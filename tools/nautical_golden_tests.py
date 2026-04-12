@@ -4151,6 +4151,85 @@ def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
     expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
 
 
+def test_on_add_due_context_treats_due_matching_entry_as_implicit():
+    """on-add should not treat due==entry as an explicit anchor due."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_due_context_entry_due_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    now_utc = mod.core.parse_dt_any("20260412T111500Z")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000113a",
+        "description": "hook test on-add implicit entry due context",
+        "status": "pending",
+        "entry": "20260412T111500Z",
+        "due": "20260412T111500Z",
+        "anchor": "w:mon,wed,fri",
+    }
+    user_provided_due, recurrence_field, due_dt, past_due_warning, due_day, due_hhmm = mod._due_context_on_add(task, now_utc)
+    expect(not user_provided_due, f"due matching entry should be treated as implicit: {(user_provided_due, recurrence_field, due_dt)!r}")
+    expect(recurrence_field == "due", f"unexpected recurrence field for implicit entry due: {recurrence_field!r}")
+    expect(due_dt == now_utc, f"implicit entry due should fall back to now_utc context: {due_dt!r}")
+    expect(past_due_warning is None, f"implicit entry due should not produce past-due warning: {past_due_warning!r}")
+    expect(due_day == mod.core.to_local(now_utc).date(), f"unexpected implicit due day: {due_day!r}")
+    expect(due_hhmm == (mod.core.to_local(now_utc).hour, mod.core.to_local(now_utc).minute), f"unexpected implicit due hhmm: {due_hhmm!r}")
+
+
+def test_on_add_anchor_preview_auto_assigns_when_due_matches_entry():
+    """on-add anchor preview should auto-assign first anchor when incoming due merely mirrors entry."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_anchor_entry_due_preview_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000113b",
+        "description": "hook test on-add implicit entry due preview",
+        "status": "pending",
+        "entry": "20260412T111500Z",
+        "due": "20260412T111500Z",
+        "anchor": "w:mon,wed,fri",
+        "anchor_mode": "skip",
+    }
+    now_utc = mod.core.parse_dt_any(task["entry"])
+    now_local = mod.core.to_local(now_utc)
+    ctx = mod._build_on_add_context(task, now_utc, now_local)
+    expect(not ctx.user_provided_due, f"build_on_add_context should treat due==entry as implicit: {ctx!r}")
+
+    captured = {}
+    orig_panel = mod._panel
+    orig_emit = mod._emit_task_json
+    try:
+        mod._panel = lambda title, rows, **_k: captured.update({"title": title, "rows": list(rows)})
+        mod._emit_task_json = lambda *_a, **_k: None
+        mod._handle_anchor_preview_on_add(
+            task,
+            ctx.anchor_str,
+            ctx.chain_state,
+            ctx.now_utc,
+            ctx.now_local,
+            ctx.user_provided_due,
+            ctx.recurrence_field,
+            ctx.due_dt,
+            ctx.due_day,
+            ctx.due_hhmm,
+            ctx.until_dt,
+            ctx.past_due_warning,
+            mod._NoopProfiler(),
+        )
+    finally:
+        mod._panel = orig_panel
+        mod._emit_task_json = orig_emit
+
+    expected_due = mod._fmt_local_for_task(mod.core.build_local_datetime(date(2026, 4, 13), (9, 0)).astimezone(timezone.utc))
+    expect(task.get("due") == expected_due, f"expected implicit entry due to auto-assign first anchor match: {task!r}")
+    rows = captured.get("rows") or []
+    labels = [label for label, _value in rows]
+    expect("Next anchor" not in labels, f"auto-assigned first due should not render a separate next-anchor row: {rows!r}")
+    expect("[auto-due]" in labels, f"expected auto-due row in anchor preview: {rows!r}")
+
+
 def test_hook_on_add_anchor_preview_skips_omit_date():
     """on-add anchor preview should skip omitted dates when selecting the next anchor."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -4364,6 +4443,56 @@ def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
         "2025-01-08" in txt or "2025-01-08 09:00" in txt or "Wed 2025-01-08" in txt,
         f"expected omitted Wednesday slot to remain visible: {txt!r}",
     )
+
+
+def test_hook_on_modify_timeline_uses_omit_file_description_label():
+    """anchor timelines should use omit_file description text for omitted markers when available."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_omit_file_desc_timeline_test")
+    if not hasattr(mod, "_timeline_lines"):
+        raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate omit timeline handling.")
+    if hasattr(mod, "_collect_prev_two"):
+        setattr(mod, "_collect_prev_two", lambda _task: [])
+    expr = "w:mon,wed,fri"
+    dnf = core.validate_anchor_expr_strict(expr)
+    child_due_utc = datetime(2025, 1, 10, 9, 0, tzinfo=timezone.utc)
+    with tempfile.TemporaryDirectory() as td:
+        omit_dir = Path(td)
+        (omit_dir / "holidays.csv").write_text(
+            "date,description\n"
+            "2025-01-08,Company holiday shutdown\n",
+            encoding="utf-8",
+        )
+        prev_dir = getattr(mod.core, "OMIT_FILE_DIR", "")
+        mod.core.OMIT_FILE_DIR = str(omit_dir)
+        try:
+            task = {
+                "uuid": "00000000-0000-0000-0000-000000000334",
+                "description": "hook test on-modify omit_file label timeline",
+                "anchor": expr,
+                "omit_file": "holidays.csv",
+                "anchor_mode": "skip",
+                "link": 1,
+                "end": "20250106T090000Z",
+                "due": "20250106T090000Z",
+                "chainID": "abcd1234",
+            }
+            lines = _call_with_supported_kwargs(
+                mod._timeline_lines,
+                kind="anchor",
+                task=task,
+                child_due_utc=child_due_utc,
+                child_short="0000abcd",
+                dnf=dnf,
+                next_count=3,
+                cap_no=None,
+                cur_no=1,
+            )
+        finally:
+            mod.core.OMIT_FILE_DIR = prev_dir
+    txt = _strip_markup("\n".join(lines))
+    expect("(Company holida...)" in txt, f"expected truncated omit_file description marker in anchor timeline: {txt!r}")
+    expect("(omitted)" not in txt, f"expected omit_file description to replace default omitted marker: {txt!r}")
 
 
 def test_hook_task_runner_handles_nonzero():
@@ -5976,6 +6105,29 @@ def test_omit_file_csv_header_parsing_is_order_independent_and_dedupes():
         )
         got = omit_files.load_omit_file_dates('holidays.csv', str(omit_dir))
         expect(got == frozenset({date(2025, 1, 1), date(2025, 1, 26)}), f'unexpected parsed omit_file dates: {got!r}')
+
+
+def test_omit_file_csv_description_mapping_is_order_independent():
+    """omit_file CSV parsing should retain per-date descriptions when a description column is present."""
+    import nautical_core.omit_files as omit_files
+
+    with tempfile.TemporaryDirectory() as td:
+        omit_dir = Path(td)
+        sample = omit_dir / 'holidays.csv'
+        sample.write_text(
+            'region,description,date\n'
+            'AU,New Year,2025-01-01\n'
+            'NSW,Anniversary Day,2025-01-26\n',
+            encoding='utf-8',
+        )
+        got = omit_files.load_omit_file_descriptions('holidays.csv', str(omit_dir))
+        expect(
+            got == {
+                date(2025, 1, 1): 'New Year',
+                date(2025, 1, 26): 'Anniversary Day',
+            },
+            f'unexpected parsed omit_file descriptions: {got!r}',
+        )
 
 
 def test_anchor_omit_next_after_expr_skips_matching_dates():
@@ -7927,6 +8079,8 @@ TESTS = [
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,
+    test_on_add_due_context_treats_due_matching_entry_as_implicit,
+    test_on_add_anchor_preview_auto_assigns_when_due_matches_entry,
     test_hook_on_add_anchor_preview_skips_omit_date,
     test_hook_on_add_anchor_preview_skips_omit_file_date,
     test_hook_on_add_timed_omit_rejected,
@@ -8066,10 +8220,12 @@ TESTS = [
     test_anchor_omit_rejects_time_modifiers,
     test_omit_file_name_rejects_paths,
     test_omit_file_csv_header_parsing_is_order_independent_and_dedupes,
+    test_omit_file_csv_description_mapping_is_order_independent,
     test_anchor_omit_next_after_expr_skips_matching_dates,
     test_anchor_omit_next_after_expr_skips_omit_file_dates,
     test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items,
     test_hook_on_modify_timeline_marks_omitted_anchor_slots,
+    test_hook_on_modify_timeline_uses_omit_file_description_label,
     test_on_modify_compute_anchor_child_due_skips_omit_date,
     test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due,
     test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails,

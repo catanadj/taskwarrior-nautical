@@ -4,6 +4,25 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 
+def _timeline_omit_label(
+    omit_dnf,
+    omit_date,
+    *,
+    omit_description_for_date: Callable[[Any, Any], str | None] | None,
+) -> str | None:
+    if omit_description_for_date is None:
+        return None
+    try:
+        text = str(omit_description_for_date(omit_dnf, omit_date) or "").strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    if len(text) <= 14:
+        return text
+    return text[:14] + "..."
+
+
 def _timeline_styles(
     task: dict[str, Any],
     kind: str,
@@ -97,6 +116,7 @@ def _timeline_future_anchor_items(
     next_occurrence_after_local_dt: Callable[..., Any],
     omit_dnf,
     omit_expr_fires_on_date: Callable[..., bool] | None,
+    omit_description_for_date: Callable[[Any, Any], str | None] | None,
     max_iterations: int,
 ) -> list[tuple[object, datetime, dict[str, Any], str]]:
     items: list[tuple[object, datetime, dict[str, Any], str]] = []
@@ -137,7 +157,21 @@ def _timeline_future_anchor_items(
                     default_seed,
                     seed_base,
                 ):
-                    items.append(("··", fut_dt, {"is_omit": True}, "omitted"))
+                    items.append(
+                        (
+                            "··",
+                            fut_dt,
+                            {
+                                "is_omit": True,
+                                "omit_label": _timeline_omit_label(
+                                    omit_dnf,
+                                    next_local.date(),
+                                    omit_description_for_date=omit_description_for_date,
+                                ),
+                            },
+                            "omitted",
+                        )
+                    )
                     continue
             except Exception:
                 pass
@@ -160,6 +194,7 @@ def _timeline_omitted_before_next_anchor_items(
     next_occurrence_after_local_dt: Callable[..., Any],
     omit_dnf,
     omit_expr_fires_on_date: Callable[..., bool] | None,
+    omit_description_for_date: Callable[[Any, Any], str | None] | None,
     max_iterations: int,
 ) -> list[tuple[object, datetime, dict[str, Any], str]]:
     if not omit_dnf or omit_expr_fires_on_date is None:
@@ -200,7 +235,21 @@ def _timeline_omitted_before_next_anchor_items(
                 default_seed,
                 seed_base,
             ):
-                items.append(("··", next_local.astimezone(timezone.utc), {"is_omit": True}, "omitted"))
+                items.append(
+                    (
+                        "··",
+                        next_local.astimezone(timezone.utc),
+                        {
+                            "is_omit": True,
+                            "omit_label": _timeline_omit_label(
+                                omit_dnf,
+                                next_local.date(),
+                                omit_description_for_date=omit_description_for_date,
+                            ),
+                        },
+                        "omitted",
+                    )
+                )
         except Exception:
             continue
     return items
@@ -252,7 +301,12 @@ def _timeline_base_line(
         return f"[{next_style}]{next_text}[/]"
 
     if item_type == "omitted":
-        return f"[dim red]{no_text} {'×':<2}{core.fmt_dt_local(dt)} [italic](omitted)[/][/]"
+        omit_label = str(obj.get("omit_label") or "").strip()
+        if omit_label:
+            omit_label = omit_label.replace("[", "(").replace("]", ")")
+        else:
+            omit_label = "omitted"
+        return f"[dim red]{no_text} {'×':<2}{core.fmt_dt_local(dt)} [italic]({omit_label})[/][/]"
 
     is_last = cap_no is not None and no == cap_no
     future_text = f"{no_text} {'»':<2}{core.fmt_dt_local(dt)}"
@@ -310,6 +364,7 @@ def timeline_lines(
     format_gap: Callable[[Any, Any, str, bool], str],
     omit_dnf=None,
     omit_expr_fires_on_date: Callable[..., bool] | None = None,
+    omit_description_for_date: Callable[[Any, Any], str | None] | None = None,
 ) -> list[str]:
     cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
     nxt_no = cur_no + 1
@@ -340,6 +395,7 @@ def timeline_lines(
             next_occurrence_after_local_dt=next_occurrence_after_local_dt,
             omit_dnf=omit_dnf,
             omit_expr_fires_on_date=omit_expr_fires_on_date,
+            omit_description_for_date=omit_description_for_date,
             max_iterations=max_iterations,
         )
         if omitted_before_next:
@@ -372,6 +428,7 @@ def timeline_lines(
                     next_occurrence_after_local_dt=next_occurrence_after_local_dt,
                     omit_dnf=omit_dnf,
                     omit_expr_fires_on_date=omit_expr_fires_on_date,
+                    omit_description_for_date=omit_description_for_date,
                     max_iterations=max_iterations,
                 )
             )

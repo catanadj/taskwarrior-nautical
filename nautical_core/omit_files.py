@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-_CACHE_BY_PATH: dict[str, tuple[int, int, frozenset[date]]] = {}
+_CACHE_BY_PATH: dict[str, tuple[int, int, frozenset[date], dict[date, str]]] = {}
 
 
 def validate_omit_file_name(value: str | None) -> str:
@@ -80,28 +80,37 @@ def _looks_like_csv(non_comment_lines: list[tuple[int, str]]) -> bool:
     return "date" in norm
 
 
-def _parse_csv_dates(text: str, *, label: str) -> frozenset[date]:
+def _parse_csv_dates_and_descriptions(text: str, *, label: str) -> tuple[frozenset[date], dict[date, str]]:
     non_comment = [line for _no, line in _iter_content_lines(text)]
     reader = csv.DictReader(io.StringIO("\n".join(non_comment)))
     fieldnames = list(reader.fieldnames or [])
     if not fieldnames:
         raise ValueError(f"{label} is empty.")
     date_key = None
+    description_key = None
     for field in fieldnames:
-        if str(field or "").strip().strip('"').lower() == "date":
+        field_name = str(field or "").strip().strip('"').lower()
+        if field_name == "date":
             date_key = field
-            break
+        elif field_name == "description":
+            description_key = field
     if date_key is None:
         raise ValueError(f"{label} CSV must contain a 'date' column.")
     out: set[date] = set()
+    descriptions: dict[date, str] = {}
     for row_no, row in enumerate(reader, 2):
         if not isinstance(row, dict):
             continue
         value = str(row.get(date_key) or "").strip()
         if not value:
             continue
-        out.update(_expand_date_spec(value, label=f"{label} line {row_no}"))
-    return frozenset(out)
+        row_dates = _expand_date_spec(value, label=f"{label} line {row_no}")
+        out.update(row_dates)
+        description = str(row.get(description_key) or "").strip() if description_key is not None else ""
+        if description:
+            for item_date in row_dates:
+                descriptions.setdefault(item_date, description)
+    return frozenset(out), descriptions
 
 
 def _parse_text_dates(text: str, *, label: str) -> frozenset[date]:
@@ -111,21 +120,33 @@ def _parse_text_dates(text: str, *, label: str) -> frozenset[date]:
     return frozenset(out)
 
 
-def load_omit_file_dates(name: str | None, omit_file_dir: str | None) -> frozenset[date]:
+def _load_omit_file_data(name: str | None, omit_file_dir: str | None) -> tuple[frozenset[date], dict[date, str]]:
     path = resolve_omit_file_path(name, omit_file_dir)
     if not path:
-        return frozenset()
+        return frozenset(), {}
     st = os.stat(path)
     cached = _CACHE_BY_PATH.get(path)
     if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        return cached[2]
+        return cached[2], dict(cached[3])
     text = Path(path).read_text(encoding="utf-8-sig")
     non_comment = list(_iter_content_lines(text))
     if not non_comment:
         dates: frozenset[date] = frozenset()
+        descriptions: dict[date, str] = {}
     elif _looks_like_csv(non_comment):
-        dates = _parse_csv_dates(text, label=f"omit_file '{os.path.basename(path)}'")
+        dates, descriptions = _parse_csv_dates_and_descriptions(text, label=f"omit_file '{os.path.basename(path)}'")
     else:
         dates = _parse_text_dates(text, label=f"omit_file '{os.path.basename(path)}'")
-    _CACHE_BY_PATH[path] = (st.st_mtime_ns, st.st_size, dates)
+        descriptions = {}
+    _CACHE_BY_PATH[path] = (st.st_mtime_ns, st.st_size, dates, dict(descriptions))
+    return dates, descriptions
+
+
+def load_omit_file_dates(name: str | None, omit_file_dir: str | None) -> frozenset[date]:
+    dates, _descriptions = _load_omit_file_data(name, omit_file_dir)
     return dates
+
+
+def load_omit_file_descriptions(name: str | None, omit_file_dir: str | None) -> dict[date, str]:
+    _dates, descriptions = _load_omit_file_data(name, omit_file_dir)
+    return descriptions

@@ -3403,6 +3403,7 @@ def test_parser_validation():
         "y:q1..q2",
         "w:mon@t=09:00",
         "m:15@t=09:00@+1d",
+        "m:15@t=09:00@-1d",
         "(w:mon + m:1) | (w:fri + m:15)",
     ]
     
@@ -3441,6 +3442,8 @@ def test_parser_atom_helpers_characterization():
     mods = core._parse_atom_mods("t=09:00,12:00@+1d")
     expect(mods["t"] == [(9, 0), (12, 0)], f"Unexpected time mods: {mods!r}")
     expect(mods["day_offset"] == 1, f"Unexpected day offset: {mods!r}")
+    neg_mods = core._parse_atom_mods("t=09:00@-2d")
+    expect(neg_mods["day_offset"] == -2, f"Unexpected negative day offset: {neg_mods!r}")
     dnf = core._build_anchor_atom_dnf("m", "1st-mon@t=09:00")
     expect(dnf == [[{"typ": "m", "spec": "1mon", "ival": 1, "mods": {"t": (9, 0), "roll": None, "wd": None, "bd": False, "day_offset": 0}}]], f"Unexpected atom dnf: {dnf!r}")
     node, next_i = core._parse_anchor_atom_at("w:mon@t=09:00 + m:1", 0, len("w:mon@t=09:00 + m:1"))
@@ -3539,6 +3542,8 @@ def test_natural_language_comprehensive():
         ("y:01-01..01-31", "Jan each year"),
         ("m:15@t=09:00", "the 15th day of each month at 09:00"),
         ("m:-1@nbd", "the last day of each month if business day; otherwise the next business day"),
+        ("y:04-25@+2d", "Apr 25 each year, 2 days later"),
+        ("y:04-25@-2d", "Apr 25 each year, 2 days earlier"),
     ]
     
     for anchor, expected_phrase in test_cases:
@@ -3555,6 +3560,7 @@ def test_natural_anchor_characterization_for_complex_terms():
         ("m/2:2nd-mon", "every 2 months among months that have the 2nd Monday"),
         ("m:-1@nbd@t=09:00", "the last day of each month if business day; otherwise the next business day at 09:00"),
         ("m:1@nw", "the 1st day of each month if business day; otherwise the nearest business day (Fri if Saturday, Mon if Sunday)"),
+        ("y:04-25@-2d@t=12:00", "Apr 25 each year, 2 days earlier at 12:00"),
         ("w/3:rand", "every 3 weeks: one random day every 3 weeks"),
         ("w:mon + m:1 + y:01-01..03-31", "Mondays that fall on the 1st day of each month and within Jan–Mar each year"),
     ]
@@ -4362,6 +4368,27 @@ def test_hook_on_add_anchor_preview_positive_day_offset_uses_timed_slot():
     stderr_txt = _strip_markup(p.stderr)
     expect("Tue 2026-05-05 12:00" in stderr_txt, f"expected first due to use shifted timed slot. stderr={stderr_txt[:500]!r}")
     expect("Wed 2027-05-05 12:00" in stderr_txt, f"expected next yearly shifted occurrence to keep timed slot. stderr={stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_anchor_preview_negative_day_offset_uses_timed_slot():
+    """on-add preview should keep @t times when an anchor date is shifted earlier by @-Nd."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000114d",
+        "description": "hook test on-add negative offset timed anchor",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20260412T111500Z",
+        "anchor": "y:04-25@-2d@t=12:00",
+        "anchor_mode": "skip",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    if p.returncode != 0:
+        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("Thu 2026-04-23 12:00" in stderr_txt, f"expected first due to use shifted timed slot. stderr={stderr_txt[:500]!r}")
+    expect("Fri 2027-04-23 12:00" in stderr_txt, f"expected next yearly shifted occurrence to keep timed slot. stderr={stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_timed_omit_rejected():

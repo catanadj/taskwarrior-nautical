@@ -303,6 +303,13 @@ def describe_term_bd_filter(term) -> bool:
     return any((atom.get("mods") or {}).get("bd") for atom in term)
 
 
+def describe_term_day_offset(term) -> int:
+    total = 0
+    for atom in term:
+        total += int((atom.get("mods") or {}).get("day_offset") or 0)
+    return total
+
+
 def describe_roll_suffix(roll: str) -> str:
     if roll == "pbd":
         return " if business day; otherwise the previous business day"
@@ -315,14 +322,22 @@ def describe_roll_suffix(roll: str) -> str:
 
 def describe_inject_schedule_suffixes(txt: str, term) -> str:
     roll = describe_term_roll_shift(term)
+    day_offset = describe_term_day_offset(term)
     if roll:
         suffix = describe_roll_suffix(roll)
     elif describe_term_bd_filter(term):
         suffix = " only if a business day (skipped if weekend)"
     else:
         suffix = ""
+    if day_offset > 0:
+        offset_suffix = f", {day_offset} day{'s' if day_offset != 1 else ''} later"
+    elif day_offset < 0:
+        abs_days = abs(day_offset)
+        offset_suffix = f", {abs_days} day{'s' if abs_days != 1 else ''} earlier"
+    else:
+        offset_suffix = ""
 
-    if not suffix:
+    if not suffix and not offset_suffix:
         return txt
 
     targets = [
@@ -335,12 +350,12 @@ def describe_inject_schedule_suffixes(txt: str, term) -> str:
     ]
     for target in targets:
         if target in txt:
-            return txt.replace(target, target + suffix)
+            return txt.replace(target, target + suffix + offset_suffix)
 
     if " at " in txt:
         head, _sep, tail = txt.partition(" at ")
-        return f"{head}{suffix} at {tail}"
-    return txt + suffix
+        return f"{head}{suffix}{offset_suffix} at {tail}"
+    return txt + suffix + offset_suffix
 
 
 def describe_anchor_term_collect(

@@ -4327,6 +4327,34 @@ def test_hook_on_add_anchor_preview_skips_omit_file_date():
         expect("2025-01-13" in stderr_txt, f"expected next anchor to skip file-blocked Friday and show Monday. stderr={stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_anchor_preview_skips_omit_file_modifier_date():
+    """on-add anchor preview should apply omit_file modifiers before skipping matching dates."""
+    hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        omit_dir = Path(td) / "omit"
+        omit_dir.mkdir()
+        (omit_dir / "holidays.csv").write_text('date,description\n2026-04-25,Weekend holiday\n', encoding='utf-8')
+        conf = Path(td) / 'config-nautical.toml'
+        conf.write_text(f'omit_file_dir = "{omit_dir}"\n', encoding='utf-8')
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000114e",
+            "description": "hook test on-add anchor omit_file modifier preview",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20260412T000000Z",
+            "anchor": "y:04-25@nbd@t=09:00",
+            "omit_file": "holidays.csv@nbd",
+            "anchor_mode": "skip",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        if p.returncode != 0:
+            raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Mon 2027-04-26 09:00" in stderr_txt, f"expected rolled 2026 occurrence to be omitted and next year shown. stderr={stderr_txt[:500]!r}")
+        expect("Mon 2026-04-27 09:00" not in stderr_txt, f"expected transformed omit_file date to be skipped. stderr={stderr_txt[:500]!r}")
+
+
 def test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot():
     """on-add preview should keep @t times when a yearly anchor rolls forward to the next business day."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -6230,6 +6258,51 @@ def test_omit_file_csv_description_mapping_is_order_independent():
             },
             f'unexpected parsed omit_file descriptions: {got!r}',
         )
+
+
+def test_omit_file_modifiers_roll_dates_and_carry_descriptions():
+    """omit_file modifiers should transform loaded dates and move descriptions onto the transformed date."""
+    import nautical_core.omit_files as omit_files
+
+    with tempfile.TemporaryDirectory() as td:
+        omit_dir = Path(td)
+        sample = omit_dir / 'holidays.csv'
+        sample.write_text(
+            'date,description\n'
+            '2026-04-25,Weekend holiday\n',
+            encoding='utf-8',
+        )
+        got_dates = omit_files.load_omit_file_dates('holidays.csv@nbd', str(omit_dir))
+        got_desc = omit_files.load_omit_file_descriptions('holidays.csv@nbd', str(omit_dir))
+        expect(got_dates == frozenset({date(2026, 4, 27)}), f'unexpected transformed omit_file dates: {got_dates!r}')
+        expect(got_desc == {date(2026, 4, 27): 'Weekend holiday'}, f'unexpected transformed omit_file descriptions: {got_desc!r}')
+
+
+def test_omit_file_modifiers_support_negative_day_offsets():
+    """omit_file modifiers should support @-Nd against file dates."""
+    import nautical_core.omit_files as omit_files
+
+    with tempfile.TemporaryDirectory() as td:
+        omit_dir = Path(td)
+        sample = omit_dir / 'holidays.csv'
+        sample.write_text('date\n2026-04-25\n', encoding='utf-8')
+        got = omit_files.load_omit_file_dates('holidays.csv@-2d', str(omit_dir))
+        expect(got == frozenset({date(2026, 4, 23)}), f'unexpected negative-offset omit_file dates: {got!r}')
+
+
+def test_omit_file_modifiers_reject_time_modifiers():
+    """omit_file should reject @t because omit rules are date-based only."""
+    import nautical_core.omit_files as omit_files
+
+    with tempfile.TemporaryDirectory() as td:
+        omit_dir = Path(td)
+        sample = omit_dir / 'holidays.csv'
+        sample.write_text('date\n2026-04-25\n', encoding='utf-8')
+        try:
+            omit_files.load_omit_file_dates('holidays.csv@t=09:00', str(omit_dir))
+            expect(False, 'expected timed omit_file modifier to fail')
+        except ValueError as e:
+            expect('omit_file does not support time modifiers (@t).' in str(e), f'unexpected timed omit_file error: {e}')
 
 
 def test_anchor_omit_next_after_expr_skips_matching_dates():

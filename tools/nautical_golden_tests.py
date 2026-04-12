@@ -3883,6 +3883,19 @@ def test_next_after_atom_with_mods_characterization():
         expect(got == expected, f"{expr} from {ref_d} seed={seed_d}: got {got}, expected {expected}")
 
 
+def test_atom_matches_on_positive_day_offset_shifted_date():
+    """atom_matches_on should recognize dates reached via positive day offsets."""
+    dnf = core.validate_anchor_expr_strict("y:04-25@+10d")
+    atom = dnf[0][0]
+    expect(core.atom_matches_on(atom, date(2026, 5, 5), date(2026, 4, 12)), "shifted date should match positive day-offset atom")
+
+
+def test_pick_hhmm_from_dnf_for_positive_day_offset_shifted_date():
+    """pick_hhmm_from_dnf_for_date should retain @t on dates reached via positive day offsets."""
+    dnf = core.validate_anchor_expr_strict("y:04-25@+10d@t=12:00")
+    expect(core.pick_hhmm_from_dnf_for_date(dnf, date(2026, 5, 5), date(2026, 4, 12)) == (12, 0), "shifted date should keep configured @t")
+
+
 def test_scheduler_atom_helpers_characterization():
     """Direct scheduler helpers should preserve interval-bucket and acceptance behavior."""
     atom = core.validate_anchor_expr_strict("w:mon")[0][0]
@@ -4328,6 +4341,27 @@ def test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot():
     expect("Mon 2026-04-27 12:00" in stderr_txt, f"expected first due to use rolled timed slot. stderr={stderr_txt[:500]!r}")
     expect("Mon 2027-04-26 12:00" in stderr_txt, f"expected next yearly rolled occurrence to keep timed slot. stderr={stderr_txt[:500]!r}")
     expect("Tue 2028-04-25 17:00" in stderr_txt, f"expected later same-day second slot in preview. stderr={stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_anchor_preview_positive_day_offset_uses_timed_slot():
+    """on-add preview should keep @t times when an anchor date is shifted forward by @+Nd."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000114c",
+        "description": "hook test on-add positive offset timed anchor",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20260412T111500Z",
+        "anchor": "y:04-25@+10d@t=12:00",
+        "anchor_mode": "skip",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    if p.returncode != 0:
+        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("Tue 2026-05-05 12:00" in stderr_txt, f"expected first due to use shifted timed slot. stderr={stderr_txt[:500]!r}")
+    expect("Wed 2027-05-05 12:00" in stderr_txt, f"expected next yearly shifted occurrence to keep timed slot. stderr={stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_timed_omit_rejected():

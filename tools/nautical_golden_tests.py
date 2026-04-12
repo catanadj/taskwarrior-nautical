@@ -6200,6 +6200,34 @@ def test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items():
     expect(not anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 5, 6), date(2026, 4, 11), "omit-test", core=core), "May Wednesday should not be omitted")
 
 
+def test_anchor_omit_business_day_roll_matches_rolled_date():
+    """omit should fire on the rolled business-day result, not only on the base date."""
+    import nautical_core.anchor_omit as anchor_omit
+
+    omit_dnf = anchor_omit.validate_omit_expr_strict(
+        "y:04-25@nbd",
+        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
+    )
+    expect(
+        anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 4, 27), date(2026, 4, 12), "omit-roll-test", core=core),
+        "rolled Monday should be omitted for 2026-04-25@nbd",
+    )
+
+
+def test_anchor_omit_positive_day_offset_matches_shifted_date():
+    """omit should fire on dates reached via positive day offsets."""
+    import nautical_core.anchor_omit as anchor_omit
+
+    omit_dnf = anchor_omit.validate_omit_expr_strict(
+        "y:04-25@+2d",
+        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
+    )
+    expect(
+        anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 4, 27), date(2026, 4, 12), "omit-offset-test", core=core),
+        "shifted date should be omitted for 2026-04-25@+2d",
+    )
+
+
 def test_on_modify_compute_anchor_child_due_skips_omit_date():
     """anchor completion should skip omitted anchor dates and choose the next valid one."""
     hook = _find_hook_file("on-modify-nautical.py")

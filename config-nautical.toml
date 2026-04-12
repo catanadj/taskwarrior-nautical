@@ -15,9 +15,9 @@ anchor_cache_ttl = 0                               # optional; 0 = never expires
 # ChainID is always enabled in v3+; legacy chains can be upgraded with tools/nautical_backfill_chainid.py.
 
 # Hook toggles (on-modify)
-chain_color_per_chain = true        # color timeline per chain (perf hit on slow terminals)
+chain_color_per_chain = true         # color timeline per chain (perf hit on slow terminals)
 show_timeline_gaps = true            # include gap rows in timeline
-show_analytics = false                # show analytics panel
+show_analytics = false               # show analytics panel
 analytics_style = "clinical"         # "coach" or "clinical"
 analytics_ontime_tol_secs = 14400    # "on time" window in seconds
 check_chain_integrity = true         # warn on gaps/mismatched links/chainID inconsistencies

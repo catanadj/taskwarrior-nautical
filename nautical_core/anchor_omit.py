@@ -99,16 +99,39 @@ def omit_expr_fires_on_date(
         return True
     if not omit_expr_dnf:
         return False
+    lookback_days = _omit_expr_match_lookback_days(omit_expr_dnf)
     try:
-        nxt, _ = core.next_after_expr(
-            omit_expr_dnf,
-            d - timedelta(days=1),
-            default_seed=default_seed,
-            seed_base=seed_base,
-        )
-        return nxt == d
+        for k in range(1, lookback_days + 1):
+            nxt, _ = core.next_after_expr(
+                omit_expr_dnf,
+                d - timedelta(days=k),
+                default_seed=default_seed,
+                seed_base=seed_base,
+            )
+            if nxt == d:
+                return True
+        return False
     except Exception:
         return False
+
+
+def _omit_expr_match_lookback_days(omit_expr_dnf) -> int:
+    max_lookback = 1
+    for term in omit_expr_dnf or []:
+        for atom in term or []:
+            mods = atom.get("mods") or {}
+            lookback = 1
+            day_offset = int(mods.get("day_offset", 0) or 0)
+            if day_offset > 0:
+                lookback += day_offset
+            roll_kind = mods.get("roll")
+            if roll_kind == "next-wd":
+                lookback += 7
+            elif roll_kind in ("nbd", "nw"):
+                lookback += 2
+            if lookback > max_lookback:
+                max_lookback = lookback
+    return max_lookback
 
 
 def omit_description_for_date(omit_dnf, d) -> str | None:

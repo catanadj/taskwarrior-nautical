@@ -168,7 +168,7 @@ def _load_omit_file_data(name: str | None, omit_file_dir: str | None) -> tuple[f
     st = os.stat(path)
     cached = _CACHE_BY_PATH.get(path)
     if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        return cached[2], dict(cached[3])
+        return _apply_omit_file_mods(cached[2], dict(cached[3]), mods)
     text = Path(path).read_text(encoding="utf-8-sig")
     non_comment = list(_iter_content_lines(text))
     if not non_comment:

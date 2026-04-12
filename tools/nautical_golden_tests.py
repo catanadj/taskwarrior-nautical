@@ -6290,6 +6290,20 @@ def test_omit_file_modifiers_support_negative_day_offsets():
         expect(got == frozenset({date(2026, 4, 23)}), f'unexpected negative-offset omit_file dates: {got!r}')
 
 
+def test_omit_file_modifiers_apply_even_when_base_file_is_cached():
+    """omit_file modifiers should still apply when the underlying file data is served from cache."""
+    import nautical_core.omit_files as omit_files
+
+    with tempfile.TemporaryDirectory() as td:
+        omit_dir = Path(td)
+        sample = omit_dir / 'holidays.csv'
+        sample.write_text('date\n2026-04-25\n', encoding='utf-8')
+        plain = omit_files.load_omit_file_dates('holidays.csv', str(omit_dir))
+        shifted = omit_files.load_omit_file_dates('holidays.csv@nbd', str(omit_dir))
+        expect(plain == frozenset({date(2026, 4, 25)}), f'unexpected plain cached omit_file dates: {plain!r}')
+        expect(shifted == frozenset({date(2026, 4, 27)}), f'unexpected cached transformed omit_file dates: {shifted!r}')
+
+
 def test_omit_file_modifiers_reject_time_modifiers():
     """omit_file should reject @t because omit rules are date-based only."""
     import nautical_core.omit_files as omit_files

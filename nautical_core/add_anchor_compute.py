@@ -36,13 +36,7 @@ def anchor_step_once_with_omit(dnf, prev_local_date, interval_seed, seed_base, *
 
 def anchor_term_fires_on_date(term, d, interval_seed, seed_base, *, core: Any):
     try:
-        nxt, _ = core.next_after_expr(
-            [term],
-            d - timedelta(days=1),
-            default_seed=interval_seed,
-            seed_base=seed_base,
-        )
-        return nxt == d
+        return all(core.atom_matches_on(atom, d, interval_seed) for atom in term)
     except Exception:
         return False
 
@@ -69,13 +63,7 @@ def anchor_expr_fires_on_date_with_omit(dnf, d, interval_seed, seed_base, *, omi
             core=core,
         ):
             return False
-        nxt, _ = core.next_after_expr(
-            dnf,
-            d - timedelta(days=1),
-            default_seed=interval_seed,
-            seed_base=seed_base,
-        )
-        return nxt == d
+        return any(anchor_term_fires_on_date(term, d, interval_seed, seed_base, core=core) for term in dnf)
     except Exception:
         return False
 

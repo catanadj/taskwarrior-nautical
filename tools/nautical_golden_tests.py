@@ -4308,6 +4308,28 @@ def test_hook_on_add_anchor_preview_skips_omit_file_date():
         expect("2025-01-13" in stderr_txt, f"expected next anchor to skip file-blocked Friday and show Monday. stderr={stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot():
+    """on-add preview should keep @t times when a yearly anchor rolls forward to the next business day."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000114b",
+        "description": "hook test on-add rolled timed business day",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20260412T111500Z",
+        "anchor": "y:04-25@nbd@t=12:00,17:00",
+        "anchor_mode": "skip",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    if p.returncode != 0:
+        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("Mon 2026-04-27 12:00" in stderr_txt, f"expected first due to use rolled timed slot. stderr={stderr_txt[:500]!r}")
+    expect("Mon 2027-04-26 12:00" in stderr_txt, f"expected next yearly rolled occurrence to keep timed slot. stderr={stderr_txt[:500]!r}")
+    expect("Tue 2028-04-25 17:00" in stderr_txt, f"expected later same-day second slot in preview. stderr={stderr_txt[:500]!r}")
+
+
 def test_hook_on_add_timed_omit_rejected():
     """on-add should reject timed omit expressions with a clear error."""
     hook = _find_hook_file("on-add-nautical.py")

@@ -43,6 +43,7 @@ def roll_apply(dt: date, mods: dict, *, parse_error_cls) -> date:
         tgt = mods.get("wd")
         if tgt is not None:
             if roll == "next-wd":
+                dt += timedelta(days=1)
                 for _ in range(8):
                     if dt.weekday() == tgt:
                         break
@@ -50,6 +51,7 @@ def roll_apply(dt: date, mods: dict, *, parse_error_cls) -> date:
                 else:
                     raise parse_error_cls("roll_apply: failed to reach target weekday (next-wd)")
             else:
+                dt -= timedelta(days=1)
                 for _ in range(8):
                     if dt.weekday() == tgt:
                         break

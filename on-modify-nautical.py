@@ -698,6 +698,8 @@ _CHECK_CHAIN_INTEGRITY = False
 _VERIFY_IMPORT = True
 _DEBUG_WAIT_SCHED = _DEFAULT_DEBUG_WAIT_SCHED
 _RECURRENCE_UPDATE_UDAS: tuple[str, ...] = ()
+_CHAIN_CACHE_CHAIN_ID = ""
+_CHAIN_CACHE: list[dict[str, Any]] = []
 _SPAWN_QUEUE_MAX_BYTES = _DEFAULT_SPAWN_QUEUE_MAX_BYTES
 _SPAWN_QUEUE_DRAIN_MAX_ITEMS = _SPAWN_QUEUE_DRAIN_MAX_ITEMS
 _MAX_CHAIN_WALK = _MAX_CHAIN_WALK
@@ -2606,6 +2608,7 @@ def _build_chain_indexes(chain: list[dict]) -> tuple[dict[int, list[dict]], dict
 
 def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
     """Set per-run chain cache to avoid repeated task exports."""
+    global _CHAIN_CACHE_CHAIN_ID, _CHAIN_CACHE
     chain_copy = list(chain or [])
     _, by_short = _build_chain_indexes(chain_copy)
     by_uuid = {
@@ -2617,6 +2620,8 @@ def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
         state.chain_cache = chain_copy
         state.chain_by_short = by_short
         state.chain_by_uuid = by_uuid
+    _CHAIN_CACHE_CHAIN_ID = chain_id or ""
+    _CHAIN_CACHE = list(chain_copy)
     _diag_count("chain_cache_seeded")
 
 
@@ -4541,6 +4546,12 @@ def _chain_export_timeout(chain_id: str) -> float:
     with state.chain_cache_lock:
         cache_match = bool(chain_id and state.chain_cache_chain_id == chain_id and state.chain_cache)
         cache_len = len(state.chain_cache) if cache_match else 0
+    if not cache_match:
+        legacy_chain_id = str(globals().get("_CHAIN_CACHE_CHAIN_ID") or "")
+        legacy_chain = list(globals().get("_CHAIN_CACHE") or [])
+        if chain_id and legacy_chain_id == chain_id and legacy_chain:
+            cache_match = True
+            cache_len = len(legacy_chain)
     if cache_match:
         extra = max(0, cache_len // 100)
         est = base + (extra * per_100)

@@ -59,7 +59,7 @@ def parse_anchor_expr_to_dnf(
         while True:
             pos = i
             i = skip_ws_pos(s, i, n)
-            if i >= n or s[i] != "+":
+            if i >= n or s[i] != "+" or (i > 0 and s[i - 1] == "@"):
                 i = pos
                 break
             i += 1

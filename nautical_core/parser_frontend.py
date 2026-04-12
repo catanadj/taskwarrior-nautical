@@ -5,16 +5,19 @@ def split_top_level(expr: str, delim: str) -> list[str]:
     parts: list[str] = []
     buf: list[str] = []
     depth = 0
+    prev = ""
     for ch in expr:
         if ch == "(":
             depth += 1
         elif ch == ")" and depth > 0:
             depth -= 1
-        if ch == delim and depth == 0:
+        if ch == delim and depth == 0 and not (delim == "+" and prev == "@"):
             parts.append("".join(buf).strip())
             buf = []
+            prev = ch
             continue
         buf.append(ch)
+        prev = ch
     tail = "".join(buf).strip()
     if tail:
         parts.append(tail)

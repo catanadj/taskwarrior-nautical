@@ -110,6 +110,15 @@ def accept_roll_candidate(ref_d, base, cand, roll_kind: str | None) -> bool:
     return cand > ref_d
 
 
+def _atom_match_lookback_days(atom) -> int:
+    mods = atom.get("mods") or {}
+    roll_kind = mods.get("roll")
+    day_offset = int(mods.get("day_offset", 0) or 0)
+    if roll_kind == "next-wd":
+        return max(5, 8 + max(0, day_offset))
+    return 5
+
+
 def next_after_atom_with_mods(
     atom,
     ref_d,
@@ -132,10 +141,11 @@ def next_after_atom_with_mods(
         ival = 100
 
     seed = default_seed or ref_d
-    probe = ref_d
     typ = atom["typ"]
     mods = atom.get("mods") or {}
     spec = atom.get("spec") or ""
+    roll_kind = mods.get("roll")
+    probe = ref_d - timedelta(days=1) if roll_kind == "next-wd" else ref_d
 
     if ival == 1 and not active_mod_keys(mods):
         candidate = base_next_after_atom(atom, ref_d)
@@ -155,7 +165,6 @@ def next_after_atom_with_mods(
 
         rolled = roll_apply(base, mods)
         cand = apply_day_offset(rolled, mods)
-        roll_kind = mods.get("roll")
         if accept_roll_candidate(ref_d, base, cand, roll_kind):
             return cand
         probe = base + timedelta(days=1)
@@ -169,7 +178,7 @@ def next_after_atom_with_mods(
 
 
 def atom_matches_on(atom, d, default_seed, *, next_after_atom_with_mods) -> bool:
-    for k in range(1, 6):
+    for k in range(1, _atom_match_lookback_days(atom) + 1):
         if next_after_atom_with_mods(atom, d - timedelta(days=k), default_seed) == d:
             return True
     return False

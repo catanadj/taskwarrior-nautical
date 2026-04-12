@@ -25,7 +25,7 @@ def warn_once_per_day(key: str, message: str, *, cache_dir: str, require_diag: b
 
         with open(stamp_path, "w", encoding="utf-8") as f:
             f.write(today)
-        if not require_diag or os.environ.get("NAUTICAL_DIAG") == "1":
+        if os.environ.get("NAUTICAL_DIAG") == "1":
             try:
                 print(message, file=sys.stderr)
             except Exception:

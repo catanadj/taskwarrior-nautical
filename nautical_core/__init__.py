@@ -343,7 +343,12 @@ emit_line = _ui.emit_line
 text_line = _ui.text_line
 panel_line_from_rows = _ui.panel_line_from_rows
 panel_line = _ui.panel_line
-render_panel = _ui.render_panel
+
+
+def render_panel(*args, **kwargs):
+    _ui.panel_line = panel_line
+    _ui.text_line = text_line
+    return _ui.render_panel(*args, **kwargs)
 
 
 

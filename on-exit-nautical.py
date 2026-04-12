@@ -252,20 +252,25 @@ def _build_hook_runtime_context():
     )
 
 def _nautical_state_dir_path() -> Path:
+    tw_data_dir = _tw_data_dir_path()
     queue_store = _module("queue_store", required=False)
     if queue_store is not None:
-        return queue_store.nautical_state_dir_path(TW_DATA_DIR)
-    return TW_DATA_DIR / ".nautical-state"
+        return queue_store.nautical_state_dir_path(tw_data_dir)
+    return tw_data_dir / ".nautical-state"
 
 def _nautical_lock_dir_path() -> Path:
+    tw_data_dir = _tw_data_dir_path()
     queue_store = _module("queue_store", required=False)
     if queue_store is not None:
-        return queue_store.nautical_lock_dir_path(TW_DATA_DIR)
-    return TW_DATA_DIR / ".nautical-locks"
+        return queue_store.nautical_lock_dir_path(tw_data_dir)
+    return tw_data_dir / ".nautical-locks"
 
 _QUEUE_DB_PATH = _nautical_state_dir_path() / ".nautical_queue.db"
 _DEAD_LETTER_PATH = _nautical_state_dir_path() / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = _nautical_lock_dir_path() / ".nautical_dead_letter.lock"
+_QUEUE_PATH = _tw_data_dir_path() / ".nautical_spawn_queue.jsonl"
+_QUEUE_PROCESSING_PATH = _tw_data_dir_path() / ".nautical_spawn_queue.processing.jsonl"
+_QUEUE_LOCK = _tw_data_dir_path() / ".nautical_spawn_queue.lock"
 _DEAD_LETTER_RETENTION_DAYS = int(os.environ.get("NAUTICAL_DEAD_LETTER_RETENTION_DAYS") or 30)
 _QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000)
 _DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)
@@ -344,6 +349,7 @@ _QUEUE_DB_CONNECT_BACKOFF_BASE = _env_float("NAUTICAL_QUEUE_DB_CONNECT_BACKOFF_B
 _EXIT_RUNTIME_STATE = None
 _EXIT_PRELOAD_CHUNK_SIZE = 32
 _EXIT_EQUIV_PRELOAD_CHUNK_SIZE = 8
+_EXIT_DIAG_STATS: dict[str, Any] = {}
 
 
 def _exit_runtime_state():
@@ -351,17 +357,21 @@ def _exit_runtime_state():
     if _EXIT_RUNTIME_STATE is None:
         exit_runtime = _module("exit_runtime")
         _EXIT_RUNTIME_STATE = exit_runtime.new_runtime_state()
+        _EXIT_RUNTIME_STATE.diag_stats = _EXIT_DIAG_STATS
     return _EXIT_RUNTIME_STATE
 
 
 def _reset_exit_runtime_state() -> None:
-    global _EXIT_RUNTIME_STATE
+    global _EXIT_RUNTIME_STATE, _EXIT_DIAG_STATS
     exit_runtime = _module("exit_runtime")
     _EXIT_RUNTIME_STATE = exit_runtime.new_runtime_state()
+    _EXIT_DIAG_STATS = _EXIT_RUNTIME_STATE.diag_stats
 
 
 def _reset_exit_diag_stats() -> None:
-    _exit_runtime_state().diag_stats = {}
+    global _EXIT_DIAG_STATS
+    _EXIT_DIAG_STATS = {}
+    _exit_runtime_state().diag_stats = _EXIT_DIAG_STATS
 
 
 def _reset_exit_export_cache() -> None:
@@ -1476,6 +1486,19 @@ def _queue_db_open_ready() -> sqlite3.Connection | None:
     return conn
 
 
+def _queue_db_open_fresh_ready() -> sqlite3.Connection | None:
+    queue_store = _module("queue_store")
+    db_path = _QUEUE_DB_PATH
+    result = queue_store.open_ready_queue_db_result(
+        db_path,
+        connect_fn=_queue_db_connect_result,
+        init_fn=_queue_db_init,
+        close_fn=_queue_close_silent,
+        diag=_diag,
+    )
+    return result.conn
+
+
 def _queue_close_silent(conn: sqlite3.Connection) -> None:
     if conn is None:
         return
@@ -1509,7 +1532,7 @@ def _take_queue_entries_sqlite_batch():
 
 
 def _ack_queue_entries_sqlite_result(entry_ids: list[int]):
-    conn = _queue_db_open_ready()
+    conn = _queue_db_open_fresh_ready()
     exit_models = _module("exit_models")
     ids = [int(raw) for raw in (entry_ids or []) if str(raw).isdigit() and int(raw) > 0]
     if conn is None:
@@ -1528,7 +1551,7 @@ def _ack_queue_entries_sqlite_result(entry_ids: list[int]):
 
 
 def _requeue_entries_sqlite_result(entries: list[dict]):
-    conn = _queue_db_open_ready()
+    conn = _queue_db_open_fresh_ready()
     exit_models = _module("exit_models")
     items = [
         entry
@@ -1827,6 +1850,10 @@ def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
 
 def _take_queue_batch():
     return _take_queue_entries_sqlite_batch()
+
+
+def _take_queue_entries():
+    return _take_queue_batch().entries
 
 
 def _requeue_entries_result(entries: list[dict]):
@@ -2166,11 +2193,20 @@ def _drain_queue_result():
             intent_log_ready=bool(intent_log_ready),
             intent_log_load_ms=float(intent_log_load_ms),
         )
+        preload_entries = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                preload_entries.append(entry)
+                continue
+            spawn_intent_id = str(entry.get("spawn_intent_id") or "").strip()
+            if spawn_intent_id and spawn_intent_id in finalized_intents:
+                continue
+            preload_entries.append(entry)
         with _exit_progress_scope(batch.entries_total) as progress_update:
             if progress_update is not None:
                 progress_update(phase="preload", state=state)
-            _preload_export_uuids(entries)
-            _preload_equivalent_child_slots(entries)
+            _preload_export_uuids(preload_entries)
+            _preload_equivalent_child_slots(preload_entries)
             if progress_update is not None:
                 progress_update(phase="drain", state=state)
 

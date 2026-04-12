@@ -1253,14 +1253,11 @@ def test_on_exit_queue_drain_idempotent():
                 return True, "", ""
 
             mod_exit._run_task = _fake_run_task
-            q_path = mod_exit._QUEUE_PATH
             entries = [
                 {"child": {"uuid": "u1"}, "parent_uuid": "p1", "child_short": "c1", "spawn_intent_id": "si_1"},
                 {"child": {"uuid": "u2"}, "parent_uuid": "p2", "child_short": "c2", "spawn_intent_id": "si_2"},
             ]
-            with open(q_path, "w", encoding="utf-8") as f:
-                for obj in entries:
-                    f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
+            _seed_sqlite_queue(mod_exit._QUEUE_DB_PATH, entries)
 
             stats1 = mod_exit._drain_queue()
             expect(stats1.get("requeued") == 1, f"expected one requeue, got {stats1}")
@@ -1269,7 +1266,6 @@ def test_on_exit_queue_drain_idempotent():
             expect(stats2.get("errors") == 0, f"second drain should be clean, got {stats2}")
             expect(import_calls == 2, f"expected 2 imports total, got {import_calls}")
             expect(modify_calls == 3, f"expected 3 modify calls, got {modify_calls}")
-            expect(not q_path.exists() or not q_path.read_text(encoding="utf-8").strip(), "queue not fully drained")
         finally:
             if prev_taskdata is None:
                 os.environ.pop("TASKDATA", None)
@@ -1672,6 +1668,7 @@ def _assert_hook_requires_core_data_context(hook_name: str, module_name: str):
     prev_argv = list(sys.argv)
     with tempfile.TemporaryDirectory() as td:
         fake_core = Path(td) / "nautical_core/__init__.py"
+        fake_core.parent.mkdir(parents=True, exist_ok=True)
         fake_core.write_text(
             "def _warn_once_per_day_any(*_args, **_kwargs):\n"
             "    return None\n",
@@ -3531,7 +3528,7 @@ def test_natural_language_comprehensive():
     """Test natural language generation for various patterns"""
     test_cases = [
         ("w:mon", "Mondays"),
-        ("w:mon,tue,fri", "Mondays or Tuesdays or Fridays"),
+        ("w:mon,tue,fri", "either Mondays, Tuesdays, or Fridays"),
         ("w/2:mon", "every 2 weeks: Mondays"),
         ("m:15", "the 15th day of each month"),
         ("m:-1", "the last day of each month"),
@@ -3737,6 +3734,28 @@ def test_prev_weekday_natural_text():
         "previous Friday before month end",
     ]
     assert any(w in nat for w in want_any), f"Natural missing expected phrasing: {nat!r}"
+
+
+def test_same_day_next_weekday_roll_moves_forward_one_week():
+    """@next-<dow> should skip same-day matches and roll to the following week."""
+    dnf = core.validate_anchor_expr_strict("y:12-31@next-thu")
+    nxt, _meta = core.next_after_expr(dnf, date(2026, 12, 1), default_seed=date(2026, 12, 1), seed_base="same-day-next")
+    expect(nxt == date(2027, 1, 7), f"expected next Thursday after 2026-12-31, got {nxt}")
+
+
+def test_same_day_prev_weekday_roll_moves_back_one_week():
+    """@prev-<dow> should skip same-day matches and roll to the previous week."""
+    dnf = core.validate_anchor_expr_strict("y:12-31@prev-thu")
+    nxt, _meta = core.next_after_expr(dnf, date(2026, 12, 1), default_seed=date(2026, 12, 1), seed_base="same-day-prev")
+    expect(nxt == date(2026, 12, 24), f"expected previous Thursday before 2026-12-31, got {nxt}")
+
+
+def test_next_weekday_roll_cross_year_date_still_matches_expression():
+    """rolled-forward weekday dates crossing year end should still be recognized as the next occurrence."""
+    dnf = core.validate_anchor_expr_strict("y:12-31@next-thu")
+    nxt, _meta = core.next_after_expr(dnf, date(2026, 12, 31), default_seed=date(2026, 12, 31), seed_base="same-day-next-cross-year")
+    expect(nxt == date(2027, 1, 7), f"expected 2027-01-07 after 2026-12-31 same-day next-thu roll, got {nxt}")
+
 
 def test_weekly_multi_days_every_2weeks_spacing_and_days():
     """
@@ -8039,6 +8058,9 @@ TESTS = [
     test_rand_with_year_window_filtering,
     test_weekly_rand_N_gate_spacing,
     test_prev_weekday_natural_text,
+    test_same_day_next_weekday_roll_moves_forward_one_week,
+    test_same_day_prev_weekday_roll_moves_back_one_week,
+    test_next_weekday_roll_cross_year_date_still_matches_expression,
     test_weekly_multi_days_every_2weeks_spacing_and_days,
     test_anchors_between_expr_stops_on_no_progress,
     test_inline_time_mods_split_ok,

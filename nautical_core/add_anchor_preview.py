@@ -8,6 +8,48 @@ from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from .anchor_inclusion import collect_included_occurrences_local
 
 
+def _anchor_file_natural_text(expr: str) -> str:
+    file_name = str(expr or '').split('@', 1)[0].strip()
+    return f"Dates from {file_name}" if file_name else ""
+
+
+def _anchor_omit_natural_text(task: dict[str, Any], *, core: Any) -> str:
+    omit_raw = str(task.get('omit') or '').strip()
+    omit_file = str(task.get('omit_file') or '').strip()
+    parts: list[str] = []
+    if omit_raw:
+        try:
+            anchor_omit = core._import_sibling('anchor_omit')
+            omit_norm = anchor_omit.normalize_omit_expr(omit_raw)
+        except Exception:
+            omit_norm = omit_raw
+        try:
+            natural = core.describe_anchor_expr(omit_norm)
+        except Exception:
+            natural = ''
+        parts.append(natural or omit_raw)
+    if omit_file:
+        file_text = _anchor_file_natural_text(omit_file)
+        if file_text:
+            parts.append(file_text)
+    return ' and '.join(part for part in parts if part)
+
+
+def _anchor_preview_natural_text(task: dict[str, Any], dnf, anchor_file_str: str, *, core: Any) -> str:
+    natural = core.describe_anchor_dnf(dnf, task) if dnf else ''
+    omit_text = _anchor_omit_natural_text(task, core=core)
+    if omit_text and (task.get('anchor_mode') or 'skip').lower() == 'skip':
+        tail = '; skip missed anchors'
+        if natural.endswith(tail):
+            natural = natural[:-len(tail)]
+        natural = natural.rstrip()
+        return f"{natural}; skip {omit_text}" if natural else f"skip {omit_text}"
+    file_text = _anchor_file_natural_text(anchor_file_str) if anchor_file_str else ''
+    if natural and file_text:
+        return f"{natural} and {file_text}"
+    return natural or file_text
+
+
 def anchor_preview_prepare_dnf(
     task: dict[str, Any],
     anchor_str: str,
@@ -362,6 +404,11 @@ def handle_anchor_file_preview_on_add(
         validate_omit_syntax_strict=validate_omit_syntax_strict,
         error_and_exit=error_and_exit,
     )
+    if dnf:
+        for idx, (label, _value) in enumerate(rows):
+            if label == 'Natural':
+                rows[idx] = ('Natural', f"[white]{_anchor_preview_natural_text(task, dnf, anchor_file_str, core=core)}[/]")
+                break
 
     t_occ = time.perf_counter()
     seed_base = (task.get("chainID") or "").strip() or "preview"
@@ -522,7 +569,7 @@ def handle_anchor_preview_on_add(
             rows.append(("Anchor file", f"[white]{anchor_file_str}[/]"))
             for idx, (label, value) in enumerate(rows):
                 if label == "Natural":
-                    rows[idx] = ("Natural", f"[white]{core.strip_rich_markup(str(value))} and {_anchor_file_natural_text(anchor_file_str)}[/]")
+                    rows[idx] = ("Natural", f"[white]{_anchor_preview_natural_text(task, dnf, anchor_file_str, core=core)}[/]")
                     break
         else:
             rows.append(("Anchor file", f"[white]{anchor_file_str}[/]"))

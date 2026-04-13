@@ -56,6 +56,23 @@ def _anchor_mode_tag(new: dict) -> str:
     }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
 
 
+def _anchor_feedback_natural(core, task: dict, dnf) -> str:
+    natural = core.describe_anchor_dnf(dnf, task) if dnf else ''
+    omit_raw, omit_natural, _omit_warns, omit_file = _anchor_omit_summary(core, task)
+    omit_parts = []
+    if omit_raw:
+        omit_parts.append(omit_natural or omit_raw)
+    if omit_file:
+        omit_parts.append(f"Dates from {omit_file.split('@', 1)[0]}")
+    if omit_parts and (task.get('anchor_mode') or 'skip').lower() == 'skip':
+        tail = '; skip missed anchors'
+        if natural.endswith(tail):
+            natural = natural[:-len(tail)]
+        natural = natural.rstrip()
+        return f"{natural}; skip {' and '.join(omit_parts)}" if natural else f"skip {' and '.join(omit_parts)}"
+    return natural
+
+
 def _anchor_omit_summary(core, task: dict) -> tuple[str | None, str | None, list[str], str | None]:
     omit_raw = str(task.get("omit") or "").strip()
     omit_file = str(task.get("omit_file") or "").strip() or None
@@ -347,12 +364,15 @@ def render_anchor_completion_feedback(
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
     if anchor_label == "Sources":
         file_expr = str(feedback.new.get("anchor_file") or "").strip()
-        natural_expr = core.describe_anchor_dnf(feedback.dnf, feedback.new) if feedback.dnf else ""
+        natural_expr = _anchor_feedback_natural(core, feedback.new, feedback.dnf)
         fb.append(("Pattern", str(feedback.new.get("anchor") or "").strip()))
         fb.append(("Anchor file", file_expr))
-        fb.append(("Natural", f"{natural_expr} and Dates from {file_expr.split('@', 1)[0]}" if natural_expr else f"Dates from {file_expr.split('@', 1)[0]}"))
+        if natural_expr:
+            fb.append(("Natural", natural_expr))
+        else:
+            fb.append(("Natural", f"Dates from {file_expr.split('@', 1)[0]}"))
     elif feedback.dnf:
-        fb.append(("Natural", core.describe_anchor_dnf(feedback.dnf, feedback.new)))
+        fb.append(("Natural", _anchor_feedback_natural(core, feedback.new, feedback.dnf)))
     elif anchor_label == "Anchor file":
         fb.append(("Natural", f"Dates from {expr_str.split('@', 1)[0]}"))
     basis_text = _pretty_basis_anchor(feedback.meta, feedback.new, parse_dt_any=core.parse_dt_any, fmt_dt_local=core.fmt_dt_local)

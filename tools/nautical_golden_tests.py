@@ -4328,6 +4328,48 @@ def test_hook_on_add_anchor_preview_skips_omit_file_date():
         expect("2025-01-13" in stderr_txt, f"expected next anchor to skip file-blocked Friday and show Monday. stderr={stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules():
+    """mixed anchor previews should describe explicit omit rules instead of the generic skip-mode tail."""
+    hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td) / "anchor"
+        omit_dir = Path(td) / "omit"
+        anchor_dir.mkdir()
+        omit_dir.mkdir()
+        (anchor_dir / "2026.csv").write_text("date\n2026-05-01\n2026-05-06\n", encoding="utf-8")
+        (omit_dir / "2026.csv").write_text("date\n2026-05-05\n", encoding="utf-8")
+        conf = Path(td) / 'config-nautical.toml'
+        conf.write_text(
+            f'anchor_file_dir = "{anchor_dir}"\nomit_file_dir = "{omit_dir}"\n',
+            encoding='utf-8',
+        )
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000114f",
+            "description": "hook test on-add anchor+file omit natural",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20260413T000000Z",
+            "anchor": "w:tue,fri | y:05-05",
+            "anchor_file": "2026.csv@-1d@t=12:00,18:00",
+            "omit": "w:sun",
+            "omit_file": "2026.csv",
+            "anchor_mode": "skip",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        if p.returncode != 0:
+            raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect(
+            "either Tuesdays, Fridays, or May 5 each year; skip Sundays and Dates from 2026.csv" in stderr_txt,
+            f"expected omit-aware natural preview wording. stderr={stderr_txt[:700]!r}",
+        )
+        expect(
+            "skip missed anchors and Dates from 2026.csv" not in stderr_txt,
+            f"unexpected generic skip tail leaked into preview. stderr={stderr_txt[:700]!r}",
+        )
+
+
 def test_hook_on_add_anchor_preview_skips_omit_file_modifier_date():
     """on-add anchor preview should apply omit_file modifiers before skipping matching dates."""
     hook = _find_hook_file("on-add-nautical.py")

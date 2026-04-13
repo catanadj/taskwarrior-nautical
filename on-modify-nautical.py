@@ -4608,6 +4608,7 @@ def _timeline_lines(
     if not _require_core():
         return []
     if kind == "anchor_file" or (kind == "anchor" and (task.get("anchor_file") or "").strip()):
+        modify_timeline = _module("modify_timeline")
         _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
         seed_base = (task.get("chainID") or "").strip() or "preview"
         child_local = _to_local_cached(child_due_utc)
@@ -4625,22 +4626,68 @@ def _timeline_lines(
             default_seed_date=default_seed,
             dnf=dnf_for_merge,
         )
-        rows: list[str] = []
-        current_no = int(cur_no or 1)
-        rows.append(f"{current_no} ► {_fmtlocal(child_due_utc)} {child_short}")
-        shown = 0
+        cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
+        nxt_no = cur_no + 1
+        allowed_future = next_count if cap_no is None else max(0, min(next_count, cap_no - nxt_no))
+        prev_style, cur_style, next_style, future_style = modify_timeline._timeline_styles(
+            task,
+            "anchor",
+            future_style_for_chain=_future_style_for_chain,
+        )
+        items = modify_timeline._timeline_initial_items(
+            task,
+            cur_no,
+            nxt_no,
+            child_due_utc,
+            child_short,
+            core=core,
+            collect_prev_two=_collect_prev_two,
+            dtparse=_dtparse,
+        )
+        fut_no = nxt_no
+        actual_future = 0
         for item_local in occurrences:
             item_utc = item_local.astimezone(timezone.utc)
             if item_utc <= child_due_utc:
                 continue
-            current_no += 1
-            if cap_no and current_no > cap_no:
+            fut_no += 1
+            if cap_no is not None and fut_no > cap_no:
                 break
-            rows.append(f"{current_no} ▸ {_fmtlocal(item_utc)}")
-            shown += 1
-            if shown >= next_count:
+            items.append((fut_no, item_utc, {"is_future": True}, "future"))
+            actual_future += 1
+            if actual_future >= allowed_future:
                 break
-        return rows
+        lines: list[str] = []
+        for i, (no, dt, obj, item_type) in enumerate(items):
+            base_line = modify_timeline._timeline_base_line(
+                no,
+                dt,
+                obj,
+                item_type,
+                task=task,
+                cap_no=cap_no,
+                prev_style=prev_style,
+                cur_style=cur_style,
+                next_style=next_style,
+                future_style=future_style,
+                core=core,
+                dtparse=_dtparse,
+                fmt_on_time_delta=_fmt_on_time_delta,
+                fmtlocal=_fmtlocal,
+                short=_short,
+            )
+            lines.append(
+                modify_timeline._timeline_with_gap(
+                    base_line,
+                    idx=i,
+                    items=items,
+                    show_gaps=show_gaps,
+                    kind="anchor",
+                    round_anchor_gaps=round_anchor_gaps,
+                    format_gap=_format_gap,
+                )
+            )
+        return lines
     modify_timeline = _module("modify_timeline")
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
     anchor_omit = _module("anchor_omit") if kind == "anchor" else None

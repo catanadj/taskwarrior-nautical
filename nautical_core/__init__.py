@@ -139,6 +139,7 @@ _DEFAULTS = {
     "wrand_salt": "nautical|wrand|v3",  # change to reshuffle weekly-rand streams
     "tz": "Europe/Bucharest",           # reserved for future DST/zone features
     "holiday_region": "",               # reserved for future holiday features
+    "anchor_file_dir": "",              # trusted directory for anchor date files
     "omit_file_dir": "",                # trusted directory for anchor omit files
 }
 
@@ -429,6 +430,7 @@ ANCHOR_YEAR_FMT = "MD"
 WRAND_SALT      = _CONF["wrand_salt"]
 LOCAL_TZ_NAME   = _CONF["tz"]
 HOLIDAY_REGION  = _CONF["holiday_region"]
+ANCHOR_FILE_DIR = _CONF["anchor_file_dir"]
 OMIT_FILE_DIR   = _CONF["omit_file_dir"]
 
 ENABLE_ANCHOR_CACHE = _conf_bool("enable_anchor_cache", False)

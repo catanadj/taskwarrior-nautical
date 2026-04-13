@@ -42,7 +42,7 @@ def handle_on_add(
         return json_result_cls(task=task, sanitize=True, prof=prof)
 
     stamp_chain_id_on_add(task)
-    if ctx.kind == 'anchor':
+    if ctx.kind in {'anchor', 'anchor_file'}:
         handle_anchor_preview_on_add(ctx, prof=prof)
         return None
 

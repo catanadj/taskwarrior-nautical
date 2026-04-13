@@ -25,9 +25,10 @@ def should_stamp_chain_id(task: dict) -> bool:
     if not isinstance(task, dict):
         return False
     has_anchor = bool((task.get("anchor") or "").strip())
+    has_anchor_file = bool((task.get("anchor_file") or "").strip())
     has_cp = bool((task.get("cp") or "").strip())
     already = bool((task.get("chainID") or "").strip())
-    return (has_anchor or has_cp) and not already
+    return (has_anchor or has_anchor_file or has_cp) and not already
 
 
 def sanitize_text(v: str, max_len: int = 1024):

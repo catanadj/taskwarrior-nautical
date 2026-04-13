@@ -42,10 +42,11 @@ def completion_kind_or_stop(
 ) -> str | None:
     raw_ch = (new.get("chain") or "").strip().lower()
     has_anchor = bool((new.get("anchor") or "").strip())
+    has_anchor_file = bool((new.get("anchor_file") or "").strip())
     has_cp = bool((new.get("cp") or "").strip())
-    effective_on = (raw_ch == "on") or (raw_ch == "" and (has_anchor or has_cp))
+    effective_on = (raw_ch == "on") or (raw_ch == "" and (has_anchor or has_anchor_file or has_cp))
     if not effective_on:
-        if has_anchor or has_cp:
+        if has_anchor or has_anchor_file or has_cp:
             panel(
                 "Chain disabled (chain:off) — no next link will be spawned.",
                 [],
@@ -57,7 +58,7 @@ def completion_kind_or_stop(
             print_task(new)
         return None
 
-    kind = "anchor" if has_anchor else ("cp" if has_cp else None)
+    kind = "anchor" if has_anchor else ("anchor_file" if has_anchor_file else ("cp" if has_cp else None))
     if not kind:
         print_task(new)
         return None

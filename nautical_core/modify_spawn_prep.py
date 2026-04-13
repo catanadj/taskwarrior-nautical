@@ -123,13 +123,15 @@ def build_child_from_parent(
         child["scheduled"] = fmt_isoz(child_due_utc)
     else:
         child["due"] = fmt_isoz(child_due_utc)
-    if kind == "anchor":
+    if kind in {"anchor", "anchor_file"}:
         child["anchor"] = parent.get("anchor")
+        child["anchor_file"] = parent.get("anchor_file")
         child["anchor_mode"] = parent.get("anchor_mode") or "skip"
         child.pop("cp", None)
     else:
         child["cp"] = parent.get("cp")
         child.pop("anchor", None)
+        child.pop("anchor_file", None)
         child.pop("anchor_mode", None)
 
     carry_relative_datetime(

@@ -14,7 +14,7 @@ def completion_compute_child_due(
     diag=None,
 ):
     try:
-        if kind == "anchor":
+        if kind in {"anchor", "anchor_file"}:
             child_due, meta, dnf = compute_anchor_child_due(new)
         else:
             child_due, meta = compute_cp_child_due(new)
@@ -138,7 +138,7 @@ def completion_caps(
                 finals.append(("max", fmax))
         except Exception:
             pass
-    if kind == "anchor" and cpmax:
+    if kind in {"anchor", "anchor_file"} and cpmax:
         try:
             fmax = estimate_anchor_final_by_max(new, child_due, dnf)
             if fmax:

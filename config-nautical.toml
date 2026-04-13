@@ -2,6 +2,7 @@
 wrand_salt      = "nautical|wrand|v4"
 tz              = "Australia/Sydney"
 holiday_region  = "" 				# not implemented yet
+anchor_file_dir = ""                 # trusted directory for anchor_file basenames
 omit_file_dir   = ""                 # trusted directory for anchor omit_file basenames
 
 # Config precedence: this file overrides built-in defaults.

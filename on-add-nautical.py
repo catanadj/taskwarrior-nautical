@@ -1509,6 +1509,7 @@ def _anchor_preview_limit_rows(
 def _handle_anchor_preview_on_add(
     task: dict,
     anchor_str: str,
+    anchor_file_str: str,
     ch: str,
     now_utc: datetime,
     now_local: datetime,
@@ -1525,6 +1526,7 @@ def _handle_anchor_preview_on_add(
     add_anchor_preview.handle_anchor_preview_on_add(
         task=task,
         anchor_str=anchor_str,
+        anchor_file_str=anchor_file_str,
         ch=ch,
         now_utc=now_utc,
         now_local=now_local,
@@ -1661,39 +1663,10 @@ def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *,
 
 
 def _handle_anchor_preview_on_add_context(ctx, *, prof) -> None:
-    if (ctx.anchor_file_str or "").strip():
-        add_anchor_preview = _module("add_anchor_preview")
-        add_anchor_preview.handle_anchor_file_preview_on_add(
-            task=ctx.task,
-            anchor_file_str=ctx.anchor_file_str,
-            ch=ctx.chain_state,
-            now_utc=ctx.now_utc,
-            now_local=ctx.now_local,
-            user_provided_due=ctx.user_provided_due,
-            recurrence_field=ctx.recurrence_field,
-            due_dt=ctx.due_dt,
-            due_hhmm=ctx.due_hhmm,
-            until_dt=ctx.until_dt,
-            past_due_warning=ctx.past_due_warning,
-            prof=prof,
-            anchor_warn=ANCHOR_WARN,
-            upcoming_preview=UPCOMING_PREVIEW,
-            preview_hard_cap=_PREVIEW_HARD_CAP,
-            core=core,
-            append_wait_sched_rows=_append_wait_sched_rows,
-            validate_chain_duration_reasonable=_validate_chain_duration_reasonable,
-            validate_omit_syntax_strict=_validate_omit_syntax_strict,
-            format_anchor_rows=_format_anchor_rows,
-            panel=_panel,
-            emit_task_json=_emit_task_json,
-            fmt_local_for_task=_fmt_local_for_task,
-            human_delta=_human_delta,
-            error_and_exit=_error_and_exit,
-        )
-        return
     _handle_anchor_preview_on_add(
         task=ctx.task,
         anchor_str=ctx.anchor_str,
+        anchor_file_str=ctx.anchor_file_str,
         ch=ctx.chain_state,
         now_utc=ctx.now_utc,
         now_local=ctx.now_local,

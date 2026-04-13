@@ -4244,6 +4244,7 @@ def test_on_add_anchor_preview_auto_assigns_when_due_matches_entry():
         mod._handle_anchor_preview_on_add(
             task,
             ctx.anchor_str,
+            "",
             ctx.chain_state,
             ctx.now_utc,
             ctx.now_local,
@@ -6368,23 +6369,28 @@ def test_config_exposes_anchor_file_dir():
     expect(hasattr(core, 'ANCHOR_FILE_DIR'), 'core should expose ANCHOR_FILE_DIR')
 
 
-def test_on_add_anchor_file_conflicts_with_anchor():
-    """on-add should reject tasks that set both anchor and anchor_file."""
+def test_on_add_anchor_and_anchor_file_can_coexist():
+    """on-add should allow anchor and anchor_file to coexist as inclusion sources."""
     hook = _find_hook_file("on-add-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_add_anchor_file_conflict_test")
+    mod = _load_hook_module(hook, "_nautical_on_add_anchor_and_file_allowed_test")
 
-    task = {
-        "description": "conflict",
-        "anchor": "w:mon",
-        "anchor_file": "calendar.csv",
-    }
-    now_utc = mod.core.now_utc()
-    now_local = mod.core.to_local(now_utc)
-    try:
-        mod._build_on_add_context(task, now_utc, now_local)
-    except SystemExit:
-        return
-    raise AssertionError("expected on-add context validation to reject anchor + anchor_file")
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / "calendar.csv").write_text("date\n2026-04-14\n", encoding="utf-8")
+        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        try:
+            task = {
+                "description": "combined inclusions",
+                "anchor": "w:mon",
+                "anchor_file": "calendar.csv",
+            }
+            now_utc = mod.core.now_utc()
+            now_local = mod.core.to_local(now_utc)
+            ctx = mod._build_on_add_context(task, now_utc, now_local)
+            expect(ctx.kind == "anchor", f"expected combined anchor kind, got {ctx.kind!r}")
+        finally:
+            mod.core.ANCHOR_FILE_DIR = old_dir
 
 
 
@@ -6440,6 +6446,42 @@ def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
         finally:
             mod.core.ANCHOR_FILE_DIR = old_dir
 
+def test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match():
+    """combined anchor sources should preview from the earliest merged occurrence."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_anchor_and_file_preview_test")
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / "calendar.csv").write_text("date,description\n2026-04-14,Special date\n", encoding="utf-8")
+        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        try:
+            task = {
+                "description": "combined preview",
+                "anchor": "w:fri@t=09:00",
+                "anchor_file": "calendar.csv@t=12:00",
+                "entry": "2026-04-12T09:00:00Z",
+                "due": "2026-04-12T09:00:00Z",
+            }
+            now_utc = mod.core.parse_dt_any("2026-04-12T09:00:00Z")
+            now_local = mod.core.to_local(now_utc)
+            ctx = mod._build_on_add_context(task, now_utc, now_local)
+            captured = {}
+            saved_panel = mod._panel
+            saved_emit = mod._emit_task_json
+            try:
+                mod._panel = lambda _title, rows, kind="info": captured.setdefault("rows", rows)
+                mod._emit_task_json = lambda task_obj, **_kwargs: captured.setdefault("task", dict(task_obj))
+                mod._handle_anchor_preview_on_add_context(ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
+            finally:
+                mod._panel = saved_panel
+                mod._emit_task_json = saved_emit
+            due_val = captured.get("task", {}).get("due") or task.get("due")
+            expect(due_val == "2026-04-14T12:00:00", f"unexpected merged due preview: {due_val!r}")
+        finally:
+            mod.core.ANCHOR_FILE_DIR = old_dir
+
 
 def test_on_modify_compute_anchor_child_due_from_anchor_file():
     """on-modify completion should compute the next child due from anchor_file occurrences."""
@@ -6470,6 +6512,35 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
             child = mod._build_child_from_parent(parent, child_due, "due", 2, "deadbeef", "anchor_file", 0, None)
             expect(child.get("anchor_file") == "calendar.csv@nbd@t=12:00", f"child should preserve anchor_file: {child!r}")
             expect(not child.get("anchor"), f"child should not gain anchor expr: {child!r}")
+        finally:
+            mod.core.ANCHOR_FILE_DIR = old_dir
+
+def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
+    """completion should use the earliest next occurrence from anchor and anchor_file together."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_combined_anchor_due_test")
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / "calendar.csv").write_text("date\n2026-04-14\n2026-04-25\n", encoding="utf-8")
+        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        try:
+            parent = {
+                "description": "combined anchor chain",
+                "anchor": "w:fri@t=09:00",
+                "anchor_file": "calendar.csv@t=12:00",
+                "anchor_mode": "skip",
+                "link": 1,
+                "chainID": "cid",
+                "due": "2026-04-11T09:00:00Z",
+                "end": "2026-04-12T12:00:00Z",
+            }
+            child_due, meta, dnf = mod._compute_anchor_child_due(parent)
+            expected_due = mod.core.build_local_datetime(date(2026, 4, 14), (12, 0)).astimezone(timezone.utc)
+            expect(dnf is not None, f"combined anchor should preserve expression dnf, got {dnf!r}")
+            expect(child_due == expected_due, f"unexpected combined anchor child due: {child_due!r}")
+            expect(isinstance(meta, dict) and meta.get("target_field") == "due", f"unexpected combined anchor meta: {meta!r}")
         finally:
             mod.core.ANCHOR_FILE_DIR = old_dir
 
@@ -8613,10 +8684,12 @@ TESTS = [
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,
     test_anchor_file_next_occurrence_after_uses_task_level_time,
     test_config_exposes_anchor_file_dir,
-    test_on_add_anchor_file_conflicts_with_anchor,
+    test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_anchor_file_root_gets_chainid_stamp,
     test_hook_on_add_anchor_file_preview_auto_assigns_first_match,
+    test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match,
     test_on_modify_compute_anchor_child_due_from_anchor_file,
+    test_on_modify_compute_anchor_child_due_from_combined_anchor_sources,
     test_omit_file_name_rejects_paths,
     test_omit_file_csv_header_parsing_is_order_independent_and_dedupes,
     test_omit_file_csv_description_mapping_is_order_independent,

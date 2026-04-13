@@ -772,6 +772,16 @@ def _load_omit_file_dates(name: str):
     return omit_files.load_omit_file_dates(name, getattr(core, "OMIT_FILE_DIR", ""))
 
 
+def _load_anchor_file_dates(name: str):
+    anchor_files = core._import_sibling("anchor_files")
+    return anchor_files.load_anchor_file_dates(name, getattr(core, "ANCHOR_FILE_DIR", ""))
+
+
+def _load_anchor_file_descriptions(name: str):
+    anchor_files = core._import_sibling("anchor_files")
+    return anchor_files.load_anchor_file_descriptions(name, getattr(core, "ANCHOR_FILE_DIR", ""))
+
+
 @lru_cache(maxsize=512)
 def _export_uuid_short_cached(u_short: str):
     return _export_uuid_short(u_short, env=None)
@@ -943,7 +953,7 @@ def _panic_passthrough() -> None:
 
 
 def _task_has_nautical_fields(old: dict, new: dict) -> bool:
-    keys = ("anchor", "anchor_mode", "cp", "chainID", "chainid", "nextLink", "prevLink", "link", "omit", "omit_file")
+    keys = ("anchor", "anchor_file", "anchor_mode", "cp", "chainID", "chainid", "nextLink", "prevLink", "link", "omit", "omit_file")
     for task in (old, new):
         if not isinstance(task, dict):
             continue
@@ -3119,6 +3129,157 @@ def _anchor_parent_local_times(parent: dict):
     return end_local, due_local, due_dt_utc
 
 
+def _anchor_file_occurrences_local(parent: dict, fallback_hhmm: tuple[int, int]) -> list[datetime]:
+    anchor_file = (parent.get("anchor_file") or "").strip()
+    if not anchor_file:
+        return []
+    anchor_files = core._import_sibling("anchor_files")
+    dates = sorted(_load_anchor_file_dates(anchor_file))
+    _name, mods = anchor_files.parse_anchor_file_spec(anchor_file)
+    tval = mods.get("t")
+    if isinstance(tval, tuple):
+        times = [tval]
+    elif isinstance(tval, list):
+        times = [item for item in tval if isinstance(item, tuple)]
+    else:
+        times = []
+    if not times:
+        times = [fallback_hhmm]
+    out: list[datetime] = []
+    for d0 in dates:
+        for hhmm in times:
+            out.append(_tolocal(core.build_local_datetime(d0, hhmm)))
+    out.sort()
+    return out
+
+
+def _anchor_file_is_omitted(omit_dnf, item_local: datetime, *, seed_base: str) -> bool:
+    if not omit_dnf:
+        return False
+    try:
+        anchor_omit = _module("anchor_omit")
+        return bool(
+            anchor_omit.omit_expr_fires_on_date(
+                omit_dnf,
+                item_local.date(),
+                item_local.date(),
+                seed_base,
+                core=core,
+            )
+        )
+    except Exception:
+        return False
+
+
+def _anchor_file_future_occurrences(parent: dict, *, fallback_hhmm: tuple[int, int], omit_dnf, seed_base: str) -> list[datetime]:
+    out: list[datetime] = []
+    for item_local in _anchor_file_occurrences_local(parent, fallback_hhmm):
+        if _anchor_file_is_omitted(omit_dnf, item_local, seed_base=seed_base):
+            continue
+        out.append(item_local)
+    return out
+
+
+def _anchor_included_occurrences(
+    parent: dict,
+    *,
+    after_local_dt: datetime,
+    inclusive: bool,
+    limit: int,
+    fallback_hhmm: tuple[int, int],
+    omit_dnf,
+    seed_base: str,
+    default_seed_date,
+    dnf,
+) -> list[datetime]:
+    anchor_file = (parent.get("anchor_file") or "").strip()
+    if anchor_file and dnf:
+        anchor_inclusion = core._import_sibling("anchor_inclusion")
+        return anchor_inclusion.collect_included_occurrences_local(
+            dnf=dnf,
+            anchor_file_str=anchor_file,
+            after_local_dt=after_local_dt,
+            inclusive=inclusive,
+            limit=limit,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            core=core,
+            next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        )
+    if anchor_file:
+        future = _anchor_file_future_occurrences(
+            parent,
+            fallback_hhmm=fallback_hhmm,
+            omit_dnf=omit_dnf,
+            seed_base=seed_base,
+        )
+        if inclusive:
+            return [item for item in future if item >= after_local_dt][:limit]
+        return [item for item in future if item > after_local_dt][:limit]
+    out: list[datetime] = []
+    cursor = after_local_dt
+    want_inclusive = inclusive
+    while len(out) < limit:
+        nxt = _next_occurrence_after_local_dt(
+            dnf,
+            cursor - timedelta(microseconds=1) if want_inclusive else cursor,
+            default_seed_date=default_seed_date,
+            seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            fallback_hhmm=fallback_hhmm,
+        )
+        if not nxt or (out and nxt <= out[-1]):
+            break
+        out.append(nxt)
+        cursor = nxt
+        want_inclusive = False
+    return out
+
+
+def _anchor_file_due_for_mode(
+    mode: str,
+    *,
+    parent: dict,
+    omit_dnf,
+    due_local,
+    end_local,
+    due_dt_utc,
+    fallback_hhmm,
+    seed_base: str,
+) -> tuple[object, dict]:
+    info: dict[str, object] = {"mode": mode, "basis": None, "missed_count": 0, "missed_preview": []}
+    occurrences = _anchor_file_future_occurrences(
+        parent,
+        fallback_hhmm=fallback_hhmm,
+        omit_dnf=omit_dnf,
+        seed_base=seed_base,
+    )
+    if not occurrences:
+        return None, info
+    after_due = [dt for dt in occurrences if dt > due_local]
+    after_end = [dt for dt in occurrences if dt > end_local]
+    if mode == "all":
+        missed = [dt for dt in occurrences if dt > due_local and dt <= end_local]
+        info["missed_count"] = len(missed)
+        info["missed_preview"] = [x.isoformat() for x in missed[:5]]
+        if missed:
+            info["basis"] = "missed"
+            return missed[0], info
+        info["basis"] = "after_due"
+        return (after_due[0] if after_due else None), info
+    if mode == "flex":
+        missed = [dt for dt in occurrences if due_dt_utc and dt > due_local and dt <= end_local]
+        info["basis"] = "flex"
+        info["missed_count"] = len(missed)
+        info["missed_preview"] = [x.isoformat() for x in missed[:5]]
+        return (after_end[0] if after_end else None), info
+    info["basis"] = "after_end"
+    return (after_end[0] if after_end else None), info
+
+
 def _anchor_due_mode_all(
     *,
     dnf,
@@ -3280,7 +3441,8 @@ def _compute_anchor_child_due(parent: dict):
     respect multi-time lists: @t=HH:MM[,HH:MM...].
     """
     expr_str, dnf = _anchor_dnf_from_parent(parent)
-    if not expr_str or not dnf:
+    anchor_file_str = (parent.get("anchor_file") or "").strip()
+    if not ((expr_str and dnf) or anchor_file_str):
         return (None, None, None)
     _omit_expr, omit_dnf = _omit_dnf_from_parent(parent)
 
@@ -3293,17 +3455,65 @@ def _compute_anchor_child_due(parent: dict):
     seed_base = (parent.get("chainID") or "").strip() or "preview"
     fallback_hhmm = (due_local.hour, due_local.minute)
     target_field = "scheduled" if not due_dt_utc and parent.get("scheduled") else "due"
-    nxt_local, info = _anchor_due_for_mode(
-        mode,
-        dnf=dnf,
-        omit_dnf=omit_dnf,
-        due_local=due_local,
-        end_local=end_local,
-        due_dt_utc=due_dt_utc,
-        default_seed_date=default_seed,
-        seed_base=seed_base,
-        fallback_hhmm=fallback_hhmm,
-    )
+    if anchor_file_str and not dnf:
+        nxt_local, info = _anchor_file_due_for_mode(
+            mode,
+            parent=parent,
+            omit_dnf=omit_dnf,
+            due_local=due_local,
+            end_local=end_local,
+            due_dt_utc=due_dt_utc,
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+        )
+    elif dnf and not anchor_file_str:
+        nxt_local, info = _anchor_due_for_mode(
+            mode,
+            dnf=dnf,
+            omit_dnf=omit_dnf,
+            due_local=due_local,
+            end_local=end_local,
+            due_dt_utc=due_dt_utc,
+            default_seed_date=default_seed,
+            seed_base=seed_base,
+            fallback_hhmm=fallback_hhmm,
+        )
+    else:
+        occurrences = _anchor_included_occurrences(
+            parent,
+            after_local_dt=(due_local if mode == "all" else (end_local if mode == "flex" else max(end_local, due_local))),
+            inclusive=False,
+            limit=32,
+            fallback_hhmm=fallback_hhmm,
+            omit_dnf=omit_dnf,
+            seed_base=seed_base,
+            default_seed_date=default_seed,
+            dnf=dnf,
+        )
+        if mode == "all":
+            missed = [dt for dt in _anchor_included_occurrences(
+                parent,
+                after_local_dt=due_local,
+                inclusive=False,
+                limit=25,
+                fallback_hhmm=fallback_hhmm,
+                omit_dnf=omit_dnf,
+                seed_base=seed_base,
+                default_seed_date=default_seed,
+                dnf=dnf,
+            ) if dt <= end_local]
+            if missed:
+                nxt_local = missed[0]
+                info = {"mode": "all", "basis": "missed", "missed_count": len(missed), "missed_preview": [x.isoformat() for x in missed[:5]]}
+            else:
+                nxt_local = occurrences[0] if occurrences else None
+                info = {"mode": "all", "basis": "after_due", "missed_count": 0, "missed_preview": []}
+        elif mode == "flex":
+            nxt_local = occurrences[0] if occurrences else None
+            info = {"mode": "flex", "basis": "flex", "missed_count": 0, "missed_preview": []}
+        else:
+            nxt_local = occurrences[0] if occurrences else None
+            info = {"mode": "skip", "basis": "after_end", "missed_count": 0, "missed_preview": []}
 
     if not nxt_local:
         raise ValueError("Could not compute next anchor occurrence")
@@ -3370,18 +3580,35 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
 
     fallback_hhmm = (nxt_local.hour, nxt_local.minute)
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
+    anchor_file = (task.get("anchor_file") or "").strip()
 
     fut_no = cur_no + 1
     fut_local = nxt_local
     while fut_no < cpmax:
-        fut_local = _next_occurrence_after_local_dt(
-            dnf,
-            fut_local,
-            default_seed_date=default_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            fallback_hhmm=fallback_hhmm,
-        )
+        if anchor_file:
+            future = _anchor_included_occurrences(
+                task,
+                after_local_dt=fut_local,
+                inclusive=False,
+                limit=2,
+                fallback_hhmm=fallback_hhmm,
+                omit_dnf=omit_dnf,
+                seed_base=seed_base,
+                default_seed_date=default_seed,
+                dnf=dnf,
+            )
+            fut_local = future[0] if future else None
+        else:
+            fut_local = _next_occurrence_after_local_dt(
+                dnf,
+                fut_local,
+                default_seed_date=default_seed,
+                seed_base=seed_base,
+                omit_dnf=omit_dnf,
+                fallback_hhmm=fallback_hhmm,
+            )
+        if fut_local is None:
+            return None
         fut_no += 1
 
     return fut_local.astimezone(timezone.utc)
@@ -4266,6 +4493,17 @@ def _end_summary_kind_rows(rows: list[tuple[str, str]], kind: str, current: dict
         except Exception:
             pass
         return
+    if kind == "anchor_file":
+        expr = (current.get("anchor_file") or "").strip()
+        mode = (current.get("anchor_mode") or "skip").lower()
+        tag = {
+            "skip": "[cyan]SKIP[/]",
+            "all": "[yellow]ALL[/]",
+            "flex": "[magenta]FLEX[/]",
+        }.get(mode, "[cyan]SKIP[/]")
+        rows.append(("Anchor file", f"{expr}  {tag}"))
+        rows.append(("Natural", f"Dates from {expr.split('@', 1)[0]}"))
+        return
     rows.append(("Period", current.get("cp") or "–"))
 
 
@@ -4297,7 +4535,8 @@ def _end_summary_limits_row(rows: list[tuple[str, str]], current: dict) -> None:
 def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict = None) -> None:
     actual_current = _end_summary_current(current, current_task)
     kind_anchor = bool((actual_current.get("anchor") or "").strip())
-    kind = "anchor" if kind_anchor else "cp"
+    kind_anchor_file = bool((actual_current.get("anchor_file") or "").strip())
+    kind = "anchor" if kind_anchor else ("anchor_file" if kind_anchor_file else "cp")
 
     chain_id = _end_summary_chain_id_row(actual_current)
     if not chain_id:
@@ -4368,6 +4607,40 @@ def _timeline_lines(
     """Compact timeline with inline gaps."""
     if not _require_core():
         return []
+    if kind == "anchor_file" or (kind == "anchor" and (task.get("anchor_file") or "").strip()):
+        _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
+        seed_base = (task.get("chainID") or "").strip() or "preview"
+        child_local = _to_local_cached(child_due_utc)
+        fallback_hhmm = (child_local.hour, child_local.minute)
+        default_seed = child_local.date()
+        dnf_for_merge = dnf if kind == "anchor" else None
+        occurrences = _anchor_included_occurrences(
+            task,
+            after_local_dt=child_local,
+            inclusive=True,
+            limit=max(8, next_count + 6),
+            fallback_hhmm=fallback_hhmm,
+            omit_dnf=omit_dnf,
+            seed_base=seed_base,
+            default_seed_date=default_seed,
+            dnf=dnf_for_merge,
+        )
+        rows: list[str] = []
+        current_no = int(cur_no or 1)
+        rows.append(f"{current_no} ► {_fmtlocal(child_due_utc)} {child_short}")
+        shown = 0
+        for item_local in occurrences:
+            item_utc = item_local.astimezone(timezone.utc)
+            if item_utc <= child_due_utc:
+                continue
+            current_no += 1
+            if cap_no and current_no > cap_no:
+                break
+            rows.append(f"{current_no} ▸ {_fmtlocal(item_utc)}")
+            shown += 1
+            if shown >= next_count:
+                break
+        return rows
     modify_timeline = _module("modify_timeline")
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
     anchor_omit = _module("anchor_omit") if kind == "anchor" else None
@@ -4456,6 +4729,7 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
     due0, _ = _safe_parse_datetime(task.get("due"))
     default_seed = _to_local_cached(due0 or next_due_utc).date()
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
+    anchor_file = (task.get("anchor_file") or "").strip()
 
     count = 0
     last_hit = None
@@ -4467,14 +4741,28 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
         iterations += 1
         count += 1
         last_hit = cursor
-        cursor = _next_occurrence_after_local_dt(
-            dnf,
-            cursor,
-            default_seed_date=default_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            fallback_hhmm=fallback_hhmm,
-        )
+        if anchor_file:
+            future = _anchor_included_occurrences(
+                task,
+                after_local_dt=cursor,
+                inclusive=False,
+                limit=2,
+                fallback_hhmm=fallback_hhmm,
+                omit_dnf=omit_dnf,
+                seed_base=seed_base,
+                default_seed_date=default_seed,
+                dnf=dnf,
+            )
+            cursor = future[0] if future else None
+        else:
+            cursor = _next_occurrence_after_local_dt(
+                dnf,
+                cursor,
+                default_seed_date=default_seed,
+                seed_base=seed_base,
+                omit_dnf=omit_dnf,
+                fallback_hhmm=fallback_hhmm,
+            )
         if cursor is None:
             break
 
@@ -4910,16 +5198,21 @@ def _non_completion_validate_anchor(old: dict, new: dict, new_anchor: str) -> No
         _got_anchor_invalid(_non_completion_anchor_error_message(new_anchor, str(e)))
 
 
-def _validate_omit_for_anchor_or_fail(anchor_expr: str, omit_expr: str, omit_file: str) -> None:
-    if omit_expr and not anchor_expr:
-        _fail_and_exit("Invalid omit", "omit requires anchor")
-    if omit_file and not anchor_expr:
-        _fail_and_exit("Invalid omit_file", "omit_file requires anchor")
+def _validate_omit_for_anchor_or_fail(anchor_expr: str, anchor_file_expr: str, omit_expr: str, omit_file: str) -> None:
+    if omit_expr and not (anchor_expr or anchor_file_expr):
+        _fail_and_exit("Invalid omit", "omit requires anchor or anchor_file")
+    if omit_file and not (anchor_expr or anchor_file_expr):
+        _fail_and_exit("Invalid omit_file", "omit_file requires anchor or anchor_file")
     if omit_expr:
         try:
             _validate_omit_on_modify(omit_expr)
         except Exception as e:
             _fail_and_exit("Invalid omit", str(e))
+    if anchor_file_expr:
+        try:
+            _load_anchor_file_dates(anchor_file_expr)
+        except Exception as e:
+            _fail_and_exit("Invalid anchor_file", str(e))
     if omit_file:
         try:
             _load_omit_file_dates(omit_file)
@@ -4927,14 +5220,20 @@ def _validate_omit_for_anchor_or_fail(anchor_expr: str, omit_expr: str, omit_fil
             _fail_and_exit("Invalid omit_file", str(e))
 
 
-def _non_completion_reject_conflicting_types(new_anchor: str, new_cp: str) -> None:
+def _non_completion_reject_conflicting_types(new_anchor: str, new_anchor_file: str, new_cp: str) -> None:
     if new_anchor and new_cp:
         _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
+    if new_anchor_file and new_cp:
+        _fail_and_exit("Invalid chain config", "anchor_file and cp cannot both be set; clear one")
 
 
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
     anchor_raw = (new.get("anchor") or "").strip()
     new_anchor = _strip_quotes(anchor_raw)
+    anchor_file_raw = (new.get("anchor_file") or "").strip()
+    new_anchor_file = _strip_quotes(anchor_file_raw)
+    if new_anchor_file:
+        new["anchor_file"] = new_anchor_file
     omit_raw = (new.get("omit") or "").strip()
     new_omit = _strip_quotes(omit_raw)
     if new_omit:
@@ -4946,23 +5245,27 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
 
     if new_anchor:
         _non_completion_validate_anchor(old, new, new_anchor)
-    _validate_omit_for_anchor_or_fail(new_anchor, new_omit, new_omit_file)
+    _validate_omit_for_anchor_or_fail(new_anchor, new_anchor_file, new_omit, new_omit_file)
 
     cp_raw = (new.get("cp") or "").strip()
     new_cp = _strip_quotes(cp_raw)
-    _non_completion_reject_conflicting_types(new_anchor, new_cp)
+    _non_completion_reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
 
     _stamp_chain_id_if_new_nautical(old, new)
     _print_task(new)
 
 
-def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
+def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, str]:
     # If we reach here, the task is being completed
     # Now we should validate CP (in addition to anchor which was already validated on modify)
     cp_raw = (new.get("cp") or "").strip()
     new_cp = _strip_quotes(cp_raw)
     anchor_raw = (new.get("anchor") or "").strip()
     new_anchor = _strip_quotes(anchor_raw)
+    anchor_file_raw = (new.get("anchor_file") or "").strip()
+    new_anchor_file = _strip_quotes(anchor_file_raw)
+    if new_anchor_file:
+        new["anchor_file"] = new_anchor_file
     omit_raw = (new.get("omit") or "").strip()
     new_omit = _strip_quotes(omit_raw)
     if new_omit:
@@ -4971,9 +5274,8 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
     new_omit_file = _strip_quotes(omit_file_raw)
     if new_omit_file:
         new["omit_file"] = new_omit_file
-    if new_anchor and new_cp:
-        _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
-    _validate_omit_for_anchor_or_fail(new_anchor, new_omit, new_omit_file)
+    _non_completion_reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
+    _validate_omit_for_anchor_or_fail(new_anchor, new_anchor_file, new_omit, new_omit_file)
 
     if new_cp:
         # Validate CP on completion
@@ -4988,7 +5290,7 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
             _fail_and_exit("CP parsing error", "Unexpected error while parsing cp")
 
         # Deep checks only if fields changed
-        if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode"):
+        if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode") or _field_changed(old, new, "anchor_file"):
             if new_anchor:
                 _validate_anchor_on_modify(new_anchor)
             # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
@@ -5002,7 +5304,7 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str]:
 
         _stamp_chain_id_if_new_nautical(old, new)
 
-    return new_cp, new_anchor
+    return new_cp, new_anchor, new_anchor_file
 
 
 def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:
@@ -5285,7 +5587,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
         except Exception:
             integrity_warnings = None
 
-    if kind == "anchor":
+    if kind in {"anchor", "anchor_file"}:
         _render_anchor_completion_feedback(
             new=new,
             child=child,

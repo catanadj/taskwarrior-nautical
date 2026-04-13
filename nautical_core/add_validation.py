@@ -44,11 +44,14 @@ def validate_chain_duration_reasonable(
     return (True, None)
 
 
-def validate_kind_not_conflicting(cp_str: Any, anchor_str: Any) -> tuple[bool, str | None]:
+def validate_kind_not_conflicting(cp_str: Any, anchor_str: Any, anchor_file_str: Any = None) -> tuple[bool, str | None]:
     has_cp = bool((cp_str or "").strip())
     has_anchor = bool((anchor_str or "").strip())
+    has_anchor_file = bool((anchor_file_str or "").strip())
     if has_cp and has_anchor:
         return (False, "Cannot set both 'cp' and 'anchor'. Choose one.")
+    if has_cp and has_anchor_file:
+        return (False, "Cannot set both 'cp' and 'anchor_file'. Choose one.")
     return (True, None)
 
 

@@ -4398,6 +4398,67 @@ def test_hook_on_add_anchor_preview_skips_omit_file_modifier_date():
         expect("Mon 2026-04-27 09:00" not in stderr_txt, f"expected transformed omit_file date to be skipped. stderr={stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_anchor_preview_marks_omitted_future_slots():
+    """on-add preview should keep omitted future anchor slots visible in Upcoming."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000114g",
+        "description": "hook test on-add omit upcoming",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20250108T000000Z",
+        "anchor": "w:mon,wed,fri@t=09:00",
+        "omit": "w:wed",
+        "anchor_mode": "skip",
+        "due": "20250108T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    if p.returncode != 0:
+        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("(omitted)" in stderr_txt, f"expected omitted marker in on-add preview: {stderr_txt[:700]!r}")
+    expect(
+        "2025-01-14" in stderr_txt or "Wed 2025-01-14" in stderr_txt or "2025-01-14 09:00" in stderr_txt,
+        f"expected omitted Wednesday slot to remain visible in Upcoming: {stderr_txt[:700]!r}",
+    )
+
+
+def test_hook_on_add_anchor_preview_uses_omit_file_description_in_upcoming():
+    """on-add preview should use omit_file descriptions for omitted Upcoming entries when available."""
+    hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        omit_dir = Path(td) / "omit"
+        omit_dir.mkdir()
+        (omit_dir / "holidays.csv").write_text('date,description\n2025-01-10,Company holiday blackout\n', encoding='utf-8')
+        conf = Path(td) / 'config-nautical.toml'
+        conf.write_text(f'omit_file_dir = "{omit_dir}"\n', encoding='utf-8')
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000114h",
+            "description": "hook test on-add omit file upcoming desc",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20250108T000000Z",
+            "anchor": "w:mon,wed,fri@t=09:00",
+            "omit_file": "holidays.csv",
+            "anchor_mode": "skip",
+            "due": "20250108T090000Z",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        if p.returncode != 0:
+            raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect(
+            "(Company holida...)" in stderr_txt,
+            f"expected omit_file description marker in on-add preview: {stderr_txt[:700]!r}",
+        )
+        expect(
+            "Fri 2025-01-10" in stderr_txt or "2025-01-10 09:00" in stderr_txt,
+            f"expected omitted omit_file date to remain visible in Upcoming: {stderr_txt[:700]!r}",
+        )
+
+
 def test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot():
     """on-add preview should keep @t times when a yearly anchor rolls forward to the next business day."""
     hook = _find_hook_file("on-add-nautical.py")

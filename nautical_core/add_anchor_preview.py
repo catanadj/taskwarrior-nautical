@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
-from .anchor_inclusion import collect_included_occurrences_local
+from .anchor_inclusion import collect_included_occurrences_local, collect_occurrence_events_local
 
 
 def _anchor_file_natural_text(expr: str) -> str:
@@ -43,7 +43,7 @@ def _anchor_preview_natural_text(task: dict[str, Any], dnf, anchor_file_str: str
         if natural.endswith(tail):
             natural = natural[:-len(tail)]
         natural = natural.rstrip()
-        return f"{natural}; skip {omit_text}" if natural else f"skip {omit_text}"
+        return f"{natural}; omit {omit_text}" if natural else f"omit {omit_text}"
     file_text = _anchor_file_natural_text(anchor_file_str) if anchor_file_str else ''
     if natural and file_text:
         return f"{natural} and {file_text}"
@@ -327,6 +327,49 @@ def _anchor_file_occurrences_local(
     return out
 
 
+def _preview_omit_label(task: dict[str, Any], item_local: datetime, *, core: Any) -> str:
+    omit_file = str(task.get("omit_file") or "").strip()
+    if not omit_file:
+        return "omitted"
+    try:
+        omit_files = core._import_sibling("omit_files")
+        descriptions = omit_files.load_omit_file_descriptions(omit_file, getattr(core, "OMIT_FILE_DIR", ""))
+        text = str(descriptions.get(item_local.date()) or "").strip()
+    except Exception:
+        text = ""
+    if not text:
+        return "omitted"
+    return (text[:14] + "...") if len(text) > 14 else text
+
+
+def _preview_occurrence_lines(
+    events: list[tuple[datetime, bool]],
+    *,
+    first_due_local_dt: datetime,
+    preview_limit: int,
+    core: Any,
+    task: dict[str, Any],
+) -> list[str]:
+    colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
+    out: list[str] = []
+    included_idx = 1
+    for item_local, is_omitted in events:
+        if item_local <= first_due_local_dt:
+            if not is_omitted and item_local == first_due_local_dt:
+                included_idx = 1
+            continue
+        if is_omitted:
+            label = _preview_omit_label(task, item_local, core=core).replace('[', '(').replace(']', ')')
+            out.append(f"[dim red]·· ×  {core.fmt_dt_local(item_local.astimezone(timezone.utc))} [italic]({label})[/][/]")
+            continue
+        included_idx += 1
+        if included_idx > preview_limit + 1:
+            break
+        color = colors[min(included_idx - 2, len(colors) - 1)]
+        out.append(f"[{color}]{included_idx} ▸ {core.fmt_dt_local(item_local.astimezone(timezone.utc))}[/]")
+    return out
+
+
 def _anchor_file_is_omitted(omit_dnf, item_local: datetime, *, core: Any, seed_base: str) -> bool:
     if not omit_dnf:
         return False
@@ -404,12 +447,6 @@ def handle_anchor_file_preview_on_add(
         validate_omit_syntax_strict=validate_omit_syntax_strict,
         error_and_exit=error_and_exit,
     )
-    if dnf:
-        for idx, (label, _value) in enumerate(rows):
-            if label == 'Natural':
-                rows[idx] = ('Natural', f"[white]{_anchor_preview_natural_text(task, dnf, anchor_file_str, core=core)}[/]")
-                break
-
     t_occ = time.perf_counter()
     seed_base = (task.get("chainID") or "").strip() or "preview"
     all_occurrences = _anchor_file_preview_occurrences(
@@ -469,10 +506,6 @@ def handle_anchor_file_preview_on_add(
             rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
 
     cpmax = core.coerce_int(task.get("chainMax"), 0)
-    upcoming = [dt for dt in all_occurrences if dt > first_due_local_dt]
-    if until_dt:
-        until_local = core.to_local(until_dt)
-        upcoming = [dt for dt in upcoming if dt <= until_local]
     exact_until_count = None
     final_until_dt = None
     if until_dt:
@@ -483,11 +516,31 @@ def handle_anchor_file_preview_on_add(
     allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
     allow_by_until = exact_until_count if exact_until_count is not None else 10**9
     preview_limit = max(0, min(upcoming_preview, allow_by_max, allow_by_until, preview_hard_cap))
-    preview_rows: list[str] = []
-    colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
-    for idx, item_local in enumerate(upcoming[:preview_limit], start=2):
-        color = colors[min(idx - 2, len(colors) - 1)]
-        preview_rows.append(f"[{color}]{idx} ▸ {core.fmt_dt_local(item_local.astimezone(timezone.utc))}[/]")
+    event_limit = max(1, preview_limit + 1)
+    events = collect_occurrence_events_local(
+        dnf=None,
+        anchor_file_str=anchor_file_str,
+        after_local_dt=first_due_local_dt,
+        inclusive=True,
+        limit_included=event_limit,
+        fallback_hhmm=(due_hhmm if user_provided_due else (9, 0)),
+        default_seed_date=first_due_local_dt.date(),
+        seed_base=seed_base,
+        omit_dnf=omit_dnf,
+        core=core,
+        next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
+        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+    )
+    if until_dt:
+        until_local = core.to_local(until_dt)
+        events = [(dt, is_omitted) for dt, is_omitted in events if dt <= until_local]
+    preview_rows = _preview_occurrence_lines(
+        events,
+        first_due_local_dt=first_due_local_dt,
+        preview_limit=preview_limit,
+        core=core,
+        task=task,
+    )
     rows.append(("Upcoming", "\n".join(preview_rows) if preview_rows else "[dim]–[/]"))
     rows.append(("Delta", f"[bright_yellow]{human_delta(now_utc, display_first_due_utc, False)}[/]"))
     anchor_preview_limit_rows(
@@ -772,15 +825,32 @@ def handle_anchor_preview_on_add(
         allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
         allow_by_until = exact_until_count if exact_until_count is not None else 10**9
         preview_limit = max(0, min(upcoming_preview, allow_by_max, allow_by_until, preview_hard_cap))
-        colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
-        preview = []
-        upcoming = [dt for dt in all_occurrences if dt > first_due_local_dt]
+        event_limit = max(1, preview_limit + 1)
+        events = collect_occurrence_events_local(
+            dnf=dnf,
+            anchor_file_str=anchor_file_str,
+            after_local_dt=first_due_local_dt,
+            inclusive=True,
+            limit_included=event_limit,
+            fallback_hhmm=first_hhmm,
+            default_seed_date=interval_seed,
+            seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            core=core,
+            next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
+            pick_occurrence_local=anchor_pick_occurrence_local,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        )
         if until_dt:
             until_local = core.to_local(until_dt)
-            upcoming = [dt for dt in upcoming if dt <= until_local]
-        for i, dt in enumerate(upcoming[:preview_limit]):
-            color = colors[min(i, len(colors) - 1)]
-            preview.append(f"[{color}]{core.fmt_dt_local(dt.astimezone(timezone.utc))}[/{color}]")
+            events = [(dt, is_omitted) for dt, is_omitted in events if dt <= until_local]
+        preview = _preview_occurrence_lines(
+            events,
+            first_due_local_dt=first_due_local_dt,
+            preview_limit=preview_limit,
+            core=core,
+            task=task,
+        )
         if anchor_str:
             anchor_preview_lint_and_validate(anchor_str, prof, core=core, panel=panel)
 

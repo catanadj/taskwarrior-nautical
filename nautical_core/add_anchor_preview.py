@@ -517,8 +517,13 @@ def handle_anchor_preview_on_add(
         if warn_msg:
             rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
     if anchor_file_str:
-        rows.append(("Anchor file", f"[white]{anchor_file_str}[/]"))
-        rows.append(("Natural", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))
+        if anchor_str:
+            rows.append(("Sources", "[white]anchor + anchor_file[/]"))
+            rows.append(("Anchor file", f"[white]{anchor_file_str}[/]"))
+            rows.append(("Natural (file)", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))
+        else:
+            rows.append(("Anchor file", f"[white]{anchor_file_str}[/]"))
+            rows.append(("Natural", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))
 
     omit_dnf = anchor_preview_prepare_omit_dnf(
         task,

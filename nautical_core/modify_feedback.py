@@ -38,6 +38,16 @@ def _pretty_basis_anchor(meta: dict, task: dict, *, parse_dt_any, fmt_dt_local) 
     return "ALL — Next anchor after completion"
 
 
+def _anchor_summary(task: dict) -> tuple[str, str]:
+    anchor_expr = str(task.get("anchor") or "").strip()
+    anchor_file = str(task.get("anchor_file") or "").strip()
+    if anchor_expr and anchor_file:
+        return "Sources", "anchor + anchor_file"
+    if anchor_file:
+        return "Anchor file", anchor_file
+    return "Pattern", anchor_expr
+
+
 def _anchor_mode_tag(new: dict) -> str:
     return {
         "skip": "[cyan]SKIP[/]",
@@ -195,7 +205,8 @@ def _build_text_feedback(
     lines = [line1, line2]
     if summary and str(summary).strip():
         if str(kind or "").lower() == "anchor":
-            summary_text = f"[bold cyan]Pattern:[/] [white]{summary.split(':', 1)[1].strip() if ':' in summary else summary}[/]"
+            label = "Sources" if str(summary).strip() == "anchor + anchor_file" else "Pattern"
+            summary_text = f"[bold cyan]{label}:[/] [white]{summary.split(':', 1)[1].strip() if ':' in summary else summary}[/]"
         else:
             summary_text = f"[bold yellow]Period:[/] [white]{summary.split(':', 1)[1].strip() if ':' in summary else summary}[/]"
         lines.append(summary_text)
@@ -266,8 +277,8 @@ def render_anchor_completion_feedback(
     chain_colour_for_task = services.chain_colour_for_task
     strip_quotes = services.strip_quotes
     human_delta = services.human_delta
-    anchor_raw = (feedback.new.get("anchor") or "").strip()
-    expr_str = strip_quotes(anchor_raw)
+    anchor_label, anchor_value = _anchor_summary(feedback.new)
+    expr_str = strip_quotes(anchor_value)
     omit_raw, omit_natural, omit_warns, omit_file = _anchor_omit_summary(core, feedback.new)
     mode_tag = _anchor_mode_tag(feedback.new)
     title = f"⚓︎ Next anchor  #{feedback.next_no}  {feedback.parent_short} → {feedback.child_short}"
@@ -310,7 +321,7 @@ def render_anchor_completion_feedback(
                 parent_short=feedback.parent_short,
                 next_no=feedback.next_no,
                 child_short=feedback.child_short,
-                summary=f"Pattern: {expr_str}  {mode_tag}",
+                summary=f"{anchor_label}: {expr_str}  {mode_tag}",
                 preview_line=line,
                 cap_no=feedback.cap_no,
                 base_no=feedback.base_no,
@@ -323,7 +334,7 @@ def render_anchor_completion_feedback(
         return
 
     fb = []
-    fb.append(("Pattern", f"{expr_str}  {mode_tag}"))
+    fb.append((anchor_label, f"{expr_str}  {mode_tag}"))
     if omit_raw:
         fb.append(("Omit", omit_raw))
         if omit_natural:
@@ -334,7 +345,10 @@ def render_anchor_completion_feedback(
         fb.append(("Omit file", omit_file))
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=core.expr_has_m_or_y(feedback.dnf))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
-    fb.append(("Natural", core.describe_anchor_dnf(feedback.dnf, feedback.new)))
+    if feedback.dnf:
+        fb.append(("Natural", core.describe_anchor_dnf(feedback.dnf, feedback.new)))
+    elif anchor_label == "Anchor file":
+        fb.append(("Natural", f"Dates from {expr_str.split('@', 1)[0]}"))
     basis_text = _pretty_basis_anchor(feedback.meta, feedback.new, parse_dt_any=core.parse_dt_any, fmt_dt_local=core.fmt_dt_local)
     if basis_text != "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)":
         fb.append(("Basis", basis_text))
@@ -376,7 +390,7 @@ def render_anchor_completion_feedback(
         )
         if tl:
             fb.append(("Timeline", "\n".join(tl)))
-    if "rand" in expr_str.lower():
+    if feedback.dnf and "rand" in expr_str.lower():
         fb.append(("Rand", f"[dim]Deterministic picks seeded by root {short(root_uuid_from(feedback.new))}[/]"))
 
     fb = format_next_anchor_rows(fb)

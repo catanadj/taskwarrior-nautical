@@ -6637,6 +6637,56 @@ def test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_strea
     expect("Mon 2026-05-04 12:00" not in txt, f"shifted omitted anchor_file date leaked into timeline: {txt!r}")
 
 
+def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream():
+    """merged timelines should still show omitted anchor-side dates when omit_file blocks them."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_side_omit_file_timeline_test")
+    if hasattr(mod, "_collect_prev_two"):
+        setattr(mod, "_collect_prev_two", lambda _task: [])
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        omit_dir = Path(td)
+        (anchor_dir / "2026.csv").write_text("date\n2026-05-01\n2026-05-05\n", encoding="utf-8")
+        old_anchor_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+        old_omit_dir = getattr(mod.core, "OMIT_FILE_DIR", "")
+        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        mod.core.OMIT_FILE_DIR = str(omit_dir)
+        try:
+            parent = {
+                "uuid": "00000000-0000-0000-0000-000000000557",
+                "description": "anchor side omit_file timeline",
+                "anchor": "w:tue,fri | y:05-05",
+                "anchor_file": "2026.csv@-1d@t=12:00,18:00",
+                "omit_file": "2026.csv",
+                "anchor_mode": "skip",
+                "link": 7,
+                "chainID": "abcd1234",
+                "due": "2026-04-30T15:00:00Z",
+                "end": "2026-04-30T15:00:00Z",
+            }
+            child_due = mod.core.parse_dt_any("2026-04-30T15:00:00Z")
+            dnf = mod.core.validate_anchor_expr_strict(parent["anchor"])
+            lines = _call_with_supported_kwargs(
+                mod._timeline_lines,
+                kind="anchor",
+                task=parent,
+                child_due_utc=child_due,
+                child_short="ba5b8228",
+                dnf=dnf,
+                next_count=4,
+                cap_no=None,
+                cur_no=7,
+            )
+        finally:
+            mod.core.ANCHOR_FILE_DIR = old_anchor_dir
+            mod.core.OMIT_FILE_DIR = old_omit_dir
+
+    txt = _strip_markup("\n".join(lines))
+    expect("Tue 2026-05-05" in txt, f"expected omitted anchor-side date to remain visible: {txt!r}")
+    expect("(omitted)" in txt, f"expected merged timeline omitted marker for anchor-side omit_file date: {txt!r}")
+
+
 def test_omit_file_modifiers_reject_time_modifiers():
     """omit_file should reject @t because omit rules are date-based only."""
     import nautical_core.omit_files as omit_files

@@ -4610,21 +4610,27 @@ def _timeline_lines(
     if kind == "anchor_file" or (kind == "anchor" and (task.get("anchor_file") or "").strip()):
         modify_timeline = _module("modify_timeline")
         _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
+        anchor_omit = _module("anchor_omit") if omit_dnf else None
         seed_base = (task.get("chainID") or "").strip() or "preview"
         child_local = _to_local_cached(child_due_utc)
         fallback_hhmm = (child_local.hour, child_local.minute)
         default_seed = child_local.date()
         dnf_for_merge = dnf if kind == "anchor" else None
-        occurrences = _anchor_included_occurrences(
-            task,
+        anchor_inclusion = core._import_sibling("anchor_inclusion")
+        events = anchor_inclusion.collect_occurrence_events_local(
+            dnf=dnf_for_merge,
+            anchor_file_str=(task.get("anchor_file") or "").strip(),
             after_local_dt=child_local,
             inclusive=True,
-            limit=max(8, next_count + 6),
+            limit_included=max(8, next_count + 6),
             fallback_hhmm=fallback_hhmm,
-            omit_dnf=omit_dnf,
-            seed_base=seed_base,
             default_seed_date=default_seed,
-            dnf=dnf_for_merge,
+            seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            core=core,
+            next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            max_iterations=_MAX_ITERATIONS,
         )
         cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
         nxt_no = cur_no + 1
@@ -4646,9 +4652,31 @@ def _timeline_lines(
         )
         fut_no = nxt_no
         actual_future = 0
-        for item_local in occurrences:
+        for item_local, is_omitted in events:
             item_utc = item_local.astimezone(timezone.utc)
             if item_utc <= child_due_utc:
+                continue
+            if is_omitted:
+                items.append(
+                    (
+                        "··",
+                        item_utc,
+                        {
+                            "is_omit": True,
+                            "omit_label": (
+                                modify_timeline._timeline_omit_label(
+                                    omit_dnf,
+                                    item_local.date(),
+                                    omit_description_for_date=(
+                                        anchor_omit.omit_description_for_date if anchor_omit is not None else None
+                                    ),
+                                )
+                                if omit_dnf else None
+                            ),
+                        },
+                        "omitted",
+                    )
+                )
                 continue
             fut_no += 1
             if cap_no is not None and fut_no > cap_no:

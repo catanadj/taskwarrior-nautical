@@ -6304,6 +6304,176 @@ def test_omit_file_modifiers_apply_even_when_base_file_is_cached():
         expect(shifted == frozenset({date(2026, 4, 27)}), f'unexpected cached transformed omit_file dates: {shifted!r}')
 
 
+def test_anchor_file_name_rejects_paths():
+    """anchor_file should accept only basenames, not paths."""
+    import nautical_core.anchor_files as anchor_files
+
+    try:
+        anchor_files.validate_anchor_file_name('../calendar.csv')
+        expect(False, 'expected anchor_file basename validation to fail')
+    except ValueError as e:
+        expect('anchor_file must be a file name, not a path.' in str(e), f'unexpected anchor_file name error: {e}')
+
+
+def test_anchor_file_spec_parses_time_and_negative_offset():
+    """anchor_file spec should parse @t and date-shift modifiers."""
+    import nautical_core.anchor_files as anchor_files
+
+    file_name, mods = anchor_files.parse_anchor_file_spec('calendar.csv@t=09:00,17:00@-2d')
+    expect(file_name == 'calendar.csv', f'unexpected anchor_file name parse: {file_name!r}')
+    expect(mods.get('t') == [(9, 0), (17, 0)], f'unexpected anchor_file time mods: {mods!r}')
+    expect(mods.get('day_offset') == -2, f'unexpected anchor_file day offset: {mods!r}')
+
+
+def test_anchor_file_loader_transforms_dates_and_carries_descriptions():
+    """anchor_file should transform file dates and carry descriptions to the transformed date."""
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        sample = anchor_dir / 'calendar.csv'
+        sample.write_text(
+            'date,description\n'
+            '2026-04-25,Weekend anchor\n',
+            encoding='utf-8',
+        )
+        got_dates = anchor_files.load_anchor_file_dates('calendar.csv@nbd', str(anchor_dir))
+        got_desc = anchor_files.load_anchor_file_descriptions('calendar.csv@nbd', str(anchor_dir))
+        expect(got_dates == frozenset({date(2026, 4, 27)}), f'unexpected transformed anchor_file dates: {got_dates!r}')
+        expect(got_desc == {date(2026, 4, 27): 'Weekend anchor'}, f'unexpected transformed anchor_file descriptions: {got_desc!r}')
+
+
+def test_anchor_file_next_occurrence_after_uses_task_level_time():
+    """anchor_file next-occurrence helper should use task-level @t values over fallback time."""
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        sample = anchor_dir / 'calendar.csv'
+        sample.write_text('date\n2026-04-25\n', encoding='utf-8')
+        after_local = core.to_local(core.build_local_datetime(date(2026, 4, 24), (10, 0)))
+        nxt = anchor_files.next_anchor_file_occurrence_after(
+            'calendar.csv@t=12:00,17:00',
+            str(anchor_dir),
+            after_local,
+            (9, 0),
+            build_local_datetime=core.build_local_datetime,
+            to_local=core.to_local,
+        )
+        expect(nxt is not None and nxt.date() == date(2026, 4, 25) and nxt.hour == 12 and nxt.minute == 0, f'unexpected anchor_file next occurrence: {nxt!r}')
+
+
+def test_config_exposes_anchor_file_dir():
+    """shared config defaults should expose anchor_file_dir alongside omit_file_dir."""
+    expect(hasattr(core, 'ANCHOR_FILE_DIR'), 'core should expose ANCHOR_FILE_DIR')
+
+
+def test_on_add_anchor_file_conflicts_with_anchor():
+    """on-add should reject tasks that set both anchor and anchor_file."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_anchor_file_conflict_test")
+
+    task = {
+        "description": "conflict",
+        "anchor": "w:mon",
+        "anchor_file": "calendar.csv",
+    }
+    now_utc = mod.core.now_utc()
+    now_local = mod.core.to_local(now_utc)
+    try:
+        mod._build_on_add_context(task, now_utc, now_local)
+    except SystemExit:
+        return
+    raise AssertionError("expected on-add context validation to reject anchor + anchor_file")
+
+
+
+def test_on_add_anchor_file_root_gets_chainid_stamp():
+    """on-add should stamp chainID for anchor_file roots so later completion can proceed."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_anchor_file_chainid_stamp_test")
+
+    task = {
+        "description": "anchor file chainid",
+        "uuid": "12345678-1234-1234-1234-1234567890ab",
+        "anchor_file": "calendar.csv",
+    }
+    mod._stamp_chain_id_on_add(task)
+    expect(task.get("chainID") == "12345678", f"expected anchor_file root chainID stamp, got: {task!r}")
+
+def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
+    """on-add anchor_file preview should auto-assign due from the first future file occurrence and keep task-level time."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_anchor_file_preview_test")
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / "calendar.csv").write_text("date,description\n2026-04-25,Party prep\n", encoding="utf-8")
+        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        try:
+            task = {
+                "description": "anchor file preview",
+                "anchor_file": "calendar.csv@nbd@t=12:00",
+                "entry": "2026-04-12T09:00:00Z",
+                "due": "2026-04-12T09:00:00Z",
+            }
+            now_utc = mod.core.parse_dt_any("2026-04-12T09:00:00Z")
+            now_local = mod.core.to_local(now_utc)
+            ctx = mod._build_on_add_context(task, now_utc, now_local)
+            expect(ctx.kind == "anchor_file", f"expected anchor_file kind, got {ctx.kind!r}")
+            expect(not ctx.user_provided_due, f"expected implicit due, got {ctx!r}")
+
+            captured = {}
+            saved_panel = mod._panel
+            saved_emit = mod._emit_task_json
+            try:
+                mod._panel = lambda _title, rows, kind="info": captured.setdefault("rows", rows)
+                mod._emit_task_json = lambda task_obj, **_kwargs: captured.setdefault("task", dict(task_obj))
+                mod._handle_anchor_preview_on_add_context(ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
+            finally:
+                mod._panel = saved_panel
+                mod._emit_task_json = saved_emit
+
+            due_val = captured.get("task", {}).get("due") or task.get("due")
+            expect(due_val == "2026-04-27T12:00:00", f"unexpected auto-assigned due for anchor_file preview: {due_val!r}")
+        finally:
+            mod.core.ANCHOR_FILE_DIR = old_dir
+
+
+def test_on_modify_compute_anchor_child_due_from_anchor_file():
+    """on-modify completion should compute the next child due from anchor_file occurrences."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_file_due_test")
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / "calendar.csv").write_text("date,description\n2026-04-25,Party prep\n2026-05-10,Event two\n", encoding="utf-8")
+        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        try:
+            parent = {
+                "description": "anchor file chain",
+                "anchor_file": "calendar.csv@nbd@t=12:00",
+                "anchor_mode": "skip",
+                "link": 1,
+                "chainID": "cid",
+                "due": "2026-04-27T12:00:00Z",
+                "end": "2026-04-28T12:00:00Z",
+            }
+            child_due, meta, dnf = mod._compute_anchor_child_due(parent)
+            expected_due = mod.core.build_local_datetime(date(2026, 5, 11), (12, 0)).astimezone(timezone.utc)
+            expect(dnf is None, f"anchor_file recurrence should not produce DNF payload, got {dnf!r}")
+            expect(child_due == expected_due, f"unexpected anchor_file child due: {child_due!r}")
+            expect(isinstance(meta, dict) and meta.get("target_field") == "due", f"unexpected anchor_file meta: {meta!r}")
+
+            child = mod._build_child_from_parent(parent, child_due, "due", 2, "deadbeef", "anchor_file", 0, None)
+            expect(child.get("anchor_file") == "calendar.csv@nbd@t=12:00", f"child should preserve anchor_file: {child!r}")
+            expect(not child.get("anchor"), f"child should not gain anchor expr: {child!r}")
+        finally:
+            mod.core.ANCHOR_FILE_DIR = old_dir
+
+
 def test_omit_file_modifiers_reject_time_modifiers():
     """omit_file should reject @t because omit rules are date-based only."""
     import nautical_core.omit_files as omit_files
@@ -8438,6 +8608,15 @@ TESTS = [
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
     test_anchor_omit_rejects_time_modifiers,
+    test_anchor_file_name_rejects_paths,
+    test_anchor_file_spec_parses_time_and_negative_offset,
+    test_anchor_file_loader_transforms_dates_and_carries_descriptions,
+    test_anchor_file_next_occurrence_after_uses_task_level_time,
+    test_config_exposes_anchor_file_dir,
+    test_on_add_anchor_file_conflicts_with_anchor,
+    test_on_add_anchor_file_root_gets_chainid_stamp,
+    test_hook_on_add_anchor_file_preview_auto_assigns_first_match,
+    test_on_modify_compute_anchor_child_due_from_anchor_file,
     test_omit_file_name_rejects_paths,
     test_omit_file_csv_header_parsing_is_order_independent_and_dedupes,
     test_omit_file_csv_description_mapping_is_order_independent,

@@ -587,7 +587,7 @@ def _validate_omit_expr_cached(expr: str) -> list[list[dict]]:
 def _task_has_nautical_fields(task: dict) -> bool:
     if not isinstance(task, dict):
         return False
-    for key in ("anchor", "anchor_mode", "cp", "chainID", "chainid", "chainMax", "chainUntil", "omit", "omit_file"):
+    for key in ("anchor", "anchor_file", "anchor_mode", "cp", "chainID", "chainid", "chainMax", "chainUntil", "omit", "omit_file"):
         if (task.get(key) or "").strip():
             return True
     return False
@@ -902,9 +902,9 @@ def _validate_chain_duration_reasonable(
 
 
 # Helper to validate cp/anchor not missing
-def _validate_kind_not_conflicting(cp_str, anchor_str) -> tuple[bool, str | None]:
+def _validate_kind_not_conflicting(cp_str, anchor_str, anchor_file_str="") -> tuple[bool, str | None]:
     add_validation = _module("add_validation")
-    return add_validation.validate_kind_not_conflicting(cp_str, anchor_str)
+    return add_validation.validate_kind_not_conflicting(cp_str, anchor_str, anchor_file_str)
 
 
 # Helper to validate chainMax > 0
@@ -953,9 +953,23 @@ def _load_omit_file_dates(name: str):
     return omit_files.load_omit_file_dates(name, getattr(core, "OMIT_FILE_DIR", ""))
 
 
-def _validate_omit_file_for_anchor_or_fail(anchor_str: str, omit_file: str) -> None:
-    if omit_file and not anchor_str:
-        _error_and_exit([("Invalid omit_file", "omit_file requires anchor")])
+def _load_anchor_file_dates(name: str):
+    anchor_files = core._import_sibling("anchor_files")
+    return anchor_files.load_anchor_file_dates(name, getattr(core, "ANCHOR_FILE_DIR", ""))
+
+
+def _validate_anchor_file_or_fail(anchor_file: str) -> None:
+    if not anchor_file:
+        return
+    try:
+        _load_anchor_file_dates(anchor_file)
+    except Exception as exc:
+        _error_and_exit([("Invalid anchor_file", str(exc))])
+
+
+def _validate_omit_file_for_anchor_or_fail(anchor_str: str, anchor_file_str: str, omit_file: str) -> None:
+    if omit_file and not (anchor_str or anchor_file_str):
+        _error_and_exit([("Invalid omit_file", "omit_file requires anchor or anchor_file")])
     if not omit_file:
         return
     try:
@@ -1047,9 +1061,10 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
 
 
 def _stamp_chain_id_on_add(task: dict) -> None:
-    # [CHAINID] Stamp short root id on new chains (anchor/cp present, no existing chainID)
+    # [CHAINID] Stamp short root id on new recurring roots (anchor/anchor_file/cp)
     try:
-        if (task.get("anchor") or task.get("cp")) and not (task.get("chainID") or "").strip():
+        has_recurrence = bool((task.get("anchor") or "").strip() or (task.get("anchor_file") or "").strip() or (task.get("cp") or "").strip())
+        if has_recurrence and not (task.get("chainID") or "").strip():
             task["chainID"] = core.short_uuid(task.get("uuid"))
     except Exception:
         # Never block task creation on bookkeeping
@@ -1626,12 +1641,16 @@ def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *,
         omit_expr = _strip_quotes((task.get("omit") or "").strip())
         if omit_expr:
             task["omit"] = omit_expr
-            if not ((ctx.anchor_str or "").strip()):
-                _error_and_exit([("Invalid omit", "omit requires anchor")])
+            if not (((ctx.anchor_str or "").strip()) or ((ctx.anchor_file_str or "").strip())):
+                _error_and_exit([("Invalid omit", "omit requires anchor or anchor_file")])
+        anchor_file = _strip_quotes((task.get("anchor_file") or "").strip())
+        if anchor_file:
+            task["anchor_file"] = anchor_file
+            _validate_anchor_file_or_fail(anchor_file)
         omit_file = _strip_quotes((task.get("omit_file") or "").strip())
         if omit_file:
             task["omit_file"] = omit_file
-        _validate_omit_file_for_anchor_or_fail(ctx.anchor_str or "", omit_file)
+        _validate_omit_file_for_anchor_or_fail(ctx.anchor_str or "", ctx.anchor_file_str or "", omit_file)
         return ctx
     except ValueError as exc:
         _error_and_exit([('Invalid chain config', str(exc))])
@@ -1642,6 +1661,36 @@ def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *,
 
 
 def _handle_anchor_preview_on_add_context(ctx, *, prof) -> None:
+    if (ctx.anchor_file_str or "").strip():
+        add_anchor_preview = _module("add_anchor_preview")
+        add_anchor_preview.handle_anchor_file_preview_on_add(
+            task=ctx.task,
+            anchor_file_str=ctx.anchor_file_str,
+            ch=ctx.chain_state,
+            now_utc=ctx.now_utc,
+            now_local=ctx.now_local,
+            user_provided_due=ctx.user_provided_due,
+            recurrence_field=ctx.recurrence_field,
+            due_dt=ctx.due_dt,
+            due_hhmm=ctx.due_hhmm,
+            until_dt=ctx.until_dt,
+            past_due_warning=ctx.past_due_warning,
+            prof=prof,
+            anchor_warn=ANCHOR_WARN,
+            upcoming_preview=UPCOMING_PREVIEW,
+            preview_hard_cap=_PREVIEW_HARD_CAP,
+            core=core,
+            append_wait_sched_rows=_append_wait_sched_rows,
+            validate_chain_duration_reasonable=_validate_chain_duration_reasonable,
+            validate_omit_syntax_strict=_validate_omit_syntax_strict,
+            format_anchor_rows=_format_anchor_rows,
+            panel=_panel,
+            emit_task_json=_emit_task_json,
+            fmt_local_for_task=_fmt_local_for_task,
+            human_delta=_human_delta,
+            error_and_exit=_error_and_exit,
+        )
+        return
     _handle_anchor_preview_on_add(
         task=ctx.task,
         anchor_str=ctx.anchor_str,
@@ -1672,17 +1721,18 @@ def _handle_cp_preview_on_add_context(ctx, *, prof) -> None:
     )
 
 
-def _kind_and_defaults_on_add(task: dict, cp_str: str, anchor_str: str) -> tuple[str | None, str]:
+def _kind_and_defaults_on_add(task: dict, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
     has_cp = bool(cp_str)
     has_anchor = bool(anchor_str)
-    kind = "anchor" if has_anchor else ("cp" if has_cp else None)
+    has_anchor_file = bool(anchor_file_str)
+    kind = "anchor" if has_anchor else ("anchor_file" if has_anchor_file else ("cp" if has_cp else None))
 
     ch = (task.get("chain") or "").strip().lower()
-    if (has_cp or has_anchor) and (not ch or ch == "off"):
+    if (has_cp or has_anchor or has_anchor_file) and (not ch or ch == "off"):
         task["chain"] = "on"
         ch = "on"
 
-    if has_cp or has_anchor:
+    if has_cp or has_anchor or has_anchor_file:
         linked_already = bool((task.get("prevLink") or "").strip() or (task.get("nextLink") or "").strip())
         if not linked_already:
             link_no = core.coerce_int(task.get("link"), 0)

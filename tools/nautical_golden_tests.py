@@ -6545,6 +6545,51 @@ def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
             mod.core.ANCHOR_FILE_DIR = old_dir
 
 
+def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_child():
+    """when anchor_file is shifted and anchor matches the original file date, timeline should still show the original date as the next future anchor."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_shifted_anchor_file_timeline_test")
+    if hasattr(mod, "_collect_prev_two"):
+        setattr(mod, "_collect_prev_two", lambda _task: [])
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / "2026.csv").write_text("date\n2026-04-25\n", encoding="utf-8")
+        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        try:
+            parent = {
+                "uuid": "00000000-0000-0000-0000-000000000555",
+                "description": "shifted anchor_file timeline",
+                "anchor": "y:04-25@t=12:00",
+                "anchor_file": "2026.csv@-1d@t=12:00",
+                "anchor_mode": "skip",
+                "link": 1,
+                "chainID": "abcd1234",
+                "due": "2026-04-23T12:00:00Z",
+                "end": "2026-04-23T13:00:00Z",
+            }
+            child_due, _meta, dnf = mod._compute_anchor_child_due(parent)
+            expect(mod.core.fmt_isoz(child_due) == "2026-04-24T09:00:00Z", f"unexpected shifted child due: {mod.core.fmt_isoz(child_due)}")
+            lines = _call_with_supported_kwargs(
+                mod._timeline_lines,
+                kind="anchor",
+                task=parent,
+                child_due_utc=child_due,
+                child_short="deadbeef",
+                dnf=dnf,
+                next_count=4,
+                cap_no=None,
+                cur_no=1,
+            )
+        finally:
+            mod.core.ANCHOR_FILE_DIR = old_dir
+
+    txt = _strip_markup("\n".join(lines))
+    expect("Fri 2026-04-24 12:00" in txt, f"expected shifted anchor_file child in timeline: {txt!r}")
+    expect("Sat 2026-04-25 12:00" in txt, f"expected original file date preserved via anchor match: {txt!r}")
+
+
 def test_omit_file_modifiers_reject_time_modifiers():
     """omit_file should reject @t because omit rules are date-based only."""
     import nautical_core.omit_files as omit_files

@@ -520,7 +520,10 @@ def handle_anchor_preview_on_add(
         if anchor_str:
             rows.append(("Sources", "[white]anchor + anchor_file[/]"))
             rows.append(("Anchor file", f"[white]{anchor_file_str}[/]"))
-            rows.append(("Natural (file)", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))
+            for idx, (label, value) in enumerate(rows):
+                if label == "Natural":
+                    rows[idx] = ("Natural", f"[white]{core.strip_rich_markup(str(value))} and {_anchor_file_natural_text(anchor_file_str)}[/]")
+                    break
         else:
             rows.append(("Anchor file", f"[white]{anchor_file_str}[/]"))
             rows.append(("Natural", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))

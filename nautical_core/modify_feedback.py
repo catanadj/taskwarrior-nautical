@@ -345,7 +345,13 @@ def render_anchor_completion_feedback(
         fb.append(("Omit file", omit_file))
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=core.expr_has_m_or_y(feedback.dnf))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
-    if feedback.dnf:
+    if anchor_label == "Sources":
+        file_expr = str(feedback.new.get("anchor_file") or "").strip()
+        natural_expr = core.describe_anchor_dnf(feedback.dnf, feedback.new) if feedback.dnf else ""
+        fb.append(("Pattern", str(feedback.new.get("anchor") or "").strip()))
+        fb.append(("Anchor file", file_expr))
+        fb.append(("Natural", f"{natural_expr} and Dates from {file_expr.split('@', 1)[0]}" if natural_expr else f"Dates from {file_expr.split('@', 1)[0]}"))
+    elif feedback.dnf:
         fb.append(("Natural", core.describe_anchor_dnf(feedback.dnf, feedback.new)))
     elif anchor_label == "Anchor file":
         fb.append(("Natural", f"Dates from {expr_str.split('@', 1)[0]}"))

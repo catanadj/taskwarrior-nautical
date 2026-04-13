@@ -42,6 +42,7 @@ class OnAddContext:
     now_local: datetime
     cp_str: str
     anchor_str: str
+    anchor_file_str: str
     kind: str | None
     chain_state: str
     until_dt: datetime | None
@@ -79,8 +80,8 @@ def build_on_add_context(
     now_utc: datetime,
     now_local: datetime,
     *,
-    validate_kind_not_conflicting: Callable[[str, str], tuple[bool, str]],
-    kind_and_defaults_on_add: Callable[[dict[str, Any], str, str], tuple[str | None, str]],
+    validate_kind_not_conflicting: Callable[[str, str, str], tuple[bool, str]],
+    kind_and_defaults_on_add: Callable[[dict[str, Any], str, str, str], tuple[str | None, str]],
     validate_chain_limits_on_add: Callable[[dict[str, Any], datetime], datetime | None],
     due_context_on_add: Callable[
         [dict[str, Any], datetime],
@@ -89,11 +90,12 @@ def build_on_add_context(
 ) -> OnAddContext:
     cp_str = (task.get('cp') or '').strip()
     anchor_str = (task.get('anchor') or '').strip()
-    is_valid, err = validate_kind_not_conflicting(cp_str, anchor_str)
+    anchor_file_str = (task.get('anchor_file') or '').strip()
+    is_valid, err = validate_kind_not_conflicting(cp_str, anchor_str, anchor_file_str)
     if not is_valid:
         raise ValueError(err)
 
-    kind, chain_state = kind_and_defaults_on_add(task, cp_str, anchor_str)
+    kind, chain_state = kind_and_defaults_on_add(task, cp_str, anchor_str, anchor_file_str)
     if not kind:
         until_dt = None
         user_provided_due = bool(task.get('due'))
@@ -119,6 +121,7 @@ def build_on_add_context(
         now_local=now_local,
         cp_str=cp_str,
         anchor_str=anchor_str,
+        anchor_file_str=anchor_file_str,
         kind=kind,
         chain_state=chain_state,
         until_dt=until_dt,

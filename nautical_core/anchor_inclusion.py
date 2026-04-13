@@ -50,6 +50,31 @@ def _next_anchor_file_occurrence_local(
     )
 
 
+def _anchor_file_occurrence_is_omitted(
+    item_local: datetime | None,
+    *,
+    omit_dnf,
+    default_seed_date,
+    seed_base: str,
+    core: Any,
+) -> bool:
+    if not item_local or not omit_dnf:
+        return False
+    try:
+        anchor_omit = core._import_sibling("anchor_omit")
+        return bool(
+            anchor_omit.omit_expr_fires_on_date(
+                omit_dnf,
+                item_local.date(),
+                default_seed_date,
+                seed_base,
+                core=core,
+            )
+        )
+    except Exception:
+        return False
+
+
 def next_included_occurrence_local(
     *,
     dnf,
@@ -107,6 +132,25 @@ def next_included_occurrence_local(
         fallback_hhmm=fallback_hhmm,
         core=core,
     )
+    file_cursor = after_local_dt
+    file_inclusive = inclusive
+    while _anchor_file_occurrence_is_omitted(
+        file_local,
+        omit_dnf=omit_dnf,
+        default_seed_date=default_seed_date,
+        seed_base=seed_base,
+        core=core,
+    ):
+        file_cursor = file_local
+        file_inclusive = False
+        file_local = _next_anchor_file_occurrence_local(
+            anchor_file_str,
+            anchor_file_dir=anchor_file_dir,
+            after_local_dt=file_cursor,
+            inclusive=file_inclusive,
+            fallback_hhmm=fallback_hhmm,
+            core=core,
+        )
     if expr_local and file_local:
         return expr_local if expr_local <= file_local else file_local
     return expr_local or file_local

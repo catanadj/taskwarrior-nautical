@@ -260,9 +260,6 @@ def _nautical_lock_dir_path() -> Path:
 _QUEUE_DB_PATH = _nautical_state_dir_path() / ".nautical_queue.db"
 _DEAD_LETTER_PATH = _nautical_state_dir_path() / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = _nautical_lock_dir_path() / ".nautical_dead_letter.lock"
-_QUEUE_PATH = _tw_data_dir_path() / ".nautical_spawn_queue.jsonl"
-_QUEUE_PROCESSING_PATH = _tw_data_dir_path() / ".nautical_spawn_queue.processing.jsonl"
-_QUEUE_LOCK = _tw_data_dir_path() / ".nautical_spawn_queue.lock"
 _DEAD_LETTER_RETENTION_DAYS = int(os.environ.get("NAUTICAL_DEAD_LETTER_RETENTION_DAYS") or 30)
 _QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000)
 _DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)

@@ -98,6 +98,8 @@ _HOOK_ENGINE = None
 _HOOK_ENGINE_LOAD_FAILED = False
 _HOOK_RESULTS = None
 _HOOK_RESULTS_LOAD_FAILED = False
+_HOOK_RUNTIME = None
+_HOOK_MODULE_ACCESS = None
 _MODULE_SPECS = {
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -195,34 +197,23 @@ def _tw_data_dir_path() -> Path:
         return Path(".")
 
 
-def _load_named_module(name: str):
-    cache_attr, failed_attr, rel_name, import_name = _MODULE_SPECS[name]
-    module = globals().get(cache_attr)
-    if module is not None:
-        return module
-    if globals().get(failed_attr):
-        return None
-    try:
-        module = importlib.import_module(import_name)
-        globals()[cache_attr] = module
-        return module
-    except Exception:
-        globals()[failed_attr] = True
-        return None
+def _hook_runtime_module():
+    global _HOOK_RUNTIME
+    if _HOOK_RUNTIME is None:
+        _HOOK_RUNTIME = importlib.import_module("nautical_core.hook_runtime")
+    return _HOOK_RUNTIME
 
 
-def _require_loaded_module(module, rel_name: str):
-    if module is None:
-        raise RuntimeError(f"nautical_core/{rel_name} is required")
-    return module
+def _hook_module_access():
+    global _HOOK_MODULE_ACCESS
+    if _HOOK_MODULE_ACCESS is None:
+        hook_runtime = _hook_runtime_module()
+        _HOOK_MODULE_ACCESS = hook_runtime.HookModuleAccess(globals(), _MODULE_SPECS)
+    return _HOOK_MODULE_ACCESS
 
 
 def _module(name: str, *, required: bool = True):
-    module = _load_named_module(name)
-    if not required:
-        return module
-    rel_name = _MODULE_SPECS[name][2]
-    return _require_loaded_module(module, rel_name)
+    return _hook_module_access().module(name, required=required)
 
 def _task_cmd_prefix() -> list[str]:
     hook_support = _module("hook_support", required=False)
@@ -241,8 +232,9 @@ def _task_cmd_prefix() -> list[str]:
 
 
 def _build_hook_runtime_context():
-    hook_context = _module("hook_context")
-    return hook_context.build_hook_runtime_context(
+    hook_runtime = _hook_runtime_module()
+    return hook_runtime.build_hook_runtime_context(
+        module_access=_hook_module_access(),
         hook_name="on-exit",
         taskdata_dir=str(TW_DATA_DIR),
         use_rc_data_location=_USE_RC_DATA_LOCATION,

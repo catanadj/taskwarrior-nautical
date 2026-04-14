@@ -869,10 +869,10 @@ def _decode_leading_json_objects(raw: str, max_objects: int = 2) -> tuple[list[o
 
 def _read_two():
     global _RAW_INPUT_TEXT, _PARSED_NEW
-    raw_bytes = sys.stdin.buffer.read(_MAX_JSON_BYTES + 1)
+    hook_results = _module("hook_results")
+    raw_bytes, raw = hook_results.read_stdin_text(_MAX_JSON_BYTES)
     if len(raw_bytes) > _MAX_JSON_BYTES:
         _fail_invalid_input(f"on-modify input exceeds {_MAX_JSON_BYTES} bytes")
-    raw = raw_bytes.decode("utf-8", errors="replace")
     _RAW_INPUT_TEXT = raw
     if not raw or not raw.strip():
         _fail_invalid_input("on-modify must receive two JSON tasks")
@@ -906,41 +906,11 @@ def _read_two():
 
     _fail_invalid_input("on-modify must receive two JSON tasks")
 
-
-def _decode_latest_task_from_raw(raw: str) -> dict | None:
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    decoder = json.JSONDecoder()
-    idx = 0
-    n = len(raw)
-    last_task = None
-    while idx < n:
-        while idx < n and raw[idx].isspace():
-            idx += 1
-        if idx >= n:
-            break
-        try:
-            obj, end = decoder.raw_decode(raw, idx)
-        except Exception:
-            break
-        if isinstance(obj, dict):
-            last_task = obj
-        elif isinstance(obj, list):
-            arr = [x for x in obj if isinstance(x, dict)]
-            if arr:
-                last_task = arr[-1]
-        if end <= idx:
-            break
-        idx = end
-    return last_task if isinstance(last_task, dict) else None
-
-
 def _panic_passthrough() -> None:
     hook_results = _module("hook_results")
     hook_results.panic_passthrough(
         _RAW_INPUT_TEXT,
         _PARSED_NEW,
-        decode_latest_task_from_raw=_decode_latest_task_from_raw,
     )
 
 
@@ -963,15 +933,14 @@ def _task_has_nautical_fields(old: dict, new: dict) -> bool:
 
 
 def _print_task(task):
+    hook_results = _module("hook_results")
     if core is None:
         try:
             _load_core()
         except Exception:
-            print(json.dumps(task, ensure_ascii=False), end="")
+            hook_results.emit_passthrough_json(task)
             return
-    if core.SANITIZE_UDA:
-        core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
-    print(json.dumps(task, ensure_ascii=False), end="")
+    hook_results.emit_task_json(task, sanitize=True, core=core)
 
 
 

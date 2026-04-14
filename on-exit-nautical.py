@@ -2233,10 +2233,8 @@ def _drain_queue() -> dict:
 
 
 def _redirect_stdout_to_devnull() -> None:
-    try:
-        sys.stdout = open(os.devnull, "w", encoding="utf-8")
-    except Exception:
-        pass
+    hook_results = _module("hook_results")
+    hook_results.redirect_stdout_to_devnull()
 
 
 def _emit_drain_stats_diag(stats: dict) -> None:

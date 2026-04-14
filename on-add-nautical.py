@@ -1294,6 +1294,8 @@ def _handle_cp_preview_on_add(
     recurrence_field: str,
     due_dt: datetime,
     until_dt: datetime | None,
+    *,
+    prof=None,
 ) -> None:
     rows: list[tuple[str, str]] = []
 
@@ -1372,10 +1374,7 @@ def _handle_cp_preview_on_add(
         rows,
         kind="preview_cp",
     )
-    if core.SANITIZE_UDA:
-        core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
-    print(json.dumps(task, ensure_ascii=False), end="")
-    sys.stdout.flush()
+    _emit_task_json(task, sanitize=True, prof=prof)
 
 
 def _anchor_preview_prepare_dnf(task: dict[str, object], anchor_str: str, due_dt: datetime, rows: list[tuple[str, str]], prof) -> tuple[list[list[dict]], str]:
@@ -1579,9 +1578,9 @@ def _build_profiler():
 
 
 def _read_on_add_task(prof) -> dict:
+    hook_results = _module("hook_results")
     with prof.section("read:stdin"):
-        raw_bytes = sys.stdin.buffer.read(_MAX_JSON_BYTES + 1)
-        raw_text = raw_bytes.decode("utf-8", errors="replace")
+        raw_bytes, raw_text = hook_results.read_stdin_text(_MAX_JSON_BYTES)
         global _RAW_INPUT_TEXT
         _RAW_INPUT_TEXT = raw_text
         if len(raw_bytes) > _MAX_JSON_BYTES:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from typing import Any, Callable
@@ -38,6 +39,47 @@ def emit_task_json(task: dict[str, Any], *, sanitize: bool = False, core=None, p
         prof.add_ms('stdout:emit', (time.perf_counter() - t_out) * 1000.0)
 
 
+def read_stdin_text(max_bytes: int) -> tuple[bytes, str]:
+    raw_bytes = sys.stdin.buffer.read(max_bytes + 1)
+    raw_text = raw_bytes.decode("utf-8", errors="replace")
+    return raw_bytes, raw_text
+
+
+def decode_latest_task_from_raw(raw: str) -> dict | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    decoder = json.JSONDecoder()
+    idx = 0
+    n = len(raw)
+    last_task = None
+    while idx < n:
+        while idx < n and raw[idx].isspace():
+            idx += 1
+        if idx >= n:
+            break
+        try:
+            obj, end = decoder.raw_decode(raw, idx)
+        except Exception:
+            break
+        if isinstance(obj, dict):
+            last_task = obj
+        elif isinstance(obj, list):
+            arr = [x for x in obj if isinstance(x, dict)]
+            if arr:
+                last_task = arr[-1]
+        if end <= idx:
+            break
+        idx = end
+    return last_task if isinstance(last_task, dict) else None
+
+
+def redirect_stdout_to_devnull() -> None:
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def panic_passthrough(
     raw_input_text: str,
     parsed_task: Any,
@@ -50,6 +92,11 @@ def panic_passthrough(
         if callable(decode_latest_task_from_raw):
             try:
                 task = decode_latest_task_from_raw(raw_input_text)
+            except Exception:
+                task = None
+        if task is None:
+            try:
+                task = globals()["decode_latest_task_from_raw"](raw_input_text)
             except Exception:
                 task = None
         if task is None:

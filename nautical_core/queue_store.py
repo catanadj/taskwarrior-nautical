@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -26,6 +27,18 @@ def nautical_lock_dir_path(tw_data_dir: Path) -> Path:
 
 def legacy_state_path(tw_data_dir: Path, name: str) -> Path:
     return tw_data_dir / name
+
+
+def queue_db_path(tw_data_dir: Path) -> Path:
+    return nautical_state_dir_path(tw_data_dir) / ".nautical_queue.db"
+
+
+def dead_letter_path(tw_data_dir: Path) -> Path:
+    return nautical_state_dir_path(tw_data_dir) / ".nautical_dead_letter.jsonl"
+
+
+def dead_letter_lock_path(tw_data_dir: Path) -> Path:
+    return nautical_lock_dir_path(tw_data_dir) / ".nautical_dead_letter.lock"
 
 
 def maybe_migrate_state_file(current: Path, legacy: Path) -> None:
@@ -54,6 +67,22 @@ def migrate_legacy_state(
         maybe_migrate_state_sidecars(current, legacy)
 
 
+def migrate_nautical_state(
+    *,
+    tw_data_dir: Path,
+    extra_file_pairs: Sequence[tuple[Path, Path]] = (),
+) -> None:
+    file_pairs = [
+        (queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),
+        (dead_letter_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_dead_letter.jsonl")),
+    ]
+    file_pairs.extend(extra_file_pairs)
+    migrate_legacy_state(
+        file_pairs=file_pairs,
+        db_sidecars=((queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),),
+    )
+
+
 def fsync_dir(path: Path) -> None:
     try:
         fd = os.open(str(path), os.O_DIRECTORY)
@@ -68,6 +97,91 @@ def fsync_dir(path: Path) -> None:
             os.close(fd)
         except Exception:
             pass
+
+
+def build_dead_letter_payload(
+    *,
+    hook: str,
+    hook_version: str,
+    entry: dict[str, Any],
+    reason: str,
+    now_fn: Callable[[], str] | None = None,
+) -> dict[str, Any]:
+    ts = now_fn() if callable(now_fn) else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return {
+        "ts": ts,
+        "hook": hook,
+        "hook_version": hook_version,
+        "reason": reason,
+        "spawn_intent_id": (entry.get("spawn_intent_id") or "").strip(),
+        "parent_uuid": (entry.get("parent_uuid") or "").strip(),
+        "child_short": (entry.get("child_short") or "").strip(),
+        "child_uuid": ((entry.get("child") or {}).get("uuid") or "").strip(),
+        "entry": entry,
+    }
+
+
+def append_dead_letter_jsonl(
+    *,
+    path: Path,
+    payload: dict[str, Any],
+    durable: bool,
+    acquire_lock: Callable[[], Any] | None = None,
+    diag: Callable[[str], None] | None = None,
+    max_bytes: int = 0,
+    retention_days: int = 0,
+) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    lock_ctx = acquire_lock() if callable(acquire_lock) else nullcontext(True)
+    try:
+        with lock_ctx as locked:
+            if locked is False:
+                if callable(diag):
+                    diag("dead-letter lock busy; entry not recorded")
+                return False
+            try:
+                if max_bytes > 0 and path.exists():
+                    try:
+                        st = path.stat()
+                        if st.st_size > max_bytes:
+                            ts = int(time.time())
+                            overflow = path.with_suffix(f".overflow.{ts}.jsonl")
+                            os.replace(path, overflow)
+                            if callable(diag):
+                                diag(f"dead-letter rotated: {overflow}")
+                            if retention_days > 0:
+                                cutoff = time.time() - (retention_days * 86400)
+                                candidates = sorted(path.parent.glob(f"{path.stem}.overflow.*.jsonl"))
+                                for old in candidates:
+                                    try:
+                                        if old.stat().st_mtime < cutoff:
+                                            old.unlink()
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+                fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+                try:
+                    os.fchmod(fd, 0o600)
+                except Exception:
+                    pass
+                with os.fdopen(fd, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+                    if durable:
+                        try:
+                            f.flush()
+                            os.fsync(f.fileno())
+                            fsync_dir(path.parent)
+                        except Exception:
+                            pass
+                return True
+            except Exception:
+                return False
+    except Exception:
+        return False
 
 
 def sqlite_error_looks_corrupt(exc: Exception) -> bool:
@@ -535,6 +649,5 @@ def enqueue_entries_sqlite_result(
         if callable(diag):
             diag(f"queue db enqueue failed: {exc}")
         return QueueWriteResult(ok=False, count=len(items), err=str(exc))
-
 
 

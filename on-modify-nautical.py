@@ -608,35 +608,12 @@ _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 
 def _migrate_legacy_nautical_state() -> None:
     queue_store = _module("queue_store", required=False)
-    file_pairs = (
-        (_SPAWN_QUEUE_DB_PATH, TW_DATA_DIR / ".nautical_queue.db"),
-        (_DEAD_LETTER_PATH, TW_DATA_DIR / ".nautical_dead_letter.jsonl"),
-    )
-    db_sidecars = (
-        (_SPAWN_QUEUE_DB_PATH, TW_DATA_DIR / ".nautical_queue.db"),
-    )
     if queue_store is not None:
-        queue_store.migrate_legacy_state(file_pairs=file_pairs, db_sidecars=db_sidecars)
+        queue_store.migrate_nautical_state(tw_data_dir=TW_DATA_DIR)
+        globals()["_SPAWN_QUEUE_DB_PATH"] = queue_store.queue_db_path(TW_DATA_DIR)
+        globals()["_DEAD_LETTER_PATH"] = queue_store.dead_letter_path(TW_DATA_DIR)
+        globals()["_DEAD_LETTER_LOCK"] = queue_store.dead_letter_lock_path(TW_DATA_DIR)
         return
-    for current, legacy in file_pairs:
-        try:
-            if current.exists() or not legacy.exists():
-                continue
-            current.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(legacy, current)
-        except Exception:
-            pass
-    for current, legacy in db_sidecars:
-        for suffix in ("-wal", "-shm"):
-            try:
-                sidecar_current = Path(str(current) + suffix)
-                sidecar_legacy = Path(str(legacy) + suffix)
-                if sidecar_current.exists() or not sidecar_legacy.exists():
-                    continue
-                sidecar_current.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(sidecar_legacy, sidecar_current)
-            except Exception:
-                pass
 
 _migrate_legacy_nautical_state()
 
@@ -1467,47 +1444,29 @@ def _enqueue_deferred_spawn(task_obj: dict) -> tuple[bool, str]:
 def _write_dead_letter(entry: dict, reason: str) -> None:
     if not _require_core():
         return
-    payload = {
-        "ts": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
-        "hook": "on-modify",
-        "hook_version": NAUTICAL_HOOK_VERSION,
-        "reason": reason,
-        "spawn_intent_id": (entry.get("spawn_intent_id") or "").strip(),
-        "parent_uuid": (entry.get("parent_uuid") or "").strip(),
-        "child_short": (entry.get("child_short") or "").strip(),
-        "child_uuid": ((entry.get("child") or {}).get("uuid") or "").strip(),
-        "entry": entry,
-    }
+    queue_store = _module("queue_store")
+    payload = queue_store.build_dead_letter_payload(
+        hook="on-modify",
+        hook_version=NAUTICAL_HOOK_VERSION,
+        entry=entry,
+        reason=reason,
+        now_fn=lambda: _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+    )
     try:
-        _DEAD_LETTER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    try:
-        with core.safe_lock(
-            _DEAD_LETTER_LOCK,
-            retries=_DEAD_LETTER_LOCK_RETRIES,
-            sleep_base=_DEAD_LETTER_LOCK_SLEEP_BASE,
-            jitter=_DEAD_LETTER_LOCK_SLEEP_BASE,
-            mkdir=True,
-            stale_after=_SPAWN_LOCK_STALE_AFTER,
-        ) as ok:
-            if not ok:
-                _diag("dead-letter lock busy; entry not recorded")
-                return
-            fd = os.open(str(_DEAD_LETTER_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            with os.fdopen(fd, "a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-                if _DURABLE_QUEUE:
-                    try:
-                        f.flush()
-                        os.fsync(f.fileno())
-                        _fsync_dir(_DEAD_LETTER_PATH.parent)
-                    except Exception:
-                        pass
+        queue_store.append_dead_letter_jsonl(
+            path=_DEAD_LETTER_PATH,
+            payload=payload,
+            durable=_DURABLE_QUEUE,
+            acquire_lock=lambda: core.safe_lock(
+                _DEAD_LETTER_LOCK,
+                retries=_DEAD_LETTER_LOCK_RETRIES,
+                sleep_base=_DEAD_LETTER_LOCK_SLEEP_BASE,
+                jitter=_DEAD_LETTER_LOCK_SLEEP_BASE,
+                mkdir=True,
+                stale_after=_SPAWN_LOCK_STALE_AFTER,
+            ),
+            diag=_diag,
+        )
     except Exception:
         pass
 

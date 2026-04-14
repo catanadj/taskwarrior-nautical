@@ -276,36 +276,15 @@ _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in
 
 def _migrate_legacy_nautical_state() -> None:
     queue_store = _module("queue_store", required=False)
-    file_pairs = (
-        (_QUEUE_DB_PATH, TW_DATA_DIR / ".nautical_queue.db"),
-        (_DEAD_LETTER_PATH, TW_DATA_DIR / ".nautical_dead_letter.jsonl"),
-        (_intent_log_path(), TW_DATA_DIR / ".nautical_spawn_intents.jsonl"),
-    )
-    db_sidecars = (
-        (_QUEUE_DB_PATH, TW_DATA_DIR / ".nautical_queue.db"),
-    )
     if queue_store is not None:
-        queue_store.migrate_legacy_state(file_pairs=file_pairs, db_sidecars=db_sidecars)
+        queue_store.migrate_nautical_state(
+            tw_data_dir=TW_DATA_DIR,
+            extra_file_pairs=((_intent_log_path(), TW_DATA_DIR / ".nautical_spawn_intents.jsonl"),),
+        )
+        globals()["_QUEUE_DB_PATH"] = queue_store.queue_db_path(TW_DATA_DIR)
+        globals()["_DEAD_LETTER_PATH"] = queue_store.dead_letter_path(TW_DATA_DIR)
+        globals()["_DEAD_LETTER_LOCK"] = queue_store.dead_letter_lock_path(TW_DATA_DIR)
         return
-    for current, legacy in file_pairs:
-        try:
-            if current.exists() or not legacy.exists():
-                continue
-            current.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(legacy, current)
-        except Exception:
-            pass
-    for current, legacy in db_sidecars:
-        for suffix in ("-wal", "-shm"):
-            try:
-                sidecar_current = Path(str(current) + suffix)
-                sidecar_legacy = Path(str(legacy) + suffix)
-                if sidecar_current.exists() or not sidecar_legacy.exists():
-                    continue
-                sidecar_current.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(sidecar_legacy, sidecar_current)
-            except Exception:
-                pass
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -1353,60 +1332,22 @@ def _lock_backoff_delay(streak: int) -> float:
 
 
 def _write_dead_letter(entry: dict, reason: str) -> None:
-    payload = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "hook": "on-exit",
-        "hook_version": NAUTICAL_HOOK_VERSION,
-        "reason": reason,
-        "spawn_intent_id": (entry.get("spawn_intent_id") or "").strip(),
-        "parent_uuid": (entry.get("parent_uuid") or "").strip(),
-        "child_short": (entry.get("child_short") or "").strip(),
-        "child_uuid": ((entry.get("child") or {}).get("uuid") or "").strip(),
-        "entry": entry,
-    }
-    with _lock_dead_letter() as locked:
-        if not locked:
-            _diag("dead-letter lock busy; entry not recorded")
-            return
-        try:
-            if _DEAD_LETTER_MAX_BYTES > 0 and _DEAD_LETTER_PATH.exists():
-                try:
-                    st = _DEAD_LETTER_PATH.stat()
-                    if st.st_size > _DEAD_LETTER_MAX_BYTES:
-                        ts = int(time.time())
-                        overflow = _DEAD_LETTER_PATH.with_suffix(f".overflow.{ts}.jsonl")
-                        os.replace(_DEAD_LETTER_PATH, overflow)
-                        _diag(f"dead-letter rotated: {overflow}")
-                        if _DEAD_LETTER_RETENTION_DAYS > 0:
-                            try:
-                                cutoff = time.time() - (_DEAD_LETTER_RETENTION_DAYS * 86400)
-                                candidates = sorted(_DEAD_LETTER_PATH.parent.glob(f"{_DEAD_LETTER_PATH.stem}.overflow.*.jsonl"))
-                                for old in candidates:
-                                    try:
-                                        if old.stat().st_mtime < cutoff:
-                                            old.unlink()
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-            fd = os.open(str(_DEAD_LETTER_PATH), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            with os.fdopen(fd, "a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-                if _DURABLE_QUEUE:
-                    try:
-                        f.flush()
-                        os.fsync(f.fileno())
-                        _fsync_dir(_DEAD_LETTER_PATH.parent)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+    queue_store = _module("queue_store")
+    payload = queue_store.build_dead_letter_payload(
+        hook="on-exit",
+        hook_version=NAUTICAL_HOOK_VERSION,
+        entry=entry,
+        reason=reason,
+    )
+    queue_store.append_dead_letter_jsonl(
+        path=_DEAD_LETTER_PATH,
+        payload=payload,
+        durable=_DURABLE_QUEUE,
+        acquire_lock=_lock_dead_letter,
+        diag=_diag,
+        max_bytes=_DEAD_LETTER_MAX_BYTES,
+        retention_days=_DEAD_LETTER_RETENTION_DAYS,
+    )
 
 def _fsync_dir(path: Path) -> None:
     queue_store = _module("queue_store", required=False)

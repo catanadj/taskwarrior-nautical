@@ -5019,19 +5019,6 @@ def _modify_runtime_services():
         chain_colour_for_task=_chain_colour_for_task,
         strip_quotes=_strip_quotes,
         human_delta=_human_delta,
-        completion_link_numbers_or_fail=_completion_link_numbers_or_fail,
-        completion_kind_or_stop=_completion_kind_or_stop,
-        completion_chain_id_or_fail=_completion_chain_id_or_fail,
-        completion_existing_next_or_fail=_completion_existing_next_or_fail,
-        completion_compute_child_due=_completion_compute_child_due,
-        completion_until_or_fail=_completion_until_or_fail,
-        completion_until_guard_or_stop=_completion_until_guard_or_stop,
-        completion_require_child_due_or_fail=_completion_require_child_due_or_fail,
-        completion_warn_unreasonable_duration=_completion_warn_unreasonable_duration,
-        completion_caps=_completion_caps,
-        completion_cap_guard_or_stop=_completion_cap_guard_or_stop,
-        build_child_from_parent=_build_child_from_parent,
-        spawn_child_atomic=_spawn_child_atomic,
     )
 
 
@@ -5348,8 +5335,13 @@ def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
 def _completion_preflight_context(new: dict, now_utc: datetime):
     modify_completion_preflight = _module("modify_completion_preflight")
     modify_runtime = _module("modify_runtime")
-    runtime = _modify_runtime_services()
-    services = modify_runtime.build_preflight_services(runtime)
+    services = modify_runtime.build_preflight_services(
+        short=_short,
+        completion_link_numbers_or_fail=_completion_link_numbers_or_fail,
+        completion_kind_or_stop=_completion_kind_or_stop,
+        completion_chain_id_or_fail=_completion_chain_id_or_fail,
+        completion_existing_next_or_fail=_completion_existing_next_or_fail,
+    )
     return modify_completion_preflight.completion_preflight_context(
         new,
         now_utc,
@@ -5447,8 +5439,15 @@ def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, n
 def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime):
     modify_completion_compute = _module("modify_completion_compute")
     modify_runtime = _module("modify_runtime")
-    runtime = _modify_runtime_services()
-    services = modify_runtime.build_compute_services(runtime)
+    services = modify_runtime.build_compute_services(
+        completion_compute_child_due=_completion_compute_child_due,
+        completion_until_or_fail=_completion_until_or_fail,
+        completion_until_guard_or_stop=_completion_until_guard_or_stop,
+        completion_require_child_due_or_fail=_completion_require_child_due_or_fail,
+        completion_warn_unreasonable_duration=_completion_warn_unreasonable_duration,
+        completion_caps=_completion_caps,
+        completion_cap_guard_or_stop=_completion_cap_guard_or_stop,
+    )
     return modify_completion_compute.completion_compute_next_and_limits(
         new,
         kind,
@@ -5471,8 +5470,13 @@ def _completion_build_and_spawn_child(
 ):
     modify_completion_spawn = _module("modify_completion_spawn")
     modify_runtime = _module("modify_runtime")
-    runtime = _modify_runtime_services()
-    services = modify_runtime.build_spawn_services(runtime)
+    services = modify_runtime.build_spawn_services(
+        build_child_from_parent=_build_child_from_parent,
+        spawn_child_atomic=_spawn_child_atomic,
+        panel=_panel,
+        print_task=_print_task,
+        diag=_diag,
+    )
     return modify_completion_spawn.completion_build_and_spawn_child(
         new,
         child_due=child_due,

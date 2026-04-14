@@ -106,19 +106,6 @@ class ModifyRuntimeServices:
     chain_colour_for_task: Any
     strip_quotes: Any
     human_delta: Any
-    completion_link_numbers_or_fail: Any
-    completion_kind_or_stop: Any
-    completion_chain_id_or_fail: Any
-    completion_existing_next_or_fail: Any
-    completion_compute_child_due: Any
-    completion_until_or_fail: Any
-    completion_until_guard_or_stop: Any
-    completion_require_child_due_or_fail: Any
-    completion_warn_unreasonable_duration: Any
-    completion_caps: Any
-    completion_cap_guard_or_stop: Any
-    build_child_from_parent: Any
-    spawn_child_atomic: Any
 
 
 def build_anchor_feedback_services(runtime: ModifyRuntimeServices) -> AnchorFeedbackServices:
@@ -186,35 +173,58 @@ def build_cp_feedback_services(runtime: ModifyRuntimeServices) -> CpFeedbackServ
     )
 
 
-def build_preflight_services(runtime: ModifyRuntimeServices) -> CompletionPreflightServices:
+def build_preflight_services(
+    *,
+    short,
+    completion_link_numbers_or_fail,
+    completion_kind_or_stop,
+    completion_chain_id_or_fail,
+    completion_existing_next_or_fail,
+) -> CompletionPreflightServices:
     return CompletionPreflightServices(
-        short=runtime.short,
-        completion_link_numbers_or_fail=runtime.completion_link_numbers_or_fail,
-        completion_kind_or_stop=runtime.completion_kind_or_stop,
-        completion_chain_id_or_fail=runtime.completion_chain_id_or_fail,
-        completion_existing_next_or_fail=runtime.completion_existing_next_or_fail,
+        short=short,
+        completion_link_numbers_or_fail=completion_link_numbers_or_fail,
+        completion_kind_or_stop=completion_kind_or_stop,
+        completion_chain_id_or_fail=completion_chain_id_or_fail,
+        completion_existing_next_or_fail=completion_existing_next_or_fail,
     )
 
 
-def build_compute_services(runtime: ModifyRuntimeServices) -> CompletionComputeServices:
+def build_compute_services(
+    *,
+    completion_compute_child_due,
+    completion_until_or_fail,
+    completion_until_guard_or_stop,
+    completion_require_child_due_or_fail,
+    completion_warn_unreasonable_duration,
+    completion_caps,
+    completion_cap_guard_or_stop,
+) -> CompletionComputeServices:
     return CompletionComputeServices(
-        completion_compute_child_due=runtime.completion_compute_child_due,
-        completion_until_or_fail=runtime.completion_until_or_fail,
-        completion_until_guard_or_stop=runtime.completion_until_guard_or_stop,
-        completion_require_child_due_or_fail=runtime.completion_require_child_due_or_fail,
-        completion_warn_unreasonable_duration=runtime.completion_warn_unreasonable_duration,
-        completion_caps=runtime.completion_caps,
-        completion_cap_guard_or_stop=runtime.completion_cap_guard_or_stop,
+        completion_compute_child_due=completion_compute_child_due,
+        completion_until_or_fail=completion_until_or_fail,
+        completion_until_guard_or_stop=completion_until_guard_or_stop,
+        completion_require_child_due_or_fail=completion_require_child_due_or_fail,
+        completion_warn_unreasonable_duration=completion_warn_unreasonable_duration,
+        completion_caps=completion_caps,
+        completion_cap_guard_or_stop=completion_cap_guard_or_stop,
     )
 
 
-def build_spawn_services(runtime: ModifyRuntimeServices) -> CompletionSpawnServices:
+def build_spawn_services(
+    *,
+    build_child_from_parent,
+    spawn_child_atomic,
+    panel,
+    print_task,
+    diag,
+) -> CompletionSpawnServices:
     return CompletionSpawnServices(
-        build_child_from_parent=runtime.build_child_from_parent,
-        spawn_child_atomic=runtime.spawn_child_atomic,
-        panel=runtime.panel,
-        print_task=runtime.print_task,
-        diag=runtime.diag,
+        build_child_from_parent=build_child_from_parent,
+        spawn_child_atomic=spawn_child_atomic,
+        panel=panel,
+        print_task=print_task,
+        diag=diag,
     )
 
 

@@ -10,10 +10,9 @@ import copy
 import math
 import stat
 from collections import OrderedDict
-from types import MappingProxyType
 from typing import Any, TypeAlias, TypedDict, cast
 from datetime import datetime, timedelta, timezone, date
-from functools import lru_cache, wraps
+from functools import lru_cache
 from calendar import month_name, monthrange
 from datetime import date as _date
 import json, zlib, base64, hashlib, tempfile, time, random, subprocess
@@ -115,39 +114,6 @@ class AnchorHintsPayload(TypedDict, total=False):
 # ==============================================================================
 
 
-# ==============================================================================
-# SECTION: Config & defaults
-# ==============================================================================
-# --- TOML loading helpers ---
-
-
-try:
-    import tomllib  # Python 3.11+
-except Exception:
-    tomllib = None
-if tomllib is None:
-    try:
-        import tomli
-
-        tomllib = tomli  # Python 3.10 and earlier (pip install tomli)
-    except Exception:
-        tomllib = None
-
-
-# --- Defaults ---
-_DEFAULTS = {
-    "wrand_salt": "nautical|wrand|v3",  # change to reshuffle weekly-rand streams
-    "tz": "Europe/Bucharest",           # reserved for future DST/zone features
-    "holiday_region": "",               # reserved for future holiday features
-    "anchor_file_dir": "",              # trusted directory for anchor date files
-    "omit_file_dir": "",                # trusted directory for anchor omit files
-}
-
-_config_support = _import_sibling("config_support")
-
-# --- Config cache ---
-_CONF_CACHE = None
-
 # --- Core constants ---
 _CACHE_LOCK_RETRIES = 6
 _CACHE_LOCK_SLEEP_BASE = 0.05
@@ -156,117 +122,36 @@ _CACHE_LOCK_STALE_AFTER = 300.0
 _CACHE_LOAD_MEM_MAX = 128
 _CACHE_LOAD_MEM_TTL = 300
 _CACHE_LOAD_MEM: OrderedDict[str, tuple[int, int, dict, float]] = OrderedDict()
-
-def _env_flag_true(name: str, env_map: dict | None = None) -> bool:
-    return _config_support.env_flag_true(name, env_map=env_map)
-
-
-def _path_input_error(path_value: str) -> str | None:
-    return _config_support.path_input_error(path_value)
-
-
-def _normalized_abspath(path_value: str) -> str:
-    return _config_support.normalized_abspath(path_value)
-
-
-def _nearest_existing_dir(path_value: str) -> str | None:
-    return _config_support.nearest_existing_dir(path_value)
-
-
-def _world_writable_without_sticky(mode: int) -> bool:
-    return _config_support.world_writable_without_sticky(mode)
-
-
-def _path_safety_error(path_value: str, *, expect_dir: bool = True) -> str | None:
-    return _config_support.path_safety_error(path_value, expect_dir=expect_dir)
-
-
-def _validated_user_dir(
-    path_value: str,
-    *,
-    label: str,
-    trust_env: str = "",
-    env_map: dict | None = None,
-    warn_on_error: bool = True,
-) -> str:
-    return _config_support.validated_user_dir(
-        path_value,
-        label=label,
-        trust_env=trust_env,
-        env_map=env_map,
-        warn_on_error=warn_on_error,
-    )
-
-
-def _read_toml(path: str) -> dict:
-    return _config_support.read_toml(
-        path,
-        tomllib_mod=tomllib,
-        warn_missing_toml_parser=_warn_missing_toml_parser,
-        warn_toml_parse_error=_warn_toml_parse_error,
-    )
-
-
-def _config_paths() -> list[str]:
-    return _config_support.config_paths(warn_env_config_missing=_warn_env_config_missing)
-
-def _warn_env_config_missing(env_path: str) -> None:
-    _config_support.warn_env_config_missing(
-        env_path,
-        warn_once_per_day_any=_warn_once_per_day_any,
-    )
-
-
-def _normalize_keys(d: dict) -> dict:
-    return _config_support.normalize_keys(d)
-
-def _load_config() -> dict:
-    return _config_support.load_config(
-        defaults=_DEFAULTS,
-        config_paths=_config_paths,
-        read_toml=_read_toml,
-        normalize_keys=_normalize_keys,
-    )
-
-
-
-def _nautical_cache_dir() -> str:
-    _cache_support = _import_sibling("cache_support")
-
-    return _cache_support.nautical_cache_dir(validated_user_dir=_validated_user_dir)
-
-
-def _warn_once_per_day(key: str, message: str) -> None:
-    _warnings = _import_sibling("warnings")
-
-    _warnings.warn_once_per_day(
-        key,
-        message,
-        cache_dir=_nautical_cache_dir(),
-        require_diag=True,
-    )
-
-
-def _warn_once_per_day_any(key: str, message: str) -> None:
-    _warnings = _import_sibling("warnings")
-
-    _warnings.warn_once_per_day(
-        key,
-        message,
-        cache_dir=_nautical_cache_dir(),
-        require_diag=False,
-    )
-
-
-def _warn_rate_limited_any(key: str, message: str, min_interval_s: float = 3600.0) -> None:
-    _warnings = _import_sibling("warnings")
-
-    _warnings.warn_rate_limited_any(
-        key,
-        message,
-        cache_dir=_nautical_cache_dir(),
-        min_interval_s=min_interval_s,
-    )
+_core_config = _import_sibling("core_config")
+_env_flag_true = _core_config.env_flag_true
+_path_input_error = _core_config.path_input_error
+_normalized_abspath = _core_config.normalized_abspath
+_nearest_existing_dir = _core_config.nearest_existing_dir
+_world_writable_without_sticky = _core_config.world_writable_without_sticky
+_path_safety_error = _core_config.path_safety_error
+_validated_user_dir = _core_config.validated_user_dir
+_DEFAULTS = _core_config._DEFAULTS
+_read_toml = _core_config._read_toml
+_config_paths = _core_config._config_paths
+_warn_env_config_missing = _core_config._warn_env_config_missing
+_normalize_keys = _core_config._normalize_keys
+_load_config = _core_config._load_config
+_nautical_cache_dir = _core_config.nautical_cache_dir
+_warn_once_per_day = _core_config.warn_once_per_day
+_warn_once_per_day_any = _core_config.warn_once_per_day_any
+_warn_rate_limited_any = _core_config.warn_rate_limited_any
+_warn_missing_toml_parser = _core_config._warn_missing_toml_parser
+_warn_toml_parse_error = _core_config._warn_toml_parse_error
+_get_config = _core_config._get_config
+_CONF = _core_config._CONF
+_conf_raw = _core_config.conf_raw
+_conf_str = _core_config.conf_str
+_conf_int = _core_config.conf_int
+_conf_bool = _core_config.conf_bool
+_conf_csv_or_list = _core_config.conf_csv_or_list
+_conf_uda_field_list = _core_config.conf_uda_field_list
+_trueish = _core_config.trueish
+_ttl_lru_cache = _core_config.ttl_lru_cache
 
 
 def _emit_cache_metrics() -> None:
@@ -351,156 +236,38 @@ def render_panel(*args, **kwargs):
     _ui.text_line = text_line
     return _ui.render_panel(*args, **kwargs)
 
-
-
-def _warn_missing_toml_parser(config_path: str) -> None:
-    _warnings = _import_sibling("warnings")
-
-    _warnings.warn_missing_toml_parser(
-        config_path,
-        warn_once_per_day=_warn_once_per_day,
-        warn_once_per_day_any=_warn_once_per_day_any,
-    )
-
-
-def _warn_toml_parse_error(config_path: str, err: Exception) -> None:
-    _warnings = _import_sibling("warnings")
-
-    _warnings.warn_toml_parse_error(
-        config_path,
-        err,
-        warn_once_per_day=_warn_once_per_day,
-        warn_once_per_day_any=_warn_once_per_day_any,
-    )
-
-
-def _get_config() -> dict:
-    global _CONF_CACHE
-    out, _CONF_CACHE = _config_support.get_config(_CONF_CACHE, load_config=_load_config)
-    return out
-
-_CONF = MappingProxyType(_get_config())
-
-def _conf_raw(key: str):
-    return _config_support.conf_raw(_CONF, key)
-
-def _conf_str(key: str, default: str) -> str:
-    return _config_support.conf_str(_CONF, key, default)
-
-def _conf_int(
-    key: str,
-    default: int,
-    min_value: int | None = None,
-    max_value: int | None = None,
-) -> int:
-    return _config_support.conf_int(
-        _CONF,
-        key,
-        default,
-        min_value=min_value,
-        max_value=max_value,
-    )
-
-def _conf_bool(
-    key: str,
-    default: bool = False,
-    true_values: set[str] | None = None,
-    false_values: set[str] | None = None,
-) -> bool:
-    return _config_support.conf_bool(
-        _CONF,
-        key,
-        default=default,
-        true_values=true_values,
-        false_values=false_values,
-    )
-
-
-def _conf_csv_or_list(key: str, default: list[str] | None = None, lower: bool = False) -> list[str]:
-    return _config_support.conf_csv_or_list(_CONF, key, default=default, lower=lower)
-
-
-def _conf_uda_field_list(key: str) -> list[str]:
-    return _config_support.conf_uda_field_list(_CONF, key)
-
-def _trueish(v, default=False):
-    return _config_support.trueish(v, default=default)
-
-ANCHOR_YEAR_FMT = "MD"
-WRAND_SALT      = _CONF["wrand_salt"]
-LOCAL_TZ_NAME   = _CONF["tz"]
-HOLIDAY_REGION  = _CONF["holiday_region"]
-ANCHOR_FILE_DIR = _CONF["anchor_file_dir"]
-OMIT_FILE_DIR   = _CONF["omit_file_dir"]
-
-ENABLE_ANCHOR_CACHE = _conf_bool("enable_anchor_cache", False)
-ANCHOR_CACHE_DIR_OVERRIDE = _conf_str("anchor_cache_dir", "")   # optional custom path
-
-# TTL is optional; 0 = no TTL
-ANCHOR_CACHE_TTL = _conf_int("anchor_cache_ttl", 0, min_value=0)
-
-# --- Hook-level toggles (shared config) -------------------------------------
-CHAIN_COLOR_PER_CHAIN = _conf_bool(
-    "chain_color_per_chain",
-    False,
-    true_values={"chain", "per-chain", "per"},
-)
-SHOW_TIMELINE_GAPS = _conf_bool(
-    "show_timeline_gaps",
-    True,
-    false_values={"0", "no", "false", "off", "none"},
-)
-SHOW_ANALYTICS = _conf_bool(
-    "show_analytics",
-    True,
-    false_values={"0", "no", "false", "off", "none"},
-)
-ANALYTICS_STYLE = _conf_str("analytics_style", "clinical").lower()
-if ANALYTICS_STYLE not in ("coach", "clinical"):
-    ANALYTICS_STYLE = "clinical"
-ANALYTICS_ONTIME_TOL_SECS = _conf_int("analytics_ontime_tol_secs", 4 * 60 * 60, min_value=0)
-VERIFY_IMPORT = _conf_bool("verify_import", True)
-DEBUG_WAIT_SCHED = _conf_bool(
-    "debug_wait_sched",
-    False,
-    true_values={"1", "yes", "true", "on"},
-)
-CHECK_CHAIN_INTEGRITY = _conf_bool(
-    "check_chain_integrity",
-    False,
-    true_values={"1", "yes", "true", "on"},
-)
-PANEL_MODE = _conf_str("panel_mode", "rich").lower()
-FAST_COLOR = _conf_bool("fast_color", True)
-EXIT_PROGRESS = _conf_bool("exit_progress", True)
-SPAWN_QUEUE_MAX_BYTES = _conf_int("spawn_queue_max_bytes", 524288, min_value=0)
-SPAWN_QUEUE_DRAIN_MAX_ITEMS = _conf_int("spawn_queue_drain_max_items", 200, min_value=0)
-MAX_CHAIN_WALK = _conf_int("max_chain_walk", 500, min_value=1)
-MAX_ANCHOR_ITER = _conf_int("max_anchor_iterations", 128, min_value=32, max_value=1024)
-MAX_LINK_NUMBER = _conf_int("max_link_number", 10000, min_value=1)
-SANITIZE_UDA = _conf_bool("sanitize_uda", False, true_values={"1", "yes", "true", "on"})
-SANITIZE_UDA_MAX_LEN = _conf_int("sanitize_uda_max_len", 1024, min_value=64, max_value=4096)
-MAX_JSON_BYTES = _conf_int("max_json_bytes", 10 * 1024 * 1024, min_value=1024, max_value=100 * 1024 * 1024)
-RECURRENCE_UPDATE_UDAS = tuple(_conf_uda_field_list("recurrence_update_udas"))
-_CACHE_TTL_SECS = _conf_int("cache_ttl_secs", 3600, min_value=0)
-_CACHE_LOAD_MEM_MAX = _conf_int("cache_load_mem_max", _CACHE_LOAD_MEM_MAX, min_value=16, max_value=4096)
-_CACHE_LOAD_MEM_TTL = _conf_int("cache_load_mem_ttl", _CACHE_LOAD_MEM_TTL, min_value=0, max_value=86400)
-
-def _ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
-    ttl_val = _CACHE_TTL_SECS if ttl is None else ttl
-    def _decorator(fn):
-        cached = lru_cache(maxsize=maxsize)(fn)
-        last = {"t": time.time()}
-        @wraps(fn)
-        def _wrapper(*args, **kwargs):
-            if ttl_val and (time.time() - last["t"] > ttl_val):
-                cached.cache_clear()
-                last["t"] = time.time()
-            return cached(*args, **kwargs)
-        _wrapper.cache_clear = cached.cache_clear
-        _wrapper.cache_info = cached.cache_info
-        return _wrapper
-    return _decorator
+ANCHOR_YEAR_FMT = _core_config.ANCHOR_YEAR_FMT
+WRAND_SALT = _core_config.WRAND_SALT
+LOCAL_TZ_NAME = _core_config.LOCAL_TZ_NAME
+HOLIDAY_REGION = _core_config.HOLIDAY_REGION
+ANCHOR_FILE_DIR = _core_config.ANCHOR_FILE_DIR
+OMIT_FILE_DIR = _core_config.OMIT_FILE_DIR
+ENABLE_ANCHOR_CACHE = _core_config.ENABLE_ANCHOR_CACHE
+ANCHOR_CACHE_DIR_OVERRIDE = _core_config.ANCHOR_CACHE_DIR_OVERRIDE
+ANCHOR_CACHE_TTL = _core_config.ANCHOR_CACHE_TTL
+CHAIN_COLOR_PER_CHAIN = _core_config.CHAIN_COLOR_PER_CHAIN
+SHOW_TIMELINE_GAPS = _core_config.SHOW_TIMELINE_GAPS
+SHOW_ANALYTICS = _core_config.SHOW_ANALYTICS
+ANALYTICS_STYLE = _core_config.ANALYTICS_STYLE
+ANALYTICS_ONTIME_TOL_SECS = _core_config.ANALYTICS_ONTIME_TOL_SECS
+VERIFY_IMPORT = _core_config.VERIFY_IMPORT
+DEBUG_WAIT_SCHED = _core_config.DEBUG_WAIT_SCHED
+CHECK_CHAIN_INTEGRITY = _core_config.CHECK_CHAIN_INTEGRITY
+PANEL_MODE = _core_config.PANEL_MODE
+FAST_COLOR = _core_config.FAST_COLOR
+EXIT_PROGRESS = _core_config.EXIT_PROGRESS
+SPAWN_QUEUE_MAX_BYTES = _core_config.SPAWN_QUEUE_MAX_BYTES
+SPAWN_QUEUE_DRAIN_MAX_ITEMS = _core_config.SPAWN_QUEUE_DRAIN_MAX_ITEMS
+MAX_CHAIN_WALK = _core_config.MAX_CHAIN_WALK
+MAX_ANCHOR_ITER = _core_config.MAX_ANCHOR_ITER
+MAX_LINK_NUMBER = _core_config.MAX_LINK_NUMBER
+SANITIZE_UDA = _core_config.SANITIZE_UDA
+SANITIZE_UDA_MAX_LEN = _core_config.SANITIZE_UDA_MAX_LEN
+MAX_JSON_BYTES = _core_config.MAX_JSON_BYTES
+RECURRENCE_UPDATE_UDAS = _core_config.RECURRENCE_UPDATE_UDAS
+_CACHE_TTL_SECS = _core_config.CACHE_TTL_SECS
+_CACHE_LOAD_MEM_MAX = _core_config.CACHE_LOAD_MEM_MAX
+_CACHE_LOAD_MEM_TTL = _core_config.CACHE_LOAD_MEM_TTL
 
 # ==============================================================================
 # SECTION: Taskwarrior helpers

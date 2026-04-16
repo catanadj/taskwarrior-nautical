@@ -2069,6 +2069,24 @@ def test_deploy_sanity_script_reports_ok():
     expect(all(bool(r.get("ok")) for r in results if isinstance(r, dict)), f"failing sanity result: {results}")
 
 
+def test_hook_replay_harness_reports_ok():
+    """Replay harness should pass the seeded hook corpus."""
+    path = os.path.join(ROOT, "tools", "nautical_hook_replay.py")
+    corpus = os.path.join(ROOT, "tools", "nautical_hook_replay_corpus.jsonl")
+    p = subprocess.run(
+        [sys.executable, path, "--json", "--corpus", corpus],
+        text=True,
+        capture_output=True,
+        timeout=12.0,
+    )
+    expect(p.returncode == 0, f"replay harness returned {p.returncode}: stderr={p.stderr!r}")
+    obj = json.loads((p.stdout or "").strip() or "{}")
+    expect(obj.get("status") == "ok", f"unexpected replay harness status: {obj}")
+    results = obj.get("results") if isinstance(obj.get("results"), list) else []
+    expect(results, "replay harness should report per-case results")
+    expect(all(bool(r.get("ok")) for r in results if isinstance(r, dict)), f"failing replay result: {results}")
+
+
 def test_ops_templates_present_and_runner_executable():
     """ops templates should exist and runner script should be executable."""
     ops = os.path.join(ROOT, "tools", "ops")
@@ -8892,6 +8910,7 @@ TESTS = [
     test_queue_status_warns_on_stale_processing_and_dead_letters,
     test_perf_budget_config_covers_cache_io_checks,
     test_deploy_sanity_script_reports_ok,
+    test_hook_replay_harness_reports_ok,
     test_ops_templates_present_and_runner_executable,
     test_on_modify_queue_full_drops_with_dead_letter,
     test_on_modify_enqueue_uses_sqlite_when_legacy_empty,

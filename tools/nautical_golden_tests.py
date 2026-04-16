@@ -1746,12 +1746,12 @@ def test_on_modify_read_two_invalid_trailing():
     expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
 
 def test_on_modify_read_two_array_uuid_mismatch_fails():
-    """on-modify array input should reject old/new UUID mismatches."""
+    """on-modify array input should reject old/new UUID mismatches for Nautical tasks."""
     hook = _find_hook_file("on-modify-nautical.py")
     raw = json.dumps(
         [
-            {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"},
-            {"uuid": "00000000-0000-0000-0000-000000000222", "status": "completed"},
+            {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending", "anchor": "w:mon"},
+            {"uuid": "00000000-0000-0000-0000-000000000222", "status": "completed", "anchor": "w:mon"},
         ]
     )
     p = _run_hook_script_raw(hook, raw)
@@ -1765,6 +1765,16 @@ def test_on_modify_read_two_array_single_missing_uuid_fails():
     p = _run_hook_script_raw(hook, raw)
     expect(p.returncode != 0, "on-modify should fail when array input lacks UUID")
     expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
+
+
+def test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored():
+    """on-modify should not fail UUID mismatch for plain Taskwarrior deletes without Nautical fields."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_uuid_mismatch_non_nautical_test")
+    old = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"}
+    new = {"uuid": "00000000-0000-0000-0000-000000000222", "status": "deleted"}
+    got_old, got_new = mod._validate_modify_pair(old, new)
+    expect(got_old is old and got_new is new, f"expected UUID mismatch to be ignored for non-nautical delete: {(got_old, got_new)!r}")
 
 def test_on_modify_invalid_anchor_has_no_stdout():
     """on-modify should keep stdout empty on semantic validation failures."""

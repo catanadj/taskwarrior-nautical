@@ -795,7 +795,11 @@ def _task_uuid_or_empty(task: dict) -> str:
 def _validate_modify_pair(old: dict, new: dict) -> tuple[dict, dict]:
     old_uuid = _task_uuid_or_empty(old)
     new_uuid = _task_uuid_or_empty(new)
-    if not old_uuid or not new_uuid or old_uuid != new_uuid:
+    if not old_uuid or not new_uuid:
+        _fail_protocol_error("Missing task UUID in on-modify input")
+    if old_uuid != new_uuid:
+        if not _task_has_nautical_fields(old, new):
+            return old, new
         _fail_protocol_error("Old and new task UUIDs differ")
     return old, new
 

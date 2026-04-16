@@ -2750,6 +2750,8 @@ def _next_occurrence_after_local_dt(
 
     This is hook-level logic because core recurrence is date-based.
     """
+    if not dnf:
+        return None
     tz = after_local_dt.tzinfo or _nautical_local_tz()
     slots = _extract_time_slots_from_dnf(dnf)
 

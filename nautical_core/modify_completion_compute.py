@@ -16,6 +16,8 @@ def completion_compute_child_due(
     try:
         if kind in {"anchor", "anchor_file"}:
             child_due, meta, dnf = compute_anchor_child_due(new)
+            if kind == "anchor_file" and dnf is None:
+                dnf = []
         else:
             child_due, meta = compute_cp_child_due(new)
             dnf = None

@@ -76,7 +76,7 @@ def apply_day_offset(d: date, mods: dict) -> date:
 
 
 def expr_has_m_or_y(dnf) -> bool:
-    for term in dnf:
+    for term in dnf or []:
         for atom in term:
             if atom["typ"] in ("m", "y"):
                 return True

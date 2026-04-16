@@ -2087,6 +2087,22 @@ def test_hook_replay_harness_reports_ok():
     expect(all(bool(r.get("ok")) for r in results if isinstance(r, dict)), f"failing replay result: {results}")
 
 
+def test_mixed_recurrence_loop_harness_reports_ok():
+    """Mixed recurrence loop harness should complete a small deterministic cycle run."""
+    path = os.path.join(ROOT, "tools", "nautical_mixed_recurrence_loop.py")
+    p = subprocess.run(
+        [sys.executable, path, "--cycles", "3", "--json"],
+        text=True,
+        capture_output=True,
+        timeout=30.0,
+    )
+    expect(p.returncode == 0, f"mixed recurrence loop returned {p.returncode}: stderr={p.stderr!r}")
+    obj = json.loads((p.stdout or "").strip() or "{}")
+    expect(obj.get("ok") is True, f"unexpected mixed loop status: {obj}")
+    expect(int(obj.get("cycles_completed") or 0) >= 1, f"expected loop progress: {obj}")
+    expect(not obj.get("violations"), f"mixed loop reported violations: {obj}")
+
+
 def test_ops_templates_present_and_runner_executable():
     """ops templates should exist and runner script should be executable."""
     ops = os.path.join(ROOT, "tools", "ops")
@@ -6678,7 +6694,7 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
             }
             child_due, meta, dnf = mod._compute_anchor_child_due(parent)
             expected_due = mod.core.build_local_datetime(date(2026, 5, 11), (12, 0)).astimezone(timezone.utc)
-            expect(dnf is None, f"anchor_file recurrence should not produce DNF payload, got {dnf!r}")
+            expect(not dnf, f"anchor_file recurrence should not produce a truthy DNF payload, got {dnf!r}")
             expect(child_due == expected_due, f"unexpected anchor_file child due: {child_due!r}")
             expect(isinstance(meta, dict) and meta.get("target_field") == "due", f"unexpected anchor_file meta: {meta!r}")
 
@@ -7143,6 +7159,58 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
     fb = captured.get("fb") or []
     expect(("Omit", "w:wed") in fb, f"expected raw omit row in anchor feedback: {fb}")
     expect(any(k == "Except" and ("Wednesday" in str(v) or "Wednesdays" in str(v)) for k, v in fb), f"expected natural omit row in anchor feedback: {fb}")
+
+
+def test_on_modify_render_anchor_file_completion_feedback_wrapper():
+    """anchor_file completion feedback should not crash when anchor DNF is absent."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_file_feedback_wrapper_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._CHAIN_COLOR_PER_CHAIN = False
+    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
+    mod._format_next_anchor_rows = lambda fb: fb
+    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
+    mod._timeline_lines = lambda *_a, **_k: []
+
+    captured = {}
+    mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
+    mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
+
+    prev_panel_mode = mod.core.PANEL_MODE
+    try:
+        mod.core.PANEL_MODE = "panel"
+        mod._render_anchor_completion_feedback(
+            new={"anchor_file": "calendar.csv@t=12:00", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000333", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-0000-0000-000000000444"},
+            child_due=mod.core.now_utc(),
+            child_short="deadbeef",
+            next_no=2,
+            parent_short="00000000",
+            cap_no=None,
+            finals=[],
+            now_utc=mod.core.now_utc(),
+            until_dt=None,
+            until_cap_no=None,
+            dnf=None,
+            meta={"mode": "skip"},
+            stripped_attrs=[],
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            chain_by_short=None,
+            analytics_advice=None,
+            integrity_warnings=None,
+            base_no=1,
+        )
+    finally:
+        mod.core.PANEL_MODE = prev_panel_mode
+
+    expect("title" in captured, "expected anchor_file preview panel emission")
+    expect("Next anchor" in captured["title"], f"unexpected anchor_file panel title: {captured}")
+    fb = captured.get("fb") or []
+    expect(any(k == "Anchor file" for k, _v in fb), f"expected anchor_file row in feedback: {fb}")
 
 
 
@@ -8901,6 +8969,9 @@ TESTS = [
     test_on_modify_read_two_array_uuid_mismatch_fails,
     test_on_modify_read_two_array_single_missing_uuid_fails,
     test_on_modify_invalid_anchor_has_no_stdout,
+    test_on_modify_render_anchor_completion_feedback_wrapper,
+    test_on_modify_render_anchor_file_completion_feedback_wrapper,
+    test_on_modify_render_cp_completion_feedback_wrapper,
     test_on_add_rejects_oversized_stdin_early,
     test_on_modify_rejects_oversized_stdin_early,
     test_health_check_json_ok_empty_taskdata,
@@ -8911,6 +8982,7 @@ TESTS = [
     test_perf_budget_config_covers_cache_io_checks,
     test_deploy_sanity_script_reports_ok,
     test_hook_replay_harness_reports_ok,
+    test_mixed_recurrence_loop_harness_reports_ok,
     test_ops_templates_present_and_runner_executable,
     test_on_modify_queue_full_drops_with_dead_letter,
     test_on_modify_enqueue_uses_sqlite_when_legacy_empty,
@@ -9020,6 +9092,7 @@ TESTS = [
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
     test_on_modify_render_anchor_completion_feedback_wrapper,
+    test_on_modify_render_anchor_file_completion_feedback_wrapper,
     test_anchor_natural_language_normalizes_grouped_list_plus_expr,
     test_on_modify_render_cp_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_text_mode,

@@ -1710,9 +1710,9 @@ def test_on_modify_read_two_fuzz_inputs():
     cases = [
         ("", "empty"),
         ("{not-json}", "invalid"),
-        (json.dumps({"status": "pending"}), "json"),
-        (json.dumps({"status": "pending"}) + "\n" + json.dumps({"status": "pending"}), "json"),
-        ("  \n" + json.dumps({"status": "pending"}) + "\n", "json"),
+        (json.dumps({"status": "pending", "anchor": "w:mon"}), "json"),
+        (json.dumps({"status": "pending", "anchor": "w:mon"}) + "\n" + json.dumps({"status": "pending", "anchor": "w:mon"}), "json"),
+        ("  \n" + json.dumps({"status": "pending", "anchor": "w:mon"}) + "\n", "json"),
     ]
     for raw, mode in cases:
         p = _run_hook_script_raw(hook, raw)
@@ -1759,12 +1759,21 @@ def test_on_modify_read_two_array_uuid_mismatch_fails():
     expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
 
 def test_on_modify_read_two_array_single_missing_uuid_fails():
-    """on-modify array input with one dict must include UUID."""
+    """on-modify array input with one dict and no Nautical fields should be ignored."""
     hook = _find_hook_file("on-modify-nautical.py")
-    raw = json.dumps([{"status": "pending"}])
+    raw = json.dumps([{"status": "deleted"}])
     p = _run_hook_script_raw(hook, raw)
-    expect(p.returncode != 0, "on-modify should fail when array input lacks UUID")
-    expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
+    expect(p.returncode == 0, "on-modify should ignore array input with one plain non-nautical task lacking UUID")
+    _assert_stdout_json_only(p.stdout)
+
+
+def test_on_modify_read_two_single_plain_delete_without_uuid_is_ignored():
+    """on-modify single-task plain deletes without Nautical fields should not fail on missing UUID."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    raw = json.dumps({"status": "deleted", "description": "plain taskwarrior recurrence delete"})
+    p = _run_hook_script_raw(hook, raw)
+    expect(p.returncode == 0, f"expected plain delete without uuid to be ignored, got rc={p.returncode}, stderr={p.stderr!r}")
+    _assert_stdout_json_only(p.stdout)
 
 
 def test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored():

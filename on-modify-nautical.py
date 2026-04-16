@@ -806,6 +806,8 @@ def _validate_modify_pair(old: dict, new: dict) -> tuple[dict, dict]:
 
 def _validate_single_modify_task(task: dict) -> tuple[dict, dict]:
     if not _task_uuid_or_empty(task):
+        if not _task_has_nautical_fields(task, task):
+            return task, task
         _fail_protocol_error("Missing task UUID in on-modify input")
     return task, task
 

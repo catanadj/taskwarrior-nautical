@@ -4570,6 +4570,27 @@ def test_hook_on_add_invalid_omit_file_rejected():
     expect("omit_file must be a file name, not a path." in stderr_txt, f"expected basename validation message. stderr={stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_anchor_file_time_padding_hint():
+    """on-add should tell the user to pad single-digit hours in anchor_file @t."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000115b",
+        "description": "hook test on-add anchor_file padding hint",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20250108T000000Z",
+        "anchor_file": "calendar.csv@t=3:00",
+        "anchor_mode": "skip",
+        "due": "20250108T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    expect(p.returncode != 0, "on-add should fail for unpadded anchor_file @t")
+    expect((p.stdout or "").strip() == "", f"expected no stdout on invalid anchor_file @t failure, got: {p.stdout!r}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("leading zero" in stderr_txt and "03:00" in stderr_txt, f"expected padding hint in error message. stderr={stderr_txt[:500]!r}")
+
+
 def test_hook_on_add_unsatisfiable_omit_fails_cleanly():
     """on-add should fail cleanly when omit removes every future anchor date."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -6427,6 +6448,18 @@ def test_anchor_file_spec_parses_time_and_negative_offset():
     expect(file_name == 'calendar.csv', f'unexpected anchor_file name parse: {file_name!r}')
     expect(mods.get('t') == [(9, 0), (17, 0)], f'unexpected anchor_file time mods: {mods!r}')
     expect(mods.get('day_offset') == -2, f'unexpected anchor_file day offset: {mods!r}')
+
+
+def test_anchor_file_spec_rejects_unpadded_times():
+    """anchor_file spec should reject 3:00 with a leading-zero hint."""
+    import nautical_core.anchor_files as anchor_files
+
+    try:
+        anchor_files.parse_anchor_file_spec('calendar.csv@t=3:00')
+        expect(False, 'expected anchor_file time padding validation to fail')
+    except ValueError as e:
+        msg = str(e)
+        expect('leading zero' in msg and '03:00' in msg, f'unexpected padding hint: {e}')
 
 
 def test_anchor_file_loader_transforms_dates_and_carries_descriptions():

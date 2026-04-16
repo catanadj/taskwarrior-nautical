@@ -16,6 +16,7 @@ _WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 
 _NEXT_PREV_WD_RE = re.compile(r"^(next|prev)-(mon|tue|wed|thu|fri|sat|sun)$")
 _DAY_OFFSET_RE = re.compile(r"^([+-]\d+)d$")
 _HHMM_RE = re.compile(r"^(\d{2}):(\d{2})$")
+_HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
 
 
 def _default_mods() -> dict:
@@ -32,8 +33,12 @@ def validate_anchor_file_name(value: str | None) -> str:
 
 
 def _parse_hhmm(text: str) -> tuple[int, int] | None:
-    match = _HHMM_RE.match(str(text or "").strip())
+    raw = str(text or "").strip()
+    match = _HHMM_RE.match(raw)
     if not match:
+        pad = _HOUR_PAD_RE.match(raw)
+        if pad:
+            raise ValueError(f"Time '{raw}' needs a leading zero. Use '0{pad.group(1)}:{pad.group(2)}'.")
         return None
     hh = int(match.group(1))
     mm = int(match.group(2))

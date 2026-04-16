@@ -1,4 +1,8 @@
 from __future__ import annotations
+import re
+
+
+_HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
 
 
 def parse_hhmm(s: str, *, hhmm_re):
@@ -6,6 +10,14 @@ def parse_hhmm(s: str, *, hhmm_re):
     if not match:
         return None
     return (int(match.group(1)), int(match.group(2)))
+
+
+def _time_padding_hint(tok: str) -> str | None:
+    text = (tok or "").strip()
+    match = _HOUR_PAD_RE.match(text)
+    if not match:
+        return None
+    return f"Time '{text}' needs a leading zero. Use '0{match.group(1)}:{match.group(2)}'."
 
 
 def parse_atom_head(head: str, *, re_mod, parse_error_cls) -> tuple[str, int]:
@@ -48,6 +60,9 @@ def parse_atom_mods(
         for p in parts:
             hhmm = parse_hhmm(p)
             if not hhmm:
+                hint = _time_padding_hint(p)
+                if hint:
+                    raise parse_error_cls(hint)
                 raise parse_error_cls(f"Invalid time in @t=HH:MM[,HH:MM...]: '{p}'")
             if hhmm not in seen:
                 out.append(hhmm)
@@ -77,6 +92,9 @@ def parse_atom_mods(
             tval = tok.split("=", 1)[1].strip()
             tlist = parse_time_list(tval)
             if not tlist:
+                hint = _time_padding_hint(tval)
+                if hint:
+                    raise parse_error_cls(hint)
                 raise parse_error_cls(f"Invalid time in @t=HH:MM[,HH:MM...]: '{tok}'")
             mods["t"] = tlist[0] if len(tlist) == 1 else tlist
             continue

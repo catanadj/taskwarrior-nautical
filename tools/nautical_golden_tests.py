@@ -9441,6 +9441,7 @@ def test_core_explicit_facade_all_contains_supported_symbols() -> None:
     assert '_parse_y_token' not in exported
     assert '_raise_if_comma_joined_anchors' not in exported
     assert '_validate_year_tokens_in_dnf' not in exported
+    assert 'parent' not in exported
     assert '_import_sibling' not in exported
 
 

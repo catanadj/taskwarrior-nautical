@@ -2895,7 +2895,6 @@ __all__ = (
     'next_after_expr',
     'now_utc',
     'panel_line',
-    'parent',
     'parse_anchor_expr_to_dnf',
     'parse_anchor_expr_to_dnf_cached',
     'parse_cp_duration',

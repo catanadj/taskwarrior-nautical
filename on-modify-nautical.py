@@ -5535,121 +5535,36 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     computed = _completion_compute_next_and_limits(new, kind, next_no, now_utc)
     if computed is None:
         return
-    child_due = computed.child_due
-    meta = computed.meta
-    dnf = computed.dnf
-    until_dt = computed.until_dt
-    cpmax = computed.cpmax
-    cap_no = computed.cap_no
-    finals = computed.finals
-    until_cap_no = computed.until_cap_no
-    child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"
-
-    spawned = _completion_build_and_spawn_child(
-        new,
-        child_due=child_due,
-        child_field=child_field,
-        next_no=next_no,
-        parent_short=parent_short,
-        kind=kind,
-        cpmax=cpmax,
-        until_dt=until_dt,
+    modify_completion_flow = importlib.import_module("nautical_core.modify_completion_flow")
+    services = modify_completion_flow.CompletionFinalizeServices(
+        build_and_spawn_child=_completion_build_and_spawn_child,
+        seed_runtime_lookup_tasks=_seed_runtime_lookup_tasks,
+        modify_chain_state=_modify_chain_state,
+        get_chain_export=_get_chain_export,
+        build_chain_indexes=_build_chain_indexes,
+        set_chain_cache=_set_chain_cache,
+        export_uuid_short_cached=_export_uuid_short_cached,
+        merge_spawned_child_into_chain=_merge_spawned_child_into_chain,
+        chain_health_advice=_chain_health_advice,
+        chain_integrity_warnings=_chain_integrity_warnings,
+        render_anchor_completion_feedback=_render_anchor_completion_feedback,
+        render_cp_completion_feedback=_render_cp_completion_feedback,
+        print_task=_print_task,
+        diag_summary=_diag_summary,
+        analytics_style=_ANALYTICS_STYLE,
     )
-    if spawned is None:
-        return
-    child = spawned.child
-    _seed_runtime_lookup_tasks(new, child)
-    child_short = spawned.child_short
-    stripped_attrs = spawned.stripped_attrs
-    deferred_spawn = spawned.deferred_spawn
-    spawn_intent_id = spawned.spawn_intent_id
-
-    # Build an in-memory chain index once for panel/timeline lookups.
-    chain = list(preloaded_chain)
-    chain_by_link = preloaded_chain_by_link
-    chain_by_short = preloaded_chain_by_short
-    chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
-    if chain_id and need_chain:
-        try:
-            if chain and spawned.verified and not deferred_spawn:
-                chain = _merge_spawned_child_into_chain(chain, new, child, child_short)
-                chain_by_link, chain_by_short = _build_chain_indexes(chain)
-                _set_chain_cache(chain_id, chain)
-                _export_uuid_short_cached.cache_clear()
-            elif not chain:
-                chain = _get_chain_export(chain_id)
-                if chain:
-                    chain_by_link, chain_by_short = _build_chain_indexes(chain)
-                    _set_chain_cache(chain_id, chain)
-                    _export_uuid_short_cached.cache_clear()
-        except Exception:
-            pass
-    state = _modify_chain_state()
-    state.panel_chain_by_link = chain_by_link
-    state.panel_chain_by_short = chain_by_short
-    analytics_advice = None
-    integrity_warnings = None
-    if _SHOW_ANALYTICS and chain:
-        try:
-            analytics_advice = _chain_health_advice(chain, kind, new, style=_ANALYTICS_STYLE)
-        except Exception:
-            analytics_advice = None
-    if _CHECK_CHAIN_INTEGRITY and chain:
-        try:
-            integrity_warnings = _chain_integrity_warnings(chain, expected_chain_id=chain_id)
-        except Exception:
-            integrity_warnings = None
-
-    if kind in {"anchor", "anchor_file"}:
-        _render_anchor_completion_feedback(
-            new=new,
-            child=child,
-            child_due=child_due,
-            child_short=child_short,
-            next_no=next_no,
-            parent_short=parent_short,
-            cap_no=cap_no,
-            finals=finals,
-            now_utc=now_utc,
-            until_dt=until_dt,
-            until_cap_no=until_cap_no,
-            dnf=dnf,
-            meta=meta,
-            stripped_attrs=stripped_attrs,
-            deferred_spawn=deferred_spawn,
-            spawn_intent_id=spawn_intent_id,
-            chain_by_short=chain_by_short,
-            analytics_advice=analytics_advice,
-            integrity_warnings=integrity_warnings,
-            base_no=base_no,
-        )
-    else:
-        _render_cp_completion_feedback(
-            new=new,
-            child=child,
-            child_due=child_due,
-            child_short=child_short,
-            next_no=next_no,
-            parent_short=parent_short,
-            cap_no=cap_no,
-            finals=finals,
-            now_utc=now_utc,
-            until_dt=until_dt,
-            until_cap_no=until_cap_no,
-            meta=meta,
-            deferred_spawn=deferred_spawn,
-            spawn_intent_id=spawn_intent_id,
-            chain_by_short=chain_by_short,
-            analytics_advice=analytics_advice,
-            integrity_warnings=integrity_warnings,
-            base_no=base_no,
-        )
-
-
-
-
-    _print_task(new)
-    _diag_summary()
+    modify_completion_flow.finalize_completion_modify(
+        new=new,
+        ctx=ctx,
+        computed=computed,
+        now_utc=now_utc,
+        need_chain=need_chain,
+        preloaded_chain=preloaded_chain,
+        preloaded_chain_by_link=preloaded_chain_by_link,
+        preloaded_chain_by_short=preloaded_chain_by_short,
+        chain_id=chain_id,
+        services=services,
+    )
 
 
 def _emit_modify_passthrough(task: dict) -> None:

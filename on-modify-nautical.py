@@ -477,6 +477,12 @@ _MODULE_SPECS = {
         "modify_feedback.py",
         "nautical_core.modify_feedback",
     ),
+    "modify_lifecycle": (
+        "_MODIFY_LIFECYCLE",
+        "_MODIFY_LIFECYCLE_LOAD_FAILED",
+        "modify_lifecycle.py",
+        "nautical_core.modify_lifecycle",
+    ),
     "modify_runtime": (
         "_MODIFY_RUNTIME",
         "_MODIFY_RUNTIME_LOAD_FAILED",
@@ -905,21 +911,8 @@ def _panic_passthrough() -> None:
 
 
 def _task_has_nautical_fields(old: dict, new: dict) -> bool:
-    keys = ("anchor", "anchor_file", "anchor_mode", "cp", "chainID", "chainid", "nextLink", "prevLink", "link", "omit", "omit_file")
-    for task in (old, new):
-        if not isinstance(task, dict):
-            continue
-        for key in keys:
-            val = task.get(key)
-            if val is None:
-                continue
-            try:
-                s = str(val).strip()
-            except Exception:
-                s = ""
-            if s:
-                return True
-    return False
+    modify_lifecycle = _module("modify_lifecycle")
+    return modify_lifecycle.task_has_nautical_fields(old) or modify_lifecycle.task_has_nautical_fields(new)
 
 
 def _print_task(task):
@@ -4995,33 +4988,18 @@ def _is_non_completion_modify(old: dict, new: dict) -> bool:
     return (old.get("status") == new.get("status")) or (new.get("status") != "completed")
 
 
+def _promote_newly_nautical_task(old: dict, new: dict) -> str | None:
+    modify_lifecycle = _module("modify_lifecycle")
+    try:
+        return modify_lifecycle.promote_newly_nautical_task(old, new, short_uuid=core.short_uuid)
+    except Exception:
+        return None
+
+
 def _stamp_chain_id_if_new_nautical(old: dict, new: dict) -> bool:
     # [CHAINID] Promote plain tasks that just became nautical so completion
     # treats them as active chains instead of defaulting to chain:off.
-    try:
-        old_has_nautical = bool(
-            (old.get("anchor") or "").strip()
-            or (old.get("anchor_file") or "").strip()
-            or (old.get("cp") or "").strip()
-        )
-        new_has_nautical = bool(
-            (new.get("anchor") or "").strip()
-            or (new.get("anchor_file") or "").strip()
-            or (new.get("cp") or "").strip()
-        )
-        already_chain = bool((new.get("chainID") or "").strip())
-        linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
-        promoted = False
-        if not old_has_nautical and new_has_nautical:
-            promoted = True
-            if (new.get("chain") or "").strip().lower() != "on":
-                new["chain"] = "on"
-        if (not old_has_nautical and new_has_nautical) and not already_chain and not linked_already:
-            new["chainID"] = core.short_uuid(new.get("uuid"))
-        return promoted
-    except Exception:
-        return False
-    return False
+    return bool(_promote_newly_nautical_task(old, new))
 
 
 def _modify_runtime_services():
@@ -5264,14 +5242,14 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     new_cp = _strip_quotes(cp_raw)
     _non_completion_reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
 
-    upgraded = _stamp_chain_id_if_new_nautical(old, new)
+    promoted_source = _promote_newly_nautical_task(old, new)
+    upgraded = bool(promoted_source)
     if upgraded:
-        source = "anchor" if new_anchor else "anchor_file" if new_anchor_file else "cp"
         _panel(
             "⚓ Nautical enabled",
             [
                 ("Reason", "This task just gained Nautical recurrence and was promoted to chain:on."),
-                ("Source", source),
+                ("Source", promoted_source),
                 ("Chain", "on"),
             ],
             kind="note",

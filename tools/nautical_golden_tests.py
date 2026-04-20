@@ -1866,6 +1866,30 @@ def test_on_modify_promotes_chain_emits_upgrade_panel():
     expect(new.get("chain") == "on", f"promotion should set chain:on, got {new!r}")
     expect(bool((new.get("chainID") or "").strip()), f"promotion should stamp chainID, got {new!r}")
 
+
+def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
+    """Modify lifecycle helper should classify and promote newly Nautical tasks explicitly."""
+    ml = core._import_sibling("modify_lifecycle")
+    old = {"uuid": "00000000-0000-0000-0000-000000000447", "status": "pending"}
+    new = {
+        "uuid": "00000000-0000-0000-0000-000000000447",
+        "status": "pending",
+        "anchor_file": "2026.csv",
+        "chain": "off",
+    }
+    route = ml.classify_modify_route(
+        old,
+        new,
+        is_non_completion_modify=lambda old_task, new_task: (old_task.get("status") == new_task.get("status")) or (new_task.get("status") != "completed"),
+    )
+    expect(not route.is_deleted, f"new task should not be deleted, got {route}")
+    expect(route.has_nautical_fields, f"new task should be nautical, got {route}")
+    expect(route.is_non_completion, f"new task should be non-completion modify, got {route}")
+    source = ml.promote_newly_nautical_task(old, new, short_uuid=lambda u: str(u).split("-")[0] if u else "")
+    expect(source == "anchor_file", f"expected anchor_file promotion source, got {source!r}")
+    expect(new.get("chain") == "on", f"promotion should set chain:on, got {new!r}")
+    expect(bool((new.get("chainID") or "").strip()), f"promotion should stamp chainID, got {new!r}")
+
 def test_on_modify_read_two_fuzz_inputs():
     """on-modify input parsing should be strict and return JSON errors on bad input."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -9184,6 +9208,7 @@ TESTS = [
     test_on_modify_ignores_unsafe_core_path_override,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_on_modify_promotes_chain_emits_upgrade_panel,
+    test_modify_lifecycle_routes_and_promotes_new_nautical_tasks,
     test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_versioned_payload,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+
 
 def handle_on_add(
     request,
@@ -82,11 +84,18 @@ def handle_on_modify(
     handle_completion_modify,
 ):
     old, new = request.old, request.new
+    modify_lifecycle = importlib.import_module("nautical_core.modify_lifecycle")
 
-    if (new.get('status') or '').lower() == 'deleted':
+    route = modify_lifecycle.classify_modify_route(
+        old,
+        new,
+        is_non_completion_modify=is_non_completion_modify,
+    )
+
+    if route.is_deleted:
         return json_result_cls(task=new, sanitize=False)
 
-    if not task_has_nautical_fields(old, new):
+    if not route.has_nautical_fields:
         return json_result_cls(task=new, sanitize=False)
 
     try:
@@ -95,7 +104,7 @@ def handle_on_modify(
         diag(f'core load failed: {exc}')
         fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
 
-    if is_non_completion_modify(old, new):
+    if route.is_non_completion:
         handle_non_completion_modify(old, new)
         return None
 

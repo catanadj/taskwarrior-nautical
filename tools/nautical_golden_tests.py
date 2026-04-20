@@ -1788,6 +1788,42 @@ def test_on_exit_requires_core_data_context_helper():
     """on-exit should fail closed when core data-context resolver is unavailable."""
     _assert_hook_requires_core_data_context("on-exit-nautical.py", "_nautical_on_exit_requires_core_data_ctx_test")
 
+def test_on_modify_promotes_chain_when_task_becomes_nautical():
+    """Tasks that gain Nautical fields on modify should be promoted to chain:on."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_chain_promotion_test")
+
+    plain_old = {
+        "uuid": "00000000-0000-0000-0000-000000000444",
+        "description": "plain task",
+        "status": "pending",
+    }
+    promote_cases = [
+        {"anchor": "w:mon", "label": "anchor"},
+        {"anchor_file": "2026.csv", "label": "anchor_file"},
+        {"cp": "3d", "label": "cp"},
+    ]
+    for case in promote_cases:
+        new = dict(plain_old)
+        new.update(case)
+        new["chain"] = "off"
+        mod._stamp_chain_id_if_new_nautical(plain_old, new)
+        expect(new.get("chain") == "on", f"{case['label']} transition should force chain:on, got {new!r}")
+        expect(bool((new.get("chainID") or "").strip()), f"{case['label']} transition should stamp chainID, got {new!r}")
+
+    already_old = {
+        "uuid": "00000000-0000-0000-0000-000000000445",
+        "description": "already nautical",
+        "status": "pending",
+        "anchor": "w:mon",
+        "chain": "off",
+    }
+    already_new = dict(already_old)
+    already_new["chain"] = "off"
+    mod._stamp_chain_id_if_new_nautical(already_old, already_new)
+    expect(already_new.get("chain") == "off", f"existing nautical task should keep chain state, got {already_new!r}")
+    expect(not already_new.get("chainID"), f"existing nautical task should not gain chainID here, got {already_new!r}")
+
 def test_on_modify_read_two_fuzz_inputs():
     """on-modify input parsing should be strict and return JSON errors on bad input."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -9104,6 +9140,7 @@ TESTS = [
     test_on_modify_panic_passthrough_uses_latest_task,
     test_on_add_ignores_unsafe_core_path_override,
     test_on_modify_ignores_unsafe_core_path_override,
+    test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_versioned_payload,

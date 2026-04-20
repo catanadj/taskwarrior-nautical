@@ -4996,13 +4996,25 @@ def _is_non_completion_modify(old: dict, new: dict) -> bool:
 
 
 def _stamp_chain_id_if_new_nautical(old: dict, new: dict) -> None:
-    # [CHAINID] stamp only when task just became nautical and has no chainID/links
+    # [CHAINID] Promote plain tasks that just became nautical so completion
+    # treats them as active chains instead of defaulting to chain:off.
     try:
-        became_anchor = (not (old.get("anchor") or "").strip()) and ((new.get("anchor") or "").strip())
-        became_cp = (not (old.get("cp") or "").strip()) and ((new.get("cp") or "").strip())
+        old_has_nautical = bool(
+            (old.get("anchor") or "").strip()
+            or (old.get("anchor_file") or "").strip()
+            or (old.get("cp") or "").strip()
+        )
+        new_has_nautical = bool(
+            (new.get("anchor") or "").strip()
+            or (new.get("anchor_file") or "").strip()
+            or (new.get("cp") or "").strip()
+        )
         already_chain = bool((new.get("chainID") or "").strip())
         linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
-        if (became_anchor or became_cp) and not already_chain and not linked_already:
+        if not old_has_nautical and new_has_nautical:
+            if (new.get("chain") or "").strip().lower() != "on":
+                new["chain"] = "on"
+        if (not old_has_nautical and new_has_nautical) and not already_chain and not linked_already:
             new["chainID"] = core.short_uuid(new.get("uuid"))
     except Exception:
         pass

@@ -1824,6 +1824,48 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
     expect(already_new.get("chain") == "off", f"existing nautical task should keep chain state, got {already_new!r}")
     expect(not already_new.get("chainID"), f"existing nautical task should not gain chainID here, got {already_new!r}")
 
+
+def test_on_modify_promotes_chain_emits_upgrade_panel():
+    """Promotion to Nautical should show a small informative panel."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_chain_upgrade_panel_test")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000446",
+        "description": "plain task",
+        "status": "pending",
+    }
+    new = {
+        "uuid": "00000000-0000-0000-0000-000000000446",
+        "description": "plain task",
+        "status": "pending",
+        "anchor": "w:mon",
+        "chain": "off",
+    }
+    captured = {}
+
+    orig_panel = mod._panel
+    orig_print_task = mod._print_task
+    try:
+        def fake_panel(title, rows, *, kind=None):
+            captured["title"] = title
+            captured["rows"] = list(rows)
+            captured["kind"] = kind
+
+        mod._panel = fake_panel
+        mod._print_task = lambda task: captured.setdefault("task", dict(task))
+        mod._handle_non_completion_modify(old, new)
+    finally:
+        mod._panel = orig_panel
+        mod._print_task = orig_print_task
+
+    expect(captured.get("title") == "⚓ Nautical enabled", f"expected upgrade panel, got {captured!r}")
+    expect(captured.get("kind") == "note", f"expected note panel, got {captured!r}")
+    rows = captured.get("rows") or []
+    expect(any(k == "Chain" and v == "on" for k, v in rows), f"expected chain:on row, got {rows!r}")
+    expect(any(k == "Source" and v == "anchor" for k, v in rows), f"expected anchor source row, got {rows!r}")
+    expect(new.get("chain") == "on", f"promotion should set chain:on, got {new!r}")
+    expect(bool((new.get("chainID") or "").strip()), f"promotion should stamp chainID, got {new!r}")
+
 def test_on_modify_read_two_fuzz_inputs():
     """on-modify input parsing should be strict and return JSON errors on bad input."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -9141,6 +9183,7 @@ TESTS = [
     test_on_add_ignores_unsafe_core_path_override,
     test_on_modify_ignores_unsafe_core_path_override,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
+    test_on_modify_promotes_chain_emits_upgrade_panel,
     test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_versioned_payload,

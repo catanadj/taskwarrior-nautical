@@ -4995,7 +4995,7 @@ def _is_non_completion_modify(old: dict, new: dict) -> bool:
     return (old.get("status") == new.get("status")) or (new.get("status") != "completed")
 
 
-def _stamp_chain_id_if_new_nautical(old: dict, new: dict) -> None:
+def _stamp_chain_id_if_new_nautical(old: dict, new: dict) -> bool:
     # [CHAINID] Promote plain tasks that just became nautical so completion
     # treats them as active chains instead of defaulting to chain:off.
     try:
@@ -5011,13 +5011,17 @@ def _stamp_chain_id_if_new_nautical(old: dict, new: dict) -> None:
         )
         already_chain = bool((new.get("chainID") or "").strip())
         linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
+        promoted = False
         if not old_has_nautical and new_has_nautical:
+            promoted = True
             if (new.get("chain") or "").strip().lower() != "on":
                 new["chain"] = "on"
         if (not old_has_nautical and new_has_nautical) and not already_chain and not linked_already:
             new["chainID"] = core.short_uuid(new.get("uuid"))
+        return promoted
     except Exception:
-        pass
+        return False
+    return False
 
 
 def _modify_runtime_services():
@@ -5260,7 +5264,18 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     new_cp = _strip_quotes(cp_raw)
     _non_completion_reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
 
-    _stamp_chain_id_if_new_nautical(old, new)
+    upgraded = _stamp_chain_id_if_new_nautical(old, new)
+    if upgraded:
+        source = "anchor" if new_anchor else "anchor_file" if new_anchor_file else "cp"
+        _panel(
+            "⚓ Nautical enabled",
+            [
+                ("Reason", "This task just gained Nautical recurrence and was promoted to chain:on."),
+                ("Source", source),
+                ("Chain", "on"),
+            ],
+            kind="note",
+        )
     _print_task(new)
 
 

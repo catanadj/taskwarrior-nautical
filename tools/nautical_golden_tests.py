@@ -2600,7 +2600,6 @@ def test_on_exit_drain_updates_progress_per_entry():
     expect(updates[-1]["phase"] == "finalize", f"expected finalize phase, got {updates}")
 
 
-
 def test_on_exit_diag_blocks_pretty_print():
     """on-exit diag output should emit indented multi-line blocks."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -9221,6 +9220,7 @@ TESTS = [
     test_on_exit_spawn_intents_drain,
     test_on_exit_take_queue_recovers_from_corrupt_sqlite_db,
     test_on_exit_drain_skips_finalized_sqlite_intent,
+    test_on_exit_drain_updates_progress_per_entry,
     test_on_exit_dead_letter_on_missing_fields,
     test_on_exit_import_child_retries_on_lock,
     test_on_exit_equivalent_child_cache_reuses_slot_lookup,

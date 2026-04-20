@@ -103,6 +103,8 @@ _EXIT_MODELS = None
 _EXIT_MODELS_LOAD_FAILED = False
 _EXIT_RUNTIME = None
 _EXIT_RUNTIME_LOAD_FAILED = False
+_EXIT_DRAIN_FLOW = None
+_EXIT_DRAIN_FLOW_LOAD_FAILED = False
 _HOOK_CONTEXT = None
 _HOOK_CONTEXT_LOAD_FAILED = False
 _HOOK_ENGINE = None
@@ -159,6 +161,12 @@ _MODULE_SPECS = {
         "_EXIT_RUNTIME_LOAD_FAILED",
         "exit_runtime.py",
         "nautical_core.exit_runtime",
+    ),
+    "exit_drain_flow": (
+        "_EXIT_DRAIN_FLOW",
+        "_EXIT_DRAIN_FLOW_LOAD_FAILED",
+        "exit_drain_flow.py",
+        "nautical_core.exit_drain_flow",
     ),
     "hook_context": (
         "_HOOK_CONTEXT",
@@ -2119,62 +2127,24 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
 
 
 def _drain_queue_result():
-    _queue_db_begin_run()
-    try:
-        drain_t0 = time.perf_counter()
-        batch = _take_queue_batch()
-        entries = batch.entries
-        intent_t0 = time.perf_counter()
-        finalized_intents, intent_log_ready = _load_finalized_intents()
-        intent_log_load_ms = (time.perf_counter() - intent_t0) * 1000.0
-        state = _DrainState(
-            entries=entries,
-            entries_total=batch.entries_total,
-            finalized_intents=finalized_intents,
-            intent_log_ready=bool(intent_log_ready),
-            intent_log_load_ms=float(intent_log_load_ms),
+    exit_drain_flow = _module("exit_drain_flow")
+    return exit_drain_flow.drain_queue_result(
+        services=exit_drain_flow.ExitDrainServices(
+            queue_db_begin_run=_queue_db_begin_run,
+            queue_db_end_run=_queue_db_end_run,
+            take_queue_batch=_take_queue_batch,
+            load_finalized_intents=_load_finalized_intents,
+            exit_progress_scope=_exit_progress_scope,
+            preload_export_uuids=_preload_export_uuids,
+            preload_equivalent_child_slots=_preload_equivalent_child_slots,
+            process_queue_entry=_process_queue_entry,
+            requeue_entries_result=_requeue_entries_result,
+            ack_queue_entries_sqlite_result=_ack_queue_entries_sqlite_result,
+            drain_state_factory=_DrainState,
+            exit_models=_module("exit_models"),
+            diag=_diag,
         )
-        preload_entries = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                preload_entries.append(entry)
-                continue
-            spawn_intent_id = str(entry.get("spawn_intent_id") or "").strip()
-            if spawn_intent_id and spawn_intent_id in finalized_intents:
-                continue
-            preload_entries.append(entry)
-        with _exit_progress_scope(batch.entries_total) as progress_update:
-            if progress_update is not None:
-                progress_update(phase="preload", state=state)
-            _preload_export_uuids(preload_entries)
-            _preload_equivalent_child_slots(preload_entries)
-            if progress_update is not None:
-                progress_update(phase="drain", state=state)
-
-            for idx, entry in enumerate(entries):
-                should_break = _process_queue_entry(idx, entry, state)
-                if progress_update is not None:
-                    progress_update(advance=1, phase="drain", state=state)
-                if should_break:
-                    break
-
-            if progress_update is not None:
-                progress_update(phase="finalize", state=state)
-
-            requeue_result = _requeue_entries_result(state.requeue) if state.requeue else _module("exit_models").ExitRequeueResult(ok=True, failed=0)
-        if not requeue_result.ok:
-            state.errors += requeue_result.failed
-            _diag(f"requeue failed for {requeue_result.failed} entries")
-
-        if state.sqlite_acked_ids:
-            ack_result = _ack_queue_entries_sqlite_result(sorted(state.sqlite_acked_ids))
-            if not ack_result.ok:
-                state.errors += ack_result.count
-                _diag(f"queue db ack failed for {ack_result.count} entries")
-
-        return state.to_stats_model(drain_t0, requeue_result.ok, requeue_result.failed)
-    finally:
-        _queue_db_end_run()
+    )
 
 
 def _drain_queue() -> dict:

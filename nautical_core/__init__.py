@@ -299,7 +299,6 @@ _yearly_validation = _import_sibling("yearly_validation")
 _year_tokens = _import_sibling("year_tokens")
 
 short_uuid = _common.short_uuid
-should_stamp_chain_id = _common.should_stamp_chain_id
 
 # ==============================================================================
 # SECTION: Time & timezone helpers

@@ -9434,6 +9434,8 @@ def test_core_explicit_facade_all_contains_supported_symbols() -> None:
     assert 'next_after_expr' in exported
     assert 'render_panel' in exported
     assert 'should_stamp_chain_id' not in exported
+    assert '_config_paths' not in exported
+    assert '_read_toml' not in exported
     assert '_import_sibling' not in exported
 
 

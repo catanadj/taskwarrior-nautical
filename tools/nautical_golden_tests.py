@@ -9436,6 +9436,10 @@ def test_core_explicit_facade_all_contains_supported_symbols() -> None:
     assert 'should_stamp_chain_id' not in exported
     assert '_config_paths' not in exported
     assert '_read_toml' not in exported
+    assert '_cache_key_for_task_cached' not in exported
+    assert '_parse_y_token' not in exported
+    assert '_raise_if_comma_joined_anchors' not in exported
+    assert '_validate_year_tokens_in_dnf' not in exported
     assert '_import_sibling' not in exported
 
 

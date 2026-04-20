@@ -4988,20 +4988,6 @@ def _is_non_completion_modify(old: dict, new: dict) -> bool:
     return (old.get("status") == new.get("status")) or (new.get("status") != "completed")
 
 
-def _promote_newly_nautical_task(old: dict, new: dict) -> str | None:
-    modify_lifecycle = _module("modify_lifecycle")
-    try:
-        return modify_lifecycle.promote_newly_nautical_task(old, new, short_uuid=core.short_uuid)
-    except Exception:
-        return None
-
-
-def _stamp_chain_id_if_new_nautical(old: dict, new: dict) -> bool:
-    # [CHAINID] Promote plain tasks that just became nautical so completion
-    # treats them as active chains instead of defaulting to chain:off.
-    return bool(_promote_newly_nautical_task(old, new))
-
-
 def _modify_runtime_services():
     modify_runtime = _module("modify_runtime")
     return modify_runtime.ModifyRuntimeServices(
@@ -5242,7 +5228,11 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     new_cp = _strip_quotes(cp_raw)
     _non_completion_reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
 
-    promoted_source = _promote_newly_nautical_task(old, new)
+    modify_lifecycle = _module("modify_lifecycle")
+    try:
+        promoted_source = modify_lifecycle.promote_newly_nautical_task(old, new, short_uuid=core.short_uuid)
+    except Exception:
+        promoted_source = None
     upgraded = bool(promoted_source)
     if upgraded:
         _panel(
@@ -5304,7 +5294,11 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, 
         ) and new_cp:
             _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
 
-        _stamp_chain_id_if_new_nautical(old, new)
+        modify_lifecycle = _module("modify_lifecycle")
+        try:
+            modify_lifecycle.promote_newly_nautical_task(old, new, short_uuid=core.short_uuid)
+        except Exception:
+            pass
 
     return new_cp, new_anchor, new_anchor_file
 

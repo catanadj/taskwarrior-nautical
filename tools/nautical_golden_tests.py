@@ -1792,6 +1792,7 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
     """Tasks that gain Nautical fields on modify should be promoted to chain:on."""
     hook = _find_hook_file("on-modify-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_modify_chain_promotion_test")
+    lifecycle = mod._module("modify_lifecycle")
 
     plain_old = {
         "uuid": "00000000-0000-0000-0000-000000000444",
@@ -1807,7 +1808,7 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
         new = dict(plain_old)
         new.update(case)
         new["chain"] = "off"
-        mod._stamp_chain_id_if_new_nautical(plain_old, new)
+        lifecycle.promote_newly_nautical_task(plain_old, new, short_uuid=mod.core.short_uuid)
         expect(new.get("chain") == "on", f"{case['label']} transition should force chain:on, got {new!r}")
         expect(bool((new.get("chainID") or "").strip()), f"{case['label']} transition should stamp chainID, got {new!r}")
 
@@ -1820,7 +1821,7 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
     }
     already_new = dict(already_old)
     already_new["chain"] = "off"
-    mod._stamp_chain_id_if_new_nautical(already_old, already_new)
+    lifecycle.promote_newly_nautical_task(already_old, already_new, short_uuid=mod.core.short_uuid)
     expect(already_new.get("chain") == "off", f"existing nautical task should keep chain state, got {already_new!r}")
     expect(not already_new.get("chainID"), f"existing nautical task should not gain chainID here, got {already_new!r}")
 

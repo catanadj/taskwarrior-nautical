@@ -2290,6 +2290,38 @@ def test_mixed_recurrence_loop_harness_reports_ok():
     expect(not obj.get("violations"), f"mixed loop reported violations: {obj}")
 
 
+def test_soak_runner_reports_ok():
+    """Short soak runner should complete without violations."""
+    path = os.path.join(ROOT, "tools", "nautical_soak_test.py")
+    p = subprocess.run(
+        [
+            sys.executable,
+            path,
+            "--seconds",
+            "2",
+            "--batch-size",
+            "4",
+            "--anchor-rate",
+            "0.5",
+            "--cp-rate",
+            "0.5",
+            "--done-rate",
+            "0.5",
+            "--progress-every-seconds",
+            "0",
+            "--json",
+            "--enforce",
+        ],
+        text=True,
+        capture_output=True,
+        timeout=240,
+    )
+    expect(p.returncode == 0, f"soak runner returned {p.returncode}: stderr={p.stderr!r}")
+    obj = json.loads((p.stdout or "").strip() or "{}")
+    expect(obj.get("ok") is True, f"unexpected soak status: {obj}")
+    expect(not obj.get("violations"), f"soak runner reported violations: {obj}")
+
+
 def test_ops_templates_present_and_runner_executable():
     """ops templates should exist and runner script should be executable."""
     ops = os.path.join(ROOT, "tools", "ops")
@@ -9170,6 +9202,7 @@ TESTS = [
     test_deploy_sanity_script_reports_ok,
     test_hook_replay_harness_reports_ok,
     test_mixed_recurrence_loop_harness_reports_ok,
+    test_soak_runner_reports_ok,
     test_ops_templates_present_and_runner_executable,
     test_on_modify_queue_full_drops_with_dead_letter,
     test_on_modify_enqueue_uses_sqlite_when_legacy_empty,

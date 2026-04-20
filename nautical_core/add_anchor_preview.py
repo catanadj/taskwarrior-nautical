@@ -404,11 +404,6 @@ def _anchor_file_preview_occurrences(
     return out
 
 
-def _anchor_file_natural_text(anchor_file_str: str) -> str:
-    file_name = str(anchor_file_str or "").strip().split("@", 1)[0]
-    return f"Dates from {file_name}"
-
-
 def handle_anchor_file_preview_on_add(
     *,
     task: dict[str, Any],
@@ -879,4 +874,3 @@ def handle_anchor_preview_on_add(
     prof.add_ms("render:anchor_panel", (time.perf_counter() - _t_panel) * 1000.0)
 
     emit_task_json(task, sanitize=True, prof=prof)
-

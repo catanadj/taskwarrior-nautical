@@ -213,6 +213,7 @@ def _must_natural(expr):
 # level, to catch regressions that can slip through core-only tests.
 
 import subprocess
+import shutil
 import importlib.util
 import importlib.machinery
 import inspect
@@ -495,6 +496,89 @@ def test_on_add_ignores_unsafe_core_path_override():
             os.environ.pop("NAUTICAL_TRUST_CORE_PATH", None)
         else:
             os.environ["NAUTICAL_TRUST_CORE_PATH"] = prev_trust
+
+
+def test_hook_bootstrap_uses_symlink_path_and_core_path_rescue():
+    """Symlinked hook installs should boot from the symlink path and NAUTICAL_CORE_PATH rescue."""
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        staging = base / "staging"
+        hooks = base / "hooks"
+        taskdata = base / "taskdata"
+        staging.mkdir(parents=True, exist_ok=True)
+        hooks.mkdir(parents=True, exist_ok=True)
+        taskdata.mkdir(parents=True, exist_ok=True)
+
+        hook_names = ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py")
+        for name in hook_names:
+            src = Path(ROOT) / name
+            dst = staging / name
+            shutil.copy2(src, dst)
+            link = hooks / name
+            if link.exists() or link.is_symlink():
+                link.unlink()
+            os.symlink(dst, link)
+
+        env = os.environ.copy()
+        env["NAUTICAL_CORE_PATH"] = ROOT
+        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
+        env["TASKDATA"] = str(taskdata)
+        env["TZ"] = "UTC"
+        env.pop("NAUTICAL_DIAG", None)
+        env.pop("NAUTICAL_DIAG_LOG", None)
+
+        add_task = {
+            "uuid": "11111111-1111-1111-1111-111111111111",
+            "description": "symlink bootstrap add",
+            "status": "pending",
+            "entry": "20260101T000000Z",
+            "modified": "20260101T000000Z",
+        }
+        modify_old = {
+            "uuid": "22222222-2222-2222-2222-222222222222",
+            "description": "symlink bootstrap modify",
+            "status": "pending",
+            "entry": "20260101T000000Z",
+            "modified": "20260101T000000Z",
+        }
+        modify_new = dict(modify_old)
+        modify_new["modified"] = "20260101T000001Z"
+
+        cases = [
+            (
+                "on-add",
+                hooks / "on-add-nautical.py",
+                json.dumps(add_task, ensure_ascii=False),
+                True,
+            ),
+            (
+                "on-modify",
+                hooks / "on-modify-nautical.py",
+                json.dumps(modify_old, ensure_ascii=False) + "\n" + json.dumps(modify_new, ensure_ascii=False),
+                True,
+            ),
+            (
+                "on-exit",
+                hooks / "on-exit-nautical.py",
+                "",
+                False,
+            ),
+        ]
+
+        for name, path, raw_input, expect_json in cases:
+            p = subprocess.run(
+                [sys.executable, str(path)],
+                input=raw_input,
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=10.0,
+            )
+            expect(p.returncode == 0, f"{name} failed via symlink install: rc={p.returncode}, stderr={p.stderr!r}")
+            if expect_json:
+                _assert_stdout_json_only(p.stdout or "")
+            else:
+                expect((p.stdout or "").strip() == "", f"{name} should keep stdout empty, got {p.stdout!r}")
 
 
 def test_on_modify_ignores_unsafe_core_path_override():
@@ -8946,6 +9030,7 @@ TESTS = [
     test_hook_stdout_strict_json_with_diag_on_modify,
     test_hook_stdout_unicode_unescaped_on_add,
     test_hook_stdout_unicode_unescaped_on_modify,
+    test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
     test_hook_stdout_empty_on_exit,
     test_hook_files_are_private_permissions,
     test_safe_lock_fcntl_contention,

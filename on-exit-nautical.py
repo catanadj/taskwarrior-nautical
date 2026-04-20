@@ -22,17 +22,28 @@ from pathlib import Path
 from contextlib import contextmanager
 from typing import Any
 
-HOOK_DIR = Path(__file__).resolve().parent
+HOOK_DIR = Path(__file__).parent
 _TW_DIR_BOOT = HOOK_DIR.parent
 try:
     import hook_bootstrap
 except ModuleNotFoundError:
     hook_bootstrap = None
-    for _bootstrap_path in (
+    _bootstrap_paths = [
         HOOK_DIR / 'hook_bootstrap.py',
         HOOK_DIR / 'nautical_core' / 'hook_bootstrap.py',
         _TW_DIR_BOOT / 'nautical_core' / 'hook_bootstrap.py',
-    ):
+    ]
+    _core_path_raw = (os.environ.get("NAUTICAL_CORE_PATH") or "").strip()
+    if _core_path_raw:
+        try:
+            _core_path = Path(_core_path_raw).expanduser()
+            _bootstrap_paths.extend([
+                _core_path / 'hook_bootstrap.py',
+                _core_path / 'nautical_core' / 'hook_bootstrap.py',
+            ])
+        except Exception:
+            pass
+    for _bootstrap_path in _bootstrap_paths:
         try:
             if not _bootstrap_path.is_file():
                 continue

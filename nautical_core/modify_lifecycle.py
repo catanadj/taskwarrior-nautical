@@ -21,7 +21,7 @@ class ModifyNauticalTransition:
 def task_has_nautical_recurrence_fields(task: dict[str, Any] | None) -> bool:
     if not isinstance(task, dict):
         return False
-    keys = ("anchor", "anchor_file", "anchor_mode", "cp", "omit", "omit_file")
+    keys = ("anchor", "anchor_file", "cp", "omit", "omit_file")
     for key in keys:
         val = task.get(key)
         if val is None:

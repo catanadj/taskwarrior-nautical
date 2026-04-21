@@ -1941,6 +1941,10 @@ def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
         "lowercase chainid should not count as Nautical state",
     )
     expect(
+        not ml.task_has_nautical_fields({"anchor_mode": "skip"}),
+        "anchor_mode alone should not count as Nautical state",
+    )
+    expect(
         ml.task_has_nautical_fields({"chainID": "abcd1234"}),
         "canonical chainID should still count as Nautical state",
     )

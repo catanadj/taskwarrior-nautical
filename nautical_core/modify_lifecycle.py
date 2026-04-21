@@ -11,6 +11,13 @@ class ModifyLifecycleRoute:
     is_non_completion: bool
 
 
+@dataclass(slots=True)
+class ModifyNauticalTransition:
+    state: str
+    source: str = ""
+    reason: str = ""
+
+
 def task_has_nautical_fields(task: dict[str, Any] | None) -> bool:
     if not isinstance(task, dict):
         return False
@@ -52,34 +59,76 @@ def promote_newly_nautical_task(
     *,
     short_uuid: Callable[[Any], str],
 ) -> str | None:
+    transition = apply_nautical_transition(old, new, short_uuid=short_uuid)
+    return transition.source if transition.state == "enabled" else None
+
+
+def apply_nautical_transition(
+    old: dict[str, Any] | None,
+    new: dict[str, Any] | None,
+    *,
+    short_uuid: Callable[[Any], str],
+) -> ModifyNauticalTransition:
     if not isinstance(old, dict) or not isinstance(new, dict):
-        return None
+        return ModifyNauticalTransition(state="unchanged")
+
     old_has_nautical = task_has_nautical_fields(old)
     new_has_nautical = task_has_nautical_fields(new)
-    if old_has_nautical or not new_has_nautical:
-        return None
+    new_chain = (new.get("chain") or "").strip().lower()
 
-    if (new.get("anchor") or "").strip():
-        source = "anchor"
-    elif (new.get("anchor_file") or "").strip():
-        source = "anchor_file"
-    elif (new.get("cp") or "").strip():
-        source = "cp"
-    else:
-        return None
+    if not old_has_nautical and new_has_nautical:
+        if (new.get("anchor") or "").strip():
+            source = "anchor"
+        elif (new.get("anchor_file") or "").strip():
+            source = "anchor_file"
+        elif (new.get("cp") or "").strip():
+            source = "cp"
+        else:
+            return ModifyNauticalTransition(state="unchanged")
 
-    if (new.get("chain") or "").strip().lower() != "on":
-        new["chain"] = "on"
+        if new_chain != "on":
+            new["chain"] = "on"
 
-    already_chain = bool((new.get("chainID") or "").strip())
-    linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
-    if not already_chain and not linked_already:
-        new["chainID"] = short_uuid(new.get("uuid"))
-    return source
+        already_chain = bool((new.get("chainID") or "").strip())
+        linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
+        if not already_chain and not linked_already:
+            new["chainID"] = short_uuid(new.get("uuid"))
+        return ModifyNauticalTransition(
+            state="enabled",
+            source=source,
+            reason="This task just gained Nautical recurrence and was promoted to chain:on.",
+        )
+
+    if old_has_nautical and not new_has_nautical:
+        if new_chain != "off":
+            new["chain"] = "off"
+        return ModifyNauticalTransition(
+            state="disabled",
+            reason="This task no longer has Nautical recurrence fields.",
+        )
+
+    if new_has_nautical and new_chain == "off":
+        if (new.get("anchor") or "").strip():
+            source = "anchor"
+        elif (new.get("anchor_file") or "").strip():
+            source = "anchor_file"
+        elif (new.get("cp") or "").strip():
+            source = "cp"
+        else:
+            source = ""
+        return ModifyNauticalTransition(
+            state="disabled",
+            source=source,
+            reason="This task's Nautical recurrence is disabled because chain:off is set.",
+        )
+
+    return ModifyNauticalTransition(state="unchanged")
 
 
 __all__ = (
     "ModifyLifecycleRoute",
+    "ModifyNauticalTransition",
+    "apply_nautical_transition",
     "classify_modify_route",
     "promote_newly_nautical_task",
     "task_has_nautical_fields",

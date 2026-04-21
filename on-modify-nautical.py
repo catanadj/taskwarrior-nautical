@@ -5230,20 +5230,25 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
 
     modify_lifecycle = _module("modify_lifecycle")
     try:
-        promoted_source = modify_lifecycle.promote_newly_nautical_task(old, new, short_uuid=core.short_uuid)
+        transition = modify_lifecycle.apply_nautical_transition(old, new, short_uuid=core.short_uuid)
     except Exception:
-        promoted_source = None
-    upgraded = bool(promoted_source)
-    if upgraded:
+        transition = None
+    if transition and transition.state == "enabled":
         _panel(
             "⚓ Nautical enabled",
             [
-                ("Reason", "This task just gained Nautical recurrence and was promoted to chain:on."),
-                ("Source", promoted_source),
+                ("Reason", transition.reason or "This task just gained Nautical recurrence and was promoted to chain:on."),
+                ("Source", transition.source),
                 ("Chain", "on"),
             ],
             kind="note",
         )
+    elif transition and transition.state == "disabled":
+        rows = [("Reason", transition.reason or "This task's Nautical recurrence is disabled.")]
+        if transition.source:
+            rows.append(("Source", transition.source))
+        rows.append(("Chain", "off"))
+        _panel("⚓ Nautical disabled", rows, kind="disabled")
     _print_task(new)
 
 
@@ -5296,7 +5301,7 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, 
 
         modify_lifecycle = _module("modify_lifecycle")
         try:
-            modify_lifecycle.promote_newly_nautical_task(old, new, short_uuid=core.short_uuid)
+            modify_lifecycle.apply_nautical_transition(old, new, short_uuid=core.short_uuid)
         except Exception:
             pass
 

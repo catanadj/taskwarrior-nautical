@@ -1868,6 +1868,71 @@ def test_on_modify_promotes_chain_emits_upgrade_panel():
     expect(bool((new.get("chainID") or "").strip()), f"promotion should stamp chainID, got {new!r}")
 
 
+def test_on_modify_disables_chain_emits_disabled_panel():
+    """Disabling Nautical recurrence should show a small informative panel."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_chain_disabled_panel_test")
+
+    base_old = {
+        "uuid": "00000000-0000-0000-0000-000000000447",
+        "description": "nautical task",
+        "status": "pending",
+        "anchor": "w:mon",
+        "chain": "on",
+        "chainID": "abcd1234",
+    }
+    disable_cases = [
+        {
+            "label": "chain_off",
+            "new": {**base_old, "chain": "off"},
+            "expect_reason": "disabled because chain:off",
+            "expect_source": "anchor",
+        },
+        {
+            "label": "fields_cleared",
+            "new": {
+                "uuid": base_old["uuid"],
+                "description": base_old["description"],
+                "status": base_old["status"],
+                "chain": "on",
+            },
+            "expect_reason": "no longer has Nautical recurrence fields",
+            "expect_source": None,
+        },
+    ]
+
+    for case in disable_cases:
+        old = dict(base_old)
+        new = dict(case["new"])
+        captured = {}
+
+        orig_panel = mod._panel
+        orig_print_task = mod._print_task
+        try:
+            def fake_panel(title, rows, *, kind=None):
+                captured["title"] = title
+                captured["rows"] = list(rows)
+                captured["kind"] = kind
+
+            mod._panel = fake_panel
+            mod._print_task = lambda task: captured.setdefault("task", dict(task))
+            mod._handle_non_completion_modify(old, new)
+        finally:
+            mod._panel = orig_panel
+            mod._print_task = orig_print_task
+
+        expect(captured.get("title") == "⚓ Nautical disabled", f"{case['label']} expected disabled panel, got {captured!r}")
+        expect(captured.get("kind") == "disabled", f"{case['label']} expected disabled panel kind, got {captured!r}")
+        rows = captured.get("rows") or []
+        expect(any(k == "Reason" and case["expect_reason"] in str(v) for k, v in rows), f"{case['label']} expected reason row, got {rows!r}")
+        if case["expect_source"] is None:
+            expect(not any(k == "Source" for k, _v in rows), f"{case['label']} should not include source row, got {rows!r}")
+        else:
+            expect(any(k == "Source" and v == case["expect_source"] for k, v in rows), f"{case['label']} expected source row, got {rows!r}")
+        expect(any(k == "Chain" and v == "off" for k, v in rows), f"{case['label']} expected chain:off row, got {rows!r}")
+        expect(new.get("chain") == "off", f"{case['label']} should set chain:off, got {new!r}")
+
+
 def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
     """Modify lifecycle helper should classify and promote newly Nautical tasks explicitly."""
     ml = core._import_sibling("modify_lifecycle")
@@ -1890,6 +1955,14 @@ def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
     expect(source == "anchor_file", f"expected anchor_file promotion source, got {source!r}")
     expect(new.get("chain") == "on", f"promotion should set chain:on, got {new!r}")
     expect(bool((new.get("chainID") or "").strip()), f"promotion should stamp chainID, got {new!r}")
+
+    disabled_old = {"uuid": "00000000-0000-0000-0000-000000000448", "status": "pending", "anchor": "w:mon", "chain": "on"}
+    disabled_new = dict(disabled_old)
+    disabled_new["chain"] = "off"
+    trans = ml.apply_nautical_transition(disabled_old, disabled_new, short_uuid=lambda u: str(u).split("-")[0] if u else "")
+    expect(trans.state == "disabled", f"expected disabled transition, got {trans!r}")
+    expect("chain:off" in trans.reason, f"expected chain-off reason, got {trans!r}")
+    expect(disabled_new.get("chain") == "off", f"disabled transition should keep chain off, got {disabled_new!r}")
 
 def test_on_modify_read_two_fuzz_inputs():
     """on-modify input parsing should be strict and return JSON errors on bad input."""
@@ -9241,6 +9314,7 @@ TESTS = [
     test_on_modify_ignores_unsafe_core_path_override,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_on_modify_promotes_chain_emits_upgrade_panel,
+    test_on_modify_disables_chain_emits_disabled_panel,
     test_modify_lifecycle_routes_and_promotes_new_nautical_tasks,
     test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,

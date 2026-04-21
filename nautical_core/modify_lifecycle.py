@@ -18,10 +18,10 @@ class ModifyNauticalTransition:
     reason: str = ""
 
 
-def task_has_nautical_fields(task: dict[str, Any] | None) -> bool:
+def task_has_nautical_recurrence_fields(task: dict[str, Any] | None) -> bool:
     if not isinstance(task, dict):
         return False
-    keys = ("anchor", "anchor_file", "anchor_mode", "cp", "chainID", "chainid", "nextLink", "prevLink", "link", "omit", "omit_file")
+    keys = ("anchor", "anchor_file", "anchor_mode", "cp", "omit", "omit_file")
     for key in keys:
         val = task.get(key)
         if val is None:
@@ -33,6 +33,27 @@ def task_has_nautical_fields(task: dict[str, Any] | None) -> bool:
         if s:
             return True
     return False
+
+
+def task_has_nautical_chain_fields(task: dict[str, Any] | None) -> bool:
+    if not isinstance(task, dict):
+        return False
+    keys = ("chainID", "nextLink", "prevLink", "link")
+    for key in keys:
+        val = task.get(key)
+        if val is None:
+            continue
+        try:
+            s = str(val).strip()
+        except Exception:
+            s = ""
+        if s:
+            return True
+    return False
+
+
+def task_has_nautical_fields(task: dict[str, Any] | None) -> bool:
+    return task_has_nautical_recurrence_fields(task) or task_has_nautical_chain_fields(task)
 
 
 def classify_modify_route(
@@ -72,11 +93,11 @@ def apply_nautical_transition(
     if not isinstance(old, dict) or not isinstance(new, dict):
         return ModifyNauticalTransition(state="unchanged")
 
-    old_has_nautical = task_has_nautical_fields(old)
-    new_has_nautical = task_has_nautical_fields(new)
+    old_has_recurrence = task_has_nautical_recurrence_fields(old)
+    new_has_recurrence = task_has_nautical_recurrence_fields(new)
     new_chain = (new.get("chain") or "").strip().lower()
 
-    if not old_has_nautical and new_has_nautical:
+    if not old_has_recurrence and new_has_recurrence:
         if (new.get("anchor") or "").strip():
             source = "anchor"
         elif (new.get("anchor_file") or "").strip():
@@ -99,7 +120,7 @@ def apply_nautical_transition(
             reason="This task just gained Nautical recurrence and was promoted to chain:on.",
         )
 
-    if old_has_nautical and not new_has_nautical:
+    if old_has_recurrence and not new_has_recurrence:
         if new_chain != "off":
             new["chain"] = "off"
         return ModifyNauticalTransition(
@@ -107,7 +128,7 @@ def apply_nautical_transition(
             reason="This task no longer has Nautical recurrence fields.",
         )
 
-    if new_has_nautical and new_chain == "off":
+    if new_has_recurrence and new_chain == "off":
         if (new.get("anchor") or "").strip():
             source = "anchor"
         elif (new.get("anchor_file") or "").strip():
@@ -131,5 +152,7 @@ __all__ = (
     "apply_nautical_transition",
     "classify_modify_route",
     "promote_newly_nautical_task",
+    "task_has_nautical_chain_fields",
     "task_has_nautical_fields",
+    "task_has_nautical_recurrence_fields",
 )

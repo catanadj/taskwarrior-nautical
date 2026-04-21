@@ -1936,6 +1936,14 @@ def test_on_modify_disables_chain_emits_disabled_panel():
 def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
     """Modify lifecycle helper should classify and promote newly Nautical tasks explicitly."""
     ml = core._import_sibling("modify_lifecycle")
+    expect(
+        not ml.task_has_nautical_fields({"chainid": "legacy-1234"}),
+        "lowercase chainid should not count as Nautical state",
+    )
+    expect(
+        ml.task_has_nautical_fields({"chainID": "abcd1234"}),
+        "canonical chainID should still count as Nautical state",
+    )
     old = {"uuid": "00000000-0000-0000-0000-000000000447", "status": "pending"}
     new = {
         "uuid": "00000000-0000-0000-0000-000000000447",

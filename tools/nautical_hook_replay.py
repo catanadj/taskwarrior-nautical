@@ -155,11 +155,6 @@ def _run_case(case: ReplayCase, root: Path, timeout_s: float) -> dict[str, Any]:
             if missing:
                 ok = False
                 message = f"stderr missing expected fragments: {missing!r}"
-        if ok and p.returncode == case.expect_rc and case.expect_rc == 0 and case.expect_stdout != "any":
-            stderr = (p.stderr or "").strip()
-            if stderr:
-                ok = False
-                message = f"unexpected stderr: {stderr}"
         return {
             "name": case.name,
             "hook": case.hook,

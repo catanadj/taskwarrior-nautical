@@ -1895,6 +1895,8 @@ def test_on_modify_disables_chain_emits_disabled_panel():
                 "description": base_old["description"],
                 "status": base_old["status"],
                 "chain": "on",
+                "chainID": "abcd1234",
+                "anchor_mode": "skip",
             },
             "expect_reason": "no longer has Nautical recurrence fields",
             "expect_source": None,
@@ -1943,6 +1945,10 @@ def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
     expect(
         not ml.task_has_nautical_fields({"anchor_mode": "skip"}),
         "anchor_mode alone should not count as Nautical state",
+    )
+    expect(
+        ml.task_has_nautical_chain_fields({"chainID": "abcd1234"}),
+        "canonical chainID should still count as chain bookkeeping",
     )
     expect(
         ml.task_has_nautical_fields({"chainID": "abcd1234"}),

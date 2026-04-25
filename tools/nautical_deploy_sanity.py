@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -72,6 +73,40 @@ def _check_required_files(root: Path, require_exec: bool) -> list[dict]:
             ok = False
             msg = "not executable"
         out.append({"kind": "file", "path": rel, "ok": bool(ok), "message": msg})
+    return out
+
+
+def _check_package_layout(root: Path, env: dict[str, str]) -> list[dict]:
+    out: list[dict] = []
+    pkg_init = root / "nautical_core" / "__init__.py"
+    if not (pkg_init.exists() and pkg_init.is_file()):
+        return [{"kind": "layout", "name": "package_core", "ok": False, "message": "nautical_core/__init__.py missing"}]
+
+    hook_names = ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py")
+    for hook_name in hook_names:
+        hook_path = root / hook_name
+        if not (hook_path.exists() and hook_path.is_file()):
+            out.append({"kind": "layout", "name": hook_name, "ok": False, "message": "hook missing"})
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(f"_nautical_layout_check_{hook_name.replace('-', '_')}", hook_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError("spec_from_file_location failed")
+            old_env = os.environ.copy()
+            try:
+                os.environ.clear()
+                os.environ.update(env)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)  # type: ignore[union-attr]
+            finally:
+                os.environ.clear()
+                os.environ.update(old_env)
+            resolved = getattr(mod, "_core_target_from_base")(root)
+            ok = resolved == pkg_init
+            msg = "ok" if ok else f"resolved to {resolved}"
+            out.append({"kind": "layout", "name": hook_name, "ok": bool(ok), "message": msg})
+        except Exception as exc:
+            out.append({"kind": "layout", "name": hook_name, "ok": False, "message": str(exc)})
     return out
 
 
@@ -151,6 +186,14 @@ def main() -> int:
 
         results = []
         results.extend(_check_required_files(root, require_exec=require_exec))
+        layout_env = os.environ.copy()
+        layout_env["NAUTICAL_CORE_PATH"] = str(root)
+        layout_env["NAUTICAL_TRUST_CORE_PATH"] = "1"
+        layout_env["TASKDATA"] = str(taskdata)
+        layout_env["TZ"] = "UTC"
+        layout_env.pop("NAUTICAL_DIAG", None)
+        layout_env.pop("NAUTICAL_DIAG_LOG", None)
+        results.extend(_check_package_layout(root, layout_env))
         results.extend(_check_hook_contracts(root, taskdata))
         ok = all(bool(r.get("ok")) for r in results)
 

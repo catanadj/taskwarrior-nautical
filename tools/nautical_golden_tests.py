@@ -2016,6 +2016,20 @@ def test_chainid_legacy_reads_do_not_drive_chain_identity():
         "legacy chainid should not satisfy equivalent-child lookup",
     )
 
+
+def test_on_add_lowercase_chainid_does_not_mark_nautical():
+    """on-add should ignore lowercase chainid when deciding whether a task is Nautical."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_chainid_alias_test")
+    expect(
+        not mod._task_has_nautical_fields({"chainid": "legacy-1234"}),
+        "lowercase chainid should not mark a task Nautical on add",
+    )
+    expect(
+        mod._task_has_nautical_fields({"chainID": "abcd1234"}),
+        "canonical chainID should still mark a task Nautical on add",
+    )
+
 def test_on_modify_read_two_fuzz_inputs():
     """on-modify input parsing should be strict and return JSON errors on bad input."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -9369,6 +9383,7 @@ TESTS = [
     test_on_modify_disables_chain_emits_disabled_panel,
     test_modify_lifecycle_routes_and_promotes_new_nautical_tasks,
     test_chainid_legacy_reads_do_not_drive_chain_identity,
+    test_on_add_lowercase_chainid_does_not_mark_nautical,
     test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_versioned_payload,

@@ -588,7 +588,7 @@ def _validate_omit_expr_cached(expr: str) -> list[list[dict]]:
 def _task_has_nautical_fields(task: dict) -> bool:
     if not isinstance(task, dict):
         return False
-    for key in ("anchor", "anchor_file", "anchor_mode", "cp", "chainID", "chainid", "chainMax", "chainUntil", "omit", "omit_file"):
+    for key in ("anchor", "anchor_file", "anchor_mode", "cp", "chainID", "chainMax", "chainUntil", "omit", "omit_file"):
         if (task.get(key) or "").strip():
             return True
     return False

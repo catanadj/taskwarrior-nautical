@@ -35,7 +35,6 @@ try:
 except ModuleNotFoundError:
     hook_bootstrap = None
     _bootstrap_paths = [
-        HOOK_DIR / 'hook_bootstrap.py',
         HOOK_DIR / 'nautical_core' / 'hook_bootstrap.py',
         _TW_DIR_BOOT / 'nautical_core' / 'hook_bootstrap.py',
     ]

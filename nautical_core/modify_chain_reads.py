@@ -73,7 +73,7 @@ def existing_next_task(
         if isinstance(obj, dict) and (obj.get("status") or "").strip().lower() != "deleted":
             return obj
 
-    chain_id = (parent_task.get("chainID") or parent_task.get("chainid") or "").strip()
+    chain_id = (parent_task.get("chainID") or "").strip()
     if not chain_id:
         return None
     try:

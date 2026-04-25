@@ -93,7 +93,7 @@ def existing_equivalent_child(
 
     if not isinstance(child, dict):
         return ExitEquivalentChildResult(False, False, "missing child", None)
-    chain_id = (child.get("chainID") or child.get("chainid") or "").strip()
+    chain_id = (child.get("chainID") or "").strip()
     link_no = child.get("link")
     if not chain_id or link_no in (None, ""):
         return ExitEquivalentChildResult(False, False, "missing chain slot", None)

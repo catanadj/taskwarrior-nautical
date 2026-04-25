@@ -2036,7 +2036,7 @@ def _root_uuid_from(task: dict) -> str:
 
     ChainID is the only source of truth.
     """
-    return (task.get("chainID") or task.get("chainid") or "").strip()
+    return (task.get("chainID") or "").strip()
 
 # --- Chain export: chainID is mandatory --------------------------------------
 def _task(args, env=None) -> str:
@@ -2128,7 +2128,7 @@ def tw_export_chain_required(seed_task, env=None):
 
     Policy: chainID is mandatory.
     """
-    chain_id = seed_task.get('chainID') or seed_task.get('chainid')
+    chain_id = seed_task.get('chainID')
     if not chain_id:
         raise RuntimeError(
             "ChainID is required (legacy chain traversal removed). "
@@ -4149,7 +4149,7 @@ def _chain_integrity_collect(
             missing_link.append(_short(uid))
 
         if expected_chain_id is not None:
-            cid = (t.get("chainID") or t.get("chainid") or "").strip()
+            cid = (t.get("chainID") or "").strip()
             if not cid:
                 warnings.append(f"missing chainID on {_short(uid)}")
             elif cid != expected_chain_id:
@@ -4368,7 +4368,7 @@ def _end_summary_current(current: dict, current_task: dict | None) -> dict:
 
 
 def _end_summary_chain_id_row(actual_current: dict) -> str:
-    return (actual_current.get("chainID") or actual_current.get("chainid") or "").strip()
+    return (actual_current.get("chainID") or "").strip()
 
 
 def _end_summary_sorted_chain(chain_id: str, actual_current: dict) -> list[dict]:
@@ -5515,7 +5515,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     preloaded_chain: list[dict] = []
     preloaded_chain_by_link = None
     preloaded_chain_by_short = None
-    preload_chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
+    preload_chain_id = (new.get("chainID") or "").strip()
     if preload_chain_id and need_chain:
         try:
             preloaded_chain = _get_chain_export(preload_chain_id)

@@ -23,9 +23,7 @@ def stable_child_uuid(
         return ""
     chain_id = (
         child_task.get("chainID")
-        or child_task.get("chainid")
         or parent_task.get("chainID")
-        or parent_task.get("chainid")
         or ""
     )
     kind = "anchor" if (parent_task.get("anchor") or "").strip() else "cp" if (parent_task.get("cp") or "").strip() else ""

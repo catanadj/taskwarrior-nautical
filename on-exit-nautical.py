@@ -1571,7 +1571,7 @@ def _short_uuid(value: str) -> str:
 def _equivalent_child_cache_key(child: dict, parent_uuid: str = "") -> tuple[str, str, str] | None:
     if not isinstance(child, dict):
         return None
-    chain_id = str(child.get("chainID") or child.get("chainid") or "").strip()
+    chain_id = str(child.get("chainID") or "").strip()
     link_no = child.get("link")
     if not chain_id or link_no in (None, ""):
         return None

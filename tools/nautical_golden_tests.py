@@ -1982,6 +1982,40 @@ def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
     expect("chain:off" in trans.reason, f"expected chain-off reason, got {trans!r}")
     expect(disabled_new.get("chain") == "off", f"disabled transition should keep chain off, got {disabled_new!r}")
 
+
+def test_chainid_legacy_reads_do_not_drive_chain_identity():
+    """Lowercase chainid should no longer participate in chain identity helpers."""
+    import uuid
+    import nautical_core.exit_queries as exit_queries
+    import nautical_core.modify_chain_reads as modify_chain_reads
+    import nautical_core.modify_spawn_prep as modify_spawn_prep
+
+    parent = {"chainid": "legacy-1", "uuid": "parent-uuid"}
+    child = {"chainid": "legacy-1", "link": 2}
+    with_legacy = modify_spawn_prep.stable_child_uuid(
+        parent,
+        child,
+        task_uuid_or_empty=lambda task: str(task.get("uuid") or "").strip(),
+        coerce_int=core.coerce_int,
+        stable_child_uuid_namespace=uuid.NAMESPACE_URL,
+    )
+    without_legacy = modify_spawn_prep.stable_child_uuid(
+        {"uuid": "parent-uuid"},
+        {"link": 2},
+        task_uuid_or_empty=lambda task: str(task.get("uuid") or "").strip(),
+        coerce_int=core.coerce_int,
+        stable_child_uuid_namespace=uuid.NAMESPACE_URL,
+    )
+    expect(with_legacy == without_legacy, "legacy chainid should not change stable child UUIDs")
+    expect(
+        modify_chain_reads.existing_next_task({"chainid": "legacy-1", "link": 2}, 3, export_uuid_short_cached=lambda _ref: None, get_chain_export=lambda *_args, **_kwargs: [] ) is None,
+        "legacy chainid should not drive existing next task lookup",
+    )
+    expect(
+        exit_queries.existing_equivalent_child({"chainid": "legacy-1", "link": 2}, task_cmd_prefix=["task"], run_task=lambda *_args, **_kwargs: (False, "", ""), timeout=0.1, retries=0, retry_delay=0.0, is_lock_error=lambda _err: False, short_uuid_fn=lambda value: value).err == "missing chain slot",
+        "legacy chainid should not satisfy equivalent-child lookup",
+    )
+
 def test_on_modify_read_two_fuzz_inputs():
     """on-modify input parsing should be strict and return JSON errors on bad input."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -9334,6 +9368,7 @@ TESTS = [
     test_on_modify_promotes_chain_emits_upgrade_panel,
     test_on_modify_disables_chain_emits_disabled_panel,
     test_modify_lifecycle_routes_and_promotes_new_nautical_tasks,
+    test_chainid_legacy_reads_do_not_drive_chain_identity,
     test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_versioned_payload,

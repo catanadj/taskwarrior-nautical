@@ -6656,6 +6656,29 @@ def test_on_modify_completion_preflight_context_happy_path():
     expect(ctx.kind == "cp", f"unexpected kind: {ctx}")
     expect(ctx.chain_id == "abcd1234", f"unexpected chain id: {ctx}")
 
+    preflight = core._import_sibling("modify_completion_preflight")
+    captured = {}
+
+    def fake_panel(title, rows, *, kind=None):
+        captured["title"] = title
+        captured["rows"] = list(rows)
+        captured["kind"] = kind
+
+    def fake_print_task(task):
+        captured["task"] = dict(task)
+
+    expect(
+        preflight.completion_chain_id_or_fail({"chainID": "abcd1234"}, panel=fake_panel, print_task=fake_print_task) == "abcd1234",
+        "canonical chainID should still pass completion preflight",
+    )
+    captured.clear()
+    expect(
+        preflight.completion_chain_id_or_fail({"chainid": "legacy-1234"}, panel=fake_panel, print_task=fake_print_task) is None,
+        "lowercase chainid should fail completion preflight",
+    )
+    expect(captured.get("title") == "⛔ ChainID missing", f"expected chainID missing panel, got {captured!r}")
+    expect(any(k == "Reason" and "ChainID is required" in str(v) for k, v in captured.get("rows") or []), f"expected chainID reason row, got {captured!r}")
+
 
 def test_on_modify_completion_compute_next_and_limits_happy_path():
     """completion compute should assemble child due and cap metadata from helper results."""

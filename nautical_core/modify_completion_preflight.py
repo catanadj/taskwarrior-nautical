@@ -66,7 +66,7 @@ def completion_kind_or_stop(
 
 
 def completion_chain_id_or_fail(new: dict, *, panel, print_task) -> str | None:
-    chain_id = (new.get("chainID") or new.get("chainid") or "").strip()
+    chain_id = (new.get("chainID") or "").strip()
     if chain_id:
         return chain_id
     panel(

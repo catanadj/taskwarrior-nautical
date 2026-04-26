@@ -23,6 +23,7 @@ import tempfile
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from collections import OrderedDict
+from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -6708,6 +6709,74 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
     expect(out.finals == finals and out.until_cap_no == 3, f"unexpected finals: {out}")
 
 
+def test_on_modify_completion_finalize_skips_analytics_when_hidden():
+    """completion finalize should not compute analytics advice when analytics are hidden."""
+    flow = core._import_sibling("modify_completion_flow")
+
+    captured = {}
+
+    def fake_build_and_spawn_child(*_a, **_k):
+        return SimpleNamespace(
+            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            child_short="deadbeef",
+            stripped_attrs=[],
+            verified=False,
+            deferred_spawn=False,
+            spawn_intent_id=None,
+        )
+
+    def fake_modify_chain_state():
+        return SimpleNamespace(panel_chain_by_link=None, panel_chain_by_short=None)
+
+    def fake_render_anchor_completion_feedback(**kwargs):
+        captured["analytics_advice"] = kwargs.get("analytics_advice")
+
+    services = flow.CompletionFinalizeServices(
+        build_and_spawn_child=fake_build_and_spawn_child,
+        seed_runtime_lookup_tasks=lambda *_a, **_k: None,
+        modify_chain_state=fake_modify_chain_state,
+        get_chain_export=lambda *_a, **_k: [],
+        build_chain_indexes=lambda chain: (None, None),
+        set_chain_cache=lambda *_a, **_k: None,
+        export_uuid_short_cached=SimpleNamespace(cache_clear=lambda: None),
+        merge_spawned_child_into_chain=lambda chain, *_a, **_k: chain,
+        chain_health_advice=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("analytics should not be computed when hidden")),
+        chain_integrity_warnings=lambda *_a, **_k: None,
+        render_anchor_completion_feedback=fake_render_anchor_completion_feedback,
+        render_cp_completion_feedback=lambda *_a, **_k: None,
+        print_task=lambda *_a, **_k: None,
+        diag_summary=lambda *_a, **_k: None,
+        show_analytics=False,
+        analytics_style="clinical",
+    )
+    ctx = SimpleNamespace(parent_short="00000000", base_no=1, next_no=2, kind="anchor", chain_id="")
+    computed = SimpleNamespace(
+        child_due=core.now_utc(),
+        meta={"target_field": "due"},
+        dnf=[[{"typ": "w", "spec": "mon", "mods": {}}]],
+        until_dt=None,
+        cpmax=0,
+        cap_no=None,
+        finals=[],
+        until_cap_no=None,
+    )
+
+    flow.finalize_completion_modify(
+        new={"anchor": "w:mon", "chainID": "abcd1234"},
+        ctx=ctx,
+        computed=computed,
+        now_utc=core.now_utc(),
+        need_chain=True,
+        preloaded_chain=[{"uuid": "00000000-0000-0000-0000-000000000111"}],
+        preloaded_chain_by_link=None,
+        preloaded_chain_by_short=None,
+        chain_id="",
+        services=services,
+    )
+
+    expect(captured.get("analytics_advice") is None, f"analytics should stay hidden, got {captured}")
+
+
 def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
     """scheduled-only cp chains should preserve scheduled wall clock on completion."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -9457,6 +9526,7 @@ TESTS = [
     test_on_modify_link_limit,
     test_on_modify_completion_preflight_context_happy_path,
     test_on_modify_completion_compute_next_and_limits_happy_path,
+    test_on_modify_completion_finalize_skips_analytics_when_hidden,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
     test_anchor_omit_rejects_time_modifiers,

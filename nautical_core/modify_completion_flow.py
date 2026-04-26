@@ -20,6 +20,7 @@ class CompletionFinalizeServices:
     render_cp_completion_feedback: Any
     print_task: Any
     diag_summary: Any
+    show_analytics: bool
     analytics_style: str
 
 
@@ -85,7 +86,7 @@ def finalize_completion_modify(
 
     analytics_advice = None
     integrity_warnings = None
-    if chain:
+    if chain and services.show_analytics:
         try:
             analytics_advice = services.chain_health_advice(chain, kind, new, style=services.analytics_style)
         except Exception:

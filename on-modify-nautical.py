@@ -5555,6 +5555,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
         render_cp_completion_feedback=_render_cp_completion_feedback,
         print_task=_print_task,
         diag_summary=_diag_summary,
+        show_analytics=_SHOW_ANALYTICS,
         analytics_style=_ANALYTICS_STYLE,
     )
     modify_completion_flow.finalize_completion_modify(

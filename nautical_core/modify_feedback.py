@@ -382,7 +382,7 @@ def render_anchor_completion_feedback(
 
     _append_wait_sched_feedback_rows(fb, debug_wait_sched=debug_wait_sched, last_wait_sched_debug=last_wait_sched_debug)
     _append_sanitised_fields_row(fb, feedback.stripped_attrs)
-    if feedback.analytics_advice:
+    if core.SHOW_ANALYTICS and feedback.analytics_advice:
         fb.append(("Analytics", feedback.analytics_advice))
     _append_integrity_warnings_row(fb, feedback.integrity_warnings)
     append_next_wait_sched_rows(
@@ -513,7 +513,7 @@ def render_cp_completion_feedback(
     if basis_text != "Preserve wall clock (period is multiple of 24h)":
         fb.append(("Basis", basis_text))
     fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))
-    if feedback.analytics_advice:
+    if core.SHOW_ANALYTICS and feedback.analytics_advice:
         fb.append(("Analytics", feedback.analytics_advice))
     _append_integrity_warnings_row(fb, feedback.integrity_warnings)
     append_next_wait_sched_rows(

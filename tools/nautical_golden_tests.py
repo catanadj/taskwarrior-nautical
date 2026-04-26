@@ -7507,8 +7507,10 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
     mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
 
     prev_panel_mode = mod.core.PANEL_MODE
+    prev_show_analytics = mod.core.SHOW_ANALYTICS
     try:
         mod.core.PANEL_MODE = "panel"
+        mod.core.SHOW_ANALYTICS = False
         mod._render_anchor_completion_feedback(
             new={"anchor": "w:mon", "omit": "w:wed", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
@@ -7527,18 +7529,20 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
             deferred_spawn=False,
             spawn_intent_id=None,
             chain_by_short=None,
-            analytics_advice=None,
+            analytics_advice="chain looks healthy but should be hidden",
             integrity_warnings=None,
             base_no=1,
         )
     finally:
         mod.core.PANEL_MODE = prev_panel_mode
+        mod.core.SHOW_ANALYTICS = prev_show_analytics
 
     expect("title" in captured, "expected preview panel emission")
     expect("Next anchor" in captured["title"], f"unexpected panel title: {captured}")
     fb = captured.get("fb") or []
     expect(("Omit", "w:wed") in fb, f"expected raw omit row in anchor feedback: {fb}")
     expect(any(k == "Except" and ("Wednesday" in str(v) or "Wednesdays" in str(v)) for k, v in fb), f"expected natural omit row in anchor feedback: {fb}")
+    expect(not any(k == "Analytics" for k, _v in fb), f"analytics row should be hidden when show_analytics is false: {fb}")
 
 
 def test_on_modify_render_anchor_file_completion_feedback_wrapper():

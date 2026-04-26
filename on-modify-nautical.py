@@ -5512,21 +5512,6 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     _completion_validate_cp_and_anchor(old, new)
     now_utc = core.now_utc()
     need_chain = _SHOW_ANALYTICS or _SHOW_TIMELINE_GAPS or _CHECK_CHAIN_INTEGRITY
-    preloaded_chain: list[dict] = []
-    preloaded_chain_by_link = None
-    preloaded_chain_by_short = None
-    preload_chain_id = (new.get("chainID") or "").strip()
-    if preload_chain_id and need_chain:
-        try:
-            preloaded_chain = _get_chain_export(preload_chain_id)
-            if preloaded_chain:
-                preloaded_chain_by_link, preloaded_chain_by_short = _build_chain_indexes(preloaded_chain)
-                _set_chain_cache(preload_chain_id, preloaded_chain)
-                _export_uuid_short_cached.cache_clear()
-        except Exception:
-            preloaded_chain = []
-            preloaded_chain_by_link = None
-            preloaded_chain_by_short = None
     ctx = _completion_preflight_context(new, now_utc)
     if ctx is None:
         return
@@ -5539,6 +5524,21 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     computed = _completion_compute_next_and_limits(new, kind, next_no, now_utc)
     if computed is None:
         return
+    preloaded_chain: list[dict] = []
+    preloaded_chain_by_link = None
+    preloaded_chain_by_short = None
+    preload_chain_id = chain_id
+    if preload_chain_id and need_chain:
+        try:
+            preloaded_chain = _get_chain_export(preload_chain_id)
+            if preloaded_chain:
+                preloaded_chain_by_link, preloaded_chain_by_short = _build_chain_indexes(preloaded_chain)
+                _set_chain_cache(preload_chain_id, preloaded_chain)
+                _export_uuid_short_cached.cache_clear()
+        except Exception:
+            preloaded_chain = []
+            preloaded_chain_by_link = None
+            preloaded_chain_by_short = None
     modify_completion_flow = importlib.import_module("nautical_core.modify_completion_flow")
     services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=_completion_build_and_spawn_child,

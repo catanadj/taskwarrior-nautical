@@ -3370,7 +3370,7 @@ def test_lint_anchor_expr_characterization():
         ("m:6th-mon", "Invalid ordinal '6th'. Only 1st..5th are supported."),
         (
             "w:sat + w:mon",
-            "These anchors joined with '+' don't share any possible date. If you meant 'either/or', join them with ',' or '|'.",
+            "These anchors joined with '+' don't share any possible date. If you meant 'either/or', use '|'.",
         ),
         (
             "y:q4..q2",
@@ -3406,7 +3406,7 @@ def test_unsat_hint_uses_yearly_alias_for_month_name_examples():
         raise AssertionError("w:wed + m:apr: expected ParseError")
     except core.ParseError as e:
         msg = str(e)
-        expect("Example: w:wed, y:apr" in msg, f"unexpected message: {msg}")
+        expect("Example: w:wed | y:apr" in msg, f"unexpected message: {msg}")
 
 def test_anchor_grouped_list_plus_expr_applies_filter_to_all_items():
     """anchor should treat comma lists joined with '+' as a grouped unit."""

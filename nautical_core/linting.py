@@ -148,7 +148,7 @@ def lint_check_unsat_pure_weekly_and(s: str, *, wd_abbr, split_csv_tokens, re_mo
         if only_weekly and wsets and not set.intersection(*wsets):
             return (
                 "These anchors joined with '+' don't share any possible date. "
-                "If you meant 'either/or', join them with ',' or '|'."
+                "If you meant 'either/or', use '|'."
             )
     return None
 

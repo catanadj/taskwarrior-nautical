@@ -33,7 +33,7 @@ def quick_weekly_and_check(term: list[dict], *, weekday_set_from_weekly_atom, an
         if not inter:
             raise and_term_unsatisfiable_cls(
                 "Weekly anchors joined with '+' never coincide (e.g., Saturday AND Monday). "
-                "Use ',' (OR) or '|' instead."
+                "Use '|' instead."
             )
 
 
@@ -50,10 +50,10 @@ def quick_yearly_and_check(term: list[dict], *, md_pairs_from_yearly_spec, and_t
     if len(md_sets) >= 2:
         inter = set.intersection(*md_sets)
         if not inter:
-            joined = ", ".join((atom.get("spec") or "").strip().lower() for atom in y_atoms)
+            example = " | ".join(f"y:{(atom.get('spec') or '').strip().lower()}" for atom in y_atoms)
             raise and_term_unsatisfiable_cls(
                 "Yearly anchors joined with '+' never overlap within a year. "
-                f"If you intended 'either/or', join them with commas: y:{joined}"
+                f"If you intended 'either/or', use '|'. Example: {example}"
             )
 
 
@@ -116,9 +116,9 @@ def validate_and_terms_satisfiable(
                             typ = "y"
                 if typ:
                     pieces.append(f"{typ}:{spec}" if spec else typ)
-            hint = ", ".join(pieces)
+            hint = " | ".join(pieces)
             raise and_term_unsatisfiable_cls(
                 "These anchors joined with '+' don't share any possible date. "
-                "If you meant 'either/or', join them with ',' (OR) or use '|'. "
-                f"Example: {hint.replace(' + ', ', ')}"
+                "If you meant 'either/or', use '|'. "
+                f"Example: {hint}"
             )

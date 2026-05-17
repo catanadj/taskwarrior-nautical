@@ -4421,6 +4421,11 @@ def test_yearly_rand_natural_and_bounds():
     for d in p2["upcoming"][:8]:
         expect(datetime.fromisoformat(d).month == 7, f"{d} must be in July")
 
+    p3 = build_preview("y:rand + w:sat")
+    expect(p3["upcoming"], "y:rand + w:sat should produce upcoming dates")
+    for d in p3["upcoming"][:8]:
+        expect(datetime.fromisoformat(d).weekday() == 5, f"{d} must be a Saturday")
+
 def test_yearly_month_aliases_and_ranges():
     """Test month name aliases and numeric shorthands"""
     # Single month by name or numeric shorthand

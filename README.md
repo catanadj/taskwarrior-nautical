@@ -169,7 +169,6 @@ For a full setup, including config keys and file-backed recurrence directories, 
 
 ## Documentation
 
-- [Manual](./Manual.md)
 - [PDF Manual](./TW-Nautical-Manual.pdf)
 - [Releases](https://github.com/catanadj/taskwarrior-nautical/releases)
 - [Issues](https://github.com/catanadj/taskwarrior-nautical/issues)

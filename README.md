@@ -1,40 +1,140 @@
 ![Nautical Banner](./nautical-banner.svg)
 
-# Taskwarrior-Nautical ⚓︎⛓
-**Real-world recurrence for Taskwarrior** - without cloud lock-in or drift.
+# Taskwarrior Nautical
 
-``` bash
-# Last Friday of every month
-task add "Monthly review" anchor:"m:last-fri"
+Taskwarrior is already a powerhouse; Nautical is the recurrence system I wanted on top of it.
 
-# Every 33 h, wall-clock preserved
-task add "Take Vitamin" cp:33h due:now+12h
+It is not a separate task manager and it does not replace Taskwarrior. It is a small hook-based layer that teaches Taskwarrior how to carry recurring work forward in a predictable way.
 
-# 2nd Mon or first working day before 15th
-task add "Board prep" anchor:"m:2mon | m:15@pbd"
-```
+When you complete a Nautical task, the hook asks one question:
 
+> What should the next task be, and when should it happen?
+
+Then it creates the next link, keeps the chain connected, and shows you what it did.
 
 ![demo_nautical](https://github.com/user-attachments/assets/8420c1a8-907b-483e-86ec-4385eec892e3)
 
+## What Nautical Adds
+
+Taskwarrior is excellent at storing and finding tasks. Nautical focuses on recurrence.
+
+It gives you two ways to describe recurring work:
+
+- `cp` for completion-based period chains
+- `anchor` for calendar-based recurrence
+
+It also gives anchors file-backed inclusion and exclusion:
+
+- `anchor_file` adds dates from a trusted file
+- `omit` removes dates using anchor grammar
+- `omit_file` removes dates from a trusted file
+
+For anchor recurrence, the mental model is:
+
+```text
+included dates from anchor and anchor_file
+minus
+blocked dates from omit and omit_file
+```
+
+In plain language: include the dates from the anchor expression and anchor file, then remove the dates blocked by omit rules and omit files.
+
+## Chains: Period Recurrence
+
+Use `cp` when the next task should be based on a duration.
+
+```bash
+# Every 12 days
+task add "Mow lawn" cp:12d due:today
+
+# Every 33 hours
+task add "Take medication" cp:33h due:now
+
+# Stop after 5 links
+task add "Calibration" cp:3d chainMax:5
+```
+
+Chains are useful for work that depends on completion rhythm: maintenance, medication, reviews, chores, and anything where "next time" follows from this time.
+
+## Anchors: Calendar Recurrence
+
+Use `anchor` when the next task should land on calendar positions.
+
+```bash
+# Every Monday, Wednesday, and Friday
+task add "Workout" anchor:w:mon,wed,fri due:today
+
+# Last Friday of every month
+task add "Monthly review" anchor:m:last-fri due:today
+
+# A random Saturday each year
+task add "Annual retreat" anchor:"y:rand + w:sat" due:today
+```
+
+Anchors are useful when the calendar matters more than the completion interval.
+
+## Files and Omitted Dates
+
+Real calendars have exceptions: holidays, blackout windows, travel, company shutdowns, and fixed external schedules.
+
+Nautical handles those without forcing everything into one dense expression.
+
+```bash
+# Mondays, Wednesdays, Fridays, except Wednesdays in June
+task add "Workout" anchor:w:mon,wed,fri omit:"w:wed + y:jun"
+
+# Use a CSV file as an additional source of anchor dates
+task add "Payroll prep" anchor_file:2026.csv
+
+# Use a holiday file to block dates
+task add "Date night" anchor:"m:rand + w:sat" omit_file:2026.csv
+
+# Combine all four sources
+task add "Hybrid schedule" \
+  anchor:"w:tue,fri | y:05-05" \
+  anchor_file:"2026.csv@-1d@t=12:00,18:00" \
+  omit:"y:04-28..05-05" \
+  omit_file:2026.csv
+```
+
+This split is intentional. Inclusion and exclusion stay separate, so the rule is easier to read, preview, validate, and debug.
+
+## What You See
+
+Nautical is deliberately visible.
+
+On add and completion, it can show:
+
+- the recurrence pattern
+- the natural-language explanation
+- the next task that was created
+- the timeline of upcoming links
+- omitted dates as explicit skipped rows
+- chain caps and remaining links
 
 
----
+## Sync and Duplicate Protection
 
-## What & Why
+Nautical uses chain identity to keep recurring tasks connected across devices.
 
-Traditional repeat syntax breaks the moment life gets messy:
+The next task is spawned from the completed task state available to the device running the hook. If you annotate or adjust the current task and then complete it, that local state is what Nautical carries forward.
 
-- “Every 2nd Monday and 5th Friday”
-- “Last working day **of the quarter**”
-- “Random weekday every 3 months”
-- "Monday at 09:00, Friday at 11:15 and 18:30, Saturday at 15:00"
+In a synced setup, sync order still matters. If another device changes a task after a child was already spawned elsewhere, Nautical cannot retroactively rewrite that child. The rule is simple and explicit: the completed task state at spawn time is the source.
 
-Nautical gives you a **single line that just works**, keeps your data **local**, and never drifts because it stores **no floating-point time**.
+Nautical also guards against duplicate children and handles batch completion through `on-exit`.
 
----
+## Install
 
-## Install (≤ 60 s)
+Nautical consists of:
+
+- `nautical_core/`
+- `on-add-nautical.py`
+- `on-modify-nautical.py`
+- `on-exit-nautical.py`
+- the UDA definitions in `uda.conf`
+- optional settings in `config-nautical.toml`
+
+Quick install:
 
 ```bash
 # 1. Drop the hooks in place
@@ -47,148 +147,36 @@ cd ..
 curl -L https://github.com/catanadj/taskwarrior-nautical/archive/refs/heads/main.tar.gz \
   | tar -xz --strip-components=1 taskwarrior-nautical-main/nautical_core
 
-# 3. Add UDAs (copy/paste block)
+# 3. Add UDAs
 curl -s https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/uda.conf >> ~/.taskrc
 
 # 4. Optional pretty panels
 pip install rich
 
-# 5. Test drive
-task add "System test" anchor:"m:2mon" due:today
+# 5. Test
+task add "System test" anchor:"m:4mon"
 ```
 
-You should see a colour panel showing the next occurrences.
-Done - you're ready for the next section.
+For a full setup, including config keys and file-backed recurrence directories, read the manual.
 
----
+## Current Boundaries
 
-## 30-Second Tutorial
+- `cp` and anchor recurrence are separate engines.
+- `omit` is date-based and does not support timed omissions.
+- `anchor_file` and `omit_file` resolve basenames inside trusted config directories.
+- Nautical follows Taskwarrior hook and sync behavior; it does not run a daemon.
+- The system still refuses to spawn tasks after `9999-12-31`, so long-term planning has limits. :)
 
-| Pattern you need                                  | One line                             |
-| ------------------------------------------------- | ------------------------------------ |
-| Last Friday monthly                               | `anchor:"m:last-fri"`                |
-| 1st & 15th (nearest weekday)                      | `anchor:"m:1@nw,m:15@nw"`            |
-| Every 8 h (exact)                                 | `cp:8h`                              |
-| Random weekday in period 20 and last day of month | `anchor:"m:rand@bd + m:20..-1"`      |
-| Quarterly on 15-Jan,15-Apr…                       | `anchor:"y:01-15,04-15,07-15,10-15"` |
+## Documentation
 
----
-## What you get (and what you don’t)
+- [Manual](./Manual.md)
+- [PDF Manual](./TW-Nautical-Manual.pdf)
+- [Releases](https://github.com/catanadj/taskwarrior-nautical/releases)
+- [Issues](https://github.com/catanadj/taskwarrior-nautical/issues)
 
-Feature matrix (✓ = first-class, ◐ = partial, ✗ = missing)
-| Capability                                                             | TW+Nautical | Todoist            | TickTick | Notion | OmniFocus       | Things  |
-| ---------------------------------------------------------------------- | ----------- | ------------------ | -------- | ------ | --------------- | ------- |
-| **Open source & self-host**                                            | ✓           | ✗                  | ✗        | ✗      | ✗               | ✗       |
-| Plain-text storage                                                     | ✓           | ✗                  | ✗        | ✗      | ✗               | ✗       |
-| Off-line first                                                         | ✓           | ◐                  | ◐        | ◐      | ✓               | ✓       |
-| **Arbitrary date DNF** (last Mon of quarter, every 3rd Tue except Dec) | ✓           | ✗                  | ✗        | ✗      | ◐ (Defer)       | ✗       |
-| **Multi-time per day** (`@t=09:00,17:30`)                              | ✓           | ✗                  | ✗        | ✗      | ✗               | ✗       |
-| **Skip / Flex / Back-fill modes**                                      | ✓           | ✗                  | ✗        | ✗      | ✓ (FIFO)        | ✗       |
-| **Chain caps** (max N or until-date)                                   | ✓           | ◐ (only “N times”) | ◐        | ◐      | ✓               | ✓       |
-| **Sub-day periods** (`cp=6h30m`)                                       | ✓           | ✗                  | ✗        | ✗      | ✗               | ✗       |
-| **Scriptable / CLI**                                                   | ✓           | ◐ (REST)           | ◐        | ◐      | ◐ (AppleScript) | ◐ (URL) |
-| **Hook ecosystem** (user code on add/modify/done)                      | ✓           | ✗                  | ✗        | ✗      | ✗               | ✗       |
-| **Speed** (add task ≤ 50 ms)                                           | ✓           | ✓                  | ✓        | ◐      | ✓               | ✓       |
-
----
-
-## Anchors (calendar logic)
-
-<details>
-<summary>Click for mini-language cheat-sheet</summary>
-
-| Token | Meaning |
-|-------|---------|
-| `w:mon,wed,fri` | Mon Wed Fri |
-| `m:1,15` | 1st & 15th of month |
-| `m:last-fri` | last Friday |
-| `m:3wed` | 3rd Wednesday |
-| `m:1@nw` | 1st, roll to nearest weekday |
-| `m:1@pbd` | 1st, roll to **prev** business day |
-| `m:1..7@bd` | bucket 1-7, business day only |
-| `m:rand` | one random day/month (seeded) |
-| `@t=09:00,17:00` | multi-time per day |
-| `&` / `,` | AND / OR (parentheses allowed) |
-
-Full grammar & more examples → [Nautical-Manual.pdf](https://github.com/catanadj/taskwarrior-nautical/blob/main/TW-Nautical-Manual.pdf)
-</details>
-
----
-
-## Chains (completion-based)
-
-<details>
-<summary>Click for examples</summary>
-
-```bash
-# 12 d after completion, keep 09:00 wall clock
-task add "mow lawn" cp:12d due:tomorrow+9h
-
-# 33 h exact (drift-free)
-task add "meds" cp:33h due:now+12h
-
-# stop after 5th occurrence
-task add "calibrate" cp:3d chainMax:5 due:today
-```
-</details>
-
----
-
-## Anchor Modes
-
-- **skip** (default) - missed? move on
-- **all** - back-fill every missed slot
-- **flex** - skip past, anchor future
-
----
-
-## Panels & Timeline
-
-Every add/completion prints a compact panel:
-
-```
-⚓︎ Next anchor  #2  a4bf5egh → 8c31d2ss
-Pattern: m:last-fri  SKIP
-First due: Fri 2024-06-28 09:00 (in 3 d)
-Upcoming: 02 ▸ Fri 2024-07-26 09:00
-          03 ▸ Fri 2024-08-30 09:00
-Links left: 8 left (cap #10)
-```
-
----
-
-## Performance & Safety
-
-- **≤ 50 ms** on Termux / old phones
-- No network, no cloud, 100 % local
-- Atomic import - never orphans a task
-- DST-safe, leap-second-safe, 64-bit time
-- Plain-text backup - grep your rules!
-
----
-
-
-## Requirements
-
-- Taskwarrior ≥ 2.6
-- Python ≥ 3.9
-- `rich` (optional, for colour panels)
-
----
-
-## Links
-
-| [Full Manual (PDF)](https://github.com/catanadj/taskwarrior-nautical/blob/main/TW-Nautical-Manual.pdf) | [Examples Gallery](https://github.com/catanadj/taskwarrior-nautical/wiki/Pattern-Gallery) | [Report Bug](https://github.com/catanadj/taskwarrior-nautical/issues) |
-|---|---|---|
-
----
 ## Support
 
-If you find this tool helpful, any support will be greatly apreciated.
+If Nautical is useful to you, support is appreciated:
 
-You can do so [here](https://buymeacoffee.com/catanadj). Thank you.
+[Buy me a coffee](https://buymeacoffee.com/catanadj)
 
----
-
-**Stop thinking about scheduling - start doing.**
-⚓︎ *Deus vult.*

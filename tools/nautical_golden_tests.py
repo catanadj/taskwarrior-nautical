@@ -5113,6 +5113,39 @@ def test_hook_on_modify_timeline_multitime_includes_all_slots():
         raise AssertionError(f"on-modify timeline collapsed times unexpectedly: {times}. text={txt[:500]!r}")
 
 
+def test_hook_on_modify_timeline_cp_sequence_labels_future_intervals():
+    """cp sequence timelines should show the interval used for future rows."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_sequence_timeline_test")
+    if not hasattr(mod, "_timeline_lines"):
+        raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate cp sequence timeline.")
+    if hasattr(mod, "_collect_prev_two"):
+        setattr(mod, "_collect_prev_two", lambda _task: [])
+    child_due_utc = datetime(2026, 1, 4, 9, 0, tzinfo=timezone.utc)
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000224",
+        "description": "hook test on-modify cp sequence timeline",
+        "cp": "3d,20d,7d",
+        "link": 1,
+        "end": "20260101T100000Z",
+        "due": "20260101T090000Z",
+    }
+    lines = _call_with_supported_kwargs(
+        mod._timeline_lines,
+        kind="cp",
+        task=task,
+        child_due_utc=child_due_utc,
+        child_short="0000abcd",
+        dnf=None,
+        next_count=3,
+        cap_no=None,
+        cur_no=1,
+    )
+    txt = _strip_markup("\n".join(lines))
+    for token in ("(20d)", "(7d)", "(3d)"):
+        expect(token in txt, f"cp sequence timeline missing {token}: {txt}")
+
+
 def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
     """anchor timelines should mark omitted future slots instead of showing them as normal links."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -9510,6 +9543,7 @@ TESTS = [
     test_hook_on_add_invalid_omit_file_rejected,
     test_hook_on_add_unsatisfiable_omit_fails_cleanly,
     test_hook_on_modify_timeline_multitime_includes_all_slots,
+    test_hook_on_modify_timeline_cp_sequence_labels_future_intervals,
     test_hook_task_runner_handles_nonzero,
     test_hook_run_task_falls_back_when_core_load_fails,
     test_on_add_run_task_falls_back_when_core_load_fails,

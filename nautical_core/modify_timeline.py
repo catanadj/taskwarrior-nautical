@@ -79,6 +79,8 @@ def _timeline_future_cp_items(
     seq = core.parse_cp_sequence(task.get("cp") or "")
     if not seq:
         return []
+    cp_tokens = [p.strip() for p in str(task.get("cp") or "").split(",")]
+    is_sequence = len(seq) > 1
     items: list[tuple[int, datetime, dict[str, Any], str]] = []
     fut_dt = child_due_utc
     fut_no = start_no
@@ -100,7 +102,12 @@ def _timeline_future_cp_items(
             fut_dt = fut_dt + td
         if cap_no is not None and fut_no > cap_no:
             break
-        items.append((fut_no, fut_dt, {"is_future": True}, "future"))
+        meta: dict[str, Any] = {"is_future": True}
+        if is_sequence:
+            step_idx = (max(1, fut_no - 1) - 1) % len(seq)
+            if 0 <= step_idx < len(cp_tokens):
+                meta["cp_interval"] = cp_tokens[step_idx]
+        items.append((fut_no, fut_dt, meta, "future"))
     return items
 
 
@@ -311,6 +318,9 @@ def _timeline_base_line(
 
     is_last = cap_no is not None and no == cap_no
     future_text = f"{no_text} {'»':<2}{core.fmt_dt_local(dt)}"
+    cp_interval = str(obj.get("cp_interval") or "").strip()
+    if cp_interval:
+        future_text = f"{future_text} [dim]({cp_interval})[/]"
     if is_last:
         return f"[{future_style}]{future_text} [bold red](last link)[/][/]"
     return f"[{future_style}]{future_text}[/]"

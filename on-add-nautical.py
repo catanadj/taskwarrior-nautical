@@ -1413,7 +1413,8 @@ def _handle_cp_preview_on_add(
 
     rows.append(("Period", f"[bold white]{cp_str}[/]"))
     if is_sequence:
-        rows.append(("Step", f"[bold white]1/{len(seq)}[/]  [dim]next interval {cp_str.split(',')[0].strip()}[/]"))
+        step_token = cp_str.split(",")[0].strip()
+        rows.append(("Step", f"[bold white]1/{len(seq)}[/] [dim]({step_token})[/]"))
     rows.append((first_label, f"[bold bright_green]{_fmt(due_dt)}[/]"))
 
     # Scheduled/Wait preview relative to the recurrence anchor.

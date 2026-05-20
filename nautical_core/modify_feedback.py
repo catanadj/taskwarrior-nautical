@@ -517,7 +517,11 @@ def render_cp_completion_feedback(
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
     fb.append(("Period", feedback.new.get("cp")))
     if feedback.meta.get("cp_sequence_len"):
-        fb.append(("Step", f"{feedback.meta.get('cp_sequence_step')}/{feedback.meta.get('cp_sequence_len')}"))
+        step = int(feedback.meta.get("cp_sequence_step") or 1)
+        cp_tokens = [p.strip() for p in str(feedback.new.get("cp") or "").split(",")]
+        step_token = cp_tokens[step - 1] if 0 <= step - 1 < len(cp_tokens) else ""
+        suffix = f" ({step_token})" if step_token else ""
+        fb.append(("Step", f"{step}/{feedback.meta.get('cp_sequence_len')}{suffix}"))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
     basis_text = _pretty_basis_cp(
         feedback.new,

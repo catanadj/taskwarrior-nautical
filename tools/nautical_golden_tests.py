@@ -4616,7 +4616,7 @@ def test_hook_on_add_cp_sequence_preview_accepts_string_periods():
     expect(out_task.get("cp") == "3d,20d,7d", f"cp sequence should be preserved as string: {out_task}")
     stderr_txt = _strip_markup(p.stderr)
     expect("Period" in stderr_txt and "3d,20d,7d" in stderr_txt, f"preview should show cp sequence: {stderr_txt[:500]!r}")
-    expect("Step" in stderr_txt and "1/3" in stderr_txt, f"preview should show sequence step: {stderr_txt[:500]!r}")
+    expect("Step" in stderr_txt and "1/3 (3d)" in stderr_txt, f"preview should show sequence step and period: {stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
@@ -7818,7 +7818,7 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
     try:
         mod.core.PANEL_MODE = "panel"
         mod._render_cp_completion_feedback(
-            new={"cp": "P1D", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            new={"cp": "3d,20d,7d", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="deadbeef",
@@ -7829,7 +7829,7 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
             now_utc=mod.core.now_utc(),
             until_dt=None,
             until_cap_no=None,
-            meta={},
+            meta={"cp_sequence_step": 3, "cp_sequence_len": 3},
             deferred_spawn=False,
             spawn_intent_id=None,
             chain_by_short=None,
@@ -7842,6 +7842,7 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
 
     expect("title" in captured, "expected preview panel emission")
     expect("Next link" in captured["title"], f"unexpected panel title: {captured}")
+    expect(("Step", "3/3 (7d)") in captured["fb"], f"expected sequence step period in feedback rows: {captured}")
 
 
 def test_on_modify_render_cp_completion_feedback_text_mode():

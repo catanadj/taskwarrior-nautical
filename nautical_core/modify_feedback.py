@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 
-def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration) -> str:
-    td = parse_cp_duration(task.get("cp") or "")
+def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequence=None) -> str:
+    if callable(parse_cp_sequence):
+        seq = parse_cp_sequence(task.get("cp") or "")
+        step = int(meta.get("cp_sequence_step") or 1)
+        if seq:
+            td = seq[(max(1, step) - 1) % len(seq)]
+        else:
+            td = None
+    else:
+        td = parse_cp_duration(task.get("cp") or "")
     if not td:
         return "end + cp"
     secs = int(td.total_seconds())
@@ -508,8 +516,15 @@ def render_cp_completion_feedback(
     fb = []
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
     fb.append(("Period", feedback.new.get("cp")))
+    if feedback.meta.get("cp_sequence_len"):
+        fb.append(("Step", f"{feedback.meta.get('cp_sequence_step')}/{feedback.meta.get('cp_sequence_len')}"))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
-    basis_text = _pretty_basis_cp(feedback.new, feedback.meta, parse_cp_duration=core.parse_cp_duration)
+    basis_text = _pretty_basis_cp(
+        feedback.new,
+        feedback.meta,
+        parse_cp_duration=core.parse_cp_duration,
+        parse_cp_sequence=getattr(core, "parse_cp_sequence", None),
+    )
     if basis_text != "Preserve wall clock (period is multiple of 24h)":
         fb.append(("Basis", basis_text))
     fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))

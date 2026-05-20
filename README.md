@@ -50,11 +50,14 @@ task add "Mow lawn" cp:12d due:today
 # Every 33 hours
 task add "Take medication" cp:33h due:now
 
+# Repeat a lifecycle sequence: 3d, then 20d, then 7d, then repeat
+task add "Insect treatment" cp:"3d,20d,7d" due:today
+
 # Stop after 5 links
 task add "Calibration" cp:3d chainMax:5
 ```
 
-Chains are useful for work that depends on completion rhythm: maintenance, medication, reviews, chores, and anything where "next time" follows from this time.
+Chains are useful for work that depends on completion rhythm: maintenance, medication, reviews, chores, lifecycle stages, and anything where "next time" follows from this time.
 
 ## Anchors: Calendar Recurrence
 
@@ -178,4 +181,3 @@ For a full setup, including config keys and file-backed recurrence directories, 
 If Nautical is useful to you, support is appreciated:
 
 [Buy me a coffee](https://buymeacoffee.com/catanadj)
-

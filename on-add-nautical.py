@@ -1214,6 +1214,14 @@ def _cp_add_period_builder(td: timedelta):
     return add_period
 
 
+def _cp_add_td(dt: datetime, td: timedelta) -> datetime:
+    return _cp_add_period_builder(td)(dt)
+
+
+def _cp_sequence_period_for_link(seq: list[timedelta], link_no: int) -> timedelta:
+    return seq[(max(1, int(link_no)) - 1) % len(seq)]
+
+
 def _cp_until_summary(due_dt: datetime, until_dt: datetime | None, add_period) -> tuple[int | None, datetime | None]:
     if not until_dt:
         return None, None
@@ -1251,6 +1259,58 @@ def _cp_preview_lines(due_dt: datetime, until_dt: datetime | None, limit: int, a
     return preview
 
 
+def _cp_sequence_until_summary(
+    due_dt: datetime,
+    until_dt: datetime | None,
+    seq: list[timedelta],
+    *,
+    start_link_no: int,
+) -> tuple[int | None, datetime | None]:
+    if not until_dt:
+        return None, None
+    count = 0
+    probe = due_dt
+    last = None
+    link_no = start_link_no
+    for _ in range(_MAX_PREVIEW_ITERATIONS):
+        if probe > until_dt:
+            break
+        last = probe
+        count += 1
+        td = _cp_sequence_period_for_link(seq, link_no)
+        probe = _cp_add_td(probe, td)
+        link_no += 1
+    if count <= 0:
+        return None, None
+    return max(0, count - 1), last
+
+
+def _cp_sequence_preview_lines(
+    due_dt: datetime,
+    until_dt: datetime | None,
+    limit: int,
+    seq: list[timedelta],
+    *,
+    start_link_no: int,
+) -> list[str]:
+    def _fmt(dt):
+        return core.fmt_dt_local(dt)
+
+    preview = []
+    nxt = due_dt
+    link_no = start_link_no
+    colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
+    for i in range(limit):
+        td = _cp_sequence_period_for_link(seq, link_no)
+        nxt = _cp_add_td(nxt, td)
+        link_no += 1
+        if until_dt and nxt > until_dt:
+            break
+        color = colors[min(i, len(colors) - 1)]
+        preview.append(f"[{color}]{_fmt(nxt)}[/{color}]")
+    return preview
+
+
 def _cp_limit_rows(
     rows: list[tuple[str, str]],
     *,
@@ -1261,6 +1321,8 @@ def _cp_limit_rows(
     final_until_dt: datetime | None,
     add_period,
     now_utc: datetime,
+    seq: list[timedelta] | None = None,
+    start_link_no: int = 1,
 ) -> None:
     def _fmt(dt):
         return core.fmt_dt_local(dt)
@@ -1270,8 +1332,13 @@ def _cp_limit_rows(
         lim_parts.append(f"max [bold yellow]{cpmax}[/]")
         fmax = due_dt
         steps = max(0, cpmax - 1)
+        link_no = start_link_no
         for _ in range(steps):
-            fmax = add_period(fmax)
+            if seq:
+                fmax = _cp_add_td(fmax, _cp_sequence_period_for_link(seq, link_no))
+                link_no += 1
+            else:
+                fmax = add_period(fmax)
         rows.append(
             (
                 "Final (max)",
@@ -1315,11 +1382,12 @@ def _handle_cp_preview_on_add(
     def _dt(s):
         return core.parse_dt_any(s)
 
-    td, err = _safe_parse_duration(cp_str, "cp")
-    if err:
-        _error_and_exit([("Invalid cp", err)])
-    if not td:
-        _error_and_exit([("Invalid cp", f"Couldn't parse duration from '{cp_str}'")])
+    seq = core.parse_cp_sequence(cp_str)
+    if not seq:
+        reason = core.cp_sequence_parse_error(cp_str) or f"couldn't parse duration from '{cp_str}'"
+        _error_and_exit([("Invalid cp", reason)])
+    td = seq[0]
+    is_sequence = len(seq) > 1
 
     if until_dt:
         is_reasonable, warn_msg = _validate_chain_duration_reasonable(
@@ -1344,6 +1412,8 @@ def _handle_cp_preview_on_add(
         first_label = "First due"
 
     rows.append(("Period", f"[bold white]{cp_str}[/]"))
+    if is_sequence:
+        rows.append(("Step", f"[bold white]1/{len(seq)}[/]  [dim]next interval {cp_str.split(',')[0].strip()}[/]"))
     rows.append((first_label, f"[bold bright_green]{_fmt(due_dt)}[/]"))
 
     # Scheduled/Wait preview relative to the recurrence anchor.
@@ -1356,13 +1426,19 @@ def _handle_cp_preview_on_add(
     )
 
     cpmax = core.coerce_int(task.get("chainMax"), 0)
-    exact_until_count, final_until_dt = _cp_until_summary(due_dt, until_dt, add_period)
+    if is_sequence:
+        exact_until_count, final_until_dt = _cp_sequence_until_summary(due_dt, until_dt, seq, start_link_no=1)
+    else:
+        exact_until_count, final_until_dt = _cp_until_summary(due_dt, until_dt, add_period)
 
     allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
     allow_by_until = exact_until_count if exact_until_count is not None else 10**9
     limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until, _PREVIEW_HARD_CAP))
 
-    preview = _cp_preview_lines(due_dt, until_dt, limit, add_period)
+    if is_sequence:
+        preview = _cp_sequence_preview_lines(due_dt, until_dt, limit, seq, start_link_no=1)
+    else:
+        preview = _cp_preview_lines(due_dt, until_dt, limit, add_period)
     rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
     rows.append(("Delta", f"[bright_yellow]{_human_delta(now_utc, due_dt, False)}[/]"))
 
@@ -1375,6 +1451,8 @@ def _handle_cp_preview_on_add(
         final_until_dt=final_until_dt,
         add_period=add_period,
         now_utc=now_utc,
+        seq=seq if is_sequence else None,
+        start_link_no=1,
     )
 
     rows.append(("Chain", "[bold green]enabled[/]" if ch == "on" else "[bold red]disabled[/]"))

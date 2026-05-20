@@ -2294,9 +2294,10 @@ def _validate_cp_on_modify(cp_str: str, chain_max_val, chain_until_val):
     if not cp_str or not cp_str.strip():
         return  # nothing to validate
 
-    td = core.parse_cp_duration(cp_str)
-    if td is None:
-        raise ValueError(f"Invalid duration format '{cp_str}' (expected: 3d, 2w, 1h, etc.)")
+    seq = core.parse_cp_sequence(cp_str)
+    if not seq:
+        reason = core.cp_sequence_parse_error(cp_str) or f"invalid duration format '{cp_str}'"
+        raise ValueError(f"{reason} (expected: 3d, 2w, 1h, etc.)")
 
     # chainMax
     if chain_max_val not in (None, ""):
@@ -2868,6 +2869,20 @@ def _human_delta(a, b, prefer_months=True):
         return core.humanize_delta(a, b)
 
 
+def _cp_add_td(dt: datetime, td: timedelta) -> datetime:
+    secs = int(td.total_seconds())
+    if secs % 86400 == 0:
+        dl = _tolocal(dt)
+        return core.build_local_datetime(
+            (dl + timedelta(days=int(secs // 86400))).date(), (dl.hour, dl.minute)
+        ).astimezone(timezone.utc)
+    return (dt + td).replace(microsecond=0)
+
+
+def _cp_sequence_period_for_link(seq: list[timedelta], link_no: int) -> timedelta:
+    return seq[(max(1, int(link_no)) - 1) % len(seq)]
+
+
 # ------------------------------------------------------------------------------
 # Due calculators
 # ------------------------------------------------------------------------------
@@ -2878,9 +2893,13 @@ def _compute_cp_child_due(parent: dict):
     if not dur:
         return (None, None)
 
-    td, err = _safe_parse_cp_duration(dur)
-    if err:
-        raise ValueError(f"cp field: {err}")
+    seq = core.parse_cp_sequence(dur)
+    if not seq:
+        reason = core.cp_sequence_parse_error(dur) or f"invalid duration format '{dur}'"
+        raise ValueError(f"cp field: {reason} (expected: 3d, 2w, 1h, etc.)")
+    link_no = core.coerce_int(parent.get("link"), 1)
+    td = seq[(max(1, link_no) - 1) % len(seq)]
+    seq_idx = (max(1, link_no) - 1) % len(seq)
     if not td:
         return (None, None)
 
@@ -2904,7 +2923,10 @@ def _compute_cp_child_due(parent: dict):
 
     cand = (end_dt + td).replace(microsecond=0)
     if rem != 0:
-        return cand, {"period": dur, "basis": "end+cp (exact)", "target_field": target_field}
+        meta = {"period": dur, "basis": "end+cp (exact)", "target_field": target_field}
+        if len(seq) > 1:
+            meta.update({"cp_sequence_len": len(seq), "cp_sequence_step": seq_idx + 1})
+        return cand, meta
 
     # preserve wall clock
     if anchor_dt0:
@@ -2915,11 +2937,14 @@ def _compute_cp_child_due(parent: dict):
         hh, mm = el.hour, el.minute
     cand_local = _tolocal(cand)
     due_local = cand_local.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    return due_local.astimezone(timezone.utc), {
+    meta = {
         "period": dur,
         "basis": "end+cp (preserve clock)",
         "target_field": target_field,
     }
+    if len(seq) > 1:
+        meta.update({"cp_sequence_len": len(seq), "cp_sequence_step": seq_idx + 1})
+    return due_local.astimezone(timezone.utc), meta
 
 
 def _safe_parse_datetime(dt_str: str) -> tuple[datetime | None, str | None]:
@@ -2973,13 +2998,14 @@ def _safe_parse_cp_duration(duration_str: str) -> tuple[timedelta | None, str | 
         return (None, None)
 
     try:
-        td = core.parse_cp_duration(duration_str)
-        if td is None:
+        seq = core.parse_cp_sequence(duration_str)
+        if not seq:
+            reason = core.cp_sequence_parse_error(duration_str) or f"invalid duration format '{duration_str}'"
             return (
                 None,
-                f"Invalid duration format '{duration_str}' (expected: 3d, 2w, 1h, etc.)",
+                f"{reason} (expected: 3d, 2w, 1h, etc.)",
             )
-        return (td, None)
+        return (seq[0], None)
     except ValueError as e:
         _diag(f"duration parse value error: {e}")
         return (None, "Duration parsing error")
@@ -3463,24 +3489,18 @@ def _estimate_cp_final_by_max(task: dict, next_due_utc):
     if cur_no >= cpmax:
         return None
 
-    td = core.parse_cp_duration(task.get("cp") or "")
-    if not td:
+    seq = core.parse_cp_sequence(task.get("cp") or "")
+    if not seq:
         return None
 
-    secs = int(td.total_seconds())
     fut_dt = next_due_utc
     fut_no = cur_no + 1
 
     # Step forward from next due until we reach cap_no
     while fut_no < cpmax:
+        td = _cp_sequence_period_for_link(seq, fut_no)
         fut_no += 1
-        if secs % 86400 == 0:
-            dl = _tolocal(fut_dt)
-            fut_dt = core.build_local_datetime(
-                (dl + timedelta(days=int(secs // 86400))).date(), (dl.hour, dl.minute)
-            ).astimezone(timezone.utc)
-        else:
-            fut_dt = fut_dt + td
+        fut_dt = _cp_add_td(fut_dt, td)
 
     return fut_dt
 
@@ -4000,7 +4020,7 @@ def _chain_health_drift(ordered: list[dict], kind: str, task: dict) -> tuple[flo
 
     median_gap = _median(gaps)
     if kind == "cp":
-        td = core.parse_cp_duration(task.get("cp") or "")
+        td = core.cp_sequence_interval_for_link(task.get("cp") or "", core.coerce_int(task.get("link"), 1))
         if td:
             drift_secs = median_gap - td.total_seconds()
     elif len(gaps) >= 2:
@@ -4052,7 +4072,7 @@ def _chain_health_coach_text(
     if drift_secs is not None:
         base = None
         if kind == "cp":
-            td = core.parse_cp_duration(task.get("cp") or "")
+            td = core.cp_sequence_interval_for_link(task.get("cp") or "", core.coerce_int(task.get("link"), 1))
             base = td.total_seconds() if td else None
         else:
             base = median_gap
@@ -4687,10 +4707,9 @@ def _cap_from_until_cp(task, next_due_utc):
     until = _dtparse(task.get("chainUntil"))
     if not until:
         return (None, None)
-    td = core.parse_cp_duration(task.get("cp") or "")
-    if not td:
+    seq = core.parse_cp_sequence(task.get("cp") or "")
+    if not seq:
         return (None, None)
-    secs = int(td.total_seconds())
     cur = core.coerce_int(task.get("link"), 1)
     nno = cur + 1
     ndt = next_due_utc
@@ -4701,13 +4720,8 @@ def _cap_from_until_cp(task, next_due_utc):
     while ndt and ndt <= until and iterations < _MAX_ITERATIONS:
         iterations += 1
         last_no, last_dt = nno, ndt
-        if secs % 86400 == 0:
-            dl = _tolocal(ndt)
-            ndt = core.build_local_datetime(
-                (dl + timedelta(days=int(secs // 86400))).date(), (dl.hour, dl.minute)
-            ).astimezone(timezone.utc)
-        else:
-            ndt = ndt + td
+        td = _cp_sequence_period_for_link(seq, nno)
+        ndt = _cp_add_td(ndt, td)
         nno += 1
 
     return (last_no, last_dt)
@@ -5276,9 +5290,10 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, 
     if new_cp:
         # Validate CP on completion
         try:
-            td = core.parse_cp_duration(new_cp)
-            if td is None:
-                raise ValueError(f"Invalid duration format '{new_cp}'")
+            seq = core.parse_cp_sequence(new_cp)
+            if not seq:
+                reason = core.cp_sequence_parse_error(new_cp) or f"invalid duration format '{new_cp}'"
+                raise ValueError(reason)
         except ValueError as e:
             _fail_and_exit("Invalid CP", str(e))
         except Exception as e:

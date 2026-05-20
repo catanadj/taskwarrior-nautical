@@ -4494,6 +4494,21 @@ def test_cp_duration_parser_and_dst_preserve_whole_days():
     assert td == timedelta(days=1, hours=2, minutes=30), f"Unexpected td for P1DT2H30M: {td}"
     td_day = core.parse_cp_duration("P1D")
     assert td_day == timedelta(days=1), f"Unexpected td for P1D: {td_day}"
+    assert core.parse_cp_duration("3d") == timedelta(days=3), "Taskwarrior-style days should parse"
+    assert core.parse_cp_duration("6h30m") == timedelta(hours=6, minutes=30), "compound hours/minutes should parse"
+    assert core.parse_cp_duration("24h+1s") == timedelta(hours=24, seconds=1), "signed component add should parse"
+    assert core.parse_cp_duration("3d-1s") == timedelta(days=3, seconds=-1), "signed component subtract should parse"
+    assert core.parse_cp_sequence("3d,P20D,16h") == [
+        timedelta(days=3),
+        timedelta(days=20),
+        timedelta(hours=16),
+    ], "cp sequence should accept mixed Taskwarrior-style and ISO tokens"
+    assert core.cp_sequence_interval_for_link("3d,20d,7d", 1) == timedelta(days=3), "link #1 should use first interval"
+    assert core.cp_sequence_interval_for_link("3d,20d,7d", 2) == timedelta(days=20), "link #2 should use second interval"
+    assert core.cp_sequence_interval_for_link("3d,20d,7d", 4) == timedelta(days=3), "sequence should repeat"
+    assert core.parse_cp_sequence("3d,,7d") is None, "empty sequence item should be invalid"
+    assert core.cp_sequence_parse_error("3d,,7d") == "empty duration at position 2", "empty item should get a precise error"
+    assert core.cp_sequence_parse_error("3d,abc") == "invalid duration 'abc' at position 2", "bad item should get a precise error"
 
     # --- 2) DST-safe stepping semantics used by CP preview (hook responsibility) ---
     # If ZoneInfo isn't available, core runs in "UTC-only" mode; skip DST assertions.
@@ -4579,6 +4594,29 @@ def test_hook_on_add_cp_scheduled_only_preserves_no_due():
     expect(out_task.get("scheduled") == task["scheduled"], f"scheduled changed unexpectedly: {out_task}")
     stderr_txt = _strip_markup(p.stderr)
     expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_cp_sequence_preview_accepts_string_periods():
+    """on-add should accept comma-separated cp sequences now that cp is string-backed."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000114",
+        "description": "hook test on-add cp sequence",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20260101T000000Z",
+        "cp": "3d,20d,7d",
+        "due": "20260101T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    if p.returncode != 0:
+        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+    out_task = _extract_last_json(p.stdout)
+    expect(out_task.get("cp") == "3d,20d,7d", f"cp sequence should be preserved as string: {out_task}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("Period" in stderr_txt and "3d,20d,7d" in stderr_txt, f"preview should show cp sequence: {stderr_txt[:500]!r}")
+    expect("Step" in stderr_txt and "1/3" in stderr_txt, f"preview should show sequence step: {stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
@@ -6839,6 +6877,45 @@ def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
     child_local = mod.core.to_local(child_due)
     expect((child_local.hour, child_local.minute) == (9, 0), f"unexpected scheduled-only child time: {child_local}")
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
+
+
+def test_on_modify_compute_cp_sequence_selects_interval_by_link():
+    """cp sequences should derive the active interval from the current link number."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_sequence_compute_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    child_due, meta = mod._compute_cp_child_due(
+        {
+            "cp": "3d,20d,7d",
+            "link": 2,
+            "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (9, 0))),
+            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (10, 0))),
+        }
+    )
+    child_local = mod.core.to_local(child_due)
+    expect(child_local.date() == date(2026, 1, 21), f"link #2 should use 20d interval: {child_local}")
+    expect((child_local.hour, child_local.minute) == (9, 0), f"whole-day sequence interval should preserve wall clock: {child_local}")
+    expect(meta.get("cp_sequence_step") == 2, f"expected sequence step 2: {meta}")
+    expect(meta.get("cp_sequence_len") == 3, f"expected sequence length 3: {meta}")
+
+
+def test_on_modify_cp_sequence_estimates_chainmax_final_date():
+    """chainMax final-date estimation should advance through cp sequence intervals."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_sequence_chainmax_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    next_due = mod.core.build_local_datetime(date(2026, 1, 4), (9, 0)).astimezone(timezone.utc)
+    final_due = mod._estimate_cp_final_by_max(
+        {"cp": "3d,20d,7d", "link": 1, "chainMax": 4},
+        next_due,
+    )
+    final_local = mod.core.to_local(final_due)
+    expect(final_local.date() == date(2026, 1, 31), f"expected Jan 31 final due, got {final_local}")
+    expect((final_local.hour, final_local.minute) == (9, 0), f"whole-day sequence cap should preserve wall clock: {final_local}")
 
 
 def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
@@ -9418,8 +9495,11 @@ TESTS = [
     test_heads_with_slashN_parse_ok_again,
     test_monthname_and_numeric_equivalence,
     test_cp_duration_parser_and_dst_preserve_whole_days,
+    test_on_modify_compute_cp_sequence_selects_interval_by_link,
+    test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
+    test_hook_on_add_cp_sequence_preview_accepts_string_periods,
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,
     test_on_add_due_context_treats_due_matching_entry_as_implicit,
     test_on_add_anchor_preview_auto_assigns_when_due_matches_entry,

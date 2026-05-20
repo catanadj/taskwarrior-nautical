@@ -451,6 +451,7 @@ _cp_re = re.compile(
     r"^P(?:(?P<w>\d+)W)?(?:(?P<d>\d+)D)?(?:T(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?(?:(?P<s>\d+)S)?)?$",
     re.I,
 )
+_cp_token_re = re.compile(r"(?P<sign>[+-]?)(?P<n>\d+)(?P<u>w|d|h|m|s)", re.I)
 _hhmm_re = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _atom_head_re = re.compile(r"^(w|m|y)(?:/(\d+))?$")
 _int_like_re = re.compile(r"^[+-]?\d+$")
@@ -1906,19 +1907,92 @@ def _months_since(seed_local: _date, y: int, m: int) -> int:
 
 # -------- cp duration ----------
 def parse_cp_duration(dur: str):
-    """Parse ISO 8601 duration string to timedelta."""
+    """Parse a single cp duration token.
+
+    Supports old ISO-8601 values exported by Taskwarrior duration UDAs
+    (``P3D``, ``PT16H``) and Nautical string values (``3d``, ``6h30m``,
+    ``24h+1s``).
+    """
     if not dur:
         return None
-    m = _cp_re.match(dur.strip())
-    if not m:
+    s = str(dur).strip()
+    if not s or "," in s:
         return None
-    return timedelta(
-        weeks=int(m.group("w") or 0),
-        days=int(m.group("d") or 0),
-        hours=int(m.group("h") or 0),
-        minutes=int(m.group("m") or 0),
-        seconds=int(m.group("s") or 0),
-    )
+    m = _cp_re.match(s)
+    if m:
+        return timedelta(
+            weeks=int(m.group("w") or 0),
+            days=int(m.group("d") or 0),
+            hours=int(m.group("h") or 0),
+            minutes=int(m.group("m") or 0),
+            seconds=int(m.group("s") or 0),
+        )
+
+    total = timedelta()
+    pos = 0
+    for match in _cp_token_re.finditer(s):
+        if match.start() != pos:
+            return None
+        sign = -1 if match.group("sign") == "-" else 1
+        n = sign * int(match.group("n"))
+        unit = match.group("u").lower()
+        if unit == "w":
+            total += timedelta(weeks=n)
+        elif unit == "d":
+            total += timedelta(days=n)
+        elif unit == "h":
+            total += timedelta(hours=n)
+        elif unit == "m":
+            total += timedelta(minutes=n)
+        elif unit == "s":
+            total += timedelta(seconds=n)
+        pos = match.end()
+    if pos != len(s) or pos == 0:
+        return None
+    return total
+
+
+def parse_cp_sequence(cp: str):
+    """Parse a cp value as one or more completion-period durations."""
+    if cp_sequence_parse_error(cp):
+        return None
+    parts = [p.strip() for p in str(cp).strip().split(",")]
+    durations = []
+    for part in parts:
+        td = parse_cp_duration(part)
+        if td is None:
+            return None
+        durations.append(td)
+    return durations
+
+
+def cp_sequence_parse_error(cp: str) -> str | None:
+    """Return a user-facing parse error for a cp sequence, or None if valid."""
+    if not cp:
+        return "cp is empty"
+    raw = str(cp).strip()
+    if not raw:
+        return "cp is empty"
+    parts = [p.strip() for p in raw.split(",")]
+    for idx, part in enumerate(parts, start=1):
+        if not part:
+            return f"empty duration at position {idx}"
+        td = parse_cp_duration(part)
+        if td is None:
+            return f"invalid duration '{part}' at position {idx}"
+    return None
+
+
+def cp_sequence_interval_for_link(cp: str, link_no: int):
+    """Return the interval used to spawn ``link_no + 1`` from ``link_no``."""
+    seq = parse_cp_sequence(cp)
+    if not seq:
+        return None
+    try:
+        idx = max(0, int(link_no) - 1) % len(seq)
+    except Exception:
+        idx = 0
+    return seq[idx]
 
 
 # -------- Anchor parser (DNF with mods) ----------
@@ -2898,6 +2972,9 @@ __all__ = (
     'parse_anchor_expr_to_dnf',
     'parse_anchor_expr_to_dnf_cached',
     'parse_cp_duration',
+    'parse_cp_sequence',
+    'cp_sequence_parse_error',
+    'cp_sequence_interval_for_link',
     'parse_dt_any',
     'pick_hhmm_from_dnf_for_date',
     'py',

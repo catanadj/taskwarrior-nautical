@@ -111,13 +111,14 @@ def safe_parse_duration(
     if not s:
         return (None, None)
     try:
-        td = core.parse_cp_duration(s)
-        if td is None:
+        seq = core.parse_cp_sequence(s)
+        if not seq:
+            reason = core.cp_sequence_parse_error(s) or f"invalid duration format '{s}'"
             return (
                 None,
-                f"{field_name}: Invalid duration format '{s}' (expected: 3d, 2w, 1h, etc.)",
+                f"{field_name}: {reason} (expected: 3d, 2w, 1h, etc.)",
             )
-        return (td, None)
+        return (seq[0], None)
     except ValueError as e:
         diag(f"{field_name} duration parse value error: {e}")
         return (None, f"{field_name}: Invalid duration value")

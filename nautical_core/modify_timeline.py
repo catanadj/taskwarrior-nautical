@@ -76,19 +76,20 @@ def _timeline_future_cp_items(
     tolocal: Callable[[datetime], datetime],
     max_iterations: int,
 ) -> list[tuple[int, datetime, dict[str, Any], str]]:
-    td = core.parse_cp_duration(task.get("cp") or "")
-    if not td:
+    seq = core.parse_cp_sequence(task.get("cp") or "")
+    if not seq:
         return []
     items: list[tuple[int, datetime, dict[str, Any], str]] = []
     fut_dt = child_due_utc
     fut_no = start_no
-    secs = int(td.total_seconds())
     iterations = 0
     for _ in range(allowed_future):
         if iterations >= max_iterations:
             break
         iterations += 1
+        td = seq[(max(1, fut_no) - 1) % len(seq)]
         fut_no += 1
+        secs = int(td.total_seconds())
         if secs % 86400 == 0:
             dl = tolocal(fut_dt)
             fut_dt = core.build_local_datetime(

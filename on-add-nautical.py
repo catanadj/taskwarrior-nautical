@@ -1291,6 +1291,7 @@ def _cp_sequence_preview_lines(
     limit: int,
     seq: list[timedelta],
     *,
+    cp_tokens: list[str],
     start_link_no: int,
 ) -> list[str]:
     def _fmt(dt):
@@ -1301,13 +1302,17 @@ def _cp_sequence_preview_lines(
     link_no = start_link_no
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
     for i in range(limit):
+        step_idx = (max(1, link_no) - 1) % len(seq)
         td = _cp_sequence_period_for_link(seq, link_no)
         nxt = _cp_add_td(nxt, td)
         link_no += 1
         if until_dt and nxt > until_dt:
             break
         color = colors[min(i, len(colors) - 1)]
-        preview.append(f"[{color}]{_fmt(nxt)}[/{color}]")
+        suffix = ""
+        if 0 <= step_idx < len(cp_tokens):
+            suffix = f" [dim]({cp_tokens[step_idx]})[/]"
+        preview.append(f"[{color}]{_fmt(nxt)}[/{color}]{suffix}")
     return preview
 
 
@@ -1437,7 +1442,8 @@ def _handle_cp_preview_on_add(
     limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until, _PREVIEW_HARD_CAP))
 
     if is_sequence:
-        preview = _cp_sequence_preview_lines(due_dt, until_dt, limit, seq, start_link_no=1)
+        cp_tokens = [p.strip() for p in cp_str.split(",")]
+        preview = _cp_sequence_preview_lines(due_dt, until_dt, limit, seq, cp_tokens=cp_tokens, start_link_no=1)
     else:
         preview = _cp_preview_lines(due_dt, until_dt, limit, add_period)
     rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))

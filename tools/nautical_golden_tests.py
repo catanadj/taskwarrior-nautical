@@ -4617,6 +4617,8 @@ def test_hook_on_add_cp_sequence_preview_accepts_string_periods():
     stderr_txt = _strip_markup(p.stderr)
     expect("Period" in stderr_txt and "3d,20d,7d" in stderr_txt, f"preview should show cp sequence: {stderr_txt[:500]!r}")
     expect("Step" in stderr_txt and "1/3 (3d)" in stderr_txt, f"preview should show sequence step and period: {stderr_txt[:500]!r}")
+    for token in ("(3d)", "(20d)", "(7d)"):
+        expect(token in stderr_txt, f"preview upcoming timeline should show sequence interval {token}: {stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_anchor_scheduled_only_preserves_no_due():

@@ -40,6 +40,11 @@ task add "Mow the lawn"  cp:12d
 task add "Take vitamin"  cp:8h
 ```
 
+Advanced cp where the duration varies depending on the instance:
+```
+task add "Check on the insect lifecycle"  cp:4d,10d,7d,20d,3d
+```
+
 Periods under 24 hours use exact completion time. Day-based periods preserve wall-clock routine.
 
 ### `anchor`  -  calendar positions

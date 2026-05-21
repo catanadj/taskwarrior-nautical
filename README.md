@@ -179,7 +179,7 @@ The timeline is especially useful for anchor-based tasks where seeing the surrou
 
 The [Taskwarrior recurrence RFC](https://djmitche.github.io/taskwarrior/rfcs/recurrence.html) proposes a native recurrence model with templates, generated instances, instance indexes, and `rtype` values like `periodic` and `chained`. That would be a genuine improvement to Taskwarrior itself.
 
-Nautical goes further in a different direction: calendar expressions, file-backed date sources, explicit omit rules, timelines, batch-safe deferred spawning, and duplicate protection for synced setups. It is not in competition with the RFC  -  it is for people who want advanced recurrence today, inside standard Taskwarrior, without waiting on upstream.
+Nautical goes further in a different direction: calendar expressions, file-backed date sources, explicit omit rules, timelines, batch-safe deferred spawning, and duplicate protection for synced setups. 
 
 ---
 

@@ -218,7 +218,7 @@ pip install rich
 task add "System test" anchor:"m:4mon"
 ```
 
-See the [manual](https://github.com/catanadj/taskwarrior-nautical) for full UDA setup, configuration options, hook installation, and annotated examples.
+See the [manual](./TW-Nautical-Manual.pdf) for full UDA setup, configuration options, hook installation, and annotated examples.
 
 ---
 

@@ -1,141 +1,194 @@
 ![Nautical Banner](./nautical-banner.svg)
 
-# Taskwarrior Nautical
-
-Taskwarrior is already a powerhouse; Nautical is the recurrence system I wanted on top of it.
-
-It is not a separate task manager and it does not replace Taskwarrior. It is a small hook-based layer that teaches Taskwarrior how to carry recurring work forward in a predictable way.
-
-When you complete a Nautical task, the hook asks one question:
-
-> What should the next task be, and when should it happen?
-
-Then it creates the next link, keeps the chain connected, and shows you what it did.
-
 ![demo_nautical](https://github.com/user-attachments/assets/8420c1a8-907b-483e-86ec-4385eec892e3)
 
-## What Nautical Adds
+# TaskWarrior Nautical
 
-Taskwarrior is excellent at storing and finding tasks. Nautical focuses on recurrence.
+Taskwarrior is one of the most powerful task databases available. But its built-in recurrence is a weak point  simple repeats, no calendar logic, no omit rules, no real composability. Nautical closes that gap.
 
-It gives you two ways to describe recurring work:
+It is not a wrapper or a replacement. It is a hook layer that plugs directly into Taskwarrior and gives it a recurrence system as capable as the rest of the tool.
 
-- `cp` for completion-based period chains
-- `anchor` for calendar-based recurrence
+---
 
-It also gives anchors file-backed inclusion and exclusion:
+## What it does
 
-- `anchor_file` adds dates from a trusted file
-- `omit` removes dates using anchor grammar
-- `omit_file` removes dates from a trusted file
+Nautical intercepts task completions via Taskwarrior hooks and answers one question:
 
-For anchor recurrence, the mental model is:
+> *When I complete this task, when should the next one happen?*
 
-```text
-included dates from anchor and anchor_file
-minus
-blocked dates from omit and omit_file
+That answer can be:
+
+- a fixed duration from now (`cp:12d`, `cp:8h`)
+- a calendar position like every Monday/Wednesday/Friday (`anchor:"w:mon,wed,fri"`)
+- a specific date each year (`anchor:"y:04-12"`)
+- a random Saturday each month (`anchor:"m:rand + w:sat"`)
+- dates read from a file, such as a CSV of company events
+- any combination of the above, minus explicit blackout dates
+
+The spawned task is a normal Taskwarrior task  -  full visibility, full `task` command support, syncs like everything else.
+
+---
+
+## Recurrence engines
+
+### `cp`  -  period chains
+
+Use when the next occurrence is a duration from completion.
+
+```
+task add "Mow the lawn"  cp:12d
+task add "Take vitamin"  cp:8h
 ```
 
-In plain language: include the dates from the anchor expression and anchor file, then remove the dates blocked by omit rules and omit files.
+Periods under 24 hours use exact completion time. Day-based periods preserve wall-clock routine.
 
-## Chains: Period Recurrence
+### `anchor`  -  calendar positions
 
-Use `cp` when the next task should be based on a duration.
+Use when recurrence is about *when on the calendar*, not *how long since last time*.
 
-```bash
-# Every 12 days
-task add "Mow lawn" cp:12d due:today
-
-# Every 33 hours
-task add "Take medication" cp:33h due:now
-
-# Repeat a lifecycle sequence: 3d, then 20d, then 7d, then repeat
-task add "Insect treatment" cp:"3d,20d,7d" due:today
-
-# Stop after 5 links
-task add "Calibration" cp:3d chainMax:5
+```
+task add "Workout"      anchor:"w:mon,wed,fri"
+task add "Date night"   anchor:"m:rand + w:sat"
+task add "Anniversary"  anchor:"y:04-12"
 ```
 
-Chains are useful for work that depends on completion rhythm: maintenance, medication, reviews, chores, lifecycle stages, and anything where "next time" follows from this time.
+Anchors compose with `+` (intersection) and `|` (union):
 
-## Anchors: Calendar Recurrence
+| Expression | Meaning |
+|---|---|
+| `w:mon,wed,fri` | Mondays, Wednesdays, Fridays |
+| `m:1` | First day of each month |
+| `m:rand + w:sat` | A random Saturday in the month |
+| `y:04-12` | April 12 every year |
+| `w:tue,fri \| y:05-05` | Tuesdays, Fridays, or May 5 |
 
-Use `anchor` when the next task should land on calendar positions.
+Both engines can combine with all other Nautical features: omit rules, file-backed dates, chain limits, and visibility options.
 
-```bash
-# Every Monday, Wednesday, and Friday
-task add "Workout" anchor:w:mon,wed,fri due:today
+---
 
-# Last Friday of every month
-task add "Monthly review" anchor:m:last-fri due:today
+## The anchor model
 
-# A random Saturday each year
-task add "Annual retreat" anchor:"y:rand + w:sat" due:today
+For anchors, Nautical resolves occurrences as:
+
+```
+(anchor ∪ anchor_file) − (omit ∪ omit_file)
 ```
 
-Anchors are useful when the calendar matters more than the completion interval.
+Inclusion and exclusion are kept separate. Schedules and blackout dates usually come from different sources  -  this matches that reality, and makes the system easier to validate and debug.
 
-## Files and Omitted Dates
+---
 
-Real calendars have exceptions: holidays, blackout windows, travel, company shutdowns, and fixed external schedules.
+## Omitting dates
 
-Nautical handles those without forcing everything into one dense expression.
+Skip specific dates without rolling forward or backward. Nautical continues searching until it finds the next valid slot.
 
-```bash
-# Mondays, Wednesdays, Fridays, except Wednesdays in June
-task add "Workout" anchor:w:mon,wed,fri omit:"w:wed + y:jun"
+```
+# Skip Wednesdays from the M/W/F workout anchor in April
+task add "Workout" anchor:"w:mon,wed,fri" omit:"w:wed + y:apr"
 
-# Use a CSV file as an additional source of anchor dates
-task add "Payroll prep" anchor_file:2026.csv
+# Skip a holiday window
+task add "Workout" anchor:"w:mon,wed,fri" omit:"y:12-24..12-31"
 
-# Use a holiday file to block dates
-task add "Date night" anchor:"m:rand + w:sat" omit_file:2026.csv
+# Use a file of blackout dates
+task add "Date night" anchor:"m:rand + w:sat" omit_file:"2026.csv"
+```
 
-# Combine all four sources
+Omitted slots stay visible in completion timelines as skipped rows, so you can see what was bypassed.
+
+---
+
+## File-backed dates
+
+Pull recurrence sources from external files  -  useful for events driven by a calendar outside Taskwarrior.
+
+Configure a trusted directory:
+
+```
+anchor_file_dir = "/home/user/.task/nautical_anchors"
+```
+
+Then reference a file:
+
+```
+task add "Company event prep" anchor_file:"2026.csv@-1d@t=12:00,18:00"
+```
+
+- `@-1d` schedules one day before each date in the file
+- `@t=12:00,18:00` creates two occurrences per resulting date
+
+`anchor` and `anchor_file` work together  -  their dates are unioned:
+
+```
 task add "Hybrid schedule" \
   anchor:"w:tue,fri | y:05-05" \
-  anchor_file:"2026.csv@-1d@t=12:00,18:00" \
-  omit:"y:04-28..05-05" \
-  omit_file:2026.csv
+  anchor_file:"2026.csv@-1d@t=12:00,18:00"
 ```
 
-This split is intentional. Inclusion and exclusion stay separate, so the rule is easier to read, preview, validate, and debug.
+`omit_file` works the same way for exclusions.
 
-## What You See
+---
 
-Nautical is deliberately visible.
+## Chain limits
 
-On add and completion, it can show:
+Stop a recurrence after a count or a date:
 
+```
+task add "Short experiment" cp:1d chainMax:3 due:today
+task add "Anniversary prep" anchor:"y:04-12" chainUntil:2028-04-12 due:today+10h
+```
+
+---
+
+## Sync and duplicate protection
+
+Nautical is designed for synced setups. It uses chain identity, stable child behavior, and equivalent-child checks to prevent duplicate next tasks from appearing across devices.
+
+The completion rule is explicit: **the completed task state is the source.** There is no hidden template that overwrites the next task. If you annotate or adjust a task before completing it, those changes carry forward. If another device adds an annotation after completion has already happened on a different device, that change cannot reach a child that was already spawned. Sync order still matters  -  but the behavior is predictable.
+
+---
+
+## Batch completion and lock safety
+
+Taskwarrior holds its own locks while hooks run. Nautical avoids contention by recording spawn intents during `on-modify` and draining them during `on-exit`, after Taskwarrior releases its lock. On interactive terminals it can show a progress bar during the drain.
+
+---
+
+## Visibility
+
+Nautical explains what it is doing. Depending on display settings, add and completion output can include:
+
+- the next spawned task
 - the recurrence pattern
-- the natural-language explanation
-- the next task that was created
-- the timeline of upcoming links
-- omitted dates as explicit skipped rows
-- chain caps and remaining links
+- natural-language explanation
+- omit rules in effect
+- file-backed sources
+- a timeline of nearby, skipped, and omitted slots
+- chain-ending information
+- full diagnostics with `NAUTICAL_DIAG=1`
 
+The timeline is especially useful for anchor-based tasks where seeing the surrounding slots  -  including what was skipped  -  matters.
 
-## Sync and Duplicate Protection
+---
 
-Nautical uses chain identity to keep recurring tasks connected across devices.
+## Compared with the Taskwarrior recurrence RFC
 
-The next task is spawned from the completed task state available to the device running the hook. If you annotate or adjust the current task and then complete it, that local state is what Nautical carries forward.
+The [Taskwarrior recurrence RFC](https://djmitche.github.io/taskwarrior/rfcs/recurrence.html) proposes a native recurrence model with templates, generated instances, instance indexes, and `rtype` values like `periodic` and `chained`. That would be a genuine improvement to Taskwarrior itself.
 
-In a synced setup, sync order still matters. If another device changes a task after a child was already spawned elsewhere, Nautical cannot retroactively rewrite that child. The rule is simple and explicit: the completed task state at spawn time is the source.
+Nautical goes further in a different direction: calendar expressions, file-backed date sources, explicit omit rules, timelines, batch-safe deferred spawning, and duplicate protection for synced setups. It is not in competition with the RFC  -  it is for people who want advanced recurrence today, inside standard Taskwarrior, without waiting on upstream.
 
-Nautical also guards against duplicate children and handles batch completion through `on-exit`.
+---
 
-## Install
+## Is Nautical for you?
 
-Nautical consists of:
+Nautical is overkill if you need a simple daily or weekly repeat. Taskwarrior's native recurrence handles that fine.
 
-- `nautical_core/`
-- `on-add-nautical.py`
-- `on-modify-nautical.py`
-- `on-exit-nautical.py`
-- the UDA definitions in `uda.conf`
-- optional settings in `config-nautical.toml`
+It is for people who treat Taskwarrior as a serious task database and want a recurrence engine with the same depth  -  one that handles calendar logic, external schedules, blackout windows, sync safety, and composable expressions, all while keeping generated tasks as normal `task` entries.
+
+The only known hard limitation: Nautical will not spawn tasks dated after `9999-12-31`, so long-term planning has limits. :)
+
+---
+
+## Installation and configuration
 
 Quick install:
 
@@ -160,15 +213,20 @@ pip install rich
 task add "System test" anchor:"m:4mon"
 ```
 
-For a full setup, including config keys and file-backed recurrence directories, read the manual.
+See the [manual](https://github.com/catanadj/taskwarrior-nautical) for full UDA setup, configuration options, hook installation, and annotated examples.
 
-## Current Boundaries
+---
 
-- `cp` and anchor recurrence are separate engines.
-- `omit` is date-based and does not support timed omissions.
-- `anchor_file` and `omit_file` resolve basenames inside trusted config directories.
-- Nautical follows Taskwarrior hook and sync behavior; it does not run a daemon.
-- The system still refuses to spawn tasks after `9999-12-31`, so long-term planning has limits. :)
+## Feedback
+
+Feedback from Taskwarrior users is especially welcome around:
+
+- recurrence edge cases the syntax does not cover well
+- sync behavior with real multi-device setups
+- whether the expression syntax feels natural in actual workflows
+
+Open an issue or start a discussion in the repository.
+
 
 ## Documentation
 

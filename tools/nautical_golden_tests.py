@@ -4509,6 +4509,22 @@ def test_cp_duration_parser_and_dst_preserve_whole_days():
     assert core.parse_cp_sequence("3d,,7d") is None, "empty sequence item should be invalid"
     assert core.cp_sequence_parse_error("3d,,7d") == "empty duration at position 2", "empty item should get a precise error"
     assert core.cp_sequence_parse_error("3d,abc") == "invalid duration 'abc' at position 2", "bad item should get a precise error"
+    rand_a = core.cp_sequence_interval_for_link("rand(3d..7d)", 1)
+    rand_b = core.cp_sequence_interval_for_link("rand(3d..7d)", 1)
+    assert rand_a == rand_b, "random cp range should be deterministic for the same link"
+    assert timedelta(days=3) <= rand_a <= timedelta(days=7), f"random day range out of bounds: {rand_a}"
+    assert int(rand_a.total_seconds()) % 86400 == 0, f"day range should choose whole days: {rand_a}"
+    rand_h = core.cp_sequence_interval_for_link("rand(12h..36h)", 1)
+    assert timedelta(hours=12) <= rand_h <= timedelta(hours=36), f"random hour range out of bounds: {rand_h}"
+    assert int(rand_h.total_seconds()) % 3600 == 0, f"hour range should choose whole hours: {rand_h}"
+    rand_m = core.cp_sequence_interval_for_link("rand(30m..90m)", 1)
+    assert timedelta(minutes=30) <= rand_m <= timedelta(minutes=90), f"random minute range out of bounds: {rand_m}"
+    assert int(rand_m.total_seconds()) % 60 == 0, f"minute range should choose whole minutes: {rand_m}"
+    assert core.cp_sequence_interval_for_link("3d,rand(10d..20d),7d", 1) == timedelta(days=3), "fixed first token should still work"
+    rand_seq = core.cp_sequence_interval_for_link("3d,rand(10d..20d),7d", 2)
+    assert timedelta(days=10) <= rand_seq <= timedelta(days=20), f"random sequence token out of bounds: {rand_seq}"
+    assert core.cp_sequence_interval_for_link("3d,rand(10d..20d),7d", 3) == timedelta(days=7), "fixed third token should still work"
+    assert "lower bound must be <= upper bound" in (core.cp_sequence_parse_error("rand(7d..3d)") or ""), "reversed range should fail clearly"
 
     # --- 2) DST-safe stepping semantics used by CP preview (hook responsibility) ---
     # If ZoneInfo isn't available, core runs in "UTC-only" mode; skip DST assertions.

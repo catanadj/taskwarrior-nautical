@@ -452,6 +452,7 @@ _cp_re = re.compile(
     re.I,
 )
 _cp_token_re = re.compile(r"(?P<sign>[+-]?)(?P<n>\d+)(?P<u>w|d|h|m|s)", re.I)
+_cp_rand_re = re.compile(r"^rand\((?P<lo>.+)\.\.(?P<hi>.+)\)$", re.I)
 _hhmm_re = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _atom_head_re = re.compile(r"^(w|m|y)(?:/(\d+))?$")
 _int_like_re = re.compile(r"^[+-]?\d+$")
@@ -1952,14 +1953,92 @@ def parse_cp_duration(dur: str):
     return total
 
 
-def parse_cp_sequence(cp: str):
-    """Parse a cp value as one or more completion-period durations."""
+def _cp_rand_granularity_seconds(lo: timedelta, hi: timedelta) -> int:
+    lo_s = int(lo.total_seconds())
+    hi_s = int(hi.total_seconds())
+    for gran in (86400, 3600, 60):
+        if lo_s % gran == 0 and hi_s % gran == 0:
+            return gran
+    return 1
+
+
+def _parse_cp_token(part: str) -> dict[str, Any] | None:
+    raw = str(part or "").strip()
+    m = _cp_rand_re.match(raw)
+    if not m:
+        td = parse_cp_duration(raw)
+        if td is None:
+            return None
+        return {"kind": "fixed", "raw": raw, "duration": td}
+
+    lo_raw = m.group("lo").strip()
+    hi_raw = m.group("hi").strip()
+    lo = parse_cp_duration(lo_raw)
+    hi = parse_cp_duration(hi_raw)
+    if lo is None or hi is None:
+        return None
+    if lo > hi:
+        return None
+    gran = _cp_rand_granularity_seconds(lo, hi)
+    return {
+        "kind": "rand",
+        "raw": raw,
+        "lo_raw": lo_raw,
+        "hi_raw": hi_raw,
+        "lo": lo,
+        "hi": hi,
+        "granularity_seconds": gran,
+    }
+
+
+def parse_cp_sequence_tokens(cp: str):
+    """Parse cp into fixed/random period tokens without resolving randomness."""
     if cp_sequence_parse_error(cp):
         return None
     parts = [p.strip() for p in str(cp).strip().split(",")]
-    durations = []
+    tokens = []
     for part in parts:
-        td = parse_cp_duration(part)
+        token = _parse_cp_token(part)
+        if token is None:
+            return None
+        tokens.append(token)
+    return tokens
+
+
+def _cp_rand_duration_for_token(token: dict[str, Any], *, cp: str, link_no: int, token_index: int) -> timedelta:
+    lo = token.get("lo")
+    hi = token.get("hi")
+    gran = int(token.get("granularity_seconds") or 1)
+    if not isinstance(lo, timedelta) or not isinstance(hi, timedelta):
+        return timedelta()
+    lo_units = int(lo.total_seconds()) // gran
+    hi_units = int(hi.total_seconds()) // gran
+    if hi_units <= lo_units:
+        return lo
+    seed = f"cp-rand|{cp}|{int(link_no)}|{int(token_index)}|{token.get('raw')}"
+    digest = hashlib.sha256(seed.encode("utf-8")).digest()
+    span = hi_units - lo_units + 1
+    pick = lo_units + (int.from_bytes(digest[:8], "big") % span)
+    return timedelta(seconds=pick * gran)
+
+
+def cp_sequence_interval_for_token(token: dict[str, Any], *, cp: str, link_no: int, token_index: int) -> timedelta | None:
+    if token.get("kind") == "fixed":
+        td = token.get("duration")
+        return td if isinstance(td, timedelta) else None
+    if token.get("kind") == "rand":
+        return _cp_rand_duration_for_token(token, cp=cp, link_no=link_no, token_index=token_index)
+    return None
+
+
+def parse_cp_sequence(cp: str):
+    """Parse a cp value as one or more completion-period durations."""
+    tokens = parse_cp_sequence_tokens(cp)
+    if not tokens:
+        return None
+    durations = []
+    for idx, token in enumerate(tokens):
+        td = cp_sequence_interval_for_token(token, cp=str(cp), link_no=idx + 1, token_index=idx)
         if td is None:
             return None
         durations.append(td)
@@ -1977,22 +2056,34 @@ def cp_sequence_parse_error(cp: str) -> str | None:
     for idx, part in enumerate(parts, start=1):
         if not part:
             return f"empty duration at position {idx}"
-        td = parse_cp_duration(part)
-        if td is None:
+        rand_m = _cp_rand_re.match(part)
+        if rand_m:
+            lo_raw = rand_m.group("lo").strip()
+            hi_raw = rand_m.group("hi").strip()
+            if not lo_raw or not hi_raw:
+                return f"invalid random cp range '{part}' at position {idx}: both bounds are required"
+            lo = parse_cp_duration(lo_raw)
+            hi = parse_cp_duration(hi_raw)
+            if lo is None or hi is None:
+                return f"invalid random cp range '{part}' at position {idx}: invalid duration bound"
+            if lo > hi:
+                return f"invalid random cp range '{part}' at position {idx}: lower bound must be <= upper bound"
+            continue
+        if parse_cp_duration(part) is None:
             return f"invalid duration '{part}' at position {idx}"
     return None
 
 
 def cp_sequence_interval_for_link(cp: str, link_no: int):
     """Return the interval used to spawn ``link_no + 1`` from ``link_no``."""
-    seq = parse_cp_sequence(cp)
-    if not seq:
+    tokens = parse_cp_sequence_tokens(cp)
+    if not tokens:
         return None
     try:
-        idx = max(0, int(link_no) - 1) % len(seq)
+        idx = max(0, int(link_no) - 1) % len(tokens)
     except Exception:
         idx = 0
-    return seq[idx]
+    return cp_sequence_interval_for_token(tokens[idx], cp=str(cp), link_no=int(link_no or 1), token_index=idx)
 
 
 # -------- Anchor parser (DNF with mods) ----------
@@ -2973,8 +3064,10 @@ __all__ = (
     'parse_anchor_expr_to_dnf_cached',
     'parse_cp_duration',
     'parse_cp_sequence',
+    'parse_cp_sequence_tokens',
     'cp_sequence_parse_error',
     'cp_sequence_interval_for_link',
+    'cp_sequence_interval_for_token',
     'parse_dt_any',
     'pick_hhmm_from_dnf_for_date',
     'py',

@@ -4649,16 +4649,18 @@ def test_hook_on_add_cp_random_preview_shows_selected_periods():
         "status": "pending",
         "project": "testing",
         "entry": "20260101T000000Z",
-        "cp": "rand(3d..7d)",
+        "cp": "rand(15d..15d)",
         "due": "20260101T090000Z",
     }
     p = _run_hook_script(hook, task, env_extra=env)
     if p.returncode != 0:
         raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
     out_task = _extract_last_json(p.stdout)
-    expect(out_task.get("cp") == "rand(3d..7d)", f"random cp should be preserved as string: {out_task}")
+    expect(out_task.get("cp") == "rand(15d..15d)", f"random cp should be preserved as string: {out_task}")
     stderr_txt = _strip_markup(p.stderr)
     expect("Step" in stderr_txt and "1/1" in stderr_txt, f"random cp preview should show selected step: {stderr_txt[:500]!r}")
+    expect("(15d)" in stderr_txt, f"random cp preview should show whole-day picks as days: {stderr_txt[:500]!r}")
+    expect("2w1d" not in stderr_txt, f"random cp preview should not show composite week/day picks: {stderr_txt[:500]!r}")
     expect("Upcoming" in stderr_txt, f"random cp preview should show upcoming dates: {stderr_txt[:500]!r}")
     expect("(rand(" not in stderr_txt, f"random cp preview should show selected durations, not raw rand tokens: {stderr_txt[:500]!r}")
 
@@ -5198,12 +5200,12 @@ def test_hook_on_modify_timeline_cp_random_labels_selected_intervals():
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate cp random timeline.")
     if hasattr(mod, "_collect_prev_two"):
         setattr(mod, "_collect_prev_two", lambda _task: [])
-    first_td = mod.core.cp_sequence_interval_for_link("rand(3d..7d)", 1)
+    first_td = mod.core.cp_sequence_interval_for_link("rand(15d..15d)", 1)
     child_due_utc = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc) + first_td
     task = {
         "uuid": "00000000-0000-0000-0000-000000000225",
         "description": "hook test on-modify cp random timeline",
-        "cp": "rand(3d..7d)",
+        "cp": "rand(15d..15d)",
         "link": 1,
         "end": "20260101T100000Z",
         "due": "20260101T090000Z",
@@ -5221,7 +5223,8 @@ def test_hook_on_modify_timeline_cp_random_labels_selected_intervals():
     )
     txt = _strip_markup("\n".join(lines))
     expect("(rand(" not in txt, f"cp random timeline should not show raw rand tokens: {txt}")
-    expect(re.search(r"\([3-7]d\)", txt), f"cp random timeline should show selected day intervals: {txt}")
+    expect("(15d)" in txt, f"cp random timeline should show whole-day picks as days: {txt}")
+    expect("2w1d" not in txt, f"cp random timeline should not show composite week/day picks: {txt}")
 
 
 def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
@@ -8003,7 +8006,7 @@ def test_on_modify_render_cp_completion_feedback_random_selected_interval():
     try:
         mod.core.PANEL_MODE = "panel"
         mod._render_cp_completion_feedback(
-            new={"cp": "rand(3d..7d)", "link": 2, "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            new={"cp": "rand(15d..15d)", "link": 2, "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="deadbeef",
@@ -8028,6 +8031,7 @@ def test_on_modify_render_cp_completion_feedback_random_selected_interval():
     step_rows = [v for k, v in captured.get("fb", []) if k == "Step"]
     expect(step_rows, f"expected random cp step row: {captured}")
     expect("rand(" not in str(step_rows[0]), f"expected selected interval in random cp step row: {captured}")
+    expect(str(step_rows[0]) == "1/1 (15d)", f"expected whole-day random interval as days: {captured}")
 
 
 def test_on_modify_render_cp_completion_feedback_text_mode():

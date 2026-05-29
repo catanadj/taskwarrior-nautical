@@ -8,6 +8,8 @@ def _format_td_short(td: timedelta) -> str:
     secs = int(td.total_seconds())
     if secs < 0:
         return "-" + _format_td_short(timedelta(seconds=-secs))
+    if secs % 86400 == 0:
+        return f"{secs // 86400}d"
     units = (("w", 604800), ("d", 86400), ("h", 3600), ("m", 60), ("s", 1))
     parts: list[str] = []
     rem = secs

@@ -1,8 +1,27 @@
 from __future__ import annotations
 
 
-def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequence=None) -> str:
-    if callable(parse_cp_sequence):
+from datetime import timedelta
+
+
+def _format_td_short(td: timedelta) -> str:
+    secs = int(td.total_seconds())
+    if secs < 0:
+        return "-" + _format_td_short(timedelta(seconds=-secs))
+    units = (("w", 604800), ("d", 86400), ("h", 3600), ("m", 60), ("s", 1))
+    parts: list[str] = []
+    rem = secs
+    for label, unit_secs in units:
+        if rem >= unit_secs:
+            n, rem = divmod(rem, unit_secs)
+            parts.append(f"{n}{label}")
+    return "".join(parts) if parts else "0s"
+
+
+def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequence=None, cp_sequence_interval_for_link=None) -> str:
+    if callable(cp_sequence_interval_for_link):
+        td = cp_sequence_interval_for_link(task.get("cp") or "", int(task.get("link") or 1))
+    elif callable(parse_cp_sequence):
         seq = parse_cp_sequence(task.get("cp") or "")
         step = int(meta.get("cp_sequence_step") or 1)
         if seq:
@@ -520,6 +539,20 @@ def render_cp_completion_feedback(
         step = int(feedback.meta.get("cp_sequence_step") or 1)
         cp_tokens = [p.strip() for p in str(feedback.new.get("cp") or "").split(",")]
         step_token = cp_tokens[step - 1] if 0 <= step - 1 < len(cp_tokens) else ""
+        if step_token.lower().startswith("rand("):
+            token_index = max(0, step - 1)
+            try:
+                tokens = core.parse_cp_sequence_tokens(feedback.new.get("cp") or "")
+                td = core.cp_sequence_interval_for_token(
+                    tokens[token_index],
+                    cp=feedback.new.get("cp") or "",
+                    link_no=int(feedback.new.get("link") or 1),
+                    token_index=token_index,
+                )
+                if td:
+                    step_token = _format_td_short(td)
+            except Exception:
+                pass
         suffix = f" ({step_token})" if step_token else ""
         fb.append(("Step", f"{step}/{feedback.meta.get('cp_sequence_len')}{suffix}"))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
@@ -528,6 +561,7 @@ def render_cp_completion_feedback(
         feedback.meta,
         parse_cp_duration=core.parse_cp_duration,
         parse_cp_sequence=getattr(core, "parse_cp_sequence", None),
+        cp_sequence_interval_for_link=getattr(core, "cp_sequence_interval_for_link", None),
     )
     if basis_text != "Preserve wall clock (period is multiple of 24h)":
         fb.append(("Basis", basis_text))

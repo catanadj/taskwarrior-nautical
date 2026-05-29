@@ -816,6 +816,20 @@ def _fmt_td_no_seconds(td: timedelta) -> str:
     return f"{sign}{days}d {hours:02d}h:{minutes:02d}m"
 
 
+def _fmt_cp_interval_token(td: timedelta) -> str:
+    secs = int(td.total_seconds())
+    if secs < 0:
+        return "-" + _fmt_cp_interval_token(timedelta(seconds=-secs))
+    units = (("w", 604800), ("d", 86400), ("h", 3600), ("m", 60), ("s", 1))
+    parts = []
+    rem = secs
+    for label, unit_secs in units:
+        if rem >= unit_secs:
+            n, rem = divmod(rem, unit_secs)
+            parts.append(f"{n}{label}")
+    return "".join(parts) if parts else "0s"
+
+
 def _append_wait_sched_rows(
     rows: list,
     task: dict,
@@ -1218,8 +1232,10 @@ def _cp_add_td(dt: datetime, td: timedelta) -> datetime:
     return _cp_add_period_builder(td)(dt)
 
 
-def _cp_sequence_period_for_link(seq: list[timedelta], link_no: int) -> timedelta:
-    return seq[(max(1, int(link_no)) - 1) % len(seq)]
+def _cp_sequence_period_for_link(tokens: list[dict], cp_str: str, link_no: int) -> timedelta:
+    idx = (max(1, int(link_no)) - 1) % len(tokens)
+    td = core.cp_sequence_interval_for_token(tokens[idx], cp=cp_str, link_no=link_no, token_index=idx)
+    return td or timedelta()
 
 
 def _cp_until_summary(due_dt: datetime, until_dt: datetime | None, add_period) -> tuple[int | None, datetime | None]:
@@ -1262,7 +1278,8 @@ def _cp_preview_lines(due_dt: datetime, until_dt: datetime | None, limit: int, a
 def _cp_sequence_until_summary(
     due_dt: datetime,
     until_dt: datetime | None,
-    seq: list[timedelta],
+    tokens: list[dict],
+    cp_str: str,
     *,
     start_link_no: int,
 ) -> tuple[int | None, datetime | None]:
@@ -1277,7 +1294,7 @@ def _cp_sequence_until_summary(
             break
         last = probe
         count += 1
-        td = _cp_sequence_period_for_link(seq, link_no)
+        td = _cp_sequence_period_for_link(tokens, cp_str, link_no)
         probe = _cp_add_td(probe, td)
         link_no += 1
     if count <= 0:
@@ -1289,7 +1306,8 @@ def _cp_sequence_preview_lines(
     due_dt: datetime,
     until_dt: datetime | None,
     limit: int,
-    seq: list[timedelta],
+    tokens: list[dict],
+    cp_str: str,
     *,
     cp_tokens: list[str],
     start_link_no: int,
@@ -1302,8 +1320,8 @@ def _cp_sequence_preview_lines(
     link_no = start_link_no
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
     for i in range(limit):
-        step_idx = (max(1, link_no) - 1) % len(seq)
-        td = _cp_sequence_period_for_link(seq, link_no)
+        step_idx = (max(1, link_no) - 1) % len(tokens)
+        td = _cp_sequence_period_for_link(tokens, cp_str, link_no)
         nxt = _cp_add_td(nxt, td)
         link_no += 1
         if until_dt and nxt > until_dt:
@@ -1311,7 +1329,9 @@ def _cp_sequence_preview_lines(
         color = colors[min(i, len(colors) - 1)]
         suffix = ""
         if 0 <= step_idx < len(cp_tokens):
-            suffix = f" [dim]({cp_tokens[step_idx]})[/]"
+            token = tokens[step_idx]
+            label = _fmt_cp_interval_token(td) if token.get("kind") == "rand" else cp_tokens[step_idx]
+            suffix = f" [dim]({label})[/]"
         preview.append(f"[{color}]{_fmt(nxt)}[/{color}]{suffix}")
     return preview
 
@@ -1326,7 +1346,8 @@ def _cp_limit_rows(
     final_until_dt: datetime | None,
     add_period,
     now_utc: datetime,
-    seq: list[timedelta] | None = None,
+    tokens: list[dict] | None = None,
+    cp_str: str = "",
     start_link_no: int = 1,
 ) -> None:
     def _fmt(dt):
@@ -1339,8 +1360,8 @@ def _cp_limit_rows(
         steps = max(0, cpmax - 1)
         link_no = start_link_no
         for _ in range(steps):
-            if seq:
-                fmax = _cp_add_td(fmax, _cp_sequence_period_for_link(seq, link_no))
+            if tokens:
+                fmax = _cp_add_td(fmax, _cp_sequence_period_for_link(tokens, cp_str, link_no))
                 link_no += 1
             else:
                 fmax = add_period(fmax)
@@ -1387,12 +1408,13 @@ def _handle_cp_preview_on_add(
     def _dt(s):
         return core.parse_dt_any(s)
 
-    seq = core.parse_cp_sequence(cp_str)
-    if not seq:
+    tokens = core.parse_cp_sequence_tokens(cp_str)
+    if not tokens:
         reason = core.cp_sequence_parse_error(cp_str) or f"couldn't parse duration from '{cp_str}'"
         _error_and_exit([("Invalid cp", reason)])
-    td = seq[0]
-    is_sequence = len(seq) > 1
+    td = _cp_sequence_period_for_link(tokens, cp_str, 1)
+    has_random = any(t.get("kind") == "rand" for t in tokens)
+    is_dynamic = len(tokens) > 1 or has_random
 
     if until_dt:
         is_reasonable, warn_msg = _validate_chain_duration_reasonable(
@@ -1417,9 +1439,11 @@ def _handle_cp_preview_on_add(
         first_label = "First due"
 
     rows.append(("Period", f"[bold white]{cp_str}[/]"))
-    if is_sequence:
+    if is_dynamic:
         step_token = cp_str.split(",")[0].strip()
-        rows.append(("Step", f"[bold white]1/{len(seq)}[/] [dim]({step_token})[/]"))
+        if tokens[0].get("kind") == "rand":
+            step_token = _fmt_cp_interval_token(td)
+        rows.append(("Step", f"[bold white]1/{len(tokens)}[/] [dim]({step_token})[/]"))
     rows.append((first_label, f"[bold bright_green]{_fmt(due_dt)}[/]"))
 
     # Scheduled/Wait preview relative to the recurrence anchor.
@@ -1432,8 +1456,8 @@ def _handle_cp_preview_on_add(
     )
 
     cpmax = core.coerce_int(task.get("chainMax"), 0)
-    if is_sequence:
-        exact_until_count, final_until_dt = _cp_sequence_until_summary(due_dt, until_dt, seq, start_link_no=1)
+    if is_dynamic:
+        exact_until_count, final_until_dt = _cp_sequence_until_summary(due_dt, until_dt, tokens, cp_str, start_link_no=1)
     else:
         exact_until_count, final_until_dt = _cp_until_summary(due_dt, until_dt, add_period)
 
@@ -1441,9 +1465,9 @@ def _handle_cp_preview_on_add(
     allow_by_until = exact_until_count if exact_until_count is not None else 10**9
     limit = max(0, min(UPCOMING_PREVIEW, allow_by_max, allow_by_until, _PREVIEW_HARD_CAP))
 
-    if is_sequence:
+    if is_dynamic:
         cp_tokens = [p.strip() for p in cp_str.split(",")]
-        preview = _cp_sequence_preview_lines(due_dt, until_dt, limit, seq, cp_tokens=cp_tokens, start_link_no=1)
+        preview = _cp_sequence_preview_lines(due_dt, until_dt, limit, tokens, cp_str, cp_tokens=cp_tokens, start_link_no=1)
     else:
         preview = _cp_preview_lines(due_dt, until_dt, limit, add_period)
     rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
@@ -1458,7 +1482,8 @@ def _handle_cp_preview_on_add(
         final_until_dt=final_until_dt,
         add_period=add_period,
         now_utc=now_utc,
-        seq=seq if is_sequence else None,
+        tokens=tokens if is_dynamic else None,
+        cp_str=cp_str,
         start_link_no=1,
     )
 

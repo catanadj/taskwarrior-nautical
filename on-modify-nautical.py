@@ -2879,8 +2879,10 @@ def _cp_add_td(dt: datetime, td: timedelta) -> datetime:
     return (dt + td).replace(microsecond=0)
 
 
-def _cp_sequence_period_for_link(seq: list[timedelta], link_no: int) -> timedelta:
-    return seq[(max(1, int(link_no)) - 1) % len(seq)]
+def _cp_sequence_period_for_link(tokens: list[dict], cp_str: str, link_no: int) -> timedelta:
+    idx = (max(1, int(link_no)) - 1) % len(tokens)
+    td = core.cp_sequence_interval_for_token(tokens[idx], cp=cp_str, link_no=link_no, token_index=idx)
+    return td or timedelta()
 
 
 # ------------------------------------------------------------------------------
@@ -2893,13 +2895,13 @@ def _compute_cp_child_due(parent: dict):
     if not dur:
         return (None, None)
 
-    seq = core.parse_cp_sequence(dur)
-    if not seq:
+    tokens = core.parse_cp_sequence_tokens(dur)
+    if not tokens:
         reason = core.cp_sequence_parse_error(dur) or f"invalid duration format '{dur}'"
         raise ValueError(f"cp field: {reason} (expected: 3d, 2w, 1h, etc.)")
     link_no = core.coerce_int(parent.get("link"), 1)
-    td = seq[(max(1, link_no) - 1) % len(seq)]
-    seq_idx = (max(1, link_no) - 1) % len(seq)
+    seq_idx = (max(1, link_no) - 1) % len(tokens)
+    td = _cp_sequence_period_for_link(tokens, dur, link_no)
     if not td:
         return (None, None)
 
@@ -2922,10 +2924,11 @@ def _compute_cp_child_due(parent: dict):
     anchor_dt0 = due_dt0 or sched_dt0
 
     cand = (end_dt + td).replace(microsecond=0)
+    show_step = len(tokens) > 1 or tokens[seq_idx].get("kind") == "rand"
     if rem != 0:
         meta = {"period": dur, "basis": "end+cp (exact)", "target_field": target_field}
-        if len(seq) > 1:
-            meta.update({"cp_sequence_len": len(seq), "cp_sequence_step": seq_idx + 1})
+        if show_step:
+            meta.update({"cp_sequence_len": len(tokens), "cp_sequence_step": seq_idx + 1})
         return cand, meta
 
     # preserve wall clock
@@ -2942,8 +2945,8 @@ def _compute_cp_child_due(parent: dict):
         "basis": "end+cp (preserve clock)",
         "target_field": target_field,
     }
-    if len(seq) > 1:
-        meta.update({"cp_sequence_len": len(seq), "cp_sequence_step": seq_idx + 1})
+    if show_step:
+        meta.update({"cp_sequence_len": len(tokens), "cp_sequence_step": seq_idx + 1})
     return due_local.astimezone(timezone.utc), meta
 
 
@@ -3489,8 +3492,9 @@ def _estimate_cp_final_by_max(task: dict, next_due_utc):
     if cur_no >= cpmax:
         return None
 
-    seq = core.parse_cp_sequence(task.get("cp") or "")
-    if not seq:
+    cp_str = task.get("cp") or ""
+    tokens = core.parse_cp_sequence_tokens(cp_str)
+    if not tokens:
         return None
 
     fut_dt = next_due_utc
@@ -3498,7 +3502,7 @@ def _estimate_cp_final_by_max(task: dict, next_due_utc):
 
     # Step forward from next due until we reach cap_no
     while fut_no < cpmax:
-        td = _cp_sequence_period_for_link(seq, fut_no)
+        td = _cp_sequence_period_for_link(tokens, cp_str, fut_no)
         fut_no += 1
         fut_dt = _cp_add_td(fut_dt, td)
 
@@ -4707,8 +4711,9 @@ def _cap_from_until_cp(task, next_due_utc):
     until = _dtparse(task.get("chainUntil"))
     if not until:
         return (None, None)
-    seq = core.parse_cp_sequence(task.get("cp") or "")
-    if not seq:
+    cp_str = task.get("cp") or ""
+    tokens = core.parse_cp_sequence_tokens(cp_str)
+    if not tokens:
         return (None, None)
     cur = core.coerce_int(task.get("link"), 1)
     nno = cur + 1
@@ -4720,7 +4725,7 @@ def _cap_from_until_cp(task, next_due_utc):
     while ndt and ndt <= until and iterations < _MAX_ITERATIONS:
         iterations += 1
         last_no, last_dt = nno, ndt
-        td = _cp_sequence_period_for_link(seq, nno)
+        td = _cp_sequence_period_for_link(tokens, cp_str, nno)
         ndt = _cp_add_td(ndt, td)
         nno += 1
 

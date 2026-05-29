@@ -41,6 +41,20 @@ def _timeline_styles(
     return prev_style, cur_style, next_style, future_style
 
 
+def _format_td_short(td: timedelta) -> str:
+    secs = int(td.total_seconds())
+    if secs < 0:
+        return "-" + _format_td_short(timedelta(seconds=-secs))
+    units = (("w", 604800), ("d", 86400), ("h", 3600), ("m", 60), ("s", 1))
+    parts: list[str] = []
+    rem = secs
+    for label, unit_secs in units:
+        if rem >= unit_secs:
+            n, rem = divmod(rem, unit_secs)
+            parts.append(f"{n}{label}")
+    return "".join(parts) if parts else "0s"
+
+
 def _timeline_initial_items(
     task: dict[str, Any],
     cur_no: int,
@@ -76,11 +90,12 @@ def _timeline_future_cp_items(
     tolocal: Callable[[datetime], datetime],
     max_iterations: int,
 ) -> list[tuple[int, datetime, dict[str, Any], str]]:
-    seq = core.parse_cp_sequence(task.get("cp") or "")
-    if not seq:
+    cp_str = str(task.get("cp") or "")
+    tokens = core.parse_cp_sequence_tokens(cp_str)
+    if not tokens:
         return []
-    cp_tokens = [p.strip() for p in str(task.get("cp") or "").split(",")]
-    is_sequence = len(seq) > 1
+    cp_tokens = [p.strip() for p in cp_str.split(",")]
+    show_interval = len(tokens) > 1 or any(t.get("kind") == "rand" for t in tokens)
     items: list[tuple[int, datetime, dict[str, Any], str]] = []
     fut_dt = child_due_utc
     fut_no = start_no
@@ -89,7 +104,10 @@ def _timeline_future_cp_items(
         if iterations >= max_iterations:
             break
         iterations += 1
-        td = seq[(max(1, fut_no) - 1) % len(seq)]
+        token_idx = (max(1, fut_no) - 1) % len(tokens)
+        td = core.cp_sequence_interval_for_token(tokens[token_idx], cp=cp_str, link_no=fut_no, token_index=token_idx)
+        if td is None:
+            break
         fut_no += 1
         secs = int(td.total_seconds())
         if secs % 86400 == 0:
@@ -103,10 +121,13 @@ def _timeline_future_cp_items(
         if cap_no is not None and fut_no > cap_no:
             break
         meta: dict[str, Any] = {"is_future": True}
-        if is_sequence:
-            step_idx = (max(1, fut_no - 1) - 1) % len(seq)
+        if show_interval:
+            step_idx = (max(1, fut_no - 1) - 1) % len(tokens)
             if 0 <= step_idx < len(cp_tokens):
-                meta["cp_interval"] = cp_tokens[step_idx]
+                if tokens[step_idx].get("kind") == "rand":
+                    meta["cp_interval"] = _format_td_short(td)
+                else:
+                    meta["cp_interval"] = cp_tokens[step_idx]
         items.append((fut_no, fut_dt, meta, "future"))
     return items
 

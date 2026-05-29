@@ -4637,6 +4637,30 @@ def test_hook_on_add_cp_sequence_preview_accepts_string_periods():
         expect(token in stderr_txt, f"preview upcoming timeline should show sequence interval {token}: {stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_cp_random_preview_shows_selected_periods():
+    """on-add random cp previews should show selected intervals, not reuse the raw rand expression."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000115",
+        "description": "hook test on-add cp random",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20260101T000000Z",
+        "cp": "rand(3d..7d)",
+        "due": "20260101T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    if p.returncode != 0:
+        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+    out_task = _extract_last_json(p.stdout)
+    expect(out_task.get("cp") == "rand(3d..7d)", f"random cp should be preserved as string: {out_task}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("Step" in stderr_txt and "1/1" in stderr_txt, f"random cp preview should show selected step: {stderr_txt[:500]!r}")
+    expect("Upcoming" in stderr_txt, f"random cp preview should show upcoming dates: {stderr_txt[:500]!r}")
+    expect("(rand(" not in stderr_txt, f"random cp preview should show selected durations, not raw rand tokens: {stderr_txt[:500]!r}")
+
+
 def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
     """scheduled-only anchor tasks should remain scheduled-only on add."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -5162,6 +5186,40 @@ def test_hook_on_modify_timeline_cp_sequence_labels_future_intervals():
     txt = _strip_markup("\n".join(lines))
     for token in ("(20d)", "(7d)", "(3d)"):
         expect(token in txt, f"cp sequence timeline missing {token}: {txt}")
+
+
+def test_hook_on_modify_timeline_cp_random_labels_selected_intervals():
+    """cp random timelines should display the selected interval for each future row."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_random_timeline_test")
+    if not hasattr(mod, "_timeline_lines"):
+        raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate cp random timeline.")
+    if hasattr(mod, "_collect_prev_two"):
+        setattr(mod, "_collect_prev_two", lambda _task: [])
+    first_td = mod.core.cp_sequence_interval_for_link("rand(3d..7d)", 1)
+    child_due_utc = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc) + first_td
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000225",
+        "description": "hook test on-modify cp random timeline",
+        "cp": "rand(3d..7d)",
+        "link": 1,
+        "end": "20260101T100000Z",
+        "due": "20260101T090000Z",
+    }
+    lines = _call_with_supported_kwargs(
+        mod._timeline_lines,
+        kind="cp",
+        task=task,
+        child_due_utc=child_due_utc,
+        child_short="0000abcd",
+        dnf=None,
+        next_count=3,
+        cap_no=None,
+        cur_no=1,
+    )
+    txt = _strip_markup("\n".join(lines))
+    expect("(rand(" not in txt, f"cp random timeline should not show raw rand tokens: {txt}")
+    expect(re.search(r"\([3-7]d\)", txt), f"cp random timeline should show selected day intervals: {txt}")
 
 
 def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
@@ -6952,6 +7010,30 @@ def test_on_modify_compute_cp_sequence_selects_interval_by_link():
     expect(meta.get("cp_sequence_len") == 3, f"expected sequence length 3: {meta}")
 
 
+def test_on_modify_compute_cp_random_selects_deterministic_interval():
+    """random cp ranges should resolve deterministically for the active link."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_random_compute_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    expected_td = mod.core.cp_sequence_interval_for_link("rand(3d..7d)", 2)
+    child_due, meta = mod._compute_cp_child_due(
+        {
+            "cp": "rand(3d..7d)",
+            "link": 2,
+            "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (9, 0))),
+            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (10, 0))),
+        }
+    )
+    child_local = mod.core.to_local(child_due)
+    expected_local = mod.core.to_local(mod.core.build_local_datetime(date(2026, 1, 1), (9, 0)) + expected_td)
+    expect(child_local.date() == expected_local.date(), f"random cp should use deterministic selected interval: {child_local} vs {expected_local}")
+    expect((child_local.hour, child_local.minute) == (9, 0), f"whole-day random interval should preserve wall clock: {child_local}")
+    expect(meta.get("cp_sequence_step") == 1, f"expected random cp selected step metadata: {meta}")
+    expect(meta.get("cp_sequence_len") == 1, f"expected random cp length metadata: {meta}")
+
+
 def test_on_modify_cp_sequence_estimates_chainmax_final_date():
     """chainMax final-date estimation should advance through cp sequence intervals."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -7894,6 +7976,56 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
     expect("title" in captured, "expected preview panel emission")
     expect("Next link" in captured["title"], f"unexpected panel title: {captured}")
     expect(("Step", "3/3 (7d)") in captured["fb"], f"expected sequence step period in feedback rows: {captured}")
+
+
+def test_on_modify_render_cp_completion_feedback_random_selected_interval():
+    """CP random completion feedback should show the selected interval, not the raw rand expression."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_random_feedback_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._CHAIN_COLOR_PER_CHAIN = False
+    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
+    mod._format_next_cp_rows = lambda fb: fb
+    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
+    mod._timeline_lines = lambda *_a, **_k: []
+    mod._export_uuid_short_cached = lambda _short: {}
+
+    captured = {}
+    mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
+    mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
+
+    prev_panel_mode = mod.core.PANEL_MODE
+    try:
+        mod.core.PANEL_MODE = "panel"
+        mod._render_cp_completion_feedback(
+            new={"cp": "rand(3d..7d)", "link": 2, "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            child_due=mod.core.now_utc(),
+            child_short="deadbeef",
+            next_no=3,
+            parent_short="00000000",
+            cap_no=None,
+            finals=[],
+            now_utc=mod.core.now_utc(),
+            until_dt=None,
+            until_cap_no=None,
+            meta={"cp_sequence_step": 1, "cp_sequence_len": 1},
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            chain_by_short=None,
+            analytics_advice=None,
+            integrity_warnings=None,
+            base_no=2,
+        )
+    finally:
+        mod.core.PANEL_MODE = prev_panel_mode
+
+    step_rows = [v for k, v in captured.get("fb", []) if k == "Step"]
+    expect(step_rows, f"expected random cp step row: {captured}")
+    expect("rand(" not in str(step_rows[0]), f"expected selected interval in random cp step row: {captured}")
 
 
 def test_on_modify_render_cp_completion_feedback_text_mode():
@@ -9548,10 +9680,12 @@ TESTS = [
     test_monthname_and_numeric_equivalence,
     test_cp_duration_parser_and_dst_preserve_whole_days,
     test_on_modify_compute_cp_sequence_selects_interval_by_link,
+    test_on_modify_compute_cp_random_selects_deterministic_interval,
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
     test_hook_on_add_cp_sequence_preview_accepts_string_periods,
+    test_hook_on_add_cp_random_preview_shows_selected_periods,
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,
     test_on_add_due_context_treats_due_matching_entry_as_implicit,
     test_on_add_anchor_preview_auto_assigns_when_due_matches_entry,
@@ -9562,6 +9696,7 @@ TESTS = [
     test_hook_on_add_unsatisfiable_omit_fails_cleanly,
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_on_modify_timeline_cp_sequence_labels_future_intervals,
+    test_hook_on_modify_timeline_cp_random_labels_selected_intervals,
     test_hook_task_runner_handles_nonzero,
     test_hook_run_task_falls_back_when_core_load_fails,
     test_on_add_run_task_falls_back_when_core_load_fails,
@@ -9737,6 +9872,7 @@ TESTS = [
     test_on_modify_render_anchor_file_completion_feedback_wrapper,
     test_anchor_natural_language_normalizes_grouped_list_plus_expr,
     test_on_modify_render_cp_completion_feedback_wrapper,
+    test_on_modify_render_cp_completion_feedback_random_selected_interval,
     test_on_modify_render_cp_completion_feedback_text_mode,
     test_on_add_preview_hard_cap,
     test_on_add_flushes_stdout,

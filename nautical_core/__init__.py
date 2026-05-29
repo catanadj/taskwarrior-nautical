@@ -2069,6 +2069,8 @@ def cp_sequence_parse_error(cp: str) -> str | None:
             if lo > hi:
                 return f"invalid random cp range '{part}' at position {idx}: lower bound must be <= upper bound"
             continue
+        if part.lower().startswith("rand("):
+            return f"invalid random cp range '{part}' at position {idx}: expected rand(<duration>..<duration>)"
         if parse_cp_duration(part) is None:
             return f"invalid duration '{part}' at position {idx}"
     return None

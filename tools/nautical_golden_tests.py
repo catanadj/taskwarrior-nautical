@@ -4525,6 +4525,8 @@ def test_cp_duration_parser_and_dst_preserve_whole_days():
     assert timedelta(days=10) <= rand_seq <= timedelta(days=20), f"random sequence token out of bounds: {rand_seq}"
     assert core.cp_sequence_interval_for_link("3d,rand(10d..20d),7d", 3) == timedelta(days=7), "fixed third token should still work"
     assert "lower bound must be <= upper bound" in (core.cp_sequence_parse_error("rand(7d..3d)") or ""), "reversed range should fail clearly"
+    assert "expected rand(<duration>..<duration>)" in (core.cp_sequence_parse_error("rand(3d-7d)") or ""), "malformed random range should fail clearly"
+    assert "expected rand(<duration>..<duration>)" in (core.cp_sequence_parse_error("3d,rand(3d..7d") or ""), "unterminated random range should fail clearly"
 
     # --- 2) DST-safe stepping semantics used by CP preview (hook responsibility) ---
     # If ZoneInfo isn't available, core runs in "UTC-only" mode; skip DST assertions.

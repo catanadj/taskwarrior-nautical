@@ -4665,6 +4665,27 @@ def test_hook_on_add_cp_random_preview_shows_selected_periods():
     expect("(rand(" not in stderr_txt, f"random cp preview should show selected durations, not raw rand tokens: {stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_cp_random_malformed_fails_with_guidance():
+    """on-add should surface clear rand syntax guidance for malformed random cp ranges."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000116",
+        "description": "hook test on-add malformed cp random",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20260101T000000Z",
+        "cp": "rand(3d-7d)",
+        "due": "20260101T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    expect(p.returncode != 0, "on-add should fail for malformed random cp")
+    expect((p.stdout or "").strip() == "", f"expected no stdout on malformed random cp failure, got: {p.stdout!r}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("Invalid cp" in stderr_txt, f"expected invalid cp panel. stderr={stderr_txt[:500]!r}")
+    expect("expected rand(<duration>..<duration>)" in stderr_txt, f"expected rand syntax guidance. stderr={stderr_txt[:500]!r}")
+
+
 def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
     """scheduled-only anchor tasks should remain scheduled-only on add."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -9692,6 +9713,7 @@ TESTS = [
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
     test_hook_on_add_cp_sequence_preview_accepts_string_periods,
     test_hook_on_add_cp_random_preview_shows_selected_periods,
+    test_hook_on_add_cp_random_malformed_fails_with_guidance,
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,
     test_on_add_due_context_treats_due_matching_entry_as_implicit,
     test_on_add_anchor_preview_auto_assigns_when_due_matches_entry,

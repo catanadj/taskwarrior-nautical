@@ -453,6 +453,7 @@ _cp_re = re.compile(
 )
 _cp_token_re = re.compile(r"(?P<sign>[+-]?)(?P<n>\d+)(?P<u>w|d|h|m|s)", re.I)
 _cp_rand_re = re.compile(r"^rand\((?P<lo>.+)\.\.(?P<hi>.+)\)$", re.I)
+_cp_jitter_re = re.compile(r"^(?P<base>.+)~(?P<spread>.+)$", re.I)
 _hhmm_re = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _atom_head_re = re.compile(r"^(w|m|y)(?:/(\d+))?$")
 _int_like_re = re.compile(r"^[+-]?\d+$")
@@ -1966,6 +1967,28 @@ def _parse_cp_token(part: str) -> dict[str, Any] | None:
     raw = str(part or "").strip()
     m = _cp_rand_re.match(raw)
     if not m:
+        jitter_m = _cp_jitter_re.match(raw)
+        if jitter_m:
+            base_raw = jitter_m.group("base").strip()
+            spread_raw = jitter_m.group("spread").strip()
+            base = parse_cp_duration(base_raw)
+            spread = parse_cp_duration(spread_raw)
+            if base is None or spread is None or spread < timedelta() or base - spread < timedelta():
+                return None
+            lo = base - spread
+            hi = base + spread
+            gran = _cp_rand_granularity_seconds(lo, hi)
+            return {
+                "kind": "rand",
+                "raw": raw,
+                "base_raw": base_raw,
+                "spread_raw": spread_raw,
+                "lo_raw": str(lo),
+                "hi_raw": str(hi),
+                "lo": lo,
+                "hi": hi,
+                "granularity_seconds": gran,
+            }
         td = parse_cp_duration(raw)
         if td is None:
             return None
@@ -2071,6 +2094,23 @@ def cp_sequence_parse_error(cp: str) -> str | None:
             continue
         if part.lower().startswith("rand("):
             return f"invalid random cp range '{part}' at position {idx}: expected rand(<duration>..<duration>)"
+        jitter_m = _cp_jitter_re.match(part)
+        if jitter_m:
+            base_raw = jitter_m.group("base").strip()
+            spread_raw = jitter_m.group("spread").strip()
+            if not base_raw or not spread_raw:
+                return f"invalid jitter cp range '{part}' at position {idx}: expected <duration>~<duration>"
+            base = parse_cp_duration(base_raw)
+            spread = parse_cp_duration(spread_raw)
+            if base is None or spread is None:
+                return f"invalid jitter cp range '{part}' at position {idx}: invalid duration bound"
+            if spread < timedelta():
+                return f"invalid jitter cp range '{part}' at position {idx}: spread must be >= 0"
+            if base - spread < timedelta():
+                return f"invalid jitter cp range '{part}' at position {idx}: lower bound must be >= 0"
+            continue
+        if "~" in part:
+            return f"invalid jitter cp range '{part}' at position {idx}: expected <duration>~<duration>"
         if parse_cp_duration(part) is None:
             return f"invalid duration '{part}' at position {idx}"
     return None

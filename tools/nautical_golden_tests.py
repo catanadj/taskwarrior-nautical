@@ -4527,6 +4527,15 @@ def test_cp_duration_parser_and_dst_preserve_whole_days():
     assert "lower bound must be <= upper bound" in (core.cp_sequence_parse_error("rand(7d..3d)") or ""), "reversed range should fail clearly"
     assert "expected rand(<duration>..<duration>)" in (core.cp_sequence_parse_error("rand(3d-7d)") or ""), "malformed random range should fail clearly"
     assert "expected rand(<duration>..<duration>)" in (core.cp_sequence_parse_error("3d,rand(3d..7d") or ""), "unterminated random range should fail clearly"
+    jitter_a = core.cp_sequence_interval_for_link("14d~2d", 1)
+    jitter_b = core.cp_sequence_interval_for_link("14d~2d", 1)
+    assert jitter_a == jitter_b, "jitter cp range should be deterministic for the same link"
+    assert timedelta(days=12) <= jitter_a <= timedelta(days=16), f"jitter day range out of bounds: {jitter_a}"
+    assert int(jitter_a.total_seconds()) % 86400 == 0, f"jitter day range should choose whole days: {jitter_a}"
+    jitter_seq = core.cp_sequence_interval_for_link("3d,14d~2d,7d", 2)
+    assert timedelta(days=12) <= jitter_seq <= timedelta(days=16), f"jitter sequence token out of bounds: {jitter_seq}"
+    assert "lower bound must be >= 0" in (core.cp_sequence_parse_error("2d~3d") or ""), "negative jitter lower bound should fail clearly"
+    assert "invalid duration bound" in (core.cp_sequence_parse_error("14d~abc") or ""), "bad jitter bound should fail clearly"
 
     # --- 2) DST-safe stepping semantics used by CP preview (hook responsibility) ---
     # If ZoneInfo isn't available, core runs in "UTC-only" mode; skip DST assertions.
@@ -4684,6 +4693,29 @@ def test_hook_on_add_cp_random_malformed_fails_with_guidance():
     stderr_txt = _strip_markup(p.stderr)
     expect("Invalid cp" in stderr_txt, f"expected invalid cp panel. stderr={stderr_txt[:500]!r}")
     expect("expected rand(<duration>..<duration>)" in stderr_txt, f"expected rand syntax guidance. stderr={stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_cp_jitter_preview_shows_selected_periods():
+    """on-add jitter cp previews should show selected intervals, not the raw jitter expression."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000117",
+        "description": "hook test on-add cp jitter",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20260101T000000Z",
+        "cp": "15d~0d",
+        "due": "20260101T090000Z",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    if p.returncode != 0:
+        raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
+    out_task = _extract_last_json(p.stdout)
+    expect(out_task.get("cp") == "15d~0d", f"jitter cp should be preserved as string: {out_task}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("Step" in stderr_txt and "1/1 (15d)" in stderr_txt, f"jitter cp preview should show selected step: {stderr_txt[:500]!r}")
+    expect("15d~0d" in stderr_txt, f"jitter cp preview should still show original period expression: {stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
@@ -8055,6 +8087,56 @@ def test_on_modify_render_cp_completion_feedback_random_selected_interval():
     expect(str(step_rows[0]) == "1/1 (15d)", f"expected whole-day random interval as days: {captured}")
 
 
+def test_on_modify_render_cp_completion_feedback_jitter_selected_interval():
+    """CP jitter completion feedback should show the selected interval, not the raw jitter expression."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_jitter_feedback_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._CHAIN_COLOR_PER_CHAIN = False
+    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
+    mod._format_next_cp_rows = lambda fb: fb
+    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
+    mod._timeline_lines = lambda *_a, **_k: []
+    mod._export_uuid_short_cached = lambda _short: {}
+
+    captured = {}
+    mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
+    mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
+
+    prev_panel_mode = mod.core.PANEL_MODE
+    try:
+        mod.core.PANEL_MODE = "panel"
+        mod._render_cp_completion_feedback(
+            new={"cp": "15d~0d", "link": 2, "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            child_due=mod.core.now_utc(),
+            child_short="deadbeef",
+            next_no=3,
+            parent_short="00000000",
+            cap_no=None,
+            finals=[],
+            now_utc=mod.core.now_utc(),
+            until_dt=None,
+            until_cap_no=None,
+            meta={"cp_sequence_step": 1, "cp_sequence_len": 1},
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            chain_by_short=None,
+            analytics_advice=None,
+            integrity_warnings=None,
+            base_no=2,
+        )
+    finally:
+        mod.core.PANEL_MODE = prev_panel_mode
+
+    step_rows = [v for k, v in captured.get("fb", []) if k == "Step"]
+    expect(step_rows, f"expected jitter cp step row: {captured}")
+    expect(str(step_rows[0]) == "1/1 (15d)", f"expected selected interval in jitter cp step row: {captured}")
+
+
 def test_on_modify_render_cp_completion_feedback_text_mode():
     """CP completion feedback should use concise ASCII text output in text mode."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -9714,6 +9796,7 @@ TESTS = [
     test_hook_on_add_cp_sequence_preview_accepts_string_periods,
     test_hook_on_add_cp_random_preview_shows_selected_periods,
     test_hook_on_add_cp_random_malformed_fails_with_guidance,
+    test_hook_on_add_cp_jitter_preview_shows_selected_periods,
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,
     test_on_add_due_context_treats_due_matching_entry_as_implicit,
     test_on_add_anchor_preview_auto_assigns_when_due_matches_entry,
@@ -9901,6 +9984,7 @@ TESTS = [
     test_anchor_natural_language_normalizes_grouped_list_plus_expr,
     test_on_modify_render_cp_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_random_selected_interval,
+    test_on_modify_render_cp_completion_feedback_jitter_selected_interval,
     test_on_modify_render_cp_completion_feedback_text_mode,
     test_on_add_preview_hard_cap,
     test_on_add_flushes_stdout,

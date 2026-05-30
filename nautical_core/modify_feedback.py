@@ -541,10 +541,10 @@ def render_cp_completion_feedback(
         step = int(feedback.meta.get("cp_sequence_step") or 1)
         cp_tokens = [p.strip() for p in str(feedback.new.get("cp") or "").split(",")]
         step_token = cp_tokens[step - 1] if 0 <= step - 1 < len(cp_tokens) else ""
-        if step_token.lower().startswith("rand("):
-            token_index = max(0, step - 1)
-            try:
-                tokens = core.parse_cp_sequence_tokens(feedback.new.get("cp") or "")
+        token_index = max(0, step - 1)
+        try:
+            tokens = core.parse_cp_sequence_tokens(feedback.new.get("cp") or "")
+            if tokens and 0 <= token_index < len(tokens) and tokens[token_index].get("kind") == "rand":
                 td = core.cp_sequence_interval_for_token(
                     tokens[token_index],
                     cp=feedback.new.get("cp") or "",
@@ -553,8 +553,8 @@ def render_cp_completion_feedback(
                 )
                 if td:
                     step_token = _format_td_short(td)
-            except Exception:
-                pass
+        except Exception:
+            pass
         suffix = f" ({step_token})" if step_token else ""
         fb.append(("Step", f"{step}/{feedback.meta.get('cp_sequence_len')}{suffix}"))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))

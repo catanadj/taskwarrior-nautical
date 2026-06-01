@@ -7,6 +7,10 @@ omit_file_dir   = ""                 # trusted directory for anchor omit_file ba
 
 # Config precedence: this file overrides built-in defaults.
 
+# Optional anchor aliases. Use with anchor:"@name".
+#[anchor_presets]
+#payday = "m:15,-1bd"
+#workout = "w:mon,wed,fri"
 
 # Toggle file cache
 enable_anchor_cache = true

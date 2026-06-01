@@ -242,6 +242,7 @@ LOCAL_TZ_NAME = _core_config.LOCAL_TZ_NAME
 HOLIDAY_REGION = _core_config.HOLIDAY_REGION
 ANCHOR_FILE_DIR = _core_config.ANCHOR_FILE_DIR
 OMIT_FILE_DIR = _core_config.OMIT_FILE_DIR
+ANCHOR_PRESETS = _core_config.ANCHOR_PRESETS
 ENABLE_ANCHOR_CACHE = _core_config.ENABLE_ANCHOR_CACHE
 ANCHOR_CACHE_DIR_OVERRIDE = _core_config.ANCHOR_CACHE_DIR_OVERRIDE
 ANCHOR_CACHE_TTL = _core_config.ANCHOR_CACHE_TTL
@@ -2171,6 +2172,37 @@ def _parse_y_token(tok: str):
     return _parse_y_token_cached(tok, _yearfmt())
 
 
+_anchor_preset_ref_re = re.compile(r"@([A-Za-z][A-Za-z0-9_-]*)")
+
+
+def resolve_anchor_presets(expr: str, *, _seen: frozenset[str] | None = None) -> str:
+    raw = _unwrap_quotes(expr or "").strip()
+    if not raw:
+        return raw
+    presets = dict(ANCHOR_PRESETS or {})
+    seen = set(_seen or frozenset())
+
+    def repl(match):
+        start = match.start()
+        if start > 0 and raw[start - 1] not in " \t\r\n(|+,":
+            return match.group(0)
+        end = match.end()
+        if end < len(raw) and raw[end] == "=":
+            return match.group(0)
+        name = match.group(1).strip().lower()
+        if name not in presets:
+            raise ParseError(
+                f"Unknown anchor preset '@{name}'. Define it under [anchor_presets] in config-nautical.toml."
+            )
+        if name in seen:
+            chain = " -> ".join([*(f"@{x}" for x in seen), f"@{name}"])
+            raise ParseError(f"Recursive anchor preset reference detected: {chain}")
+        resolved = resolve_anchor_presets(presets[name], _seen=frozenset([*seen, name]))
+        return f"({resolved})"
+
+    return _anchor_preset_ref_re.sub(repl, raw)
+
+
 # ------------------------------------------------------------------------------
 # Anchor DNF parser
 # ------------------------------------------------------------------------------
@@ -2243,6 +2275,7 @@ def _parse_anchor_atom_at(s: str, i: int, n: int):
 
 
 def parse_anchor_expr_to_dnf(s: str) -> AnchorDNF:
+    s = resolve_anchor_presets(s)
     return _parser_dnf.parse_anchor_expr_to_dnf(
         s,
         normalize_anchor_expr_input=_normalize_anchor_expr_input,
@@ -3115,6 +3148,7 @@ __all__ = (
     'py',
     'random',
     'render_panel',
+    'resolve_anchor_presets',
     'resolve_task_data_context',
     'roll_apply',
     'run_task',

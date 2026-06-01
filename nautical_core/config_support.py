@@ -200,6 +200,19 @@ def normalize_keys(data: dict) -> dict:
     return out
 
 
+def normalize_anchor_presets(value) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, expr in value.items():
+        name = str(key or "").strip().lower()
+        text = str(expr or "").strip()
+        if not name or not text:
+            continue
+        out[name] = text
+    return out
+
+
 def config_paths(*, warn_env_config_missing) -> list[str]:
     env_path = os.environ.get("NAUTICAL_CONFIG")
     if env_path:
@@ -304,6 +317,7 @@ def load_config(
     cfg["holiday_region"] = str(cfg.get("holiday_region") or "")
     cfg["anchor_file_dir"] = str(cfg.get("anchor_file_dir") or "")
     cfg["omit_file_dir"] = str(cfg.get("omit_file_dir") or "")
+    cfg["anchor_presets"] = normalize_anchor_presets(cfg.get("anchor_presets"))
     if cfg.get("recurrence_update_udas") is None:
         rec = cfg.get("recurrence")
         if isinstance(rec, dict):

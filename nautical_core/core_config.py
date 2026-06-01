@@ -27,6 +27,7 @@ _DEFAULTS = {
     "holiday_region": "",
     "anchor_file_dir": "",
     "omit_file_dir": "",
+    "anchor_presets": {},
 }
 
 _CONF_CACHE = None
@@ -222,6 +223,7 @@ LOCAL_TZ_NAME = _CONF["tz"]
 HOLIDAY_REGION = _CONF["holiday_region"]
 ANCHOR_FILE_DIR = _CONF["anchor_file_dir"]
 OMIT_FILE_DIR = _CONF["omit_file_dir"]
+ANCHOR_PRESETS = _CONF["anchor_presets"]
 
 ENABLE_ANCHOR_CACHE = conf_bool("enable_anchor_cache", False)
 ANCHOR_CACHE_DIR_OVERRIDE = conf_str("anchor_cache_dir", "")

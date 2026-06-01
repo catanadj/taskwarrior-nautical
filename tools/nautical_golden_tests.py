@@ -4676,6 +4676,56 @@ def test_hook_on_add_anchor_unknown_preset_fails_cleanly():
         expect("Unknown anchor preset '@missing'" in stderr_txt, f"expected unknown preset guidance. stderr={stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_anchor_composed_preset_resolves_from_config():
+    """on-add should allow presets to compose with normal anchor filters."""
+    hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        conf = Path(td) / "config-nautical.toml"
+        conf.write_text('[anchor_presets]\nworkout = "w:mon,wed,fri"\n', encoding="utf-8")
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000120",
+            "description": "hook test on-add composed anchor preset",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20260401T000000Z",
+            "anchor": "@workout + y:apr",
+            "anchor_mode": "skip",
+            "due": "20260401T090000Z",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        if p.returncode != 0:
+            raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:500]!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Invalid anchor" not in stderr_txt, f"composed preset should validate cleanly: {stderr_txt[:500]!r}")
+        expect("Natural" in stderr_txt and "Apr" in stderr_txt, f"composed preset should describe resolved expression: {stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_anchor_recursive_preset_fails_cleanly():
+    """on-add should reject recursive preset definitions with a clear message."""
+    hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        conf = Path(td) / "config-nautical.toml"
+        conf.write_text('[anchor_presets]\na = "@b"\nb = "@a"\n', encoding="utf-8")
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000121",
+            "description": "hook test on-add recursive anchor preset",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20260101T000000Z",
+            "anchor": "@a",
+            "anchor_mode": "skip",
+            "due": "20260101T090000Z",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        expect(p.returncode != 0, "on-add should fail for recursive anchor presets")
+        expect((p.stdout or "").strip() == "", f"expected no stdout on recursive preset failure, got: {p.stdout!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Invalid anchor" in stderr_txt, f"expected invalid anchor panel. stderr={stderr_txt[:500]!r}")
+        expect("Recursive anchor preset reference detected" in stderr_txt, f"expected recursive preset guidance. stderr={stderr_txt[:500]!r}")
+
+
 def test_hook_on_add_cp_sequence_preview_accepts_string_periods():
     """on-add should accept comma-separated cp sequences now that cp is string-backed."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -9870,6 +9920,8 @@ TESTS = [
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
     test_hook_on_add_anchor_preset_resolves_from_config,
     test_hook_on_add_anchor_unknown_preset_fails_cleanly,
+    test_hook_on_add_anchor_composed_preset_resolves_from_config,
+    test_hook_on_add_anchor_recursive_preset_fails_cleanly,
     test_hook_on_add_cp_sequence_preview_accepts_string_periods,
     test_hook_on_add_cp_random_preview_shows_selected_periods,
     test_hook_on_add_cp_random_malformed_fails_with_guidance,

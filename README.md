@@ -105,6 +105,27 @@ Omitted slots stay visible in completion timelines as skipped rows, so you can s
 
 ---
 
+## Anchor presets
+
+Put reusable anchor expressions in `config-nautical.toml`:
+
+```toml
+[anchor_presets]
+payday = "m:15,-1bd"
+workout = "w:mon,wed,fri"
+```
+
+Then use them as aliases:
+
+```bash
+task add "Pay bills" anchor:"@payday"
+task add "April workouts" anchor:"@workout + y:apr"
+```
+
+Panels show the expansion for simple presets, for example `Preset @payday → m:15,-1bd`.
+
+---
+
 ## File-backed dates
 
 Pull recurrence sources from external files  -  useful for events driven by a calendar outside Taskwarrior.

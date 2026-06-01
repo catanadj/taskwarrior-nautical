@@ -4437,7 +4437,15 @@ def _end_summary_kind_rows(rows: list[tuple[str, str]], kind: str, current: dict
             "all": "[yellow]ALL[/]",
             "flex": "[magenta]FLEX[/]",
         }.get(mode, "[cyan]SKIP[/]")
-        rows.append(("Pattern", f"{expr}  {tag}"))
+        try:
+            preset_display = core.anchor_preset_display(expr)
+        except Exception:
+            preset_display = None
+        if preset_display:
+            label, text = preset_display
+            rows.append((label, f"{text}  {tag}"))
+        else:
+            rows.append(("Pattern", f"{expr}  {tag}"))
         try:
             dnf = _validate_anchor_expr_cached(expr)
             rows.append(("Natural", core.describe_anchor_dnf(dnf, current)))

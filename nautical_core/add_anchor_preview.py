@@ -79,7 +79,12 @@ def anchor_preview_prepare_dnf(
         "all": "[bold yellow]ALL[/]",
         "flex": "[bold magenta]FLEX[/]",
     }.get(mode, "[bold bright_cyan]SKIP[/]")
-    rows.append(("Pattern", f"[white]{anchor_str}[/]  {tag}"))
+    preset_display = getattr(core, "anchor_preset_display", lambda _expr: None)(anchor_str)
+    if preset_display:
+        label, text = preset_display
+        rows.append((label, f"[white]{text}[/]  {tag}"))
+    else:
+        rows.append(("Pattern", f"[white]{anchor_str}[/]  {tag}"))
     try:
         rows.append(("Natural", f"[white]{core.describe_anchor_dnf(dnf, task)}[/]"))
     except Exception:

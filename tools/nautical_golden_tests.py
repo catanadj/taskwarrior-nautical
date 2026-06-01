@@ -4647,6 +4647,7 @@ def test_hook_on_add_anchor_preset_resolves_from_config():
         expect(out_task.get("anchor") == "@payday", f"anchor preset expression should be preserved: {out_task}")
         stderr_txt = _strip_markup(p.stderr)
         expect("Invalid anchor" not in stderr_txt, f"preset should validate cleanly: {stderr_txt[:500]!r}")
+        expect("Preset" in stderr_txt and "@payday → m:15" in stderr_txt, f"preset preview should show expansion: {stderr_txt[:500]!r}")
         expect("2026-01-15" in stderr_txt, f"preset preview should use resolved anchor expression: {stderr_txt[:500]!r}")
 
 
@@ -7182,6 +7183,24 @@ def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
 
 
+def test_on_modify_anchor_dnf_accepts_configured_preset():
+    """completion-side anchor validation should resolve configured preset aliases."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_preset_dnf_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    prev_anchor_presets = getattr(mod.core, "ANCHOR_PRESETS", {})
+    try:
+        mod.core.ANCHOR_PRESETS = {"payday": "m:15,-1bd"}
+        expr, dnf = mod._anchor_dnf_from_parent({"anchor": "@payday"})
+    finally:
+        mod.core.ANCHOR_PRESETS = prev_anchor_presets
+
+    expect(expr == "@payday", f"original preset anchor should be preserved: {expr!r}")
+    expect(dnf, f"preset anchor should resolve to DNF: {dnf!r}")
+
+
 def test_anchor_omit_rejects_time_modifiers():
     """omit expressions should reject @t modifiers because omit is date-based only."""
     import nautical_core.anchor_omit as anchor_omit
@@ -7942,11 +7961,13 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
 
     prev_panel_mode = mod.core.PANEL_MODE
     prev_show_analytics = mod.core.SHOW_ANALYTICS
+    prev_anchor_presets = getattr(mod.core, "ANCHOR_PRESETS", {})
     try:
         mod.core.PANEL_MODE = "panel"
         mod.core.SHOW_ANALYTICS = False
+        mod.core.ANCHOR_PRESETS = {"payday": "m:15,-1bd"}
         mod._render_anchor_completion_feedback(
-            new={"anchor": "w:mon", "omit": "w:wed", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            new={"anchor": "@payday", "omit": "w:wed", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="deadbeef",
@@ -7970,11 +7991,13 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
     finally:
         mod.core.PANEL_MODE = prev_panel_mode
         mod.core.SHOW_ANALYTICS = prev_show_analytics
+        mod.core.ANCHOR_PRESETS = prev_anchor_presets
 
     expect("title" in captured, "expected preview panel emission")
     expect("Next anchor" in captured["title"], f"unexpected panel title: {captured}")
     fb = captured.get("fb") or []
     expect(("Omit", "w:wed") in fb, f"expected raw omit row in anchor feedback: {fb}")
+    expect(any(k == "Preset" and "@payday → m:15,-1bd" in str(v) for k, v in fb), f"expected preset expansion row in anchor feedback: {fb}")
     expect(any(k == "Except" and ("Wednesday" in str(v) or "Wednesdays" in str(v)) for k, v in fb), f"expected natural omit row in anchor feedback: {fb}")
     expect(not any(k == "Analytics" for k, _v in fb), f"analytics row should be hidden when show_analytics is false: {fb}")
 
@@ -10008,6 +10031,7 @@ TESTS = [
     test_on_modify_completion_defers_chain_export_until_after_preflight,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
+    test_on_modify_anchor_dnf_accepts_configured_preset,
     test_anchor_omit_rejects_time_modifiers,
     test_anchor_file_name_rejects_paths,
     test_anchor_file_spec_parses_time_and_negative_offset,

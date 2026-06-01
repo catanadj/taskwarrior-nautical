@@ -2203,6 +2203,18 @@ def resolve_anchor_presets(expr: str, *, _seen: frozenset[str] | None = None) ->
     return _anchor_preset_ref_re.sub(repl, raw)
 
 
+def anchor_preset_display(expr: str) -> tuple[str, str] | None:
+    raw = _unwrap_quotes(expr or "").strip()
+    m = re.match(r"^@([A-Za-z][A-Za-z0-9_-]*)$", raw)
+    if not m:
+        return None
+    name = m.group(1).strip().lower()
+    presets = dict(ANCHOR_PRESETS or {})
+    if name not in presets:
+        return None
+    return "Preset", f"@{name} → {presets[name]}"
+
+
 # ------------------------------------------------------------------------------
 # Anchor DNF parser
 # ------------------------------------------------------------------------------
@@ -3114,6 +3126,7 @@ __all__ = (
     'anchor_cache_dir',
     'anchor_cache_ttl',
     'anchors_between_expr',
+    'anchor_preset_display',
     'atom_matches_on',
     'base_next_after_atom',
     'build_acf',

@@ -77,6 +77,16 @@ def _anchor_summary(task: dict) -> tuple[str, str]:
     return "Pattern", anchor_expr
 
 
+def _anchor_pattern_row(core, expr: str) -> tuple[str, str]:
+    try:
+        preset_display = core.anchor_preset_display(expr)
+    except Exception:
+        preset_display = None
+    if preset_display:
+        return preset_display
+    return "Pattern", expr
+
+
 def _anchor_mode_tag(new: dict) -> str:
     return {
         "skip": "[cyan]SKIP[/]",
@@ -324,6 +334,9 @@ def render_anchor_completion_feedback(
     strip_quotes = services.strip_quotes
     human_delta = services.human_delta
     anchor_label, anchor_value = _anchor_summary(feedback.new)
+    pattern_label, pattern_value = _anchor_pattern_row(core, str(feedback.new.get("anchor") or "").strip())
+    if anchor_label == "Pattern":
+        anchor_label, anchor_value = pattern_label, pattern_value
     expr_str = strip_quotes(anchor_value)
     omit_raw, omit_natural, omit_warns, omit_file = _anchor_omit_summary(core, feedback.new)
     mode_tag = _anchor_mode_tag(feedback.new)
@@ -394,7 +407,7 @@ def render_anchor_completion_feedback(
     if anchor_label == "Sources":
         file_expr = str(feedback.new.get("anchor_file") or "").strip()
         natural_expr = _anchor_feedback_natural(core, feedback.new, feedback.dnf)
-        fb.append(("Pattern", str(feedback.new.get("anchor") or "").strip()))
+        fb.append((pattern_label, pattern_value))
         fb.append(("Anchor file", file_expr))
         if natural_expr:
             fb.append(("Natural", natural_expr))

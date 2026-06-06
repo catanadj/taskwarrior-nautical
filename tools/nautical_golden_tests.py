@@ -7499,6 +7499,29 @@ def test_file_backed_empty_or_no_usable_dates_fail_cleanly():
                 expect('1 data row(s), 0 non-empty date value(s)' in msg, f'{module_label} error should report row counts: {e}')
 
 
+def test_file_backed_cache_detects_same_size_content_replacement():
+    """anchor_file and omit_file caches should not serve stale dates after same-size file rewrites."""
+    import nautical_core.anchor_files as anchor_files
+    import nautical_core.omit_files as omit_files
+
+    for module_label, loader in (
+        ('anchor_file', anchor_files.load_anchor_file_dates),
+        ('omit_file', omit_files.load_omit_file_dates),
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            sample = base / 'calendar.csv'
+            sample.write_text('date\n2026-01-01\n', encoding='utf-8')
+            first_stat = sample.stat()
+            first = loader('calendar.csv', str(base))
+            expect(first == frozenset({date(2026, 1, 1)}), f'unexpected initial {module_label} cache value: {first!r}')
+
+            sample.write_text('date\n2026-01-02\n', encoding='utf-8')
+            os.utime(sample, ns=(first_stat.st_atime_ns, first_stat.st_mtime_ns))
+            second = loader('calendar.csv', str(base))
+            expect(second == frozenset({date(2026, 1, 2)}), f'{module_label} cache served stale same-size data: {second!r}')
+
+
 def test_omit_file_modifiers_roll_dates_and_carry_descriptions():
     """omit_file modifiers should transform loaded dates and move descriptions onto the transformed date."""
     import nautical_core.omit_files as omit_files
@@ -10287,6 +10310,7 @@ TESTS = [
     test_omit_file_csv_description_mapping_is_order_independent,
     test_file_backed_csv_missing_date_column_reports_columns,
     test_file_backed_empty_or_no_usable_dates_fail_cleanly,
+    test_file_backed_cache_detects_same_size_content_replacement,
     test_anchor_omit_next_after_expr_skips_matching_dates,
     test_anchor_omit_next_after_expr_skips_omit_file_dates,
     test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items,

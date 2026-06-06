@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import os
 import re
@@ -11,7 +12,7 @@ from typing import Callable, Iterable
 from .schedule_utils import apply_day_offset, roll_apply
 
 
-_CACHE_BY_PATH: dict[str, tuple[int, int, frozenset[date], dict[date, str]]] = {}
+_CACHE_BY_PATH: dict[str, tuple[int, int, str, frozenset[date], dict[date, str]]] = {}
 _WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 _NEXT_PREV_WD_RE = re.compile(r"^(next|prev)-(mon|tue|wed|thu|fri|sat|sun)$")
 _DAY_OFFSET_RE = re.compile(r"^([+-]\d+)d$")
@@ -214,10 +215,12 @@ def _load_anchor_file_data(name: str | None, anchor_file_dir: str | None) -> tup
     if not path:
         return frozenset(), {}
     st = os.stat(path)
+    raw = Path(path).read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
     cached = _CACHE_BY_PATH.get(path)
-    if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        return _apply_anchor_file_mods(cached[2], dict(cached[3]), mods)
-    text = Path(path).read_text(encoding="utf-8-sig")
+    if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size and cached[2] == digest:
+        return _apply_anchor_file_mods(cached[3], dict(cached[4]), mods)
+    text = raw.decode("utf-8-sig")
     non_comment = list(_iter_content_lines(text))
     if not non_comment:
         raise ValueError(f"anchor_file '{os.path.basename(path)}' is empty or has no date rows.")
@@ -228,7 +231,7 @@ def _load_anchor_file_data(name: str | None, anchor_file_dir: str | None) -> tup
         descriptions = {}
         if not dates:
             raise ValueError(f"anchor_file '{os.path.basename(path)}' did not contain any usable dates.")
-    _CACHE_BY_PATH[path] = (st.st_mtime_ns, st.st_size, dates, dict(descriptions))
+    _CACHE_BY_PATH[path] = (st.st_mtime_ns, st.st_size, digest, dates, dict(descriptions))
     return _apply_anchor_file_mods(dates, descriptions, mods)
 
 

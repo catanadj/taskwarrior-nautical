@@ -113,6 +113,10 @@ Put reusable anchor expressions in `config-nautical.toml`:
 [anchor_presets]
 payday = "m:15,-1bd"
 workout = "w:mon,wed,fri"
+
+[omit_presets]
+holidays = "y:12-24..12-31"
+april = "y:apr"
 ```
 
 Then use them as aliases:
@@ -120,6 +124,7 @@ Then use them as aliases:
 ```bash
 task add "Pay bills" anchor:"@payday"
 task add "April workouts" anchor:"@workout + y:apr"
+task add "Workout except April" anchor:"@workout" omit:"@april"
 ```
 
 Panels show the expansion for simple presets, for example `Preset @payday → m:15,-1bd`.

@@ -243,6 +243,7 @@ HOLIDAY_REGION = _core_config.HOLIDAY_REGION
 ANCHOR_FILE_DIR = _core_config.ANCHOR_FILE_DIR
 OMIT_FILE_DIR = _core_config.OMIT_FILE_DIR
 ANCHOR_PRESETS = _core_config.ANCHOR_PRESETS
+OMIT_PRESETS = _core_config.OMIT_PRESETS
 ENABLE_ANCHOR_CACHE = _core_config.ENABLE_ANCHOR_CACHE
 ANCHOR_CACHE_DIR_OVERRIDE = _core_config.ANCHOR_CACHE_DIR_OVERRIDE
 ANCHOR_CACHE_TTL = _core_config.ANCHOR_CACHE_TTL
@@ -2175,11 +2176,18 @@ def _parse_y_token(tok: str):
 _anchor_preset_ref_re = re.compile(r"@([A-Za-z][A-Za-z0-9_-]*)")
 
 
-def resolve_anchor_presets(expr: str, *, _seen: frozenset[str] | None = None) -> str:
+def _resolve_preset_refs(
+    expr: str,
+    *,
+    presets: dict,
+    table_name: str,
+    label: str,
+    _seen: frozenset[str] | None = None,
+) -> str:
     raw = _unwrap_quotes(expr or "").strip()
     if not raw:
         return raw
-    presets = dict(ANCHOR_PRESETS or {})
+    presets = dict(presets or {})
     seen = set(_seen or frozenset())
 
     def repl(match):
@@ -2192,15 +2200,41 @@ def resolve_anchor_presets(expr: str, *, _seen: frozenset[str] | None = None) ->
         name = match.group(1).strip().lower()
         if name not in presets:
             raise ParseError(
-                f"Unknown anchor preset '@{name}'. Define it under [anchor_presets] in config-nautical.toml."
+                f"Unknown {label} preset '@{name}'. Define it under [{table_name}] in config-nautical.toml."
             )
         if name in seen:
             chain = " -> ".join([*(f"@{x}" for x in seen), f"@{name}"])
-            raise ParseError(f"Recursive anchor preset reference detected: {chain}")
-        resolved = resolve_anchor_presets(presets[name], _seen=frozenset([*seen, name]))
+            raise ParseError(f"Recursive {label} preset reference detected: {chain}")
+        resolved = _resolve_preset_refs(
+            presets[name],
+            presets=presets,
+            table_name=table_name,
+            label=label,
+            _seen=frozenset([*seen, name]),
+        )
         return f"({resolved})"
 
     return _anchor_preset_ref_re.sub(repl, raw)
+
+
+def resolve_anchor_presets(expr: str, *, _seen: frozenset[str] | None = None) -> str:
+    return _resolve_preset_refs(
+        expr,
+        presets=ANCHOR_PRESETS,
+        table_name="anchor_presets",
+        label="anchor",
+        _seen=_seen,
+    )
+
+
+def resolve_omit_presets(expr: str, *, _seen: frozenset[str] | None = None) -> str:
+    return _resolve_preset_refs(
+        expr,
+        presets=OMIT_PRESETS,
+        table_name="omit_presets",
+        label="omit",
+        _seen=_seen,
+    )
 
 
 def anchor_preset_display(expr: str) -> tuple[str, str] | None:
@@ -3162,6 +3196,7 @@ __all__ = (
     'random',
     'render_panel',
     'resolve_anchor_presets',
+    'resolve_omit_presets',
     'resolve_task_data_context',
     'roll_apply',
     'run_task',

@@ -74,8 +74,11 @@ def validate_omit_expr_strict(
     expr: str | list[list[dict[str, Any]]],
     *,
     validate_anchor_expr_cached: Callable[[str | list[list[dict[str, Any]]]], list[list[dict[str, Any]]]],
+    resolve_omit_presets: Callable[[str], str] | None = None,
 ) -> list[list[dict[str, Any]]]:
     if isinstance(expr, str):
+        if resolve_omit_presets is not None:
+            expr = resolve_omit_presets(expr)
         expr = normalize_omit_expr(expr)
     dnf = validate_anchor_expr_cached(expr)
     for term in dnf:

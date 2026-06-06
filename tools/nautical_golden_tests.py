@@ -4726,6 +4726,113 @@ def test_hook_on_add_anchor_recursive_preset_fails_cleanly():
         expect("Recursive anchor preset reference detected" in stderr_txt, f"expected recursive preset guidance. stderr={stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_omit_preset_resolves_from_config():
+    """on-add should resolve @omit presets from config before omit validation/preview."""
+    hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        conf = Path(td) / "config-nautical.toml"
+        conf.write_text('[omit_presets]\napril = "y:apr"\n', encoding="utf-8")
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000122",
+            "description": "hook test on-add omit preset",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20260301T000000Z",
+            "anchor": "w:mon",
+            "omit": "@april",
+            "anchor_mode": "skip",
+            "due": "20260302T090000Z",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        if p.returncode != 0:
+            raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:500]!r}")
+        out_task = _extract_last_json(p.stdout)
+        expect(out_task.get("omit") == "@april", f"omit preset expression should be preserved: {out_task}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Invalid omit" not in stderr_txt, f"omit preset should validate cleanly: {stderr_txt[:500]!r}")
+        expect("Omit" in stderr_txt and "@april" in stderr_txt, f"omit preset preview should show raw omit: {stderr_txt[:500]!r}")
+        expect("Except" in stderr_txt and "Apr" in stderr_txt, f"omit preset preview should describe resolved omit: {stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_omit_unknown_preset_fails_cleanly():
+    """on-add should fail clearly when an omit preset is not configured."""
+    hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        conf = Path(td) / "config-nautical.toml"
+        conf.write_text("[omit_presets]\n", encoding="utf-8")
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000123",
+            "description": "hook test on-add unknown omit preset",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20260301T000000Z",
+            "anchor": "w:mon",
+            "omit": "@missing",
+            "anchor_mode": "skip",
+            "due": "20260302T090000Z",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        expect(p.returncode != 0, "on-add should fail for unknown omit preset")
+        expect((p.stdout or "").strip() == "", f"expected no stdout on unknown omit preset failure, got: {p.stdout!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Invalid omit" in stderr_txt, f"expected invalid omit panel. stderr={stderr_txt[:500]!r}")
+        expect("Unknown omit preset '@missing'" in stderr_txt, f"expected unknown omit preset guidance. stderr={stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_omit_recursive_preset_fails_cleanly():
+    """on-add should reject recursive omit preset definitions with a clear message."""
+    hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        conf = Path(td) / "config-nautical.toml"
+        conf.write_text('[omit_presets]\na = "@b"\nb = "@a"\n', encoding="utf-8")
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000124",
+            "description": "hook test on-add recursive omit preset",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20260301T000000Z",
+            "anchor": "w:mon",
+            "omit": "@a",
+            "anchor_mode": "skip",
+            "due": "20260302T090000Z",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        expect(p.returncode != 0, "on-add should fail for recursive omit presets")
+        expect((p.stdout or "").strip() == "", f"expected no stdout on recursive omit preset failure, got: {p.stdout!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Invalid omit" in stderr_txt, f"expected invalid omit panel. stderr={stderr_txt[:500]!r}")
+        expect("Recursive omit preset reference detected" in stderr_txt, f"expected recursive omit preset guidance. stderr={stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_omit_timed_preset_rejected():
+    """omit presets should remain date-based and reject timed expressions."""
+    hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        conf = Path(td) / "config-nautical.toml"
+        conf.write_text('[omit_presets]\ntimed = "w:mon@t=09:00"\n', encoding="utf-8")
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000125",
+            "description": "hook test on-add timed omit preset",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20260301T000000Z",
+            "anchor": "w:mon",
+            "omit": "@timed",
+            "anchor_mode": "skip",
+            "due": "20260302T090000Z",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        expect(p.returncode != 0, "on-add should fail for timed omit preset")
+        expect((p.stdout or "").strip() == "", f"expected no stdout on timed omit preset failure, got: {p.stdout!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Invalid omit" in stderr_txt, f"expected invalid omit panel. stderr={stderr_txt[:500]!r}")
+        expect("omit does not support time modifiers" in stderr_txt, f"expected timed omit guidance. stderr={stderr_txt[:500]!r}")
+
+
 def test_hook_on_add_cp_sequence_preview_accepts_string_periods():
     """on-add should accept comma-separated cp sequences now that cp is string-backed."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -7249,6 +7356,24 @@ def test_on_modify_anchor_dnf_accepts_configured_preset():
 
     expect(expr == "@payday", f"original preset anchor should be preserved: {expr!r}")
     expect(dnf, f"preset anchor should resolve to DNF: {dnf!r}")
+
+
+def test_on_modify_omit_dnf_accepts_configured_preset():
+    """completion-side omit validation should resolve configured omit preset aliases."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_omit_preset_dnf_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    prev_omit_presets = getattr(mod.core, "OMIT_PRESETS", {})
+    try:
+        mod.core.OMIT_PRESETS = {"april": "y:apr"}
+        expr, omit_dnf = mod._omit_dnf_from_parent({"omit": "@april"})
+    finally:
+        mod.core.OMIT_PRESETS = prev_omit_presets
+
+    expect(expr == "@april", f"original omit preset should be preserved: {expr!r}")
+    expect(omit_dnf, f"omit preset should resolve to DNF: {omit_dnf!r}")
 
 
 def test_anchor_omit_rejects_time_modifiers():
@@ -9922,6 +10047,10 @@ TESTS = [
     test_hook_on_add_anchor_unknown_preset_fails_cleanly,
     test_hook_on_add_anchor_composed_preset_resolves_from_config,
     test_hook_on_add_anchor_recursive_preset_fails_cleanly,
+    test_hook_on_add_omit_preset_resolves_from_config,
+    test_hook_on_add_omit_unknown_preset_fails_cleanly,
+    test_hook_on_add_omit_recursive_preset_fails_cleanly,
+    test_hook_on_add_omit_timed_preset_rejected,
     test_hook_on_add_cp_sequence_preview_accepts_string_periods,
     test_hook_on_add_cp_random_preview_shows_selected_periods,
     test_hook_on_add_cp_random_malformed_fails_with_guidance,
@@ -10084,6 +10213,7 @@ TESTS = [
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
     test_on_modify_anchor_dnf_accepts_configured_preset,
+    test_on_modify_omit_dnf_accepts_configured_preset,
     test_anchor_omit_rejects_time_modifiers,
     test_anchor_file_name_rejects_paths,
     test_anchor_file_spec_parses_time_and_negative_offset,

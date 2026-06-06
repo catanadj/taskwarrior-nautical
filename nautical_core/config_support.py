@@ -200,7 +200,7 @@ def normalize_keys(data: dict) -> dict:
     return out
 
 
-def normalize_anchor_presets(value) -> dict[str, str]:
+def normalize_preset_table(value) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
     out: dict[str, str] = {}
@@ -211,6 +211,10 @@ def normalize_anchor_presets(value) -> dict[str, str]:
             continue
         out[name] = text
     return out
+
+
+def normalize_anchor_presets(value) -> dict[str, str]:
+    return normalize_preset_table(value)
 
 
 def config_paths(*, warn_env_config_missing) -> list[str]:
@@ -318,6 +322,7 @@ def load_config(
     cfg["anchor_file_dir"] = str(cfg.get("anchor_file_dir") or "")
     cfg["omit_file_dir"] = str(cfg.get("omit_file_dir") or "")
     cfg["anchor_presets"] = normalize_anchor_presets(cfg.get("anchor_presets"))
+    cfg["omit_presets"] = normalize_preset_table(cfg.get("omit_presets"))
     if cfg.get("recurrence_update_udas") is None:
         rec = cfg.get("recurrence")
         if isinstance(rec, dict):

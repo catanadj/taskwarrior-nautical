@@ -12,6 +12,10 @@ omit_file_dir   = ""                 # trusted directory for anchor omit_file ba
 payday = "m:15,-1bd"
 workout = "w:mon,wed,fri"
 
+[omit_presets]
+holidays = "y:12-24..12-31"
+april = "y:apr"
+
 # Toggle file cache
 enable_anchor_cache = true
 anchor_cache_dir = ""  # optional; defaults beside core

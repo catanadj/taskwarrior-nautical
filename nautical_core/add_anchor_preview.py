@@ -20,7 +20,8 @@ def _anchor_omit_natural_text(task: dict[str, Any], *, core: Any) -> str:
     if omit_raw:
         try:
             anchor_omit = core._import_sibling('anchor_omit')
-            omit_norm = anchor_omit.normalize_omit_expr(omit_raw)
+            omit_expr = core.resolve_omit_presets(omit_raw)
+            omit_norm = anchor_omit.normalize_omit_expr(omit_expr)
         except Exception:
             omit_norm = omit_raw
         try:
@@ -112,7 +113,8 @@ def anchor_preview_prepare_omit_dnf(
         rows.append(("Omit", f"[white]{omit_str}[/]"))
         try:
             anchor_omit = core._import_sibling("anchor_omit")
-            omit_norm = anchor_omit.normalize_omit_expr(omit_str)
+            omit_expr = core.resolve_omit_presets(omit_str)
+            omit_norm = anchor_omit.normalize_omit_expr(omit_expr)
         except Exception:
             omit_norm = omit_str
         try:

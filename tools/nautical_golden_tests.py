@@ -7446,6 +7446,59 @@ def test_omit_file_csv_description_mapping_is_order_independent():
         )
 
 
+def test_file_backed_csv_missing_date_column_reports_columns():
+    """anchor_file and omit_file CSV errors should name the missing column and detected columns."""
+    import nautical_core.anchor_files as anchor_files
+    import nautical_core.omit_files as omit_files
+
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        sample = base / 'calendar.csv'
+        sample.write_text('name,description\nHoliday,No date column\n', encoding='utf-8')
+
+        for loader, label in (
+            (anchor_files.load_anchor_file_dates, 'anchor_file'),
+            (omit_files.load_omit_file_dates, 'omit_file'),
+        ):
+            try:
+                loader('calendar.csv', str(base))
+                expect(False, f'expected {label} CSV without date column to fail')
+            except ValueError as e:
+                msg = str(e)
+                expect("CSV must contain a 'date' column" in msg, f'unexpected {label} missing-date error: {e}')
+                expect('Found columns: name, description' in msg, f'{label} error should report detected columns: {e}')
+
+
+def test_file_backed_empty_or_no_usable_dates_fail_cleanly():
+    """anchor_file and omit_file should reject empty files and CSV files with no usable date values."""
+    import nautical_core.anchor_files as anchor_files
+    import nautical_core.omit_files as omit_files
+
+    for module_label, loader in (
+        ('anchor_file', anchor_files.load_anchor_file_dates),
+        ('omit_file', omit_files.load_omit_file_dates),
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            empty = base / 'empty.csv'
+            empty.write_text('# no dates here\n\n', encoding='utf-8')
+            try:
+                loader('empty.csv', str(base))
+                expect(False, f'expected empty {module_label} file to fail')
+            except ValueError as e:
+                expect('empty or has no date rows' in str(e), f'unexpected empty {module_label} error: {e}')
+
+            blank_dates = base / 'blank_dates.csv'
+            blank_dates.write_text('date,description\n,Missing date\n', encoding='utf-8')
+            try:
+                loader('blank_dates.csv', str(base))
+                expect(False, f'expected {module_label} CSV with no usable dates to fail')
+            except ValueError as e:
+                msg = str(e)
+                expect('did not contain any usable dates' in msg, f'unexpected no-date {module_label} error: {e}')
+                expect('1 data row(s), 0 non-empty date value(s)' in msg, f'{module_label} error should report row counts: {e}')
+
+
 def test_omit_file_modifiers_roll_dates_and_carry_descriptions():
     """omit_file modifiers should transform loaded dates and move descriptions onto the transformed date."""
     import nautical_core.omit_files as omit_files
@@ -10232,6 +10285,8 @@ TESTS = [
     test_omit_file_name_rejects_paths,
     test_omit_file_csv_header_parsing_is_order_independent_and_dedupes,
     test_omit_file_csv_description_mapping_is_order_independent,
+    test_file_backed_csv_missing_date_column_reports_columns,
+    test_file_backed_empty_or_no_usable_dates_fail_cleanly,
     test_anchor_omit_next_after_expr_skips_matching_dates,
     test_anchor_omit_next_after_expr_skips_omit_file_dates,
     test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items,

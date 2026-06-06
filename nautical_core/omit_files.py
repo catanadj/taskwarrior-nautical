@@ -117,7 +117,7 @@ def _looks_like_csv(non_comment_lines: list[tuple[int, str]]) -> bool:
     except Exception:
         return False
     norm = {str(col or "").strip().strip('"').lower() for col in header}
-    return "date" in norm
+    return "date" in norm or len(header) > 1
 
 
 def _parse_csv_dates_and_descriptions(text: str, *, label: str) -> tuple[frozenset[date], dict[date, str]]:
@@ -135,21 +135,32 @@ def _parse_csv_dates_and_descriptions(text: str, *, label: str) -> tuple[frozens
         elif field_name == "description":
             description_key = field
     if date_key is None:
-        raise ValueError(f"{label} CSV must contain a 'date' column.")
+        cols = ", ".join(str(field or "").strip() for field in fieldnames if str(field or "").strip())
+        suffix = f" Found columns: {cols}." if cols else ""
+        raise ValueError(f"{label} CSV must contain a 'date' column.{suffix}")
     out: set[date] = set()
     descriptions: dict[date, str] = {}
+    total_rows = 0
+    nonempty_date_rows = 0
     for row_no, row in enumerate(reader, 2):
         if not isinstance(row, dict):
             continue
+        total_rows += 1
         value = str(row.get(date_key) or "").strip()
         if not value:
             continue
+        nonempty_date_rows += 1
         row_dates = _expand_date_spec(value, label=f"{label} line {row_no}")
         out.update(row_dates)
         description = str(row.get(description_key) or "").strip() if description_key is not None else ""
         if description:
             for item_date in row_dates:
                 descriptions.setdefault(item_date, description)
+    if not out:
+        raise ValueError(
+            f"{label} CSV did not contain any usable dates in the 'date' column "
+            f"({total_rows} data row(s), {nonempty_date_rows} non-empty date value(s))."
+        )
     return frozenset(out), descriptions
 
 
@@ -172,13 +183,14 @@ def _load_omit_file_data(name: str | None, omit_file_dir: str | None) -> tuple[f
     text = Path(path).read_text(encoding="utf-8-sig")
     non_comment = list(_iter_content_lines(text))
     if not non_comment:
-        dates: frozenset[date] = frozenset()
-        descriptions: dict[date, str] = {}
+        raise ValueError(f"omit_file '{os.path.basename(path)}' is empty or has no date rows.")
     elif _looks_like_csv(non_comment):
         dates, descriptions = _parse_csv_dates_and_descriptions(text, label=f"omit_file '{os.path.basename(path)}'")
     else:
         dates = _parse_text_dates(text, label=f"omit_file '{os.path.basename(path)}'")
         descriptions = {}
+        if not dates:
+            raise ValueError(f"omit_file '{os.path.basename(path)}' did not contain any usable dates.")
     _CACHE_BY_PATH[path] = (st.st_mtime_ns, st.st_size, dates, dict(descriptions))
     return _apply_omit_file_mods(dates, descriptions, mods)
 

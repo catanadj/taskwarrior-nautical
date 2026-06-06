@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 
 
@@ -68,6 +69,32 @@ def _write_nautical_config(path: Path, anchor_dir: Path, omit_dir: Path) -> None
         + "\n",
         encoding="utf-8",
     )
+
+
+def _write_fixture_files(anchor_dir: Path, omit_dir: Path) -> dict[str, str]:
+    today = date.today()
+    anchor_a = today + timedelta(days=7)
+    anchor_b = today + timedelta(days=14)
+    anchor_c = today + timedelta(days=21)
+    omit_expr_day = today + timedelta(days=10)
+    omit_file_day = today + timedelta(days=13)
+
+    (anchor_dir / "mixed.csv").write_text(
+        "date,description\n"
+        f"{anchor_a.isoformat()},Future file anchor\n"
+        f"{anchor_b.isoformat()},Second file anchor\n"
+        f"{anchor_c.isoformat()},Merged file anchor\n",
+        encoding="utf-8",
+    )
+    (omit_dir / "holidays.csv").write_text(
+        f"{omit_file_day.isoformat()}\n",
+        encoding="utf-8",
+    )
+    return {
+        "anchor_file": "mixed.csv",
+        "omit_expr": f"y:{omit_expr_day.strftime('%m-%d')}",
+        "special_anchor": f"y:{anchor_c.strftime('%m-%d')}",
+    }
 
 
 def _install_hooks(data_dir: Path) -> None:
@@ -200,18 +227,7 @@ def main() -> int:
     _write_taskrc(taskrc, data_dir)
     _write_nautical_config(config, anchor_dir, omit_dir)
 
-    # Small, deterministic fixtures.
-    (anchor_dir / "2026.csv").write_text(
-        "date,description\n"
-        "2026-04-17,Friday anchor\n"
-        "2026-04-25,Saturday file\n"
-        "2026-05-05,Anniversary anchor\n",
-        encoding="utf-8",
-    )
-    (omit_dir / "holidays.csv").write_text(
-        "2026-04-28\n2026-05-05\n",
-        encoding="utf-8",
-    )
+    fixtures = _write_fixture_files(anchor_dir, omit_dir)
 
     env = os.environ.copy()
     env["TASKRC"] = str(taskrc)
@@ -227,14 +243,14 @@ def main() -> int:
         ),
         SeedTask(
             "mixed anchor file",
-            ["anchor_file:2026.csv@t=12:00", "anchor_mode:skip", "chain:on", "due:today"],
+            [f"anchor_file:{fixtures['anchor_file']}@t=12:00", "anchor_mode:skip", "chain:on", "due:today"],
         ),
         SeedTask(
             "mixed merged recurrence",
             [
-                "anchor:w:tue,fri | y:05-05",
-                "anchor_file:2026.csv@-1d@t=12:00,18:00",
-                "omit:y:04-28..05-05",
+                f"anchor:w:tue,fri | {fixtures['special_anchor']}",
+                f"anchor_file:{fixtures['anchor_file']}@-1d@t=12:00,18:00",
+                f"omit:{fixtures['omit_expr']}",
                 "omit_file:holidays.csv",
                 "anchor_mode:skip",
                 "chain:on",

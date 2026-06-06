@@ -4584,6 +4584,65 @@ def test_cp_duration_parser_and_dst_preserve_whole_days():
             f"Naive UTC+timedelta should drift across DST: start={dl} -> naive={nl}"
         )            
 
+
+def test_cp_sequence_link_boundary_contract():
+    """CP sequence interval selection should be stable at first/last/wrapped/high links."""
+    cp = "3d,20d,7d"
+    expected = {
+        0: timedelta(days=3),
+        1: timedelta(days=3),
+        2: timedelta(days=20),
+        3: timedelta(days=7),
+        4: timedelta(days=3),
+        5: timedelta(days=20),
+        9999: timedelta(days=7),
+        10000: timedelta(days=3),
+    }
+    for link_no, td in expected.items():
+        got = core.cp_sequence_interval_for_link(cp, link_no)
+        expect(got == td, f"unexpected cp interval for link {link_no}: got {got}, want {td}")
+
+
+def test_cp_random_and_jitter_are_deterministic_per_link_and_bounded():
+    """CP rand/jitter should be repeatable per link while staying inside configured bounds."""
+    cases = [
+        ("rand(3d..7d)", timedelta(days=3), timedelta(days=7), 86400),
+        ("rand(12h..36h)", timedelta(hours=12), timedelta(hours=36), 3600),
+        ("14d~2d", timedelta(days=12), timedelta(days=16), 86400),
+        ("3d,14d~2d,7d", timedelta(days=12), timedelta(days=16), 86400),
+    ]
+    for cp, lo, hi, gran in cases:
+        link_no = 2 if "," in cp else 1
+        first = core.cp_sequence_interval_for_link(cp, link_no)
+        second = core.cp_sequence_interval_for_link(cp, link_no)
+        expect(first == second, f"{cp} should be deterministic for link {link_no}: {first} != {second}")
+        expect(lo <= first <= hi, f"{cp} picked out-of-bounds interval for link {link_no}: {first}")
+        expect(int(first.total_seconds()) % gran == 0, f"{cp} picked interval at wrong granularity: {first}")
+
+
+def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
+    """on-add preview and on-modify completion should select the same cp interval for the same link."""
+    add_mod = _load_hook_module(_find_hook_file("on-add-nautical.py"), "_nautical_on_add_cp_interval_agreement_test")
+    modify_mod = _load_hook_module(_find_hook_file("on-modify-nautical.py"), "_nautical_on_modify_cp_interval_agreement_test")
+    if hasattr(add_mod, "_load_core"):
+        add_mod._load_core()
+    if hasattr(modify_mod, "_load_core"):
+        modify_mod._load_core()
+
+    for cp, link_no in (
+        ("3d,20d,7d", 1),
+        ("3d,20d,7d", 3),
+        ("3d,20d,7d", 4),
+        ("3d,rand(10d..20d),7d", 2),
+        ("3d,14d~2d,7d", 2),
+        ("rand(12h..36h)", 5),
+    ):
+        tokens = core.parse_cp_sequence_tokens(cp)
+        add_td = add_mod._cp_sequence_period_for_link(tokens, cp, link_no)
+        modify_td = modify_mod._cp_sequence_period_for_link(tokens, cp, link_no)
+        core_td = core.cp_sequence_interval_for_link(cp, link_no)
+        expect(add_td == modify_td == core_td, f"cp interval mismatch for {cp!r} link {link_no}: add={add_td}, modify={modify_td}, core={core_td}")
+
 # -------- Runner --------------------------------------------------------------
 
 def test_hook_on_add_multitime_preview_emits_all_slots():
@@ -4918,6 +4977,72 @@ def test_hook_on_add_omit_timed_preset_rejected():
         stderr_txt = _strip_markup(p.stderr)
         expect("Invalid omit" in stderr_txt, f"expected invalid omit panel. stderr={stderr_txt[:500]!r}")
         expect("omit does not support time modifiers" in stderr_txt, f"expected timed omit guidance. stderr={stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance():
+    """on-add should surface parser-specific guidance for malformed cp strings."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    cases = [
+        ("rand(7d..3d)", ("lower", "bound", "<=", "upper")),
+        ("rand(3d-7d)", ("expected", "rand(<duration>..<duration>)")),
+        ("14d~abc", ("invalid", "duration", "bound")),
+        ("2d~3d", ("lower", "bound", ">= 0")),
+        ("3d,,7d", ("empty", "duration", "position 2")),
+    ]
+    for idx, (cp_value, expected_parts) in enumerate(cases, start=1):
+        task = {
+            "uuid": f"00000000-0000-0000-0000-00000000{130 + idx:04d}",
+            "description": f"hook test malformed cp add {idx}",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20260101T000000Z",
+            "cp": cp_value,
+            "due": "20260101T090000Z",
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        expect(p.returncode != 0, f"on-add should fail for malformed cp {cp_value!r}")
+        expect((p.stdout or "").strip() == "", f"expected no stdout on malformed cp add failure, got: {p.stdout!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Invalid cp" in stderr_txt or "Invalid CP" in stderr_txt, f"expected invalid cp panel for {cp_value!r}: {stderr_txt[:500]!r}")
+        for part in expected_parts:
+            expect(part in stderr_txt, f"expected parser guidance fragment {part!r} for {cp_value!r}: {stderr_txt[:500]!r}")
+
+
+def test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance():
+    """on-modify completion should surface parser-specific guidance for malformed cp strings."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    env = {"NO_COLOR": "1"}
+    cases = [
+        ("rand(7d..3d)", ("lower", "bound", "<=", "upper")),
+        ("rand(3d-7d)", ("expected", "rand(<duration>..<duration>)")),
+        ("14d~abc", ("invalid", "duration", "bound")),
+        ("2d~3d", ("lower", "bound", ">= 0")),
+        ("3d,,7d", ("empty", "duration", "position 2")),
+    ]
+    for idx, (cp_value, expected_parts) in enumerate(cases, start=1):
+        old = {
+            "uuid": f"00000000-0000-0000-0000-00000000{150 + idx:04d}",
+            "description": f"hook test malformed cp modify {idx}",
+            "status": "pending",
+            "entry": "20260101T000000Z",
+            "cp": cp_value,
+            "chain": "on",
+            "chainID": "abcd1234",
+            "link": 1,
+            "due": "20260101T090000Z",
+        }
+        new = dict(old)
+        new["status"] = "completed"
+        new["end"] = "20260101T100000Z"
+        raw = json.dumps(old) + "\n" + json.dumps(new) + "\n"
+        p = _run_hook_script_raw(hook, raw, env_extra=env)
+        expect(p.returncode != 0, f"on-modify should fail for malformed cp {cp_value!r}")
+        expect((p.stdout or "").strip() == "", f"expected no stdout on malformed cp modify failure, got: {p.stdout!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Invalid CP" in stderr_txt, f"expected Invalid CP panel for {cp_value!r}: {stderr_txt[:500]!r}")
+        for part in expected_parts:
+            expect(part in stderr_txt, f"expected parser guidance fragment {part!r} for {cp_value!r}: {stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_cp_sequence_preview_accepts_string_periods():
@@ -10204,6 +10329,9 @@ TESTS = [
     test_heads_with_slashN_parse_ok_again,
     test_monthname_and_numeric_equivalence,
     test_cp_duration_parser_and_dst_preserve_whole_days,
+    test_cp_sequence_link_boundary_contract,
+    test_cp_random_and_jitter_are_deterministic_per_link_and_bounded,
+    test_cp_interval_helpers_agree_between_on_add_and_on_modify,
     test_on_modify_compute_cp_sequence_selects_interval_by_link,
     test_on_modify_compute_cp_random_selects_deterministic_interval,
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
@@ -10221,6 +10349,8 @@ TESTS = [
     test_hook_on_add_omit_unknown_preset_fails_cleanly,
     test_hook_on_add_omit_recursive_preset_fails_cleanly,
     test_hook_on_add_omit_timed_preset_rejected,
+    test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance,
+    test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance,
     test_hook_on_add_cp_sequence_preview_accepts_string_periods,
     test_hook_on_add_cp_random_preview_shows_selected_periods,
     test_hook_on_add_cp_random_malformed_fails_with_guidance,

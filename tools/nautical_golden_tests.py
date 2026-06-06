@@ -3068,6 +3068,22 @@ def test_core_recurrence_update_udas_config_aliases():
         )
 
 
+def test_shipped_config_keeps_hook_toggles_top_level():
+    """Preset tables in config-nautical.toml should not swallow later top-level hook settings."""
+    try:
+        import tomllib
+    except Exception:
+        import tomli as tomllib
+
+    cfg_path = Path(ROOT) / "config-nautical.toml"
+    data = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+    expect(data.get("panel_mode") == "rich", f"panel_mode should be top-level in shipped config: {data!r}")
+    expect(data.get("show_analytics") is False, f"show_analytics should be top-level in shipped config: {data!r}")
+    omit_presets = data.get("omit_presets") if isinstance(data.get("omit_presets"), dict) else {}
+    expect("panel_mode" not in omit_presets, f"panel_mode was parsed as an omit preset: {omit_presets!r}")
+    expect("show_analytics" not in omit_presets, f"show_analytics was parsed as an omit preset: {omit_presets!r}")
+
+
 def test_on_modify_invalid_json_passthrough():
     """Malformed JSON should fail fast without stdout JSON."""
     path = _find_hook_file("on-modify-nautical.py")
@@ -10473,6 +10489,7 @@ TESTS = [
     test_dst_round_trip_noon_preserves_local_date,
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_core_recurrence_update_udas_config_aliases,
+    test_shipped_config_keeps_hook_toggles_top_level,
     test_warn_rate_limited_any,
     test_on_modify_build_child_carries_configured_uda_datetime,
 

@@ -4623,6 +4623,77 @@ def test_hook_on_add_cp_scheduled_only_preserves_no_due():
     expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
 
 
+def test_core_anchor_preset_unknown_lists_available_names():
+    """Core preset resolution should give actionable guidance for unknown anchor aliases."""
+    prev_anchor_presets = getattr(core, "ANCHOR_PRESETS", {})
+    try:
+        core.ANCHOR_PRESETS = {"payday": "m:15", "workout": "w:mon,wed,fri"}
+        try:
+            core.resolve_anchor_presets("@missing")
+            expect(False, "expected unknown anchor preset to fail")
+        except Exception as e:
+            msg = str(e)
+            expect("Unknown anchor preset '@missing'" in msg, f"unexpected unknown preset message: {e}")
+            expect("Available anchor presets: @payday, @workout" in msg, f"expected available preset list: {e}")
+            expect("[anchor_presets]" in msg, f"expected config table hint: {e}")
+    finally:
+        core.ANCHOR_PRESETS = prev_anchor_presets
+
+
+def test_core_omit_preset_unknown_lists_available_names():
+    """Core preset resolution should give actionable guidance for unknown omit aliases."""
+    prev_omit_presets = getattr(core, "OMIT_PRESETS", {})
+    try:
+        core.OMIT_PRESETS = {"april": "y:apr", "weekends": "w:sat,sun"}
+        try:
+            core.resolve_omit_presets("@missing")
+            expect(False, "expected unknown omit preset to fail")
+        except Exception as e:
+            msg = str(e)
+            expect("Unknown omit preset '@missing'" in msg, f"unexpected unknown preset message: {e}")
+            expect("Available omit presets: @april, @weekends" in msg, f"expected available preset list: {e}")
+            expect("[omit_presets]" in msg, f"expected config table hint: {e}")
+    finally:
+        core.OMIT_PRESETS = prev_omit_presets
+
+
+def test_core_preset_recursion_chain_is_deterministic():
+    """Recursive preset diagnostics should preserve the actual reference path."""
+    prev_anchor_presets = getattr(core, "ANCHOR_PRESETS", {})
+    try:
+        core.ANCHOR_PRESETS = {"a": "@b", "b": "@c", "c": "@a"}
+        try:
+            core.resolve_anchor_presets("@a")
+            expect(False, "expected recursive anchor preset to fail")
+        except Exception as e:
+            expect(
+                "Recursive anchor preset reference detected: @a -> @b -> @c -> @a" in str(e),
+                f"unexpected recursive preset chain: {e}",
+            )
+    finally:
+        core.ANCHOR_PRESETS = prev_anchor_presets
+
+
+def test_core_nested_preset_display_shows_resolved_leaf():
+    """Preset display should show the effective resolved expression for simple nested aliases."""
+    prev_anchor_presets = getattr(core, "ANCHOR_PRESETS", {})
+    prev_omit_presets = getattr(core, "OMIT_PRESETS", {})
+    try:
+        core.ANCHOR_PRESETS = {"payday": "m:15,-1bd", "salary": "@payday"}
+        core.OMIT_PRESETS = {"april": "y:apr", "spring": "@april"}
+        expect(
+            core.anchor_preset_display("@salary") == ("Preset", "@salary → m:15,-1bd"),
+            f"unexpected nested anchor preset display: {core.anchor_preset_display('@salary')!r}",
+        )
+        expect(
+            core.omit_preset_display("@spring") == ("Omit preset", "@spring → y:apr"),
+            f"unexpected nested omit preset display: {core.omit_preset_display('@spring')!r}",
+        )
+    finally:
+        core.ANCHOR_PRESETS = prev_anchor_presets
+        core.OMIT_PRESETS = prev_omit_presets
+
+
 def test_hook_on_add_anchor_preset_resolves_from_config():
     """on-add should resolve @anchor presets from config before validation/preview."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -10122,6 +10193,10 @@ TESTS = [
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
+    test_core_anchor_preset_unknown_lists_available_names,
+    test_core_omit_preset_unknown_lists_available_names,
+    test_core_preset_recursion_chain_is_deterministic,
+    test_core_nested_preset_display_shows_resolved_leaf,
     test_hook_on_add_anchor_preset_resolves_from_config,
     test_hook_on_add_anchor_unknown_preset_fails_cleanly,
     test_hook_on_add_anchor_composed_preset_resolves_from_config,

@@ -2182,13 +2182,14 @@ def _resolve_preset_refs(
     presets: dict,
     table_name: str,
     label: str,
-    _seen: frozenset[str] | None = None,
+    _seen: tuple[str, ...] | frozenset[str] | None = None,
 ) -> str:
     raw = _unwrap_quotes(expr or "").strip()
     if not raw:
         return raw
     presets = dict(presets or {})
-    seen = set(_seen or frozenset())
+    seen_chain = tuple(sorted(_seen)) if isinstance(_seen, frozenset) else tuple(_seen or ())
+    seen = set(seen_chain)
 
     def repl(match):
         start = match.start()
@@ -2199,25 +2200,30 @@ def _resolve_preset_refs(
             return match.group(0)
         name = match.group(1).strip().lower()
         if name not in presets:
+            if presets:
+                available = ", ".join(f"@{item}" for item in sorted(presets))
+                hint = f" Available {label} presets: {available}."
+            else:
+                hint = f" No {label} presets are configured."
             raise ParseError(
-                f"Unknown {label} preset '@{name}'. Define it under [{table_name}] in config-nautical.toml."
+                f"Unknown {label} preset '@{name}'.{hint} Define it under [{table_name}] in config-nautical.toml."
             )
         if name in seen:
-            chain = " -> ".join([*(f"@{x}" for x in seen), f"@{name}"])
+            chain = " -> ".join([*(f"@{x}" for x in seen_chain), f"@{name}"])
             raise ParseError(f"Recursive {label} preset reference detected: {chain}")
         resolved = _resolve_preset_refs(
             presets[name],
             presets=presets,
             table_name=table_name,
             label=label,
-            _seen=frozenset([*seen, name]),
+            _seen=(*seen_chain, name),
         )
         return f"({resolved})"
 
     return _anchor_preset_ref_re.sub(repl, raw)
 
 
-def resolve_anchor_presets(expr: str, *, _seen: frozenset[str] | None = None) -> str:
+def resolve_anchor_presets(expr: str, *, _seen: tuple[str, ...] | frozenset[str] | None = None) -> str:
     return _resolve_preset_refs(
         expr,
         presets=ANCHOR_PRESETS,
@@ -2227,7 +2233,7 @@ def resolve_anchor_presets(expr: str, *, _seen: frozenset[str] | None = None) ->
     )
 
 
-def resolve_omit_presets(expr: str, *, _seen: frozenset[str] | None = None) -> str:
+def resolve_omit_presets(expr: str, *, _seen: tuple[str, ...] | frozenset[str] | None = None) -> str:
     return _resolve_preset_refs(
         expr,
         presets=OMIT_PRESETS,
@@ -2235,6 +2241,23 @@ def resolve_omit_presets(expr: str, *, _seen: frozenset[str] | None = None) -> s
         label="omit",
         _seen=_seen,
     )
+
+
+def _preset_display_value(name: str, presets: dict, *, table_name: str, label: str) -> str:
+    raw = str(presets[name] or "").strip()
+    try:
+        resolved = _resolve_preset_refs(
+            raw,
+            presets=presets,
+            table_name=table_name,
+            label=label,
+            _seen=(name,),
+        ).strip()
+    except ParseError:
+        return raw
+    if resolved.startswith("(") and resolved.endswith(")"):
+        return resolved[1:-1].strip()
+    return resolved
 
 
 def anchor_preset_display(expr: str) -> tuple[str, str] | None:
@@ -2246,7 +2269,7 @@ def anchor_preset_display(expr: str) -> tuple[str, str] | None:
     presets = dict(ANCHOR_PRESETS or {})
     if name not in presets:
         return None
-    return "Preset", f"@{name} → {presets[name]}"
+    return "Preset", f"@{name} → {_preset_display_value(name, presets, table_name='anchor_presets', label='anchor')}"
 
 
 def omit_preset_display(expr: str) -> tuple[str, str] | None:
@@ -2258,7 +2281,7 @@ def omit_preset_display(expr: str) -> tuple[str, str] | None:
     presets = dict(OMIT_PRESETS or {})
     if name not in presets:
         return None
-    return "Omit preset", f"@{name} → {presets[name]}"
+    return "Omit preset", f"@{name} → {_preset_display_value(name, presets, table_name='omit_presets', label='omit')}"
 
 
 # ------------------------------------------------------------------------------

@@ -4751,7 +4751,7 @@ def test_hook_on_add_omit_preset_resolves_from_config():
         expect(out_task.get("omit") == "@april", f"omit preset expression should be preserved: {out_task}")
         stderr_txt = _strip_markup(p.stderr)
         expect("Invalid omit" not in stderr_txt, f"omit preset should validate cleanly: {stderr_txt[:500]!r}")
-        expect("Omit" in stderr_txt and "@april" in stderr_txt, f"omit preset preview should show raw omit: {stderr_txt[:500]!r}")
+        expect("Omit preset" in stderr_txt and "@april → y:apr" in stderr_txt, f"omit preset preview should show expansion: {stderr_txt[:500]!r}")
         expect("Except" in stderr_txt and "Apr" in stderr_txt, f"omit preset preview should describe resolved omit: {stderr_txt[:500]!r}")
 
 
@@ -8137,12 +8137,14 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
     prev_panel_mode = mod.core.PANEL_MODE
     prev_show_analytics = mod.core.SHOW_ANALYTICS
     prev_anchor_presets = getattr(mod.core, "ANCHOR_PRESETS", {})
+    prev_omit_presets = getattr(mod.core, "OMIT_PRESETS", {})
     try:
         mod.core.PANEL_MODE = "panel"
         mod.core.SHOW_ANALYTICS = False
         mod.core.ANCHOR_PRESETS = {"payday": "m:15,-1bd"}
+        mod.core.OMIT_PRESETS = {"wed": "w:wed"}
         mod._render_anchor_completion_feedback(
-            new={"anchor": "@payday", "omit": "w:wed", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            new={"anchor": "@payday", "omit": "@wed", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="deadbeef",
@@ -8167,11 +8169,12 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
         mod.core.PANEL_MODE = prev_panel_mode
         mod.core.SHOW_ANALYTICS = prev_show_analytics
         mod.core.ANCHOR_PRESETS = prev_anchor_presets
+        mod.core.OMIT_PRESETS = prev_omit_presets
 
     expect("title" in captured, "expected preview panel emission")
     expect("Next anchor" in captured["title"], f"unexpected panel title: {captured}")
     fb = captured.get("fb") or []
-    expect(("Omit", "w:wed") in fb, f"expected raw omit row in anchor feedback: {fb}")
+    expect(any(k == "Omit preset" and "@wed → w:wed" in str(v) for k, v in fb), f"expected omit preset expansion row in anchor feedback: {fb}")
     expect(any(k == "Preset" and "@payday → m:15,-1bd" in str(v) for k, v in fb), f"expected preset expansion row in anchor feedback: {fb}")
     expect(any(k == "Except" and ("Wednesday" in str(v) or "Wednesdays" in str(v)) for k, v in fb), f"expected natural omit row in anchor feedback: {fb}")
     expect(not any(k == "Analytics" for k, _v in fb), f"analytics row should be hidden when show_analytics is false: {fb}")

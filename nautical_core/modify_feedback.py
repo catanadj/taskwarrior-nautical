@@ -87,6 +87,16 @@ def _anchor_pattern_row(core, expr: str) -> tuple[str, str]:
     return "Pattern", expr
 
 
+def _omit_pattern_row(core, expr: str) -> tuple[str, str]:
+    try:
+        preset_display = core.omit_preset_display(expr)
+    except Exception:
+        preset_display = None
+    if preset_display:
+        return preset_display
+    return "Omit", expr
+
+
 def _anchor_mode_tag(new: dict) -> str:
     return {
         "skip": "[cyan]SKIP[/]",
@@ -396,7 +406,7 @@ def render_anchor_completion_feedback(
     fb = []
     fb.append((anchor_label, f"{expr_str}  {mode_tag}"))
     if omit_raw:
-        fb.append(("Omit", omit_raw))
+        fb.append(_omit_pattern_row(core, omit_raw))
         if omit_natural:
             fb.append(("Except", omit_natural))
         for warn in omit_warns:

@@ -110,7 +110,12 @@ def anchor_preview_prepare_omit_dnf(
         if dnf is None:
             error_and_exit([("Invalid omit", err or "omit syntax error")])
         omit_dnf = dnf
-        rows.append(("Omit", f"[white]{omit_str}[/]"))
+        preset_display = getattr(core, "omit_preset_display", lambda _expr: None)(omit_str)
+        if preset_display:
+            label, text = preset_display
+            rows.append((label, f"[white]{text}[/]"))
+        else:
+            rows.append(("Omit", f"[white]{omit_str}[/]"))
         try:
             anchor_omit = core._import_sibling("anchor_omit")
             omit_expr = core.resolve_omit_presets(omit_str)

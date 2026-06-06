@@ -2249,6 +2249,18 @@ def anchor_preset_display(expr: str) -> tuple[str, str] | None:
     return "Preset", f"@{name} → {presets[name]}"
 
 
+def omit_preset_display(expr: str) -> tuple[str, str] | None:
+    raw = _unwrap_quotes(expr or "").strip()
+    m = re.match(r"^@([A-Za-z][A-Za-z0-9_-]*)$", raw)
+    if not m:
+        return None
+    name = m.group(1).strip().lower()
+    presets = dict(OMIT_PRESETS or {})
+    if name not in presets:
+        return None
+    return "Omit preset", f"@{name} → {presets[name]}"
+
+
 # ------------------------------------------------------------------------------
 # Anchor DNF parser
 # ------------------------------------------------------------------------------
@@ -3181,6 +3193,7 @@ __all__ = (
     'next_after_atom_with_mods',
     'next_after_expr',
     'now_utc',
+    'omit_preset_display',
     'panel_line',
     'parse_anchor_expr_to_dnf',
     'parse_anchor_expr_to_dnf_cached',

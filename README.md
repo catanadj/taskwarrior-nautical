@@ -128,6 +128,7 @@ task add "Workout except April" anchor:"@workout" omit:"@april"
 ```
 
 Panels show the expansion for simple presets, for example `Preset @payday → m:15,-1bd`.
+`[anchor_presets]` and `[omit_presets]` are separate namespaces on purpose: the same `@name` can mean different things depending on whether it is used in `anchor` or `omit`.
 
 ---
 

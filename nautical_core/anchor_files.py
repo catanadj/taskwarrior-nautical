@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import csv
-import hashlib
-import io
 import os
 import re
-from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Callable, Iterable
+from datetime import date, datetime
+from typing import Callable
 
+from .file_backed_dates import load_file_date_data
 from .schedule_utils import apply_day_offset, roll_apply
 
 
-_CACHE_BY_PATH: dict[str, tuple[int, int, str, frozenset[date], dict[date, str]]] = {}
 _WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 _NEXT_PREV_WD_RE = re.compile(r"^(next|prev)-(mon|tue|wed|thu|fri|sat|sun)$")
 _DAY_OFFSET_RE = re.compile(r"^([+-]\d+)d$")
@@ -116,122 +112,12 @@ def resolve_anchor_file_path(name: str | None, anchor_file_dir: str | None) -> s
     return path
 
 
-def _expand_date_spec(spec: str, *, label: str) -> set[date]:
-    text = str(spec or "").strip()
-    if not text:
-        return set()
-    try:
-        if ".." not in text:
-            return {date.fromisoformat(text)}
-        left, right = text.split("..", 1)
-        start = date.fromisoformat(left.strip())
-        end = date.fromisoformat(right.strip())
-    except Exception:
-        raise ValueError(f"{label} contains an invalid date or range.")
-    if end < start:
-        raise ValueError(f"{label} contains a backward date range.")
-    out: set[date] = set()
-    cur = start
-    while cur <= end:
-        out.add(cur)
-        cur += timedelta(days=1)
-    return out
-
-
-def _iter_content_lines(text: str) -> Iterable[tuple[int, str]]:
-    for line_no, raw in enumerate(text.splitlines(), 1):
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        yield line_no, raw
-
-
-def _looks_like_csv(non_comment_lines: list[tuple[int, str]]) -> bool:
-    if not non_comment_lines:
-        return False
-    _line_no, first = non_comment_lines[0]
-    try:
-        header = next(csv.reader([first]))
-    except Exception:
-        return False
-    norm = {str(col or "").strip().strip('"').lower() for col in header}
-    return "date" in norm or len(header) > 1
-
-
-def _parse_csv_dates_and_descriptions(text: str, *, label: str) -> tuple[frozenset[date], dict[date, str]]:
-    non_comment = [line for _no, line in _iter_content_lines(text)]
-    reader = csv.DictReader(io.StringIO("\n".join(non_comment)))
-    fieldnames = list(reader.fieldnames or [])
-    if not fieldnames:
-        raise ValueError(f"{label} is empty.")
-    date_key = None
-    description_key = None
-    for field in fieldnames:
-        field_name = str(field or "").strip().strip('"').lower()
-        if field_name == "date":
-            date_key = field
-        elif field_name == "description":
-            description_key = field
-    if date_key is None:
-        cols = ", ".join(str(field or "").strip() for field in fieldnames if str(field or "").strip())
-        suffix = f" Found columns: {cols}." if cols else ""
-        raise ValueError(f"{label} CSV must contain a 'date' column.{suffix}")
-    out: set[date] = set()
-    descriptions: dict[date, str] = {}
-    total_rows = 0
-    nonempty_date_rows = 0
-    for row_no, row in enumerate(reader, 2):
-        if not isinstance(row, dict):
-            continue
-        total_rows += 1
-        value = str(row.get(date_key) or "").strip()
-        if not value:
-            continue
-        nonempty_date_rows += 1
-        row_dates = _expand_date_spec(value, label=f"{label} line {row_no}")
-        out.update(row_dates)
-        description = str(row.get(description_key) or "").strip() if description_key is not None else ""
-        if description:
-            for item_date in row_dates:
-                descriptions.setdefault(item_date, description)
-    if not out:
-        raise ValueError(
-            f"{label} CSV did not contain any usable dates in the 'date' column "
-            f"({total_rows} data row(s), {nonempty_date_rows} non-empty date value(s))."
-        )
-    return frozenset(out), descriptions
-
-
-def _parse_text_dates(text: str, *, label: str) -> frozenset[date]:
-    out: set[date] = set()
-    for line_no, raw in _iter_content_lines(text):
-        out.update(_expand_date_spec(raw.strip(), label=f"{label} line {line_no}"))
-    return frozenset(out)
-
-
 def _load_anchor_file_data(name: str | None, anchor_file_dir: str | None) -> tuple[frozenset[date], dict[date, str]]:
     file_name, mods = parse_anchor_file_spec(name)
     path = resolve_anchor_file_path(file_name, anchor_file_dir)
     if not path:
         return frozenset(), {}
-    st = os.stat(path)
-    raw = Path(path).read_bytes()
-    digest = hashlib.sha256(raw).hexdigest()
-    cached = _CACHE_BY_PATH.get(path)
-    if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size and cached[2] == digest:
-        return _apply_anchor_file_mods(cached[3], dict(cached[4]), mods)
-    text = raw.decode("utf-8-sig")
-    non_comment = list(_iter_content_lines(text))
-    if not non_comment:
-        raise ValueError(f"anchor_file '{os.path.basename(path)}' is empty or has no date rows.")
-    elif _looks_like_csv(non_comment):
-        dates, descriptions = _parse_csv_dates_and_descriptions(text, label=f"anchor_file '{os.path.basename(path)}'")
-    else:
-        dates = _parse_text_dates(text, label=f"anchor_file '{os.path.basename(path)}'")
-        descriptions = {}
-        if not dates:
-            raise ValueError(f"anchor_file '{os.path.basename(path)}' did not contain any usable dates.")
-    _CACHE_BY_PATH[path] = (st.st_mtime_ns, st.st_size, digest, dates, dict(descriptions))
+    dates, descriptions = load_file_date_data(path, label=f"anchor_file '{os.path.basename(path)}'")
     return _apply_anchor_file_mods(dates, descriptions, mods)
 
 

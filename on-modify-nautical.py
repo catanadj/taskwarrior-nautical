@@ -2775,21 +2775,23 @@ def _next_occurrence_after_local_dt(
     # same-day: only if the expression hits on that date
     adate = after_local_dt.date()
     try:
-        anchor_omit = _module("anchor_omit")
-        prev = adate - timedelta(days=1)
-        nxt_date, _ = anchor_omit.next_after_expr_with_omit(
-            dnf,
-            prev,
-            default_seed=default_seed_date,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-            max_skip_iterations=max(core.MAX_ANCHOR_ITER, 128),
+        same_day_matches = any(
+            all(core.atom_matches_on(atom, adate, default_seed_date) for atom in term)
+            for term in dnf
         )
+        if same_day_matches and omit_dnf:
+            anchor_omit = _module("anchor_omit")
+            same_day_matches = not anchor_omit.omit_expr_fires_on_date(
+                omit_dnf,
+                adate,
+                default_seed_date,
+                seed_base,
+                core=core,
+            )
     except Exception:
-        nxt_date = None
+        same_day_matches = False
 
-    if nxt_date == adate:
+    if same_day_matches:
         slots = _extract_time_slots_for_date(dnf, adate, default_seed_date)
         if not slots:
             slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]

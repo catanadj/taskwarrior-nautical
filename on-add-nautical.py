@@ -557,6 +557,7 @@ def _validate_anchor_expr_cached(expr: str) -> list[list[dict]]:
         k = _dnf_cache_key(expr)
         if k in cache:
             cache.move_to_end(k)
+            cache[k] = core._normalize_dnf_cached(cache[k])
             return cache[k]
 
     dnf = core.validate_anchor_expr_strict(expr)

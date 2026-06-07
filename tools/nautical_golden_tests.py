@@ -3945,7 +3945,7 @@ def test_parser_validation():
         ("m:6th-mon", "nth-weekday must be between 1 and 5 (or 'last'). Did you mean 'last-mon'? Offending token: '6th-mon'"),
         ("y:13-01", "Yearly token '13-01' doesn’t match ANCHOR_YEAR_FMT=MD. month '13' is invalid. Did you mean MM-DD? e.g., '04-20'"),
         ("y:01-32", "Yearly token '01-32' doesn’t match ANCHOR_YEAR_FMT=MD. day '32' is invalid. Did you mean MM-DD? e.g., '04-20'"),
-        ("w:mon + w:sun", "Weekly anchors joined with '+' never coincide (e.g., Saturday AND Monday). Use ',' (OR) or '|' instead"),
+        ("w:mon + w:sun", "Weekly anchors joined with '+' never coincide (e.g., Saturday AND Monday). Use '|' instead"),
     ]
     
     for expr, expected_error in invalid_expressions:
@@ -4368,7 +4368,7 @@ def test_business_day_modifiers():
         ("m:1@nbd", "2024-08-31", "2024-09-02"),  # Sep 1 is Sunday -> Monday 2nd
         
         # @nw - nearest business day
-        ("m:15@nw", "2024-06-14", "2024-06-14"),  # June 15 is Saturday -> June 14 (Friday)
+        ("m:15@nw", "2024-06-14", "2024-07-15"),  # June's rolled date is not strictly after the cursor
         ("m:15@nw", "2024-09-14", "2024-09-16"),  # Sep 15 is Sunday -> Sep 16 (Monday)
     ]
     
@@ -4400,7 +4400,7 @@ def test_next_after_atom_with_mods_characterization():
         ("m:3@bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 2, 3)),
         # Roll then day_offset behavior.
         ("m:1@nbd@+1d", date(2024, 8, 31), date(2024, 8, 31), date(2024, 9, 3)),
-        # Business-day roll may return candidate equal to ref_d when base is strictly after.
+        # Low-level atom scheduling may expose an equal rolled date; expression scheduling filters it.
         ("m:15@nw", date(2024, 6, 14), date(2024, 6, 14), date(2024, 6, 14)),
     ]
 
@@ -4408,6 +4408,113 @@ def test_next_after_atom_with_mods_characterization():
         atom = _single_atom(expr)
         got = core.next_after_atom_with_mods(atom, ref_d, seed_d)
         expect(got == expected, f"{expr} from {ref_d} seed={seed_d}: got {got}, expected {expected}")
+
+
+def test_modifier_boundary_paths_agree_and_advance_strictly():
+    """Rolled and shifted anchors should agree across preview, completion, timeline, and omit."""
+    import nautical_core.anchor_omit as anchor_omit
+    import nautical_core.modify_timeline as modify_timeline
+
+    add_mod = _load_hook_module(_find_hook_file("on-add-nautical.py"), "_nautical_modifier_boundary_add_test")
+    modify_mod = _load_hook_module(_find_hook_file("on-modify-nautical.py"), "_nautical_modifier_boundary_modify_test")
+    if hasattr(add_mod, "_load_core"):
+        add_mod._load_core()
+    if hasattr(modify_mod, "_load_core"):
+        modify_mod._load_core()
+
+    cases = [
+        ("y:04-25@pbd@t=09:00", "y:04-25@pbd", date(2026, 4, 24), date(2027, 4, 23)),
+        ("y:04-25@nbd@t=09:00", "y:04-25@nbd", date(2026, 4, 27), date(2027, 4, 26)),
+        ("y:04-25@nbd@t=12:00,17:00", "y:04-25@nbd", date(2026, 4, 27), date(2026, 4, 27)),
+        ("y:01-31@+1d@t=09:00", "y:01-31@+1d", date(2026, 2, 1), date(2027, 2, 1)),
+        ("y:03-01@-1d@t=09:00", "y:03-01@-1d", date(2026, 2, 28), date(2027, 2, 28)),
+        ("y:02-29@+1d@t=09:00", "y:02-29@+1d", date(2028, 3, 1), date(2032, 3, 1)),
+        ("w:sun@t=09:00", "w:sun", date(2026, 3, 22), date(2026, 3, 29)),
+    ]
+    chain_id = "modifier-boundary"
+
+    for expr, omit_expr, current_day, expected_next_day in cases:
+        dnf = add_mod.core.validate_anchor_expr_strict(expr)
+        omit_dnf = anchor_omit.validate_omit_expr_strict(
+            omit_expr,
+            validate_anchor_expr_cached=add_mod.core.validate_anchor_expr_strict,
+        )
+        first_slot = (12, 0) if "12:00,17:00" in expr else (9, 0)
+        current_utc = add_mod.core.build_local_datetime(current_day, first_slot).astimezone(timezone.utc)
+        current_local = add_mod.core.to_local(current_utc)
+
+        preview_next = add_mod._anchor_next_occurrence_after_local_dt(
+            dnf,
+            current_local,
+            first_slot,
+            current_day,
+            chain_id,
+        )
+        expect(preview_next is not None, f"{expr}: preview did not find the next occurrence")
+        expect(preview_next > current_local, f"{expr}: preview did not advance strictly: {preview_next}")
+        expect(preview_next.date() == expected_next_day, f"{expr}: unexpected preview date {preview_next.date()}")
+        expected_hhmm = (17, 0) if "12:00,17:00" in expr else first_slot
+        expect((preview_next.hour, preview_next.minute) == expected_hhmm, f"{expr}: preview lost wall-clock time")
+
+        parent = {
+            "anchor": expr,
+            "anchor_mode": "skip",
+            "due": modify_mod.core.fmt_isoz(current_utc),
+            "end": modify_mod.core.fmt_isoz(current_utc),
+            "chainID": chain_id,
+            "link": 1,
+        }
+        child_due, _meta, completion_dnf = modify_mod._compute_anchor_child_due(parent)
+        completion_next = modify_mod.core.to_local(child_due)
+        expect(completion_next == preview_next, f"{expr}: completion {completion_next} != preview {preview_next}")
+
+        preview_after_child = add_mod._anchor_next_occurrence_after_local_dt(
+            dnf,
+            preview_next,
+            expected_hhmm,
+            current_day,
+            chain_id,
+        )
+        timeline_items = modify_timeline._timeline_future_anchor_items(
+            parent,
+            completion_dnf,
+            child_due,
+            start_no=2,
+            allowed_future=1,
+            cap_no=None,
+            to_local_cached=modify_mod._to_local_cached,
+            safe_parse_datetime=modify_mod._safe_parse_datetime,
+            next_occurrence_after_local_dt=modify_mod._next_occurrence_after_local_dt,
+            omit_dnf=None,
+            omit_expr_fires_on_date=None,
+            omit_description_for_date=None,
+            max_iterations=32,
+        )
+        expect(len(timeline_items) == 1, f"{expr}: timeline did not produce one future occurrence")
+        timeline_next = modify_mod.core.to_local(timeline_items[0][1])
+        expect(timeline_next == preview_after_child, f"{expr}: timeline {timeline_next} != preview {preview_after_child}")
+
+        expect(
+            anchor_omit.omit_expr_fires_on_date(
+                omit_dnf,
+                current_day,
+                current_day - timedelta(days=10),
+                chain_id,
+                core=add_mod.core,
+            ),
+            f"{omit_expr}: omit did not recognize the effective rolled/shifted date",
+        )
+
+    dst_dnf = add_mod.core.validate_anchor_expr_strict("w:sun@t=09:00")
+    before_dst = add_mod.core.to_local(add_mod.core.build_local_datetime(date(2026, 3, 22), (9, 0)))
+    after_dst = add_mod._anchor_next_occurrence_after_local_dt(
+        dst_dnf,
+        before_dst,
+        (9, 0),
+        date(2026, 3, 22),
+        chain_id,
+    )
+    expect((after_dst.hour, after_dst.minute) == (9, 0), f"DST transition changed anchor wall clock: {after_dst}")
 
 
 def test_atom_matches_on_positive_day_offset_shifted_date():
@@ -5532,64 +5639,79 @@ def test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot():
     """on-add preview should keep @t times when a yearly anchor rolls forward to the next business day."""
     hook = _find_hook_file("on-add-nautical.py")
     env = {"NO_COLOR": "1"}
+    expr = "y:04-25@nbd@t=12:00,17:00"
     task = {
         "uuid": "00000000-0000-0000-0000-000000000114b",
         "description": "hook test on-add rolled timed business day",
         "status": "pending",
         "project": "testing",
         "entry": "20260412T111500Z",
-        "anchor": "y:04-25@nbd@t=12:00,17:00",
+        "anchor": expr,
         "anchor_mode": "skip",
     }
     p = _run_hook_script(hook, task, env_extra=env)
     if p.returncode != 0:
         raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
     stderr_txt = _strip_markup(p.stderr)
-    expect("Mon 2026-04-27 12:00" in stderr_txt, f"expected first due to use rolled timed slot. stderr={stderr_txt[:500]!r}")
-    expect("Mon 2027-04-26 12:00" in stderr_txt, f"expected next yearly rolled occurrence to keep timed slot. stderr={stderr_txt[:500]!r}")
-    expect("Tue 2028-04-25 17:00" in stderr_txt, f"expected later same-day second slot in preview. stderr={stderr_txt[:500]!r}")
+    dnf = core.validate_anchor_expr_strict(expr)
+    today = core.to_local(core.now_utc()).date()
+    first, _ = core.next_after_expr(dnf, today, default_seed=today, seed_base="preview-test")
+    second, _ = core.next_after_expr(dnf, first, default_seed=today, seed_base="preview-test")
+    expect(f"{first:%Y-%m-%d} 12:00" in stderr_txt, f"expected first due to use rolled timed slot. stderr={stderr_txt[:500]!r}")
+    expect(f"{first:%Y-%m-%d} 17:00" in stderr_txt, f"expected later same-day second slot in preview. stderr={stderr_txt[:500]!r}")
+    expect(f"{second:%Y-%m-%d} 12:00" in stderr_txt, f"expected next yearly rolled occurrence to keep timed slot. stderr={stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_anchor_preview_positive_day_offset_uses_timed_slot():
     """on-add preview should keep @t times when an anchor date is shifted forward by @+Nd."""
     hook = _find_hook_file("on-add-nautical.py")
     env = {"NO_COLOR": "1"}
+    expr = "y:04-25@+10d@t=12:00"
     task = {
         "uuid": "00000000-0000-0000-0000-000000000114c",
         "description": "hook test on-add positive offset timed anchor",
         "status": "pending",
         "project": "testing",
         "entry": "20260412T111500Z",
-        "anchor": "y:04-25@+10d@t=12:00",
+        "anchor": expr,
         "anchor_mode": "skip",
     }
     p = _run_hook_script(hook, task, env_extra=env)
     if p.returncode != 0:
         raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
     stderr_txt = _strip_markup(p.stderr)
-    expect("Tue 2026-05-05 12:00" in stderr_txt, f"expected first due to use shifted timed slot. stderr={stderr_txt[:500]!r}")
-    expect("Wed 2027-05-05 12:00" in stderr_txt, f"expected next yearly shifted occurrence to keep timed slot. stderr={stderr_txt[:500]!r}")
+    dnf = core.validate_anchor_expr_strict(expr)
+    today = core.to_local(core.now_utc()).date()
+    first, _ = core.next_after_expr(dnf, today, default_seed=today, seed_base="preview-test")
+    second, _ = core.next_after_expr(dnf, first, default_seed=today, seed_base="preview-test")
+    expect(f"{first:%Y-%m-%d} 12:00" in stderr_txt, f"expected first due to use shifted timed slot. stderr={stderr_txt[:500]!r}")
+    expect(f"{second:%Y-%m-%d} 12:00" in stderr_txt, f"expected next yearly shifted occurrence to keep timed slot. stderr={stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_anchor_preview_negative_day_offset_uses_timed_slot():
     """on-add preview should keep @t times when an anchor date is shifted earlier by @-Nd."""
     hook = _find_hook_file("on-add-nautical.py")
     env = {"NO_COLOR": "1"}
+    expr = "y:04-25@-2d@t=12:00"
     task = {
         "uuid": "00000000-0000-0000-0000-000000000114d",
         "description": "hook test on-add negative offset timed anchor",
         "status": "pending",
         "project": "testing",
         "entry": "20260412T111500Z",
-        "anchor": "y:04-25@-2d@t=12:00",
+        "anchor": expr,
         "anchor_mode": "skip",
     }
     p = _run_hook_script(hook, task, env_extra=env)
     if p.returncode != 0:
         raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
     stderr_txt = _strip_markup(p.stderr)
-    expect("Thu 2026-04-23 12:00" in stderr_txt, f"expected first due to use shifted timed slot. stderr={stderr_txt[:500]!r}")
-    expect("Fri 2027-04-23 12:00" in stderr_txt, f"expected next yearly shifted occurrence to keep timed slot. stderr={stderr_txt[:500]!r}")
+    dnf = core.validate_anchor_expr_strict(expr)
+    today = core.to_local(core.now_utc()).date()
+    first, _ = core.next_after_expr(dnf, today, default_seed=today, seed_base="preview-test")
+    second, _ = core.next_after_expr(dnf, first, default_seed=today, seed_base="preview-test")
+    expect(f"{first:%Y-%m-%d} 12:00" in stderr_txt, f"expected first due to use shifted timed slot. stderr={stderr_txt[:500]!r}")
+    expect(f"{second:%Y-%m-%d} 12:00" in stderr_txt, f"expected next yearly shifted occurrence to keep timed slot. stderr={stderr_txt[:500]!r}")
 
 
 def test_hook_on_add_timed_omit_rejected():
@@ -10877,6 +10999,9 @@ TESTS = [
     test_complex_dnf_expressions,
     test_business_day_modifiers,
     test_next_after_atom_with_mods_characterization,
+    test_modifier_boundary_paths_agree_and_advance_strictly,
+    test_atom_matches_on_positive_day_offset_shifted_date,
+    test_pick_hhmm_from_dnf_for_positive_day_offset_shifted_date,
     test_deterministic_randomness,
     test_edge_cases,
     test_natural_language_comprehensive,
@@ -10937,6 +11062,9 @@ TESTS = [
     test_on_add_anchor_preview_auto_assigns_when_due_matches_entry,
     test_hook_on_add_anchor_preview_skips_omit_date,
     test_hook_on_add_anchor_preview_skips_omit_file_date,
+    test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot,
+    test_hook_on_add_anchor_preview_positive_day_offset_uses_timed_slot,
+    test_hook_on_add_anchor_preview_negative_day_offset_uses_timed_slot,
     test_hook_on_add_timed_omit_rejected,
     test_hook_on_add_invalid_omit_file_rejected,
     test_hook_on_add_unsatisfiable_omit_fails_cleanly,
@@ -11120,6 +11248,8 @@ TESTS = [
     test_anchor_omit_next_after_expr_skips_matching_dates,
     test_anchor_omit_next_after_expr_skips_omit_file_dates,
     test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items,
+    test_anchor_omit_business_day_roll_matches_rolled_date,
+    test_anchor_omit_positive_day_offset_matches_shifted_date,
     test_hook_on_modify_timeline_marks_omitted_anchor_slots,
     test_hook_on_modify_timeline_uses_omit_file_description_label,
     test_on_modify_compute_anchor_child_due_skips_omit_date,

@@ -4858,6 +4858,27 @@ def test_yearly_rand_respects_sibling_month_filter():
     )
 
 
+def test_yearly_rand_balances_constrained_month_choices():
+    """Constrained yearly rand should avoid pathological deterministic month streaks."""
+    dnf = core.parse_anchor_expr_to_dnf_cached("y:rand + y:apr,jul,oct")
+    current = date(2025, 1, 1)
+    months = []
+    for _ in range(14):
+        nxt, _meta = core.next_after_expr(dnf, current, seed_base="6ac6538d")
+        expect(nxt is not None and nxt > current, "balanced constrained yearly rand did not advance")
+        months.append(nxt.month)
+        current = nxt
+    expect(set(months) == {4, 7, 10}, f"balanced yearly rand did not use every eligible month: {months}")
+    counts = {month: months.count(month) for month in (4, 7, 10)}
+    expect(max(counts.values()) - min(counts.values()) <= 1, f"yearly month choices are imbalanced: {months}")
+    longest = 1
+    current_run = 1
+    for previous, month in zip(months, months[1:]):
+        current_run = current_run + 1 if month == previous else 1
+        longest = max(longest, current_run)
+    expect(longest <= 2, f"yearly rand retained a pathological month streak: {months}")
+
+
 def test_yearly_month_aliases_and_ranges():
     """Test month name aliases and numeric shorthands"""
     # Single month by name or numeric shorthand
@@ -11542,6 +11563,7 @@ TESTS = [
     test_build_and_cache_hints_parses_once_per_miss,
     test_yearly_rand_natural_and_bounds,
     test_yearly_rand_respects_sibling_month_filter,
+    test_yearly_rand_balances_constrained_month_choices,
     test_yearly_month_aliases_and_ranges,
     test_business_day_bd_skip_semantics,
     test_scheduler_atom_helpers_characterization,

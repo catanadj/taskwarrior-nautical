@@ -335,13 +335,33 @@ def _next_after_expr_yearly_rand_candidate(
     mods = info.get("mods") or {}
     bd_only = bool(mods.get("bd"))
     target_m = info.get("month", None)
+    has_year_filter = any(
+        idx != info["atom_idx"]
+        and (atom.get("typ") or atom.get("type")) == "y"
+        for idx, atom in enumerate(term)
+    )
     y = after_date.year
 
     for _ in range(10):
         if target_m is None:
-            cands = []
+            by_month = {}
             for mm in range(1, 13):
-                cands.extend(term_candidates_in_month(term, y, mm, info["atom_idx"], bd_only))
+                month_cands = term_candidates_in_month(term, y, mm, info["atom_idx"], bd_only)
+                if month_cands:
+                    by_month[mm] = month_cands
+            if has_year_filter and len(by_month) > 1:
+                months = sorted(by_month)
+                cycle, position = divmod(y, len(months))
+                order = sorted(
+                    months,
+                    key=lambda mm: sha_pick(
+                        2**31,
+                        f"{seed_key_base}|y|{term_id}|months|{cycle}|{','.join(map(str, months))}|{mm}",
+                    ),
+                )
+                cands = by_month[order[position]]
+            else:
+                cands = [cand for mm in sorted(by_month) for cand in by_month[mm]]
             period_key = f"{y:04d}"
         else:
             cands = term_candidates_in_month(term, y, int(target_m), info["atom_idx"], bd_only)

@@ -9663,6 +9663,116 @@ def test_anchor_validate_roundtrip_preserves_next_occurrence():
             ref_b = nxt_b
 
 
+def test_anchor_expression_characterization_matrix():
+    """Freeze representative parse, normalization, natural text, and scheduling behavior."""
+    import nautical_core as core
+
+    cases = [
+        {
+            "expr": "w:mon,wed,fri + y:apr",
+            "terms": [
+                [("w", "mon", 1, None, False, 0), ("y", "04-01..04-31", 1, None, False, 0)],
+                [("w", "wed", 1, None, False, 0), ("y", "04-01..04-31", 1, None, False, 0)],
+                [("w", "fri", 1, None, False, 0), ("y", "04-01..04-31", 1, None, False, 0)],
+            ],
+            "natural": "Mondays, Wednesdays, or Fridays in Apr each year",
+            "dates": ["2026-04-01", "2026-04-03", "2026-04-06", "2026-04-08", "2026-04-10", "2026-04-13"],
+        },
+        {
+            "expr": "w:mon | m:15",
+            "terms": [
+                [("w", "mon", 1, None, False, 0)],
+                [("m", "15", 1, None, False, 0)],
+            ],
+            "natural": "either Mondays or the 15th day of each month",
+            "dates": ["2026-01-05", "2026-01-12", "2026-01-15", "2026-01-19", "2026-01-26", "2026-02-02"],
+        },
+        {
+            "expr": "m:last-fri",
+            "terms": [[("m", "last-fri", 1, None, False, 0)]],
+            "natural": "the last Friday of each month",
+            "dates": ["2026-01-30", "2026-02-27", "2026-03-27", "2026-04-24", "2026-05-29", "2026-06-26"],
+        },
+        {
+            "expr": "m:-1bd",
+            "terms": [[("m", "-1bd", 1, None, False, 0)]],
+            "natural": "the last business day of each month",
+            "dates": ["2026-01-30", "2026-02-27", "2026-03-31", "2026-04-30", "2026-05-29", "2026-06-30"],
+        },
+        {
+            "expr": "y:02-29",
+            "terms": [[("y", "02-29", 1, None, False, 0)]],
+            "natural": "Feb 29 each leap year",
+            "dates": ["2028-02-29", "2032-02-29", "2036-02-29"],
+        },
+        {
+            "expr": "y:rand + w:sat",
+            "terms": [[("y", "rand", 1, None, False, 0), ("w", "sat", 1, None, False, 0)]],
+            "natural": "Saturdays one random day each year",
+            "dates": ["2026-11-07", "2027-05-08", "2028-07-22"],
+        },
+        {
+            "expr": "m:rand + y:apr",
+            "terms": [[("m", "rand", 1, None, False, 0), ("y", "04-01..04-31", 1, None, False, 0)]],
+            "natural": "one random day each month and within Apr each year",
+            "dates": ["2026-04-23", "2027-04-23", "2028-04-07"],
+        },
+        {
+            "expr": "w/2:fri",
+            "terms": [[("w", "fri", 2, None, False, 0)]],
+            "natural": "every 2 weeks: Fridays",
+            "dates": ["2026-01-02", "2026-01-16", "2026-01-30", "2026-02-13", "2026-02-27", "2026-03-13"],
+        },
+        {
+            "expr": "w:mon..fri@t=09:00",
+            "terms": [[("w", "mon..fri", 1, (9, 0), False, 0)]],
+            "natural": "Mondays through Fridays at 09:00",
+            "dates": ["2026-01-02", "2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"],
+        },
+    ]
+
+    def signature(dnf):
+        return [
+            [
+                (
+                    atom.get("typ"),
+                    atom.get("spec"),
+                    atom.get("ival"),
+                    (atom.get("mods") or {}).get("t"),
+                    bool((atom.get("mods") or {}).get("bd")),
+                    (atom.get("mods") or {}).get("day_offset"),
+                )
+                for atom in term
+            ]
+            for term in dnf
+        ]
+
+    start = date(2026, 1, 1)
+    for case in cases:
+        expr = case["expr"]
+        parsed = core.parse_anchor_expr_to_dnf_cached(expr)
+        validated = core.validate_anchor_expr_strict(expr)
+        revalidated = core.validate_anchor_expr_strict(parsed)
+        expect(signature(parsed) == case["terms"], f"{expr}: normalized DNF drifted: {parsed!r}")
+        expect(signature(validated) == case["terms"], f"{expr}: strict validation changed DNF: {validated!r}")
+        expect(signature(revalidated) == case["terms"], f"{expr}: DNF re-validation changed normalization: {revalidated!r}")
+        expect(core.describe_anchor_expr(expr) == case["natural"], f"{expr}: natural text drifted")
+
+        current = start
+        generated = []
+        for _ in case["dates"]:
+            nxt, _meta = core.next_after_expr(
+                validated,
+                current,
+                default_seed=start,
+                seed_base="anchor-characterization-v1",
+            )
+            expect(nxt is not None, f"{expr}: scheduler stopped before the expected characterization dates")
+            generated.append(nxt.isoformat())
+            current = nxt
+        expect(generated == case["dates"], f"{expr}: scheduled dates drifted: {generated!r}")
+
+
 def test_anchor_parse_deep_nesting_guard():
     """Deeply nested expressions should fail with ParseError, not recursion/runtime failures."""
     import nautical_core as core
@@ -10818,6 +10928,7 @@ TESTS = [
     test_parse_anchor_expr_fuzz_inputs,
     test_anchor_parse_validate_fuzz_no_unexpected_exceptions,
     test_anchor_validate_roundtrip_preserves_next_occurrence,
+    test_anchor_expression_characterization_matrix,
     test_anchor_parse_deep_nesting_guard,
     test_anchor_validate_rejects_legacy_tuple_error_payload,
     test_rand_determinism_with_seed,

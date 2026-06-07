@@ -2050,6 +2050,7 @@ def _apply_parent_update_for_entry(
 def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     if _handle_entry_gate(entry, state):
         return False
+    queue_entry = entry
     entry = _normalize_queue_entry(entry)
 
     spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
@@ -2081,7 +2082,7 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
                     _diag(f"equivalent child already exists; binding to child {child_short}")
 
     ctx = _build_exit_entry_context(
-        entry,
+        queue_entry,
         idx,
         state,
         parent_uuid=parent_uuid,
@@ -2119,8 +2120,8 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
 
     _seed_equivalent_child_cache(child, parent_uuid, child_uuid)
     state.processed += 1
-    state.mark_final(entry, "done", "processed")
-    state.ack_sqlite(entry)
+    state.mark_final(queue_entry, "done", "processed")
+    state.ack_sqlite(queue_entry)
     state.reset_lock_streak()
     return False
 

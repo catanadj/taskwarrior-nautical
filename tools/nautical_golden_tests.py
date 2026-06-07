@@ -6453,6 +6453,9 @@ def test_on_exit_spawn_intents_drain():
         expect(stats.get("processed") == 1, f"unexpected drain processed: {stats}")
         expect(imported["ok"], "child import did not run")
         expect(parent_updated["ok"], "parent update did not run")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            remaining = conn.execute("SELECT COUNT(*) FROM queue_entries").fetchone()
+        expect(remaining == (0,), f"processed sqlite queue row was not acknowledged: {remaining}")
 
 
 def test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links():
@@ -6601,6 +6604,151 @@ def test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links():
         mod._mark_intent_status = saved["mark"]
         mod._seed_equivalent_child_cache = saved["seed"]
         mod._sleep = saved["sleep"]
+
+
+def test_cross_device_spawn_intents_converge_in_either_merge_order():
+    """Two devices should converge on one child slot regardless of queue order."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_cross_device_spawn_test")
+    exit_models = mod._module("exit_models")
+    exit_queries = mod._module("exit_queries")
+
+    parent_uuid = "11111111-0000-0000-0000-000000000111"
+    device_uuids = {
+        "a": "22222222-0000-0000-0000-000000000222",
+        "b": "33333333-0000-0000-0000-000000000333",
+    }
+    saved = {
+        "export_uuid": mod._export_uuid,
+        "parent_state": mod._parent_nextlink_state,
+        "import_child": mod._import_child,
+        "update_parent": mod._update_parent_nextlink,
+        "cleanup": mod._cleanup_orphan_child,
+        "mark": mod._mark_intent_status,
+        "sleep": mod._sleep,
+        "equivalent_query": exit_queries.existing_equivalent_child,
+    }
+
+    def make_entry(device: str, child_uuid: str) -> dict:
+        return {
+            "parent_uuid": parent_uuid,
+            "parent_nextlink": "",
+            "child_short": child_uuid[:8],
+            "child": {
+                "uuid": child_uuid,
+                "description": f"cross-device child {device}",
+                "status": "pending",
+                "chainID": "abcd1234",
+                "link": 2,
+                "prevLink": parent_uuid[:8],
+            },
+            "spawn_intent_id": f"si_device_{device}",
+        }
+
+    def run_case(order: tuple[str, str], *, divergent_uuids: bool) -> None:
+        mod._reset_exit_equiv_child_cache()
+        uuids = dict(device_uuids)
+        if not divergent_uuids:
+            uuids["b"] = uuids["a"]
+        entries = [make_entry(device, uuids[device]) for device in order]
+        world = {
+            "children": {},
+            "parent_next": "",
+            "imports": 0,
+            "updates": 0,
+            "cleanups": 0,
+            "marks": [],
+        }
+
+        def export_uuid(uuid_str, *, prefer_cache=True):
+            _ = prefer_cache
+            obj = world["children"].get(uuid_str)
+            return exit_models.ExitExportResult(
+                obj is not None,
+                False,
+                "" if obj is not None else "not found",
+                obj,
+            )
+
+        def equivalent_query(child, **_kwargs):
+            for existing in world["children"].values():
+                if (
+                    existing.get("chainID") == child.get("chainID")
+                    and existing.get("link") == child.get("link")
+                    and existing.get("prevLink") == child.get("prevLink")
+                ):
+                    return exit_models.ExitEquivalentChildResult(True, False, "", existing)
+            return exit_models.ExitEquivalentChildResult(False, False, "not found", None)
+
+        def parent_nextlink_state(_parent_uuid, child_short, expected_prev=None, *, prefer_cache=True):
+            _ = (expected_prev, prefer_cache)
+            if world["parent_next"] == child_short:
+                return exit_models.ExitParentNextlinkStateResult("already", "")
+            if world["parent_next"]:
+                return exit_models.ExitParentNextlinkStateResult("conflict", "parent nextLink already set")
+            return exit_models.ExitParentNextlinkStateResult("ok", "")
+
+        def import_child(child):
+            world["imports"] += 1
+            world["children"][child["uuid"]] = dict(child)
+            return exit_models.ExitImportResult(True, "")
+
+        def update_parent(_parent_uuid, child_short, expected_prev=None):
+            _ = expected_prev
+            world["updates"] += 1
+            world["parent_next"] = child_short
+            return exit_models.ExitParentUpdateResult(True, "")
+
+        mod._export_uuid = export_uuid
+        exit_queries.existing_equivalent_child = equivalent_query
+        mod._parent_nextlink_state = parent_nextlink_state
+        mod._import_child = import_child
+        mod._update_parent_nextlink = update_parent
+        mod._cleanup_orphan_child = lambda *_a, **_k: world.__setitem__("cleanups", world["cleanups"] + 1)
+        mod._mark_intent_status = lambda sid, status, reason="": world["marks"].append((sid, status, reason)) or True
+        mod._sleep = lambda _seconds: None
+
+        state = mod._DrainState(entries, len(entries), set(), True, 0.0)
+        for idx, entry in enumerate(entries):
+            expect(not mod._process_queue_entry(idx, entry, state), f"{order}: processing should not circuit-break")
+
+        expected_uuid = uuids[order[0]]
+        expect(state.processed == 2 and state.errors == 0, f"{order}: intents did not converge cleanly")
+        expect(world["imports"] == 1, f"{order}: expected exactly one child import")
+        expect(list(world["children"]) == [expected_uuid], f"{order}: duplicate child slot survived")
+        expect(world["parent_next"] == expected_uuid[:8], f"{order}: parent did not link to the surviving child")
+        expect(world["updates"] == 1, f"{order}: parent link should be written once")
+        expect(world["cleanups"] == 0, f"{order}: converged child should not be cleaned up")
+        expect(
+            {sid for sid, status, _reason in world["marks"] if status == "done"}
+            == {entry["spawn_intent_id"] for entry in entries},
+            f"{order}: both device intents should be finalized",
+        )
+
+        side_effects = (world["imports"], world["updates"], world["cleanups"])
+        finalized = {entry["spawn_intent_id"] for entry in entries}
+        replay = mod._DrainState(entries, len(entries), finalized, True, 0.0)
+        for idx, entry in enumerate(entries):
+            expect(not mod._process_queue_entry(idx, entry, replay), f"{order}: finalized replay should not break")
+        expect(replay.skipped_idempotent == 2, f"{order}: finalized intents were not skipped")
+        expect(
+            (world["imports"], world["updates"], world["cleanups"]) == side_effects,
+            f"{order}: finalized replay caused side effects",
+        )
+
+    try:
+        for order in (("a", "b"), ("b", "a")):
+            run_case(order, divergent_uuids=False)
+            run_case(order, divergent_uuids=True)
+    finally:
+        mod._export_uuid = saved["export_uuid"]
+        mod._parent_nextlink_state = saved["parent_state"]
+        mod._import_child = saved["import_child"]
+        mod._update_parent_nextlink = saved["update_parent"]
+        mod._cleanup_orphan_child = saved["cleanup"]
+        mod._mark_intent_status = saved["mark"]
+        mod._sleep = saved["sleep"]
+        exit_queries.existing_equivalent_child = saved["equivalent_query"]
 
 
 def test_on_exit_take_queue_recovers_from_corrupt_sqlite_db():
@@ -7065,6 +7213,13 @@ def test_on_exit_parent_update_lock_busy_requeues():
         expect(stats.get("requeued") == 1, f"expected one requeued entry, got: {stats}")
         expect(stats.get("errors") == 0, f"lock-busy parent update should be retryable: {stats}")
         expect(not mod._DEAD_LETTER_PATH.exists(), "lock-busy parent update should not dead-letter")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            queued = conn.execute(
+                "SELECT attempts, state, claim_token, claimed_at FROM queue_entries "
+                "WHERE spawn_intent_id=?",
+                (entry["spawn_intent_id"],),
+            ).fetchone()
+        expect(queued == (1, "queued", None, None), f"sqlite retry metadata was not preserved: {queued}")
 
 
 def test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter():
@@ -11325,6 +11480,7 @@ TESTS = [
     test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,
     test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links,
+    test_cross_device_spawn_intents_converge_in_either_merge_order,
     test_on_exit_take_queue_recovers_from_corrupt_sqlite_db,
     test_on_exit_drain_skips_finalized_sqlite_intent,
     test_on_exit_drain_updates_progress_per_entry,

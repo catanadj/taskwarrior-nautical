@@ -7878,6 +7878,75 @@ def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
 
 
+def test_on_add_preview_and_completion_skip_choose_same_next_anchor():
+    """Preview and completion should agree when given the same occurrence and chain seed."""
+    add_hook = _find_hook_file("on-add-nautical.py")
+    modify_hook = _find_hook_file("on-modify-nautical.py")
+    add_mod = _load_hook_module(add_hook, "_nautical_on_add_preview_completion_agreement_test")
+    modify_mod = _load_hook_module(modify_hook, "_nautical_on_modify_preview_completion_agreement_test")
+    if hasattr(add_mod, "_load_core"):
+        add_mod._load_core()
+    if hasattr(modify_mod, "_load_core"):
+        modify_mod._load_core()
+
+    cases = [
+        ("w:mon,wed,fri@t=09:00", "", date(2026, 1, 5), (9, 0)),
+        ("w:mon,wed,fri + y:apr@t=09:00", "", date(2026, 4, 1), (9, 0)),
+        ("m:-1bd@t=09:00", "", date(2026, 1, 30), (9, 0)),
+        ("w/2:fri@t=09:00", "", date(2026, 1, 2), (9, 0)),
+        ("w:mon@t=09:00,12:00,18:00", "", date(2026, 1, 5), (9, 0)),
+        ("w:mon,wed,fri@t=09:00", "w:wed", date(2026, 1, 5), (9, 0)),
+        ("y:rand + w:sat@t=09:00", "", date(2026, 1, 1), (9, 0)),
+    ]
+
+    chain_id = "agree1234"
+    for expr, omit_expr, due_day, fallback_hhmm in cases:
+        due_utc = modify_mod.core.build_local_datetime(due_day, fallback_hhmm).astimezone(timezone.utc)
+        due_local = modify_mod.core.to_local(due_utc)
+        dnf = add_mod.core.validate_anchor_expr_strict(expr)
+        omit_dnf = None
+        if omit_expr:
+            anchor_omit = add_mod.core._import_sibling("anchor_omit")
+            omit_dnf = anchor_omit.validate_omit_expr_strict(
+                omit_expr,
+                validate_anchor_expr_cached=add_mod.core.validate_anchor_expr_strict,
+            )
+
+        preview_current = due_local
+        completion_current = due_local
+        for step in range(4):
+            preview_next = add_mod._anchor_next_occurrence_after_local_dt(
+                dnf,
+                preview_current,
+                fallback_hhmm,
+                due_day,
+                chain_id,
+                omit_dnf,
+            )
+            expect(preview_next is not None, f"{expr}: preview did not find occurrence {step + 1}")
+
+            completion_current_utc = completion_current.astimezone(timezone.utc)
+            parent = {
+                "anchor": expr,
+                "anchor_mode": "skip",
+                "due": modify_mod.core.fmt_isoz(completion_current_utc),
+                "end": modify_mod.core.fmt_isoz(completion_current_utc),
+                "chainID": chain_id,
+            }
+            if omit_expr:
+                parent["omit"] = omit_expr
+            child_due, meta, _dnf = modify_mod._compute_anchor_child_due(parent)
+            completion_next = modify_mod.core.to_local(child_due)
+
+            expect(
+                preview_next == completion_next,
+                f"{expr} omit={omit_expr!r} step={step + 1}: preview chose {preview_next}, completion chose {completion_next}",
+            )
+            expect(meta.get("basis") == "after_end", f"{expr}: expected skip-mode completion metadata: {meta}")
+            preview_current = preview_next
+            completion_current = completion_next
+
+
 def test_on_modify_anchor_dnf_accepts_configured_preset():
     """completion-side anchor validation should resolve configured preset aliases."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -10957,6 +11026,7 @@ TESTS = [
     test_on_modify_completion_defers_chain_export_until_after_preflight,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
+    test_on_add_preview_and_completion_skip_choose_same_next_anchor,
     test_on_modify_anchor_dnf_accepts_configured_preset,
     test_on_modify_omit_dnf_accepts_configured_preset,
     test_anchor_omit_rejects_time_modifiers,

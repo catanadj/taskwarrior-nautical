@@ -9826,6 +9826,76 @@ def test_anchor_validate_roundtrip_preserves_next_occurrence():
             ref_b = nxt_b
 
 
+def test_anchor_normalization_is_semantically_idempotent():
+    """Normalization should preserve DNF, natural text, and scheduled dates."""
+    import nautical_core as core
+
+    expressions = [
+        "w:mon,wed,fri + y:apr",
+        "(w:mon | w:fri) + y:apr",
+        "y:jan",
+        "m:1bd + y:q4",
+        "m:-1bd + y:q4",
+        "w/2:fri@t=09:00",
+        "y:rand + w:sat",
+        "w:mon@t=09:00,fri@t=15:00",
+        "y:07-rand",
+        "m:15@+2d | m:last-fri@nbd",
+        "@workout + y:apr",
+    ]
+    previous_presets = getattr(core, "ANCHOR_PRESETS", {})
+    core.ANCHOR_PRESETS = {**previous_presets, "workout": "w:mon,wed,fri"}
+    try:
+        start = date(2026, 1, 1)
+        for expr in expressions:
+            parsed = core.parse_anchor_expr_to_dnf_cached(expr)
+            parsed_again = core.parse_anchor_expr_to_dnf_cached(expr)
+            validated = core.validate_anchor_expr_strict(expr)
+            revalidated = core.validate_anchor_expr_strict(parsed)
+            revalidated_again = core.validate_anchor_expr_strict(revalidated)
+
+            expect(parsed == parsed_again, f"{expr}: repeated parsing changed normalized DNF")
+            expect(parsed is not parsed_again, f"{expr}: cached parsing returned a shared outer list")
+            expect(validated == revalidated == revalidated_again, f"{expr}: DNF validation is not idempotent")
+            mutation_probe = core.parse_anchor_expr_to_dnf_cached(expr)
+            original_spec = mutation_probe[0][0]["spec"]
+            mutation_probe[0][0]["spec"] = "__mutated__"
+            parsed_after_mutation = core.parse_anchor_expr_to_dnf_cached(expr)
+            expect(
+                parsed_again[0][0]["spec"] == original_spec
+                and parsed_after_mutation[0][0]["spec"] == original_spec,
+                f"{expr}: cached parsing leaked a shared nested atom",
+            )
+
+            source_natural = core.describe_anchor_expr(expr)
+            normalized_natural = core._describe_anchor_expr_from_dnf(revalidated)
+            expect(source_natural == normalized_natural, f"{expr}: natural text changed after normalization")
+
+            refs = [start, start, start]
+            streams = [[], [], []]
+            dnfs = [validated, revalidated, revalidated_again]
+            for _ in range(20):
+                for idx, dnf in enumerate(dnfs):
+                    nxt, _meta = core.next_after_expr(
+                        dnf,
+                        refs[idx],
+                        default_seed=start,
+                        seed_base="normalization-invariance-v1",
+                    )
+                    expect(nxt is not None and nxt > refs[idx], f"{expr}: normalized scheduler made no progress")
+                    streams[idx].append(nxt)
+                    refs[idx] = nxt
+            expect(streams[0] == streams[1] == streams[2], f"{expr}: normalization changed scheduled dates")
+
+        grouped_natural = core.describe_anchor_expr("w:mon,wed,fri + y:apr")
+        expect(
+            grouped_natural == "Mondays, Wednesdays, or Fridays in Apr each year",
+            f"grouped natural text lost compact grouping: {grouped_natural!r}",
+        )
+    finally:
+        core.ANCHOR_PRESETS = previous_presets
+
+
 def test_anchor_expression_characterization_matrix():
     """Freeze representative parse, normalization, natural text, and scheduling behavior."""
     import nautical_core as core
@@ -11094,6 +11164,7 @@ TESTS = [
     test_parse_anchor_expr_fuzz_inputs,
     test_anchor_parse_validate_fuzz_no_unexpected_exceptions,
     test_anchor_validate_roundtrip_preserves_next_occurrence,
+    test_anchor_normalization_is_semantically_idempotent,
     test_anchor_expression_characterization_matrix,
     test_anchor_parse_deep_nesting_guard,
     test_anchor_validate_rejects_legacy_tuple_error_payload,

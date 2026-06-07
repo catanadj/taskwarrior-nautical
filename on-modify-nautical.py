@@ -2289,7 +2289,7 @@ def _validate_cp_on_modify(cp_str: str, chain_max_val, chain_until_val):
     """
     Mirror on-add CP checks for a plain modify:
       - cp must parse as a duration
-      - optional chainMax must be a non-negative int
+      - optional chainMax must be a positive integer
       - optional chainUntil must parse as a datetime
     """
     if not cp_str or not cp_str.strip():
@@ -2301,17 +2301,10 @@ def _validate_cp_on_modify(cp_str: str, chain_max_val, chain_until_val):
         raise ValueError(f"{reason} (expected: 3d, 2w, 1h, etc.)")
 
     # chainMax
-    if chain_max_val not in (None, ""):
-        try:
-            cpmax = core.coerce_int(chain_max_val, 0)
-        except Exception:
-            # fallback if coerce_int isn't available
-            try:
-                cpmax = int(str(chain_max_val).strip())
-            except Exception:
-                raise ValueError("chainMax must be an integer")
-        if cpmax < 0:
-            raise ValueError("chainMax must be a non-negative integer")
+    add_validation = core._import_sibling("add_validation")
+    _cpmax, chain_max_err = add_validation.parse_chain_max(chain_max_val)
+    if chain_max_err:
+        raise ValueError(chain_max_err)
 
     # chainUntil
     cu = (chain_until_val or "").strip()
@@ -2319,6 +2312,25 @@ def _validate_cp_on_modify(cp_str: str, chain_max_val, chain_until_val):
         dt = core.parse_dt_any(cu)
         if dt is None:
             raise ValueError(f"Invalid chainUntil '{cu}'")
+
+
+def _validate_chain_limits_on_modify(task: dict) -> None:
+    add_validation = core._import_sibling("add_validation")
+    cpmax, chain_max_err = add_validation.parse_chain_max(task.get("chainMax"))
+    if chain_max_err:
+        _fail_and_exit("Invalid chainMax", chain_max_err)
+    if cpmax is not None:
+        task["chainMax"] = cpmax
+
+    chain_until = str(task.get("chainUntil") or "").strip()
+    if not chain_until:
+        return
+    until_dt = core.parse_dt_any(chain_until)
+    if until_dt is None:
+        _fail_and_exit("Invalid chainUntil", f"Unrecognized datetime format '{chain_until}'")
+    is_valid, until_err = _validate_until_not_past(until_dt, core.now_utc())
+    if not is_valid:
+        _fail_and_exit("Invalid chainUntil", until_err or "chainUntil is in the past")
 
 
 # ------------------------------------------------------------------------------
@@ -5254,6 +5266,12 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     cp_raw = (new.get("cp") or "").strip()
     new_cp = _strip_quotes(cp_raw)
     _non_completion_reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
+    recurrence_or_cap_changed = any(
+        _field_changed(old, new, field)
+        for field in ("cp", "anchor", "anchor_file", "chainMax", "chainUntil")
+    )
+    if recurrence_or_cap_changed and (new_cp or new_anchor or new_anchor_file):
+        _validate_chain_limits_on_modify(new)
 
     modify_lifecycle = _module("modify_lifecycle")
     try:
@@ -5300,6 +5318,8 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, 
         new["omit_file"] = new_omit_file
     _non_completion_reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
     _validate_omit_for_anchor_or_fail(new_anchor, new_anchor_file, new_omit, new_omit_file)
+    if new_cp or new_anchor or new_anchor_file:
+        _validate_chain_limits_on_modify(new)
 
     if new_cp:
         # Validate CP on completion

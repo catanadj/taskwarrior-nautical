@@ -7341,6 +7341,238 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
     expect(out.finals == finals and out.until_cap_no == 3, f"unexpected finals: {out}")
 
 
+def test_chain_cap_guards_are_inclusive_at_boundary():
+    """chainMax and chainUntil should allow the exact boundary and stop only beyond it."""
+    compute = core._import_sibling("modify_completion_compute")
+    now_utc = core.now_utc()
+
+    summaries = []
+    printed = []
+    task = {"chain": "on"}
+    expect(
+        compute.completion_cap_guard_or_stop(
+            task,
+            5,
+            5,
+            now_utc,
+            end_chain_summary=lambda *_a, **_k: summaries.append((_a, _k)),
+            print_task=lambda obj: printed.append(dict(obj)),
+        ),
+        "chainMax should allow spawning the exact capped link",
+    )
+    expect(task.get("chain") == "on" and not summaries and not printed, f"exact chainMax boundary should not stop: {task!r}")
+
+    expect(
+        not compute.completion_cap_guard_or_stop(
+            task,
+            6,
+            5,
+            now_utc,
+            end_chain_summary=lambda *_a, **_k: summaries.append((_a, _k)),
+            print_task=lambda obj: printed.append(dict(obj)),
+        ),
+        "chainMax should stop the first link beyond the cap",
+    )
+    expect(task.get("chain") == "off", f"cap stop should disable the chain: {task!r}")
+    expect(summaries and "Reached cap #5" in str(summaries[-1]), f"cap stop should explain the boundary: {summaries!r}")
+
+    until = now_utc + timedelta(days=2)
+    task = {"chain": "on"}
+    expect(
+        compute.completion_until_guard_or_stop(
+            task,
+            until,
+            until,
+            now_utc,
+            end_chain_summary=lambda *_a, **_k: summaries.append((_a, _k)),
+            print_task=lambda obj: printed.append(dict(obj)),
+        ),
+        "chainUntil should include an occurrence exactly at the deadline",
+    )
+    expect(
+        not compute.completion_until_guard_or_stop(
+            task,
+            until + timedelta(seconds=1),
+            until,
+            now_utc,
+            end_chain_summary=lambda *_a, **_k: summaries.append((_a, _k)),
+            print_task=lambda obj: printed.append(dict(obj)),
+        ),
+        "chainUntil should stop an occurrence after the deadline",
+    )
+    expect(task.get("chain") == "off", f"until stop should disable the chain: {task!r}")
+
+
+def test_completion_caps_earliest_limit_wins():
+    """When chainMax and chainUntil coexist, the earlier numeric cap should control spawning."""
+    compute = core._import_sibling("modify_completion_compute")
+    child_due = (core.now_utc() + timedelta(days=1)).replace(microsecond=0)
+    until_dt = child_due + timedelta(days=10)
+
+    result = compute.completion_caps(
+        "cp",
+        {"chainMax": 8, "chainUntil": core.fmt_isoz(until_dt)},
+        child_due,
+        None,
+        coerce_int=core.coerce_int,
+        dtparse=core.parse_dt_any,
+        estimate_cp_final_by_max=lambda *_a: child_due + timedelta(days=7),
+        estimate_anchor_final_by_max=lambda *_a: None,
+        cap_from_until_cp=lambda *_a: (5, child_due + timedelta(days=4)),
+        cap_from_until_anchor=lambda *_a: (None, None),
+    )
+    cpmax, parsed_until, cap_no, finals, until_cap_no = result
+    expect(cpmax == 8 and parsed_until == until_dt, f"unexpected parsed caps: {result!r}")
+    expect(cap_no == 5 and until_cap_no == 5, f"earliest until cap should win: {result!r}")
+    expect([kind for kind, _dt in finals] == ["max", "until"], f"both final estimates should remain visible: {finals!r}")
+
+    later_until = compute.completion_caps(
+        "cp",
+        {"chainMax": 3, "chainUntil": core.fmt_isoz(until_dt)},
+        child_due,
+        None,
+        coerce_int=core.coerce_int,
+        dtparse=core.parse_dt_any,
+        estimate_cp_final_by_max=lambda *_a: child_due + timedelta(days=2),
+        estimate_anchor_final_by_max=lambda *_a: None,
+        cap_from_until_cp=lambda *_a: (5, child_due + timedelta(days=4)),
+        cap_from_until_anchor=lambda *_a: (None, None),
+    )
+    expect(later_until[2] == 3 and later_until[4] == 5, f"earlier chainMax should win: {later_until!r}")
+
+
+def test_cap_from_until_cp_includes_exact_deadline():
+    """CP chainUntil counting should include a due timestamp exactly equal to the deadline."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cap_until_exact_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    next_due = mod.core.build_local_datetime(date(2026, 1, 2), (9, 0)).astimezone(timezone.utc)
+    exact_until = mod._cp_add_td(next_due, timedelta(days=1))
+    task = {
+        "cp": "1d",
+        "link": 1,
+        "chainUntil": mod.core.fmt_isoz(exact_until),
+    }
+    final_no, final_dt = mod._cap_from_until_cp(task, next_due)
+    expect(final_no == 3, f"exact deadline should include link #3: got #{final_no}")
+    expect(final_dt == exact_until, f"exact deadline should be the final due: {final_dt!r} != {exact_until!r}")
+
+
+def test_chain_max_parser_requires_positive_integer():
+    """Shared chainMax parsing should accept integral values and reject ambiguous caps."""
+    import nautical_core.add_validation as add_validation
+
+    for value, expected_value in ((1, 1), (5, 5), (5.0, 5), ("5", 5), ("5.0", 5)):
+        parsed, err = add_validation.parse_chain_max(value)
+        expect(parsed == expected_value, f"unexpected parsed chainMax for {value!r}: {(parsed, err)!r}")
+        expect(err is None, f"valid chainMax should not error for {value!r}: {err!r}")
+
+    for value, expected in (
+        (0, "chainMax must be > 0"),
+        (-1, "chainMax must be > 0"),
+        (2.5, "chainMax must be a positive integer"),
+        ("abc", "chainMax must be a positive integer"),
+        (True, "chainMax must be a positive integer"),
+    ):
+        parsed, err = add_validation.parse_chain_max(value)
+        expect(parsed is None and err == expected, f"unexpected invalid chainMax result for {value!r}: {(parsed, err)!r}")
+
+
+def test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor():
+    """on-add should reject invalid chainMax values for both recurrence branches."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    cases = [
+        ({"cp": "1d", "chainMax": 0}, "cp zero"),
+        ({"cp": "1d", "chainMax": -1}, "cp negative"),
+        ({"cp": "1d", "chainMax": 2.5}, "cp fractional"),
+        ({"anchor": "w:mon", "anchor_mode": "skip", "chainMax": 0}, "anchor zero"),
+    ]
+    for idx, (attrs, label) in enumerate(cases, start=1):
+        task = {
+            "uuid": f"00000000-0000-0000-0000-00000000{180 + idx:04d}",
+            "description": f"hook test invalid chainMax add {label}",
+            "status": "pending",
+            "entry": "20260101T000000Z",
+            "due": "20260101T090000Z",
+            **attrs,
+        }
+        p = _run_hook_script(hook, task, env_extra=env)
+        expect(p.returncode != 0, f"on-add should reject {label}")
+        expect((p.stdout or "").strip() == "", f"invalid chainMax add should not emit stdout: {p.stdout!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Invalid chainMax" in stderr_txt, f"expected chainMax panel for {label}: {stderr_txt[:500]!r}")
+        expect("chainMax must be" in stderr_txt, f"expected chainMax guidance for {label}: {stderr_txt[:500]!r}")
+
+
+def test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor():
+    """on-modify should reject invalid chainMax values before completion or spawn."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    env = {"NO_COLOR": "1"}
+    cases = [
+        ({"cp": "1d"}, 0, "cp zero"),
+        ({"cp": "1d"}, -1, "cp negative"),
+        ({"cp": "1d"}, 2.5, "cp fractional"),
+        ({"anchor": "w:mon", "anchor_mode": "skip"}, 0, "anchor zero"),
+    ]
+    for idx, (recurrence, invalid_cap, label) in enumerate(cases, start=1):
+        old = {
+            "uuid": f"00000000-0000-0000-0000-00000000{200 + idx:04d}",
+            "description": f"hook test invalid chainMax modify {label}",
+            "status": "pending",
+            "entry": "20260101T000000Z",
+            "due": "20260101T090000Z",
+            "chain": "on",
+            "chainID": "abcd1234",
+            "link": 1,
+            **recurrence,
+        }
+        new = dict(old)
+        new["chainMax"] = invalid_cap
+        raw = json.dumps(old) + "\n" + json.dumps(new) + "\n"
+        p = _run_hook_script_raw(hook, raw, env_extra=env)
+        expect(p.returncode != 0, f"on-modify should reject {label}")
+        expect((p.stdout or "").strip() == "", f"invalid chainMax modify should not emit stdout: {p.stdout!r}")
+        stderr_txt = _strip_markup(p.stderr)
+        expect("Invalid chainMax" in stderr_txt, f"expected chainMax panel for {label}: {stderr_txt[:500]!r}")
+        expect("chainMax must be" in stderr_txt, f"expected chainMax guidance for {label}: {stderr_txt[:500]!r}")
+
+
+def test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change():
+    """Unrelated edits should pass, but changing chainUntil should trigger strict validation."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    env = {"NO_COLOR": "1"}
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000220",
+        "description": "expired chain",
+        "status": "pending",
+        "entry": "20260101T000000Z",
+        "due": "20260101T090000Z",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "abcd1234",
+        "link": 1,
+        "chainUntil": "20200101T000000Z",
+    }
+
+    unrelated = dict(old)
+    unrelated["description"] = "expired chain renamed"
+    p = _run_hook_script_raw(hook, json.dumps(old) + "\n" + json.dumps(unrelated) + "\n", env_extra=env)
+    expect(p.returncode == 0, f"unrelated modify should not revalidate an old cap: stderr={p.stderr!r}")
+    expect(_extract_last_json(p.stdout) == unrelated, f"unrelated modify should pass through: {p.stdout!r}")
+
+    invalid = dict(old)
+    invalid["chainUntil"] = "not-a-date"
+    p = _run_hook_script_raw(hook, json.dumps(old) + "\n" + json.dumps(invalid) + "\n", env_extra=env)
+    expect(p.returncode != 0, "changing chainUntil to an invalid value should fail")
+    expect((p.stdout or "").strip() == "", f"invalid chainUntil modify should not emit stdout: {p.stdout!r}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect("Invalid chainUntil" in stderr_txt, f"expected chainUntil panel: {stderr_txt[:500]!r}")
+    expect("Unrecognized datetime format" in stderr_txt, f"expected chainUntil guidance: {stderr_txt[:500]!r}")
+
+
 def test_on_modify_completion_finalize_skips_analytics_when_hidden():
     """completion finalize should not compute analytics advice when analytics are hidden."""
     flow = core._import_sibling("modify_completion_flow")
@@ -10508,6 +10740,13 @@ TESTS = [
     test_on_modify_link_limit,
     test_on_modify_completion_preflight_context_happy_path,
     test_on_modify_completion_compute_next_and_limits_happy_path,
+    test_chain_cap_guards_are_inclusive_at_boundary,
+    test_completion_caps_earliest_limit_wins,
+    test_cap_from_until_cp_includes_exact_deadline,
+    test_chain_max_parser_requires_positive_integer,
+    test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor,
+    test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor,
+    test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
     test_on_modify_completion_finalize_skips_analytics_when_hidden,
     test_on_modify_completion_defers_chain_export_until_after_preflight,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,

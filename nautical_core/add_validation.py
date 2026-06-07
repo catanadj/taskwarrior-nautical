@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
@@ -59,6 +60,23 @@ def validate_cpmax_positive(cpmax: Any) -> tuple[bool, str | None]:
     if cpmax <= 0:
         return (False, "chainMax must be > 0")
     return (True, None)
+
+
+def parse_chain_max(value: Any) -> tuple[int | None, str | None]:
+    if value in (None, ""):
+        return (None, None)
+    if isinstance(value, bool):
+        return (None, "chainMax must be a positive integer")
+    try:
+        parsed = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        return (None, "chainMax must be a positive integer")
+    if not parsed.is_finite() or parsed != parsed.to_integral_value():
+        return (None, "chainMax must be a positive integer")
+    cpmax = int(parsed)
+    if cpmax <= 0:
+        return (None, "chainMax must be > 0")
+    return (cpmax, None)
 
 
 def safe_parse_datetime(

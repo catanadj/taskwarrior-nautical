@@ -1829,11 +1829,12 @@ def _kind_and_defaults_on_add(task: dict, cp_str: str, anchor_str: str, anchor_f
 
 
 def _validate_chain_limits_on_add(task: dict, now_utc: datetime) -> datetime | None:
-    cpmax = core.coerce_int(task.get("chainMax"), 0)
-    if cpmax:
-        is_valid, err = _validate_cpmax_positive(cpmax)
-        if not is_valid:
-            _error_and_exit([("Invalid chainMax", err)])
+    add_validation = _module("add_validation")
+    cpmax, err = add_validation.parse_chain_max(task.get("chainMax"))
+    if err:
+        _error_and_exit([("Invalid chainMax", err)])
+    if cpmax is not None:
+        task["chainMax"] = cpmax
 
     until_dt, err = _safe_parse_datetime(task.get("chainUntil"), "chainUntil")
     if err:

@@ -3628,6 +3628,61 @@ def test_anchors_between_expr_stops_on_no_progress():
     finally:
         core.next_after_expr = saved_next
 
+
+def test_anchors_between_expr_matches_iterative_scheduler():
+    """Bulk expansion should return the same dates as repeated next-after scheduling."""
+    import nautical_core as core
+
+    cases = [
+        "w:mon..fri",
+        "w/2:fri",
+        "w:mon,wed,fri + y:apr",
+        "m:last-fri",
+        "m:rand + y:apr",
+    ]
+    start = date(2026, 1, 1)
+    end = date(2027, 1, 1)
+    seed = "bulk-agreement-v1"
+
+    for expr in cases:
+        dnf = core.validate_anchor_expr_strict(expr)
+        expected = []
+        current = start
+        while len(expected) < 20:
+            nxt, _meta = core.next_after_expr(dnf, current, default_seed=start, seed_base=seed)
+            if nxt is None or nxt >= end:
+                break
+            expected.append(nxt)
+            current = nxt
+
+        actual = core.anchors_between_expr(
+            dnf,
+            start_excl=start,
+            end_excl=end,
+            default_seed=start,
+            seed_base=seed,
+        )
+        expect(actual[:20] == expected, f"{expr}: bulk dates disagree with iterative scheduler: {actual[:20]!r} != {expected!r}")
+
+    weekdays = core.validate_anchor_expr_strict("w:mon..fri")
+    expected_prefix = [
+        date(2026, 1, 2),
+        date(2026, 1, 5),
+        date(2026, 1, 6),
+        date(2026, 1, 7),
+        date(2026, 1, 8),
+        date(2026, 1, 9),
+    ]
+    actual = core.anchors_between_expr(
+        weekdays,
+        start_excl=start,
+        end_excl=date(2029, 1, 1),
+        default_seed=start,
+        seed_base=seed,
+    )
+    expect(actual[:6] == expected_prefix, f"large-range bulk expansion skipped consecutive weekdays: {actual[:6]!r}")
+
+
 def test_rand_with_year_window():
     """Test random pattern with yearly window constraint"""
     # Only inside Apr 20 – May 15
@@ -10636,6 +10691,7 @@ TESTS = [
     test_next_weekday_roll_cross_year_date_still_matches_expression,
     test_weekly_multi_days_every_2weeks_spacing_and_days,
     test_anchors_between_expr_stops_on_no_progress,
+    test_anchors_between_expr_matches_iterative_scheduler,
     test_inline_time_mods_split_ok,
     test_anchor_date_calculations,
     test_interval_patterns,

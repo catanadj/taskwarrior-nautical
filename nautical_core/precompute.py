@@ -147,8 +147,10 @@ def anchors_between_large_range(
         nxt, _ = next_after_expr(dnf, cur, default_seed, seed_base=seed_base)
         if nxt is None or nxt >= end_excl:
             break
+        if nxt <= cur:
+            break
         acc.append(nxt)
-        cur = nxt + timedelta(days=1)
+        cur = nxt
 
         if len(acc) >= batch_size:
             break
@@ -196,8 +198,8 @@ def anchors_between_expr(
                 )
             break
         if acc and nxt <= acc[-1]:
-            cur = acc[-1] + timedelta(days=1)
+            cur = acc[-1]
             continue
         acc.append(nxt)
-        cur = nxt + timedelta(days=1)
+        cur = nxt
     return acc

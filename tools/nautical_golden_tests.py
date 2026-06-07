@@ -2365,6 +2365,199 @@ def test_queue_status_warns_on_stale_processing_and_dead_letters():
         expect(len(queue.get("sample") or []) >= 1, f"expected sample rows: {queue}")
 
 
+def _write_fake_task_for_doctor(path: Path) -> None:
+    path.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("3.4.2")
+    raise SystemExit(0)
+if len(args) == 2 and args[0] == "_get":
+    key = args[1]
+    if key == "rc.hooks.location":
+        print(os.environ.get("FAKE_HOOKS", ""))
+        raise SystemExit(0)
+    if key.startswith("rc.uda.") and key.endswith(".type"):
+        name = key[len("rc.uda."):-len(".type")]
+        expected = {
+            "cp": "string", "chain": "string", "anchor": "string",
+            "anchor_file": "string", "anchor_mode": "string",
+            "omit": "string", "omit_file": "string",
+            "chainMax": "numeric", "chainUntil": "date",
+            "prevLink": "string", "nextLink": "string",
+            "link": "numeric", "chainID": "string",
+        }
+        if name == os.environ.get("FAKE_WRONG_UDA"):
+            print("date")
+        else:
+            print(expected.get(name, ""))
+        raise SystemExit(0)
+if "export" in args:
+    print(os.environ.get("FAKE_EXPORT", "[]"))
+    raise SystemExit(0)
+print("unsupported", file=sys.stderr)
+raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def test_doctor_reports_healthy_installation():
+    """doctor should report ok for a complete installation with clean chain state."""
+    path = os.path.join(ROOT, "tools", "nautical_doctor.py")
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        hooks = td_path / "hooks"
+        hooks.mkdir()
+        for name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
+            hook = hooks / name
+            hook.write_text("#!/bin/sh\n", encoding="utf-8")
+            hook.chmod(0o755)
+        (td_path / "config-nautical.toml").write_text('tz = "UTC"\n', encoding="utf-8")
+        fake_task = td_path / "task"
+        _write_fake_task_for_doctor(fake_task)
+        rows = [
+            {
+                "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "cp": "1d",
+                "chainID": "cid",
+                "link": 1,
+                "nextLink": "bbbbbbbb",
+            },
+            {
+                "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "cp": "1d",
+                "chainID": "cid",
+                "link": 2,
+                "prevLink": "aaaaaaaa",
+            },
+        ]
+        env = os.environ.copy()
+        env["FAKE_HOOKS"] = str(hooks)
+        env["FAKE_EXPORT"] = json.dumps(rows)
+        p = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task), "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=8.0,
+        )
+        expect(p.returncode == 0, f"doctor returned {p.returncode}: {p.stderr!r} {p.stdout!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        expect(obj.get("status") == "ok", f"unexpected doctor status: {obj}")
+        expect((obj.get("counts") or {}).get("chains") == 1, f"unexpected doctor counts: {obj}")
+
+
+def test_doctor_reports_actionable_broken_installation():
+    """doctor should identify installation, queue, and chain failures with stable IDs."""
+    path = os.path.join(ROOT, "tools", "nautical_doctor.py")
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        hooks = td_path / "hooks"
+        hooks.mkdir()
+        fake_task = td_path / "task"
+        _write_fake_task_for_doctor(fake_task)
+        (td_path / "config-nautical.toml").write_text("broken = [\n", encoding="utf-8")
+        state_dir = td_path / ".nautical-state"
+        state_dir.mkdir()
+        with sqlite3.connect(str(state_dir / ".nautical_queue.db")) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, state, created_at, updated_at) "
+                "VALUES ('si_doctor', '{}', 'queued', 1.0, 1.0)"
+            )
+            conn.commit()
+        rows = [
+            {
+                "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "description": "Missing chain identity",
+                "status": "pending",
+                "anchor": "w:mon",
+                "link": 1,
+                "nextLink": "missing1",
+            },
+            {
+                "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "description": "Duplicate slot first",
+                "status": "pending",
+                "cp": "1d",
+                "chainID": "cid",
+                "link": 2,
+            },
+            {
+                "uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                "description": "Duplicate slot second",
+                "status": "completed",
+                "cp": "1d",
+                "chainID": "cid",
+                "link": 2,
+            },
+        ]
+        env = os.environ.copy()
+        env["FAKE_HOOKS"] = str(hooks)
+        env["FAKE_EXPORT"] = json.dumps(rows)
+        env["FAKE_WRONG_UDA"] = "cp"
+        p = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task), "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=8.0,
+        )
+        expect(p.returncode == 2, f"expected doctor error exit 2, got {p.returncode}: {p.stderr!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        ids = {item.get("id") for item in obj.get("findings") or []}
+        expected = {
+            "hook.on-add.missing",
+            "hook.on-modify.missing",
+            "hook.on-exit.missing",
+            "uda.cp.type",
+            "config.invalid",
+            "queue.state",
+            "chains.missing_chainid",
+            "chains.duplicate_slots",
+            "chains.dangling_links",
+        }
+        expect(expected <= ids, f"doctor findings missing {expected - ids}: {obj}")
+
+        text = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task)],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=8.0,
+        )
+        expect(text.returncode == 2, f"expected text doctor error exit 2, got {text.returncode}")
+        report = text.stdout or ""
+        expect(
+            "Affected: aaaaaaaa Missing chain identity" in report,
+            f"missing affected task identity from doctor text: {report!r}",
+        )
+        expect("Slot: chain=cid link=2" in report, f"missing duplicate slot identity: {report!r}")
+        expect("bbbbbbbb Duplicate slot first" in report, f"missing first duplicate task: {report!r}")
+        expect("cccccccc Duplicate slot second" in report, f"missing second duplicate task: {report!r}")
+        expect("nextLink -> missing1" in report, f"missing broken link target: {report!r}")
+
+
 def test_perf_budget_config_covers_cache_io_checks():
     """Perf budget config should include explicit cache save/load check budgets."""
     cfg_path = Path(ROOT) / "tools" / "perf_budget.json"
@@ -4642,6 +4835,28 @@ def test_yearly_rand_natural_and_bounds():
     expect(p3["upcoming"], "y:rand + w:sat should produce upcoming dates")
     for d in p3["upcoming"][:8]:
         expect(datetime.fromisoformat(d).weekday() == 5, f"{d} must be a Saturday")
+
+
+def test_yearly_rand_respects_sibling_month_filter():
+    """y:rand should choose from sibling yearly constraints, not the whole year."""
+    dnf = core.parse_anchor_expr_to_dnf_cached("y:rand + y:apr,jul,oct")
+    current = date(2025, 1, 1)
+    dates = []
+    for _ in range(8):
+        nxt, meta = core.next_after_expr(dnf, current, seed_base="yearly-rand-month-filter")
+        expect(nxt is not None and nxt > current, "constrained yearly rand did not advance")
+        expect((meta or {}).get("basis") == "rand", f"unexpected constrained rand metadata: {meta}")
+        dates.append(nxt)
+        current = nxt
+    expect(
+        all(dt.month in {4, 7, 10} for dt in dates),
+        f"yearly rand escaped Apr/Jul/Oct: {dates}",
+    )
+    expect(
+        len({dt.year for dt in dates}) == len(dates),
+        f"yearly rand should produce one pick per year: {dates}",
+    )
+
 
 def test_yearly_month_aliases_and_ranges():
     """Test month name aliases and numeric shorthands"""
@@ -11326,6 +11541,7 @@ TESTS = [
     test_cache_key_for_task_caches_build_acf_results,
     test_build_and_cache_hints_parses_once_per_miss,
     test_yearly_rand_natural_and_bounds,
+    test_yearly_rand_respects_sibling_month_filter,
     test_yearly_month_aliases_and_ranges,
     test_business_day_bd_skip_semantics,
     test_scheduler_atom_helpers_characterization,
@@ -11423,6 +11639,8 @@ TESTS = [
     test_health_check_critical_queue_db_rows,
     test_queue_status_json_ok_empty_taskdata,
     test_queue_status_warns_on_stale_processing_and_dead_letters,
+    test_doctor_reports_healthy_installation,
+    test_doctor_reports_actionable_broken_installation,
     test_perf_budget_config_covers_cache_io_checks,
     test_deploy_sanity_script_reports_ok,
     test_hook_replay_harness_reports_ok,

@@ -248,6 +248,19 @@ pip install rich
 task add "System test" anchor:"m:4mon"
 ```
 
+Optional diagnostic command:
+
+```bash
+# From a Nautical repository checkout:
+mkdir -p ~/.local/bin
+ln -s "$PWD/nautical" ~/.local/bin/nautical
+nautical doctor
+nautical doctor --json
+```
+
+`nautical doctor` is read-only. It checks the hooks, UDAs, config, file directories,
+queue state, duplicate chain slots, and broken lineage.
+
 See the [manual](./TW-Nautical-Manual.pdf) for full UDA setup, configuration options, hook installation, and annotated examples.
 
 ---

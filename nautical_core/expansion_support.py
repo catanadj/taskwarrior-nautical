@@ -144,11 +144,12 @@ def doms_allowed_by_year(
 ) -> set[int]:
     if not y_specs:
         return set(range(1, days_in_month(y, m) + 1))
-    if any((sp or "").strip().lower() == "rand" for sp in y_specs):
+    filter_specs = [sp for sp in y_specs if (sp or "").strip().lower() != "rand"]
+    if not filter_specs:
         return set(range(1, days_in_month(y, m) + 1))
 
     ranges = []
-    for sp in y_specs:
+    for sp in filter_specs:
         ranges.extend(y_ranges_from_spec(sp))
     if not ranges:
         return set()

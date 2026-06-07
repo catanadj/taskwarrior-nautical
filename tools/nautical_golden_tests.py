@@ -6455,6 +6455,154 @@ def test_on_exit_spawn_intents_drain():
         expect(parent_updated["ok"], "parent update did not run")
 
 
+def test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links():
+    """Spawn retries and cross-device equivalents should create at most one child slot."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_spawn_lifecycle_matrix_test")
+    exit_models = mod._module("exit_models")
+
+    parent_uuid = "11111111-0000-0000-0000-000000000111"
+    intended_uuid = "22222222-0000-0000-0000-000000000222"
+    equivalent_uuid = "33333333-0000-0000-0000-000000000333"
+    saved = {
+        "export_uuid": mod._export_uuid,
+        "equivalent": mod._existing_equivalent_child,
+        "parent_state": mod._parent_nextlink_state,
+        "import_child": mod._import_child,
+        "update_parent": mod._update_parent_nextlink,
+        "cleanup": mod._cleanup_orphan_child,
+        "mark": mod._mark_intent_status,
+        "seed": mod._seed_equivalent_child_cache,
+        "sleep": mod._sleep,
+    }
+
+    def run_case(name, *, child_exists=False, equivalent=False, parent_next="", fail_first_update=False, finalized=False):
+        world = {
+            "children": {intended_uuid} if child_exists else set(),
+            "parent_next": parent_next,
+            "imports": 0,
+            "updates": 0,
+            "cleanups": 0,
+            "marks": [],
+            "fail_first_update": fail_first_update,
+        }
+        entry = {
+            "parent_uuid": parent_uuid,
+            "parent_nextlink": "",
+            "child_short": intended_uuid[:8],
+            "child": {
+                "uuid": intended_uuid,
+                "description": f"spawn matrix {name}",
+                "status": "pending",
+                "chainID": "abcd1234",
+                "link": 2,
+                "prevLink": parent_uuid[:8],
+            },
+            "spawn_intent_id": f"si_{name}",
+            "__queue_backend": "sqlite",
+            "__queue_id": 1,
+        }
+
+        def export_uuid(uuid_str, *, prefer_cache=True):
+            _ = prefer_cache
+            exists = uuid_str in world["children"]
+            obj = {"uuid": uuid_str, "status": "pending"} if exists else None
+            return exit_models.ExitExportResult(exists, False, "" if exists else "not found", obj)
+
+        def existing_equivalent_child(_child, _parent_uuid=""):
+            if equivalent:
+                obj = {
+                    "uuid": equivalent_uuid,
+                    "status": "pending",
+                    "chainID": "abcd1234",
+                    "link": 2,
+                    "prevLink": parent_uuid[:8],
+                }
+                world["children"].add(equivalent_uuid)
+                return exit_models.ExitEquivalentChildResult(True, False, "", obj)
+            return exit_models.ExitEquivalentChildResult(False, False, "not found", None)
+
+        def parent_nextlink_state(_parent_uuid, child_short, expected_prev=None, *, prefer_cache=True):
+            _ = (expected_prev, prefer_cache)
+            if world["parent_next"] == child_short:
+                return exit_models.ExitParentNextlinkStateResult("already", "")
+            if world["parent_next"]:
+                return exit_models.ExitParentNextlinkStateResult("conflict", "parent nextLink already set")
+            return exit_models.ExitParentNextlinkStateResult("ok", "")
+
+        def import_child(child):
+            world["imports"] += 1
+            world["children"].add(child["uuid"])
+            return exit_models.ExitImportResult(True, "")
+
+        def update_parent(_parent_uuid, child_short, expected_prev=None):
+            _ = expected_prev
+            world["updates"] += 1
+            if world["fail_first_update"] and world["updates"] == 1:
+                return exit_models.ExitParentUpdateResult(False, "parent lock busy")
+            world["parent_next"] = child_short
+            return exit_models.ExitParentUpdateResult(True, "")
+
+        mod._export_uuid = export_uuid
+        mod._existing_equivalent_child = existing_equivalent_child
+        mod._parent_nextlink_state = parent_nextlink_state
+        mod._import_child = import_child
+        mod._update_parent_nextlink = update_parent
+        mod._cleanup_orphan_child = lambda *_a, **_k: world.__setitem__("cleanups", world["cleanups"] + 1)
+        mod._mark_intent_status = lambda sid, status, reason="": world["marks"].append((sid, status, reason)) or True
+        mod._seed_equivalent_child_cache = lambda *_a, **_k: None
+        mod._sleep = lambda _seconds: None
+
+        finalized_intents = {entry["spawn_intent_id"]} if finalized else set()
+        state = mod._DrainState([entry], 1, finalized_intents, True, 0.0)
+        should_break = mod._process_queue_entry(0, entry, state)
+        expect(not should_break, f"{name}: single-entry processing should not circuit-break")
+
+        if fail_first_update:
+            expect(len(state.requeue) == 1, f"{name}: failed parent update should requeue the intent")
+            retry_entry = state.requeue[0]
+            expect(
+                retry_entry.get("spawn_intent_id") == entry["spawn_intent_id"],
+                f"{name}: requeued intent identity changed",
+            )
+            expect(retry_entry.get("attempts") == 1, f"{name}: retry count was not incremented")
+            expect(world["imports"] == 1, f"{name}: first attempt should import exactly once")
+            state = mod._DrainState([retry_entry], 1, set(), True, 0.0)
+            world["fail_first_update"] = False
+            should_break = mod._process_queue_entry(0, retry_entry, state)
+            expect(not should_break, f"{name}: retry should complete")
+
+        expected_short = equivalent_uuid[:8] if equivalent else intended_uuid[:8]
+        if finalized:
+            expect(state.skipped_idempotent == 1, f"{name}: finalized intent should be skipped")
+            expect(world["imports"] == 0 and world["updates"] == 0, f"{name}: finalized replay caused side effects")
+            return
+
+        expect(state.processed == 1, f"{name}: intent should finish exactly once")
+        expect(world["parent_next"] == expected_short, f"{name}: parent link was not repaired")
+        expect(world["imports"] <= 1, f"{name}: duplicate child imports occurred")
+        expect(len(world["children"]) <= 1, f"{name}: more than one child exists for the slot")
+        expect(world["cleanups"] == 0, f"{name}: successful retry should not delete the child")
+        expect(any(status == "done" for _sid, status, _reason in world["marks"]), f"{name}: intent was not finalized")
+
+    try:
+        run_case("fresh")
+        run_case("after_import_crash", fail_first_update=True)
+        run_case("equivalent_device", equivalent=True)
+        run_case("already_linked", child_exists=True, parent_next=intended_uuid[:8])
+        run_case("finalized_replay", finalized=True)
+    finally:
+        mod._export_uuid = saved["export_uuid"]
+        mod._existing_equivalent_child = saved["equivalent"]
+        mod._parent_nextlink_state = saved["parent_state"]
+        mod._import_child = saved["import_child"]
+        mod._update_parent_nextlink = saved["update_parent"]
+        mod._cleanup_orphan_child = saved["cleanup"]
+        mod._mark_intent_status = saved["mark"]
+        mod._seed_equivalent_child_cache = saved["seed"]
+        mod._sleep = saved["sleep"]
+
+
 def test_on_exit_take_queue_recovers_from_corrupt_sqlite_db():
     """on-exit queue drain should quarantine a corrupt sqlite queue db and continue."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -11176,6 +11324,7 @@ TESTS = [
     test_on_add_dnf_cache_size_guard_skips_load,
     test_on_add_dnf_cache_skips_non_jsonable_values,
     test_on_exit_spawn_intents_drain,
+    test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links,
     test_on_exit_take_queue_recovers_from_corrupt_sqlite_db,
     test_on_exit_drain_skips_finalized_sqlite_intent,
     test_on_exit_drain_updates_progress_per_entry,

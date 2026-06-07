@@ -3351,6 +3351,45 @@ def test_satisfiability_helpers_characterization():
     )
 
 
+def test_parser_satisfiability_agrees_with_scheduler():
+    """Accepted AND terms should schedule, while impossible intersections remain rejected."""
+    import nautical_core as core
+
+    start = date(2026, 1, 1)
+    accepted = [
+        ("w:mon + y:01-01", date(2029, 1, 1)),
+        ("y:rand + w:sat", None),
+        ("m:rand + y:02-29", date(2028, 2, 29)),
+        ("m:5th-mon + y:02-29", date(2044, 2, 29)),
+        ("m:last-mon + y:02-29", date(2044, 2, 29)),
+    ]
+    for expr, expected in accepted:
+        dnf = core.parse_anchor_expr_to_dnf(expr)
+        validated = core.validate_anchor_expr_strict(dnf)
+        nxt, _meta = core.next_after_expr(
+            validated,
+            start,
+            default_seed=start,
+            seed_base="satisfiability-agreement-v1",
+        )
+        expect(nxt is not None and nxt > start, f"{expr}: accepted expression did not schedule")
+        if expected is not None:
+            expect(nxt == expected, f"{expr}: expected {expected}, got {nxt}")
+
+    impossible = [
+        "w:mon + w:sun",
+        "y:01-01 + y:12-25",
+        "m:31 + y:apr",
+        "m:30 + y:feb",
+    ]
+    for expr in impossible:
+        try:
+            core.parse_anchor_expr_to_dnf(expr)
+            raise AssertionError(f"{expr}: impossible expression should be rejected")
+        except core.AndTermUnsatisfiable:
+            pass
+
+
 def test_expansion_helpers_characterization():
     """Weekly/yearly expansion helpers should preserve core support behavior."""
     expect(core._weekly_spec_to_wset("mon..wed") == {0, 1, 2}, "weekly range should expand to Mon-Wed")
@@ -10657,6 +10696,7 @@ TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
     test_satisfiability_helpers_characterization,
+    test_parser_satisfiability_agrees_with_scheduler,
     test_expansion_helpers_characterization,
     test_nth_weekday_range,
     test_lint_anchor_expr_characterization,

@@ -98,7 +98,8 @@ def validate_and_terms_satisfiable(
             continue
         quick_weekly_and_check(term)
         quick_yearly_and_check(term)
-        if not term_has_any_match_within(term, ref_d, seed, years=8):
+        # Leap-day weekday alignments can be 40 years apart in the Gregorian cycle.
+        if not term_has_any_match_within(term, ref_d, seed, years=40):
             pieces = []
             for atom in term:
                 typ = (atom.get("typ") or "").lower()

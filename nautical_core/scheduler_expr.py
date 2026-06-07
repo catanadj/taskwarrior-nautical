@@ -360,6 +360,8 @@ def _next_after_expr_yearly_rand_candidate(
 
 def _next_after_expr_term_candidate(term: list[dict], after_date, default_seed, *, next_after_term):
     cand, _ = next_after_term(term, after_date, default_seed)
+    if cand is not None and cand <= after_date:
+        cand, _ = next_after_term(term, after_date + timedelta(days=1), default_seed)
     if cand:
         return cand, {"basis": "term"}
     return None, None

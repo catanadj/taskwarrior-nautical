@@ -150,33 +150,27 @@ def anchor_next_occurrence_after_local_dt(
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
 ):
     d0 = after_dt_local.date()
-    try:
-        anchor_omit = core._import_sibling("anchor_omit")
-        nxt_date, _ = anchor_omit.next_after_expr_with_omit(
+    if anchor_expr_fires_on_date_with_omit(
+        dnf,
+        d0,
+        interval_seed,
+        seed_base,
+        omit_dnf=omit_dnf,
+        core=core,
+    ):
+        tlist = anchor_times_for_date(
             dnf,
-            d0 - timedelta(days=1),
-            default_seed=interval_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
+            d0,
+            interval_seed,
+            seed_base,
             core=core,
-            max_skip_iterations=max(getattr(core, "MAX_ANCHOR_ITER", 128), 128),
-        )
-        if nxt_date == d0:
-            tlist = anchor_times_for_date(
-                dnf,
-                d0,
-                interval_seed,
-                seed_base,
-                core=core,
-                norm_t_mod=norm_t_mod,
-            ) or [fallback_hhmm]
-            for hhmm in tlist:
-                cand_utc = core.build_local_datetime(d0, hhmm)
-                cand_local = core.to_local(cand_utc)
-                if cand_local > after_dt_local:
-                    return cand_local
-    except Exception:
-        pass
+            norm_t_mod=norm_t_mod,
+        ) or [fallback_hhmm]
+        for hhmm in tlist:
+            cand_utc = core.build_local_datetime(d0, hhmm)
+            cand_local = core.to_local(cand_utc)
+            if cand_local > after_dt_local:
+                return cand_local
 
     nxt_d = anchor_step_once_with_omit(dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core)
     if not nxt_d:

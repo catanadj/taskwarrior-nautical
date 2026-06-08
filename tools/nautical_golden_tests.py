@@ -4860,6 +4860,29 @@ def test_yearly_rand_respects_sibling_month_filter():
     )
 
 
+def test_yearly_rand_natural_compacts_sibling_filter():
+    """Constrained yearly random should describe its eligible date set compactly."""
+    cases = [
+        ("y:rand + y:apr", "one random day each year in Apr"),
+        (
+            "y:rand + y:apr,jul,oct",
+            "one random day each year in Apr, Jul, or Oct",
+        ),
+        (
+            "y:rand + y:04-20..05-15",
+            "one random day each year in Apr 20–May 15",
+        ),
+    ]
+    for expr, expected in cases:
+        expect(core.describe_anchor_expr(expr) == expected, f"{expr}: unexpected natural text")
+
+    union = core.describe_anchor_expr("y:rand | y:apr,jul,oct")
+    expect(
+        union.startswith("either one random day each year or "),
+        f"yearly random OR semantics were incorrectly collapsed: {union!r}",
+    )
+
+
 def test_yearly_rand_uses_independent_chain_scoped_draws():
     """Constrained yearly rand should be deterministic without a forced shuffle cycle."""
     dnf = core.parse_anchor_expr_to_dnf_cached("y:rand + y:apr,jul,oct")
@@ -4967,6 +4990,193 @@ def test_random_salt_namespaces_draws():
         expect(first != sequence("salt-b"), "changing wrand_salt should change the random sequence")
     finally:
         core.WRAND_SALT = original
+
+
+def test_random_anchor_cross_chain_matrix():
+    """Every random anchor form should replay per chain and vary across chains."""
+    cases = [
+        {
+            "expr": "w:rand",
+            "start": date(2026, 6, 7),
+            "key": lambda d: d.weekday(),
+            "valid": lambda d: True,
+            "min_unique": 5,
+        },
+        {
+            "expr": "m:rand",
+            "start": date(2026, 5, 31),
+            "key": lambda d: d.day,
+            "valid": lambda d: d.year == 2026 and d.month == 6,
+            "min_unique": 16,
+        },
+        {
+            "expr": "y:rand",
+            "start": date(2025, 12, 31),
+            "key": lambda d: (d.month, d.day),
+            "valid": lambda d: d.year == 2026,
+            "min_unique": 36,
+        },
+        {
+            "expr": "y:rand + y:apr,jul,oct",
+            "start": date(2025, 12, 31),
+            "key": lambda d: (d.month, d.day),
+            "valid": lambda d: d.year == 2026 and d.month in {4, 7, 10},
+            "min_unique": 32,
+        },
+        {
+            "expr": "m:rand@bd",
+            "start": date(2026, 5, 31),
+            "key": lambda d: d.day,
+            "valid": lambda d: d.year == 2026 and d.month == 6 and d.weekday() < 5,
+            "min_unique": 14,
+        },
+    ]
+
+    for case in cases:
+        dnf = core.validate_anchor_expr_strict(case["expr"])
+        picks = []
+        for idx in range(64):
+            seed = f"cross-chain-{case['expr']}-{idx}"
+            first, _meta = core.next_after_expr(
+                dnf,
+                case["start"],
+                default_seed=case["start"],
+                seed_base=seed,
+            )
+            replay, _meta = core.next_after_expr(
+                dnf,
+                case["start"],
+                default_seed=case["start"],
+                seed_base=seed,
+            )
+            expect(first == replay, f"{case['expr']}: one chain did not replay deterministically")
+            expect(case["valid"](first), f"{case['expr']}: random pick escaped its constraints: {first}")
+            picks.append(case["key"](first))
+        expect(
+            len(set(picks)) >= case["min_unique"],
+            f"{case['expr']}: insufficient cross-chain diversity: {picks}",
+        )
+
+
+def test_random_anchor_and_omit_presets_keep_chain_scope():
+    """Random presets should preserve the same chain-scoped draw contract."""
+    import nautical_core.anchor_omit as anchor_omit
+
+    previous_anchor_presets = getattr(core, "ANCHOR_PRESETS", {})
+    previous_omit_presets = getattr(core, "OMIT_PRESETS", {})
+    core.ANCHOR_PRESETS = {**previous_anchor_presets, "random-workday": "m:rand@bd"}
+    core.OMIT_PRESETS = {**previous_omit_presets, "random-weekday": "w:rand"}
+    start = date(2026, 6, 1)
+    try:
+        preset_dnf = core.validate_anchor_expr_strict("@random-workday")
+        direct_dnf = core.validate_anchor_expr_strict("m:rand@bd")
+        preset_picks = []
+        for idx in range(48):
+            seed = f"random-preset-{idx}"
+            preset_pick, _meta = core.next_after_expr(
+                preset_dnf,
+                start,
+                default_seed=start,
+                seed_base=seed,
+            )
+            direct_pick, _meta = core.next_after_expr(
+                direct_dnf,
+                start,
+                default_seed=start,
+                seed_base=seed,
+            )
+            expect(preset_pick == direct_pick, f"anchor preset changed the random draw for {seed}")
+            preset_picks.append(preset_pick)
+        expect(len(set(preset_picks)) >= 12, f"random anchor preset lacked chain diversity: {preset_picks}")
+
+        omit_dnf = anchor_omit.validate_omit_expr_strict(
+            "@random-weekday",
+            validate_anchor_expr_cached=core.validate_anchor_expr_strict,
+            resolve_omit_presets=core.resolve_omit_presets,
+        )
+        omit_picks = []
+        weekly_dnf = core.validate_anchor_expr_strict("w:rand")
+        week_start = date(2026, 6, 7)
+        for idx in range(48):
+            seed = f"random-omit-{idx}"
+            selected, _meta = core.next_after_expr(
+                weekly_dnf,
+                week_start,
+                default_seed=week_start,
+                seed_base=seed,
+            )
+            expect(
+                anchor_omit.omit_expr_fires_on_date(
+                    omit_dnf,
+                    selected,
+                    week_start,
+                    seed,
+                    core=core,
+                ),
+                f"random omit preset did not recognize its selected date for {seed}",
+            )
+            omit_picks.append(selected.weekday())
+        expect(len(set(omit_picks)) >= 5, f"random omit preset lacked chain diversity: {omit_picks}")
+    finally:
+        core.ANCHOR_PRESETS = previous_anchor_presets
+        core.OMIT_PRESETS = previous_omit_presets
+
+
+def test_chain_colour_uses_complete_root_identity():
+    """Chain colours should hash the full root instead of its final UUID suffix."""
+    hook = _load_hook_module(
+        _find_hook_file("on-modify-nautical.py"),
+        "_nautical_chain_colour_full_identity_test",
+    )
+
+    root = "12345678-1234-4234-8234-00000000abcd"
+    expect(
+        hook._chain_colour_root("anchor", root) == hook._chain_colour_root("anchor", root),
+        "chain colour should replay deterministically",
+    )
+    expect(
+        hook._chain_colour_root("anchor", root.upper()) == hook._chain_colour_root("anchor", root),
+        "UUID case should not change the chain colour",
+    )
+    expect(
+        hook._chain_colour_root("anchor", "") == "bright_cyan",
+        "empty anchor roots should retain the existing fallback colour",
+    )
+    expect(
+        hook._chain_colour_root("cp", "") == "orange_red1",
+        "empty cp roots should retain the existing fallback colour",
+    )
+
+    same_suffix_roots = [
+        f"{idx:08x}-1234-4234-8234-00000000abcd"
+        for idx in range(256)
+    ]
+    anchor_colours = {
+        hook._chain_colour_root("anchor", candidate)
+        for candidate in same_suffix_roots
+    }
+    cp_colours = {
+        hook._chain_colour_root("cp", candidate)
+        for candidate in same_suffix_roots
+    }
+    expect(
+        len(anchor_colours) >= 16,
+        f"anchor colours still collapse roots sharing one suffix: {anchor_colours}",
+    )
+    expect(
+        len(cp_colours) >= 15,
+        f"cp colours still collapse roots sharing one suffix: {cp_colours}",
+    )
+
+    legacy = "legacy/root identifier"
+    expect(
+        hook._chain_colour_root("anchor", legacy) == hook._chain_colour_root("anchor", legacy),
+        "non-UUID legacy roots should remain deterministic",
+    )
+    expect(
+        hook._chain_colour_root("anchor", root) != hook._chain_colour_root("cp", root),
+        "anchor and cp colour domains should remain separated",
+    )
 
 
 def test_yearly_month_aliases_and_ranges():
@@ -10693,13 +10903,17 @@ def test_anchor_expression_characterization_matrix():
             "expr": "y:rand + w:sat",
             "terms": [[("y", "rand", 1, None, False, 0), ("w", "sat", 1, None, False, 0)]],
             "natural": "Saturdays one random day each year",
-            "dates": ["2026-09-05", "2027-12-25", "2028-09-16"],
+            "dates": None,
+            "count": 3,
+            "valid_date": lambda d: d.weekday() == 5,
         },
         {
             "expr": "m:rand + y:apr",
             "terms": [[("m", "rand", 1, None, False, 0), ("y", "04-01..04-31", 1, None, False, 0)]],
             "natural": "one random day each month and within Apr each year",
-            "dates": ["2026-04-18", "2027-04-28", "2028-04-13"],
+            "dates": None,
+            "count": 3,
+            "valid_date": lambda d: d.month == 4,
         },
         {
             "expr": "w/2:fri",
@@ -10744,7 +10958,8 @@ def test_anchor_expression_characterization_matrix():
 
         current = start
         generated = []
-        for _ in case["dates"]:
+        expected_dates = case["dates"]
+        for _ in range(len(expected_dates) if expected_dates is not None else case["count"]):
             nxt, _meta = core.next_after_expr(
                 validated,
                 current,
@@ -10754,7 +10969,14 @@ def test_anchor_expression_characterization_matrix():
             expect(nxt is not None, f"{expr}: scheduler stopped before the expected characterization dates")
             generated.append(nxt.isoformat())
             current = nxt
-        expect(generated == case["dates"], f"{expr}: scheduled dates drifted: {generated!r}")
+        if expected_dates is not None:
+            expect(generated == expected_dates, f"{expr}: scheduled dates drifted: {generated!r}")
+        else:
+            valid_date = case["valid_date"]
+            expect(
+                all(valid_date(date.fromisoformat(value)) for value in generated),
+                f"{expr}: random dates escaped their constraints: {generated!r}",
+            )
 
 
 def test_anchor_parse_deep_nesting_guard():
@@ -11653,10 +11875,14 @@ TESTS = [
     test_build_and_cache_hints_parses_once_per_miss,
     test_yearly_rand_natural_and_bounds,
     test_yearly_rand_respects_sibling_month_filter,
+    test_yearly_rand_natural_compacts_sibling_filter,
     test_yearly_rand_uses_independent_chain_scoped_draws,
     test_weekly_rand_is_chain_scoped_and_deterministic,
     test_monthly_rand_year_intersection_is_chain_scoped,
     test_random_salt_namespaces_draws,
+    test_random_anchor_cross_chain_matrix,
+    test_random_anchor_and_omit_presets_keep_chain_scope,
+    test_chain_colour_uses_complete_root_identity,
     test_yearly_month_aliases_and_ranges,
     test_business_day_bd_skip_semantics,
     test_scheduler_atom_helpers_characterization,

@@ -9,7 +9,7 @@ Chained next-link spawner for Taskwarrior.
 - Timeline is capped and marks (last link).
 """
 
-import sys, json, os, uuid, subprocess, importlib, importlib.util, random, tempfile
+import sys, json, os, uuid, subprocess, importlib, importlib.util, random, tempfile, hashlib
 import atexit
 import time as _ptime
 import sqlite3
@@ -2339,7 +2339,7 @@ def _validate_chain_limits_on_modify(task: dict) -> None:
 @lru_cache(maxsize=512)
 def _chain_colour_root(kind: str, root_uuid: str) -> str:
     """
-    Deterministic but cheap 'random' colour per chain root.
+    Deterministic colour derived from the complete chain root identity.
 
     `kind` is "anchor" or "cp".
     """
@@ -2354,7 +2354,6 @@ def _chain_colour_root(kind: str, root_uuid: str) -> str:
         "turquoise2",
         "medium_turquoise",
         "dark_turquoise",
-        "cyan3",
         "deep_sky_blue1",
         "sky_blue1",
         "dodger_blue1",
@@ -2376,7 +2375,6 @@ def _chain_colour_root(kind: str, root_uuid: str) -> str:
         "orange3",
         "gold3",
         "indian_red1",
-        "light_coral",
         "salmon1",
         "deep_pink3",
         "hot_pink",
@@ -2394,18 +2392,12 @@ def _chain_colour_root(kind: str, root_uuid: str) -> str:
     if not palette:
         return "bright_magenta" if kind == "cp" else "bright_cyan"
 
-    s = (root_uuid or "").replace("-", "")
+    s = (root_uuid or "").strip().lower()
     if not s:
         return palette[0]
 
-    # Very cheap "hash": last 4 hex chars; fall back to sum of ords.
-    try:
-        h = int(s[-4:], 16)
-    except ValueError:
-        h = 0
-        for ch in s:
-            h += ord(ch)
-
+    digest = hashlib.sha256(f"nautical-chain-colour-v2|{kind}|{s}".encode("utf-8")).digest()
+    h = int.from_bytes(digest[:8], "big")
     return palette[h % len(palette)]
 
 

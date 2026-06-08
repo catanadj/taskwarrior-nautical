@@ -405,6 +405,32 @@ def describe_anchor_term_collect(
     return w_phrase, m_parts, y_parts, bd_filter, wk_ival, mo_ival, yr_ival, monthly_specs, yearly_specs
 
 
+def describe_yearly_rand_filter(
+    yearly_specs: list[str],
+    yr_ival: int,
+    *,
+    split_csv_tokens,
+    fmt_yearly_atom,
+) -> str | None:
+    if yr_ival != 1 or len(yearly_specs) != 2:
+        return None
+    random_specs = [spec for spec in yearly_specs if spec == "rand"]
+    filter_specs = [spec for spec in yearly_specs if spec != "rand"]
+    if len(random_specs) != 1 or len(filter_specs) != 1:
+        return None
+
+    labels = []
+    for token in split_csv_tokens(filter_specs[0]):
+        phrase = fmt_yearly_atom(token)
+        if not phrase or phrase.startswith("one random day"):
+            return None
+        suffix = " each year"
+        labels.append(phrase[: -len(suffix)] if phrase.endswith(suffix) else phrase)
+    if not labels:
+        return None
+    return f"one random day each year in {join_plain_or_terms(labels)}"
+
+
 def describe_anchor_term_fused_month_year(
     term,
     default_due_dt,
@@ -603,6 +629,15 @@ def describe_anchor_term(
     )
     if fused is not None:
         return fused
+
+    compact_yearly_rand = describe_yearly_rand_filter(
+        yearly_specs,
+        yr_ival,
+        split_csv_tokens=split_csv_tokens,
+        fmt_yearly_atom=fmt_yearly_atom,
+    )
+    if compact_yearly_rand is not None:
+        y_parts = [compact_yearly_rand]
 
     interval_prefix, suppress_tail = describe_anchor_term_interval_prefix(
         wk_ival,

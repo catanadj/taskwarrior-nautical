@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+import re
+
+
+_RANDOM_SELECTOR_RE = re.compile(
+    r"^(?:m(?:/\d+)?:rand|y(?:/\d+)?:(?:rand|rand-\d{2}))(?:@|$)",
+    re.IGNORECASE,
+)
+_WEEKLY_LIST_RE = re.compile(r"^w(?:/\d+)?:[^()|+]*,[^()|+]*$", re.IGNORECASE)
+
 
 def split_top_level(expr: str, delim: str) -> list[str]:
     parts: list[str] = []
@@ -32,10 +41,12 @@ def normalize_grouped_list_filters(s: str) -> str:
         if len(parts) <= 1:
             out_terms.append(term.strip())
             continue
+        has_random_selector = any(_RANDOM_SELECTOR_RE.match(part.strip()) for part in parts)
         new_parts: list[str] = []
         for part in parts:
             p = part.strip()
-            if "," in p and not (p.startswith("(") and p.endswith(")")):
+            grouped_random_weekdays = has_random_selector and _WEEKLY_LIST_RE.match(p)
+            if "," in p and not grouped_random_weekdays and not (p.startswith("(") and p.endswith(")")):
                 p = f"({p})"
             new_parts.append(p)
         out_terms.append(" + ".join(new_parts))
@@ -57,13 +68,34 @@ def rewrite_weekly_multi_time_atoms(s: str, *, split_csv_tokens, re_mod) -> str:
     out = []
     i, n = 0, len(s)
 
-    def flush_atom(prefix: str, body: str):
+    def term_has_random_selector(position: int) -> bool:
+        depth = 0
+        start = 0
+        end = n
+        for idx, char in enumerate(s):
+            if char == "(":
+                depth += 1
+            elif char == ")" and depth > 0:
+                depth -= 1
+            elif char == "|" and depth == 0:
+                if idx < position:
+                    start = idx + 1
+                elif idx > position:
+                    end = idx
+                    break
+        return any(
+            _RANDOM_SELECTOR_RE.match(part.strip())
+            for part in split_top_level(s[start:end], "+")
+        )
+
+    def flush_atom(prefix: str, body: str, *, grouped: bool, random_peer: bool):
         parts = split_csv_tokens(body)
         if len(parts) <= 1:
             out.append(prefix + body)
             return
         pat = re_mod.compile(r"^(mon|tue|wed|thu|fri|sat|sun)(@t=\d{2}:\d{2})?$", re_mod.I)
-        if all(pat.match(p) for p in parts):
+        should_expand = grouped or not random_peer or any("@t=" in p.lower() for p in parts)
+        if should_expand and all(pat.match(p) for p in parts):
             out.append(" | ".join(f"{prefix}{p}" for p in parts))
         else:
             out.append(prefix + body)
@@ -96,7 +128,15 @@ def rewrite_weekly_multi_time_atoms(s: str, *, split_csv_tokens, re_mod) -> str:
                 elif depth == 0 and c in "|+":
                     break
                 j += 1
-            flush_atom(s[i:colon + 1], s[colon + 1:j])
+            previous = i - 1
+            while previous >= 0 and s[previous].isspace():
+                previous -= 1
+            flush_atom(
+                s[i:colon + 1],
+                s[colon + 1:j],
+                grouped=previous >= 0 and s[previous] == "(",
+                random_peer=term_has_random_selector(i),
+            )
             i = j
         else:
             out.append(s[i])

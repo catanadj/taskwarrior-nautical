@@ -431,6 +431,34 @@ def describe_yearly_rand_filter(
     return f"one random day each year in {join_plain_or_terms(labels)}"
 
 
+def describe_random_weekday_pool(
+    w_phrase: str | None,
+    monthly_specs: list[str],
+    yearly_specs: list[str],
+    bd_filter: bool,
+) -> str | None:
+    if not w_phrase or bd_filter:
+        return None
+    if monthly_specs == ["rand"] and not yearly_specs:
+        period = "month"
+    elif yearly_specs == ["rand"] and not monthly_specs:
+        period = "year"
+    else:
+        return None
+    singular = w_phrase
+    for plural, one in (
+        ("Mondays", "Monday"),
+        ("Tuesdays", "Tuesday"),
+        ("Wednesdays", "Wednesday"),
+        ("Thursdays", "Thursday"),
+        ("Fridays", "Friday"),
+        ("Saturdays", "Saturday"),
+        ("Sundays", "Sunday"),
+    ):
+        singular = singular.replace(plural, one)
+    return f"one random {singular} each {period}"
+
+
 def describe_anchor_term_fused_month_year(
     term,
     default_due_dt,
@@ -638,6 +666,18 @@ def describe_anchor_term(
     )
     if compact_yearly_rand is not None:
         y_parts = [compact_yearly_rand]
+
+    random_weekday_pool = describe_random_weekday_pool(
+        w_phrase,
+        monthly_specs,
+        yearly_specs,
+        bd_filter,
+    )
+    if random_weekday_pool is not None:
+        hhmm = fmt_hhmm_for_term(term, default_due_dt)
+        if hhmm:
+            random_weekday_pool = f"{random_weekday_pool} at {hhmm}"
+        return describe_inject_schedule_suffixes(random_weekday_pool, term)
 
     interval_prefix, suppress_tail = describe_anchor_term_interval_prefix(
         wk_ival,

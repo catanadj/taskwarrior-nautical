@@ -4964,6 +4964,70 @@ def test_monthly_rand_year_intersection_is_chain_scoped():
     expect(pick("monthly-replay") == pick("monthly-replay"), "monthly/yearly rand must replay identically")
 
 
+def test_random_weekday_list_is_one_grouped_draw():
+    """A comma-separated weekday filter should form one random candidate pool."""
+    start = date(2025, 12, 31)
+    for expr in ("m:rand + w:mon,sat", "w:mon,sat + m:rand"):
+        dnf = core.validate_anchor_expr_strict(expr)
+        expect(len(dnf) == 1, f"{expr}: weekday pool expanded into multiple random branches: {dnf!r}")
+        expect(
+            core.describe_anchor_expr(expr) == "one random Monday or Saturday each month",
+            f"{expr}: unexpected grouped-random natural text",
+        )
+        current = start
+        picks = []
+        for _ in range(12):
+            current, _meta = core.next_after_expr(
+                dnf,
+                current,
+                default_seed=start,
+                seed_base=f"grouped-weekday-{expr}",
+            )
+            picks.append(current)
+        expect(
+            all(pick.weekday() in {0, 5} for pick in picks),
+            f"{expr}: random pick escaped Monday/Saturday: {picks}",
+        )
+        expect(
+            len({(pick.year, pick.month) for pick in picks}) == len(picks),
+            f"{expr}: produced more than one random date in a month: {picks}",
+        )
+
+    yearly = core.validate_anchor_expr_strict("y:rand + w:mon,sat")
+    expect(len(yearly) == 1, f"yearly weekday pool expanded into multiple branches: {yearly!r}")
+    expect(
+        core.describe_anchor_expr("y:rand + w:mon,sat") == "one random Monday or Saturday each year",
+        "unexpected yearly grouped-random natural text",
+    )
+
+
+def test_random_weekday_explicit_or_keeps_separate_draws():
+    """Explicit weekday OR should remain the opt-in form for one draw per branch."""
+    expr = "m:rand + (w:mon | w:sat)"
+    dnf = core.validate_anchor_expr_strict(expr)
+    expect(len(dnf) == 2, f"explicit random weekday OR should retain two branches: {dnf!r}")
+    start = date(2025, 12, 31)
+    dates = core.anchors_between_expr(
+        dnf,
+        start_excl=start,
+        end_excl=date(2026, 4, 1),
+        default_seed=start,
+        seed_base="explicit-random-weekday-or",
+    )
+    by_month = {}
+    for pick in dates:
+        by_month.setdefault((pick.year, pick.month), []).append(pick)
+    expect(set(by_month) == {(2026, 1), (2026, 2), (2026, 3)}, f"unexpected OR months: {dates}")
+    expect(
+        all(len(picks) == 2 for picks in by_month.values()),
+        f"explicit OR should produce one Monday and one Saturday per month: {by_month}",
+    )
+    expect(
+        all({pick.weekday() for pick in picks} == {0, 5} for picks in by_month.values()),
+        f"explicit OR produced the wrong weekday branches: {by_month}",
+    )
+
+
 def test_random_salt_namespaces_draws():
     """wrand_salt should remain an explicit namespace for deterministic draws."""
     dnf = core.parse_anchor_expr_to_dnf_cached("w:rand")
@@ -10902,7 +10966,7 @@ def test_anchor_expression_characterization_matrix():
         {
             "expr": "y:rand + w:sat",
             "terms": [[("y", "rand", 1, None, False, 0), ("w", "sat", 1, None, False, 0)]],
-            "natural": "Saturdays one random day each year",
+            "natural": "one random Saturday each year",
             "dates": None,
             "count": 3,
             "valid_date": lambda d: d.weekday() == 5,
@@ -11879,6 +11943,8 @@ TESTS = [
     test_yearly_rand_uses_independent_chain_scoped_draws,
     test_weekly_rand_is_chain_scoped_and_deterministic,
     test_monthly_rand_year_intersection_is_chain_scoped,
+    test_random_weekday_list_is_one_grouped_draw,
+    test_random_weekday_explicit_or_keeps_separate_draws,
     test_random_salt_namespaces_draws,
     test_random_anchor_cross_chain_matrix,
     test_random_anchor_and_omit_presets_keep_chain_scope,

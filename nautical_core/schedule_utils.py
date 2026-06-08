@@ -87,11 +87,12 @@ def pick_hhmm_from_dnf_for_date(
     dnf,
     target: date,
     default_seed: date,
+    seed_base=None,
     *,
     atom_matches_on,
 ):
     for term in dnf:
-        if all(atom_matches_on(atom, target, default_seed) for atom in term):
+        if all(atom_matches_on(atom, target, default_seed, seed_base=seed_base) for atom in term):
             for atom in term:
                 tval = atom["mods"].get("t")
                 if not tval:

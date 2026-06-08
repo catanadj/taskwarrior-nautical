@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import date, timedelta
+
+RAND_ALGORITHM_VERSION = "nautical-rand-v2"
 
 
 def active_mod_keys(mods: dict) -> set:
@@ -18,24 +21,60 @@ def week_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
-def seeded_int(key: str) -> int:
-    return int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:4], "big")
+def random_identity(value) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
 
 
-def weekly_rand_pick(iso_year: int, iso_week: int, mods: dict, *, wrand_salt: str, seeded_int) -> int:
+def random_pick_index(
+    seq_len: int,
+    *,
+    seed_base: str | None,
+    domain: str,
+    identity: str,
+    period: str,
+    attempt: int = 0,
+    namespace: str = "",
+) -> int:
+    if seq_len <= 0:
+        raise ValueError("random choice requires at least one candidate")
+    key = "|".join(
+        (
+            RAND_ALGORITHM_VERSION,
+            namespace,
+            seed_base or "preview",
+            domain,
+            identity,
+            period,
+            str(attempt),
+        )
+    )
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") % seq_len
+
+
+def weekly_rand_pick(
+    iso_year: int,
+    iso_week: int,
+    mods: dict,
+    *,
+    seed_base: str | None,
+    atom_identity: str,
+    namespace: str,
+) -> int:
     pool = [0, 1, 2, 3, 4] if (mods.get("bd") or mods.get("wd") is True) else [0, 1, 2, 3, 4, 5, 6]
-    key = f"{wrand_salt}|{iso_year}|{iso_week}|{'bd' if len(pool) == 5 else 'all'}"
-    n = seeded_int(key)
-    return pool[n % len(pool)]
+    idx = random_pick_index(
+        len(pool),
+        seed_base=seed_base,
+        domain="weekly",
+        identity=atom_identity,
+        period=f"{iso_year:04d}-W{iso_week:02d}",
+        namespace=namespace,
+    )
+    return pool[idx]
 
 
 def is_bd(dt: date) -> bool:
     return dt.weekday() < 5
-
-
-def sha_pick(seq_len: int, seed_key: str) -> int:
-    h = hashlib.sha256(seed_key.encode("utf-8")).digest()
-    return int.from_bytes(h[:8], "big") % seq_len
 
 
 def term_rand_info(term):

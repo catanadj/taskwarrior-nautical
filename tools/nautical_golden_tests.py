@@ -3289,7 +3289,8 @@ def test_next_for_and_no_progress_fails_fast():
     """_next_for_and should fail fast when a term makes no forward progress."""
     saved = core.next_after_atom_with_mods
     try:
-        def _stub(_atom, ref_d, _seed):
+        def _stub(_atom, ref_d, _seed, seed_base=None):
+            _ = seed_base
             return ref_d
         core.next_after_atom_with_mods = _stub
         term = [{"typ": "w", "spec": "mon"}]
@@ -3309,14 +3310,15 @@ def test_next_for_and_transient_stall_recovers():
     try:
         calls = {"n": 0}
 
-        def _stub(_atom, ref_d, _seed):
+        def _stub(_atom, ref_d, _seed, seed_base=None):
+            _ = seed_base
             calls["n"] += 1
             if calls["n"] == 1:
                 return ref_d
             return ref_d + timedelta(days=1)
 
         core.next_after_atom_with_mods = _stub
-        core.atom_matches_on = lambda _a, _d, _s: True
+        core.atom_matches_on = lambda _a, _d, _s, seed_base=None: True
         term = [{"typ": "w", "spec": "mon"}]
         got = core._next_for_and(term, date(2025, 1, 1), date(2025, 1, 1))
         expect(got > date(2025, 1, 1), f"expected forward progress after transient stall, got {got}")
@@ -4858,25 +4860,113 @@ def test_yearly_rand_respects_sibling_month_filter():
     )
 
 
-def test_yearly_rand_balances_constrained_month_choices():
-    """Constrained yearly rand should avoid pathological deterministic month streaks."""
+def test_yearly_rand_uses_independent_chain_scoped_draws():
+    """Constrained yearly rand should be deterministic without a forced shuffle cycle."""
     dnf = core.parse_anchor_expr_to_dnf_cached("y:rand + y:apr,jul,oct")
-    current = date(2025, 1, 1)
-    months = []
-    for _ in range(14):
-        nxt, _meta = core.next_after_expr(dnf, current, seed_base="6ac6538d")
-        expect(nxt is not None and nxt > current, "balanced constrained yearly rand did not advance")
-        months.append(nxt.month)
-        current = nxt
-    expect(set(months) == {4, 7, 10}, f"balanced yearly rand did not use every eligible month: {months}")
-    counts = {month: months.count(month) for month in (4, 7, 10)}
-    expect(max(counts.values()) - min(counts.values()) <= 1, f"yearly month choices are imbalanced: {months}")
-    longest = 1
-    current_run = 1
-    for previous, month in zip(months, months[1:]):
-        current_run = current_run + 1 if month == previous else 1
-        longest = max(longest, current_run)
-    expect(longest <= 2, f"yearly rand retained a pathological month streak: {months}")
+    start = date(2025, 12, 31)
+
+    def sequence(seed: str, count: int = 8) -> list[date]:
+        current = start
+        out = []
+        for _ in range(count):
+            nxt, _meta = core.next_after_expr(dnf, current, default_seed=start, seed_base=seed)
+            expect(nxt is not None and nxt > current, "constrained yearly rand did not advance")
+            out.append(nxt)
+            current = nxt
+        return out
+
+    first = sequence("yearly-chain-a")
+    expect(first == sequence("yearly-chain-a"), "yearly rand must replay identically for one chain")
+    expect(first != sequence("yearly-chain-b"), "different chains should not share one yearly rand sequence")
+
+    first_three_months = {
+        tuple(dt.month for dt in sequence(f"yearly-cycle-check-{idx}", 3))
+        for idx in range(24)
+    }
+    expect(
+        any(set(months) != {4, 7, 10} for months in first_three_months),
+        f"yearly rand still behaves like a forced three-month shuffle: {first_three_months}",
+    )
+
+    counts = {4: 0, 7: 0, 10: 0}
+    for idx in range(600):
+        nxt = sequence(f"yearly-distribution-{idx}", 1)[0]
+        counts[nxt.month] += 1
+    expect(
+        all(140 <= count <= 260 for count in counts.values()),
+        f"yearly rand distribution is unexpectedly skewed: {counts}",
+    )
+
+
+def test_weekly_rand_is_chain_scoped_and_deterministic():
+    """w:rand should roll independently per chain and ISO week."""
+    dnf = core.parse_anchor_expr_to_dnf_cached("w:rand")
+    start = date(2026, 6, 7)  # Sunday immediately before ISO week 24.
+
+    def pick(seed: str, current: date = start) -> date:
+        nxt, _meta = core.next_after_expr(dnf, current, default_seed=start, seed_base=seed)
+        expect(nxt is not None and nxt > current, "weekly rand did not advance")
+        return nxt
+
+    same_week = [pick(f"weekly-chain-{idx}") for idx in range(64)]
+    expect(
+        len({dt.weekday() for dt in same_week}) >= 5,
+        f"weekly rand did not separate chains in the same week: {same_week}",
+    )
+    expect(pick("weekly-replay") == pick("weekly-replay"), "weekly rand must replay identically")
+
+    current = start
+    sequence = []
+    for _ in range(24):
+        current = pick("weekly-periods", current)
+        sequence.append(current.weekday())
+    expect(
+        len(set(sequence)) >= 5,
+        f"weekly rand did not vary across periods for one chain: {sequence}",
+    )
+
+
+def test_monthly_rand_year_intersection_is_chain_scoped():
+    """m:rand combined with yearly constraints should include the chain seed."""
+    dnf = core.parse_anchor_expr_to_dnf_cached("m:rand + y:apr")
+    start = date(2026, 3, 31)
+
+    def pick(seed: str) -> date:
+        nxt, _meta = core.next_after_expr(dnf, start, default_seed=start, seed_base=seed)
+        expect(nxt is not None and nxt.month == 4, f"monthly/yearly rand escaped April: {nxt}")
+        return nxt
+
+    picks = [pick(f"monthly-intersection-{idx}") for idx in range(48)]
+    expect(len(set(picks)) >= 16, f"monthly/yearly rand did not separate chains: {picks}")
+    expect(pick("monthly-replay") == pick("monthly-replay"), "monthly/yearly rand must replay identically")
+
+
+def test_random_salt_namespaces_draws():
+    """wrand_salt should remain an explicit namespace for deterministic draws."""
+    dnf = core.parse_anchor_expr_to_dnf_cached("w:rand")
+    start = date(2026, 6, 7)
+    original = core.WRAND_SALT
+
+    def sequence(salt: str) -> list[date]:
+        core.WRAND_SALT = salt
+        current = start
+        out = []
+        for _ in range(12):
+            current, _meta = core.next_after_expr(
+                dnf,
+                current,
+                default_seed=start,
+                seed_base="salt-test-chain",
+            )
+            out.append(current)
+        return out
+
+    try:
+        first = sequence("salt-a")
+        expect(first == sequence("salt-a"), "the same random salt must replay identically")
+        expect(first != sequence("salt-b"), "changing wrand_salt should change the random sequence")
+    finally:
+        core.WRAND_SALT = original
 
 
 def test_yearly_month_aliases_and_ranges():
@@ -10603,13 +10693,13 @@ def test_anchor_expression_characterization_matrix():
             "expr": "y:rand + w:sat",
             "terms": [[("y", "rand", 1, None, False, 0), ("w", "sat", 1, None, False, 0)]],
             "natural": "Saturdays one random day each year",
-            "dates": ["2026-11-07", "2027-05-08", "2028-07-22"],
+            "dates": ["2026-09-05", "2027-12-25", "2028-09-16"],
         },
         {
             "expr": "m:rand + y:apr",
             "terms": [[("m", "rand", 1, None, False, 0), ("y", "04-01..04-31", 1, None, False, 0)]],
             "natural": "one random day each month and within Apr each year",
-            "dates": ["2026-04-23", "2027-04-23", "2028-04-07"],
+            "dates": ["2026-04-18", "2027-04-28", "2028-04-13"],
         },
         {
             "expr": "w/2:fri",
@@ -11563,7 +11653,10 @@ TESTS = [
     test_build_and_cache_hints_parses_once_per_miss,
     test_yearly_rand_natural_and_bounds,
     test_yearly_rand_respects_sibling_month_filter,
-    test_yearly_rand_balances_constrained_month_choices,
+    test_yearly_rand_uses_independent_chain_scoped_draws,
+    test_weekly_rand_is_chain_scoped_and_deterministic,
+    test_monthly_rand_year_intersection_is_chain_scoped,
+    test_random_salt_namespaces_draws,
     test_yearly_month_aliases_and_ranges,
     test_business_day_bd_skip_semantics,
     test_scheduler_atom_helpers_characterization,

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 
 def base_next_after_atom(
     atom,
     ref_d,
+    seed_base=None,
     *,
     expand_weekly_cached_mods,
     split_csv_tokens,
@@ -20,10 +22,28 @@ def base_next_after_atom(
     mods = atom.get("mods") or {}
 
     if typ == "w" and "rand" in spec:
+        atom_identity = json.dumps(
+            {
+                "typ": typ,
+                "spec": spec,
+                "ival": atom.get("ival", 1),
+                "mods": mods,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
         p = ref_d + timedelta(days=1)
         for _ in range(366):
             iso = p.isocalendar()
-            dow = weekly_rand_pick(iso.year, iso.week, mods)
+            dow = weekly_rand_pick(
+                iso.year,
+                iso.week,
+                mods,
+                seed_base=seed_base,
+                atom_identity=atom_identity,
+            )
             mon = week_monday(p)
             dt = mon + timedelta(days=dow)
             if dt > ref_d:
@@ -126,6 +146,7 @@ def next_after_atom_with_mods(
     atom,
     ref_d,
     default_seed,
+    seed_base=None,
     *,
     active_mod_keys,
     base_next_after_atom,
@@ -151,12 +172,12 @@ def next_after_atom_with_mods(
     probe = ref_d - timedelta(days=1) if roll_kind == "next-wd" else ref_d
 
     if ival == 1 and not active_mod_keys(mods):
-        candidate = base_next_after_atom(atom, ref_d)
+        candidate = base_next_after_atom(atom, ref_d, seed_base=seed_base)
         if candidate > ref_d:
             return candidate
 
     for _ in range(max_anchor_iter):
-        base = base_next_after_atom(atom, probe)
+        base = base_next_after_atom(atom, probe, seed_base=seed_base)
         if mods.get("bd") and base.weekday() > 4:
             probe = base + timedelta(days=1)
             continue
@@ -180,8 +201,8 @@ def next_after_atom_with_mods(
     return ref_d + timedelta(days=365)
 
 
-def atom_matches_on(atom, d, default_seed, *, next_after_atom_with_mods) -> bool:
+def atom_matches_on(atom, d, default_seed, seed_base=None, *, next_after_atom_with_mods) -> bool:
     for k in range(1, _atom_match_lookback_days(atom) + 1):
-        if next_after_atom_with_mods(atom, d - timedelta(days=k), default_seed) == d:
+        if next_after_atom_with_mods(atom, d - timedelta(days=k), default_seed, seed_base=seed_base) == d:
             return True
     return False

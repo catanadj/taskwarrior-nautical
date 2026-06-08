@@ -1,16 +1,27 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import timedelta
 
 
-def _choose_rand_dom(wrand_salt: str, y: int, m: int, doms: set[int]) -> int | None:
-    """Deterministically pick one day from doms using the configured salt."""
+def _choose_rand_dom(
+    y: int,
+    m: int,
+    doms: set[int],
+    *,
+    seed_base,
+    identity: str,
+    random_pick_index,
+) -> int | None:
     if not doms:
         return None
     pool = sorted(doms)
-    digest = hashlib.sha256(f"{wrand_salt}|{y:04d}-{m:02d}".encode("utf-8")).digest()
-    idx = int.from_bytes(digest[:8], "big") % len(pool)
+    idx = random_pick_index(
+        len(pool),
+        seed_base=seed_base,
+        domain="monthly-intersection",
+        identity=identity,
+        period=f"{y:04d}-{m:02d}",
+    )
     return pool[idx]
 
 
@@ -56,7 +67,9 @@ def next_for_and_rand_yearly(
     ref_d,
     y_specs: list[str],
     *,
-    wrand_salt: str,
+    seed_base,
+    identity: str,
+    random_pick_index,
     days_in_month,
     doms_allowed_by_year,
     intersect_monthly_atoms_allowed,
@@ -89,7 +102,14 @@ def next_for_and_rand_yearly(
             probe = _first_day_next_month(y, m, date_cls=date_cls, days_in_month=days_in_month)
             continue
 
-        pick = _choose_rand_dom(wrand_salt, y, m, allowed)
+        pick = _choose_rand_dom(
+            y,
+            m,
+            allowed,
+            seed_base=seed_base,
+            identity=identity,
+            random_pick_index=random_pick_index,
+        )
         if pick is None:
             probe = _first_day_next_month(y, m, date_cls=date_cls, days_in_month=days_in_month)
             continue
@@ -104,6 +124,7 @@ def next_for_and_fast_path(
     term: list[dict],
     ref_d,
     seed,
+    seed_base=None,
     *,
     next_after_atom_with_mods,
     atom_matches_on,
@@ -115,7 +136,7 @@ def next_for_and_fast_path(
     probe = ref_d
     stalled = 0
     for _ in range(max_anchor_iter):
-        cands = [next_after_atom_with_mods(atom, probe, seed) for atom in term]
+        cands = [next_after_atom_with_mods(atom, probe, seed, seed_base=seed_base) for atom in term]
         if not cands:
             raise parse_error_cls("Anchor evaluation term is empty; check anchor spec.")
         target = max(cands)
@@ -131,7 +152,7 @@ def next_for_and_fast_path(
                 )
             raise parse_error_cls("Anchor evaluation made no forward progress; check anchor spec.")
         stalled = 0
-        if all(atom_matches_on(atom, target, seed) for atom in term):
+        if all(atom_matches_on(atom, target, seed, seed_base=seed_base) for atom in term):
             return target
         probe = target
     if os_mod.environ.get("NAUTICAL_DIAG") == "1":
@@ -146,8 +167,10 @@ def next_for_and(
     term: list[dict],
     ref_d,
     seed,
+    seed_base=None,
     *,
-    wrand_salt: str,
+    random_identity,
+    random_pick_index,
     days_in_month,
     doms_allowed_by_year,
     intersect_monthly_atoms_allowed,
@@ -173,7 +196,9 @@ def next_for_and(
             term,
             ref_d,
             y_specs,
-            wrand_salt=wrand_salt,
+            seed_base=seed_base,
+            identity=random_identity(term),
+            random_pick_index=random_pick_index,
             days_in_month=days_in_month,
             doms_allowed_by_year=doms_allowed_by_year,
             intersect_monthly_atoms_allowed=intersect_monthly_atoms_allowed,
@@ -187,6 +212,7 @@ def next_for_and(
         term,
         ref_d,
         seed,
+        seed_base=seed_base,
         next_after_atom_with_mods=next_after_atom_with_mods,
         atom_matches_on=atom_matches_on,
         max_anchor_iter=max_anchor_iter,
@@ -196,10 +222,10 @@ def next_for_and(
     )
 
 
-def next_for_or(dnf: list[list[dict]], ref_d, seed, *, next_for_and):
+def next_for_or(dnf: list[list[dict]], ref_d, seed, seed_base=None, *, next_for_and):
     best = None
     for term in dnf:
-        cand = next_for_and(term, ref_d, seed)
+        cand = next_for_and(term, ref_d, seed, seed_base=seed_base)
         if cand and cand > ref_d and (best is None or cand < best):
             best = cand
     return best or (ref_d + timedelta(days=365))
@@ -209,6 +235,7 @@ def next_after_term(
     term,
     ref_d,
     default_seed,
+    seed_base=None,
     *,
     next_after_atom_with_mods,
     atom_matches_on,
@@ -217,17 +244,17 @@ def next_after_term(
     """Find next date after ref_d that matches all atoms in term."""
     if len(term) == 1:
         atom = term[0]
-        nxt = next_after_atom_with_mods(atom, ref_d, default_seed)
+        nxt = next_after_atom_with_mods(atom, ref_d, default_seed, seed_base=seed_base)
         mods = atom.get("mods") or {}
         hhmm = mods.get("t")
         return nxt, hhmm
 
     cur = ref_d
     for _ in range(min(intersection_guard_steps, 100)):
-        cands = [next_after_atom_with_mods(a, cur, default_seed) for a in term]
+        cands = [next_after_atom_with_mods(a, cur, default_seed, seed_base=seed_base) for a in term]
         nxt = max(cands)
 
-        if all(atom_matches_on(a, nxt, default_seed) for a in term):
+        if all(atom_matches_on(a, nxt, default_seed, seed_base=seed_base) for a in term):
             hhmm = None
             for atom in term:
                 mods = atom.get("mods") or {}
@@ -283,10 +310,11 @@ def _next_after_expr_monthly_rand_candidate(
     next_for_and,
     months_since,
     term_candidates_in_month,
-    sha_pick,
+    random_identity,
+    random_pick_index,
 ):
     if any(atype(a) == "y" for a in term):
-        cand = next_for_and(term, after_date, default_seed)
+        cand = next_for_and(term, after_date, default_seed, seed_base=seed_base)
         if cand:
             return cand, {"basis": "rand+yearly"}
         return None, None
@@ -309,8 +337,13 @@ def _next_after_expr_monthly_rand_candidate(
         cands = term_candidates_in_month(term, y, m, info["atom_idx"], bd_only)
         if cands:
             period_key = f"{y:04d}{m:02d}"
-            seed_key = f"{seed_key_base}|m|{term_id}|{period_key}"
-            idx = sha_pick(len(cands), seed_key)
+            idx = random_pick_index(
+                len(cands),
+                seed_base=seed_key_base,
+                domain=f"monthly:{term_id}",
+                identity=random_identity(term),
+                period=period_key,
+            )
             choice = cands[idx]
             if choice > after_date:
                 return choice, {"basis": "rand", "rand_period": period_key}
@@ -329,17 +362,13 @@ def _next_after_expr_yearly_rand_candidate(
     seed_base,
     *,
     term_candidates_in_month,
-    sha_pick,
+    random_identity,
+    random_pick_index,
 ):
     seed_key_base = seed_base if seed_base is not None else "preview"
     mods = info.get("mods") or {}
     bd_only = bool(mods.get("bd"))
     target_m = info.get("month", None)
-    has_year_filter = any(
-        idx != info["atom_idx"]
-        and (atom.get("typ") or atom.get("type")) == "y"
-        for idx, atom in enumerate(term)
-    )
     y = after_date.year
 
     for _ in range(10):
@@ -349,27 +378,20 @@ def _next_after_expr_yearly_rand_candidate(
                 month_cands = term_candidates_in_month(term, y, mm, info["atom_idx"], bd_only)
                 if month_cands:
                     by_month[mm] = month_cands
-            if has_year_filter and len(by_month) > 1:
-                months = sorted(by_month)
-                cycle, position = divmod(y, len(months))
-                order = sorted(
-                    months,
-                    key=lambda mm: sha_pick(
-                        2**31,
-                        f"{seed_key_base}|y|{term_id}|months|{cycle}|{','.join(map(str, months))}|{mm}",
-                    ),
-                )
-                cands = by_month[order[position]]
-            else:
-                cands = [cand for mm in sorted(by_month) for cand in by_month[mm]]
+            cands = [cand for mm in sorted(by_month) for cand in by_month[mm]]
             period_key = f"{y:04d}"
         else:
             cands = term_candidates_in_month(term, y, int(target_m), info["atom_idx"], bd_only)
             period_key = f"{y:04d}-{int(target_m):02d}"
 
         if cands:
-            seed_key = f"{seed_key_base}|y|{term_id}|{period_key}"
-            idx = sha_pick(len(cands), seed_key)
+            idx = random_pick_index(
+                len(cands),
+                seed_base=seed_key_base,
+                domain=f"yearly:{term_id}",
+                identity=random_identity(term),
+                period=period_key,
+            )
             choice = cands[idx]
             if choice > after_date:
                 return choice, {"basis": "rand", "rand_period": period_key}
@@ -378,10 +400,10 @@ def _next_after_expr_yearly_rand_candidate(
     return None, None
 
 
-def _next_after_expr_term_candidate(term: list[dict], after_date, default_seed, *, next_after_term):
-    cand, _ = next_after_term(term, after_date, default_seed)
+def _next_after_expr_term_candidate(term: list[dict], after_date, default_seed, seed_base, *, next_after_term):
+    cand, _ = next_after_term(term, after_date, default_seed, seed_base=seed_base)
     if cand is not None and cand <= after_date:
-        cand, _ = next_after_term(term, after_date + timedelta(days=1), default_seed)
+        cand, _ = next_after_term(term, after_date + timedelta(days=1), default_seed, seed_base=seed_base)
     if cand:
         return cand, {"basis": "term"}
     return None, None
@@ -400,7 +422,8 @@ def next_after_expr(
     next_for_and,
     months_since,
     term_candidates_in_month,
-    sha_pick,
+    random_identity,
+    random_pick_index,
     next_after_term,
 ):
     """Return the next matching local date strictly > after_date."""
@@ -427,7 +450,8 @@ def next_after_expr(
                 next_for_and=next_for_and,
                 months_since=months_since,
                 term_candidates_in_month=term_candidates_in_month,
-                sha_pick=sha_pick,
+                random_identity=random_identity,
+                random_pick_index=random_pick_index,
             )
             best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
             continue
@@ -440,7 +464,8 @@ def next_after_expr(
                 after_date,
                 seed_base,
                 term_candidates_in_month=term_candidates_in_month,
-                sha_pick=sha_pick,
+                random_identity=random_identity,
+                random_pick_index=random_pick_index,
             )
             best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
             continue
@@ -449,6 +474,7 @@ def next_after_expr(
             term,
             after_date,
             default_seed,
+            seed_base,
             next_after_term=next_after_term,
         )
         best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)

@@ -1067,12 +1067,19 @@ def _intersect_monthly_atoms_allowed(
     )
 
 
-def _next_for_and_rand_yearly(term: list[dict], ref_d: date, y_specs: list[str]) -> date | None:
+def _next_for_and_rand_yearly(
+    term: list[dict],
+    ref_d: date,
+    y_specs: list[str],
+    seed_base: str | None = None,
+) -> date | None:
     return _scheduler_expr.next_for_and_rand_yearly(
         term,
         ref_d,
         y_specs,
-        wrand_salt=WRAND_SALT,
+        seed_base=seed_base,
+        identity=_random_identity(term),
+        random_pick_index=_random_pick_index,
         days_in_month=_days_in_month,
         doms_allowed_by_year=_doms_allowed_by_year,
         intersect_monthly_atoms_allowed=_intersect_monthly_atoms_allowed,
@@ -1081,11 +1088,17 @@ def _next_for_and_rand_yearly(term: list[dict], ref_d: date, y_specs: list[str])
     )
 
 
-def _next_for_and_fast_path(term: list[dict], ref_d: date, seed: date) -> date:
+def _next_for_and_fast_path(
+    term: list[dict],
+    ref_d: date,
+    seed: date,
+    seed_base: str | None = None,
+) -> date:
     return _scheduler_expr.next_for_and_fast_path(
         term,
         ref_d,
         seed,
+        seed_base=seed_base,
         next_after_atom_with_mods=next_after_atom_with_mods,
         atom_matches_on=atom_matches_on,
         max_anchor_iter=MAX_ANCHOR_ITER,
@@ -1095,12 +1108,19 @@ def _next_for_and_fast_path(term: list[dict], ref_d: date, seed: date) -> date:
     )
 
 
-def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
+def _next_for_and(
+    term: list[dict],
+    ref_d: date,
+    seed: date,
+    seed_base: str | None = None,
+) -> date:
     return _scheduler_expr.next_for_and(
         term,
         ref_d,
         seed,
-        wrand_salt=WRAND_SALT,
+        seed_base=seed_base,
+        random_identity=_random_identity,
+        random_pick_index=_random_pick_index,
         days_in_month=_days_in_month,
         doms_allowed_by_year=_doms_allowed_by_year,
         intersect_monthly_atoms_allowed=_intersect_monthly_atoms_allowed,
@@ -1115,8 +1135,19 @@ def _next_for_and(term: list[dict], ref_d: date, seed: date) -> date:
     )
 
 
-def _next_for_or(dnf: list[list[dict]], ref_d: date, seed: date) -> date:
-    return _scheduler_expr.next_for_or(dnf, ref_d, seed, next_for_and=_next_for_and)
+def _next_for_or(
+    dnf: list[list[dict]],
+    ref_d: date,
+    seed: date,
+    seed_base: str | None = None,
+) -> date:
+    return _scheduler_expr.next_for_or(
+        dnf,
+        ref_d,
+        seed,
+        seed_base=seed_base,
+        next_for_and=_next_for_and,
+    )
 
 # ---- Public precompute --------------------------------------------------------
 
@@ -1824,17 +1855,21 @@ def _week_monday(d: date) -> date:
     return _cached_expansion.week_monday(d)
 
 
-def _seeded_int(key: str) -> int:
-    return _cached_expansion.seeded_int(key)
-
-
-def _weekly_rand_pick(iso_year: int, iso_week: int, mods: dict) -> int:
+def _weekly_rand_pick(
+    iso_year: int,
+    iso_week: int,
+    mods: dict,
+    *,
+    seed_base: str | None,
+    atom_identity: str,
+) -> int:
     return _cached_expansion.weekly_rand_pick(
         iso_year,
         iso_week,
         mods,
-        wrand_salt=WRAND_SALT,
-        seeded_int=_seeded_int,
+        seed_base=seed_base,
+        atom_identity=atom_identity,
+        namespace=WRAND_SALT,
     )
 
 
@@ -1842,8 +1877,12 @@ def _is_bd(dt: _date):  # business day
     return _cached_expansion.is_bd(dt)
 
 
-def _sha_pick(seq_len: int, seed_key: str) -> int:
-    return _cached_expansion.sha_pick(seq_len, seed_key)
+def _random_identity(value) -> str:
+    return _cached_expansion.random_identity(value)
+
+
+def _random_pick_index(seq_len: int, **kwargs) -> int:
+    return _cached_expansion.random_pick_index(seq_len, namespace=WRAND_SALT, **kwargs)
 
 
 def _term_rand_info(term):
@@ -2817,10 +2856,11 @@ def apply_day_offset(d: date, mods: dict) -> date:
     return _schedule_utils.apply_day_offset(d, mods)
 
 
-def base_next_after_atom(atom, ref_d: date) -> date:
+def base_next_after_atom(atom, ref_d: date, seed_base=None) -> date:
     return _scheduler_atom.base_next_after_atom(
         atom,
         ref_d,
+        seed_base=seed_base,
         expand_weekly_cached_mods=expand_weekly_cached_mods,
         split_csv_tokens=_split_csv_tokens,
         expand_monthly_cached=expand_monthly_cached,
@@ -2923,11 +2963,12 @@ def _accept_roll_candidate(ref_d: date, base: date, cand: date, roll_kind: str |
     return _scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
 
 
-def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
+def next_after_atom_with_mods(atom, ref_d: date, default_seed: date, seed_base=None) -> date:
     return _scheduler_atom.next_after_atom_with_mods(
         atom,
         ref_d,
         default_seed,
+        seed_base=seed_base,
         active_mod_keys=_active_mod_keys,
         base_next_after_atom=base_next_after_atom,
         interval_allowed_for_atom=_interval_allowed_for_atom,
@@ -2944,20 +2985,22 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date) -> date:
 
 
 
-def atom_matches_on(atom, d: date, default_seed: date) -> bool:
+def atom_matches_on(atom, d: date, default_seed: date, seed_base=None) -> bool:
     return _scheduler_atom.atom_matches_on(
         atom,
         d,
         default_seed,
+        seed_base=seed_base,
         next_after_atom_with_mods=next_after_atom_with_mods,
     )
 
 
-def next_after_term(term, ref_d: date, default_seed: date):
+def next_after_term(term, ref_d: date, default_seed: date, seed_base=None):
     return _scheduler_expr.next_after_term(
         term,
         ref_d,
         default_seed,
+        seed_base=seed_base,
         next_after_atom_with_mods=next_after_atom_with_mods,
         atom_matches_on=atom_matches_on,
         intersection_guard_steps=INTERSECTION_GUARD_STEPS,
@@ -2977,7 +3020,8 @@ def next_after_expr(dnf, after_date, default_seed=None, seed_base=None):
         next_for_and=_next_for_and,
         months_since=_months_since,
         term_candidates_in_month=_term_candidates_in_month,
-        sha_pick=_sha_pick,
+        random_identity=_random_identity,
+        random_pick_index=_random_pick_index,
         next_after_term=next_after_term,
     )
 
@@ -3015,11 +3059,12 @@ def expr_has_m_or_y(dnf) -> bool:
     return _schedule_utils.expr_has_m_or_y(dnf)
 
 
-def pick_hhmm_from_dnf_for_date(dnf, target: date, default_seed: date):
+def pick_hhmm_from_dnf_for_date(dnf, target: date, default_seed: date, seed_base=None):
     return _schedule_utils.pick_hhmm_from_dnf_for_date(
         dnf,
         target,
         default_seed,
+        seed_base=seed_base,
         atom_matches_on=atom_matches_on,
     )
 

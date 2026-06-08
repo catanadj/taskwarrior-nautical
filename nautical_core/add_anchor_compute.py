@@ -36,7 +36,7 @@ def anchor_step_once_with_omit(dnf, prev_local_date, interval_seed, seed_base, *
 
 def anchor_term_fires_on_date(term, d, interval_seed, seed_base, *, core: Any):
     try:
-        return all(core.atom_matches_on(atom, d, interval_seed) for atom in term)
+        return all(core.atom_matches_on(atom, d, interval_seed, seed_base=seed_base) for atom in term)
     except Exception:
         return False
 
@@ -220,7 +220,12 @@ def anchor_until_summary(
     exact_until_count = max(0, count - 1)
     if not last:
         return exact_until_count, None
-    final_hhmm = core.pick_hhmm_from_dnf_for_date(dnf, last, first_date_local) or first_hhmm
+    final_hhmm = core.pick_hhmm_from_dnf_for_date(
+        dnf,
+        last,
+        first_date_local,
+        seed_base=seed_base,
+    ) or first_hhmm
     final_until_dt = core.build_local_datetime(last, final_hhmm).astimezone(timezone.utc)
     return exact_until_count, final_until_dt
 

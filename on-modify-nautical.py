@@ -2686,13 +2686,21 @@ def _extract_time_slots_from_dnf(dnf) -> list[tuple[int, int]]:
         return []
     return sorted(out)
 
-def _extract_time_slots_for_date(dnf, target_date, default_seed_date) -> list[tuple[int, int]]:
+def _extract_time_slots_for_date(
+    dnf,
+    target_date,
+    default_seed_date,
+    seed_base: str,
+) -> list[tuple[int, int]]:
     """Extract time slots for terms that match target_date."""
     out: set[tuple[int, int]] = set()
     matched = False
     try:
         for term in dnf:
-            if all(core.atom_matches_on(atom, target_date, default_seed_date) for atom in term):
+            if all(
+                core.atom_matches_on(atom, target_date, default_seed_date, seed_base=seed_base)
+                for atom in term
+            ):
                 matched = True
                 for atom in term:
                     mods = atom.get("mods") or {}
@@ -2709,6 +2717,7 @@ def _skip_reference_dt_local(
     end_local: "datetime",
     due_local: Optional["datetime"],
     default_seed_date,
+    seed_base: str,
 ) -> "datetime":
     """Choose the reference datetime for SKIP mode.
 
@@ -2731,7 +2740,7 @@ def _skip_reference_dt_local(
     if end_local >= due_local:
         return end_local
 
-    slots = _extract_time_slots_for_date(dnf, due_local.date(), default_seed_date)
+    slots = _extract_time_slots_for_date(dnf, due_local.date(), default_seed_date, seed_base)
     if len(slots) <= 1:
         return due_local
 
@@ -2776,7 +2785,10 @@ def _next_occurrence_after_local_dt(
     adate = after_local_dt.date()
     try:
         same_day_matches = any(
-            all(core.atom_matches_on(atom, adate, default_seed_date) for atom in term)
+            all(
+                core.atom_matches_on(atom, adate, default_seed_date, seed_base=seed_base)
+                for atom in term
+            )
             for term in dnf
         )
         if same_day_matches and omit_dnf:
@@ -2792,7 +2804,7 @@ def _next_occurrence_after_local_dt(
         same_day_matches = False
 
     if same_day_matches:
-        slots = _extract_time_slots_for_date(dnf, adate, default_seed_date)
+        slots = _extract_time_slots_for_date(dnf, adate, default_seed_date, seed_base)
         if not slots:
             slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
         for hh, mm in slots:
@@ -2811,7 +2823,7 @@ def _next_occurrence_after_local_dt(
         core=core,
         max_skip_iterations=max(core.MAX_ANCHOR_ITER, 128),
     )
-    slots = _extract_time_slots_for_date(dnf, nxt_date, default_seed_date)
+    slots = _extract_time_slots_for_date(dnf, nxt_date, default_seed_date, seed_base)
     if not slots:
         slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
     hh, mm = slots[0]
@@ -3285,6 +3297,7 @@ def _anchor_due_mode_all(
         end_local=end_local,
         due_local=(due_local if due_dt_utc else None),
         default_seed_date=default_seed_date,
+        seed_base=seed_base,
     )
     nxt_local = _next_occurrence_after_local_dt(
         dnf,

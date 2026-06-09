@@ -315,14 +315,14 @@ def _timeline_base_line(
         delta = fmt_on_time_delta(due_dt, end_dt)
         end_s = fmtlocal(end_dt) if end_dt else "(no end)"
         short_id = short(obj.get("uuid"))
-        return f"[{prev_style}]{no_text} {'✓':<2}{end_s} {delta} {short_id}[/]"
+        return f"[{prev_style}]{no_text} {'✓':<2}{end_s} {short_id} {delta}[/]"
 
     if item_type == "current":
         cur_end = dtparse(task.get("end"))
         cur_due = dtparse(task.get("due"))
         cur_delta = fmt_on_time_delta(cur_due, cur_end)
         cur_end_s = fmtlocal(cur_end) if cur_end else "(no end)"
-        return f"[{cur_style}]{no_text} {'✓':<2}{cur_end_s} {cur_delta} {short(task.get('uuid'))}[/]"
+        return f"[{cur_style}]{no_text} {'✓':<2}{cur_end_s} {short(task.get('uuid'))} {cur_delta}[/]"
 
     if item_type == "next":
         is_last = cap_no is not None and no == cap_no

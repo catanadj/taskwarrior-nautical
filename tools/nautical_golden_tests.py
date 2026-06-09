@@ -9947,6 +9947,42 @@ def test_anchor_natural_language_normalizes_grouped_list_plus_expr():
     expect(natural == "Mondays, Wednesdays, or Fridays in Apr each year", f"expected compact grouped phrase, got {natural!r}")
 
 
+def test_timeline_completed_rows_place_uuid_before_delta():
+    """completed timeline rows should consistently place the UUID before the timing delta."""
+    timeline = importlib.import_module("nautical_core.modify_timeline")
+    common = {
+        "dt": None,
+        "cap_no": None,
+        "prev_style": "prev",
+        "cur_style": "current",
+        "next_style": "next",
+        "future_style": "future",
+        "core": SimpleNamespace(fmt_dt_local=lambda _dt: "DATE"),
+        "dtparse": lambda value: value,
+        "fmt_on_time_delta": lambda _due, _end: "(DELTA)",
+        "fmtlocal": lambda _dt: "DATE",
+        "short": lambda value: str(value)[:8],
+    }
+
+    prev = timeline._timeline_base_line(
+        1,
+        obj={"due": "due", "end": "end", "uuid": "deadbeef-0000"},
+        item_type="prev",
+        task={},
+        **common,
+    )
+    current = timeline._timeline_base_line(
+        2,
+        obj={},
+        item_type="current",
+        task={"due": "due", "end": "end", "uuid": "cafebabe-0000"},
+        **common,
+    )
+
+    expect("DATE deadbeef (DELTA)" in prev, f"unexpected previous-row ordering: {prev!r}")
+    expect("DATE cafebabe (DELTA)" in current, f"unexpected current-row ordering: {current!r}")
+
+
 def test_on_modify_render_cp_completion_feedback_wrapper():
     """CP completion feedback wrapper should delegate and emit a preview panel title."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -12036,6 +12072,7 @@ TESTS = [
     test_on_modify_read_two_array_uuid_mismatch_fails,
     test_on_modify_read_two_array_single_missing_uuid_fails,
     test_on_modify_invalid_anchor_has_no_stdout,
+    test_timeline_completed_rows_place_uuid_before_delta,
     test_on_modify_render_anchor_completion_feedback_wrapper,
     test_on_modify_render_anchor_file_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_wrapper,

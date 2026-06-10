@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 def normalize_anchor_input_to_dnf(expr, *, parse_anchor_expr_to_dnf_cached, parse_error_cls):
     """Normalize user input to parsed DNF, preserving current error messages."""
@@ -51,13 +53,23 @@ def validate_anchor_atom_strict(
     interval = int(atom.get("ival") or atom.get("intv") or 1)
     mods = atom.get("mods") or {}
     active = None
+    random_match = re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", spec)
 
     if typ == "w":
         validate_weekly_spec(spec)
+        if random_match:
+            count = 1 if spec == "rand" else int(spec[:-4])
+            if (mods.get("bd") or mods.get("wd") is True) and count > 5:
+                raise parse_error_cls("Weekly business-day random count cannot exceed 5 days.")
         return
 
     if typ == "m":
-        if spec == "rand":
+        if random_match:
+            count = 1 if spec == "rand" else int(spec[:-4])
+            if count > 31:
+                raise parse_error_cls("Monthly random count cannot exceed 31 days.")
+            if (mods.get("bd") or mods.get("wd") is True) and count > 23:
+                raise parse_error_cls("Monthly business-day random count cannot exceed 23 days.")
             active = active_mod_keys(mods)
             bad = [key for key in active if key not in ("t", "bd", "wd")]
             if bad:
@@ -69,7 +81,11 @@ def validate_anchor_atom_strict(
         return
 
     if typ == "y":
-        if spec == "rand" or spec.startswith("rand-"):
+        if random_match or spec.startswith("rand-"):
+            if random_match:
+                count = 1 if spec == "rand" else int(spec[:-4])
+                if (mods.get("bd") or mods.get("wd") is True) and count > 262:
+                    raise parse_error_cls("Yearly business-day random count cannot exceed 262 days.")
             if spec.startswith("rand-"):
                 try:
                     mm = int(spec.split("-", 1)[1])
@@ -89,10 +105,17 @@ def validate_anchor_atom_strict(
     raise parse_error_cls(f"Unknown anchor type '{typ}'")
 
 
-def validate_anchor_dnf_atoms_strict(dnf, *, validate_anchor_atom_strict) -> None:
+def validate_anchor_dnf_atoms_strict(dnf, *, validate_anchor_atom_strict, parse_error_cls) -> None:
     for term in dnf:
+        counted_randoms = 0
         for atom in term:
             validate_anchor_atom_strict(atom)
+            spec = str(atom.get("spec") or atom.get("value") or "").lower()
+            match = re.fullmatch(r"([1-9]\d{0,2})rand", spec)
+            if match and int(match.group(1)) > 1:
+                counted_randoms += 1
+        if counted_randoms > 1:
+            raise parse_error_cls("An AND term can contain only one counted random selector.")
 
 
 def validate_anchor_expr_strict(

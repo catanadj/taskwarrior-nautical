@@ -4552,6 +4552,127 @@ def test_group_time_modifier_rejects_conflicts_and_non_time_modifiers():
             expect(needle in str(exc), f"unexpected grouped modifier error for {expr!r}: {exc}")
 
 
+def _counted_random_dates(expr: str, start: date, count: int, seed_base: str = "counted-rand-test") -> list[date]:
+    dnf = core.validate_anchor_expr_strict(expr)
+    out: list[date] = []
+    cursor = start
+    for _ in range(count):
+        cursor, _meta = core.next_after_expr(
+            dnf,
+            cursor,
+            default_seed=start,
+            seed_base=seed_base,
+        )
+        expect(cursor is not None, f"{expr!r} stopped before {count} occurrences")
+        out.append(cursor)
+    return out
+
+
+def test_counted_random_selects_unique_dates_per_period():
+    """w:Nrand, m:Nrand, and y:Nrand should emit exactly N unique dates per period."""
+    weekly = _counted_random_dates("w:2rand", date(2026, 1, 4), 2)
+    expect(len(set(weekly)) == 2, f"weekly counted random repeated a date: {weekly}")
+    expect(len({item.isocalendar()[:2] for item in weekly}) == 1, f"weekly picks crossed periods: {weekly}")
+
+    monthly = _counted_random_dates("m:3rand", date(2025, 12, 31), 3)
+    expect(len(set(monthly)) == 3, f"monthly counted random repeated a date: {monthly}")
+    expect({(item.year, item.month) for item in monthly} == {(2026, 1)}, f"monthly picks crossed periods: {monthly}")
+
+    yearly = _counted_random_dates("y:2rand", date(2025, 12, 31), 2)
+    expect(len(set(yearly)) == 2, f"yearly counted random repeated a date: {yearly}")
+    expect({item.year for item in yearly} == {2026}, f"yearly picks crossed periods: {yearly}")
+
+
+def test_counted_random_is_deterministic_chain_scoped_and_constrained():
+    """Counted draws should replay per chain while respecting the complete candidate pool."""
+    start = date(2025, 12, 31)
+    expr = "m:2rand + w:mon,sat"
+    first = _counted_random_dates(expr, start, 8, seed_base="chain-a")
+    replay = _counted_random_dates(expr, start, 8, seed_base="chain-a")
+    other = _counted_random_dates(expr, start, 8, seed_base="chain-b")
+    expect(first == replay, f"counted random replay changed: {first} != {replay}")
+    expect(first != other, "different chains should not share the same counted-random sequence")
+    expect(all(item.weekday() in (0, 5) for item in first), f"weekday constraint was ignored: {first}")
+    month_counts = {}
+    for item in first:
+        month_counts[(item.year, item.month)] = month_counts.get((item.year, item.month), 0) + 1
+    expect(all(value == 2 for value in month_counts.values()), f"monthly cardinality drifted: {month_counts}")
+
+
+def test_counted_random_omit_redraws_from_remaining_pool():
+    """An omitted counted-random pick should be replaced before the period is emitted."""
+    anchor_omit = importlib.import_module("nautical_core.anchor_omit")
+    dnf = core.validate_anchor_expr_strict("m:3rand")
+    start = date(2025, 12, 31)
+    baseline = _counted_random_dates("m:3rand", start, 3, seed_base="omit-redraw")
+    omitted = baseline[0]
+    omit_state = {"dnf": None, "dates": frozenset({omitted}), "descriptions": {}}
+    out = []
+    cursor = start
+    for _ in range(3):
+        cursor, _meta = anchor_omit.next_after_expr_with_omit(
+            dnf,
+            cursor,
+            default_seed=start,
+            seed_base="omit-redraw",
+            omit_dnf=omit_state,
+            core=core,
+        )
+        out.append(cursor)
+    expect(omitted not in out, f"omitted random date was still selected: {out}")
+    expect(len(set(out)) == 3, f"omission did not redraw a complete unique set: {out}")
+    expect({(item.year, item.month) for item in out} == {(2026, 1)}, f"redraw escaped its period: {out}")
+
+
+def test_counted_random_cadence_time_and_canonical_round_trip():
+    """Counted random should compose with /N cadence, grouped times, and ACF caching."""
+    expr = "(m/2:2rand + w:mon..fri)@t=09:00"
+    dnf = core.validate_anchor_expr_strict(expr)
+    dates = _counted_random_dates(expr, date(2025, 12, 31), 4)
+    expect(all(item.weekday() < 5 for item in dates), f"weekday filter was ignored: {dates}")
+    expect(
+        [(item.year, item.month) for item in dates[:2]] == [(2026, 2), (2026, 2)]
+        and [(item.year, item.month) for item in dates[2:]] == [(2026, 4), (2026, 4)],
+        f"monthly /2 cadence was not preserved: {dates}",
+    )
+    expect(
+        all(atom.get("mods", {}).get("t") == (9, 0) for term in dnf for atom in term),
+        f"group time was not applied to counted random: {dnf!r}",
+    )
+    canonical = core.acf_to_original_format(core.build_acf(expr))
+    reparsed = core.validate_anchor_expr_strict(canonical)
+    expect(core.dnf_has_counted_random(reparsed), f"ACF round-trip lost counted random: {canonical!r}")
+
+    yearly = _counted_random_dates("y/2:2rand", date(2025, 12, 31), 4)
+    expect(
+        [item.year for item in yearly] == [2027, 2027, 2029, 2029],
+        f"yearly /2 cadence was not preserved: {yearly}",
+    )
+
+
+def test_counted_random_validation_and_natural_text():
+    """Counted-random limits and natural descriptions should be explicit."""
+    expected = {
+        "w:2rand": "2 random days each week",
+        "m:3rand": "3 random days each month",
+        "y:2rand": "2 random days each year",
+        "y:2rand + y:apr,jul,oct": "2 random days each year in Apr, Jul, or Oct",
+    }
+    for expr, natural in expected.items():
+        expect(core.describe_anchor_expr(expr) == natural, f"unexpected natural text for {expr!r}")
+    for expr, needle in (
+        ("w:8rand", "cannot exceed 7"),
+        ("w:6rand@bd", "cannot exceed 5"),
+        ("m:32rand", "cannot exceed 31"),
+        ("y:367rand", "cannot exceed 366"),
+    ):
+        try:
+            core.validate_anchor_expr_strict(expr)
+            expect(False, f"expected counted-random validation failure for {expr!r}")
+        except (core.ParseError, core.YearTokenFormatError) as exc:
+            expect(needle in str(exc), f"unexpected validation error for {expr!r}: {exc}")
+
+
 def test_deterministic_randomness():
     """Test that random patterns are deterministic with same seed"""
     # Only valid random patterns
@@ -5516,6 +5637,33 @@ def test_hook_on_add_multitime_preview_emits_all_slots():
     stderr_txt = _strip_markup(p.stderr)
     if "12:00" not in stderr_txt or "22:00" not in stderr_txt:
         raise AssertionError(f"on-add preview missing expected intra-day times. stderr={stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_counted_random_preview_uses_group_time():
+    """on-add should schedule and explain a constrained counted-random anchor."""
+    hook = _find_hook_file("on-add-nautical.py")
+    env = {"NO_COLOR": "1"}
+    expr = "(m:2rand + w:mon..fri)@t=09:00"
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000119",
+        "description": "hook test counted random",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20260101T000000Z",
+        "anchor": expr,
+        "anchor_mode": "skip",
+    }
+    p = _run_hook_script(hook, task, env_extra=env)
+    expect(p.returncode == 0, f"on-add counted random failed: {p.stderr[:500]!r}")
+    out_task = _extract_last_json(p.stdout)
+    due = datetime.fromisoformat(str(out_task.get("due")))
+    expect((due.hour, due.minute) == (9, 0), f"group time was not used for first due: {due}")
+    expect(due.weekday() < 5, f"weekday constraint was ignored for first due: {due}")
+    stderr_txt = _strip_markup(p.stderr)
+    expect(
+        "2 random days each" in stderr_txt and "month at 09:00" in stderr_txt,
+        f"counted-random natural text missing: {stderr_txt[:500]!r}",
+    )
 
 
 def test_hook_on_add_cp_scheduled_only_preserves_no_due():
@@ -9773,6 +9921,42 @@ def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due():
     expect(meta.get("target_field") == "due", f"expected due target field when due is present: {meta}")
 
 
+def test_on_modify_compute_counted_random_advances_within_period():
+    """Counted-random completion should emit the remaining selection in the same period."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_counted_random_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    dnf = mod.core.validate_anchor_expr_strict("m:2rand")
+    seed = date(2026, 1, 1)
+    first, _meta = mod.core.next_after_expr(
+        dnf,
+        seed,
+        default_seed=seed,
+        seed_base="abcd1234",
+    )
+    expected, _meta = mod.core.next_after_expr(
+        dnf,
+        first,
+        default_seed=seed,
+        seed_base="abcd1234",
+    )
+    child_due, meta, _dnf = mod._compute_anchor_child_due(
+        {
+            "anchor": "m:2rand",
+            "anchor_mode": "skip",
+            "due": mod.core.fmt_isoz(mod.core.build_local_datetime(first, (9, 0))),
+            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(first, (10, 0))),
+            "chainID": "abcd1234",
+            "link": 1,
+        }
+    )
+    expect(mod.core.to_local(child_due).date() == expected, f"unexpected counted-random child due: {child_due}")
+    expect(expected.month == first.month, f"second counted pick should remain in the same month: {first}, {expected}")
+    expect(meta.get("target_field") == "due", f"expected due target field: {meta}")
+
+
 def test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails():
     """anchor completion should fail cleanly when omit removes every future anchor date."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -11990,6 +12174,11 @@ TESTS = [
     test_group_time_modifier_distributes_to_all_branches,
     test_group_time_modifier_supports_multiple_times,
     test_group_time_modifier_rejects_conflicts_and_non_time_modifiers,
+    test_counted_random_selects_unique_dates_per_period,
+    test_counted_random_is_deterministic_chain_scoped_and_constrained,
+    test_counted_random_omit_redraws_from_remaining_pool,
+    test_counted_random_cadence_time_and_canonical_round_trip,
+    test_counted_random_validation_and_natural_text,
     test_anchor_date_calculations,
     test_interval_patterns,
     test_complex_dnf_expressions,
@@ -12045,6 +12234,7 @@ TESTS = [
     test_on_modify_compute_cp_random_selects_deterministic_interval,
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_hook_on_add_multitime_preview_emits_all_slots,
+    test_hook_on_add_counted_random_preview_uses_group_time,
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
     test_core_anchor_preset_unknown_lists_available_names,
     test_core_omit_preset_unknown_lists_available_names,
@@ -12266,6 +12456,7 @@ TESTS = [
     test_hook_on_modify_timeline_uses_omit_file_description_label,
     test_on_modify_compute_anchor_child_due_skips_omit_date,
     test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due,
+    test_on_modify_compute_counted_random_advances_within_period,
     test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails,
     test_on_modify_completion_build_and_spawn_child_happy_path,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,

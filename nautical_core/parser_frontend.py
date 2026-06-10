@@ -4,7 +4,7 @@ import re
 
 
 _RANDOM_SELECTOR_RE = re.compile(
-    r"^(?:m(?:/\d+)?:rand|y(?:/\d+)?:(?:rand|rand-\d{2}))(?:@|$)",
+    r"^(?:m(?:/\d+)?:(?:rand|[1-9]\d{0,2}rand)|y(?:/\d+)?:(?:rand|[1-9]\d{0,2}rand|rand-\d{2}))(?:@|$)",
     re.IGNORECASE,
 )
 _WEEKLY_LIST_RE = re.compile(r"^w(?:/\d+)?:[^()|+]*,[^()|+]*$", re.IGNORECASE)

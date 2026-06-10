@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date, timedelta
 
 RAND_ALGORITHM_VERSION = "nautical-rand-v2"
@@ -52,6 +53,51 @@ def random_pick_index(
     return int.from_bytes(digest[:8], "big") % seq_len
 
 
+def random_count_from_spec(spec: str) -> int | None:
+    text = str(spec or "").strip().lower()
+    if text == "rand":
+        return 1
+    match = re.fullmatch(r"([1-9]\d{0,2})rand", text)
+    return int(match.group(1)) if match else None
+
+
+def dnf_has_counted_random(dnf) -> bool:
+    for term in dnf or []:
+        for atom in term or []:
+            count = random_count_from_spec(atom.get("spec") or atom.get("value") or "")
+            if count is not None and count > 1:
+                return True
+    return False
+
+
+def random_pick_indices(
+    seq_len: int,
+    count: int,
+    *,
+    seed_base: str | None,
+    domain: str,
+    identity: str,
+    period: str,
+    namespace: str = "",
+) -> list[int]:
+    if count < 1 or count > seq_len:
+        return []
+    remaining = list(range(seq_len))
+    selected: list[int] = []
+    for draw in range(count):
+        pos = random_pick_index(
+            len(remaining),
+            seed_base=seed_base,
+            domain=domain,
+            identity=identity,
+            period=period,
+            attempt=draw,
+            namespace=namespace,
+        )
+        selected.append(remaining.pop(pos))
+    return sorted(selected)
+
+
 def weekly_rand_pick(
     iso_year: int,
     iso_week: int,
@@ -81,21 +127,51 @@ def term_rand_info(term):
     for i, atom in enumerate(term):
         typ = (atom.get("typ") or atom.get("type") or "").lower()
         spec = str(atom.get("spec") or atom.get("value") or "").lower()
-        if typ == "m" and spec == "rand":
+        count = random_count_from_spec(spec)
+        if typ == "w" and count is not None and count > 1:
+            return (
+                "w",
+                {
+                    "mods": atom.get("mods") or {},
+                    "ival": int(atom.get("ival") or atom.get("intv") or 1),
+                    "atom_idx": i,
+                    "count": count,
+                },
+            )
+        if typ == "m" and count is not None:
             return (
                 "m",
                 {
                     "mods": atom.get("mods") or {},
                     "ival": int(atom.get("ival") or atom.get("intv") or 1),
                     "atom_idx": i,
+                    "count": count,
                 },
             )
         if typ == "y":
-            if spec == "rand":
-                return ("y", {"mods": atom.get("mods") or {}, "month": None, "atom_idx": i})
+            if count is not None:
+                return (
+                    "y",
+                    {
+                        "mods": atom.get("mods") or {},
+                        "month": None,
+                        "atom_idx": i,
+                        "count": count,
+                        "ival": int(atom.get("ival") or atom.get("intv") or 1),
+                    },
+                )
             if spec.startswith("rand-"):
                 mm = int(spec.split("-", 1)[1])
-                return ("y", {"mods": atom.get("mods") or {}, "month": mm, "atom_idx": i})
+                return (
+                    "y",
+                    {
+                        "mods": atom.get("mods") or {},
+                        "month": mm,
+                        "atom_idx": i,
+                        "count": 1,
+                        "ival": int(atom.get("ival") or atom.get("intv") or 1),
+                    },
+                )
     return (None, None)
 
 
@@ -225,14 +301,18 @@ def term_candidates_in_month(
         if atype(atom) != "m":
             continue
         sp = aspec(atom)
-        if sp == "rand":
+        if random_count_from_spec(sp) is not None:
             continue
         msets.append(month_tokens_for_atom(atom, y, m))
     if msets:
         allowed_days = set.intersection(*msets) if msets else set()
         dates = [d for d in dates if d.day in allowed_days]
 
-    y_specs = [str(atom.get("spec") or "") for atom in term if atype(atom) == "y"]
+    y_specs = [
+        str(atom.get("spec") or "")
+        for idx, atom in enumerate(term)
+        if idx != rand_atom_idx and atype(atom) == "y"
+    ]
     if y_specs:
         allowed_dom = doms_allowed_by_year(y, m, y_specs)
         if allowed_dom:

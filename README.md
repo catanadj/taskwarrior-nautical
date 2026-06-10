@@ -67,11 +67,16 @@ Anchors compose with `+` (intersection) and `|` (union):
 | `w:mon,wed,fri` | Mondays, Wednesdays, Fridays |
 | `m:1` | First day of each month |
 | `m:rand + w:sat` | A random Saturday in the month |
+| `w:2rand` | Two random days each week |
+| `m:3rand + w:mon..fri` | Three random weekdays each month |
+| `y:2rand + y:apr,jul,oct` | Two random dates each year selected from Apr, Jul, or Oct |
 | `y:04-12` | April 12 every year |
 | `w:tue,fri \| y:05-05` | Tuesdays, Fridays, or May 5 |
 | `(w:mon \| m:last-fri)@t=09:00` | Mondays or the last Friday, all at 09:00 |
 
 `@t=HH:MM` can follow a parenthesized expression to apply the same time to every branch. Keep per-term times inside the group when branches need different times.
+
+Counted random selectors use the same syntax in every calendar family: `w:Nrand`, `m:Nrand`, and `y:Nrand`. Nautical selects `N` distinct dates from the complete constrained pool, orders them chronologically, and reproduces the same draw for that chain and period. Omitted dates are removed before selection, so the requested count is retained whenever enough candidates remain. A period with fewer than `N` eligible dates is skipped.
 
 Both engines can combine with all other Nautical features: omit rules, file-backed dates, chain limits, and visibility options.
 

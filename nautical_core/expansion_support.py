@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from datetime import date
+import re
+
+
+def _is_random_spec(spec: str) -> bool:
+    return bool(re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", str(spec or "").strip().lower()))
 
 
 def days_in_month(y: int, m: int, *, monthrange) -> int:
@@ -44,7 +49,7 @@ def weekly_spec_to_wset(
     toks = split_csv_lower(spec)
     out: set[int] = set()
 
-    if any(t == "rand" for t in toks):
+    if any(_is_random_spec(t) for t in toks):
         pool = (
             {0, 1, 2, 3, 4}
             if ((mods or {}).get("bd") or (mods or {}).get("wd") is True)
@@ -53,7 +58,7 @@ def weekly_spec_to_wset(
         out |= pool
 
     for tok in toks:
-        if tok == "rand":
+        if _is_random_spec(tok):
             continue
         if ".." in tok:
             a, b = tok.split("..", 1)

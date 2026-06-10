@@ -298,6 +298,86 @@ def _pick_earlier_candidate(best, best_meta, cand, meta):
     return best, best_meta
 
 
+def _selected_random_candidates(
+    candidates,
+    count: int,
+    *,
+    seed_base,
+    domain: str,
+    identity: str,
+    period: str,
+    random_pick_indices,
+    date_is_excluded,
+):
+    pool = [cand for cand in candidates if date_is_excluded is None or not date_is_excluded(cand)]
+    if len(pool) < count:
+        return []
+    indices = random_pick_indices(
+        len(pool),
+        count,
+        seed_base=seed_base,
+        domain=domain,
+        identity=identity,
+        period=period,
+    )
+    return sorted(pool[idx] for idx in indices)
+
+
+def _next_after_expr_weekly_rand_candidate(
+    term: list[dict],
+    term_id: int,
+    info: dict,
+    after_date,
+    default_seed,
+    seed_base,
+    *,
+    random_identity,
+    random_pick_indices,
+    atom_matches_on,
+    date_is_excluded,
+):
+    count = int(info.get("count") or 1)
+    mods = info.get("mods") or {}
+    bd_only = bool(mods.get("bd") or mods.get("wd") is True)
+    ival = int(info.get("ival") or 1)
+    rand_idx = int(info["atom_idx"])
+    seed = default_seed or after_date
+    monday = after_date - timedelta(days=after_date.weekday())
+    seed_monday = seed - timedelta(days=seed.weekday())
+
+    for _ in range(520):
+        week_delta = (monday - seed_monday).days // 7
+        if ival <= 1 or week_delta % ival == 0:
+            candidates = [monday + timedelta(days=offset) for offset in range(7)]
+            if bd_only:
+                candidates = [cand for cand in candidates if cand.weekday() < 5]
+            filtered = []
+            for cand in candidates:
+                if all(
+                    idx == rand_idx
+                    or atom_matches_on(atom, cand, default_seed, seed_base=seed_base)
+                    for idx, atom in enumerate(term)
+                ):
+                    filtered.append(cand)
+            iso = monday.isocalendar()
+            period_key = f"{iso.year:04d}-W{iso.week:02d}"
+            selected = _selected_random_candidates(
+                filtered,
+                count,
+                seed_base=seed_base if seed_base is not None else "preview",
+                domain=f"weekly:{term_id}",
+                identity=random_identity(term),
+                period=period_key,
+                random_pick_indices=random_pick_indices,
+                date_is_excluded=date_is_excluded,
+            )
+            for choice in selected:
+                if choice > after_date:
+                    return choice, {"basis": "rand", "rand_period": period_key}
+        monday += timedelta(days=7)
+    return None, None
+
+
 def _next_after_expr_monthly_rand_candidate(
     term: list[dict],
     term_id: int,
@@ -311,9 +391,11 @@ def _next_after_expr_monthly_rand_candidate(
     months_since,
     term_candidates_in_month,
     random_identity,
-    random_pick_index,
+    random_pick_indices,
+    date_is_excluded,
 ):
-    if any(atype(a) == "y" for a in term):
+    count = int(info.get("count") or 1)
+    if count == 1 and any(atype(a) == "y" for a in term):
         cand = next_for_and(term, after_date, default_seed, seed_base=seed_base)
         if cand:
             return cand, {"basis": "rand+yearly"}
@@ -337,16 +419,19 @@ def _next_after_expr_monthly_rand_candidate(
         cands = term_candidates_in_month(term, y, m, info["atom_idx"], bd_only)
         if cands:
             period_key = f"{y:04d}{m:02d}"
-            idx = random_pick_index(
-                len(cands),
+            selected = _selected_random_candidates(
+                cands,
+                count,
                 seed_base=seed_key_base,
                 domain=f"monthly:{term_id}",
                 identity=random_identity(term),
                 period=period_key,
+                random_pick_indices=random_pick_indices,
+                date_is_excluded=date_is_excluded,
             )
-            choice = cands[idx]
-            if choice > after_date:
-                return choice, {"basis": "rand", "rand_period": period_key}
+            for choice in selected:
+                if choice > after_date:
+                    return choice, {"basis": "rand", "rand_period": period_key}
         m = 1 if m == 12 else m + 1
         if m == 1:
             y += 1
@@ -359,19 +444,27 @@ def _next_after_expr_yearly_rand_candidate(
     term_id: int,
     info: dict,
     after_date,
+    default_seed,
     seed_base,
     *,
     term_candidates_in_month,
     random_identity,
-    random_pick_index,
+    random_pick_indices,
+    date_is_excluded,
 ):
     seed_key_base = seed_base if seed_base is not None else "preview"
     mods = info.get("mods") or {}
     bd_only = bool(mods.get("bd"))
     target_m = info.get("month", None)
+    count = int(info.get("count") or 1)
+    ival = int(info.get("ival") or 1)
+    seed_year = (default_seed or after_date).year
     y = after_date.year
 
     for _ in range(10):
+        if ival > 1 and (y - seed_year) % ival != 0:
+            y += 1
+            continue
         if target_m is None:
             by_month = {}
             for mm in range(1, 13):
@@ -385,16 +478,19 @@ def _next_after_expr_yearly_rand_candidate(
             period_key = f"{y:04d}-{int(target_m):02d}"
 
         if cands:
-            idx = random_pick_index(
-                len(cands),
+            selected = _selected_random_candidates(
+                cands,
+                count,
                 seed_base=seed_key_base,
                 domain=f"yearly:{term_id}",
                 identity=random_identity(term),
                 period=period_key,
+                random_pick_indices=random_pick_indices,
+                date_is_excluded=date_is_excluded,
             )
-            choice = cands[idx]
-            if choice > after_date:
-                return choice, {"basis": "rand", "rand_period": period_key}
+            for choice in selected:
+                if choice > after_date:
+                    return choice, {"basis": "rand", "rand_period": period_key}
         y += 1
 
     return None, None
@@ -423,8 +519,10 @@ def next_after_expr(
     months_since,
     term_candidates_in_month,
     random_identity,
-    random_pick_index,
+    random_pick_indices,
+    atom_matches_on,
     next_after_term,
+    date_is_excluded=None,
 ):
     """Return the next matching local date strictly > after_date."""
     if _is_simple_weekly(dnf, active_mod_keys=active_mod_keys):
@@ -437,6 +535,22 @@ def next_after_expr(
 
     for term_id, term in enumerate(dnf):
         rk, info = term_rand_info(term)
+
+        if rk == "w":
+            cand, meta = _next_after_expr_weekly_rand_candidate(
+                term,
+                term_id,
+                info,
+                after_date,
+                default_seed,
+                seed_base,
+                random_identity=random_identity,
+                random_pick_indices=random_pick_indices,
+                atom_matches_on=atom_matches_on,
+                date_is_excluded=date_is_excluded,
+            )
+            best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
+            continue
 
         if rk == "m":
             cand, meta = _next_after_expr_monthly_rand_candidate(
@@ -451,7 +565,8 @@ def next_after_expr(
                 months_since=months_since,
                 term_candidates_in_month=term_candidates_in_month,
                 random_identity=random_identity,
-                random_pick_index=random_pick_index,
+                random_pick_indices=random_pick_indices,
+                date_is_excluded=date_is_excluded,
             )
             best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
             continue
@@ -462,10 +577,12 @@ def next_after_expr(
                 term_id,
                 info,
                 after_date,
+                default_seed,
                 seed_base,
                 term_candidates_in_month=term_candidates_in_month,
                 random_identity=random_identity,
-                random_pick_index=random_pick_index,
+                random_pick_indices=random_pick_indices,
+                date_is_excluded=date_is_excluded,
             )
             best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
             continue

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from datetime import date
+import re
+
+
+def _is_random_spec(spec: str) -> bool:
+    return bool(re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", str(spec or "").strip().lower()))
 
 
 def doms_for_monthly_token(
@@ -18,7 +23,7 @@ def doms_for_monthly_token(
     if tok in monthly_alias:
         tok = monthly_alias[tok]
     dim = days_in_month(y, m)
-    if tok == "rand":
+    if _is_random_spec(tok):
         return set(range(1, dim + 1))
     match = re_mod.fullmatch(r"(\-?\d{1,2})\.\.(\-?\d{1,2})", tok)
     if match:
@@ -67,7 +72,7 @@ def month_allowed_doms_for_monthly_atom(
         return set(range(1, dim + 1))
     doms: set[int] = set()
     for tok in toks:
-        if tok == "rand":
+        if _is_random_spec(tok):
             doms.update(range(1, dim + 1))
         else:
             doms.update(doms_for_monthly_token(tok, y, m))

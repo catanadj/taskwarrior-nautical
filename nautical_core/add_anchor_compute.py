@@ -63,6 +63,23 @@ def anchor_expr_fires_on_date_with_omit(dnf, d, interval_seed, seed_base, *, omi
             core=core,
         ):
             return False
+        if core.dnf_has_counted_random(dnf):
+            date_is_excluded = None
+            if omit_dnf:
+                date_is_excluded = lambda candidate: anchor_omit.omit_expr_fires_on_date(
+                    omit_dnf,
+                    candidate,
+                    interval_seed,
+                    seed_base,
+                    core=core,
+                )
+            return core.next_after_expr(
+                dnf,
+                d - timedelta(days=1),
+                default_seed=interval_seed,
+                seed_base=seed_base,
+                date_is_excluded=date_is_excluded,
+            )[0] == d
         return any(anchor_term_fires_on_date(term, d, interval_seed, seed_base, core=core) for term in dnf)
     except Exception:
         return False
@@ -73,13 +90,36 @@ def anchor_times_for_date(
     d,
     interval_seed,
     seed_base,
+    omit_dnf=None,
     *,
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
 ):
     times = set()
     for term in dnf:
-        if anchor_term_fires_on_date(term, d, interval_seed, seed_base, core=core):
+        term_matches = anchor_term_fires_on_date(term, d, interval_seed, seed_base, core=core)
+        if not term_matches and core.dnf_has_counted_random([term]):
+            try:
+                anchor_omit = core._import_sibling("anchor_omit")
+                date_is_excluded = None
+                if omit_dnf:
+                    date_is_excluded = lambda candidate: anchor_omit.omit_expr_fires_on_date(
+                        omit_dnf,
+                        candidate,
+                        interval_seed,
+                        seed_base,
+                        core=core,
+                    )
+                term_matches = core.next_after_expr(
+                    [term],
+                    d - timedelta(days=1),
+                    default_seed=interval_seed,
+                    seed_base=seed_base,
+                    date_is_excluded=date_is_excluded,
+                )[0] == d
+            except Exception:
+                term_matches = False
+        if term_matches:
             for atom in term:
                 mods = atom.get("mods") or {}
                 for hhmm in norm_t_mod(mods.get("t")):
@@ -106,6 +146,7 @@ def anchor_pick_occurrence_local(
             d0,
             interval_seed,
             seed_base,
+            omit_dnf=omit_dnf,
             core=core,
             norm_t_mod=norm_t_mod,
         ) or [fallback_hhmm]
@@ -132,6 +173,7 @@ def anchor_pick_occurrence_local(
         nxt_d,
         interval_seed,
         seed_base,
+        omit_dnf=omit_dnf,
         core=core,
         norm_t_mod=norm_t_mod,
     ) or [fallback_hhmm]
@@ -163,6 +205,7 @@ def anchor_next_occurrence_after_local_dt(
             d0,
             interval_seed,
             seed_base,
+            omit_dnf=omit_dnf,
             core=core,
             norm_t_mod=norm_t_mod,
         ) or [fallback_hhmm]
@@ -180,6 +223,7 @@ def anchor_next_occurrence_after_local_dt(
         nxt_d,
         interval_seed,
         seed_base,
+        omit_dnf=omit_dnf,
         core=core,
         norm_t_mod=norm_t_mod,
     ) or [fallback_hhmm]

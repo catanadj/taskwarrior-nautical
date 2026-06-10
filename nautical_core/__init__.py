@@ -1379,7 +1379,11 @@ def _rewrite_year_month_aliases_in_dnf(dnf: list[list[dict]]) -> list[list[dict]
 
             for tok in toks_in:
                 # Pass through already-standard forms and rand variants
-                if re.fullmatch(r"\d{2}-\d{2}(?:\.\.\d{2}-\d{2})?$", tok) or tok == "rand" or re.fullmatch(r"rand-\d{2}", tok):
+                if (
+                    re.fullmatch(r"\d{2}-\d{2}(?:\.\.\d{2}-\d{2})?$", tok)
+                    or re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", tok)
+                    or re.fullmatch(r"rand-\d{2}", tok)
+                ):
                     toks_out.append(tok)
                     continue
 
@@ -1885,8 +1889,21 @@ def _random_pick_index(seq_len: int, **kwargs) -> int:
     return _cached_expansion.random_pick_index(seq_len, namespace=WRAND_SALT, **kwargs)
 
 
+def _random_pick_indices(seq_len: int, count: int, **kwargs) -> list[int]:
+    return _cached_expansion.random_pick_indices(
+        seq_len,
+        count,
+        namespace=WRAND_SALT,
+        **kwargs,
+    )
+
+
 def _term_rand_info(term):
     return _cached_expansion.term_rand_info(term)
+
+
+def dnf_has_counted_random(dnf) -> bool:
+    return _cached_expansion.dnf_has_counted_random(dnf)
 
 
 
@@ -2562,13 +2579,16 @@ def _validate_weekly_spec(spec: str):
             f"Weekly spec is empty. Examples: '{_CANON_WEEKLY_RANGE_EX}', '{_CANON_WEEKLY_LIST_EX}'."
         )
 
-    # Special token: 'rand' = one random day per ISO week
-    if any(t == "rand" for t in toks):
+    random_tokens = [t for t in toks if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", t)]
+    if random_tokens:
         if len(toks) > 1:
             raise ParseError(
-                "w:rand cannot be combined with explicit weekdays in the same list. "
-                "If you mean 'either random OR Monday', use OR: 'w:rand | w:mon'."
+                "A weekly random selector cannot be combined with explicit weekdays in the same list. "
+                "Use '+' to constrain its candidate pool or '|' for a separate branch."
             )
+        count = _cached_expansion.random_count_from_spec(random_tokens[0]) or 1
+        if count > 7:
+            raise ParseError("Weekly random count cannot exceed 7 days.")
         return  # valid
 
     for tok in toks:
@@ -2609,6 +2629,12 @@ def _validate_monthly_spec(spec: str):
         raise ParseError("Empty monthly spec")
 
     for tok in toks:
+        random_count = _cached_expansion.random_count_from_spec(tok)
+        if random_count is not None:
+            if random_count > 31:
+                raise ParseError("Monthly random count cannot exceed 31 days.")
+            continue
+
         # 1) Day-of-month (positive or negative)
         if _int_like_re.fullmatch(tok):
             try:
@@ -2771,6 +2797,7 @@ def _validate_anchor_dnf_atoms_strict(dnf: AnchorDNF) -> None:
     _strict_validation.validate_anchor_dnf_atoms_strict(
         dnf,
         validate_anchor_atom_strict=_validate_anchor_atom_strict,
+        parse_error_cls=ParseError,
     )
 
 
@@ -3008,7 +3035,7 @@ def next_after_term(term, ref_d: date, default_seed: date, seed_base=None):
     )
 
 
-def next_after_expr(dnf, after_date, default_seed=None, seed_base=None):
+def next_after_expr(dnf, after_date, default_seed=None, seed_base=None, date_is_excluded=None):
     return _scheduler_expr.next_after_expr(
         dnf,
         after_date,
@@ -3022,8 +3049,10 @@ def next_after_expr(dnf, after_date, default_seed=None, seed_base=None):
         months_since=_months_since,
         term_candidates_in_month=_term_candidates_in_month,
         random_identity=_random_identity,
-        random_pick_index=_random_pick_index,
+        random_pick_indices=_random_pick_indices,
+        atom_matches_on=atom_matches_on,
         next_after_term=next_after_term,
+        date_is_excluded=date_is_excluded,
     )
 
 

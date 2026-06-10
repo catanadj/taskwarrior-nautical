@@ -172,6 +172,7 @@ def next_occurrence_event_local(
     anchor_file_dir: str = "",
 ) -> tuple[datetime, bool] | None:
     expr_local = None
+    expr_omit_dnf = omit_dnf if dnf and core.dnf_has_counted_random(dnf) else None
     if dnf:
         if inclusive and pick_occurrence_local is not None:
             expr_local = pick_occurrence_local(
@@ -181,7 +182,7 @@ def next_occurrence_event_local(
                 fallback_hhmm=fallback_hhmm,
                 interval_seed=default_seed_date,
                 seed_base=seed_base,
-                omit_dnf=None,
+                omit_dnf=expr_omit_dnf,
             )
         else:
             expr_after = after_local_dt - timedelta(microseconds=1) if inclusive else after_local_dt
@@ -191,7 +192,7 @@ def next_occurrence_event_local(
                     expr_after,
                     default_seed_date=default_seed_date,
                     seed_base=seed_base,
-                    omit_dnf=None,
+                    omit_dnf=expr_omit_dnf,
                     fallback_hhmm=fallback_hhmm,
                 )
             except TypeError:
@@ -201,7 +202,7 @@ def next_occurrence_event_local(
                     fallback_hhmm,
                     default_seed_date,
                     seed_base,
-                    omit_dnf=None,
+                    omit_dnf=expr_omit_dnf,
                     core=core,
                     norm_t_mod=_norm_t_mod,
                 )

@@ -96,6 +96,10 @@ def fmt_weekdays_list(spec: str, *, expand_weekly_aliases, split_csv_lower, wday
         if token == "rand":
             names.append("one random day each week")
             continue
+        counted_rand = re.fullmatch(r"([1-9]\d{0,2})rand", token)
+        if counted_rand:
+            names.append(f"{int(counted_rand.group(1))} random days each week")
+            continue
 
         if ".." in token:
             left, right = token.split("..", 1)
@@ -132,6 +136,9 @@ def fmt_monthly_atom(
         text = monthly_alias[text]
     if text == "rand":
         return "one random day each month"
+    counted_rand = re.fullmatch(r"([1-9]\d{0,2})rand", text)
+    if counted_rand:
+        return f"{int(counted_rand.group(1))} random days each month"
 
     match = safe_match(nth_wd_re, text)
     if match:
@@ -192,6 +199,9 @@ def fmt_yearly_atom(
 
     if text == "rand":
         return "one random day each year"
+    counted_rand = re.fullmatch(r"([1-9]\d{0,2})rand", text)
+    if counted_rand:
+        return f"{int(counted_rand.group(1))} random days each year"
 
     match_rand_month = rand_mm_re.fullmatch(text)
     if match_rand_month:
@@ -382,8 +392,11 @@ def describe_anchor_term_collect(
         if typ == "w":
             wk_ival = max(wk_ival, ival)
             w_phrase = fmt_weekdays_list(spec)
-            if wk_ival > 1 and spec == "rand":
-                w_phrase = f"one random day every {wk_ival} weeks"
+            random_match = re.fullmatch(r"(?:rand|([1-9]\d{0,2})rand)", spec)
+            if wk_ival > 1 and random_match:
+                count = int(random_match.group(1) or 1)
+                label = "one random day" if count == 1 else f"{count} random days"
+                w_phrase = f"{label} every {wk_ival} weeks"
         elif typ == "m":
             mo_ival = max(mo_ival, ival)
             monthly_specs.append(spec)
@@ -414,8 +427,8 @@ def describe_yearly_rand_filter(
 ) -> str | None:
     if yr_ival != 1 or len(yearly_specs) != 2:
         return None
-    random_specs = [spec for spec in yearly_specs if spec == "rand"]
-    filter_specs = [spec for spec in yearly_specs if spec != "rand"]
+    random_specs = [spec for spec in yearly_specs if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", spec)]
+    filter_specs = [spec for spec in yearly_specs if spec not in random_specs]
     if len(random_specs) != 1 or len(filter_specs) != 1:
         return None
 
@@ -428,7 +441,10 @@ def describe_yearly_rand_filter(
         labels.append(phrase[: -len(suffix)] if phrase.endswith(suffix) else phrase)
     if not labels:
         return None
-    return f"one random day each year in {join_plain_or_terms(labels)}"
+    random_spec = random_specs[0]
+    count = 1 if random_spec == "rand" else int(random_spec[:-4])
+    label = "one random day" if count == 1 else f"{count} random days"
+    return f"{label} each year in {join_plain_or_terms(labels)}"
 
 
 def describe_random_weekday_pool(

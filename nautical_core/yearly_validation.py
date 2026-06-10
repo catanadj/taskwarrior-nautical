@@ -43,7 +43,7 @@ def yearly_mmdd_error(mm: int, dd: int) -> str | None:
 def validate_yearly_token_allowlist(tok: str, fmt: str, *, year_token_format_error_cls) -> None:
     s = tok
 
-    if s == "rand" or re.fullmatch(r"rand-\d{2}", s):
+    if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", s) or re.fullmatch(r"rand-\d{2}", s):
         return
 
     if re.fullmatch(r"\d{2}:\d{2}(?::\d{2}:\d{2})?", s):
@@ -71,7 +71,10 @@ def validate_yearly_token_allowlist(tok: str, fmt: str, *, year_token_format_err
 def validate_yearly_token_detailed(tok: str, fmt: str, *, year_token_format_error_cls) -> tuple[str, str] | None:
     s = tok.strip().lower()
 
-    if s == "rand":
+    if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", s):
+        count = 1 if s == "rand" else int(s[:-4])
+        if count > 366:
+            raise year_token_format_error_cls("Yearly random count cannot exceed 366 days.")
         return None
 
     m_randm = re.fullmatch(r"rand-(\d{2})", s)
@@ -237,6 +240,8 @@ def validate_yearly_spec_token(
     parse_error_cls,
     month_full,
 ) -> None:
+    if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand|rand-\d{2})", tok):
+        return
     if ":" in tok:
         raise parse_error_cls(
             "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."

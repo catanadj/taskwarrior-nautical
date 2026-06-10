@@ -165,6 +165,16 @@ def next_after_expr_with_omit(
             seed_base=seed_base,
         )
 
+    date_is_excluded = None
+    if core.dnf_has_counted_random(dnf):
+        date_is_excluded = lambda candidate: omit_expr_fires_on_date(
+            omit_dnf,
+            candidate,
+            default_seed,
+            seed_base,
+            core=core,
+        )
+
     probe = after_date
     for _ in range(max_skip_iterations):
         nxt, meta = core.next_after_expr(
@@ -172,6 +182,7 @@ def next_after_expr_with_omit(
             probe,
             default_seed=default_seed,
             seed_base=seed_base,
+            date_is_excluded=date_is_excluded,
         )
         if nxt is None:
             return (None, meta)

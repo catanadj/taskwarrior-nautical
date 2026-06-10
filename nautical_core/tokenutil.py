@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from . import common as _common
 
 WD_ABBR = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -123,7 +125,7 @@ def normalize_weekday(s: str) -> str | None:
     s = (s or "").strip().lower()
     if not s:
         return None
-    if s in ("rand", "rand*"):
+    if s in ("rand", "rand*") or re.fullmatch(r"[1-9]\d{0,2}rand", s):
         return s
     if s in WD_ABBR:
         return s

@@ -4510,6 +4510,48 @@ def test_inline_time_mods_split_ok():
     assert fatal is None, f"Unexpected lint fatal: {fatal}"
     _must_parse("w:mon@t=09:00,fri@t=15:00")
 
+
+def test_group_time_modifier_distributes_to_all_branches():
+    """A time after a parenthesized expression should apply to every expanded branch."""
+    dnf = core.parse_anchor_expr_to_dnf("(w:mon | m:last-fri)@t=09:00")
+    expect(len(dnf) == 2, f"expected two OR branches, got: {dnf!r}")
+    expect(
+        all(atom.get("mods", {}).get("t") == (9, 0) for term in dnf for atom in term),
+        f"group time was not distributed to every atom: {dnf!r}",
+    )
+    natural = core.describe_anchor_expr("(w:mon | m:last-fri)@t=09:00")
+    expect("09:00" in natural, f"group time missing from natural text: {natural!r}")
+    canonical = core.acf_to_original_format(core.build_acf("(w:mon | m:last-fri)@t=09:00"))
+    reparsed = core.parse_anchor_expr_to_dnf(canonical)
+    expect(
+        all(atom.get("mods", {}).get("t") == (9, 0) for term in reparsed for atom in term),
+        f"group time was lost during ACF round-trip: {canonical!r}",
+    )
+
+
+def test_group_time_modifier_supports_multiple_times():
+    """Grouped time modifiers should retain the existing multi-time syntax."""
+    dnf = core.parse_anchor_expr_to_dnf("(w:mon | w:fri)@t=09:00,17:30")
+    expected = [(9, 0), (17, 30)]
+    expect(
+        all(atom.get("mods", {}).get("t") == expected for term in dnf for atom in term),
+        f"group time list was not distributed intact: {dnf!r}",
+    )
+
+
+def test_group_time_modifier_rejects_conflicts_and_non_time_modifiers():
+    """Group v1 should reject ambiguous nested times and modifiers other than @t."""
+    for expr, needle in (
+        ("(w:mon@t=10:00 | w:fri)@t=09:00", "already has"),
+        ("(m:1 | m:15)@nbd", "only supports '@t="),
+    ):
+        try:
+            core.parse_anchor_expr_to_dnf(expr)
+            expect(False, f"expected grouped modifier rejection for {expr!r}")
+        except core.ParseError as exc:
+            expect(needle in str(exc), f"unexpected grouped modifier error for {expr!r}: {exc}")
+
+
 def test_deterministic_randomness():
     """Test that random patterns are deterministic with same seed"""
     # Only valid random patterns
@@ -11945,6 +11987,9 @@ TESTS = [
     test_anchors_between_expr_stops_on_no_progress,
     test_anchors_between_expr_matches_iterative_scheduler,
     test_inline_time_mods_split_ok,
+    test_group_time_modifier_distributes_to_all_branches,
+    test_group_time_modifier_supports_multiple_times,
+    test_group_time_modifier_rejects_conflicts_and_non_time_modifiers,
     test_anchor_date_calculations,
     test_interval_patterns,
     test_complex_dnf_expressions,

@@ -69,6 +69,9 @@ Anchors compose with `+` (intersection) and `|` (union):
 | `m:rand + w:sat` | A random Saturday in the month |
 | `y:04-12` | April 12 every year |
 | `w:tue,fri \| y:05-05` | Tuesdays, Fridays, or May 5 |
+| `(w:mon \| m:last-fri)@t=09:00` | Mondays or the last Friday, all at 09:00 |
+
+`@t=HH:MM` can follow a parenthesized expression to apply the same time to every branch. Keep per-term times inside the group when branches need different times.
 
 Both engines can combine with all other Nautical features: omit rules, file-backed dates, chain limits, and visibility options.
 

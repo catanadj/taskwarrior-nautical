@@ -2401,6 +2401,7 @@ def parse_anchor_expr_to_dnf(s: str) -> AnchorDNF:
         normalize_anchor_expr_input=_normalize_anchor_expr_input,
         raise_on_bad_colon_year_tokens=_raise_on_bad_colon_year_tokens,
         parse_anchor_atom_at=_parse_anchor_atom_at,
+        parse_atom_mods=_parse_atom_mods,
         skip_ws_pos=_skip_ws_pos,
         rewrite_quarters_in_context=_rewrite_quarters_in_context,
         rewrite_year_month_aliases_in_context=_rewrite_year_month_aliases_in_context,

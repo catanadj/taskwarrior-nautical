@@ -7,6 +7,7 @@ def parse_anchor_expr_to_dnf(
     normalize_anchor_expr_input,
     raise_on_bad_colon_year_tokens,
     parse_anchor_atom_at,
+    parse_atom_mods,
     skip_ws_pos,
     rewrite_quarters_in_context,
     rewrite_year_month_aliases_in_context,
@@ -39,6 +40,34 @@ def parse_anchor_expr_to_dnf(
             if i >= n or s[i] != ")":
                 raise parse_error_cls("Unclosed '('")
             i += 1
+            i = skip_ws_pos(s, i, n)
+            if i < n and s[i] == "@":
+                start = i
+                i += 1
+                while i < n:
+                    if s[i] in "|)":
+                        break
+                    if s[i] == "+" and s[i - 1] != "@":
+                        break
+                    i += 1
+                mods = parse_atom_mods(s[start:i].strip())
+                if not mods.get("t") or any(
+                    value
+                    for key, value in mods.items()
+                    if key != "t"
+                ):
+                    raise parse_error_cls(
+                        "A grouped modifier currently only supports '@t=HH:MM[,HH:MM...]'."
+                    )
+                for term in res:
+                    for atom in term:
+                        atom_mods = atom.setdefault("mods", {})
+                        if atom_mods.get("t"):
+                            raise parse_error_cls(
+                                "Cannot apply a grouped @t modifier because the group already has a timed term."
+                            )
+                        tval = mods["t"]
+                        atom_mods["t"] = list(tval) if isinstance(tval, list) else tval
             return res
         return parse_atom()
 

@@ -863,7 +863,24 @@ def compress_or_terms_by_clause(terms: list[str], delim: str) -> str | None:
     return f"{prefix}{delim}{join_natural_or_terms(variants)}{common_tail}"
 
 
+def natural_or_interval_branch(term: str) -> str:
+    """Make interval-prefixed terms read naturally inside an either/or list."""
+    match = re.fullmatch(r"every (\d+) (weeks|months|years): (.+)", term)
+    if not match:
+        return term
+    cadence = f"every {match.group(1)} {match.group(2)}"
+    body = match.group(3)
+    if cadence in body:
+        return body
+    if " at " in body:
+        head, separator, tail = body.partition(" at ")
+        return f"{head} {cadence}{separator}{tail}"
+    return f"{body} {cadence}"
+
+
 def compress_natural_or_terms(terms: list[str]) -> str:
+    if len(terms) > 1:
+        terms = [natural_or_interval_branch(term) for term in terms]
     return (
         compress_or_terms_by_shared_rest(terms, " and within ")
         or compress_or_terms_by_shared_rest(terms, " that fall on ")

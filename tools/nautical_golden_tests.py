@@ -4284,6 +4284,23 @@ def test_natural_anchor_characterization_for_complex_terms():
         got = core.describe_anchor_expr(expr)
         assert got == expected, f"{expr}: expected {expected!r}, got {got!r}"
 
+
+def test_natural_interval_or_branches_keep_cadence_with_subject():
+    """Interval OR branches should not begin with an awkward nested prefix."""
+    expr = "(w/2:2rand@t=18:00 | w/3:thu@t=12:00)"
+    expected = "either 2 random days every 2 weeks at 18:00 or Thursdays every 3 weeks at 12:00"
+    expect(core.describe_anchor_expr(expr) == expected, f"unexpected interval OR natural text")
+    expect(
+        core.describe_anchor_dnf(core.validate_anchor_expr_strict(expr), {"anchor_mode": "skip"})
+        == f"{expected}; skip missed anchors",
+        "mode suffix should follow the polished interval OR text",
+    )
+    expect(
+        core.describe_anchor_expr("w/2:mon") == "every 2 weeks: Mondays",
+        "standalone interval wording should remain backward-compatible",
+    )
+
+
 def test_natural_compresses_repeated_within_variants():
     """describe_anchor_dnf should compact repeated OR terms that only vary by yearly 'within' token."""
     expr = (
@@ -12220,6 +12237,7 @@ TESTS = [
     test_edge_cases,
     test_natural_language_comprehensive,
     test_natural_anchor_characterization_for_complex_terms,
+    test_natural_interval_or_branches_keep_cadence_with_subject,
     test_natural_compresses_repeated_within_variants,
     test_natural_compresses_repeated_fall_on_variants,
     test_rand_bucket_signature_characterization,

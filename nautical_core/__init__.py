@@ -229,6 +229,7 @@ emit_line = _ui.emit_line
 text_line = _ui.text_line
 panel_line_from_rows = _ui.panel_line_from_rows
 panel_line = _ui.panel_line
+chain_colour_root = _import_sibling("panel_colours").chain_colour_root
 
 
 def render_panel(*args, **kwargs):
@@ -3211,6 +3212,7 @@ __all__ = (
     'AnchorDNF',
     'TaskDict',
     'AnchorValidationResult',
+    'chain_colour_root',
     'HintMetaCfg',
     'HintMeta',
     'HintPerYear',

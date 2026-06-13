@@ -561,7 +561,7 @@ def handle_anchor_file_preview_on_add(
         human_delta=human_delta,
     )
     rows.append(("Chain", "[bold green]enabled[/]" if ch == "on" else "[bold red]disabled[/]"))
-    panel("⚓︎ Anchor Preview", format_anchor_rows(rows), kind="preview_anchor")
+    panel("⚓︎ Anchor Preview", format_anchor_rows(rows), kind="preview_anchor", task=task)
     emit_task_json(task, sanitize=True, prof=prof)
 
 
@@ -882,7 +882,7 @@ def handle_anchor_preview_on_add(
     rows.append(("Chain", "[bold green]enabled[/]" if ch == "on" else "[bold red]disabled[/]"))
     formatted_rows = format_anchor_rows(rows)
     _t_panel = time.perf_counter()
-    panel("⚓︎ Anchor Preview", formatted_rows, kind="preview_anchor")
+    panel("⚓︎ Anchor Preview", formatted_rows, kind="preview_anchor", task=task)
     prof.add_ms("render:anchor_panel", (time.perf_counter() - _t_panel) * 1000.0)
 
     emit_task_json(task, sanitize=True, prof=prof)

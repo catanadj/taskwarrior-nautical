@@ -2499,7 +2499,7 @@ def _chain_colour_for_task(task: dict, kind: str) -> str:
     Get the chain colour for this task (uses root uuid, cached).
     """
     root = _root_uuid_from(task)
-    return _chain_colour_root(kind, root)
+    return core.chain_colour_root(kind, root)
 
 
 def _future_style_for_chain(task: dict, kind: str) -> str:

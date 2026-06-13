@@ -5406,6 +5406,35 @@ def test_chain_colour_uses_complete_root_identity():
     )
 
 
+def test_on_add_preview_uses_configured_chain_colour():
+    """on-add should use the same chain colour as on-modify when enabled."""
+    hook = _load_hook_module(
+        _find_hook_file("on-add-nautical.py"),
+        "_nautical_on_add_chain_colour_test",
+    )
+    task = {"chainID": "12345678", "anchor": "w:mon"}
+    captured = {}
+    original_render = hook.core.render_panel
+    original_setting = hook.core.CHAIN_COLOR_PER_CHAIN
+    try:
+        hook.core.render_panel = lambda *_args, **kwargs: captured.update(kwargs)
+        hook.core.CHAIN_COLOR_PER_CHAIN = True
+        hook._panel("Preview", [("Pattern", "w:mon")], kind="preview_anchor", task=task)
+        expected = hook.core.chain_colour_root("anchor", "12345678")
+        theme = captured.get("themes", {}).get("preview_anchor", {})
+        expect(theme.get("border") == expected, f"unexpected on-add border colour: {theme!r}")
+        expect(theme.get("title") == expected, f"unexpected on-add title colour: {theme!r}")
+
+        captured.clear()
+        hook.core.CHAIN_COLOR_PER_CHAIN = False
+        hook._panel("Preview", [("Pattern", "w:mon")], kind="preview_anchor", task=task)
+        theme = captured.get("themes", {}).get("preview_anchor", {})
+        expect(theme.get("border") == "light_sea_green", f"disabled setting changed static border: {theme!r}")
+    finally:
+        hook.core.render_panel = original_render
+        hook.core.CHAIN_COLOR_PER_CHAIN = original_setting
+
+
 def test_yearly_month_aliases_and_ranges():
     """Test month name aliases and numeric shorthands"""
     # Single month by name or numeric shorthand
@@ -9529,7 +9558,7 @@ def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
             saved_panel = mod._panel
             saved_emit = mod._emit_task_json
             try:
-                mod._panel = lambda _title, rows, kind="info": captured.setdefault("rows", rows)
+                mod._panel = lambda _title, rows, **_kwargs: captured.setdefault("rows", rows)
                 mod._emit_task_json = lambda task_obj, **_kwargs: captured.setdefault("task", dict(task_obj))
                 mod._handle_anchor_preview_on_add_context(ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
             finally:
@@ -9566,7 +9595,7 @@ def test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match():
             saved_panel = mod._panel
             saved_emit = mod._emit_task_json
             try:
-                mod._panel = lambda _title, rows, kind="info": captured.setdefault("rows", rows)
+                mod._panel = lambda _title, rows, **_kwargs: captured.setdefault("rows", rows)
                 mod._emit_task_json = lambda task_obj, **_kwargs: captured.setdefault("task", dict(task_obj))
                 mod._handle_anchor_preview_on_add_context(ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
             finally:
@@ -12219,6 +12248,7 @@ TESTS = [
     test_random_anchor_cross_chain_matrix,
     test_random_anchor_and_omit_presets_keep_chain_scope,
     test_chain_colour_uses_complete_root_identity,
+    test_on_add_preview_uses_configured_chain_colour,
     test_yearly_month_aliases_and_ranges,
     test_business_day_bd_skip_semantics,
     test_scheduler_atom_helpers_characterization,

@@ -626,7 +626,7 @@ _PANEL_THEMES = {
 }
 
 
-def _panel(title, rows, kind: str = "info"):
+def _panel(title, rows, kind: str = "info", task: dict | None = None):
     if core is None:
         try:
             _load_core()
@@ -636,13 +636,21 @@ def _panel(title, rows, kind: str = "info"):
             except Exception:
                 pass
             return
+    themes = dict(_PANEL_THEMES)
+    if task is not None and core.CHAIN_COLOR_PER_CHAIN and kind in {"preview_anchor", "preview_cp"}:
+        theme = dict(themes[kind])
+        colour_kind = "cp" if kind == "preview_cp" else "anchor"
+        colour = core.chain_colour_root(colour_kind, str(task.get("chainID") or ""))
+        theme["border"] = colour
+        theme["title"] = colour
+        themes[kind] = theme
     core.render_panel(
         title,
         rows,
         kind=kind,
         panel_mode=core.PANEL_MODE,
         fast_color=core.FAST_COLOR,
-        themes=_PANEL_THEMES,
+        themes=themes,
         allow_line=False,
         label_width_min=6,
         label_width_max=28,
@@ -1497,6 +1505,7 @@ def _handle_cp_preview_on_add(
         "⛓ Recurring Chain Preview",
         rows,
         kind="preview_cp",
+        task=task,
     )
     _emit_task_json(task, sanitize=True, prof=prof)
 

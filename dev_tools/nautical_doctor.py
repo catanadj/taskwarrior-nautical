@@ -258,7 +258,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
 
 
 def _load_queue_status():
-    path = ROOT / "tools" / "nautical_queue_status.py"
+    path = ROOT / "dev_tools" / "nautical_queue_status.py"
     spec = importlib.util.spec_from_file_location("_nautical_doctor_queue_status", path)
     if spec is None or spec.loader is None:
         raise RuntimeError("could not load queue status helper")
@@ -286,7 +286,7 @@ def _check_queue(findings: list[dict[str, Any]], taskdata: Path, stale_after: fl
         "queue.state",
         "warn" if issues else "ok",
         "Queue state has findings." if issues else "Queue and dead-letter state are clean.",
-        fix="Run tools/nautical_queue_status.py for queue details." if issues else "",
+        fix="Run dev_tools/nautical_queue_status.py for queue details." if issues else "",
         details={"issues": issues} if issues else None,
     )
     return payload
@@ -343,7 +343,7 @@ def _check_chains(
             "chains.missing_chainid",
             "error",
             f"{len(missing_chain)} Nautical task(s) are missing chainID.",
-            fix="Run tools/nautical_backfill_chainid.py, review its output, then retry.",
+            fix="Run dev_tools/nautical_backfill_chainid.py, review its output, then retry.",
             details={"tasks": [_task_detail(row) for row in missing_chain[:10]]},
         )
 

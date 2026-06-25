@@ -22,7 +22,7 @@ export NAUTICAL_EXIT_STRICT=0
 2. Confirm health check works:
 
 ```bash
-python3 tools/nautical_health_check.py --taskdata "$HOME/.task" --json
+python3 dev_tools/nautical_health_check.py --taskdata "$HOME/.task" --json
 ```
 
 ## Cron installation
@@ -37,8 +37,8 @@ python3 tools/nautical_health_check.py --taskdata "$HOME/.task" --json
 
 ```bash
 mkdir -p "$HOME/.config/systemd/user"
-cp tools/ops/nautical-health-check.service "$HOME/.config/systemd/user/"
-cp tools/ops/nautical-health-check.timer "$HOME/.config/systemd/user/"
+cp dev_tools/ops/nautical-health-check.service "$HOME/.config/systemd/user/"
+cp dev_tools/ops/nautical-health-check.timer "$HOME/.config/systemd/user/"
 systemctl --user daemon-reload
 systemctl --user enable --now nautical-health-check.timer
 systemctl --user status nautical-health-check.timer

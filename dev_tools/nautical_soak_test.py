@@ -9,8 +9,8 @@ The goal is not peak throughput. It is stability over time:
 - threshold enforcement for latency, failures, and stale queue state
 
 Usage:
-  python3 tools/nautical_soak_test.py --minutes 10
-  python3 tools/nautical_soak_test.py --seconds 120 --json --enforce
+  python3 dev_tools/nautical_soak_test.py --minutes 10
+  python3 dev_tools/nautical_soak_test.py --seconds 120 --json --enforce
 """
 
 from __future__ import annotations
@@ -138,7 +138,7 @@ def _percentile(vals: list[float], pct: float) -> float:
 
 def _health_snapshot(env: dict, data_dir: Path) -> dict:
     ok, out, err, dt = _run(
-        [sys.executable, str(REPO_ROOT / "tools" / "nautical_health_check.py"), "--taskdata", str(data_dir), "--json"],
+        [sys.executable, str(REPO_ROOT / "dev_tools" / "nautical_health_check.py"), "--taskdata", str(data_dir), "--json"],
         env=env,
         timeout=15.0,
     )

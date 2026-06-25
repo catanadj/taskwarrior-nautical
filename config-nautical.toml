@@ -12,7 +12,7 @@ enable_anchor_cache = true
 anchor_cache_dir = ""  # optional; defaults beside core
 anchor_cache_ttl = 0                               # optional; 0 = never expires
 
-# ChainID is always enabled in v3+; legacy chains can be upgraded with tools/nautical_backfill_chainid.py.
+# ChainID is always enabled in v3+; legacy chains can be upgraded with dev_tools/nautical_backfill_chainid.py.
 
 # Hook toggles (on-modify)
 chain_color_per_chain = true         # color timeline per chain (perf hit on slow terminals)

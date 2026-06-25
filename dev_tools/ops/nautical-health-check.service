@@ -5,4 +5,4 @@ Description=Nautical queue/dead-letter health check
 Type=oneshot
 Environment=TASKDATA=%h/.task
 # Replace REPO_DIR with your absolute checkout path.
-ExecStart=/bin/bash REPO_DIR/tools/ops/nautical_health_check_cron.sh
+ExecStart=/bin/bash REPO_DIR/dev_tools/ops/nautical_health_check_cron.sh

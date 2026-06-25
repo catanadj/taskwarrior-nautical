@@ -139,7 +139,7 @@ def _health_snapshot(env: dict, taskdata: Path) -> dict:
     ok, out, err, dt = _run(
         [
             sys.executable,
-            str(ROOT / "tools" / "nautical_health_check.py"),
+            str(ROOT / "dev_tools" / "nautical_health_check.py"),
             "--taskdata",
             str(taskdata),
             "--json",

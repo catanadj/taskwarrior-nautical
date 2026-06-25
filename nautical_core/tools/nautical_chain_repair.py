@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+CORE_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = CORE_DIR.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from nautical_core import chain_repair  # noqa: E402
 

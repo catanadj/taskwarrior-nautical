@@ -73,7 +73,7 @@ def completion_chain_id_or_fail(new: dict, *, panel, print_task) -> str | None:
         "⛔ ChainID missing",
         [
             ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
-            ("Fix", "Run tools/nautical_backfill_chainid.py, then retry."),
+            ("Fix", "Run dev_tools/nautical_backfill_chainid.py, then retry."),
         ],
         kind="error",
     )

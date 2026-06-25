@@ -2133,7 +2133,7 @@ def tw_export_chain_required(seed_task, env=None):
     if not chain_id:
         raise RuntimeError(
             "ChainID is required (legacy chain traversal removed). "
-            "Run tools/nautical_backfill_chainid.py, then retry."
+            "Run dev_tools/nautical_backfill_chainid.py, then retry."
         )
     if env is None:
         return _get_chain_export(chain_id)
@@ -4616,7 +4616,7 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
             "⚠ Chain summary skipped",
             [
                 ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
-                ("Fix", "Run tools/nautical_backfill_chainid.py."),
+                ("Fix", "Run dev_tools/nautical_backfill_chainid.py."),
             ],
             kind="warning",
         )

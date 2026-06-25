@@ -4,9 +4,9 @@
 Load test for Nautical hooks using a disposable Taskwarrior data directory.
 
 Usage:
-  python3 tools/load_test_nautical.py --tasks 500 --concurrency 4
-  python3 tools/load_test_nautical.py --tasks 2000 --concurrency 8 --keep
-  python3 tools/load_test_nautical.py --ramp --json --enforce
+  python3 dev_tools/load_test_nautical.py --tasks 500 --concurrency 4
+  python3 dev_tools/load_test_nautical.py --tasks 2000 --concurrency 8 --keep
+  python3 dev_tools/load_test_nautical.py --ramp --json --enforce
 """
 
 from __future__ import annotations

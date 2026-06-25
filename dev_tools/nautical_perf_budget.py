@@ -4,10 +4,10 @@
 Deterministic performance budget checks for core anchor paths.
 
 Usage:
-  python3 tools/nautical_perf_budget.py
-  python3 tools/nautical_perf_budget.py --enforce
-  python3 tools/nautical_perf_budget.py --json --enforce
-  python3 tools/nautical_perf_budget.py --budget-file tools/perf_budget.json
+  python3 dev_tools/nautical_perf_budget.py
+  python3 dev_tools/nautical_perf_budget.py --enforce
+  python3 dev_tools/nautical_perf_budget.py --json --enforce
+  python3 dev_tools/nautical_perf_budget.py --budget-file dev_tools/perf_budget.json
 """
 
 from __future__ import annotations

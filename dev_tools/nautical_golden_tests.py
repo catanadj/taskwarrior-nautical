@@ -27,6 +27,7 @@ from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+DEV_TOOLS = HERE
 sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
@@ -2173,7 +2174,7 @@ def test_on_modify_rejects_oversized_stdin_early():
 
 def test_health_check_json_ok_empty_taskdata():
     """health check should report ok for empty taskdata."""
-    path = os.path.join(ROOT, "tools", "nautical_health_check.py")
+    path = os.path.join(DEV_TOOLS, "nautical_health_check.py")
     with tempfile.TemporaryDirectory() as td:
         p = subprocess.run(
             [sys.executable, path, "--taskdata", td, "--json"],
@@ -2187,7 +2188,7 @@ def test_health_check_json_ok_empty_taskdata():
 
 def test_health_check_critical_queue_bytes():
     """health check should return critical when queue exceeds crit threshold."""
-    path = os.path.join(ROOT, "tools", "nautical_health_check.py")
+    path = os.path.join(DEV_TOOLS, "nautical_health_check.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         q = td_path / ".nautical_spawn_queue.jsonl"
@@ -2214,7 +2215,7 @@ def test_health_check_critical_queue_bytes():
 
 def test_health_check_critical_queue_db_rows():
     """health check should return critical when sqlite queue rows exceed crit threshold."""
-    path = os.path.join(ROOT, "tools", "nautical_health_check.py")
+    path = os.path.join(DEV_TOOLS, "nautical_health_check.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         db = td_path / ".nautical_queue.db"
@@ -2269,7 +2270,7 @@ def test_health_check_critical_queue_db_rows():
 
 def test_queue_status_json_ok_empty_taskdata():
     """queue status should report ok for empty taskdata."""
-    path = os.path.join(ROOT, "tools", "nautical_queue_status.py")
+    path = os.path.join(DEV_TOOLS, "nautical_queue_status.py")
     with tempfile.TemporaryDirectory() as td:
         p = subprocess.run(
             [sys.executable, path, "--taskdata", td, "--json"],
@@ -2286,7 +2287,7 @@ def test_queue_status_json_ok_empty_taskdata():
 
 def test_queue_status_warns_on_stale_processing_and_dead_letters():
     """queue status should report stale processing, dead letters, and lock failures."""
-    path = os.path.join(ROOT, "tools", "nautical_queue_status.py")
+    path = os.path.join(DEV_TOOLS, "nautical_queue_status.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         state_dir = td_path / ".nautical-state"
@@ -2409,7 +2410,7 @@ raise SystemExit(2)
 
 def test_doctor_reports_healthy_installation():
     """doctor should report ok for a complete installation with clean chain state."""
-    path = os.path.join(ROOT, "tools", "nautical_doctor.py")
+    path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         hooks = td_path / "hooks"
@@ -2455,7 +2456,7 @@ def test_doctor_reports_healthy_installation():
 
 def test_doctor_reports_actionable_broken_installation():
     """doctor should identify installation, queue, and chain failures with stable IDs."""
-    path = os.path.join(ROOT, "tools", "nautical_doctor.py")
+    path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         hooks = td_path / "hooks"
@@ -2560,7 +2561,7 @@ def test_doctor_reports_actionable_broken_installation():
 
 def test_perf_budget_config_covers_cache_io_checks():
     """Perf budget config should include explicit cache save/load check budgets."""
-    cfg_path = Path(ROOT) / "tools" / "perf_budget.json"
+    cfg_path = Path(DEV_TOOLS) / "perf_budget.json"
     obj = json.loads(cfg_path.read_text(encoding="utf-8"))
     budgets = obj.get("budgets_seconds") if isinstance(obj, dict) else None
     workload = obj.get("workload") if isinstance(obj, dict) else None
@@ -2574,7 +2575,7 @@ def test_perf_budget_config_covers_cache_io_checks():
 
 def test_deploy_sanity_script_reports_ok():
     """Deployment sanity script should pass on repo-local hooks/core."""
-    path = os.path.join(ROOT, "tools", "nautical_deploy_sanity.py")
+    path = os.path.join(DEV_TOOLS, "nautical_deploy_sanity.py")
     p = subprocess.run(
         [sys.executable, path, "--json"],
         text=True,
@@ -2591,8 +2592,8 @@ def test_deploy_sanity_script_reports_ok():
 
 def test_hook_replay_harness_reports_ok():
     """Replay harness should pass the seeded hook corpus."""
-    path = os.path.join(ROOT, "tools", "nautical_hook_replay.py")
-    corpus = os.path.join(ROOT, "tools", "nautical_hook_replay_corpus.jsonl")
+    path = os.path.join(DEV_TOOLS, "nautical_hook_replay.py")
+    corpus = os.path.join(DEV_TOOLS, "nautical_hook_replay_corpus.jsonl")
     p = subprocess.run(
         [sys.executable, path, "--json", "--corpus", corpus],
         text=True,
@@ -2609,7 +2610,7 @@ def test_hook_replay_harness_reports_ok():
 
 def test_mixed_recurrence_loop_harness_reports_ok():
     """Mixed recurrence loop harness should complete a small deterministic cycle run."""
-    path = os.path.join(ROOT, "tools", "nautical_mixed_recurrence_loop.py")
+    path = os.path.join(DEV_TOOLS, "nautical_mixed_recurrence_loop.py")
     p = subprocess.run(
         [sys.executable, path, "--cycles", "3", "--json"],
         text=True,
@@ -2625,7 +2626,7 @@ def test_mixed_recurrence_loop_harness_reports_ok():
 
 def test_soak_runner_reports_ok():
     """Short soak runner should complete without violations."""
-    path = os.path.join(ROOT, "tools", "nautical_soak_test.py")
+    path = os.path.join(DEV_TOOLS, "nautical_soak_test.py")
     p = subprocess.run(
         [
             sys.executable,
@@ -2657,7 +2658,7 @@ def test_soak_runner_reports_ok():
 
 def test_ops_templates_present_and_runner_executable():
     """ops templates should exist and runner script should be executable."""
-    ops = os.path.join(ROOT, "tools", "ops")
+    ops = os.path.join(DEV_TOOLS, "ops")
     files = [
         "README.md",
         "nautical-health-check.crontab",

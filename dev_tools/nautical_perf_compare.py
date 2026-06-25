@@ -4,9 +4,9 @@
 Compare two nautical perf budget reports and detect meaningful regressions.
 
 Usage:
-  python3 tools/nautical_perf_compare.py --base base.json --head head.json
-  python3 tools/nautical_perf_compare.py --base base.json --head head.json --enforce
-  python3 tools/nautical_perf_compare.py --base base.json --head head.json --json
+  python3 dev_tools/nautical_perf_compare.py --base base.json --head head.json
+  python3 dev_tools/nautical_perf_compare.py --base base.json --head head.json --enforce
+  python3 dev_tools/nautical_perf_compare.py --base base.json --head head.json --json
 """
 
 from __future__ import annotations

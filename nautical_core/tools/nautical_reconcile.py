@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-os.environ.setdefault("NAUTICAL_CORE_PATH", str(ROOT))
+CORE_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = CORE_DIR.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+os.environ.setdefault("NAUTICAL_CORE_PATH", str(CORE_DIR))
 
 from nautical_core import reconcile  # noqa: E402
 
@@ -49,7 +50,7 @@ def _export(task_bin: str, filters: list[str], *, timeout: float = 120.0) -> lis
 
 
 def _load_on_modify():
-    path = ROOT / "on-modify-nautical.py"
+    path = BASE_DIR / "on-modify-nautical.py"
     spec = importlib.util.spec_from_file_location("_nautical_reconcile_on_modify", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"could not load {path}")

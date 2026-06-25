@@ -120,6 +120,18 @@ def _infer_missing_link(task: dict[str, Any], by_short: dict[str, dict[str, Any]
     return inferred
 
 
+def _infer_single_root_link(chain_id: str, members: list[dict[str, Any]], missing_link: list[dict[str, Any]]) -> int | None:
+    if len(members) != 1 or len(missing_link) != 1:
+        return None
+    task = missing_link[0]
+    uuid = str(task.get("uuid") or "").strip()
+    if short_uuid(uuid) != chain_id:
+        return None
+    if str(task.get("prevLink") or "").strip():
+        return None
+    return 1
+
+
 def plan_chain_link_repairs(tasks: list[dict[str, Any]]) -> tuple[list[LinkRepair], list[ChainIssue]]:
     repairs: list[LinkRepair] = []
     issues: list[ChainIssue] = []
@@ -149,9 +161,10 @@ def plan_chain_link_repairs(tasks: list[dict[str, Any]]) -> tuple[list[LinkRepai
             by_short = _short_index(members)
             tasks_by_inferred: dict[int, list[dict[str, Any]]] = {}
             unresolved: list[dict[str, Any]] = []
+            single_root_link = _infer_single_root_link(chain_id, members, missing_link)
 
             for task in missing_link:
-                inferred = _infer_missing_link(task, by_short)
+                inferred = single_root_link if single_root_link is not None else _infer_missing_link(task, by_short)
                 uuid = str(task.get("uuid") or "").strip()
                 if inferred is None or not uuid:
                     unresolved.append(task)

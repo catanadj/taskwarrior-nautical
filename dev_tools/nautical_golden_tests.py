@@ -11973,6 +11973,33 @@ def test_chain_repair_infers_missing_links_only_when_deterministic():
     expect({"occupied", "conflict"}.issubset(issue_chains), f"unsafe missing links should remain issues: {issues}")
 
 
+def test_chain_repair_infers_single_root_link_one_only():
+    """A singleton root chain with no numeric link should be repaired to link 1."""
+    import nautical_core.chain_repair as chain_repair
+
+    tasks = [
+        {
+            "uuid": "aaaaaaaa-0000-0000-0000-000000000001",
+            "chainID": "aaaaaaaa",
+            "status": "pending",
+            "nextLink": "bbbbbbbb",
+        },
+        {
+            "uuid": "cccccccc-0000-0000-0000-000000000003",
+            "chainID": "orphan",
+            "status": "pending",
+            "prevLink": "bbbbbbbb",
+        },
+    ]
+    repairs, issues = chain_repair.plan_chain_link_repairs(tasks)
+    got = {(repair.short, repair.field, repair.new) for repair in repairs}
+    expect(("aaaaaaaa", "link", "1") in got, f"singleton root should be repaired to link 1: {repairs}")
+    expect(not any(repair.short == "cccccccc" for repair in repairs), f"orphan child singleton should not be repaired: {repairs}")
+    issue_chains = {issue.chain_id for issue in issues if issue.kind == "missing_link"}
+    expect("aaaaaaaa" not in issue_chains, f"singleton root should not remain an issue: {issues}")
+    expect("orphan" in issue_chains, f"orphan child singleton should remain an issue: {issues}")
+
+
 def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     """on-modify should reuse one full-chain export across preflight and later feedback prep when chain context is needed."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -12793,6 +12820,7 @@ TESTS = [
     test_reconcile_tool_loads_task_hooks_layout,
     test_chain_repair_plans_only_safe_adjacent_link_updates,
     test_chain_repair_infers_missing_links_only_when_deterministic,
+    test_chain_repair_infers_single_root_link_one_only,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,

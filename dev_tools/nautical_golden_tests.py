@@ -11901,6 +11901,78 @@ def test_chain_repair_plans_only_safe_adjacent_link_updates():
     expect(not any(repair.chain_id == "dupe" for repair in repairs), f"duplicate chain should not be modified: {repairs}")
 
 
+def test_chain_repair_infers_missing_links_only_when_deterministic():
+    """Missing numeric link values should be repaired only from unambiguous adjacent pointers."""
+    import nautical_core.chain_repair as chain_repair
+
+    tasks = [
+        {
+            "uuid": "11111111-0000-0000-0000-000000000001",
+            "chainID": "safe",
+            "link": 1,
+            "status": "completed",
+        },
+        {
+            "uuid": "22222222-0000-0000-0000-000000000002",
+            "chainID": "safe",
+            "status": "completed",
+            "prevLink": "11111111",
+            "nextLink": "33333333",
+        },
+        {
+            "uuid": "33333333-0000-0000-0000-000000000003",
+            "chainID": "safe",
+            "link": 3,
+            "status": "pending",
+        },
+        {
+            "uuid": "44444444-0000-0000-0000-000000000004",
+            "chainID": "occupied",
+            "link": 1,
+            "status": "completed",
+        },
+        {
+            "uuid": "55555555-0000-0000-0000-000000000005",
+            "chainID": "occupied",
+            "link": 2,
+            "status": "completed",
+        },
+        {
+            "uuid": "66666666-0000-0000-0000-000000000006",
+            "chainID": "occupied",
+            "status": "pending",
+            "prevLink": "44444444",
+        },
+        {
+            "uuid": "77777777-0000-0000-0000-000000000007",
+            "chainID": "conflict",
+            "link": 1,
+            "status": "completed",
+        },
+        {
+            "uuid": "88888888-0000-0000-0000-000000000008",
+            "chainID": "conflict",
+            "link": 4,
+            "status": "pending",
+        },
+        {
+            "uuid": "99999999-0000-0000-0000-000000000009",
+            "chainID": "conflict",
+            "status": "pending",
+            "prevLink": "77777777",
+            "nextLink": "88888888",
+        },
+    ]
+    repairs, issues = chain_repair.plan_chain_link_repairs(tasks)
+    got = {(repair.short, repair.field, repair.old, repair.new) for repair in repairs}
+    expect(("22222222", "link", "", "2") in got, f"missing safe link repair: {repairs}")
+    expect(not any(repair.short == "66666666" for repair in repairs), f"occupied slot should not be repaired: {repairs}")
+    expect(not any(repair.short == "99999999" for repair in repairs), f"conflicting inference should not be repaired: {repairs}")
+    issue_chains = {issue.chain_id for issue in issues if issue.kind == "missing_link"}
+    expect("safe" not in issue_chains, f"safe inferred task should not remain an issue: {issues}")
+    expect({"occupied", "conflict"}.issubset(issue_chains), f"unsafe missing links should remain issues: {issues}")
+
+
 def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     """on-modify should reuse one full-chain export across preflight and later feedback prep when chain context is needed."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -12720,6 +12792,7 @@ TESTS = [
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_tool_loads_task_hooks_layout,
     test_chain_repair_plans_only_safe_adjacent_link_updates,
+    test_chain_repair_infers_missing_links_only_when_deterministic,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,

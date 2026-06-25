@@ -63,6 +63,19 @@ def task_summary(task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _short_index(tasks: list[dict[str, Any]]) -> dict[str, dict[str, Any] | None]:
+    index: dict[str, dict[str, Any] | None] = {}
+    for task in tasks:
+        short = short_uuid(task.get("uuid"))
+        if not short:
+            continue
+        if short in index:
+            index[short] = None
+        else:
+            index[short] = task
+    return index
+
+
 def group_by_chain_id(tasks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for task in tasks:
@@ -73,6 +86,38 @@ def group_by_chain_id(tasks: list[dict[str, Any]]) -> dict[str, list[dict[str, A
             continue
         groups.setdefault(chain_id, []).append(task)
     return groups
+
+
+def _numeric_link_from_short(short: str, by_short: dict[str, dict[str, Any] | None]) -> int | None:
+    task = by_short.get(short)
+    if task is None:
+        return None
+    return int_or_none(task.get("link"))
+
+
+def _infer_missing_link(task: dict[str, Any], by_short: dict[str, dict[str, Any] | None]) -> int | None:
+    candidates: list[int] = []
+
+    prev_short = str(task.get("prevLink") or "").strip()
+    if prev_short:
+        prev_link = _numeric_link_from_short(prev_short, by_short)
+        if prev_link is not None:
+            candidates.append(prev_link + 1)
+
+    next_short = str(task.get("nextLink") or "").strip()
+    if next_short:
+        next_link = _numeric_link_from_short(next_short, by_short)
+        if next_link is not None:
+            candidates.append(next_link - 1)
+
+    if not candidates:
+        return None
+    inferred = candidates[0]
+    if inferred < 1:
+        return None
+    if any(candidate != inferred for candidate in candidates):
+        return None
+    return inferred
 
 
 def plan_chain_link_repairs(tasks: list[dict[str, Any]]) -> tuple[list[LinkRepair], list[ChainIssue]]:
@@ -89,16 +134,6 @@ def plan_chain_link_repairs(tasks: list[dict[str, Any]]) -> tuple[list[LinkRepai
                 continue
             slots.setdefault(link, []).append(task)
 
-        if missing_link:
-            issues.append(
-                ChainIssue(
-                    "missing_link",
-                    chain_id,
-                    f"{len(missing_link)} task(s) are missing a numeric link",
-                    [task_summary(task) for task in missing_link],
-                )
-            )
-
         duplicates = {link: rows for link, rows in slots.items() if len(rows) > 1}
         for link, rows in sorted(duplicates.items()):
             issues.append(
@@ -109,6 +144,39 @@ def plan_chain_link_repairs(tasks: list[dict[str, Any]]) -> tuple[list[LinkRepai
                     [task_summary(task) for task in rows],
                 )
             )
+
+        if missing_link:
+            by_short = _short_index(members)
+            tasks_by_inferred: dict[int, list[dict[str, Any]]] = {}
+            unresolved: list[dict[str, Any]] = []
+
+            for task in missing_link:
+                inferred = _infer_missing_link(task, by_short)
+                uuid = str(task.get("uuid") or "").strip()
+                if inferred is None or not uuid:
+                    unresolved.append(task)
+                    continue
+                tasks_by_inferred.setdefault(inferred, []).append(task)
+
+            for inferred, rows in sorted(tasks_by_inferred.items()):
+                if inferred in slots or len(rows) > 1:
+                    unresolved.extend(rows)
+                    continue
+                task = rows[0]
+                uuid = str(task.get("uuid") or "").strip()
+                short = short_uuid(uuid)
+                if uuid and short:
+                    repairs.append(LinkRepair(uuid, short, chain_id, inferred, "link", str(task.get("link") or ""), str(inferred)))
+
+            if unresolved:
+                issues.append(
+                    ChainIssue(
+                        "missing_link",
+                        chain_id,
+                        f"{len(unresolved)} task(s) are missing a numeric link",
+                        [task_summary(task) for task in unresolved],
+                    )
+                )
 
         unique_slots = {link: rows[0] for link, rows in slots.items() if len(rows) == 1}
         for link in sorted(unique_slots):

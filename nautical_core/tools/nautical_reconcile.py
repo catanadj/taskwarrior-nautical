@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -20,6 +21,22 @@ if str(BASE_DIR) not in sys.path:
 os.environ.setdefault("NAUTICAL_CORE_PATH", str(CORE_DIR))
 
 from nautical_core import reconcile  # noqa: E402
+
+
+def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
+    candidates: list[Path] = []
+    for raw in (explicit, os.environ.get("NAUTICAL_ON_MODIFY_PATH")):
+        if raw:
+            candidates.append(Path(raw).expanduser())
+    candidates.extend(
+        [
+            BASE_DIR / "on-modify-nautical.py",
+            BASE_DIR / "hooks" / "on-modify-nautical.py",
+            BASE_DIR / "hooks" / "on-modify",
+            CORE_DIR / "on-modify-nautical.py",
+        ]
+    )
+    return candidates
 
 
 def _run_task(task_bin: str, args: list[str], *, input_text: str | None = None, timeout: float = 60.0):
@@ -49,13 +66,18 @@ def _export(task_bin: str, filters: list[str], *, timeout: float = 120.0) -> lis
     return [row for row in payload if isinstance(row, dict)]
 
 
-def _load_on_modify():
-    path = BASE_DIR / "on-modify-nautical.py"
-    spec = importlib.util.spec_from_file_location("_nautical_reconcile_on_modify", path)
-    if spec is None or spec.loader is None:
+def _load_on_modify(hook_path: str | None = None):
+    searched = _candidate_on_modify_paths(hook_path)
+    path = next((candidate for candidate in searched if candidate.is_file()), None)
+    if path is None:
+        tried = ", ".join(str(candidate) for candidate in searched)
+        raise RuntimeError(f"could not find on-modify hook; tried: {tried}")
+    loader = importlib.machinery.SourceFileLoader("_nautical_reconcile_on_modify", str(path))
+    spec = importlib.util.spec_from_loader("_nautical_reconcile_on_modify", loader)
+    if spec is None:
         raise RuntimeError(f"could not load {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    loader.exec_module(module)
     if hasattr(module, "_load_core"):
         module._load_core()
     return module
@@ -134,10 +156,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Repair Nautical chains completed by hookless clients.")
     parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
     parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
+    parser.add_argument("--hook-path", default=None, help="Explicit on-modify hook path for non-standard installs.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
     args = parser.parse_args(argv)
 
-    hook = _load_on_modify()
+    hook = _load_on_modify(args.hook_path)
     _bind_hook_task_bin(hook, args.task_bin)
     candidates = _candidate_rows(args.task_bin)
     plans: list[reconcile.ReconcilePlan] = []

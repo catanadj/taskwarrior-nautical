@@ -11818,6 +11818,34 @@ def test_reconcile_candidate_and_plan_paths():
     expect(plan.action == "legitimate_final" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
 
 
+def test_reconcile_tool_loads_task_hooks_layout():
+    """Installed reconcile tool should find hooks under taskdata/hooks, including extensionless hook names."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_tool_hook_layout_test")
+    prev_base = mod.BASE_DIR
+    prev_core = mod.CORE_DIR
+    prev_env = os.environ.get("NAUTICAL_ON_MODIFY_PATH")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            hooks = base / "hooks"
+            hooks.mkdir()
+            hook = hooks / "on-modify"
+            hook.write_text("def _load_core():\n    pass\n", encoding="utf-8")
+            mod.BASE_DIR = base
+            mod.CORE_DIR = base / "nautical_core"
+            os.environ.pop("NAUTICAL_ON_MODIFY_PATH", None)
+            loaded = mod._load_on_modify()
+            expect(hasattr(loaded, "_load_core"), "extensionless hooks/on-modify should load")
+    finally:
+        mod.BASE_DIR = prev_base
+        mod.CORE_DIR = prev_core
+        if prev_env is None:
+            os.environ.pop("NAUTICAL_ON_MODIFY_PATH", None)
+        else:
+            os.environ["NAUTICAL_ON_MODIFY_PATH"] = prev_env
+
+
 def test_chain_repair_plans_only_safe_adjacent_link_updates():
     """Chain repair should fix unique adjacent slots and report duplicates without guessing."""
     import nautical_core.chain_repair as chain_repair
@@ -12690,6 +12718,7 @@ TESTS = [
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
+    test_reconcile_tool_loads_task_hooks_layout,
     test_chain_repair_plans_only_safe_adjacent_link_updates,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_cp_completion_spawns_next_link,

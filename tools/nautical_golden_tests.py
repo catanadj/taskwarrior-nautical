@@ -11751,6 +11751,127 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
     expect(not called["spawn"], "existing link #N+1 should prevent duplicate spawn")
 
 
+def test_reconcile_candidate_and_plan_paths():
+    """Hookless-completion repair should target only active completed orphans."""
+    import nautical_core.reconcile as reconcile
+
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "description": "remote completion",
+        "cp": "P1D",
+        "chain": "on",
+        "chainID": "11111111",
+        "link": 2,
+        "due": "20260101T090000Z",
+        "end": "20260101T100000Z",
+    }
+    expect(reconcile.is_orphan_completion_candidate(parent), "completed active chain without nextLink should be a candidate")
+    with_next = dict(parent, nextLink="22222222")
+    expect(not reconcile.is_orphan_completion_candidate(with_next), "linked completion should not be a candidate")
+    chain_off = dict(parent, chain="off")
+    expect(not reconcile.is_orphan_completion_candidate(chain_off), "chain:off completion should not be a candidate")
+
+    existing = [{"uuid": "22222222-0000-0000-0000-000000000002", "chainID": "11111111", "link": 3, "status": "pending"}]
+    plan = reconcile.build_reconcile_plan(parent, existing_children=existing, hook=None)
+    expect(plan.action == "backfill_nextlink" and plan.child_short == "22222222", f"unexpected backfill plan: {plan}")
+
+    class FakeCore:
+        @staticmethod
+        def coerce_int(value, default=0):
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+    class FakeHook:
+        core = FakeCore()
+
+        @staticmethod
+        def _safe_parse_datetime(_value):
+            return None, None
+
+        @staticmethod
+        def _compute_cp_child_due(_parent):
+            return "20260102T090000Z", {"target_field": "due"}
+
+        @staticmethod
+        def _build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+            return {
+                "description": parent.get("description"),
+                child_field: child_due,
+                "link": next_link,
+                "prevLink": parent_short,
+                "chainID": parent.get("chainID"),
+                "kind": kind,
+                "chainMax": cpmax,
+                "chainUntil": until_dt,
+            }
+
+    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=FakeHook())
+    expect(plan.action == "spawn", f"expected spawn plan, got: {plan}")
+    expect(plan.child and plan.child.get("link") == 3 and plan.child.get("prevLink") == "11111111", f"bad child plan: {plan}")
+
+    capped = dict(parent, chainMax=2)
+    plan = reconcile.build_reconcile_plan(capped, existing_children=[], hook=FakeHook())
+    expect(plan.action == "legitimate_final" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
+
+
+def test_chain_repair_plans_only_safe_adjacent_link_updates():
+    """Chain repair should fix unique adjacent slots and report duplicates without guessing."""
+    import nautical_core.chain_repair as chain_repair
+
+    tasks = [
+        {
+            "uuid": "11111111-0000-0000-0000-000000000001",
+            "chainID": "cid",
+            "link": 1,
+            "status": "completed",
+            "cp": "P1D",
+            "nextLink": "",
+        },
+        {
+            "uuid": "22222222-0000-0000-0000-000000000002",
+            "chainID": "cid",
+            "link": 2,
+            "status": "completed",
+            "cp": "P1D",
+            "prevLink": "",
+            "nextLink": "wrong",
+        },
+        {
+            "uuid": "33333333-0000-0000-0000-000000000003",
+            "chainID": "cid",
+            "link": 3,
+            "status": "pending",
+            "cp": "P1D",
+            "prevLink": "xxxxxxxx",
+        },
+        {
+            "uuid": "44444444-0000-0000-0000-000000000004",
+            "chainID": "dupe",
+            "link": 1,
+            "status": "completed",
+            "cp": "P1D",
+        },
+        {
+            "uuid": "55555555-0000-0000-0000-000000000005",
+            "chainID": "dupe",
+            "link": 1,
+            "status": "completed",
+            "cp": "P1D",
+        },
+    ]
+    repairs, issues = chain_repair.plan_chain_link_repairs(tasks)
+    got = {(repair.short, repair.field, repair.old, repair.new) for repair in repairs}
+    expect(("11111111", "nextLink", "", "22222222") in got, f"missing link1 next repair: {repairs}")
+    expect(("22222222", "prevLink", "", "11111111") in got, f"missing link2 prev repair: {repairs}")
+    expect(("22222222", "nextLink", "wrong", "33333333") in got, f"missing link2 next repair: {repairs}")
+    expect(("33333333", "prevLink", "xxxxxxxx", "22222222") in got, f"missing link3 prev repair: {repairs}")
+    expect(any(issue.kind == "duplicate_slot" and issue.chain_id == "dupe" for issue in issues), f"duplicate slot not reported: {issues}")
+    expect(not any(repair.chain_id == "dupe" for repair in repairs), f"duplicate chain should not be modified: {repairs}")
+
+
 def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     """on-modify should reuse one full-chain export across preflight and later feedback prep when chain context is needed."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -12567,6 +12688,8 @@ TESTS = [
     test_on_modify_spawn_intent_entry_rejects_missing_child_uuid,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
+    test_reconcile_candidate_and_plan_paths,
+    test_chain_repair_plans_only_safe_adjacent_link_updates,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,

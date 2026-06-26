@@ -2173,6 +2173,25 @@ def test_hook_engine_reports_pending_nautical_delete_without_spawning():
     expect(calls == {"load": 1, "deleted": 1, "completion": 0, "non_completion": 0}, f"unexpected nautical delete routing: {calls!r}")
 
 
+def test_delete_chain_summary_span_uses_stop_time_without_last_end():
+    """Deletion summaries should show active chain span even when the deleted pending task has no end."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_delete_chain_summary_span_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    first, last, span = mod._end_summary_span_fields(
+        "cid",
+        [{"uuid": "root", "due": "20260101T000000Z"}, {"uuid": "tail", "status": "deleted"}],
+        stop_at=datetime(2026, 1, 11, tzinfo=timezone.utc),
+        stopped_by_delete=True,
+    )
+    expect(first is not None, "first due should parse")
+    expect(last is None, f"deleted pending task should not create last end: {last!r}")
+    expect(span.startswith("Active for "), f"delete span should describe active duration: {span!r}")
+    expect("before deletion" in span, f"delete span should mention deletion: {span!r}")
+
+
 def test_on_modify_invalid_anchor_has_no_stdout():
     """on-modify should keep stdout empty on semantic validation failures."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -12664,6 +12683,7 @@ TESTS = [
     test_on_modify_read_two_array_uuid_mismatch_fails,
     test_on_modify_read_two_array_single_missing_uuid_fails,
     test_hook_engine_reports_pending_nautical_delete_without_spawning,
+    test_delete_chain_summary_span_uses_stop_time_without_last_end,
     test_on_modify_invalid_anchor_has_no_stdout,
     test_timeline_completed_rows_place_uuid_before_delta,
     test_on_modify_render_anchor_completion_feedback_wrapper,

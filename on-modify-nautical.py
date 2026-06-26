@@ -4522,7 +4522,13 @@ def _end_summary_sorted_chain(chain_id: str, actual_current: dict) -> list[dict]
     return chain
 
 
-def _end_summary_span_fields(chain_id: str, chain: list[dict]) -> tuple[datetime | None, datetime | None, str]:
+def _end_summary_span_fields(
+    chain_id: str,
+    chain: list[dict],
+    *,
+    stop_at=None,
+    stopped_by_delete: bool = False,
+) -> tuple[datetime | None, datetime | None, str]:
     first_task = chain[0] if chain else None
     last_task = chain[-1] if chain else None
     if not first_task and chain_id:
@@ -4538,6 +4544,13 @@ def _end_summary_span_fields(chain_id: str, chain: list[dict]) -> tuple[datetime
             .replace("in ", "")
             .replace("overdue by ", "")
         )
+    elif first and stop_at and stopped_by_delete:
+        active = (
+            _human_delta(first, stop_at, prefer_months=True)
+            .replace("in ", "")
+            .replace("overdue by ", "")
+        )
+        span = f"Active for {active} before deletion"
     return first, last, span
 
 
@@ -4627,7 +4640,13 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
     L = core.coerce_int(current.get("link"), len(chain))
     root = _short(_root_uuid_from(current))
     cur_s = _short(current.get("uuid"))
-    first, last, span = _end_summary_span_fields(chain_id, chain)
+    stopped_by_delete = str(reason or "").strip().lower().startswith("pending task deleted")
+    first, last, span = _end_summary_span_fields(
+        chain_id,
+        chain,
+        stop_at=now_utc,
+        stopped_by_delete=stopped_by_delete,
+    )
 
     rows = []
     rows.append(("Reason", reason))

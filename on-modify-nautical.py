@@ -4410,6 +4410,22 @@ def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
         label_width = len(str(max_link)) + 1  # +1 for the # symbol
     else:
         label_width = 4  # default width
+
+    def history_line(obj: dict, no: int) -> str:
+        end = _dtparse(obj.get("end"))
+        due = _dtparse(obj.get("due"))
+        is_deleted = str(obj.get("status") or "").strip().lower() == "deleted"
+        if is_deleted and not end:
+            end_s = "deleted"
+            delta = ""
+            marker = "×"
+        else:
+            end_s = _fmtlocal(end) if end else "(no end)"
+            delta = _fmt_on_time_delta(due, end)
+            marker = "✓"
+        short = _short(obj.get("uuid"))
+        lab = f"[bold]#{no:<{label_width}}[/]"
+        return f"{lab} {marker:<2} {end_s} {delta} [dim]{short}[/]"
     
     # If chain has more than 10 tasks, show top 3 (most recent) and bottom 3 (oldest)
     if len(chain_with_links) > 10:
@@ -4423,14 +4439,7 @@ def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
         top_lines = []
         for obj in top_tasks:
             no = get_link(obj)
-            end = _dtparse(obj.get("end"))
-            due = _dtparse(obj.get("due"))
-            end_s = _fmtlocal(end) if end else "(no end)"
-            delta = _fmt_on_time_delta(due, end)
-            short = _short(obj.get("uuid"))
-            lab = f"[bold]#{no:<{label_width}}[/]"
-            marker = "✓"
-            line = f"{lab} {marker:<2} {end_s} {delta} [dim]{short}[/]"
+            line = history_line(obj, no)
             # Highlight the most recent task
             if no == get_link(chain_with_links[0]):
                 line = f"[green]{line}[/]"
@@ -4443,15 +4452,7 @@ def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
         bottom_lines = []
         for obj in bottom_tasks:  # Already in descending order (e.g., 3, 2, 1)
             no = get_link(obj)
-            end = _dtparse(obj.get("end"))
-            due = _dtparse(obj.get("due"))
-            end_s = _fmtlocal(end) if end else "(no end)"
-            delta = _fmt_on_time_delta(due, end)
-            short = _short(obj.get("uuid"))
-            lab = f"[bold]#{no:<{label_width}}[/]"
-            marker = "✓"
-            line = f"{lab} {marker:<2} {end_s} {delta} [dim]{short}[/]"
-            bottom_lines.append(line)
+            bottom_lines.append(history_line(obj, no))
         
         return top_lines + [ellipsis_line] + bottom_lines
     
@@ -4459,14 +4460,7 @@ def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
     lines = []
     for obj in chain_with_links[:n]:
         no = get_link(obj)
-        end = _dtparse(obj.get("end"))
-        due = _dtparse(obj.get("due"))
-        end_s = _fmtlocal(end) if end else "(no end)"
-        delta = _fmt_on_time_delta(due, end)
-        short = _short(obj.get("uuid"))
-        lab = f"[bold]#{no:<{label_width}}[/]"
-        marker = "✓"
-        line = f"{lab} {marker:<2} {end_s} {delta} [dim]{short}[/]"
+        line = history_line(obj, no)
         # Highlight the most recent task
         if no == get_link(chain_with_links[0]):
             line = f"[green]{line}[/]"
@@ -4665,6 +4659,8 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
         rows.append(("First due", core.fmt_dt_local(first)))
     if last:
         rows.append(("Last end", core.fmt_dt_local(last)))
+    if stopped_by_delete:
+        rows.append(("Stopped at", core.fmt_dt_local(now_utc)))
     rows.append(("Span", span))
 
     _end_summary_stats_rows(rows, chain, now_utc)
@@ -4675,7 +4671,8 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
         rows.append(("History", "\n".join(tail)))
 
     rows = _format_chain_summary_rows(rows)
-    _panel("⛔ Chain finished – summary", rows, kind="summary")
+    title = "⛔ Chain stopped – summary" if stopped_by_delete else "⛔ Chain finished – summary"
+    _panel(title, rows, kind="summary")
 
 
 

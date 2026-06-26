@@ -2192,6 +2192,83 @@ def test_delete_chain_summary_span_uses_stop_time_without_last_end():
     expect("before deletion" in span, f"delete span should mention deletion: {span!r}")
 
 
+def test_end_summary_history_marks_deleted_pending_tail():
+    """End-summary history should not mark deleted pending tasks as completed."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_delete_chain_summary_history_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    lines = mod._last_n_timeline(
+        [
+            {
+                "uuid": "00000000-0000-0000-0000-000000000111",
+                "status": "completed",
+                "link": 1,
+                "due": "20260101T000000Z",
+                "end": "20260101T000000Z",
+            },
+            {
+                "uuid": "00000000-0000-0000-0000-000000000222",
+                "status": "deleted",
+                "link": 2,
+                "due": "20260102T000000Z",
+            },
+        ],
+        n=6,
+    )
+    got = "\n".join(core.strip_rich_markup(line) for line in lines)
+    expect("#2" in got and "×" in got and "deleted" in got, f"deleted tail should be marked as deleted: {got!r}")
+    expect("#2  ✓" not in got and "(no end)" not in got.split("#1", 1)[0], f"deleted tail should not look completed/no-end: {got!r}")
+
+
+def test_delete_chain_summary_uses_stopped_title():
+    """Deletion-stopped summaries should use stopped wording in the panel title."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_delete_chain_summary_title_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    captured = {}
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000222",
+        "status": "deleted",
+        "chainID": "00000000",
+        "link": 2,
+        "cp": "1d",
+        "due": "20260102T000000Z",
+    }
+    chain = [
+        {
+            "uuid": "00000000-0000-0000-0000-000000000111",
+            "status": "completed",
+            "chainID": "00000000",
+            "link": 1,
+            "cp": "1d",
+            "due": "20260101T000000Z",
+            "end": "20260101T000000Z",
+        },
+        task,
+    ]
+
+    prev_panel = mod._panel
+    prev_export = mod.tw_export_chain_required
+    try:
+        mod._panel = lambda title, rows, kind=None: captured.update({"title": title, "rows": rows, "kind": kind})
+        mod.tw_export_chain_required = lambda _task: list(chain)
+        mod._end_chain_summary(
+            task,
+            "Pending task deleted.",
+            datetime(2026, 1, 3, tzinfo=timezone.utc),
+            current_task=task,
+        )
+    finally:
+        mod._panel = prev_panel
+        mod.tw_export_chain_required = prev_export
+
+    expect(captured.get("title") == "⛔ Chain stopped – summary", f"unexpected delete summary title: {captured!r}")
+
+
 def test_on_modify_invalid_anchor_has_no_stdout():
     """on-modify should keep stdout empty on semantic validation failures."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -12684,6 +12761,8 @@ TESTS = [
     test_on_modify_read_two_array_single_missing_uuid_fails,
     test_hook_engine_reports_pending_nautical_delete_without_spawning,
     test_delete_chain_summary_span_uses_stop_time_without_last_end,
+    test_end_summary_history_marks_deleted_pending_tail,
+    test_delete_chain_summary_uses_stopped_title,
     test_on_modify_invalid_anchor_has_no_stdout,
     test_timeline_completed_rows_place_uuid_before_delta,
     test_on_modify_render_anchor_completion_feedback_wrapper,

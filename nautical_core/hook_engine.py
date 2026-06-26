@@ -82,6 +82,7 @@ def handle_on_modify(
     is_non_completion_modify,
     handle_non_completion_modify,
     handle_completion_modify,
+    handle_deleted_modify=None,
 ):
     old, new = request.old, request.new
     modify_lifecycle = importlib.import_module("nautical_core.modify_lifecycle")
@@ -91,6 +92,15 @@ def handle_on_modify(
         new,
         is_non_completion_modify=is_non_completion_modify,
     )
+
+    if route.is_deleted and route.has_nautical_fields and handle_deleted_modify is not None:
+        try:
+            load_core()
+        except Exception as exc:
+            diag(f'core load failed: {exc}')
+            fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
+        handle_deleted_modify(old, new)
+        return json_result_cls(task=new, sanitize=False)
 
     if route.is_deleted:
         return json_result_cls(task=new, sanitize=False)

@@ -2113,6 +2113,66 @@ def test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored():
     got_old, got_new = mod._validate_modify_pair(old, new)
     expect(got_old is old and got_new is new, f"expected UUID mismatch to be ignored for non-nautical delete: {(got_old, got_new)!r}")
 
+
+def test_hook_engine_reports_pending_nautical_delete_without_spawning():
+    """Deleted pending Nautical tasks should trigger delete feedback and still pass through unchanged."""
+    from nautical_core import hook_engine
+    from nautical_core.hook_results import HookJsonResult
+
+    class Request:
+        def __init__(self, old, new):
+            self.old = old
+            self.new = new
+
+    calls = {"load": 0, "deleted": 0, "completion": 0, "non_completion": 0}
+
+    def load_core():
+        calls["load"] += 1
+
+    def handle_deleted(old, new):
+        calls["deleted"] += 1
+        expect(old.get("status") == "pending", f"delete handler should receive old pending task: {old!r}")
+        expect(new.get("status") == "deleted", f"delete handler should receive new deleted task: {new!r}")
+
+    plain_new = {"uuid": "00000000-0000-0000-0000-000000000301", "status": "deleted"}
+    result = hook_engine.handle_on_modify(
+        Request({"uuid": plain_new["uuid"], "status": "pending"}, plain_new),
+        json_result_cls=HookJsonResult,
+        task_has_nautical_fields=lambda task: bool(task.get("anchor") or task.get("chainID")),
+        load_core=load_core,
+        diag=lambda _msg: None,
+        fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("plain delete should not fail")),
+        is_non_completion_modify=lambda _old, _new: False,
+        handle_non_completion_modify=lambda *_args: calls.__setitem__("non_completion", calls["non_completion"] + 1),
+        handle_completion_modify=lambda *_args: calls.__setitem__("completion", calls["completion"] + 1),
+        handle_deleted_modify=handle_deleted,
+    )
+    expect(isinstance(result, HookJsonResult) and result.task is plain_new, f"plain delete should pass through: {result!r}")
+    expect(calls == {"load": 0, "deleted": 0, "completion": 0, "non_completion": 0}, f"plain delete should stay cheap: {calls!r}")
+
+    nautical_old = {
+        "uuid": "00000000-0000-0000-0000-000000000302",
+        "status": "pending",
+        "anchor": "w:mon",
+        "chainID": "00000000",
+    }
+    nautical_new = dict(nautical_old, status="deleted")
+    result = hook_engine.handle_on_modify(
+        Request(nautical_old, nautical_new),
+        json_result_cls=HookJsonResult,
+        task_has_nautical_fields=lambda task: bool(task.get("anchor") or task.get("chainID")),
+        load_core=load_core,
+        diag=lambda _msg: None,
+        fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("nautical delete should not fail")),
+        is_non_completion_modify=lambda _old, _new: False,
+        handle_non_completion_modify=lambda *_args: calls.__setitem__("non_completion", calls["non_completion"] + 1),
+        handle_completion_modify=lambda *_args: calls.__setitem__("completion", calls["completion"] + 1),
+        handle_deleted_modify=handle_deleted,
+    )
+    expect(isinstance(result, HookJsonResult) and result.task is nautical_new, f"nautical delete should pass through: {result!r}")
+    expect(calls == {"load": 1, "deleted": 1, "completion": 0, "non_completion": 0}, f"unexpected nautical delete routing: {calls!r}")
+
+
 def test_on_modify_invalid_anchor_has_no_stdout():
     """on-modify should keep stdout empty on semantic validation failures."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -12603,6 +12663,7 @@ TESTS = [
     test_on_modify_read_two_invalid_trailing,
     test_on_modify_read_two_array_uuid_mismatch_fails,
     test_on_modify_read_two_array_single_missing_uuid_fails,
+    test_hook_engine_reports_pending_nautical_delete_without_spawning,
     test_on_modify_invalid_anchor_has_no_stdout,
     test_timeline_completed_rows_place_uuid_before_delta,
     test_on_modify_render_anchor_completion_feedback_wrapper,

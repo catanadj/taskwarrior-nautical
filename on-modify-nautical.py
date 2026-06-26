@@ -5721,6 +5721,28 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     )
 
 
+def _handle_deleted_modify(old: dict, new: dict) -> None:
+    if str(old.get("status") or "").strip().lower() != "pending":
+        return
+    if not ((old.get("chainID") or new.get("chainID") or "").strip()):
+        return
+
+    now_utc = core.now_utc()
+    try:
+        _end_chain_summary(new, "Pending task deleted.", now_utc, current_task=old)
+    except Exception as exc:
+        _diag(f"delete chain summary failed: {exc}")
+        _panel(
+            "⛔ Nautical chain stopped",
+            [
+                ("Reason", "Pending Nautical task was deleted."),
+                ("Root", _format_root_and_age(old, now_utc)),
+                ("Task", _short(old.get("uuid")) or "–"),
+            ],
+            kind="summary",
+        )
+
+
 def _emit_modify_passthrough(task: dict) -> None:
     hook_results = _module("hook_results")
     hook_results.emit_passthrough_json(task)
@@ -5759,6 +5781,7 @@ def main():
         is_non_completion_modify=_is_non_completion_modify,
         handle_non_completion_modify=_handle_non_completion_modify,
         handle_completion_modify=_handle_completion_modify,
+        handle_deleted_modify=_handle_deleted_modify,
     )
     if result is not None:
         hook_results.emit_json_result(result, core=core)

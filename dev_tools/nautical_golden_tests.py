@@ -1938,6 +1938,45 @@ def test_on_modify_disables_chain_emits_disabled_panel():
         expect(new.get("chain") == "off", f"{case['label']} should set chain:off, got {new!r}")
 
 
+def test_on_modify_recurrence_update_emits_ack_panel():
+    """Changing recurrence settings on an existing Nautical task should be acknowledged."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_recurrence_update_panel_test")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000449",
+        "description": "nautical task",
+        "status": "pending",
+        "anchor": "w:mon",
+        "chain": "on",
+        "chainID": "abcd1234",
+    }
+    new = {**old, "anchor": "w:tue,thu"}
+    captured = {}
+
+    orig_panel = mod._panel
+    orig_print_task = mod._print_task
+    try:
+        def fake_panel(title, rows, *, kind=None):
+            captured["title"] = title
+            captured["rows"] = list(rows)
+            captured["kind"] = kind
+
+        mod._panel = fake_panel
+        mod._print_task = lambda task: captured.setdefault("task", dict(task))
+        mod._handle_non_completion_modify(old, new)
+    finally:
+        mod._panel = orig_panel
+        mod._print_task = orig_print_task
+
+    expect(captured.get("title") == "⚓ Nautical recurrence updated", f"expected recurrence update panel, got {captured!r}")
+    expect(captured.get("kind") == "note", f"expected note panel, got {captured!r}")
+    rows = captured.get("rows") or []
+    expect(("Anchor", "w:mon → w:tue,thu") in rows, f"expected anchor change row, got {rows!r}")
+    expect(any(k == "Natural" and "Tuesday" in str(v) and "Thursday" in str(v) for k, v in rows), f"expected natural row, got {rows!r}")
+    expect(("Chain", "on") in rows, f"expected chain row, got {rows!r}")
+    expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
+
+
 def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
     """Modify lifecycle helper should classify and promote newly Nautical tasks explicitly."""
     ml = core._import_sibling("modify_lifecycle")
@@ -1984,6 +2023,12 @@ def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
     expect(trans.state == "disabled", f"expected disabled transition, got {trans!r}")
     expect("chain:off" in trans.reason, f"expected chain-off reason, got {trans!r}")
     expect(disabled_new.get("chain") == "off", f"disabled transition should keep chain off, got {disabled_new!r}")
+
+    changes = ml.recurrence_setting_changes(
+        {"anchor": "w:mon", "omit": "", "chain": "on"},
+        {"anchor": "w:tue", "omit": "y:apr", "chain": "on"},
+    )
+    expect(changes == [("anchor", "w:mon", "w:tue"), ("omit", "", "y:apr")], f"unexpected recurrence setting changes: {changes!r}")
 
 
 def test_chainid_legacy_reads_do_not_drive_chain_identity():
@@ -13059,6 +13104,7 @@ TESTS = [
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_on_modify_promotes_chain_emits_upgrade_panel,
     test_on_modify_disables_chain_emits_disabled_panel,
+    test_on_modify_recurrence_update_emits_ack_panel,
     test_modify_lifecycle_routes_and_promotes_new_nautical_tasks,
     test_chainid_legacy_reads_do_not_drive_chain_identity,
     test_on_add_lowercase_chainid_does_not_mark_nautical,

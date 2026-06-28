@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+RECURRENCE_SETTING_FIELDS = ("anchor", "anchor_file", "omit", "omit_file", "anchor_mode", "cp")
+
 
 @dataclass(slots=True)
 class ModifyLifecycleRoute:
@@ -54,6 +56,25 @@ def task_has_nautical_chain_fields(task: dict[str, Any] | None) -> bool:
 
 def task_has_nautical_fields(task: dict[str, Any] | None) -> bool:
     return task_has_nautical_recurrence_fields(task) or task_has_nautical_chain_fields(task)
+
+
+def _norm_field(value: Any) -> str:
+    try:
+        return str(value or "").strip()
+    except Exception:
+        return ""
+
+
+def recurrence_setting_changes(old: dict[str, Any] | None, new: dict[str, Any] | None) -> list[tuple[str, str, str]]:
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return []
+    changes: list[tuple[str, str, str]] = []
+    for field in RECURRENCE_SETTING_FIELDS:
+        old_value = _norm_field(old.get(field))
+        new_value = _norm_field(new.get(field))
+        if old_value != new_value:
+            changes.append((field, old_value, new_value))
+    return changes
 
 
 def classify_modify_route(
@@ -149,9 +170,11 @@ def apply_nautical_transition(
 __all__ = (
     "ModifyLifecycleRoute",
     "ModifyNauticalTransition",
+    "RECURRENCE_SETTING_FIELDS",
     "apply_nautical_transition",
     "classify_modify_route",
     "promote_newly_nautical_task",
+    "recurrence_setting_changes",
     "task_has_nautical_chain_fields",
     "task_has_nautical_fields",
     "task_has_nautical_recurrence_fields",

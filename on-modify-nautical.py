@@ -5359,6 +5359,51 @@ def _non_completion_reject_conflicting_types(new_anchor: str, new_anchor_file: s
         _fail_and_exit("Invalid chain config", "anchor_file and cp cannot both be set; clear one")
 
 
+def _recurrence_update_label(field: str) -> str:
+    return {
+        "anchor": "Anchor",
+        "anchor_file": "Anchor file",
+        "omit": "Omit",
+        "omit_file": "Omit file",
+        "anchor_mode": "Mode",
+        "cp": "Period",
+    }.get(field, field)
+
+
+def _recurrence_update_value(old_value: str, new_value: str) -> str:
+    old_text = old_value or "-"
+    new_text = new_value or "-"
+    return f"{old_text} → {new_text}"
+
+
+def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: dict) -> None:
+    if not changes:
+        return
+    rows: list[tuple[str, str]] = [
+        (_recurrence_update_label(field), _recurrence_update_value(old_value, new_value))
+        for field, old_value, new_value in changes
+    ]
+
+    anchor_expr = str(new.get("anchor") or "").strip()
+    if anchor_expr and any(field == "anchor" for field, _old, _new in changes):
+        try:
+            rows.append(("Natural", core.describe_anchor_expr(anchor_expr)))
+        except Exception:
+            pass
+
+    omit_expr = str(new.get("omit") or "").strip()
+    if omit_expr and any(field == "omit" for field, _old, _new in changes):
+        try:
+            rows.append(("Except", core.describe_anchor_expr(core.resolve_omit_presets(omit_expr))))
+        except Exception:
+            pass
+
+    chain_state = str(new.get("chain") or "").strip()
+    if chain_state:
+        rows.append(("Chain", chain_state))
+    _panel("⚓ Nautical recurrence updated", rows, kind="note")
+
+
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
     anchor_raw = (new.get("anchor") or "").strip()
     new_anchor = _strip_quotes(anchor_raw)
@@ -5410,6 +5455,12 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
             rows.append(("Source", transition.source))
         rows.append(("Chain", "off"))
         _panel("⚓ Nautical disabled", rows, kind="disabled")
+    else:
+        try:
+            changes = modify_lifecycle.recurrence_setting_changes(old, new)
+        except Exception:
+            changes = []
+        _render_recurrence_updated_panel(changes, new)
     _print_task(new)
 
 

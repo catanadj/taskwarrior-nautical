@@ -28,6 +28,7 @@ from types import SimpleNamespace
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 DEV_TOOLS = HERE
+CORE_TOOLS = os.path.join(ROOT, "nautical_core", "tools")
 sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
@@ -2441,6 +2442,21 @@ def test_queue_status_json_ok_empty_taskdata():
         expect((obj.get("queue") or {}).get("processing") == 0, f"unexpected processing count: {obj}")
 
 
+def test_operator_queue_status_json_ok_empty_taskdata():
+    """installed queue status should work from nautical_core/tools."""
+    path = os.path.join(CORE_TOOLS, "nautical_queue_status.py")
+    with tempfile.TemporaryDirectory() as td:
+        p = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--json"],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(p.returncode == 0, f"operator queue status returned {p.returncode}: {p.stderr!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        expect(obj.get("status") == "ok", f"unexpected operator queue status: {obj}")
+
+
 def test_queue_status_warns_on_stale_processing_and_dead_letters():
     """queue status should report stale processing, dead letters, and lock failures."""
     path = os.path.join(DEV_TOOLS, "nautical_queue_status.py")
@@ -2608,6 +2624,23 @@ def test_doctor_reports_healthy_installation():
         obj = json.loads((p.stdout or "").strip() or "{}")
         expect(obj.get("status") == "ok", f"unexpected doctor status: {obj}")
         expect((obj.get("counts") or {}).get("chains") == 1, f"unexpected doctor counts: {obj}")
+
+
+def test_operator_doctor_loads_colocated_queue_helper():
+    """installed doctor should load queue status from nautical_core/tools."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    with tempfile.TemporaryDirectory() as td:
+        p = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--task-bin", "/bin/false", "--json"],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(p.returncode == 2, f"operator doctor returned {p.returncode}: {p.stderr!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        ids = {item.get("id") for item in obj.get("findings") or []}
+        expect("queue.state" in ids, f"operator doctor did not inspect queue state: {obj}")
+        expect("queue.unreadable" not in ids, f"operator doctor could not load queue helper: {obj}")
 
 
 def test_doctor_reports_actionable_broken_installation():
@@ -3957,6 +3990,18 @@ def test_anchor_grouped_list_plus_expr_applies_filter_to_all_items():
     from datetime import date
     expect(core.next_after_expr(dnf, date(2026, 4, 12), default_seed=date(2026, 4, 11), seed_base="anchor-test")[0] == date(2026, 4, 13), "April Monday should match")
     expect(core.next_after_expr(dnf, date(2026, 4, 30), default_seed=date(2026, 4, 11), seed_base="anchor-test")[0] == date(2027, 4, 2), "May weekdays should not match; next match should be in next April")
+
+
+def test_lint_grouped_list_plus_expr_matches_current_grammar():
+    """lint should not warn that comma-list filters bind only to the final item."""
+    for expr in (
+        "w:mon,wed,fri + y:apr",
+        "m:1,15,-1bd + w:mon..fri",
+        "y:apr,jul,oct + w:sat",
+    ):
+        fatal, warns = core.lint_anchor_expr(expr)
+        expect(fatal is None, f"{expr}: unexpected lint fatal {fatal!r}")
+        expect(warns == [], f"{expr}: obsolete grouped-list warning returned: {warns!r}")
 
 
 def test_last_weekday():
@@ -12778,6 +12823,7 @@ TESTS = [
     test_nth_weekday_range,
     test_lint_anchor_expr_characterization,
     test_anchor_grouped_list_plus_expr_applies_filter_to_all_items,
+    test_lint_grouped_list_plus_expr_matches_current_grammar,
     test_month_alias_in_monthly_anchor_suggests_yearly_anchor,
     test_unsat_hint_uses_yearly_alias_for_month_name_examples,
     test_last_weekday,
@@ -12962,8 +13008,10 @@ TESTS = [
     test_health_check_critical_queue_bytes,
     test_health_check_critical_queue_db_rows,
     test_queue_status_json_ok_empty_taskdata,
+    test_operator_queue_status_json_ok_empty_taskdata,
     test_queue_status_warns_on_stale_processing_and_dead_letters,
     test_doctor_reports_healthy_installation,
+    test_operator_doctor_loads_colocated_queue_helper,
     test_doctor_reports_actionable_broken_installation,
     test_doctor_reports_chain_repair_plan_findings,
     test_doctor_reports_reconcile_backfill_plans,

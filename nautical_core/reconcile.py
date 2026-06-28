@@ -74,6 +74,28 @@ def recurrence_kind(task: dict[str, Any]) -> str:
     return "cp"
 
 
+def describe_plan(plan: ReconcilePlan) -> dict[str, Any]:
+    parent = plan.parent
+    evidence: dict[str, Any] = {
+        "parent": short_uuid(parent.get("uuid")),
+        "chainID": str(parent.get("chainID") or ""),
+        "parent_link": int_or_default(parent.get("link"), 0),
+        "next_link": plan.next_link,
+        "kind": recurrence_kind(parent),
+        "reason": plan.reason,
+    }
+    if plan.child_due is not None:
+        evidence["child_due"] = str(plan.child_due)
+    if plan.child_short:
+        evidence["existing_child"] = plan.child_short
+    if plan.child:
+        field = "scheduled" if "scheduled" in plan.child else "due"
+        evidence["child_field"] = field
+        if plan.child.get(field) is not None:
+            evidence["child_target"] = str(plan.child.get(field))
+    return evidence
+
+
 def build_reconcile_plan(
     parent: dict[str, Any],
     *,

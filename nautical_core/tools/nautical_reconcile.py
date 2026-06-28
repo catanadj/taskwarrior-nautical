@@ -137,19 +137,31 @@ def _fmt_parent(parent: dict[str, Any]) -> str:
     return f"{uuid} chain {chain_id} link {link}" + (f" · {desc}" if desc else "")
 
 
+def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:
+    for key in keys:
+        value = evidence.get(key)
+        if value in (None, ""):
+            continue
+        print(f"  {key.replace('_', ' ')}: {value}")
+
+
 def _print_plan(plan: reconcile.ReconcilePlan, *, applied_short: str = "") -> None:
     parent = _fmt_parent(plan.parent)
+    evidence = reconcile.describe_plan(plan)
     if plan.action == "spawn":
-        due = plan.child_due
         suffix = f" -> created {applied_short}" if applied_short else ""
-        print(f"spawn: {parent} -> link {plan.next_link} due {due}{suffix}")
+        print(f"spawn: {parent}{suffix}")
+        _print_evidence(evidence, ("reason", "kind", "next_link", "child_field", "child_target", "child_due"))
     elif plan.action == "backfill_nextlink":
         suffix = " (applied)" if applied_short else ""
-        print(f"backfill: {parent} -> nextLink {plan.child_short}{suffix}")
+        print(f"backfill nextLink: {parent}{suffix}")
+        _print_evidence(evidence, ("reason", "next_link", "existing_child"))
     elif plan.action == "legitimate_final":
         print(f"final: {parent} ({plan.reason})")
+        _print_evidence(evidence, ("kind", "next_link", "child_due"))
     else:
         print(f"error: {parent} ({plan.reason})")
+        _print_evidence(evidence, ("kind", "next_link", "child_due"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -191,6 +203,13 @@ def main(argv: list[str] | None = None) -> int:
         "backfill_nextlink": sum(1 for p in plans if p.action == "backfill_nextlink"),
         "legitimate_final": sum(1 for p in plans if p.action == "legitimate_final"),
         "errors": sum(1 for p in plans if p.action == "error"),
+        "plans": [
+            {
+                "action": plan.action,
+                **reconcile.describe_plan(plan),
+            }
+            for plan in plans
+        ],
         "applied": applied,
     }
     if args.json:

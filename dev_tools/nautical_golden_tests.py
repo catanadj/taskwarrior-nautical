@@ -11968,6 +11968,10 @@ def test_reconcile_candidate_and_plan_paths():
     plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=FakeHook())
     expect(plan.action == "spawn", f"expected spawn plan, got: {plan}")
     expect(plan.child and plan.child.get("link") == 3 and plan.child.get("prevLink") == "11111111", f"bad child plan: {plan}")
+    evidence = reconcile.describe_plan(plan)
+    expect(evidence.get("kind") == "cp", f"expected cp evidence, got: {evidence!r}")
+    expect(evidence.get("next_link") == 3, f"expected next_link evidence, got: {evidence!r}")
+    expect(evidence.get("child_field") == "due", f"expected child field evidence, got: {evidence!r}")
 
     capped = dict(parent, chainMax=2)
     plan = reconcile.build_reconcile_plan(capped, existing_children=[], hook=FakeHook())
@@ -12000,6 +12004,37 @@ def test_reconcile_tool_loads_task_hooks_layout():
             os.environ.pop("NAUTICAL_ON_MODIFY_PATH", None)
         else:
             os.environ["NAUTICAL_ON_MODIFY_PATH"] = prev_env
+
+
+def test_reconcile_tool_print_plan_includes_evidence():
+    """Reconcile dry-run output should explain why each action is safe."""
+    import nautical_core.reconcile as reconcile
+
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_tool_print_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "description": "remote completion",
+        "cp": "P1D",
+        "chain": "on",
+        "chainID": "11111111",
+        "link": 2,
+    }
+    plan = reconcile.ReconcilePlan(
+        "backfill_nextlink",
+        parent,
+        3,
+        "next link already exists",
+        child_short="22222222",
+    )
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mod._print_plan(plan)
+    out = buf.getvalue()
+    expect("backfill nextLink:" in out, f"missing backfill headline: {out!r}")
+    expect("reason: next link already exists" in out, f"missing reason evidence: {out!r}")
+    expect("existing child: 22222222" in out, f"missing child evidence: {out!r}")
 
 
 def test_chain_repair_plans_only_safe_adjacent_link_updates():
@@ -12996,6 +13031,7 @@ TESTS = [
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_tool_loads_task_hooks_layout,
+    test_reconcile_tool_print_plan_includes_evidence,
     test_chain_repair_plans_only_safe_adjacent_link_updates,
     test_chain_repair_infers_missing_links_only_when_deterministic,
     test_chain_repair_infers_single_root_link_one_only,

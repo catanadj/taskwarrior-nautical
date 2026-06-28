@@ -76,6 +76,9 @@ def _print_issue(issue: chain_repair.ChainIssue) -> None:
             f"prev:{task.get('prevLink') or '-'} next:{task.get('nextLink') or '-'} "
             f"{task.get('description') or ''}".rstrip()
         )
+        reason = str(task.get("reason") or "").strip()
+        if reason:
+            print(f"    why: {reason}")
 
 
 def main(argv: list[str] | None = None) -> int:

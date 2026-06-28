@@ -12127,6 +12127,14 @@ def test_chain_repair_infers_missing_links_only_when_deterministic():
     issue_chains = {issue.chain_id for issue in issues if issue.kind == "missing_link"}
     expect("safe" not in issue_chains, f"safe inferred task should not remain an issue: {issues}")
     expect({"occupied", "conflict"}.issubset(issue_chains), f"unsafe missing links should remain issues: {issues}")
+    issue_reasons = {
+        task.get("short"): task.get("reason")
+        for issue in issues
+        if issue.kind == "missing_link"
+        for task in issue.tasks
+    }
+    expect("already occupied" in str(issue_reasons.get("66666666")), f"occupied issue should explain refusal: {issue_reasons!r}")
+    expect("different links" in str(issue_reasons.get("99999999")), f"conflict issue should explain refusal: {issue_reasons!r}")
 
 
 def test_chain_repair_infers_single_root_link_one_only():
@@ -12154,6 +12162,16 @@ def test_chain_repair_infers_single_root_link_one_only():
     issue_chains = {issue.chain_id for issue in issues if issue.kind == "missing_link"}
     expect("aaaaaaaa" not in issue_chains, f"singleton root should not remain an issue: {issues}")
     expect("orphan" in issue_chains, f"orphan child singleton should remain an issue: {issues}")
+    orphan_reason = next(
+        (
+            task.get("reason")
+            for issue in issues
+            if issue.kind == "missing_link" and issue.chain_id == "orphan"
+            for task in issue.tasks
+        ),
+        "",
+    )
+    expect("not rooted" in str(orphan_reason), f"orphan singleton should explain refusal: {issues}")
 
 
 def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():

@@ -50,8 +50,8 @@ def is_nautical_chain_task(task: dict[str, Any]) -> bool:
     return any(str(task.get(field) or "").strip() for field in RECURRENCE_FIELDS)
 
 
-def task_summary(task: dict[str, Any]) -> dict[str, Any]:
-    return {
+def task_summary(task: dict[str, Any], *, reason: str = "") -> dict[str, Any]:
+    summary = {
         "uuid": str(task.get("uuid") or ""),
         "short": short_uuid(task.get("uuid")),
         "status": str(task.get("status") or ""),
@@ -61,6 +61,9 @@ def task_summary(task: dict[str, Any]) -> dict[str, Any]:
         "nextLink": str(task.get("nextLink") or ""),
         "description": str(task.get("description") or ""),
     }
+    if reason:
+        summary["reason"] = reason
+    return summary
 
 
 def _short_index(tasks: list[dict[str, Any]]) -> dict[str, dict[str, Any] | None]:
@@ -88,48 +91,58 @@ def group_by_chain_id(tasks: list[dict[str, Any]]) -> dict[str, list[dict[str, A
     return groups
 
 
-def _numeric_link_from_short(short: str, by_short: dict[str, dict[str, Any] | None]) -> int | None:
+def _link_evidence(short: str, by_short: dict[str, dict[str, Any] | None], field: str) -> tuple[int | None, str]:
+    if short not in by_short:
+        return None, f"{field} target {short} was not found in this chain"
     task = by_short.get(short)
     if task is None:
-        return None
-    return int_or_none(task.get("link"))
+        return None, f"{field} target {short} is ambiguous"
+    link = int_or_none(task.get("link"))
+    if link is None:
+        return None, f"{field} target {short} has no numeric link"
+    return link, ""
 
 
-def _infer_missing_link(task: dict[str, Any], by_short: dict[str, dict[str, Any] | None]) -> int | None:
+def _infer_missing_link(task: dict[str, Any], by_short: dict[str, dict[str, Any] | None]) -> tuple[int | None, str]:
     candidates: list[int] = []
+    skipped: list[str] = []
 
     prev_short = str(task.get("prevLink") or "").strip()
     if prev_short:
-        prev_link = _numeric_link_from_short(prev_short, by_short)
+        prev_link, reason = _link_evidence(prev_short, by_short, "prevLink")
         if prev_link is not None:
             candidates.append(prev_link + 1)
+        elif reason:
+            skipped.append(reason)
 
     next_short = str(task.get("nextLink") or "").strip()
     if next_short:
-        next_link = _numeric_link_from_short(next_short, by_short)
+        next_link, reason = _link_evidence(next_short, by_short, "nextLink")
         if next_link is not None:
             candidates.append(next_link - 1)
+        elif reason:
+            skipped.append(reason)
 
     if not candidates:
-        return None
+        return None, "; ".join(skipped) or "no usable prevLink/nextLink evidence"
     inferred = candidates[0]
     if inferred < 1:
-        return None
+        return None, f"adjacent pointers imply invalid link {inferred}"
     if any(candidate != inferred for candidate in candidates):
-        return None
-    return inferred
+        return None, f"prevLink/nextLink imply different links: {', '.join(str(candidate) for candidate in candidates)}"
+    return inferred, ""
 
 
-def _infer_single_root_link(chain_id: str, members: list[dict[str, Any]], missing_link: list[dict[str, Any]]) -> int | None:
+def _infer_single_root_link(chain_id: str, members: list[dict[str, Any]], missing_link: list[dict[str, Any]]) -> tuple[int | None, str]:
     if len(members) != 1 or len(missing_link) != 1:
-        return None
+        return None, ""
     task = missing_link[0]
     uuid = str(task.get("uuid") or "").strip()
     if short_uuid(uuid) != chain_id:
-        return None
+        return None, "single-task chain is not rooted at its own chainID"
     if str(task.get("prevLink") or "").strip():
-        return None
-    return 1
+        return None, "single-task chain has prevLink, so it does not look like root link 1"
+    return 1, ""
 
 
 def plan_chain_link_repairs(tasks: list[dict[str, Any]]) -> tuple[list[LinkRepair], list[ChainIssue]]:
@@ -160,20 +173,28 @@ def plan_chain_link_repairs(tasks: list[dict[str, Any]]) -> tuple[list[LinkRepai
         if missing_link:
             by_short = _short_index(members)
             tasks_by_inferred: dict[int, list[dict[str, Any]]] = {}
-            unresolved: list[dict[str, Any]] = []
-            single_root_link = _infer_single_root_link(chain_id, members, missing_link)
+            unresolved: list[tuple[dict[str, Any], str]] = []
+            single_root_link, single_root_reason = _infer_single_root_link(chain_id, members, missing_link)
 
             for task in missing_link:
-                inferred = single_root_link if single_root_link is not None else _infer_missing_link(task, by_short)
+                if single_root_link is not None:
+                    inferred, reason = single_root_link, ""
+                elif single_root_reason:
+                    inferred, reason = None, single_root_reason
+                else:
+                    inferred, reason = _infer_missing_link(task, by_short)
                 uuid = str(task.get("uuid") or "").strip()
                 if inferred is None or not uuid:
-                    unresolved.append(task)
+                    unresolved.append((task, reason or "missing task UUID"))
                     continue
                 tasks_by_inferred.setdefault(inferred, []).append(task)
 
             for inferred, rows in sorted(tasks_by_inferred.items()):
-                if inferred in slots or len(rows) > 1:
-                    unresolved.extend(rows)
+                if inferred in slots:
+                    unresolved.extend((task, f"inferred link {inferred} is already occupied") for task in rows)
+                    continue
+                if len(rows) > 1:
+                    unresolved.extend((task, f"{len(rows)} missing-link tasks infer the same link {inferred}") for task in rows)
                     continue
                 task = rows[0]
                 uuid = str(task.get("uuid") or "").strip()
@@ -187,7 +208,7 @@ def plan_chain_link_repairs(tasks: list[dict[str, Any]]) -> tuple[list[LinkRepai
                         "missing_link",
                         chain_id,
                         f"{len(unresolved)} task(s) are missing a numeric link",
-                        [task_summary(task) for task in unresolved],
+                        [task_summary(task, reason=reason) for task, reason in unresolved],
                     )
                 )
 

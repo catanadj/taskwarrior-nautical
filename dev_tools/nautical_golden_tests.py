@@ -2715,6 +2715,76 @@ def test_doctor_reports_actionable_broken_installation():
         expect("nextLink -> missing1" in report, f"missing broken link target: {report!r}")
 
 
+def test_doctor_reports_chain_repair_plan_findings():
+    """doctor should surface safe chain repairs and unresolved repair reasons."""
+    path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        hooks = td_path / "hooks"
+        hooks.mkdir()
+        for name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
+            hook = hooks / name
+            hook.write_text("#!/bin/sh\n", encoding="utf-8")
+            hook.chmod(0o755)
+        (td_path / "config-nautical.toml").write_text('tz = "UTC"\n', encoding="utf-8")
+        fake_task = td_path / "task"
+        _write_fake_task_for_doctor(fake_task)
+        rows = [
+            {
+                "uuid": "11111111-0000-0000-0000-000000000001",
+                "status": "completed",
+                "cp": "1d",
+                "chainID": "safe",
+                "link": 1,
+            },
+            {
+                "uuid": "22222222-0000-0000-0000-000000000002",
+                "status": "pending",
+                "cp": "1d",
+                "chainID": "safe",
+                "link": 2,
+                "prevLink": "wrong",
+            },
+            {
+                "uuid": "33333333-0000-0000-0000-000000000003",
+                "status": "pending",
+                "cp": "1d",
+                "chainID": "review",
+                "prevLink": "missing1",
+            },
+        ]
+        env = os.environ.copy()
+        env["FAKE_HOOKS"] = str(hooks)
+        env["FAKE_EXPORT"] = json.dumps(rows)
+        p = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task), "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=8.0,
+        )
+        expect(p.returncode == 1, f"expected doctor warn exit 1, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        findings = {item.get("id"): item for item in obj.get("findings") or []}
+        expect("chains.repair_available" in findings, f"missing repair available finding: {obj}")
+        expect("chains.repair_review" in findings, f"missing repair review finding: {obj}")
+        repair_details = findings["chains.repair_available"].get("details") or {}
+        expect(any(repair.get("field") == "prevLink" for repair in repair_details.get("repairs") or []), f"bad repair details: {repair_details}")
+        review_details = findings["chains.repair_review"].get("details") or {}
+        expect(any("not rooted" in reason for reason in (review_details.get("reasons") or {})), f"bad review reasons: {review_details}")
+
+        text = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task)],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=8.0,
+        )
+        report = text.stdout or ""
+        expect("Repair:" in report, f"missing repair text: {report!r}")
+        expect("Why:" in report, f"missing repair reason text: {report!r}")
+
+
 def test_perf_budget_config_covers_cache_io_checks():
     """Perf budget config should include explicit cache save/load check budgets."""
     cfg_path = Path(DEV_TOOLS) / "perf_budget.json"
@@ -12830,6 +12900,7 @@ TESTS = [
     test_queue_status_warns_on_stale_processing_and_dead_letters,
     test_doctor_reports_healthy_installation,
     test_doctor_reports_actionable_broken_installation,
+    test_doctor_reports_chain_repair_plan_findings,
     test_perf_budget_config_covers_cache_io_checks,
     test_deploy_sanity_script_reports_ok,
     test_hook_replay_harness_reports_ok,

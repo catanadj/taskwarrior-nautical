@@ -17,6 +17,11 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from nautical_core import chain_repair  # noqa: E402
+
 REQUIRED_UDAS = {
     "cp": "string",
     "chain": "string",
@@ -307,6 +312,17 @@ def _task_detail(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _chain_repair_detail(repair: chain_repair.LinkRepair) -> dict[str, Any]:
+    return {
+        "task": repair.short,
+        "chainID": repair.chain_id,
+        "link": repair.link,
+        "field": repair.field,
+        "old": repair.old,
+        "new": repair.new,
+    }
+
+
 def _check_chains(
     findings: list[dict[str, Any]],
     *,
@@ -323,6 +339,42 @@ def _check_chains(
             details={"error": err},
         )
         return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
+
+    repairs, repair_issues = chain_repair.plan_chain_link_repairs(rows)
+    if repairs:
+        _finding(
+            findings,
+            "chains.repair_available",
+            "warn",
+            f"{len(repairs)} safe chain repair(s) are available.",
+            fix="Run python3 nautical_core/tools/nautical_chain_repair.py --apply after reviewing the dry-run output.",
+            details={"repairs": [_chain_repair_detail(repair) for repair in repairs[:10]]},
+        )
+    if repair_issues:
+        reason_counts: dict[str, int] = defaultdict(int)
+        for issue in repair_issues:
+            for task in issue.tasks:
+                reason = str(task.get("reason") or issue.message or issue.kind).strip()
+                reason_counts[reason] += 1
+        _finding(
+            findings,
+            "chains.repair_review",
+            "warn",
+            f"{len(repair_issues)} chain repair issue(s) need review.",
+            fix="Run python3 nautical_core/tools/nautical_chain_repair.py and inspect the 'why:' lines.",
+            details={
+                "reasons": dict(sorted(reason_counts.items())),
+                "issues": [
+                    {
+                        "kind": issue.kind,
+                        "chainID": issue.chain_id,
+                        "message": issue.message,
+                        "tasks": issue.tasks[:5],
+                    }
+                    for issue in repair_issues[:10]
+                ],
+            },
+        )
 
     nautical = [
         row
@@ -460,7 +512,32 @@ def _render_details(details: dict[str, Any]) -> None:
     if error:
         print(f"  Detail: {error}")
     for issue in details.get("issues") or []:
-        print(f"  Detail: {issue}")
+        if not isinstance(issue, dict):
+            print(f"  Detail: {issue}")
+            continue
+        print(
+            "  Issue: "
+            f"{issue.get('kind') or '?'} chain={issue.get('chainID') or '?'} "
+            f"{issue.get('message') or ''}".rstrip()
+        )
+        for task in issue.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            print(f"    Task: {_format_task(task)}")
+            reason = str(task.get("reason") or "").strip()
+            if reason:
+                print(f"      Why: {reason}")
+    for reason, count in (details.get("reasons") or {}).items():
+        print(f"  Reason: {reason} ({count})")
+    for repair in details.get("repairs") or []:
+        if not isinstance(repair, dict):
+            continue
+        print(
+            "  Repair: "
+            f"{repair.get('task') or '?'} chain={repair.get('chainID') or '?'} "
+            f"link={repair.get('link') or '?'} {repair.get('field') or '?'}: "
+            f"{repair.get('old') or '-'} -> {repair.get('new') or '-'}"
+        )
     for task in details.get("tasks") or []:
         if isinstance(task, dict):
             print(f"  Affected: {_format_task(task)}")

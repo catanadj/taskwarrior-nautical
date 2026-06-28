@@ -2785,6 +2785,71 @@ def test_doctor_reports_chain_repair_plan_findings():
         expect("Why:" in report, f"missing repair reason text: {report!r}")
 
 
+def test_doctor_reports_reconcile_backfill_plans():
+    """doctor should surface hookless completion reconcile plans without mutating data."""
+    path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        hooks = td_path / "hooks"
+        hooks.mkdir()
+        for name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
+            hook = hooks / name
+            hook.write_text("#!/bin/sh\n", encoding="utf-8")
+            hook.chmod(0o755)
+        (td_path / "config-nautical.toml").write_text('tz = "UTC"\n', encoding="utf-8")
+        fake_task = td_path / "task"
+        _write_fake_task_for_doctor(fake_task)
+        rows = [
+            {
+                "uuid": "11111111-0000-0000-0000-000000000001",
+                "description": "hookless completed parent",
+                "status": "completed",
+                "cp": "1d",
+                "chain": "on",
+                "chainID": "cid",
+                "link": 1,
+            },
+            {
+                "uuid": "22222222-0000-0000-0000-000000000002",
+                "description": "existing child",
+                "status": "pending",
+                "cp": "1d",
+                "chain": "on",
+                "chainID": "cid",
+                "link": 2,
+                "prevLink": "11111111",
+            },
+        ]
+        env = os.environ.copy()
+        env["FAKE_HOOKS"] = str(hooks)
+        env["FAKE_EXPORT"] = json.dumps(rows)
+        p = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task), "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=8.0,
+        )
+        expect(p.returncode == 1, f"expected doctor warn exit 1, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        findings = {item.get("id"): item for item in obj.get("findings") or []}
+        expect("chains.reconcile_available" in findings, f"missing reconcile finding: {obj}")
+        details = findings["chains.reconcile_available"].get("details") or {}
+        expect((details.get("actions") or {}).get("backfill_nextlink") == 1, f"bad reconcile action counts: {details}")
+        expect((details.get("plans") or [{}])[0].get("existing_child") == "22222222", f"bad reconcile plan evidence: {details}")
+
+        text = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task)],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=8.0,
+        )
+        report = text.stdout or ""
+        expect("Plan: backfill_nextlink" in report, f"missing reconcile plan text: {report!r}")
+        expect("Child: 22222222" in report, f"missing reconcile child text: {report!r}")
+
+
 def test_perf_budget_config_covers_cache_io_checks():
     """Perf budget config should include explicit cache save/load check budgets."""
     cfg_path = Path(DEV_TOOLS) / "perf_budget.json"
@@ -12901,6 +12966,7 @@ TESTS = [
     test_doctor_reports_healthy_installation,
     test_doctor_reports_actionable_broken_installation,
     test_doctor_reports_chain_repair_plan_findings,
+    test_doctor_reports_reconcile_backfill_plans,
     test_perf_budget_config_covers_cache_io_checks,
     test_deploy_sanity_script_reports_ok,
     test_hook_replay_harness_reports_ok,

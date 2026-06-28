@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import chain_repair  # noqa: E402
+from nautical_core import chain_repair, reconcile  # noqa: E402
 
 REQUIRED_UDAS = {
     "cp": "string",
@@ -323,11 +324,98 @@ def _chain_repair_detail(repair: chain_repair.LinkRepair) -> dict[str, Any]:
     }
 
 
+def _existing_reconcile_children(rows: list[dict[str, Any]], parent: dict[str, Any]) -> list[dict[str, Any]]:
+    chain_id = str(parent.get("chainID") or "").strip()
+    next_link = reconcile.int_or_default(parent.get("link"), 1) + 1
+    return [
+        row
+        for row in rows
+        if str(row.get("chainID") or "").strip() == chain_id
+        and reconcile.int_or_default(row.get("link"), -1) == next_link
+        and str(row.get("status") or "").strip() != "deleted"
+    ]
+
+
+def _load_on_modify_hook_for_reconcile(hooks_dir: Path):
+    hook = _find_hook(hooks_dir, "on-modify")
+    if hook is None:
+        raise RuntimeError(f"No on-modify hook was found in {hooks_dir}.")
+    loader = importlib.machinery.SourceFileLoader("_nautical_doctor_on_modify", str(hook))
+    spec = importlib.util.spec_from_loader("_nautical_doctor_on_modify", loader)
+    if spec is None:
+        raise RuntimeError(f"could not load {hook}")
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    if hasattr(module, "_load_core"):
+        module._load_core()
+    return module
+
+
+def _check_reconcile_plans(
+    findings: list[dict[str, Any]],
+    *,
+    rows: list[dict[str, Any]],
+    hooks_dir: Path,
+) -> None:
+    candidates = [row for row in rows if reconcile.is_orphan_completion_candidate(row)]
+    if not candidates:
+        return
+
+    hook = None
+    plans: list[reconcile.ReconcilePlan] = []
+    unavailable = ""
+    for parent in candidates:
+        existing_children = _existing_reconcile_children(rows, parent)
+        if not existing_children and hook is None:
+            try:
+                hook = _load_on_modify_hook_for_reconcile(hooks_dir)
+            except Exception as exc:
+                unavailable = str(exc)
+                break
+        plans.append(reconcile.build_reconcile_plan(parent, existing_children=existing_children, hook=hook))
+
+    if unavailable:
+        _finding(
+            findings,
+            "chains.reconcile_unavailable",
+            "warn",
+            f"{len(candidates)} hookless completion candidate(s) were found, but reconcile planning could not load on-modify.",
+            fix="Run python3 nautical_core/tools/nautical_reconcile.py for full diagnostics.",
+            details={"error": unavailable, "candidates": [_task_detail(row) for row in candidates[:10]]},
+        )
+        return
+
+    if not plans:
+        return
+
+    action_counts: dict[str, int] = defaultdict(int)
+    for plan in plans:
+        action_counts[plan.action] += 1
+    _finding(
+        findings,
+        "chains.reconcile_available",
+        "warn",
+        f"{len(plans)} hookless completion reconcile plan(s) are available.",
+        fix="Run python3 nautical_core/tools/nautical_reconcile.py --apply after reviewing the dry-run output.",
+        details={
+            "actions": dict(sorted(action_counts.items())),
+            "plans": [
+                {
+                    "action": plan.action,
+                    **reconcile.describe_plan(plan),
+                }
+                for plan in plans[:10]
+            ],
+        },
+    )
+
+
 def _check_chains(
     findings: list[dict[str, Any]],
     *,
     task_bin: str,
     env: dict[str, str],
+    hooks_dir: Path,
 ) -> dict[str, int]:
     ok, rows, err = _task_export(task_bin, env)
     if not ok:
@@ -375,6 +463,7 @@ def _check_chains(
                 ],
             },
         )
+    _check_reconcile_plans(findings, rows=rows, hooks_dir=hooks_dir)
 
     nautical = [
         row
@@ -538,6 +627,22 @@ def _render_details(details: dict[str, Any]) -> None:
             f"link={repair.get('link') or '?'} {repair.get('field') or '?'}: "
             f"{repair.get('old') or '-'} -> {repair.get('new') or '-'}"
         )
+    for action, count in (details.get("actions") or {}).items():
+        print(f"  Action: {action} ({count})")
+    for plan in details.get("plans") or []:
+        if not isinstance(plan, dict):
+            continue
+        print(
+            "  Plan: "
+            f"{plan.get('action') or '?'} parent={plan.get('parent') or '?'} "
+            f"chain={plan.get('chainID') or '?'} next={plan.get('next_link') or '?'}"
+        )
+        reason = str(plan.get("reason") or "").strip()
+        if reason:
+            print(f"    Reason: {reason}")
+        child = plan.get("existing_child") or plan.get("child_target") or plan.get("child_due")
+        if child:
+            print(f"    Child: {child}")
     for task in details.get("tasks") or []:
         if isinstance(task, dict):
             print(f"  Affected: {_format_task(task)}")
@@ -601,7 +706,7 @@ def main() -> int:
     _check_hooks_and_udas(findings, task_bin=args.task_bin, hooks_dir=hooks_dir, env=env)
     _check_config(findings, taskdata)
     queue = _check_queue(findings, taskdata, max(0.0, args.stale_after_seconds))
-    counts = _check_chains(findings, task_bin=args.task_bin, env=env)
+    counts = _check_chains(findings, task_bin=args.task_bin, env=env, hooks_dir=hooks_dir)
 
     status = _overall_status(findings)
     payload = {

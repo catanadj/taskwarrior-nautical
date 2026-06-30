@@ -269,7 +269,7 @@ nautical doctor --json
 `nautical doctor` is read-only. It checks the hooks, UDAs, config, file directories,
 queue state, duplicate chain slots, and broken lineage.
 
-See the [manual](./TW-Nautical-Manual.pdf) for full UDA setup, configuration options, hook installation, and annotated examples.
+See the [systems manual](./Taskwarrior-Nautical-v4-Systems-Manual.pdf) for full UDA setup, configuration options, hook installation, and annotated examples. For a shorter printable reference, use the [cheatsheet](./Taskwarrior-Nautical-v4-CheatSheet.pdf).
 
 ---
 
@@ -286,7 +286,8 @@ Open an issue or start a discussion in the repository.
 
 ## Documentation
 
-- [PDF Manual](./TW-Nautical-Manual.pdf)
+- [Systems Manual PDF](./Taskwarrior-Nautical-v4-Systems-Manual.pdf)
+- [Cheatsheet PDF](./Taskwarrior-Nautical-v4-CheatSheet.pdf)
 - [Releases](https://github.com/catanadj/taskwarrior-nautical/releases)
 - [Issues](https://github.com/catanadj/taskwarrior-nautical/issues)
 

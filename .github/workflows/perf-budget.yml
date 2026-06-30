@@ -24,7 +24,7 @@ jobs:
 
       - name: Enforce performance budgets (head)
         run: |
-          python3 tools/nautical_perf_budget.py --json --enforce --budget-file tools/perf_budget.json | tee perf-budget-report-head.json
+          python3 dev_tools/nautical_perf_budget.py --json --enforce --budget-file dev_tools/perf_budget.json | tee perf-budget-report-head.json
 
       - name: Upload performance report artifact (head)
         uses: actions/upload-artifact@v4
@@ -40,14 +40,14 @@ jobs:
       - name: Measure performance budgets (base, PR only)
         if: github.event_name == 'pull_request'
         run: |
-          python3 ../perf-base/tools/nautical_perf_budget.py --json --budget-file ../perf-base/tools/perf_budget.json > perf-budget-report-base.json
+          python3 ../perf-base/dev_tools/nautical_perf_budget.py --json --budget-file ../perf-base/dev_tools/perf_budget.json > perf-budget-report-base.json
 
       - name: Compare head vs base trend (PR only)
         if: github.event_name == 'pull_request'
         run: |
-          python3 tools/nautical_perf_compare.py --base perf-budget-report-base.json --head perf-budget-report-head.json > perf-trend-report.md
+          python3 dev_tools/nautical_perf_compare.py --base perf-budget-report-base.json --head perf-budget-report-head.json > perf-trend-report.md
           cat perf-trend-report.md >> "$GITHUB_STEP_SUMMARY"
-          python3 tools/nautical_perf_compare.py --base perf-budget-report-base.json --head perf-budget-report-head.json --json --enforce > perf-trend-report.json
+          python3 dev_tools/nautical_perf_compare.py --base perf-budget-report-base.json --head perf-budget-report-head.json --json --enforce > perf-trend-report.json
 
       - name: Upload performance report artifacts (PR only)
         if: github.event_name == 'pull_request'

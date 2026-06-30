@@ -28,4 +28,4 @@ jobs:
         run: python3 -m mypy --config-file mypy.ini
 
       - name: Run deployment sanity checks
-        run: python3 tools/nautical_deploy_sanity.py --json
+        run: python3 dev_tools/nautical_deploy_sanity.py --json

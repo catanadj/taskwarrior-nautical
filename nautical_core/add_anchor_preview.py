@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from .anchor_inclusion import collect_included_occurrences_local, collect_occurrence_events_local
+from . import panel_diagnostics
 
 
 def _anchor_file_natural_text(expr: str) -> str:
@@ -568,10 +569,8 @@ def handle_anchor_file_preview_on_add(
 
 
 def _timezone_fallback_warning_needed(core: Any, anchor_str: str, anchor_file_str: str) -> bool:
-    if getattr(core, "_LOCAL_TZ", None) is not None:
-        return False
-    combined = f"{anchor_str or ''} {anchor_file_str or ''}".lower()
-    return "@t=" in combined
+    task = {"anchor": anchor_str, "anchor_file": anchor_file_str}
+    return bool(panel_diagnostics.recurrence_timezone_warning(core, task))
 
 
 def handle_anchor_preview_on_add(
@@ -614,8 +613,8 @@ def handle_anchor_preview_on_add(
     error_and_exit: Callable[[list[tuple[str, str]]], None],
 ) -> None:
     rows: list[tuple[str, str]] = []
-    if _timezone_fallback_warning_needed(core, anchor_str, anchor_file_str):
-        rows.append(("Warning", "[yellow]Timezone data unavailable; using UTC fallback. Run nautical doctor.[/]"))
+    for warning in panel_diagnostics.panel_warnings(core, task):
+        rows.append(("Warning", f"[yellow]{warning}[/]"))
     dnf = None
     if anchor_str:
         dnf, _ = anchor_preview_prepare_dnf(

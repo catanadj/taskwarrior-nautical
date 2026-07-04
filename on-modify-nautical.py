@@ -500,6 +500,12 @@ _MODULE_SPECS = {
         "anchor_omit.py",
         "nautical_core.anchor_omit",
     ),
+    "panel_diagnostics": (
+        "_PANEL_DIAGNOSTICS",
+        "_PANEL_DIAGNOSTICS_LOAD_FAILED",
+        "panel_diagnostics.py",
+        "nautical_core.panel_diagnostics",
+    ),
     "queue_store": (
         "_QUEUE_STORE",
         "_QUEUE_STORE_LOAD_FAILED",
@@ -5197,10 +5203,11 @@ def _render_anchor_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
-    timezone_warning = _timezone_fallback_warning_for_task(new)
-    if timezone_warning:
+    diagnostics = _module("panel_diagnostics")
+    panel_warnings = diagnostics.panel_warnings(core, new)
+    if panel_warnings:
         integrity_warnings = list(integrity_warnings or [])
-        integrity_warnings.append(timezone_warning)
+        integrity_warnings.extend(panel_warnings)
     modify_feedback = _module("modify_feedback")
     modify_models = _module("modify_models")
     modify_runtime = _module("modify_runtime")
@@ -5235,13 +5242,8 @@ def _render_anchor_completion_feedback(
 
 
 def _timezone_fallback_warning_for_task(task: dict) -> str:
-    if getattr(core, "_LOCAL_TZ", None) is not None:
-        return ""
-    anchor_str = str(task.get("anchor") or "")
-    anchor_file_str = str(task.get("anchor_file") or "")
-    if "@t=" not in f"{anchor_str} {anchor_file_str}".lower():
-        return ""
-    return "Timezone data unavailable; using UTC fallback. Run nautical doctor."
+    diagnostics = _module("panel_diagnostics")
+    return diagnostics.recurrence_timezone_warning(core, task)
 
 
 def _render_cp_completion_feedback(
@@ -5265,6 +5267,11 @@ def _render_cp_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
+    diagnostics = _module("panel_diagnostics")
+    panel_warnings = diagnostics.panel_warnings(core, new, include_files=False)
+    if panel_warnings:
+        integrity_warnings = list(integrity_warnings or [])
+        integrity_warnings.extend(panel_warnings)
     modify_feedback = _module("modify_feedback")
     modify_models = _module("modify_models")
     modify_runtime = _module("modify_runtime")

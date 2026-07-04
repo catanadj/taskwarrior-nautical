@@ -160,6 +160,12 @@ _MODULE_SPECS = {
         "anchor_omit.py",
         "nautical_core.anchor_omit",
     ),
+    "panel_diagnostics": (
+        "_PANEL_DIAGNOSTICS",
+        "_PANEL_DIAGNOSTICS_LOAD_FAILED",
+        "panel_diagnostics.py",
+        "nautical_core.panel_diagnostics",
+    ),
     "hook_context": (
         "_HOOK_CONTEXT",
         "_HOOK_CONTEXT_LOAD_FAILED",
@@ -1413,6 +1419,9 @@ def _handle_cp_preview_on_add(
     prof=None,
 ) -> None:
     rows: list[tuple[str, str]] = []
+    diagnostics = _module("panel_diagnostics")
+    for warning in diagnostics.panel_warnings(core, task, include_files=False):
+        rows.append(("Warning", f"[yellow]{warning}[/]"))
 
     def _fmt(dt):
         return core.fmt_dt_local(dt)

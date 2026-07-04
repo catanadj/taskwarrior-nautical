@@ -2739,16 +2739,51 @@ def test_doctor_text_timezone_summary():
     expect("Timezone: Europe/Bucharest unavailable; UTC fallback active" in out, f"missing timezone summary: {out!r}")
 
 
-def test_on_add_preview_warns_when_timed_anchor_uses_utc_fallback():
-    """on-add preview helper should flag timed anchors when timezone data is unavailable."""
+def test_on_add_preview_warns_when_anchor_uses_utc_fallback():
+    """on-add preview helper should flag anchors when timezone data is unavailable."""
     import nautical_core.add_anchor_preview as mod
 
     core = SimpleNamespace(_LOCAL_TZ=None)
     expect(mod._timezone_fallback_warning_needed(core, "w:mon@t=09:00", ""), "timed anchor should warn")
     expect(mod._timezone_fallback_warning_needed(core, "", "calendar.csv@t=09:00"), "timed anchor_file should warn")
-    expect(not mod._timezone_fallback_warning_needed(core, "w:mon", ""), "untimed anchor should not warn")
+    expect(mod._timezone_fallback_warning_needed(core, "w:mon", ""), "untimed anchor should warn")
+    expect(not mod._timezone_fallback_warning_needed(core, "", ""), "non-nautical task should not warn")
     core._LOCAL_TZ = object()
     expect(not mod._timezone_fallback_warning_needed(core, "w:mon@t=09:00", ""), "available timezone should not warn")
+
+
+def test_panel_diagnostics_warns_for_missing_env_config():
+    """Panel diagnostics should make missing explicit config visible without NAUTICAL_DIAG."""
+    import nautical_core.panel_diagnostics as mod
+
+    prev = os.environ.get("NAUTICAL_CONFIG")
+    try:
+        os.environ["NAUTICAL_CONFIG"] = "/tmp/nautical-definitely-missing-config.toml"
+        warnings = mod.config_warnings()
+    finally:
+        if prev is None:
+            os.environ.pop("NAUTICAL_CONFIG", None)
+        else:
+            os.environ["NAUTICAL_CONFIG"] = prev
+
+    expect(any("NAUTICAL_CONFIG points to a missing file" in item for item in warnings), f"missing config warning: {warnings}")
+
+
+def test_panel_diagnostics_warns_for_empty_file_sources():
+    """Panel diagnostics should flag file-backed rules that load but provide no usable dates."""
+    import nautical_core.panel_diagnostics as mod
+
+    with tempfile.TemporaryDirectory() as td:
+        Path(td, "weekend.csv").write_text("date,description\n2026-07-04,weekend\n", encoding="utf-8")
+        fake_core = SimpleNamespace(
+            ANCHOR_FILE_DIR=td,
+            OMIT_FILE_DIR=td,
+            _import_sibling=lambda name: importlib.import_module(f"nautical_core.{name}"),
+        )
+        warnings = mod.file_source_warnings(fake_core, {"anchor_file": "weekend.csv@bd", "omit_file": "weekend.csv@bd"})
+
+    expect(any("anchor_file 'weekend.csv' has no usable dates" in item for item in warnings), f"missing anchor_file warning: {warnings}")
+    expect(any("omit_file 'weekend.csv' has no usable dates" in item for item in warnings), f"missing omit_file warning: {warnings}")
 
 
 def test_doctor_reports_actionable_broken_installation():
@@ -10649,7 +10684,7 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
         mod.core._LOCAL_TZ = None
         mod.core.PANEL_MODE = "panel"
         mod._render_anchor_completion_feedback(
-            new={"anchor": "w:mon@t=09:00", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            new={"anchor": "w:mon", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="deadbeef",
@@ -10660,7 +10695,7 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
             now_utc=mod.core.now_utc(),
             until_dt=None,
             until_cap_no=None,
-            dnf=[[{"typ": "w", "spec": "mon", "mods": {"t": (9, 0)}}]],
+            dnf=[[{"typ": "w", "spec": "mon", "mods": {}}]],
             meta={"mode": "skip"},
             stripped_attrs=[],
             deferred_spawn=False,
@@ -13324,7 +13359,9 @@ TESTS = [
     test_operator_doctor_loads_colocated_queue_helper,
     test_doctor_reports_missing_timezone_data,
     test_doctor_text_timezone_summary,
-    test_on_add_preview_warns_when_timed_anchor_uses_utc_fallback,
+    test_on_add_preview_warns_when_anchor_uses_utc_fallback,
+    test_panel_diagnostics_warns_for_missing_env_config,
+    test_panel_diagnostics_warns_for_empty_file_sources,
     test_doctor_reports_actionable_broken_installation,
     test_doctor_reports_chain_repair_plan_findings,
     test_doctor_reports_reconcile_backfill_plans,

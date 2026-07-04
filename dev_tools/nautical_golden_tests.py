@@ -2716,6 +2716,41 @@ def test_doctor_reports_missing_timezone_data():
     expect("pip install tzdata" in fix, f"missing tzdata fix hint: {findings!r}")
 
 
+def test_doctor_text_timezone_summary():
+    """doctor text output should surface timezone health near the top."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_timezone_summary_test")
+    payload = {
+        "status": "warn",
+        "taskdata": "/tmp/task",
+        "findings": [
+            {
+                "id": "config.timezone.invalid",
+                "severity": "warn",
+                "message": "Nautical timezone 'Europe/Bucharest' is not available; hooks will use UTC fallback.",
+                "details": {"tz": "Europe/Bucharest"},
+            }
+        ],
+    }
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mod._render_text(payload)
+    out = buf.getvalue()
+    expect("Timezone: Europe/Bucharest unavailable; UTC fallback active" in out, f"missing timezone summary: {out!r}")
+
+
+def test_on_add_preview_warns_when_timed_anchor_uses_utc_fallback():
+    """on-add preview helper should flag timed anchors when timezone data is unavailable."""
+    import nautical_core.add_anchor_preview as mod
+
+    core = SimpleNamespace(_LOCAL_TZ=None)
+    expect(mod._timezone_fallback_warning_needed(core, "w:mon@t=09:00", ""), "timed anchor should warn")
+    expect(mod._timezone_fallback_warning_needed(core, "", "calendar.csv@t=09:00"), "timed anchor_file should warn")
+    expect(not mod._timezone_fallback_warning_needed(core, "w:mon", ""), "untimed anchor should not warn")
+    core._LOCAL_TZ = object()
+    expect(not mod._timezone_fallback_warning_needed(core, "w:mon@t=09:00", ""), "available timezone should not warn")
+
+
 def test_doctor_reports_actionable_broken_installation():
     """doctor should identify installation, queue, and chain failures with stable IDs."""
     path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
@@ -10592,6 +10627,57 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
     expect(not any(k == "Analytics" for k, _v in fb), f"analytics row should be hidden when show_analytics is false: {fb}")
 
 
+def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
+    """Timed anchors should show a warning when timezone data is unavailable."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_timezone_warning_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._CHAIN_COLOR_PER_CHAIN = False
+    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
+    mod._format_next_anchor_rows = lambda fb: fb
+    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
+    mod._timeline_lines = lambda *_a, **_k: []
+
+    captured = {}
+    mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
+    prev_local_tz = getattr(mod.core, "_LOCAL_TZ", None)
+    prev_panel_mode = mod.core.PANEL_MODE
+    try:
+        mod.core._LOCAL_TZ = None
+        mod.core.PANEL_MODE = "panel"
+        mod._render_anchor_completion_feedback(
+            new={"anchor": "w:mon@t=09:00", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            child_due=mod.core.now_utc(),
+            child_short="deadbeef",
+            next_no=2,
+            parent_short="00000000",
+            cap_no=None,
+            finals=[],
+            now_utc=mod.core.now_utc(),
+            until_dt=None,
+            until_cap_no=None,
+            dnf=[[{"typ": "w", "spec": "mon", "mods": {"t": (9, 0)}}]],
+            meta={"mode": "skip"},
+            stripped_attrs=[],
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            chain_by_short=None,
+            analytics_advice=None,
+            integrity_warnings=None,
+            base_no=1,
+        )
+    finally:
+        mod.core._LOCAL_TZ = prev_local_tz
+        mod.core.PANEL_MODE = prev_panel_mode
+
+    fb = captured.get("fb") or []
+    expect(any("Timezone data unavailable" in str(v) for k, v in fb if k == "Integrity"), f"missing timezone fallback warning: {fb}")
+
+
 def test_on_modify_render_anchor_file_completion_feedback_wrapper():
     """anchor_file completion feedback should not crash when anchor DNF is absent."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -12307,6 +12393,31 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
     expect(evidence.get("child_target") == "20260706T140000Z", f"expected due target, got: {evidence!r}")
 
 
+def test_reconcile_evidence_includes_local_child_time_when_formatter_available():
+    """Reconcile evidence should include the local interpretation of a planned child."""
+    import nautical_core.reconcile as reconcile
+
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "description": "remote completion",
+        "cp": "P1D",
+        "chain": "on",
+        "chainID": "11111111",
+        "link": 1,
+    }
+    plan = reconcile.ReconcilePlan(
+        "spawn",
+        parent,
+        2,
+        "missing next link",
+        child={"due": "20260704T110000Z"},
+        child_due=datetime(2026, 7, 4, 11, 0, tzinfo=timezone.utc),
+    )
+    evidence = reconcile.describe_plan(plan, fmt_dt_local=lambda _dt: "Sat 2026-07-04 14:00 EEST")
+    expect(evidence.get("child_local") == "Sat 2026-07-04 14:00 EEST", f"missing child_local evidence: {evidence!r}")
+
+
 def test_reconcile_tool_loads_task_hooks_layout():
     """Installed reconcile tool should find hooks under taskdata/hooks, including extensionless hook names."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -12333,6 +12444,37 @@ def test_reconcile_tool_loads_task_hooks_layout():
             os.environ.pop("NAUTICAL_ON_MODIFY_PATH", None)
         else:
             os.environ["NAUTICAL_ON_MODIFY_PATH"] = prev_env
+
+
+def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
+    """Actual reconcile tool loading should compute @t slots as configured-local time."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    prev_core_path = os.environ.get("NAUTICAL_CORE_PATH")
+    try:
+        os.environ.pop("NAUTICAL_CORE_PATH", None)
+        mod = _load_hook_module(str(path), "_nautical_reconcile_tool_timed_anchor_test")
+        hook = mod._load_on_modify(str(Path(ROOT) / "on-modify-nautical.py"))
+        child_due, _meta, _dnf = hook._compute_anchor_child_due(
+            {
+                "uuid": "c3f2c233-0000-0000-0000-000000000001",
+                "status": "completed",
+                "description": "Drink 0.5L of water",
+                "anchor": "w:mon..sun@t=05:00,09:00,14:00,19:00",
+                "anchor_mode": "skip",
+                "chain": "on",
+                "chainID": "d07ff246",
+                "link": 92,
+                "due": hook.core.fmt_isoz(hook.core.build_local_datetime(date(2026, 7, 4), (9, 0))),
+                "end": hook.core.fmt_isoz(hook.core.build_local_datetime(date(2026, 7, 4), (10, 0))),
+            }
+        )
+        child_local = hook.core.to_local(child_due)
+        expect((child_local.hour, child_local.minute) == (14, 0), f"expected 14:00 local via reconcile tool path: {child_local}")
+    finally:
+        if prev_core_path is None:
+            os.environ.pop("NAUTICAL_CORE_PATH", None)
+        else:
+            os.environ["NAUTICAL_CORE_PATH"] = prev_core_path
 
 
 def test_reconcile_tool_defaults_core_path_to_install_base():
@@ -13167,6 +13309,7 @@ TESTS = [
     test_on_modify_invalid_anchor_has_no_stdout,
     test_timeline_completed_rows_place_uuid_before_delta,
     test_on_modify_render_anchor_completion_feedback_wrapper,
+    test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
     test_on_modify_render_anchor_file_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_wrapper,
     test_on_add_rejects_oversized_stdin_early,
@@ -13180,6 +13323,8 @@ TESTS = [
     test_doctor_reports_healthy_installation,
     test_operator_doctor_loads_colocated_queue_helper,
     test_doctor_reports_missing_timezone_data,
+    test_doctor_text_timezone_summary,
+    test_on_add_preview_warns_when_timed_anchor_uses_utc_fallback,
     test_doctor_reports_actionable_broken_installation,
     test_doctor_reports_chain_repair_plan_findings,
     test_doctor_reports_reconcile_backfill_plans,
@@ -13386,7 +13531,9 @@ TESTS = [
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
+    test_reconcile_evidence_includes_local_child_time_when_formatter_available,
     test_reconcile_tool_loads_task_hooks_layout,
+    test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
     test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_print_plan_includes_evidence,
     test_chain_repair_plans_only_safe_adjacent_link_updates,

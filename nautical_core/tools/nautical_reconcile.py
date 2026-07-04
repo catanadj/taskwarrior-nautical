@@ -145,23 +145,23 @@ def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:
         print(f"  {key.replace('_', ' ')}: {value}")
 
 
-def _print_plan(plan: reconcile.ReconcilePlan, *, applied_short: str = "") -> None:
+def _print_plan(plan: reconcile.ReconcilePlan, *, applied_short: str = "", fmt_dt_local=None) -> None:
     parent = _fmt_parent(plan.parent)
-    evidence = reconcile.describe_plan(plan)
+    evidence = reconcile.describe_plan(plan, fmt_dt_local=fmt_dt_local)
     if plan.action == "spawn":
         suffix = f" -> created {applied_short}" if applied_short else ""
         print(f"spawn: {parent}{suffix}")
-        _print_evidence(evidence, ("reason", "kind", "next_link", "child_field", "child_target", "child_due"))
+        _print_evidence(evidence, ("reason", "kind", "next_link", "child_field", "child_target", "child_due", "child_local"))
     elif plan.action == "backfill_nextlink":
         suffix = " (applied)" if applied_short else ""
         print(f"backfill nextLink: {parent}{suffix}")
         _print_evidence(evidence, ("reason", "next_link", "existing_child"))
     elif plan.action == "legitimate_final":
         print(f"final: {parent} ({plan.reason})")
-        _print_evidence(evidence, ("kind", "next_link", "child_due"))
+        _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local"))
     else:
         print(f"error: {parent} ({plan.reason})")
-        _print_evidence(evidence, ("kind", "next_link", "child_due"))
+        _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -174,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
 
     hook = _load_on_modify(args.hook_path)
     _bind_hook_task_bin(hook, args.task_bin)
+    fmt_dt_local = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
     candidates = _candidate_rows(args.task_bin)
     plans: list[reconcile.ReconcilePlan] = []
     applied: list[dict[str, Any]] = []
@@ -188,13 +189,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.apply and plan.action == "spawn":
             child_short = _apply_spawn(args.task_bin, hook, plan)
             applied.append({"action": "spawn", "parent": reconcile.short_uuid(parent.get("uuid")), "child": child_short})
-            _print_plan(plan, applied_short=child_short)
+            _print_plan(plan, applied_short=child_short, fmt_dt_local=fmt_dt_local)
         elif args.apply and plan.action == "backfill_nextlink":
             _modify_parent_nextlink(args.task_bin, parent, plan.child_short)
             applied.append({"action": "backfill_nextlink", "parent": reconcile.short_uuid(parent.get("uuid")), "child": plan.child_short})
-            _print_plan(plan, applied_short=plan.child_short)
+            _print_plan(plan, applied_short=plan.child_short, fmt_dt_local=fmt_dt_local)
         elif not args.json:
-            _print_plan(plan)
+            _print_plan(plan, fmt_dt_local=fmt_dt_local)
 
     summary = {
         "mode": "apply" if args.apply else "dry-run",
@@ -206,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         "plans": [
             {
                 "action": plan.action,
-                **reconcile.describe_plan(plan),
+                **reconcile.describe_plan(plan, fmt_dt_local=fmt_dt_local),
             }
             for plan in plans
         ],

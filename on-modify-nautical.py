@@ -5197,6 +5197,10 @@ def _render_anchor_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
+    timezone_warning = _timezone_fallback_warning_for_task(new)
+    if timezone_warning:
+        integrity_warnings = list(integrity_warnings or [])
+        integrity_warnings.append(timezone_warning)
     modify_feedback = _module("modify_feedback")
     modify_models = _module("modify_models")
     modify_runtime = _module("modify_runtime")
@@ -5228,6 +5232,16 @@ def _render_anchor_completion_feedback(
         feedback=feedback,
         services=services,
     )
+
+
+def _timezone_fallback_warning_for_task(task: dict) -> str:
+    if getattr(core, "_LOCAL_TZ", None) is not None:
+        return ""
+    anchor_str = str(task.get("anchor") or "")
+    anchor_file_str = str(task.get("anchor_file") or "")
+    if "@t=" not in f"{anchor_str} {anchor_file_str}".lower():
+        return ""
+    return "Timezone data unavailable; using UTC fallback. Run nautical doctor."
 
 
 def _render_cp_completion_feedback(

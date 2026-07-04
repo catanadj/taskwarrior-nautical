@@ -423,6 +423,7 @@ def _check_reconcile_plans(
     action_counts: dict[str, int] = defaultdict(int)
     for plan in plans:
         action_counts[plan.action] += 1
+    fmt_dt_local = getattr(getattr(hook, "core", None), "fmt_dt_local", None) if hook is not None else None
     _finding(
         findings,
         "chains.reconcile_available",
@@ -434,7 +435,7 @@ def _check_reconcile_plans(
             "plans": [
                 {
                     "action": plan.action,
-                    **reconcile.describe_plan(plan),
+                    **reconcile.describe_plan(plan, fmt_dt_local=fmt_dt_local),
                 }
                 for plan in plans[:10]
             ],
@@ -702,6 +703,9 @@ def _render_details(details: dict[str, Any]) -> None:
 def _render_text(payload: dict[str, Any]) -> None:
     print(f"Nautical doctor: {payload['status']}")
     print(f"Taskdata: {payload['taskdata']}")
+    timezone = _timezone_summary(payload.get("findings") or [])
+    if timezone:
+        print(f"Timezone: {timezone}")
     for section in ("error", "warn", "ok"):
         items = [item for item in payload["findings"] if item["severity"] == section]
         if not items:
@@ -714,6 +718,20 @@ def _render_text(payload: dict[str, Any]) -> None:
                 _render_details(details)
             if item.get("fix"):
                 print(f"  Fix: {item['fix']}")
+
+
+def _timezone_summary(findings: list[dict[str, Any]]) -> str:
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        check_id = item.get("id")
+        if check_id == "config.timezone":
+            return str(item.get("message") or "").replace("Nautical timezone is available: ", "")
+        if check_id in {"config.timezone.invalid", "config.timezone.unavailable"}:
+            details = item.get("details") if isinstance(item.get("details"), dict) else {}
+            tz_name = str(details.get("tz") or "?")
+            return f"{tz_name} unavailable; UTC fallback active"
+    return ""
 
 
 def main() -> int:

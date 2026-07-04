@@ -74,7 +74,7 @@ def recurrence_kind(task: dict[str, Any]) -> str:
     return "cp"
 
 
-def describe_plan(plan: ReconcilePlan) -> dict[str, Any]:
+def describe_plan(plan: ReconcilePlan, *, fmt_dt_local: Any = None) -> dict[str, Any]:
     parent = plan.parent
     evidence: dict[str, Any] = {
         "parent": short_uuid(parent.get("uuid")),
@@ -86,6 +86,11 @@ def describe_plan(plan: ReconcilePlan) -> dict[str, Any]:
     }
     if plan.child_due is not None:
         evidence["child_due"] = str(plan.child_due)
+        if callable(fmt_dt_local):
+            try:
+                evidence["child_local"] = str(fmt_dt_local(plan.child_due))
+            except Exception:
+                pass
     if plan.child_short:
         evidence["existing_child"] = plan.child_short
     if plan.child:

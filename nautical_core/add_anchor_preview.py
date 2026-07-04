@@ -445,6 +445,8 @@ def handle_anchor_file_preview_on_add(
     error_and_exit: Callable[[list[tuple[str, str]]], None],
 ) -> None:
     rows: list[tuple[str, str]] = []
+    if _timezone_fallback_warning_needed(core, "", anchor_file_str):
+        rows.append(("Warning", "[yellow]Timezone data unavailable; using UTC fallback. Run nautical doctor.[/]"))
     rows.append(("Anchor file", f"[white]{anchor_file_str}[/]  [bold bright_cyan]SKIP[/]"))
     rows.append(("Natural", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))
     omit_dnf = anchor_preview_prepare_omit_dnf(
@@ -565,6 +567,13 @@ def handle_anchor_file_preview_on_add(
     emit_task_json(task, sanitize=True, prof=prof)
 
 
+def _timezone_fallback_warning_needed(core: Any, anchor_str: str, anchor_file_str: str) -> bool:
+    if getattr(core, "_LOCAL_TZ", None) is not None:
+        return False
+    combined = f"{anchor_str or ''} {anchor_file_str or ''}".lower()
+    return "@t=" in combined
+
+
 def handle_anchor_preview_on_add(
     *,
     task: dict[str, Any],
@@ -605,6 +614,8 @@ def handle_anchor_preview_on_add(
     error_and_exit: Callable[[list[tuple[str, str]]], None],
 ) -> None:
     rows: list[tuple[str, str]] = []
+    if _timezone_fallback_warning_needed(core, anchor_str, anchor_file_str):
+        rows.append(("Warning", "[yellow]Timezone data unavailable; using UTC fallback. Run nautical doctor.[/]"))
     dnf = None
     if anchor_str:
         dnf, _ = anchor_preview_prepare_dnf(

@@ -2702,13 +2702,13 @@ def test_doctor_reports_missing_timezone_data():
         class ZoneInfoNotFoundError(Exception):
             pass
 
-    prev_zoneinfo = mod.ZoneInfo
+    prev_zoneinfo = mod.ZONEINFO_FACTORY
     try:
-        mod.ZoneInfo = _missing_zoneinfo
+        mod.ZONEINFO_FACTORY = _missing_zoneinfo
         findings = []
         mod._check_timezone(findings, {"tz": "Europe/Bucharest"})
     finally:
-        mod.ZoneInfo = prev_zoneinfo
+        mod.ZONEINFO_FACTORY = prev_zoneinfo
 
     ids = {item.get("id") for item in findings}
     expect("config.timezone.invalid" in ids, f"missing timezone warning: {findings!r}")

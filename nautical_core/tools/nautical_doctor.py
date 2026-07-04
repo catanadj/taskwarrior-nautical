@@ -12,14 +12,12 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import zoneinfo
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-try:
-    from zoneinfo import ZoneInfo
-except Exception:  # pragma: no cover
-    ZoneInfo = None
+ZONEINFO_FACTORY: Callable[[str], Any] | None = getattr(zoneinfo, "ZoneInfo", None)
 
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -272,7 +270,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
 
 def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
     tz_name = str(data.get("tz") or "Europe/Bucharest").strip() or "Europe/Bucharest"
-    if ZoneInfo is None:
+    if ZONEINFO_FACTORY is None:
         _finding(
             findings,
             "config.timezone.unavailable",
@@ -283,7 +281,7 @@ def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> Non
         )
         return
     try:
-        ZoneInfo(tz_name)
+        ZONEINFO_FACTORY(tz_name)
     except Exception as exc:
         _finding(
             findings,

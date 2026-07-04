@@ -89,7 +89,7 @@ def describe_plan(plan: ReconcilePlan) -> dict[str, Any]:
     if plan.child_short:
         evidence["existing_child"] = plan.child_short
     if plan.child:
-        field = "scheduled" if "scheduled" in plan.child else "due"
+        field = "due" if "due" in plan.child else "scheduled" if "scheduled" in plan.child else "due"
         evidence["child_field"] = field
         if plan.child.get(field) is not None:
             evidence["child_target"] = str(plan.child.get(field))

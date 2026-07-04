@@ -12203,6 +12203,60 @@ def test_reconcile_candidate_and_plan_paths():
     expect(plan.action == "legitimate_final" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
 
 
+def test_reconcile_evidence_prefers_due_over_carried_scheduled():
+    """Reconcile evidence should show the recurrence target, not carried scheduled metadata."""
+    import nautical_core.reconcile as reconcile
+
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "description": "remote completion",
+        "anchor": "w:mon@t=09:00,17:00",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "11111111",
+        "link": 1,
+        "due": "20260706T060000Z",
+        "scheduled": "20260706T050000Z",
+        "end": "20260706T070000Z",
+    }
+
+    class FakeCore:
+        @staticmethod
+        def coerce_int(value, default=0):
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+    class FakeHook:
+        core = FakeCore()
+
+        @staticmethod
+        def _safe_parse_datetime(_value):
+            return None, None
+
+        @staticmethod
+        def _compute_anchor_child_due(_parent):
+            return "20260706T140000Z", {"target_field": "due"}, []
+
+        @staticmethod
+        def _build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+            return {
+                "description": parent.get("description"),
+                "due": child_due,
+                "scheduled": "20260706T130000Z",
+                "link": next_link,
+                "prevLink": parent_short,
+                "chainID": parent.get("chainID"),
+            }
+
+    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=FakeHook())
+    evidence = reconcile.describe_plan(plan)
+    expect(evidence.get("child_field") == "due", f"expected due target evidence, got: {evidence!r}")
+    expect(evidence.get("child_target") == "20260706T140000Z", f"expected due target, got: {evidence!r}")
+
+
 def test_reconcile_tool_loads_task_hooks_layout():
     """Installed reconcile tool should find hooks under taskdata/hooks, including extensionless hook names."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -13261,6 +13315,7 @@ TESTS = [
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
+    test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_tool_loads_task_hooks_layout,
     test_reconcile_tool_print_plan_includes_evidence,
     test_chain_repair_plans_only_safe_adjacent_link_updates,

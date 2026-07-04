@@ -18,7 +18,7 @@ CORE_DIR = Path(__file__).resolve().parents[1]
 BASE_DIR = CORE_DIR.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
-os.environ.setdefault("NAUTICAL_CORE_PATH", str(CORE_DIR))
+os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
 from nautical_core import reconcile  # noqa: E402
 

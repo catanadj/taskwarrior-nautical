@@ -12307,6 +12307,24 @@ def test_reconcile_tool_loads_task_hooks_layout():
             os.environ["NAUTICAL_ON_MODIFY_PATH"] = prev_env
 
 
+def test_reconcile_tool_defaults_core_path_to_install_base():
+    """The reconciler must seed hook bootstrap with the base containing nautical_core."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    prev_core_path = os.environ.get("NAUTICAL_CORE_PATH")
+    try:
+        os.environ.pop("NAUTICAL_CORE_PATH", None)
+        mod = _load_hook_module(str(path), "_nautical_reconcile_tool_core_path_test")
+        expect(
+            os.environ.get("NAUTICAL_CORE_PATH") == str(mod.BASE_DIR),
+            f"expected NAUTICAL_CORE_PATH={mod.BASE_DIR}, got {os.environ.get('NAUTICAL_CORE_PATH')!r}",
+        )
+    finally:
+        if prev_core_path is None:
+            os.environ.pop("NAUTICAL_CORE_PATH", None)
+        else:
+            os.environ["NAUTICAL_CORE_PATH"] = prev_core_path
+
+
 def test_reconcile_tool_print_plan_includes_evidence():
     """Reconcile dry-run output should explain why each action is safe."""
     import nautical_core.reconcile as reconcile
@@ -13340,6 +13358,7 @@ TESTS = [
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_tool_loads_task_hooks_layout,
+    test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_print_plan_includes_evidence,
     test_chain_repair_plans_only_safe_adjacent_link_updates,
     test_chain_repair_infers_missing_links_only_when_deterministic,

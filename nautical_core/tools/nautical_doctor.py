@@ -16,6 +16,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover
+    ZoneInfo = None
+
 
 TOOLS_DIR = Path(__file__).resolve().parent
 ROOT = TOOLS_DIR.parent.parent
@@ -247,6 +252,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
         )
         return
     _finding(findings, "config.loaded", "ok", f"Nautical config is valid: {config}")
+    _check_timezone(findings, data)
     for key in ("anchor_file_dir", "omit_file_dir"):
         raw = str(data.get(key) or "").strip()
         if not raw:
@@ -262,6 +268,33 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             f"{key} {'is accessible' if valid else 'is not accessible'}: {path.resolve()}",
             fix="" if valid else f"Create or correct the configured {key} directory.",
         )
+
+
+def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
+    tz_name = str(data.get("tz") or "Europe/Bucharest").strip() or "Europe/Bucharest"
+    if ZoneInfo is None:
+        _finding(
+            findings,
+            "config.timezone.unavailable",
+            "warn",
+            "Python zoneinfo support is unavailable; Nautical will use UTC fallback.",
+            fix="Use Python 3.9+ with zoneinfo support, or install timezone support for your Python build.",
+            details={"tz": tz_name},
+        )
+        return
+    try:
+        ZoneInfo(tz_name)
+    except Exception as exc:
+        _finding(
+            findings,
+            "config.timezone.invalid",
+            "warn",
+            f"Nautical timezone '{tz_name}' is not available; hooks will use UTC fallback.",
+            fix="Install system tzdata, or on Termux/Python environments run: python3 -m pip install tzdata.",
+            details={"tz": tz_name, "error": str(exc)},
+        )
+        return
+    _finding(findings, "config.timezone", "ok", f"Nautical timezone is available: {tz_name}")
 
 
 def _load_queue_status():

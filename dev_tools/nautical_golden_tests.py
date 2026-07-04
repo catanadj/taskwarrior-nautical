@@ -2688,6 +2688,34 @@ def test_operator_doctor_loads_colocated_queue_helper():
         expect("queue.unreadable" not in ids, f"operator doctor could not load queue helper: {obj}")
 
 
+def test_doctor_reports_missing_timezone_data():
+    """doctor should warn when the configured timezone cannot be loaded."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_timezone_test")
+
+    def _missing_zoneinfo(_name):
+        raise ZoneInfoNotFoundError("No time zone found")
+
+    try:
+        from zoneinfo import ZoneInfoNotFoundError
+    except Exception:
+        class ZoneInfoNotFoundError(Exception):
+            pass
+
+    prev_zoneinfo = mod.ZoneInfo
+    try:
+        mod.ZoneInfo = _missing_zoneinfo
+        findings = []
+        mod._check_timezone(findings, {"tz": "Europe/Bucharest"})
+    finally:
+        mod.ZoneInfo = prev_zoneinfo
+
+    ids = {item.get("id") for item in findings}
+    expect("config.timezone.invalid" in ids, f"missing timezone warning: {findings!r}")
+    fix = next(item for item in findings if item.get("id") == "config.timezone.invalid").get("fix", "")
+    expect("pip install tzdata" in fix, f"missing tzdata fix hint: {findings!r}")
+
+
 def test_doctor_reports_actionable_broken_installation():
     """doctor should identify installation, queue, and chain failures with stable IDs."""
     path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
@@ -13151,6 +13179,7 @@ TESTS = [
     test_queue_status_warns_on_stale_processing_and_dead_letters,
     test_doctor_reports_healthy_installation,
     test_operator_doctor_loads_colocated_queue_helper,
+    test_doctor_reports_missing_timezone_data,
     test_doctor_reports_actionable_broken_installation,
     test_doctor_reports_chain_repair_plan_findings,
     test_doctor_reports_reconcile_backfill_plans,

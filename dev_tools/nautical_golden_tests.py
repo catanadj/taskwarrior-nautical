@@ -9521,6 +9521,28 @@ def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
 
 
+def test_on_modify_compute_anchor_child_due_builds_timed_slots_in_configured_timezone():
+    """@t slots are local wall-clock anchors, not UTC clock values."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_timed_timezone_compute_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    child_due, _meta, _dnf = mod._compute_anchor_child_due(
+        {
+            "anchor": "w:mon..sun@t=05:00,09:00,14:00,19:00",
+            "anchor_mode": "skip",
+            "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 4), (9, 0))),
+            "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 4), (10, 0))),
+            "chainID": "d07ff246",
+        }
+    )
+
+    child_local = mod.core.to_local(child_due)
+    expect(child_local.date() == date(2026, 7, 4), f"expected same-day next slot, got {child_local}")
+    expect((child_local.hour, child_local.minute) == (14, 0), f"expected 14:00 local, got {child_local}")
+
+
 def test_on_add_preview_and_completion_skip_choose_same_next_anchor():
     """Preview and completion should agree when given the same occurrence and chain seed."""
     add_hook = _find_hook_file("on-add-nautical.py")
@@ -13221,6 +13243,7 @@ TESTS = [
     test_on_modify_completion_defers_chain_export_until_after_preflight,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
+    test_on_modify_compute_anchor_child_due_builds_timed_slots_in_configured_timezone,
     test_on_add_preview_and_completion_skip_choose_same_next_anchor,
     test_on_modify_anchor_dnf_accepts_configured_preset,
     test_on_modify_omit_dnf_accepts_configured_preset,

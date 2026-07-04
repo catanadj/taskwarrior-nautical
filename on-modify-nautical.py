@@ -2797,6 +2797,10 @@ def _extract_time_slots_for_date(
         return sorted(out)
     return _extract_time_slots_from_dnf(dnf)
 
+def _anchor_slot_local_dt(target_date, hhmm: tuple[int, int]) -> datetime:
+    """Build a configured-local anchor slot for @t=HH:MM."""
+    return core.to_local(core.build_local_datetime(target_date, hhmm))
+
 def _skip_reference_dt_local(
     dnf,
     end_local: "datetime",
@@ -2838,8 +2842,7 @@ def _skip_reference_dt_local(
         return due_local
 
     hh, mm = prev_slots[-1]
-    tz = end_local.tzinfo or _nautical_local_tz()
-    return datetime.combine(end_local.date(), time(hh, mm), tzinfo=tz)
+    return _anchor_slot_local_dt(end_local.date(), (hh, mm))
 
 def _as_local_dt(d: datetime | None) -> datetime | None:
     if d is None:
@@ -2863,7 +2866,6 @@ def _next_occurrence_after_local_dt(
     """
     if not dnf:
         return None
-    tz = after_local_dt.tzinfo or _nautical_local_tz()
     slots = _extract_time_slots_from_dnf(dnf)
 
     # same-day: only if the expression hits on that date
@@ -2893,7 +2895,7 @@ def _next_occurrence_after_local_dt(
         if not slots:
             slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
         for hh, mm in slots:
-            cand = datetime.combine(adate, time(hh, mm), tzinfo=tz)
+            cand = _anchor_slot_local_dt(adate, (hh, mm))
             if cand > after_local_dt:
                 return cand
 
@@ -2912,7 +2914,7 @@ def _next_occurrence_after_local_dt(
     if not slots:
         slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
     hh, mm = slots[0]
-    return datetime.combine(nxt_date, time(hh, mm), tzinfo=tz)
+    return _anchor_slot_local_dt(nxt_date, (hh, mm))
 
 
 def _missed_occurrences_between_local(

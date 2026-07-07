@@ -21,32 +21,52 @@ you actually need.
 Period-based recurrence:
 
 ```bash
+# Every 12 days from completion
 task add "Mow the lawn" cp:12d
+
+# Every 8 hours
 task add "Take vitamin" cp:8h
+
+# Pick a repeat period between 3 and 7 days
 task add "Inspect field trap" cp:"rand(3d..7d)"
+
+# Follow a repeating sequence of periods
 task add "Insect lifecycle check" cp:4d,10d,7d,20d,3d
 ```
 
 Calendar-based recurrence:
 
 ```bash
+# Every Monday, Wednesday, and Friday
 task add "Workout" anchor:"w:mon,wed,fri"
+
+# One random Saturday each month
 task add "Date night" anchor:"m:rand + w:sat"
+
+# Every April 12
 task add "Anniversary" anchor:"y:04-12"
+
+# The 15th and the last business day of each month
 task add "Pay bills" anchor:"m:15,-1bd"
 ```
 
 Calendar rules with exclusions:
 
 ```bash
+# M/W/F workouts, except Wednesdays in April
 task add "Workout" anchor:"w:mon,wed,fri" omit:"w:wed + y:apr"
+
+# M/W/F workouts, except the holiday window
 task add "Workout" anchor:"w:mon,wed,fri" omit:"y:12-24..12-31"
+
+# Random Saturday date night, excluding dates from a file
 task add "Date night" anchor:"m:rand + w:sat" omit_file:"2026.csv"
 ```
 
 File-backed dates:
 
 ```bash
+# One day before each file date, at 12:00 and 18:00
 task add "Company event prep" anchor_file:"2026.csv@-1d@t=12:00,18:00"
 ```
 

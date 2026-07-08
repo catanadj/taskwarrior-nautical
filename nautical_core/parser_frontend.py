@@ -96,7 +96,14 @@ def rewrite_weekly_multi_time_atoms(s: str, *, split_csv_tokens, re_mod) -> str:
         pat = re_mod.compile(r"^(mon|tue|wed|thu|fri|sat|sun)(@t=\d{2}:\d{2})?$", re_mod.I)
         should_expand = grouped or not random_peer or any("@t=" in p.lower() for p in parts)
         if should_expand and all(pat.match(p) for p in parts):
-            out.append(" | ".join(f"{prefix}{p}" for p in parts))
+            timed_idxs = [idx for idx, part in enumerate(parts) if "@t=" in part.lower()]
+            if len(timed_idxs) == 1 and timed_idxs[0] == len(parts) - 1:
+                head, time_mod = parts[-1].split("@", 1)
+                expanded_parts = [f"{part}@{time_mod}" for part in parts[:-1]]
+                expanded_parts.append(f"{head}@{time_mod}")
+            else:
+                expanded_parts = parts
+            out.append(" | ".join(f"{prefix}{p}" for p in expanded_parts))
         else:
             out.append(prefix + body)
 

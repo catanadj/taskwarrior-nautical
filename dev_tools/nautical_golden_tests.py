@@ -5008,6 +5008,47 @@ def test_inline_time_mods_split_ok():
     _must_parse("w:mon@t=09:00,fri@t=15:00")
 
 
+def test_weekly_trailing_time_modifier_applies_to_whole_list():
+    """A trailing @t on a weekly comma-list should apply to every listed weekday."""
+    expr = "w:mon,wed,fri@t=05:00"
+    dnf = core.parse_anchor_expr_to_dnf(expr)
+    specs = [term[0].get("spec") for term in dnf]
+    expect(specs == ["mon", "wed", "fri"], f"unexpected weekly list expansion: {dnf!r}")
+    expect(
+        all((term[0].get("mods") or {}).get("t") == (5, 0) for term in dnf),
+        f"trailing time did not apply to every weekday: {dnf!r}",
+    )
+
+    cursor = date(2026, 7, 7)
+    slots = []
+    for _idx in range(4):
+        nxt, _meta = core.next_after_expr(
+            dnf,
+            cursor,
+            default_seed=date(2026, 7, 7),
+            seed_base="weekly-list-trailing-time-test",
+        )
+        expect(nxt is not None, "expected another weekly occurrence")
+        assert nxt is not None
+        hhmm = core.pick_hhmm_from_dnf_for_date(
+            dnf,
+            nxt,
+            date(2026, 7, 7),
+            seed_base="weekly-list-trailing-time-test",
+        )
+        slots.append((nxt, hhmm))
+        cursor = nxt
+    expect(
+        slots == [
+            (date(2026, 7, 8), (5, 0)),
+            (date(2026, 7, 10), (5, 0)),
+            (date(2026, 7, 13), (5, 0)),
+            (date(2026, 7, 15), (5, 0)),
+        ],
+        f"weekly preview slots should all use 05:00, got {slots!r}",
+    )
+
+
 def test_group_time_modifier_distributes_to_all_branches():
     """A time after a parenthesized expression should apply to every expanded branch."""
     dnf = core.parse_anchor_expr_to_dnf("(w:mon | m:last-fri)@t=09:00")
@@ -13200,6 +13241,7 @@ TESTS = [
     test_anchors_between_expr_stops_on_no_progress,
     test_anchors_between_expr_matches_iterative_scheduler,
     test_inline_time_mods_split_ok,
+    test_weekly_trailing_time_modifier_applies_to_whole_list,
     test_group_time_modifier_distributes_to_all_branches,
     test_group_time_modifier_supports_multiple_times,
     test_group_time_modifier_rejects_conflicts_and_non_time_modifiers,

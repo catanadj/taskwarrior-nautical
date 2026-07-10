@@ -11,16 +11,10 @@ from __future__ import annotations
 
 import sys
 import os
-import json
 import time
-import subprocess
-import random
-import sqlite3
 import importlib
 import importlib.util
 from pathlib import Path
-from contextlib import contextmanager
-from typing import Any
 
 HOOK_DIR = Path(__file__).parent
 _TW_DIR_BOOT = HOOK_DIR.parent
@@ -58,12 +52,6 @@ except ModuleNotFoundError:
         raise
 _IMPORT_T0 = time.perf_counter()
 _IMPORT_MS: float | None = None
-try:
-    import fcntl  # POSIX advisory lock
-except Exception:
-    fcntl = None
-
-
 hook_bootstrap.ensure_utf8_stdio()
 
 
@@ -81,6 +69,46 @@ def _core_target_from_base(base: Path) -> Path | None:
     return hook_bootstrap.core_target_from_base(base)
 
 _CORE_BASE = _trusted_core_base(TW_DIR)
+_EARLY_EXIT_PROBE = None
+
+if __name__ == "__main__" and os.environ.get("NAUTICAL_DIAG") != "1":
+    _path_support, _path_support_path, _path_support_error = hook_bootstrap.load_core_helper_module(
+        _CORE_BASE,
+        "config_support.py",
+        "_nautical_exit_path_support",
+    )
+    _exit_probe, _exit_probe_path, _exit_probe_error = hook_bootstrap.load_core_helper_module(
+        _CORE_BASE,
+        "exit_probe.py",
+        "_nautical_exit_probe",
+    )
+    if _path_support is not None and _exit_probe is not None:
+        try:
+            _early_taskdata = hook_bootstrap.resolve_task_data_context_light(
+                path_support=_path_support,
+                argv=sys.argv[1:],
+                env=os.environ,
+                tw_dir=str(TW_DIR),
+            )
+            if _early_taskdata is not None:
+                _EARLY_EXIT_PROBE = _exit_probe.probe_exit_work(_early_taskdata[0])
+        except Exception:
+            _EARLY_EXIT_PROBE = None
+        if _EARLY_EXIT_PROBE is not None and _EARLY_EXIT_PROBE.definitely_empty:
+            raise SystemExit(0)
+
+
+import json
+import random
+import sqlite3
+import subprocess
+from contextlib import contextmanager
+from typing import Any
+
+try:
+    import fcntl  # POSIX advisory lock
+except Exception:
+    fcntl = None
 
 
 core = None

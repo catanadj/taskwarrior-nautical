@@ -682,6 +682,11 @@ def _load_hook_protocol_module(module_name: str):
     return _load_hook_module(path, module_name)
 
 
+def _load_exit_probe_module(module_name: str):
+    path = os.path.join(ROOT, "nautical_core", "exit_probe.py")
+    return _load_hook_module(path, module_name)
+
+
 def test_hook_protocol_loads_without_core_package():
     """The lightweight protocol gate must not import the nautical_core package."""
     path = os.path.join(ROOT, "nautical_core", "hook_protocol.py")
@@ -804,6 +809,94 @@ def test_hook_protocol_modify_validation_limits_and_emission():
     expect(json.loads(output)["description"] == "Cafe ăîșț ✅", f"protocol emission was not strict JSON: {output!r}")
 
 
+def test_exit_probe_is_conservative_across_queue_states():
+    """The exit probe should bypass only definitely empty queue state."""
+    probe = _load_exit_probe_module("_nautical_exit_probe_state_test")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        empty = probe.probe_exit_work(root)
+        expect(empty.definitely_empty, f"missing queue state should be empty: {empty.reason}")
+
+        legacy_dead_letter = root / ".nautical_dead_letter.jsonl"
+        legacy_dead_letter.write_text("", encoding="utf-8")
+        expect(probe.probe_exit_work(root).may_have_work, "pending legacy migration should force a full exit")
+        legacy_dead_letter.unlink()
+
+        state_dir = root / ".nautical-state"
+        state_dir.mkdir()
+        legacy = state_dir / ".nautical_spawn_queue.jsonl"
+        legacy.write_text("", encoding="utf-8")
+        expect(probe.probe_exit_work(root).definitely_empty, "empty legacy queue should not force a drain")
+        legacy.write_text("{}\n", encoding="utf-8")
+        expect(probe.probe_exit_work(root).may_have_work, "non-empty legacy queue should force a drain")
+        legacy.write_text("", encoding="utf-8")
+
+        queue_db = state_dir / ".nautical_queue.db"
+        with sqlite3.connect(str(queue_db)) as conn:
+            conn.execute(
+                "CREATE TABLE queue_entries (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, state TEXT NOT NULL)"
+            )
+            conn.commit()
+        expect(probe.probe_exit_work(root).definitely_empty, "empty sqlite queue should not force a drain")
+
+        with sqlite3.connect(str(queue_db)) as conn:
+            conn.execute("INSERT INTO queue_entries (payload, state) VALUES ('{}', 'queued')")
+            conn.commit()
+        expect(probe.probe_exit_work(root).may_have_work, "queued sqlite row should force a drain")
+
+        with sqlite3.connect(str(queue_db)) as conn:
+            conn.execute("UPDATE queue_entries SET state='processing'")
+            conn.commit()
+        expect(probe.probe_exit_work(root).may_have_work, "processing sqlite row should force a drain")
+
+        queue_db.write_bytes(b"not-a-sqlite-database")
+        corrupt = probe.probe_exit_work(root)
+        expect(corrupt.may_have_work, "corrupt sqlite state must fall through to the full drain")
+
+
+def test_light_taskdata_resolution_matches_hook_precedence():
+    """The early exit resolver should preserve argv, environment, and fallback precedence."""
+    bootstrap = _load_hook_module(
+        os.path.join(ROOT, "nautical_core", "hook_bootstrap.py"),
+        "_nautical_bootstrap_light_taskdata_test",
+    )
+    path_support = _load_hook_module(
+        os.path.join(ROOT, "nautical_core", "config_support.py"),
+        "_nautical_config_support_light_taskdata_test",
+    )
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        env_dir = root / "env-data"
+        arg_dir = root / "arg-data"
+        env_dir.mkdir()
+        arg_dir.mkdir()
+        env = {"TASKDATA": str(env_dir)}
+
+        from_env = bootstrap.resolve_task_data_context_light(
+            path_support=path_support,
+            argv=[],
+            env=env,
+            tw_dir=str(root),
+        )
+        expect(from_env == (str(env_dir), True, "env"), f"unexpected environment resolution: {from_env!r}")
+
+        from_argv = bootstrap.resolve_task_data_context_light(
+            path_support=path_support,
+            argv=[f"data.location:{arg_dir}"],
+            env=env,
+            tw_dir=str(root),
+        )
+        expect(from_argv == (str(arg_dir), True, "argv"), f"unexpected argv resolution: {from_argv!r}")
+
+        fallback = bootstrap.resolve_task_data_context_light(
+            path_support=path_support,
+            argv=[],
+            env={},
+            tw_dir=str(root),
+        )
+        expect(fallback == (str(root), False, "fallback"), f"unexpected fallback resolution: {fallback!r}")
+
+
 def test_plain_hook_fast_paths_do_not_import_core_package():
     """Plain add and modify tasks should pass through even when the core package cannot import."""
     with tempfile.TemporaryDirectory() as td:
@@ -812,10 +905,12 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         core_dir = root / "nautical_core"
         hooks_dir.mkdir()
         core_dir.mkdir()
-        for hook_name in ("on-add-nautical.py", "on-modify-nautical.py"):
+        for hook_name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
             shutil.copy2(_find_hook_file(hook_name), hooks_dir / hook_name)
         shutil.copy2(Path(ROOT) / "nautical_core" / "hook_bootstrap.py", core_dir / "hook_bootstrap.py")
         shutil.copy2(Path(ROOT) / "nautical_core" / "hook_protocol.py", core_dir / "hook_protocol.py")
+        shutil.copy2(Path(ROOT) / "nautical_core" / "exit_probe.py", core_dir / "exit_probe.py")
+        shutil.copy2(Path(ROOT) / "nautical_core" / "config_support.py", core_dir / "config_support.py")
         (core_dir / "__init__.py").write_text("raise RuntimeError('core must not load on plain fast path')\n", encoding="utf-8")
 
         env = os.environ.copy()
@@ -853,6 +948,68 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         expect(modify.returncode == 0, f"plain modify fast path failed: {modify.stderr!r}")
         expect(json.loads(modify.stdout) == modified, f"plain modify fast path changed task: {modify.stdout!r}")
         expect("ăîșț ✅" in modify.stdout and "\\u" not in modify.stdout, f"plain modify escaped Unicode: {modify.stdout!r}")
+
+        exit_hook = subprocess.run(
+            [sys.executable, str(hooks_dir / "on-exit-nautical.py")],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=5.0,
+        )
+        expect(exit_hook.returncode == 0, f"empty exit fast path failed: {exit_hook.stderr!r}")
+        expect(exit_hook.stdout == "", f"empty exit fast path wrote stdout: {exit_hook.stdout!r}")
+        expect(not (root / ".nautical-state").exists(), "empty exit fast path should not create queue state")
+
+
+def test_on_exit_active_sqlite_queue_uses_full_drain():
+    """An active sqlite row must bypass the early exit guard and enter the full drain."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        state_dir = root / ".nautical-state"
+        state_dir.mkdir()
+        queue_db = state_dir / ".nautical_queue.db"
+        with sqlite3.connect(str(queue_db)) as conn:
+            conn.execute(
+                """
+                CREATE TABLE queue_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_intent_id TEXT,
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    claim_token TEXT,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, state, created_at, updated_at) "
+                "VALUES ('si_exit_probe', '{}', 'queued', 1.0, 1.0)"
+            )
+            conn.commit()
+
+        env = os.environ.copy()
+        env["TASKDATA"] = str(root)
+        env["NAUTICAL_CORE_PATH"] = ROOT
+        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
+        env.pop("NAUTICAL_DIAG", None)
+        proc = subprocess.run(
+            [sys.executable, hook],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=8.0,
+        )
+        expect(proc.returncode == 0, f"active queue drain failed: {proc.stderr!r}")
+        expect(proc.stdout == "", f"on-exit active drain wrote stdout: {proc.stdout!r}")
+        with sqlite3.connect(str(queue_db)) as conn:
+            remaining = conn.execute("SELECT COUNT(1) FROM queue_entries").fetchone()[0]
+        expect(int(remaining) == 0, f"active queue row was not drained: remaining={remaining}")
+        dead_letter = state_dir / ".nautical_dead_letter.jsonl"
+        expect(dead_letter.exists() and dead_letter.stat().st_size > 0, "malformed active row was not dead-lettered")
 
 
 def test_hook_stdout_empty_on_exit():
@@ -13540,7 +13697,10 @@ TESTS = [
     test_hook_protocol_on_modify_accepts_supported_input_forms,
     test_hook_protocol_on_modify_matches_nautical_route_rules,
     test_hook_protocol_modify_validation_limits_and_emission,
+    test_exit_probe_is_conservative_across_queue_states,
+    test_light_taskdata_resolution_matches_hook_precedence,
     test_plain_hook_fast_paths_do_not_import_core_package,
+    test_on_exit_active_sqlite_queue_uses_full_drain,
     test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
     test_hook_stdout_empty_on_exit,
     test_hook_files_are_private_permissions,

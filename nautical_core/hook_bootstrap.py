@@ -112,6 +112,56 @@ def load_core_helper_module(
         return None, helper_path, exc
 
 
+def hook_arg_value(argv: list[str], keys: tuple[str, ...]) -> str:
+    for token in argv:
+        text = str(token or "").strip()
+        if not text:
+            continue
+        for key in keys:
+            for separator in (":", "="):
+                prefix = f"{key}{separator}"
+                if text.startswith(prefix):
+                    value = text[len(prefix):].strip()
+                    if value:
+                        return value
+    return ""
+
+
+def resolve_task_data_context_light(
+    *,
+    path_support: Any,
+    argv: list[str],
+    env: dict[str, str],
+    tw_dir: str,
+) -> tuple[str, bool, str] | None:
+    validated_user_dir = getattr(path_support, "validated_user_dir", None)
+    normalized_abspath = getattr(path_support, "normalized_abspath", None)
+    if not callable(validated_user_dir) or not callable(normalized_abspath):
+        return None
+    taskdata_env = str(env.get("TASKDATA") or "").strip()
+    taskdata_arg = hook_arg_value(argv, ("data", "data.location"))
+    explicit = taskdata_arg or taskdata_env
+    if explicit:
+        source = "argv" if taskdata_arg else "env"
+        safe_explicit = validated_user_dir(
+            str(explicit),
+            label=("rc.data.location" if taskdata_arg else "TASKDATA"),
+            trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
+            env_map=env,
+        )
+        if safe_explicit:
+            return str(safe_explicit), True, source
+    base = str(tw_dir or "~/.task")
+    safe_fallback = validated_user_dir(
+        base,
+        label="fallback task data dir",
+        trust_env="NAUTICAL_TRUST_TASKDATA_PATH",
+        env_map=env,
+        warn_on_error=False,
+    )
+    return str(safe_fallback or normalized_abspath(base)), False, "fallback"
+
+
 def resolve_task_data_context(*, core: Any, core_import_error: Exception | None, core_import_target: Path | None, core_base: Path, tw_dir: str, argv: list[str], env: dict[str, str]) -> tuple[str, bool]:
     resolver = getattr(core, "resolve_task_data_context", None) if core is not None else None
     if not callable(resolver):

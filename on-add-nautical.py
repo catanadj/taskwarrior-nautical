@@ -17,16 +17,8 @@ Features:
 
 from __future__ import annotations
 
-import sys, json, os, importlib, importlib.util, time, atexit, hashlib, random
-import re
+import sys, json, os, importlib, importlib.util, time
 from pathlib import Path
-from datetime import timedelta, timezone, datetime
-from functools import lru_cache
-from contextlib import contextmanager
-import subprocess
-import tempfile
-from collections import OrderedDict
-from typing import Any
 
 HOOK_DIR = Path(__file__).parent
 _TW_DIR_BOOT = HOOK_DIR.parent
@@ -100,6 +92,40 @@ _CORE_BASE = _trusted_core_base(TW_DIR)
 # --- Optional micro-profiler (stderr-only; enable with NAUTICAL_PROFILE=1 or 2)
 _PROFILE_LEVEL = int(os.environ.get('NAUTICAL_PROFILE', '0') or '0')
 _IMPORT_T0 = time.perf_counter()
+_EARLY_PROTOCOL_RESULT = None
+
+if __name__ == "__main__":
+    _protocol, _protocol_path, _protocol_error = hook_bootstrap.load_core_helper_module(
+        _CORE_BASE,
+        "hook_protocol.py",
+        "_nautical_hook_protocol_add",
+    )
+    if _protocol is not None:
+        try:
+            _EARLY_PROTOCOL_RESULT = _protocol.read_on_add(max_bytes=_MAX_JSON_BYTES)
+        except Exception:
+            _EARLY_PROTOCOL_RESULT = None
+        if (
+            _EARLY_PROTOCOL_RESULT is not None
+            and _EARLY_PROTOCOL_RESULT.valid
+            and not _EARLY_PROTOCOL_RESULT.is_nautical
+            and _PROFILE_LEVEL <= 0
+        ):
+            _protocol.emit_passthrough_json(_EARLY_PROTOCOL_RESULT.task)
+            raise SystemExit(0)
+
+
+import atexit
+import hashlib
+import random
+import re
+import subprocess
+import tempfile
+from collections import OrderedDict
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from typing import Any
 
 core = None
 _CORE_READY = False
@@ -1720,10 +1746,20 @@ def _build_profiler():
 
 
 def _read_on_add_task(prof) -> dict:
+    global _RAW_INPUT_TEXT, _PARSED_TASK
+    if _EARLY_PROTOCOL_RESULT is not None:
+        _RAW_INPUT_TEXT = _EARLY_PROTOCOL_RESULT.raw_text
+        if not _EARLY_PROTOCOL_RESULT.valid:
+            _fail_and_exit("Invalid input", _EARLY_PROTOCOL_RESULT.error)
+        task = _EARLY_PROTOCOL_RESULT.task
+        if not isinstance(task, dict):
+            _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
+        _PARSED_TASK = task
+        return task
+
     hook_results = _module("hook_results")
     with prof.section("read:stdin"):
         raw_bytes, raw_text = hook_results.read_stdin_text(_MAX_JSON_BYTES)
-        global _RAW_INPUT_TEXT
         _RAW_INPUT_TEXT = raw_text
         if len(raw_bytes) > _MAX_JSON_BYTES:
             _fail_and_exit("Invalid input", f"on-add input exceeds {_MAX_JSON_BYTES} bytes")
@@ -1733,7 +1769,6 @@ def _read_on_add_task(prof) -> dict:
     try:
         with prof.section("parse:json"):
             task = json.loads(raw)
-            global _PARSED_TASK
             _PARSED_TASK = task
             return task
     except Exception:

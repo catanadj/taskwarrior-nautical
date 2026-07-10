@@ -676,6 +676,185 @@ def test_hook_stdout_unicode_unescaped_on_modify():
     expect("ăîșț ✅" in out, f"expected raw Unicode in stdout, got: {out!r}")
     expect("\\u" not in out, f"stdout should not escape Unicode: {out!r}")
 
+
+def _load_hook_protocol_module(module_name: str):
+    path = os.path.join(ROOT, "nautical_core", "hook_protocol.py")
+    return _load_hook_module(path, module_name)
+
+
+def test_hook_protocol_loads_without_core_package():
+    """The lightweight protocol gate must not import the nautical_core package."""
+    path = os.path.join(ROOT, "nautical_core", "hook_protocol.py")
+    code = (
+        "import importlib.util,sys;"
+        "spec=importlib.util.spec_from_file_location('_nautical_protocol_isolated',sys.argv[1]);"
+        "mod=importlib.util.module_from_spec(spec);"
+        "spec.loader.exec_module(mod);"
+        "assert 'nautical_core' not in sys.modules"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code, path],
+        text=True,
+        capture_output=True,
+        timeout=5.0,
+    )
+    expect(proc.returncode == 0, f"protocol gate imported core: {proc.stderr!r}")
+
+
+def test_hook_protocol_on_add_classifies_and_validates():
+    """The add gate should distinguish plain and Nautical tasks without weakening JSON validation."""
+    protocol = _load_hook_protocol_module("_nautical_hook_protocol_add_test")
+    plain = {"uuid": "00000000-0000-0000-0000-000000000701", "description": "Cafe ăîșț ✅"}
+    result = protocol.probe_on_add(json.dumps(plain, ensure_ascii=False))
+    expect(result.valid and result.task == plain, f"plain add probe failed: {result.error!r}")
+    expect(not result.is_nautical, f"plain add task classified as Nautical: {result.task!r}")
+
+    for field, value in (
+        ("anchor", "w:mon"),
+        ("anchor_file", "dates.csv"),
+        ("anchor_mode", "skip"),
+        ("cp", "1d"),
+        ("chainID", "abcd1234"),
+        ("chainMax", 3),
+        ("chainUntil", "20270101T000000Z"),
+        ("omit", "w:sun"),
+        ("omit_file", "holidays.csv"),
+    ):
+        task = dict(plain, **{field: value})
+        probed = protocol.probe_on_add(json.dumps(task))
+        expect(probed.valid and probed.is_nautical, f"add field {field} was not classified as Nautical")
+
+    expect(not protocol.probe_on_add("").valid, "empty add input should be invalid")
+    expect(not protocol.probe_on_add("[]").valid, "array add input should be invalid")
+    expect(not protocol.probe_on_add('{"uuid":"broken"} trailing').valid, "trailing add input should be invalid")
+
+
+def test_hook_protocol_on_modify_accepts_supported_input_forms():
+    """The modify gate should accept concatenated, array, and single-task hook payloads."""
+    protocol = _load_hook_protocol_module("_nautical_hook_protocol_modify_forms_test")
+    uuid_str = "00000000-0000-0000-0000-000000000702"
+    old = {"uuid": uuid_str, "status": "pending", "description": "old"}
+    new = {"uuid": uuid_str, "status": "pending", "description": "new ăîșț"}
+
+    concatenated = protocol.probe_on_modify(
+        json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False)
+    )
+    expect(concatenated.valid, f"concatenated modify input failed: {concatenated.error!r}")
+    expect(concatenated.old == old and concatenated.new == new, "concatenated modify tasks changed")
+    expect(not concatenated.is_nautical, "plain modify pair classified as Nautical")
+
+    array_result = protocol.probe_on_modify(json.dumps([old, new], ensure_ascii=False))
+    expect(array_result.valid and array_result.old == old and array_result.new == new, "array modify input failed")
+
+    single_result = protocol.probe_on_modify(json.dumps(new, ensure_ascii=False))
+    expect(single_result.valid and single_result.old == new and single_result.new == new, "single modify input failed")
+
+
+def test_hook_protocol_on_modify_matches_nautical_route_rules():
+    """Modify classification should match modify_lifecycle's recurrence and lineage fields."""
+    protocol = _load_hook_protocol_module("_nautical_hook_protocol_modify_route_test")
+    uuid_str = "00000000-0000-0000-0000-000000000703"
+    base = {"uuid": uuid_str, "status": "pending"}
+    for field, value in (
+        ("anchor", "w:mon"),
+        ("anchor_file", "dates.csv"),
+        ("cp", "1d"),
+        ("omit", "w:sun"),
+        ("omit_file", "holidays.csv"),
+        ("chainID", "abcd1234"),
+        ("prevLink", "11111111"),
+        ("nextLink", "22222222"),
+        ("link", 2),
+    ):
+        task = dict(base, **{field: value})
+        result = protocol.probe_on_modify(json.dumps(task))
+        expect(result.valid and result.is_nautical, f"modify field {field} was not classified as Nautical")
+
+    anchor_mode_only = protocol.probe_on_modify(json.dumps(dict(base, anchor_mode="skip")))
+    expect(anchor_mode_only.valid and not anchor_mode_only.is_nautical, "anchor_mode alone should follow the plain route")
+
+
+def test_hook_protocol_modify_validation_limits_and_emission():
+    """The gate should preserve UUID policy, byte limits, strict JSON, and raw Unicode output."""
+    protocol = _load_hook_protocol_module("_nautical_hook_protocol_validation_test")
+    old = {"uuid": "00000000-0000-0000-0000-000000000704", "status": "pending"}
+    different = {"uuid": "00000000-0000-0000-0000-000000000705", "status": "deleted"}
+    plain_mismatch = protocol.probe_on_modify(json.dumps(old) + json.dumps(different))
+    expect(plain_mismatch.valid and not plain_mismatch.is_nautical, "plain UUID mismatch should remain ignorable")
+
+    nautical_mismatch = protocol.probe_on_modify(json.dumps(dict(old, cp="1d")) + json.dumps(dict(different, cp="1d")))
+    expect(not nautical_mismatch.valid, "Nautical UUID mismatch should be invalid")
+    expect(nautical_mismatch.error == "Old and new task UUIDs differ", f"unexpected mismatch error: {nautical_mismatch.error!r}")
+
+    missing_uuid = protocol.probe_on_modify(json.dumps({"status": "pending", "anchor": "w:mon"}))
+    expect(not missing_uuid.valid, "Nautical task without UUID should be invalid")
+    expect(not protocol.probe_on_modify(json.dumps(old) + " trailing").valid, "modify trailing input should be invalid")
+    expect(not protocol.probe_on_modify(b"12345", max_bytes=4).valid, "oversized modify input should be invalid")
+    expect(not protocol.probe_on_add(b"12345", max_bytes=4).valid, "oversized add input should be invalid")
+
+    add_stream = io.BytesIO(json.dumps(old).encode("utf-8"))
+    expect(protocol.read_on_add(stream=add_stream).valid, "read_on_add should accept a binary stdin-like stream")
+    modify_stream = io.StringIO(json.dumps(old) + "\n" + json.dumps(old))
+    expect(protocol.read_on_modify(stream=modify_stream).valid, "read_on_modify should accept a text stdin-like stream")
+
+    stream = io.StringIO()
+    protocol.emit_passthrough_json({"description": "Cafe ăîșț ✅"}, stream=stream)
+    output = stream.getvalue()
+    expect("ăîșț ✅" in output and "\\u" not in output, f"protocol emission escaped Unicode: {output!r}")
+    expect(json.loads(output)["description"] == "Cafe ăîșț ✅", f"protocol emission was not strict JSON: {output!r}")
+
+
+def test_plain_hook_fast_paths_do_not_import_core_package():
+    """Plain add and modify tasks should pass through even when the core package cannot import."""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        hooks_dir = root / "hooks"
+        core_dir = root / "nautical_core"
+        hooks_dir.mkdir()
+        core_dir.mkdir()
+        for hook_name in ("on-add-nautical.py", "on-modify-nautical.py"):
+            shutil.copy2(_find_hook_file(hook_name), hooks_dir / hook_name)
+        shutil.copy2(Path(ROOT) / "nautical_core" / "hook_bootstrap.py", core_dir / "hook_bootstrap.py")
+        shutil.copy2(Path(ROOT) / "nautical_core" / "hook_protocol.py", core_dir / "hook_protocol.py")
+        (core_dir / "__init__.py").write_text("raise RuntimeError('core must not load on plain fast path')\n", encoding="utf-8")
+
+        env = os.environ.copy()
+        env["TASKDATA"] = str(root)
+        env.pop("NAUTICAL_CORE_PATH", None)
+        env.pop("NAUTICAL_TRUST_CORE_PATH", None)
+        env.pop("NAUTICAL_PROFILE", None)
+        plain = {
+            "uuid": "00000000-0000-0000-0000-000000000706",
+            "status": "pending",
+            "description": "Cafe ăîșț ✅",
+        }
+
+        add = subprocess.run(
+            [sys.executable, str(hooks_dir / "on-add-nautical.py")],
+            input=json.dumps(plain, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=5.0,
+        )
+        expect(add.returncode == 0, f"plain add fast path failed: {add.stderr!r}")
+        expect(json.loads(add.stdout) == plain, f"plain add fast path changed task: {add.stdout!r}")
+        expect("ăîșț ✅" in add.stdout and "\\u" not in add.stdout, f"plain add escaped Unicode: {add.stdout!r}")
+
+        modified = dict(plain, description="Modified ăîșț ✅")
+        modify = subprocess.run(
+            [sys.executable, str(hooks_dir / "on-modify-nautical.py")],
+            input=json.dumps(plain, ensure_ascii=False) + "\n" + json.dumps(modified, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=5.0,
+        )
+        expect(modify.returncode == 0, f"plain modify fast path failed: {modify.stderr!r}")
+        expect(json.loads(modify.stdout) == modified, f"plain modify fast path changed task: {modify.stdout!r}")
+        expect("ăîșț ✅" in modify.stdout and "\\u" not in modify.stdout, f"plain modify escaped Unicode: {modify.stdout!r}")
+
+
 def test_hook_stdout_empty_on_exit():
     """on-exit should not emit stdout (stdout is redirected to /dev/null)."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -13356,6 +13535,12 @@ TESTS = [
     test_hook_stdout_strict_json_with_diag_on_modify,
     test_hook_stdout_unicode_unescaped_on_add,
     test_hook_stdout_unicode_unescaped_on_modify,
+    test_hook_protocol_loads_without_core_package,
+    test_hook_protocol_on_add_classifies_and_validates,
+    test_hook_protocol_on_modify_accepts_supported_input_forms,
+    test_hook_protocol_on_modify_matches_nautical_route_rules,
+    test_hook_protocol_modify_validation_limits_and_emission,
+    test_plain_hook_fast_paths_do_not_import_core_package,
     test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
     test_hook_stdout_empty_on_exit,
     test_hook_files_are_private_permissions,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -79,6 +80,36 @@ def import_core_package(base: Path) -> tuple[Any | None, Path | None, Exception 
         return module, target, None
     except Exception as exc:
         return None, target, exc
+
+
+def load_core_helper_module(
+    base: Path,
+    filename: str,
+    module_name: str,
+) -> tuple[Any | None, Path | None, Exception | None]:
+    target = core_target_from_base(base)
+    candidates = []
+    if target is not None:
+        candidates.append(target.parent / filename)
+    try:
+        if base.is_file():
+            candidates.append(base.parent / filename)
+        else:
+            candidates.extend((base / "nautical_core" / filename, base / filename))
+    except Exception:
+        pass
+    helper_path = next((path for path in candidates if path.is_file()), None)
+    if helper_path is None:
+        return None, helper_path, None
+    try:
+        spec = importlib.util.spec_from_file_location(module_name, helper_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"could not load {helper_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module, helper_path, None
+    except Exception as exc:
+        return None, helper_path, exc
 
 
 def resolve_task_data_context(*, core: Any, core_import_error: Exception | None, core_import_target: Path | None, core_base: Path, tw_dir: str, argv: list[str], env: dict[str, str]) -> tuple[str, bool]:

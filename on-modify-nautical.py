@@ -9,18 +9,9 @@ Chained next-link spawner for Taskwarrior.
 - Timeline is capped and marks (last link).
 """
 
-import sys, json, os, uuid, subprocess, importlib, importlib.util, random, tempfile, hashlib
-import atexit
+import sys, json, os, importlib, importlib.util
 import time as _ptime
-import sqlite3
-from collections import OrderedDict
 from pathlib import Path
-from datetime import datetime, timedelta, timezone, time
-from functools import lru_cache
-import re
-import time as _time
-from typing import Any, Optional
-import stat
 
 HOOK_DIR = Path(__file__).parent
 _TW_DIR_BOOT = HOOK_DIR.parent
@@ -57,11 +48,67 @@ except ModuleNotFoundError:
     if hook_bootstrap is None:
         raise
 
+# Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
+hook_bootstrap.ensure_utf8_stdio()
+
 _IMPORT_T0 = _ptime.perf_counter()
 _IMPORT_MS = None
 
 _MAX_JSON_BYTES = 10 * 1024 * 1024
 NAUTICAL_HOOK_VERSION = "updateG-20260328"
+
+TW_DIR = _TW_DIR_BOOT
+
+
+def _trusted_core_base(default_base: Path) -> Path:
+    return hook_bootstrap.trusted_core_base(
+        default_base,
+        env=os.environ,
+        diag_enabled=os.environ.get("NAUTICAL_DIAG") == "1",
+    )
+
+
+def _core_target_from_base(base: Path) -> Path | None:
+    return hook_bootstrap.core_target_from_base(base)
+
+
+_CORE_BASE = _trusted_core_base(TW_DIR)
+_EARLY_PROTOCOL_RESULT = None
+
+if __name__ == "__main__":
+    _protocol, _protocol_path, _protocol_error = hook_bootstrap.load_core_helper_module(
+        _CORE_BASE,
+        "hook_protocol.py",
+        "_nautical_hook_protocol_modify",
+    )
+    if _protocol is not None:
+        try:
+            _EARLY_PROTOCOL_RESULT = _protocol.read_on_modify(max_bytes=_MAX_JSON_BYTES)
+        except Exception:
+            _EARLY_PROTOCOL_RESULT = None
+        if (
+            _EARLY_PROTOCOL_RESULT is not None
+            and _EARLY_PROTOCOL_RESULT.valid
+            and not _EARLY_PROTOCOL_RESULT.is_nautical
+        ):
+            _protocol.emit_passthrough_json(_EARLY_PROTOCOL_RESULT.task)
+            raise SystemExit(0)
+
+
+import atexit
+import hashlib
+import random
+import re
+import sqlite3
+import stat
+import subprocess
+import tempfile
+import time as _time
+import uuid
+from collections import OrderedDict
+from datetime import datetime, timedelta, timezone, time
+from functools import lru_cache
+from typing import Any, Optional
 
 
 # Optional: DST-aware local TZ helpers (used by some carry-forward variants)
@@ -74,10 +121,6 @@ ZoneInfo = _zoneinfo.ZoneInfo if _zoneinfo is not None else None
 
 # set config show_analytics=false to disable analytics panel entry.
 
- # Ensure hook IO supports Unicode (emoji, symbols) in JSON output.
- # Python's json.dumps() defaults to ensure_ascii=True, which escapes non-ASCII
- # as "\\uXXXX". Prefer human-readable UTF-8 JSON for hook passthrough.
-hook_bootstrap.ensure_utf8_stdio()
 # ------------------------------------------------------------------------------
 # Constants
 # ------------------------------------------------------------------------------
@@ -371,25 +414,6 @@ def _append_next_wait_sched_rows(
             "⚠ Wait/Sched",
             "This can happen when due is auto-assigned; adjust scheduled/wait if undesired.",
         ))
-
-# ------------------------------------------------------------------------------
-# Locate nautical_core (single fixed location: ~/.task)
-# ------------------------------------------------------------------------------
-TW_DIR = _TW_DIR_BOOT
-
-def _trusted_core_base(default_base: Path) -> Path:
-    return hook_bootstrap.trusted_core_base(
-        default_base,
-        env=os.environ,
-        diag_enabled=os.environ.get("NAUTICAL_DIAG") == "1",
-    )
-
-
-def _core_target_from_base(base: Path) -> Path | None:
-    return hook_bootstrap.core_target_from_base(base)
-
-_CORE_BASE = _trusted_core_base(TW_DIR)
-
 
 core = None
 _CORE_READY = False
@@ -871,6 +895,19 @@ def _decode_leading_json_objects(raw: str, max_objects: int = 2) -> tuple[list[o
 
 def _read_two():
     global _RAW_INPUT_TEXT, _PARSED_NEW
+    if _EARLY_PROTOCOL_RESULT is not None:
+        _RAW_INPUT_TEXT = _EARLY_PROTOCOL_RESULT.raw_text
+        _PARSED_NEW = _EARLY_PROTOCOL_RESULT.new
+        if not _EARLY_PROTOCOL_RESULT.valid:
+            if _EARLY_PROTOCOL_RESULT.error_kind == "protocol":
+                _fail_protocol_error(_EARLY_PROTOCOL_RESULT.error)
+            _fail_invalid_input(_EARLY_PROTOCOL_RESULT.error)
+        old = _EARLY_PROTOCOL_RESULT.old
+        new = _EARLY_PROTOCOL_RESULT.new
+        if isinstance(old, dict) and isinstance(new, dict):
+            return old, new
+        _fail_invalid_input("on-modify must receive two JSON tasks")
+
     hook_results = _module("hook_results")
     raw_bytes, raw = hook_results.read_stdin_text(_MAX_JSON_BYTES)
     if len(raw_bytes) > _MAX_JSON_BYTES:

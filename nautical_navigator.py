@@ -888,6 +888,49 @@ class TaskAnalyzer:
         for u in list(self._uuid_cache.keys()):
             self._uuid_by_short[u[:8]] = self._uuid_by_short.get(u[:8], u)
 
+    def _export_tasks(self, *args: str) -> List[Dict]:
+        cmd = ["task", "rc.json.array=1", *args, "export"]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        payload = json.loads(result.stdout)
+        if isinstance(payload, dict):
+            payload = [payload]
+        if not isinstance(payload, list):
+            return []
+        tasks = [t for t in payload if isinstance(t, dict)]
+        for t in tasks:
+            if t.get("id"):
+                self._task_cache[int(t["id"])] = t
+            if t.get("uuid"):
+                self._uuid_cache[t["uuid"]] = t
+        return tasks
+
+    def _normalize_task_refs(self, tasks: List[Dict]) -> List[Dict]:
+        by_uuid = {str(t.get("uuid") or "").strip(): t for t in tasks if str(t.get("uuid") or "").strip()}
+
+        def resolve(ref: str | None) -> str:
+            raw = str(ref or "").strip()
+            if not raw:
+                return ""
+            if raw in by_uuid:
+                return raw
+            matches = [u for u in by_uuid if u.startswith(raw)]
+            if len(matches) == 1:
+                return matches[0]
+            if len(raw) >= 8:
+                short = raw[:8]
+                matches = [u for u in by_uuid if u.startswith(short)]
+                if len(matches) == 1:
+                    return matches[0]
+            return raw
+
+        normalized: List[Dict] = []
+        for task in tasks:
+            item = dict(task)
+            item["prevLink"] = resolve(item.get("prevLink"))
+            item["nextLink"] = resolve(item.get("nextLink"))
+            normalized.append(item)
+        return normalized
+
     def _render_line_plot(self, x_labels: List[str], series: Dict[str, List[Optional[float]]], height: int = 10, width: int = 60) -> Panel:
         """
         Render a simple terminal line chart:
@@ -1024,7 +1067,7 @@ class TaskAnalyzer:
 
 
 
-    def _build_global_graph(self) -> tuple[dict, dict, dict]:
+    def _build_global_graph(self, tasks: Optional[List[Dict]] = None) -> tuple[dict, dict, dict]:
         """
         Build a single graph over ALL chained tasks:
         by_uuid: uuid -> task
@@ -1032,7 +1075,8 @@ class TaskAnalyzer:
         indeg: uuid -> in-degree
         Only add edges where child's prevLink resolves to a parent present in by_uuid.
         """
-        tasks = self.get_all_chained_tasks()
+        tasks = self.get_all_chained_tasks() if tasks is None else tasks
+        tasks = self._normalize_task_refs(tasks)
         by_uuid = {t.get("uuid"): t for t in tasks if t.get("uuid")}
         children = defaultdict(list)
         indeg = defaultdict(int)
@@ -1091,42 +1135,64 @@ class TaskAnalyzer:
 
     def build_chain_from_tasks(self, start_id: int) -> List[Dict]:
         """Backtrack using prevLink; return chain oldest→newest."""
-        _ = self.get_all_chained_tasks()
-        if start_id not in self._task_cache:
+        seed = self._task_cache.get(start_id)
+        if not seed:
+            seed_tasks = self._export_tasks(str(start_id))
+            seed = seed_tasks[0] if seed_tasks else None
+        if not seed:
             console.print(f"[{COLORS['error']}]Task ID {start_id} not found in chained tasks[/]")
             sys.exit(1)
 
-        chain: List[Dict] = []
-        current = self._task_cache[start_id]
-        # walk back to root
-        while current:
-            chain.append(current)
-            prev_uuid = current.get("prevLink")
-            if not prev_uuid:
-                break
-            nxt = self._uuid_cache.get(prev_uuid)
-            if not nxt:
-                # prefix match fallback
-                for u, t in self._uuid_cache.items():
-                    if u.startswith(prev_uuid):
-                        nxt = t
-                        break
-            if not nxt:
-                break
-            current = nxt
-        chain = list(reversed(chain))
+        chain_id = str(seed.get("chainID") or "").strip()
+        if chain_id:
+            tasks = self._export_tasks(f"chainID:{chain_id}")
+        else:
+            tasks = self.get_all_chained_tasks()
 
-        # then try walking forward deterministically like build_all_chains does
-        tail = chain[-1]
-        while True:
-            kids = self._children.get(tail.get("uuid"), [])
+        if not tasks:
+            console.print(f"[{COLORS['error']}]No chained tasks found for task ID {start_id}[/]")
+            sys.exit(1)
+
+        tasks = self._normalize_task_refs(tasks)
+        by_uuid = {t.get("uuid"): t for t in tasks if t.get("uuid")}
+        children = defaultdict(list)
+        for task in tasks:
+            u = task.get("uuid")
+            prev_uuid = str(task.get("prevLink") or "").strip()
+            if u and prev_uuid and prev_uuid in by_uuid:
+                children[prev_uuid].append(task)
+
+        start_uuid = str(seed.get("uuid") or "").strip()
+        if not start_uuid or start_uuid not in by_uuid:
+            console.print(f"[{COLORS['error']}]Task ID {start_id} did not resolve to a chained UUID[/]")
+            sys.exit(1)
+
+        chain: List[Dict] = []
+        seen: set[str] = set()
+        current = by_uuid[start_uuid]
+        while current:
+            cur_uuid = str(current.get("uuid") or "").strip()
+            if not cur_uuid or cur_uuid in seen:
+                break
+            chain.append(current)
+            seen.add(cur_uuid)
+            prev_uuid = str(current.get("prevLink") or "").strip()
+            if not prev_uuid or prev_uuid not in by_uuid:
+                break
+            current = by_uuid[prev_uuid]
+        chain.reverse()
+
+        tail = chain[-1] if chain else None
+        while tail:
+            kids = sorted(children.get(tail.get("uuid"), []), key=self._entry_key)
             if not kids:
                 break
-            kids_sorted = sorted(kids, key=lambda k: (k.get("entry") or "", k.get("uuid") or ""))
-            nxt = kids_sorted[0]
-            if nxt in chain:
+            nxt = kids[0]
+            nxt_uuid = str(nxt.get("uuid") or "").strip()
+            if not nxt_uuid or nxt_uuid in seen:
                 break
             chain.append(nxt)
+            seen.add(nxt_uuid)
             tail = nxt
 
         return chain

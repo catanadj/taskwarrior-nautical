@@ -43,13 +43,20 @@ jobs:
           import json
           from pathlib import Path
 
-          report = json.loads(Path("soak-test-report.json").read_text(encoding="utf-8"))
+          print("## Soak Test")
+          print("")
+          raw = Path("soak-test-report.json").read_text(encoding="utf-8") if Path("soak-test-report.json").exists() else ""
+          if not raw.strip():
+              print("- report: `missing or empty`")
+              raise SystemExit(0)
+          try:
+              report = json.loads(raw)
+          except Exception as exc:
+              print(f"- report: `invalid JSON ({exc})`")
+              raise SystemExit(0)
           add = report.get("add", {})
           done = report.get("done", {})
           health = report.get("health", {})
-
-          print("## Soak Test")
-          print("")
           print(f"- ok: `{report.get('ok')}`")
           print(f"- duration_s: `{report.get('duration_s')}`")
           print(f"- cycles: `{report.get('cycles')}`")

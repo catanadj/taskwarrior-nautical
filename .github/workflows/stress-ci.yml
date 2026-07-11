@@ -48,9 +48,17 @@ jobs:
           import json
           from pathlib import Path
 
-          report = json.loads(Path("stress-ci-report.json").read_text(encoding="utf-8"))
           print("## Stress CI")
           print("")
+          raw = Path("stress-ci-report.json").read_text(encoding="utf-8") if Path("stress-ci-report.json").exists() else ""
+          if not raw.strip():
+              print("- report: `missing or empty`")
+              raise SystemExit(0)
+          try:
+              report = json.loads(raw)
+          except Exception as exc:
+              print(f"- report: `invalid JSON ({exc})`")
+              raise SystemExit(0)
           print(f"- ok: `{report.get('ok')}`")
           print(f"- duration_s: `{report.get('duration_s')}`")
           print(f"- task_available: `{report.get('task_available')}`")

@@ -10623,6 +10623,75 @@ def test_navigator_uses_anchor_and_anchor_file_sources():
             navigator.core.ANCHOR_FILE_DIR = old_dir
 
 
+def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain():
+    """Navigator direct task lookup should prefer chainID and resolve the full chain from short links."""
+    module_name = "_nautical_navigator_direct_chain_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+    finally:
+        sys.modules.pop(module_name, None)
+
+    root = {
+        "id": 1,
+        "uuid": "aaaaaaaa-0000-0000-0000-000000000001",
+        "chainID": "cid123",
+        "link": 1,
+        "description": "root",
+        "status": "completed",
+        "entry": "2026-01-01T00:00:00Z",
+        "nextLink": "bbbbbbbb",
+    }
+    mid = {
+        "id": 2,
+        "uuid": "bbbbbbbb-0000-0000-0000-000000000002",
+        "chainID": "cid123",
+        "link": 2,
+        "description": "mid",
+        "status": "completed",
+        "entry": "2026-01-02T00:00:00Z",
+        "prevLink": "aaaaaaaa",
+        "nextLink": "cccccccc",
+    }
+    tail = {
+        "id": 3,
+        "uuid": "cccccccc-0000-0000-0000-000000000003",
+        "chainID": "cid123",
+        "link": 3,
+        "description": "tail",
+        "status": "pending",
+        "entry": "2026-01-03T00:00:00Z",
+        "prevLink": "bbbbbbbb",
+    }
+
+    calls = []
+    original_run = navigator.subprocess.run
+
+    def fake_run(cmd, capture_output=True, text=True, check=True):
+        calls.append(list(cmd))
+        if cmd[:4] == ["task", "rc.json.array=1", "2", "export"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps([mid]), stderr="")
+        if cmd[:4] == ["task", "rc.json.array=1", "chainID:cid123", "export"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps([root, mid, tail]), stderr="")
+        raise AssertionError(f"unexpected task command: {cmd!r}")
+
+    navigator.subprocess.run = fake_run
+    try:
+        analyzer = navigator.TaskAnalyzer()
+        chain = analyzer.build_chain_from_tasks(2)
+        expect([task["uuid"] for task in chain] == [root["uuid"], mid["uuid"], tail["uuid"]],
+               f"unexpected rebuilt chain: {chain!r}")
+        expect(any(cmd == ["task", "rc.json.array=1", "chainID:cid123", "export"] for cmd in calls),
+               f"expected targeted chainID export, got: {calls!r}")
+        expect(not any(cmd == ["task", "chain:on", "export", "all"] for cmd in calls),
+               f"direct task selection should not export all chains: {calls!r}")
+    finally:
+        navigator.subprocess.run = original_run
+
+
 def test_on_add_anchor_and_anchor_file_can_coexist():
     """on-add should allow anchor and anchor_file to coexist as inclusion sources."""
     hook = _find_hook_file("on-add-nautical.py")

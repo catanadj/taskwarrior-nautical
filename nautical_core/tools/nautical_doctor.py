@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from nautical_core import chain_repair, reconcile  # noqa: E402
+import nautical_core.runtime as runtime  # noqa: E402
 
 REQUIRED_UDAS = {
     "cp": "string",
@@ -79,6 +80,11 @@ def _run_task(task_bin: str, args: list[str], env: dict[str, str], timeout: floa
 def _task_get(task_bin: str, key: str, env: dict[str, str]) -> tuple[bool, str]:
     proc = _run_task(task_bin, ["_get", key], env)
     return proc.returncode == 0, (proc.stdout or "").strip()
+
+
+def _discover_taskdata(task_bin: str, env: dict[str, str]) -> str:
+    ok, raw = _task_get(task_bin, "rc.data.location", env)
+    return raw if ok else ""
 
 
 def _task_export(task_bin: str, env: dict[str, str]) -> tuple[bool, list[dict[str, Any]], str]:
@@ -324,7 +330,7 @@ def _check_queue(findings: list[dict[str, Any]], taskdata: Path, stale_after: fl
         "queue.state",
         "warn" if issues else "ok",
         "Queue state has findings." if issues else "Queue and dead-letter state are clean.",
-        fix="Run python3 nautical_core/tools/nautical_queue_status.py for queue details." if issues else "",
+        fix="Run nautical queue-status for queue details." if issues else "",
         details={"issues": issues} if issues else None,
     )
     return payload
@@ -414,7 +420,7 @@ def _check_reconcile_plans(
             "chains.reconcile_unavailable",
             "warn",
             f"{len(candidates)} hookless completion candidate(s) were found, but reconcile planning could not load on-modify.",
-            fix="Run python3 nautical_core/tools/nautical_reconcile.py for full diagnostics.",
+            fix="Run nautical reconcile for full diagnostics.",
             details={"error": unavailable, "candidates": [_task_detail(row) for row in candidates[:10]]},
         )
         return
@@ -431,7 +437,7 @@ def _check_reconcile_plans(
         "chains.reconcile_available",
         "warn",
         f"{len(plans)} hookless completion reconcile plan(s) are available.",
-        fix="Run python3 nautical_core/tools/nautical_reconcile.py --apply after reviewing the dry-run output.",
+        fix="Run nautical reconcile --apply after reviewing the dry-run output.",
         details={
             "actions": dict(sorted(action_counts.items())),
             "plans": [
@@ -470,7 +476,7 @@ def _check_chains(
             "chains.repair_available",
             "warn",
             f"{len(repairs)} safe chain repair(s) are available.",
-            fix="Run python3 nautical_core/tools/nautical_chain_repair.py --apply after reviewing the dry-run output.",
+            fix="Run nautical chain-repair --apply after reviewing the dry-run output.",
             details={"repairs": [_chain_repair_detail(repair) for repair in repairs[:10]]},
         )
     if repair_issues:
@@ -484,7 +490,7 @@ def _check_chains(
             "chains.repair_review",
             "warn",
             f"{len(repair_issues)} chain repair issue(s) need review.",
-            fix="Run python3 nautical_core/tools/nautical_chain_repair.py and inspect the 'why:' lines.",
+            fix="Run nautical chain-repair and inspect the 'why:' lines.",
             details={
                 "reasons": dict(sorted(reason_counts.items())),
                 "issues": [
@@ -738,14 +744,25 @@ def _timezone_summary(findings: list[dict[str, Any]]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--taskdata", default=os.environ.get("TASKDATA", "~/.task"))
+    parser.add_argument("--taskdata", default=None)
     parser.add_argument("--task-bin", default=shutil.which("task") or "task")
     parser.add_argument("--json", action="store_true", help="emit JSON only")
     parser.add_argument("--stale-after-seconds", type=float, default=300.0)
     args = parser.parse_args()
 
-    taskdata = Path(args.taskdata).expanduser().resolve()
     env = os.environ.copy()
+    if args.taskdata:
+        taskdata_raw, _, _ = runtime.resolve_task_data_context(
+            argv=[f"data:{args.taskdata}"],
+            env=env,
+            tw_dir=args.taskdata,
+        )
+    else:
+        taskdata_raw, _, _ = runtime.resolve_task_data_context(
+            env=env,
+            tw_dir=_discover_taskdata(args.task_bin, env) or None,
+        )
+    taskdata = Path(taskdata_raw).expanduser().resolve()
     env["TASKDATA"] = str(taskdata)
     findings: list[dict[str, Any]] = []
 

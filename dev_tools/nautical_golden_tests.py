@@ -3069,6 +3069,9 @@ if len(args) == 2 and args[0] == "_get":
     if key == "rc.hooks.location":
         print(os.environ.get("FAKE_HOOKS", ""))
         raise SystemExit(0)
+    if key == "rc.data.location":
+        print(os.environ.get("FAKE_DATA_DIR", ""))
+        raise SystemExit(0)
     if key.startswith("rc.uda.") and key.endswith(".type"):
         name = key[len("rc.uda."):-len(".type")]
         expected = {
@@ -3141,6 +3144,58 @@ def test_doctor_reports_healthy_installation():
         expect((obj.get("counts") or {}).get("chains") == 1, f"unexpected doctor counts: {obj}")
 
 
+def test_doctor_discovers_effective_taskdata_directory():
+    """doctor should discover the effective data dir when --taskdata is omitted."""
+    path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        config_dir = td_path / "config"
+        data_dir = td_path / "taskdata"
+        config_dir.mkdir()
+        hooks = data_dir / "hooks"
+        hooks.mkdir(parents=True)
+        for name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
+            hook = hooks / name
+            hook.write_text("#!/bin/sh\n", encoding="utf-8")
+            hook.chmod(0o755)
+        config = config_dir / "config-nautical.toml"
+        config.write_text('tz = "UTC"\n', encoding="utf-8")
+        fake_task = td_path / "task"
+        _write_fake_task_for_doctor(fake_task)
+        rows = [
+            {
+                "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "cp": "1d",
+                "chainID": "cid",
+                "link": 1,
+                "nextLink": "bbbbbbbb",
+            },
+            {
+                "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "cp": "1d",
+                "chainID": "cid",
+                "link": 2,
+                "prevLink": "aaaaaaaa",
+            },
+        ]
+        env = os.environ.copy()
+        env["FAKE_HOOKS"] = str(hooks)
+        env["FAKE_DATA_DIR"] = str(data_dir)
+        env["FAKE_EXPORT"] = json.dumps(rows)
+        env["NAUTICAL_CONFIG"] = str(config)
+        p = subprocess.run(
+            [sys.executable, path, "--task-bin", str(fake_task), "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=8.0,
+        )
+        expect(p.returncode == 0, f"doctor returned {p.returncode}: {p.stderr!r} {p.stdout!r}")
+        obj = json.loads((p.stdout or "").strip() or "{}")
+        expect(obj.get("status") == "ok", f"unexpected doctor status: {obj}")
+        expect(obj.get("taskdata") == str(data_dir), f"doctor did not discover the effective taskdata dir: {obj}")
+
+
 def test_operator_doctor_loads_colocated_queue_helper():
     """installed doctor should load queue status from nautical_core/tools."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
@@ -3156,6 +3211,43 @@ def test_operator_doctor_loads_colocated_queue_helper():
         ids = {item.get("id") for item in obj.get("findings") or []}
         expect("queue.state" in ids, f"operator doctor did not inspect queue state: {obj}")
         expect("queue.unreadable" not in ids, f"operator doctor could not load queue helper: {obj}")
+
+
+def test_nautical_dispatches_supported_subcommands():
+    """nautical should dispatch supported subcommands to the matching scripts."""
+    path = os.path.join(ROOT, "nautical")
+    mod = _load_hook_module(path, "_nautical_entrypoint_dispatch_test")
+    prev_argv = list(sys.argv)
+    prev_run_path = mod.runpy.run_path
+    calls = []
+    targets = {
+        "doctor": os.path.join(ROOT, "nautical_core", "tools", "nautical_doctor.py"),
+        "queue-status": os.path.join(ROOT, "nautical_core", "tools", "nautical_queue_status.py"),
+        "chain-repair": os.path.join(ROOT, "nautical_core", "tools", "nautical_chain_repair.py"),
+        "reconcile": os.path.join(ROOT, "nautical_core", "tools", "nautical_reconcile.py"),
+        "navigator": os.path.join(ROOT, "nautical_navigator.py"),
+    }
+
+    def _fake_run_path(target, run_name=None):
+        calls.append((target, run_name, list(sys.argv)))
+        return {}
+
+    try:
+        mod.runpy.run_path = _fake_run_path
+        for command, expected_target in targets.items():
+            sys.argv = ["nautical", command, "--json"]
+            expect(mod.main() == 0, f"nautical returned non-zero for {command}")
+        sys.argv = ["nautical", "unknown"]
+        expect(mod.main() == 2, "nautical should reject unknown commands")
+    finally:
+        mod.runpy.run_path = prev_run_path
+        sys.argv = prev_argv
+
+    expect(len(calls) == len(targets), f"unexpected dispatch count: {calls!r}")
+    for (target, run_name, argv), (command, expected_target) in zip(calls, targets.items()):
+        expect(target == expected_target, f"wrong target for {command}: {target!r}")
+        expect(run_name == "__main__", f"wrong run_name for {command}: {run_name!r}")
+        expect(argv[0] == expected_target, f"argv not rewritten for {command}: {argv!r}")
 
 
 def test_doctor_reports_missing_timezone_data():
@@ -14046,7 +14138,9 @@ TESTS = [
     test_operator_queue_status_json_ok_empty_taskdata,
     test_queue_status_warns_on_stale_processing_and_dead_letters,
     test_doctor_reports_healthy_installation,
+    test_doctor_discovers_effective_taskdata_directory,
     test_operator_doctor_loads_colocated_queue_helper,
+    test_nautical_dispatches_supported_subcommands,
     test_doctor_reports_missing_timezone_data,
     test_doctor_text_timezone_summary,
     test_on_add_preview_warns_when_anchor_uses_utc_fallback,

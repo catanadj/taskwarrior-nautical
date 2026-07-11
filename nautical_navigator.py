@@ -3,7 +3,7 @@
 Taskwarrior Chain Analyzer — Pro Edition
 
 What’s new:
-- Integrates cp_anchor analysis (Pattern, Natural, First/Next anchors, projected future anchors).
+- Integrates anchor / anchor_file analysis (Pattern, Natural, First/Next anchors, projected future anchors).
 - Fuzzy search across ALL chained tasks (any status), plus a Chain picker (Active vs Finished).
 - Builds chains by walking prevLink; shows a finished-chain brief (totals, span, cadence, anchor adherence).
 - Calendar now shows completed dates (green) AND upcoming link dates (blue) and pending due dates (yellow).
@@ -637,7 +637,7 @@ class TaskAnalyzer:
         last = chain[-1]
 
         # --- basic parsed fields
-        anchor_expr = (last.get("cp_anchor") or "").strip()
+        anchor_expr = (last.get("anchor") or "").strip()
         cp_period   = (last.get("cp") or "").strip()
         cpmax       = core.coerce_int(last.get("chainMax"), 0) or 0
         cur_link    = core.coerce_int(last.get("link"), 1) or 1
@@ -1791,7 +1791,7 @@ class TaskAnalyzer:
         meaningful_fields = {
             "description", "status", "priority", "project", "area",
             "wait", "scheduled", "until", "start",
-            "duration", "tags", "depends", "annotations", "chainMax", "chainUntil", "anchor_mode", "cp_anchor"
+            "duration", "tags", "depends", "annotations", "chainMax", "chainUntil", "anchor", "anchor_file", "anchor_mode"
         }
 
         changes: List[TaskChange] = []
@@ -1885,15 +1885,21 @@ class TaskAnalyzer:
 
     # ── Anchor / CP analysis helpers ─────────────────────────────────────────
     def _anchor_summary(self, task: Dict) -> Optional[Tuple[str, str]]:
-        """Return (pattern, natural) if cp_anchor present."""
-        expr = (task.get("cp_anchor") or "").strip()
-        if not expr:
+        """Return a concise summary for anchor / anchor_file sources."""
+        anchor_expr = (task.get("anchor") or "").strip()
+        anchor_file = (task.get("anchor_file") or "").strip()
+        if not anchor_expr and not anchor_file:
             return None
+        if anchor_expr and anchor_file:
+            return ("Sources", "anchor + anchor_file")
+        if anchor_file:
+            return ("Anchor file", anchor_file)
+
         natural = None
-        pat = expr
+        pat = anchor_expr
         if core:
             try:
-                dnf = core.validate_anchor_expr_strict(expr)
+                dnf = core.validate_anchor_expr_strict(anchor_expr)
                 natural = core.describe_anchor_dnf(dnf, task)
             except Exception:
                 natural = None
@@ -1906,16 +1912,12 @@ class TaskAnalyzer:
         start_from_date: Optional[date] = None,  # local date; project strictly AFTER this date
     ) -> List[datetime.datetime]:
         """
-        Project the next anchor datetimes in LOCAL TZ, strictly after `start_from_date`
-        (exclusive). If start_from_date is None, we fall back to *today*.
+        Project the next anchor and anchor_file datetimes in LOCAL TZ, strictly after
+        `start_from_date` (exclusive). If start_from_date is None, we fall back to *today*.
         """
-        expr = (task.get("cp_anchor") or "").strip()
-        if not expr or not core:
-            return []
-
-        try:
-            dnf = core.validate_anchor_expr_strict(expr)
-        except Exception:
+        anchor_expr = (task.get("anchor") or "").strip()
+        anchor_file = (task.get("anchor_file") or "").strip()
+        if not core or (not anchor_expr and not anchor_file):
             return []
 
         # Base local date
@@ -1924,36 +1926,64 @@ class TaskAnalyzer:
             now_loc = core.to_local(now_utc) if hasattr(core, "to_local") else now_utc.astimezone(LOCAL_ZONE)
             start_from_date = now_loc.date()
 
-        # step produces the next matching *date* after prev_date
-        def step(prev_date: date):
-            nxt_date, _ = core.next_after_expr(
-                dnf, prev_date, default_seed=prev_date, seed_base=task.get("uuid") or "analyzer"
-            )
-            return nxt_date
-
-        # First date strictly AFTER start_from_date
-        first_date = step(start_from_date)
-        if not first_date:
-            return []
-
-        # Time-of-day: from pattern if available; otherwise keep due’s HH:MM (if any), else 09:00
         due_local_dt = self.convert_to_local(task.get("due") or "")
         default_hhmm = (due_local_dt.hour, due_local_dt.minute) if due_local_dt else (9, 0)
-        first_hhmm = core.pick_hhmm_from_dnf_for_date(dnf, first_date, first_date) or default_hhmm
+        after_dt_local = due_local_dt if due_local_dt else core.build_local_datetime(start_from_date, default_hhmm)
 
-        out = []
-        cur_date, cur_hhmm = first_date, first_hhmm
-        for _ in range(limit):
-            dt_utc = core.build_local_datetime(cur_date, cur_hhmm)
-            out.append(core.to_local(dt_utc))
+        anchor_out: List[datetime.datetime] = []
+        file_out: List[datetime.datetime] = []
 
-            # next anchor
-            nxt_date = step(cur_date)
-            if not nxt_date:
-                break
-            cur_hhmm = core.pick_hhmm_from_dnf_for_date(dnf, nxt_date, first_date) or cur_hhmm
-            cur_date = nxt_date
+        if anchor_expr:
+            try:
+                dnf = core.validate_anchor_expr_strict(anchor_expr)
+            except Exception:
+                dnf = None
+            if dnf:
+                def step(prev_date: date):
+                    nxt_date, _ = core.next_after_expr(
+                        dnf, prev_date, default_seed=prev_date, seed_base=task.get("uuid") or "analyzer"
+                    )
+                    return nxt_date
 
+                # First date strictly AFTER start_from_date
+                first_date = step(start_from_date)
+                if first_date:
+                    first_hhmm = core.pick_hhmm_from_dnf_for_date(dnf, first_date, first_date) or default_hhmm
+                    cur_date, cur_hhmm = first_date, first_hhmm
+                    for _ in range(limit):
+                        dt_utc = core.build_local_datetime(cur_date, cur_hhmm)
+                        anchor_out.append(core.to_local(dt_utc))
+
+                        nxt_date = step(cur_date)
+                        if not nxt_date:
+                            break
+                        cur_hhmm = core.pick_hhmm_from_dnf_for_date(dnf, nxt_date, first_date) or cur_hhmm
+                        cur_date = nxt_date
+
+        if anchor_file:
+            try:
+                anchor_files = core._import_sibling("anchor_files")
+                fallback = default_hhmm
+                cur_after = after_dt_local
+                while len(file_out) < limit:
+                    nxt = anchor_files.next_anchor_file_occurrence_after(
+                        anchor_file,
+                        getattr(core, "ANCHOR_FILE_DIR", ""),
+                        cur_after,
+                        fallback,
+                        build_local_datetime=core.build_local_datetime,
+                        to_local=core.to_local,
+                    )
+                    if not nxt:
+                        break
+                    file_out.append(nxt)
+                    cur_after = nxt
+            except Exception:
+                pass
+
+        out = sorted(set(anchor_out + file_out))
+        if len(out) > limit:
+            out = out[:limit]
         return out
 
 
@@ -2004,22 +2034,38 @@ class TaskAnalyzer:
         """Check if a due (UTC string) falls on an anchor day (local date)."""
         if not core:
             return None
-        expr = (task.get("cp_anchor") or "").strip()
-        if not expr:
-            return None
-        try:
-            dnf = core.validate_anchor_expr_strict(expr)
-        except Exception:
+        anchor_expr = (task.get("anchor") or "").strip()
+        anchor_file = (task.get("anchor_file") or "").strip()
+        if not anchor_expr and not anchor_file:
             return None
         due_local = self.convert_to_local(due_dt_utc)
         if not due_local:
             return None
         due_day = due_local.date()
-        def step(prev_date: date):
-            nxt_date, _ = core.next_after_expr(dnf, prev_date, default_seed=prev_date, seed_base=task.get("uuid") or "analyzer")
-            return nxt_date
-        first_on_or_after = step(due_day - timedelta(days=1))
-        return first_on_or_after == due_day
+        if anchor_expr:
+            try:
+                dnf = core.validate_anchor_expr_strict(anchor_expr)
+            except Exception:
+                dnf = None
+            if dnf:
+                def step(prev_date: date):
+                    nxt_date, _ = core.next_after_expr(
+                        dnf, prev_date, default_seed=prev_date, seed_base=task.get("uuid") or "analyzer"
+                    )
+                    return nxt_date
+                first_on_or_after = step(due_day - timedelta(days=1))
+                if first_on_or_after == due_day:
+                    return True
+
+        if anchor_file:
+            try:
+                anchor_files = core._import_sibling("anchor_files")
+                dates = anchor_files.load_anchor_file_dates(anchor_file, getattr(core, "ANCHOR_FILE_DIR", ""))
+                return due_day in dates
+            except Exception:
+                return None
+
+        return None
 
     def _months_per_row(self) -> int:
         try:
@@ -2319,7 +2365,7 @@ class TaskAnalyzer:
 
         # Anchor adherence (% completed tasks whose due fell on an anchor day)
         adherence_txt = "N/A"
-        if any((t.get("cp_anchor") for t in chain)) and core:
+        if any((t.get("anchor") or t.get("anchor_file") for t in chain)) and core:
             checks = []
             for t in completed:
                 due = t.get("due")
@@ -2469,7 +2515,7 @@ class TaskAnalyzer:
         completed_dates = self._get_completion_dates(full_chain)
         pending_due_dates = self._get_pending_due_dates(full_chain)
 
-        # upcoming link dates: cp_anchor preferred; else cp
+        # upcoming link dates: anchor / anchor_file preferred; else cp
         tail = full_chain[-1] if full_chain else None
         upcoming_local_datetimes: List[datetime.datetime] = []
         is_active = False
@@ -2480,7 +2526,7 @@ class TaskAnalyzer:
             if is_active:
                 due_local_dt = self.convert_to_local(tail.get("due") or "")
                 # For anchors: start strictly AFTER the due *date* (so overdue tasks show next anchors right away)
-                if (tail.get("cp_anchor") or "").strip() and core:
+                if ((tail.get("anchor") or tail.get("anchor_file")) and core):
                     start_from_date = due_local_dt.date() if due_local_dt else None
                     upcoming_local_datetimes = self._project_anchor_dates(
                         tail, limit=UPCOMING_MAX, start_from_date=start_from_date
@@ -2497,7 +2543,7 @@ class TaskAnalyzer:
         upcoming_dates = sorted(set(dt.date() for dt in upcoming_local_datetimes))
         console.print(self.create_enhanced_calendar(completed_dates, upcoming_dates, pending_due_dates))
 
-        # cp_anchor panel (if present)
+        # anchor panel (if present)
         anchor_info = self._anchor_summary(tail) if tail else None
         if anchor_info:
             pat, nat = anchor_info
@@ -2526,7 +2572,7 @@ class TaskAnalyzer:
         self._display_chain_table(display_chain)
         # Show CP performance chart for classic CP chains (no anchors)
         tail = full_chain[-1] if full_chain else None
-        if tail and (tail.get("cp") or "").strip() and not (tail.get("cp_anchor") or "").strip():
+        if tail and (tail.get("cp") or "").strip() and not ((tail.get("anchor") or tail.get("anchor_file"))):
             self._cp_performance_panel(full_chain)
 
         # finished-chain brief

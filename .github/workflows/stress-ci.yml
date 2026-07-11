@@ -1,0 +1,71 @@
+name: Stress CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  stress-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install rich prompt_toolkit python-dateutil asciichartpy
+
+      - name: Install Taskwarrior
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y taskwarrior
+
+      - name: Show tool versions
+        run: |
+          python3 --version
+          task --version
+
+      - name: Run golden correctness suite
+        run: |
+          python3 dev_tools/nautical_golden_tests.py
+
+      - name: Run CI stress profile
+        run: |
+          python3 dev_tools/nautical_stress_campaign.py --profile ci --json | tee stress-ci-report.json
+
+      - name: Append stress summary
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("stress-ci-report.json").read_text(encoding="utf-8"))
+          print("## Stress CI")
+          print("")
+          print(f"- ok: `{report.get('ok')}`")
+          print(f"- duration_s: `{report.get('duration_s')}`")
+          print(f"- task_available: `{report.get('task_available')}`")
+          failed = report.get("failed_stages") or []
+          print(f"- failed_stages: `{', '.join(failed) if failed else 'none'}`")
+          print("")
+          print("| Stage | Status | Duration (s) |")
+          print("| --- | --- | ---: |")
+          for stage in report.get("stages", []):
+              print(f"| {stage.get('stage', '')} | {stage.get('status', '')} | {stage.get('duration_s', '')} |")
+          PY
+
+      - name: Upload stress report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-ci-report
+          path: stress-ci-report.json
+          if-no-files-found: error

@@ -10572,6 +10572,57 @@ def test_config_exposes_anchor_file_dir():
     expect(hasattr(core, 'ANCHOR_FILE_DIR'), 'core should expose ANCHOR_FILE_DIR')
 
 
+def test_navigator_uses_anchor_and_anchor_file_sources():
+    """Navigator anchor helpers should summarize and merge anchor sources from anchor + anchor_file."""
+    module_name = "_nautical_navigator_anchor_sources_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+    finally:
+        sys.modules.pop(module_name, None)
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / "calendar.csv").write_text(
+            "date,description\n"
+            "2026-04-14,Midweek check\n"
+            "2026-04-25,Month-end check\n",
+            encoding="utf-8",
+        )
+        old_dir = getattr(navigator.core, "ANCHOR_FILE_DIR", "")
+        navigator.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        try:
+            analyzer = navigator.TaskAnalyzer()
+            task = {
+                "uuid": "00000000-0000-0000-0000-000000000900",
+                "description": "combined navigator anchor",
+                "anchor": "w:fri@t=09:00",
+                "anchor_file": "calendar.csv@t=12:00",
+                "due": "2026-04-11T09:00:00Z",
+            }
+
+            expect(
+                analyzer._anchor_summary(task) == ("Sources", "anchor + anchor_file"),
+                f"unexpected anchor summary: {analyzer._anchor_summary(task)!r}",
+            )
+
+            projected = analyzer._project_anchor_dates(task, limit=4, start_from_date=date(2026, 4, 11))
+            projected_txt = [(item.date().isoformat(), item.strftime("%H:%M")) for item in projected]
+            expect(
+                projected_txt[:3] == [("2026-04-14", "12:00"), ("2026-04-17", "09:00"), ("2026-04-24", "09:00")],
+                f"unexpected merged projection order: {projected_txt!r}",
+            )
+            expect(
+                analyzer._due_is_anchor_day("2026-04-14T12:00:00Z", task) is True,
+                "anchor_file due date should count as an anchor day",
+            )
+        finally:
+            navigator.core.ANCHOR_FILE_DIR = old_dir
+
+
 def test_on_add_anchor_and_anchor_file_can_coexist():
     """on-add should allow anchor and anchor_file to coexist as inclusion sources."""
     hook = _find_hook_file("on-add-nautical.py")

@@ -1,0 +1,75 @@
+name: Soak Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 3 * * *"
+
+jobs:
+  soak-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install rich prompt_toolkit python-dateutil asciichartpy
+
+      - name: Install Taskwarrior
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y taskwarrior
+
+      - name: Show tool versions
+        run: |
+          python3 --version
+          task --version
+
+      - name: Run enforced soak test
+        run: |
+          python3 dev_tools/nautical_soak_test.py --minutes 10 --json --enforce | tee soak-test-report.json
+
+      - name: Append soak summary
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("soak-test-report.json").read_text(encoding="utf-8"))
+          add = report.get("add", {})
+          done = report.get("done", {})
+          health = report.get("health", {})
+
+          print("## Soak Test")
+          print("")
+          print(f"- ok: `{report.get('ok')}`")
+          print(f"- duration_s: `{report.get('duration_s')}`")
+          print(f"- cycles: `{report.get('cycles')}`")
+          print(f"- worst_health: `{health.get('worst_status')}`")
+          print(f"- max_queue_bytes: `{health.get('max_queue_bytes')}`")
+          print(f"- max_dead_letter_lines: `{health.get('max_dead_letter_lines')}`")
+          violations = report.get("violations") or []
+          print(f"- violations: `{', '.join(violations) if violations else 'none'}`")
+          print("")
+          print("| Metric | Value |")
+          print("| --- | ---: |")
+          print(f"| add p95 (s) | {add.get('p95_s', '')} |")
+          print(f"| add fail rate | {add.get('fail_rate', '')} |")
+          print(f"| done p95 (s) | {done.get('p95_s', '')} |")
+          print(f"| done fail rate | {done.get('fail_rate', '')} |")
+          PY
+
+      - name: Upload soak report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-test-report
+          path: soak-test-report.json
+          if-no-files-found: error

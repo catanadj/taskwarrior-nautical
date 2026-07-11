@@ -296,6 +296,8 @@ def _load_hook_module(path: str, module_name: str):
     _force_tz_utc()
     if os.path.basename(path) == "on-add-nautical.py":
         path = os.path.join(ROOT, "nautical_core", "hooks", "add_impl.py")
+    elif os.path.basename(path) == "on-exit-nautical.py":
+        path = os.path.join(ROOT, "nautical_core", "hooks", "exit_impl.py")
     loader = importlib.machinery.SourceFileLoader(module_name, path)
     spec = importlib.util.spec_from_loader(module_name, loader)
     mod = importlib.util.module_from_spec(spec)
@@ -1016,6 +1018,36 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
             timeout=5.0,
         )
         expect("API mismatch" in mismatch_diag.stderr, "on-add API mismatch diagnostic was not actionable")
+
+        (impl_dir / "exit_impl.py").write_text(
+            "HOOK_IMPL_API = 999\n"
+            "def run_hook(**_kwargs):\n"
+            "    raise AssertionError('mismatched implementation must not run')\n",
+            encoding="utf-8",
+        )
+        (root / ".nautical_spawn_queue.jsonl").write_text("{}\n", encoding="utf-8")
+        exit_mismatch = subprocess.run(
+            [sys.executable, str(hooks_dir / "on-exit-nautical.py")],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=5.0,
+        )
+        expect(exit_mismatch.returncode != 0, "on-exit accepted an incompatible implementation API")
+        expect(exit_mismatch.stdout == "", f"on-exit API mismatch wrote stdout: {exit_mismatch.stdout!r}")
+        expect(
+            exit_mismatch.stderr == "",
+            f"on-exit API mismatch wrote diagnostics without opt-in: {exit_mismatch.stderr!r}",
+        )
+
+        exit_mismatch_diag = subprocess.run(
+            [sys.executable, str(hooks_dir / "on-exit-nautical.py")],
+            text=True,
+            capture_output=True,
+            env=diag_env,
+            timeout=5.0,
+        )
+        expect("API mismatch" in exit_mismatch_diag.stderr, "on-exit API mismatch diagnostic was not actionable")
 
 
 def test_on_exit_active_sqlite_queue_uses_full_drain():

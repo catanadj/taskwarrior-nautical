@@ -24,6 +24,7 @@ REQUIRED_RUNTIME_FILES = (
     "on-exit-nautical.py",
     "nautical_core/hooks/__init__.py",
     "nautical_core/hooks/add_impl.py",
+    "nautical_core/hooks/exit_impl.py",
 )
 
 

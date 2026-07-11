@@ -1,0 +1,2347 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Heavy on-exit implementation loaded lazily by the executable wrapper.
+
+Drains Nautical spawn intents after Taskwarrior releases its lock.
+Reads JSONL queue entries, imports child tasks, and updates parent nextLink.
+"""
+
+from __future__ import annotations
+
+import sys
+import os
+import time
+import importlib
+import importlib.util
+from pathlib import Path
+
+_IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
+HOOK_DIR = _IMPL_CORE_DIR.parent
+_TW_DIR_BOOT = _IMPL_CORE_DIR.parent
+try:
+    import hook_bootstrap
+except ModuleNotFoundError:
+    hook_bootstrap = None
+    _bootstrap_paths = [
+        HOOK_DIR / 'nautical_core' / 'hook_bootstrap.py',
+        _TW_DIR_BOOT / 'nautical_core' / 'hook_bootstrap.py',
+    ]
+    _core_path_raw = (os.environ.get("NAUTICAL_CORE_PATH") or "").strip()
+    if _core_path_raw:
+        try:
+            _core_path = Path(_core_path_raw).expanduser()
+            _bootstrap_paths.extend([
+                _core_path / 'hook_bootstrap.py',
+                _core_path / 'nautical_core' / 'hook_bootstrap.py',
+            ])
+        except Exception:
+            pass
+    for _bootstrap_path in _bootstrap_paths:
+        try:
+            if not _bootstrap_path.is_file():
+                continue
+            _spec = importlib.util.spec_from_file_location('hook_bootstrap', _bootstrap_path)
+            if _spec and _spec.loader:
+                _bootstrap_mod = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_bootstrap_mod)
+                hook_bootstrap = _bootstrap_mod
+                break
+        except Exception:
+            continue
+    if hook_bootstrap is None:
+        raise
+_IMPORT_T0 = time.perf_counter()
+_IMPORT_MS: float | None = None
+hook_bootstrap.ensure_utf8_stdio()
+
+
+TW_DIR = _TW_DIR_BOOT
+
+def _trusted_core_base(default_base: Path) -> Path:
+    return hook_bootstrap.trusted_core_base(
+        default_base,
+        env=os.environ,
+        diag_enabled=os.environ.get("NAUTICAL_DIAG") == "1",
+    )
+
+
+def _core_target_from_base(base: Path) -> Path | None:
+    return hook_bootstrap.core_target_from_base(base)
+
+_CORE_BASE = _trusted_core_base(TW_DIR)
+_EARLY_EXIT_PROBE = None
+
+if (
+    __name__ == "__main__"
+    and os.environ.get("NAUTICAL_DIAG") != "1"
+    and os.environ.get("NAUTICAL_BENCH_FORCE_FULL") != "1"
+):
+    _path_support, _path_support_path, _path_support_error = hook_bootstrap.load_core_helper_module(
+        _CORE_BASE,
+        "config_support.py",
+        "_nautical_exit_path_support",
+    )
+    _exit_probe, _exit_probe_path, _exit_probe_error = hook_bootstrap.load_core_helper_module(
+        _CORE_BASE,
+        "exit_probe.py",
+        "_nautical_exit_probe",
+    )
+    if _path_support is not None and _exit_probe is not None:
+        try:
+            _early_taskdata = hook_bootstrap.resolve_task_data_context_light(
+                path_support=_path_support,
+                argv=sys.argv[1:],
+                env=os.environ,
+                tw_dir=str(TW_DIR),
+            )
+            if _early_taskdata is not None:
+                _EARLY_EXIT_PROBE = _exit_probe.probe_exit_work(_early_taskdata[0])
+        except Exception:
+            _EARLY_EXIT_PROBE = None
+        if _EARLY_EXIT_PROBE is not None and _EARLY_EXIT_PROBE.definitely_empty:
+            raise SystemExit(0)
+
+
+import json
+import random
+import sqlite3
+import subprocess
+from contextlib import contextmanager
+from typing import Any
+
+try:
+    import fcntl  # POSIX advisory lock
+except Exception:
+    fcntl = None
+
+
+core = None
+_CORE_IMPORT_ERROR: Exception | None = None
+_CORE_IMPORT_TARGET: Path | None = None
+_HOOK_SUPPORT = None
+_HOOK_SUPPORT_LOAD_FAILED = False
+_EXIT_QUERIES = None
+_EXIT_QUERIES_LOAD_FAILED = False
+_EXIT_SIDE_EFFECTS = None
+_EXIT_SIDE_EFFECTS_LOAD_FAILED = False
+_EXIT_ENTRY_FLOW = None
+_EXIT_ENTRY_FLOW_LOAD_FAILED = False
+_QUEUE_STORE = None
+_QUEUE_STORE_LOAD_FAILED = False
+_QUEUE_MODELS = None
+_QUEUE_MODELS_LOAD_FAILED = False
+_EXIT_MODELS = None
+_EXIT_MODELS_LOAD_FAILED = False
+_EXIT_RUNTIME = None
+_EXIT_RUNTIME_LOAD_FAILED = False
+_EXIT_DRAIN_FLOW = None
+_EXIT_DRAIN_FLOW_LOAD_FAILED = False
+_HOOK_CONTEXT = None
+_HOOK_CONTEXT_LOAD_FAILED = False
+_HOOK_ENGINE = None
+_HOOK_ENGINE_LOAD_FAILED = False
+_HOOK_RESULTS = None
+_HOOK_RESULTS_LOAD_FAILED = False
+_HOOK_RUNTIME = None
+_HOOK_MODULE_ACCESS = None
+_MODULE_SPECS = {
+    "hook_support": (
+        "_HOOK_SUPPORT",
+        "_HOOK_SUPPORT_LOAD_FAILED",
+        "hook_support.py",
+        "nautical_core.hook_support",
+    ),
+    "exit_queries": (
+        "_EXIT_QUERIES",
+        "_EXIT_QUERIES_LOAD_FAILED",
+        "exit_queries.py",
+        "nautical_core.exit_queries",
+    ),
+    "exit_side_effects": (
+        "_EXIT_SIDE_EFFECTS",
+        "_EXIT_SIDE_EFFECTS_LOAD_FAILED",
+        "exit_side_effects.py",
+        "nautical_core.exit_side_effects",
+    ),
+    "exit_entry_flow": (
+        "_EXIT_ENTRY_FLOW",
+        "_EXIT_ENTRY_FLOW_LOAD_FAILED",
+        "exit_entry_flow.py",
+        "nautical_core.exit_entry_flow",
+    ),
+    "queue_store": (
+        "_QUEUE_STORE",
+        "_QUEUE_STORE_LOAD_FAILED",
+        "queue_store.py",
+        "nautical_core.queue_store",
+    ),
+    "queue_models": (
+        "_QUEUE_MODELS",
+        "_QUEUE_MODELS_LOAD_FAILED",
+        "queue_models.py",
+        "nautical_core.queue_models",
+    ),
+    "exit_models": (
+        "_EXIT_MODELS",
+        "_EXIT_MODELS_LOAD_FAILED",
+        "exit_models.py",
+        "nautical_core.exit_models",
+    ),
+    "exit_runtime": (
+        "_EXIT_RUNTIME",
+        "_EXIT_RUNTIME_LOAD_FAILED",
+        "exit_runtime.py",
+        "nautical_core.exit_runtime",
+    ),
+    "exit_drain_flow": (
+        "_EXIT_DRAIN_FLOW",
+        "_EXIT_DRAIN_FLOW_LOAD_FAILED",
+        "exit_drain_flow.py",
+        "nautical_core.exit_drain_flow",
+    ),
+    "hook_context": (
+        "_HOOK_CONTEXT",
+        "_HOOK_CONTEXT_LOAD_FAILED",
+        "hook_context.py",
+        "nautical_core.hook_context",
+    ),
+    "hook_engine": (
+        "_HOOK_ENGINE",
+        "_HOOK_ENGINE_LOAD_FAILED",
+        "hook_engine.py",
+        "nautical_core.hook_engine",
+    ),
+    "hook_results": (
+        "_HOOK_RESULTS",
+        "_HOOK_RESULTS_LOAD_FAILED",
+        "hook_results.py",
+        "nautical_core.hook_results",
+    ),
+}
+core, _CORE_IMPORT_TARGET, _CORE_IMPORT_ERROR = hook_bootstrap.import_core_package(_CORE_BASE)
+
+
+def _resolve_task_data_context() -> tuple[str, bool]:
+    return hook_bootstrap.resolve_task_data_context(
+        core=core,
+        core_import_error=_CORE_IMPORT_ERROR,
+        core_import_target=_CORE_IMPORT_TARGET,
+        core_base=_CORE_BASE,
+        tw_dir=str(TW_DIR),
+        argv=sys.argv[1:],
+        env=os.environ,
+    )
+
+_TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
+TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+_IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
+
+
+def _tw_data_dir_path() -> Path:
+    td = TW_DATA_DIR
+    if isinstance(td, Path):
+        return td
+    try:
+        return Path(str(td)).expanduser()
+    except Exception:
+        return Path(".")
+
+
+def _hook_runtime_module():
+    global _HOOK_RUNTIME
+    if _HOOK_RUNTIME is None:
+        _HOOK_RUNTIME = importlib.import_module("nautical_core.hook_runtime")
+    return _HOOK_RUNTIME
+
+
+def _hook_module_access():
+    global _HOOK_MODULE_ACCESS
+    if _HOOK_MODULE_ACCESS is None:
+        hook_runtime = _hook_runtime_module()
+        _HOOK_MODULE_ACCESS = hook_runtime.HookModuleAccess(globals(), _MODULE_SPECS)
+    return _HOOK_MODULE_ACCESS
+
+
+def _module(name: str, *, required: bool = True):
+    return _hook_module_access().module(name, required=required)
+
+def _task_cmd_prefix() -> list[str]:
+    hook_support = _module("hook_support", required=False)
+    if hook_support is not None:
+        return hook_support.build_task_cmd_prefix(
+            use_rc_data_location=_USE_RC_DATA_LOCATION,
+            tw_data_dir=TW_DATA_DIR,
+        )
+    cmd = ["task"]
+    if _USE_RC_DATA_LOCATION:
+        cmd.append(f"rc.data.location={TW_DATA_DIR}")
+    return cmd
+
+
+
+
+
+def _build_hook_runtime_context():
+    hook_runtime = _hook_runtime_module()
+    return hook_runtime.build_hook_runtime_context(
+        module_access=_hook_module_access(),
+        hook_name="on-exit",
+        taskdata_dir=str(TW_DATA_DIR),
+        use_rc_data_location=_USE_RC_DATA_LOCATION,
+        tw_dir=str(TW_DIR),
+        hook_dir=str(HOOK_DIR),
+        import_ms=_IMPORT_MS,
+    )
+
+def _nautical_state_dir_path() -> Path:
+    tw_data_dir = _tw_data_dir_path()
+    queue_store = _module("queue_store", required=False)
+    if queue_store is not None:
+        return queue_store.nautical_state_dir_path(tw_data_dir)
+    return tw_data_dir / ".nautical-state"
+
+def _nautical_lock_dir_path() -> Path:
+    tw_data_dir = _tw_data_dir_path()
+    queue_store = _module("queue_store", required=False)
+    if queue_store is not None:
+        return queue_store.nautical_lock_dir_path(tw_data_dir)
+    return tw_data_dir / ".nautical-locks"
+
+_QUEUE_DB_PATH = _nautical_state_dir_path() / ".nautical_queue.db"
+_DEAD_LETTER_PATH = _nautical_state_dir_path() / ".nautical_dead_letter.jsonl"
+_DEAD_LETTER_LOCK = _nautical_lock_dir_path() / ".nautical_dead_letter.lock"
+_DEAD_LETTER_RETENTION_DAYS = int(os.environ.get("NAUTICAL_DEAD_LETTER_RETENTION_DAYS") or 30)
+_QUEUE_MAX_LINES = int(os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES") or 10000)
+_DEAD_LETTER_MAX_BYTES = int(os.environ.get("NAUTICAL_DEAD_LETTER_MAX_BYTES") or 524288)
+HOOK_IMPL_API = 1
+NAUTICAL_HOOK_VERSION = "updateG-20260328"
+_QUEUE_RETRY_MAX = int(os.environ.get("NAUTICAL_QUEUE_RETRY_MAX") or 6)
+_QUEUE_LOCK_FAIL_MARKER = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock_failed"
+_QUEUE_LOCK_FAIL_COUNT = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock_failed.count"
+_DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
+# When set, exit 1 if any spawns were dead-lettered or errored (for scripting/monitoring).
+_EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in ("1", "true", "yes", "on")
+
+def _migrate_legacy_nautical_state() -> None:
+    queue_store = _module("queue_store", required=False)
+    if queue_store is not None:
+        queue_store.migrate_nautical_state(
+            tw_data_dir=TW_DATA_DIR,
+            extra_file_pairs=((_intent_log_path(), TW_DATA_DIR / ".nautical_spawn_intents.jsonl"),),
+        )
+        globals()["_QUEUE_DB_PATH"] = queue_store.queue_db_path(TW_DATA_DIR)
+        globals()["_DEAD_LETTER_PATH"] = queue_store.dead_letter_path(TW_DATA_DIR)
+        globals()["_DEAD_LETTER_LOCK"] = queue_store.dead_letter_lock_path(TW_DATA_DIR)
+        return
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(str(os.environ.get(name, "")).strip() or default)
+    except Exception:
+        return float(default)
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.environ.get(name, "")).strip() or default)
+    except Exception:
+        return int(default)
+
+_TASK_TIMEOUT_EXPORT = _env_float("NAUTICAL_TASK_TIMEOUT_EXPORT", 3.0)
+_TASK_TIMEOUT_IMPORT = _env_float("NAUTICAL_TASK_TIMEOUT_IMPORT", 8.0)
+_TASK_TIMEOUT_MODIFY = _env_float("NAUTICAL_TASK_TIMEOUT_MODIFY", 4.0)
+_TASK_RETRIES_EXPORT = _env_int("NAUTICAL_TASK_RETRIES_EXPORT", 2)
+_TASK_RETRIES_MODIFY = _env_int("NAUTICAL_TASK_RETRIES_MODIFY", 2)
+_TASK_RETRY_DELAY = _env_float("NAUTICAL_TASK_RETRY_DELAY", 0.2)
+_QUEUE_LOCK_RETRIES = _env_int("NAUTICAL_QUEUE_LOCK_RETRIES", 6)
+_QUEUE_LOCK_SLEEP_BASE = _env_float("NAUTICAL_QUEUE_LOCK_SLEEP_BASE", 0.03)
+_QUEUE_LOCK_STALE_AFTER = _env_float("NAUTICAL_QUEUE_LOCK_STALE_AFTER", 30.0)
+_INTENT_LOG_MAX_BYTES = _env_int("NAUTICAL_INTENT_LOG_MAX_BYTES", 524288)
+_INTENT_LOG_MAX_ENTRIES = _env_int("NAUTICAL_INTENT_LOG_MAX_ENTRIES", 20000)
+_LOCK_STORM_THRESHOLD = _env_int("NAUTICAL_LOCK_STORM_THRESHOLD", 8)
+_LOCK_BACKOFF_BASE = _env_float("NAUTICAL_LOCK_BACKOFF_BASE", 0.05)
+_LOCK_BACKOFF_MAX = _env_float("NAUTICAL_LOCK_BACKOFF_MAX", 1.0)
+_QUEUE_PROCESSING_STALE_AFTER = _env_float("NAUTICAL_QUEUE_PROCESSING_STALE_AFTER", 300.0)
+_QUEUE_DB_CONNECT_RETRIES = _env_int("NAUTICAL_QUEUE_DB_CONNECT_RETRIES", 3)
+_QUEUE_DB_CONNECT_TIMEOUT_MAX = _env_float("NAUTICAL_QUEUE_DB_CONNECT_TIMEOUT_MAX", 60.0)
+_QUEUE_DB_CONNECT_BACKOFF_BASE = _env_float("NAUTICAL_QUEUE_DB_CONNECT_BACKOFF_BASE", 0.05)
+
+_EXIT_RUNTIME_STATE = None
+_EXIT_PRELOAD_CHUNK_SIZE = 32
+_EXIT_EQUIV_PRELOAD_CHUNK_SIZE = 8
+_EXIT_DIAG_STATS: dict[str, Any] = {}
+
+
+def _exit_runtime_state():
+    global _EXIT_RUNTIME_STATE
+    if _EXIT_RUNTIME_STATE is None:
+        exit_runtime = _module("exit_runtime")
+        _EXIT_RUNTIME_STATE = exit_runtime.new_runtime_state()
+        _EXIT_RUNTIME_STATE.diag_stats = _EXIT_DIAG_STATS
+    return _EXIT_RUNTIME_STATE
+
+
+def _reset_exit_runtime_state() -> None:
+    global _EXIT_RUNTIME_STATE, _EXIT_DIAG_STATS
+    exit_runtime = _module("exit_runtime")
+    _EXIT_RUNTIME_STATE = exit_runtime.new_runtime_state()
+    _EXIT_DIAG_STATS = _EXIT_RUNTIME_STATE.diag_stats
+
+
+def _reset_exit_diag_stats() -> None:
+    global _EXIT_DIAG_STATS
+    _EXIT_DIAG_STATS = {}
+    _exit_runtime_state().diag_stats = _EXIT_DIAG_STATS
+
+
+def _reset_exit_export_cache() -> None:
+    _exit_runtime_state().export_cache = {}
+
+
+def _reset_exit_equiv_child_cache() -> None:
+    _exit_runtime_state().equiv_child_cache = {}
+
+
+def _diag_count_exit(key: str, inc: float | int = 1) -> None:
+    try:
+        state = _exit_runtime_state()
+        stats = state.diag_stats
+        stats[key] = stats.get(key, 0) + inc
+    except Exception:
+        pass
+
+
+def _run_task_diag_bucket(cmd: list[str]) -> str:
+    try:
+        parts = []
+        for p in (cmd or ()):
+            parts.extend(str(p).split())
+        parts = tuple(parts)
+    except Exception:
+        return "other"
+    if not parts:
+        return "other"
+    if "import" in parts:
+        return "import"
+    if "modify" in parts:
+        if any(p.startswith("nextLink:") for p in parts):
+            return "modify_parent_nextlink"
+        if "status:deleted" in parts:
+            return "modify_cleanup"
+        return "modify_other"
+    if "export" in parts:
+        if any(p.startswith("uuid:") for p in parts):
+            return "export_uuid"
+        if any(p.startswith("chainID:") for p in parts):
+            return "export_equivalent_child"
+        return "export_other"
+    return "other"
+
+
+def _diag_record_run_task(cmd: list[str], *, ok: bool, elapsed: float) -> None:
+    bucket = _run_task_diag_bucket(cmd)
+    _diag_count_exit(f"run_task_calls_{bucket}")
+    _diag_count_exit(f"run_task_seconds_{bucket}", float(elapsed or 0.0))
+    if not ok:
+        _diag_count_exit(f"run_task_failures_{bucket}")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.environ.get(name, "")).strip().lower()
+    if not raw:
+        return bool(default)
+    if raw in {"1", "yes", "true", "on"}:
+        return True
+    if raw in {"0", "no", "false", "off"}:
+        return False
+    return bool(default)
+
+
+def _exit_progress_enabled(entries_total: int) -> bool:
+    if int(entries_total or 0) < 2:
+        return False
+    if not sys.stderr.isatty():
+        return False
+    if str(os.environ.get("TERM") or "").strip().lower() == "dumb":
+        return False
+    return _env_bool("NAUTICAL_EXIT_PROGRESS", bool(getattr(core, "EXIT_PROGRESS", True)))
+
+
+def _exit_progress_counts(state: object | None) -> str:
+    if state is None:
+        return "ok:0 skip:0 rq:0 dead:0"
+    try:
+        ok = int(getattr(state, "processed", 0) or 0)
+        skip = int(getattr(state, "skipped_idempotent", 0) or 0)
+        rq = len(getattr(state, "requeue", []) or [])
+        dead = int(getattr(state, "dead_lettered", 0) or 0)
+        return f"ok:{ok} skip:{skip} rq:{rq} dead:{dead}"
+    except Exception:
+        return "ok:0 skip:0 rq:0 dead:0"
+
+
+@contextmanager
+def _exit_progress_scope(entries_total: int):
+    if not _exit_progress_enabled(entries_total):
+        yield None
+        return
+    try:
+        from rich.console import Console
+        from rich.progress import (
+            BarColumn,
+            Progress,
+            TaskProgressColumn,
+            TextColumn,
+            TimeElapsedColumn,
+            TimeRemainingColumn,
+        )
+    except Exception:
+        yield None
+        return
+    try:
+        console = Console(file=sys.stderr, force_terminal=True)
+        with Progress(
+            TextColumn("[bold cyan]Nautical[/]"),
+            TextColumn("[dim]{task.fields[phase]}[/]"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            TextColumn("[dim]{task.fields[counts]}[/]"),
+            console=console,
+            transient=True,
+            refresh_per_second=10,
+        ) as progress:
+            task_id = progress.add_task(
+                "drain",
+                total=max(1, int(entries_total or 0)),
+                phase="preload",
+                counts=_exit_progress_counts(None),
+            )
+
+            def _advance(*, advance: int = 0, phase: str | None = None, state: object | None = None) -> None:
+                try:
+                    kwargs = {
+                        "advance": max(0, int(advance or 0)),
+                        "counts": _exit_progress_counts(state),
+                    }
+                    if phase is not None:
+                        kwargs["phase"] = str(phase)
+                    progress.update(task_id, **kwargs)
+                except Exception:
+                    pass
+
+            yield _advance
+    except Exception:
+        yield None
+
+
+def _export_cache_get(uuid_str: str):
+    key = str(uuid_str or "").strip()
+    if not key:
+        return None
+    cached = _exit_runtime_state().export_cache.get(key)
+    if cached is not None:
+        _diag_count_exit("preload_export_hits")
+        return cached
+    _diag_count_exit("preload_export_misses")
+    return None
+
+
+def _export_cache_set(uuid_str: str, result) -> None:
+    key = str(uuid_str or "").strip()
+    if not key or result is None:
+        return
+    _exit_runtime_state().export_cache[key] = result
+
+
+def _chunked(items: list[str], size: int):
+    size = max(1, int(size or 1))
+    for idx in range(0, len(items), size):
+        yield items[idx:idx + size]
+
+
+def _preload_export_uuids(entries: list[dict]) -> None:
+    exit_models = _module("exit_models")
+    hook_support = _module("hook_support", required=False)
+    uuids: list[str] = []
+    seen: set[str] = set()
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        parent_uuid = str(entry.get("parent_uuid") or "").strip()
+        child = entry.get("child") or {}
+        child_uuid = str(child.get("uuid") or "").strip() if isinstance(child, dict) else ""
+        for uuid_str in (parent_uuid, child_uuid):
+            if uuid_str and uuid_str not in seen:
+                seen.add(uuid_str)
+                uuids.append(uuid_str)
+    if not uuids:
+        return
+    prefix = _task_cmd_prefix()
+    for chunk in _chunked(uuids, _EXIT_PRELOAD_CHUNK_SIZE):
+        _diag_count_exit("preload_export_chunks")
+        cmd = list(prefix) + ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off"]
+        for idx, uuid_str in enumerate(chunk):
+            if idx:
+                cmd.append("or")
+            cmd.append(f"uuid:{uuid_str}")
+        cmd.append("export")
+        ok, out, err = _run_task(
+            cmd,
+            timeout=_TASK_TIMEOUT_EXPORT,
+            retries=_TASK_RETRIES_EXPORT,
+            retry_delay=_TASK_RETRY_DELAY,
+        )
+        if not ok:
+            if _is_lock_error(err):
+                continue
+            continue
+        rows: list[dict[str, Any]] = []
+        parsed_ok = False
+        allow_negative_cache = (out or "").lstrip().startswith("[")
+        parser = getattr(hook_support, "parse_export_array", None) if hook_support is not None else None
+        if callable(parser):
+            try:
+                parsed_rows = parser(out, diag=_diag) or []
+                if isinstance(parsed_rows, list):
+                    rows = [row for row in parsed_rows if isinstance(row, dict)]
+                    parsed_ok = True
+            except Exception:
+                rows = []
+        if not parsed_ok:
+            try:
+                parsed = json.loads((out or "").strip() or "[]")
+                if isinstance(parsed, list):
+                    rows = [row for row in parsed if isinstance(row, dict)]
+                    parsed_ok = True
+                elif isinstance(parsed, dict) and len(chunk) == 1:
+                    rows = [parsed]
+                    parsed_ok = True
+            except Exception:
+                rows = []
+        found: set[str] = set()
+        for row in rows:
+            row_uuid = str(row.get("uuid") or "").strip()
+            if not row_uuid:
+                continue
+            found.add(row_uuid)
+            _export_cache_set(row_uuid, exit_models.ExitExportResult(True, False, "", row))
+        if parsed_ok and allow_negative_cache:
+            for uuid_str in chunk:
+                _diag_count_exit("preload_export_uuids")
+                if uuid_str not in found:
+                    _export_cache_set(uuid_str, exit_models.ExitExportResult(False, False, "not found", None))
+
+
+def _queue_db_begin_run() -> None:
+    state = _exit_runtime_state()
+    state.run_queue_db_active = True
+    state.run_queue_db_conn = None
+    state.queue_db_open_count = 0
+    state.queue_db_reuse_count = 0
+    state.queue_lock_failures_this_run = 0
+    state.last_queue_lock_diag_ts = 0.0
+    _reset_exit_diag_stats()
+    _reset_exit_export_cache()
+    _reset_exit_equiv_child_cache()
+
+
+def _queue_db_end_run() -> None:
+    state = _exit_runtime_state()
+    state.run_queue_db_active = False
+    conn = state.run_queue_db_conn
+    state.run_queue_db_conn = None
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _local_lock_sleep_once(sleep_base: float) -> None:
+    try:
+        delay = float(sleep_base or 0.0)
+    except Exception:
+        delay = 0.0
+    if delay > 0:
+        time.sleep(delay)
+
+
+def _local_lock_age(path_str: str) -> float | None:
+    try:
+        with open(path_str, "r", encoding="utf-8") as f:
+            head = f.read(64)
+        parts = head.strip().split()
+        if len(parts) >= 2:
+            return time.time() - float(parts[1])
+    except Exception:
+        pass
+    try:
+        st = os.stat(path_str)
+        return time.time() - float(st.st_mtime)
+    except Exception:
+        return None
+
+
+def _local_lock_stale_pid(path_str: str, stale_after: float | None) -> bool:
+    try:
+        with open(path_str, "r", encoding="utf-8") as f:
+            head = f.read(64)
+        parts = head.strip().split()
+        pid_str = parts[0] if parts else ""
+        pid = int(pid_str)
+        if pid <= 0:
+            return True
+        if stale_after is not None and len(parts) >= 2:
+            try:
+                age = time.time() - float(parts[1])
+                if age < float(stale_after):
+                    return False
+            except Exception:
+                pass
+        try:
+            os.kill(pid, 0)
+            return False
+        except PermissionError:
+            return False
+        except ProcessLookupError:
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def _local_lock_ensure_parent(path: Path) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+
+def _mount_path_unescape(path: str) -> str:
+    return (
+        str(path or "")
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
+    )
+
+
+def _path_looks_network_mount(path: Path) -> bool:
+    network_fs = {
+        "nfs",
+        "nfs4",
+        "cifs",
+        "smbfs",
+        "fuse.sshfs",
+        "9p",
+        "afpfs",
+        "davfs",
+        "glusterfs",
+        "ceph",
+    }
+    try:
+        target = str(path.resolve())
+    except Exception:
+        target = str(path)
+    if not target:
+        return False
+    best_mount = ""
+    best_fs = ""
+    try:
+        with open("/proc/mounts", "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                mount_point = _mount_path_unescape(parts[1]).rstrip("/") or "/"
+                fs_type = str(parts[2] or "").strip().lower()
+                if not fs_type:
+                    continue
+                if target == mount_point or target.startswith(mount_point + "/"):
+                    if len(mount_point) > len(best_mount):
+                        best_mount = mount_point
+                        best_fs = fs_type
+    except Exception:
+        return False
+    if not best_fs:
+        return False
+    return best_fs in network_fs or best_fs.startswith("nfs")
+
+
+@contextmanager
+def _local_lock_fcntl_context(path: Path, path_str: str, *, tries: int, sleep_base: float):
+    lf = None
+    acquired = False
+    _local_lock_ensure_parent(path)
+    try:
+        fd = os.open(path_str, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        lf = os.fdopen(fd, "a", encoding="utf-8")
+        for _ in range(tries):
+            try:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except Exception:
+                _local_lock_sleep_once(sleep_base)
+    except Exception:
+        lf = None
+    try:
+        yield acquired
+    finally:
+        try:
+            if acquired and lf is not None:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            if lf is not None:
+                lf.close()
+        except Exception:
+            pass
+
+
+@contextmanager
+def _local_lock_excl_context(
+    path: Path,
+    path_str: str,
+    *,
+    tries: int,
+    sleep_base: float,
+    stale_after: float | None,
+):
+    fd = None
+    acquired = False
+    for _ in range(tries):
+        _local_lock_ensure_parent(path)
+        try:
+            fd = os.open(path_str, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
+            try:
+                payload = f"{os.getpid()} {int(time.time())}\n"
+                os.write(fd, payload.encode("ascii", "replace"))
+            except Exception:
+                pass
+            acquired = True
+            break
+        except FileExistsError:
+            pid_stale = _local_lock_stale_pid(path_str, stale_after)
+            age_stale = False
+            if stale_after is not None:
+                age = _local_lock_age(path_str)
+                if age is not None and age >= float(stale_after):
+                    age_stale = True
+            if pid_stale and age_stale:
+                try:
+                    os.unlink(path_str)
+                except Exception:
+                    pass
+            else:
+                _local_lock_sleep_once(sleep_base)
+        except Exception:
+            break
+    try:
+        yield acquired
+    finally:
+        try:
+            if acquired and fd is not None:
+                os.close(fd)
+        except Exception:
+            pass
+        try:
+            if acquired and fd is not None:
+                os.unlink(path_str)
+        except Exception:
+            pass
+
+
+@contextmanager
+def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, stale_after: float | None = 60.0):
+    path_str = str(path) if path else ""
+    if not path_str:
+        yield False
+        return
+
+    tries = max(1, int(retries or 0))
+    if fcntl is None and _path_looks_network_mount(path):
+        _diag(f"queue lock fallback disabled on network mount: {path}")
+        yield False
+        return
+    if fcntl is not None:
+        with _local_lock_fcntl_context(path, path_str, tries=tries, sleep_base=sleep_base) as acquired:
+            yield acquired
+        return
+
+    with _local_lock_excl_context(
+        path,
+        path_str,
+        tries=tries,
+        sleep_base=sleep_base,
+        stale_after=stale_after,
+    ) as acquired:
+        yield acquired
+
+
+_DIAG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
+
+
+def _diag_redact_msg(msg: object) -> str:
+    raw = msg if isinstance(msg, str) else str(msg)
+    redactor = getattr(core, "diag_log_redact", None) if core is not None else None
+    if callable(redactor):
+        try:
+            red = redactor(raw)
+            return red if isinstance(red, str) else str(red)
+        except Exception:
+            pass
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            for k in list(data.keys()):
+                if k in _DIAG_REDACT_KEYS:
+                    data[k] = "[redacted]"
+            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        pass
+    return raw
+
+
+def _diag(msg: str) -> None:
+    safe_msg = _diag_redact_msg(msg)
+    if core is not None:
+        core.diag(safe_msg, "on-exit", str(TW_DATA_DIR))
+    elif os.environ.get("NAUTICAL_DIAG") == "1":
+        try:
+            sys.stderr.write(f"[nautical] {safe_msg}\n")
+        except Exception:
+            pass
+
+
+def _diag_block(title: str, items, *, columns: int = 3) -> None:
+    if os.environ.get("NAUTICAL_DIAG") != "1":
+        return
+    try:
+        pairs = [f"{k}={v}" for k, v in (items or ())]
+        _diag(f"{title}:")
+        step = max(1, int(columns or 1))
+        for idx in range(0, len(pairs), step):
+            _diag("  " + "  ".join(pairs[idx:idx + step]))
+    except Exception:
+        pass
+
+
+def _emit_exit_feedback(msg: str) -> None:
+    """Write failing-hook feedback for Taskwarrior and keep stderr diagnostics."""
+    seen: set[int] = set()
+    for stream in (getattr(sys, "__stdout__", None), getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
+        if stream is None:
+            continue
+        ident = id(stream)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        try:
+            stream.write(msg + "\n")
+            stream.flush()
+        except Exception:
+            pass
+
+
+def _run_task_retry_or_stop(attempt: int, attempts: int, delay: float) -> bool:
+    if attempt >= attempts or delay <= 0:
+        return False
+    jitter = random.uniform(0.0, delay)
+    _sleep(delay * (2 ** (attempt - 1)) + jitter)
+    return True
+
+
+def _run_task_terminate(proc: subprocess.Popen | None) -> None:
+    if proc is None:
+        return
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=1.0)
+    except Exception:
+        pass
+
+
+def _run_task_attempt(
+    cmd: list[str],
+    *,
+    env: dict[str, str],
+    input_text: str | None,
+    timeout: float,
+) -> tuple[bool, str, str]:
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            close_fds=True,
+            env=env,
+        )
+        try:
+            out, err = proc.communicate(input=input_text, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if proc is not None:
+                proc.kill()
+            try:
+                out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
+            except Exception:
+                out, err = "", ""
+            return False, out or "", "timeout"
+        out = out or ""
+        err = err or ""
+        if proc.returncode == 0:
+            return True, out, err
+        return False, out, err
+    except subprocess.TimeoutExpired:
+        _run_task_terminate(proc)
+        return False, "", "timeout"
+    except Exception as e:
+        _run_task_terminate(proc)
+        return False, "", str(e)
+
+
+def _run_task(
+    cmd: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    input_text: str | None = None,
+    timeout: float = 6.0,
+    retries: int = 1,
+    retry_delay: float = 0.0,
+) -> tuple[bool, str, str]:
+    started = time.perf_counter()
+    ok = False
+    env_map = env or os.environ.copy()
+    run_fn = core.run_task if core is not None else None
+    hook_support = _module("hook_support", required=False)
+    try:
+        if hook_support is not None:
+            result = hook_support.run_task(
+                cmd,
+                core_run_task=run_fn,
+                env=env_map,
+                input_text=input_text,
+                timeout=timeout,
+                retries=max(1, int(retries)),
+                retry_delay=max(0.0, float(retry_delay)),
+            )
+            ok = bool(result[0]) if isinstance(result, tuple) and result else False
+            return result
+        if run_fn is not None:
+            result = run_fn(
+                cmd,
+                env=env_map,
+                input_text=input_text,
+                timeout=timeout,
+                retries=max(1, int(retries)),
+                retry_delay=max(0.0, float(retry_delay)),
+            )
+            ok = bool(result[0]) if isinstance(result, tuple) and result else False
+            return result
+        attempts = max(1, int(retries))
+        delay = max(0.0, float(retry_delay))
+        last_out = ""
+        last_err = ""
+        for attempt in range(1, attempts + 1):
+            ok, out, err = _run_task_attempt(
+                cmd,
+                env=env_map,
+                input_text=input_text,
+                timeout=timeout,
+            )
+            last_out = out or ""
+            last_err = err or ""
+            if ok:
+                return True, last_out, last_err
+            if _run_task_retry_or_stop(attempt, attempts, delay):
+                continue
+            return (False, last_out, last_err)
+        return (False, last_out, last_err)
+    finally:
+        elapsed = time.perf_counter() - started
+        _diag_count_exit("run_task_calls")
+        _diag_count_exit("run_task_seconds", elapsed)
+        _diag_record_run_task(cmd, ok=ok, elapsed=elapsed)
+        if not ok:
+            _diag_count_exit("run_task_failures")
+
+
+def _is_lock_error(err: str) -> bool:
+    if core is not None:
+        return core.is_lock_error(err)
+    e = (err or "").lower()
+    return (
+        "database is locked" in e or "unable to lock" in e
+        or "resource temporarily unavailable" in e or "another task is running" in e
+        or "lock file" in e or "lockfile" in e or "locked by" in e or "timeout" in e
+    )
+
+def _tw_lock_path() -> Path:
+    return _tw_data_dir_path() / "lock"
+
+def _tw_lock_recent(max_age_s: float = 5.0) -> bool:
+    try:
+        p = _tw_lock_path()
+        if not p.exists():
+            return False
+        age = time.time() - p.stat().st_mtime
+        return age >= 0 and age <= max_age_s
+    except Exception:
+        return False
+
+def _sleep(secs: float) -> None:
+    time.sleep(secs)
+
+def _record_queue_lock_failure() -> None:
+    state = _exit_runtime_state()
+    state.queue_lock_failures_this_run += 1
+    now = time.time()
+    if now - state.last_queue_lock_diag_ts >= 60.0:
+        _diag("queue lock not acquired; drain deferred")
+        state.last_queue_lock_diag_ts = now
+    try:
+        payload: dict[str, Any] = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "reason": "queue lock busy",
+        }
+        _QUEUE_LOCK_FAIL_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(_QUEUE_LOCK_FAIL_MARKER), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+    try:
+        count = 0
+        if _QUEUE_LOCK_FAIL_COUNT.exists():
+            try:
+                data = json.loads(_QUEUE_LOCK_FAIL_COUNT.read_text(encoding="utf-8") or "{}")
+                count = int(data.get("count") or 0)
+            except Exception:
+                count = 0
+        count += 1
+        payload = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "count": count,
+        }
+        _QUEUE_LOCK_FAIL_COUNT.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(_QUEUE_LOCK_FAIL_COUNT), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
+@contextmanager
+def _lock_dead_letter():
+    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
+    with lock_fn(
+        _DEAD_LETTER_LOCK,
+        retries=_QUEUE_LOCK_RETRIES,
+        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
+        stale_after=_QUEUE_LOCK_STALE_AFTER,
+    ) as acquired:
+        yield acquired
+
+
+def _intent_log_path() -> Path:
+    return _nautical_state_dir_path() / ".nautical_spawn_intents.jsonl"
+
+
+def _intent_log_lock_path() -> Path:
+    return _nautical_lock_dir_path() / ".nautical_spawn_intents.lock"
+
+
+@contextmanager
+def _lock_intent_log():
+    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
+    with lock_fn(
+        _intent_log_lock_path(),
+        retries=_QUEUE_LOCK_RETRIES,
+        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
+        stale_after=_QUEUE_LOCK_STALE_AFTER,
+    ) as acquired:
+        yield acquired
+
+
+def _parent_nextlink_lock_path(parent_uuid: str) -> Path:
+    raw = (parent_uuid or "").strip().lower()
+    safe = "".join(ch for ch in raw if ch.isalnum())
+    if not safe:
+        safe = "unknown"
+    if len(safe) > 64:
+        safe = safe[:64]
+    return _nautical_lock_dir_path() / f".nautical_parent_nextlink.{safe}.lock"
+
+
+@contextmanager
+def _lock_parent_nextlink(parent_uuid: str):
+    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
+    with lock_fn(
+        _parent_nextlink_lock_path(parent_uuid),
+        retries=_QUEUE_LOCK_RETRIES,
+        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
+        stale_after=_QUEUE_LOCK_STALE_AFTER,
+    ) as acquired:
+        yield acquired
+
+
+def _intent_log_collect_final_states(path: Path) -> dict[str, str] | None:
+    final_states: dict[str, str] = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                ln = line.strip()
+                if not ln:
+                    continue
+                try:
+                    obj = json.loads(ln)
+                except Exception:
+                    continue
+                sid = (obj.get("spawn_intent_id") or "").strip()
+                status = (obj.get("status") or "").strip().lower()
+                if not sid or status not in {"done", "dead"}:
+                    continue
+                if sid in final_states:
+                    final_states.pop(sid, None)
+                final_states[sid] = status
+        return final_states
+    except Exception as e:
+        _diag(f"intent log read failed: {e}")
+        return None
+
+
+def _intent_log_needs_compact(path: Path, final_states: dict[str, str]) -> bool:
+    try:
+        st_size = path.stat().st_size
+    except Exception:
+        st_size = 0
+    return bool(
+        (_INTENT_LOG_MAX_BYTES > 0 and st_size > _INTENT_LOG_MAX_BYTES)
+        or (_INTENT_LOG_MAX_ENTRIES > 0 and len(final_states) > _INTENT_LOG_MAX_ENTRIES)
+    )
+
+
+def _intent_log_trim_states(final_states: dict[str, str]) -> None:
+    if _INTENT_LOG_MAX_ENTRIES <= 0:
+        return
+    if len(final_states) <= _INTENT_LOG_MAX_ENTRIES:
+        return
+    drop_n = len(final_states) - _INTENT_LOG_MAX_ENTRIES
+    for sid in list(final_states.keys())[:drop_n]:
+        final_states.pop(sid, None)
+
+
+def _intent_log_compact(path: Path, final_states: dict[str, str]) -> None:
+    tmp_path = path.with_suffix(".staging")
+    try:
+        fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            pass
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for sid, status in final_states.items():
+                payload = {
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "hook": "on-exit",
+                    "hook_version": NAUTICAL_HOOK_VERSION,
+                    "status": status,
+                    "spawn_intent_id": sid,
+                    "reason": "compacted",
+                }
+                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+            if _DURABLE_QUEUE:
+                try:
+                    f.flush()
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+        os.replace(tmp_path, path)
+        if _DURABLE_QUEUE:
+            _fsync_dir(path.parent)
+    except Exception as e:
+        _diag(f"intent log compaction failed: {e}")
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+
+
+def _load_finalized_intents() -> tuple[set[str], bool]:
+    """Return finalized spawn_intent_id set, with best-effort compaction."""
+    p = _intent_log_path()
+    with _lock_intent_log() as locked:
+        if not locked:
+            _diag("intent log lock busy; idempotency disabled for this drain")
+            return set(), False
+        try:
+            if not p.exists():
+                return set(), True
+        except Exception:
+            return set(), True
+        final_states = _intent_log_collect_final_states(p)
+        if final_states is None:
+            return set(), False
+
+        needs_compact = _intent_log_needs_compact(p, final_states)
+        _intent_log_trim_states(final_states)
+        if needs_compact:
+            _intent_log_compact(p, final_states)
+    return set(final_states.keys()), True
+
+
+def _mark_intent_status(spawn_intent_id: str, status: str, reason: str = "") -> bool:
+    sid = (spawn_intent_id or "").strip()
+    st = (status or "").strip().lower()
+    if not sid or st not in {"done", "dead"}:
+        return False
+    payload = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "hook": "on-exit",
+        "hook_version": NAUTICAL_HOOK_VERSION,
+        "status": st,
+        "spawn_intent_id": sid,
+        "reason": reason,
+    }
+    p = _intent_log_path()
+    with _lock_intent_log() as locked:
+        if not locked:
+            _diag(f"intent log lock busy; could not mark {sid} as {st}")
+            return False
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            fd = os.open(str(p), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except Exception:
+                pass
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+                if _DURABLE_QUEUE:
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                        _fsync_dir(p.parent)
+                    except Exception:
+                        pass
+            return True
+        except Exception as e:
+            _diag(f"intent log write failed ({sid}={st}): {e}")
+            return False
+
+
+def _lock_backoff_delay(streak: int) -> float:
+    if streak <= 0:
+        return 0.0
+    base = max(0.0, float(_LOCK_BACKOFF_BASE or 0.0))
+    cap = max(0.0, float(_LOCK_BACKOFF_MAX or 0.0))
+    if base <= 0.0:
+        return 0.0
+    exp = min(int(streak), 8)
+    delay = base * (2 ** (exp - 1))
+    delay = min(delay, cap if cap > 0 else delay)
+    jitter = random.uniform(0.0, base) if base > 0 else 0.0
+    return delay + jitter
+
+
+def _write_dead_letter(entry: dict, reason: str) -> None:
+    queue_store = _module("queue_store")
+    payload = queue_store.build_dead_letter_payload(
+        hook="on-exit",
+        hook_version=NAUTICAL_HOOK_VERSION,
+        entry=entry,
+        reason=reason,
+    )
+    queue_store.append_dead_letter_jsonl(
+        path=_DEAD_LETTER_PATH,
+        payload=payload,
+        durable=_DURABLE_QUEUE,
+        acquire_lock=_lock_dead_letter,
+        diag=_diag,
+        max_bytes=_DEAD_LETTER_MAX_BYTES,
+        retention_days=_DEAD_LETTER_RETENTION_DAYS,
+    )
+
+def _fsync_dir(path: Path) -> None:
+    queue_store = _module("queue_store", required=False)
+    if queue_store is not None:
+        queue_store.fsync_dir(path)
+        return
+    try:
+        fd = os.open(str(path), os.O_DIRECTORY)
+    except Exception:
+        return
+    try:
+        os.fsync(fd)
+    except Exception:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+
+def _queue_db_connect_result():
+    state = _exit_runtime_state()
+    queue_store = _module("queue_store")
+    db_path = _QUEUE_DB_PATH
+    timeout_base = max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0)
+    timeout_max = max(timeout_base, float(_QUEUE_DB_CONNECT_TIMEOUT_MAX or timeout_base))
+    result = queue_store.connect_queue_db_result(
+        db_path,
+        attempts=max(1, int(_QUEUE_DB_CONNECT_RETRIES or 1)),
+        timeout_base=timeout_base,
+        timeout_max=timeout_max,
+        backoff_base=float(_QUEUE_DB_CONNECT_BACKOFF_BASE or 0.0),
+        row_factory=sqlite3.Row,
+        diag=_diag,
+        sleep_fn=_sleep,
+    )
+    if result.conn is not None:
+        state.queue_db_open_count += 1
+    return result
+
+
+def _queue_db_init(conn: sqlite3.Connection) -> None:
+    queue_store = _module("queue_store")
+    queue_store.init_queue_db(conn)
+
+
+def _queue_db_open_ready() -> sqlite3.Connection | None:
+    state = _exit_runtime_state()
+    if state.run_queue_db_active and state.run_queue_db_conn is not None:
+        try:
+            state.run_queue_db_conn.execute("SELECT 1")
+            state.queue_db_reuse_count += 1
+            return state.run_queue_db_conn
+        except Exception:
+            _queue_close_silent(state.run_queue_db_conn)
+            state.run_queue_db_conn = None
+    queue_store = _module("queue_store")
+    db_path = _QUEUE_DB_PATH
+    result = queue_store.open_ready_queue_db_result(
+        db_path,
+        connect_fn=_queue_db_connect_result,
+        init_fn=_queue_db_init,
+        close_fn=_queue_close_silent,
+        diag=_diag,
+    )
+    conn = result.conn
+    if state.run_queue_db_active and conn is not None:
+        state.run_queue_db_conn = conn
+    return conn
+
+
+def _queue_db_open_fresh_ready() -> sqlite3.Connection | None:
+    queue_store = _module("queue_store")
+    db_path = _QUEUE_DB_PATH
+    result = queue_store.open_ready_queue_db_result(
+        db_path,
+        connect_fn=_queue_db_connect_result,
+        init_fn=_queue_db_init,
+        close_fn=_queue_close_silent,
+        diag=_diag,
+    )
+    return result.conn
+
+
+def _queue_close_silent(conn: sqlite3.Connection) -> None:
+    if conn is None:
+        return
+    state = _exit_runtime_state()
+    if state.run_queue_db_active and conn is state.run_queue_db_conn:
+        return
+    queue_store = _module("queue_store")
+    queue_store.close_silent(conn)
+
+
+def _take_queue_entries_sqlite_batch():
+    conn = _queue_db_open_ready()
+    exit_models = _module("exit_models")
+    if conn is None:
+        return exit_models.ExitQueueBatch(entries=[])
+    token = f"drain-{os.getpid()}-{int(time.time() * 1000)}"
+    now = time.time()
+    queue_store = _module("queue_store")
+    claim = queue_store.claim_rows_sqlite_result(
+        conn,
+        token=token,
+        now=now,
+        processing_stale_after=_QUEUE_PROCESSING_STALE_AFTER,
+        max_lines=_QUEUE_MAX_LINES,
+        diag=_diag,
+        on_lock_busy=_record_queue_lock_failure,
+    )
+    entries = queue_store.rows_to_entries_result(claim.rows).entries
+    _queue_close_silent(conn)
+    return exit_models.ExitQueueBatch(entries=entries)
+
+
+def _ack_queue_entries_sqlite_result(entry_ids: list[int]):
+    conn = _queue_db_open_fresh_ready()
+    exit_models = _module("exit_models")
+    ids = [int(raw) for raw in (entry_ids or []) if str(raw).isdigit() and int(raw) > 0]
+    if conn is None:
+        return exit_models.ExitQueueWriteResult(ok=False, count=len(ids))
+    try:
+        queue_store = _module("queue_store")
+        result = queue_store.ack_entry_ids_sqlite_result(
+            conn,
+            ids,
+            diag=_diag,
+            on_lock_busy=_record_queue_lock_failure,
+        )
+        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
+    finally:
+        _queue_close_silent(conn)
+
+
+def _requeue_entries_sqlite_result(entries: list[dict]):
+    conn = _queue_db_open_fresh_ready()
+    exit_models = _module("exit_models")
+    items = [
+        entry
+        for entry in (entries or [])
+        if isinstance(entry, dict) and entry.get("__queue_backend") == "sqlite" and entry.get("__queue_id")
+    ]
+    if conn is None:
+        return exit_models.ExitQueueWriteResult(ok=False, count=len(items))
+    try:
+        queue_store = _module("queue_store")
+        result = queue_store.requeue_entries_sqlite_result(
+            conn,
+            items,
+            now=time.time(),
+            diag=_diag,
+            on_lock_busy=_record_queue_lock_failure,
+        )
+        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
+    finally:
+        _queue_close_silent(conn)
+
+
+def _enqueue_entries_sqlite_result(entries: list[dict]):
+    conn = _queue_db_open_ready()
+    exit_models = _module("exit_models")
+    items = [entry for entry in (entries or []) if isinstance(entry, dict)]
+    if conn is None:
+        return exit_models.ExitQueueWriteResult(ok=False, count=len(items))
+    try:
+        queue_store = _module("queue_store")
+        result = queue_store.enqueue_entries_sqlite_result(
+            conn,
+            items,
+            now=time.time(),
+            diag=_diag,
+            on_lock_busy=_record_queue_lock_failure,
+        )
+        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
+    finally:
+        _queue_close_silent(conn)
+
+
+def _normalize_queue_entry(entry: dict) -> dict:
+    queue_models = _module("queue_models")
+    return queue_models.normalize_spawn_queue_entry(entry)
+
+
+def _validate_queue_entry(entry: dict) -> tuple[bool, str]:
+    try:
+        _normalize_queue_entry(entry)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+def _bump_attempts(entry: dict) -> int:
+    try:
+        attempts = int(entry.get("attempts") or 0)
+    except Exception:
+        attempts = 0
+    attempts += 1
+    entry["attempts"] = attempts
+    return attempts
+
+def _short_uuid(value: str) -> str:
+    exit_queries = _module("exit_queries")
+    return exit_queries.short_uuid(value, core=core)
+
+
+def _equivalent_child_cache_key(child: dict, parent_uuid: str = "") -> tuple[str, str, str] | None:
+    if not isinstance(child, dict):
+        return None
+    chain_id = str(child.get("chainID") or "").strip()
+    link_no = child.get("link")
+    if not chain_id or link_no in (None, ""):
+        return None
+    try:
+        link_token = str(int(link_no))
+    except Exception:
+        return None
+    prev_link = str(child.get("prevLink") or "").strip()
+    if not prev_link and parent_uuid:
+        prev_link = _short_uuid(parent_uuid)
+    return (chain_id, link_token, prev_link)
+
+
+def _pick_equivalent_child_row(rows: list[dict]) -> dict | None:
+    for wanted in ("pending", "waiting", "completed"):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if (row.get("status") or "").strip().lower() != wanted:
+                continue
+            if (row.get("uuid") or "").strip():
+                return row
+    for row in rows:
+        if isinstance(row, dict) and (row.get("uuid") or "").strip():
+            return row
+    return None
+
+
+def _preload_equivalent_child_slots(entries: list[dict]) -> None:
+    exit_models = _module("exit_models")
+    slot_specs: dict[tuple[str, str, str], list[str]] = {}
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        child = entry.get("child") or {}
+        parent_uuid = str(entry.get("parent_uuid") or "").strip()
+        key = _equivalent_child_cache_key(child, parent_uuid)
+        if key is None or key in slot_specs:
+            continue
+        chain_id, link_token, prev_link = key
+        clause = [f"chainID:{chain_id}", f"link:{link_token}"]
+        if prev_link:
+            clause.append(f"prevLink:{prev_link}")
+        clause.append("status.not:deleted")
+        slot_specs[key] = clause
+    if not slot_specs:
+        return
+    prefix = _task_cmd_prefix()
+    keys = list(slot_specs.keys())
+    _diag_count_exit("equivalent_child_preload_slots", len(keys))
+    for chunk_keys in _chunked(keys, _EXIT_EQUIV_PRELOAD_CHUNK_SIZE):
+        _diag_count_exit("equivalent_child_preload_chunks")
+        cmd = list(prefix) + ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off"]
+        first = True
+        for key in chunk_keys:
+            if not first:
+                cmd.append("or")
+            first = False
+            cmd.extend(slot_specs[key])
+        cmd.append("export")
+        ok, out, err = _run_task(
+            cmd,
+            timeout=_TASK_TIMEOUT_EXPORT,
+            retries=_TASK_RETRIES_EXPORT,
+            retry_delay=_TASK_RETRY_DELAY,
+        )
+        if not ok:
+            continue
+        try:
+            rows = json.loads((out or "").strip() or "[]")
+        except Exception:
+            continue
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list):
+            continue
+        grouped: dict[tuple[str, str, str], list[dict]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_key = _equivalent_child_cache_key(row)
+            if row_key is None:
+                continue
+            grouped.setdefault(row_key, []).append(row)
+        for key in chunk_keys:
+            selected = _pick_equivalent_child_row(grouped.get(key, []))
+            if selected is not None:
+                _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(True, False, "", selected)
+                _diag_count_exit("equivalent_child_preload_hits")
+            else:
+                _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(False, False, "not found", None)
+                _diag_count_exit("equivalent_child_preload_misses")
+
+
+def _equivalent_child_cache_get(child: dict, parent_uuid: str = ""):
+    key = _equivalent_child_cache_key(child, parent_uuid)
+    if key is None:
+        return None
+    cached = _exit_runtime_state().equiv_child_cache.get(key)
+    if cached is not None:
+        _diag_count_exit("equivalent_child_cache_hits")
+        return cached
+    _diag_count_exit("equivalent_child_cache_misses")
+    return None
+
+
+def _equivalent_child_cache_set(child: dict, parent_uuid: str, result) -> None:
+    key = _equivalent_child_cache_key(child, parent_uuid)
+    if key is None or result is None:
+        return
+    _exit_runtime_state().equiv_child_cache[key] = result
+
+
+def _seed_equivalent_child_cache(child: dict, parent_uuid: str, child_uuid: str) -> None:
+    key = _equivalent_child_cache_key(child, parent_uuid)
+    if key is None or not child_uuid:
+        return
+    exit_models = _module("exit_models")
+    row = dict(child or {}) if isinstance(child, dict) else {}
+    row["uuid"] = child_uuid
+    if not row.get("prevLink") and parent_uuid:
+        row["prevLink"] = _short_uuid(parent_uuid)
+    _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(True, False, "", row)
+    _diag_count_exit("equivalent_child_cache_seeded")
+
+
+def _export_uuid(uuid_str: str, *, prefer_cache: bool = True):
+    if prefer_cache:
+        cached = _export_cache_get(uuid_str)
+        if cached is not None:
+            return cached
+    exit_queries = _module("exit_queries")
+    hook_support = _module("hook_support", required=False)
+    result = exit_queries.export_uuid(
+        uuid_str,
+        hook_support=hook_support,
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        timeout=_TASK_TIMEOUT_EXPORT,
+        retries=_TASK_RETRIES_EXPORT,
+        retry_delay=_TASK_RETRY_DELAY,
+        is_lock_error=_is_lock_error,
+    )
+    if not result.retryable:
+        _export_cache_set(uuid_str, result)
+    return result
+
+
+def _existing_equivalent_child(child: dict, parent_uuid: str = ""):
+    cached = _equivalent_child_cache_get(child, parent_uuid)
+    if cached is not None:
+        return cached
+    exit_queries = _module("exit_queries")
+    result = exit_queries.existing_equivalent_child(
+        child,
+        parent_uuid=parent_uuid,
+        task_cmd_prefix=_task_cmd_prefix(),
+        run_task=_run_task,
+        timeout=_TASK_TIMEOUT_EXPORT,
+        retries=_TASK_RETRIES_EXPORT,
+        retry_delay=_TASK_RETRY_DELAY,
+        is_lock_error=_is_lock_error,
+        short_uuid_fn=_short_uuid,
+    )
+    if not result.retryable:
+        _equivalent_child_cache_set(child, parent_uuid, result)
+    return result
+
+
+def _import_child(obj: dict):
+    exit_side_effects = _module("exit_side_effects")
+    return exit_side_effects.import_child(
+        obj,
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        timeout_import=_TASK_TIMEOUT_IMPORT,
+        is_lock_error=_is_lock_error,
+        sleep=_sleep,
+        random_uniform=random.uniform,
+    )
+
+
+def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: str | None = None):
+    exit_side_effects = _module("exit_side_effects")
+    return exit_side_effects.update_parent_nextlink(
+        parent_uuid,
+        child_short,
+        expected_prev=expected_prev,
+        lock_parent_nextlink=_lock_parent_nextlink,
+        parent_nextlink_state_fn=lambda parent_uuid, child_short, expected_prev: _parent_nextlink_state(
+            parent_uuid, child_short, expected_prev, prefer_cache=False
+        ),
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        timeout_modify=_TASK_TIMEOUT_MODIFY,
+        retries_modify=_TASK_RETRIES_MODIFY,
+        retry_delay=_TASK_RETRY_DELAY,
+    )
+
+
+def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: str | None = None, *, prefer_cache: bool = True):
+    exit_side_effects = _module("exit_side_effects")
+    return exit_side_effects.parent_nextlink_state(
+        parent_uuid,
+        child_short,
+        expected_prev=expected_prev,
+        export_uuid=lambda uuid_str: _export_uuid(uuid_str, prefer_cache=prefer_cache),
+    )
+
+
+def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
+    exit_side_effects = _module("exit_side_effects")
+    exit_side_effects.cleanup_orphan_child(
+        child_uuid,
+        spawn_intent_id=spawn_intent_id,
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        timeout_modify=_TASK_TIMEOUT_MODIFY,
+        retries_modify=_TASK_RETRIES_MODIFY,
+        retry_delay=_TASK_RETRY_DELAY,
+        diag=_diag,
+    )
+
+
+def _take_queue_batch():
+    return _take_queue_entries_sqlite_batch()
+
+
+def _take_queue_entries():
+    return _take_queue_batch().entries
+
+
+def _requeue_entries_result(entries: list[dict]):
+    exit_models = _module("exit_models")
+    items = [e for e in (entries or []) if isinstance(e, dict)]
+    if not items:
+        return exit_models.ExitRequeueResult(ok=True, failed=0)
+    claimed: list[dict] = []
+    fresh: list[dict] = []
+    for e in items:
+        if (e.get("__queue_backend") == "sqlite") and e.get("__queue_id"):
+            claimed.append(e)
+        else:
+            fresh.append(e)
+    claimed_result = _requeue_entries_sqlite_result(claimed) if claimed else exit_models.ExitQueueWriteResult(ok=True, count=0)
+    fresh_result = _enqueue_entries_sqlite_result(fresh) if fresh else exit_models.ExitQueueWriteResult(ok=True, count=0)
+    ok = claimed_result.ok and fresh_result.ok
+    failed = 0 if ok else len(items)
+    return exit_models.ExitRequeueResult(ok=ok, failed=failed)
+
+
+class _DrainState:
+    def __init__(
+        self,
+        entries: list[dict],
+        entries_total: int,
+        finalized_intents: set[str],
+        intent_log_ready: bool,
+        intent_log_load_ms: float,
+    ) -> None:
+        self.entries = entries
+        self.entries_total = entries_total
+        self.finalized_intents = finalized_intents
+        self.intent_log_ready = intent_log_ready
+        self.intent_log_load_ms = intent_log_load_ms
+        self.processed = 0
+        self.errors = 0
+        self.requeue: list[dict] = []
+        self.dead_lettered = 0
+        self.skipped_idempotent = 0
+        self.lock_events = 0
+        self.lock_streak = 0
+        self.lock_streak_max = 0
+        self.circuit_breaks = 0
+        self.intent_mark_ok = 0
+        self.intent_mark_fail = 0
+        self.sqlite_acked_ids: set[int] = set()
+
+    def mark_final(self, entry: dict, status: str, reason: str) -> None:
+        sid = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
+        if not sid:
+            return
+        if _mark_intent_status(sid, status, reason):
+            self.finalized_intents.add(sid)
+            self.intent_mark_ok += 1
+        else:
+            self.intent_mark_fail += 1
+
+    def queue_backend(self, entry: dict) -> str:
+        if not isinstance(entry, dict):
+            return "sqlite"
+        b = (entry.get("__queue_backend") or "").strip().lower()
+        return b if b else "sqlite"
+
+    def queue_id(self, entry: dict) -> int:
+        if not isinstance(entry, dict):
+            return 0
+        try:
+            return int(entry.get("__queue_id") or 0)
+        except Exception:
+            return 0
+
+    def entry_clean(self, entry: dict) -> dict:
+        if not isinstance(entry, dict):
+            return {}
+        out = dict(entry)
+        out.pop("__queue_backend", None)
+        out.pop("__queue_id", None)
+        return out
+
+    def ack_sqlite(self, entry: dict) -> None:
+        if self.queue_backend(entry) != "sqlite":
+            return
+        rid = self.queue_id(entry)
+        if rid > 0:
+            self.sqlite_acked_ids.add(rid)
+
+    def dead_letter(self, entry: dict, reason: str) -> None:
+        _write_dead_letter(self.entry_clean(entry), reason)
+        self.dead_lettered += 1
+        self.errors += 1
+        self.mark_final(entry, "dead", reason)
+        self.ack_sqlite(entry)
+
+    def record_lock_event(self, idx: int) -> bool:
+        self.lock_events += 1
+        self.lock_streak += 1
+        if self.lock_streak > self.lock_streak_max:
+            self.lock_streak_max = self.lock_streak
+        delay = _lock_backoff_delay(self.lock_streak)
+        if delay > 0:
+            _sleep(delay)
+        if _LOCK_STORM_THRESHOLD > 0 and self.lock_streak >= _LOCK_STORM_THRESHOLD and (idx + 1) < self.entries_total:
+            self.circuit_breaks += 1
+            self.requeue.extend(self.entries[idx + 1:])
+            _diag(
+                f"lock storm detected (streak={self.lock_streak}); "
+                f"requeued remaining {self.entries_total - (idx + 1)} entries"
+            )
+            return True
+        return False
+
+    def reset_lock_streak(self) -> None:
+        self.lock_streak = 0
+
+    def to_stats_model(self, drain_t0: float, requeue_ok: bool, requeue_failed: int):
+        exit_models = _module("exit_models")
+        return exit_models.ExitDrainStats(
+            processed=self.processed,
+            errors=self.errors,
+            requeued=len(self.requeue) if requeue_ok else 0,
+            requeue_failed=requeue_failed,
+            dead_lettered=self.dead_lettered,
+            queue_lock_failures=_exit_runtime_state().queue_lock_failures_this_run,
+            entries_total=self.entries_total,
+            entries_skipped_idempotent=self.skipped_idempotent,
+            lock_events=self.lock_events,
+            lock_streak_max=self.lock_streak_max,
+            circuit_breaks=self.circuit_breaks,
+            intent_log_ready=1 if self.intent_log_ready else 0,
+            intent_log_size=len(self.finalized_intents),
+            intent_log_load_ms=round(self.intent_log_load_ms, 3),
+            intent_mark_ok=self.intent_mark_ok,
+            intent_mark_fail=self.intent_mark_fail,
+            queue_db_opens=_exit_runtime_state().queue_db_open_count,
+            queue_db_reuses=_exit_runtime_state().queue_db_reuse_count,
+            preload_export_uuids=int(_exit_runtime_state().diag_stats.get("preload_export_uuids", 0)),
+            preload_export_hits=int(_exit_runtime_state().diag_stats.get("preload_export_hits", 0)),
+            preload_export_misses=int(_exit_runtime_state().diag_stats.get("preload_export_misses", 0)),
+            preload_export_chunks=int(_exit_runtime_state().diag_stats.get("preload_export_chunks", 0)),
+            drain_ms=round((time.perf_counter() - drain_t0) * 1000.0, 3),
+        )
+
+
+def _requeue_or_dead_letter_for_lock(entry: dict, idx: int, state: _DrainState) -> bool:
+    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+        state.dead_letter(entry, "exceeded retry budget")
+    else:
+        state.requeue.append(entry)
+    return state.record_lock_event(idx)
+
+
+def _handle_entry_gate(entry: dict, state: _DrainState) -> bool:
+    spawn_intent_id = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
+    if spawn_intent_id and spawn_intent_id in state.finalized_intents:
+        state.skipped_idempotent += 1
+        state.processed += 1
+        state.ack_sqlite(entry)
+        state.reset_lock_streak()
+        return True
+
+    valid, reason = _validate_queue_entry(entry)
+    if not valid:
+        state.dead_letter(entry, reason)
+        state.reset_lock_streak()
+        return True
+    return False
+
+
+def _build_exit_entry_context(
+    entry: dict,
+    idx: int,
+    state: _DrainState,
+    *,
+    parent_uuid: str,
+    child_short: str,
+    expected_parent_nextlink: str | None,
+    child: dict,
+    child_uuid: str,
+    spawn_intent_id: str,
+):
+    exit_models = _module("exit_models")
+    return exit_models.ExitEntryContext(
+        entry=entry,
+        idx=idx,
+        state=state,
+        parent_uuid=parent_uuid,
+        child_short=child_short,
+        expected_parent_nextlink=expected_parent_nextlink,
+        child=child,
+        child_uuid=child_uuid,
+        spawn_intent_id=spawn_intent_id,
+    )
+
+
+def _exit_runtime_services():
+    exit_runtime = _module("exit_runtime")
+    return exit_runtime.ExitRuntimeServices(
+        state=_exit_runtime_state(),
+        parent_nextlink_state=_parent_nextlink_state,
+        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
+        export_uuid=_export_uuid,
+        import_child=_import_child,
+        is_lock_error=_is_lock_error,
+        diag=_diag,
+        update_parent_nextlink=_update_parent_nextlink,
+        cleanup_orphan_child=_cleanup_orphan_child,
+    )
+
+
+def _precheck_parent_link_state(ctx) -> tuple[str, bool]:
+    exit_entry_flow = _module("exit_entry_flow")
+    exit_runtime = _module("exit_runtime")
+    services = exit_runtime.build_precheck_services(_exit_runtime_services())
+    return exit_entry_flow.precheck_parent_link_state(ctx, services=services)
+
+
+def _ensure_child_exists_for_entry(ctx, *, initial_export_res=None) -> tuple[str, bool]:
+    exit_entry_flow = _module("exit_entry_flow")
+    exit_runtime = _module("exit_runtime")
+    services = exit_runtime.build_ensure_child_services(_exit_runtime_services())
+    return exit_entry_flow.ensure_child_exists_for_entry(
+        ctx,
+        services=services,
+        initial_export_res=initial_export_res,
+    )
+
+
+def _apply_parent_update_for_entry(
+    ctx,
+    *,
+    parent_linked_already: bool,
+    imported: bool,
+) -> str:
+    exit_entry_flow = _module("exit_entry_flow")
+    exit_runtime = _module("exit_runtime")
+    services = exit_runtime.build_apply_parent_update_services(_exit_runtime_services())
+    return exit_entry_flow.apply_parent_update_for_entry(
+        ctx,
+        parent_linked_already=parent_linked_already,
+        imported=imported,
+        services=services,
+    )
+
+
+def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
+    if _handle_entry_gate(entry, state):
+        return False
+    queue_entry = entry
+    entry = _normalize_queue_entry(entry)
+
+    spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
+    parent_uuid = (entry.get("parent_uuid") or "").strip()
+    expected_parent_nextlink = (entry.get("parent_nextlink") or "").strip()
+    child = entry.get("child") or {}
+    child_short = (entry.get("child_short") or "").strip()
+    child_uuid = (child.get("uuid") or "").strip()
+    exact_child = _export_uuid(child_uuid)
+    if exact_child.retryable:
+        return _requeue_or_dead_letter_for_lock(entry, idx, state)
+    child_already_exists = bool(exact_child.exists)
+    if not exact_child.exists:
+        equivalent = _existing_equivalent_child(child, parent_uuid)
+        if equivalent.retryable:
+            return _requeue_or_dead_letter_for_lock(entry, idx, state)
+        existing_obj = equivalent.obj
+        if isinstance(existing_obj, dict):
+            child_uuid = (existing_obj.get("uuid") or "").strip()
+            child_short = _short_uuid(child_uuid)
+            child_already_exists = bool(child_uuid)
+            if child_short:
+                if spawn_intent_id:
+                    _diag(
+                        f"equivalent child already exists; binding intent {spawn_intent_id} "
+                        f"to child {child_short}"
+                    )
+                else:
+                    _diag(f"equivalent child already exists; binding to child {child_short}")
+
+    ctx = _build_exit_entry_context(
+        queue_entry,
+        idx,
+        state,
+        parent_uuid=parent_uuid,
+        child_short=child_short,
+        expected_parent_nextlink=expected_parent_nextlink or None,
+        child=child,
+        child_uuid=child_uuid,
+        spawn_intent_id=spawn_intent_id,
+    )
+
+    link_action, parent_linked_already = _precheck_parent_link_state(ctx)
+    if link_action == "break":
+        return True
+    if link_action == "continue":
+        return False
+
+    if child_already_exists:
+        child_action, imported = ("ok", False)
+    else:
+        child_action, imported = _ensure_child_exists_for_entry(ctx, initial_export_res=exact_child)
+    if child_action == "break":
+        return True
+    if child_action == "continue":
+        return False
+
+    parent_action = _apply_parent_update_for_entry(
+        ctx,
+        parent_linked_already=parent_linked_already,
+        imported=imported,
+    )
+    if parent_action == "break":
+        return True
+    if parent_action == "continue":
+        return False
+
+    _seed_equivalent_child_cache(child, parent_uuid, child_uuid)
+    state.processed += 1
+    state.mark_final(queue_entry, "done", "processed")
+    state.ack_sqlite(queue_entry)
+    state.reset_lock_streak()
+    return False
+
+
+def _drain_queue_result():
+    exit_drain_flow = _module("exit_drain_flow")
+    return exit_drain_flow.drain_queue_result(
+        services=exit_drain_flow.ExitDrainServices(
+            queue_db_begin_run=_queue_db_begin_run,
+            queue_db_end_run=_queue_db_end_run,
+            take_queue_batch=_take_queue_batch,
+            load_finalized_intents=_load_finalized_intents,
+            exit_progress_scope=_exit_progress_scope,
+            preload_export_uuids=_preload_export_uuids,
+            preload_equivalent_child_slots=_preload_equivalent_child_slots,
+            process_queue_entry=_process_queue_entry,
+            requeue_entries_result=_requeue_entries_result,
+            ack_queue_entries_sqlite_result=_ack_queue_entries_sqlite_result,
+            drain_state_factory=_DrainState,
+            exit_models=_module("exit_models"),
+            diag=_diag,
+        )
+    )
+
+
+def _drain_queue() -> dict:
+    return _drain_queue_result().to_dict()
+
+
+def _redirect_stdout_to_devnull() -> None:
+    hook_results = _module("hook_results")
+    hook_results.redirect_stdout_to_devnull()
+
+
+def _emit_drain_stats_diag(stats: dict) -> None:
+    if os.environ.get("NAUTICAL_DIAG") != "1":
+        return
+    startup_stats = _exit_runtime_state().startup_stats
+    if startup_stats:
+        _diag_block("on-exit startup", startup_stats.items(), columns=2)
+    drain_items = [
+        ("entries_total", stats.get("entries_total", 0)),
+        ("idempotent_skipped", stats.get("entries_skipped_idempotent", 0)),
+        ("processed", stats.get("processed", 0)),
+        ("errors", stats.get("errors", 0)),
+        ("requeued", stats.get("requeued", 0)),
+        ("requeue_failed", stats.get("requeue_failed", 0)),
+        ("dead_lettered", stats.get("dead_lettered", 0)),
+        ("queue_lock_failures", stats.get("queue_lock_failures", 0)),
+        ("lock_events", stats.get("lock_events", 0)),
+        ("lock_streak_max", stats.get("lock_streak_max", 0)),
+        ("circuit_breaks", stats.get("circuit_breaks", 0)),
+        ("intent_log_ready", stats.get("intent_log_ready", 0)),
+        ("intent_log_size", stats.get("intent_log_size", 0)),
+        ("intent_mark_ok", stats.get("intent_mark_ok", 0)),
+        ("intent_mark_fail", stats.get("intent_mark_fail", 0)),
+        ("intent_log_load_ms", stats.get("intent_log_load_ms", 0)),
+        ("queue_db_opens", stats.get("queue_db_opens", 0)),
+        ("queue_db_reuses", stats.get("queue_db_reuses", 0)),
+        ("preload_export_uuids", stats.get("preload_export_uuids", 0)),
+        ("preload_export_hits", stats.get("preload_export_hits", 0)),
+        ("preload_export_misses", stats.get("preload_export_misses", 0)),
+        ("preload_export_chunks", stats.get("preload_export_chunks", 0)),
+        ("drain_ms", stats.get("drain_ms", 0)),
+    ]
+    _diag_block("on-exit drain", drain_items, columns=3)
+    diag_stats = _exit_runtime_state().diag_stats
+    task_stats = {
+        "run_task_calls": diag_stats.get("run_task_calls", 0),
+        "run_task_failures": diag_stats.get("run_task_failures", 0),
+        "run_task_calls_export_uuid": diag_stats.get("run_task_calls_export_uuid", 0),
+        "run_task_calls_export_equivalent_child": diag_stats.get("run_task_calls_export_equivalent_child", 0),
+        "run_task_calls_import": diag_stats.get("run_task_calls_import", 0),
+        "run_task_calls_modify_parent_nextlink": diag_stats.get("run_task_calls_modify_parent_nextlink", 0),
+        "run_task_calls_modify_cleanup": diag_stats.get("run_task_calls_modify_cleanup", 0),
+        "run_task_calls_modify_other": diag_stats.get("run_task_calls_modify_other", 0),
+        "run_task_calls_export_other": diag_stats.get("run_task_calls_export_other", 0),
+        "run_task_calls_other": diag_stats.get("run_task_calls_other", 0),
+        "run_task_failures_export_uuid": diag_stats.get("run_task_failures_export_uuid", 0),
+        "run_task_failures_export_equivalent_child": diag_stats.get("run_task_failures_export_equivalent_child", 0),
+        "run_task_failures_import": diag_stats.get("run_task_failures_import", 0),
+        "run_task_failures_modify_parent_nextlink": diag_stats.get("run_task_failures_modify_parent_nextlink", 0),
+        "run_task_failures_modify_cleanup": diag_stats.get("run_task_failures_modify_cleanup", 0),
+        "run_task_failures_modify_other": diag_stats.get("run_task_failures_modify_other", 0),
+        "run_task_failures_export_other": diag_stats.get("run_task_failures_export_other", 0),
+        "run_task_failures_other": diag_stats.get("run_task_failures_other", 0),
+        "run_task_seconds_export_uuid": round(float(diag_stats.get("run_task_seconds_export_uuid", 0.0)), 4),
+        "run_task_seconds_export_equivalent_child": round(float(diag_stats.get("run_task_seconds_export_equivalent_child", 0.0)), 4),
+        "run_task_seconds_import": round(float(diag_stats.get("run_task_seconds_import", 0.0)), 4),
+        "equivalent_child_cache_hits": diag_stats.get("equivalent_child_cache_hits", 0),
+        "equivalent_child_cache_misses": diag_stats.get("equivalent_child_cache_misses", 0),
+        "equivalent_child_cache_seeded": diag_stats.get("equivalent_child_cache_seeded", 0),
+        "equivalent_child_preload_slots": diag_stats.get("equivalent_child_preload_slots", 0),
+        "equivalent_child_preload_hits": diag_stats.get("equivalent_child_preload_hits", 0),
+        "equivalent_child_preload_misses": diag_stats.get("equivalent_child_preload_misses", 0),
+        "equivalent_child_preload_chunks": diag_stats.get("equivalent_child_preload_chunks", 0),
+        "run_task_seconds_modify_parent_nextlink": round(float(diag_stats.get("run_task_seconds_modify_parent_nextlink", 0.0)), 4),
+        "run_task_seconds_modify_cleanup": round(float(diag_stats.get("run_task_seconds_modify_cleanup", 0.0)), 4),
+        "run_task_seconds_modify_other": round(float(diag_stats.get("run_task_seconds_modify_other", 0.0)), 4),
+        "run_task_seconds_export_other": round(float(diag_stats.get("run_task_seconds_export_other", 0.0)), 4),
+        "run_task_seconds_other": round(float(diag_stats.get("run_task_seconds_other", 0.0)), 4),
+        "run_task_seconds": round(float(diag_stats.get("run_task_seconds", 0.0)), 4),
+    }
+    _diag_block("on-exit task stats", task_stats.items(), columns=3)
+
+
+def _strict_exit_feedback_message(stats: dict) -> str | None:
+    errors = stats.get("errors", 0)
+    dead_lettered = stats.get("dead_lettered", 0)
+    queue_lock_failures = stats.get("queue_lock_failures", 0)
+    if not (_EXIT_STRICT and (errors > 0 or dead_lettered > 0 or queue_lock_failures > 0)):
+        return None
+    return (
+        f"[nautical] on-exit: {dead_lettered} dead-lettered, {errors} errors, {queue_lock_failures} queue lock failures. "
+        "Check .nautical-state/.nautical_dead_letter.jsonl (set NAUTICAL_EXIT_STRICT=0 to disable)"
+    )
+
+
+def main() -> int:
+    _migrate_legacy_nautical_state()
+    _reset_exit_runtime_state()
+    startup_t0 = time.perf_counter()
+    module_t0 = time.perf_counter()
+    hook_context = _module("hook_context")
+    hook_results = _module("hook_results")
+    hook_engine = _module("hook_engine")
+    module_ms = round((time.perf_counter() - module_t0) * 1000.0, 3)
+    request_t0 = time.perf_counter()
+    request = hook_context.build_on_exit_request(runtime=_build_hook_runtime_context())
+    request_ms = round((time.perf_counter() - request_t0) * 1000.0, 3)
+    _exit_runtime_state().startup_stats = {
+        "startup_import_ms": round(float(_IMPORT_MS or 0.0), 3),
+        "startup_module_ms": module_ms,
+        "startup_request_ms": request_ms,
+        "startup_total_ms": round((time.perf_counter() - startup_t0) * 1000.0, 3),
+    }
+    result = hook_engine.handle_on_exit(
+        request,
+        exit_result_cls=hook_results.HookExitResult,
+        redirect_stdout_to_devnull=_redirect_stdout_to_devnull,
+        drain_queue=_drain_queue,
+        strict_exit_result=_strict_exit_feedback_message,
+    )
+    return hook_results.emit_exit_result(
+        result,
+        emit_exit_feedback=_emit_exit_feedback,
+        emit_stats_diag=_emit_drain_stats_diag,
+    )
+
+
+def run_hook(
+    *,
+    argv: tuple[str, ...],
+    hook_dir: str,
+    core_base: str,
+) -> int:
+    """Run the extracted implementation with context captured by the wrapper."""
+    global HOOK_DIR, TW_DIR, _CORE_BASE
+    global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
+    global _QUEUE_DB_PATH, _DEAD_LETTER_PATH, _DEAD_LETTER_LOCK
+    global _QUEUE_LOCK_FAIL_MARKER, _QUEUE_LOCK_FAIL_COUNT
+
+    HOOK_DIR = Path(hook_dir)
+    TW_DIR = HOOK_DIR.parent
+    _CORE_BASE = Path(core_base)
+    sys.argv = [sys.argv[0], *argv]
+    _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
+    TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+
+    state_dir = TW_DATA_DIR / ".nautical-state"
+    lock_dir = TW_DATA_DIR / ".nautical-locks"
+    _QUEUE_DB_PATH = state_dir / ".nautical_queue.db"
+    _DEAD_LETTER_PATH = state_dir / ".nautical_dead_letter.jsonl"
+    _DEAD_LETTER_LOCK = lock_dir / ".nautical_dead_letter.lock"
+    _QUEUE_LOCK_FAIL_MARKER = lock_dir / ".nautical_spawn_queue.lock_failed"
+    _QUEUE_LOCK_FAIL_COUNT = lock_dir / ".nautical_spawn_queue.lock_failed.count"
+    return main()
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as e:
+        _diag(f"on-exit unexpected error: {e}")
+        err_text = _diag_redact_msg(f"{type(e).__name__}: {e}")
+        _emit_exit_feedback(f"[nautical] on-exit: unexpected error: {err_text}")
+        try:
+            _write_dead_letter({"error": "unexpected_error"}, "on-exit exception")
+        except Exception:
+            pass
+        raise SystemExit(1)

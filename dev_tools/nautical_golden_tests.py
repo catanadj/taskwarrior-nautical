@@ -294,6 +294,8 @@ def _extract_last_json(stdout_text: str) -> dict:
 
 def _load_hook_module(path: str, module_name: str):
     _force_tz_utc()
+    if os.path.basename(path) == "on-add-nautical.py":
+        path = os.path.join(ROOT, "nautical_core", "hooks", "add_impl.py")
     loader = importlib.machinery.SourceFileLoader(module_name, path)
     spec = importlib.util.spec_from_loader(module_name, loader)
     mod = importlib.util.module_from_spec(spec)
@@ -981,6 +983,39 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
                 timeout=5.0,
             )
             expect(forced.returncode != 0, f"force-full switch did not reach the broken core for {hook_path.name}")
+
+        impl_dir = core_dir / "hooks"
+        impl_dir.mkdir()
+        (impl_dir / "add_impl.py").write_text(
+            "HOOK_IMPL_API = 999\n"
+            "def run_hook(**_kwargs):\n"
+            "    raise AssertionError('mismatched implementation must not run')\n",
+            encoding="utf-8",
+        )
+        nautical = dict(plain, cp="P1D")
+        mismatch = subprocess.run(
+            [sys.executable, str(hooks_dir / "on-add-nautical.py")],
+            input=json.dumps(nautical, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=5.0,
+        )
+        expect(mismatch.returncode != 0, "on-add accepted an incompatible implementation API")
+        expect(json.loads(mismatch.stdout) == nautical, "on-add API mismatch did not preserve the input task")
+        expect(mismatch.stderr == "", f"on-add API mismatch wrote diagnostics without opt-in: {mismatch.stderr!r}")
+
+        diag_env = dict(env)
+        diag_env["NAUTICAL_DIAG"] = "1"
+        mismatch_diag = subprocess.run(
+            [sys.executable, str(hooks_dir / "on-add-nautical.py")],
+            input=json.dumps(nautical, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+            env=diag_env,
+            timeout=5.0,
+        )
+        expect("API mismatch" in mismatch_diag.stderr, "on-add API mismatch diagnostic was not actionable")
 
 
 def test_on_exit_active_sqlite_queue_uses_full_drain():

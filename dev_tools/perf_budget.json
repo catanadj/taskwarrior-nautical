@@ -1,5 +1,5 @@
 {
-  "version": "1",
+  "version": "2",
   "workload": {
     "expressions": [
       "w:mon..fri@t=09:00",
@@ -25,5 +25,14 @@
     "cache_key_hot": 0.08,
     "cache_save": 0.9,
     "cache_load_hot": 0.35
+  },
+  "hook_fast_path": {
+    "enabled": true,
+    "repeats": 7,
+    "max_ratio": {
+      "hook_plain_add": 0.8,
+      "hook_plain_modify": 0.8,
+      "hook_empty_exit": 0.8
+    }
   }
 }

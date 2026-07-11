@@ -71,7 +71,11 @@ def _core_target_from_base(base: Path) -> Path | None:
 _CORE_BASE = _trusted_core_base(TW_DIR)
 _EARLY_EXIT_PROBE = None
 
-if __name__ == "__main__" and os.environ.get("NAUTICAL_DIAG") != "1":
+if (
+    __name__ == "__main__"
+    and os.environ.get("NAUTICAL_DIAG") != "1"
+    and os.environ.get("NAUTICAL_BENCH_FORCE_FULL") != "1"
+):
     _path_support, _path_support_path, _path_support_error = hook_bootstrap.load_core_helper_module(
         _CORE_BASE,
         "config_support.py",

@@ -16,7 +16,9 @@ import argparse
 import importlib
 import json
 import os
+import sqlite3
 import statistics
+import subprocess
 import sys
 import tempfile
 import time
@@ -180,6 +182,206 @@ def _measure(name: str, fn, repeats: int) -> dict:
     }
 
 
+def _strict_json_object(raw: str) -> dict:
+    text = (raw or "").strip()
+    decoder = json.JSONDecoder()
+    try:
+        obj, end = decoder.raw_decode(text)
+    except Exception as exc:
+        raise RuntimeError(f"hook stdout is not valid JSON: {exc}") from exc
+    if text[end:].strip() or not isinstance(obj, dict):
+        raise RuntimeError("hook stdout must contain exactly one JSON object")
+    return obj
+
+
+def _run_hook_timed(
+    hook_path: Path,
+    *,
+    input_text: str,
+    env: dict[str, str],
+    expected_task: dict | None,
+) -> float:
+    started = time.perf_counter()
+    proc = subprocess.run(
+        [sys.executable, str(hook_path)],
+        input=input_text,
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=15.0,
+    )
+    elapsed = time.perf_counter() - started
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"{hook_path.name} failed with exit {proc.returncode}: "
+            f"{(proc.stderr or proc.stdout or '').strip()}"
+        )
+    if expected_task is None:
+        if (proc.stdout or "").strip():
+            raise RuntimeError(f"{hook_path.name} wrote unexpected stdout")
+    else:
+        actual = _strict_json_object(proc.stdout or "")
+        if actual != expected_task:
+            raise RuntimeError(f"{hook_path.name} changed the plain passthrough task")
+    return elapsed
+
+
+def _init_empty_queue_db(taskdata: Path) -> None:
+    state_dir = taskdata / ".nautical-state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(state_dir / ".nautical_queue.db")) as conn:
+        conn.execute(
+            """
+            CREATE TABLE queue_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                spawn_intent_id TEXT,
+                payload TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'queued',
+                claim_token TEXT,
+                claimed_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+
+def _measure_hook_fast_path(
+    name: str,
+    hook_path: Path,
+    *,
+    input_text: str,
+    expected_task: dict | None,
+    base_env: dict[str, str],
+    repeats: int,
+    max_ratio: float,
+) -> dict:
+    fast_env = dict(base_env)
+    fast_env.pop("NAUTICAL_BENCH_FORCE_FULL", None)
+    full_env = dict(base_env)
+    full_env["NAUTICAL_BENCH_FORCE_FULL"] = "1"
+
+    _run_hook_timed(hook_path, input_text=input_text, env=fast_env, expected_task=expected_task)
+    _run_hook_timed(hook_path, input_text=input_text, env=full_env, expected_task=expected_task)
+
+    fast_samples: list[float] = []
+    full_samples: list[float] = []
+    for index in range(max(1, int(repeats))):
+        if index % 2 == 0:
+            fast_samples.append(
+                _run_hook_timed(hook_path, input_text=input_text, env=fast_env, expected_task=expected_task)
+            )
+            full_samples.append(
+                _run_hook_timed(hook_path, input_text=input_text, env=full_env, expected_task=expected_task)
+            )
+        else:
+            full_samples.append(
+                _run_hook_timed(hook_path, input_text=input_text, env=full_env, expected_task=expected_task)
+            )
+            fast_samples.append(
+                _run_hook_timed(hook_path, input_text=input_text, env=fast_env, expected_task=expected_task)
+            )
+
+    fast_samples.sort()
+    full_samples.sort()
+    fast_median = float(statistics.median(fast_samples))
+    full_median = float(statistics.median(full_samples))
+    ratio = fast_median / full_median if full_median > 0.0 else 1.0
+    return {
+        "name": name,
+        "samples_s": fast_samples,
+        "min_s": fast_samples[0],
+        "median_s": fast_median,
+        "max_s": fast_samples[-1],
+        "full_samples_s": full_samples,
+        "full_median_s": full_median,
+        "fast_to_full_ratio": ratio,
+        "max_ratio": float(max_ratio),
+        "budget_s": 0.0,
+        "pass": ratio <= float(max_ratio),
+    }
+
+
+def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
+    hook_cfg = cfg.get("hook_fast_path")
+    if not isinstance(hook_cfg, dict) or not hook_cfg.get("enabled", True):
+        return {}
+    repeats = max(1, int(hook_cfg.get("repeats", 7)))
+    max_ratios = hook_cfg.get("max_ratio") if isinstance(hook_cfg.get("max_ratio"), dict) else {}
+
+    plain = {
+        "uuid": "11111111-1111-1111-1111-111111111111",
+        "description": "plain hook latency",
+        "status": "pending",
+        "entry": "20260101T000000Z",
+        "modified": "20260101T000000Z",
+    }
+    modified = dict(plain, modified="20260101T000001Z")
+
+    with tempfile.TemporaryDirectory(prefix="nautical-hook-perf-") as td:
+        temp_root = Path(td)
+        config_path = temp_root / "config-nautical.toml"
+        config_path.write_text('tz = "UTC"\npanel_mode = "minimal"\n', encoding="utf-8")
+        base_env = os.environ.copy()
+        base_env.update(
+            {
+                "NAUTICAL_CONFIG": str(config_path),
+                "NAUTICAL_CORE_PATH": str(ROOT),
+                "NAUTICAL_TRUST_CONFIG_PATH": "1",
+                "NAUTICAL_TRUST_CORE_PATH": "1",
+                "TZ": "UTC",
+            }
+        )
+        for key in ("NAUTICAL_DIAG", "NAUTICAL_DIAG_LOG", "NAUTICAL_PROFILE"):
+            base_env.pop(key, None)
+
+        cases = []
+        add_data = temp_root / "add-data"
+        add_data.mkdir()
+        cases.append(
+            (
+                "hook_plain_add",
+                ROOT / "on-add-nautical.py",
+                json.dumps(plain, ensure_ascii=False),
+                plain,
+                add_data,
+            )
+        )
+        modify_data = temp_root / "modify-data"
+        modify_data.mkdir()
+        cases.append(
+            (
+                "hook_plain_modify",
+                ROOT / "on-modify-nautical.py",
+                json.dumps(plain, ensure_ascii=False) + "\n" + json.dumps(modified, ensure_ascii=False),
+                modified,
+                modify_data,
+            )
+        )
+        exit_data = temp_root / "exit-data"
+        exit_data.mkdir()
+        _init_empty_queue_db(exit_data)
+        cases.append(("hook_empty_exit", ROOT / "on-exit-nautical.py", "", None, exit_data))
+
+        results = {}
+        for name, hook_path, input_text, expected_task, taskdata in cases:
+            env = dict(base_env)
+            env["TASKDATA"] = str(taskdata)
+            ratio_budget = float(max_ratios.get(name, 0.8))
+            results[name] = _measure_hook_fast_path(
+                name,
+                hook_path,
+                input_text=input_text,
+                expected_task=expected_task,
+                base_env=env,
+                repeats=repeats,
+                max_ratio=ratio_budget,
+            )
+        return results
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--budget-file", default=str(HERE / "perf_budget.json"))
@@ -224,6 +426,12 @@ def main() -> int:
         if args.enforce and not r["pass"]:
             failures.append(name)
 
+    hook_results = _bench_hook_fast_paths(cfg)
+    for name, result in hook_results.items():
+        results[name] = result
+        if args.enforce and not result["pass"]:
+            failures.append(name)
+
     summary = {
         "budget_file": str(Path(args.budget_file).resolve()),
         "python": sys.version.split()[0],
@@ -240,14 +448,19 @@ def main() -> int:
     else:
         print("Nautical Performance Budget")
         print(f"Budget file: {summary['budget_file']}")
-        for name in ("parse_validate", "describe_expr", "next_after", "build_hints", "cache_key_hot"):
-            r = results[name]
+        for name, r in results.items():
             status = "OK" if r["pass"] else "FAIL"
-            print(
-                f"- {name}: median={r['median_s']:.4f}s "
-                f"(min={r['min_s']:.4f}s, max={r['max_s']:.4f}s) "
-                f"budget={r['budget_s']:.4f}s => {status}"
-            )
+            if "fast_to_full_ratio" in r:
+                print(
+                    f"- {name}: fast={r['median_s']:.4f}s full={r['full_median_s']:.4f}s "
+                    f"ratio={r['fast_to_full_ratio']:.3f} max_ratio={r['max_ratio']:.3f} => {status}"
+                )
+            else:
+                print(
+                    f"- {name}: median={r['median_s']:.4f}s "
+                    f"(min={r['min_s']:.4f}s, max={r['max_s']:.4f}s) "
+                    f"budget={r['budget_s']:.4f}s => {status}"
+                )
         if args.enforce:
             print("Enforced:", "PASS" if summary["ok"] else f"FAIL ({', '.join(failures)})")
 

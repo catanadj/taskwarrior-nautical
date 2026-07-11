@@ -898,7 +898,7 @@ def test_light_taskdata_resolution_matches_hook_precedence():
 
 
 def test_plain_hook_fast_paths_do_not_import_core_package():
-    """Plain add and modify tasks should pass through even when the core package cannot import."""
+    """Plain add/modify and empty exit should pass through without importing the core package."""
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         hooks_dir = root / "hooks"
@@ -918,6 +918,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         env.pop("NAUTICAL_CORE_PATH", None)
         env.pop("NAUTICAL_TRUST_CORE_PATH", None)
         env.pop("NAUTICAL_PROFILE", None)
+        env.pop("NAUTICAL_BENCH_FORCE_FULL", None)
         plain = {
             "uuid": "00000000-0000-0000-0000-000000000706",
             "status": "pending",
@@ -959,6 +960,27 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         expect(exit_hook.returncode == 0, f"empty exit fast path failed: {exit_hook.stderr!r}")
         expect(exit_hook.stdout == "", f"empty exit fast path wrote stdout: {exit_hook.stdout!r}")
         expect(not (root / ".nautical-state").exists(), "empty exit fast path should not create queue state")
+
+        forced_env = dict(env)
+        forced_env["NAUTICAL_BENCH_FORCE_FULL"] = "1"
+        forced_cases = (
+            (hooks_dir / "on-add-nautical.py", json.dumps(plain, ensure_ascii=False)),
+            (
+                hooks_dir / "on-modify-nautical.py",
+                json.dumps(plain, ensure_ascii=False) + "\n" + json.dumps(modified, ensure_ascii=False),
+            ),
+            (hooks_dir / "on-exit-nautical.py", ""),
+        )
+        for hook_path, input_text in forced_cases:
+            forced = subprocess.run(
+                [sys.executable, str(hook_path)],
+                input=input_text,
+                text=True,
+                capture_output=True,
+                env=forced_env,
+                timeout=5.0,
+            )
+            expect(forced.returncode != 0, f"force-full switch did not reach the broken core for {hook_path.name}")
 
 
 def test_on_exit_active_sqlite_queue_uses_full_drain():
@@ -3363,7 +3385,7 @@ def test_doctor_reports_reconcile_backfill_plans():
 
 
 def test_perf_budget_config_covers_cache_io_checks():
-    """Perf budget config should include explicit cache save/load check budgets."""
+    """Perf budget config should include cache IO and normalized hook latency checks."""
     cfg_path = Path(DEV_TOOLS) / "perf_budget.json"
     obj = json.loads(cfg_path.read_text(encoding="utf-8"))
     budgets = obj.get("budgets_seconds") if isinstance(obj, dict) else None
@@ -3374,6 +3396,55 @@ def test_perf_budget_config_covers_cache_io_checks():
     expect("cache_load_hot" in budgets, "cache_load_hot budget missing")
     expect("cache_save_rounds" in workload, "cache_save_rounds missing from workload")
     expect("cache_load_rounds" in workload, "cache_load_rounds missing from workload")
+    hook_fast_path = obj.get("hook_fast_path") if isinstance(obj, dict) else None
+    expect(isinstance(hook_fast_path, dict), "hook_fast_path config must be present")
+    expect(int(hook_fast_path.get("repeats") or 0) >= 3, "hook fast-path benchmark needs repeated samples")
+    ratios = hook_fast_path.get("max_ratio") if isinstance(hook_fast_path.get("max_ratio"), dict) else {}
+    expect(
+        {"hook_plain_add", "hook_plain_modify", "hook_empty_exit"} <= set(ratios),
+        f"hook ratio budgets are incomplete: {ratios}",
+    )
+
+
+def test_perf_hook_fast_path_ratio_enforcement():
+    """Hook latency checks should enforce the normalized fast/full median ratio."""
+    perf = _load_hook_module(
+        os.path.join(DEV_TOOLS, "nautical_perf_budget.py"),
+        "_nautical_hook_perf_ratio_test",
+    )
+
+    def clearly_faster(_hook_path, *, input_text, env, expected_task):
+        _ = (input_text, expected_task)
+        return 0.100 if env.get("NAUTICAL_BENCH_FORCE_FULL") == "1" else 0.050
+
+    perf._run_hook_timed = clearly_faster
+    passing = perf._measure_hook_fast_path(
+        "hook_test",
+        Path("unused-hook"),
+        input_text="{}",
+        expected_task={},
+        base_env={},
+        repeats=3,
+        max_ratio=0.8,
+    )
+    expect(passing.get("pass") is True, f"clear fast-path improvement should pass: {passing}")
+    expect(abs(float(passing.get("fast_to_full_ratio")) - 0.5) < 0.001, f"unexpected ratio: {passing}")
+
+    def insufficient_gain(_hook_path, *, input_text, env, expected_task):
+        _ = (input_text, expected_task)
+        return 0.100 if env.get("NAUTICAL_BENCH_FORCE_FULL") == "1" else 0.090
+
+    perf._run_hook_timed = insufficient_gain
+    failing = perf._measure_hook_fast_path(
+        "hook_test",
+        Path("unused-hook"),
+        input_text="{}",
+        expected_task={},
+        base_env={},
+        repeats=3,
+        max_ratio=0.8,
+    )
+    expect(failing.get("pass") is False, f"insufficient fast-path improvement should fail: {failing}")
 
 
 def test_deploy_sanity_script_reports_ok():
@@ -13753,6 +13824,7 @@ TESTS = [
     test_doctor_reports_chain_repair_plan_findings,
     test_doctor_reports_reconcile_backfill_plans,
     test_perf_budget_config_covers_cache_io_checks,
+    test_perf_hook_fast_path_ratio_enforcement,
     test_deploy_sanity_script_reports_ok,
     test_hook_replay_harness_reports_ok,
     test_mixed_recurrence_loop_harness_reports_ok,

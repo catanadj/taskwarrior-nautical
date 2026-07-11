@@ -90,6 +90,7 @@ if __name__ == "__main__":
             _EARLY_PROTOCOL_RESULT is not None
             and _EARLY_PROTOCOL_RESULT.valid
             and not _EARLY_PROTOCOL_RESULT.is_nautical
+            and os.environ.get("NAUTICAL_BENCH_FORCE_FULL") != "1"
         ):
             _protocol.emit_passthrough_json(_EARLY_PROTOCOL_RESULT.task)
             raise SystemExit(0)

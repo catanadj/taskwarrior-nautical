@@ -372,10 +372,12 @@ def _load_on_modify_hook_for_reconcile(hooks_dir: Path):
     hook = _find_hook(hooks_dir, "on-modify")
     if hook is None:
         raise RuntimeError(f"No on-modify hook was found in {hooks_dir}.")
-    loader = importlib.machinery.SourceFileLoader("_nautical_doctor_on_modify", str(hook))
+    implementation = ROOT / "nautical_core" / "hooks" / "modify_impl.py"
+    source = implementation if implementation.is_file() else hook
+    loader = importlib.machinery.SourceFileLoader("_nautical_doctor_on_modify", str(source))
     spec = importlib.util.spec_from_loader("_nautical_doctor_on_modify", loader)
     if spec is None:
-        raise RuntimeError(f"could not load {hook}")
+        raise RuntimeError(f"could not load {source}")
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     if hasattr(module, "_load_core"):

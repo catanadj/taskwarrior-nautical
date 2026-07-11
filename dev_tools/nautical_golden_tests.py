@@ -34,7 +34,7 @@ sys.path.insert(0, HERE)
 os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
 
 core = importlib.import_module("nautical_core")
-_hook = importlib.import_module("on-modify-nautical")
+_hook = importlib.import_module("nautical_core.hooks.modify_impl")
 
 # -------- Helpers -------------------------------------------------------------
 
@@ -296,6 +296,8 @@ def _load_hook_module(path: str, module_name: str):
     _force_tz_utc()
     if os.path.basename(path) == "on-add-nautical.py":
         path = os.path.join(ROOT, "nautical_core", "hooks", "add_impl.py")
+    elif os.path.basename(path) == "on-modify-nautical.py":
+        path = os.path.join(ROOT, "nautical_core", "hooks", "modify_impl.py")
     elif os.path.basename(path) == "on-exit-nautical.py":
         path = os.path.join(ROOT, "nautical_core", "hooks", "exit_impl.py")
     loader = importlib.machinery.SourceFileLoader(module_name, path)
@@ -1018,6 +1020,49 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
             timeout=5.0,
         )
         expect("API mismatch" in mismatch_diag.stderr, "on-add API mismatch diagnostic was not actionable")
+
+        (impl_dir / "modify_impl.py").write_text(
+            "HOOK_IMPL_API = 999\n"
+            "def run_hook(**_kwargs):\n"
+            "    raise AssertionError('mismatched implementation must not run')\n",
+            encoding="utf-8",
+        )
+        nautical_old = dict(plain, cp="P1D")
+        nautical_new = dict(nautical_old, description="Modified nautical ăîșț ✅")
+        modify_input = json.dumps(nautical_old, ensure_ascii=False) + "\n" + json.dumps(
+            nautical_new,
+            ensure_ascii=False,
+        )
+        modify_mismatch = subprocess.run(
+            [sys.executable, str(hooks_dir / "on-modify-nautical.py")],
+            input=modify_input,
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=5.0,
+        )
+        expect(modify_mismatch.returncode != 0, "on-modify accepted an incompatible implementation API")
+        expect(
+            json.loads(modify_mismatch.stdout) == nautical_new,
+            "on-modify API mismatch did not preserve the latest task",
+        )
+        expect(
+            modify_mismatch.stderr == "",
+            f"on-modify API mismatch wrote diagnostics without opt-in: {modify_mismatch.stderr!r}",
+        )
+
+        modify_mismatch_diag = subprocess.run(
+            [sys.executable, str(hooks_dir / "on-modify-nautical.py")],
+            input=modify_input,
+            text=True,
+            capture_output=True,
+            env=diag_env,
+            timeout=5.0,
+        )
+        expect(
+            "API mismatch" in modify_mismatch_diag.stderr,
+            "on-modify API mismatch diagnostic was not actionable",
+        )
 
         (impl_dir / "exit_impl.py").write_text(
             "HOOK_IMPL_API = 999\n"

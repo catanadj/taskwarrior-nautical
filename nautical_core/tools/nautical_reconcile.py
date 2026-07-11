@@ -30,6 +30,7 @@ def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
             candidates.append(Path(raw).expanduser())
     candidates.extend(
         [
+            CORE_DIR / "hooks" / "modify_impl.py",
             BASE_DIR / "on-modify-nautical.py",
             BASE_DIR / "hooks" / "on-modify-nautical.py",
             BASE_DIR / "hooks" / "on-modify",
@@ -37,6 +38,16 @@ def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
         ]
     )
     return candidates
+
+
+def _modify_implementation_path(path: Path) -> Path:
+    if path.name == "modify_impl.py":
+        return path
+    candidates = (
+        path.parent / "nautical_core" / "hooks" / "modify_impl.py",
+        path.parent.parent / "nautical_core" / "hooks" / "modify_impl.py",
+    )
+    return next((candidate for candidate in candidates if candidate.is_file()), path)
 
 
 def _run_task(task_bin: str, args: list[str], *, input_text: str | None = None, timeout: float = 60.0):
@@ -72,6 +83,7 @@ def _load_on_modify(hook_path: str | None = None):
     if path is None:
         tried = ", ".join(str(candidate) for candidate in searched)
         raise RuntimeError(f"could not find on-modify hook; tried: {tried}")
+    path = _modify_implementation_path(path)
     loader = importlib.machinery.SourceFileLoader("_nautical_reconcile_on_modify", str(path))
     spec = importlib.util.spec_from_loader("_nautical_reconcile_on_modify", loader)
     if spec is None:

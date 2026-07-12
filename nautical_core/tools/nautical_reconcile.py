@@ -133,6 +133,19 @@ def _modify_parent_nextlink(task_bin: str, parent: dict[str, Any], child_short: 
         raise RuntimeError((proc.stderr or proc.stdout or "parent nextLink update failed").strip())
 
 
+def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
+    parent_uuid = str(parent.get("uuid") or "").strip()
+    if not parent_uuid:
+        raise RuntimeError("parent task has no UUID")
+    proc = _run_task(
+        task_bin,
+        ["rc.hooks=off", "rc.confirmation=off", "rc.verbose=nothing", f"uuid:{parent_uuid}", "modify", "chain:off"],
+        timeout=30.0,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "parent chain update failed").strip())
+
+
 def _apply_spawn(task_bin: str, hook: Any, plan: reconcile.ReconcilePlan) -> str:
     if not plan.child:
         raise RuntimeError("spawn plan has no child payload")
@@ -169,7 +182,8 @@ def _print_plan(plan: reconcile.ReconcilePlan, *, applied_short: str = "", fmt_d
         print(f"backfill nextLink: {parent}{suffix}")
         _print_evidence(evidence, ("reason", "next_link", "existing_child"))
     elif plan.action == "legitimate_final":
-        print(f"final: {parent} ({plan.reason})")
+        suffix = " -> set chain:off" if applied_short else ""
+        print(f"final: {parent} ({plan.reason}){suffix}")
         _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local"))
     else:
         print(f"error: {parent} ({plan.reason})")
@@ -206,6 +220,10 @@ def main(argv: list[str] | None = None) -> int:
             _modify_parent_nextlink(args.task_bin, parent, plan.child_short)
             applied.append({"action": "backfill_nextlink", "parent": reconcile.short_uuid(parent.get("uuid")), "child": plan.child_short})
             _print_plan(plan, applied_short=plan.child_short, fmt_dt_local=fmt_dt_local)
+        elif args.apply and plan.action == "legitimate_final":
+            _disable_parent_chain(args.task_bin, parent)
+            applied.append({"action": "disable_chain", "parent": reconcile.short_uuid(parent.get("uuid"))})
+            _print_plan(plan, applied_short="off", fmt_dt_local=fmt_dt_local)
         elif not args.json:
             _print_plan(plan, fmt_dt_local=fmt_dt_local)
 

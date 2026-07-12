@@ -13333,6 +13333,71 @@ def test_reconcile_tool_print_plan_includes_evidence():
     expect("existing child: 22222222" in out, f"missing child evidence: {out!r}")
 
 
+def test_reconcile_tool_apply_disables_legitimate_final_chain():
+    """Applying a cap-final plan should persist chain:off so it is not reconsidered."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_tool_disable_final_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "description": "capped remote completion",
+        "cp": "P1D",
+        "chain": "on",
+        "chainID": "11111111",
+        "chainMax": 2,
+        "link": 2,
+    }
+
+    class FakeCore:
+        fmt_dt_local = None
+
+        @staticmethod
+        def coerce_int(value, default=0):
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+    class FakeHook:
+        core = FakeCore()
+
+        @staticmethod
+        def _task_cmd_prefix():
+            return ["task"]
+
+        @staticmethod
+        def _safe_parse_datetime(_value):
+            return None, None
+
+    calls = []
+    original = (mod._load_on_modify, mod._candidate_rows, mod._existing_children, mod._run_task)
+    try:
+        mod._load_on_modify = lambda _path=None: FakeHook()
+        mod._candidate_rows = lambda _task_bin: [parent] if parent["chain"] == "on" else []
+        mod._existing_children = lambda _task_bin, _parent: []
+
+        def fake_run_task(task_bin, args, **_kwargs):
+            calls.append((task_bin, args))
+            if args[-2:] == ["modify", "chain:off"]:
+                parent["chain"] = "off"
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        mod._run_task = fake_run_task
+        first_out = io.StringIO()
+        with contextlib.redirect_stdout(first_out):
+            expect(mod.main(["--apply"]) == 0, "first reconcile apply should succeed")
+        expect("set chain:off" in first_out.getvalue(), f"applied final should report the persisted state: {first_out.getvalue()!r}")
+        expect(any(args[-2:] == ["modify", "chain:off"] for _bin, args in calls), f"chain:off was not persisted: {calls!r}")
+
+        second_out = io.StringIO()
+        with contextlib.redirect_stdout(second_out):
+            expect(mod.main(["--apply", "--json"]) == 0, "second reconcile apply should succeed")
+        second = json.loads(second_out.getvalue())
+        expect(second.get("candidates") == 0, f"disabled final task should not be reconsidered: {second!r}")
+    finally:
+        mod._load_on_modify, mod._candidate_rows, mod._existing_children, mod._run_task = original
+
+
 def test_chain_repair_plans_only_safe_adjacent_link_updates():
     """Chain repair should fix unique adjacent slots and report duplicates without guessing."""
     import nautical_core.chain_repair as chain_repair
@@ -14358,6 +14423,7 @@ TESTS = [
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
     test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_print_plan_includes_evidence,
+    test_reconcile_tool_apply_disables_legitimate_final_chain,
     test_chain_repair_plans_only_safe_adjacent_link_updates,
     test_chain_repair_infers_missing_links_only_when_deterministic,
     test_chain_repair_infers_single_root_link_one_only,

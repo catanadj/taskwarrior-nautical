@@ -449,7 +449,7 @@ def render_anchor_completion_feedback(
         fb,
         feedback.cap_no,
         feedback.base_no,
-        second_to_last_text="[yellow]This was the second-to-last link[/]",
+        second_to_last_text="[yellow]This was the second-to-last link. Next is last.[/]",
     )
     _append_final_rows(fb, feedback.finals, feedback.now_utc, fmt_dt_local=core.fmt_dt_local, human_delta=human_delta)
     if feedback.deferred_spawn and diag_enabled and feedback.spawn_intent_id:

@@ -554,7 +554,7 @@ def _export_cache_set(uuid_str: str, result) -> None:
     _exit_runtime_state().export_cache[key] = result
 
 
-def _chunked(items: list[str], size: int):
+def _chunked(items: list[Any], size: int):
     size = max(1, int(size or 1))
     for idx in range(0, len(items), size):
         yield items[idx:idx + size]
@@ -575,16 +575,28 @@ def _preload_export_uuids(entries: list[dict]) -> None:
             if uuid_str and uuid_str not in seen:
                 seen.add(uuid_str)
                 uuids.append(uuid_str)
-    if not uuids:
+    slot_specs = _equivalent_child_slot_specs(entries)
+    specs: list[tuple[str, Any, list[str]]] = [
+        ("uuid", uuid_str, [f"uuid:{uuid_str}"])
+        for uuid_str in uuids
+    ]
+    specs.extend(("slot", key, clause) for key, clause in slot_specs.items())
+    if not specs:
         return
     prefix = _task_cmd_prefix()
-    for chunk in _chunked(uuids, _EXIT_PRELOAD_CHUNK_SIZE):
+    if slot_specs:
+        _diag_count_exit("equivalent_child_preload_slots", len(slot_specs))
+    for chunk in _chunked(specs, _EXIT_PRELOAD_CHUNK_SIZE):
         _diag_count_exit("preload_export_chunks")
+        chunk_uuids = [value for kind, value, _clause in chunk if kind == "uuid"]
+        chunk_slots = [value for kind, value, _clause in chunk if kind == "slot"]
+        if chunk_slots:
+            _diag_count_exit("equivalent_child_preload_chunks")
         cmd = list(prefix) + ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off"]
-        for idx, uuid_str in enumerate(chunk):
+        for idx, (_kind, _value, clause) in enumerate(chunk):
             if idx:
                 cmd.append("or")
-            cmd.append(f"uuid:{uuid_str}")
+            cmd.extend(clause)
         cmd.append("export")
         ok, out, err = _run_task(
             cmd,
@@ -627,10 +639,23 @@ def _preload_export_uuids(entries: list[dict]) -> None:
             found.add(row_uuid)
             _export_cache_set(row_uuid, exit_models.ExitExportResult(True, False, "", row))
         if parsed_ok and allow_negative_cache:
-            for uuid_str in chunk:
+            for uuid_str in chunk_uuids:
                 _diag_count_exit("preload_export_uuids")
                 if uuid_str not in found:
                     _export_cache_set(uuid_str, exit_models.ExitExportResult(False, False, "not found", None))
+            grouped: dict[tuple[str, str, str], list[dict]] = {}
+            for row in rows:
+                row_key = _equivalent_child_cache_key(row)
+                if row_key is not None:
+                    grouped.setdefault(row_key, []).append(row)
+            for key in chunk_slots:
+                selected = _pick_equivalent_child_row(grouped.get(key, []))
+                if selected is not None:
+                    _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(True, False, "", selected)
+                    _diag_count_exit("equivalent_child_preload_hits")
+                else:
+                    _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(False, False, "not found", None)
+                    _diag_count_exit("equivalent_child_preload_misses")
 
 
 def _queue_db_begin_run() -> None:
@@ -1630,8 +1655,7 @@ def _pick_equivalent_child_row(rows: list[dict]) -> dict | None:
     return None
 
 
-def _preload_equivalent_child_slots(entries: list[dict]) -> None:
-    exit_models = _module("exit_models")
+def _equivalent_child_slot_specs(entries: list[dict]) -> dict[tuple[str, str, str], list[str]]:
     slot_specs: dict[tuple[str, str, str], list[str]] = {}
     for entry in entries or []:
         if not isinstance(entry, dict):
@@ -1647,6 +1671,17 @@ def _preload_equivalent_child_slots(entries: list[dict]) -> None:
             clause.append(f"prevLink:{prev_link}")
         clause.append("status.not:deleted")
         slot_specs[key] = clause
+    return slot_specs
+
+
+def _preload_equivalent_child_slots(entries: list[dict]) -> None:
+    exit_models = _module("exit_models")
+    cached = _exit_runtime_state().equiv_child_cache
+    slot_specs = {
+        key: clause
+        for key, clause in _equivalent_child_slot_specs(entries).items()
+        if key not in cached
+    }
     if not slot_specs:
         return
     prefix = _task_cmd_prefix()

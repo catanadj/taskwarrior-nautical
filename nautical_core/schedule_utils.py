@@ -71,8 +71,17 @@ def weeks_between(d1: date, d2: date) -> int:
 
 
 def apply_day_offset(d: date, mods: dict) -> date:
+    """Apply calendar-day offsets, then exclusive Monday-Friday offsets."""
     off = int(mods.get("day_offset", 0) or 0)
-    return d + timedelta(days=off) if off else d
+    if off:
+        d += timedelta(days=off)
+    business_off = int(mods.get("business_day_offset", 0) or 0)
+    step = 1 if business_off > 0 else -1
+    for _ in range(abs(business_off)):
+        d += timedelta(days=step)
+        while d.weekday() > 4:
+            d += timedelta(days=step)
+    return d
 
 
 def expr_has_m_or_y(dnf) -> bool:

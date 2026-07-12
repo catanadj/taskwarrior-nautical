@@ -320,6 +320,13 @@ def describe_term_day_offset(term) -> int:
     return total
 
 
+def describe_term_business_day_offset(term) -> int:
+    total = 0
+    for atom in term:
+        total += int((atom.get("mods") or {}).get("business_day_offset") or 0)
+    return total
+
+
 def describe_roll_suffix(roll: str) -> str:
     if roll == "pbd":
         return " if business day; otherwise the previous business day"
@@ -333,6 +340,7 @@ def describe_roll_suffix(roll: str) -> str:
 def describe_inject_schedule_suffixes(txt: str, term) -> str:
     roll = describe_term_roll_shift(term)
     day_offset = describe_term_day_offset(term)
+    business_day_offset = describe_term_business_day_offset(term)
     if roll:
         suffix = describe_roll_suffix(roll)
     elif describe_term_bd_filter(term):
@@ -346,6 +354,12 @@ def describe_inject_schedule_suffixes(txt: str, term) -> str:
         offset_suffix = f", {abs_days} day{'s' if abs_days != 1 else ''} earlier"
     else:
         offset_suffix = ""
+    if business_day_offset > 0:
+        count = business_day_offset
+        offset_suffix += f", {count} business day{'s' if count != 1 else ''} later"
+    elif business_day_offset < 0:
+        count = abs(business_day_offset)
+        offset_suffix += f", {count} business day{'s' if count != 1 else ''} earlier"
 
     if not suffix and not offset_suffix:
         return txt

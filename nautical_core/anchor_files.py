@@ -17,7 +17,14 @@ _HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
 
 
 def _default_mods() -> dict:
-    return {"t": None, "roll": None, "wd": None, "bd": False, "day_offset": 0}
+    return {
+        "t": None,
+        "roll": None,
+        "wd": None,
+        "bd": False,
+        "day_offset": 0,
+        "business_day_offset": 0,
+    }
 
 
 def validate_anchor_file_name(value: str | None) -> str:
@@ -90,6 +97,10 @@ def parse_anchor_file_spec(value: str | None) -> tuple[str, dict]:
         if match:
             mods["day_offset"] += int(match.group(1))
             continue
+        match = re.fullmatch(r"([+-]\d+)bd", tok)
+        if match:
+            mods["business_day_offset"] += int(match.group(1))
+            continue
         raise ValueError(f"Unknown anchor_file modifier '@{tok}'")
     return file_name, mods
 
@@ -124,7 +135,14 @@ def _load_anchor_file_data(name: str | None, anchor_file_dir: str | None) -> tup
 def _apply_anchor_file_mods(dates: frozenset[date], descriptions: dict[date, str], mods: dict) -> tuple[frozenset[date], dict[date, str]]:
     if not dates:
         return frozenset(), {}
-    if not any((mods.get("bd"), mods.get("roll"), int(mods.get("day_offset", 0) or 0))):
+    if not any(
+        (
+            mods.get("bd"),
+            mods.get("roll"),
+            int(mods.get("day_offset", 0) or 0),
+            int(mods.get("business_day_offset", 0) or 0),
+        )
+    ):
         return dates, dict(descriptions)
     out_dates: set[date] = set()
     out_descriptions: dict[date, str] = {}

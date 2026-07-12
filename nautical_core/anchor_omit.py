@@ -130,6 +130,9 @@ def _omit_expr_match_lookback_days(omit_expr_dnf) -> int:
             day_offset = int(mods.get("day_offset", 0) or 0)
             if day_offset > 0:
                 lookback += day_offset
+            business_day_offset = int(mods.get("business_day_offset", 0) or 0)
+            if business_day_offset > 0:
+                lookback += (2 * business_day_offset) + 1
             roll_kind = mods.get("roll")
             if roll_kind == "next-wd":
                 lookback += 7

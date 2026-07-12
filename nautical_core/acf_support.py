@@ -238,6 +238,9 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
     off = int(mods.get("day_offset") or 0)
     if off:
         out["+d"] = off
+    business_off = int(mods.get("business_day_offset") or 0)
+    if business_off:
+        out["+bd"] = business_off
     return out
 
 
@@ -257,6 +260,8 @@ def acf_mods_to_string(m: dict, *, wd_abbr) -> str:
         parts.append("@bd")
     if isinstance(m.get("+d"), int) and m["+d"]:
         parts.append(f"@{m['+d']:+d}d")
+    if isinstance(m.get("+bd"), int) and m["+bd"]:
+        parts.append(f"@{m['+bd']:+d}bd")
     return "".join(parts)
 
 

@@ -53,6 +53,8 @@ class AnchorMods(TypedDict, total=False):
     pbd: int
     nbd: int
     nw: bool
+    day_offset: int
+    business_day_offset: int
 
 
 class AnchorAtom(TypedDict, total=False):
@@ -1787,7 +1789,7 @@ def _parse_group_with_inline_mods(typ: str, ival: int, spec: str, outer_mods_str
         # To keep the grammar resilient and avoid ambiguous "trailing mods", we disallow
         # any non-time modifiers inside an inline item (e.g. '@bd', '@next-mon', '@+1d').
         if item_mods_str.strip():
-            if item_mods.get("roll") or item_mods.get("wd") is not None or item_mods.get("bd") or (item_mods.get("day_offset") or 0) != 0:
+            if item_mods.get("roll") or item_mods.get("wd") is not None or item_mods.get("bd") or (item_mods.get("day_offset") or 0) != 0 or (item_mods.get("business_day_offset") or 0) != 0:
                 raise ParseError(
                     "Inline per-item modifiers in comma-lists only support '@t=HH:MM[,HH:MM...]'. "
                     "For other modifiers (e.g. '@bd'), use group style like 'w:mon,tue@bd@t=09:00,12:00' "

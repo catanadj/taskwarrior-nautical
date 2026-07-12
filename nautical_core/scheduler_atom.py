@@ -134,7 +134,8 @@ def _atom_match_lookback_days(atom) -> int:
     mods = atom.get("mods") or {}
     roll_kind = mods.get("roll")
     day_offset = int(mods.get("day_offset", 0) or 0)
-    lookback = 5 + max(0, day_offset)
+    business_day_offset = int(mods.get("business_day_offset", 0) or 0)
+    lookback = 5 + max(0, day_offset) + (2 * max(0, business_day_offset))
     if roll_kind == "next-wd":
         lookback += 7
     elif roll_kind in ("nbd", "nw"):

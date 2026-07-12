@@ -25,10 +25,10 @@ def validate_omit_file_name(value: str | None) -> str:
 def parse_omit_file_spec(value: str | None) -> tuple[str, dict]:
     raw = str(value or "").strip()
     if not raw:
-        return "", {"t": None, "roll": None, "wd": None, "bd": False, "day_offset": 0}
+        return "", {"t": None, "roll": None, "wd": None, "bd": False, "day_offset": 0, "business_day_offset": 0}
     name, mods_str = (raw.split("@", 1) + [""])[:2]
     file_name = validate_omit_file_name(name.strip())
-    mods = {"t": None, "roll": None, "wd": None, "bd": False, "day_offset": 0}
+    mods = {"t": None, "roll": None, "wd": None, "bd": False, "day_offset": 0, "business_day_offset": 0}
     if not mods_str:
         return file_name, mods
     for raw_tok in mods_str.split("@"):
@@ -51,6 +51,10 @@ def parse_omit_file_spec(value: str | None) -> tuple[str, dict]:
         match = _DAY_OFFSET_RE.match(tok)
         if match:
             mods["day_offset"] += int(match.group(1))
+            continue
+        match = re.fullmatch(r"([+-]\d+)bd", tok)
+        if match:
+            mods["business_day_offset"] += int(match.group(1))
             continue
         raise ValueError(f"Unknown omit_file modifier '@{tok}'")
     return file_name, mods
@@ -91,6 +95,7 @@ def _apply_omit_file_mods(dates: frozenset[date], descriptions: dict[date, str],
             mods.get("bd"),
             mods.get("roll"),
             int(mods.get("day_offset", 0) or 0),
+            int(mods.get("business_day_offset", 0) or 0),
         )
     ):
         return dates, dict(descriptions)

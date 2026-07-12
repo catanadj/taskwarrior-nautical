@@ -120,6 +120,7 @@ def normalize_dnf_cached(dnf):
             mods = atom.get("mods")
             if not isinstance(mods, dict):
                 continue
+            mods.setdefault("business_day_offset", 0)
             tval = mods.get("t")
             if isinstance(tval, list):
                 if len(tval) == 2 and all(isinstance(x, int) for x in tval):

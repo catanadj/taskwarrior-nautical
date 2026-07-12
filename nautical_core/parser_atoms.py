@@ -47,7 +47,14 @@ def parse_atom_mods(
     day_offset_re,
     parse_error_cls,
 ):
-    mods = {"t": None, "roll": None, "wd": None, "bd": False, "day_offset": 0}
+    mods = {
+        "t": None,
+        "roll": None,
+        "wd": None,
+        "bd": False,
+        "day_offset": 0,
+        "business_day_offset": 0,
+    }
     if not mods_str:
         return mods
 
@@ -101,6 +108,10 @@ def parse_atom_mods(
         match = day_offset_re.match(tok)
         if match:
             mods["day_offset"] += int(match.group(1))
+            continue
+        match = re.fullmatch(r"([+-]\d+)bd", tok)
+        if match:
+            mods["business_day_offset"] += int(match.group(1))
             continue
         raise parse_error_cls(f"Unknown modifier '@{tok}'")
     return mods

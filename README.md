@@ -109,6 +109,7 @@ Useful syntax:
 | `w:mon,wed,fri` | Mondays, Wednesdays, Fridays |
 | `m:1` | First day of each month |
 | `m:-1bd` | Last business day of each month |
+| `m:-1@pbd@-2bd` | Two business days before the rolled month end |
 | `m:rand + w:sat` | One random Saturday each month |
 | `w:2rand` | Two random days each week |
 | `m:3rand + w:mon..fri` | Three random weekdays each month |
@@ -176,12 +177,17 @@ File modifiers are practical:
 |---|---|
 | `@-1d` | Shift each file date one day earlier |
 | `@+2d` | Shift each file date two days later |
+| `@-2bd` | Shift each file date two business days earlier |
+| `@+2bd` | Shift each file date two business days later |
 | `@nbd` | Roll to next business day |
 | `@pbd` | Roll to previous business day |
 | `@bd` | Keep only business days |
 | `@t=09:00,17:00` | Create times on `anchor_file` dates |
 
 `omit_file` is date-based only; it intentionally does not support `@t=`.
+
+When combined, modifiers run in this order: roll, calendar-day offset, then
+business-day offset. Business days currently mean Monday through Friday.
 
 ---
 

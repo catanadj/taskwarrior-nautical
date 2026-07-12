@@ -5349,6 +5349,8 @@ def test_parser_validation():
         "w:mon@t=09:00",
         "m:15@t=09:00@+1d",
         "m:15@t=09:00@-1d",
+        "m:-1@pbd@-2bd",
+        "y:04-24@+1bd",
         "(w:mon + m:1) | (w:fri + m:15)",
     ]
     
@@ -5389,11 +5391,15 @@ def test_parser_atom_helpers_characterization():
     expect(mods["day_offset"] == 1, f"Unexpected day offset: {mods!r}")
     neg_mods = core._parse_atom_mods("t=09:00@-2d")
     expect(neg_mods["day_offset"] == -2, f"Unexpected negative day offset: {neg_mods!r}")
+    business_mods = core._parse_atom_mods("pbd@-2bd@+1bd")
+    expect(business_mods["business_day_offset"] == -1, f"Unexpected business-day offset: {business_mods!r}")
     dnf = core._build_anchor_atom_dnf("m", "1st-mon@t=09:00")
-    expect(dnf == [[{"typ": "m", "spec": "1mon", "ival": 1, "mods": {"t": (9, 0), "roll": None, "wd": None, "bd": False, "day_offset": 0}}]], f"Unexpected atom dnf: {dnf!r}")
+    expect(dnf == [[{"typ": "m", "spec": "1mon", "ival": 1, "mods": {"t": (9, 0), "roll": None, "wd": None, "bd": False, "day_offset": 0, "business_day_offset": 0}}]], f"Unexpected atom dnf: {dnf!r}")
     node, next_i = core._parse_anchor_atom_at("w:mon@t=09:00 + m:1", 0, len("w:mon@t=09:00 + m:1"))
-    expect(node == [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {"t": (9, 0), "roll": None, "wd": None, "bd": False, "day_offset": 0}}]], f"Unexpected parsed node: {node!r}")
+    expect(node == [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {"t": (9, 0), "roll": None, "wd": None, "bd": False, "day_offset": 0, "business_day_offset": 0}}]], f"Unexpected parsed node: {node!r}")
     expect(next_i > 0, "Parser should advance index for single atom")
+    business_expr = "m:-1@pbd@-2bd"
+    expect(core.acf_to_original_format(core.build_acf(business_expr)) == business_expr, "ACF round-trip lost business-day offset")
 
 
 def test_yearly_spec_token_helper_accepts_known_valid_tokens():
@@ -5489,6 +5495,8 @@ def test_natural_language_comprehensive():
         ("m:-1@nbd", "the last day of each month if business day; otherwise the next business day"),
         ("y:04-25@+2d", "Apr 25 each year, 2 days later"),
         ("y:04-25@-2d", "Apr 25 each year, 2 days earlier"),
+        ("y:04-24@+1bd", "Apr 24 each year, 1 business day later"),
+        ("m:-1@pbd@-2bd", "the last day of each month if business day; otherwise the previous business day, 2 business days earlier"),
     ]
     
     for anchor, expected_phrase in test_cases:
@@ -6045,6 +6053,11 @@ def test_next_after_atom_with_mods_characterization():
         ("m:3@bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 2, 3)),
         # Roll then day_offset behavior.
         ("m:1@nbd@+1d", date(2024, 8, 31), date(2024, 8, 31), date(2024, 9, 3)),
+        # Roll, then calendar-day offset, then business-day offset.
+        ("m:-1@pbd@-2bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 1, 28)),
+        ("y:04-24@+1bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 4, 27)),
+        ("y:04-27@-1bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 4, 24)),
+        ("y:04-25@+1d@+1bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 4, 27)),
         # Low-level atom scheduling may expose an equal rolled date; expression scheduling filters it.
         ("m:15@nw", date(2024, 6, 14), date(2024, 6, 14), date(2024, 6, 14)),
     ]
@@ -6074,6 +6087,7 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
         ("y:01-31@+1d@t=09:00", "y:01-31@+1d", date(2026, 2, 1), date(2027, 2, 1)),
         ("y:03-01@-1d@t=09:00", "y:03-01@-1d", date(2026, 2, 28), date(2027, 2, 28)),
         ("y:02-29@+1d@t=09:00", "y:02-29@+1d", date(2028, 3, 1), date(2032, 3, 1)),
+        ("y:04-24@+1bd@t=09:00", "y:04-24@+1bd", date(2026, 4, 27), date(2027, 4, 26)),
         ("w:sun@t=09:00", "w:sun", date(2026, 3, 22), date(2026, 3, 29)),
     ]
     chain_id = "modifier-boundary"
@@ -10768,15 +10782,17 @@ def test_omit_file_modifiers_roll_dates_and_carry_descriptions():
 
 
 def test_omit_file_modifiers_support_negative_day_offsets():
-    """omit_file modifiers should support @-Nd against file dates."""
+    """omit_file modifiers should support calendar- and business-day offsets."""
     import nautical_core.omit_files as omit_files
 
     with tempfile.TemporaryDirectory() as td:
         omit_dir = Path(td)
         sample = omit_dir / 'holidays.csv'
-        sample.write_text('date\n2026-04-25\n', encoding='utf-8')
+        sample.write_text('date\n2026-04-27\n', encoding='utf-8')
         got = omit_files.load_omit_file_dates('holidays.csv@-2d', str(omit_dir))
-        expect(got == frozenset({date(2026, 4, 23)}), f'unexpected negative-offset omit_file dates: {got!r}')
+        expect(got == frozenset({date(2026, 4, 25)}), f'unexpected negative-offset omit_file dates: {got!r}')
+        business_got = omit_files.load_omit_file_dates('holidays.csv@-2bd', str(omit_dir))
+        expect(business_got == frozenset({date(2026, 4, 23)}), f'unexpected business-day-offset omit_file dates: {business_got!r}')
 
 
 def test_omit_file_modifiers_apply_even_when_base_file_is_cached():
@@ -10808,10 +10824,11 @@ def test_anchor_file_spec_parses_time_and_negative_offset():
     """anchor_file spec should parse @t and date-shift modifiers."""
     import nautical_core.anchor_files as anchor_files
 
-    file_name, mods = anchor_files.parse_anchor_file_spec('calendar.csv@t=09:00,17:00@-2d')
+    file_name, mods = anchor_files.parse_anchor_file_spec('calendar.csv@t=09:00,17:00@-2d@+1bd')
     expect(file_name == 'calendar.csv', f'unexpected anchor_file name parse: {file_name!r}')
     expect(mods.get('t') == [(9, 0), (17, 0)], f'unexpected anchor_file time mods: {mods!r}')
     expect(mods.get('day_offset') == -2, f'unexpected anchor_file day offset: {mods!r}')
+    expect(mods.get('business_day_offset') == 1, f'unexpected anchor_file business-day offset: {mods!r}')
 
 
 def test_anchor_file_spec_rejects_unpadded_times():
@@ -10842,6 +10859,8 @@ def test_anchor_file_loader_transforms_dates_and_carries_descriptions():
         got_desc = anchor_files.load_anchor_file_descriptions('calendar.csv@nbd', str(anchor_dir))
         expect(got_dates == frozenset({date(2026, 4, 27)}), f'unexpected transformed anchor_file dates: {got_dates!r}')
         expect(got_desc == {date(2026, 4, 27): 'Weekend anchor'}, f'unexpected transformed anchor_file descriptions: {got_desc!r}')
+        shifted = anchor_files.load_anchor_file_dates('calendar.csv@nbd@-1bd', str(anchor_dir))
+        expect(shifted == frozenset({date(2026, 4, 24)}), f'unexpected anchor_file business-day shift: {shifted!r}')
 
 
 def test_anchor_file_next_occurrence_after_uses_task_level_time():
@@ -11388,7 +11407,7 @@ def test_anchor_omit_business_day_roll_matches_rolled_date():
 
 
 def test_anchor_omit_positive_day_offset_matches_shifted_date():
-    """omit should fire on dates reached via positive day offsets."""
+    """omit should fire on dates reached via positive calendar- and business-day offsets."""
     import nautical_core.anchor_omit as anchor_omit
 
     omit_dnf = anchor_omit.validate_omit_expr_strict(
@@ -11398,6 +11417,14 @@ def test_anchor_omit_positive_day_offset_matches_shifted_date():
     expect(
         anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 4, 27), date(2026, 4, 12), "omit-offset-test", core=core),
         "shifted date should be omitted for 2026-04-25@+2d",
+    )
+    business_dnf = anchor_omit.validate_omit_expr_strict(
+        "y:04-24@+1bd",
+        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
+    )
+    expect(
+        anchor_omit.omit_expr_fires_on_date(business_dnf, date(2026, 4, 27), date(2026, 4, 12), "omit-business-offset-test", core=core),
+        "shifted Monday should be omitted for 2026-04-24@+1bd",
     )
 
 

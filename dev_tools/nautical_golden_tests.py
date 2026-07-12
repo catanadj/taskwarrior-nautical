@@ -12192,6 +12192,54 @@ def test_on_exit_preloads_equivalent_child_slots_for_early_checks():
     expect(not res_b.exists and not res_b.retryable, f"expected negative preloaded equivalent-child miss: {res_b}")
 
 
+def test_on_exit_combines_uuid_and_equivalent_slot_preloads():
+    """One export should seed exact UUID and equivalent-slot caches for a normal queue entry."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_combined_preload_test")
+    mod._reset_exit_export_cache()
+    mod._reset_exit_equiv_child_cache()
+    mod._reset_exit_diag_stats()
+
+    parent_uuid = "aaaaaaaa-0000-0000-0000-000000000001"
+    child_uuid = "bbbbbbbb-0000-0000-0000-000000000002"
+    existing_uuid = "cccccccc-0000-0000-0000-000000000003"
+    child = {
+        "uuid": child_uuid,
+        "chainID": "cid-a",
+        "link": 2,
+        "prevLink": "aaaaaaaa",
+    }
+    entries = [{"parent_uuid": parent_uuid, "child": child}]
+    calls = []
+
+    def _fake_run_task(cmd, **_kwargs):
+        calls.append(cmd)
+        expect(f"uuid:{parent_uuid}" in cmd, f"combined preload omitted parent UUID: {cmd}")
+        expect(f"uuid:{child_uuid}" in cmd, f"combined preload omitted child UUID: {cmd}")
+        expect("chainID:cid-a" in cmd and "link:2" in cmd, f"combined preload omitted slot filter: {cmd}")
+        rows = [
+            {"uuid": parent_uuid, "nextLink": ""},
+            {
+                "uuid": existing_uuid,
+                "chainID": "cid-a",
+                "link": 2,
+                "prevLink": "aaaaaaaa",
+                "status": "pending",
+            },
+        ]
+        return True, json.dumps(rows), ""
+
+    mod._run_task = _fake_run_task
+    mod._preload_export_uuids(entries)
+    mod._preload_equivalent_child_slots(entries)
+
+    exact = mod._export_uuid(child_uuid)
+    equivalent = mod._existing_equivalent_child(child, parent_uuid)
+    expect(len(calls) == 1, f"expected one combined preload export, got {len(calls)}: {calls!r}")
+    expect(not exact.exists and not exact.retryable, f"missing exact child should be negatively cached: {exact}")
+    expect(equivalent.exists and equivalent.obj.get("uuid") == existing_uuid, f"equivalent child was not cached: {equivalent}")
+
+
 def test_on_exit_preloads_uuid_exports_for_early_checks():
     """on-exit should bulk-preload early parent/child exports and keep locked parent rechecks live."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -14422,6 +14470,7 @@ TESTS = [
     test_on_exit_import_child_retries_on_lock,
     test_on_exit_equivalent_child_cache_reuses_slot_lookup,
     test_on_exit_preloads_equivalent_child_slots_for_early_checks,
+    test_on_exit_combines_uuid_and_equivalent_slot_preloads,
     test_on_exit_preloads_uuid_exports_for_early_checks,
     test_on_exit_successful_import_reuses_initial_child_export,
     test_on_exit_dead_letter_on_import_failure,

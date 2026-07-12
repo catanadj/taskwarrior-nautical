@@ -815,6 +815,47 @@ def test_hook_protocol_modify_validation_limits_and_emission():
     expect(json.loads(output)["description"] == "Cafe ăîșț ✅", f"protocol emission was not strict JSON: {output!r}")
 
 
+def test_hook_protocol_classifies_safe_nautical_ordinary_edits():
+    """Only changes unrelated to Nautical behavior should qualify for thin modify handling."""
+    protocol = _load_hook_protocol_module("_nautical_hook_protocol_ordinary_edit_test")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000707",
+        "status": "pending",
+        "description": "ordinary edit",
+        "project": "home",
+        "due": "20270101T090000Z",
+        "cp": "P1D",
+        "chain": "on",
+        "chainID": "abcd1234",
+        "link": 4,
+    }
+    for field, value in (
+        ("description", "renamed"),
+        ("project", "work"),
+        ("priority", "H"),
+        ("tags", ["next", "phone"]),
+        ("depends", ["11111111-1111-1111-1111-111111111111"]),
+    ):
+        new = dict(old, **{field: value}, modified="20260101T000001Z")
+        expect(protocol.is_safe_nautical_ordinary_modify(old, new), f"ordinary {field} edit should use the thin path")
+
+    for field, value in (
+        ("status", "completed"),
+        ("cp", "P2D"),
+        ("chain", "off"),
+        ("chainMax", 8),
+        ("chainUntil", "20280101T000000Z"),
+        ("link", 5),
+        ("nextLink", "eeeeeeee"),
+        ("due", "20270102T090000Z"),
+        ("scheduled", "20270101T080000Z"),
+        ("wait", "20261231T090000Z"),
+        ("custom_uda", "changed"),
+    ):
+        new = dict(old, **{field: value}, modified="20260101T000001Z")
+        expect(not protocol.is_safe_nautical_ordinary_modify(old, new), f"Nautical-sensitive {field} edit must use the full path")
+
+
 def test_exit_probe_is_conservative_across_queue_states():
     """The exit probe should bypass only definitely empty queue state."""
     probe = _load_exit_probe_module("_nautical_exit_probe_state_test")
@@ -956,6 +997,26 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         expect(json.loads(modify.stdout) == modified, f"plain modify fast path changed task: {modify.stdout!r}")
         expect("ăîșț ✅" in modify.stdout and "\\u" not in modify.stdout, f"plain modify escaped Unicode: {modify.stdout!r}")
 
+        nautical_old = dict(
+            plain,
+            cp="P1D",
+            chain="on",
+            chainID="abcd1234",
+            link=3,
+            due="20270101T090000Z",
+        )
+        nautical_new = dict(nautical_old, description="Modified nautical ăîșț ✅")
+        nautical_modify = subprocess.run(
+            [sys.executable, str(hooks_dir / "on-modify-nautical.py")],
+            input=json.dumps(nautical_old, ensure_ascii=False) + "\n" + json.dumps(nautical_new, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=5.0,
+        )
+        expect(nautical_modify.returncode == 0, f"ordinary Nautical edit loaded the broken core: {nautical_modify.stderr!r}")
+        expect(json.loads(nautical_modify.stdout) == nautical_new, f"ordinary Nautical edit changed task: {nautical_modify.stdout!r}")
+
         exit_hook = subprocess.run(
             [sys.executable, str(hooks_dir / "on-exit-nautical.py")],
             text=True,
@@ -974,6 +1035,10 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
             (
                 hooks_dir / "on-modify-nautical.py",
                 json.dumps(plain, ensure_ascii=False) + "\n" + json.dumps(modified, ensure_ascii=False),
+            ),
+            (
+                hooks_dir / "on-modify-nautical.py",
+                json.dumps(nautical_old, ensure_ascii=False) + "\n" + json.dumps(nautical_new, ensure_ascii=False),
             ),
             (hooks_dir / "on-exit-nautical.py", ""),
         )
@@ -1028,9 +1093,9 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
             encoding="utf-8",
         )
         nautical_old = dict(plain, cp="P1D")
-        nautical_new = dict(nautical_old, description="Modified nautical ăîșț ✅")
+        nautical_changed = dict(nautical_old, cp="P2D")
         modify_input = json.dumps(nautical_old, ensure_ascii=False) + "\n" + json.dumps(
-            nautical_new,
+            nautical_changed,
             ensure_ascii=False,
         )
         modify_mismatch = subprocess.run(
@@ -1043,7 +1108,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         )
         expect(modify_mismatch.returncode != 0, "on-modify accepted an incompatible implementation API")
         expect(
-            json.loads(modify_mismatch.stdout) == nautical_new,
+            json.loads(modify_mismatch.stdout) == nautical_changed,
             "on-modify API mismatch did not preserve the latest task",
         )
         expect(
@@ -3605,7 +3670,7 @@ def test_perf_budget_config_covers_cache_io_checks():
     expect(int(hook_fast_path.get("repeats") or 0) >= 3, "hook fast-path benchmark needs repeated samples")
     ratios = hook_fast_path.get("max_ratio") if isinstance(hook_fast_path.get("max_ratio"), dict) else {}
     expect(
-        {"hook_plain_add", "hook_plain_modify", "hook_empty_exit"} <= set(ratios),
+        {"hook_plain_add", "hook_plain_modify", "hook_nautical_ordinary_modify", "hook_empty_exit"} <= set(ratios),
         f"hook ratio budgets are incomplete: {ratios}",
     )
 
@@ -14230,6 +14295,7 @@ TESTS = [
     test_hook_protocol_on_modify_accepts_supported_input_forms,
     test_hook_protocol_on_modify_matches_nautical_route_rules,
     test_hook_protocol_modify_validation_limits_and_emission,
+    test_hook_protocol_classifies_safe_nautical_ordinary_edits,
     test_exit_probe_is_conservative_across_queue_states,
     test_light_taskdata_resolution_matches_hook_precedence,
     test_plain_hook_fast_paths_do_not_import_core_package,

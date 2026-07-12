@@ -103,6 +103,14 @@ def _diagnose(message: str) -> None:
         pass
 
 
+def _full_path_requested() -> bool:
+    return (
+        os.environ.get("NAUTICAL_DIAG") == "1"
+        or (os.environ.get("NAUTICAL_PROFILE") or "0").strip() not in ("", "0")
+        or os.environ.get("NAUTICAL_BENCH_FORCE_FULL") == "1"
+    )
+
+
 def main() -> int:
     raw_input = _read_input()
     protocol, _protocol_path, protocol_error = hook_bootstrap.load_core_helper_module(
@@ -117,14 +125,20 @@ def main() -> int:
         except Exception as exc:
             protocol_error = exc
 
-    if (
-        probe is not None
-        and probe.valid
-        and not probe.is_nautical
-        and os.environ.get("NAUTICAL_BENCH_FORCE_FULL") != "1"
-    ):
-        protocol.emit_passthrough_json(probe.task)
-        return 0
+    if probe is not None and probe.valid:
+        plain_fast_path = not probe.is_nautical and os.environ.get("NAUTICAL_BENCH_FORCE_FULL") != "1"
+        ordinary_nautical_fast_path = False
+        if probe.is_nautical and not _full_path_requested():
+            try:
+                classify_ordinary = getattr(protocol, "is_safe_nautical_ordinary_modify", None)
+                ordinary_nautical_fast_path = bool(
+                    callable(classify_ordinary) and classify_ordinary(probe.old, probe.new)
+                )
+            except Exception:
+                ordinary_nautical_fast_path = False
+        if plain_fast_path or ordinary_nautical_fast_path:
+            protocol.emit_passthrough_json(probe.task)
+            return 0
 
     impl, impl_path, impl_error = hook_bootstrap.load_core_helper_module(
         _CORE_BASE,

@@ -19,6 +19,10 @@ _ADD_NAUTICAL_FIELDS = (
 )
 _MODIFY_RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp", "omit", "omit_file")
 _MODIFY_CHAIN_FIELDS = ("chainID", "nextLink", "prevLink", "link")
+_MODIFY_SAFE_ORDINARY_FIELDS = frozenset(
+    ("description", "project", "priority", "tags", "annotations", "depends", "modified", "urgency")
+)
+_MISSING = object()
 
 
 class HookProtocolResult:
@@ -78,6 +82,17 @@ def task_has_modify_nautical_fields(task: dict | None) -> bool:
         return False
     fields = _MODIFY_RECURRENCE_FIELDS + _MODIFY_CHAIN_FIELDS
     return any(_field_has_value(task, field) for field in fields)
+
+
+def is_safe_nautical_ordinary_modify(old: dict | None, new: dict | None) -> bool:
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return False
+    if not (task_has_modify_nautical_fields(old) or task_has_modify_nautical_fields(new)):
+        return False
+    for field in set(old) | set(new):
+        if old.get(field, _MISSING) != new.get(field, _MISSING) and field not in _MODIFY_SAFE_ORDINARY_FIELDS:
+            return False
+    return True
 
 
 def _raw_input(raw: bytes | str) -> tuple[bytes, str]:
@@ -248,6 +263,7 @@ __all__ = (
     "HookProtocolResult",
     "MAX_JSON_BYTES",
     "emit_passthrough_json",
+    "is_safe_nautical_ordinary_modify",
     "probe_on_add",
     "probe_on_modify",
     "read_on_add",

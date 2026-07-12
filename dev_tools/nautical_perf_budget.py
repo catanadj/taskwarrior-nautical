@@ -360,6 +360,24 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
                 modify_data,
             )
         )
+        nautical_old = dict(
+            plain,
+            cp="P1D",
+            chain="on",
+            chainID="abcd1234",
+            link=3,
+            due="20270101T090000Z",
+        )
+        nautical_modified = dict(nautical_old, description="ordinary Nautical edit", modified="20260101T000001Z")
+        cases.append(
+            (
+                "hook_nautical_ordinary_modify",
+                ROOT / "on-modify-nautical.py",
+                json.dumps(nautical_old, ensure_ascii=False) + "\n" + json.dumps(nautical_modified, ensure_ascii=False),
+                nautical_modified,
+                modify_data,
+            )
+        )
         exit_data = temp_root / "exit-data"
         exit_data.mkdir()
         _init_empty_queue_db(exit_data)

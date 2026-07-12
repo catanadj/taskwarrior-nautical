@@ -116,6 +116,12 @@ Useful syntax:
 | `y:04-12` | April 12 every year |
 | `w:tue,fri | y:05-05` | Tuesdays, Fridays, or May 5 |
 | `(w:mon | m:last-fri)@t=09:00` | Apply the same time to a grouped expression |
+| `(y:12-24 | y:12-31)@pbd@-1bd` | Apply shared date modifiers to OR branches |
+
+Parenthesized OR groups accept shared time, roll, filter, calendar-offset, and
+business-day-offset modifiers. Shared `@t=` also works on groups containing
+`+`; date modifiers on `AND` groups must remain attached to their individual
+atoms so the intersection cannot acquire false rolled matches.
 
 For anchors, Nautical resolves dates as:
 

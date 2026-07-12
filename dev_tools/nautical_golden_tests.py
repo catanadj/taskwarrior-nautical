@@ -5834,11 +5834,43 @@ def test_group_time_modifier_supports_multiple_times():
     )
 
 
-def test_group_time_modifier_rejects_conflicts_and_non_time_modifiers():
-    """Group v1 should reject ambiguous nested times and modifiers other than @t."""
+def test_group_date_modifiers_distribute_across_or_branches():
+    """Date modifiers on OR-only groups should schedule and round-trip exactly."""
+    expr = "(y:12-24 | (y:12-30 | y:12-31))@pbd@-1bd@t=09:00"
+    dnf = core.validate_anchor_expr_strict(expr)
+    expect(len(dnf) == 3 and all(len(term) == 1 for term in dnf), f"unexpected grouped DNF: {dnf!r}")
+    for term in dnf:
+        mods = term[0].get("mods") or {}
+        expect(mods.get("roll") == "pbd", f"grouped roll missing: {dnf!r}")
+        expect(mods.get("business_day_offset") == -1, f"grouped business offset missing: {dnf!r}")
+        expect(mods.get("t") == (9, 0), f"grouped time missing: {dnf!r}")
+
+    next_date, _meta = core.next_after_expr(dnf, date(2026, 12, 1))
+    expect(next_date == date(2026, 12, 23), f"grouped modifiers scheduled {next_date!r}")
+    natural = core.describe_anchor_expr(expr)
+    expect("previous business day" in natural and "1 business day earlier" in natural, f"grouped natural text missing: {natural!r}")
+    canonical = core.acf_to_original_format(core.build_acf(expr))
+    expect(core.parse_anchor_expr_to_dnf(canonical) == dnf, f"grouped modifiers were lost in ACF: {canonical!r}")
+
+    all_mods = core.parse_anchor_expr_to_dnf("(y:04-24 | y:04-30)@nbd@bd@+1d@-2bd@t=09:00")
+    expect(
+        all((term[0].get("mods") or {}).get("bd") for term in all_mods),
+        f"grouped business-day filter missing: {all_mods!r}",
+    )
+    cancelled = core.parse_anchor_expr_to_dnf("(w:mon | w:fri)@+1d@-1d")
+    expect(
+        all((term[0].get("mods") or {}).get("day_offset") == 0 for term in cancelled),
+        f"cancelling grouped offsets should normalize to zero: {cancelled!r}",
+    )
+
+
+def test_group_modifiers_reject_ambiguous_combinations():
+    """Grouped modifiers should reject representations that would change semantics."""
     for expr, needle in (
         ("(w:mon@t=10:00 | w:fri)@t=09:00", "already has"),
-        ("(m:1 | m:15)@nbd", "only supports '@t="),
+        ("(m:1@pbd | m:15)@nbd", "already inside"),
+        ("(m:1 + w:sun)@nbd", "OR-only"),
+        ("(w:mon)@", "empty"),
     ):
         try:
             core.parse_anchor_expr_to_dnf(expr)
@@ -6994,6 +7026,28 @@ def test_hook_on_add_counted_random_preview_uses_group_time():
         "2 random days each" in stderr_txt and "month at 09:00" in stderr_txt,
         f"counted-random natural text missing: {stderr_txt[:500]!r}",
     )
+
+
+def test_hook_on_add_accepts_group_date_modifiers():
+    """on-add should accept and schedule date modifiers shared by OR branches."""
+    hook = _find_hook_file("on-add-nautical.py")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000120",
+        "description": "hook test grouped date modifiers",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20260101T000000Z",
+        "anchor": "(y:04-24 | y:04-30)@pbd@-1bd@t=09:00",
+        "anchor_mode": "skip",
+    }
+    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
+    expect(proc.returncode == 0, f"on-add grouped date modifiers failed: {proc.stderr[:500]!r}")
+    out_task = _extract_last_json(proc.stdout)
+    due = datetime.fromisoformat(str(out_task.get("due")))
+    today = core.to_local(core.now_utc()).date()
+    expected_date, _meta = core.next_after_expr(core.validate_anchor_expr_strict(task["anchor"]), today)
+    expect(due.date() == expected_date, f"grouped date modifiers produced wrong due date: {due}, expected {expected_date}")
+    expect((due.hour, due.minute) == (9, 0), f"grouped date modifiers lost shared time: {due}")
 
 
 def test_hook_on_add_cp_scheduled_only_preserves_no_due():
@@ -14320,7 +14374,8 @@ TESTS = [
     test_weekly_trailing_time_modifier_applies_to_whole_list,
     test_group_time_modifier_distributes_to_all_branches,
     test_group_time_modifier_supports_multiple_times,
-    test_group_time_modifier_rejects_conflicts_and_non_time_modifiers,
+    test_group_date_modifiers_distribute_across_or_branches,
+    test_group_modifiers_reject_ambiguous_combinations,
     test_counted_random_selects_unique_dates_per_period,
     test_counted_random_is_deterministic_chain_scoped_and_constrained,
     test_counted_random_omit_redraws_from_remaining_pool,
@@ -14384,6 +14439,7 @@ TESTS = [
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_counted_random_preview_uses_group_time,
+    test_hook_on_add_accepts_group_date_modifiers,
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
     test_core_anchor_preset_unknown_lists_available_names,
     test_core_omit_preset_unknown_lists_available_names,

@@ -1,6 +1,48 @@
 from __future__ import annotations
 
 
+def _group_has_date_modifiers(mods: dict) -> bool:
+    return bool(
+        mods.get("roll")
+        or mods.get("wd") is not None
+        or mods.get("bd")
+        or int(mods.get("day_offset", 0) or 0)
+        or int(mods.get("business_day_offset", 0) or 0)
+    )
+
+
+def _apply_group_modifiers(res, mods: dict, *, parse_error_cls) -> None:
+    has_date_modifiers = _group_has_date_modifiers(mods)
+    if has_date_modifiers and any(len(term) != 1 for term in res):
+        raise parse_error_cls(
+            "Grouped date modifiers require OR-only branches. "
+            "Attach date modifiers to individual atoms in groups containing '+'."
+        )
+    for term in res:
+        for atom in term:
+            atom_mods = atom.setdefault("mods", {})
+            if mods.get("t"):
+                if atom_mods.get("t"):
+                    raise parse_error_cls(
+                        "Cannot apply a grouped @t modifier because the group already has a timed term."
+                    )
+                tval = mods["t"]
+                atom_mods["t"] = list(tval) if isinstance(tval, list) else tval
+            if not has_date_modifiers:
+                continue
+            if _group_has_date_modifiers(atom_mods):
+                raise parse_error_cls(
+                    "Cannot combine grouped date modifiers with date modifiers already inside the group."
+                )
+            if mods.get("roll"):
+                atom_mods["roll"] = mods["roll"]
+                atom_mods["wd"] = mods.get("wd")
+            if mods.get("bd"):
+                atom_mods["bd"] = True
+            atom_mods["day_offset"] = int(mods.get("day_offset", 0) or 0)
+            atom_mods["business_day_offset"] = int(mods.get("business_day_offset", 0) or 0)
+
+
 def parse_anchor_expr_to_dnf(
     s: str,
     *,
@@ -50,24 +92,11 @@ def parse_anchor_expr_to_dnf(
                     if s[i] == "+" and s[i - 1] != "@":
                         break
                     i += 1
-                mods = parse_atom_mods(s[start:i].strip())
-                if not mods.get("t") or any(
-                    value
-                    for key, value in mods.items()
-                    if key != "t"
-                ):
-                    raise parse_error_cls(
-                        "A grouped modifier currently only supports '@t=HH:MM[,HH:MM...]'."
-                    )
-                for term in res:
-                    for atom in term:
-                        atom_mods = atom.setdefault("mods", {})
-                        if atom_mods.get("t"):
-                            raise parse_error_cls(
-                                "Cannot apply a grouped @t modifier because the group already has a timed term."
-                            )
-                        tval = mods["t"]
-                        atom_mods["t"] = list(tval) if isinstance(tval, list) else tval
+                mods_text = s[start:i].strip()
+                if not mods_text.strip("@").strip():
+                    raise parse_error_cls("Grouped modifier is empty.")
+                mods = parse_atom_mods(mods_text)
+                _apply_group_modifiers(res, mods, parse_error_cls=parse_error_cls)
             return res
         return parse_atom()
 

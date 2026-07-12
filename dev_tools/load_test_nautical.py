@@ -17,6 +17,7 @@ import os
 import random
 import re
 import shutil
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -35,29 +36,49 @@ def _which_task() -> str | None:
 def _write_taskrc(path: Path, data_dir: Path, hooks_dir: Path) -> None:
     lines = [
         f"data.location={data_dir}",
+        f"hooks.location={hooks_dir}",
         "hooks=on",
         "confirmation=off",
-        "verbose=nothing",
+        f"include {REPO_ROOT / 'uda.conf'}",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _install_hooks(hooks_dir: Path) -> None:
     hooks_dir.mkdir(parents=True, exist_ok=True)
-    src_on_add = REPO_ROOT / "on-add-nautical.py"
-    src_on_modify = REPO_ROOT / "on-modify-nautical.py"
     src_core_pkg = REPO_ROOT / "nautical_core"
-    dst_on_add = hooks_dir / "on-add"
-    dst_on_modify = hooks_dir / "on-modify"
     task_root = hooks_dir.parent
-    shutil.copy2(src_on_add, dst_on_add)
-    shutil.copy2(src_on_modify, dst_on_modify)
+    installed = []
+    for source_name, target_name in (
+        ("on-add-nautical.py", "on-add"),
+        ("on-modify-nautical.py", "on-modify"),
+        ("on-exit-nautical.py", "on-exit"),
+    ):
+        target = hooks_dir / target_name
+        shutil.copy2(REPO_ROOT / source_name, target)
+        installed.append(target)
     shutil.copytree(src_core_pkg, task_root / "nautical_core", dirs_exist_ok=True)
-    for p in (dst_on_add, dst_on_modify):
+    for p in installed:
         try:
             p.chmod(0o755)
         except Exception:
             pass
+
+
+def _write_nautical_config(path: Path) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                'tz = "UTC"',
+                'panel_mode = "text"',
+                "show_analytics = false",
+                "show_timeline_gaps = false",
+                "check_chain_integrity = false",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _run_task(cmd: list[str], env: dict, timeout: float = 15.0) -> tuple[bool, str, str, float]:
@@ -86,24 +107,93 @@ def _parse_created_id(stdout: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def _export_pending_uuids(env: dict) -> set[str]:
+def _export_tasks(env: dict, *filters: str) -> list[dict]:
     ok, out, _err, _dt = _run_task(
-        ["task", "rc.hooks=off", "rc.json.array=1", "status:pending", "export"],
+        ["task", "rc.hooks=off", "rc.json.array=1", *filters, "export"],
         env,
         timeout=30.0,
     )
     if not ok or not out:
-        return set()
+        return []
     try:
         arr = json.loads(out)
     except Exception:
-        return set()
-    uuids = set()
-    for obj in arr or []:
-        u = obj.get("uuid") if isinstance(obj, dict) else None
-        if u:
-            uuids.add(str(u))
-    return uuids
+        return []
+    if isinstance(arr, dict):
+        arr = [arr]
+    return [obj for obj in (arr or []) if isinstance(obj, dict)] if isinstance(arr, list) else []
+
+
+def _export_pending_uuids(env: dict) -> set[str]:
+    return {
+        str(obj.get("uuid"))
+        for obj in _export_tasks(env, "status:pending")
+        if str(obj.get("uuid") or "").strip()
+    }
+
+
+def _queue_metrics(data_dir: Path) -> dict[str, int]:
+    db_path = data_dir / ".nautical-state" / ".nautical_queue.db"
+    if not db_path.is_file():
+        return {"items": 0, "bytes": 0}
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.5) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(length(payload)), 0) "
+                "FROM queue_entries WHERE state IN ('queued', 'processing')"
+            ).fetchone()
+        return {"items": int(row[0] or 0), "bytes": int(row[1] or 0)}
+    except Exception:
+        return {"items": -1, "bytes": -1}
+
+
+def _verify_link_rows(rows: list[dict], parent_uuids: list[str]) -> dict:
+    by_uuid = {
+        str(row.get("uuid") or "").strip(): row
+        for row in rows
+        if str(row.get("uuid") or "").strip()
+    }
+    by_slot: dict[tuple[str, int], list[dict]] = {}
+    for row in rows:
+        chain_id = str(row.get("chainID") or "").strip()
+        try:
+            link = int(row.get("link"))
+        except Exception:
+            continue
+        if chain_id and str(row.get("status") or "").strip() != "deleted":
+            by_slot.setdefault((chain_id, link), []).append(row)
+
+    failures = []
+    verified = 0
+    for parent_uuid in parent_uuids:
+        parent = by_uuid.get(parent_uuid)
+        if parent is None:
+            failures.append(f"{parent_uuid[:8]}: parent missing")
+            continue
+        chain_id = str(parent.get("chainID") or "").strip()
+        try:
+            next_link = int(parent.get("link")) + 1
+        except Exception:
+            failures.append(f"{parent_uuid[:8]}: invalid parent link")
+            continue
+        children = by_slot.get((chain_id, next_link), [])
+        if len(children) != 1:
+            failures.append(f"{parent_uuid[:8]}: expected one child at link {next_link}, found {len(children)}")
+            continue
+        child = children[0]
+        child_uuid = str(child.get("uuid") or "").strip()
+        if str(parent.get("nextLink") or "").strip() != child_uuid[:8]:
+            failures.append(f"{parent_uuid[:8]}: parent nextLink mismatch")
+            continue
+        if str(child.get("prevLink") or "").strip() != parent_uuid[:8]:
+            failures.append(f"{parent_uuid[:8]}: child prevLink mismatch")
+            continue
+        verified += 1
+    return {"expected": len(parent_uuids), "verified": verified, "failures": failures}
+
+
+def _verify_completed_links(env: dict, parent_uuids: list[str]) -> dict:
+    return _verify_link_rows(_export_tasks(env, "chainID.not:"), parent_uuids)
 
 
 def _percentile(vals: list[float], pct: float) -> float:
@@ -136,6 +226,7 @@ def main() -> int:
     ap.add_argument("--ramp-step", type=int, default=200, help="increment per stage")
     ap.add_argument("--ramp-max", type=int, default=3000, help="max tasks per stage")
     ap.add_argument("--limit-p95", type=float, default=1.0, help="stop when p95 add latency exceeds (s)")
+    ap.add_argument("--limit-done-p95", type=float, default=1.5, help="stop when p95 end-to-end completion latency exceeds (s)")
     ap.add_argument("--limit-fail-rate", type=float, default=0.01, help="stop when add fail rate exceeds")
     ap.add_argument("--limit-queue-bytes", type=int, default=1, help="stop when queue bytes exceeds")
     ap.add_argument("--seed", type=int, default=42, help="random seed")
@@ -171,14 +262,20 @@ def main() -> int:
     data_dir = temp_dir / "taskdata"
     hooks_dir = data_dir / "hooks"
     taskrc_path = temp_dir / "taskrc"
+    config_path = temp_dir / "config-nautical.toml"
 
     data_dir.mkdir(parents=True, exist_ok=True)
     _install_hooks(hooks_dir)
     _write_taskrc(taskrc_path, data_dir, hooks_dir)
+    _write_nautical_config(config_path)
 
     env = os.environ.copy()
     env["TASKRC"] = str(taskrc_path)
     env["TASKDATA"] = str(data_dir)
+    env["NAUTICAL_CONFIG"] = str(config_path)
+    env["NAUTICAL_TRUST_CONFIG_PATH"] = "1"
+    env["NAUTICAL_CORE_PATH"] = str(data_dir)
+    env["NAUTICAL_TRUST_CORE_PATH"] = "1"
 
     def _make_add_cmd(i: int) -> list[str]:
         desc = f"loadtest task {i}"
@@ -224,6 +321,8 @@ def main() -> int:
             "add": _stats(res.get("add_lat", []), int(res.get("add_fail", 0) or 0)),
             "done": _stats(res.get("done_lat", []), int(res.get("done_fail", 0) or 0)),
             "queue_bytes": int(res.get("queue_bytes", 0) or 0),
+            "queue_items": int(res.get("queue_items", 0) or 0),
+            "lifecycle": res.get("lifecycle") or {"expected": 0, "verified": 0, "failures": []},
             "done_targets": int(res.get("done_targets", 0) or 0),
             "tasks_created": int(res.get("tasks_created", 0) or 0),
         }
@@ -233,11 +332,7 @@ def main() -> int:
         done_lat = []
         add_fail = 0
         done_fail = 0
-        task_ids = []
-        before_uuids = set()
-
-        if args.done_only:
-            before_uuids = _export_pending_uuids(env)
+        before_uuids = _export_pending_uuids(env)
 
         if args.concurrency <= 1:
             for i in range(batch_tasks):
@@ -247,10 +342,6 @@ def main() -> int:
                 if not ok:
                     if measure_add:
                         add_fail += 1
-                else:
-                    tid = _parse_created_id(out)
-                    if tid is not None:
-                        task_ids.append(tid)
         else:
             from concurrent.futures import ThreadPoolExecutor
 
@@ -264,18 +355,22 @@ def main() -> int:
                     if not ok:
                         if measure_add:
                             add_fail += 1
-                    else:
-                        tid = _parse_created_id(out)
-                        if tid is not None:
-                            task_ids.append(tid)
 
-        if args.done_only or not task_ids:
-            after_uuids = _export_pending_uuids(env)
-            new_uuids = list(after_uuids - before_uuids)
-            task_ids = new_uuids
+        pending_rows = _export_tasks(env, "status:pending")
+        pending_by_uuid = {
+            str(row.get("uuid") or "").strip(): row
+            for row in pending_rows
+            if str(row.get("uuid") or "").strip()
+        }
+        task_ids = list(set(pending_by_uuid) - before_uuids)
 
         random.shuffle(task_ids)
         to_done = task_ids[:int(round(batch_tasks * batch_done_rate))]
+        nautical_parents = [
+            task_uuid
+            for task_uuid in to_done
+            if any(str(pending_by_uuid[task_uuid].get(field) or "").strip() for field in ("anchor", "anchor_file", "cp"))
+        ]
 
         def _done_cmd(tid) -> list[str]:
             return ["task", str(tid), "done"]
@@ -298,15 +393,17 @@ def main() -> int:
                     if not ok:
                         done_fail += 1
 
-        queue_path = data_dir / ".nautical_spawn_queue.jsonl"
-        queue_bytes = queue_path.stat().st_size if queue_path.exists() else 0
+        queue = _queue_metrics(data_dir)
+        lifecycle = _verify_completed_links(env, nautical_parents)
 
         return {
             "add_lat": add_lat,
             "done_lat": done_lat,
             "add_fail": add_fail,
             "done_fail": done_fail,
-            "queue_bytes": queue_bytes,
+            "queue_bytes": queue["bytes"],
+            "queue_items": queue["items"],
+            "lifecycle": lifecycle,
             "done_targets": len(to_done),
             "tasks_created": len(task_ids),
         }
@@ -350,41 +447,52 @@ def main() -> int:
                 if not okd:
                     done_fail += 1
 
-        queue_path = data_dir / ".nautical_spawn_queue.jsonl"
-        queue_bytes = queue_path.stat().st_size if queue_path.exists() else 0
+        queue = _queue_metrics(data_dir)
 
         return {
             "add_lat": add_lat,
             "done_lat": done_lat,
             "add_fail": add_fail,
             "done_fail": done_fail,
-            "queue_bytes": queue_bytes,
+            "queue_bytes": queue["bytes"],
+            "queue_items": queue["items"],
+            "lifecycle": {"expected": 0, "verified": 0, "failures": []},
         }
 
     def _thresholds_summary() -> str:
         return (
-            f"thresholds: p95>{args.limit_p95:.3f}s "
+            f"thresholds: add_p95>{args.limit_p95:.3f}s done_p95>{args.limit_done_p95:.3f}s "
             f"fail_rate>{args.limit_fail_rate:.3f} "
             f"queue_bytes>{args.limit_queue_bytes}"
         )
 
     def _stage_threshold_violations(stage: dict) -> list[str]:
         violations = []
-        target = stage["done"] if args.done_only else stage["add"]
-        metric_prefix = "done" if args.done_only else "add"
-        if target.get("p95_s", 0.0) > args.limit_p95:
-            violations.append(f"{metric_prefix}.p95_s>{args.limit_p95}")
-        if target.get("fail_rate", 0.0) > args.limit_fail_rate:
-            violations.append(f"{metric_prefix}.fail_rate>{args.limit_fail_rate}")
+        add = stage.get("add") or {}
+        done = stage.get("done") or {}
+        if int(add.get("samples", 0) or 0) > 0 and add.get("p95_s", 0.0) > args.limit_p95:
+            violations.append(f"add.p95_s>{args.limit_p95}")
+        if int(done.get("samples", 0) or 0) > 0 and done.get("p95_s", 0.0) > args.limit_done_p95:
+            violations.append(f"done.p95_s>{args.limit_done_p95}")
+        if int(add.get("samples", 0) or 0) > 0 and add.get("fail_rate", 0.0) > args.limit_fail_rate:
+            violations.append(f"add.fail_rate>{args.limit_fail_rate}")
+        if int(done.get("samples", 0) or 0) > 0 and done.get("fail_rate", 0.0) > args.limit_fail_rate:
+            violations.append(f"done.fail_rate>{args.limit_fail_rate}")
         if int(stage.get("queue_bytes", 0) or 0) > args.limit_queue_bytes:
             violations.append(f"queue_bytes>{args.limit_queue_bytes}")
+        if int(stage.get("queue_items", 0) or 0) != 0:
+            violations.append("queue_items!=0")
+        lifecycle = stage.get("lifecycle") or {}
+        if lifecycle.get("failures"):
+            violations.append("lifecycle_failures")
         return violations
 
     summary = {
         "mode": "",
         "done_only": bool(args.done_only),
         "thresholds": {
-            "limit_p95_s": float(args.limit_p95),
+            "limit_add_p95_s": float(args.limit_p95),
+            "limit_done_p95_s": float(args.limit_done_p95),
             "limit_fail_rate": float(args.limit_fail_rate),
             "limit_queue_bytes": int(args.limit_queue_bytes),
         },

@@ -38,6 +38,10 @@ jobs:
         run: |
           python3 dev_tools/nautical_golden_tests.py
 
+      - name: Run end-to-end hook latency benchmark
+        run: |
+          python3 dev_tools/load_test_nautical.py --tasks 30 --done-rate 1 --anchor-rate 0.5 --cp-rate 0.5 --limit-p95 1.0 --limit-done-p95 2.0 --json --enforce | tee e2e-latency-report.json
+
       - name: Run CI stress profile
         run: |
           python3 dev_tools/nautical_stress_campaign.py --profile ci --json | tee stress-ci-report.json
@@ -75,5 +79,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: stress-ci-report
-          path: stress-ci-report.json
+          path: |
+            stress-ci-report.json
+            e2e-latency-report.json
           if-no-files-found: error

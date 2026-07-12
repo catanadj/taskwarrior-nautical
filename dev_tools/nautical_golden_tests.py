@@ -9898,7 +9898,11 @@ def test_on_modify_completion_preflight_context_happy_path():
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    mod._existing_next_task = lambda _task, _next_no: None
+    mod._existing_next_task = lambda _task, _next_no, _snapshot=None: None
+    models = core._import_sibling("modify_models")
+    mod._completion_chain_snapshot = lambda *_a, **_k: models.CompletionChainSnapshot(
+        mode="recent", rows=[], loaded=True
+    )
     new = {
         "uuid": "00000000-0000-0000-0000-000000000111",
         "status": "completed",
@@ -10199,7 +10203,7 @@ def test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change():
 
 
 def test_on_modify_completion_finalize_skips_analytics_when_hidden():
-    """completion finalize should not compute analytics advice when analytics are hidden."""
+    """completion finalize should keep integrity checks independent from analytics."""
     flow = core._import_sibling("modify_completion_flow")
 
     captured = {}
@@ -10219,6 +10223,7 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
 
     def fake_render_anchor_completion_feedback(**kwargs):
         captured["analytics_advice"] = kwargs.get("analytics_advice")
+        captured["integrity_warnings"] = kwargs.get("integrity_warnings")
 
     services = flow.CompletionFinalizeServices(
         build_and_spawn_child=fake_build_and_spawn_child,
@@ -10230,12 +10235,13 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
         export_uuid_short_cached=SimpleNamespace(cache_clear=lambda: None),
         merge_spawned_child_into_chain=lambda chain, *_a, **_k: chain,
         chain_health_advice=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("analytics should not be computed when hidden")),
-        chain_integrity_warnings=lambda *_a, **_k: None,
+        chain_integrity_warnings=lambda *_a, **_k: ["missing link"],
         render_anchor_completion_feedback=fake_render_anchor_completion_feedback,
         render_cp_completion_feedback=lambda *_a, **_k: None,
         print_task=lambda *_a, **_k: None,
         diag_summary=lambda *_a, **_k: None,
         show_analytics=False,
+        check_integrity=True,
         analytics_style="clinical",
     )
     ctx = SimpleNamespace(parent_short="00000000", base_no=1, next_no=2, kind="anchor", chain_id="")
@@ -10256,6 +10262,7 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
         computed=computed,
         now_utc=core.now_utc(),
         need_chain=True,
+        chain_snapshot_loaded=True,
         preloaded_chain=[{"uuid": "00000000-0000-0000-0000-000000000111"}],
         preloaded_chain_by_link=None,
         preloaded_chain_by_short=None,
@@ -10264,6 +10271,66 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
     )
 
     expect(captured.get("analytics_advice") is None, f"analytics should stay hidden, got {captured}")
+    expect(captured.get("integrity_warnings") == ["missing link"], f"integrity checks should still run: {captured}")
+
+
+def test_on_modify_completion_chain_snapshot_modes_and_query():
+    """completion snapshots should broaden only for feedback or explicit full-chain features."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_completion_snapshot_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    saved = (mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY, mod._run_task)
+    calls = []
+
+    def fake_run_task(cmd, **_kwargs):
+        calls.append(list(cmd))
+        return True, "[]", ""
+
+    try:
+        mod._run_task = fake_run_task
+        mod._SHOW_ANALYTICS = False
+        mod._CHECK_CHAIN_INTEGRITY = False
+        mod.core.PANEL_MODE = "line"
+        next_only = mod._completion_chain_snapshot("cid", 5, 6)
+        expect(next_only.mode == "next" and next_only.loaded, f"unexpected line snapshot: {next_only}")
+        expect("link:6" in calls[-1] and "link:3" not in calls[-1], f"line mode queried history: {calls[-1]}")
+
+        mod.core.PANEL_MODE = "rich"
+        recent = mod._completion_chain_snapshot("cid", 5, 6)
+        expect(recent.mode == "recent" and calls[-1].count("or") == 2, f"unexpected recent query: {calls[-1]}")
+        expect(all(token in calls[-1] for token in ("link:3", "link:4", "link:6")), f"recent links missing: {calls[-1]}")
+
+        mod._CHECK_CHAIN_INTEGRITY = True
+        full = mod._completion_chain_snapshot("cid", 5, 6)
+        expect(full.mode == "full" and not any(token.startswith("link:") for token in calls[-1]), f"full query was filtered: {calls[-1]}")
+    finally:
+        mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY, mod._run_task = saved
+
+
+def test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export():
+    """an intentionally empty snapshot should not fall back to a full chain export."""
+    reads = core._import_sibling("modify_chain_reads")
+    calls = []
+    rows = reads.collect_prev_two(
+        {"chainID": "cid", "link": 5},
+        coerce_int=core.coerce_int,
+        get_chain_export=lambda *_a, **_k: calls.append(True) or [],
+        panel_chain_by_link={},
+        panel_chain_snapshot_loaded=True,
+    )
+    expect(rows == [] and calls == [], f"empty snapshot triggered a full export: calls={calls}, rows={rows}")
+
+    existing = reads.existing_next_task(
+        {"chainID": "cid", "link": 5},
+        6,
+        export_uuid_short_cached=lambda *_a: (_ for _ in ()).throw(AssertionError("UUID export should not run")),
+        get_chain_export=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("second chain export should not run")),
+        snapshot_rows=[{"uuid": "next-uuid", "link": 6, "status": "pending"}],
+        snapshot_loaded=True,
+    )
+    expect(existing and existing.get("uuid") == "next-uuid", f"duplicate guard ignored snapshot: {existing}")
 
 
 def test_on_modify_completion_defers_chain_export_until_after_preflight():
@@ -14509,6 +14576,8 @@ TESTS = [
     test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor,
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
     test_on_modify_completion_finalize_skips_analytics_when_hidden,
+    test_on_modify_completion_chain_snapshot_modes_and_query,
+    test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export,
     test_on_modify_completion_defers_chain_export_until_after_preflight,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,

@@ -118,6 +118,7 @@ def completion_preflight_context(
     completion_link_numbers_or_fail = services.completion_link_numbers_or_fail
     completion_kind_or_stop = services.completion_kind_or_stop
     completion_chain_id_or_fail = services.completion_chain_id_or_fail
+    completion_chain_snapshot = services.completion_chain_snapshot
     completion_existing_next_or_fail = services.completion_existing_next_or_fail
     parent_short = short(new.get("uuid"))
     nums = completion_link_numbers_or_fail(new)
@@ -133,7 +134,8 @@ def completion_preflight_context(
     if not chain_id:
         return None
 
-    if not completion_existing_next_or_fail(new, next_no):
+    chain_snapshot = completion_chain_snapshot(chain_id, base_no, next_no)
+    if not completion_existing_next_or_fail(new, next_no, chain_snapshot):
         return None
 
     return CompletionPreflightContext(
@@ -142,4 +144,5 @@ def completion_preflight_context(
         next_no=next_no,
         kind=kind,
         chain_id=chain_id,
+        chain_snapshot=chain_snapshot,
     )

@@ -1,6 +1,50 @@
 from __future__ import annotations
 
 
+def export_completion_chain_snapshot(
+    chain_id: str,
+    links: list[int] | None,
+    *,
+    run_task,
+    task_cmd_prefix,
+    parse_export_array,
+    diag=None,
+    timeout: float = 3.0,
+) -> tuple[bool, list[dict]]:
+    if not chain_id:
+        return False, []
+    clauses = [[f"chainID:{chain_id}", f"link:{link}"] for link in (links or [])]
+    if not clauses:
+        clauses = [[f"chainID:{chain_id}"]]
+    args = list(task_cmd_prefix) + [
+        "rc.hooks=off",
+        "rc.json.array=1",
+        "rc.verbose=nothing",
+        "rc.color=off",
+    ]
+    for index, clause in enumerate(clauses):
+        if index:
+            args.append("or")
+        args.extend(clause)
+    args.append("export")
+    ok, out, err = run_task(args, timeout=timeout, retries=1, use_tempfiles=not bool(links))
+    if not ok:
+        if callable(diag):
+            diag(f"completion chain snapshot failed: {(err or '').strip()}")
+        return False, []
+    if not (out or "").lstrip().startswith("["):
+        if callable(diag):
+            diag("completion chain snapshot returned malformed JSON")
+        return False, []
+    try:
+        rows = parse_export_array(out, diag=diag)
+    except Exception as exc:
+        if callable(diag):
+            diag(f"completion chain snapshot parse failed: {exc}")
+        return False, []
+    return True, [row for row in rows if isinstance(row, dict)]
+
+
 def task_text(args, *, run_task, task_cmd_prefix, env=None, timeout: float = 3.0, retries: int = 2, diag=None) -> str:
     env = env or {}
     ok, out, err = run_task(

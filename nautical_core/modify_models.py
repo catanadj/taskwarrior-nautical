@@ -5,12 +5,20 @@ from typing import Any
 
 
 @dataclass(slots=True)
+class CompletionChainSnapshot:
+    mode: str
+    rows: list[dict[str, Any]]
+    loaded: bool
+
+
+@dataclass(slots=True)
 class CompletionPreflightContext:
     parent_short: str
     base_no: int
     next_no: int
     kind: str
     chain_id: str
+    chain_snapshot: CompletionChainSnapshot
 
 
 @dataclass(slots=True)
@@ -33,6 +41,7 @@ class CompletionPreflightServices:
     completion_link_numbers_or_fail: Any
     completion_kind_or_stop: Any
     completion_chain_id_or_fail: Any
+    completion_chain_snapshot: Any
     completion_existing_next_or_fail: Any
 
 

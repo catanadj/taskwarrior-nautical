@@ -70,6 +70,7 @@ class ModifyRuntimeState:
     diag_start_ts: float = field(default_factory=_time.perf_counter)
     panel_chain_by_link: dict[int, list[dict[str, Any]]] | None = None
     panel_chain_by_short: dict[str, dict[str, Any]] | None = None
+    panel_chain_snapshot_loaded: bool = False
     chain_cache_chain_id: str = ""
     chain_cache: list[dict[str, Any]] = field(default_factory=list)
     chain_by_short: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -179,6 +180,7 @@ def build_preflight_services(
     completion_link_numbers_or_fail,
     completion_kind_or_stop,
     completion_chain_id_or_fail,
+    completion_chain_snapshot,
     completion_existing_next_or_fail,
 ) -> CompletionPreflightServices:
     return CompletionPreflightServices(
@@ -186,6 +188,7 @@ def build_preflight_services(
         completion_link_numbers_or_fail=completion_link_numbers_or_fail,
         completion_kind_or_stop=completion_kind_or_stop,
         completion_chain_id_or_fail=completion_chain_id_or_fail,
+        completion_chain_snapshot=completion_chain_snapshot,
         completion_existing_next_or_fail=completion_existing_next_or_fail,
     )
 

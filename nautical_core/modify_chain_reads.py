@@ -7,6 +7,7 @@ def collect_prev_two(
     coerce_int,
     get_chain_export,
     panel_chain_by_link=None,
+    panel_chain_snapshot_loaded: bool = False,
     chain_by_link: dict[int, list[dict]] | None = None,
 ) -> list[dict]:
     """Return up to two previous tasks (older first) using chainID export only."""
@@ -34,7 +35,7 @@ def collect_prev_two(
             chain_index = panel_chain_by_link
         else:
             chain_index = {}
-    if not chain_index:
+    if not chain_index and not panel_chain_snapshot_loaded:
         try:
             chain = get_chain_export(chain_id)
         except Exception:
@@ -62,10 +63,21 @@ def existing_next_task(
     *,
     export_uuid_short_cached,
     get_chain_export,
+    snapshot_rows: list[dict] | None = None,
+    snapshot_loaded: bool = False,
 ) -> dict | None:
     """Return an existing next-link task for idempotent re-completion handling."""
     if not isinstance(parent_task, dict):
         return None
+
+    rows = [
+        row for row in (snapshot_rows or [])
+        if isinstance(row, dict)
+        and str(row.get("link") or "").strip() == str(int(next_no))
+        and (row.get("status") or "").strip().lower() != "deleted"
+    ]
+    if rows:
+        return _pick_existing_next(rows)
 
     next_ref = (parent_task.get("nextLink") or "").strip()
     if next_ref:
@@ -74,7 +86,7 @@ def existing_next_task(
             return obj
 
     chain_id = (parent_task.get("chainID") or "").strip()
-    if not chain_id:
+    if not chain_id or snapshot_loaded:
         return None
     try:
         rows = get_chain_export(chain_id, extra=f"link:{int(next_no)} status.not:deleted")
@@ -83,8 +95,12 @@ def existing_next_task(
     if not rows:
         return None
 
+    return _pick_existing_next(rows)
+
+
+def _pick_existing_next(rows: list[dict]) -> dict | None:
     for st in ("pending", "waiting", "completed"):
         for row in rows:
             if (row.get("status") or "").strip().lower() == st:
                 return row
-    return rows[0]
+    return rows[0] if rows else None

@@ -2580,6 +2580,7 @@ def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] |
         coerce_int=core.coerce_int,
         get_chain_export=_get_chain_export,
         panel_chain_by_link=_modify_chain_state().panel_chain_by_link,
+        panel_chain_snapshot_loaded=_modify_chain_state().panel_chain_snapshot_loaded,
         chain_by_link=chain_by_link,
     )
 
@@ -2659,13 +2660,15 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
     return list(cached)
 
 
-def _existing_next_task(parent_task: dict, next_no: int) -> dict | None:
+def _existing_next_task(parent_task: dict, next_no: int, chain_snapshot=None) -> dict | None:
     modify_chain_reads = _module("modify_chain_reads")
     return modify_chain_reads.existing_next_task(
         parent_task,
         next_no,
         export_uuid_short_cached=_export_uuid_short_cached,
         get_chain_export=_get_chain_export,
+        snapshot_rows=getattr(chain_snapshot, "rows", None),
+        snapshot_loaded=bool(getattr(chain_snapshot, "loaded", False)),
     )
 
 
@@ -5614,16 +5617,46 @@ def _completion_chain_id_or_fail(new: dict) -> str | None:
     )
 
 
-def _completion_existing_next_or_fail(new: dict, next_no: int) -> bool:
+def _completion_existing_next_or_fail(new: dict, next_no: int, chain_snapshot=None) -> bool:
     modify_completion_preflight = _module("modify_completion_preflight")
     return modify_completion_preflight.completion_existing_next_or_fail(
         new,
         next_no,
-        existing_next_task=_existing_next_task,
+        existing_next_task=lambda task, link: _existing_next_task(task, link, chain_snapshot),
         short=_short,
         panel=_panel,
         print_task=_print_task,
     )
+
+
+def _completion_chain_snapshot_mode() -> str:
+    if _SHOW_ANALYTICS or _CHECK_CHAIN_INTEGRITY:
+        return "full"
+    mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
+    if mode in {"line", "minimal", "quiet", "text"}:
+        return "next"
+    return "recent"
+
+
+def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
+    modify_models = _module("modify_models")
+    modify_queries = _module("modify_queries")
+    hook_support = _module("hook_support", required=False)
+    parser = hook_support.parse_export_array if hook_support is not None else _tw_export_chain_parse
+    mode = _completion_chain_snapshot_mode()
+    links = None if mode == "full" else ([next_no] if mode == "next" else [base_no - 2, base_no - 1, next_no])
+    if links is not None:
+        links = sorted({link for link in links if link > 0})
+    loaded, rows = modify_queries.export_completion_chain_snapshot(
+        chain_id,
+        links,
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        parse_export_array=parser,
+        diag=_diag,
+        timeout=_chain_export_timeout(chain_id),
+    )
+    return modify_models.CompletionChainSnapshot(mode=mode, rows=rows, loaded=loaded)
 
 
 def _completion_preflight_context(new: dict, now_utc: datetime):
@@ -5634,6 +5667,7 @@ def _completion_preflight_context(new: dict, now_utc: datetime):
         completion_link_numbers_or_fail=_completion_link_numbers_or_fail,
         completion_kind_or_stop=_completion_kind_or_stop,
         completion_chain_id_or_fail=_completion_chain_id_or_fail,
+        completion_chain_snapshot=_completion_chain_snapshot,
         completion_existing_next_or_fail=_completion_existing_next_or_fail,
     )
     return modify_completion_preflight.completion_preflight_context(
@@ -5787,7 +5821,6 @@ def _completion_build_and_spawn_child(
 def _handle_completion_modify(old: dict, new: dict) -> None:
     _completion_validate_cp_and_anchor(old, new)
     now_utc = core.now_utc()
-    need_chain = _SHOW_ANALYTICS or _SHOW_TIMELINE_GAPS or _CHECK_CHAIN_INTEGRITY
     ctx = _completion_preflight_context(new, now_utc)
     if ctx is None:
         return
@@ -5800,21 +5833,12 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     computed = _completion_compute_next_and_limits(new, kind, next_no, now_utc)
     if computed is None:
         return
-    preloaded_chain: list[dict] = []
-    preloaded_chain_by_link = None
-    preloaded_chain_by_short = None
-    preload_chain_id = chain_id
-    if preload_chain_id and need_chain:
-        try:
-            preloaded_chain = _get_chain_export(preload_chain_id)
-            if preloaded_chain:
-                preloaded_chain_by_link, preloaded_chain_by_short = _build_chain_indexes(preloaded_chain)
-                _set_chain_cache(preload_chain_id, preloaded_chain)
-                _export_uuid_short_cached.cache_clear()
-        except Exception:
-            preloaded_chain = []
-            preloaded_chain_by_link = None
-            preloaded_chain_by_short = None
+    snapshot = ctx.chain_snapshot
+    preloaded_chain = list(snapshot.rows)
+    preloaded_chain_by_link, preloaded_chain_by_short = _build_chain_indexes(preloaded_chain)
+    if snapshot.mode == "full" and snapshot.loaded:
+        _set_chain_cache(chain_id, preloaded_chain)
+        _export_uuid_short_cached.cache_clear()
     modify_completion_flow = importlib.import_module("nautical_core.modify_completion_flow")
     services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=_completion_build_and_spawn_child,
@@ -5832,6 +5856,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
         print_task=_print_task,
         diag_summary=_diag_summary,
         show_analytics=_SHOW_ANALYTICS,
+        check_integrity=_CHECK_CHAIN_INTEGRITY,
         analytics_style=_ANALYTICS_STYLE,
     )
     modify_completion_flow.finalize_completion_modify(
@@ -5839,7 +5864,8 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
         ctx=ctx,
         computed=computed,
         now_utc=now_utc,
-        need_chain=need_chain,
+        need_chain=snapshot.mode == "full",
+        chain_snapshot_loaded=snapshot.loaded,
         preloaded_chain=preloaded_chain,
         preloaded_chain_by_link=preloaded_chain_by_link,
         preloaded_chain_by_short=preloaded_chain_by_short,

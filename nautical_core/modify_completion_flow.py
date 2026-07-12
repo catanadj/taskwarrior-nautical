@@ -21,6 +21,7 @@ class CompletionFinalizeServices:
     print_task: Any
     diag_summary: Any
     show_analytics: bool
+    check_integrity: bool
     analytics_style: str
 
 
@@ -31,6 +32,7 @@ def finalize_completion_modify(
     computed,
     now_utc,
     need_chain: bool,
+    chain_snapshot_loaded: bool,
     preloaded_chain: list[dict],
     preloaded_chain_by_link,
     preloaded_chain_by_short,
@@ -64,14 +66,14 @@ def finalize_completion_modify(
     chain = list(preloaded_chain)
     chain_by_link = preloaded_chain_by_link
     chain_by_short = preloaded_chain_by_short
-    if chain_id and need_chain:
+    if chain_id:
         try:
             if chain and spawned.verified and not deferred_spawn:
                 chain = services.merge_spawned_child_into_chain(chain, new, child, child_short)
                 chain_by_link, chain_by_short = services.build_chain_indexes(chain)
                 services.set_chain_cache(chain_id, chain)
                 services.export_uuid_short_cached.cache_clear()
-            elif not chain:
+            elif need_chain and not chain_snapshot_loaded:
                 chain = services.get_chain_export(chain_id)
                 if chain:
                     chain_by_link, chain_by_short = services.build_chain_indexes(chain)
@@ -83,6 +85,7 @@ def finalize_completion_modify(
     state = services.modify_chain_state()
     state.panel_chain_by_link = chain_by_link
     state.panel_chain_by_short = chain_by_short
+    state.panel_chain_snapshot_loaded = True
 
     analytics_advice = None
     integrity_warnings = None
@@ -91,6 +94,7 @@ def finalize_completion_modify(
             analytics_advice = services.chain_health_advice(chain, kind, new, style=services.analytics_style)
         except Exception:
             analytics_advice = None
+    if chain and services.check_integrity:
         try:
             integrity_warnings = services.chain_integrity_warnings(chain, expected_chain_id=chain_id)
         except Exception:

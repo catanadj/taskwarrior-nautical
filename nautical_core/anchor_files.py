@@ -5,6 +5,7 @@ import re
 from datetime import date, datetime
 from typing import Callable
 
+from .business_calendar import DEFAULT_BUSINESS_CALENDAR, BusinessCalendar
 from .file_backed_dates import load_file_date_data
 from .file_source_expr import (
     FileSourceResolution,
@@ -156,6 +157,7 @@ def _parse_source_mod_layers(
 
 def _load_anchor_source_data(
     source: ResolvedFileSource,
+    business_calendar: BusinessCalendar,
 ) -> tuple[frozenset[date], dict[date, str], tuple[int, int] | list[tuple[int, int]] | None]:
     dates, descriptions = load_file_date_data(
         source.path,
@@ -163,16 +165,26 @@ def _load_anchor_source_data(
     )
     layers, source_time = _parse_source_mod_layers(source.display_name, source.modifier_layers)
     for mods in layers:
-        dates, descriptions = _apply_anchor_file_mods(dates, descriptions, mods)
+        dates, descriptions = _apply_anchor_file_mods(
+            dates,
+            descriptions,
+            mods,
+            business_calendar=business_calendar,
+        )
     return dates, descriptions, source_time
 
 
-def _load_anchor_file_data(name: str | None, anchor_file_dir: str | None) -> tuple[frozenset[date], dict[date, str]]:
+def _load_anchor_file_data(
+    name: str | None,
+    anchor_file_dir: str | None,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> tuple[frozenset[date], dict[date, str]]:
     resolution = _resolved_anchor_sources(name, anchor_file_dir)
     out_dates: set[date] = set()
     out_descriptions: dict[date, str] = {}
     for source in resolution.sources:
-        dates, descriptions, _source_time = _load_anchor_source_data(source)
+        dates, descriptions, _source_time = _load_anchor_source_data(source, business_calendar)
         out_dates.update(dates)
         for item_date, text in descriptions.items():
             if text:
@@ -180,7 +192,13 @@ def _load_anchor_file_data(name: str | None, anchor_file_dir: str | None) -> tup
     return frozenset(out_dates), out_descriptions
 
 
-def _apply_anchor_file_mods(dates: frozenset[date], descriptions: dict[date, str], mods: dict) -> tuple[frozenset[date], dict[date, str]]:
+def _apply_anchor_file_mods(
+    dates: frozenset[date],
+    descriptions: dict[date, str],
+    mods: dict,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> tuple[frozenset[date], dict[date, str]]:
     if not dates:
         return frozenset(), {}
     if not any(
@@ -195,7 +213,11 @@ def _apply_anchor_file_mods(dates: frozenset[date], descriptions: dict[date, str
     out_dates: set[date] = set()
     out_descriptions: dict[date, str] = {}
     for item_date in sorted(dates):
-        transformed = _transform_anchor_file_date(item_date, mods)
+        transformed = _transform_anchor_file_date(
+            item_date,
+            mods,
+            business_calendar=business_calendar,
+        )
         if transformed is None:
             continue
         out_dates.add(transformed)
@@ -205,11 +227,21 @@ def _apply_anchor_file_mods(dates: frozenset[date], descriptions: dict[date, str
     return frozenset(out_dates), out_descriptions
 
 
-def _transform_anchor_file_date(d: date, mods: dict) -> date | None:
-    rolled = roll_apply(d, mods, parse_error_cls=ValueError)
-    if mods.get("bd") and rolled.weekday() > 4:
+def _transform_anchor_file_date(
+    d: date,
+    mods: dict,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> date | None:
+    rolled = roll_apply(
+        d,
+        mods,
+        parse_error_cls=ValueError,
+        business_calendar=business_calendar,
+    )
+    if mods.get("bd") and not business_calendar.is_business_day(rolled):
         return None
-    return apply_day_offset(rolled, mods)
+    return apply_day_offset(rolled, mods, business_calendar=business_calendar)
 
 
 def _norm_t_list(tval) -> list[tuple[int, int]]:
@@ -222,18 +254,49 @@ def _norm_t_list(tval) -> list[tuple[int, int]]:
     return []
 
 
-def load_anchor_file_dates(name: str | None, anchor_file_dir: str | None) -> frozenset[date]:
-    dates, _descriptions = _load_anchor_file_data(name, anchor_file_dir)
+def load_anchor_file_dates(
+    name: str | None,
+    anchor_file_dir: str | None,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> frozenset[date]:
+    dates, _descriptions = _load_anchor_file_data(
+        name,
+        anchor_file_dir,
+        business_calendar=business_calendar,
+    )
     return dates
 
 
-def load_anchor_file_descriptions(name: str | None, anchor_file_dir: str | None) -> dict[date, str]:
-    _dates, descriptions = _load_anchor_file_data(name, anchor_file_dir)
+def load_anchor_file_descriptions(
+    name: str | None,
+    anchor_file_dir: str | None,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> dict[date, str]:
+    _dates, descriptions = _load_anchor_file_data(
+        name,
+        anchor_file_dir,
+        business_calendar=business_calendar,
+    )
     return descriptions
 
 
-def anchor_file_description_for_date(name: str | None, anchor_file_dir: str | None, target: date) -> str | None:
-    text = str(load_anchor_file_descriptions(name, anchor_file_dir).get(target) or "").strip()
+def anchor_file_description_for_date(
+    name: str | None,
+    anchor_file_dir: str | None,
+    target: date,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> str | None:
+    text = str(
+        load_anchor_file_descriptions(
+            name,
+            anchor_file_dir,
+            business_calendar=business_calendar,
+        ).get(target)
+        or ""
+    ).strip()
     return text or None
 
 
@@ -241,12 +304,14 @@ def load_anchor_file_occurrence_specs(
     name: str | None,
     anchor_file_dir: str | None,
     fallback_hhmm: tuple[int, int],
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
 ) -> list[tuple[date, tuple[int, int]]]:
     resolution = _resolved_anchor_sources(name, anchor_file_dir)
     out: list[tuple[date, tuple[int, int]]] = []
     seen: set[tuple[date, tuple[int, int]]] = set()
     for source in resolution.sources:
-        dates, _descriptions, source_time = _load_anchor_source_data(source)
+        dates, _descriptions, source_time = _load_anchor_source_data(source, business_calendar)
         times = _norm_t_list(source_time) or [fallback_hhmm]
         for item_date in sorted(dates):
             for hhmm in times:
@@ -267,8 +332,14 @@ def next_anchor_file_occurrence_after(
     *,
     build_local_datetime: Callable[[date, tuple[int, int]], datetime],
     to_local: Callable[[datetime], datetime],
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
 ) -> datetime | None:
-    for d0, hhmm in load_anchor_file_occurrence_specs(name, anchor_file_dir, fallback_hhmm):
+    for d0, hhmm in load_anchor_file_occurrence_specs(
+        name,
+        anchor_file_dir,
+        fallback_hhmm,
+        business_calendar=business_calendar,
+    ):
         cand_local = to_local(build_local_datetime(d0, hhmm))
         if cand_local > after_dt_local:
             return cand_local

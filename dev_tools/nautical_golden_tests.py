@@ -6078,6 +6078,153 @@ def test_business_day_modifiers():
         
         assert next_date == expected, f"{anchor}: got {next_date}, expected {expected}"
 
+
+def test_default_business_calendar_operations_characterization():
+    """the centralized default policy should preserve Monday-Friday rolls, offsets, and ordinals."""
+    from nautical_core import business_calendar
+
+    policy = business_calendar.DEFAULT_BUSINESS_CALENDAR
+    expect(policy.is_business_day(date(2026, 4, 24)), 'Friday should remain a default business day')
+    expect(not policy.is_business_day(date(2026, 4, 25)), 'Saturday should remain excluded by default')
+    expect(
+        business_calendar.find_business_day(date(2026, 4, 25), -1, policy) == date(2026, 4, 24),
+        'previous-business-day roll changed',
+    )
+    expect(
+        business_calendar.find_business_day(date(2026, 4, 25), 1, policy) == date(2026, 4, 27),
+        'next-business-day roll changed',
+    )
+    expect(
+        business_calendar.nearest_business_day(date(2026, 4, 25), policy) == date(2026, 4, 24),
+        'nearest-business-day selection changed',
+    )
+    expect(
+        business_calendar.shift_business_days(date(2026, 4, 24), 1, policy) == date(2026, 4, 27),
+        'positive exclusive business-day offset changed',
+    )
+    expect(
+        business_calendar.shift_business_days(date(2026, 4, 27), -1, policy) == date(2026, 4, 24),
+        'negative exclusive business-day offset changed',
+    )
+    expect(
+        business_calendar.nth_business_day_of_month(2026, 1, 1, policy) == date(2026, 1, 1),
+        'first business-day ordinal changed',
+    )
+    expect(
+        business_calendar.nth_business_day_of_month(2026, 1, -1, policy) == date(2026, 1, 30),
+        'last business-day ordinal changed',
+    )
+
+
+def test_business_calendar_policy_flows_through_scheduler_paths():
+    """alternate policies should control filters, rolls, offsets, ordinals, and random pools."""
+    class SetCalendar:
+        name = 'test-calendar'
+
+        def __init__(self, open_dates):
+            self.open_dates = frozenset(open_dates)
+
+        def is_business_day(self, value):
+            return value in self.open_dates
+
+    policy = SetCalendar(
+        {
+            date(2026, 1, 2),
+            date(2026, 1, 7),
+            date(2026, 1, 21),
+            date(2026, 4, 25),
+            date(2026, 4, 28),
+        }
+    )
+
+    cases = [
+        ('y:04-25@bd', date(2026, 4, 12), date(2026, 4, 25)),
+        ('y:04-26@pbd', date(2026, 4, 12), date(2026, 4, 25)),
+        ('y:04-26@nbd', date(2026, 4, 12), date(2026, 4, 28)),
+        ('y:04-26@nw', date(2026, 4, 12), date(2026, 4, 25)),
+        ('y:04-24@+1bd', date(2026, 4, 12), date(2026, 4, 25)),
+        ('m:1bd', date(2026, 1, 1), date(2026, 1, 2)),
+        ('m:-1bd', date(2026, 1, 1), date(2026, 1, 21)),
+        ('w:rand@bd', date(2026, 1, 4), date(2026, 1, 7)),
+        ('w:rand@bd', date(2026, 1, 7), date(2026, 1, 21)),
+    ]
+    for expr, start, expected in cases:
+        dnf = core.validate_anchor_expr_strict(expr)
+        got, _meta = core.next_after_expr(
+            dnf,
+            start,
+            default_seed=start,
+            seed_base='business-calendar-policy',
+            business_calendar=policy,
+        )
+        expect(got == expected, f'{expr} ignored the injected business calendar: got {got}, expected {expected}')
+    random_dnf = core.validate_anchor_expr_strict('m:rand@bd')
+    random_got, _meta = core.next_after_expr(
+        random_dnf,
+        date(2026, 1, 1),
+        default_seed=date(2026, 1, 1),
+        seed_base='business-calendar-policy',
+        business_calendar=policy,
+    )
+    expect(
+        random_got in {date(2026, 1, 2), date(2026, 1, 7)},
+        f'm:rand@bd selected outside the injected business calendar: {random_got}',
+    )
+
+
+def test_business_calendar_policy_flows_through_file_modifiers():
+    """anchor_file and omit_file modifiers should use the same injected business-day policy."""
+    import nautical_core.anchor_files as anchor_files
+    import nautical_core.omit_files as omit_files
+
+    class SetCalendar:
+        name = 'file-calendar'
+
+        def __init__(self, open_dates):
+            self.open_dates = frozenset(open_dates)
+
+        def is_business_day(self, value):
+            return value in self.open_dates
+
+    policy = SetCalendar({date(2026, 4, 25), date(2026, 4, 27)})
+    with tempfile.TemporaryDirectory() as td:
+        source_dir = Path(td)
+        (source_dir / 'saturday.csv').write_text('date\n2026-04-25\n', encoding='utf-8')
+        (source_dir / 'friday.csv').write_text('date\n2026-04-24\n', encoding='utf-8')
+
+        expect(
+            anchor_files.load_anchor_file_dates('saturday.csv@bd', str(source_dir)) == frozenset(),
+            'default file policy should still exclude Saturday',
+        )
+        expect(
+            anchor_files.load_anchor_file_dates(
+                'saturday.csv@bd',
+                str(source_dir),
+                business_calendar=policy,
+            )
+            == frozenset({date(2026, 4, 25)}),
+            'anchor_file @bd ignored the injected policy',
+        )
+        expect(
+            anchor_files.load_anchor_file_dates(
+                'friday.csv@+1bd',
+                str(source_dir),
+                business_calendar=policy,
+            )
+            == frozenset({date(2026, 4, 25)}),
+            'anchor_file business offset ignored the injected policy',
+        )
+        expect(
+            omit_files.load_omit_file_dates(
+                'saturday.csv@bd',
+                str(source_dir),
+                business_calendar=policy,
+            )
+            == frozenset({date(2026, 4, 25)}),
+            'omit_file @bd ignored the injected policy',
+        )
+
+
 def test_next_after_atom_with_mods_characterization():
     """Direct atom scheduling should preserve seed-gated interval and roll/offset behavior."""
     def _single_atom(expr: str):
@@ -14637,6 +14784,9 @@ TESTS = [
     test_interval_patterns,
     test_complex_dnf_expressions,
     test_business_day_modifiers,
+    test_default_business_calendar_operations_characterization,
+    test_business_calendar_policy_flows_through_scheduler_paths,
+    test_business_calendar_policy_flows_through_file_modifiers,
     test_next_after_atom_with_mods_characterization,
     test_modifier_boundary_paths_agree_and_advance_strictly,
     test_atom_matches_on_positive_day_offset_shifted_date,

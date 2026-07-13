@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from .business_calendar import is_business_day as default_is_business_day
+
 
 def _choose_rand_dom(
     y: int,
@@ -335,6 +337,7 @@ def _next_after_expr_weekly_rand_candidate(
     random_pick_indices,
     atom_matches_on,
     date_is_excluded,
+    is_business_day=default_is_business_day,
 ):
     count = int(info.get("count") or 1)
     mods = info.get("mods") or {}
@@ -350,7 +353,7 @@ def _next_after_expr_weekly_rand_candidate(
         if ival <= 1 or week_delta % ival == 0:
             candidates = [monday + timedelta(days=offset) for offset in range(7)]
             if bd_only:
-                candidates = [cand for cand in candidates if cand.weekday() < 5]
+                candidates = [cand for cand in candidates if is_business_day(cand)]
             filtered = []
             for cand in candidates:
                 if all(
@@ -523,6 +526,7 @@ def next_after_expr(
     atom_matches_on,
     next_after_term,
     date_is_excluded=None,
+    is_business_day=default_is_business_day,
 ):
     """Return the next matching local date strictly > after_date."""
     if _is_simple_weekly(dnf, active_mod_keys=active_mod_keys):
@@ -548,6 +552,7 @@ def next_after_expr(
                 random_pick_indices=random_pick_indices,
                 atom_matches_on=atom_matches_on,
                 date_is_excluded=date_is_excluded,
+                is_business_day=is_business_day,
             )
             best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
             continue

@@ -2,40 +2,44 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from .business_calendar import (
+    DEFAULT_BUSINESS_CALENDAR,
+    BusinessCalendar,
+    BusinessCalendarSearchError,
+    find_business_day,
+    shift_business_days,
+)
 
-def roll_apply(dt: date, mods: dict, *, parse_error_cls) -> date:
+
+def roll_apply(
+    dt: date,
+    mods: dict,
+    *,
+    parse_error_cls,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> date:
     roll = mods.get("roll")
 
     if roll in ("pbd", "nbd", "nw"):
-        if dt.weekday() > 4:
+        if not business_calendar.is_business_day(dt):
             if roll == "pbd":
-                for _ in range(8):
-                    if dt.weekday() <= 4:
-                        break
-                    dt -= timedelta(days=1)
-                else:
+                try:
+                    dt = find_business_day(dt, -1, business_calendar)
+                except BusinessCalendarSearchError:
                     raise parse_error_cls("roll_apply: failed to reach business day (pbd)")
             elif roll == "nbd":
-                for _ in range(8):
-                    if dt.weekday() <= 4:
-                        break
-                    dt += timedelta(days=1)
-                else:
+                try:
+                    dt = find_business_day(dt, 1, business_calendar)
+                except BusinessCalendarSearchError:
                     raise parse_error_cls("roll_apply: failed to reach business day (nbd)")
             else:
-                prev_dt = dt
-                next_dt = dt
-                for _ in range(8):
-                    if prev_dt.weekday() <= 4:
-                        break
-                    prev_dt -= timedelta(days=1)
-                else:
+                try:
+                    prev_dt = find_business_day(dt, -1, business_calendar)
+                except BusinessCalendarSearchError:
                     raise parse_error_cls("roll_apply: failed to reach business day (nw prev)")
-                for _ in range(8):
-                    if next_dt.weekday() <= 4:
-                        break
-                    next_dt += timedelta(days=1)
-                else:
+                try:
+                    next_dt = find_business_day(dt, 1, business_calendar)
+                except BusinessCalendarSearchError:
                     raise parse_error_cls("roll_apply: failed to reach business day (nw next)")
                 dt = prev_dt if (dt - prev_dt) <= (next_dt - dt) else next_dt
 
@@ -70,18 +74,18 @@ def weeks_between(d1: date, d2: date) -> int:
     return (mon2 - mon1).days // 7
 
 
-def apply_day_offset(d: date, mods: dict) -> date:
-    """Apply calendar-day offsets, then exclusive Monday-Friday offsets."""
+def apply_day_offset(
+    d: date,
+    mods: dict,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> date:
+    """Apply calendar-day offsets, then exclusive business-day offsets."""
     off = int(mods.get("day_offset", 0) or 0)
     if off:
         d += timedelta(days=off)
     business_off = int(mods.get("business_day_offset", 0) or 0)
-    step = 1 if business_off > 0 else -1
-    for _ in range(abs(business_off)):
-        d += timedelta(days=step)
-        while d.weekday() > 4:
-            d += timedelta(days=step)
-    return d
+    return shift_business_days(d, business_off, business_calendar)
 
 
 def expr_has_m_or_y(dnf) -> bool:

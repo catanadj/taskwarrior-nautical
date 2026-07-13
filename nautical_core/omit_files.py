@@ -4,6 +4,7 @@ import os
 import re
 from datetime import date
 
+from .business_calendar import DEFAULT_BUSINESS_CALENDAR, BusinessCalendar
 from .file_backed_dates import load_file_date_data
 from .file_source_expr import (
     FileSourceResolution,
@@ -99,22 +100,35 @@ def _parse_source_mod_layers(modifier_layers: tuple[str, ...]) -> list[dict]:
     return layers
 
 
-def _load_omit_source_data(source: ResolvedFileSource) -> tuple[frozenset[date], dict[date, str]]:
+def _load_omit_source_data(
+    source: ResolvedFileSource,
+    business_calendar: BusinessCalendar,
+) -> tuple[frozenset[date], dict[date, str]]:
     dates, descriptions = load_file_date_data(
         source.path,
         label=f"omit_file '{source.display_name}'",
     )
     for mods in _parse_source_mod_layers(source.modifier_layers):
-        dates, descriptions = _apply_omit_file_mods(dates, descriptions, mods)
+        dates, descriptions = _apply_omit_file_mods(
+            dates,
+            descriptions,
+            mods,
+            business_calendar=business_calendar,
+        )
     return dates, descriptions
 
 
-def _load_omit_file_data(name: str | None, omit_file_dir: str | None) -> tuple[frozenset[date], dict[date, str]]:
+def _load_omit_file_data(
+    name: str | None,
+    omit_file_dir: str | None,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> tuple[frozenset[date], dict[date, str]]:
     resolution = _resolved_omit_sources(name, omit_file_dir)
     out_dates: set[date] = set()
     out_descriptions: dict[date, str] = {}
     for source in resolution.sources:
-        dates, descriptions = _load_omit_source_data(source)
+        dates, descriptions = _load_omit_source_data(source, business_calendar)
         out_dates.update(dates)
         for item_date, text in descriptions.items():
             if text:
@@ -122,7 +136,13 @@ def _load_omit_file_data(name: str | None, omit_file_dir: str | None) -> tuple[f
     return frozenset(out_dates), out_descriptions
 
 
-def _apply_omit_file_mods(dates: frozenset[date], descriptions: dict[date, str], mods: dict) -> tuple[frozenset[date], dict[date, str]]:
+def _apply_omit_file_mods(
+    dates: frozenset[date],
+    descriptions: dict[date, str],
+    mods: dict,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> tuple[frozenset[date], dict[date, str]]:
     if not dates:
         return frozenset(), {}
     if not any(
@@ -138,7 +158,11 @@ def _apply_omit_file_mods(dates: frozenset[date], descriptions: dict[date, str],
     out_dates: set[date] = set()
     out_descriptions: dict[date, str] = {}
     for item_date in sorted(dates):
-        transformed = _transform_omit_file_date(item_date, mods)
+        transformed = _transform_omit_file_date(
+            item_date,
+            mods,
+            business_calendar=business_calendar,
+        )
         if transformed is None:
             continue
         out_dates.add(transformed)
@@ -148,18 +172,46 @@ def _apply_omit_file_mods(dates: frozenset[date], descriptions: dict[date, str],
     return frozenset(out_dates), out_descriptions
 
 
-def _transform_omit_file_date(d: date, mods: dict) -> date | None:
-    rolled = roll_apply(d, mods, parse_error_cls=ValueError)
-    if mods.get("bd") and rolled.weekday() > 4:
+def _transform_omit_file_date(
+    d: date,
+    mods: dict,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> date | None:
+    rolled = roll_apply(
+        d,
+        mods,
+        parse_error_cls=ValueError,
+        business_calendar=business_calendar,
+    )
+    if mods.get("bd") and not business_calendar.is_business_day(rolled):
         return None
-    return apply_day_offset(rolled, mods)
+    return apply_day_offset(rolled, mods, business_calendar=business_calendar)
 
 
-def load_omit_file_dates(name: str | None, omit_file_dir: str | None) -> frozenset[date]:
-    dates, _descriptions = _load_omit_file_data(name, omit_file_dir)
+def load_omit_file_dates(
+    name: str | None,
+    omit_file_dir: str | None,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> frozenset[date]:
+    dates, _descriptions = _load_omit_file_data(
+        name,
+        omit_file_dir,
+        business_calendar=business_calendar,
+    )
     return dates
 
 
-def load_omit_file_descriptions(name: str | None, omit_file_dir: str | None) -> dict[date, str]:
-    _dates, descriptions = _load_omit_file_data(name, omit_file_dir)
+def load_omit_file_descriptions(
+    name: str | None,
+    omit_file_dir: str | None,
+    *,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> dict[date, str]:
+    _dates, descriptions = _load_omit_file_data(
+        name,
+        omit_file_dir,
+        business_calendar=business_calendar,
+    )
     return descriptions

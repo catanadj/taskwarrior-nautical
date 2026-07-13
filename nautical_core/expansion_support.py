@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date
 import re
 
+from .business_calendar import WEEKDAY_BUSINESS_DAYS
+
 
 def _is_random_spec(spec: str) -> bool:
     return bool(re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", str(spec or "").strip().lower()))
@@ -51,7 +53,7 @@ def weekly_spec_to_wset(
 
     if any(_is_random_spec(t) for t in toks):
         pool = (
-            {0, 1, 2, 3, 4}
+            set(WEEKDAY_BUSINESS_DAYS)
             if ((mods or {}).get("bd") or (mods or {}).get("wd") is True)
             else {0, 1, 2, 3, 4, 5, 6}
         )

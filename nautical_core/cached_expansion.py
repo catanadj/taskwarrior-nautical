@@ -5,6 +5,15 @@ import json
 import re
 from datetime import date, timedelta
 
+from .business_calendar import (
+    DEFAULT_BUSINESS_CALENDAR,
+    WEEKDAY_BUSINESS_DAYS,
+    BusinessCalendar,
+    business_day_offsets_for_iso_week,
+    business_days_in_month,
+    nth_business_day_of_month,
+)
+
 RAND_ALGORITHM_VERSION = "nautical-rand-v2"
 
 
@@ -106,8 +115,15 @@ def weekly_rand_pick(
     seed_base: str | None,
     atom_identity: str,
     namespace: str,
-) -> int:
-    pool = [0, 1, 2, 3, 4] if (mods.get("bd") or mods.get("wd") is True) else [0, 1, 2, 3, 4, 5, 6]
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> int | None:
+    pool = (
+        business_day_offsets_for_iso_week(iso_year, iso_week, business_calendar)
+        if (mods.get("bd") or mods.get("wd") is True)
+        else list(range(7))
+    )
+    if not pool:
+        return None
     idx = random_pick_index(
         len(pool),
         seed_base=seed_base,
@@ -119,8 +135,11 @@ def weekly_rand_pick(
     return pool[idx]
 
 
-def is_bd(dt: date) -> bool:
-    return dt.weekday() < 5
+def is_bd(
+    dt: date,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+) -> bool:
+    return business_calendar.is_business_day(dt)
 
 
 def term_rand_info(term):
@@ -201,6 +220,7 @@ def month_tokens_for_atom_values(
     nth_weekday_re,
     weekday_map,
     re_mod,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
 ) -> set[int]:
     spec = expand_monthly_aliases(spec)
     ndays = days_in_month(y, m)
@@ -209,7 +229,7 @@ def month_tokens_for_atom_values(
     m2 = bd_re.match(spec)
     if m2:
         k = int(m2.group(1))
-        bds = [d for d in range(1, ndays + 1) if date(y, m, d).weekday() < 5]
+        bds = [item.day for item in business_days_in_month(y, m, business_calendar)]
         if not bds:
             return out
         if k > 0:
@@ -330,7 +350,7 @@ def expand_weekly(spec: str, *, weekly_spec_to_wset):
 def expand_weekly_mods(spec: str, bd_only: bool, *, expand_weekly_cached):
     days = expand_weekly_cached(spec)
     if bd_only:
-        days = [d for d in days if d < 5]
+        days = [d for d in days if d in WEEKDAY_BUSINESS_DAYS]
     return days
 
 
@@ -411,6 +431,7 @@ def expand_monthly(
     bd_re,
     weekday_map,
     re_mod,
+    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
 ) -> list[int]:
     out = set()
     last = month_len(y, m)
@@ -435,29 +456,6 @@ def expand_monthly(
         d = d - timedelta(days=off + (abs(n) - 1) * 7)
         return d.day if d.month == m else None
 
-    def nth_business_day(n: int):
-        if n == 0:
-            return None
-        if n > 0:
-            cnt = 0
-            d = date(y, m, 1)
-            while d.month == m:
-                if d.weekday() < 5:
-                    cnt += 1
-                    if cnt == n:
-                        return d.day
-                d = d + timedelta(days=1)
-            return None
-        cnt = 0
-        d = date(y, m, last)
-        while d.month == m:
-            if d.weekday() < 5:
-                cnt += 1
-                if cnt == abs(n):
-                    return d.day
-            d = d - timedelta(days=1)
-        return None
-
     for tok in split_csv_lower(spec):
         m1 = nth_weekday_re.match(tok)
         if m1:
@@ -474,7 +472,8 @@ def expand_monthly(
         m2 = bd_re.match(tok)
         if m2:
             n = int(m2.group(1))
-            d0 = nth_business_day(n)
+            business_date = nth_business_day_of_month(y, m, n, business_calendar)
+            d0 = business_date.day if business_date is not None else None
             if d0:
                 out.add(d0)
                 continue

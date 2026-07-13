@@ -10,9 +10,9 @@ import copy
 import math
 import stat
 from collections import OrderedDict
-from typing import Any, TypeAlias, TypedDict, cast
+from typing import Any, Callable, TypeAlias, TypedDict, cast
 from datetime import datetime, timedelta, timezone, date
-from functools import lru_cache
+from functools import lru_cache, partial
 from calendar import month_name, monthrange
 from datetime import date as _date
 import json, zlib, base64, hashlib, tempfile, time, random, subprocess
@@ -280,6 +280,7 @@ _common = _import_sibling("common")
 _cache_payload = _import_sibling("cache_payload")
 _cache_locking = _import_sibling("cache_locking")
 _acf_support = _import_sibling("acf_support")
+_business_calendar = _import_sibling("business_calendar")
 _cached_expansion = _import_sibling("cached_expansion")
 _nth_monthly = _import_sibling("nth_monthly")
 _expansion_support = _import_sibling("expansion_support")
@@ -304,6 +305,13 @@ _yearly_validation = _import_sibling("yearly_validation")
 _year_tokens = _import_sibling("year_tokens")
 
 short_uuid = _common.short_uuid
+DEFAULT_BUSINESS_CALENDAR = _business_calendar.DEFAULT_BUSINESS_CALENDAR
+
+
+def _with_business_calendar(fn: Callable[..., Any], business_calendar) -> Callable[..., Any]:
+    if business_calendar is DEFAULT_BUSINESS_CALENDAR:
+        return fn
+    return partial(fn, business_calendar=business_calendar)
 
 # ==============================================================================
 # SECTION: Time & timezone helpers
@@ -1096,14 +1104,17 @@ def _next_for_and_fast_path(
     ref_d: date,
     seed: date,
     seed_base: str | None = None,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
 ) -> date:
+    next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
+    matches = _with_business_calendar(atom_matches_on, business_calendar)
     return _scheduler_expr.next_for_and_fast_path(
         term,
         ref_d,
         seed,
         seed_base=seed_base,
-        next_after_atom_with_mods=next_after_atom_with_mods,
-        atom_matches_on=atom_matches_on,
+        next_after_atom_with_mods=next_atom,
+        atom_matches_on=matches,
         max_anchor_iter=MAX_ANCHOR_ITER,
         warn_once_per_day=_warn_once_per_day,
         parse_error_cls=ParseError,
@@ -1116,7 +1127,10 @@ def _next_for_and(
     ref_d: date,
     seed: date,
     seed_base: str | None = None,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
 ) -> date:
+    next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
+    matches = _with_business_calendar(atom_matches_on, business_calendar)
     return _scheduler_expr.next_for_and(
         term,
         ref_d,
@@ -1128,8 +1142,8 @@ def _next_for_and(
         doms_allowed_by_year=_doms_allowed_by_year,
         intersect_monthly_atoms_allowed=_intersect_monthly_atoms_allowed,
         doms_for_weekly_spec=_doms_for_weekly_spec,
-        next_after_atom_with_mods=next_after_atom_with_mods,
-        atom_matches_on=atom_matches_on,
+        next_after_atom_with_mods=next_atom,
+        atom_matches_on=matches,
         max_anchor_iter=MAX_ANCHOR_ITER,
         warn_once_per_day=_warn_once_per_day,
         parse_error_cls=ParseError,
@@ -1143,13 +1157,15 @@ def _next_for_or(
     ref_d: date,
     seed: date,
     seed_base: str | None = None,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
 ) -> date:
+    next_for_and_fn = _with_business_calendar(_next_for_and, business_calendar)
     return _scheduler_expr.next_for_or(
         dnf,
         ref_d,
         seed,
         seed_base=seed_base,
-        next_for_and=_next_for_and,
+        next_for_and=next_for_and_fn,
     )
 
 # ---- Public precompute --------------------------------------------------------
@@ -1869,7 +1885,8 @@ def _weekly_rand_pick(
     *,
     seed_base: str | None,
     atom_identity: str,
-) -> int:
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> int | None:
     return _cached_expansion.weekly_rand_pick(
         iso_year,
         iso_week,
@@ -1877,11 +1894,12 @@ def _weekly_rand_pick(
         seed_base=seed_base,
         atom_identity=atom_identity,
         namespace=WRAND_SALT,
+        business_calendar=business_calendar,
     )
 
 
-def _is_bd(dt: _date):  # business day
-    return _cached_expansion.is_bd(dt)
+def _is_bd(dt: _date, business_calendar=DEFAULT_BUSINESS_CALENDAR):
+    return _cached_expansion.is_bd(dt, business_calendar)
 
 
 def _random_identity(value) -> str:
@@ -1921,7 +1939,12 @@ def _filter_by_w(dt_list: list[_date], term: list[dict]):
 
 
 @_ttl_lru_cache(maxsize=128)
-def _month_tokens_for_atom_cached(y: int, m: int, spec: str) -> set[int]:
+def _month_tokens_for_atom_cached(
+    y: int,
+    m: int,
+    spec: str,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> set[int]:
     return _cached_expansion.month_tokens_for_atom_values(
         y,
         m,
@@ -1932,20 +1955,34 @@ def _month_tokens_for_atom_cached(y: int, m: int, spec: str) -> set[int]:
         nth_weekday_re=_nth_weekday_re,
         weekday_map=_WD,
         re_mod=re,
+        business_calendar=business_calendar,
     )
 
 
-def _month_tokens_for_atom(a: dict, y: int, m: int) -> set[int]:
+def _month_tokens_for_atom(
+    a: dict,
+    y: int,
+    m: int,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> set[int]:
     return _cached_expansion.month_tokens_for_atom(
         a,
         y,
         m,
-        month_tokens_for_atom_cached=_month_tokens_for_atom_cached,
+        month_tokens_for_atom_cached=_with_business_calendar(
+            _month_tokens_for_atom_cached,
+            business_calendar,
+        ),
     )
 
 
 def _term_candidates_in_month(
-    term: list[dict], y: int, m: int, rand_atom_idx: int, bd_only: bool
+    term: list[dict],
+    y: int,
+    m: int,
+    rand_atom_idx: int,
+    bd_only: bool,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
 ):
     return _cached_expansion.term_candidates_in_month(
         term,
@@ -1954,11 +1991,14 @@ def _term_candidates_in_month(
         rand_atom_idx,
         bd_only,
         days_in_month=_days_in_month,
-        is_bd=_is_bd,
+        is_bd=_with_business_calendar(_is_bd, business_calendar),
         filter_by_w=_filter_by_w,
         atype=_atype,
         aspec=_aspec,
-        month_tokens_for_atom=_month_tokens_for_atom,
+        month_tokens_for_atom=_with_business_calendar(
+            _month_tokens_for_atom,
+            business_calendar,
+        ),
         doms_allowed_by_year=_doms_allowed_by_year,
     )
 
@@ -2846,7 +2886,12 @@ def expand_yearly_cached(spec: str, y: int):
 
 
 @_ttl_lru_cache(maxsize=128)
-def expand_monthly_cached(spec: str, y: int, m: int):
+def expand_monthly_cached(
+    spec: str,
+    y: int,
+    m: int,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+):
     return _cached_expansion.expand_monthly(
         spec,
         y,
@@ -2858,6 +2903,7 @@ def expand_monthly_cached(spec: str, y: int, m: int):
         bd_re=_bd_re,
         weekday_map=_WEEKDAYS,
         re_mod=re,
+        business_calendar=business_calendar,
     )
 
 
@@ -2877,26 +2923,54 @@ def expand_yearly_for_year_strict(spec: str, y: int):
 
 
 # -------- Rolls / atoms ----------
-def roll_apply(dt: date, mods: dict) -> date:
-    return _schedule_utils.roll_apply(dt, mods, parse_error_cls=ParseError)
+def roll_apply(
+    dt: date,
+    mods: dict,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> date:
+    return _schedule_utils.roll_apply(
+        dt,
+        mods,
+        parse_error_cls=ParseError,
+        business_calendar=business_calendar,
+    )
 
 def _weeks_between(d1: date, d2: date) -> int:
     return _schedule_utils.weeks_between(d1, d2)
 
-def apply_day_offset(d: date, mods: dict) -> date:
-    return _schedule_utils.apply_day_offset(d, mods)
+def apply_day_offset(
+    d: date,
+    mods: dict,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> date:
+    return _schedule_utils.apply_day_offset(
+        d,
+        mods,
+        business_calendar=business_calendar,
+    )
 
 
-def base_next_after_atom(atom, ref_d: date, seed_base=None) -> date:
+def base_next_after_atom(
+    atom,
+    ref_d: date,
+    seed_base=None,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> date:
     return _scheduler_atom.base_next_after_atom(
         atom,
         ref_d,
         seed_base=seed_base,
         expand_weekly_cached_mods=expand_weekly_cached_mods,
         split_csv_tokens=_split_csv_tokens,
-        expand_monthly_cached=expand_monthly_cached,
+        expand_monthly_cached=_with_business_calendar(
+            expand_monthly_cached,
+            business_calendar,
+        ),
         expand_yearly_cached=expand_yearly_cached,
-        weekly_rand_pick=_weekly_rand_pick,
+        weekly_rand_pick=_with_business_calendar(
+            _weekly_rand_pick,
+            business_calendar,
+        ),
         week_monday=_week_monday,
         date_cls=date,
     )
@@ -2928,65 +3002,126 @@ def _advance_probe_for_interval_bucket(typ: str, ival: int, seed: date, cand: da
     )
 
 
-def _month_doms_safe(spec: str, y: int, m: int) -> list[int]:
+def _month_doms_safe(
+    spec: str,
+    y: int,
+    m: int,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> list[int]:
     return _monthly_support.month_doms_safe(
         spec,
         y,
         m,
-        expand_monthly_cached=expand_monthly_cached,
+        expand_monthly_cached=_with_business_calendar(
+            expand_monthly_cached,
+            business_calendar,
+        ),
     )
 
 
-def _month_has_hit(spec: str, y: int, m: int) -> bool:
+def _month_has_hit(
+    spec: str,
+    y: int,
+    m: int,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> bool:
     return _monthly_support.month_has_hit(
         spec,
         y,
         m,
-        month_doms_safe=_month_doms_safe,
+        month_doms_safe=_with_business_calendar(
+            _month_doms_safe,
+            business_calendar,
+        ),
     )
 
 
-def _first_hit_after_probe_in_month(spec: str, y: int, m: int, probe: date) -> date | None:
+def _first_hit_after_probe_in_month(
+    spec: str,
+    y: int,
+    m: int,
+    probe: date,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> date | None:
     return _monthly_support.first_hit_after_probe_in_month(
         spec,
         y,
         m,
         probe,
-        month_doms_safe=_month_doms_safe,
+        month_doms_safe=_with_business_calendar(
+            _month_doms_safe,
+            business_calendar,
+        ),
     )
 
 
-def _next_valid_month_on_or_after(spec: str, y: int, m: int) -> tuple[int, int]:
+def _next_valid_month_on_or_after(
+    spec: str,
+    y: int,
+    m: int,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> tuple[int, int]:
     return _monthly_support.next_valid_month_on_or_after(
         spec,
         y,
         m,
-        month_has_hit=_month_has_hit,
+        month_has_hit=_with_business_calendar(
+            _month_has_hit,
+            business_calendar,
+        ),
     )
 
 
-def _advance_k_valid_months(spec: str, start_y: int, start_m: int, k: int) -> tuple[int, int]:
+def _advance_k_valid_months(
+    spec: str,
+    start_y: int,
+    start_m: int,
+    k: int,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> tuple[int, int]:
     return _monthly_support.advance_k_valid_months(
         spec,
         start_y,
         start_m,
         k,
-        next_valid_month_on_or_after=_next_valid_month_on_or_after,
+        next_valid_month_on_or_after=_with_business_calendar(
+            _next_valid_month_on_or_after,
+            business_calendar,
+        ),
     )
 
 
-def _monthly_align_base_for_interval(spec: str, base: date, probe: date, seed: date, ival: int) -> date:
+def _monthly_align_base_for_interval(
+    spec: str,
+    base: date,
+    probe: date,
+    seed: date,
+    ival: int,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> date:
     return _monthly_support.monthly_align_base_for_interval(
         spec,
         base,
         probe,
         seed,
         ival,
-        month_has_hit=_month_has_hit,
-        next_valid_month_on_or_after=_next_valid_month_on_or_after,
-        first_hit_after_probe_in_month=_first_hit_after_probe_in_month,
-        advance_k_valid_months=_advance_k_valid_months,
-        month_doms_safe=_month_doms_safe,
+        month_has_hit=_with_business_calendar(_month_has_hit, business_calendar),
+        next_valid_month_on_or_after=_with_business_calendar(
+            _next_valid_month_on_or_after,
+            business_calendar,
+        ),
+        first_hit_after_probe_in_month=_with_business_calendar(
+            _first_hit_after_probe_in_month,
+            business_calendar,
+        ),
+        advance_k_valid_months=_with_business_calendar(
+            _advance_k_valid_months,
+            business_calendar,
+        ),
+        month_doms_safe=_with_business_calendar(
+            _month_doms_safe,
+            business_calendar,
+        ),
     )
 
 
@@ -2994,20 +3129,34 @@ def _accept_roll_candidate(ref_d: date, base: date, cand: date, roll_kind: str |
     return _scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
 
 
-def next_after_atom_with_mods(atom, ref_d: date, default_seed: date, seed_base=None) -> date:
+def next_after_atom_with_mods(
+    atom,
+    ref_d: date,
+    default_seed: date,
+    seed_base=None,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> date:
+    base_next = _with_business_calendar(base_next_after_atom, business_calendar)
+    monthly_align = _with_business_calendar(
+        _monthly_align_base_for_interval,
+        business_calendar,
+    )
+    roll = _with_business_calendar(roll_apply, business_calendar)
+    day_offset = _with_business_calendar(apply_day_offset, business_calendar)
     return _scheduler_atom.next_after_atom_with_mods(
         atom,
         ref_d,
         default_seed,
         seed_base=seed_base,
         active_mod_keys=_active_mod_keys,
-        base_next_after_atom=base_next_after_atom,
+        base_next_after_atom=base_next,
         interval_allowed_for_atom=_interval_allowed_for_atom,
         advance_probe_for_interval_bucket=_advance_probe_for_interval_bucket,
-        monthly_align_base_for_interval=_monthly_align_base_for_interval,
-        roll_apply=roll_apply,
-        apply_day_offset=apply_day_offset,
+        monthly_align_base_for_interval=monthly_align,
+        roll_apply=roll,
+        apply_day_offset=day_offset,
         accept_roll_candidate=_accept_roll_candidate,
+        is_business_day=business_calendar.is_business_day,
         max_anchor_iter=MAX_ANCHOR_ITER,
         warn_once_per_day=_warn_once_per_day,
         os_mod=os,
@@ -3016,29 +3165,58 @@ def next_after_atom_with_mods(atom, ref_d: date, default_seed: date, seed_base=N
 
 
 
-def atom_matches_on(atom, d: date, default_seed: date, seed_base=None) -> bool:
+def atom_matches_on(
+    atom,
+    d: date,
+    default_seed: date,
+    seed_base=None,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+) -> bool:
+    next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
     return _scheduler_atom.atom_matches_on(
         atom,
         d,
         default_seed,
         seed_base=seed_base,
-        next_after_atom_with_mods=next_after_atom_with_mods,
+        next_after_atom_with_mods=next_atom,
     )
 
 
-def next_after_term(term, ref_d: date, default_seed: date, seed_base=None):
+def next_after_term(
+    term,
+    ref_d: date,
+    default_seed: date,
+    seed_base=None,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+):
+    next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
+    matches = _with_business_calendar(atom_matches_on, business_calendar)
     return _scheduler_expr.next_after_term(
         term,
         ref_d,
         default_seed,
         seed_base=seed_base,
-        next_after_atom_with_mods=next_after_atom_with_mods,
-        atom_matches_on=atom_matches_on,
+        next_after_atom_with_mods=next_atom,
+        atom_matches_on=matches,
         intersection_guard_steps=INTERSECTION_GUARD_STEPS,
     )
 
 
-def next_after_expr(dnf, after_date, default_seed=None, seed_base=None, date_is_excluded=None):
+def next_after_expr(
+    dnf,
+    after_date,
+    default_seed=None,
+    seed_base=None,
+    date_is_excluded=None,
+    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+):
+    next_for_and_fn = _with_business_calendar(_next_for_and, business_calendar)
+    term_candidates = _with_business_calendar(
+        _term_candidates_in_month,
+        business_calendar,
+    )
+    matches = _with_business_calendar(atom_matches_on, business_calendar)
+    next_term = _with_business_calendar(next_after_term, business_calendar)
     return _scheduler_expr.next_after_expr(
         dnf,
         after_date,
@@ -3048,14 +3226,15 @@ def next_after_expr(dnf, after_date, default_seed=None, seed_base=None, date_is_
         expand_weekly_cached=expand_weekly_cached,
         term_rand_info=_term_rand_info,
         atype=_atype,
-        next_for_and=_next_for_and,
+        next_for_and=next_for_and_fn,
         months_since=_months_since,
-        term_candidates_in_month=_term_candidates_in_month,
+        term_candidates_in_month=term_candidates,
         random_identity=_random_identity,
         random_pick_indices=_random_pick_indices,
-        atom_matches_on=atom_matches_on,
-        next_after_term=next_after_term,
+        atom_matches_on=matches,
+        next_after_term=next_term,
         date_is_excluded=date_is_excluded,
+        is_business_day=business_calendar.is_business_day,
     )
 
 

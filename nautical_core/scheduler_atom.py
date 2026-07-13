@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
+from .business_calendar import is_business_day as default_is_business_day
+
 
 def base_next_after_atom(
     atom,
@@ -45,6 +47,9 @@ def base_next_after_atom(
                 atom_identity=atom_identity,
             )
             mon = week_monday(p)
+            if dow is None:
+                p = mon + timedelta(days=7)
+                continue
             dt = mon + timedelta(days=dow)
             if dt > ref_d:
                 return dt
@@ -52,8 +57,7 @@ def base_next_after_atom(
         return ref_d + timedelta(days=7)
 
     if typ == "w":
-        bd_only = bool(mods.get("bd") or (mods.get("wd") is True))
-        days = expand_weekly_cached_mods(spec, bd_only)
+        days = expand_weekly_cached_mods(spec, False)
         if not days:
             return ref_d + timedelta(days=365)
         for i in range(1, 15):
@@ -157,6 +161,7 @@ def next_after_atom_with_mods(
     roll_apply,
     apply_day_offset,
     accept_roll_candidate,
+    is_business_day=default_is_business_day,
     max_anchor_iter: int,
     warn_once_per_day,
     os_mod,
@@ -179,7 +184,7 @@ def next_after_atom_with_mods(
 
     for _ in range(max_anchor_iter):
         base = base_next_after_atom(atom, probe, seed_base=seed_base)
-        if mods.get("bd") and base.weekday() > 4:
+        if (mods.get("bd") or mods.get("wd") is True) and not is_business_day(base):
             probe = base + timedelta(days=1)
             continue
         if typ in ("w", "y") and not interval_allowed_for_atom(typ, ival, seed, base):

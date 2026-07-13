@@ -6,6 +6,13 @@ from datetime import date, datetime
 from typing import Callable
 
 from .file_backed_dates import load_file_date_data
+from .file_source_expr import (
+    FileSourceResolution,
+    ResolvedFileSource,
+    parse_file_source_expression,
+    resolve_file_source_expression,
+    resolve_file_sources,
+)
 from .schedule_utils import apply_day_offset, roll_apply
 
 
@@ -109,27 +116,68 @@ def resolve_anchor_file_path(name: str | None, anchor_file_dir: str | None) -> s
     file_name, _mods = parse_anchor_file_spec(name)
     if not file_name:
         return ""
-    base_dir = str(anchor_file_dir or "").strip()
-    if not base_dir:
-        raise ValueError("anchor_file_dir is not configured.")
-    root = os.path.abspath(os.path.expanduser(base_dir))
-    if not os.path.isdir(root):
-        raise ValueError("anchor_file_dir does not exist or is not a directory.")
-    path = os.path.abspath(os.path.join(root, file_name))
-    if os.path.dirname(path) != root:
-        raise ValueError("anchor_file must be a file name, not a path.")
-    if not os.path.isfile(path):
-        raise ValueError(f"anchor_file '{file_name}' was not found in anchor_file_dir.")
-    return path
+    resolution = resolve_file_source_expression(file_name, anchor_file_dir, label="anchor_file")
+    if len(resolution.sources) != 1:
+        raise ValueError("resolve_anchor_file_path requires exactly one matching anchor_file.")
+    return resolution.sources[0].path
+
+
+def _resolved_anchor_sources(name: str | None, anchor_file_dir: str | None) -> FileSourceResolution:
+    parsed = parse_file_source_expression(name, label="anchor_file")
+    for source in parsed:
+        _parse_source_mod_layers(source.pattern, source.modifier_layers)
+    return resolve_file_sources(parsed, anchor_file_dir, label="anchor_file")
+
+
+def unmatched_anchor_file_patterns(name: str | None, anchor_file_dir: str | None) -> tuple[str, ...]:
+    return _resolved_anchor_sources(name, anchor_file_dir).unmatched_patterns
+
+
+def _parse_source_mod_layers(
+    display_name: str,
+    modifier_layers: tuple[str, ...],
+) -> tuple[list[dict], tuple[int, int] | list[tuple[int, int]] | None]:
+    layers: list[dict] = []
+    source_time: tuple[int, int] | list[tuple[int, int]] | None = None
+    for modifier_text in modifier_layers:
+        _file_name, mods = parse_anchor_file_spec(f"source{modifier_text}")
+        tval = mods.get("t")
+        if tval is not None:
+            if source_time is not None:
+                raise ValueError(
+                    f"anchor_file '{display_name}' has more than one @t modifier across its expression groups."
+                )
+            source_time = tval
+        layers.append(mods)
+    if not layers:
+        layers.append(_default_mods())
+    return layers, source_time
+
+
+def _load_anchor_source_data(
+    source: ResolvedFileSource,
+) -> tuple[frozenset[date], dict[date, str], tuple[int, int] | list[tuple[int, int]] | None]:
+    dates, descriptions = load_file_date_data(
+        source.path,
+        label=f"anchor_file '{source.display_name}'",
+    )
+    layers, source_time = _parse_source_mod_layers(source.display_name, source.modifier_layers)
+    for mods in layers:
+        dates, descriptions = _apply_anchor_file_mods(dates, descriptions, mods)
+    return dates, descriptions, source_time
 
 
 def _load_anchor_file_data(name: str | None, anchor_file_dir: str | None) -> tuple[frozenset[date], dict[date, str]]:
-    file_name, mods = parse_anchor_file_spec(name)
-    path = resolve_anchor_file_path(file_name, anchor_file_dir)
-    if not path:
-        return frozenset(), {}
-    dates, descriptions = load_file_date_data(path, label=f"anchor_file '{os.path.basename(path)}'")
-    return _apply_anchor_file_mods(dates, descriptions, mods)
+    resolution = _resolved_anchor_sources(name, anchor_file_dir)
+    out_dates: set[date] = set()
+    out_descriptions: dict[date, str] = {}
+    for source in resolution.sources:
+        dates, descriptions, _source_time = _load_anchor_source_data(source)
+        out_dates.update(dates)
+        for item_date, text in descriptions.items():
+            if text:
+                out_descriptions.setdefault(item_date, text)
+    return frozenset(out_dates), out_descriptions
 
 
 def _apply_anchor_file_mods(dates: frozenset[date], descriptions: dict[date, str], mods: dict) -> tuple[frozenset[date], dict[date, str]]:
@@ -189,6 +237,28 @@ def anchor_file_description_for_date(name: str | None, anchor_file_dir: str | No
     return text or None
 
 
+def load_anchor_file_occurrence_specs(
+    name: str | None,
+    anchor_file_dir: str | None,
+    fallback_hhmm: tuple[int, int],
+) -> list[tuple[date, tuple[int, int]]]:
+    resolution = _resolved_anchor_sources(name, anchor_file_dir)
+    out: list[tuple[date, tuple[int, int]]] = []
+    seen: set[tuple[date, tuple[int, int]]] = set()
+    for source in resolution.sources:
+        dates, _descriptions, source_time = _load_anchor_source_data(source)
+        times = _norm_t_list(source_time) or [fallback_hhmm]
+        for item_date in sorted(dates):
+            for hhmm in times:
+                occurrence = (item_date, hhmm)
+                if occurrence in seen:
+                    continue
+                seen.add(occurrence)
+                out.append(occurrence)
+    out.sort()
+    return out
+
+
 def next_anchor_file_occurrence_after(
     name: str | None,
     anchor_file_dir: str | None,
@@ -198,14 +268,8 @@ def next_anchor_file_occurrence_after(
     build_local_datetime: Callable[[date, tuple[int, int]], datetime],
     to_local: Callable[[datetime], datetime],
 ) -> datetime | None:
-    dates = sorted(load_anchor_file_dates(name, anchor_file_dir))
-    if not dates:
-        return None
-    _file_name, mods = parse_anchor_file_spec(name)
-    tlist = _norm_t_list(mods.get("t")) or [fallback_hhmm]
-    for d0 in dates:
-        for hhmm in tlist:
-            cand_local = to_local(build_local_datetime(d0, hhmm))
-            if cand_local > after_dt_local:
-                return cand_local
+    for d0, hhmm in load_anchor_file_occurrence_specs(name, anchor_file_dir, fallback_hhmm):
+        cand_local = to_local(build_local_datetime(d0, hhmm))
+        if cand_local > after_dt_local:
+            return cand_local
     return None

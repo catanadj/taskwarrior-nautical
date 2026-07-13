@@ -3408,9 +3408,21 @@ def test_panel_diagnostics_warns_for_empty_file_sources():
             _import_sibling=lambda name: importlib.import_module(f"nautical_core.{name}"),
         )
         warnings = mod.file_source_warnings(fake_core, {"anchor_file": "weekend.csv@bd", "omit_file": "weekend.csv@bd"})
+        pattern_warnings = mod.file_source_warnings(
+            fake_core,
+            {"anchor_file": "missing-*.csv | weekend.csv", "omit_file": "missing-?.txt"},
+        )
 
     expect(any("anchor_file 'weekend.csv' has no usable dates" in item for item in warnings), f"missing anchor_file warning: {warnings}")
     expect(any("omit_file 'weekend.csv' has no usable dates" in item for item in warnings), f"missing omit_file warning: {warnings}")
+    expect(
+        "anchor_file pattern 'missing-*.csv' matched no files." in pattern_warnings,
+        f"missing partial anchor wildcard warning: {pattern_warnings}",
+    )
+    expect(
+        "omit_file pattern 'missing-?.txt' matched no files." in pattern_warnings,
+        f"missing omit wildcard warning: {pattern_warnings}",
+    )
 
 
 def test_doctor_reports_actionable_broken_installation():
@@ -10937,6 +10949,213 @@ def test_anchor_file_next_occurrence_after_uses_task_level_time():
         expect(nxt is not None and nxt.date() == date(2026, 4, 25) and nxt.hour == 12 and nxt.minute == 0, f'unexpected anchor_file next occurrence: {nxt!r}')
 
 
+def test_file_source_expression_flattens_groups_and_rejects_unsafe_patterns():
+    """file-source expressions should retain inner-to-outer modifier layers and reject unsupported paths/globs."""
+    from nautical_core.file_source_expr import parse_file_source_expression
+
+    sources = parse_file_source_expression(
+        '(one.csv@-1d | team-?.csv)@+1d | final.txt',
+        label='anchor_file',
+    )
+    expect(
+        [(item.pattern, item.modifier_layers) for item in sources]
+        == [
+            ('one.csv', ('@-1d', '@+1d')),
+            ('team-?.csv', ('@+1d',)),
+            ('final.txt', ()),
+        ],
+        f'unexpected flattened file sources: {sources!r}',
+    )
+
+    for expr, expected in (
+        ('one.csv || two.csv', 'empty branch'),
+        ('../one.csv', 'not a path'),
+        ('**', "recursive '**'"),
+        ('team-[ab].csv', "only '*' and '?'"),
+    ):
+        try:
+            parse_file_source_expression(expr, label='anchor_file')
+            expect(False, f'expected invalid file-source expression to fail: {expr!r}')
+        except ValueError as e:
+            expect(expected in str(e), f'unexpected expression error for {expr!r}: {e}')
+
+
+def test_anchor_file_expression_merges_sources_and_applies_group_modifiers():
+    """anchor_file should merge ordered sources while applying branch modifiers before group modifiers."""
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / 'first.csv').write_text(
+            'date,description\n2026-04-20,First description\n',
+            encoding='utf-8',
+        )
+        (anchor_dir / 'second.csv').write_text(
+            'date,description\n2026-04-21,Second description\n2026-04-22,Later date\n',
+            encoding='utf-8',
+        )
+
+        expr = '(first.csv@+1d | second.csv)@+1d'
+        got_dates = anchor_files.load_anchor_file_dates(expr, str(anchor_dir))
+        got_descriptions = anchor_files.load_anchor_file_descriptions(expr, str(anchor_dir))
+        expect(
+            got_dates == frozenset({date(2026, 4, 22), date(2026, 4, 23)}),
+            f'unexpected multi-source anchor dates: {got_dates!r}',
+        )
+        expect(
+            got_descriptions == {
+                date(2026, 4, 22): 'First description',
+                date(2026, 4, 23): 'Later date',
+            },
+            f'first source should win description conflicts: {got_descriptions!r}',
+        )
+
+
+def test_file_source_wildcards_are_deterministic_and_star_dot_star_means_all():
+    """exact *.* should include every non-hidden regular file, including names without a dot."""
+    import nautical_core.anchor_files as anchor_files
+    import nautical_core.file_source_expr as file_source_expr
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / 'b.csv').write_text('date\n2026-04-22\n', encoding='utf-8')
+        (anchor_dir / 'a').write_text('2026-04-21\n', encoding='utf-8')
+        (anchor_dir / '.hidden.csv').write_text('date\n2026-04-23\n', encoding='utf-8')
+        (anchor_dir / 'folder.csv').mkdir()
+
+        got = anchor_files.load_anchor_file_dates('*.*', str(anchor_dir))
+        expect(
+            got == frozenset({date(2026, 4, 21), date(2026, 4, 22)}),
+            f'*.* should include non-hidden regular files only: {got!r}',
+        )
+        expect(
+            anchor_files.load_anchor_file_dates('missing-*.csv', str(anchor_dir)) == frozenset(),
+            'an unmatched wildcard should contribute an empty date set',
+        )
+        expect(
+            anchor_files.unmatched_anchor_file_patterns('missing-*.csv | b.csv', str(anchor_dir))
+            == ('missing-*.csv',),
+            'unmatched wildcard should remain available to diagnostics',
+        )
+        scan_calls = 0
+        original_scandir = file_source_expr.os.scandir
+
+        def counted_scandir(path):
+            nonlocal scan_calls
+            scan_calls += 1
+            return original_scandir(path)
+
+        file_source_expr.os.scandir = counted_scandir
+        try:
+            file_source_expr.resolve_file_source_expression(
+                '* | *.csv | missing-?.txt',
+                str(anchor_dir),
+                label='anchor_file',
+            )
+        finally:
+            file_source_expr.os.scandir = original_scandir
+        expect(scan_calls == 1, f'wildcard branches should share one directory scan, got {scan_calls}')
+        try:
+            anchor_files.load_anchor_file_dates('missing-*.csv@unknown', str(anchor_dir))
+            expect(False, 'expected an invalid modifier on an unmatched wildcard to fail')
+        except ValueError as e:
+            expect("Unknown anchor_file modifier '@unknown'" in str(e), f'unexpected unmatched modifier error: {e}')
+
+
+def test_anchor_file_expression_preserves_per_source_times_and_dedupes_matches():
+    """independent source times should survive merging and identical literal/glob matches should dedupe."""
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / 'early.csv').write_text('date\n2026-04-25\n', encoding='utf-8')
+        (anchor_dir / 'late.csv').write_text('date\n2026-04-25\n', encoding='utf-8')
+
+        specs = anchor_files.load_anchor_file_occurrence_specs(
+            'late.csv@t=15:00 | early.csv@t=09:00 | early*.csv@t=09:00',
+            str(anchor_dir),
+            (12, 0),
+        )
+        expect(
+            specs == [(date(2026, 4, 25), (9, 0)), (date(2026, 4, 25), (15, 0))],
+            f'unexpected per-source occurrence times: {specs!r}',
+        )
+        grouped_specs = anchor_files.load_anchor_file_occurrence_specs(
+            '(early.csv | late.csv)@t=11:00',
+            str(anchor_dir),
+            (12, 0),
+        )
+        expect(
+            grouped_specs == [(date(2026, 4, 25), (11, 0))],
+            f'grouped @t should apply to every source and dedupe occurrences: {grouped_specs!r}',
+        )
+        try:
+            anchor_files.load_anchor_file_dates('(early.csv@t=09:00 | late.csv)@t=15:00', str(anchor_dir))
+            expect(False, 'expected layered @t modifiers on one source to fail')
+        except ValueError as e:
+            expect('more than one @t modifier' in str(e), f'unexpected layered @t error: {e}')
+        after_local = core.to_local(core.build_local_datetime(date(2026, 4, 25), (10, 0)))
+        nxt = anchor_files.next_anchor_file_occurrence_after(
+            'late.csv@t=15:00 | early.csv@t=09:00',
+            str(anchor_dir),
+            after_local,
+            (12, 0),
+            build_local_datetime=core.build_local_datetime,
+            to_local=core.to_local,
+        )
+        expect(nxt is not None and (nxt.hour, nxt.minute) == (15, 0), f'unexpected next merged occurrence: {nxt!r}')
+
+
+def test_omit_file_expression_merges_sources_atomically_and_rejects_group_times():
+    """omit_file expressions should merge date layers, reject @t, and never return a partial malformed result."""
+    import nautical_core.omit_files as omit_files
+
+    with tempfile.TemporaryDirectory() as td:
+        omit_dir = Path(td)
+        (omit_dir / 'public.csv').write_text('date\n2026-04-20\n', encoding='utf-8')
+        (omit_dir / 'local.txt').write_text('2026-04-21\n', encoding='utf-8')
+        (omit_dir / 'bad.csv').write_text('date\nnot-a-date\n', encoding='utf-8')
+
+        got = omit_files.load_omit_file_dates('(public.csv | local.txt)@+1d', str(omit_dir))
+        expect(
+            got == frozenset({date(2026, 4, 21), date(2026, 4, 22)}),
+            f'unexpected merged omit dates: {got!r}',
+        )
+        try:
+            omit_files.load_omit_file_dates('(public.csv | local.txt)@t=09:00', str(omit_dir))
+            expect(False, 'expected grouped omit_file time modifier to fail')
+        except ValueError as e:
+            expect('omit_file does not support time modifiers (@t).' in str(e), f'unexpected grouped @t error: {e}')
+        try:
+            omit_files.load_omit_file_dates('missing-*.csv@t=09:00', str(omit_dir))
+            expect(False, 'expected a timed unmatched omit_file pattern to fail')
+        except ValueError as e:
+            expect('omit_file does not support time modifiers (@t).' in str(e), f'unexpected unmatched @t error: {e}')
+        try:
+            omit_files.load_omit_file_dates('public.csv | bad.csv', str(omit_dir))
+            expect(False, 'expected a malformed matched file to invalidate the expression')
+        except ValueError as e:
+            expect("omit_file 'bad.csv'" in str(e), f'malformed source error should identify its file: {e}')
+
+
+def test_file_source_symlink_must_remain_inside_configured_directory():
+    """literal and wildcard sources should reject file symlinks escaping the configured directory."""
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        anchor_dir = base / 'anchors'
+        anchor_dir.mkdir()
+        outside = base / 'outside.csv'
+        outside.write_text('date\n2026-04-20\n', encoding='utf-8')
+        (anchor_dir / 'linked.csv').symlink_to(outside)
+        try:
+            anchor_files.load_anchor_file_dates('linked.csv', str(anchor_dir))
+            expect(False, 'expected an escaping file symlink to fail')
+        except ValueError as e:
+            expect('resolves outside its configured directory' in str(e), f'unexpected symlink error: {e}')
+
+
 def test_config_exposes_anchor_file_dir():
     """shared config defaults should expose anchor_file_dir alongside omit_file_dir."""
     expect(hasattr(core, 'ANCHOR_FILE_DIR'), 'core should expose ANCHOR_FILE_DIR')
@@ -11207,6 +11426,39 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
             expect(not child.get("anchor"), f"child should not gain anchor expr: {child!r}")
         finally:
             mod.core.ANCHOR_FILE_DIR = old_dir
+
+
+def test_on_modify_compute_anchor_child_due_from_multiple_file_times():
+    """completion should retain independent times and select a later same-day occurrence from another file."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_multiple_anchor_file_due_test")
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / "morning.csv").write_text("date\n2026-04-25\n", encoding="utf-8")
+        (anchor_dir / "afternoon.csv").write_text("date\n2026-04-25\n", encoding="utf-8")
+        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        try:
+            due_utc = mod.core.build_local_datetime(date(2026, 4, 25), (9, 0)).astimezone(timezone.utc)
+            end_utc = mod.core.build_local_datetime(date(2026, 4, 25), (10, 0)).astimezone(timezone.utc)
+            parent = {
+                "description": "multiple anchor file times",
+                "anchor_file": "morning.csv@t=09:00 | afternoon.csv@t=15:00",
+                "anchor_mode": "skip",
+                "link": 1,
+                "chainID": "cid",
+                "due": mod.core.fmt_isoz(due_utc),
+                "end": mod.core.fmt_isoz(end_utc),
+            }
+            child_due, meta, dnf = mod._compute_anchor_child_due(parent)
+            expected_due = mod.core.build_local_datetime(date(2026, 4, 25), (15, 0)).astimezone(timezone.utc)
+            expect(not dnf, f"multiple anchor_file recurrence should not produce DNF: {dnf!r}")
+            expect(child_due == expected_due, f"unexpected later same-day child due: {child_due!r}")
+            expect(meta.get("target_field") == "due", f"unexpected multiple-file metadata: {meta!r}")
+        finally:
+            mod.core.ANCHOR_FILE_DIR = old_dir
+
 
 def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
     """completion should use the earliest next occurrence from anchor and anchor_file together."""
@@ -14673,12 +14925,19 @@ TESTS = [
     test_anchor_file_spec_parses_time_and_negative_offset,
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,
     test_anchor_file_next_occurrence_after_uses_task_level_time,
+    test_file_source_expression_flattens_groups_and_rejects_unsafe_patterns,
+    test_anchor_file_expression_merges_sources_and_applies_group_modifiers,
+    test_file_source_wildcards_are_deterministic_and_star_dot_star_means_all,
+    test_anchor_file_expression_preserves_per_source_times_and_dedupes_matches,
+    test_omit_file_expression_merges_sources_atomically_and_rejects_group_times,
+    test_file_source_symlink_must_remain_inside_configured_directory,
     test_config_exposes_anchor_file_dir,
     test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_anchor_file_root_gets_chainid_stamp,
     test_hook_on_add_anchor_file_preview_auto_assigns_first_match,
     test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match,
     test_on_modify_compute_anchor_child_due_from_anchor_file,
+    test_on_modify_compute_anchor_child_due_from_multiple_file_times,
     test_on_modify_compute_anchor_child_due_from_combined_anchor_sources,
     test_omit_file_name_rejects_paths,
     test_omit_file_csv_header_parsing_is_order_independent_and_dedupes,

@@ -177,6 +177,23 @@ task add "Hybrid schedule" anchor:"w:tue,fri | y:05-05" anchor_file:"2026.csv@-1
 task add "Workout" anchor:"w:mon,wed,fri" omit_file:"holidays.csv"
 ```
 
+The singular `anchor_file` and `omit_file` UDAs also accept file expressions:
+
+```bash
+task add "Regional events" anchor_file:"north.csv@t=09:00 | south.csv@t=15:00"
+task add "Team events" anchor_file:"team-*.csv@t=09:00"
+task add "Prepared events" anchor_file:"(public.csv | company.txt)@-1d@t=12:00"
+task add "Workdays" anchor:"w:mon,tue,wed,thu,fri" omit_file:"*.*"
+```
+
+`|` merges sources, and modifiers after a parenthesized group apply to every
+source in that group. Sources retain their own `@t=` values. Patterns support
+`*` and `?` within the configured folder; recursive `**`, paths, and character
+classes are rejected. Exact `*` and `*.*` both mean every non-hidden regular
+file, including file names without a dot. An unmatched pattern contributes no
+dates and is reported by diagnostics, while a malformed matched file invalidates
+the whole expression.
+
 File modifiers are practical:
 
 | Modifier | Meaning |

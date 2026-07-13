@@ -30,7 +30,13 @@ def file_source_warnings(core: Any, task: dict[str, Any]) -> list[str]:
         try:
             anchor_files = core._import_sibling("anchor_files")
             dates = anchor_files.load_anchor_file_dates(anchor_file, getattr(core, "ANCHOR_FILE_DIR", ""))
-            if not dates:
+            unmatched = anchor_files.unmatched_anchor_file_patterns(
+                anchor_file,
+                getattr(core, "ANCHOR_FILE_DIR", ""),
+            )
+            for pattern in unmatched:
+                warnings.append(f"anchor_file pattern '{pattern}' matched no files.")
+            if not dates and not unmatched:
                 warnings.append(f"anchor_file '{_file_label(anchor_file)}' has no usable dates.")
         except Exception:
             pass
@@ -38,7 +44,13 @@ def file_source_warnings(core: Any, task: dict[str, Any]) -> list[str]:
         try:
             omit_files = core._import_sibling("omit_files")
             dates = omit_files.load_omit_file_dates(omit_file, getattr(core, "OMIT_FILE_DIR", ""))
-            if not dates:
+            unmatched = omit_files.unmatched_omit_file_patterns(
+                omit_file,
+                getattr(core, "OMIT_FILE_DIR", ""),
+            )
+            for pattern in unmatched:
+                warnings.append(f"omit_file pattern '{pattern}' matched no files.")
+            if not dates and not unmatched:
                 warnings.append(f"omit_file '{_file_label(omit_file)}' has no usable dates.")
         except Exception:
             pass

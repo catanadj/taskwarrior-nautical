@@ -3250,21 +3250,15 @@ def _anchor_file_occurrences_local(parent: dict, fallback_hhmm: tuple[int, int])
     if not anchor_file:
         return []
     anchor_files = core._import_sibling("anchor_files")
-    dates = sorted(_load_anchor_file_dates(anchor_file))
-    _name, mods = anchor_files.parse_anchor_file_spec(anchor_file)
-    tval = mods.get("t")
-    if isinstance(tval, tuple):
-        times = [tval]
-    elif isinstance(tval, list):
-        times = [item for item in tval if isinstance(item, tuple)]
-    else:
-        times = []
-    if not times:
-        times = [fallback_hhmm]
-    out: list[datetime] = []
-    for d0 in dates:
-        for hhmm in times:
-            out.append(_tolocal(core.build_local_datetime(d0, hhmm)))
+    occurrence_specs = anchor_files.load_anchor_file_occurrence_specs(
+        anchor_file,
+        getattr(core, "ANCHOR_FILE_DIR", ""),
+        fallback_hhmm,
+    )
+    out = [
+        _tolocal(core.build_local_datetime(d0, hhmm))
+        for d0, hhmm in occurrence_specs
+    ]
     out.sort()
     return out
 

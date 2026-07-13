@@ -5,6 +5,13 @@ import re
 from datetime import date
 
 from .file_backed_dates import load_file_date_data
+from .file_source_expr import (
+    FileSourceResolution,
+    ResolvedFileSource,
+    parse_file_source_expression,
+    resolve_file_source_expression,
+    resolve_file_sources,
+)
 from .schedule_utils import apply_day_offset, roll_apply
 
 
@@ -64,27 +71,55 @@ def resolve_omit_file_path(name: str | None, omit_file_dir: str | None) -> str:
     file_name, _mods = parse_omit_file_spec(name)
     if not file_name:
         return ""
-    base_dir = str(omit_file_dir or "").strip()
-    if not base_dir:
-        raise ValueError("omit_file_dir is not configured.")
-    root = os.path.abspath(os.path.expanduser(base_dir))
-    if not os.path.isdir(root):
-        raise ValueError("omit_file_dir does not exist or is not a directory.")
-    path = os.path.abspath(os.path.join(root, file_name))
-    if os.path.dirname(path) != root:
-        raise ValueError("omit_file must be a file name, not a path.")
-    if not os.path.isfile(path):
-        raise ValueError(f"omit_file '{file_name}' was not found in omit_file_dir.")
-    return path
+    resolution = resolve_file_source_expression(file_name, omit_file_dir, label="omit_file")
+    if len(resolution.sources) != 1:
+        raise ValueError("resolve_omit_file_path requires exactly one matching omit_file.")
+    return resolution.sources[0].path
+
+
+def _resolved_omit_sources(name: str | None, omit_file_dir: str | None) -> FileSourceResolution:
+    parsed = parse_file_source_expression(name, label="omit_file")
+    for source in parsed:
+        _parse_source_mod_layers(source.modifier_layers)
+    return resolve_file_sources(parsed, omit_file_dir, label="omit_file")
+
+
+def unmatched_omit_file_patterns(name: str | None, omit_file_dir: str | None) -> tuple[str, ...]:
+    return _resolved_omit_sources(name, omit_file_dir).unmatched_patterns
+
+
+def _parse_source_mod_layers(modifier_layers: tuple[str, ...]) -> list[dict]:
+    layers: list[dict] = []
+    for modifier_text in modifier_layers:
+        _file_name, mods = parse_omit_file_spec(f"source{modifier_text}")
+        layers.append(mods)
+    if not layers:
+        _file_name, mods = parse_omit_file_spec("source")
+        layers.append(mods)
+    return layers
+
+
+def _load_omit_source_data(source: ResolvedFileSource) -> tuple[frozenset[date], dict[date, str]]:
+    dates, descriptions = load_file_date_data(
+        source.path,
+        label=f"omit_file '{source.display_name}'",
+    )
+    for mods in _parse_source_mod_layers(source.modifier_layers):
+        dates, descriptions = _apply_omit_file_mods(dates, descriptions, mods)
+    return dates, descriptions
 
 
 def _load_omit_file_data(name: str | None, omit_file_dir: str | None) -> tuple[frozenset[date], dict[date, str]]:
-    file_name, mods = parse_omit_file_spec(name)
-    path = resolve_omit_file_path(file_name, omit_file_dir)
-    if not path:
-        return frozenset(), {}
-    dates, descriptions = load_file_date_data(path, label=f"omit_file '{os.path.basename(path)}'")
-    return _apply_omit_file_mods(dates, descriptions, mods)
+    resolution = _resolved_omit_sources(name, omit_file_dir)
+    out_dates: set[date] = set()
+    out_descriptions: dict[date, str] = {}
+    for source in resolution.sources:
+        dates, descriptions = _load_omit_source_data(source)
+        out_dates.update(dates)
+        for item_date, text in descriptions.items():
+            if text:
+                out_descriptions.setdefault(item_date, text)
+    return frozenset(out_dates), out_descriptions
 
 
 def _apply_omit_file_mods(dates: frozenset[date], descriptions: dict[date, str], mods: dict) -> tuple[frozenset[date], dict[date, str]]:

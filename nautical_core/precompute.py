@@ -101,8 +101,13 @@ def build_and_cache_hints(
     wrand_salt: str,
     local_tz_name: str,
     holiday_region: str,
+    business_calendar_fingerprint: str = "",
 ):
-    key = cache_key_for_task(anchor_expr, anchor_mode)
+    key = cache_key_for_task(
+        anchor_expr,
+        anchor_mode,
+        business_calendar_fingerprint,
+    )
     cached = cache_load(key)
     if cached:
         return cached
@@ -119,6 +124,7 @@ def build_and_cache_hints(
                 "salt": wrand_salt,
                 "tz": local_tz_name,
                 "hol": holiday_region,
+                "bc": business_calendar_fingerprint,
             },
         },
         "dnf": dnf,

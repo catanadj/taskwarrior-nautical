@@ -34,6 +34,7 @@ REQUIRED_UDAS = {
     "anchor": "string",
     "anchor_file": "string",
     "anchor_mode": "string",
+    "bc": "string",
     "omit": "string",
     "omit_file": "string",
     "chainMax": "numeric",

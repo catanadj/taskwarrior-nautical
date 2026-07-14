@@ -77,6 +77,7 @@ class HintMetaCfg(TypedDict, total=False):
     salt: str
     tz: str
     hol: str
+    bc: str
 
 
 class HintMeta(TypedDict, total=False):
@@ -312,6 +313,7 @@ BusinessCalendarConfigError = _business_calendar_config.BusinessCalendarConfigEr
 
 
 def _with_business_calendar(fn: Callable[..., Any], business_calendar) -> Callable[..., Any]:
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
     if business_calendar is DEFAULT_BUSINESS_CALENDAR:
         return fn
     return partial(fn, business_calendar=business_calendar)
@@ -732,12 +734,18 @@ def _cache_dir() -> str:
     _CACHE_DIR = chosen
     return chosen
 
-def _cache_key(acf: str, anchor_mode: str) -> str:
+def _cache_key(
+    acf: str,
+    anchor_mode: str,
+    *,
+    business_calendar_fingerprint: str = "",
+) -> str:
     _cache_support = _import_sibling("cache_support")
 
     return _cache_support.cache_key(
         acf,
         anchor_mode,
+        business_calendar_fingerprint=business_calendar_fingerprint,
         anchor_year_fmt=ANCHOR_YEAR_FMT,
         wrand_salt=WRAND_SALT,
         local_tz_name=LOCAL_TZ_NAME,
@@ -973,18 +981,35 @@ def cache_save(key: str, obj: dict) -> bool:
     )
 
 @_ttl_lru_cache(maxsize=1024)
-def _cache_key_for_task_cached(anchor_expr: str, anchor_mode: str, fmt: str) -> str:
+def _cache_key_for_task_cached(
+    anchor_expr: str,
+    anchor_mode: str,
+    fmt: str,
+    business_calendar_fingerprint: str = "",
+) -> str:
     return _cache_payload.cache_key_for_task_cached(
         anchor_expr,
         anchor_mode,
         fmt,
+        business_calendar_fingerprint,
         build_acf=build_acf,
         cache_key=_cache_key,
     )
 
 
-def cache_key_for_task(anchor_expr: str, anchor_mode: str) -> str:
-    return _cache_key_for_task_cached(anchor_expr or "", anchor_mode or "", _yearfmt())
+def cache_key_for_task(
+    anchor_expr: str,
+    anchor_mode: str,
+    calendar_fingerprint: str | None = None,
+) -> str:
+    if calendar_fingerprint is None:
+        calendar_fingerprint = business_calendar_fingerprint()
+    return _cache_key_for_task_cached(
+        anchor_expr or "",
+        anchor_mode or "",
+        _yearfmt(),
+        calendar_fingerprint,
+    )
 
 
 # ---- Core iterator over DNF ---------------------------------------------------
@@ -1107,7 +1132,7 @@ def _next_for_and_fast_path(
     ref_d: date,
     seed: date,
     seed_base: str | None = None,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> date:
     next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
     matches = _with_business_calendar(atom_matches_on, business_calendar)
@@ -1130,7 +1155,7 @@ def _next_for_and(
     ref_d: date,
     seed: date,
     seed_base: str | None = None,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> date:
     next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
     matches = _with_business_calendar(atom_matches_on, business_calendar)
@@ -1160,7 +1185,7 @@ def _next_for_or(
     ref_d: date,
     seed: date,
     seed_base: str | None = None,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> date:
     next_for_and_fn = _with_business_calendar(_next_for_and, business_calendar)
     return _scheduler_expr.next_for_or(
@@ -1178,8 +1203,10 @@ def precompute_hints(dnf: list[list[dict]],
                      anchor_mode: str = "ALL",
                      rand_seed: str | None = None,
                      k_next: int = 24,
-                     sample_days_for_year: int = 366) -> dict:
+                     sample_days_for_year: int = 366,
+                     business_calendar=None) -> dict:
     _ = anchor_mode
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
     return _precompute.precompute_hints(
         dnf,
         start_dt=start_dt,
@@ -1187,8 +1214,8 @@ def precompute_hints(dnf: list[list[dict]],
         k_next=k_next,
         sample_days_for_year=sample_days_for_year,
         now_local=datetime.now,
-        next_after_expr=next_after_expr,
-        next_for_or=_next_for_or,
+        next_after_expr=_with_business_calendar(next_after_expr, business_calendar),
+        next_for_or=_with_business_calendar(_next_for_or, business_calendar),
     )
 
 
@@ -1196,7 +1223,10 @@ def precompute_hints(dnf: list[list[dict]],
 
 def build_and_cache_hints(anchor_expr: str,
                           anchor_mode: str = "ALL",
-                          default_due_dt=None) -> AnchorHintsPayload:
+                          default_due_dt=None,
+                          business_calendar=None) -> AnchorHintsPayload:
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
+    calendar_fingerprint = business_calendar_fingerprint(business_calendar)
     return cast(
         AnchorHintsPayload,
         _precompute.build_and_cache_hints(
@@ -1207,12 +1237,16 @@ def build_and_cache_hints(anchor_expr: str,
             cache_load=cache_load,
             validate_anchor_expr_strict=validate_anchor_expr_strict,
             describe_anchor_expr_from_dnf=_describe_anchor_expr_from_dnf,
-            precompute_hints=precompute_hints,
+            precompute_hints=partial(
+                precompute_hints,
+                business_calendar=business_calendar,
+            ),
             cache_save=cache_save,
             anchor_year_fmt=ANCHOR_YEAR_FMT,
             wrand_salt=WRAND_SALT,
             local_tz_name=LOCAL_TZ_NAME,
             holiday_region=HOLIDAY_REGION,
+            business_calendar_fingerprint=calendar_fingerprint,
         ),
     )
 
@@ -1888,8 +1922,9 @@ def _weekly_rand_pick(
     *,
     seed_base: str | None,
     atom_identity: str,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> int | None:
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
     return _cached_expansion.weekly_rand_pick(
         iso_year,
         iso_week,
@@ -1901,7 +1936,8 @@ def _weekly_rand_pick(
     )
 
 
-def _is_bd(dt: _date, business_calendar=DEFAULT_BUSINESS_CALENDAR):
+def _is_bd(dt: _date, business_calendar=None):
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
     return _cached_expansion.is_bd(dt, business_calendar)
 
 
@@ -1946,8 +1982,9 @@ def _month_tokens_for_atom_cached(
     y: int,
     m: int,
     spec: str,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> set[int]:
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
     return _cached_expansion.month_tokens_for_atom_values(
         y,
         m,
@@ -1966,7 +2003,7 @@ def _month_tokens_for_atom(
     a: dict,
     y: int,
     m: int,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> set[int]:
     return _cached_expansion.month_tokens_for_atom(
         a,
@@ -1985,7 +2022,7 @@ def _term_candidates_in_month(
     m: int,
     rand_atom_idx: int,
     bd_only: bool,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ):
     return _cached_expansion.term_candidates_in_month(
         term,
@@ -2893,8 +2930,9 @@ def expand_monthly_cached(
     spec: str,
     y: int,
     m: int,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ):
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
     return _cached_expansion.expand_monthly(
         spec,
         y,
@@ -2929,8 +2967,9 @@ def expand_yearly_for_year_strict(spec: str, y: int):
 def roll_apply(
     dt: date,
     mods: dict,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> date:
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
     return _schedule_utils.roll_apply(
         dt,
         mods,
@@ -2944,8 +2983,9 @@ def _weeks_between(d1: date, d2: date) -> int:
 def apply_day_offset(
     d: date,
     mods: dict,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> date:
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
     return _schedule_utils.apply_day_offset(
         d,
         mods,
@@ -2957,7 +2997,7 @@ def base_next_after_atom(
     atom,
     ref_d: date,
     seed_base=None,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> date:
     return _scheduler_atom.base_next_after_atom(
         atom,
@@ -3009,7 +3049,7 @@ def _month_doms_safe(
     spec: str,
     y: int,
     m: int,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> list[int]:
     return _monthly_support.month_doms_safe(
         spec,
@@ -3026,7 +3066,7 @@ def _month_has_hit(
     spec: str,
     y: int,
     m: int,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> bool:
     return _monthly_support.month_has_hit(
         spec,
@@ -3044,7 +3084,7 @@ def _first_hit_after_probe_in_month(
     y: int,
     m: int,
     probe: date,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> date | None:
     return _monthly_support.first_hit_after_probe_in_month(
         spec,
@@ -3062,7 +3102,7 @@ def _next_valid_month_on_or_after(
     spec: str,
     y: int,
     m: int,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> tuple[int, int]:
     return _monthly_support.next_valid_month_on_or_after(
         spec,
@@ -3080,7 +3120,7 @@ def _advance_k_valid_months(
     start_y: int,
     start_m: int,
     k: int,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> tuple[int, int]:
     return _monthly_support.advance_k_valid_months(
         spec,
@@ -3100,7 +3140,7 @@ def _monthly_align_base_for_interval(
     probe: date,
     seed: date,
     ival: int,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> date:
     return _monthly_support.monthly_align_base_for_interval(
         spec,
@@ -3137,8 +3177,9 @@ def next_after_atom_with_mods(
     ref_d: date,
     default_seed: date,
     seed_base=None,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> date:
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
     base_next = _with_business_calendar(base_next_after_atom, business_calendar)
     monthly_align = _with_business_calendar(
         _monthly_align_base_for_interval,
@@ -3173,7 +3214,7 @@ def atom_matches_on(
     d: date,
     default_seed: date,
     seed_base=None,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ) -> bool:
     next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
     return _scheduler_atom.atom_matches_on(
@@ -3190,7 +3231,7 @@ def next_after_term(
     ref_d: date,
     default_seed: date,
     seed_base=None,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ):
     next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
     matches = _with_business_calendar(atom_matches_on, business_calendar)
@@ -3211,8 +3252,9 @@ def next_after_expr(
     default_seed=None,
     seed_base=None,
     date_is_excluded=None,
-    business_calendar=DEFAULT_BUSINESS_CALENDAR,
+    business_calendar=None,
 ):
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
     next_for_and_fn = _with_business_calendar(_next_for_and, business_calendar)
     term_candidates = _with_business_calendar(
         _term_candidates_in_month,
@@ -3260,7 +3302,13 @@ def _business_calendar_expression_matches_date(dnf, value: date, name: str) -> b
     seed_base = f"business-calendar:{name}"
     return any(
         all(
-            atom_matches_on(atom, value, value, seed_base=seed_base)
+            atom_matches_on(
+                atom,
+                value,
+                value,
+                seed_base=seed_base,
+                business_calendar=DEFAULT_BUSINESS_CALENDAR,
+            )
             for atom in term
         )
         for term in dnf
@@ -3308,6 +3356,36 @@ def get_configured_business_calendar(name: str):
         ) from None
 
 
+def business_calendar_for_task(task: dict | None):
+    raw_name = str((task or {}).get("bc") or "").strip()
+    if not raw_name:
+        return DEFAULT_BUSINESS_CALENDAR
+    return get_configured_business_calendar(_unwrap_quotes(raw_name))
+
+
+def normalize_task_business_calendar(task: dict):
+    business_calendar = business_calendar_for_task(task)
+    if str(task.get("bc") or "").strip():
+        task["bc"] = business_calendar.name
+    return business_calendar
+
+
+def business_calendar_fingerprint(business_calendar=None) -> str:
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
+    return str(
+        getattr(business_calendar, "fingerprint", "")
+        or f"{business_calendar.name}-v1"
+    )
+
+
+def use_business_calendar(business_calendar):
+    return _business_calendar.use_business_calendar(business_calendar)
+
+
+def use_task_business_calendar(task: dict):
+    return use_business_calendar(normalize_task_business_calendar(task))
+
+
 def anchors_between_expr(dnf, start_excl, end_excl, default_seed, seed_base=None):
     return _precompute.anchors_between_expr(
         dnf,
@@ -3341,13 +3419,19 @@ def expr_has_m_or_y(dnf) -> bool:
     return _schedule_utils.expr_has_m_or_y(dnf)
 
 
-def pick_hhmm_from_dnf_for_date(dnf, target: date, default_seed: date, seed_base=None):
+def pick_hhmm_from_dnf_for_date(
+    dnf,
+    target: date,
+    default_seed: date,
+    seed_base=None,
+    business_calendar=None,
+):
     return _schedule_utils.pick_hhmm_from_dnf_for_date(
         dnf,
         target,
         default_seed,
         seed_base=seed_base,
-        atom_matches_on=atom_matches_on,
+        atom_matches_on=_with_business_calendar(atom_matches_on, business_calendar),
     )
 
 
@@ -3532,6 +3616,8 @@ __all__ = (
     'build_acf',
     'build_and_cache_hints',
     'build_local_datetime',
+    'business_calendar_fingerprint',
+    'business_calendar_for_task',
     'business_calendar_definitions',
     'cache_key_for_task',
     'cache_load',
@@ -3549,6 +3635,7 @@ __all__ = (
     'lint_anchor_expr',
     'next_after_atom_with_mods',
     'next_after_expr',
+    'normalize_task_business_calendar',
     'now_utc',
     'omit_preset_display',
     'panel_line',
@@ -3579,6 +3666,8 @@ __all__ = (
     'term_width_stderr',
     'time',
     'to_local',
+    'use_business_calendar',
+    'use_task_business_calendar',
     'validate_anchor_expr_strict',
     'write_text',
 )

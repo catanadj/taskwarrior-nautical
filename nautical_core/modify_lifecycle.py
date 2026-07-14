@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-RECURRENCE_SETTING_FIELDS = ("anchor", "anchor_file", "omit", "omit_file", "anchor_mode", "cp")
+RECURRENCE_SETTING_FIELDS = ("anchor", "anchor_file", "omit", "omit_file", "anchor_mode", "bc", "cp")
 
 
 @dataclass(slots=True)

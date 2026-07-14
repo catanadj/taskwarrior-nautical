@@ -111,6 +111,7 @@ def cache_key(
     acf: str,
     anchor_mode: str,
     *,
+    business_calendar_fingerprint: str = "",
     anchor_year_fmt: str,
     wrand_salt: str,
     local_tz_name: str,
@@ -124,6 +125,7 @@ def cache_key(
             wrand_salt,
             local_tz_name,
             holiday_region,
+            business_calendar_fingerprint,
             "nautical-cache|v1",
         ]
     )

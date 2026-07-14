@@ -10,6 +10,7 @@ _ADD_NAUTICAL_FIELDS = (
     "anchor",
     "anchor_file",
     "anchor_mode",
+    "bc",
     "cp",
     "chainID",
     "chainMax",
@@ -17,7 +18,7 @@ _ADD_NAUTICAL_FIELDS = (
     "omit",
     "omit_file",
 )
-_MODIFY_RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp", "omit", "omit_file")
+_MODIFY_RECURRENCE_FIELDS = ("anchor", "anchor_file", "bc", "cp", "omit", "omit_file")
 _MODIFY_CHAIN_FIELDS = ("chainID", "nextLink", "prevLink", "link")
 _MODIFY_SAFE_ORDINARY_FIELDS = frozenset(
     ("description", "project", "priority", "tags", "annotations", "depends", "modified", "urgency")

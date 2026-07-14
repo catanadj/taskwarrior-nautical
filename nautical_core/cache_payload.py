@@ -324,10 +324,22 @@ def cache_save(
     return ok_saved
 
 
-def cache_key_for_task_cached(anchor_expr: str, anchor_mode: str, fmt: str, *, build_acf, cache_key) -> str:
+def cache_key_for_task_cached(
+    anchor_expr: str,
+    anchor_mode: str,
+    fmt: str,
+    business_calendar_fingerprint: str = "",
+    *,
+    build_acf,
+    cache_key,
+) -> str:
     _ = fmt
     try:
         acf = build_acf(anchor_expr)
     except Exception:
         acf = (anchor_expr or "").strip()
-    return cache_key(acf, anchor_mode or "")
+    return cache_key(
+        acf,
+        anchor_mode or "",
+        business_calendar_fingerprint=business_calendar_fingerprint,
+    )

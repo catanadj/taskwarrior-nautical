@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -250,8 +252,24 @@ def resolve_business_calendars(
         def omit_matches(value: date, rules=omit_rules, calendar_name=name) -> bool:
             return any(expression_matches_date(rule, value, calendar_name) for rule in rules)
 
+        fingerprint_payload = {
+            "name": name,
+            "anchor": anchor_rules,
+            "anchor_file": sorted(item.isoformat() for item in anchor_dates),
+            "omit": omit_rules,
+            "omit_file": sorted(item.isoformat() for item in omit_dates),
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                fingerprint_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()[:16]
         calendars[name] = ConfiguredBusinessCalendar(
             name=name,
+            fingerprint=fingerprint,
             anchor_dates=anchor_dates,
             omit_dates=omit_dates,
             _anchor_matches=anchor_matches,

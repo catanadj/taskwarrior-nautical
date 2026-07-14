@@ -4,7 +4,11 @@ import os
 import re
 from datetime import date
 
-from .business_calendar import DEFAULT_BUSINESS_CALENDAR, BusinessCalendar
+from .business_calendar import (
+    DEFAULT_BUSINESS_CALENDAR,
+    BusinessCalendar,
+    effective_business_calendar,
+)
 from .business_calendar_config import validate_calendar_rule_modifiers
 from .file_backed_dates import load_file_date_data
 from .file_source_expr import (
@@ -130,8 +134,9 @@ def _load_omit_file_data(
     name: str | None,
     omit_file_dir: str | None,
     *,
-    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+    business_calendar: BusinessCalendar | None = None,
 ) -> tuple[frozenset[date], dict[date, str]]:
+    business_calendar = effective_business_calendar(business_calendar)
     resolution = _resolved_omit_sources(name, omit_file_dir)
     out_dates: set[date] = set()
     out_descriptions: dict[date, str] = {}
@@ -201,7 +206,7 @@ def load_omit_file_dates(
     name: str | None,
     omit_file_dir: str | None,
     *,
-    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+    business_calendar: BusinessCalendar | None = None,
 ) -> frozenset[date]:
     dates, _descriptions = _load_omit_file_data(
         name,
@@ -215,7 +220,7 @@ def load_omit_file_descriptions(
     name: str | None,
     omit_file_dir: str | None,
     *,
-    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+    business_calendar: BusinessCalendar | None = None,
 ) -> dict[date, str]:
     _dates, descriptions = _load_omit_file_data(
         name,

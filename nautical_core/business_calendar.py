@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import lru_cache
@@ -19,6 +21,7 @@ class BusinessCalendarSearchError(ValueError):
 @dataclass(frozen=True)
 class WeekdayBusinessCalendar:
     name: str = "weekday"
+    fingerprint: str = "weekday-v1"
 
     def is_business_day(self, value: date) -> bool:
         return value.weekday() < 5
@@ -27,6 +30,7 @@ class WeekdayBusinessCalendar:
 @dataclass(frozen=True, eq=False)
 class ConfiguredBusinessCalendar:
     name: str
+    fingerprint: str
     anchor_dates: frozenset[date]
     omit_dates: frozenset[date]
     _anchor_matches: Callable[[date], bool]
@@ -41,6 +45,29 @@ class ConfiguredBusinessCalendar:
 
 DEFAULT_BUSINESS_CALENDAR: BusinessCalendar = WeekdayBusinessCalendar()
 WEEKDAY_BUSINESS_DAYS = frozenset({0, 1, 2, 3, 4})
+_ACTIVE_BUSINESS_CALENDAR: ContextVar[BusinessCalendar] = ContextVar(
+    "nautical_business_calendar",
+    default=DEFAULT_BUSINESS_CALENDAR,
+)
+
+
+def active_business_calendar() -> BusinessCalendar:
+    return _ACTIVE_BUSINESS_CALENDAR.get()
+
+
+def effective_business_calendar(
+    business_calendar: BusinessCalendar | None = None,
+) -> BusinessCalendar:
+    return business_calendar if business_calendar is not None else active_business_calendar()
+
+
+@contextmanager
+def use_business_calendar(business_calendar: BusinessCalendar):
+    token = _ACTIVE_BUSINESS_CALENDAR.set(business_calendar)
+    try:
+        yield business_calendar
+    finally:
+        _ACTIVE_BUSINESS_CALENDAR.reset(token)
 
 
 def is_business_day(

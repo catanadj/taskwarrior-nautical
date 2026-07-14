@@ -3808,6 +3808,7 @@ _UDA_CARRY_SKIP_LOWER = {
     "cp",
     "anchor",
     "anchor_mode",
+    "bc",
     "due",
     "entry",
     "wait",
@@ -5423,6 +5424,7 @@ def _recurrence_update_label(field: str) -> str:
         "omit": "Omit",
         "omit_file": "Omit file",
         "anchor_mode": "Mode",
+        "bc": "Business calendar",
         "cp": "Period",
     }.get(field, field)
 
@@ -5908,6 +5910,11 @@ def main():
     read_t0 = _ptime.perf_counter()
     old, new = _read_two()
     state.diag_stats["startup_read_input_ms"] = round((_ptime.perf_counter() - read_t0) * 1000.0, 3)
+    try:
+        calendar_context = core.use_task_business_calendar(new)
+    except Exception as exc:
+        _fail_and_exit("Invalid business calendar", str(exc))
+        return
     request_t0 = _ptime.perf_counter()
     _seed_runtime_lookup_tasks(old, new)
     request = hook_context.build_on_modify_request(
@@ -5919,18 +5926,19 @@ def main():
         state.diag_stats["startup_import_ms"] = round(float(_IMPORT_MS), 3)
     state.diag_stats["startup_request_ms"] = round((_ptime.perf_counter() - request_t0) * 1000.0, 3)
     state.diag_stats["startup_total_ms"] = round((_ptime.perf_counter() - startup_t0) * 1000.0, 3)
-    result = hook_engine.handle_on_modify(
-        request,
-        json_result_cls=hook_results.HookJsonResult,
-        task_has_nautical_fields=_task_has_nautical_fields,
-        load_core=_load_core,
-        diag=_diag,
-        fail_and_exit=_fail_and_exit,
-        is_non_completion_modify=_is_non_completion_modify,
-        handle_non_completion_modify=_handle_non_completion_modify,
-        handle_completion_modify=_handle_completion_modify,
-        handle_deleted_modify=_handle_deleted_modify,
-    )
+    with calendar_context:
+        result = hook_engine.handle_on_modify(
+            request,
+            json_result_cls=hook_results.HookJsonResult,
+            task_has_nautical_fields=_task_has_nautical_fields,
+            load_core=_load_core,
+            diag=_diag,
+            fail_and_exit=_fail_and_exit,
+            is_non_completion_modify=_is_non_completion_modify,
+            handle_non_completion_modify=_handle_non_completion_modify,
+            handle_completion_modify=_handle_completion_modify,
+            handle_deleted_modify=_handle_deleted_modify,
+        )
     if result is not None:
         hook_results.emit_json_result(result, core=core)
 

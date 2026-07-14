@@ -3140,7 +3140,7 @@ if len(args) == 2 and args[0] == "_get":
     if key.startswith("rc.uda.") and key.endswith(".type"):
         name = key[len("rc.uda."):-len(".type")]
         expected = {
-            "cp": "string", "chain": "string", "anchor": "string",
+            "cp": "string", "chain": "string", "anchor": "string", "bc": "string",
             "anchor_file": "string", "anchor_mode": "string",
             "omit": "string", "omit_file": "string",
             "chainMax": "numeric", "chainUntil": "date",
@@ -6380,6 +6380,188 @@ def test_business_calendar_toml_section_resolves_lazily():
         expect(proc.returncode == 0, f'calendar TOML subprocess failed: {proc.stderr}')
         payload = json.loads(proc.stdout)
         expect(payload == {'names': ['work'], 'open': True, 'closed': False}, f'unexpected TOML result: {payload!r}')
+
+
+def test_task_business_calendar_context_selects_and_restores_policy():
+    """task bc selection should be case-insensitive, scoped, and visible to schedulers and file modifiers."""
+    calendars = core.resolve_business_calendar_config(
+        {'weekend': {'anchor': 'w:sat,sun'}},
+    )
+    saved_registry = core.configured_business_calendars
+    task = {'bc': 'WEEKEND'}
+    try:
+        core.configured_business_calendars = lambda: calendars
+        policy = core.normalize_task_business_calendar(task)
+        expect(task['bc'] == 'weekend', f'bc should normalize to its configured name: {task!r}')
+        dnf = core.validate_anchor_expr_strict('m:1bd')
+        with core.use_business_calendar(policy):
+            selected, _meta = core.next_after_expr(dnf, date(2026, 6, 30))
+            expect(selected == date(2026, 7, 4), f'named calendar was not used: {selected}')
+            expect(
+                core.business_calendar_fingerprint() == policy.fingerprint,
+                'active calendar fingerprint should follow the scoped policy',
+            )
+        restored, _meta = core.next_after_expr(dnf, date(2026, 6, 30))
+        expect(restored == date(2026, 7, 1), f'default policy was not restored: {restored}')
+    finally:
+        core.configured_business_calendars = saved_registry
+
+
+def test_business_calendar_fingerprint_invalidates_rule_file_and_hint_caches():
+    """semantic rule or file-date changes should produce new persistent recurrence cache keys."""
+    monday = core.resolve_business_calendar_config({'work': {'anchor': 'w:mon'}})['work']
+    tuesday = core.resolve_business_calendar_config({'work': {'anchor': 'w:tue'}})['work']
+    expect(monday.fingerprint != tuesday.fingerprint, 'rule changes should alter the calendar fingerprint')
+    expect(
+        core.cache_key_for_task('m:1bd', 'skip')
+        == core.cache_key_for_task('m:1bd', 'skip', core.DEFAULT_BUSINESS_CALENDAR.fingerprint),
+        'the public cache helper should include the effective default calendar',
+    )
+    expect(
+        core.cache_key_for_task('m:1bd', 'skip', monday.fingerprint)
+        != core.cache_key_for_task('m:1bd', 'skip', tuesday.fingerprint),
+        'calendar fingerprints should participate in persistent cache keys',
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        source = anchor_dir / 'open.csv'
+        source.write_text('date\n2026-04-20\n', encoding='utf-8')
+        raw = {'work': {'anchor_file': 'open.csv'}}
+        first = core.resolve_business_calendar_config(raw, anchor_file_dir=td)['work']
+        source.write_text('date\n2026-04-21\n', encoding='utf-8')
+        second = core.resolve_business_calendar_config(raw, anchor_file_dir=td)['work']
+        expect(first.fingerprint != second.fingerprint, 'file date changes should alter the calendar fingerprint')
+
+    hints = core.build_and_cache_hints('m:1bd', 'skip', business_calendar=monday)
+    expect(
+        hints.get('meta', {}).get('cfg', {}).get('bc') == monday.fingerprint,
+        'hint metadata should record the selected calendar fingerprint',
+    )
+
+
+def test_hook_on_add_uses_and_normalizes_business_calendar():
+    """on-add should use bc for recurrence calculation and emit its canonical name."""
+    hook = _find_hook_file('on-add-nautical.py')
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / 'config-nautical.toml'
+        config_path.write_text(
+            '[business_calendar.weekend]\n'
+            'anchor = "w:sat,sun"\n',
+            encoding='utf-8',
+        )
+        task = {
+            'uuid': '00000000-0000-0000-0000-000000000121',
+            'description': 'weekend business calendar',
+            'status': 'pending',
+            'entry': '20260714T000000Z',
+            'anchor': 'm:1bd@t=09:00',
+            'anchor_mode': 'skip',
+            'bc': 'WEEKEND',
+        }
+        proc = _run_hook_script(
+            hook,
+            task,
+            env_extra={'NO_COLOR': '1', 'NAUTICAL_CONFIG': str(config_path)},
+        )
+        expect(proc.returncode == 0, f'on-add named calendar failed: {proc.stderr[:500]!r}')
+        out_task = _assert_stdout_json_only(proc.stdout)
+        due = datetime.fromisoformat(str(out_task.get('due')))
+        expect(due.weekday() in {5, 6}, f'named weekend calendar was ignored: {due}')
+        expect(out_task.get('bc') == 'weekend', f'bc was not normalized: {out_task!r}')
+
+
+def test_hook_on_add_rejects_unknown_business_calendar_cleanly():
+    """unknown bc values should fail before recurrence scheduling with an actionable error."""
+    hook = _find_hook_file('on-add-nautical.py')
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / 'config-nautical.toml'
+        config_path.write_text(
+            '[business_calendar.work]\n'
+            'anchor = "w:mon..fri"\n',
+            encoding='utf-8',
+        )
+        task = {
+            'uuid': '00000000-0000-0000-0000-000000000122',
+            'description': 'unknown business calendar',
+            'status': 'pending',
+            'anchor': 'w:mon',
+            'bc': 'missing',
+        }
+        proc = _run_hook_script(
+            hook,
+            task,
+            env_extra={'NO_COLOR': '1', 'NAUTICAL_CONFIG': str(config_path)},
+        )
+        expect(proc.returncode != 0, 'on-add should reject an unknown business calendar')
+        stderr_text = _strip_markup(proc.stderr)
+        expect('Invalid business calendar' in stderr_text, f'missing error title: {stderr_text[:500]!r}')
+        expect(
+            'configured calendars:' in stderr_text and 'work.' in stderr_text,
+            f'missing available-calendar hint: {stderr_text[:500]!r}',
+        )
+
+
+def test_hook_on_modify_rejects_unknown_business_calendar_cleanly():
+    """changing bc to an unknown name should fail before recurrence is evaluated."""
+    hook = _find_hook_file('on-modify-nautical.py')
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / 'config-nautical.toml'
+        config_path.write_text(
+            '[business_calendar.work]\n'
+            'anchor = "w:mon..fri"\n',
+            encoding='utf-8',
+        )
+        old = {
+            'uuid': '00000000-0000-0000-0000-000000000123',
+            'description': 'change business calendar',
+            'status': 'pending',
+            'anchor': 'w:mon',
+            'bc': 'work',
+        }
+        new = dict(old, bc='missing')
+        proc = _run_hook_script_raw(
+            hook,
+            json.dumps(old) + '\n' + json.dumps(new) + '\n',
+            env_extra={'NO_COLOR': '1', 'NAUTICAL_CONFIG': str(config_path)},
+        )
+        expect(proc.returncode != 0, 'on-modify should reject an unknown business calendar')
+        expect(not proc.stdout.strip(), f'failing hook should not emit stdout: {proc.stdout[:500]!r}')
+        stderr_text = _strip_markup(proc.stderr)
+        expect('Invalid business calendar' in stderr_text, f'missing error title: {stderr_text[:500]!r}')
+        expect(
+            'configured calendars:' in stderr_text and 'work.' in stderr_text,
+            f'missing available-calendar hint: {stderr_text[:500]!r}',
+        )
+
+
+def test_on_modify_spawned_child_preserves_business_calendar():
+    """completion spawning should copy the parent's canonical bc value unchanged."""
+    hook = _find_hook_file('on-modify-nautical.py')
+    mod = _load_hook_module(hook, '_nautical_on_modify_business_calendar_child_test')
+    child_due = mod.core.build_local_datetime(date(2026, 7, 18), (9, 0))
+    parent = {
+        'uuid': '00000000-0000-0000-0000-000000000124',
+        'description': 'weekend chain',
+        'status': 'completed',
+        'due': mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 12), (9, 0))),
+        'anchor': 'm:1bd',
+        'anchor_mode': 'skip',
+        'bc': 'weekend',
+        'chainID': 'calendar-chain',
+        'link': 1,
+    }
+    child = mod._build_child_from_parent(
+        parent,
+        child_due,
+        'due',
+        2,
+        '00000000',
+        'anchor',
+        0,
+        None,
+    )
+    expect(child.get('bc') == 'weekend', f'child lost its business calendar: {child!r}')
 
 
 def test_next_after_atom_with_mods_characterization():
@@ -11516,6 +11698,51 @@ def test_navigator_uses_anchor_and_anchor_file_sources():
             navigator.core.ANCHOR_FILE_DIR = old_dir
 
 
+def test_navigator_uses_task_business_calendar_for_anchor_projection():
+    """Navigator projections and due checks should honor the task's bc selection."""
+    module_name = '_nautical_navigator_business_calendar_test'
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, 'nautical_navigator.py'))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+    finally:
+        sys.modules.pop(module_name, None)
+
+    calendars = navigator.core.resolve_business_calendar_config(
+        {'weekend': {'anchor': 'w:sat,sun'}},
+    )
+    saved_registry = navigator.core.configured_business_calendars
+    try:
+        navigator.core.configured_business_calendars = lambda: calendars
+        analyzer = navigator.TaskAnalyzer()
+        task = {
+            'uuid': '00000000-0000-0000-0000-000000000901',
+            'description': 'weekend navigator anchor',
+            'anchor': 'm:1bd@t=09:00',
+            'bc': 'weekend',
+        }
+        projected = analyzer._project_anchor_dates(
+            task,
+            limit=1,
+            start_from_date=date(2026, 6, 30),
+        )
+        expect(
+            projected and projected[0].date() == date(2026, 7, 4),
+            f'named calendar was ignored by Navigator projection: {projected!r}',
+        )
+        due = navigator.core.fmt_isoz(
+            navigator.core.build_local_datetime(date(2026, 7, 4), (9, 0)),
+        )
+        expect(
+            analyzer._due_is_anchor_day(due, task) is True,
+            'Navigator due validation ignored the named calendar',
+        )
+    finally:
+        navigator.core.configured_business_calendars = saved_registry
+
+
 def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain():
     """Navigator direct task lookup should prefer chainID and resolve the full chain from short links."""
     module_name = "_nautical_navigator_direct_chain_test"
@@ -14948,6 +15175,12 @@ TESTS = [
     test_business_calendar_config_resolves_rules_files_and_omissions,
     test_business_calendar_config_rejects_ambiguous_or_unstable_rules,
     test_business_calendar_toml_section_resolves_lazily,
+    test_task_business_calendar_context_selects_and_restores_policy,
+    test_business_calendar_fingerprint_invalidates_rule_file_and_hint_caches,
+    test_hook_on_add_uses_and_normalizes_business_calendar,
+    test_hook_on_add_rejects_unknown_business_calendar_cleanly,
+    test_hook_on_modify_rejects_unknown_business_calendar_cleanly,
+    test_on_modify_spawned_child_preserves_business_calendar,
     test_next_after_atom_with_mods_characterization,
     test_modifier_boundary_paths_agree_and_advance_strictly,
     test_atom_matches_on_positive_day_offset_shifted_date,
@@ -15243,6 +15476,7 @@ TESTS = [
     test_omit_file_expression_merges_sources_atomically_and_rejects_group_times,
     test_file_source_symlink_must_remain_inside_configured_directory,
     test_config_exposes_anchor_file_dir,
+    test_navigator_uses_task_business_calendar_for_anchor_projection,
     test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_anchor_file_root_gets_chainid_stamp,
     test_hook_on_add_anchor_file_preview_auto_assigns_first_match,

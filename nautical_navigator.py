@@ -665,6 +665,10 @@ class TaskAnalyzer:
         scheduled: Set[date] = set()
 
         if anchor_expr:
+            try:
+                business_calendar = core.business_calendar_for_task(last)
+            except Exception:
+                return scheduled
             # ---------- ANCHOR ----------
             try:
                 dnf = core.validate_anchor_expr_strict(anchor_expr)
@@ -677,7 +681,12 @@ class TaskAnalyzer:
                 seed_day = core.to_local(due_dt).date()
                 clock = (core.to_local(due_dt).hour, core.to_local(due_dt).minute)
             else:
-                seed_day, hhmm = core.next_after_expr(dnf, window_start, default_seed=window_start)
+                seed_day, hhmm = core.next_after_expr(
+                    dnf,
+                    window_start,
+                    default_seed=window_start,
+                    business_calendar=business_calendar,
+                )
                 clock = hhmm or (core.DEFAULT_DUE_HOUR, 0)
 
             # walk forward until window_end / chainUntil / chainMax (future)
@@ -685,7 +694,12 @@ class TaskAnalyzer:
             prev = None
             future_taken = 0
             for _ in range(MAX_CAL_FUTURE_STEPS):
-                nxt, _ = core.next_after_expr(dnf, cur, default_seed=seed_day)
+                nxt, _ = core.next_after_expr(
+                    dnf,
+                    cur,
+                    default_seed=seed_day,
+                    business_calendar=business_calendar,
+                )
                 if prev is not None and nxt <= prev:
                     cur = prev + timedelta(days=1); continue
                 prev = nxt
@@ -1985,6 +1999,10 @@ class TaskAnalyzer:
         anchor_file = (task.get("anchor_file") or "").strip()
         if not core or (not anchor_expr and not anchor_file):
             return []
+        try:
+            business_calendar = core.business_calendar_for_task(task)
+        except Exception:
+            return []
 
         # Base local date
         if start_from_date is None:
@@ -2007,14 +2025,23 @@ class TaskAnalyzer:
             if dnf:
                 def step(prev_date: date):
                     nxt_date, _ = core.next_after_expr(
-                        dnf, prev_date, default_seed=prev_date, seed_base=task.get("uuid") or "analyzer"
+                        dnf,
+                        prev_date,
+                        default_seed=prev_date,
+                        seed_base=task.get("uuid") or "analyzer",
+                        business_calendar=business_calendar,
                     )
                     return nxt_date
 
                 # First date strictly AFTER start_from_date
                 first_date = step(start_from_date)
                 if first_date:
-                    first_hhmm = core.pick_hhmm_from_dnf_for_date(dnf, first_date, first_date) or default_hhmm
+                    first_hhmm = core.pick_hhmm_from_dnf_for_date(
+                        dnf,
+                        first_date,
+                        first_date,
+                        business_calendar=business_calendar,
+                    ) or default_hhmm
                     cur_date, cur_hhmm = first_date, first_hhmm
                     for _ in range(limit):
                         dt_utc = core.build_local_datetime(cur_date, cur_hhmm)
@@ -2023,7 +2050,12 @@ class TaskAnalyzer:
                         nxt_date = step(cur_date)
                         if not nxt_date:
                             break
-                        cur_hhmm = core.pick_hhmm_from_dnf_for_date(dnf, nxt_date, first_date) or cur_hhmm
+                        cur_hhmm = core.pick_hhmm_from_dnf_for_date(
+                            dnf,
+                            nxt_date,
+                            first_date,
+                            business_calendar=business_calendar,
+                        ) or cur_hhmm
                         cur_date = nxt_date
 
         if anchor_file:
@@ -2039,6 +2071,7 @@ class TaskAnalyzer:
                         fallback,
                         build_local_datetime=core.build_local_datetime,
                         to_local=core.to_local,
+                        business_calendar=business_calendar,
                     )
                     if not nxt:
                         break
@@ -2104,6 +2137,10 @@ class TaskAnalyzer:
         anchor_file = (task.get("anchor_file") or "").strip()
         if not anchor_expr and not anchor_file:
             return None
+        try:
+            business_calendar = core.business_calendar_for_task(task)
+        except Exception:
+            return None
         due_local = self.convert_to_local(due_dt_utc)
         if not due_local:
             return None
@@ -2116,7 +2153,11 @@ class TaskAnalyzer:
             if dnf:
                 def step(prev_date: date):
                     nxt_date, _ = core.next_after_expr(
-                        dnf, prev_date, default_seed=prev_date, seed_base=task.get("uuid") or "analyzer"
+                        dnf,
+                        prev_date,
+                        default_seed=prev_date,
+                        seed_base=task.get("uuid") or "analyzer",
+                        business_calendar=business_calendar,
                     )
                     return nxt_date
                 first_on_or_after = step(due_day - timedelta(days=1))
@@ -2126,7 +2167,11 @@ class TaskAnalyzer:
         if anchor_file:
             try:
                 anchor_files = core._import_sibling("anchor_files")
-                dates = anchor_files.load_anchor_file_dates(anchor_file, getattr(core, "ANCHOR_FILE_DIR", ""))
+                dates = anchor_files.load_anchor_file_dates(
+                    anchor_file,
+                    getattr(core, "ANCHOR_FILE_DIR", ""),
+                    business_calendar=business_calendar,
+                )
                 return due_day in dates
             except Exception:
                 return None

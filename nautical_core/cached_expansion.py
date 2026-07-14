@@ -393,8 +393,39 @@ def expand_yearly(
     def _pair(a: int, b: int) -> tuple[int, int]:
         return (b, a) if yearfmt() == "MD" else (a, b)
 
+    def _year_day(ordinal: int) -> date | None:
+        if ordinal == 0 or abs(ordinal) > 366:
+            return None
+        if ordinal > 0:
+            candidate = date(y, 1, 1) + timedelta(days=ordinal - 1)
+        else:
+            candidate = date(y, 12, 31) + timedelta(days=ordinal + 1)
+        return candidate if candidate.year == y else None
+
     days = []
     for tok in split_csv_lower(spec):
+        year_day = re_mod.fullmatch(r"d(-?(?:0|[1-9]\d{0,2}))", tok)
+        if year_day:
+            candidate = _year_day(int(year_day.group(1)))
+            if candidate:
+                days.append(candidate)
+            continue
+
+        year_day_range = re_mod.fullmatch(
+            r"d(-?(?:0|[1-9]\d{0,2}))\.\.d(-?(?:0|[1-9]\d{0,2}))",
+            tok,
+        )
+        if year_day_range:
+            start = _year_day(int(year_day_range.group(1)))
+            end = _year_day(int(year_day_range.group(2)))
+            if not start or not end or end < start:
+                continue
+            current = start
+            while current <= end:
+                days.append(current)
+                current += timedelta(days=1)
+            continue
+
         match = re_mod.fullmatch(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$", tok)
         if not match:
             continue

@@ -20,12 +20,42 @@ YEARLY_MONTH_MAX = {
 
 YEARLY_QUARTER_RE = re.compile(r"^q[1-4][sme]?$")
 YEARLY_QUARTER_RANGE_RE = re.compile(r"^(q[1-4])([sme])?\.\.(q[1-4])([sme])?$")
+YEARLY_DAY_RE = re.compile(r"^d(-?\d+)$")
+YEARLY_DAY_RANGE_RE = re.compile(r"^d(-?\d+)\.\.d(-?\d+)$")
 YEARLY_MONTH_ONLY_RE = re.compile(r"^\d{1,2}$")
 YEARLY_MONTH_RANGE_ONLY_RE = re.compile(r"^\d{1,2}\.\.\d{1,2}$")
 YEARLY_NON_PADDED_DM_RE = re.compile(r"^\d{1,2}-\d{1,2}(?:\.\.\d{1,2}-\d{1,2})?$")
 YEARLY_PADDED_DM_RE = re.compile(
     r"^(?P<d1>\d{2})-(?P<m1>\d{2})(?:\.\.(?P<d2>\d{2})-(?P<m2>\d{2}))?$"
 )
+
+
+def validate_year_day_token(tok: str, *, error_cls) -> bool:
+    single = YEARLY_DAY_RE.fullmatch(tok)
+    day_range = YEARLY_DAY_RANGE_RE.fullmatch(tok)
+    if not single and not day_range:
+        return False
+
+    raw_values = [single.group(1)] if single else [day_range.group(1), day_range.group(2)]
+    for raw_value in raw_values:
+        digits = raw_value.removeprefix("-")
+        if len(digits) > 1 and digits.startswith("0"):
+            raise error_cls(
+                f"Year-day '{raw_value}' must not be zero-padded. Use 'd{int(raw_value)}'."
+            )
+        value = int(raw_value)
+        if value == 0 or abs(value) > 366:
+            raise error_cls(
+                f"Year-day '{value}' out of range. Use d1..d366 or d-1..d-366."
+            )
+
+    if day_range:
+        start, end = (int(value) for value in raw_values)
+        start_pos = start if start > 0 else 367 + start
+        end_pos = end if end > 0 else 367 + end
+        if end_pos < start_pos:
+            raise error_cls(f"Invalid year-day range '{tok}': end precedes start.")
+    return True
 
 
 def yearly_pair_from_fmt(a: int, b: int, fmt: str) -> tuple[int, int]:
@@ -44,6 +74,8 @@ def validate_yearly_token_allowlist(tok: str, fmt: str, *, year_token_format_err
     s = tok
 
     if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", s) or re.fullmatch(r"rand-\d{2}", s):
+        return
+    if YEARLY_DAY_RE.fullmatch(s) or YEARLY_DAY_RANGE_RE.fullmatch(s):
         return
 
     if re.fullmatch(r"\d{2}:\d{2}(?::\d{2}:\d{2})?", s):
@@ -83,6 +115,9 @@ def validate_yearly_token_detailed(tok: str, fmt: str, *, year_token_format_erro
         if 1 <= mm <= 12:
             return None
         raise year_token_format_error_cls(f"Invalid month in yearly token '{tok}'. Expected 01..12.")
+
+    if validate_year_day_token(s, error_cls=year_token_format_error_cls):
+        return None
 
     m = re.fullmatch(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$", s)
     if m:
@@ -253,6 +288,9 @@ def validate_yearly_spec_token(
             "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."
         )
     if YEARLY_QUARTER_RE.fullmatch(tok):
+        return
+
+    if validate_year_day_token(tok, error_cls=parse_error_cls):
         return
 
     m = YEARLY_QUARTER_RANGE_RE.fullmatch(tok)

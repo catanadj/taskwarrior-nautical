@@ -4949,6 +4949,70 @@ def test_leap_year_29feb():
     # Must contain an actual Feb 29 within a 4-year span
     expect(any(datetime.fromisoformat(d).day == 29 for d in dates), "Must include a Feb 29 occurrence")
 
+
+def test_year_day_ordinals_expand_and_schedule():
+    """Year-day selectors should resolve positive and reverse ordinals per calendar year."""
+    expect(
+        core.expand_yearly_for_year_strict("d1,d60,d-1", 2023)
+        == [date(2023, 1, 1), date(2023, 3, 1), date(2023, 12, 31)],
+        "common-year ordinal expansion drifted",
+    )
+    expect(
+        core.expand_yearly_for_year_strict("d1,d60,d-1", 2024)
+        == [date(2024, 1, 1), date(2024, 2, 29), date(2024, 12, 31)],
+        "leap-year ordinal expansion drifted",
+    )
+    expect(core.expand_yearly_for_year_strict("d366", 2023) == [], "d366 must be absent in a common year")
+    expect(
+        core.expand_yearly_for_year_strict("d366,d-366", 2024)
+        == [date(2024, 1, 1), date(2024, 12, 31)],
+        "leap-year boundary ordinals expanded incorrectly",
+    )
+    expect(
+        core.expand_yearly_for_year_strict("d100..d102,d-2..d-1", 2024)
+        == [
+            date(2024, 4, 9),
+            date(2024, 4, 10),
+            date(2024, 4, 11),
+            date(2024, 12, 30),
+            date(2024, 12, 31),
+        ],
+        "year-day lists and ranges expanded incorrectly",
+    )
+
+    dnf = core.validate_anchor_expr_strict("y:d60")
+    nxt, _meta = core.next_after_expr(dnf, date(2023, 3, 1), default_seed=date(2023, 1, 1))
+    expect(nxt == date(2024, 2, 29), f"year-day scheduler skipped leap-sensitive d60: {nxt!r}")
+    expect(core.factor_matches_on(dnf[0][0], date(2024, 2, 29), date(2024, 1, 1)), "d60 should match leap day")
+    expect(not core.factor_matches_on(dnf[0][0], date(2024, 3, 1), date(2024, 1, 1)), "d60 matched the wrong leap-year date")
+
+
+def test_year_day_ordinals_validate_strictly():
+    """Year-day syntax should accept its compact forms and reject ambiguous or impossible values."""
+    for expr in ("y:d1", "y:d-1", "y:d1,d100,d-1", "y:d100..d110", "y:d-7..d-1"):
+        core.validate_anchor_expr_strict(expr)
+    for token in ("d1", "d-1", "d100..d110", "d-7..d-1"):
+        core._validate_yearly_spec_token(token)
+
+    invalid = (
+        ("y:d0", "Year-day '0' out of range"),
+        ("y:d367", "Year-day '367' out of range"),
+        ("y:d-367", "Year-day '-367' out of range"),
+        ("y:d01", "must not be zero-padded"),
+        ("y:d100..110", "Unknown yearly token 'd100..110'"),
+        ("y:d-1..d1", "end precedes start"),
+    )
+    for expr, expected in invalid:
+        try:
+            core.validate_anchor_expr_strict(expr)
+            raise AssertionError(f"{expr}: expected ParseError")
+        except core.ParseError as exc:
+            expect(expected in str(exc), f"{expr}: unexpected error: {exc}")
+
+    expect(core._parse_y_token("d100") == ("year_day", 100), "d100 token parsing drifted")
+    expect(core._parse_y_token("d-1") == ("year_day", -1), "d-1 token parsing drifted")
+    expect(core._parse_y_token("d0") is None, "d0 must not parse")
+
 def test_quarters_window():
     """Test quarter window constraints (Q1-Q2)"""
     # Quarter aliases paired with m:* are now rejected (ambiguous).
@@ -15975,6 +16039,8 @@ TESTS = [
     test_monthly_valid_months_m2_5th_mon,
     test_monthly_support_helpers_characterization,
     test_leap_year_29feb,
+    test_year_day_ordinals_expand_and_schedule,
+    test_year_day_ordinals_validate_strictly,
     test_quarters_window,
     test_quarter_alias_unambiguous_month_selectors,
     test_quarter_selector_mode_characterization,

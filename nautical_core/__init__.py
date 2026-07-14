@@ -2769,6 +2769,12 @@ def _validate_weekly_spec(spec: str):
         return  # valid
 
     for tok in toks:
+        if re.fullmatch(r"w-?\d+", tok):
+            canonical_week = int(tok[1:])
+            raise ParseError(
+                f"ISO week numbers belong to yearly anchors. "
+                f"Use 'y:w{canonical_week}' instead of 'w:{tok}'."
+            )
         if "-" in tok or ":" in tok:
             raise ParseError(
                 f"Invalid weekly range '{tok}'. Use '..' (e.g., '{_CANON_WEEKLY_RANGE_EX}')."

@@ -136,8 +136,19 @@ def validate_yearly_token_allowlist(tok: str, fmt: str, *, year_token_format_err
     if re.fullmatch(r"q[1-4](?:\.\.q[1-4])?", s):
         return
 
+    malformed_day_range = re.fullmatch(r"(d-?\d+)\.\.(-?\d+)", s)
+    if malformed_day_range:
+        raise year_token_format_error_cls(
+            f"Year-day ranges repeat the 'd' prefix. Use '{malformed_day_range.group(1)}..d{malformed_day_range.group(2)}'."
+        )
+    malformed_week_range = re.fullmatch(r"(w-?\d+)\.\.(-?\d+)", s)
+    if malformed_week_range:
+        raise year_token_format_error_cls(
+            f"ISO-week ranges repeat the 'w' prefix. Use '{malformed_week_range.group(1)}..w{malformed_week_range.group(2)}'."
+        )
+
     raise year_token_format_error_cls(
-        f"Unknown yearly token '{tok}'. Expected day-month, month alias, or quarter."
+        f"Unknown yearly token '{tok}'. Expected day-month, dN year-day, wN ISO week, month alias, or quarter."
     )
 
 
@@ -402,7 +413,8 @@ def validate_yearly_spec_token(
     if not m:
         raise parse_error_cls(
             f"Unknown yearly token '{tok}'. Expected 'DD-MM', 'DD-MM..DD-MM', "
-            f"or quarter aliases 'q1..q4'/'q1s/q1m/q1e' (e.g., 'q1', 'q1s', 'q1..q2')."
+            f"'dN', 'wN', or quarter aliases 'q1..q4'/'q1s/q1m/q1e' "
+            f"(e.g., 'd100', 'w20', 'q1..q2')."
         )
 
     d1 = int(m.group("d1"))

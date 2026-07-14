@@ -6,7 +6,9 @@
       "m:1bd + y:q1..q4",
       "(w:mon + m:1..7) | (w:fri + m:-7..-1)",
       "w/2:mon,tue,wed,thu,fri",
-      "m:rand + y:04-20..05-15"
+      "m:rand + y:04-20..05-15",
+      "y:d60,d-1",
+      "y:w20 + w:mon"
     ],
     "repeats": 5,
     "parse_validate_rounds": 220,

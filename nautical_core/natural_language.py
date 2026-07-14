@@ -203,6 +203,37 @@ def fmt_yearly_atom(
     if counted_rand:
         return f"{int(counted_rand.group(1))} random days each year"
 
+    ordinal_match = re.fullmatch(r"([dw])(-?\d+)(?:\.\.\1(-?\d+))?", text)
+    if ordinal_match:
+        kind = ordinal_match.group(1)
+        start = int(ordinal_match.group(2))
+        end_raw = ordinal_match.group(3)
+        if end_raw is None:
+            if kind == "d":
+                if start == -1:
+                    return "the last day of each year"
+                if start < 0:
+                    return f"the {ordinal(abs(start))}-last day of each year"
+                return f"the {ordinal(start)} day of each year"
+            if start == -1:
+                return "the final ISO week of each ISO year"
+            if start < 0:
+                return f"the {ordinal(abs(start))}-last ISO week of each ISO year"
+            return f"ISO week {start} each ISO year"
+
+        end = int(end_raw)
+        if kind == "d":
+            if start < 0 and end == -1:
+                return f"the final {abs(start)} days of each year"
+            if start > 0 and end > 0:
+                return f"days {start}–{end} of each year"
+            return f"year-days {start}–{end} each year"
+        if start < 0 and end == -1:
+            return f"the final {abs(start)} ISO weeks of each ISO year"
+        if start > 0 and end > 0:
+            return f"ISO weeks {start}–{end} each ISO year"
+        return f"ISO weeks {start}–{end} each ISO year"
+
     match_rand_month = rand_mm_re.fullmatch(text)
     if match_rand_month:
         month = int(match_rand_month.group(1))
@@ -451,8 +482,11 @@ def describe_yearly_rand_filter(
         phrase = fmt_yearly_atom(token)
         if not phrase or phrase.startswith("one random day"):
             return None
-        suffix = " each year"
-        labels.append(phrase[: -len(suffix)] if phrase.endswith(suffix) else phrase)
+        for suffix in (" each ISO year", " each year"):
+            if phrase.endswith(suffix):
+                phrase = phrase[: -len(suffix)]
+                break
+        labels.append(phrase)
     if not labels:
         return None
     random_spec = random_specs[0]
@@ -531,6 +565,7 @@ def describe_anchor_term_interval_prefix(
     mo_ival,
     yr_ival,
     monthly_specs,
+    yearly_specs,
     *,
     describe_is_pure_nth_weekday_spec,
     describe_is_pure_dom_spec,
@@ -571,7 +606,19 @@ def describe_anchor_term_interval_prefix(
         else:
             interval_prefix = monthly_prefix + ": "
     elif yr_ival > 1:
-        interval_prefix = f"every {yr_ival} years: "
+        pure_iso_weeks = bool(yearly_specs) and all(
+            all(
+                re.fullmatch(r"w-?[1-9]\d?(?:\.\.w-?[1-9]\d?)?", token.strip())
+                for token in spec.split(",")
+                if token.strip()
+            )
+            for spec in yearly_specs
+        )
+        interval_prefix = (
+            f"every {yr_ival} ISO years: "
+            if pure_iso_weeks
+            else f"every {yr_ival} years: "
+        )
 
     return interval_prefix, suppress_tail
 
@@ -592,6 +639,8 @@ def describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter: bool) -> l
         yearly = " or ".join(y_parts) if len(y_parts) > 1 else y_parts[0]
         if yearly.startswith("one random day"):
             parts.append(yearly)
+        elif w_phrase and not m_parts and "ISO week" in yearly:
+            parts.append(f"in {yearly}")
         elif w_phrase or m_parts:
             parts.append(f"and within {yearly}")
         else:
@@ -714,9 +763,15 @@ def describe_anchor_term(
         mo_ival,
         yr_ival,
         monthly_specs,
+        yearly_specs,
         describe_is_pure_nth_weekday_spec=describe_is_pure_nth_weekday_spec,
         describe_is_pure_dom_spec=describe_is_pure_dom_spec,
     )
+    if interval_prefix and "ISO years" in interval_prefix:
+        y_parts = [
+            part[: -len(" each ISO year")] if part.endswith(" each ISO year") else part
+            for part in y_parts
+        ]
     parts = describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter)
     hhmm = fmt_hhmm_for_term(term, default_due_dt)
 

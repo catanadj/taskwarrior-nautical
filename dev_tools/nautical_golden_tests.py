@@ -3677,6 +3677,9 @@ def test_perf_budget_config_covers_cache_io_checks():
     expect("cache_load_hot" in budgets, "cache_load_hot budget missing")
     expect("cache_save_rounds" in workload, "cache_save_rounds missing from workload")
     expect("cache_load_rounds" in workload, "cache_load_rounds missing from workload")
+    expressions = set(workload.get("expressions") or [])
+    expect("y:d60,d-1" in expressions, "year-day latency workload missing")
+    expect("y:w20 + w:mon" in expressions, "ISO-week latency workload missing")
     hook_fast_path = obj.get("hook_fast_path") if isinstance(obj, dict) else None
     expect(isinstance(hook_fast_path, dict), "hook_fast_path config must be present")
     expect(int(hook_fast_path.get("repeats") or 0) >= 3, "hook fast-path benchmark needs repeated samples")
@@ -5003,7 +5006,7 @@ def test_year_day_ordinals_validate_strictly():
         ("y:d367", "Year-day '367' out of range"),
         ("y:d-367", "Year-day '-367' out of range"),
         ("y:d01", "must not be zero-padded"),
-        ("y:d100..110", "Unknown yearly token 'd100..110'"),
+        ("y:d100..110", "Use 'd100..d110'"),
         ("y:d-1..d1", "end precedes start"),
     )
     for expr, expected in invalid:
@@ -5075,7 +5078,7 @@ def test_iso_week_ordinals_validate_strictly():
         ("y:w54", "ISO week '54' out of range"),
         ("y:w-54", "ISO week '-54' out of range"),
         ("y:w01", "must not be zero-padded"),
-        ("y:w10..13", "Unknown yearly token 'w10..13'"),
+        ("y:w10..13", "Use 'w10..w13'"),
         ("y:w-1..w1", "end precedes start"),
     )
     for expr, expected in invalid:
@@ -5195,6 +5198,163 @@ def test_year_ordinals_positional_acf_and_cache_round_trip():
 
     json_roundtrip = json.loads(json.dumps(dnf, ensure_ascii=False))
     expect(core.validate_anchor_expr_strict(json_roundtrip), "JSON cache round-trip rejected ordinal selectors")
+
+
+def test_year_ordinals_natural_language_and_validation_guidance():
+    """Ordinal selectors should read naturally and malformed shorthand should point to canonical syntax."""
+    expected = {
+        "y:d1": "the 1st day of each year",
+        "y:d-1": "the last day of each year",
+        "y:d100..d110": "days 100–110 of each year",
+        "y:d-7..d-1": "the final 7 days of each year",
+        "y:w20": "ISO week 20 each ISO year",
+        "y:w-1": "the final ISO week of each ISO year",
+        "y:w10..w13": "ISO weeks 10–13 each ISO year",
+        "y:w-4..w-1": "the final 4 ISO weeks of each ISO year",
+        "y:w20 + w:mon": "Mondays in ISO week 20 each ISO year",
+        "y/2:w1": "every 2 ISO years: ISO week 1",
+    }
+    for expr, natural in expected.items():
+        expect(core.describe_anchor_expr(expr) == natural, f"{expr}: unexpected natural description")
+
+    invalid = (
+        ("y:d100..110", "Use 'd100..d110'"),
+        ("y:w10..13", "Use 'w10..w13'"),
+        ("w:w01", "Use 'y:w1' instead of 'w:w01'"),
+        ("y:day100", "dN year-day"),
+    )
+    for expr, guidance in invalid:
+        try:
+            core.validate_anchor_expr_strict(expr)
+            raise AssertionError(f"{expr}: expected ParseError")
+        except core.ParseError as exc:
+            expect(guidance in str(exc), f"{expr}: missing guidance in {exc}")
+
+
+def test_year_ordinals_hooks_modes_calendar_and_timeline():
+    """Ordinal selectors should work through add, completion modes, named calendars, and timelines."""
+    add_hook = _find_hook_file("on-add-nautical.py")
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "config-nautical.toml"
+        config_path.write_text(
+            'tz = "UTC"\n'
+            '[business_calendar.work]\n'
+            'anchor = "w:mon..fri"\n'
+            'omit = "y:12-31"\n',
+            encoding="utf-8",
+        )
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000781",
+            "description": "ordinal calendar integration",
+            "status": "pending",
+            "entry": "20260101T000000Z",
+            "anchor": "y:d-1@pbd@t=09:00",
+            "anchor_mode": "skip",
+            "bc": "WORK",
+        }
+        proc = _run_hook_script(
+            add_hook,
+            task,
+            env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config_path)},
+        )
+        expect(proc.returncode == 0, f"on-add rejected year-day calendar anchor: {proc.stderr}")
+        out_task = _assert_stdout_json_only(proc.stdout)
+        expect(out_task.get("anchor") == task["anchor"], f"on-add changed ordinal anchor: {out_task}")
+        expect(out_task.get("bc") == "work", f"on-add did not normalize calendar: {out_task}")
+        due = datetime.fromisoformat(str(out_task.get("due")))
+        expect(due.date() == date(2026, 12, 30), f"calendar did not roll closed d-1 backward: {due}")
+        expect("last day of each year" in _strip_markup(proc.stderr), f"add preview omitted ordinal natural text: {proc.stderr}")
+
+    modify_hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(modify_hook, "_nautical_year_ordinal_hook_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    def _stamp(day, hhmm):
+        return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
+
+    common = {
+        "anchor": "y:w20@t=09:00",
+        "due": _stamp(date(2026, 5, 11), (9, 0)),
+        "end": _stamp(date(2026, 5, 14), (10, 0)),
+        "chainID": "abcd1234",
+    }
+    all_due, all_meta, _all_dnf = mod._compute_anchor_child_due(
+        dict(common, anchor_mode="all", scheduled=_stamp(date(2026, 5, 11), (9, 0)))
+    )
+    skip_due, skip_meta, _skip_dnf = mod._compute_anchor_child_due(dict(common, anchor_mode="skip"))
+    expect(mod.core.to_local(all_due).date() == date(2026, 5, 12), f"all mode did not backfill ISO week: {all_due}")
+    expect(all_meta.get("basis") == "missed", f"all mode metadata drifted: {all_meta}")
+    expect(mod.core.to_local(skip_due).date() == date(2026, 5, 15), f"skip mode did not advance after completion: {skip_due}")
+    expect(skip_meta.get("basis") == "after_end", f"skip mode metadata drifted: {skip_meta}")
+
+    monday_expr = "y:w20 + w:mon@t=09:00"
+    child_due, _meta, child_dnf = mod._compute_anchor_child_due(
+        {
+            "anchor": monday_expr,
+            "anchor_mode": "skip",
+            "due": _stamp(date(2026, 5, 11), (9, 0)),
+            "end": _stamp(date(2026, 5, 11), (10, 0)),
+            "chainID": "abcd1234",
+        }
+    )
+    expect(mod.core.to_local(child_due).date() == date(2027, 5, 17), f"completion lost ISO-week weekday: {child_due}")
+
+    saved_collect = getattr(mod, "_collect_prev_two", None)
+    if saved_collect is not None:
+        mod._collect_prev_two = lambda _task: []
+    try:
+        lines = _call_with_supported_kwargs(
+            mod._timeline_lines,
+            kind="anchor",
+            task={
+                "anchor": monday_expr,
+                "anchor_mode": "skip",
+                "link": 2,
+                "due": _stamp(date(2026, 5, 11), (9, 0)),
+                "end": _stamp(date(2026, 5, 11), (10, 0)),
+                "chainID": "abcd1234",
+            },
+            child_due_utc=child_due,
+            child_short="0000abcd",
+            dnf=child_dnf,
+            next_count=3,
+            cap_no=None,
+            cur_no=2,
+        )
+    finally:
+        if saved_collect is not None:
+            mod._collect_prev_two = saved_collect
+    timeline = _strip_markup("\n".join(lines))
+    expect("2027-05-17" in timeline, f"timeline omitted ordinal child: {timeline}")
+    expect("2028-05-15" in timeline, f"timeline omitted future ordinal occurrence: {timeline}")
+
+
+def test_reconcile_tool_computes_year_ordinal_anchor():
+    """The reconciler's installed hook path should schedule ordinal anchor children."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_year_ordinal_test")
+    hook = mod._load_on_modify(str(Path(ROOT) / "on-modify-nautical.py"))
+    due = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (9, 0)))
+    end = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (10, 0)))
+    child_due, meta, _dnf = hook._compute_anchor_child_due(
+        {
+            "uuid": "c3f2c233-0000-0000-0000-000000000002",
+            "status": "completed",
+            "description": "ordinal reconcile integration",
+            "anchor": "y:d60@t=09:00",
+            "anchor_mode": "skip",
+            "chain": "on",
+            "chainID": "d07ff247",
+            "link": 2,
+            "due": due,
+            "end": end,
+        }
+    )
+    child_local = hook.core.to_local(child_due)
+    expect(child_local.date() == date(2025, 3, 1), f"reconciler computed the wrong d60 child: {child_local}")
+    expect((child_local.hour, child_local.minute) == (9, 0), f"reconciler lost ordinal anchor time: {child_local}")
+    expect(meta.get("basis") == "after_end", f"unexpected reconcile scheduling metadata: {meta}")
 
 def test_quarters_window():
     """Test quarter window constraints (Q1-Q2)"""
@@ -16230,6 +16390,9 @@ TESTS = [
     test_iso_week_interval_uses_iso_year_buckets,
     test_year_ordinals_filter_random_and_omit_candidates,
     test_year_ordinals_positional_acf_and_cache_round_trip,
+    test_year_ordinals_natural_language_and_validation_guidance,
+    test_year_ordinals_hooks_modes_calendar_and_timeline,
+    test_reconcile_tool_computes_year_ordinal_anchor,
     test_quarters_window,
     test_quarter_alias_unambiguous_month_selectors,
     test_quarter_selector_mode_characterization,

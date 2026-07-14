@@ -16,6 +16,7 @@ POSITION_LIMITS = {
 
 _ORDINAL_RE = re.compile(r"^(\d+)(st|nd|rd|th)?$")
 _REVERSE_ORDINAL_RE = re.compile(r"^(\d+)(st|nd|rd|th)-last$")
+_GROUP_SELECTION_RE = re.compile(r"^in-(week|month|quarter|year)=(.*)$")
 _MAX_POSITION_TEXT_LENGTH = 4096
 _DEFAULT_PERIOD_SCAN_LIMIT = 128
 
@@ -26,6 +27,10 @@ class SelectionNode(TypedDict):
     positions: tuple[int, ...]
     expr: list[list[dict[str, Any]]]
     mods: dict[str, Any]
+
+
+def is_selection_node(value: object) -> bool:
+    return isinstance(value, dict) and value.get("kind") == "select"
 
 
 def _ordinal_suffix(value: int) -> str:
@@ -100,6 +105,57 @@ def parse_positions(value: str, scope: str) -> tuple[int, ...]:
     return tuple(positions)
 
 
+def parse_group_selection_modifier(value: str) -> tuple[str, tuple[int, ...]] | None:
+    """Parse the monthly-only public selector from a group modifier suffix."""
+    tokens = [token.strip() for token in str(value or "").split("@") if token.strip()]
+    selection_tokens = [token for token in tokens if token.lower().startswith("in-")]
+    if not selection_tokens:
+        return None
+    if len(tokens) != 1 or len(selection_tokens) != 1:
+        raise ValueError(
+            "@in-month cannot be combined with other group modifiers yet."
+        )
+
+    match = _GROUP_SELECTION_RE.fullmatch(selection_tokens[0].lower())
+    if match is None:
+        raise ValueError(
+            "Invalid positional selector. Use '(expression)@in-month=first' or '=last'."
+        )
+    scope, raw_positions = match.groups()
+    if scope != "month":
+        raise ValueError("Only @in-month is supported in this release stage.")
+    return scope, parse_positions(raw_positions, scope)
+
+
+def format_position(position: int) -> str:
+    if position == 1:
+        return "first"
+    if position == -1:
+        return "last"
+    if position > 0:
+        return f"{position}{_ordinal_suffix(position)}"
+    value = abs(position)
+    return f"{value}{_ordinal_suffix(value)}-last"
+
+
+def format_positions(positions: list[int] | tuple[int, ...]) -> str:
+    return ",".join(format_position(position) for position in positions)
+
+
+def describe_selection(node: object, inner_description: str) -> str:
+    normalized = normalize_selection_node(node)
+    labels = [format_position(position) for position in normalized["positions"]]
+    if len(labels) == 1:
+        position_text = labels[0]
+    elif len(labels) == 2:
+        position_text = f"{labels[0]} and {labels[1]}"
+    else:
+        position_text = ", ".join(labels[:-1]) + f", and {labels[-1]}"
+    noun = "date" if len(labels) == 1 else "dates"
+    inner = inner_description.strip() or "the candidate expression"
+    return f"the {position_text} matching {noun} from {inner} in each month"
+
+
 def normalize_selection_node(node: object) -> SelectionNode:
     """Validate and normalize an internal positional-selection factor."""
     if not isinstance(node, dict) or node.get("kind") != "select":
@@ -148,6 +204,27 @@ def normalize_selection_node(node: object) -> SelectionNode:
         "expr": expr,
         "mods": dict(mods),
     }
+
+
+def validate_monthly_selection_node(node: object) -> SelectionNode:
+    """Apply the deterministic monthly feature limits for the first public slice."""
+    normalized = normalize_selection_node(node)
+    if normalized["scope"] != "month":
+        raise ValueError("Only monthly positional selections are currently supported.")
+    if any(value not in (None, False, 0, 0.0, "", []) for value in normalized["mods"].values()):
+        raise ValueError("Modifiers after @in-month are not supported yet.")
+
+    for term in normalized["expr"]:
+        for factor in term:
+            spec = str(factor.get("spec") or factor.get("value") or "").lower()
+            if "rand" in spec:
+                raise ValueError("@in-month candidate expressions cannot contain random selectors.")
+            mods = factor.get("mods") or {}
+            if any(value not in (None, False, 0, 0.0, "", []) for value in mods.values()):
+                raise ValueError(
+                    "@in-month candidate expressions cannot contain modifiers yet."
+                )
+    return normalized
 
 
 def period_bounds(scope: str, value: date) -> tuple[date, date]:
@@ -363,11 +440,17 @@ __all__ = (
     "SelectionNode",
     "candidate_cache_info",
     "clear_candidate_cache",
+    "describe_selection",
+    "format_position",
+    "format_positions",
+    "is_selection_node",
     "next_period_start",
     "next_selected_date",
     "normalize_selection_node",
     "parse_positions",
+    "parse_group_selection_modifier",
     "period_bounds",
     "select_positions",
     "selected_candidates_in_period",
+    "validate_monthly_selection_node",
 )

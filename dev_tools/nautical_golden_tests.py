@@ -15415,6 +15415,198 @@ def test_position_selection_candidate_cache_identity():
     expect(info.hits >= 2 and info.misses == 3, f"unexpected candidate cache metrics: {info}")
 
 
+def test_position_selection_public_monthly_parser_validation():
+    """The public monthly selector should require a deterministic parenthesized candidate set."""
+    dnf = core.validate_anchor_expr_strict(
+        "(w:tue | w:thu)@in-month=first,3rd,last"
+    )
+    node = dnf[0][0]
+    expect(node.get("kind") == "select", f"selector was not preserved as a factor: {node}")
+    expect(node.get("scope") == "month", f"unexpected selector scope: {node}")
+    expect(node.get("positions") == (1, 3, -1), f"unexpected selector positions: {node}")
+
+    invalid = (
+        ("w:tue@in-month=last", "parenthesized candidate group"),
+        ("(w:tue | w:thu)@in-quarter=last", "Only @in-month"),
+        ("(w:rand | w:thu)@in-month=last", "cannot contain random selectors"),
+        ("(w:tue@bd | w:thu)@in-month=last", "cannot contain modifiers"),
+        ("(w:tue | w:thu)@in-month=last@t=09:00", "cannot be combined"),
+        ("((w:tue | w:thu)@in-month=last)@in-month=last", "Nested positional"),
+        (
+            "(w:tue)@in-month=last + (w:thu)@in-month=last",
+            "only one positional selection",
+        ),
+    )
+    for expr, message in invalid:
+        try:
+            core.validate_anchor_expr_strict(expr)
+            raise AssertionError(f"invalid positional selector should be rejected: {expr}")
+        except core.ParseError as exc:
+            expect(message in str(exc), f"unexpected error for {expr!r}: {exc}")
+
+
+def test_position_selection_public_monthly_scheduler():
+    """The production scheduler should select positions and jump empty monthly buckets."""
+    seed = date(2026, 1, 1)
+    dnf = core.validate_anchor_expr_strict(
+        "(w:tue | w:thu)@in-month=first,last"
+    )
+    expected = (
+        (date(2026, 7, 1), date(2026, 7, 2)),
+        (date(2026, 7, 2), date(2026, 7, 30)),
+        (date(2026, 7, 30), date(2026, 8, 4)),
+    )
+    for after_date, expected_date in expected:
+        actual, _meta = core.next_after_expr(
+            dnf,
+            after_date,
+            default_seed=seed,
+            seed_base="chain-a",
+        )
+        expect(actual == expected_date, f"unexpected selection after {after_date}: {actual}")
+
+    constrained = core.validate_anchor_expr_strict(
+        "(m:20..-1 + w:tue,thu)@in-month=first"
+    )
+    actual, _meta = core.next_after_expr(
+        constrained,
+        date(2026, 7, 1),
+        default_seed=seed,
+        seed_base="chain-a",
+    )
+    expect(actual == date(2026, 7, 21), f"candidate intersection was not selected: {actual}")
+
+    sparse = core.validate_anchor_expr_strict("(w:mon)@in-month=5th")
+    actual, _meta = core.next_after_expr(
+        sparse,
+        date(2026, 7, 1),
+        default_seed=seed,
+        seed_base="chain-a",
+    )
+    expect(actual == date(2026, 8, 31), f"empty July bucket was not skipped: {actual}")
+
+
+def test_position_selection_public_acf_natural_and_cache_shape():
+    """Monthly selectors should round-trip through ACF, descriptions, and JSON cache payloads."""
+    expr = "(w:tue | w:thu)@in-month=first,last"
+    dnf = core.validate_anchor_expr_strict(expr)
+    acf = core.build_acf(expr)
+    canonical = core.acf_to_original_format(acf)
+    reparsed = core.validate_anchor_expr_strict(canonical)
+    expect(reparsed[0][0].get("positions") == (1, -1), f"ACF lost positions: {canonical}")
+
+    seed = date(2026, 1, 1)
+    original_next = core.next_after_expr(dnf, date(2026, 7, 1), default_seed=seed)[0]
+    canonical_next = core.next_after_expr(reparsed, date(2026, 7, 1), default_seed=seed)[0]
+    expect(original_next == canonical_next, "ACF round-trip changed selection scheduling")
+
+    natural = core.describe_anchor_expr(expr)
+    expect(
+        "first and last matching dates" in natural and "in each month" in natural,
+        f"unexpected positional natural language: {natural!r}",
+    )
+    json_roundtrip = json.loads(json.dumps(dnf, ensure_ascii=False))
+    expect(core.validate_anchor_expr_strict(json_roundtrip), "JSON cache round-trip rejected selection DNF")
+
+    hints = core.precompute_hints(
+        dnf,
+        start_dt=datetime(2026, 7, 1),
+        k_next=4,
+        sample_days_for_year=8,
+    )
+    expect(
+        hints.get("next_dates", [])[:4]
+        == [
+            "2026-07-02T00:00",
+            "2026-07-30T00:00",
+            "2026-08-04T00:00",
+            "2026-08-27T00:00",
+        ],
+        f"unexpected positional preview hints: {hints}",
+    )
+
+
+def test_position_selection_on_add_and_modify_completion():
+    """Add preview and modify completion should agree on monthly positional anchors."""
+    expr = "(w:tue | w:thu)@in-month=last"
+    add_hook = _find_hook_file("on-add-nautical.py")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000777",
+        "description": "positional anchor integration",
+        "status": "pending",
+        "entry": "20260701T090000Z",
+        "due": "20260730T090000Z",
+        "anchor": expr,
+        "anchor_mode": "skip",
+    }
+    result = _run_hook_script(add_hook, task, env_extra={"NO_COLOR": "1"})
+    expect(result.returncode == 0, f"on-add rejected positional anchor: {result.stderr}")
+    out_task = _extract_last_json(result.stdout)
+    expect(out_task.get("anchor") == expr, f"on-add changed positional expression: {out_task}")
+    expect(out_task.get("chain") == "on", f"on-add did not enable chain: {out_task}")
+    expect(
+        "last matching date" in _strip_markup(result.stderr),
+        f"on-add preview omitted positional natural text: {result.stderr}",
+    )
+
+    modify_hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(modify_hook, "_nautical_position_selection_modify_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+    child_due, meta, child_dnf = mod._compute_anchor_child_due(
+        {
+            "anchor": expr,
+            "anchor_mode": "skip",
+            "due": "20260730T090000Z",
+            "end": "20260730T100000Z",
+            "chainID": "abcd1234",
+        }
+    )
+    expect(mod.core.fmt_isoz(child_due) == "2026-08-27T09:00:00Z", f"bad child due: {child_due}")
+    expect(meta.get("basis") == "after_end", f"unexpected completion metadata: {meta}")
+    expect(child_dnf and child_dnf[0][0].get("kind") == "select", "completion lost selection DNF")
+
+
+def test_position_selection_modify_timeline_projects_future_dates():
+    """Modify timelines should project future positional-selection occurrences."""
+    mod = _hook
+    if hasattr(mod, "_collect_prev_two"):
+        saved_collect = mod._collect_prev_two
+        mod._collect_prev_two = lambda _task: []
+    else:
+        saved_collect = None
+    expr = "(w:tue | w:thu)@in-month=last"
+    dnf = core.validate_anchor_expr_strict(expr)
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000778",
+        "description": "positional timeline",
+        "anchor": expr,
+        "anchor_mode": "skip",
+        "link": 1,
+        "due": "20260730T090000Z",
+        "end": "20260730T100000Z",
+        "chainID": "abcd1234",
+    }
+    try:
+        lines = _call_with_supported_kwargs(
+            mod._timeline_lines,
+            kind="anchor",
+            task=task,
+            child_due_utc=datetime(2026, 8, 27, 9, 0, tzinfo=timezone.utc),
+            child_short="0000abcd",
+            dnf=dnf,
+            next_count=5,
+            cap_no=None,
+            cur_no=1,
+        )
+    finally:
+        if saved_collect is not None:
+            mod._collect_prev_two = saved_collect
+    text = _strip_markup("\n".join(lines))
+    expect("2026-08-27" in text, f"timeline omitted next positional date: {text}")
+    expect("2026-09-29" in text, f"timeline omitted future positional date: {text}")
+
+
 TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
@@ -15445,6 +15637,11 @@ TESTS = [
     test_position_selection_internal_evaluator_validation,
     test_position_selection_next_date_jumps_periods,
     test_position_selection_candidate_cache_identity,
+    test_position_selection_public_monthly_parser_validation,
+    test_position_selection_public_monthly_scheduler,
+    test_position_selection_public_acf_natural_and_cache_shape,
+    test_position_selection_on_add_and_modify_completion,
+    test_position_selection_modify_timeline_projects_future_dates,
     test_yearly_month_names,
     test_rand_with_year_window,
     test_weekly_rand_N_gate,

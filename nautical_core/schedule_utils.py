@@ -91,6 +91,12 @@ def apply_day_offset(
 def expr_has_m_or_y(dnf) -> bool:
     for term in dnf or []:
         for atom in term:
+            if atom.get("kind") == "select":
+                if atom.get("scope") in ("month", "quarter", "year"):
+                    return True
+                if expr_has_m_or_y(atom.get("expr") or []):
+                    return True
+                continue
             if atom["typ"] in ("m", "y"):
                 return True
     return False

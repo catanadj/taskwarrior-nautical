@@ -16,6 +16,28 @@ def is_atom_like(atom) -> bool:
     return True
 
 
+def is_selection_like(value) -> bool:
+    if not isinstance(value, dict) or value.get("kind") != "select":
+        return False
+    if value.get("scope") not in ("week", "month", "quarter", "year"):
+        return False
+    positions = value.get("positions")
+    if not isinstance(positions, (list, tuple)) or not positions:
+        return False
+    if any(isinstance(position, bool) or not isinstance(position, int) or position == 0 for position in positions):
+        return False
+    mods = value.get("mods")
+    if mods is not None and not isinstance(mods, dict):
+        return False
+    return is_dnf_like(value.get("expr"), is_atom_like=is_factor_like)
+
+
+def is_factor_like(value) -> bool:
+    if isinstance(value, dict) and value.get("kind") == "select":
+        return is_selection_like(value)
+    return is_atom_like(value)
+
+
 def is_dnf_like(dnf, *, is_atom_like) -> bool:
     if not isinstance(dnf, list):
         return False
@@ -117,6 +139,8 @@ def normalize_dnf_cached(dnf):
         for atom in term:
             if not isinstance(atom, dict):
                 continue
+            if atom.get("kind") == "select":
+                normalize_dnf_cached(atom.get("expr"))
             mods = atom.get("mods")
             if not isinstance(mods, dict):
                 continue

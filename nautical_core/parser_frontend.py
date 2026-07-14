@@ -103,7 +103,8 @@ def rewrite_weekly_multi_time_atoms(s: str, *, split_csv_tokens, re_mod) -> str:
                 expanded_parts.append(f"{head}@{time_mod}")
             else:
                 expanded_parts = parts
-            out.append(" | ".join(f"{prefix}{p}" for p in expanded_parts))
+            expanded = " | ".join(f"{prefix}{p}" for p in expanded_parts)
+            out.append(f"({expanded})")
         else:
             out.append(prefix + body)
 

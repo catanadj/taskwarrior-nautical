@@ -141,6 +141,8 @@ def next_for_and_fast_path(
         cands = [next_after_atom_with_mods(atom, probe, seed, seed_base=seed_base) for atom in term]
         if not cands:
             raise parse_error_cls("Anchor evaluation term is empty; check anchor spec.")
+        if any(candidate is None for candidate in cands):
+            return None
         target = max(cands)
         if target <= probe:
             stalled += 1
@@ -254,6 +256,8 @@ def next_after_term(
     cur = ref_d
     for _ in range(min(intersection_guard_steps, 100)):
         cands = [next_after_atom_with_mods(a, cur, default_seed, seed_base=seed_base) for a in term]
+        if any(candidate is None for candidate in cands):
+            return None, None
         nxt = max(cands)
 
         if all(atom_matches_on(a, nxt, default_seed, seed_base=seed_base) for a in term):
@@ -279,7 +283,7 @@ def _is_simple_weekly(dnf, *, active_mod_keys) -> bool:
         return False
     atom = dnf[0][0]
     return (
-        atom["typ"] == "w"
+        atom.get("typ") == "w"
         and "rand" not in (atom.get("spec") or "")
         and atom.get("ival", 1) == 1
         and not active_mod_keys(atom.get("mods"))

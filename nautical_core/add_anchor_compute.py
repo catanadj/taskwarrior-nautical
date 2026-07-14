@@ -36,7 +36,7 @@ def anchor_step_once_with_omit(dnf, prev_local_date, interval_seed, seed_base, *
 
 def anchor_term_fires_on_date(term, d, interval_seed, seed_base, *, core: Any):
     try:
-        return all(core.atom_matches_on(atom, d, interval_seed, seed_base=seed_base) for atom in term)
+        return all(core.factor_matches_on(atom, d, interval_seed, seed_base=seed_base) for atom in term)
     except Exception:
         return False
 

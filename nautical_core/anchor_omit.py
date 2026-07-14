@@ -86,6 +86,8 @@ def validate_omit_expr_strict(
     dnf = validate_anchor_expr_cached(expr)
     for term in dnf:
         for atom in term:
+            if atom.get("kind") == "select":
+                raise ValueError("omit does not support positional selection modifiers.")
             mods = atom.get("mods") or {}
             if mods.get("t"):
                 raise ValueError(_OMIT_TIMED_ERROR)

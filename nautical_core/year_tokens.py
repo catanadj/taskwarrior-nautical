@@ -50,6 +50,9 @@ def rewrite_year_month_aliases_in_context(dnf: list[list[dict]], *, tok_range) -
     """
     for term in dnf:
         for atom in term:
+            if atom.get("kind") == "select":
+                rewrite_year_month_aliases_in_context(atom.get("expr") or [], tok_range=tok_range)
+                continue
             if (atom.get("typ") or atom.get("type") or "").lower() != "y":
                 continue
             spec = (atom.get("spec") or atom.get("value") or "").strip().lower()

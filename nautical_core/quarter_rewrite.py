@@ -154,6 +154,15 @@ def rewrite_quarters_in_context(
     rewrite_quarter_year_atoms,
 ):
     for term in dnf:
+        for factor in term:
+            if factor.get("kind") == "select":
+                rewrite_quarters_in_context(
+                    factor.get("expr") or [],
+                    has_quarter_tokens=has_quarter_tokens,
+                    quarter_atom_spec=quarter_atom_spec,
+                    term_quarter_rewrite_mode=term_quarter_rewrite_mode,
+                    rewrite_quarter_year_atoms=rewrite_quarter_year_atoms,
+                )
         y_atoms = [a for a in term if (a.get("typ") or a.get("type") or "").lower() == "y"]
         if not y_atoms:
             continue

@@ -12,32 +12,39 @@ def acf_unpack(packed: str, *, base64_mod, zlib_mod, json_mod) -> dict:
     return json_mod.loads(zlib_mod.decompress(raw).decode("utf-8"))
 
 
-def build_acf(
-    expr: str,
+def _build_acf_terms(
+    dnf,
     *,
-    parse_anchor_expr_to_dnf_cached,
     coerce_int,
     normalize_spec_for_acf,
     mods_to_acf,
     atom_sort_key,
     json_mod,
-    zlib_mod,
-    base64_mod,
-    hashlib_mod,
-    acf_checksum_len: int,
-) -> str:
-    if not expr or not expr.strip():
-        return ""
-
-    try:
-        dnf = parse_anchor_expr_to_dnf_cached(expr)
-    except Exception:
-        return "!PARSE_ERROR"
-
+):
     terms = []
     for term in dnf:
         atoms = []
         for atom in term:
+            if atom.get("kind") == "select":
+                nested_terms = _build_acf_terms(
+                    atom.get("expr") or [],
+                    coerce_int=coerce_int,
+                    normalize_spec_for_acf=normalize_spec_for_acf,
+                    mods_to_acf=mods_to_acf,
+                    atom_sort_key=atom_sort_key,
+                    json_mod=json_mod,
+                )
+                if nested_terms:
+                    atoms.append(
+                        {
+                            "k": "select",
+                            "c": atom.get("scope"),
+                            "p": list(atom.get("positions") or []),
+                            "e": nested_terms,
+                        }
+                    )
+                continue
+
             typ = (atom.get("typ") or "").lower()
             ival = int(coerce_int(atom.get("ival"), 1) or 1)
             spec = atom.get("spec") or ""
@@ -60,10 +67,44 @@ def build_acf(
             atoms.sort(key=atom_sort_key)
             terms.append(atoms)
 
+    terms.sort(key=lambda value: json_mod.dumps(value, sort_keys=True))
+    return terms
+
+
+def build_acf(
+    expr: str,
+    *,
+    parse_anchor_expr_to_dnf_cached,
+    coerce_int,
+    normalize_spec_for_acf,
+    mods_to_acf,
+    atom_sort_key,
+    json_mod,
+    zlib_mod,
+    base64_mod,
+    hashlib_mod,
+    acf_checksum_len: int,
+) -> str:
+    if not expr or not expr.strip():
+        return ""
+
+    try:
+        dnf = parse_anchor_expr_to_dnf_cached(expr)
+    except Exception:
+        return "!PARSE_ERROR"
+
+    terms = _build_acf_terms(
+        dnf,
+        coerce_int=coerce_int,
+        normalize_spec_for_acf=normalize_spec_for_acf,
+        mods_to_acf=mods_to_acf,
+        atom_sort_key=atom_sort_key,
+        json_mod=json_mod,
+    )
+
     if not terms:
         return ""
 
-    terms.sort(key=lambda x: json_mod.dumps(x, sort_keys=True))
     structure = {"terms": terms}
     json_str = json_mod.dumps(structure, separators=(",", ":"), sort_keys=True)
     compressed = zlib_mod.compress(json_str.encode(), level=9)
@@ -183,6 +224,7 @@ def acf_to_original_format(
     acf_unpack,
     acf_spec_to_string,
     acf_mods_to_string,
+    format_selection_positions,
 ) -> str:
     if not is_valid_acf(acf_str):
         return ""
@@ -195,27 +237,35 @@ def acf_to_original_format(
     if not obj:
         return ""
 
-    terms_str = []
-    for term in obj.get("terms", []):
-        atoms_str = []
-        for atom in term:
-            typ = atom["t"]
-            spec = atom["s"]
-            ival = atom.get("i", 1)
-            mods = atom.get("m", {})
-            spec_str = acf_spec_to_string(typ, spec)
-            atom_str = f"{typ}"
-            if ival != 1:
-                atom_str += f"/{ival}"
-            atom_str += f":{spec_str}"
-            if mods:
-                mods_str = acf_mods_to_string(mods)
-                if mods_str:
-                    atom_str += mods_str
-            atoms_str.append(atom_str)
-        terms_str.append("+".join(sorted(atoms_str)))
+    def format_terms(terms) -> str:
+        terms_str = []
+        for term in terms:
+            atoms_str = []
+            for atom in term:
+                if atom.get("k") == "select":
+                    inner = format_terms(atom.get("e") or [])
+                    scope = str(atom.get("c") or "month")
+                    positions = format_selection_positions(atom.get("p") or [])
+                    atoms_str.append(f"({inner})@in-{scope}={positions}")
+                    continue
+                typ = atom["t"]
+                spec = atom["s"]
+                ival = atom.get("i", 1)
+                mods = atom.get("m", {})
+                spec_str = acf_spec_to_string(typ, spec)
+                atom_str = f"{typ}"
+                if ival != 1:
+                    atom_str += f"/{ival}"
+                atom_str += f":{spec_str}"
+                if mods:
+                    mods_str = acf_mods_to_string(mods)
+                    if mods_str:
+                        atom_str += mods_str
+                atoms_str.append(atom_str)
+            terms_str.append("+".join(sorted(atoms_str)))
+        return " | ".join(sorted(terms_str))
 
-    return " | ".join(sorted(terms_str))
+    return format_terms(obj.get("terms", []))
 
 
 def mods_to_acf(mods: dict, *, hhmm_re) -> dict:

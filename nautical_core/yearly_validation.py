@@ -174,6 +174,12 @@ def validate_year_tokens_in_dnf(
 ) -> None:
     for term in dnf:
         for atom in term:
+            if atom.get("kind") == "select":
+                validate_year_tokens_in_dnf(
+                    atom.get("expr") or [],
+                    validate_yearly_token_format=validate_yearly_token_format,
+                )
+                continue
             if (atom.get("typ") or "").lower() == "y":
                 spec = (atom.get("spec") or "").strip()
                 validate_yearly_token_format(spec)

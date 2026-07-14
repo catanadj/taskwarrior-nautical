@@ -218,6 +218,11 @@ def _clear_all_caches() -> None:
         _cache_key_for_task_cached.cache_clear()
     except Exception:
         pass
+    try:
+        _position_selection.clear_candidate_cache()
+        _selection_inner_matcher.cache_clear()
+    except Exception:
+        pass
 
 
 # -------- UI helpers ----------------------------------------------------------
@@ -293,6 +298,7 @@ _linting = _import_sibling("linting")
 _parser_atoms = _import_sibling("parser_atoms")
 _parser_dnf = _import_sibling("parser_dnf")
 _parser_frontend = _import_sibling("parser_frontend")
+_position_selection = _import_sibling("position_selection")
 _precompute = _import_sibling("precompute")
 _quarter_helpers = _import_sibling("quarter_helpers")
 _quarter_rewrite = _import_sibling("quarter_rewrite")
@@ -687,6 +693,7 @@ def acf_to_original_format(acf_str: str) -> str:
         acf_unpack=_acf_unpack,
         acf_spec_to_string=_acf_spec_to_string,
         acf_mods_to_string=_acf_mods_to_string,
+        format_selection_positions=_position_selection.format_positions,
     )
 
 
@@ -908,7 +915,7 @@ def _is_dnf_like(dnf) -> bool:
     return _cache_payload.is_dnf_like(dnf, is_atom_like=_is_atom_like)
 
 def _is_atom_like(atom) -> bool:
-    return _cache_payload.is_atom_like(atom)
+    return _cache_payload.is_factor_like(atom)
 
 
 def _clone_mod_value(v):
@@ -1134,8 +1141,8 @@ def _next_for_and_fast_path(
     seed_base: str | None = None,
     business_calendar=None,
 ) -> date:
-    next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
-    matches = _with_business_calendar(atom_matches_on, business_calendar)
+    next_atom = _with_business_calendar(next_after_factor, business_calendar)
+    matches = _with_business_calendar(factor_matches_on, business_calendar)
     return _scheduler_expr.next_for_and_fast_path(
         term,
         ref_d,
@@ -1157,8 +1164,8 @@ def _next_for_and(
     seed_base: str | None = None,
     business_calendar=None,
 ) -> date:
-    next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
-    matches = _with_business_calendar(atom_matches_on, business_calendar)
+    next_atom = _with_business_calendar(next_after_factor, business_calendar)
+    matches = _with_business_calendar(factor_matches_on, business_calendar)
     return _scheduler_expr.next_for_and(
         term,
         ref_d,
@@ -1642,6 +1649,31 @@ def _describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter: bool) -> 
 
 
 def describe_anchor_term(term: list, default_due_dt=None) -> str:
+    selections = [factor for factor in term if _position_selection.is_selection_node(factor)]
+    if selections:
+        selection = selections[0]
+        inner = _describe_anchor_expr_from_dnf(
+            selection.get("expr") or [],
+            default_due_dt=default_due_dt,
+        )
+        text = _position_selection.describe_selection(selection, inner)
+        plain_factors = [factor for factor in term if not _position_selection.is_selection_node(factor)]
+        if plain_factors:
+            constraint = _natural_language.describe_anchor_term(
+                plain_factors,
+                default_due_dt=default_due_dt,
+                fmt_weekdays_list=_fmt_weekdays_list,
+                split_csv_tokens=_split_csv_tokens,
+                fmt_monthly_atom=_fmt_monthly_atom,
+                fmt_yearly_atom=_fmt_yearly_atom,
+                describe_is_pure_nth_weekday_spec=_describe_is_pure_nth_weekday_spec,
+                describe_single_full_month_from_yearly_spec=_describe_single_full_month_from_yearly_spec,
+                fmt_hhmm_for_term=_fmt_hhmm_for_term,
+                describe_is_pure_dom_spec=_describe_is_pure_dom_spec,
+            )
+            if constraint:
+                text += f" that also matches {constraint}"
+        return text
     return _natural_language.describe_anchor_term(
         term,
         default_due_dt=default_due_dt,
@@ -2669,8 +2701,20 @@ def _term_has_any_match_within(
 # Anchor satisfiability checks
 # ------------------------------------------------------------------------------
 def _validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d: date):
+    for term in dnf:
+        for factor in term:
+            if _position_selection.is_selection_node(factor):
+                _validate_and_terms_satisfiable(factor.get("expr") or [], ref_d)
+
+    plain_dnf = [
+        term
+        for term in dnf
+        if not any(_position_selection.is_selection_node(factor) for factor in term)
+    ]
+    if not plain_dnf:
+        return
     _satisfiability.validate_and_terms_satisfiable(
-        dnf,
+        plain_dnf,
         ref_d,
         quick_weekly_and_check=_quick_weekly_and_check,
         quick_yearly_and_check=_quick_yearly_and_check,
@@ -2914,6 +2958,8 @@ def _validate_anchor_dnf_atoms_strict(dnf: AnchorDNF) -> None:
     _strict_validation.validate_anchor_dnf_atoms_strict(
         dnf,
         validate_anchor_atom_strict=_validate_anchor_atom_strict,
+        is_selection_node=_position_selection.is_selection_node,
+        validate_selection_node=_position_selection.validate_monthly_selection_node,
         parse_error_cls=ParseError,
     )
 
@@ -3260,6 +3306,64 @@ def atom_matches_on(
     )
 
 
+@lru_cache(maxsize=32)
+def _selection_inner_matcher(business_calendar):
+    return partial(atom_matches_on, business_calendar=business_calendar)
+
+
+def next_after_factor(
+    factor,
+    ref_d: date,
+    default_seed: date | None,
+    seed_base=None,
+    business_calendar=None,
+) -> date | None:
+    if not _position_selection.is_selection_node(factor):
+        next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
+        return next_atom(
+            factor,
+            ref_d,
+            default_seed or ref_d,
+            seed_base=seed_base,
+        )
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
+    return _position_selection.next_selected_date(
+        factor,
+        ref_d,
+        matches_on=_selection_inner_matcher(business_calendar),
+        default_seed=default_seed or ref_d,
+        seed_base=seed_base,
+        calendar_fingerprint=business_calendar_fingerprint(business_calendar),
+    )
+
+
+def factor_matches_on(
+    factor,
+    d: date,
+    default_seed: date | None,
+    seed_base=None,
+    business_calendar=None,
+) -> bool:
+    if not _position_selection.is_selection_node(factor):
+        matches = _with_business_calendar(atom_matches_on, business_calendar)
+        return matches(
+            factor,
+            d,
+            default_seed or d,
+            seed_base=seed_base,
+        )
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
+    selected = _position_selection.selected_candidates_in_period(
+        factor,
+        d,
+        matches_on=_selection_inner_matcher(business_calendar),
+        default_seed=default_seed or d,
+        seed_base=seed_base,
+        calendar_fingerprint=business_calendar_fingerprint(business_calendar),
+    )
+    return d in selected
+
+
 def next_after_term(
     term,
     ref_d: date,
@@ -3267,8 +3371,8 @@ def next_after_term(
     seed_base=None,
     business_calendar=None,
 ):
-    next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
-    matches = _with_business_calendar(atom_matches_on, business_calendar)
+    next_atom = _with_business_calendar(next_after_factor, business_calendar)
+    matches = _with_business_calendar(factor_matches_on, business_calendar)
     return _scheduler_expr.next_after_term(
         term,
         ref_d,
@@ -3294,7 +3398,7 @@ def next_after_expr(
         _term_candidates_in_month,
         business_calendar,
     )
-    matches = _with_business_calendar(atom_matches_on, business_calendar)
+    matches = _with_business_calendar(factor_matches_on, business_calendar)
     next_term = _with_business_calendar(next_after_term, business_calendar)
     return _scheduler_expr.next_after_expr(
         dnf,
@@ -3465,7 +3569,7 @@ def pick_hhmm_from_dnf_for_date(
         target,
         default_seed,
         seed_base=seed_base,
-        atom_matches_on=_with_business_calendar(atom_matches_on, business_calendar),
+        atom_matches_on=_with_business_calendar(factor_matches_on, business_calendar),
     )
 
 
@@ -3661,6 +3765,7 @@ __all__ = (
     'describe_anchor_expr',
     'diag',
     'enable_anchor_cache',
+    'factor_matches_on',
     'fcntl',
     'fmt_dt_local',
     'fmt_isoz',
@@ -3668,6 +3773,7 @@ __all__ = (
     'get_configured_business_calendar',
     'lint_anchor_expr',
     'next_after_atom_with_mods',
+    'next_after_factor',
     'next_after_expr',
     'normalize_task_business_calendar',
     'now_utc',

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from . import position_selection
+
 
 def _group_has_date_modifiers(mods: dict) -> bool:
     return bool(
@@ -95,6 +97,24 @@ def parse_anchor_expr_to_dnf(
                 mods_text = s[start:i].strip()
                 if not mods_text.strip("@").strip():
                     raise parse_error_cls("Grouped modifier is empty.")
+                try:
+                    selection = position_selection.parse_group_selection_modifier(mods_text)
+                except ValueError as exc:
+                    raise parse_error_cls(str(exc)) from None
+                if selection is not None:
+                    scope, positions = selection
+                    node = {
+                        "kind": "select",
+                        "scope": scope,
+                        "positions": positions,
+                        "expr": res,
+                        "mods": {},
+                    }
+                    try:
+                        normalized = position_selection.validate_monthly_selection_node(node)
+                    except ValueError as exc:
+                        raise parse_error_cls(str(exc)) from None
+                    return [[normalized]]
                 mods = parse_atom_mods(mods_text)
                 _apply_group_modifiers(res, mods, parse_error_cls=parse_error_cls)
             return res

@@ -12,6 +12,14 @@ def _has_rand_atoms(dnf: list[list[dict]]) -> bool:
     )
 
 
+def _has_selection_factors(dnf: list[list[dict]]) -> bool:
+    return any(
+        atom.get("kind") == "select"
+        for term in (dnf or [])
+        for atom in (term or [])
+    )
+
+
 def precompute_hints(
     dnf: list[list[dict]],
     *,
@@ -27,7 +35,7 @@ def precompute_hints(
     today = now_local().date()
     start_d = (start_dt.date() if isinstance(start_dt, datetime) else start_dt) or today
 
-    has_rand = _has_rand_atoms(dnf)
+    use_expr_scheduler = _has_rand_atoms(dnf) or _has_selection_factors(dnf)
 
     out_next: list[str] = []
     ref = start_d
@@ -39,7 +47,7 @@ def precompute_hints(
     safety_limit = 366 * 5
     steps = 0
     while len(out_next) < k_next and steps < safety_limit:
-        if has_rand:
+        if use_expr_scheduler:
             nxt, _ = next_after_expr(dnf, ref, default_seed=default_seed, seed_base=seed_base)
         else:
             nxt = next_for_or(dnf, ref, default_seed)
@@ -58,7 +66,7 @@ def precompute_hints(
     seen = set()
 
     while steps < sample_days_for_year:
-        if has_rand:
+        if use_expr_scheduler:
             nxt, _ = next_after_expr(dnf, ref, default_seed=default_seed, seed_base=seed_base)
         else:
             nxt = next_for_or(dnf, ref, default_seed)

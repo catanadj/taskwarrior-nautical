@@ -113,6 +113,11 @@ def parse_atom_mods(
         if match:
             mods["business_day_offset"] += int(match.group(1))
             continue
+        if tok.startswith("in-"):
+            raise parse_error_cls(
+                "Positional selectors require a parenthesized candidate group, "
+                "for example '(w:tue | w:thu)@in-month=last'."
+            )
         raise parse_error_cls(f"Unknown modifier '@{tok}'")
     return mods
 

@@ -2829,7 +2829,7 @@ def _extract_time_slots_for_date(
     try:
         for term in dnf:
             if all(
-                core.atom_matches_on(atom, target_date, default_seed_date, seed_base=seed_base)
+                core.factor_matches_on(atom, target_date, default_seed_date, seed_base=seed_base)
                 for atom in term
             ):
                 matched = True
@@ -2919,7 +2919,7 @@ def _next_occurrence_after_local_dt(
     try:
         same_day_matches = any(
             all(
-                core.atom_matches_on(atom, adate, default_seed_date, seed_base=seed_base)
+                core.factor_matches_on(atom, adate, default_seed_date, seed_base=seed_base)
                 for atom in term
             )
             for term in dnf

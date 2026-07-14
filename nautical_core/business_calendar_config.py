@@ -133,6 +133,10 @@ def validate_calendar_rule_modifiers(mods: Mapping[str, Any], *, label: str) -> 
 def _validate_rule_dnf(dnf: Any, *, label: str) -> None:
     for term in dnf or ():
         for atom in term or ():
+            if atom.get("kind") == "select":
+                raise BusinessCalendarConfigError(
+                    f"{label} does not support positional selection modifiers."
+                )
             if int(atom.get("ival", atom.get("intv", 1)) or 1) != 1:
                 raise BusinessCalendarConfigError(
                     f"{label} does not support interval recurrences (/N)."

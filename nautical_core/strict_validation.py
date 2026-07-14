@@ -105,10 +105,33 @@ def validate_anchor_atom_strict(
     raise parse_error_cls(f"Unknown anchor type '{typ}'")
 
 
-def validate_anchor_dnf_atoms_strict(dnf, *, validate_anchor_atom_strict, parse_error_cls) -> None:
+def validate_anchor_dnf_atoms_strict(
+    dnf,
+    *,
+    validate_anchor_atom_strict,
+    is_selection_node,
+    validate_selection_node,
+    parse_error_cls,
+) -> None:
     for term in dnf:
         counted_randoms = 0
+        selection_count = sum(1 for factor in term if is_selection_node(factor))
+        if selection_count > 1:
+            raise parse_error_cls("An AND term can contain only one positional selection.")
         for atom in term:
+            if is_selection_node(atom):
+                try:
+                    selection = validate_selection_node(atom)
+                except ValueError as exc:
+                    raise parse_error_cls(str(exc)) from None
+                validate_anchor_dnf_atoms_strict(
+                    selection["expr"],
+                    validate_anchor_atom_strict=validate_anchor_atom_strict,
+                    is_selection_node=is_selection_node,
+                    validate_selection_node=validate_selection_node,
+                    parse_error_cls=parse_error_cls,
+                )
+                continue
             validate_anchor_atom_strict(atom)
             spec = str(atom.get("spec") or atom.get("value") or "").lower()
             match = re.fullmatch(r"([1-9]\d{0,2})rand", spec)

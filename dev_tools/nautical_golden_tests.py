@@ -5231,6 +5231,23 @@ def test_year_ordinals_natural_language_and_validation_guidance():
             expect(guidance in str(exc), f"{expr}: missing guidance in {exc}")
 
 
+def test_year_ordinals_documented_examples():
+    """README year-ordinal examples should remain present and parseable."""
+    readme = (Path(ROOT) / "README.md").read_text(encoding="utf-8")
+    examples = (
+        "y:d100",
+        "y:d-1",
+        "y:w20 + w:mon",
+        "y:w-1 + w:fri",
+        "y:d1,d100,d-1",
+        "y:w10..w13",
+        "y/2:w1",
+    )
+    for expr in examples:
+        expect(f"`{expr}`" in readme, f"README year-ordinal example is missing: {expr}")
+        core.validate_anchor_expr_strict(expr)
+
+
 def test_year_ordinals_hooks_modes_calendar_and_timeline():
     """Ordinal selectors should work through add, completion modes, named calendars, and timelines."""
     add_hook = _find_hook_file("on-add-nautical.py")
@@ -16391,6 +16408,7 @@ TESTS = [
     test_year_ordinals_filter_random_and_omit_candidates,
     test_year_ordinals_positional_acf_and_cache_round_trip,
     test_year_ordinals_natural_language_and_validation_guidance,
+    test_year_ordinals_documented_examples,
     test_year_ordinals_hooks_modes_calendar_and_timeline,
     test_reconcile_tool_computes_year_ordinal_anchor,
     test_quarters_window,

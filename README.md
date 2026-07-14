@@ -114,9 +114,23 @@ Useful syntax:
 | `w:2rand` | Two random days each week |
 | `m:3rand + w:mon..fri` | Three random weekdays each month |
 | `y:04-12` | April 12 every year |
+| `y:d100` | 100th calendar day of each year |
+| `y:d-1` | Last calendar day of each year |
+| `y:w20 + w:mon` | Monday of ISO week 20 |
+| `y:w-1 + w:fri` | Friday of the final ISO week |
 | `w:tue,fri | y:05-05` | Tuesdays, Fridays, or May 5 |
 | `(w:mon | m:last-fri)@t=09:00` | Apply the same time to a grouped expression |
 | `(y:12-24 | y:12-31)@pbd@-1bd` | Apply shared date modifiers to OR branches |
+
+Year ordinals accept calendar days `d1` through `d366` and ISO weeks `w1`
+through `w53`; negative values count backward from the end. Lists and ranges
+repeat their prefix, as in `y:d1,d100,d-1` or `y:w10..w13`. Zero and zero-padded
+values are invalid. Missing dates such as day 366 in a common year contribute no
+date.
+
+An ISO week can cross a calendar-year boundary. A bare `y:w20` selects all seven
+days, so combine it with a weekday when one date is intended. For pure ISO-week
+selectors, a cadence such as `y/2:w1` advances in ISO-year buckets.
 
 Parenthesized OR groups accept shared time, roll, filter, calendar-offset, and
 business-day-offset modifiers. Shared `@t=` also works on groups containing

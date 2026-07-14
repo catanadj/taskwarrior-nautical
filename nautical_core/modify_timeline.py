@@ -107,7 +107,13 @@ def _timeline_future_cp_items(
             break
         iterations += 1
         token_idx = (max(1, fut_no) - 1) % len(tokens)
-        td = core.cp_sequence_interval_for_token(tokens[token_idx], cp=cp_str, link_no=fut_no, token_index=token_idx)
+        td = core.cp_sequence_interval_for_token(
+            tokens[token_idx],
+            cp=cp_str,
+            link_no=fut_no,
+            token_index=token_idx,
+            chain_id=str(task.get("chainID") or "").strip(),
+        )
         if td is None:
             break
         fut_no += 1

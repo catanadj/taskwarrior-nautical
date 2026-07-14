@@ -3039,9 +3039,20 @@ def _cp_add_td(dt: datetime, td: timedelta) -> datetime:
     return (dt + td).replace(microsecond=0)
 
 
-def _cp_sequence_period_for_link(tokens: list[dict], cp_str: str, link_no: int) -> timedelta:
+def _cp_sequence_period_for_link(
+    tokens: list[dict],
+    cp_str: str,
+    link_no: int,
+    chain_id: str | None = None,
+) -> timedelta:
     idx = (max(1, int(link_no)) - 1) % len(tokens)
-    td = core.cp_sequence_interval_for_token(tokens[idx], cp=cp_str, link_no=link_no, token_index=idx)
+    td = core.cp_sequence_interval_for_token(
+        tokens[idx],
+        cp=cp_str,
+        link_no=link_no,
+        token_index=idx,
+        chain_id=chain_id,
+    )
     return td or timedelta()
 
 
@@ -3061,7 +3072,12 @@ def _compute_cp_child_due(parent: dict):
         raise ValueError(f"cp field: {reason} (expected: 3d, 2w, 1h, etc.)")
     link_no = core.coerce_int(parent.get("link"), 1)
     seq_idx = (max(1, link_no) - 1) % len(tokens)
-    td = _cp_sequence_period_for_link(tokens, dur, link_no)
+    td = _cp_sequence_period_for_link(
+        tokens,
+        dur,
+        link_no,
+        str(parent.get("chainID") or "").strip(),
+    )
     if not td:
         return (None, None)
 
@@ -3657,7 +3673,12 @@ def _estimate_cp_final_by_max(task: dict, next_due_utc):
 
     # Step forward from next due until we reach cap_no
     while fut_no < cpmax:
-        td = _cp_sequence_period_for_link(tokens, cp_str, fut_no)
+        td = _cp_sequence_period_for_link(
+            tokens,
+            cp_str,
+            fut_no,
+            str(task.get("chainID") or "").strip(),
+        )
         fut_no += 1
         fut_dt = _cp_add_td(fut_dt, td)
 
@@ -4180,7 +4201,11 @@ def _chain_health_drift(ordered: list[dict], kind: str, task: dict) -> tuple[flo
 
     median_gap = _median(gaps)
     if kind == "cp":
-        td = core.cp_sequence_interval_for_link(task.get("cp") or "", core.coerce_int(task.get("link"), 1))
+        td = core.cp_sequence_interval_for_link(
+            task.get("cp") or "",
+            core.coerce_int(task.get("link"), 1),
+            str(task.get("chainID") or "").strip(),
+        )
         if td:
             drift_secs = median_gap - td.total_seconds()
     elif len(gaps) >= 2:
@@ -4232,7 +4257,11 @@ def _chain_health_coach_text(
     if drift_secs is not None:
         base = None
         if kind == "cp":
-            td = core.cp_sequence_interval_for_link(task.get("cp") or "", core.coerce_int(task.get("link"), 1))
+            td = core.cp_sequence_interval_for_link(
+                task.get("cp") or "",
+                core.coerce_int(task.get("link"), 1),
+                str(task.get("chainID") or "").strip(),
+            )
             base = td.total_seconds() if td else None
         else:
             base = median_gap
@@ -4905,7 +4934,12 @@ def _cap_from_until_cp(task, next_due_utc):
     while ndt and ndt <= until and iterations < _MAX_ITERATIONS:
         iterations += 1
         last_no, last_dt = nno, ndt
-        td = _cp_sequence_period_for_link(tokens, cp_str, nno)
+        td = _cp_sequence_period_for_link(
+            tokens,
+            cp_str,
+            nno,
+            str(task.get("chainID") or "").strip(),
+        )
         ndt = _cp_add_td(ndt, td)
         nno += 1
 

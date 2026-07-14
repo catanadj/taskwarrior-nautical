@@ -1278,9 +1278,20 @@ def _cp_add_td(dt: datetime, td: timedelta) -> datetime:
     return _cp_add_period_builder(td)(dt)
 
 
-def _cp_sequence_period_for_link(tokens: list[dict], cp_str: str, link_no: int) -> timedelta:
+def _cp_sequence_period_for_link(
+    tokens: list[dict],
+    cp_str: str,
+    link_no: int,
+    chain_id: str | None = None,
+) -> timedelta:
     idx = (max(1, int(link_no)) - 1) % len(tokens)
-    td = core.cp_sequence_interval_for_token(tokens[idx], cp=cp_str, link_no=link_no, token_index=idx)
+    td = core.cp_sequence_interval_for_token(
+        tokens[idx],
+        cp=cp_str,
+        link_no=link_no,
+        token_index=idx,
+        chain_id=chain_id,
+    )
     return td or timedelta()
 
 
@@ -1328,6 +1339,7 @@ def _cp_sequence_until_summary(
     cp_str: str,
     *,
     start_link_no: int,
+    chain_id: str | None = None,
 ) -> tuple[int | None, datetime | None]:
     if not until_dt:
         return None, None
@@ -1340,7 +1352,7 @@ def _cp_sequence_until_summary(
             break
         last = probe
         count += 1
-        td = _cp_sequence_period_for_link(tokens, cp_str, link_no)
+        td = _cp_sequence_period_for_link(tokens, cp_str, link_no, chain_id)
         probe = _cp_add_td(probe, td)
         link_no += 1
     if count <= 0:
@@ -1357,6 +1369,7 @@ def _cp_sequence_preview_lines(
     *,
     cp_tokens: list[str],
     start_link_no: int,
+    chain_id: str | None = None,
 ) -> list[str]:
     def _fmt(dt):
         return core.fmt_dt_local(dt)
@@ -1367,7 +1380,7 @@ def _cp_sequence_preview_lines(
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
     for i in range(limit):
         step_idx = (max(1, link_no) - 1) % len(tokens)
-        td = _cp_sequence_period_for_link(tokens, cp_str, link_no)
+        td = _cp_sequence_period_for_link(tokens, cp_str, link_no, chain_id)
         nxt = _cp_add_td(nxt, td)
         link_no += 1
         if until_dt and nxt > until_dt:
@@ -1395,6 +1408,7 @@ def _cp_limit_rows(
     tokens: list[dict] | None = None,
     cp_str: str = "",
     start_link_no: int = 1,
+    chain_id: str | None = None,
 ) -> None:
     def _fmt(dt):
         return core.fmt_dt_local(dt)
@@ -1407,7 +1421,10 @@ def _cp_limit_rows(
         link_no = start_link_no
         for _ in range(steps):
             if tokens:
-                fmax = _cp_add_td(fmax, _cp_sequence_period_for_link(tokens, cp_str, link_no))
+                fmax = _cp_add_td(
+                    fmax,
+                    _cp_sequence_period_for_link(tokens, cp_str, link_no, chain_id),
+                )
                 link_no += 1
             else:
                 fmax = add_period(fmax)
@@ -1461,7 +1478,8 @@ def _handle_cp_preview_on_add(
     if not tokens:
         reason = core.cp_sequence_parse_error(cp_str) or f"couldn't parse duration from '{cp_str}'"
         _error_and_exit([("Invalid cp", reason)])
-    td = _cp_sequence_period_for_link(tokens, cp_str, 1)
+    chain_id = str(task.get("chainID") or "").strip()
+    td = _cp_sequence_period_for_link(tokens, cp_str, 1, chain_id)
     has_random = any(t.get("kind") == "rand" for t in tokens)
     is_dynamic = len(tokens) > 1 or has_random
 
@@ -1506,7 +1524,14 @@ def _handle_cp_preview_on_add(
 
     cpmax = core.coerce_int(task.get("chainMax"), 0)
     if is_dynamic:
-        exact_until_count, final_until_dt = _cp_sequence_until_summary(due_dt, until_dt, tokens, cp_str, start_link_no=1)
+        exact_until_count, final_until_dt = _cp_sequence_until_summary(
+            due_dt,
+            until_dt,
+            tokens,
+            cp_str,
+            start_link_no=1,
+            chain_id=chain_id,
+        )
     else:
         exact_until_count, final_until_dt = _cp_until_summary(due_dt, until_dt, add_period)
 
@@ -1516,7 +1541,16 @@ def _handle_cp_preview_on_add(
 
     if is_dynamic:
         cp_tokens = [p.strip() for p in cp_str.split(",")]
-        preview = _cp_sequence_preview_lines(due_dt, until_dt, limit, tokens, cp_str, cp_tokens=cp_tokens, start_link_no=1)
+        preview = _cp_sequence_preview_lines(
+            due_dt,
+            until_dt,
+            limit,
+            tokens,
+            cp_str,
+            cp_tokens=cp_tokens,
+            start_link_no=1,
+            chain_id=chain_id,
+        )
     else:
         preview = _cp_preview_lines(due_dt, until_dt, limit, add_period)
     rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
@@ -1534,6 +1568,7 @@ def _handle_cp_preview_on_add(
         tokens=tokens if is_dynamic else None,
         cp_str=cp_str,
         start_link_no=1,
+        chain_id=chain_id,
     )
 
     rows.append(("Chain", "[bold green]enabled[/]" if ch == "on" else "[bold red]disabled[/]"))

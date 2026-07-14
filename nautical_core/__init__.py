@@ -2169,7 +2169,14 @@ def parse_cp_sequence_tokens(cp: str):
     return tokens
 
 
-def _cp_rand_duration_for_token(token: dict[str, Any], *, cp: str, link_no: int, token_index: int) -> timedelta:
+def _cp_rand_duration_for_token(
+    token: dict[str, Any],
+    *,
+    cp: str,
+    link_no: int,
+    token_index: int,
+    chain_id: str | None = None,
+) -> timedelta:
     lo = token.get("lo")
     hi = token.get("hi")
     gran = int(token.get("granularity_seconds") or 1)
@@ -2179,19 +2186,36 @@ def _cp_rand_duration_for_token(token: dict[str, Any], *, cp: str, link_no: int,
     hi_units = int(hi.total_seconds()) // gran
     if hi_units <= lo_units:
         return lo
-    seed = f"cp-rand|{cp}|{int(link_no)}|{int(token_index)}|{token.get('raw')}"
+    chain_scope = str(chain_id or "").strip().lower()
+    seed = (
+        f"cp-rand-v2|{chain_scope}|{cp}|{int(link_no)}|"
+        f"{int(token_index)}|{token.get('raw')}"
+    )
     digest = hashlib.sha256(seed.encode("utf-8")).digest()
     span = hi_units - lo_units + 1
     pick = lo_units + (int.from_bytes(digest[:8], "big") % span)
     return timedelta(seconds=pick * gran)
 
 
-def cp_sequence_interval_for_token(token: dict[str, Any], *, cp: str, link_no: int, token_index: int) -> timedelta | None:
+def cp_sequence_interval_for_token(
+    token: dict[str, Any],
+    *,
+    cp: str,
+    link_no: int,
+    token_index: int,
+    chain_id: str | None = None,
+) -> timedelta | None:
     if token.get("kind") == "fixed":
         td = token.get("duration")
         return td if isinstance(td, timedelta) else None
     if token.get("kind") == "rand":
-        return _cp_rand_duration_for_token(token, cp=cp, link_no=link_no, token_index=token_index)
+        return _cp_rand_duration_for_token(
+            token,
+            cp=cp,
+            link_no=link_no,
+            token_index=token_index,
+            chain_id=chain_id,
+        )
     return None
 
 
@@ -2257,7 +2281,11 @@ def cp_sequence_parse_error(cp: str) -> str | None:
     return None
 
 
-def cp_sequence_interval_for_link(cp: str, link_no: int):
+def cp_sequence_interval_for_link(
+    cp: str,
+    link_no: int,
+    chain_id: str | None = None,
+):
     """Return the interval used to spawn ``link_no + 1`` from ``link_no``."""
     tokens = parse_cp_sequence_tokens(cp)
     if not tokens:
@@ -2266,7 +2294,13 @@ def cp_sequence_interval_for_link(cp: str, link_no: int):
         idx = max(0, int(link_no) - 1) % len(tokens)
     except Exception:
         idx = 0
-    return cp_sequence_interval_for_token(tokens[idx], cp=str(cp), link_no=int(link_no or 1), token_index=idx)
+    return cp_sequence_interval_for_token(
+        tokens[idx],
+        cp=str(cp),
+        link_no=int(link_no or 1),
+        token_index=idx,
+        chain_id=chain_id,
+    )
 
 
 # -------- Anchor parser (DNF with mods) ----------

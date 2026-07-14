@@ -87,8 +87,8 @@ task add "Random field inspection" cp:"rand(3d..7d)"
 ```
 
 Day-based periods preserve the wall-clock routine. Sub-day periods use exact time.
-Random ranges and jitter are deterministic per chain link, so retries and sync do
-not create different schedules.
+Random ranges and jitter use `chainID`-scoped deterministic picks per link, so
+separate chains do not share a sequence and retries or sync do not change one.
 
 ### `anchor`: calendar rules
 

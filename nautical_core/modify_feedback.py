@@ -22,7 +22,11 @@ def _format_td_short(td: timedelta) -> str:
 
 def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequence=None, cp_sequence_interval_for_link=None) -> str:
     if callable(cp_sequence_interval_for_link):
-        td = cp_sequence_interval_for_link(task.get("cp") or "", int(task.get("link") or 1))
+        td = cp_sequence_interval_for_link(
+            task.get("cp") or "",
+            int(task.get("link") or 1),
+            str(task.get("chainID") or "").strip(),
+        )
     elif callable(parse_cp_sequence):
         seq = parse_cp_sequence(task.get("cp") or "")
         step = int(meta.get("cp_sequence_step") or 1)
@@ -574,6 +578,7 @@ def render_cp_completion_feedback(
                     cp=feedback.new.get("cp") or "",
                     link_no=int(feedback.new.get("link") or 1),
                     token_index=token_index,
+                    chain_id=str(feedback.new.get("chainID") or "").strip(),
                 )
                 if td:
                     step_token = _format_td_short(td)

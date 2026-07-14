@@ -7444,6 +7444,24 @@ def test_cp_random_and_jitter_are_deterministic_per_link_and_bounded():
         expect(int(first.total_seconds()) % gran == 0, f"{cp} picked interval at wrong granularity: {first}")
 
 
+def test_cp_random_seed_is_chain_scoped_and_normalized():
+    """random CP ranges should be repeatable within a chain and vary across chains."""
+    cp = "rand(11d..14d)"
+
+    def days(link_no: int, chain_id: str) -> int:
+        td = core.cp_sequence_interval_for_link(cp, link_no, chain_id)
+        return int(td.total_seconds() // 86400)
+
+    chain_a = [days(link_no, "chain-a") for link_no in range(1, 17)]
+    chain_b = [days(link_no, "chain-b") for link_no in range(1, 17)]
+    expect(chain_a != chain_b, "different chains should not share the same random sequence")
+    expect(
+        chain_a == [days(link_no, " CHAIN-A ") for link_no in range(1, 17)],
+        "chain random scope should be normalized and repeatable",
+    )
+    expect(all(11 <= value <= 14 for value in chain_a + chain_b), "chain-scoped pick escaped its bounds")
+
+
 def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
     """on-add preview and on-modify completion should select the same cp interval for the same link."""
     add_mod = _load_hook_module(_find_hook_file("on-add-nautical.py"), "_nautical_on_add_cp_interval_agreement_test")
@@ -7453,6 +7471,7 @@ def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
     if hasattr(modify_mod, "_load_core"):
         modify_mod._load_core()
 
+    chain_id = "abcd1234"
     for cp, link_no in (
         ("3d,20d,7d", 1),
         ("3d,20d,7d", 3),
@@ -7462,9 +7481,9 @@ def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
         ("rand(12h..36h)", 5),
     ):
         tokens = core.parse_cp_sequence_tokens(cp)
-        add_td = add_mod._cp_sequence_period_for_link(tokens, cp, link_no)
-        modify_td = modify_mod._cp_sequence_period_for_link(tokens, cp, link_no)
-        core_td = core.cp_sequence_interval_for_link(cp, link_no)
+        add_td = add_mod._cp_sequence_period_for_link(tokens, cp, link_no, chain_id)
+        modify_td = modify_mod._cp_sequence_period_for_link(tokens, cp, link_no, chain_id)
+        core_td = core.cp_sequence_interval_for_link(cp, link_no, chain_id)
         expect(add_td == modify_td == core_td, f"cp interval mismatch for {cp!r} link {link_no}: add={add_td}, modify={modify_td}, core={core_td}")
 
 # -------- Runner --------------------------------------------------------------
@@ -7967,6 +7986,35 @@ def test_hook_on_add_cp_random_preview_shows_selected_periods():
     expect("2w1d" not in stderr_txt, f"random cp preview should not show composite week/day picks: {stderr_txt[:500]!r}")
     expect("Upcoming" in stderr_txt, f"random cp preview should show upcoming dates: {stderr_txt[:500]!r}")
     expect("(rand(" not in stderr_txt, f"random cp preview should show selected durations, not raw rand tokens: {stderr_txt[:500]!r}")
+
+
+def test_hook_on_add_cp_random_preview_uses_stamped_chain_id():
+    """on-add should scope random previews to the chain ID stamped on the new root task."""
+    hook = _find_hook_file("on-add-nautical.py")
+    cp = "rand(11d..14d)"
+    chain_id = "12345678"
+    task = {
+        "uuid": "12345678-0000-0000-0000-000000000115",
+        "description": "chain-scoped random preview",
+        "status": "pending",
+        "entry": "20260101T000000Z",
+        "cp": cp,
+        "due": "20260101T090000Z",
+    }
+    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
+    expect(proc.returncode == 0, f"on-add chain-scoped random preview failed: {proc.stderr[:500]!r}")
+    out_task = _assert_stdout_json_only(proc.stdout)
+    expect(out_task.get("chainID") == chain_id, f"unexpected stamped chain ID: {out_task!r}")
+
+    selected = core.cp_sequence_interval_for_link(cp, 1, chain_id)
+    other_chain = core.cp_sequence_interval_for_link(cp, 1, "chain-b")
+    expect(selected != other_chain, "test chains must have distinct selections at the previewed link")
+    selected_days = int(selected.total_seconds() // 86400)
+    stderr_txt = _strip_markup(proc.stderr)
+    expect(
+        f"({selected_days}d)" in stderr_txt,
+        f"preview did not use the stamped chain ID selection: {stderr_txt[:500]!r}",
+    )
 
 
 def test_hook_on_add_cp_random_malformed_fails_with_guidance():
@@ -8563,12 +8611,15 @@ def test_hook_on_modify_timeline_cp_random_labels_selected_intervals():
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate cp random timeline.")
     if hasattr(mod, "_collect_prev_two"):
         setattr(mod, "_collect_prev_two", lambda _task: [])
-    first_td = mod.core.cp_sequence_interval_for_link("rand(15d..15d)", 1)
+    cp = "rand(11d..14d)"
+    chain_id = "chain-a"
+    first_td = mod.core.cp_sequence_interval_for_link(cp, 1, chain_id)
     child_due_utc = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc) + first_td
     task = {
         "uuid": "00000000-0000-0000-0000-000000000225",
         "description": "hook test on-modify cp random timeline",
-        "cp": "rand(15d..15d)",
+        "cp": cp,
+        "chainID": chain_id,
         "link": 1,
         "end": "20260101T100000Z",
         "due": "20260101T090000Z",
@@ -8586,8 +8637,15 @@ def test_hook_on_modify_timeline_cp_random_labels_selected_intervals():
     )
     txt = _strip_markup("\n".join(lines))
     expect("(rand(" not in txt, f"cp random timeline should not show raw rand tokens: {txt}")
-    expect("(15d)" in txt, f"cp random timeline should show whole-day picks as days: {txt}")
-    expect("2w1d" not in txt, f"cp random timeline should not show composite week/day picks: {txt}")
+    expected_days = {
+        int(mod.core.cp_sequence_interval_for_link(cp, link_no, chain_id).total_seconds() // 86400)
+        for link_no in (2, 3, 4)
+    }
+    for selected_days in expected_days:
+        expect(
+            f"({selected_days}d)" in txt,
+            f"cp random timeline omitted chain-scoped interval {selected_days}d: {txt}",
+        )
 
 
 def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
@@ -10987,11 +11045,13 @@ def test_on_modify_compute_cp_random_selects_deterministic_interval():
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    expected_td = mod.core.cp_sequence_interval_for_link("rand(3d..7d)", 2)
+    chain_id = "abcd1234"
+    expected_td = mod.core.cp_sequence_interval_for_link("rand(3d..7d)", 2, chain_id)
     child_due, meta = mod._compute_cp_child_due(
         {
             "cp": "rand(3d..7d)",
             "link": 2,
+            "chainID": chain_id,
             "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (9, 0))),
             "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (10, 0))),
         }
@@ -12719,10 +12779,12 @@ def test_on_modify_render_cp_completion_feedback_random_selected_interval():
     mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
 
     prev_panel_mode = mod.core.PANEL_MODE
+    cp = "rand(11d..14d)"
+    chain_id = "abcd1234"
     try:
         mod.core.PANEL_MODE = "panel"
         mod._render_cp_completion_feedback(
-            new={"cp": "rand(15d..15d)", "link": 2, "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
+            new={"cp": cp, "link": 2, "uuid": "00000000-0000-0000-0000-000000000111", "chainID": chain_id},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="deadbeef",
@@ -12747,7 +12809,12 @@ def test_on_modify_render_cp_completion_feedback_random_selected_interval():
     step_rows = [v for k, v in captured.get("fb", []) if k == "Step"]
     expect(step_rows, f"expected random cp step row: {captured}")
     expect("rand(" not in str(step_rows[0]), f"expected selected interval in random cp step row: {captured}")
-    expect(str(step_rows[0]) == "1/1 (15d)", f"expected whole-day random interval as days: {captured}")
+    selected = mod.core.cp_sequence_interval_for_link(cp, 2, chain_id)
+    selected_days = int(selected.total_seconds() // 86400)
+    expect(
+        str(step_rows[0]) == f"1/1 ({selected_days}d)",
+        f"expected chain-scoped random interval as days: {captured}",
+    )
 
 
 def test_on_modify_render_cp_completion_feedback_jitter_selected_interval():
@@ -15229,6 +15296,7 @@ TESTS = [
     test_cp_duration_parser_and_dst_preserve_whole_days,
     test_cp_sequence_link_boundary_contract,
     test_cp_random_and_jitter_are_deterministic_per_link_and_bounded,
+    test_cp_random_seed_is_chain_scoped_and_normalized,
     test_cp_interval_helpers_agree_between_on_add_and_on_modify,
     test_on_modify_compute_cp_sequence_selects_interval_by_link,
     test_on_modify_compute_cp_random_selects_deterministic_interval,
@@ -15253,6 +15321,7 @@ TESTS = [
     test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance,
     test_hook_on_add_cp_sequence_preview_accepts_string_periods,
     test_hook_on_add_cp_random_preview_shows_selected_periods,
+    test_hook_on_add_cp_random_preview_uses_stamped_chain_id,
     test_hook_on_add_cp_random_malformed_fails_with_guidance,
     test_hook_on_add_cp_jitter_preview_shows_selected_periods,
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,

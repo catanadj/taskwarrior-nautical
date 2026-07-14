@@ -15430,7 +15430,8 @@ def test_position_selection_public_monthly_parser_validation():
         ("(w:tue | w:thu)@in-quarter=last", "Only @in-month"),
         ("(w:rand | w:thu)@in-month=last", "cannot contain random selectors"),
         ("(w:tue@bd | w:thu)@in-month=last", "cannot contain modifiers"),
-        ("(w:tue | w:thu)@in-month=last@t=09:00", "cannot be combined"),
+        ("(w:tue | w:thu)@in-month=last@bd", "candidate filter"),
+        ("(w:tue | w:thu)@t=09:00@in-month=last", "must appear before"),
         ("((w:tue | w:thu)@in-month=last)@in-month=last", "Nested positional"),
         (
             "(w:tue)@in-month=last + (w:thu)@in-month=last",
@@ -15607,6 +15608,154 @@ def test_position_selection_modify_timeline_projects_future_dates():
     expect("2026-09-29" in text, f"timeline omitted future positional date: {text}")
 
 
+def test_position_selection_post_modifiers_parser_and_scheduler():
+    """Post-selection modifiers should transform selected dates without changing the candidate bucket."""
+    expr = "(w:tue | w:thu)@in-month=last@next-mon@+1d@-2bd@t=09:00,17:30"
+    dnf = core.validate_anchor_expr_strict(expr)
+    mods = dnf[0][0].get("mods") or {}
+    expect(mods.get("roll") == "next-wd" and mods.get("wd") == 0, f"bad roll mods: {mods}")
+    expect(mods.get("day_offset") == 1, f"bad calendar offset: {mods}")
+    expect(mods.get("business_day_offset") == -2, f"bad business offset: {mods}")
+    expect(mods.get("t") == [(9, 0), (17, 30)], f"bad time list: {mods}")
+
+    seed = date(2026, 1, 1)
+    cases = (
+        ("(w:tue | w:thu)@in-month=last@+2d", date(2026, 7, 1), date(2026, 7, 2)),
+        ("(w:tue | w:thu)@in-month=last@+2d", date(2026, 7, 2), date(2026, 8, 1)),
+        ("(w:tue | w:thu)@in-month=last@-2d", date(2026, 7, 1), date(2026, 7, 28)),
+        ("(m:-1)@in-month=last@pbd", date(2026, 1, 1), date(2026, 1, 30)),
+        ("(m:-1)@in-month=last@nbd", date(2026, 1, 1), date(2026, 2, 2)),
+        ("(w:thu)@in-month=last@next-mon", date(2026, 7, 1), date(2026, 8, 3)),
+        ("(w:thu)@in-month=last@+1bd", date(2026, 7, 1), date(2026, 7, 31)),
+    )
+    for anchor, after_date, expected_date in cases:
+        parsed = core.validate_anchor_expr_strict(anchor)
+        actual, _meta = core.next_after_expr(parsed, after_date, default_seed=seed)
+        expect(actual == expected_date, f"unexpected transformed selection for {anchor}: {actual}")
+        expect(
+            core.factor_matches_on(parsed[0][0], expected_date, seed),
+            f"transformed selection did not match its output date: {anchor}",
+        )
+
+    collision = core.validate_anchor_expr_strict("(m:-2,-1)@in-month=first,last@pbd")
+    first, _meta = core.next_after_expr(collision, date(2026, 1, 1), default_seed=seed)
+    second, _meta = core.next_after_expr(collision, first, default_seed=seed)
+    expect(first == date(2026, 1, 30), f"unexpected rolled collision date: {first}")
+    expect(second == date(2026, 2, 27), f"rolled collision was not deduplicated: {second}")
+
+    class HolidayCalendar:
+        name = "selector-holidays"
+        fingerprint = "selector-holidays-v1"
+
+        def is_business_day(self, value):
+            return value.weekday() < 5 and value != date(2026, 7, 31)
+
+    custom = core.validate_anchor_expr_strict("(w:thu)@in-month=last@+1bd")
+    custom_next, _meta = core.next_after_expr(
+        custom,
+        date(2026, 7, 1),
+        default_seed=seed,
+        business_calendar=HolidayCalendar(),
+    )
+    expect(custom_next == date(2026, 8, 3), f"selector ignored custom business calendar: {custom_next}")
+
+
+def test_position_selection_post_modifiers_acf_natural_and_time():
+    """Post-selection modifiers should survive ACF and remain visible in descriptions and time lookup."""
+    expr = "(w:tue | w:thu)@in-month=last@next-mon@+1d@-2bd@t=09:00,17:30"
+    dnf = core.validate_anchor_expr_strict(expr)
+    canonical = core.acf_to_original_format(core.build_acf(expr))
+    reparsed = core.validate_anchor_expr_strict(canonical)
+    expect(reparsed[0][0].get("mods") == dnf[0][0].get("mods"), f"ACF lost modifiers: {canonical}")
+
+    natural = core.describe_anchor_expr(expr)
+    for phrase in (
+        "last matching date",
+        "shifted to the next Monday",
+        "1 day later",
+        "2 business days earlier",
+        "at 09:00, 17:30",
+    ):
+        expect(phrase in natural, f"natural description omitted {phrase!r}: {natural}")
+
+    timed = core.validate_anchor_expr_strict(
+        "(w:tue | w:thu)@in-month=last@+2d@t=09:00,17:30"
+    )
+    target = date(2026, 8, 1)
+    expect(
+        core.pick_hhmm_from_dnf_for_date(timed, target, date(2026, 1, 1)) == (9, 0),
+        "post-selection time was not available on the transformed date",
+    )
+
+
+def test_position_selection_post_modifiers_modify_completion():
+    """Modify completion should schedule the next transformed positional occurrence and time."""
+    expr = "(w:tue | w:thu)@in-month=last@+2d@t=09:00"
+    add_hook = _find_hook_file("on-add-nautical.py")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000779",
+        "description": "post-selection modifier integration",
+        "status": "pending",
+        "entry": "20260703T090000Z",
+        "due": "20260801T060000Z",
+        "anchor": expr,
+        "anchor_mode": "skip",
+    }
+    result = _run_hook_script(add_hook, task, env_extra={"NO_COLOR": "1"})
+    expect(result.returncode == 0, f"on-add rejected selector modifiers: {result.stderr}")
+    out_task = _extract_last_json(result.stdout)
+    expect(out_task.get("anchor") == expr, f"on-add changed selector modifiers: {out_task}")
+    expect("2 days later at 09:00" in _strip_markup(result.stderr), f"bad add preview: {result.stderr}")
+
+    modify_hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(modify_hook, "_nautical_position_selection_modifier_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+    child_due, meta, child_dnf = mod._compute_anchor_child_due(
+        {
+            "anchor": expr,
+            "anchor_mode": "skip",
+            "due": "20260801T090000Z",
+            "end": "20260801T100000Z",
+            "chainID": "abcd1234",
+        }
+    )
+    child_local = mod.core.to_local(child_due)
+    expect(child_local.date() == date(2026, 8, 29), f"bad child date: {child_due}")
+    expect((child_local.hour, child_local.minute) == (9, 0), f"bad child time: {child_due}")
+    expect(meta.get("basis") == "after_end", f"unexpected completion metadata: {meta}")
+    expect(child_dnf[0][0].get("mods", {}).get("day_offset") == 2, "completion lost selector mods")
+
+    saved_collect = getattr(mod, "_collect_prev_two", None)
+    if saved_collect is not None:
+        mod._collect_prev_two = lambda _task: []
+    try:
+        lines = _call_with_supported_kwargs(
+            mod._timeline_lines,
+            kind="anchor",
+            task={
+                "anchor": expr,
+                "anchor_mode": "skip",
+                "link": 2,
+                "due": "20260801T060000Z",
+                "end": "20260801T070000Z",
+                "chainID": "abcd1234",
+            },
+            child_due_utc=child_due,
+            child_short="0000abcd",
+            dnf=child_dnf,
+            next_count=4,
+            cap_no=None,
+            cur_no=2,
+        )
+    finally:
+        if saved_collect is not None:
+            mod._collect_prev_two = saved_collect
+    timeline = _strip_markup("\n".join(lines))
+    expect("2026-08-29" in timeline, f"timeline omitted transformed child: {timeline}")
+    expect("2026-10-01" in timeline, f"timeline omitted next transformed date: {timeline}")
+
+
 TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
@@ -15642,6 +15791,9 @@ TESTS = [
     test_position_selection_public_acf_natural_and_cache_shape,
     test_position_selection_on_add_and_modify_completion,
     test_position_selection_modify_timeline_projects_future_dates,
+    test_position_selection_post_modifiers_parser_and_scheduler,
+    test_position_selection_post_modifiers_acf_natural_and_time,
+    test_position_selection_post_modifiers_modify_completion,
     test_yearly_month_names,
     test_rand_with_year_window,
     test_weekly_rand_N_gate,

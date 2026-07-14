@@ -105,18 +105,22 @@ def parse_positions(value: str, scope: str) -> tuple[int, ...]:
     return tuple(positions)
 
 
-def parse_group_selection_modifier(value: str) -> tuple[str, tuple[int, ...]] | None:
-    """Parse the monthly-only public selector from a group modifier suffix."""
+def parse_group_selection_modifier(
+    value: str,
+) -> tuple[str, tuple[int, ...], str] | None:
+    """Parse the monthly selector and return its remaining modifier suffix."""
     tokens = [token.strip() for token in str(value or "").split("@") if token.strip()]
-    selection_tokens = [token for token in tokens if token.lower().startswith("in-")]
-    if not selection_tokens:
+    selection_indexes = [
+        index for index, token in enumerate(tokens) if token.lower().startswith("in-")
+    ]
+    if not selection_indexes:
         return None
-    if len(tokens) != 1 or len(selection_tokens) != 1:
-        raise ValueError(
-            "@in-month cannot be combined with other group modifiers yet."
-        )
+    if len(selection_indexes) != 1:
+        raise ValueError("A group can contain only one positional selector.")
+    if selection_indexes[0] != 0:
+        raise ValueError("@in-month must appear before its post-selection modifiers.")
 
-    match = _GROUP_SELECTION_RE.fullmatch(selection_tokens[0].lower())
+    match = _GROUP_SELECTION_RE.fullmatch(tokens[0].lower())
     if match is None:
         raise ValueError(
             "Invalid positional selector. Use '(expression)@in-month=first' or '=last'."
@@ -124,7 +128,8 @@ def parse_group_selection_modifier(value: str) -> tuple[str, tuple[int, ...]] | 
     scope, raw_positions = match.groups()
     if scope != "month":
         raise ValueError("Only @in-month is supported in this release stage.")
-    return scope, parse_positions(raw_positions, scope)
+    remaining = "".join(f"@{token}" for token in tokens[1:])
+    return scope, parse_positions(raw_positions, scope), remaining
 
 
 def format_position(position: int) -> str:
@@ -211,8 +216,40 @@ def validate_monthly_selection_node(node: object) -> SelectionNode:
     normalized = normalize_selection_node(node)
     if normalized["scope"] != "month":
         raise ValueError("Only monthly positional selections are currently supported.")
-    if any(value not in (None, False, 0, 0.0, "", []) for value in normalized["mods"].values()):
-        raise ValueError("Modifiers after @in-month are not supported yet.")
+    mods = normalized["mods"]
+    active = {
+        key
+        for key, value in mods.items()
+        if value not in (None, False, 0, 0.0, "", [])
+    }
+    unsupported = active - {
+        "t",
+        "roll",
+        "wd",
+        "bd",
+        "day_offset",
+        "business_day_offset",
+    }
+    if unsupported:
+        label = ", ".join(sorted(unsupported))
+        raise ValueError(f"@in-month does not support post-selection modifier(s): {label}.")
+    if mods.get("bd"):
+        raise ValueError(
+            "@bd is a candidate filter and is not supported after @in-month."
+        )
+    roll = mods.get("roll")
+    if roll not in (None, "pbd", "nbd", "nw", "next-wd", "prev-wd"):
+        raise ValueError(f"Unsupported @in-month roll modifier: {roll}.")
+    if roll in ("next-wd", "prev-wd"):
+        weekday = mods.get("wd")
+        if isinstance(weekday, bool) or not isinstance(weekday, int) or not 0 <= weekday < 7:
+            raise ValueError("Weekday roll modifiers after @in-month require a valid weekday.")
+    elif mods.get("wd") is not None:
+        raise ValueError("@in-month weekday values require @next-<weekday> or @prev-<weekday>.")
+    for key in ("day_offset", "business_day_offset"):
+        value = mods.get(key, 0)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"@in-month {key} must be an integer.")
 
     for term in normalized["expr"]:
         for factor in term:
@@ -225,6 +262,14 @@ def validate_monthly_selection_node(node: object) -> SelectionNode:
                     "@in-month candidate expressions cannot contain modifiers yet."
                 )
     return normalized
+
+
+def _has_date_modifiers(mods: dict[str, Any]) -> bool:
+    return bool(
+        mods.get("roll")
+        or int(mods.get("day_offset", 0) or 0)
+        or int(mods.get("business_day_offset", 0) or 0)
+    )
 
 
 def period_bounds(scope: str, value: date) -> tuple[date, date]:
@@ -427,6 +472,90 @@ def next_selected_date(
     return None
 
 
+def next_selected_date_with_modifiers(
+    node: object,
+    after_date: date,
+    *,
+    matches_on: Callable[..., bool],
+    apply_modifiers: Callable[[date, dict[str, Any]], date],
+    default_seed: date,
+    seed_base: object = None,
+    calendar_fingerprint: str = "",
+    max_periods: int = _DEFAULT_PERIOD_SCAN_LIMIT,
+) -> date | None:
+    """Select a base occurrence, then apply its date modifiers."""
+    normalized = normalize_selection_node(node)
+    if not isinstance(after_date, date):
+        raise TypeError("Selection reference must be a date.")
+    if not isinstance(default_seed, date):
+        raise TypeError("Selection default seed must be a date.")
+    if isinstance(max_periods, bool) or not isinstance(max_periods, int) or max_periods < 1:
+        raise ValueError("Selection period scan limit must be a positive integer.")
+    if not _has_date_modifiers(normalized["mods"]):
+        return next_selected_date(
+            normalized,
+            after_date,
+            matches_on=matches_on,
+            default_seed=default_seed,
+            seed_base=seed_base,
+            calendar_fingerprint=calendar_fingerprint,
+            max_periods=max_periods,
+        )
+    if not callable(apply_modifiers):
+        raise TypeError("Selection modifier application must be callable.")
+
+    after_day = date(after_date.year, after_date.month, after_date.day)
+    seed_day = date(default_seed.year, default_seed.month, default_seed.day)
+
+    # Supported rolls and fixed offsets are monotonic. Find the latest selected
+    # base whose transformed date is not after the reference, then advance once.
+    boundary = None
+    period_probe = after_day
+    for _ in range(max_periods):
+        selected = _selected_candidates_in_period(
+            normalized,
+            period_probe,
+            matches_on=matches_on,
+            default_seed=seed_day,
+            seed_base=seed_base,
+            calendar_fingerprint=calendar_fingerprint,
+        )
+        for base in reversed(selected):
+            if apply_modifiers(base, normalized["mods"]) <= after_day:
+                boundary = base
+                break
+        if boundary is not None:
+            break
+        period_start, _ = period_bounds(normalized["scope"], period_probe)
+        try:
+            period_probe = period_start - timedelta(days=1)
+        except (OverflowError, ValueError):
+            return None
+
+    if boundary is None:
+        return None
+
+    probe = boundary
+    max_occurrences = max_periods * max(1, len(normalized["positions"]))
+    for _ in range(max_occurrences):
+        base = next_selected_date(
+            normalized,
+            probe,
+            matches_on=matches_on,
+            default_seed=seed_day,
+            seed_base=seed_base,
+            calendar_fingerprint=calendar_fingerprint,
+            max_periods=max_periods,
+        )
+        if base is None:
+            return None
+        transformed = apply_modifiers(base, normalized["mods"])
+        if transformed > after_day:
+            return transformed
+        probe = base
+    return None
+
+
 def clear_candidate_cache() -> None:
     _matching_candidates_cached.cache_clear()
 
@@ -446,6 +575,7 @@ __all__ = (
     "is_selection_node",
     "next_period_start",
     "next_selected_date",
+    "next_selected_date_with_modifiers",
     "normalize_selection_node",
     "parse_positions",
     "parse_group_selection_modifier",

@@ -102,13 +102,14 @@ def parse_anchor_expr_to_dnf(
                 except ValueError as exc:
                     raise parse_error_cls(str(exc)) from None
                 if selection is not None:
-                    scope, positions = selection
+                    scope, positions, remaining_modifiers = selection
+                    mods = parse_atom_mods(remaining_modifiers)
                     node = {
                         "kind": "select",
                         "scope": scope,
                         "positions": positions,
                         "expr": res,
-                        "mods": {},
+                        "mods": mods,
                     }
                     try:
                         normalized = position_selection.validate_monthly_selection_node(node)

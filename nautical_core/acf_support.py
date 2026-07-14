@@ -35,14 +35,16 @@ def _build_acf_terms(
                     json_mod=json_mod,
                 )
                 if nested_terms:
-                    atoms.append(
-                        {
-                            "k": "select",
-                            "c": atom.get("scope"),
-                            "p": list(atom.get("positions") or []),
-                            "e": nested_terms,
-                        }
-                    )
+                    selection = {
+                        "k": "select",
+                        "c": atom.get("scope"),
+                        "p": list(atom.get("positions") or []),
+                        "e": nested_terms,
+                    }
+                    mods = mods_to_acf(atom.get("mods") or {})
+                    if mods:
+                        selection["m"] = mods
+                    atoms.append(selection)
                 continue
 
             typ = (atom.get("typ") or "").lower()
@@ -246,7 +248,9 @@ def acf_to_original_format(
                     inner = format_terms(atom.get("e") or [])
                     scope = str(atom.get("c") or "month")
                     positions = format_selection_positions(atom.get("p") or [])
-                    atoms_str.append(f"({inner})@in-{scope}={positions}")
+                    selection = f"({inner})@in-{scope}={positions}"
+                    mods = acf_mods_to_string(atom.get("m") or {})
+                    atoms_str.append(selection + mods)
                     continue
                 typ = atom["t"]
                 spec = atom["s"]
@@ -278,6 +282,14 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
             out["t"] = f"{tval[0]:02d}:{tval[1]:02d}"
         elif isinstance(tval, str) and hhmm_re.fullmatch(tval):
             out["t"] = tval
+        elif isinstance(tval, list):
+            times = [
+                f"{value[0]:02d}:{value[1]:02d}"
+                for value in tval
+                if isinstance(value, tuple) and len(value) == 2
+            ]
+            if times:
+                out["t"] = ",".join(times)
     roll = mods.get("roll")
     if roll in ("pbd", "nbd", "nw", "next-wd", "prev-wd"):
         out["roll"] = roll

@@ -1657,6 +1657,21 @@ def describe_anchor_term(term: list, default_due_dt=None) -> str:
             default_due_dt=default_due_dt,
         )
         text = _position_selection.describe_selection(selection, inner)
+        hhmm = _fmt_hhmm_for_term([selection], default_due_dt)
+        if hhmm:
+            text += f" at {hhmm}"
+        text = _describe_inject_schedule_suffixes(text, [selection])
+        mods = selection.get("mods") or {}
+        roll = mods.get("roll")
+        weekday = mods.get("wd")
+        if roll in ("next-wd", "prev-wd") and isinstance(weekday, int) and 0 <= weekday < 7:
+            direction = "next" if roll == "next-wd" else "previous"
+            suffix = f", shifted to the {direction} {_natural_language._WDNAME[weekday]}"
+            if " at " in text:
+                head, separator, tail = text.partition(" at ")
+                text = f"{head}{suffix}{separator}{tail}"
+            else:
+                text += suffix
         plain_factors = [factor for factor in term if not _position_selection.is_selection_node(factor)]
         if plain_factors:
             constraint = _natural_language.describe_anchor_term(
@@ -3311,6 +3326,12 @@ def _selection_inner_matcher(business_calendar):
     return partial(atom_matches_on, business_calendar=business_calendar)
 
 
+def _apply_selection_date_modifiers(base: date, mods: dict, business_calendar=None) -> date:
+    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
+    rolled = roll_apply(base, mods, business_calendar=business_calendar)
+    return apply_day_offset(rolled, mods, business_calendar=business_calendar)
+
+
 def next_after_factor(
     factor,
     ref_d: date,
@@ -3327,10 +3348,14 @@ def next_after_factor(
             seed_base=seed_base,
         )
     business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    return _position_selection.next_selected_date(
+    return _position_selection.next_selected_date_with_modifiers(
         factor,
         ref_d,
         matches_on=_selection_inner_matcher(business_calendar),
+        apply_modifiers=partial(
+            _apply_selection_date_modifiers,
+            business_calendar=business_calendar,
+        ),
         default_seed=default_seed or ref_d,
         seed_base=seed_base,
         calendar_fingerprint=business_calendar_fingerprint(business_calendar),
@@ -3353,15 +3378,23 @@ def factor_matches_on(
             seed_base=seed_base,
         )
     business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    selected = _position_selection.selected_candidates_in_period(
+    try:
+        previous = d - timedelta(days=1)
+    except (OverflowError, ValueError):
+        return False
+    selected = _position_selection.next_selected_date_with_modifiers(
         factor,
-        d,
+        previous,
         matches_on=_selection_inner_matcher(business_calendar),
+        apply_modifiers=partial(
+            _apply_selection_date_modifiers,
+            business_calendar=business_calendar,
+        ),
         default_seed=default_seed or d,
         seed_base=seed_base,
         calendar_fingerprint=business_calendar_fingerprint(business_calendar),
     )
-    return d in selected
+    return selected == d
 
 
 def next_after_term(

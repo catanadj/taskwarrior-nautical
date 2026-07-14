@@ -15259,6 +15259,162 @@ def test_position_selection_period_boundaries():
         expect("must be a date" in str(exc), f"unexpected date type error: {exc}")
 
 
+def test_position_selection_internal_evaluator():
+    """The dormant evaluator should select signed positions from real anchor matches."""
+    selection = importlib.import_module("nautical_core.position_selection")
+    inner = core.validate_anchor_expr_strict("w:tue | w:thu")
+    node = {
+        "kind": "select",
+        "scope": "month",
+        "positions": [1, -1, 1],
+        "expr": inner,
+        "mods": {},
+    }
+
+    normalized = selection.normalize_selection_node(node)
+    expect(normalized["positions"] == (1, -1), f"unexpected node positions: {normalized}")
+    selected = selection.selected_candidates_in_period(
+        node,
+        date(2026, 7, 15),
+        matches_on=core.atom_matches_on,
+        default_seed=date(2026, 1, 1),
+        seed_base="chain-a",
+    )
+    expect(
+        selected == (date(2026, 7, 2), date(2026, 7, 30)),
+        f"unexpected monthly positional selection: {selected}",
+    )
+
+    direct = selection.select_positions(
+        [date(2026, 7, 2), date(2026, 7, 2), date(2026, 7, 30)],
+        (1, -1, 4),
+    )
+    expect(
+        direct == (date(2026, 7, 2), date(2026, 7, 30)),
+        f"candidate deduplication or missing-position handling changed: {direct}",
+    )
+
+
+def test_position_selection_internal_evaluator_validation():
+    """Internal selection nodes should reject malformed and nested structures defensively."""
+    selection = importlib.import_module("nautical_core.position_selection")
+    atom = core.validate_anchor_expr_strict("w:mon")[0][0]
+    invalid_nodes = (
+        {},
+        {"kind": "select", "scope": "month", "positions": [], "expr": [[atom]]},
+        {"kind": "select", "scope": "month", "positions": [0], "expr": [[atom]]},
+        {"kind": "select", "scope": "week", "positions": [8], "expr": [[atom]]},
+        {"kind": "select", "scope": "month", "positions": [1], "expr": []},
+        {"kind": "select", "scope": "month", "positions": [1], "expr": [[]]},
+        {
+            "kind": "select",
+            "scope": "month",
+            "positions": [1],
+            "expr": [[{"kind": "select"}]],
+        },
+    )
+    for node in invalid_nodes:
+        try:
+            selection.normalize_selection_node(node)
+            raise AssertionError(f"invalid selection node should be rejected: {node}")
+        except ValueError:
+            pass
+
+    try:
+        selection.select_positions([date(2026, 1, 1)], (0,))
+        raise AssertionError("direct position zero should be rejected")
+    except ValueError as exc:
+        expect("non-zero integers" in str(exc), f"unexpected direct selection error: {exc}")
+
+
+def test_position_selection_next_date_jumps_periods():
+    """Next-date selection should remain strict and jump over exhausted or empty periods."""
+    selection = importlib.import_module("nautical_core.position_selection")
+    node = {
+        "kind": "select",
+        "scope": "month",
+        "positions": [-1],
+        "expr": core.validate_anchor_expr_strict("w:tue | w:thu"),
+        "mods": {},
+    }
+    next_date = selection.next_selected_date(
+        node,
+        date(2026, 7, 30),
+        matches_on=core.atom_matches_on,
+        default_seed=date(2026, 1, 1),
+        seed_base="chain-a",
+    )
+    expect(next_date == date(2026, 8, 27), f"did not jump to next month: {next_date}")
+
+    calls = {"count": 0}
+
+    def never_matches(atom, value, default_seed, seed_base=None):
+        _ = atom, value, default_seed, seed_base
+        calls["count"] += 1
+        return False
+
+    empty = selection.next_selected_date(
+        node,
+        date(2026, 7, 1),
+        matches_on=never_matches,
+        default_seed=date(2026, 1, 1),
+        max_periods=3,
+    )
+    expect(empty is None, f"empty bounded scan should return None, got {empty}")
+    expect(
+        calls["count"] == 184,
+        f"expected two branch checks across three calendar months, got {calls['count']}",
+    )
+
+
+def test_position_selection_candidate_cache_identity():
+    """Candidate caching should include expression, chain seed, and business-calendar identity."""
+    selection = importlib.import_module("nautical_core.position_selection")
+    selection.clear_candidate_cache()
+    calls = {"count": 0}
+
+    def counting_match(atom, value, default_seed, seed_base=None):
+        calls["count"] += 1
+        return core.atom_matches_on(atom, value, default_seed, seed_base=seed_base)
+
+    node = {
+        "kind": "select",
+        "scope": "month",
+        "positions": [-1],
+        "expr": core.validate_anchor_expr_strict("w:tue | w:thu"),
+        "mods": {},
+    }
+    kwargs = {
+        "matches_on": counting_match,
+        "default_seed": date(2026, 1, 1),
+        "seed_base": "chain-a",
+        "calendar_fingerprint": "calendar-a",
+    }
+    first = selection.selected_candidates_in_period(node, date(2026, 7, 1), **kwargs)
+    first_call_count = calls["count"]
+    second = selection.selected_candidates_in_period(node, date(2026, 7, 20), **kwargs)
+    expect(first == second == (date(2026, 7, 30),), f"unexpected cached result: {first}, {second}")
+    expect(calls["count"] == first_call_count, f"same-period lookup missed cache: {calls['count']}")
+
+    reversed_node = dict(node)
+    reversed_node["expr"] = list(reversed(node["expr"]))
+    selection.selected_candidates_in_period(reversed_node, date(2026, 7, 1), **kwargs)
+    expect(calls["count"] == first_call_count, "canonical OR order should share the candidate cache")
+
+    changed_calendar = dict(kwargs, calendar_fingerprint="calendar-b")
+    selection.selected_candidates_in_period(node, date(2026, 7, 1), **changed_calendar)
+    expect(
+        calls["count"] == first_call_count * 2,
+        "calendar fingerprint should separate cache entries",
+    )
+
+    changed_seed = dict(kwargs, seed_base="chain-b")
+    selection.selected_candidates_in_period(node, date(2026, 7, 1), **changed_seed)
+    expect(calls["count"] == first_call_count * 3, "chain seed should separate cache entries")
+    info = selection.candidate_cache_info()
+    expect(info.hits >= 2 and info.misses == 3, f"unexpected candidate cache metrics: {info}")
+
+
 TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
@@ -15285,6 +15441,10 @@ TESTS = [
     test_position_selection_parses_arbitrary_ordinals,
     test_position_selection_rejects_invalid_tokens_and_bounds,
     test_position_selection_period_boundaries,
+    test_position_selection_internal_evaluator,
+    test_position_selection_internal_evaluator_validation,
+    test_position_selection_next_date_jumps_periods,
+    test_position_selection_candidate_cache_identity,
     test_yearly_month_names,
     test_rand_with_year_window,
     test_weekly_rand_N_gate,

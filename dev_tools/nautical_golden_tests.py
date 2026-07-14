@@ -15179,6 +15179,86 @@ def test_hooks_no_direct_subprocess_run():
         path = _find_hook_file(hook_name)
         bad = _bad_calls(path)
         expect(not bad, f"Direct subprocess.run found in {hook_name}: {bad}")
+
+
+def test_position_selection_parses_arbitrary_ordinals():
+    """Position vocabulary should normalize aliases and preserve first-seen order."""
+    selection = importlib.import_module("nautical_core.position_selection")
+
+    expect(
+        selection.parse_positions("first, 2nd, 11th, 21st, last, 2nd-last", "month")
+        == (1, 2, 11, 21, -1, -2),
+        "readable position aliases were not normalized",
+    )
+    expect(
+        selection.parse_positions("first,1st,1,last,1st-last", "month") == (1, -1),
+        "equivalent position aliases were not deduplicated",
+    )
+    expect(
+        selection.parse_positions("92nd", "quarter") == (92,),
+        "quarter maximum should be accepted",
+    )
+    expect(
+        selection.parse_positions("100th,366th", "year") == (100, 366),
+        "large valid yearly positions should be accepted",
+    )
+
+
+def test_position_selection_rejects_invalid_tokens_and_bounds():
+    """Position vocabulary should reject malformed ordinals and impossible scope positions."""
+    selection = importlib.import_module("nautical_core.position_selection")
+    invalid = (
+        ("", "month", "cannot be empty"),
+        ("first,,last", "month", "empty item"),
+        ("0", "month", "zero is invalid"),
+        ("11st", "month", "Use '11th'"),
+        ("22th", "month", "Use '22nd'"),
+        ("22th-last", "month", "Use '22nd-last'"),
+        ("second", "month", "Invalid position"),
+        ("8th", "week", "week limit of 7"),
+        ("32nd", "month", "month limit of 31"),
+        ("93rd", "quarter", "quarter limit of 92"),
+        ("367th", "year", "year limit of 366"),
+    )
+    for value, scope, message in invalid:
+        try:
+            selection.parse_positions(value, scope)
+            raise AssertionError(f"{scope}:{value!r} should be rejected")
+        except ValueError as exc:
+            expect(message in str(exc), f"unexpected error for {scope}:{value!r}: {exc}")
+
+    try:
+        selection.parse_positions("first", "decade")
+        raise AssertionError("unknown selection scope should be rejected")
+    except ValueError as exc:
+        expect("Unknown selection scope" in str(exc), f"unexpected scope error: {exc}")
+
+
+def test_position_selection_period_boundaries():
+    """Selection periods should use ISO weeks and exact calendar boundaries."""
+    selection = importlib.import_module("nautical_core.position_selection")
+    cases = (
+        ("week", date(2024, 12, 31), date(2024, 12, 30), date(2025, 1, 5)),
+        ("month", date(2024, 2, 15), date(2024, 2, 1), date(2024, 2, 29)),
+        ("month", date(2023, 2, 15), date(2023, 2, 1), date(2023, 2, 28)),
+        ("quarter", date(2024, 5, 20), date(2024, 4, 1), date(2024, 6, 30)),
+        ("quarter", date(2024, 12, 31), date(2024, 10, 1), date(2024, 12, 31)),
+        ("year", date(2024, 2, 29), date(2024, 1, 1), date(2024, 12, 31)),
+    )
+    for scope, value, expected_start, expected_end in cases:
+        actual = selection.period_bounds(scope, value)
+        expect(
+            actual == (expected_start, expected_end),
+            f"unexpected {scope} boundaries for {value}: {actual}",
+        )
+
+    try:
+        selection.period_bounds("month", "2024-02-01")
+        raise AssertionError("non-date period input should be rejected")
+    except TypeError as exc:
+        expect("must be a date" in str(exc), f"unexpected date type error: {exc}")
+
+
 TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
@@ -15202,6 +15282,9 @@ TESTS = [
     test_term_quarter_rewrite_mode_characterization,
     test_quarter_spec_rewrite_characterization,
     test_rewrite_quarters_in_context_characterization,
+    test_position_selection_parses_arbitrary_ordinals,
+    test_position_selection_rejects_invalid_tokens_and_bounds,
+    test_position_selection_period_boundaries,
     test_yearly_month_names,
     test_rand_with_year_window,
     test_weekly_rand_N_gate,

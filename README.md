@@ -338,15 +338,15 @@ ln -s "$PWD/nautical" ~/.local/bin/nautical
 nautical doctor
 ```
 
-See the [systems manual](./Taskwarrior-Nautical-v4-Systems-Manual.pdf) for full
+See the [systems manual](./Taskwarrior-Nautical-v5-Systems-Manual.pdf) for full
 installation and configuration details.
 
 ---
 
 ## Documentation
 
-- [Systems Manual PDF](./Taskwarrior-Nautical-v4-Systems-Manual.pdf)
-- [Cheatsheet PDF](./Taskwarrior-Nautical-v4-CheatSheet.pdf)
+- [Systems Manual PDF](./Taskwarrior-Nautical-v5-Systems-Manual.pdf)
+- [Cheatsheet PDF](./Taskwarrior-Nautical-v5-CheatSheet.pdf)
 - [Releases](https://github.com/catanadj/taskwarrior-nautical/releases)
 - [Issues](https://github.com/catanadj/taskwarrior-nautical/issues)
 

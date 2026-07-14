@@ -4964,6 +4964,10 @@ def test_year_day_ordinals_expand_and_schedule():
     )
     expect(core.expand_yearly_for_year_strict("d366", 2023) == [], "d366 must be absent in a common year")
     expect(
+        core.expand_yearly_for_year_strict("d1..d366", 2023)[-1] == date(2023, 12, 31),
+        "a missing d366 endpoint must not erase the valid common-year range",
+    )
+    expect(
         core.expand_yearly_for_year_strict("d366,d-366", 2024)
         == [date(2024, 1, 1), date(2024, 12, 31)],
         "leap-year boundary ordinals expanded incorrectly",
@@ -5012,6 +5016,78 @@ def test_year_day_ordinals_validate_strictly():
     expect(core._parse_y_token("d100") == ("year_day", 100), "d100 token parsing drifted")
     expect(core._parse_y_token("d-1") == ("year_day", -1), "d-1 token parsing drifted")
     expect(core._parse_y_token("d0") is None, "d0 must not parse")
+
+
+def test_iso_week_ordinals_expand_across_year_boundaries():
+    """ISO week selectors should preserve week-year boundaries and dynamic reverse positions."""
+    expect(
+        core.expand_yearly_for_year_strict("w53", 2020)
+        == [date(2020, 12, 28), date(2020, 12, 29), date(2020, 12, 30), date(2020, 12, 31)],
+        "Gregorian 2020 should contain the first four dates of ISO week 53",
+    )
+    expect(
+        core.expand_yearly_for_year_strict("w53", 2021)
+        == [date(2021, 1, 1), date(2021, 1, 2), date(2021, 1, 3)],
+        "Gregorian 2021 should contain the final three dates of ISO week 53 of 2020",
+    )
+    expect(
+        core.expand_yearly_for_year_strict("w1", 2018)[-1] == date(2018, 12, 31),
+        "ISO week 1 should include its December boundary date",
+    )
+    expect(
+        core.expand_yearly_for_year_strict("w-1", 2021)
+        == [
+            date(2021, 1, 1),
+            date(2021, 1, 2),
+            date(2021, 1, 3),
+            date(2021, 12, 27),
+            date(2021, 12, 28),
+            date(2021, 12, 29),
+            date(2021, 12, 30),
+            date(2021, 12, 31),
+        ],
+        "final ISO weeks should resolve against their owning ISO years",
+    )
+    expect(
+        len(core.expand_yearly_for_year_strict("w20", 2024)) == 7,
+        "a complete ISO week within a Gregorian year should contain seven dates",
+    )
+    expect(
+        len(core.expand_yearly_for_year_strict("w1..w53", 2021)) == 365,
+        "a missing ISO week 53 must not erase valid weeks from a range",
+    )
+
+    dnf = core.validate_anchor_expr_strict("y:w53")
+    nxt, _meta = core.next_after_expr(dnf, date(2020, 12, 31), default_seed=date(2020, 1, 1))
+    expect(nxt == date(2021, 1, 1), f"scheduler lost the ISO week across New Year: {nxt!r}")
+    expect(core.factor_matches_on(dnf[0][0], date(2021, 1, 2), date(2020, 1, 1)), "w53 should match its January tail")
+
+
+def test_iso_week_ordinals_validate_strictly():
+    """ISO week syntax should accept compact positions and reject noncanonical or impossible forms."""
+    for expr in ("y:w1", "y:w-1", "y:w1,w20,w-1", "y:w10..w13", "y:w-4..w-1"):
+        core.validate_anchor_expr_strict(expr)
+    for token in ("w1", "w-1", "w10..w13", "w-4..w-1"):
+        core._validate_yearly_spec_token(token)
+
+    invalid = (
+        ("y:w0", "ISO week '0' out of range"),
+        ("y:w54", "ISO week '54' out of range"),
+        ("y:w-54", "ISO week '-54' out of range"),
+        ("y:w01", "must not be zero-padded"),
+        ("y:w10..13", "Unknown yearly token 'w10..13'"),
+        ("y:w-1..w1", "end precedes start"),
+    )
+    for expr, expected in invalid:
+        try:
+            core.validate_anchor_expr_strict(expr)
+            raise AssertionError(f"{expr}: expected ParseError")
+        except core.ParseError as exc:
+            expect(expected in str(exc), f"{expr}: unexpected error: {exc}")
+
+    expect(core._parse_y_token("w20") == ("iso_week", 20), "w20 token parsing drifted")
+    expect(core._parse_y_token("w-1") == ("iso_week", -1), "w-1 token parsing drifted")
+    expect(core._parse_y_token("w0") is None, "w0 must not parse")
 
 def test_quarters_window():
     """Test quarter window constraints (Q1-Q2)"""
@@ -16041,6 +16117,8 @@ TESTS = [
     test_leap_year_29feb,
     test_year_day_ordinals_expand_and_schedule,
     test_year_day_ordinals_validate_strictly,
+    test_iso_week_ordinals_expand_across_year_boundaries,
+    test_iso_week_ordinals_validate_strictly,
     test_quarters_window,
     test_quarter_alias_unambiguous_month_selectors,
     test_quarter_selector_mode_characterization,

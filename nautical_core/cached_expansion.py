@@ -402,6 +402,34 @@ def expand_yearly(
             candidate = date(y, 12, 31) + timedelta(days=ordinal + 1)
         return candidate if candidate.year == y else None
 
+    def _iso_week(iso_year: int, ordinal: int) -> int | None:
+        last_week = date(iso_year, 12, 28).isocalendar().week
+        week = ordinal if ordinal > 0 else last_week + ordinal + 1
+        return week if 1 <= week <= last_week else None
+
+    def _iso_week_dates(start_ordinal: int, end_ordinal: int | None = None) -> list[date]:
+        out = []
+        for iso_year in range(max(1, y - 1), min(9999, y + 1) + 1):
+            if end_ordinal is None:
+                week_numbers = [_iso_week(iso_year, start_ordinal)]
+            elif (start_ordinal < 0) == (end_ordinal < 0):
+                week_numbers = [_iso_week(iso_year, value) for value in range(start_ordinal, end_ordinal + 1)]
+            else:
+                first = _iso_week(iso_year, start_ordinal)
+                last = _iso_week(iso_year, end_ordinal)
+                week_numbers = range(first, last + 1) if first is not None and last is not None else []
+            for week in week_numbers:
+                if week is None:
+                    continue
+                for weekday in range(1, 8):
+                    try:
+                        candidate = date.fromisocalendar(iso_year, week, weekday)
+                    except ValueError:
+                        continue
+                    if candidate.year == y:
+                        out.append(candidate)
+        return out
+
     days = []
     for tok in split_csv_lower(spec):
         year_day = re_mod.fullmatch(r"d(-?(?:0|[1-9]\d{0,2}))", tok)
@@ -416,14 +444,40 @@ def expand_yearly(
             tok,
         )
         if year_day_range:
-            start = _year_day(int(year_day_range.group(1)))
-            end = _year_day(int(year_day_range.group(2)))
-            if not start or not end or end < start:
-                continue
-            current = start
-            while current <= end:
-                days.append(current)
-                current += timedelta(days=1)
+            start_ordinal = int(year_day_range.group(1))
+            end_ordinal = int(year_day_range.group(2))
+            if (start_ordinal < 0) == (end_ordinal < 0):
+                for ordinal in range(start_ordinal, end_ordinal + 1):
+                    candidate = _year_day(ordinal)
+                    if candidate:
+                        days.append(candidate)
+            else:
+                start = _year_day(start_ordinal)
+                end = _year_day(end_ordinal)
+                if not start or not end or end < start:
+                    continue
+                current = start
+                while current <= end:
+                    days.append(current)
+                    current += timedelta(days=1)
+            continue
+
+        iso_week = re_mod.fullmatch(r"w(-?(?:0|[1-9]\d?))", tok)
+        if iso_week:
+            days.extend(_iso_week_dates(int(iso_week.group(1))))
+            continue
+
+        iso_week_range = re_mod.fullmatch(
+            r"w(-?(?:0|[1-9]\d?))\.\.w(-?(?:0|[1-9]\d?))",
+            tok,
+        )
+        if iso_week_range:
+            days.extend(
+                _iso_week_dates(
+                    int(iso_week_range.group(1)),
+                    int(iso_week_range.group(2)),
+                )
+            )
             continue
 
         match = re_mod.fullmatch(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$", tok)

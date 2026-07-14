@@ -10,7 +10,7 @@ def parse_y_token(
     y_token_re,
     re_mod,
 ):
-    """Parse yearly token (e.g., '15-02', 'd100', or 'q1')."""
+    """Parse yearly token (e.g., '15-02', 'd100', 'w20', or 'q1')."""
     tok = tok.strip().lower()
     if tok in quarters:
         return ("quarter", tok)
@@ -23,6 +23,12 @@ def parse_y_token(
         if ordinal == 0 or abs(ordinal) > 366:
             return None
         return ("year_day", ordinal)
+    match = re_mod.fullmatch(r"w(-?(?:0|[1-9]\d?))", tok)
+    if match:
+        week = int(match.group(1))
+        if week == 0 or abs(week) > 53:
+            return None
+        return ("iso_week", week)
     match = y_token_re.match(tok)
     if not match:
         return None

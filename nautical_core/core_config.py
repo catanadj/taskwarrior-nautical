@@ -29,6 +29,7 @@ _DEFAULTS = {
     "omit_file_dir": "",
     "anchor_presets": {},
     "omit_presets": {},
+    "business_calendar": {},
 }
 
 _CONF_CACHE = None
@@ -226,6 +227,7 @@ ANCHOR_FILE_DIR = _CONF["anchor_file_dir"]
 OMIT_FILE_DIR = _CONF["omit_file_dir"]
 ANCHOR_PRESETS = _CONF["anchor_presets"]
 OMIT_PRESETS = _CONF["omit_presets"]
+BUSINESS_CALENDAR_CONFIG = _CONF["business_calendar"]
 
 ENABLE_ANCHOR_CACHE = conf_bool("enable_anchor_cache", False)
 ANCHOR_CACHE_DIR_OVERRIDE = conf_str("anchor_cache_dir", "")

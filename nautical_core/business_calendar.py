@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Protocol
+from functools import lru_cache
+from typing import Callable, Protocol
 
 
 class BusinessCalendar(Protocol):
@@ -21,6 +22,21 @@ class WeekdayBusinessCalendar:
 
     def is_business_day(self, value: date) -> bool:
         return value.weekday() < 5
+
+
+@dataclass(frozen=True, eq=False)
+class ConfiguredBusinessCalendar:
+    name: str
+    anchor_dates: frozenset[date]
+    omit_dates: frozenset[date]
+    _anchor_matches: Callable[[date], bool]
+    _omit_matches: Callable[[date], bool]
+
+    @lru_cache(maxsize=4096)
+    def is_business_day(self, value: date) -> bool:
+        included = value in self.anchor_dates or self._anchor_matches(value)
+        excluded = value in self.omit_dates or self._omit_matches(value)
+        return included and not excluded
 
 
 DEFAULT_BUSINESS_CALENDAR: BusinessCalendar = WeekdayBusinessCalendar()

@@ -6,6 +6,7 @@ from datetime import date, datetime
 from typing import Callable
 
 from .business_calendar import DEFAULT_BUSINESS_CALENDAR, BusinessCalendar
+from .business_calendar_config import validate_calendar_rule_modifiers
 from .file_backed_dates import load_file_date_data
 from .file_source_expr import (
     FileSourceResolution,
@@ -132,6 +133,17 @@ def _resolved_anchor_sources(name: str | None, anchor_file_dir: str | None) -> F
 
 def unmatched_anchor_file_patterns(name: str | None, anchor_file_dir: str | None) -> tuple[str, ...]:
     return _resolved_anchor_sources(name, anchor_file_dir).unmatched_patterns
+
+
+def validate_business_calendar_anchor_file(value: str) -> None:
+    parsed = parse_file_source_expression(value, label="anchor_file")
+    for source in parsed:
+        layers, _source_time = _parse_source_mod_layers(
+            source.pattern,
+            source.modifier_layers,
+        )
+        for mods in layers:
+            validate_calendar_rule_modifiers(mods, label="business calendar anchor_file")
 
 
 def _parse_source_mod_layers(

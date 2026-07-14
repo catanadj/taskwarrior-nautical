@@ -6225,6 +6225,163 @@ def test_business_calendar_policy_flows_through_file_modifiers():
         )
 
 
+def test_business_calendar_config_normalizes_immutable_definitions():
+    """business_calendar tables should normalize names and string/list fields without becoming mutable."""
+    import nautical_core.business_calendar_config as calendar_config
+
+    definitions = calendar_config.parse_business_calendar_definitions(
+        {
+            'Work-Days': {
+                'anchor': ['w:mon..fri', 'w:mon..fri', ' y:04-25 '],
+                'anchor_file': 'open-*.csv',
+                'omit': 'y:04-20',
+                'omit_file': ['closed-*.csv'],
+            }
+        }
+    )
+    definition = definitions['work-days']
+    expect(definition.anchor == ('w:mon..fri', 'y:04-25'), f'unexpected anchors: {definition.anchor!r}')
+    expect(definition.anchor_file == ('open-*.csv',), f'unexpected anchor files: {definition.anchor_file!r}')
+    expect(definition.omit == ('y:04-20',), f'unexpected omits: {definition.omit!r}')
+    expect(definition.omit_file == ('closed-*.csv',), f'unexpected omit files: {definition.omit_file!r}')
+    try:
+        definitions['other'] = definition
+        expect(False, 'resolved definition mapping should be immutable')
+    except TypeError:
+        pass
+
+
+def test_business_calendar_config_resolves_rules_files_and_omissions():
+    """configured calendars should union anchor sources and then apply omit sources."""
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        anchor_dir = base / 'anchors'
+        omit_dir = base / 'omits'
+        anchor_dir.mkdir()
+        omit_dir.mkdir()
+        (anchor_dir / 'open-local.csv').write_text('date\n2026-04-25\n', encoding='utf-8')
+        (omit_dir / 'closed-local.csv').write_text('date\n2026-04-20\n', encoding='utf-8')
+
+        calendars = core.resolve_business_calendar_config(
+            {
+                'work': {
+                    'anchor': ['w:mon..fri', 'y:04-25'],
+                    'anchor_file': 'open-*.csv@+1d',
+                    'omit': 'y:04-22',
+                    'omit_file': 'closed-*.csv@+1d',
+                }
+            },
+            anchor_file_dir=str(anchor_dir),
+            omit_file_dir=str(omit_dir),
+        )
+        policy = calendars['work']
+        cases = [
+            (date(2026, 4, 17), True),
+            (date(2026, 4, 18), False),
+            (date(2026, 4, 21), False),
+            (date(2026, 4, 22), False),
+            (date(2026, 4, 25), True),
+            (date(2026, 4, 26), True),
+        ]
+        for value, expected in cases:
+            expect(
+                policy.is_business_day(value) is expected,
+                f'configured calendar mismatch for {value}: expected {expected}',
+            )
+        expect(hash(policy), 'configured calendars should be usable in scheduler cache keys')
+        try:
+            calendars['other'] = policy
+            expect(False, 'resolved calendar mapping should be immutable')
+        except TypeError:
+            pass
+
+
+def test_business_calendar_config_rejects_ambiguous_or_unstable_rules():
+    """invalid fields and rules without stable date membership should fail with field context."""
+    import nautical_core.business_calendar_config as calendar_config
+
+    parse_cases = [
+        ({'bad.name': {'anchor': 'w:mon'}}, 'Invalid business_calendar name'),
+        ({'work': {'anchor_files': '*.csv'}}, 'Unknown business_calendar.work field'),
+        ({'work': {'omit': 'y:04-20'}}, 'must define anchor or anchor_file'),
+    ]
+    for raw, expected in parse_cases:
+        try:
+            calendar_config.parse_business_calendar_definitions(raw)
+            expect(False, f'expected invalid calendar definition to fail: {raw!r}')
+        except calendar_config.BusinessCalendarConfigError as exc:
+            expect(expected in str(exc), f'unexpected definition error: {exc}')
+
+    resolve_cases = [
+        ({'work': {'anchor': 'w/2:mon'}}, 'interval recurrences'),
+        ({'work': {'anchor': 'w:rand'}}, 'random selectors'),
+        ({'work': {'anchor': 'w:mon@t=09:00'}}, 'time modifiers'),
+        ({'work': {'anchor': 'w:mon@bd'}}, 'business-day modifiers'),
+        ({'work': {'anchor': 'm:lbd'}}, 'business-day ordinals'),
+    ]
+    for raw, expected in resolve_cases:
+        try:
+            core.resolve_business_calendar_config(raw)
+            expect(False, f'expected unstable calendar rule to fail: {raw!r}')
+        except calendar_config.BusinessCalendarConfigError as exc:
+            expect(expected in str(exc), f'unexpected rule error: {exc}')
+
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / 'days.csv').write_text('date\n2026-04-20\n', encoding='utf-8')
+        try:
+            core.resolve_business_calendar_config(
+                {'work': {'anchor_file': 'missing-*.csv'}},
+                anchor_file_dir=td,
+            )
+            expect(False, 'expected unmatched calendar file pattern to fail')
+        except calendar_config.BusinessCalendarConfigError as exc:
+            expect('matched no files' in str(exc), f'unexpected unmatched-pattern error: {exc}')
+        try:
+            core.resolve_business_calendar_config(
+                {'work': {'anchor_file': 'days.csv@nbd'}},
+                anchor_file_dir=td,
+            )
+            expect(False, 'expected self-referential file modifiers to fail')
+        except calendar_config.BusinessCalendarConfigError as exc:
+            expect('business-day modifiers' in str(exc), f'unexpected file-modifier error: {exc}')
+
+
+def test_business_calendar_toml_section_resolves_lazily():
+    """a real [business_calendar.<name>] TOML section should load through the core facade."""
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        config_path = base / 'config-nautical.toml'
+        config_path.write_text(
+            '[business_calendar.work]\n'
+            'anchor = "w:mon..fri"\n'
+            'omit = "y:04-20"\n',
+            encoding='utf-8',
+        )
+        script = (
+            'import json\n'
+            'from datetime import date\n'
+            'import nautical_core as core\n'
+            'policy = core.get_configured_business_calendar("WORK")\n'
+            'print(json.dumps({'
+            '"names": sorted(core.business_calendar_definitions()), '
+            '"open": policy.is_business_day(date(2026, 4, 21)), '
+            '"closed": policy.is_business_day(date(2026, 4, 20))}))\n'
+        )
+        env = os.environ.copy()
+        env['PYTHONPATH'] = ROOT + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+        env['NAUTICAL_CONFIG'] = str(config_path)
+        proc = subprocess.run(
+            [sys.executable, '-c', script],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=10,
+        )
+        expect(proc.returncode == 0, f'calendar TOML subprocess failed: {proc.stderr}')
+        payload = json.loads(proc.stdout)
+        expect(payload == {'names': ['work'], 'open': True, 'closed': False}, f'unexpected TOML result: {payload!r}')
+
+
 def test_next_after_atom_with_mods_characterization():
     """Direct atom scheduling should preserve seed-gated interval and roll/offset behavior."""
     def _single_atom(expr: str):
@@ -14787,6 +14944,10 @@ TESTS = [
     test_default_business_calendar_operations_characterization,
     test_business_calendar_policy_flows_through_scheduler_paths,
     test_business_calendar_policy_flows_through_file_modifiers,
+    test_business_calendar_config_normalizes_immutable_definitions,
+    test_business_calendar_config_resolves_rules_files_and_omissions,
+    test_business_calendar_config_rejects_ambiguous_or_unstable_rules,
+    test_business_calendar_toml_section_resolves_lazily,
     test_next_after_atom_with_mods_characterization,
     test_modifier_boundary_paths_agree_and_advance_strictly,
     test_atom_matches_on_positive_day_offset_shifted_date,

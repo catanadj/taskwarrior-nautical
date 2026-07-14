@@ -247,6 +247,7 @@ ANCHOR_FILE_DIR = _core_config.ANCHOR_FILE_DIR
 OMIT_FILE_DIR = _core_config.OMIT_FILE_DIR
 ANCHOR_PRESETS = _core_config.ANCHOR_PRESETS
 OMIT_PRESETS = _core_config.OMIT_PRESETS
+BUSINESS_CALENDAR_CONFIG = _core_config.BUSINESS_CALENDAR_CONFIG
 ENABLE_ANCHOR_CACHE = _core_config.ENABLE_ANCHOR_CACHE
 ANCHOR_CACHE_DIR_OVERRIDE = _core_config.ANCHOR_CACHE_DIR_OVERRIDE
 ANCHOR_CACHE_TTL = _core_config.ANCHOR_CACHE_TTL
@@ -281,6 +282,7 @@ _cache_payload = _import_sibling("cache_payload")
 _cache_locking = _import_sibling("cache_locking")
 _acf_support = _import_sibling("acf_support")
 _business_calendar = _import_sibling("business_calendar")
+_business_calendar_config = _import_sibling("business_calendar_config")
 _cached_expansion = _import_sibling("cached_expansion")
 _nth_monthly = _import_sibling("nth_monthly")
 _expansion_support = _import_sibling("expansion_support")
@@ -306,6 +308,7 @@ _year_tokens = _import_sibling("year_tokens")
 
 short_uuid = _common.short_uuid
 DEFAULT_BUSINESS_CALENDAR = _business_calendar.DEFAULT_BUSINESS_CALENDAR
+BusinessCalendarConfigError = _business_calendar_config.BusinessCalendarConfigError
 
 
 def _with_business_calendar(fn: Callable[..., Any], business_calendar) -> Callable[..., Any]:
@@ -3238,6 +3241,73 @@ def next_after_expr(
     )
 
 
+def business_calendar_definitions():
+    return _business_calendar_config.parse_business_calendar_definitions(
+        BUSINESS_CALENDAR_CONFIG
+    )
+
+
+def _validate_business_calendar_omit_expr(expr: str):
+    anchor_omit = _import_sibling("anchor_omit")
+    return anchor_omit.validate_omit_expr_strict(
+        expr,
+        validate_anchor_expr_cached=validate_anchor_expr_strict,
+        resolve_omit_presets=resolve_omit_presets,
+    )
+
+
+def _business_calendar_expression_matches_date(dnf, value: date, name: str) -> bool:
+    seed_base = f"business-calendar:{name}"
+    return any(
+        all(
+            atom_matches_on(atom, value, value, seed_base=seed_base)
+            for atom in term
+        )
+        for term in dnf
+    )
+
+
+def resolve_business_calendar_config(
+    raw_config,
+    *,
+    anchor_file_dir: str | None = None,
+    omit_file_dir: str | None = None,
+):
+    anchor_files = _import_sibling("anchor_files")
+    omit_files = _import_sibling("omit_files")
+    return _business_calendar_config.resolve_business_calendars(
+        raw_config,
+        anchor_file_dir=ANCHOR_FILE_DIR if anchor_file_dir is None else anchor_file_dir,
+        omit_file_dir=OMIT_FILE_DIR if omit_file_dir is None else omit_file_dir,
+        validate_anchor_expr=validate_anchor_expr_strict,
+        validate_omit_expr=_validate_business_calendar_omit_expr,
+        expression_matches_date=_business_calendar_expression_matches_date,
+        validate_anchor_file_expr=anchor_files.validate_business_calendar_anchor_file,
+        validate_omit_file_expr=omit_files.validate_business_calendar_omit_file,
+        unmatched_anchor_file_patterns=anchor_files.unmatched_anchor_file_patterns,
+        unmatched_omit_file_patterns=omit_files.unmatched_omit_file_patterns,
+        load_anchor_file_dates=anchor_files.load_anchor_file_dates,
+        load_omit_file_dates=omit_files.load_omit_file_dates,
+    )
+
+
+@lru_cache(maxsize=1)
+def configured_business_calendars():
+    return resolve_business_calendar_config(BUSINESS_CALENDAR_CONFIG)
+
+
+def get_configured_business_calendar(name: str):
+    normalized = str(name or "").strip().lower()
+    calendars = configured_business_calendars()
+    try:
+        return calendars[normalized]
+    except KeyError:
+        available = ", ".join(sorted(calendars)) or "none"
+        raise _business_calendar_config.BusinessCalendarConfigError(
+            f"Unknown business calendar {name!r}; configured calendars: {available}."
+        ) from None
+
+
 def anchors_between_expr(dnf, start_excl, end_excl, default_seed, seed_base=None):
     return _precompute.anchors_between_expr(
         dnf,
@@ -3402,7 +3472,10 @@ __all__ = (
     'ParseError',
     'YearTokenFormatError',
     'AndTermUnsatisfiable',
+    'BusinessCalendarConfigError',
     'ANCHOR_CACHE_DIR_OVERRIDE',
+    'BUSINESS_CALENDAR_CONFIG',
+    'DEFAULT_BUSINESS_CALENDAR',
     'ENABLE_ANCHOR_CACHE',
     'LOCAL_TZ_NAME',
     'OMIT_FILE_DIR',
@@ -3459,6 +3532,7 @@ __all__ = (
     'build_acf',
     'build_and_cache_hints',
     'build_local_datetime',
+    'business_calendar_definitions',
     'cache_key_for_task',
     'cache_load',
     'cache_save',
@@ -3470,6 +3544,8 @@ __all__ = (
     'fcntl',
     'fmt_dt_local',
     'fmt_isoz',
+    'configured_business_calendars',
+    'get_configured_business_calendar',
     'lint_anchor_expr',
     'next_after_atom_with_mods',
     'next_after_expr',
@@ -3490,6 +3566,7 @@ __all__ = (
     'random',
     'render_panel',
     'resolve_anchor_presets',
+    'resolve_business_calendar_config',
     'resolve_omit_presets',
     'resolve_task_data_context',
     'roll_apply',

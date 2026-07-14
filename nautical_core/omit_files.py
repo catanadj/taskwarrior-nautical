@@ -5,6 +5,7 @@ import re
 from datetime import date
 
 from .business_calendar import DEFAULT_BUSINESS_CALENDAR, BusinessCalendar
+from .business_calendar_config import validate_calendar_rule_modifiers
 from .file_backed_dates import load_file_date_data
 from .file_source_expr import (
     FileSourceResolution,
@@ -87,6 +88,13 @@ def _resolved_omit_sources(name: str | None, omit_file_dir: str | None) -> FileS
 
 def unmatched_omit_file_patterns(name: str | None, omit_file_dir: str | None) -> tuple[str, ...]:
     return _resolved_omit_sources(name, omit_file_dir).unmatched_patterns
+
+
+def validate_business_calendar_omit_file(value: str) -> None:
+    parsed = parse_file_source_expression(value, label="omit_file")
+    for source in parsed:
+        for mods in _parse_source_mod_layers(source.modifier_layers):
+            validate_calendar_rule_modifiers(mods, label="business calendar omit_file")
 
 
 def _parse_source_mod_layers(modifier_layers: tuple[str, ...]) -> list[dict]:

@@ -323,6 +323,7 @@ def load_config(
     cfg["omit_file_dir"] = str(cfg.get("omit_file_dir") or "")
     cfg["anchor_presets"] = normalize_anchor_presets(cfg.get("anchor_presets"))
     cfg["omit_presets"] = normalize_preset_table(cfg.get("omit_presets"))
+    cfg["business_calendar"] = copy.deepcopy(cfg.get("business_calendar"))
     if cfg.get("recurrence_update_udas") is None:
         rec = cfg.get("recurrence")
         if isinstance(rec, dict):

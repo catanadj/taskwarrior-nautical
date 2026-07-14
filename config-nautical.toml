@@ -40,3 +40,11 @@ workout = "w:mon,wed,fri"
 [omit_presets]
 holidays = "y:12-24..12-31"
 april = "y:apr"
+
+# Optional named business calendar. Select it on a task with bc:work.
+# Each field accepts one expression or an array of expressions.
+[business_calendar.work]
+anchor = "w:mon..fri"
+omit = ["y:01-01", "y:12-25"]
+# anchor_file = ["extra-open-days.csv"]
+# omit_file = ["holidays.csv", "company-closures-*.csv"]

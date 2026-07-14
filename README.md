@@ -210,7 +210,53 @@ File modifiers are practical:
 `omit_file` is date-based only; it intentionally does not support `@t=`.
 
 When combined, modifiers run in this order: roll, calendar-day offset, then
-business-day offset. Business days currently mean Monday through Friday.
+business-day offset. Without a `bc` value, business days mean Monday through
+Friday.
+
+---
+
+## Named Business Calendars
+
+Define a calendar in `config-nautical.toml` when weekends, holidays, or
+exceptional open days need to be user-controlled:
+
+```toml
+[business_calendar.work]
+anchor = "w:mon..fri"
+omit = ["y:01-01", "y:12-25"]
+# anchor_file = ["extra-open-days.csv"]
+# omit_file = ["holidays.csv", "company-closures-*.csv"]
+```
+
+Each section defines one calendar. Its open dates are:
+
+```text
+(anchor ∪ anchor_file) − (omit ∪ omit_file)
+```
+
+Every field accepts either one expression or an array of expressions. File
+expressions use `anchor_file_dir` or `omit_file_dir`, including the same `*`
+and `?` patterns supported by task-level file sources. Calendar file patterns
+must match at least one file so configuration mistakes fail early.
+
+Select the calendar with the `bc` UDA:
+
+```bash
+task add "Submit payroll" anchor:"m:-1bd@t=16:00" bc:work
+task add "Review next open day" anchor:"y:12-25@nbd@t=09:00" bc:work
+```
+
+The selected calendar applies consistently to business-day ordinals, `@bd`,
+`@nbd`, `@pbd`, `@+Nbd`, `@-Nbd`, file modifiers, previews, and spawned chain
+links. Names are case-insensitive and stored in normalized form. An empty `bc`
+uses the built-in Monday-Friday calendar; an unknown name is rejected with the
+available names.
+
+Calendar definitions must be deterministic and cannot refer back to business
+days while defining them. Therefore `/N`, random selectors, `@t=`, business-day
+ordinals, and business-day modifiers are rejected inside calendar fields. Cache
+keys include the resolved calendar rules and file dates, so changing either does
+not reuse stale recurrence hints.
 
 ---
 

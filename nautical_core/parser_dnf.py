@@ -112,7 +112,7 @@ def parse_anchor_expr_to_dnf(
                         "mods": mods,
                     }
                     try:
-                        normalized = position_selection.validate_monthly_selection_node(node)
+                        normalized = position_selection.validate_public_selection_node(node)
                     except ValueError as exc:
                         raise parse_error_cls(str(exc)) from None
                     return [[normalized]]

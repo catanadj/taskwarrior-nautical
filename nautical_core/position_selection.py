@@ -118,16 +118,15 @@ def parse_group_selection_modifier(
     if len(selection_indexes) != 1:
         raise ValueError("A group can contain only one positional selector.")
     if selection_indexes[0] != 0:
-        raise ValueError("@in-month must appear before its post-selection modifiers.")
+        raise ValueError("The positional selector must appear before its post-selection modifiers.")
 
     match = _GROUP_SELECTION_RE.fullmatch(tokens[0].lower())
     if match is None:
         raise ValueError(
-            "Invalid positional selector. Use '(expression)@in-month=first' or '=last'."
+            "Invalid positional selector. Use forms such as "
+            "'(expression)@in-month=first' or '@in-year=last'."
         )
     scope, raw_positions = match.groups()
-    if scope != "month":
-        raise ValueError("Only @in-month is supported in this release stage.")
     remaining = "".join(f"@{token}" for token in tokens[1:])
     return scope, parse_positions(raw_positions, scope), remaining
 
@@ -158,7 +157,7 @@ def describe_selection(node: object, inner_description: str) -> str:
         position_text = ", ".join(labels[:-1]) + f", and {labels[-1]}"
     noun = "date" if len(labels) == 1 else "dates"
     inner = inner_description.strip() or "the candidate expression"
-    return f"the {position_text} matching {noun} from {inner} in each month"
+    return f"the {position_text} matching {noun} from {inner} in each {normalized['scope']}"
 
 
 def normalize_selection_node(node: object) -> SelectionNode:
@@ -211,11 +210,10 @@ def normalize_selection_node(node: object) -> SelectionNode:
     }
 
 
-def validate_monthly_selection_node(node: object) -> SelectionNode:
-    """Apply the deterministic monthly feature limits for the first public slice."""
+def validate_public_selection_node(node: object) -> SelectionNode:
+    """Apply deterministic public positional-selection limits."""
     normalized = normalize_selection_node(node)
-    if normalized["scope"] != "month":
-        raise ValueError("Only monthly positional selections are currently supported.")
+    selector = f"@in-{normalized['scope']}"
     mods = normalized["mods"]
     active = {
         key
@@ -232,34 +230,34 @@ def validate_monthly_selection_node(node: object) -> SelectionNode:
     }
     if unsupported:
         label = ", ".join(sorted(unsupported))
-        raise ValueError(f"@in-month does not support post-selection modifier(s): {label}.")
+        raise ValueError(f"{selector} does not support post-selection modifier(s): {label}.")
     if mods.get("bd"):
         raise ValueError(
-            "@bd is a candidate filter and is not supported after @in-month."
+            f"@bd is a candidate filter and is not supported after {selector}."
         )
     roll = mods.get("roll")
     if roll not in (None, "pbd", "nbd", "nw", "next-wd", "prev-wd"):
-        raise ValueError(f"Unsupported @in-month roll modifier: {roll}.")
+        raise ValueError(f"Unsupported {selector} roll modifier: {roll}.")
     if roll in ("next-wd", "prev-wd"):
         weekday = mods.get("wd")
         if isinstance(weekday, bool) or not isinstance(weekday, int) or not 0 <= weekday < 7:
-            raise ValueError("Weekday roll modifiers after @in-month require a valid weekday.")
+            raise ValueError(f"Weekday roll modifiers after {selector} require a valid weekday.")
     elif mods.get("wd") is not None:
-        raise ValueError("@in-month weekday values require @next-<weekday> or @prev-<weekday>.")
+        raise ValueError(f"{selector} weekday values require @next-<weekday> or @prev-<weekday>.")
     for key in ("day_offset", "business_day_offset"):
         value = mods.get(key, 0)
         if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError(f"@in-month {key} must be an integer.")
+            raise ValueError(f"{selector} {key} must be an integer.")
 
     for term in normalized["expr"]:
         for factor in term:
             spec = str(factor.get("spec") or factor.get("value") or "").lower()
             if "rand" in spec:
-                raise ValueError("@in-month candidate expressions cannot contain random selectors.")
+                raise ValueError(f"{selector} candidate expressions cannot contain random selectors.")
             mods = factor.get("mods") or {}
             if any(value not in (None, False, 0, 0.0, "", []) for value in mods.values()):
                 raise ValueError(
-                    "@in-month candidate expressions cannot contain modifiers yet."
+                    f"{selector} candidate expressions cannot contain modifiers yet."
                 )
     return normalized
 
@@ -582,5 +580,5 @@ __all__ = (
     "period_bounds",
     "select_positions",
     "selected_candidates_in_period",
-    "validate_monthly_selection_node",
+    "validate_public_selection_node",
 )

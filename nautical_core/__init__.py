@@ -2974,7 +2974,7 @@ def _validate_anchor_dnf_atoms_strict(dnf: AnchorDNF) -> None:
         dnf,
         validate_anchor_atom_strict=_validate_anchor_atom_strict,
         is_selection_node=_position_selection.is_selection_node,
-        validate_selection_node=_position_selection.validate_monthly_selection_node,
+        validate_selection_node=_position_selection.validate_public_selection_node,
         parse_error_cls=ParseError,
     )
 

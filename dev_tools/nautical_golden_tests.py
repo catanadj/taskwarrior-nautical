@@ -15427,7 +15427,7 @@ def test_position_selection_public_monthly_parser_validation():
 
     invalid = (
         ("w:tue@in-month=last", "parenthesized candidate group"),
-        ("(w:tue | w:thu)@in-quarter=last", "Only @in-month"),
+        ("(w:tue | w:thu)@in-decade=last", "Invalid positional selector"),
         ("(w:rand | w:thu)@in-month=last", "cannot contain random selectors"),
         ("(w:tue@bd | w:thu)@in-month=last", "cannot contain modifiers"),
         ("(w:tue | w:thu)@in-month=last@bd", "candidate filter"),
@@ -15756,6 +15756,183 @@ def test_position_selection_post_modifiers_modify_completion():
     expect("2026-10-01" in timeline, f"timeline omitted next transformed date: {timeline}")
 
 
+def test_position_selection_public_period_scopes_validation():
+    """Week, quarter, and year selectors should parse with scope-specific position limits."""
+    cases = (
+        ("(w:mon | w:wed | w:fri)@in-week=first,last", "week", (1, -1)),
+        ("(w:mon)@in-quarter=10th,2nd-last", "quarter", (10, -2)),
+        ("(w:mon)@in-year=100th,last", "year", (100, -1)),
+    )
+    for expr, expected_scope, expected_positions in cases:
+        node = core.validate_anchor_expr_strict(expr)[0][0]
+        expect(node.get("scope") == expected_scope, f"unexpected scope for {expr}: {node}")
+        expect(node.get("positions") == expected_positions, f"unexpected positions for {expr}: {node}")
+
+    invalid = (
+        ("w:mon@in-year=last", "parenthesized candidate group"),
+        ("(w:mon)@in-week=8th", "week limit of 7"),
+        ("(w:mon)@in-quarter=93rd", "quarter limit of 92"),
+        ("(w:mon)@in-year=367th", "year limit of 366"),
+        ("(w:mon)@in-year=last@bd", "candidate filter"),
+        ("(w:rand)@in-quarter=last", "cannot contain random selectors"),
+        ("((w:mon)@in-week=last)@in-year=last", "Nested positional"),
+    )
+    for expr, message in invalid:
+        try:
+            core.validate_anchor_expr_strict(expr)
+            raise AssertionError(f"invalid period selector should be rejected: {expr}")
+        except core.ParseError as exc:
+            expect(message in str(exc), f"unexpected error for {expr!r}: {exc}")
+
+
+def test_position_selection_public_period_scopes_scheduler():
+    """New scopes should select within calendar periods and preserve the source bucket after shifts."""
+    seed = date(2026, 1, 1)
+    cases = (
+        (
+            "(w:mon | w:wed | w:fri)@in-week=last",
+            date(2026, 7, 14),
+            date(2026, 7, 17),
+        ),
+        ("(w:mon)@in-quarter=last", date(2026, 4, 1), date(2026, 6, 29)),
+        ("(w:mon)@in-year=10th", date(2026, 1, 1), date(2026, 3, 9)),
+        ("(y:02-29)@in-year=first", date(2026, 1, 1), date(2028, 2, 29)),
+        ("(w:fri)@in-week=last@+3d", date(2026, 7, 12), date(2026, 7, 13)),
+        ("(w:mon)@in-quarter=last@+3d", date(2026, 6, 30), date(2026, 7, 2)),
+        ("(w:mon)@in-year=last@+7d", date(2027, 1, 1), date(2027, 1, 4)),
+        ("(w:mon)@in-year=first@-7d", date(2025, 12, 1), date(2025, 12, 29)),
+    )
+    for expr, after_date, expected_date in cases:
+        dnf = core.validate_anchor_expr_strict(expr)
+        actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
+        expect(actual == expected_date, f"unexpected scoped selection for {expr}: {actual}")
+        expect(
+            core.factor_matches_on(dnf[0][0], expected_date, seed),
+            f"scoped selection did not match its output date: {expr}",
+        )
+
+    class QuarterHolidayCalendar:
+        name = "quarter-holidays"
+        fingerprint = "quarter-holidays-v1"
+
+        def is_business_day(self, value):
+            return value.weekday() < 5 and value != date(2026, 6, 30)
+
+    custom = core.validate_anchor_expr_strict("(w:mon)@in-quarter=last@+1bd")
+    custom_next, _meta = core.next_after_expr(
+        custom,
+        date(2026, 4, 1),
+        default_seed=seed,
+        business_calendar=QuarterHolidayCalendar(),
+    )
+    expect(custom_next == date(2026, 7, 1), f"quarter selector ignored custom calendar: {custom_next}")
+
+
+def test_position_selection_public_period_scopes_acf_natural_and_hints():
+    """New scopes should round-trip and remain visible in descriptions and previews."""
+    expressions = (
+        ("(w:mon | w:wed | w:fri)@in-week=last", "in each week"),
+        ("(w:mon)@in-quarter=last@+3d", "in each quarter"),
+        ("(w:mon)@in-year=10th@t=09:00", "in each year"),
+    )
+    seed = date(2026, 1, 1)
+    for expr, phrase in expressions:
+        dnf = core.validate_anchor_expr_strict(expr)
+        canonical = core.acf_to_original_format(core.build_acf(expr))
+        reparsed = core.validate_anchor_expr_strict(canonical)
+        expect(reparsed[0][0].get("scope") == dnf[0][0].get("scope"), f"ACF lost scope: {canonical}")
+        expect(
+            reparsed[0][0].get("positions") == dnf[0][0].get("positions"),
+            f"ACF lost positions: {canonical}",
+        )
+        expect(phrase in core.describe_anchor_expr(expr), f"natural text omitted {phrase}: {expr}")
+
+    yearly = core.validate_anchor_expr_strict("(w:mon)@in-year=last@+7d@t=09:00")
+    hints = core.precompute_hints(
+        yearly,
+        start_dt=datetime(2026, 7, 1),
+        k_next=3,
+        sample_days_for_year=3,
+    )
+    expect(
+        hints.get("next_dates", [])[:3]
+        == ["2027-01-04T00:00", "2028-01-03T00:00", "2029-01-01T00:00"],
+        f"unexpected yearly positional hints: {hints}",
+    )
+    expect(
+        core.pick_hhmm_from_dnf_for_date(yearly, date(2027, 1, 4), seed) == (9, 0),
+        "yearly positional time was not available on its shifted date",
+    )
+
+
+def test_position_selection_public_period_scopes_hooks():
+    """Add, completion, and timeline paths should support shifted yearly selections."""
+    expr = "(w:mon)@in-year=last@+7d@t=09:00"
+    add_hook = _find_hook_file("on-add-nautical.py")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000780",
+        "description": "yearly positional integration",
+        "status": "pending",
+        "entry": "20260701T090000Z",
+        "due": "20270104T060000Z",
+        "anchor": expr,
+        "anchor_mode": "skip",
+    }
+    result = _run_hook_script(add_hook, task, env_extra={"NO_COLOR": "1"})
+    expect(result.returncode == 0, f"on-add rejected yearly selection: {result.stderr}")
+    out_task = _extract_last_json(result.stdout)
+    expect(out_task.get("anchor") == expr, f"on-add changed yearly selection: {out_task}")
+    expect("in each year" in _strip_markup(result.stderr), f"bad add preview: {result.stderr}")
+
+    modify_hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(modify_hook, "_nautical_period_selection_hook_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+    child_due, meta, child_dnf = mod._compute_anchor_child_due(
+        {
+            "anchor": expr,
+            "anchor_mode": "skip",
+            "due": "20270104T060000Z",
+            "end": "20270104T070000Z",
+            "chainID": "abcd1234",
+        }
+    )
+    child_local = mod.core.to_local(child_due)
+    expect(child_local.date() == date(2028, 1, 3), f"bad yearly child date: {child_due}")
+    expect((child_local.hour, child_local.minute) == (9, 0), f"bad yearly child time: {child_due}")
+    expect(meta.get("basis") == "after_end", f"unexpected completion metadata: {meta}")
+    expect(child_dnf[0][0].get("scope") == "year", "completion lost yearly scope")
+
+    saved_collect = getattr(mod, "_collect_prev_two", None)
+    if saved_collect is not None:
+        mod._collect_prev_two = lambda _task: []
+    try:
+        lines = _call_with_supported_kwargs(
+            mod._timeline_lines,
+            kind="anchor",
+            task={
+                "anchor": expr,
+                "anchor_mode": "skip",
+                "link": 2,
+                "due": "20270104T060000Z",
+                "end": "20270104T070000Z",
+                "chainID": "abcd1234",
+            },
+            child_due_utc=child_due,
+            child_short="0000abcd",
+            dnf=child_dnf,
+            next_count=4,
+            cap_no=None,
+            cur_no=2,
+        )
+    finally:
+        if saved_collect is not None:
+            mod._collect_prev_two = saved_collect
+    timeline = _strip_markup("\n".join(lines))
+    expect("2028-01-03" in timeline, f"timeline omitted yearly child: {timeline}")
+    expect("2029-01-01" in timeline, f"timeline omitted next yearly selection: {timeline}")
+
+
 TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
@@ -15794,6 +15971,10 @@ TESTS = [
     test_position_selection_post_modifiers_parser_and_scheduler,
     test_position_selection_post_modifiers_acf_natural_and_time,
     test_position_selection_post_modifiers_modify_completion,
+    test_position_selection_public_period_scopes_validation,
+    test_position_selection_public_period_scopes_scheduler,
+    test_position_selection_public_period_scopes_acf_natural_and_hints,
+    test_position_selection_public_period_scopes_hooks,
     test_yearly_month_names,
     test_rand_with_year_window,
     test_weekly_rand_N_gate,

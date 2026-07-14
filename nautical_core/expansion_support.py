@@ -148,6 +148,7 @@ def doms_allowed_by_year(
     *,
     y_ranges_from_spec,
     days_in_month,
+    expand_yearly,
 ) -> set[int]:
     if not y_specs:
         return set(range(1, days_in_month(y, m) + 1))
@@ -155,14 +156,20 @@ def doms_allowed_by_year(
     if not filter_specs:
         return set(range(1, days_in_month(y, m) + 1))
 
+    allowed = {
+        candidate.day
+        for spec in filter_specs
+        for candidate in expand_yearly(spec, y)
+        if candidate.month == m
+    }
+
     ranges = []
     for sp in filter_specs:
         ranges.extend(y_ranges_from_spec(sp))
     if not ranges:
-        return set()
+        return allowed
 
     dim = days_in_month(y, m)
-    allowed: set[int] = set()
     for (m1, d1, m2, d2) in ranges:
         if m1 == m2:
             if m == m1:

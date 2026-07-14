@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import timedelta
 
 from .business_calendar import is_business_day as default_is_business_day
@@ -99,18 +100,47 @@ def base_next_after_atom(
     return ref_d + timedelta(days=365)
 
 
-def interval_allowed_for_atom(typ: str, ival: int, seed, cand, *, weeks_between, year_index) -> bool:
+def _is_pure_iso_week_spec(spec: str) -> bool:
+    tokens = [token.strip() for token in str(spec or "").lower().split(",") if token.strip()]
+    return bool(tokens) and all(
+        re.fullmatch(r"w-?[1-9]\d?(?:\.\.w-?[1-9]\d?)?", token)
+        for token in tokens
+    )
+
+
+def interval_allowed_for_atom(
+    typ: str,
+    ival: int,
+    seed,
+    cand,
+    *,
+    weeks_between,
+    year_index,
+    spec: str = "",
+) -> bool:
     if ival <= 1:
         return True
     if typ == "w":
         weeks_diff = weeks_between(seed, cand)
         return weeks_diff % ival == 0
     if typ == "y":
+        if _is_pure_iso_week_spec(spec):
+            return (cand.isocalendar().year - seed.isocalendar().year) % ival == 0
         return (year_index(cand) - year_index(seed)) % ival == 0
     return True
 
 
-def advance_probe_for_interval_bucket(typ: str, ival: int, seed, cand, *, weeks_between, year_index, date_cls):
+def advance_probe_for_interval_bucket(
+    typ: str,
+    ival: int,
+    seed,
+    cand,
+    *,
+    weeks_between,
+    year_index,
+    date_cls,
+    spec: str = "",
+):
     if ival <= 1:
         return cand
     if typ == "w":
@@ -121,6 +151,12 @@ def advance_probe_for_interval_bucket(typ: str, ival: int, seed, cand, *, weeks_
         next_allowed_monday = cur_monday + timedelta(weeks=add_weeks or ival)
         return next_allowed_monday - timedelta(days=1)
     if typ == "y":
+        if _is_pure_iso_week_spec(spec):
+            seed_iso_year = seed.isocalendar().year
+            candidate_iso_year = cand.isocalendar().year
+            diff = (candidate_iso_year - seed_iso_year) % ival
+            next_iso_year = candidate_iso_year + (ival - diff)
+            return date_cls.fromisocalendar(next_iso_year, 1, 1) - timedelta(days=1)
         diff = (year_index(cand) - year_index(seed)) % ival
         add_y = (ival - diff) if diff != 0 else 0
         next_jan1 = date_cls(cand.year + (add_y or ival), 1, 1)
@@ -187,8 +223,14 @@ def next_after_atom_with_mods(
         if (mods.get("bd") or mods.get("wd") is True) and not is_business_day(base):
             probe = base + timedelta(days=1)
             continue
-        if typ in ("w", "y") and not interval_allowed_for_atom(typ, ival, seed, base):
-            probe = advance_probe_for_interval_bucket(typ, ival, seed, base)
+        if typ in ("w", "y") and not interval_allowed_for_atom(
+            typ,
+            ival,
+            seed,
+            base,
+            spec=spec,
+        ):
+            probe = advance_probe_for_interval_bucket(typ, ival, seed, base, spec=spec)
             continue
         if typ == "m" and ival > 1:
             base = monthly_align_base_for_interval(spec, base, probe, seed, ival)

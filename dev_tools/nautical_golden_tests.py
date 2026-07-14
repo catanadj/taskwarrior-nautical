@@ -5089,6 +5089,113 @@ def test_iso_week_ordinals_validate_strictly():
     expect(core._parse_y_token("w-1") == ("iso_week", -1), "w-1 token parsing drifted")
     expect(core._parse_y_token("w0") is None, "w0 must not parse")
 
+
+def test_year_ordinals_compose_with_weekdays_or_and_modifiers():
+    """Year-day and ISO-week selectors should compose through the normal expression engine."""
+    seed = date(2018, 1, 1)
+    cases = (
+        ("y:w20 + w:mon", date(2024, 1, 1), date(2024, 5, 13)),
+        ("y:w1 + w:mon", date(2018, 12, 29), date(2018, 12, 31)),
+        ("y:w1 + w:mon", date(2018, 12, 31), date(2019, 12, 30)),
+        ("y:w-1 + w:fri", date(2020, 12, 20), date(2021, 1, 1)),
+        ("y:w20@+1d + w:tue", date(2024, 5, 1), date(2024, 5, 14)),
+    )
+    for expr, after_date, expected in cases:
+        dnf = core.validate_anchor_expr_strict(expr)
+        actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
+        expect(actual == expected, f"{expr}: expected {expected}, got {actual}")
+
+    union = core.validate_anchor_expr_strict("y:w20 + w:mon | y:d100")
+    first, _meta = core.next_after_expr(union, date(2024, 4, 1), default_seed=seed)
+    second, _meta = core.next_after_expr(union, first, default_seed=seed)
+    expect(first == date(2024, 4, 9), f"OR branch lost d100: {first}")
+    expect(second == date(2024, 5, 13), f"OR branch lost ISO-week Monday: {second}")
+
+
+def test_iso_week_interval_uses_iso_year_buckets():
+    """Yearly intervals on pure ISO-week specs must not split a week at New Year."""
+    seed = date(2018, 1, 1)
+    dnf = core.validate_anchor_expr_strict("y/2:w1")
+    cases = (
+        (date(2019, 12, 29), date(2019, 12, 30)),
+        (date(2019, 12, 31), date(2020, 1, 1)),
+        (date(2020, 1, 5), date(2022, 1, 3)),
+    )
+    for after_date, expected in cases:
+        actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
+        expect(actual == expected, f"ISO /2 bucket split or skipped a week after {after_date}: {actual}")
+
+    expect(
+        core._interval_allowed_for_atom("y", 2, seed, date(2019, 12, 30), "w1"),
+        "ISO year 2020 should be allowed from an ISO year 2018 seed",
+    )
+    expect(
+        core._interval_allowed_for_atom("y", 2, seed, date(2020, 1, 3), "w1"),
+        "the January tail of an allowed ISO week should remain allowed",
+    )
+
+
+def test_year_ordinals_filter_random_and_omit_candidates():
+    """Ordinal yearly selectors should constrain random pools and participate in omissions."""
+    import nautical_core.anchor_omit as anchor_omit
+
+    seed = date(2024, 1, 1)
+    exact = core.validate_anchor_expr_strict("y:rand + y:d60")
+    exact_next, _meta = core.next_after_expr(exact, seed, default_seed=seed, seed_base="ordinal-rand")
+    expect(exact_next == date(2024, 2, 29), f"yearly random ignored d60: {exact_next}")
+
+    for expr in ("m:rand + y:w20", "m:2rand + y:w20", "y:rand + y:w20"):
+        dnf = core.validate_anchor_expr_strict(expr)
+        first, _meta = core.next_after_expr(dnf, seed, default_seed=seed, seed_base="week-rand")
+        expect(first is not None and first.isocalendar().week == 20, f"{expr}: random date escaped ISO week 20: {first}")
+        if "2rand" in expr:
+            second, _meta = core.next_after_expr(dnf, first, default_seed=seed, seed_base="week-rand")
+            expect(second is not None and second != first, f"{expr}: counted random did not advance")
+            expect(second.isocalendar().week == 20, f"{expr}: second random date escaped ISO week 20: {second}")
+
+    anchor_dnf = core.validate_anchor_expr_strict("y:w20 + w:mon")
+    omit_dnf = anchor_omit.validate_omit_expr_strict(
+        "y:d134",
+        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
+    )
+    next_unomitted, _meta = anchor_omit.next_after_expr_with_omit(
+        anchor_dnf,
+        seed,
+        default_seed=seed,
+        seed_base="ordinal-omit",
+        omit_dnf=omit_dnf,
+        core=core,
+    )
+    expect(next_unomitted == date(2025, 5, 12), f"d134 omission did not skip the 2024 week-20 Monday: {next_unomitted}")
+
+
+def test_year_ordinals_positional_acf_and_cache_round_trip():
+    """Ordinal selectors should survive positional evaluation and serialized recurrence forms."""
+    expr = "(y:w20 + w:mon)@in-year=first@+1d | y:d100"
+    seed = date(2024, 1, 1)
+    dnf = core.validate_anchor_expr_strict(expr)
+    first, _meta = core.next_after_expr(dnf, date(2024, 4, 1), default_seed=seed)
+    second, _meta = core.next_after_expr(dnf, first, default_seed=seed)
+    expect(first == date(2024, 4, 9), f"positional OR lost d100: {first}")
+    expect(second == date(2024, 5, 14), f"positional ISO-week candidate was not shifted: {second}")
+
+    canonical = core.acf_to_original_format(core.build_acf(expr))
+    reparsed = core.validate_anchor_expr_strict(canonical)
+    canonical_dates = []
+    cursor = date(2024, 4, 1)
+    for _ in range(4):
+        cursor, _meta = core.next_after_expr(reparsed, cursor, default_seed=seed)
+        canonical_dates.append(cursor)
+    original_dates = []
+    cursor = date(2024, 4, 1)
+    for _ in range(4):
+        cursor, _meta = core.next_after_expr(dnf, cursor, default_seed=seed)
+        original_dates.append(cursor)
+    expect(canonical_dates == original_dates, f"ACF round-trip changed ordinal scheduling: {canonical}")
+
+    json_roundtrip = json.loads(json.dumps(dnf, ensure_ascii=False))
+    expect(core.validate_anchor_expr_strict(json_roundtrip), "JSON cache round-trip rejected ordinal selectors")
+
 def test_quarters_window():
     """Test quarter window constraints (Q1-Q2)"""
     # Quarter aliases paired with m:* are now rejected (ambiguous).
@@ -16119,6 +16226,10 @@ TESTS = [
     test_year_day_ordinals_validate_strictly,
     test_iso_week_ordinals_expand_across_year_boundaries,
     test_iso_week_ordinals_validate_strictly,
+    test_year_ordinals_compose_with_weekdays_or_and_modifiers,
+    test_iso_week_interval_uses_iso_year_buckets,
+    test_year_ordinals_filter_random_and_omit_candidates,
+    test_year_ordinals_positional_acf_and_cache_round_trip,
     test_quarters_window,
     test_quarter_alias_unambiguous_month_selectors,
     test_quarter_selector_mode_characterization,

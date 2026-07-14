@@ -1082,6 +1082,7 @@ def _doms_allowed_by_year(y:int, m:int, y_specs: list[str]) -> set[int]:
         y_specs,
         y_ranges_from_spec=_y_ranges_from_spec,
         days_in_month=_days_in_month,
+        expand_yearly=expand_yearly_cached,
     )
 
 def _month_allowed_doms_for_monthly_atom(atom: dict, y: int, m: int, dim: int) -> set[int]:
@@ -3117,7 +3118,13 @@ def base_next_after_atom(
 # ------------------------------------------------------------------------------
 # Anchor scheduling & iteration helpers
 # ------------------------------------------------------------------------------
-def _interval_allowed_for_atom(typ: str, ival: int, seed: date, cand: date) -> bool:
+def _interval_allowed_for_atom(
+    typ: str,
+    ival: int,
+    seed: date,
+    cand: date,
+    spec: str = "",
+) -> bool:
     return _scheduler_atom.interval_allowed_for_atom(
         typ,
         ival,
@@ -3125,10 +3132,17 @@ def _interval_allowed_for_atom(typ: str, ival: int, seed: date, cand: date) -> b
         cand,
         weeks_between=_weeks_between,
         year_index=_year_index,
+        spec=spec,
     )
 
 
-def _advance_probe_for_interval_bucket(typ: str, ival: int, seed: date, cand: date) -> date:
+def _advance_probe_for_interval_bucket(
+    typ: str,
+    ival: int,
+    seed: date,
+    cand: date,
+    spec: str = "",
+) -> date:
     return _scheduler_atom.advance_probe_for_interval_bucket(
         typ,
         ival,
@@ -3137,6 +3151,7 @@ def _advance_probe_for_interval_bucket(typ: str, ival: int, seed: date, cand: da
         weeks_between=_weeks_between,
         year_index=_year_index,
         date_cls=date,
+        spec=spec,
     )
 
 

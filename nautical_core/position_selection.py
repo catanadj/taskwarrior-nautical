@@ -123,8 +123,8 @@ def parse_group_selection_modifier(
     match = _GROUP_SELECTION_RE.fullmatch(tokens[0].lower())
     if match is None:
         raise ValueError(
-            "Invalid positional selector. Use forms such as "
-            "'(expression)@in-month=first' or '@in-year=last'."
+            "Invalid positional selector. Use @in-week, @in-month, @in-quarter, "
+            "or @in-year on a parenthesized expression."
         )
     scope, raw_positions = match.groups()
     remaining = "".join(f"@{token}" for token in tokens[1:])
@@ -257,7 +257,8 @@ def validate_public_selection_node(node: object) -> SelectionNode:
             mods = factor.get("mods") or {}
             if any(value not in (None, False, 0, 0.0, "", []) for value in mods.values()):
                 raise ValueError(
-                    f"{selector} candidate expressions cannot contain modifiers yet."
+                    f"{selector} candidate expressions cannot contain modifiers; "
+                    "place supported modifiers after the selector."
                 )
     return normalized
 

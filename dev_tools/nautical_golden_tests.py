@@ -15933,6 +15933,32 @@ def test_position_selection_public_period_scopes_hooks():
     expect("2029-01-01" in timeline, f"timeline omitted next yearly selection: {timeline}")
 
 
+def test_position_selection_documented_examples_and_feedback():
+    """README examples should remain parseable and invalid forms should provide actionable guidance."""
+    readme = (Path(ROOT) / "README.md").read_text(encoding="utf-8")
+    examples = (
+        "(w:mon | w:wed | w:fri)@in-week=last",
+        "(w:tue | w:thu)@in-month=first,last",
+        "(w:mon)@in-quarter=last@+1bd",
+        "(w:mon)@in-year=10th@t=09:00",
+    )
+    for expr in examples:
+        expect(f'anchor:"{expr}"' in readme, f"README positional example is missing: {expr}")
+        core.validate_anchor_expr_strict(expr)
+
+    invalid = (
+        ("w:mon@in-year=last", "parenthesized candidate group"),
+        ("(w:mon@t=09:00)@in-year=last", "place supported modifiers after the selector"),
+        ("(w:mon)@in-decade=last", "@in-week, @in-month, @in-quarter, or @in-year"),
+    )
+    for expr, guidance in invalid:
+        try:
+            core.validate_anchor_expr_strict(expr)
+            raise AssertionError(f"invalid documented form should be rejected: {expr}")
+        except core.ParseError as exc:
+            expect(guidance in str(exc), f"missing guidance for {expr!r}: {exc}")
+
+
 TESTS = [
     test_lint_formats,
     test_weekly_and_unsat,
@@ -15975,6 +16001,7 @@ TESTS = [
     test_position_selection_public_period_scopes_scheduler,
     test_position_selection_public_period_scopes_acf_natural_and_hints,
     test_position_selection_public_period_scopes_hooks,
+    test_position_selection_documented_examples_and_feedback,
     test_yearly_month_names,
     test_rand_with_year_window,
     test_weekly_rand_N_gate,

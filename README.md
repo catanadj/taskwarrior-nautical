@@ -123,6 +123,59 @@ business-day-offset modifiers. Shared `@t=` also works on groups containing
 `+`; date modifiers on `AND` groups must remain attached to their individual
 atoms so the intersection cannot acquire false rolled matches.
 
+### Positional selection
+
+Use a positional selector when the schedule depends on a date's position in a
+set of matches rather than a single built-in atom:
+
+```text
+(candidate expression)@in-<scope>=<positions>
+```
+
+Nautical evaluates it in this order:
+
+```text
+collect matches in the period -> select positions -> apply modifiers
+```
+
+Examples:
+
+```bash
+# Last Monday, Wednesday, or Friday in each Monday-Sunday week
+task add "Weekly closeout" anchor:"(w:mon | w:wed | w:fri)@in-week=last"
+
+# First and last Tuesday or Thursday in each month
+task add "Twice-monthly review" anchor:"(w:tue | w:thu)@in-month=first,last"
+
+# Last Monday in each calendar quarter, then move one business day forward
+task add "Quarter handoff" anchor:"(w:mon)@in-quarter=last@+1bd"
+
+# Tenth Monday in each calendar year at 09:00
+task add "Annual checkpoint" anchor:"(w:mon)@in-year=10th@t=09:00"
+```
+
+Positions accept `first`, `last`, positive ordinals such as `3rd`, reverse
+ordinals such as `2nd-last`, and comma-separated lists. The scope limits are:
+
+| Selector | Period boundary | Position limit |
+|---|---|---:|
+| `@in-week` | Monday through Sunday | 7 |
+| `@in-month` | Calendar month | 31 |
+| `@in-quarter` | Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec | 92 |
+| `@in-year` | Calendar year | 366 |
+
+The candidate expression must be parenthesized and deterministic. Random
+candidates, candidate-side modifiers, nested positional selectors, and `@bd`
+after the selector are intentionally rejected. Supported post-selection
+modifiers are `@t=`, calendar and business-day offsets, `@pbd`, `@nbd`, `@nw`,
+and named weekday rolls such as `@next-mon` or `@prev-fri`.
+
+If a requested position does not exist, that position contributes no date. If
+the whole period has no selected date, Nautical advances to the next period;
+for example, `(y:02-29)@in-year=first` advances across non-leap years. A roll or
+offset may move the final occurrence outside the period where its candidate was
+selected. Business-day transforms use the task's `bc` calendar.
+
 For anchors, Nautical resolves dates as:
 
 ```text

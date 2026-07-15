@@ -91,6 +91,13 @@ def anchor_preview_prepare_dnf(
         rows.append(("Natural", f"[white]{core.describe_anchor_dnf(dnf, task)}[/]"))
     except Exception:
         pass
+    try:
+        selection = core._import_sibling("position_selection")
+        advice = selection.selection_advice_for_dnf(dnf)
+        if advice:
+            rows.append(("Advice", f"[yellow]{' '.join(advice)}[/]"))
+    except Exception:
+        pass
     return dnf, mode
 
 

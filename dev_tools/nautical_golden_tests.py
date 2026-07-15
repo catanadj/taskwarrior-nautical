@@ -15658,6 +15658,143 @@ def test_position_selection_rejects_invalid_tokens_and_bounds():
         expect("Unknown selection scope" in str(exc), f"unexpected scope error: {exc}")
 
 
+def test_position_selection_candidate_capacity_bounds():
+    """Candidate bounds should stay conservative while tightening common deterministic selectors."""
+    selection = importlib.import_module("nautical_core.position_selection")
+    cases = (
+        ("(w:mon)@in-week=first", 1),
+        ("(w:mon)@in-month=5th", 5),
+        ("(w:mon | w:fri)@in-month=10th", 10),
+        ("(m:15)@in-year=12th", 12),
+        ("(y:d1..d10)@in-year=10th", 10),
+        ("(y:w-1)@in-year=14th", 14),
+        ("(y:w-1 + w:fri)@in-year=2nd", 2),
+    )
+    for expr, expected in cases:
+        dnf = core.validate_anchor_expr_strict(expr)
+        node = dnf[0][0]
+        actual = selection.candidate_capacity_upper_bound(node)
+        expect(actual == expected, f"{expr}: expected candidate capacity {expected}, got {actual}")
+
+
+def test_position_selection_candidate_capacity_bounds_are_sound():
+    """Structural bounds must never fall below actual candidate counts."""
+    selection = importlib.import_module("nautical_core.position_selection")
+    candidates = (
+        "w:fri..mon",
+        "w:mon | w:fri",
+        "m:1,-1",
+        "m:1..7",
+        "m:last-fri",
+        "y:d1..d10",
+        "y:w-1",
+        "y:w52..w53",
+        "y:01-01..01-31",
+        "y:apr",
+        "y:q1",
+        "y:q1..q2",
+        "y:w-1 + w:fri",
+    )
+    probes = {
+        "week": [date(2023, 12, 25) + timedelta(days=7 * offset) for offset in range(106)],
+        "month": [date(year, month, 1) for year in range(2024, 2027) for month in range(1, 13)],
+        "quarter": [date(year, month, 1) for year in range(2024, 2027) for month in (1, 4, 7, 10)],
+        "year": [date(year, 1, 1) for year in range(2024, 2029)],
+    }
+    seed = date(2024, 1, 1)
+    for candidate in candidates:
+        for scope, scope_probes in probes.items():
+            dnf = core.validate_anchor_expr_strict(f"({candidate})@in-{scope}=first")
+            node = dnf[0][0]
+            upper = selection.candidate_capacity_upper_bound(node)
+            inner = node["expr"]
+            for probe in scope_probes:
+                start, end = selection.period_bounds(scope, probe)
+                current = start
+                count = 0
+                while current <= end:
+                    if any(
+                        all(core.atom_matches_on(atom, current, seed, seed_base="capacity-soundness") for atom in term)
+                        for term in inner
+                    ):
+                        count += 1
+                    current += timedelta(days=1)
+                expect(
+                    count <= upper,
+                    f"{candidate} in {scope} at {start}: actual {count} exceeds bound {upper}",
+                )
+
+
+def test_position_selection_rejects_only_fully_impossible_candidates():
+    """Strict validation should reject positions only when none can ever contribute."""
+    impossible = (
+        ("(w:mon)@in-week=2nd", "at most 1 matching date per week"),
+        ("(w:mon)@in-month=6th", "at most 5 matching dates per month"),
+        ("(m:15)@in-month=2nd", "at most 1 matching date per month"),
+        ("(y:d100)@in-year=2nd", "at most 1 matching date per year"),
+        ("(y:w-1 + w:fri)@in-year=3rd", "at most 2 matching dates per year"),
+    )
+    for expr, expected in impossible:
+        try:
+            core.validate_anchor_expr_strict(expr)
+            raise AssertionError(f"{expr}: provably impossible position should be rejected")
+        except core.ParseError as exc:
+            expect(expected in str(exc), f"{expr}: unexpected capacity guidance: {exc}")
+
+    mixed = core.validate_anchor_expr_strict("(w:mon)@in-month=first,6th")
+    expect(mixed[0][0].get("positions") == (1, 6), f"mixed useful/dead positions should remain valid: {mixed}")
+
+
+def test_position_selection_semantic_advice():
+    """Semantic advice should explain dead, redundant, and cross-calendar selections."""
+    selection = importlib.import_module("nautical_core.position_selection")
+
+    mixed = selection.selection_advice_for_dnf(
+        core.validate_anchor_expr_strict("(w:mon)@in-month=first,6th")
+    )
+    expect(any("6th can never contribute" in message for message in mixed), f"missing dead-position advice: {mixed}")
+
+    redundant = selection.selection_advice_for_dnf(
+        core.validate_anchor_expr_strict("(m:15)@in-month=first")
+    )
+    expect(any("is redundant here" in message for message in redundant), f"missing redundancy advice: {redundant}")
+
+    boundary = selection.selection_advice_for_dnf(
+        core.validate_anchor_expr_strict("(y:w-1)@in-year=8th")
+    )
+    expect(
+        any("ISO-week candidates by calendar year" in message for message in boundary),
+        f"missing ISO/calendar boundary advice: {boundary}",
+    )
+    nxt, _meta = core.next_after_expr(
+        core.validate_anchor_expr_strict("(y:w-1)@in-year=8th"),
+        date(2026, 1, 1),
+        default_seed=date(2026, 1, 1),
+        seed_base="semantic-advice",
+    )
+    expect(nxt == date(2027, 12, 31), f"advisory expression should remain schedulable: {nxt}")
+
+
+def test_on_add_position_selection_renders_semantic_advice():
+    """The on-add preview should include one advice row without disturbing hook JSON."""
+    hook = _find_hook_file("on-add-nautical.py")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000782",
+        "description": "positional semantic advice",
+        "status": "pending",
+        "entry": "20260715T090000Z",
+        "anchor": "(y:w-1)@in-year=8th",
+        "anchor_mode": "skip",
+    }
+    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
+    expect(proc.returncode == 0, f"on-add advice preview failed: {proc.stderr}")
+    out_task = _extract_last_json(proc.stdout)
+    expect(out_task.get("anchor") == task["anchor"], f"on-add changed advised anchor: {out_task}")
+    stderr = _strip_markup(proc.stderr)
+    expect("Advice" in stderr, f"on-add preview omitted advice row: {stderr}")
+    expect("ISO-week candidates by calendar year" in stderr, f"on-add preview omitted boundary explanation: {stderr}")
+
+
 def test_position_selection_period_boundaries():
     """Selection periods should use ISO weeks and exact calendar boundaries."""
     selection = importlib.import_module("nautical_core.position_selection")
@@ -16420,6 +16557,11 @@ TESTS = [
     test_rewrite_quarters_in_context_characterization,
     test_position_selection_parses_arbitrary_ordinals,
     test_position_selection_rejects_invalid_tokens_and_bounds,
+    test_position_selection_candidate_capacity_bounds,
+    test_position_selection_candidate_capacity_bounds_are_sound,
+    test_position_selection_rejects_only_fully_impossible_candidates,
+    test_position_selection_semantic_advice,
+    test_on_add_position_selection_renders_semantic_advice,
     test_position_selection_period_boundaries,
     test_position_selection_internal_evaluator,
     test_position_selection_internal_evaluator_validation,

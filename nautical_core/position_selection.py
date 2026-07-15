@@ -6,6 +6,22 @@ from datetime import date, timedelta
 from functools import lru_cache
 from typing import Any, Callable, TypedDict
 
+from .tokenutil import (
+    WD_ABBR,
+    expand_monthly_aliases,
+    expand_weekly_aliases,
+    month_from_alias,
+    static_month_last_day,
+)
+from .yearly_validation import (
+    YEARLY_DAY_RANGE_RE,
+    YEARLY_DAY_RE,
+    YEARLY_QUARTER_RANGE_RE,
+    YEARLY_QUARTER_RE,
+    YEARLY_WEEK_RANGE_RE,
+    YEARLY_WEEK_RE,
+)
+
 
 POSITION_LIMITS = {
     "week": 7,
@@ -210,6 +226,303 @@ def normalize_selection_node(node: object) -> SelectionNode:
     }
 
 
+def _ordinal_span(start: int, end: int, limit: int) -> int | None:
+    start_pos = start if start > 0 else limit + 1 + start
+    end_pos = end if end > 0 else limit + 1 + end
+    return end_pos - start_pos + 1 if end_pos >= start_pos else None
+
+
+def _weekly_weekdays(spec: str) -> set[int] | None:
+    text = expand_weekly_aliases(str(spec or ""))
+    weekdays: set[int] = set()
+    for token in (part.strip().lower() for part in text.split(",")):
+        if not token:
+            continue
+        if "rand" in token:
+            return None
+        if ".." in token:
+            left, right = token.split("..", 1)
+            if left not in WD_ABBR or right not in WD_ABBR:
+                return None
+            start = WD_ABBR.index(left)
+            end = WD_ABBR.index(right)
+            if start <= end:
+                weekdays.update(range(start, end + 1))
+            else:
+                weekdays.update(range(start, 7))
+                weekdays.update(range(0, end + 1))
+            continue
+        if token not in WD_ABBR:
+            return None
+        weekdays.add(WD_ABBR.index(token))
+    return weekdays or None
+
+
+def _monthly_capacity_per_month(spec: str) -> int | None:
+    text = expand_monthly_aliases(str(spec or ""))
+    capacity = 0
+    for token in (part.strip().lower() for part in text.split(",")):
+        if not token:
+            continue
+        if "rand" in token:
+            return None
+        if re.fullmatch(r"-?\d+", token) or re.fullmatch(r"-?\d+bd", token):
+            capacity += 1
+            continue
+        if re.fullmatch(
+            r"(?:last|-?[1-5](?:st|nd|rd|th)?)-?(?:mon|tue|wed|thu|fri|sat|sun)",
+            token,
+        ):
+            capacity += 1
+            continue
+        match = re.fullmatch(r"(-?\d+)\.\.(-?\d+)", token)
+        if match:
+            span = _ordinal_span(int(match.group(1)), int(match.group(2)), 31)
+            if span is None:
+                return None
+            capacity += span
+            continue
+        return None
+    return min(31, capacity) if capacity else None
+
+
+def _yearly_ordinal_span(token: str, *, prefix: str, limit: int) -> int | None:
+    single_re = YEARLY_DAY_RE if prefix == "d" else YEARLY_WEEK_RE
+    range_re = YEARLY_DAY_RANGE_RE if prefix == "d" else YEARLY_WEEK_RANGE_RE
+    single = single_re.fullmatch(token)
+    if single:
+        return 1
+    ordinal_range = range_re.fullmatch(token)
+    if not ordinal_range:
+        return None
+    return _ordinal_span(int(ordinal_range.group(1)), int(ordinal_range.group(2)), limit)
+
+
+def _fixed_year_range_capacity(token: str) -> int | None:
+    match = re.fullmatch(r"(\d{2})-(\d{2})\.\.(\d{2})-(\d{2})", token)
+    if not match:
+        return None
+    values = tuple(int(value) for value in match.groups())
+    capacities: list[int] = []
+    for month_first in (True, False):
+        if month_first:
+            month1, day1, month2, day2 = values
+        else:
+            day1, month1, day2, month2 = values
+        try:
+            start = date(2000, month1, day1)
+            end = date(2000, month2, day2)
+        except ValueError:
+            continue
+        if end >= start:
+            capacities.append((end - start).days + 1)
+    return max(capacities) if capacities else None
+
+
+def _quarter_capacity(token: str) -> int | None:
+    if not YEARLY_QUARTER_RE.fullmatch(token):
+        return None
+    quarter = int(token[1])
+    suffix = token[2:]
+    start_month = 1 + (quarter - 1) * 3
+    if not suffix:
+        return sum(static_month_last_day(month) for month in range(start_month, start_month + 3))
+    month_offset = {"s": 0, "m": 1, "e": 2}[suffix]
+    return static_month_last_day(start_month + month_offset)
+
+
+def _quarter_range_capacity(token: str) -> int | None:
+    match = YEARLY_QUARTER_RANGE_RE.fullmatch(token)
+    if not match:
+        return None
+    left, left_suffix, right, right_suffix = match.groups()
+    if left_suffix or right_suffix:
+        return None
+    start_quarter = int(left[1])
+    end_quarter = int(right[1])
+    if end_quarter < start_quarter:
+        return None
+    return sum(_quarter_capacity(f"q{quarter}") or 0 for quarter in range(start_quarter, end_quarter + 1))
+
+
+def _month_range_capacity(token: str) -> int | None:
+    match = re.fullmatch(r"([a-z]+|\d{2})\.\.([a-z]+|\d{2})", token)
+    if not match:
+        return None
+    start_month = month_from_alias(match.group(1))
+    end_month = month_from_alias(match.group(2))
+    if start_month is None or end_month is None or end_month < start_month:
+        return None
+    return sum(static_month_last_day(month) for month in range(start_month, end_month + 1))
+
+
+def _yearly_capacity_per_calendar_year(spec: str, scope: str) -> int | None:
+    capacity = 0
+    for token in (part.strip().lower() for part in str(spec or "").split(",")):
+        if not token:
+            continue
+        if "rand" in token:
+            return None
+        day_span = _yearly_ordinal_span(token, prefix="d", limit=366)
+        if day_span is not None:
+            capacity += day_span
+            continue
+        week_span = _yearly_ordinal_span(token, prefix="w", limit=53)
+        if week_span is not None:
+            boundary_factor = 2 if scope == "year" else 1
+            capacity += 7 * week_span * boundary_factor
+            continue
+        if re.fullmatch(r"\d{2}-\d{2}", token):
+            capacity += 1
+            continue
+        fixed_range = _fixed_year_range_capacity(token)
+        if fixed_range is not None:
+            capacity += fixed_range
+            continue
+        month = month_from_alias(token)
+        if month is not None:
+            capacity += static_month_last_day(month)
+            continue
+        month_range = _month_range_capacity(token)
+        if month_range is not None:
+            capacity += month_range
+            continue
+        quarter = _quarter_capacity(token)
+        if quarter is not None:
+            capacity += quarter
+            continue
+        quarter_range = _quarter_range_capacity(token)
+        if quarter_range is not None:
+            capacity += quarter_range
+            continue
+        return None
+    return min(POSITION_LIMITS[scope], capacity) if capacity else None
+
+
+def _pure_iso_week_count(spec: str) -> int | None:
+    count = 0
+    for token in (part.strip().lower() for part in str(spec or "").split(",")):
+        span = _yearly_ordinal_span(token, prefix="w", limit=53)
+        if span is None:
+            return None
+        count += span
+    return min(53, count) if count else None
+
+
+def _atom_capacity_upper(atom: dict[str, Any], scope: str) -> int:
+    limit = POSITION_LIMITS[scope]
+    typ = str(atom.get("typ") or atom.get("type") or "").lower()
+    spec = str(atom.get("spec") or atom.get("value") or "").lower()
+    if typ == "w":
+        weekdays = _weekly_weekdays(spec)
+        if weekdays is None:
+            return limit
+        per_weekday = {"week": 1, "month": 5, "quarter": 14, "year": 53}[scope]
+        return min(limit, len(weekdays) * per_weekday)
+    if typ == "m":
+        per_month = _monthly_capacity_per_month(spec)
+        if per_month is None:
+            return limit
+        months = {"week": 1, "month": 1, "quarter": 3, "year": 12}[scope]
+        return min(limit, per_month * months)
+    if typ == "y":
+        per_year = _yearly_capacity_per_calendar_year(spec, scope)
+        return limit if per_year is None else min(limit, per_year)
+    return limit
+
+
+def _term_capacity_upper(term: list[dict[str, Any]], scope: str) -> int:
+    limit = POSITION_LIMITS[scope]
+    upper = min((_atom_capacity_upper(atom, scope) for atom in term), default=limit)
+
+    weekly_sets = [
+        weekdays
+        for atom in term
+        if str(atom.get("typ") or atom.get("type") or "").lower() == "w"
+        if (weekdays := _weekly_weekdays(str(atom.get("spec") or atom.get("value") or ""))) is not None
+    ]
+    iso_week_counts = [
+        count
+        for atom in term
+        if str(atom.get("typ") or atom.get("type") or "").lower() == "y"
+        if (count := _pure_iso_week_count(str(atom.get("spec") or atom.get("value") or ""))) is not None
+    ]
+    if weekly_sets and iso_week_counts:
+        weekday_count = len(set.intersection(*weekly_sets))
+        boundary_factor = 2 if scope == "year" else 1
+        upper = min(upper, min(iso_week_counts) * weekday_count * boundary_factor)
+    return max(0, min(limit, upper))
+
+
+def candidate_capacity_upper_bound(node: object) -> int:
+    """Return a conservative maximum candidate count per selection period."""
+    normalized = normalize_selection_node(node)
+    limit = POSITION_LIMITS[normalized["scope"]]
+    return min(
+        limit,
+        sum(_term_capacity_upper(term, normalized["scope"]) for term in normalized["expr"]),
+    )
+
+
+def _impossible_positions(node: SelectionNode, upper: int) -> tuple[int, ...]:
+    return tuple(position for position in node["positions"] if abs(position) > upper)
+
+
+def _contains_iso_week_candidate(node: SelectionNode) -> bool:
+    return any(
+        str(atom.get("typ") or atom.get("type") or "").lower() == "y"
+        and any(
+            YEARLY_WEEK_RE.fullmatch(token) or YEARLY_WEEK_RANGE_RE.fullmatch(token)
+            for token in str(atom.get("spec") or atom.get("value") or "").lower().split(",")
+        )
+        for term in node["expr"]
+        for atom in term
+    )
+
+
+def selection_advice(node: object) -> tuple[str, ...]:
+    """Return concise, non-fatal semantic advice for one selection node."""
+    normalized = normalize_selection_node(node)
+    selector = f"@in-{normalized['scope']}"
+    upper = candidate_capacity_upper_bound(normalized)
+    advice: list[str] = []
+    impossible = _impossible_positions(normalized, upper)
+    if impossible and len(impossible) < len(normalized["positions"]):
+        labels = format_positions(impossible)
+        noun = "date" if upper == 1 else "dates"
+        advice.append(
+            f"{selector} position {labels} can never contribute; its candidate has at most "
+            f"{upper} matching {noun} per {normalized['scope']}."
+        )
+    if upper <= 1 and all(abs(position) == 1 for position in normalized["positions"]):
+        advice.append(
+            f"{selector} is redundant here because its candidate has at most one matching date "
+            f"per {normalized['scope']}."
+        )
+    if normalized["scope"] == "year" and _contains_iso_week_candidate(normalized):
+        advice.append(
+            "@in-year groups ISO-week candidates by calendar year; boundary dates from adjacent "
+            "ISO years may be counted, so higher positions exist only in some years."
+        )
+    return tuple(advice)
+
+
+def selection_advice_for_dnf(dnf: object) -> tuple[str, ...]:
+    if not isinstance(dnf, (list, tuple)):
+        return ()
+    out: list[str] = []
+    for term in dnf:
+        if not isinstance(term, (list, tuple)):
+            continue
+        for factor in term:
+            if not is_selection_node(factor):
+                continue
+            for message in selection_advice(factor):
+                if message not in out:
+                    out.append(message)
+    return tuple(out)
+
+
 def validate_public_selection_node(node: object) -> SelectionNode:
     """Apply deterministic public positional-selection limits."""
     normalized = normalize_selection_node(node)
@@ -260,6 +573,15 @@ def validate_public_selection_node(node: object) -> SelectionNode:
                     f"{selector} candidate expressions cannot contain modifiers; "
                     "place supported modifiers after the selector."
                 )
+    upper = candidate_capacity_upper_bound(normalized)
+    impossible = _impossible_positions(normalized, upper)
+    if impossible and len(impossible) == len(normalized["positions"]):
+        labels = format_positions(impossible)
+        noun = "date" if upper == 1 else "dates"
+        raise ValueError(
+            f"{selector} position {labels} can never match: the candidate has at most "
+            f"{upper} matching {noun} per {normalized['scope']}."
+        )
     return normalized
 
 
@@ -566,6 +888,7 @@ def candidate_cache_info():
 __all__ = (
     "POSITION_LIMITS",
     "SelectionNode",
+    "candidate_capacity_upper_bound",
     "candidate_cache_info",
     "clear_candidate_cache",
     "describe_selection",
@@ -580,6 +903,8 @@ __all__ = (
     "parse_group_selection_modifier",
     "period_bounds",
     "select_positions",
+    "selection_advice",
+    "selection_advice_for_dnf",
     "selected_candidates_in_period",
     "validate_public_selection_node",
 )

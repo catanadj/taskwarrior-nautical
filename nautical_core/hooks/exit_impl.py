@@ -2305,6 +2305,59 @@ def _strict_exit_feedback_message(stats: dict) -> str | None:
     )
 
 
+def _render_exit_drain_failure_panel(stats: dict) -> None:
+    if not isinstance(stats, dict) or core is None:
+        return
+
+    def count(key: str) -> int:
+        try:
+            return max(0, int(stats.get(key, 0) or 0))
+        except Exception:
+            return 0
+
+    errors = count("errors")
+    dead_lettered = count("dead_lettered")
+    requeue_failed = count("requeue_failed")
+    if not (errors or dead_lettered or requeue_failed):
+        return
+
+    problems = []
+    if dead_lettered:
+        problems.append(f"{dead_lettered} dead-lettered")
+    if requeue_failed:
+        suffix = "" if requeue_failed == 1 else "s"
+        problems.append(f"{requeue_failed} requeue write{suffix} failed")
+    other_errors = max(0, errors - dead_lettered - requeue_failed)
+    if other_errors:
+        suffix = "" if other_errors == 1 else "s"
+        problems.append(f"{other_errors} other drain error{suffix}")
+
+    rows = [
+        ("Action", "Run nautical queue-status"),
+        ("Problems", "; ".join(problems) or f"{errors} drain errors"),
+    ]
+    if dead_lettered:
+        rows.append(("State", ".nautical-state/.nautical_dead_letter.jsonl"))
+    requeued = count("requeued")
+    if requeued:
+        rows.append(("Retrying", str(requeued)))
+    queue_lock_failures = count("queue_lock_failures")
+    if queue_lock_failures:
+        rows.append(("Lock events", str(queue_lock_failures)))
+
+    core.render_panel(
+        "⚠ Nautical spawn drain failed",
+        rows,
+        kind="warning",
+        panel_mode=core.PANEL_MODE,
+        fast_color=core.FAST_COLOR,
+        themes={"warning": {"border": "yellow", "title": "yellow", "label": "yellow"}},
+        allow_line=True,
+        label_width_min=6,
+        label_width_max=14,
+    )
+
+
 def main() -> int:
     _migrate_legacy_nautical_state()
     _reset_exit_runtime_state()
@@ -2330,6 +2383,7 @@ def main() -> int:
         drain_queue=_drain_queue,
         strict_exit_result=_strict_exit_feedback_message,
     )
+    _render_exit_drain_failure_panel(result.stats or {})
     return hook_results.emit_exit_result(
         result,
         emit_exit_feedback=_emit_exit_feedback,

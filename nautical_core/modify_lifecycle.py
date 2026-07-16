@@ -3,7 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-RECURRENCE_SETTING_FIELDS = ("anchor", "anchor_file", "omit", "omit_file", "anchor_mode", "bc", "cp")
+RECURRENCE_SETTING_FIELDS = (
+    "anchor",
+    "anchor_file",
+    "omit",
+    "omit_file",
+    "anchor_mode",
+    "bc",
+    "cp",
+    "chainMax",
+    "chainUntil",
+)
 
 
 @dataclass(slots=True)
@@ -116,6 +126,7 @@ def apply_nautical_transition(
 
     old_has_recurrence = task_has_nautical_recurrence_fields(old)
     new_has_recurrence = task_has_nautical_recurrence_fields(new)
+    old_chain = (old.get("chain") or "").strip().lower()
     new_chain = (new.get("chain") or "").strip().lower()
 
     if not old_has_recurrence and new_has_recurrence:
@@ -147,6 +158,21 @@ def apply_nautical_transition(
         return ModifyNauticalTransition(
             state="disabled",
             reason="This task no longer has Nautical recurrence fields.",
+        )
+
+    if old_has_recurrence and new_has_recurrence and old_chain == "off" and new_chain == "on":
+        if (new.get("anchor") or "").strip():
+            source = "anchor"
+        elif (new.get("anchor_file") or "").strip():
+            source = "anchor_file"
+        elif (new.get("cp") or "").strip():
+            source = "cp"
+        else:
+            source = ""
+        return ModifyNauticalTransition(
+            state="resumed",
+            source=source,
+            reason="This task's Nautical recurrence was resumed with chain:on.",
         )
 
     if new_has_recurrence and new_chain == "off":

@@ -1204,6 +1204,9 @@ def test_on_exit_active_sqlite_queue_uses_full_drain():
         )
         expect(proc.returncode == 0, f"active queue drain failed: {proc.stderr!r}")
         expect(proc.stdout == "", f"on-exit active drain wrote stdout: {proc.stdout!r}")
+        stderr_text = _strip_markup(proc.stderr)
+        expect("Nautical spawn drain failed" in stderr_text, f"missing drain failure panel: {proc.stderr!r}")
+        expect("nautical queue-status" in stderr_text, f"missing recovery command: {proc.stderr!r}")
         with sqlite3.connect(str(queue_db)) as conn:
             remaining = conn.execute("SELECT COUNT(1) FROM queue_entries").fetchone()[0]
         expect(int(remaining) == 0, f"active queue row was not drained: remaining={remaining}")
@@ -2473,6 +2476,72 @@ def test_on_modify_disables_chain_emits_disabled_panel():
         expect(new.get("chain") == "off", f"{case['label']} should set chain:off, got {new!r}")
 
 
+def test_on_modify_resumes_chain_emits_resumed_panel():
+    """Explicitly resuming an existing recurrence should acknowledge its effect."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_chain_resumed_panel_test")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000451",
+        "description": "paused nautical task",
+        "status": "pending",
+        "anchor": "w:mon",
+        "chain": "off",
+        "chainID": "abcd1234",
+        "chainMax": 8,
+    }
+    new = {**old, "chain": "on"}
+    captured = {}
+
+    orig_panel = mod._panel
+    orig_print_task = mod._print_task
+    try:
+        def fake_panel(title, rows, *, kind=None):
+            captured["title"] = title
+            captured["rows"] = list(rows)
+            captured["kind"] = kind
+
+        mod._panel = fake_panel
+        mod._print_task = lambda task: captured.setdefault("task", dict(task))
+        mod._handle_non_completion_modify(old, new)
+    finally:
+        mod._panel = orig_panel
+        mod._print_task = orig_print_task
+
+    expect(captured.get("title") == "⚓ Nautical resumed", f"expected resumed panel, got {captured!r}")
+    expect(captured.get("kind") == "note", f"expected note panel, got {captured!r}")
+    rows = captured.get("rows") or []
+    expect(("Source", "anchor") in rows, f"expected anchor source row, got {rows!r}")
+    expect(("Chain", "off → on") in rows, f"expected chain transition row, got {rows!r}")
+    expect(any(k == "Effect" and "subject to chain limits" in str(v) for k, v in rows), f"expected bounded resume effect, got {rows!r}")
+    expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
+
+
+def test_on_modify_resume_wrapper_preserves_json_and_emits_panel():
+    """The thin wrapper must route chain resume through feedback without polluting stdout."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000452",
+        "description": "paused nautical task",
+        "status": "pending",
+        "cp": "1d",
+        "chain": "off",
+        "chainID": "abcd1234",
+        "link": 3,
+    }
+    new = {**old, "chain": "on"}
+    with tempfile.TemporaryDirectory() as td:
+        proc = _run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"TASKDATA": td},
+        )
+
+    expect(proc.returncode == 0, f"resume hook failed: {proc.stderr!r}")
+    expect(_assert_stdout_json_only(proc.stdout) == new, f"resume hook changed task JSON: {proc.stdout!r}")
+    expect("Nautical resumed" in proc.stderr, f"resume panel missing from stderr: {proc.stderr!r}")
+    expect("off → on" in proc.stderr, f"chain transition missing from panel: {proc.stderr!r}")
+
+
 def test_on_modify_recurrence_update_emits_ack_panel():
     """Changing recurrence settings on an existing Nautical task should be acknowledged."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -2510,6 +2579,49 @@ def test_on_modify_recurrence_update_emits_ack_panel():
     expect(any(k == "Natural" and "Tuesday" in str(v) and "Thursday" in str(v) for k, v in rows), f"expected natural row, got {rows!r}")
     expect(("Chain", "on") in rows, f"expected chain row, got {rows!r}")
     expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
+
+
+def test_on_modify_limit_update_emits_effective_boundaries():
+    """Changing chain limits should acknowledge both boundaries without speculative dates."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_limit_update_panel_test")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000450",
+        "description": "limited nautical task",
+        "status": "pending",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "abcd1234",
+        "link": 2,
+        "chainMax": 5,
+        "chainUntil": "20260810T070000Z",
+    }
+    new = {**old, "chainMax": 8, "chainUntil": "20260820T070000Z"}
+    cleared = dict(new)
+    cleared.pop("chainMax")
+    cleared.pop("chainUntil")
+    panels = []
+
+    orig_panel = mod._panel
+    orig_print_task = mod._print_task
+    try:
+        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
+        mod._print_task = lambda _task: None
+        mod._handle_non_completion_modify(old, new)
+        mod._handle_non_completion_modify(new, cleared)
+    finally:
+        mod._panel = orig_panel
+        mod._print_task = orig_print_task
+
+    expect(len(panels) == 2, f"each limit update should emit one panel: {panels!r}")
+    title, rows, kind = panels[0]
+    expect(title == "⚓ Nautical recurrence updated" and kind == "note", f"unexpected limit panel: {panels!r}")
+    expect(("Max links", "5 → 8") in rows, f"missing chainMax update: {rows!r}")
+    expect(any(label == "Until" and "2026-08-10" in value and "2026-08-20" in value for label, value in rows), f"missing localized chainUntil update: {rows!r}")
+    expect(("Final link", "#8") in rows, f"missing final link boundary: {rows!r}")
+    expect(any(label == "Deadline" and "2026-08-20" in value for label, value in rows), f"missing deadline boundary: {rows!r}")
+    expect(("Effective", "Whichever boundary is reached first") in rows, f"missing effective limit rule: {rows!r}")
+    expect(("Limits", "None") in panels[1][1], f"clearing both limits should be explicit: {panels[1]!r}")
 
 
 def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
@@ -2558,6 +2670,12 @@ def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
     expect(trans.state == "disabled", f"expected disabled transition, got {trans!r}")
     expect("chain:off" in trans.reason, f"expected chain-off reason, got {trans!r}")
     expect(disabled_new.get("chain") == "off", f"disabled transition should keep chain off, got {disabled_new!r}")
+
+    resumed_new = dict(disabled_new)
+    resumed_new["chain"] = "on"
+    trans = ml.apply_nautical_transition(disabled_new, resumed_new, short_uuid=lambda u: str(u).split("-")[0] if u else "")
+    expect(trans.state == "resumed", f"expected resumed transition, got {trans!r}")
+    expect(trans.source == "anchor", f"expected resumed anchor source, got {trans!r}")
 
     changes = ml.recurrence_setting_changes(
         {"anchor": "w:mon", "omit": "", "chain": "on"},
@@ -10905,8 +11023,15 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
         completed.get("wait") == "2026-07-15T07:40:00Z",
         f"combined due and completion edit should retain the wait offset: {completed!r}",
     )
-    expect(len(panels) == 3, f"each ordinary automatic adjustment should emit one panel: {panels!r}")
-    title, rows, kind = panels[0]
+    adjustment_panels = [panel for panel in panels if panel[0] == "⚓ Nautical schedule adjusted"]
+    warning_panels = [panel for panel in panels if panel[0] == "⚠ Nautical timing order"]
+    expect(len(adjustment_panels) == 3, f"each ordinary automatic adjustment should emit one panel: {panels!r}")
+    expect(len(warning_panels) == 1, f"the invalid explicit scheduled edit should warn once: {panels!r}")
+    expect(
+        any(label == "Problem" and "Wait is after Scheduled" in value for label, value in warning_panels[0][1]),
+        f"explicit scheduled edit should explain the resulting order: {warning_panels!r}",
+    )
+    title, rows, kind = adjustment_panels[0]
     expect(title == "⚓ Nautical schedule adjusted", f"unexpected adjustment panel title: {panels!r}")
     expect(kind == "note", f"adjustment panel should be informational: {panels!r}")
     expect(any(label == "Due" and "→" in value for label, value in rows), f"missing due row: {rows!r}")
@@ -10916,6 +11041,82 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
         ("Offsets", "Scheduled -0d 00h:10m; Wait -0d 00h:20m") in rows,
         f"missing retained offsets row: {rows!r}",
     )
+
+
+def test_on_modify_explicit_timing_edits_warn_on_invalid_order():
+    """Explicit timing edits should warn, not fail, when they leave an invalid order."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_timing_order_panel_test")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000992",
+        "description": "timing hierarchy",
+        "status": "pending",
+        "due": "20260720T100000Z",
+        "scheduled": "20260720T090000Z",
+        "wait": "20260720T080000Z",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "cid12345",
+    }
+    cases = [
+        ({**old, "scheduled": "20260720T110000Z"}, "Due >= Scheduled >= Wait", "Scheduled is after Due"),
+        ({**old, "wait": "20260720T093000Z"}, "Due >= Scheduled >= Wait", "Wait is after Scheduled"),
+    ]
+    scheduled_only = {key: value for key, value in old.items() if key != "due"}
+    cases.append(
+        ({**scheduled_only, "wait": "20260720T110000Z"}, "Scheduled >= Wait", "Wait is after Scheduled")
+    )
+    valid = {**old, "scheduled": "20260720T093000Z"}
+    panels = []
+
+    orig_panel = mod._panel
+    orig_print_task = mod._print_task
+    try:
+        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
+        mod._print_task = lambda _task: None
+        for changed, _expected, _problem in cases:
+            base = scheduled_only if "due" not in changed else old
+            mod._handle_non_completion_modify(base, changed)
+        mod._handle_non_completion_modify(old, valid)
+    finally:
+        mod._panel = orig_panel
+        mod._print_task = orig_print_task
+
+    expect(len(panels) == len(cases), f"only invalid explicit edits should warn: {panels!r}")
+    for panel, (_changed, expected, problem) in zip(panels, cases):
+        title, rows, kind = panel
+        expect(title == "⚠ Nautical timing order", f"unexpected warning title: {panel!r}")
+        expect(kind == "warning", f"timing order should use warning styling: {panel!r}")
+        expect(("Expected", expected) in rows, f"missing expected order: {rows!r}")
+        expect(any(label == "Problem" and problem in value for label, value in rows), f"missing timing problem: {rows!r}")
+        expect(any(label == "Action" for label, _value in rows), f"missing corrective action: {rows!r}")
+
+
+def test_on_modify_timing_warning_wrapper_preserves_json_stdout():
+    """Timing warnings must stay on stderr while the thin wrapper returns strict task JSON."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000993",
+        "description": "timing warning protocol",
+        "status": "pending",
+        "due": "20260720T100000Z",
+        "scheduled": "20260720T090000Z",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "cid12345",
+    }
+    new = {**old, "scheduled": "20260720T110000Z"}
+    with tempfile.TemporaryDirectory() as td:
+        proc = _run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"TASKDATA": td},
+        )
+
+    expect(proc.returncode == 0, f"timing warning hook failed: {proc.stderr!r}")
+    expect(_assert_stdout_json_only(proc.stdout) == new, f"timing warning changed task JSON: {proc.stdout!r}")
+    expect("Nautical timing order" in proc.stderr, f"timing warning missing from stderr: {proc.stderr!r}")
+    expect("Scheduled is after Due" in proc.stderr, f"timing problem missing from stderr: {proc.stderr!r}")
 
 
 def test_on_modify_build_child_carries_configured_uda_datetime():
@@ -14640,6 +14841,54 @@ def test_on_exit_emit_exit_feedback_reaches_stdout_contract():
     expect("[nautical] test feedback" in fake_stderr.getvalue(), "feedback should also remain visible on stderr")
 
 
+def test_on_exit_drain_failure_panel_is_actionable_and_retry_quiet():
+    """Permanent drain failures should show one panel; successful requeues should stay quiet."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_drain_failure_panel_test")
+    captured = []
+    original_render_panel = mod.core.render_panel
+    try:
+        mod.core.render_panel = lambda title, rows, **kwargs: captured.append((title, list(rows), kwargs))
+        mod._render_exit_drain_failure_panel(
+            {"processed": 1, "errors": 0, "dead_lettered": 0, "requeue_failed": 0, "requeued": 0}
+        )
+        mod._render_exit_drain_failure_panel(
+            {
+                "processed": 0,
+                "errors": 0,
+                "dead_lettered": 0,
+                "requeue_failed": 0,
+                "requeued": 2,
+                "queue_lock_failures": 2,
+            }
+        )
+        expect(captured == [], f"successful and retryable drains should be silent: {captured!r}")
+
+        mod._render_exit_drain_failure_panel(
+            {
+                "processed": 0,
+                "errors": 3,
+                "dead_lettered": 1,
+                "requeue_failed": 1,
+                "requeued": 2,
+                "queue_lock_failures": 2,
+            }
+        )
+    finally:
+        mod.core.render_panel = original_render_panel
+
+    expect(len(captured) == 1, f"expected one consolidated failure panel: {captured!r}")
+    title, rows, kwargs = captured[0]
+    expect(title == "⚠ Nautical spawn drain failed", f"unexpected panel title: {captured!r}")
+    expect(kwargs.get("kind") == "warning", f"failure panel should use warning styling: {captured!r}")
+    expect(
+        any(label == "Problems" and "1 dead-lettered" in value and "1 requeue write failed" in value for label, value in rows),
+        f"missing consolidated failure counts: {rows!r}",
+    )
+    expect(("Action", "Run nautical queue-status") in rows, f"missing recovery command: {rows!r}")
+    expect(any(label == "State" and ".nautical_dead_letter.jsonl" in value for label, value in rows), f"missing state path: {rows!r}")
+
+
 def test_on_exit_parent_nextlink_lock_uses_dedicated_dir():
     """on-exit parent-nextlink locks should live under .nautical-locks."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -16954,7 +17203,10 @@ TESTS = [
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_on_modify_promotes_chain_emits_upgrade_panel,
     test_on_modify_disables_chain_emits_disabled_panel,
+    test_on_modify_resumes_chain_emits_resumed_panel,
+    test_on_modify_resume_wrapper_preserves_json_and_emits_panel,
     test_on_modify_recurrence_update_emits_ack_panel,
+    test_on_modify_limit_update_emits_effective_boundaries,
     test_modify_lifecycle_routes_and_promotes_new_nautical_tasks,
     test_chainid_legacy_reads_do_not_drive_chain_identity,
     test_on_add_lowercase_chainid_does_not_mark_nautical,
@@ -17004,6 +17256,8 @@ TESTS = [
     test_on_exit_requires_core_data_context_helper,
     test_on_modify_carry_wall_clock_across_dst,
     test_on_modify_cp_due_edit_preserves_relative_offsets,
+    test_on_modify_explicit_timing_edits_warn_on_invalid_order,
+    test_on_modify_timing_warning_wrapper_preserves_json_stdout,
     test_normalize_spec_for_acf_cache_guards,
     test_on_modify_link_limit,
     test_on_modify_completion_preflight_context_happy_path,
@@ -17113,6 +17367,7 @@ TESTS = [
     test_on_exit_requeue_failure_leaves_sqlite_entry_processing,
     test_on_exit_export_uuid_noisy_stdout,
     test_on_exit_emit_exit_feedback_reaches_stdout_contract,
+    test_on_exit_drain_failure_panel_is_actionable_and_retry_quiet,
     test_on_exit_parent_nextlink_lock_uses_dedicated_dir,
     test_on_exit_state_files_use_dedicated_dir,
     test_on_exit_run_task_accepts_env,

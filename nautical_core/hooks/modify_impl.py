@@ -5460,12 +5460,23 @@ def _recurrence_update_label(field: str) -> str:
         "anchor_mode": "Mode",
         "bc": "Business calendar",
         "cp": "Period",
+        "chainMax": "Max links",
+        "chainUntil": "Until",
     }.get(field, field)
 
 
-def _recurrence_update_value(old_value: str, new_value: str) -> str:
-    old_text = old_value or "-"
-    new_text = new_value or "-"
+def _recurrence_update_value(field: str, old_value: str, new_value: str) -> str:
+    def display(value: str) -> str:
+        if not value:
+            return "-"
+        if field == "chainUntil":
+            parsed = core.parse_dt_any(value)
+            if parsed:
+                return _fmtlocal(parsed)
+        return value
+
+    old_text = display(old_value)
+    new_text = display(new_value)
     return f"{old_text} → {new_text}"
 
 
@@ -5473,9 +5484,21 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
     if not changes:
         return
     rows: list[tuple[str, str]] = [
-        (_recurrence_update_label(field), _recurrence_update_value(old_value, new_value))
+        (_recurrence_update_label(field), _recurrence_update_value(field, old_value, new_value))
         for field, old_value, new_value in changes
     ]
+
+    if any(field in {"chainMax", "chainUntil"} for field, _old, _new in changes):
+        max_link = core.coerce_int(new.get("chainMax"), 0)
+        deadline = core.parse_dt_any(new.get("chainUntil"))
+        if max_link:
+            rows.append(("Final link", f"#{max_link}"))
+        if deadline:
+            rows.append(("Deadline", _fmtlocal(deadline)))
+        if max_link and deadline:
+            rows.append(("Effective", "Whichever boundary is reached first"))
+        elif not max_link and not deadline:
+            rows.append(("Limits", "None"))
 
     anchor_expr = str(new.get("anchor") or "").strip()
     if anchor_expr and any(field == "anchor" for field, _old, _new in changes):
@@ -5522,6 +5545,47 @@ def _render_cp_schedule_adjusted_panel(
     )
 
 
+def _render_explicit_timing_order_warning(new: dict, changed_fields: tuple[str, ...]) -> None:
+    if not changed_fields:
+        return
+
+    def parsed(field: str) -> datetime | None:
+        value = new.get(field)
+        if not value:
+            return None
+        try:
+            return core.parse_dt_any(value)
+        except Exception:
+            return None
+
+    due = parsed("due")
+    scheduled = parsed("scheduled")
+    wait = parsed("wait")
+    issues: list[str] = []
+    if due and scheduled and scheduled > due:
+        issues.append(f"Scheduled is after Due by {_fmt_td_dd_hhmm(scheduled - due)}")
+    if due and wait and wait > due:
+        issues.append(f"Wait is after Due by {_fmt_td_dd_hhmm(wait - due)}")
+    if scheduled and wait and wait > scheduled:
+        issues.append(f"Wait is after Scheduled by {_fmt_td_dd_hhmm(wait - scheduled)}")
+    if not issues:
+        return
+
+    if due:
+        expected = "Due >= Scheduled >= Wait"
+        action = "Keep Scheduled at/before Due and Wait at/before Scheduled."
+    else:
+        expected = "Scheduled >= Wait"
+        action = "Keep Wait at or before Scheduled."
+    rows = [
+        ("Changed", ", ".join(field.capitalize() for field in changed_fields)),
+        ("Expected", expected),
+    ]
+    rows.extend(("Problem", issue) for issue in issues)
+    rows.append(("Action", action))
+    _panel("⚠ Nautical timing order", rows, kind="warning")
+
+
 def _preserve_cp_relative_offsets_on_due_change(
     old: dict,
     new: dict,
@@ -5566,6 +5630,9 @@ def _preserve_cp_relative_offsets_on_due_change(
 
 
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
+    explicit_timing_changes = tuple(
+        field for field in ("due", "scheduled", "wait") if _field_changed(old, new, field)
+    )
     anchor_raw = (new.get("anchor") or "").strip()
     new_anchor = _strip_quotes(anchor_raw)
     anchor_file_raw = (new.get("anchor_file") or "").strip()
@@ -5598,6 +5665,7 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     schedule_adjustment = _preserve_cp_relative_offsets_on_due_change(old, new, new_cp)
     if schedule_adjustment:
         _render_cp_schedule_adjusted_panel(schedule_adjustment)
+    _render_explicit_timing_order_warning(new, explicit_timing_changes)
 
     modify_lifecycle = _module("modify_lifecycle")
     try:
@@ -5620,6 +5688,17 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
             rows.append(("Source", transition.source))
         rows.append(("Chain", "off"))
         _panel("⚓ Nautical disabled", rows, kind="disabled")
+    elif transition and transition.state == "resumed":
+        rows = [("Reason", transition.reason or "This task's Nautical recurrence was resumed.")]
+        if transition.source:
+            rows.append(("Source", transition.source))
+        rows.extend(
+            [
+                ("Chain", "off → on"),
+                ("Effect", "Completion can spawn the next link, subject to chain limits."),
+            ]
+        )
+        _panel("⚓ Nautical resumed", rows, kind="note")
     else:
         try:
             changes = modify_lifecycle.recurrence_setting_changes(old, new)

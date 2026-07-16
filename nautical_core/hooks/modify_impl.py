@@ -5498,46 +5498,71 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
 
 
 def _render_cp_schedule_adjusted_panel(
-    adjustment: tuple[datetime, datetime, datetime, datetime, timedelta],
+    adjustment: tuple[
+        datetime,
+        datetime,
+        list[tuple[str, datetime, datetime, timedelta]],
+    ],
 ) -> None:
-    old_due, new_due, old_scheduled, new_scheduled, local_offset = adjustment
+    old_due, new_due, field_adjustments = adjustment
+    rows = [("Due", f"{_fmtlocal(old_due)} → {_fmtlocal(new_due)}")]
+    rows.extend(
+        (field.capitalize(), f"{_fmtlocal(old_value)} → {_fmtlocal(new_value)}")
+        for field, old_value, new_value, _offset in field_adjustments
+    )
+    offset_text = "; ".join(
+        f"{field.capitalize()} {_fmt_td_dd_hhmm(offset)}"
+        for field, _old_value, _new_value, offset in field_adjustments
+    )
+    rows.append(("Offset" if len(field_adjustments) == 1 else "Offsets", offset_text))
     _panel(
         "⚓ Nautical schedule adjusted",
-        [
-            ("Due", f"{_fmtlocal(old_due)} → {_fmtlocal(new_due)}"),
-            ("Scheduled", f"{_fmtlocal(old_scheduled)} → {_fmtlocal(new_scheduled)}"),
-            ("Offset", _fmt_td_dd_hhmm(local_offset)),
-        ],
+        rows,
         kind="note",
     )
 
 
-def _preserve_cp_scheduled_offset_on_due_change(
+def _preserve_cp_relative_offsets_on_due_change(
     old: dict,
     new: dict,
     new_cp: str,
-) -> tuple[datetime, datetime, datetime, datetime, timedelta] | None:
-    """Keep scheduled relative to due when an existing cp task's due alone moves."""
+) -> tuple[
+    datetime,
+    datetime,
+    list[tuple[str, datetime, datetime, timedelta]],
+] | None:
+    """Keep scheduled and wait relative to due when an existing cp task's due moves."""
     if not new_cp or not str(old.get("cp") or "").strip():
         return None
-    if not _field_changed(old, new, "due") or _field_changed(old, new, "scheduled"):
+    if not _field_changed(old, new, "due"):
         return None
-    if not (old.get("due") and new.get("due") and old.get("scheduled")):
+    if not (old.get("due") and new.get("due")):
         return None
 
     try:
         old_due = core.parse_dt_any(old.get("due"))
         new_due = core.parse_dt_any(new.get("due"))
-        old_scheduled = core.parse_dt_any(old.get("scheduled"))
-        if not (old_due and new_due and old_scheduled):
+        if not (old_due and new_due):
             return None
-        local_offset = _utc_to_local_naive(old_scheduled) - _utc_to_local_naive(old_due)
-        new_scheduled_local = _utc_to_local_naive(new_due) + local_offset
-        new_scheduled = _local_naive_to_utc(new_scheduled_local)
-        new["scheduled"] = core.fmt_isoz(new_scheduled)
-        return old_due, new_due, old_scheduled, new_scheduled, local_offset
     except Exception:
         return None
+
+    adjustments: list[tuple[str, datetime, datetime, timedelta]] = []
+    for field in ("scheduled", "wait"):
+        if _field_changed(old, new, field) or not old.get(field):
+            continue
+        try:
+            old_value = core.parse_dt_any(old.get(field))
+            if not old_value:
+                continue
+            local_offset = _utc_to_local_naive(old_value) - _utc_to_local_naive(old_due)
+            new_value_local = _utc_to_local_naive(new_due) + local_offset
+            new_value = _local_naive_to_utc(new_value_local)
+            new[field] = core.fmt_isoz(new_value)
+            adjustments.append((field, old_value, new_value, local_offset))
+        except Exception:
+            continue
+    return (old_due, new_due, adjustments) if adjustments else None
 
 
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
@@ -5570,7 +5595,7 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     if recurrence_or_cap_changed and (new_cp or new_anchor or new_anchor_file):
         _validate_chain_limits_on_modify(new)
 
-    schedule_adjustment = _preserve_cp_scheduled_offset_on_due_change(old, new, new_cp)
+    schedule_adjustment = _preserve_cp_relative_offsets_on_due_change(old, new, new_cp)
     if schedule_adjustment:
         _render_cp_schedule_adjusted_panel(schedule_adjustment)
 
@@ -5898,7 +5923,7 @@ def _completion_build_and_spawn_child(
 def _handle_completion_modify(old: dict, new: dict) -> None:
     _completion_validate_cp_and_anchor(old, new)
     new_cp = _strip_quotes(str(new.get("cp") or "").strip())
-    _preserve_cp_scheduled_offset_on_due_change(old, new, new_cp)
+    _preserve_cp_relative_offsets_on_due_change(old, new, new_cp)
     now_utc = core.now_utc()
     ctx = _completion_preflight_context(new, now_utc)
     if ctx is None:

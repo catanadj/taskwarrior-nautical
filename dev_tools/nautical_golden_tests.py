@@ -10805,8 +10805,8 @@ def test_on_modify_carry_wall_clock_across_dst():
     expect(wait_local.hour == 3 and wait_local.minute == 30, f"unexpected local wait: {wait_local}")
 
 
-def test_on_modify_cp_due_edit_preserves_scheduled_offset():
-    """A due-only edit on a cp task should move scheduled by the same local delta."""
+def test_on_modify_cp_due_edit_preserves_relative_offsets():
+    """A due edit on a cp task should retain unedited scheduled and wait offsets."""
     hook = _find_hook_file("on-modify-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_due_scheduled_test")
     if hasattr(mod, "_load_core"):
@@ -10818,6 +10818,7 @@ def test_on_modify_cp_due_edit_preserves_scheduled_offset():
         "status": "pending",
         "due": "20260710T080000Z",
         "scheduled": "20260710T075000Z",
+        "wait": "20260710T074000Z",
         "cp": "1d",
         "chain": "on",
         "chainID": "cid12345",
@@ -10828,6 +10829,17 @@ def test_on_modify_cp_due_edit_preserves_scheduled_offset():
         **old,
         "due": "20260715T080000Z",
         "scheduled": "20260715T070000Z",
+    }
+    explicit_wait = {
+        **old,
+        "due": "20260715T080000Z",
+        "wait": "20260715T063000Z",
+    }
+    explicit_both = {
+        **old,
+        "due": "20260715T080000Z",
+        "scheduled": "20260715T070000Z",
+        "wait": "20260715T063000Z",
     }
     malformed = {**old, "due": "not-a-date"}
     completed = {
@@ -10846,6 +10858,8 @@ def test_on_modify_cp_due_edit_preserves_scheduled_offset():
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._handle_non_completion_modify(old, due_only)
         mod._handle_non_completion_modify(old, explicit_scheduled)
+        mod._handle_non_completion_modify(old, explicit_wait)
+        mod._handle_non_completion_modify(old, explicit_both)
         mod._handle_non_completion_modify(old, malformed)
         mod._completion_preflight_context = lambda *_args, **_kwargs: None
         mod._handle_completion_modify(old, completed)
@@ -10859,24 +10873,49 @@ def test_on_modify_cp_due_edit_preserves_scheduled_offset():
         f"due-only edit should retain the 10-minute offset: {due_only!r}",
     )
     expect(
+        due_only.get("wait") == "2026-07-15T07:40:00Z",
+        f"due-only edit should retain the 20-minute wait offset: {due_only!r}",
+    )
+    expect(
         explicit_scheduled.get("scheduled") == "20260715T070000Z",
         f"explicit scheduled edit should win: {explicit_scheduled!r}",
     )
     expect(
-        malformed.get("scheduled") == old["scheduled"],
-        f"malformed due should leave scheduled unchanged: {malformed!r}",
+        explicit_scheduled.get("wait") == "2026-07-15T07:40:00Z",
+        f"an explicit scheduled edit should not prevent wait carry: {explicit_scheduled!r}",
+    )
+    expect(
+        explicit_wait.get("scheduled") == "2026-07-15T07:50:00Z",
+        f"an explicit wait edit should not prevent scheduled carry: {explicit_wait!r}",
+    )
+    expect(explicit_wait.get("wait") == "20260715T063000Z", f"explicit wait edit should win: {explicit_wait!r}")
+    expect(
+        explicit_both.get("scheduled") == "20260715T070000Z" and explicit_both.get("wait") == "20260715T063000Z",
+        f"explicit scheduled and wait edits should both win: {explicit_both!r}",
+    )
+    expect(
+        malformed.get("scheduled") == old["scheduled"] and malformed.get("wait") == old["wait"],
+        f"malformed due should leave relative fields unchanged: {malformed!r}",
     )
     expect(
         completed.get("scheduled") == "2026-07-15T07:50:00Z",
         f"combined due and completion edit should retain the offset: {completed!r}",
     )
-    expect(len(panels) == 1, f"only the ordinary automatic adjustment should emit a panel: {panels!r}")
+    expect(
+        completed.get("wait") == "2026-07-15T07:40:00Z",
+        f"combined due and completion edit should retain the wait offset: {completed!r}",
+    )
+    expect(len(panels) == 3, f"each ordinary automatic adjustment should emit one panel: {panels!r}")
     title, rows, kind = panels[0]
     expect(title == "⚓ Nautical schedule adjusted", f"unexpected adjustment panel title: {panels!r}")
     expect(kind == "note", f"adjustment panel should be informational: {panels!r}")
     expect(any(label == "Due" and "→" in value for label, value in rows), f"missing due row: {rows!r}")
     expect(any(label == "Scheduled" and "→" in value for label, value in rows), f"missing scheduled row: {rows!r}")
-    expect(("Offset", "-0d 00h:10m") in rows, f"missing retained offset row: {rows!r}")
+    expect(any(label == "Wait" and "→" in value for label, value in rows), f"missing wait row: {rows!r}")
+    expect(
+        ("Offsets", "Scheduled -0d 00h:10m; Wait -0d 00h:20m") in rows,
+        f"missing retained offsets row: {rows!r}",
+    )
 
 
 def test_on_modify_build_child_carries_configured_uda_datetime():
@@ -16964,7 +17003,7 @@ TESTS = [
     test_on_modify_requires_core_data_context_helper,
     test_on_exit_requires_core_data_context_helper,
     test_on_modify_carry_wall_clock_across_dst,
-    test_on_modify_cp_due_edit_preserves_scheduled_offset,
+    test_on_modify_cp_due_edit_preserves_relative_offsets,
     test_normalize_spec_for_acf_cache_guards,
     test_on_modify_link_limit,
     test_on_modify_completion_preflight_context_happy_path,

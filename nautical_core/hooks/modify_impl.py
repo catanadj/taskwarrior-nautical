@@ -5497,6 +5497,28 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
     _panel("⚓ Nautical recurrence updated", rows, kind="note")
 
 
+def _preserve_cp_scheduled_offset_on_due_change(old: dict, new: dict, new_cp: str) -> None:
+    """Keep scheduled relative to due when an existing cp task's due alone moves."""
+    if not new_cp or not str(old.get("cp") or "").strip():
+        return
+    if not _field_changed(old, new, "due") or _field_changed(old, new, "scheduled"):
+        return
+    if not (old.get("due") and new.get("due") and old.get("scheduled")):
+        return
+
+    try:
+        old_due = core.parse_dt_any(old.get("due"))
+        new_due = core.parse_dt_any(new.get("due"))
+        old_scheduled = core.parse_dt_any(old.get("scheduled"))
+        if not (old_due and new_due and old_scheduled):
+            return
+        local_offset = _utc_to_local_naive(old_scheduled) - _utc_to_local_naive(old_due)
+        new_scheduled_local = _utc_to_local_naive(new_due) + local_offset
+        new["scheduled"] = core.fmt_isoz(_local_naive_to_utc(new_scheduled_local))
+    except Exception:
+        return
+
+
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
     anchor_raw = (new.get("anchor") or "").strip()
     new_anchor = _strip_quotes(anchor_raw)
@@ -5526,6 +5548,8 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     )
     if recurrence_or_cap_changed and (new_cp or new_anchor or new_anchor_file):
         _validate_chain_limits_on_modify(new)
+
+    _preserve_cp_scheduled_offset_on_due_change(old, new, new_cp)
 
     modify_lifecycle = _module("modify_lifecycle")
     try:
@@ -5850,6 +5874,8 @@ def _completion_build_and_spawn_child(
 
 def _handle_completion_modify(old: dict, new: dict) -> None:
     _completion_validate_cp_and_anchor(old, new)
+    new_cp = _strip_quotes(str(new.get("cp") or "").strip())
+    _preserve_cp_scheduled_offset_on_due_change(old, new, new_cp)
     now_utc = core.now_utc()
     ctx = _completion_preflight_context(new, now_utc)
     if ctx is None:

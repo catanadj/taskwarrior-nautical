@@ -10805,6 +10805,69 @@ def test_on_modify_carry_wall_clock_across_dst():
     expect(wait_local.hour == 3 and wait_local.minute == 30, f"unexpected local wait: {wait_local}")
 
 
+def test_on_modify_cp_due_edit_preserves_scheduled_offset():
+    """A due-only edit on a cp task should move scheduled by the same local delta."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_due_scheduled_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000991",
+        "description": "cp due edit",
+        "status": "pending",
+        "due": "20260710T080000Z",
+        "scheduled": "20260710T075000Z",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "cid12345",
+    }
+
+    due_only = {**old, "due": "20260715T080000Z"}
+    explicit_scheduled = {
+        **old,
+        "due": "20260715T080000Z",
+        "scheduled": "20260715T070000Z",
+    }
+    malformed = {**old, "due": "not-a-date"}
+    completed = {
+        **old,
+        "status": "completed",
+        "due": "20260715T080000Z",
+        "end": "20260715T081500Z",
+    }
+
+    orig_print_task = mod._print_task
+    orig_preflight = mod._completion_preflight_context
+    try:
+        mod._print_task = lambda _task: None
+        mod._handle_non_completion_modify(old, due_only)
+        mod._handle_non_completion_modify(old, explicit_scheduled)
+        mod._handle_non_completion_modify(old, malformed)
+        mod._completion_preflight_context = lambda *_args, **_kwargs: None
+        mod._handle_completion_modify(old, completed)
+    finally:
+        mod._print_task = orig_print_task
+        mod._completion_preflight_context = orig_preflight
+
+    expect(
+        due_only.get("scheduled") == "2026-07-15T07:50:00Z",
+        f"due-only edit should retain the 10-minute offset: {due_only!r}",
+    )
+    expect(
+        explicit_scheduled.get("scheduled") == "20260715T070000Z",
+        f"explicit scheduled edit should win: {explicit_scheduled!r}",
+    )
+    expect(
+        malformed.get("scheduled") == old["scheduled"],
+        f"malformed due should leave scheduled unchanged: {malformed!r}",
+    )
+    expect(
+        completed.get("scheduled") == "2026-07-15T07:50:00Z",
+        f"combined due and completion edit should retain the offset: {completed!r}",
+    )
+
+
 def test_on_modify_build_child_carries_configured_uda_datetime():
     """configured recurrence_update_udas fields should carry with wall-clock delta."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -16890,6 +16953,7 @@ TESTS = [
     test_on_modify_requires_core_data_context_helper,
     test_on_exit_requires_core_data_context_helper,
     test_on_modify_carry_wall_clock_across_dst,
+    test_on_modify_cp_due_edit_preserves_scheduled_offset,
     test_normalize_spec_for_acf_cache_guards,
     test_on_modify_link_limit,
     test_on_modify_completion_preflight_context_happy_path,

@@ -10839,8 +10839,11 @@ def test_on_modify_cp_due_edit_preserves_scheduled_offset():
 
     orig_print_task = mod._print_task
     orig_preflight = mod._completion_preflight_context
+    orig_panel = mod._panel
+    panels = []
     try:
         mod._print_task = lambda _task: None
+        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._handle_non_completion_modify(old, due_only)
         mod._handle_non_completion_modify(old, explicit_scheduled)
         mod._handle_non_completion_modify(old, malformed)
@@ -10849,6 +10852,7 @@ def test_on_modify_cp_due_edit_preserves_scheduled_offset():
     finally:
         mod._print_task = orig_print_task
         mod._completion_preflight_context = orig_preflight
+        mod._panel = orig_panel
 
     expect(
         due_only.get("scheduled") == "2026-07-15T07:50:00Z",
@@ -10866,6 +10870,13 @@ def test_on_modify_cp_due_edit_preserves_scheduled_offset():
         completed.get("scheduled") == "2026-07-15T07:50:00Z",
         f"combined due and completion edit should retain the offset: {completed!r}",
     )
+    expect(len(panels) == 1, f"only the ordinary automatic adjustment should emit a panel: {panels!r}")
+    title, rows, kind = panels[0]
+    expect(title == "⚓ Nautical schedule adjusted", f"unexpected adjustment panel title: {panels!r}")
+    expect(kind == "note", f"adjustment panel should be informational: {panels!r}")
+    expect(any(label == "Due" and "→" in value for label, value in rows), f"missing due row: {rows!r}")
+    expect(any(label == "Scheduled" and "→" in value for label, value in rows), f"missing scheduled row: {rows!r}")
+    expect(("Offset", "-0d 00h:10m") in rows, f"missing retained offset row: {rows!r}")
 
 
 def test_on_modify_build_child_carries_configured_uda_datetime():

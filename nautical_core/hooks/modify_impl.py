@@ -5497,26 +5497,47 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
     _panel("⚓ Nautical recurrence updated", rows, kind="note")
 
 
-def _preserve_cp_scheduled_offset_on_due_change(old: dict, new: dict, new_cp: str) -> None:
+def _render_cp_schedule_adjusted_panel(
+    adjustment: tuple[datetime, datetime, datetime, datetime, timedelta],
+) -> None:
+    old_due, new_due, old_scheduled, new_scheduled, local_offset = adjustment
+    _panel(
+        "⚓ Nautical schedule adjusted",
+        [
+            ("Due", f"{_fmtlocal(old_due)} → {_fmtlocal(new_due)}"),
+            ("Scheduled", f"{_fmtlocal(old_scheduled)} → {_fmtlocal(new_scheduled)}"),
+            ("Offset", _fmt_td_dd_hhmm(local_offset)),
+        ],
+        kind="note",
+    )
+
+
+def _preserve_cp_scheduled_offset_on_due_change(
+    old: dict,
+    new: dict,
+    new_cp: str,
+) -> tuple[datetime, datetime, datetime, datetime, timedelta] | None:
     """Keep scheduled relative to due when an existing cp task's due alone moves."""
     if not new_cp or not str(old.get("cp") or "").strip():
-        return
+        return None
     if not _field_changed(old, new, "due") or _field_changed(old, new, "scheduled"):
-        return
+        return None
     if not (old.get("due") and new.get("due") and old.get("scheduled")):
-        return
+        return None
 
     try:
         old_due = core.parse_dt_any(old.get("due"))
         new_due = core.parse_dt_any(new.get("due"))
         old_scheduled = core.parse_dt_any(old.get("scheduled"))
         if not (old_due and new_due and old_scheduled):
-            return
+            return None
         local_offset = _utc_to_local_naive(old_scheduled) - _utc_to_local_naive(old_due)
         new_scheduled_local = _utc_to_local_naive(new_due) + local_offset
-        new["scheduled"] = core.fmt_isoz(_local_naive_to_utc(new_scheduled_local))
+        new_scheduled = _local_naive_to_utc(new_scheduled_local)
+        new["scheduled"] = core.fmt_isoz(new_scheduled)
+        return old_due, new_due, old_scheduled, new_scheduled, local_offset
     except Exception:
-        return
+        return None
 
 
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
@@ -5549,7 +5570,9 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     if recurrence_or_cap_changed and (new_cp or new_anchor or new_anchor_file):
         _validate_chain_limits_on_modify(new)
 
-    _preserve_cp_scheduled_offset_on_due_change(old, new, new_cp)
+    schedule_adjustment = _preserve_cp_scheduled_offset_on_due_change(old, new, new_cp)
+    if schedule_adjustment:
+        _render_cp_schedule_adjusted_panel(schedule_adjustment)
 
     modify_lifecycle = _module("modify_lifecycle")
     try:

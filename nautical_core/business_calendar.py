@@ -18,6 +18,14 @@ class BusinessCalendarSearchError(ValueError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class CalendarDisplacement:
+    calendar_name: str
+    original: date
+    adjusted: date
+    operation: str
+
+
 @dataclass(frozen=True)
 class WeekdayBusinessCalendar:
     name: str = "weekday"
@@ -49,6 +57,10 @@ _ACTIVE_BUSINESS_CALENDAR: ContextVar[BusinessCalendar] = ContextVar(
     "nautical_business_calendar",
     default=DEFAULT_BUSINESS_CALENDAR,
 )
+_ACTIVE_DISPLACEMENTS: ContextVar[list[CalendarDisplacement] | None] = ContextVar(
+    "nautical_business_calendar_displacements",
+    default=None,
+)
 
 
 def active_business_calendar() -> BusinessCalendar:
@@ -68,6 +80,67 @@ def use_business_calendar(business_calendar: BusinessCalendar):
         yield business_calendar
     finally:
         _ACTIVE_BUSINESS_CALENDAR.reset(token)
+
+
+@contextmanager
+def capture_business_calendar_displacements():
+    events: list[CalendarDisplacement] = []
+    token = _ACTIVE_DISPLACEMENTS.set(events)
+    try:
+        yield events
+    finally:
+        _ACTIVE_DISPLACEMENTS.reset(token)
+
+
+def record_business_calendar_displacement(
+    original: date,
+    adjusted: date,
+    business_calendar: BusinessCalendar,
+    *,
+    operation: str,
+) -> None:
+    events = _ACTIVE_DISPLACEMENTS.get()
+    if events is None or original == adjusted:
+        return
+    name = str(getattr(business_calendar, "name", "") or "").strip().lower()
+    if not name:
+        return
+    events.append(
+        CalendarDisplacement(
+            calendar_name=name,
+            original=original,
+            adjusted=adjusted,
+            operation=str(operation or "adjustment"),
+        )
+    )
+
+
+def business_calendar_displacement_for_date(
+    adjusted: date,
+    *,
+    calendar_name: str = "",
+) -> CalendarDisplacement | None:
+    events = _ACTIVE_DISPLACEMENTS.get() or []
+    wanted_name = str(calendar_name or "").strip().lower()
+    for index, event in enumerate(events):
+        if event.adjusted != adjusted:
+            continue
+        if wanted_name and event.calendar_name != wanted_name:
+            continue
+        original = event.original
+        operations = [event.operation]
+        for previous in reversed(events[:index]):
+            if previous.calendar_name != event.calendar_name or previous.adjusted != original:
+                continue
+            original = previous.original
+            operations.insert(0, previous.operation)
+        return CalendarDisplacement(
+            calendar_name=event.calendar_name,
+            original=original,
+            adjusted=event.adjusted,
+            operation="+".join(operations),
+        )
+    return None
 
 
 def is_business_day(

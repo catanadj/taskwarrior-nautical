@@ -10,6 +10,7 @@
 
 import sys, json, os, importlib, importlib.util
 import time as _ptime
+from contextlib import nullcontext
 from pathlib import Path
 
 _IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
@@ -5272,6 +5273,13 @@ def _render_anchor_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
+    calendar_feedback = importlib.import_module("nautical_core.calendar_feedback")
+    calendar_feedback.render_business_calendar_displacement(
+        new,
+        child_due,
+        core=core,
+        panel=_panel,
+    )
     diagnostics = _module("panel_diagnostics")
     panel_warnings = diagnostics.panel_warnings(core, new)
     if panel_warnings:
@@ -6113,7 +6121,12 @@ def main():
         state.diag_stats["startup_import_ms"] = round(float(_IMPORT_MS), 3)
     state.diag_stats["startup_request_ms"] = round((_ptime.perf_counter() - request_t0) * 1000.0, 3)
     state.diag_stats["startup_total_ms"] = round((_ptime.perf_counter() - startup_t0) * 1000.0, 3)
-    with calendar_context:
+    displacement_context = (
+        core.capture_business_calendar_displacements()
+        if str(new.get("bc") or "").strip()
+        else nullcontext()
+    )
+    with calendar_context, displacement_context:
         result = hook_engine.handle_on_modify(
             request,
             json_result_cls=hook_results.HookJsonResult,

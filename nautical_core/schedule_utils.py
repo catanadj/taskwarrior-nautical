@@ -7,6 +7,7 @@ from .business_calendar import (
     BusinessCalendar,
     BusinessCalendarSearchError,
     find_business_day,
+    record_business_calendar_displacement,
     shift_business_days,
 )
 
@@ -19,6 +20,7 @@ def roll_apply(
     business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
 ) -> date:
     roll = mods.get("roll")
+    original = dt
 
     if roll in ("pbd", "nbd", "nw"):
         if not business_calendar.is_business_day(dt):
@@ -42,6 +44,13 @@ def roll_apply(
                 except BusinessCalendarSearchError:
                     raise parse_error_cls("roll_apply: failed to reach business day (nw next)")
                 dt = prev_dt if (dt - prev_dt) <= (next_dt - dt) else next_dt
+
+        record_business_calendar_displacement(
+            original,
+            dt,
+            business_calendar,
+            operation=str(roll),
+        )
 
     elif roll in ("next-wd", "prev-wd"):
         tgt = mods.get("wd")
@@ -85,7 +94,15 @@ def apply_day_offset(
     if off:
         d += timedelta(days=off)
     business_off = int(mods.get("business_day_offset", 0) or 0)
-    return shift_business_days(d, business_off, business_calendar)
+    adjusted = shift_business_days(d, business_off, business_calendar)
+    if business_off:
+        record_business_calendar_displacement(
+            d,
+            adjusted,
+            business_calendar,
+            operation=f"{business_off:+d}bd",
+        )
+    return adjusted
 
 
 def expr_has_m_or_y(dnf) -> bool:

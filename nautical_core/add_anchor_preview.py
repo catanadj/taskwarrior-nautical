@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from .anchor_inclusion import collect_included_occurrences_local, collect_occurrence_events_local
-from . import panel_diagnostics
+from . import calendar_feedback, panel_diagnostics
 
 
 def _anchor_file_natural_text(expr: str) -> str:
@@ -492,6 +492,12 @@ def handle_anchor_file_preview_on_add(
         task["due"] = fmt_local_for_task(first_due_utc)
         rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
 
+    calendar_feedback.render_business_calendar_displacement(
+        task,
+        first_due_local_dt,
+        core=core,
+        panel=panel,
+    )
     append_wait_sched_rows(
         rows,
         task,
@@ -756,6 +762,12 @@ def handle_anchor_preview_on_add(
             task["due"] = fmt_local_for_task(first_due_utc)
             rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
 
+    calendar_feedback.render_business_calendar_displacement(
+        task,
+        first_due_local_dt,
+        core=core,
+        panel=panel,
+    )
     append_wait_sched_rows(
         rows,
         task,

@@ -316,6 +316,8 @@ _year_tokens = _import_sibling("year_tokens")
 short_uuid = _common.short_uuid
 DEFAULT_BUSINESS_CALENDAR = _business_calendar.DEFAULT_BUSINESS_CALENDAR
 BusinessCalendarConfigError = _business_calendar_config.BusinessCalendarConfigError
+business_calendar_displacement_for_date = _business_calendar.business_calendar_displacement_for_date
+capture_business_calendar_displacements = _business_calendar.capture_business_calendar_displacements
 
 
 def _with_business_calendar(fn: Callable[..., Any], business_calendar) -> Callable[..., Any]:
@@ -3809,11 +3811,13 @@ __all__ = (
     'build_and_cache_hints',
     'build_local_datetime',
     'business_calendar_fingerprint',
+    'business_calendar_displacement_for_date',
     'business_calendar_for_task',
     'business_calendar_definitions',
     'cache_key_for_task',
     'cache_load',
     'cache_save',
+    'capture_business_calendar_displacements',
     'coerce_int',
     'describe_anchor_dnf',
     'describe_anchor_expr',

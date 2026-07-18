@@ -6714,6 +6714,44 @@ def test_business_calendar_policy_flows_through_scheduler_paths():
     )
 
 
+def test_business_calendar_displacement_capture_is_shift_only():
+    """Calendar feedback should capture real rolls without labeling unchanged dates."""
+    import nautical_core.anchor_files as anchor_files
+
+    calendars = core.resolve_business_calendar_config(
+        {'work': {'anchor': 'w:mon..fri', 'omit': 'y:04-24'}}
+    )
+    policy = calendars['work']
+    shifted_dnf = core.validate_anchor_expr_strict('y:04-24@nbd')
+    chained_dnf = core.validate_anchor_expr_strict('y:04-24@nbd@+1bd')
+    unchanged_dnf = core.validate_anchor_expr_strict('y:04-23@nbd')
+
+    with tempfile.TemporaryDirectory() as td:
+        Path(td, 'dates.csv').write_text('date\n2026-04-24\n', encoding='utf-8')
+        with core.use_business_calendar(policy), core.capture_business_calendar_displacements():
+            shifted, _meta = core.next_after_expr(shifted_dnf, date(2026, 4, 20), date(2026, 4, 20))
+            displacement = core.business_calendar_displacement_for_date(shifted, calendar_name='work')
+            chained, _meta = core.next_after_expr(chained_dnf, date(2026, 4, 20), date(2026, 4, 20))
+            chained_displacement = core.business_calendar_displacement_for_date(chained, calendar_name='work')
+            unchanged, _meta = core.next_after_expr(unchanged_dnf, date(2026, 4, 20), date(2026, 4, 20))
+            no_displacement = core.business_calendar_displacement_for_date(unchanged, calendar_name='work')
+        with core.capture_business_calendar_displacements():
+            file_dates = anchor_files.load_anchor_file_dates('dates.csv@nbd', td, business_calendar=policy)
+            file_displacement = core.business_calendar_displacement_for_date(date(2026, 4, 27), calendar_name='work')
+
+    expect(shifted == date(2026, 4, 27), f'configured holiday roll was ignored: {shifted}')
+    expect(displacement is not None, 'shifted occurrence did not retain displacement metadata')
+    expect(displacement.original == date(2026, 4, 24), f'unexpected displacement origin: {displacement!r}')
+    expect(displacement.adjusted == shifted and displacement.calendar_name == 'work', f'unexpected displacement: {displacement!r}')
+    expect(chained == date(2026, 4, 28), f'chained calendar movement was ignored: {chained}')
+    expect(chained_displacement.original == date(2026, 4, 24), f'chained displacement lost its origin: {chained_displacement!r}')
+    expect(chained_displacement.adjusted == date(2026, 4, 28), f'chained displacement lost its result: {chained_displacement!r}')
+    expect(file_dates == frozenset({date(2026, 4, 27)}), f'anchor_file roll was ignored: {file_dates!r}')
+    expect(file_displacement is not None and file_displacement.original == date(2026, 4, 24), f'anchor_file displacement missing: {file_displacement!r}')
+    expect(unchanged == date(2026, 4, 23), f'unchanged occurrence moved unexpectedly: {unchanged}')
+    expect(no_displacement is None, f'unchanged occurrence should remain silent: {no_displacement!r}')
+
+
 def test_business_calendar_policy_flows_through_file_modifiers():
     """anchor_file and omit_file modifiers should use the same injected business-day policy."""
     import nautical_core.anchor_files as anchor_files
@@ -7011,6 +7049,47 @@ def test_hook_on_add_uses_and_normalizes_business_calendar():
         due = datetime.fromisoformat(str(out_task.get('due')))
         expect(due.weekday() in {5, 6}, f'named weekend calendar was ignored: {due}')
         expect(out_task.get('bc') == 'weekend', f'bc was not normalized: {out_task!r}')
+
+
+def test_hook_on_add_reports_business_calendar_displacement_only_when_shifted():
+    """On-add should explain a named-calendar roll while leaving unchanged anchors quiet."""
+    hook = _find_hook_file('on-add-nautical.py')
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / 'config-nautical.toml'
+        config_path.write_text(
+            '[business_calendar.work]\n'
+            'anchor = "w:mon..fri"\n'
+            'omit = "y:04-24"\n',
+            encoding='utf-8',
+        )
+        base = {
+            'uuid': '00000000-0000-0000-0000-000000000125',
+            'description': 'calendar displacement',
+            'status': 'pending',
+            'due': '20260420T060000Z',
+            'anchor_mode': 'skip',
+            'bc': 'work',
+        }
+        shifted = _run_hook_script(
+            hook,
+            {**base, 'anchor': 'y:04-24@nbd@t=09:00'},
+            env_extra={'NO_COLOR': '1', 'NAUTICAL_CONFIG': str(config_path)},
+        )
+        unchanged = _run_hook_script(
+            hook,
+            {**base, 'uuid': '00000000-0000-0000-0000-000000000126', 'anchor': 'y:04-23@nbd@t=09:00'},
+            env_extra={'NO_COLOR': '1', 'NAUTICAL_CONFIG': str(config_path)},
+        )
+
+    expect(shifted.returncode == 0, f'shifted calendar add failed: {shifted.stderr[:500]!r}')
+    _assert_stdout_json_only(shifted.stdout)
+    shifted_err = _strip_markup(shifted.stderr)
+    expect('Business calendar adjusted' in shifted_err, f'displacement panel missing: {shifted_err[:800]!r}')
+    expect('Calendar work' in shifted_err, f'calendar name missing: {shifted_err[:800]!r}')
+    expect('Fri 2026-04-24' in shifted_err and 'Mon 2026-04-27' in shifted_err, f'displacement dates missing: {shifted_err[:800]!r}')
+    expect(unchanged.returncode == 0, f'unchanged calendar add failed: {unchanged.stderr[:500]!r}')
+    _assert_stdout_json_only(unchanged.stdout)
+    expect('Business calendar adjusted' not in _strip_markup(unchanged.stderr), f'unchanged anchor should stay quiet: {unchanged.stderr[:800]!r}')
 
 
 def test_hook_on_add_rejects_unknown_business_calendar_cleanly():
@@ -13301,6 +13380,73 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
     expect(not any(k == "Analytics" for k, _v in fb), f"analytics row should be hidden when show_analytics is false: {fb}")
 
 
+def test_on_modify_reports_business_calendar_displacement():
+    """Completion feedback should report the captured calendar roll in every panel mode."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_calendar_displacement_test")
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._CHAIN_COLOR_PER_CHAIN = False
+    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
+    mod._format_next_anchor_rows = lambda rows: rows
+    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
+    mod._timeline_lines = lambda *_a, **_k: []
+    mod._panel_line = lambda *_a, **_k: None
+    panels = []
+    mod._panel = lambda title, rows, **_kwargs: panels.append((title, list(rows)))
+
+    policy = mod.core.resolve_business_calendar_config(
+        {'work': {'anchor': 'w:mon..fri', 'omit': 'y:04-24'}}
+    )['work']
+    dnf = mod.core.validate_anchor_expr_strict('y:04-24@nbd@t=09:00')
+    previous_mode = mod.core.PANEL_MODE
+    try:
+        mod.core.PANEL_MODE = "minimal"
+        with mod.core.use_business_calendar(policy), mod.core.capture_business_calendar_displacements():
+            child_date, _meta = mod.core.next_after_expr(
+                dnf,
+                date(2026, 4, 20),
+                date(2026, 4, 20),
+            )
+            child_due = mod.core.build_local_datetime(child_date, (9, 0))
+            mod._render_anchor_completion_feedback(
+                new={
+                    "anchor": "y:04-24@nbd@t=09:00",
+                    "anchor_mode": "skip",
+                    "bc": "work",
+                    "uuid": "00000000-0000-0000-0000-000000000127",
+                    "chainID": "calendar-chain",
+                },
+                child={"uuid": "00000000-0000-0000-0000-000000000128"},
+                child_due=child_due,
+                child_short="deadbeef",
+                next_no=2,
+                parent_short="00000000",
+                cap_no=None,
+                finals=[],
+                now_utc=mod.core.now_utc(),
+                until_dt=None,
+                until_cap_no=None,
+                dnf=dnf,
+                meta={"mode": "skip"},
+                stripped_attrs=[],
+                deferred_spawn=False,
+                spawn_intent_id=None,
+                chain_by_short=None,
+                analytics_advice=None,
+                integrity_warnings=None,
+                base_no=1,
+            )
+    finally:
+        mod.core.PANEL_MODE = previous_mode
+
+    calendar_panels = [rows for title, rows in panels if title == "⚓ Business calendar adjusted"]
+    expect(len(calendar_panels) == 1, f"completion should emit one displacement panel: {panels!r}")
+    rows = calendar_panels[0]
+    expect(("Calendar", "work") in rows, f"calendar name missing: {rows!r}")
+    expect(("Original", "Fri 2026-04-24") in rows, f"original occurrence missing: {rows!r}")
+    expect(("Adjusted", "Mon 2026-04-27 (+3d)") in rows, f"adjusted occurrence missing: {rows!r}")
+
+
 def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
     """Timed anchors should show a warning when timezone data is unavailable."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -16977,6 +17123,7 @@ TESTS = [
     test_business_day_modifiers,
     test_default_business_calendar_operations_characterization,
     test_business_calendar_policy_flows_through_scheduler_paths,
+    test_business_calendar_displacement_capture_is_shift_only,
     test_business_calendar_policy_flows_through_file_modifiers,
     test_business_calendar_config_normalizes_immutable_definitions,
     test_business_calendar_config_resolves_rules_files_and_omissions,
@@ -16985,6 +17132,7 @@ TESTS = [
     test_task_business_calendar_context_selects_and_restores_policy,
     test_business_calendar_fingerprint_invalidates_rule_file_and_hint_caches,
     test_hook_on_add_uses_and_normalizes_business_calendar,
+    test_hook_on_add_reports_business_calendar_displacement_only_when_shifted,
     test_hook_on_add_rejects_unknown_business_calendar_cleanly,
     test_hook_on_modify_rejects_unknown_business_calendar_cleanly,
     test_on_modify_spawned_child_preserves_business_calendar,
@@ -17133,6 +17281,7 @@ TESTS = [
     test_on_modify_invalid_anchor_has_no_stdout,
     test_timeline_completed_rows_place_uuid_before_delta,
     test_on_modify_render_anchor_completion_feedback_wrapper,
+    test_on_modify_reports_business_calendar_displacement,
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
     test_on_modify_render_anchor_file_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_wrapper,

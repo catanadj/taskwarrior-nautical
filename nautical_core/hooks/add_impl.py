@@ -124,7 +124,7 @@ import re
 import subprocess
 import tempfile
 from collections import OrderedDict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any
@@ -2009,7 +2009,12 @@ def main():
     hook_engine = _module("hook_engine")
     runtime = _build_hook_runtime_context()
     request = hook_context.build_on_add_request(runtime=runtime, task=task, prof=prof)
-    with calendar_context:
+    displacement_context = (
+        core.capture_business_calendar_displacements()
+        if str(task.get("bc") or "").strip()
+        else nullcontext()
+    )
+    with calendar_context, displacement_context:
         result = hook_engine.handle_on_add(
             request,
             json_result_cls=hook_results.HookJsonResult,

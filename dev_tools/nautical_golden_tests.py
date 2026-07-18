@@ -14062,6 +14062,146 @@ def test_ui_static_rich_renderer_delegates_to_shared_builder():
     expect("shared builder output" in stderr.getvalue(), f"renderer did not print builder result: {stderr.getvalue()!r}")
 
 
+def test_ui_live_renderer_reveals_cumulative_row_frames():
+    """Live rendering should reveal cumulative rows and leave the complete panel as its final frame."""
+    import nautical_core.ui as ui
+    import rich.live
+
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    built_rows = []
+    live_frames = []
+    stderr = TtyBuffer()
+    original_stderr = sys.stderr
+    original_builder = ui._build_rich_panel
+    original_live = rich.live.Live
+    try:
+        def fake_builder(_title, rows, *, kind, themes):
+            snapshot = list(rows)
+            built_rows.append(snapshot)
+            return tuple(snapshot)
+
+        class FakeLive:
+            def __init__(self, renderable, **kwargs):
+                live_frames.append(renderable)
+                expect(kwargs.get("auto_refresh") is False, f"live renderer should refresh explicitly: {kwargs!r}")
+                expect(kwargs.get("transient") is False, f"final panel should remain visible: {kwargs!r}")
+
+            def __enter__(self):
+                return self
+
+            def update(self, renderable, *, refresh=False):
+                expect(refresh is True, "each cumulative frame should be refreshed explicitly")
+                live_frames.append(renderable)
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return False
+
+        ui._build_rich_panel = fake_builder
+        rich.live.Live = FakeLive
+        sys.stderr = stderr
+        rendered = ui._render_panel_live(
+            "Live",
+            [("One", "1"), ("Two", "2"), ("Three", "3")],
+            kind="info",
+            themes={"info": {"border": "blue"}},
+        )
+    finally:
+        sys.stderr = original_stderr
+        ui._build_rich_panel = original_builder
+        rich.live.Live = original_live
+
+    expect(rendered is True, "live renderer should report success on a TTY")
+    expect(
+        built_rows == [
+            [("One", "1")],
+            [("One", "1"), ("Two", "2")],
+            [("One", "1"), ("Two", "2"), ("Three", "3")],
+        ],
+        f"live frames should reveal cumulative rows: {built_rows!r}",
+    )
+    expect(live_frames[-1] == tuple(built_rows[-1]), f"final live frame is incomplete: {live_frames!r}")
+
+
+def test_ui_live_mode_non_tty_falls_back_without_live_control_codes():
+    """Captured hook stderr should bypass Live and use the existing static fallback."""
+    import nautical_core.ui as ui
+    import rich.live
+
+    stderr = io.StringIO()
+    stdout = io.StringIO()
+    original_stderr = sys.stderr
+    original_stdout = sys.stdout
+    original_live = rich.live.Live
+    try:
+        class ForbiddenLive:
+            def __init__(self, *_args, **_kwargs):
+                raise AssertionError("Live must not start when stderr is captured")
+
+        rich.live.Live = ForbiddenLive
+        sys.stderr = stderr
+        sys.stdout = stdout
+        ui.render_panel("Captured", [("Key", "Value")], panel_mode="live")
+    finally:
+        sys.stderr = original_stderr
+        sys.stdout = original_stdout
+        rich.live.Live = original_live
+
+    output = stderr.getvalue()
+    expect("Captured" in output and "Key" in output and "Value" in output, f"live fallback lost panel: {output!r}")
+    expect("\x1b[" not in output, f"captured live fallback emitted terminal controls: {output!r}")
+    expect(stdout.getvalue() == "", f"panel output polluted stdout: {stdout.getvalue()!r}")
+
+
+def test_ui_render_panel_routes_live_mode_without_static_duplicate():
+    """A successful live render should not also print the static panel."""
+    import nautical_core.ui as ui
+
+    calls = []
+    original_live = ui._render_panel_live
+    original_rich = ui._render_panel_rich
+    try:
+        ui._render_panel_live = lambda title, rows, **kwargs: calls.append(("live", title, list(rows), kwargs)) or True
+        ui._render_panel_rich = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("static Rich duplicated live output"))
+        ui.render_panel("Routed", [("Key", "Value")], kind="info", panel_mode="live")
+    finally:
+        ui._render_panel_live = original_live
+        ui._render_panel_rich = original_rich
+
+    expect(len(calls) == 1 and calls[0][0] == "live", f"live mode did not route exactly once: {calls!r}")
+
+
+def test_ui_live_failure_preserves_rows_for_static_fallback():
+    """A failed live render must not consume generator-backed rows before fallback."""
+    import nautical_core.ui as ui
+
+    stderr = io.StringIO()
+    stdout = io.StringIO()
+    original_stderr = sys.stderr
+    original_stdout = sys.stdout
+    original_live = ui._render_panel_live
+    try:
+        def fail_after_consuming(_title, rows, **_kwargs):
+            list(rows)
+            return False
+
+        ui._render_panel_live = fail_after_consuming
+        sys.stderr = stderr
+        sys.stdout = stdout
+        rows = ((key, value) for key, value in [("Key", "Value")])
+        ui.render_panel("Fallback", rows, panel_mode="live")
+    finally:
+        sys.stderr = original_stderr
+        sys.stdout = original_stdout
+        ui._render_panel_live = original_live
+
+    output = stderr.getvalue()
+    expect("Fallback" in output and "Key" in output and "Value" in output, f"live fallback lost rows: {output!r}")
+    expect(stdout.getvalue() == "", f"panel output polluted stdout: {stdout.getvalue()!r}")
+
+
 def test_on_exit_equivalent_child_cache_reuses_slot_lookup():
     """on-exit should reuse equivalent-child lookups for the same slot within one run."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -17548,6 +17688,10 @@ TESTS = [
     test_core_render_panel_line_force_rich_kind_skips_panel_line,
     test_ui_build_rich_panel_preserves_static_layout_and_theme,
     test_ui_static_rich_renderer_delegates_to_shared_builder,
+    test_ui_live_renderer_reveals_cumulative_row_frames,
+    test_ui_live_mode_non_tty_falls_back_without_live_control_codes,
+    test_ui_render_panel_routes_live_mode_without_static_duplicate,
+    test_ui_live_failure_preserves_rows_for_static_fallback,
     test_on_exit_import_error_but_child_exists,
     test_on_exit_parent_nextlink_changed_dead_letter,
     test_on_exit_parent_update_lock_busy_requeues,

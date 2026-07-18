@@ -429,6 +429,42 @@ def _render_panel_rich(
     return True
 
 
+def _render_panel_live(
+    title,
+    rows,
+    *,
+    kind: str,
+    themes: dict | None,
+) -> bool:
+    try:
+        if not sys.stderr.isatty():
+            raise RuntimeError("no tty")
+        from rich.console import Console
+        from rich.live import Live
+
+        row_list = list(rows)
+        first_rows = row_list[:1]
+        panel = _build_rich_panel(title, first_rows, kind=kind, themes=themes)
+        console = Console(file=sys.stderr, force_terminal=True)
+        with Live(
+            panel,
+            console=console,
+            auto_refresh=False,
+            transient=False,
+        ) as live:
+            for end in range(2, len(row_list) + 1):
+                panel = _build_rich_panel(
+                    title,
+                    row_list[:end],
+                    kind=kind,
+                    themes=themes,
+                )
+                live.update(panel, refresh=True)
+        return True
+    except Exception:
+        return False
+
+
 def render_panel(
     title,
     rows,
@@ -475,6 +511,12 @@ def render_panel(
                 force_color=None,
             )
             return
+
+        if mode == "live":
+            live_rows = list(rows)
+            if _render_panel_live(title, live_rows, kind=kind, themes=themes):
+                return
+            rows = live_rows
 
         # Rich mode (default)
         if _render_panel_rich(title, rows, kind=kind, themes=themes):

@@ -7,8 +7,10 @@ import time
 
 
 _RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
-_LIVE_REVEAL_TOTAL_SECONDS = 0.16
+_DEFAULT_LIVE_PANEL_DURATION_MS = 160
+_MAX_LIVE_PANEL_DURATION_MS = 1000
 _LIVE_REVEAL_MAX_STEP_SECONDS = 0.04
+_LIVE_ANIMATION_USED = False
 
 
 def strip_rich_markup(s: str) -> str:
@@ -372,6 +374,8 @@ def _build_rich_panel(
     }
 
     t = Table.grid(padding=(0, 1), expand=False)
+    if live:
+        t.min_width = len("NAUTICAL") + 2
     t.add_column(style=f"bold {lstyle}", no_wrap=True, justify="right")
     t.add_column(style="white")
 
@@ -390,11 +394,13 @@ def _build_rich_panel(
             marker_text = Text(marker)
             if row_active:
                 marker_text.stylize(f"bold {tstyle}")
-                value_text.stylize(f"bold {tstyle}")
+                value_text.stylize("bold")
             t.add_row(marker_text, value_text)
             continue
 
-        label_text = Text(f"{marker}{k}")
+        label_text = Text(marker)
+        label_start = len(label_text)
+        label_text.append(str(k))
         value_raw = "" if v is None else str(v)
         try:
             value_text = Text.from_markup(value_raw)
@@ -402,20 +408,22 @@ def _build_rich_panel(
             value_text = Text(value_raw)
         lk = str(k).lower()
         if "warning" in lk:
-            label_text.stylize("bold yellow")
+            label_text.stylize("bold yellow", label_start)
         elif "error" in lk:
-            label_text.stylize("bold red")
+            label_text.stylize("bold red", label_start)
         elif "note" in lk:
-            label_text.stylize("italic cyan")
+            label_text.stylize("italic cyan", label_start)
 
         row_style = _panel_style_for_row(str(k), value_raw, palette=palette)
         if row_style:
             value_text.stylize(row_style)
             if lk in {"basis", "root"}:
-                label_text.stylize(row_style)
+                label_text.stylize(row_style, label_start)
         if row_active:
-            label_text.stylize(f"bold {tstyle}")
-            value_text.stylize(f"bold {tstyle}")
+            if label_start:
+                label_text.stylize(f"bold {tstyle}", 0, label_start)
+            label_text.stylize("bold", label_start)
+            value_text.stylize("bold")
 
         t.add_row(label_text, value_text)
 
@@ -465,7 +473,10 @@ def _render_panel_live(
     *,
     kind: str,
     themes: dict | None,
+    duration_ms: int | float = _DEFAULT_LIVE_PANEL_DURATION_MS,
 ) -> bool:
+    global _LIVE_ANIMATION_USED
+
     try:
         if not sys.stderr.isatty() or os.environ.get("TERM", "").strip().lower() == "dumb":
             raise RuntimeError("no tty")
@@ -473,59 +484,110 @@ def _render_panel_live(
         from rich.live import Live
 
         row_list = list(rows)
+        settled_panel = _build_rich_panel(
+            title,
+            row_list,
+            kind=kind,
+            themes=themes,
+            live=True,
+        )
+        console = Console(file=sys.stderr, force_terminal=True)
+    except Exception:
+        return False
+
+    effective_duration_ms = _live_animation_duration_ms(kind, duration_ms)
+    if len(row_list) <= 1 or effective_duration_ms <= 0:
+        try:
+            console.print(settled_panel)
+            return True
+        except Exception:
+            return False
+
+    try:
         first_rows = row_list[:1]
-        active_row = 0 if len(row_list) > 1 else None
         panel = _build_rich_panel(
             title,
             first_rows,
             kind=kind,
             themes=themes,
             live=True,
-            active_row=active_row,
+            active_row=0,
         )
-        reveal_delay = _live_reveal_delay(len(row_list))
-        console = Console(file=sys.stderr, force_terminal=True)
+        reveal_delay = _live_reveal_delay(len(row_list), effective_duration_ms)
+    except Exception:
+        try:
+            console.print(settled_panel)
+            return True
+        except Exception:
+            return False
+
+    started = False
+    try:
         with Live(
             panel,
             console=console,
             auto_refresh=False,
             transient=False,
         ) as live:
-            for end in range(2, len(row_list) + 1):
-                panel = _build_rich_panel(
-                    title,
-                    row_list[:end],
-                    kind=kind,
-                    themes=themes,
-                    live=True,
-                    active_row=end - 1,
-                )
-                if reveal_delay:
+            started = True
+            _LIVE_ANIMATION_USED = True
+            try:
+                for end in range(2, len(row_list) + 1):
+                    panel = _build_rich_panel(
+                        title,
+                        row_list[:end],
+                        kind=kind,
+                        themes=themes,
+                        live=True,
+                        active_row=end - 1,
+                    )
                     time.sleep(reveal_delay)
-                live.update(panel, refresh=True)
-            if reveal_delay:
+                    live.update(panel, refresh=True)
                 time.sleep(reveal_delay)
-                panel = _build_rich_panel(
-                    title,
-                    row_list,
-                    kind=kind,
-                    themes=themes,
-                    live=True,
-                )
-                live.update(panel, refresh=True)
+                live.update(settled_panel, refresh=True)
+            except Exception:
+                try:
+                    live.update(settled_panel, refresh=True)
+                except Exception:
+                    pass
         return True
     except Exception:
-        return False
+        return started
 
 
-def _live_reveal_delay(row_count: int) -> float:
+def _normalized_live_duration_ms(duration_ms: int | float) -> float:
+    try:
+        duration = float(duration_ms)
+    except Exception:
+        duration = float(_DEFAULT_LIVE_PANEL_DURATION_MS)
+    return max(0.0, min(float(_MAX_LIVE_PANEL_DURATION_MS), duration))
+
+
+def _live_animation_duration_ms(kind: str, duration_ms: int | float) -> float:
+    duration = _normalized_live_duration_ms(duration_ms)
+    if duration <= 0 or str(kind or "").strip().lower() == "error" or _LIVE_ANIMATION_USED:
+        return 0.0
+    if str(kind or "").strip().lower() == "warning":
+        return duration / 2.0
+    return duration
+
+
+def _reset_live_animation_state() -> None:
+    global _LIVE_ANIMATION_USED
+    _LIVE_ANIMATION_USED = False
+
+
+def _live_reveal_delay(
+    row_count: int,
+    duration_ms: int | float = _DEFAULT_LIVE_PANEL_DURATION_MS,
+) -> float:
     row_count = max(0, int(row_count))
     transitions = row_count if row_count > 1 else 0
     if not transitions:
         return 0.0
     return min(
         _LIVE_REVEAL_MAX_STEP_SECONDS,
-        _LIVE_REVEAL_TOTAL_SECONDS / transitions,
+        (_normalized_live_duration_ms(duration_ms) / 1000.0) / transitions,
     )
 
 
@@ -535,6 +597,7 @@ def render_panel(
     *,
     kind: str = "info",
     panel_mode: str = "rich",
+    live_duration_ms: int | float = _DEFAULT_LIVE_PANEL_DURATION_MS,
     fast_color: bool = True,
     themes: dict | None = None,
     allow_line: bool = True,
@@ -578,7 +641,13 @@ def render_panel(
 
         if mode == "live":
             live_rows = list(rows)
-            if _render_panel_live(title, live_rows, kind=kind, themes=themes):
+            if _render_panel_live(
+                title,
+                live_rows,
+                kind=kind,
+                themes=themes,
+                duration_ms=live_duration_ms,
+            ):
                 return
             rows = live_rows
 

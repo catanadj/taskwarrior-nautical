@@ -264,6 +264,7 @@ CHECK_CHAIN_INTEGRITY = conf_bool(
     true_values={"1", "yes", "true", "on"},
 )
 PANEL_MODE = conf_str("panel_mode", "rich").lower()
+LIVE_PANEL_DURATION_MS = conf_int("live_panel_duration_ms", 160, min_value=0, max_value=1000)
 FAST_COLOR = conf_bool("fast_color", True)
 EXIT_PROGRESS = conf_bool("exit_progress", True)
 SPAWN_QUEUE_MAX_BYTES = conf_int("spawn_queue_max_bytes", 524288, min_value=0)

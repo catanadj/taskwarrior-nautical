@@ -4611,6 +4611,28 @@ def test_core_recurrence_update_udas_config_aliases():
         )
 
 
+def test_core_live_panel_duration_config_defaults_and_clamps():
+    """Live panel duration should default to 160 ms and stay within its safe range."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
+    cases = [
+        ("", 160),
+        ("live_panel_duration_ms = -20\n", 0),
+        ("live_panel_duration_ms = 275\n", 275),
+        ("live_panel_duration_ms = 5000\n", 1000),
+        ('live_panel_duration_ms = "bad"\n', 160),
+    ]
+    for index, (config_text, expected) in enumerate(cases):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = os.path.join(td, "nautical.toml")
+            with open(cfg, "w", encoding="utf-8") as f:
+                f.write(config_text)
+            mod = _load_core_module(core_path, f"_nautical_core_live_duration_{index}", cfg)
+            expect(
+                mod.LIVE_PANEL_DURATION_MS == expected,
+                f"unexpected live duration for {config_text!r}: {mod.LIVE_PANEL_DURATION_MS!r}",
+            )
+
+
 def test_shipped_config_keeps_hook_toggles_top_level():
     """Preset tables in config-nautical.toml should not swallow later top-level hook settings."""
     try:
@@ -4621,6 +4643,7 @@ def test_shipped_config_keeps_hook_toggles_top_level():
     cfg_path = Path(ROOT) / "config-nautical.toml"
     data = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
     expect(data.get("panel_mode") == "rich", f"panel_mode should be top-level in shipped config: {data!r}")
+    expect(data.get("live_panel_duration_ms") == 160, f"live duration should be top-level in shipped config: {data!r}")
     expect(data.get("show_analytics") is False, f"show_analytics should be top-level in shipped config: {data!r}")
     omit_presets = data.get("omit_presets") if isinstance(data.get("omit_presets"), dict) else {}
     expect("panel_mode" not in omit_presets, f"panel_mode was parsed as an omit preset: {omit_presets!r}")
@@ -7876,6 +7899,10 @@ def test_on_add_preview_uses_configured_chain_colour():
         theme = captured.get("themes", {}).get("preview_anchor", {})
         expect(theme.get("border") == expected, f"unexpected on-add border colour: {theme!r}")
         expect(theme.get("title") == expected, f"unexpected on-add title colour: {theme!r}")
+        expect(
+            captured.get("live_duration_ms") == hook.core.LIVE_PANEL_DURATION_MS,
+            f"on-add did not forward live duration: {captured!r}",
+        )
 
         captured.clear()
         hook.core.CHAIN_COLOR_PER_CHAIN = False
@@ -13990,6 +14017,27 @@ def test_on_modify_panel_fallback():
     expect("Test Panel" in out, "fallback panel should emit title")
 
 
+def test_on_modify_panel_forwards_live_duration():
+    """on-modify should pass the configured total live duration to the shared renderer."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_live_duration_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    captured = {}
+    original_render = mod.core.render_panel
+    try:
+        mod.core.render_panel = lambda *_args, **kwargs: captured.update(kwargs)
+        mod._panel("Live duration", [("Key", "Value")], kind="info")
+    finally:
+        mod.core.render_panel = original_render
+
+    expect(
+        captured.get("live_duration_ms") == mod.core.LIVE_PANEL_DURATION_MS,
+        f"on-modify did not forward live duration: {captured!r}",
+    )
+
+
 def test_core_render_panel_line_mode_uses_panel_line():
     calls = []
     orig_panel_line = core.panel_line
@@ -14098,6 +14146,25 @@ def test_ui_live_panel_has_nautical_branding_without_changing_static_panels():
     expect(active_width == settled_width, f"live focus shifted panel width: active={active_width}, settled={settled_width}")
     expect(ui._live_reveal_delay(1) == 0, "one-row live panels should not incur animation delay")
 
+    narrow_panel = ui._build_rich_panel("N", [("A", "1")], kind="info", themes=None, live=True)
+    narrow_output = io.StringIO()
+    Console(file=narrow_output, width=40, color_system=None).print(narrow_panel)
+    expect("NAUTICAL" in narrow_output.getvalue(), f"narrow live panel truncated its footer: {narrow_output.getvalue()!r}")
+
+    semantic_panel = ui._build_rich_panel(
+        "Semantic",
+        [("Warning", "late")],
+        kind="info",
+        themes=None,
+        live=True,
+        active_row=0,
+    )
+    value_text = semantic_panel.renderable.columns[1]._cells[0]
+    value_styles = [str(span.style) for span in value_text.spans]
+    expect(any("yellow" in style for style in value_styles), f"active focus lost semantic colour: {value_styles!r}")
+    expect(any(style == "bold" for style in value_styles), f"active focus did not emphasize value: {value_styles!r}")
+    expect(not any("cyan" in style for style in value_styles), f"active focus overrode semantic colour: {value_styles!r}")
+
 
 def test_ui_static_rich_renderer_delegates_to_shared_builder():
     """Static Rich rendering should print exactly the renderable returned by the shared builder."""
@@ -14197,18 +14264,147 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
     expect(rendered is True, "live renderer should report success on a TTY")
     expect(
         built_rows == [
+            [("One", "1"), ("Two", "2"), ("Three", "3")],
             [("One", "1")],
             [("One", "1"), ("Two", "2")],
             [("One", "1"), ("Two", "2"), ("Three", "3")],
-            [("One", "1"), ("Two", "2"), ("Three", "3")],
         ],
-        f"live frames should reveal cumulative rows: {built_rows!r}",
+        f"live renderer should prebuild recovery then reveal cumulative rows: {built_rows!r}",
     )
     expect(built_live_flags == [True, True, True, True], f"live frames lost their live styling: {built_live_flags!r}")
-    expect(built_active_rows == [0, 1, 2, None], f"live focus did not settle cleanly: {built_active_rows!r}")
+    expect(built_active_rows == [None, 0, 1, 2], f"live recovery/focus frames changed: {built_active_rows!r}")
     expect(len(sleep_delays) == 3 and all(delay > 0 for delay in sleep_delays), f"unexpected live pacing: {sleep_delays!r}")
     expect(sum(sleep_delays) <= 0.161, f"live reveal exceeded its total delay budget: {sleep_delays!r}")
     expect(live_frames[-1] == tuple(built_rows[-1]), f"final live frame is incomplete: {live_frames!r}")
+
+
+def test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels():
+    """Only one eligible panel should animate; warnings shorten motion and errors remain immediate."""
+    import nautical_core.ui as ui
+    import rich.live
+    from rich.text import Text
+
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    live_starts = []
+    sleep_delays = []
+    original_stderr = sys.stderr
+    original_builder = ui._build_rich_panel
+    original_live = rich.live.Live
+    original_sleep = ui.time.sleep
+    try:
+        def fake_builder(title, rows, **_kwargs):
+            return Text(f"{title}:{len(list(rows))}")
+
+        class FakeLive:
+            def __init__(self, renderable, **_kwargs):
+                live_starts.append(renderable)
+
+            def __enter__(self):
+                return self
+
+            def update(self, _renderable, *, refresh=False):
+                expect(refresh is True, "live policy frames should refresh explicitly")
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return False
+
+        sys.stderr = TtyBuffer()
+        ui._build_rich_panel = fake_builder
+        rich.live.Live = FakeLive
+        ui.time.sleep = sleep_delays.append
+
+        ui._reset_live_animation_state()
+        expect(ui._render_panel_live("Warning", [("A", "1"), ("B", "2"), ("C", "3")], kind="warning", themes=None, duration_ms=200), "warning live render failed")
+        expect(len(live_starts) == 1, f"warning panel did not animate once: {live_starts!r}")
+        expect(0 < sum(sleep_delays) <= 0.101, f"warning exceeded half-duration cap: {sleep_delays!r}")
+        warning_sleep_count = len(sleep_delays)
+
+        expect(ui._render_panel_live("Later", [("A", "1"), ("B", "2")], kind="info", themes=None, duration_ms=200), "settled follow-up render failed")
+        expect(len(live_starts) == 1, "a second panel animated in the same process")
+        expect(len(sleep_delays) == warning_sleep_count, "a settled follow-up panel added delay")
+
+        ui._reset_live_animation_state()
+        starts_before_error = len(live_starts)
+        expect(ui._render_panel_live("Error", [("Error", "bad")], kind="error", themes=None, duration_ms=200), "error settled render failed")
+        expect(len(live_starts) == starts_before_error, "error panel should render immediately")
+        expect(ui._render_panel_live("After error", [("A", "1"), ("B", "2")], kind="info", themes=None, duration_ms=200), "post-error live render failed")
+        expect(len(live_starts) == starts_before_error + 1, "an immediate error consumed the animation allowance")
+
+        ui._reset_live_animation_state()
+        starts_before_zero = len(live_starts)
+        expect(ui._render_panel_live("No motion", [("A", "1"), ("B", "2")], kind="info", themes=None, duration_ms=0), "zero-duration settled render failed")
+        expect(len(live_starts) == starts_before_zero, "zero duration should disable motion")
+    finally:
+        ui._reset_live_animation_state()
+        sys.stderr = original_stderr
+        ui._build_rich_panel = original_builder
+        rich.live.Live = original_live
+        ui.time.sleep = original_sleep
+
+
+def test_ui_live_mid_animation_failure_settles_without_static_duplicate():
+    """Once Live starts, a frame error should settle the complete panel without static fallback."""
+    import nautical_core.ui as ui
+    import rich.live
+    from rich.text import Text
+
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    frames = []
+    static_calls = []
+    original_stderr = sys.stderr
+    original_builder = ui._build_rich_panel
+    original_live = rich.live.Live
+    original_rich = ui._render_panel_rich
+    original_sleep = ui.time.sleep
+    try:
+        def flaky_builder(_title, rows, *, active_row=None, **_kwargs):
+            snapshot = list(rows)
+            if active_row == 1:
+                raise RuntimeError("frame failed")
+            return Text(f"rows={len(snapshot)} active={active_row}")
+
+        class FakeLive:
+            def __init__(self, renderable, **_kwargs):
+                frames.append(str(renderable))
+
+            def __enter__(self):
+                return self
+
+            def update(self, renderable, *, refresh=False):
+                expect(refresh is True, "settled recovery frame should refresh")
+                frames.append(str(renderable))
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return False
+
+        ui._reset_live_animation_state()
+        sys.stderr = TtyBuffer()
+        ui._build_rich_panel = flaky_builder
+        rich.live.Live = FakeLive
+        ui._render_panel_rich = lambda *_args, **_kwargs: static_calls.append(True) or False
+        ui.time.sleep = lambda _delay: None
+        ui.render_panel(
+            "Recover",
+            [("One", "1"), ("Two", "2"), ("Three", "3")],
+            panel_mode="live",
+            live_duration_ms=160,
+        )
+    finally:
+        ui._reset_live_animation_state()
+        sys.stderr = original_stderr
+        ui._build_rich_panel = original_builder
+        rich.live.Live = original_live
+        ui._render_panel_rich = original_rich
+        ui.time.sleep = original_sleep
+
+    expect(not static_calls, "mid-animation failure printed a duplicate static panel")
+    expect(frames[-1] == "rows=3 active=None", f"mid-animation failure did not settle complete rows: {frames!r}")
 
 
 def test_ui_live_renderer_rejects_dumb_terminal():
@@ -15351,6 +15547,10 @@ def test_on_exit_drain_failure_panel_is_actionable_and_retry_quiet():
     title, rows, kwargs = captured[0]
     expect(title == "⚠ Nautical spawn drain failed", f"unexpected panel title: {captured!r}")
     expect(kwargs.get("kind") == "warning", f"failure panel should use warning styling: {captured!r}")
+    expect(
+        kwargs.get("live_duration_ms") == mod.core.LIVE_PANEL_DURATION_MS,
+        f"on-exit did not forward live duration: {captured!r}",
+    )
     expect(
         any(label == "Problems" and "1 dead-lettered" in value and "1 requeue write failed" in value for label, value in rows),
         f"missing consolidated failure counts: {rows!r}",
@@ -17805,12 +18005,15 @@ TESTS = [
     test_on_add_format_anchor_rows_numbers_upcoming_from_three_with_next_anchor,
     test_on_add_format_anchor_rows_numbers_upcoming_from_two_without_next_anchor,
     test_on_modify_panel_fallback,
+    test_on_modify_panel_forwards_live_duration,
     test_core_render_panel_line_mode_uses_panel_line,
     test_core_render_panel_line_force_rich_kind_skips_panel_line,
     test_ui_build_rich_panel_preserves_static_layout_and_theme,
     test_ui_live_panel_has_nautical_branding_without_changing_static_panels,
     test_ui_static_rich_renderer_delegates_to_shared_builder,
     test_ui_live_renderer_reveals_cumulative_row_frames,
+    test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels,
+    test_ui_live_mid_animation_failure_settles_without_static_duplicate,
     test_ui_live_renderer_rejects_dumb_terminal,
     test_ui_live_mode_non_tty_falls_back_without_live_control_codes,
     test_ui_render_panel_routes_live_mode_without_static_duplicate,
@@ -17891,6 +18094,7 @@ TESTS = [
     test_dst_round_trip_noon_preserves_local_date,
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_core_recurrence_update_udas_config_aliases,
+    test_core_live_panel_duration_config_defaults_and_clamps,
     test_shipped_config_keeps_hook_toggles_top_level,
     test_warn_rate_limited_any,
     test_on_modify_build_child_carries_configured_uda_datetime,

@@ -362,7 +362,9 @@ panels. Depending on the task, you may see:
 
 Set `panel_mode = "live"` in `config-nautical.toml` for a short line-by-line
 reveal on interactive terminals. It requires Rich and falls back to the normal
-static panel when terminal cursor control is unavailable.
+static panel when terminal cursor control is unavailable. Set
+`live_panel_duration_ms = 160` to control the total reveal budget, or `0` to
+retain the live styling without motion.
 
 For a deeper read-only check:
 

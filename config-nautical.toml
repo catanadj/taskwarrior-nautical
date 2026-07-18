@@ -25,6 +25,7 @@ verify_import = true                 # verify child import via export
 debug_wait_sched = false             # include wait/scheduled debug rows
 recurrence_update_udas = []          # optional date UDAs to carry relative to due (e.g., ["rappel"])
 panel_mode = "rich"                  # "rich", "live", "fast" (aka "plain"), "line", "compact", "minimal", or "text"
+live_panel_duration_ms = 160          # total live reveal budget (0 = no motion, maximum 1000)
 exit_progress = true                 # show Rich drain progress on on-exit when stderr is a TTY
 fast_color = true                    # allow ANSI color in fast mode
 spawn_queue_max_bytes = 524288       # max queued JSONL bytes before fast-drain

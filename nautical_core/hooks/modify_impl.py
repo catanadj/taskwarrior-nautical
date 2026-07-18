@@ -1014,6 +1014,7 @@ def _panel(
         rows,
         kind=kind,
         panel_mode=core.PANEL_MODE,
+        live_duration_ms=getattr(core, "LIVE_PANEL_DURATION_MS", 160),
         fast_color=core.FAST_COLOR,
         themes=themes,
         allow_line=True,

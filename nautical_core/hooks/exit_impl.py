@@ -2350,6 +2350,7 @@ def _render_exit_drain_failure_panel(stats: dict) -> None:
         rows,
         kind="warning",
         panel_mode=core.PANEL_MODE,
+        live_duration_ms=getattr(core, "LIVE_PANEL_DURATION_MS", 160),
         fast_color=core.FAST_COLOR,
         themes={"warning": {"border": "yellow", "title": "yellow", "label": "yellow"}},
         allow_line=True,

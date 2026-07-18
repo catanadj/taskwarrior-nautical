@@ -683,6 +683,7 @@ def _panel(title, rows, kind: str = "info", task: dict | None = None):
         rows,
         kind=kind,
         panel_mode=core.PANEL_MODE,
+        live_duration_ms=getattr(core, "LIVE_PANEL_DURATION_MS", 160),
         fast_color=core.FAST_COLOR,
         themes=themes,
         allow_line=False,

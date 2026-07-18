@@ -343,22 +343,16 @@ def _render_panel_fast(
     sys.stderr.write(f"└{'─' * inner_width}┘\n")
 
 
-def _render_panel_rich(
+def _build_rich_panel(
     title,
     rows,
     *,
     kind: str,
     themes: dict | None,
-) -> bool:
-    try:
-        if not sys.stderr.isatty():
-            raise RuntimeError("no tty")
-        from rich.console import Console
-        from rich.panel import Panel
-        from rich.table import Table
-        from rich.text import Text
-    except Exception:
-        return False
+) -> object:
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
 
     theme = (themes or {}).get(kind) or (themes or {}).get("info") or {}
     border = theme.get("border", "blue")
@@ -372,7 +366,6 @@ def _render_panel_rich(
         "YELLOW": "yellow",
     }
 
-    console = Console(file=sys.stderr, force_terminal=True)
     t = Table.grid(padding=(0, 1), expand=False)
     t.add_column(style=f"bold {lstyle}", no_wrap=True, justify="right")
     t.add_column(style="white")
@@ -404,15 +397,35 @@ def _render_panel_rich(
 
         t.add_row(label_text, value_text)
 
-    console.print(
-        Panel(
-            t,
-            title=Text(title, style=f"bold {tstyle}"),
-            border_style=border,
-            expand=False,
-            padding=(0, 1),
-        )
+    return Panel(
+        t,
+        title=Text(title, style=f"bold {tstyle}"),
+        border_style=border,
+        expand=False,
+        padding=(0, 1),
     )
+
+
+def _render_panel_rich(
+    title,
+    rows,
+    *,
+    kind: str,
+    themes: dict | None,
+) -> bool:
+    try:
+        if not sys.stderr.isatty():
+            raise RuntimeError("no tty")
+        from rich.console import Console
+    except Exception:
+        return False
+
+    try:
+        panel = _build_rich_panel(title, rows, kind=kind, themes=themes)
+    except ImportError:
+        return False
+    console = Console(file=sys.stderr, force_terminal=True)
+    console.print(panel)
     return True
 
 

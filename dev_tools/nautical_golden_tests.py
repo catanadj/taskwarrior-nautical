@@ -13998,6 +13998,70 @@ def test_core_render_panel_line_force_rich_kind_skips_panel_line():
     expect("Title" in out and "Key" in out, "promoted rich/fast path should emit fallback panel text")
 
 
+def test_ui_build_rich_panel_preserves_static_layout_and_theme():
+    """The shared Rich builder should preserve the existing panel content and theme contract."""
+    import nautical_core.ui as ui
+    from rich.console import Console
+
+    panel = ui._build_rich_panel(
+        "Nautical title",
+        [("Pattern", "w:mon"), (None, "separator"), ("Warning", "check this")],
+        kind="preview_anchor",
+        themes={
+            "preview_anchor": {
+                "border": "magenta",
+                "title": "bright_cyan",
+                "label": "green",
+            }
+        },
+    )
+    output = io.StringIO()
+    Console(file=output, width=80, color_system=None).print(panel)
+    rendered = output.getvalue()
+
+    expect("Nautical title" in rendered, f"builder lost panel title: {rendered!r}")
+    expect("Pattern" in rendered and "w:mon" in rendered, f"builder lost normal row: {rendered!r}")
+    expect("separator" in rendered, f"builder lost unlabeled row: {rendered!r}")
+    expect("Warning" in rendered and "check this" in rendered, f"builder lost warning row: {rendered!r}")
+    expect(str(panel.border_style) == "magenta", f"builder lost border theme: {panel.border_style!r}")
+
+
+def test_ui_static_rich_renderer_delegates_to_shared_builder():
+    """Static Rich rendering should print exactly the renderable returned by the shared builder."""
+    import nautical_core.ui as ui
+    from rich.text import Text
+
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    captured = {}
+    stderr = TtyBuffer()
+    original_stderr = sys.stderr
+    original_builder = ui._build_rich_panel
+    try:
+        def fake_builder(title, rows, *, kind, themes):
+            captured.update(title=title, rows=list(rows), kind=kind, themes=themes)
+            return Text("shared builder output")
+
+        ui._build_rich_panel = fake_builder
+        sys.stderr = stderr
+        rendered = ui._render_panel_rich(
+            "Delegated",
+            [("Key", "Value")],
+            kind="info",
+            themes={"info": {"border": "blue"}},
+        )
+    finally:
+        sys.stderr = original_stderr
+        ui._build_rich_panel = original_builder
+
+    expect(rendered is True, "static Rich renderer should report successful output")
+    expect(captured.get("title") == "Delegated", f"builder did not receive title: {captured!r}")
+    expect(captured.get("rows") == [("Key", "Value")], f"builder did not receive rows: {captured!r}")
+    expect("shared builder output" in stderr.getvalue(), f"renderer did not print builder result: {stderr.getvalue()!r}")
+
+
 def test_on_exit_equivalent_child_cache_reuses_slot_lookup():
     """on-exit should reuse equivalent-child lookups for the same slot within one run."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -17482,6 +17546,8 @@ TESTS = [
     test_on_modify_panel_fallback,
     test_core_render_panel_line_mode_uses_panel_line,
     test_core_render_panel_line_force_rich_kind_skips_panel_line,
+    test_ui_build_rich_panel_preserves_static_layout_and_theme,
+    test_ui_static_rich_renderer_delegates_to_shared_builder,
     test_on_exit_import_error_but_child_exists,
     test_on_exit_parent_nextlink_changed_dead_letter,
     test_on_exit_parent_update_lock_busy_requeues,

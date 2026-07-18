@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 
 
 _RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
+_LIVE_REVEAL_TOTAL_SECONDS = 0.12
+_LIVE_REVEAL_MAX_STEP_SECONDS = 0.04
 
 
 def strip_rich_markup(s: str) -> str:
@@ -349,6 +352,7 @@ def _build_rich_panel(
     *,
     kind: str,
     themes: dict | None,
+    live: bool = False,
 ) -> object:
     from rich.panel import Panel
     from rich.table import Table
@@ -397,12 +401,20 @@ def _build_rich_panel(
 
         t.add_row(label_text, value_text)
 
+    panel_kwargs = {}
+    if live:
+        panel_kwargs = {
+            "subtitle": Text("NAUTICAL", style=f"dim {tstyle}"),
+            "subtitle_align": "right",
+        }
+
     return Panel(
         t,
         title=Text(title, style=f"bold {tstyle}"),
         border_style=border,
         expand=False,
         padding=(0, 1),
+        **panel_kwargs,
     )
 
 
@@ -437,14 +449,15 @@ def _render_panel_live(
     themes: dict | None,
 ) -> bool:
     try:
-        if not sys.stderr.isatty():
+        if not sys.stderr.isatty() or os.environ.get("TERM", "").strip().lower() == "dumb":
             raise RuntimeError("no tty")
         from rich.console import Console
         from rich.live import Live
 
         row_list = list(rows)
         first_rows = row_list[:1]
-        panel = _build_rich_panel(title, first_rows, kind=kind, themes=themes)
+        panel = _build_rich_panel(title, first_rows, kind=kind, themes=themes, live=True)
+        reveal_delay = _live_reveal_delay(len(row_list))
         console = Console(file=sys.stderr, force_terminal=True)
         with Live(
             panel,
@@ -458,11 +471,24 @@ def _render_panel_live(
                     row_list[:end],
                     kind=kind,
                     themes=themes,
+                    live=True,
                 )
+                if reveal_delay:
+                    time.sleep(reveal_delay)
                 live.update(panel, refresh=True)
         return True
     except Exception:
         return False
+
+
+def _live_reveal_delay(row_count: int) -> float:
+    transitions = max(0, int(row_count) - 1)
+    if not transitions:
+        return 0.0
+    return min(
+        _LIVE_REVEAL_MAX_STEP_SECONDS,
+        _LIVE_REVEAL_TOTAL_SECONDS / transitions,
+    )
 
 
 def render_panel(

@@ -360,6 +360,10 @@ panels. Depending on the task, you may see:
 - chain integrity warnings
 - timezone/config/file-source diagnostics when something is degraded
 
+Set `panel_mode = "live"` in `config-nautical.toml` for a short line-by-line
+reveal on interactive terminals. It requires Rich and falls back to the normal
+static panel when terminal cursor control is unavailable.
+
 For a deeper read-only check:
 
 ```bash

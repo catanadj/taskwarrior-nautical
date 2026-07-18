@@ -14062,13 +14062,41 @@ def test_ui_build_rich_panel_preserves_static_layout_and_theme():
 def test_ui_live_panel_has_nautical_branding_without_changing_static_panels():
     """Only live panels should carry the restrained Nautical footer treatment."""
     import nautical_core.ui as ui
+    from rich.console import Console
 
     static_panel = ui._build_rich_panel("Static", [("Key", "Value")], kind="info", themes=None)
-    live_panel = ui._build_rich_panel("Live", [("Key", "Value")], kind="info", themes=None, live=True)
+    live_panel = ui._build_rich_panel(
+        "Live",
+        [("First", "one"), ("Second", "two")],
+        kind="info",
+        themes=None,
+        live=True,
+        active_row=1,
+    )
+    settled_panel = ui._build_rich_panel(
+        "Live",
+        [("First", "one"), ("Second", "two")],
+        kind="info",
+        themes=None,
+        live=True,
+    )
+    active_output = io.StringIO()
+    settled_output = io.StringIO()
+    Console(file=active_output, width=80, color_system=None).print(live_panel)
+    Console(file=settled_output, width=80, color_system=None).print(settled_panel)
 
     expect(static_panel.subtitle is None, f"static panel unexpectedly gained live branding: {static_panel.subtitle!r}")
     expect(str(live_panel.subtitle) == "NAUTICAL", f"live panel branding missing: {live_panel.subtitle!r}")
     expect(live_panel.subtitle_align == "right", f"live panel branding alignment changed: {live_panel.subtitle_align!r}")
+    expect("▸" in active_output.getvalue(), f"active live row has no focus marker: {active_output.getvalue()!r}")
+    expect("▸" not in settled_output.getvalue(), f"settled live panel kept its focus marker: {settled_output.getvalue()!r}")
+    expect(str(live_panel.border_style) == "bold blue", f"active live border was not emphasized: {live_panel.border_style!r}")
+    expect(str(settled_panel.border_style) == "blue", f"settled live border did not return to its theme: {settled_panel.border_style!r}")
+    expect("/" not in str(live_panel.subtitle), f"live footer should not show a progress count: {live_panel.subtitle!r}")
+    active_width = max(len(line) for line in active_output.getvalue().splitlines())
+    settled_width = max(len(line) for line in settled_output.getvalue().splitlines())
+    expect(active_width == settled_width, f"live focus shifted panel width: active={active_width}, settled={settled_width}")
+    expect(ui._live_reveal_delay(1) == 0, "one-row live panels should not incur animation delay")
 
 
 def test_ui_static_rich_renderer_delegates_to_shared_builder():
@@ -14118,6 +14146,7 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
 
     built_rows = []
     built_live_flags = []
+    built_active_rows = []
     live_frames = []
     sleep_delays = []
     stderr = TtyBuffer()
@@ -14126,10 +14155,11 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
     original_live = rich.live.Live
     original_sleep = ui.time.sleep
     try:
-        def fake_builder(_title, rows, *, kind, themes, live=False):
+        def fake_builder(_title, rows, *, kind, themes, live=False, active_row=None):
             snapshot = list(rows)
             built_rows.append(snapshot)
             built_live_flags.append(live)
+            built_active_rows.append(active_row)
             return tuple(snapshot)
 
         class FakeLive:
@@ -14170,12 +14200,14 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
             [("One", "1")],
             [("One", "1"), ("Two", "2")],
             [("One", "1"), ("Two", "2"), ("Three", "3")],
+            [("One", "1"), ("Two", "2"), ("Three", "3")],
         ],
         f"live frames should reveal cumulative rows: {built_rows!r}",
     )
-    expect(built_live_flags == [True, True, True], f"live frames lost their live styling: {built_live_flags!r}")
-    expect(len(sleep_delays) == 2 and all(delay > 0 for delay in sleep_delays), f"unexpected live pacing: {sleep_delays!r}")
-    expect(sum(sleep_delays) <= 0.121, f"live reveal exceeded its total delay budget: {sleep_delays!r}")
+    expect(built_live_flags == [True, True, True, True], f"live frames lost their live styling: {built_live_flags!r}")
+    expect(built_active_rows == [0, 1, 2, None], f"live focus did not settle cleanly: {built_active_rows!r}")
+    expect(len(sleep_delays) == 3 and all(delay > 0 for delay in sleep_delays), f"unexpected live pacing: {sleep_delays!r}")
+    expect(sum(sleep_delays) <= 0.161, f"live reveal exceeded its total delay budget: {sleep_delays!r}")
     expect(live_frames[-1] == tuple(built_rows[-1]), f"final live frame is incomplete: {live_frames!r}")
 
 

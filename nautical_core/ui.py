@@ -7,7 +7,7 @@ import time
 
 
 _RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
-_LIVE_REVEAL_TOTAL_SECONDS = 0.12
+_LIVE_REVEAL_TOTAL_SECONDS = 0.16
 _LIVE_REVEAL_MAX_STEP_SECONDS = 0.04
 
 
@@ -353,6 +353,7 @@ def _build_rich_panel(
     kind: str,
     themes: dict | None,
     live: bool = False,
+    active_row: int | None = None,
 ) -> object:
     from rich.panel import Panel
     from rich.table import Table
@@ -374,12 +375,26 @@ def _build_rich_panel(
     t.add_column(style=f"bold {lstyle}", no_wrap=True, justify="right")
     t.add_column(style="white")
 
-    for k, v in rows:
+    for row_index, (k, v) in enumerate(rows):
+        row_active = live and row_index == active_row
+        marker = "▸ " if row_active else ("  " if live else "")
         if k is None:
-            t.add_row("", v or "")
+            if not live:
+                t.add_row("", v or "")
+                continue
+            value_raw = "" if v is None else str(v)
+            try:
+                value_text = Text.from_markup(value_raw)
+            except Exception:
+                value_text = Text(value_raw)
+            marker_text = Text(marker)
+            if row_active:
+                marker_text.stylize(f"bold {tstyle}")
+                value_text.stylize(f"bold {tstyle}")
+            t.add_row(marker_text, value_text)
             continue
 
-        label_text = Text(str(k))
+        label_text = Text(f"{marker}{k}")
         value_raw = "" if v is None else str(v)
         try:
             value_text = Text.from_markup(value_raw)
@@ -398,6 +413,9 @@ def _build_rich_panel(
             value_text.stylize(row_style)
             if lk in {"basis", "root"}:
                 label_text.stylize(row_style)
+        if row_active:
+            label_text.stylize(f"bold {tstyle}")
+            value_text.stylize(f"bold {tstyle}")
 
         t.add_row(label_text, value_text)
 
@@ -411,7 +429,7 @@ def _build_rich_panel(
     return Panel(
         t,
         title=Text(title, style=f"bold {tstyle}"),
-        border_style=border,
+        border_style=f"bold {border}" if live and active_row is not None else border,
         expand=False,
         padding=(0, 1),
         **panel_kwargs,
@@ -456,7 +474,15 @@ def _render_panel_live(
 
         row_list = list(rows)
         first_rows = row_list[:1]
-        panel = _build_rich_panel(title, first_rows, kind=kind, themes=themes, live=True)
+        active_row = 0 if len(row_list) > 1 else None
+        panel = _build_rich_panel(
+            title,
+            first_rows,
+            kind=kind,
+            themes=themes,
+            live=True,
+            active_row=active_row,
+        )
         reveal_delay = _live_reveal_delay(len(row_list))
         console = Console(file=sys.stderr, force_terminal=True)
         with Live(
@@ -472,9 +498,20 @@ def _render_panel_live(
                     kind=kind,
                     themes=themes,
                     live=True,
+                    active_row=end - 1,
                 )
                 if reveal_delay:
                     time.sleep(reveal_delay)
+                live.update(panel, refresh=True)
+            if reveal_delay:
+                time.sleep(reveal_delay)
+                panel = _build_rich_panel(
+                    title,
+                    row_list,
+                    kind=kind,
+                    themes=themes,
+                    live=True,
+                )
                 live.update(panel, refresh=True)
         return True
     except Exception:
@@ -482,7 +519,8 @@ def _render_panel_live(
 
 
 def _live_reveal_delay(row_count: int) -> float:
-    transitions = max(0, int(row_count) - 1)
+    row_count = max(0, int(row_count))
+    transitions = row_count if row_count > 1 else 0
     if not transitions:
         return 0.0
     return min(

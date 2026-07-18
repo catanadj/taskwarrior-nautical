@@ -8139,6 +8139,39 @@ def test_hook_on_add_multitime_preview_emits_all_slots():
         raise AssertionError(f"on-add preview missing expected intra-day times. stderr={stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_live_panel_mode_preserves_captured_protocol():
+    """Configured live panels should fall back cleanly when a hook's stderr is captured."""
+    hook = _find_hook_file("on-add-nautical.py")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000121",
+        "description": "live panel protocol test",
+        "status": "pending",
+        "entry": "20260101T000000Z",
+        "cp": "1d",
+        "due": "20260102T090000Z",
+    }
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "nautical.toml"
+        config_path.write_text('tz = "UTC"\npanel_mode = "live"\n', encoding="utf-8")
+        proc = _run_hook_script(
+            hook,
+            task,
+            env_extra={"NAUTICAL_CONFIG": str(config_path), "NO_COLOR": "1"},
+        )
+
+    expect(proc.returncode == 0, f"on-add live mode failed: {proc.stderr[:500]!r}")
+    stdout_lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    expect(len(stdout_lines) == 1, f"live mode emitted non-protocol stdout: {proc.stdout!r}")
+    output_task = json.loads(stdout_lines[0])
+    expect(output_task.get("uuid") == task["uuid"], f"live mode changed hook protocol output: {output_task!r}")
+    stderr_text = _strip_markup(proc.stderr)
+    expect(
+        "Recurring Chain Preview" in stderr_text and "Period" in stderr_text,
+        f"captured live mode lost the static panel fallback: {stderr_text[:500]!r}",
+    )
+    expect("\x1b[" not in proc.stderr, f"captured live hook emitted terminal controls: {proc.stderr!r}")
+
+
 def test_hook_on_add_counted_random_preview_uses_group_time():
     """on-add should schedule and explain a constrained counted-random anchor."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -14026,6 +14059,18 @@ def test_ui_build_rich_panel_preserves_static_layout_and_theme():
     expect(str(panel.border_style) == "magenta", f"builder lost border theme: {panel.border_style!r}")
 
 
+def test_ui_live_panel_has_nautical_branding_without_changing_static_panels():
+    """Only live panels should carry the restrained Nautical footer treatment."""
+    import nautical_core.ui as ui
+
+    static_panel = ui._build_rich_panel("Static", [("Key", "Value")], kind="info", themes=None)
+    live_panel = ui._build_rich_panel("Live", [("Key", "Value")], kind="info", themes=None, live=True)
+
+    expect(static_panel.subtitle is None, f"static panel unexpectedly gained live branding: {static_panel.subtitle!r}")
+    expect(str(live_panel.subtitle) == "NAUTICAL", f"live panel branding missing: {live_panel.subtitle!r}")
+    expect(live_panel.subtitle_align == "right", f"live panel branding alignment changed: {live_panel.subtitle_align!r}")
+
+
 def test_ui_static_rich_renderer_delegates_to_shared_builder():
     """Static Rich rendering should print exactly the renderable returned by the shared builder."""
     import nautical_core.ui as ui
@@ -14072,15 +14117,19 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
             return True
 
     built_rows = []
+    built_live_flags = []
     live_frames = []
+    sleep_delays = []
     stderr = TtyBuffer()
     original_stderr = sys.stderr
     original_builder = ui._build_rich_panel
     original_live = rich.live.Live
+    original_sleep = ui.time.sleep
     try:
-        def fake_builder(_title, rows, *, kind, themes):
+        def fake_builder(_title, rows, *, kind, themes, live=False):
             snapshot = list(rows)
             built_rows.append(snapshot)
+            built_live_flags.append(live)
             return tuple(snapshot)
 
         class FakeLive:
@@ -14101,6 +14150,7 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
 
         ui._build_rich_panel = fake_builder
         rich.live.Live = FakeLive
+        ui.time.sleep = sleep_delays.append
         sys.stderr = stderr
         rendered = ui._render_panel_live(
             "Live",
@@ -14112,6 +14162,7 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
         sys.stderr = original_stderr
         ui._build_rich_panel = original_builder
         rich.live.Live = original_live
+        ui.time.sleep = original_sleep
 
     expect(rendered is True, "live renderer should report success on a TTY")
     expect(
@@ -14122,7 +14173,44 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
         ],
         f"live frames should reveal cumulative rows: {built_rows!r}",
     )
+    expect(built_live_flags == [True, True, True], f"live frames lost their live styling: {built_live_flags!r}")
+    expect(len(sleep_delays) == 2 and all(delay > 0 for delay in sleep_delays), f"unexpected live pacing: {sleep_delays!r}")
+    expect(sum(sleep_delays) <= 0.121, f"live reveal exceeded its total delay budget: {sleep_delays!r}")
     expect(live_frames[-1] == tuple(built_rows[-1]), f"final live frame is incomplete: {live_frames!r}")
+
+
+def test_ui_live_renderer_rejects_dumb_terminal():
+    """Live cursor control should not run on terminals explicitly marked as dumb."""
+    import nautical_core.ui as ui
+    import rich.live
+
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    original_stderr = sys.stderr
+    original_term = os.environ.get("TERM")
+    original_live = rich.live.Live
+    live_calls = []
+    try:
+        class ForbiddenLive:
+            def __init__(self, *_args, **_kwargs):
+                live_calls.append(True)
+
+        sys.stderr = TtyBuffer()
+        os.environ["TERM"] = "dumb"
+        rich.live.Live = ForbiddenLive
+        rendered = ui._render_panel_live("Dumb", [("Key", "Value")], kind="info", themes=None)
+    finally:
+        sys.stderr = original_stderr
+        rich.live.Live = original_live
+        if original_term is None:
+            os.environ.pop("TERM", None)
+        else:
+            os.environ["TERM"] = original_term
+
+    expect(rendered is False, "live renderer should defer to static output on TERM=dumb")
+    expect(not live_calls, "Live must not start on TERM=dumb")
 
 
 def test_ui_live_mode_non_tty_falls_back_without_live_control_codes():
@@ -17394,6 +17482,7 @@ TESTS = [
     test_on_modify_compute_cp_random_selects_deterministic_interval,
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_hook_on_add_multitime_preview_emits_all_slots,
+    test_hook_on_add_live_panel_mode_preserves_captured_protocol,
     test_hook_on_add_counted_random_preview_uses_group_time,
     test_hook_on_add_accepts_group_date_modifiers,
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
@@ -17687,8 +17776,10 @@ TESTS = [
     test_core_render_panel_line_mode_uses_panel_line,
     test_core_render_panel_line_force_rich_kind_skips_panel_line,
     test_ui_build_rich_panel_preserves_static_layout_and_theme,
+    test_ui_live_panel_has_nautical_branding_without_changing_static_panels,
     test_ui_static_rich_renderer_delegates_to_shared_builder,
     test_ui_live_renderer_reveals_cumulative_row_frames,
+    test_ui_live_renderer_rejects_dumb_terminal,
     test_ui_live_mode_non_tty_falls_back_without_live_control_codes,
     test_ui_render_panel_routes_live_mode_without_static_duplicate,
     test_ui_live_failure_preserves_rows_for_static_fallback,

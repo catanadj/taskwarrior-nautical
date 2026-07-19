@@ -2403,7 +2403,7 @@ def test_on_modify_promotes_chain_emits_upgrade_panel():
     expect(captured.get("title") == "⚓ Nautical enabled", f"expected upgrade panel, got {captured!r}")
     expect(captured.get("kind") == "note", f"expected note panel, got {captured!r}")
     rows = captured.get("rows") or []
-    expect(any(k == "Chain" and v == "on" for k, v in rows), f"expected chain:on row, got {rows!r}")
+    expect(not any(k == "Chain" for k, _v in rows), f"enabled panel should omit redundant chain:on row, got {rows!r}")
     expect(any(k == "Source" and v == "anchor" for k, v in rows), f"expected anchor source row, got {rows!r}")
     expect(new.get("chain") == "on", f"promotion should set chain:on, got {new!r}")
     expect(bool((new.get("chainID") or "").strip()), f"promotion should stamp chainID, got {new!r}")
@@ -2511,7 +2511,10 @@ def test_on_modify_resumes_chain_emits_resumed_panel():
     expect(captured.get("kind") == "note", f"expected note panel, got {captured!r}")
     rows = captured.get("rows") or []
     expect(("Source", "anchor") in rows, f"expected anchor source row, got {rows!r}")
-    expect(("Chain", "off → on") in rows, f"expected chain transition row, got {rows!r}")
+    expect(
+        ("Chain", "[dim]off[/] [cyan]→[/] [bold]on[/]") in rows,
+        f"expected styled chain transition row, got {rows!r}",
+    )
     expect(any(k == "Effect" and "subject to chain limits" in str(v) for k, v in rows), f"expected bounded resume effect, got {rows!r}")
     expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
 
@@ -2575,9 +2578,12 @@ def test_on_modify_recurrence_update_emits_ack_panel():
     expect(captured.get("title") == "⚓ Nautical recurrence updated", f"expected recurrence update panel, got {captured!r}")
     expect(captured.get("kind") == "note", f"expected note panel, got {captured!r}")
     rows = captured.get("rows") or []
-    expect(("Anchor", "w:mon → w:tue,thu") in rows, f"expected anchor change row, got {rows!r}")
+    expect(
+        ("Anchor", "[dim]w:mon[/] [cyan]→[/] [bold]w:tue,thu[/]") in rows,
+        f"expected styled anchor change row, got {rows!r}",
+    )
     expect(any(k == "Natural" and "Tuesday" in str(v) and "Thursday" in str(v) for k, v in rows), f"expected natural row, got {rows!r}")
-    expect(("Chain", "on") in rows, f"expected chain row, got {rows!r}")
+    expect(not any(k == "Chain" for k, _v in rows), f"recurrence panel should omit redundant chain:on row, got {rows!r}")
     expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
 
 
@@ -2616,7 +2622,10 @@ def test_on_modify_limit_update_emits_effective_boundaries():
     expect(len(panels) == 2, f"each limit update should emit one panel: {panels!r}")
     title, rows, kind = panels[0]
     expect(title == "⚓ Nautical recurrence updated" and kind == "note", f"unexpected limit panel: {panels!r}")
-    expect(("Max links", "5 → 8") in rows, f"missing chainMax update: {rows!r}")
+    expect(
+        ("Max links", "[dim]5[/] [cyan]→[/] [bold]8[/]") in rows,
+        f"missing styled chainMax update: {rows!r}",
+    )
     expect(any(label == "Until" and "2026-08-10" in value and "2026-08-20" in value for label, value in rows), f"missing localized chainUntil update: {rows!r}")
     expect(("Final link", "#8") in rows, f"missing final link boundary: {rows!r}")
     expect(any(label == "Deadline" and "2026-08-20" in value for label, value in rows), f"missing deadline boundary: {rows!r}")
@@ -11214,9 +11223,13 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
     title, rows, kind = adjustment_panels[0]
     expect(title == "⚓ Nautical schedule adjusted", f"unexpected adjustment panel title: {panels!r}")
     expect(kind == "note", f"adjustment panel should be informational: {panels!r}")
-    expect(any(label == "Due" and "→" in value for label, value in rows), f"missing due row: {rows!r}")
-    expect(any(label == "Scheduled" and "→" in value for label, value in rows), f"missing scheduled row: {rows!r}")
-    expect(any(label == "Wait" and "→" in value for label, value in rows), f"missing wait row: {rows!r}")
+    for label in ("Due", "Scheduled", "Wait"):
+        value = next((value for row_label, value in rows if row_label == label), "")
+        expect(
+            value.startswith("[dim]") and "[/] [cyan]→[/] [bold]" in value and value.endswith("[/]"),
+            f"{label} row should use semantic diff styling: {rows!r}",
+        )
+        expect("→" in mod.core.strip_rich_markup(value), f"{label} plain fallback lost its transition: {value!r}")
     expect(
         ("Offsets", "Scheduled -0d 00h:10m; Wait -0d 00h:20m") in rows,
         f"missing retained offsets row: {rows!r}",

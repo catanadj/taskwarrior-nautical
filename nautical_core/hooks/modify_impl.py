@@ -5474,6 +5474,10 @@ def _recurrence_update_label(field: str) -> str:
     }.get(field, field)
 
 
+def _semantic_diff_value(old_text: str, new_text: str) -> str:
+    return f"[dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
+
+
 def _recurrence_update_value(field: str, old_value: str, new_value: str) -> str:
     def display(value: str) -> str:
         if not value:
@@ -5486,7 +5490,7 @@ def _recurrence_update_value(field: str, old_value: str, new_value: str) -> str:
 
     old_text = display(old_value)
     new_text = display(new_value)
-    return f"{old_text} → {new_text}"
+    return _semantic_diff_value(old_text, new_text)
 
 
 def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: dict) -> None:
@@ -5523,9 +5527,6 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
         except Exception:
             pass
 
-    chain_state = str(new.get("chain") or "").strip()
-    if chain_state:
-        rows.append(("Chain", chain_state))
     _panel("⚓ Nautical recurrence updated", rows, kind="note")
 
 
@@ -5537,9 +5538,9 @@ def _render_cp_schedule_adjusted_panel(
     ],
 ) -> None:
     old_due, new_due, field_adjustments = adjustment
-    rows = [("Due", f"{_fmtlocal(old_due)} → {_fmtlocal(new_due)}")]
+    rows = [("Due", _semantic_diff_value(_fmtlocal(old_due), _fmtlocal(new_due)))]
     rows.extend(
-        (field.capitalize(), f"{_fmtlocal(old_value)} → {_fmtlocal(new_value)}")
+        (field.capitalize(), _semantic_diff_value(_fmtlocal(old_value), _fmtlocal(new_value)))
         for field, old_value, new_value, _offset in field_adjustments
     )
     offset_text = "; ".join(
@@ -5687,7 +5688,6 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
             [
                 ("Reason", transition.reason or "This task just gained Nautical recurrence and was promoted to chain:on."),
                 ("Source", transition.source),
-                ("Chain", "on"),
             ],
             kind="note",
         )
@@ -5703,7 +5703,7 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
             rows.append(("Source", transition.source))
         rows.extend(
             [
-                ("Chain", "off → on"),
+                ("Chain", _semantic_diff_value("off", "on")),
                 ("Effect", "Completion can spawn the next link, subject to chain limits."),
             ]
         )

@@ -7958,7 +7958,8 @@ def test_on_add_preview_uses_configured_chain_colour():
         hook.core.CHAIN_COLOR_PER_CHAIN = False
         hook._panel("Preview", [("Pattern", "w:mon")], kind="preview_anchor", task=task)
         theme = captured.get("themes", {}).get("preview_anchor", {})
-        expect(theme.get("border") == "light_sea_green", f"disabled setting changed static border: {theme!r}")
+        expect(theme.get("border") == "turquoise2", f"disabled setting changed static border: {theme!r}")
+        expect(captured.get("themes") == hook.core.panel_themes(), f"on-add did not use shared themes: {captured!r}")
     finally:
         hook.core.render_panel = original_render
         hook.core.CHAIN_COLOR_PER_CHAIN = original_setting
@@ -14090,6 +14091,10 @@ def test_on_modify_panel_forwards_live_duration():
         captured.get("live_duration_ms") == mod.core.LIVE_PANEL_DURATION_MS,
         f"on-modify did not forward live duration: {captured!r}",
     )
+    expect(
+        captured.get("themes") == mod.core.panel_themes(),
+        f"on-modify did not use shared semantic themes: {captured!r}",
+    )
 
 
 def test_core_render_panel_line_mode_uses_panel_line():
@@ -14159,6 +14164,20 @@ def test_ui_build_rich_panel_preserves_static_layout_and_theme():
     expect("separator" in rendered, f"builder lost unlabeled row: {rendered!r}")
     expect("Warning" in rendered and "check this" in rendered, f"builder lost warning row: {rendered!r}")
     expect(str(panel.border_style) == "magenta", f"builder lost border theme: {panel.border_style!r}")
+
+    semantic = ui.panel_themes()
+    expect(
+        semantic["preview_anchor"] == {"border": "turquoise2", "title": "bright_cyan", "label": "sea_green2"},
+        f"anchor theme lost its shared identity: {semantic!r}",
+    )
+    expect(
+        semantic["preview_cp"] == {"border": "dark_orange", "title": "orange_red1", "label": "gold3"},
+        f"cp theme lost its shared identity: {semantic!r}",
+    )
+    expect(semantic["summary"]["border"] == "magenta", f"summary should not use error red: {semantic!r}")
+    expect(semantic["error"]["border"] == "red", f"error theme should remain red: {semantic!r}")
+    semantic["info"]["border"] = "changed"
+    expect(ui.panel_themes()["info"]["border"] == "blue", "panel theme callers should receive independent copies")
 
 
 def test_ui_live_panel_has_nautical_branding_without_changing_static_panels():
@@ -15738,6 +15757,10 @@ def test_on_exit_drain_failure_panel_is_actionable_and_retry_quiet():
     expect(
         kwargs.get("live_duration_ms") == mod.core.LIVE_PANEL_DURATION_MS,
         f"on-exit did not forward live duration: {captured!r}",
+    )
+    expect(
+        kwargs.get("themes") == mod.core.panel_themes(),
+        f"on-exit did not use shared semantic themes: {captured!r}",
     )
     expect(
         any(label == "Problems" and "1 dead-lettered" in value and "1 requeue write failed" in value for label, value in rows),

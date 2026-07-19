@@ -651,14 +651,6 @@ def _strip_quotes(s: str) -> str:
     s = (s or "").strip()
     return s[1:-1] if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"') else s
 
-_PANEL_THEMES = {
-    "preview_anchor": {"border": "light_sea_green", "title": "light_sea_green", "label": "cyan"},
-    "preview_cp": {"border": "hot_pink", "title": "bright_green", "label": "green"},
-    "error": {"border": "red", "title": "red", "label": "red"},
-    "warning": {"border": "yellow", "title": "yellow", "label": "yellow"},
-    "info": {"border": "white", "title": "white", "label": "white"},
-}
-
 
 def _panel(title, rows, kind: str = "info", task: dict | None = None):
     if core is None:
@@ -670,7 +662,7 @@ def _panel(title, rows, kind: str = "info", task: dict | None = None):
             except Exception:
                 pass
             return
-    themes = dict(_PANEL_THEMES)
+    themes = core.panel_themes()
     if task is not None and core.CHAIN_COLOR_PER_CHAIN and kind in {"preview_anchor", "preview_cp"}:
         theme = dict(themes[kind])
         colour_kind = "cp" if kind == "preview_cp" else "anchor"

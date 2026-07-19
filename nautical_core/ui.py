@@ -12,6 +12,30 @@ _MAX_LIVE_PANEL_DURATION_MS = 1000
 _LIVE_PANEL_MAX_HEIGHT_RATIO = 0.75
 _LIVE_PANEL_MIN_SPARE_LINES = 3
 _LIVE_ANIMATION_USED = False
+_PANEL_THEMES = {
+    "preview_anchor": {"border": "turquoise2", "title": "bright_cyan", "label": "sea_green2"},
+    "preview_cp": {"border": "dark_orange", "title": "orange_red1", "label": "gold3"},
+    "summary": {"border": "magenta", "title": "bright_magenta", "label": "magenta"},
+    "disabled": {"border": "yellow", "title": "yellow", "label": "yellow"},
+    "error": {"border": "red", "title": "red", "label": "red"},
+    "warning": {"border": "yellow", "title": "yellow", "label": "yellow"},
+    "note": {"border": "blue", "title": "cyan", "label": "cyan"},
+    "info": {"border": "blue", "title": "cyan", "label": "cyan"},
+}
+
+
+def panel_themes() -> dict[str, dict[str, str]]:
+    return {kind: dict(theme) for kind, theme in _PANEL_THEMES.items()}
+
+
+def _panel_theme(kind: str, themes: dict | None) -> dict[str, str]:
+    theme = dict(_PANEL_THEMES.get(kind) or _PANEL_THEMES["info"])
+    override = (themes or {}).get(kind)
+    if override is None and kind not in _PANEL_THEMES:
+        override = (themes or {}).get("info")
+    if override:
+        theme.update(override)
+    return theme
 
 
 def strip_rich_markup(s: str) -> str:
@@ -214,7 +238,7 @@ def panel_line(
         emit_line(strip_rich_markup(line) if markup_body else line)
         return
 
-    theme = (themes or {}).get(kind) or (themes or {}).get("info") or {}
+    theme = _panel_theme(kind, themes)
     border = border_style or theme.get("border", "blue")
     tstyle = title_style or theme.get("title", "cyan")
 
@@ -362,7 +386,7 @@ def _build_rich_panel(
     from rich.table import Table
     from rich.text import Text
 
-    theme = (themes or {}).get(kind) or (themes or {}).get("info") or {}
+    theme = _panel_theme(kind, themes)
     border = theme.get("border", "blue")
     tstyle = theme.get("title", "cyan")
     lstyle = theme.get("label", "cyan")

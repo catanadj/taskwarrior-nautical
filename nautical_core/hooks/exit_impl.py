@@ -2352,7 +2352,7 @@ def _render_exit_drain_failure_panel(stats: dict) -> None:
         panel_mode=core.PANEL_MODE,
         live_duration_ms=getattr(core, "LIVE_PANEL_DURATION_MS", 160),
         fast_color=core.FAST_COLOR,
-        themes={"warning": {"border": "yellow", "title": "yellow", "label": "yellow"}},
+        themes=core.panel_themes(),
         allow_line=True,
         label_width_min=6,
         label_width_max=14,

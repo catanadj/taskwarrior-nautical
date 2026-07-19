@@ -972,17 +972,6 @@ def _print_task(task):
 
 
 
-_PANEL_THEMES = {
-    "preview_anchor": {"border": "turquoise2", "title": "bright_cyan", "label": "sea_green2"},
-    "preview_cp": {"border": "dark_orange", "title": "orange_red1", "label": "gold3"},
-    "summary": {"border": "indian_red", "title": "indian_red", "label": "red"},
-    "disabled": {"border": "yellow", "title": "yellow", "label": "yellow"},
-    "error": {"border": "red", "title": "red", "label": "red"},
-    "warning": {"border": "yellow", "title": "yellow", "label": "yellow"},
-    "info": {"border": "blue", "title": "cyan", "label": "cyan"},
-}
-
-
 def _panel(
     title,
     rows,
@@ -1000,7 +989,7 @@ def _panel(
             except Exception:
                 pass
             return
-    themes = dict(_PANEL_THEMES)
+    themes = core.panel_themes()
     theme = dict(themes.get(kind, themes.get("info", {})))
     if border_style:
         theme["border"] = border_style
@@ -1041,7 +1030,7 @@ def _panel_line(
         title,
         line,
         kind=kind,
-        themes=_PANEL_THEMES,
+        themes=core.panel_themes(),
         border_style=border_style,
         title_style=title_style,
         markup_body=markup_body,

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 ZONEINFO_FACTORY: Callable[[str], Any] | None = getattr(zoneinfo, "ZoneInfo", None)
+RICH_SPEC_FACTORY: Callable[[str], Any] = importlib.util.find_spec
 
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -258,6 +259,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
         return
     _finding(findings, "config.loaded", "ok", f"Nautical config is valid: {config}")
     _check_timezone(findings, data)
+    _check_panel_config(findings, data)
     for key in ("anchor_file_dir", "omit_file_dir"):
         raw = str(data.get(key) or "").strip()
         if not raw:
@@ -300,6 +302,70 @@ def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> Non
         )
         return
     _finding(findings, "config.timezone", "ok", f"Nautical timezone is available: {tz_name}")
+
+
+def _check_panel_config(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
+    mode = str(data.get("panel_mode") or "rich").strip().lower() or "rich"
+    raw_duration = data.get("live_panel_duration_ms", 160)
+    duration_valid = True
+    try:
+        configured_duration = int(str(raw_duration).strip())
+    except Exception:
+        configured_duration = 160
+        duration_valid = False
+
+    effective_duration = max(0, min(1000, configured_duration))
+    if not duration_valid:
+        _finding(
+            findings,
+            "config.panel.duration.invalid",
+            "warn",
+            f"live_panel_duration_ms is invalid ({raw_duration!r}); the effective duration is 160 ms.",
+            fix="Set live_panel_duration_ms to an integer from 0 to 1000.",
+            details={"configured_duration_ms": raw_duration, "effective_duration_ms": 160},
+        )
+    elif effective_duration != configured_duration:
+        _finding(
+            findings,
+            "config.panel.duration.clamped",
+            "warn",
+            f"live_panel_duration_ms is {configured_duration}; Nautical clamps it to {effective_duration} ms.",
+            fix="Set live_panel_duration_ms to an integer from 0 to 1000.",
+            details={
+                "configured_duration_ms": configured_duration,
+                "effective_duration_ms": effective_duration,
+            },
+        )
+
+    if mode != "live":
+        return
+
+    try:
+        rich_available = RICH_SPEC_FACTORY("rich") is not None
+    except Exception:
+        rich_available = False
+    motion = "disabled" if effective_duration == 0 else f"{effective_duration} ms"
+    rich_state = "available" if rich_available else "unavailable"
+    _finding(
+        findings,
+        "config.panel.live",
+        "ok",
+        f"Live panels use {motion} effective duration; Rich is {rich_state}; non-TTY output uses static fallback.",
+        details={
+            "configured_duration_ms": raw_duration if not duration_valid else configured_duration,
+            "effective_duration_ms": effective_duration,
+            "rich_available": rich_available,
+            "non_tty_fallback": "static",
+        },
+    )
+    if not rich_available:
+        _finding(
+            findings,
+            "config.panel.rich_missing",
+            "warn",
+            "panel_mode is live, but Rich is not installed; panels will use the static fallback.",
+            fix="Run python3 -m pip install rich.",
+        )
 
 
 def _load_queue_status():

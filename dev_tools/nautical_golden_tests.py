@@ -3484,6 +3484,47 @@ def test_doctor_text_timezone_summary():
     expect("Timezone: Europe/Bucharest unavailable; UTC fallback active" in out, f"missing timezone summary: {out!r}")
 
 
+def test_doctor_reports_live_panel_configuration_health():
+    """Doctor should explain effective live duration, fallback behavior, and Rich availability."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_live_panel_config_test")
+    original_rich_spec = mod.RICH_SPEC_FACTORY
+    try:
+        mod.RICH_SPEC_FACTORY = lambda _name: object()
+
+        findings = []
+        mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": 275})
+        live = next(item for item in findings if item.get("id") == "config.panel.live")
+        details = live.get("details") or {}
+        expect(live.get("severity") == "ok", f"valid live config should be healthy: {findings!r}")
+        expect(details.get("configured_duration_ms") == 275, f"configured duration missing: {findings!r}")
+        expect(details.get("effective_duration_ms") == 275, f"effective duration missing: {findings!r}")
+        expect(details.get("non_tty_fallback") == "static", f"non-TTY fallback missing: {findings!r}")
+        expect(details.get("rich_available") is True, f"Rich availability missing: {findings!r}")
+        expect("Rich is available" in str(live.get("message") or ""), f"text finding omits Rich health: {findings!r}")
+
+        findings = []
+        mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": "slow"})
+        invalid = next(item for item in findings if item.get("id") == "config.panel.duration.invalid")
+        expect(invalid.get("severity") == "warn", f"malformed duration should warn: {findings!r}")
+        expect((invalid.get("details") or {}).get("effective_duration_ms") == 160, f"invalid duration default missing: {findings!r}")
+
+        findings = []
+        mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": 5000})
+        clamped = next(item for item in findings if item.get("id") == "config.panel.duration.clamped")
+        expect(clamped.get("severity") == "warn", f"out-of-range duration should warn: {findings!r}")
+        expect((clamped.get("details") or {}).get("effective_duration_ms") == 1000, f"clamped duration missing: {findings!r}")
+
+        mod.RICH_SPEC_FACTORY = lambda _name: None
+        findings = []
+        mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": 160})
+        missing = next(item for item in findings if item.get("id") == "config.panel.rich_missing")
+        expect(missing.get("severity") == "warn", f"missing Rich should warn in live mode: {findings!r}")
+        expect("pip install rich" in str(missing.get("fix") or ""), f"missing Rich fix is not actionable: {findings!r}")
+    finally:
+        mod.RICH_SPEC_FACTORY = original_rich_spec
+
+
 def test_on_add_preview_warns_when_anchor_uses_utc_fallback():
     """on-add preview helper should flag anchors when timezone data is unavailable."""
     import nautical_core.add_anchor_preview as mod
@@ -14407,6 +14448,65 @@ def test_ui_live_mid_animation_failure_settles_without_static_duplicate():
     expect(frames[-1] == "rows=3 active=None", f"mid-animation failure did not settle complete rows: {frames!r}")
 
 
+def test_ui_live_oversized_panel_settles_without_starting_animation():
+    """A panel that leaves too little terminal space should render settled without Live cursor control."""
+    import nautical_core.ui as ui
+    import rich.console
+    import rich.live
+    from rich.text import Text
+
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    live_starts = []
+    settled = []
+    original_stderr = sys.stderr
+    original_builder = ui._build_rich_panel
+    original_console = rich.console.Console
+    original_live = rich.live.Live
+    try:
+        class ShortConsole:
+            height = 8
+
+            def __init__(self, **_kwargs):
+                pass
+
+            def render_lines(self, _renderable, *, pad=True):
+                expect(pad is False, "height guard should measure without terminal padding")
+                return [[] for _ in range(6)]
+
+            def print(self, renderable):
+                settled.append(str(renderable))
+
+        class ForbiddenLive:
+            def __init__(self, *_args, **_kwargs):
+                live_starts.append(True)
+
+        ui._reset_live_animation_state()
+        sys.stderr = TtyBuffer()
+        ui._build_rich_panel = lambda title, rows, **_kwargs: Text(f"{title}:{len(list(rows))}")
+        rich.console.Console = ShortConsole
+        rich.live.Live = ForbiddenLive
+        rendered = ui._render_panel_live(
+            "Tall",
+            [("A", "1"), ("B", "2"), ("C", "3")],
+            kind="info",
+            themes=None,
+            duration_ms=160,
+        )
+    finally:
+        ui._reset_live_animation_state()
+        sys.stderr = original_stderr
+        ui._build_rich_panel = original_builder
+        rich.console.Console = original_console
+        rich.live.Live = original_live
+
+    expect(rendered is True, "oversized live panel did not render its settled frame")
+    expect(settled == ["Tall:3"], f"oversized panel did not render exactly once: {settled!r}")
+    expect(not live_starts, "oversized panel started Live animation")
+
+
 def test_ui_live_renderer_rejects_dumb_terminal():
     """Live cursor control should not run on terminals explicitly marked as dumb."""
     import nautical_core.ui as ui
@@ -17824,6 +17924,7 @@ TESTS = [
     test_nautical_dispatches_supported_subcommands,
     test_doctor_reports_missing_timezone_data,
     test_doctor_text_timezone_summary,
+    test_doctor_reports_live_panel_configuration_health,
     test_on_add_preview_warns_when_anchor_uses_utc_fallback,
     test_panel_diagnostics_warns_for_missing_env_config,
     test_panel_diagnostics_warns_for_empty_file_sources,
@@ -18014,6 +18115,7 @@ TESTS = [
     test_ui_live_renderer_reveals_cumulative_row_frames,
     test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels,
     test_ui_live_mid_animation_failure_settles_without_static_duplicate,
+    test_ui_live_oversized_panel_settles_without_starting_animation,
     test_ui_live_renderer_rejects_dumb_terminal,
     test_ui_live_mode_non_tty_falls_back_without_live_control_codes,
     test_ui_render_panel_routes_live_mode_without_static_duplicate,

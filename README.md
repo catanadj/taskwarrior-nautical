@@ -364,7 +364,8 @@ Set `panel_mode = "live"` in `config-nautical.toml` for a short line-by-line
 reveal on interactive terminals. It requires Rich and falls back to the normal
 static panel when terminal cursor control is unavailable. Set
 `live_panel_duration_ms = 160` to control the total reveal budget, or `0` to
-retain the live styling without motion.
+retain the live styling without motion. Panels that would occupy most of the
+terminal height also settle immediately to avoid scrolling and flicker.
 
 For a deeper read-only check:
 
@@ -374,7 +375,8 @@ nautical doctor --json
 ```
 
 `nautical doctor` checks hooks, UDAs, config, file directories, queue state,
-duplicate chain slots, and broken lineage.
+duplicate chain slots, and broken lineage. In live mode it also reports Rich
+availability, effective panel duration, clamping, and static fallback behavior.
 
 ---
 

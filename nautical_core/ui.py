@@ -10,6 +10,8 @@ _RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
 _DEFAULT_LIVE_PANEL_DURATION_MS = 160
 _MAX_LIVE_PANEL_DURATION_MS = 1000
 _LIVE_REVEAL_MAX_STEP_SECONDS = 0.04
+_LIVE_PANEL_MAX_HEIGHT_RATIO = 0.75
+_LIVE_PANEL_MIN_SPARE_LINES = 3
 _LIVE_ANIMATION_USED = False
 
 
@@ -496,6 +498,8 @@ def _render_panel_live(
         return False
 
     effective_duration_ms = _live_animation_duration_ms(kind, duration_ms)
+    if effective_duration_ms > 0 and _live_panel_too_tall(console, settled_panel):
+        effective_duration_ms = 0.0
     if len(row_list) <= 1 or effective_duration_ms <= 0:
         try:
             console.print(settled_panel)
@@ -561,6 +565,22 @@ def _normalized_live_duration_ms(duration_ms: int | float) -> float:
     except Exception:
         duration = float(_DEFAULT_LIVE_PANEL_DURATION_MS)
     return max(0.0, min(float(_MAX_LIVE_PANEL_DURATION_MS), duration))
+
+
+def _live_panel_too_tall(console, panel) -> bool:
+    try:
+        terminal_height = max(1, int(console.height))
+        rendered_height = len(console.render_lines(panel, pad=False))
+        max_animated_height = max(
+            1,
+            min(
+                terminal_height - _LIVE_PANEL_MIN_SPARE_LINES,
+                int(terminal_height * _LIVE_PANEL_MAX_HEIGHT_RATIO),
+            ),
+        )
+        return rendered_height > max_animated_height
+    except Exception:
+        return False
 
 
 def _live_animation_duration_ms(kind: str, duration_ms: int | float) -> float:

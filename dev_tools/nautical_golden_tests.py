@@ -14185,7 +14185,7 @@ def test_ui_live_panel_has_nautical_branding_without_changing_static_panels():
     active_width = max(len(line) for line in active_output.getvalue().splitlines())
     settled_width = max(len(line) for line in settled_output.getvalue().splitlines())
     expect(active_width == settled_width, f"live focus shifted panel width: active={active_width}, settled={settled_width}")
-    expect(ui._live_reveal_delay(1) == 0, "one-row live panels should not incur animation delay")
+    expect(ui._live_reveal_delays(1, 160) == [], "one-frame live panels should not incur animation delay")
 
     narrow_panel = ui._build_rich_panel("N", [("A", "1")], kind="info", themes=None, live=True)
     narrow_output = io.StringIO()
@@ -14290,6 +14290,7 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
         rich.live.Live = FakeLive
         ui.time.sleep = sleep_delays.append
         sys.stderr = stderr
+        ui._reset_live_animation_state()
         rendered = ui._render_panel_live(
             "Live",
             [("One", "1"), ("Two", "2"), ("Three", "3")],
@@ -14297,6 +14298,7 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
             themes={"info": {"border": "blue"}},
         )
     finally:
+        ui._reset_live_animation_state()
         sys.stderr = original_stderr
         ui._build_rich_panel = original_builder
         rich.live.Live = original_live
@@ -14315,8 +14317,81 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
     expect(built_live_flags == [True, True, True, True], f"live frames lost their live styling: {built_live_flags!r}")
     expect(built_active_rows == [None, 0, 1, 2], f"live recovery/focus frames changed: {built_active_rows!r}")
     expect(len(sleep_delays) == 3 and all(delay > 0 for delay in sleep_delays), f"unexpected live pacing: {sleep_delays!r}")
-    expect(sum(sleep_delays) <= 0.161, f"live reveal exceeded its total delay budget: {sleep_delays!r}")
+    expect(abs(sum(sleep_delays) - 0.16) < 0.001, f"live reveal did not use its configured duration: {sleep_delays!r}")
+    expect(sleep_delays[0] < sleep_delays[-1], f"live reveal did not ease into its final frame: {sleep_delays!r}")
     expect(live_frames[-1] == tuple(built_rows[-1]), f"final live frame is incomplete: {live_frames!r}")
+
+
+def test_ui_live_renderer_reveals_multiline_values_progressively():
+    """Multiline values should reveal one visual line at a time under a stable active label."""
+    import nautical_core.ui as ui
+    import rich.live
+
+    class TtyBuffer(io.StringIO):
+        def isatty(self):
+            return True
+
+    built_rows = []
+    active_rows = []
+    sleep_delays = []
+    original_stderr = sys.stderr
+    original_builder = ui._build_rich_panel
+    original_live = rich.live.Live
+    original_sleep = ui.time.sleep
+    try:
+        def fake_builder(_title, rows, *, active_row=None, **_kwargs):
+            snapshot = list(rows)
+            built_rows.append(snapshot)
+            active_rows.append(active_row)
+            return tuple(snapshot)
+
+        class FakeLive:
+            def __init__(self, _renderable, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def update(self, _renderable, *, refresh=False):
+                expect(refresh is True, "multiline reveal frames should refresh explicitly")
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return False
+
+        ui._reset_live_animation_state()
+        sys.stderr = TtyBuffer()
+        ui._build_rich_panel = fake_builder
+        rich.live.Live = FakeLive
+        ui.time.sleep = sleep_delays.append
+        rendered = ui._render_panel_live(
+            "Multiline",
+            [("Upcoming", "one\ntwo\nthree"), ("Chain", "enabled")],
+            kind="info",
+            themes=None,
+            duration_ms=160,
+        )
+    finally:
+        ui._reset_live_animation_state()
+        sys.stderr = original_stderr
+        ui._build_rich_panel = original_builder
+        rich.live.Live = original_live
+        ui.time.sleep = original_sleep
+
+    expect(rendered is True, "multiline live renderer failed")
+    expect(
+        built_rows == [
+            [("Upcoming", "one\ntwo\nthree"), ("Chain", "enabled")],
+            [("Upcoming", "one")],
+            [("Upcoming", "one\ntwo")],
+            [("Upcoming", "one\ntwo\nthree")],
+            [("Upcoming", "one\ntwo\nthree"), ("Chain", "enabled")],
+        ],
+        f"multiline values did not reveal progressively: {built_rows!r}",
+    )
+    expect(active_rows == [None, 0, 0, 0, 1], f"multiline focus moved before the row completed: {active_rows!r}")
+    expect(len(sleep_delays) == 4, f"unexpected multiline transition count: {sleep_delays!r}")
+    expect(abs(sum(sleep_delays) - 0.16) < 0.001, f"multiline reveal exceeded its total budget: {sleep_delays!r}")
+    expect(sleep_delays[0] < sleep_delays[-1], f"multiline reveal did not ease toward settle: {sleep_delays!r}")
 
 
 def test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels():
@@ -18113,6 +18188,7 @@ TESTS = [
     test_ui_live_panel_has_nautical_branding_without_changing_static_panels,
     test_ui_static_rich_renderer_delegates_to_shared_builder,
     test_ui_live_renderer_reveals_cumulative_row_frames,
+    test_ui_live_renderer_reveals_multiline_values_progressively,
     test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels,
     test_ui_live_mid_animation_failure_settles_without_static_duplicate,
     test_ui_live_oversized_panel_settles_without_starting_animation,

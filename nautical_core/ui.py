@@ -9,7 +9,6 @@ import time
 _RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
 _DEFAULT_LIVE_PANEL_DURATION_MS = 160
 _MAX_LIVE_PANEL_DURATION_MS = 1000
-_LIVE_REVEAL_MAX_STEP_SECONDS = 0.04
 _LIVE_PANEL_MAX_HEIGHT_RATIO = 0.75
 _LIVE_PANEL_MIN_SPARE_LINES = 3
 _LIVE_ANIMATION_USED = False
@@ -500,7 +499,7 @@ def _render_panel_live(
     effective_duration_ms = _live_animation_duration_ms(kind, duration_ms)
     if effective_duration_ms > 0 and _live_panel_too_tall(console, settled_panel):
         effective_duration_ms = 0.0
-    if len(row_list) <= 1 or effective_duration_ms <= 0:
+    if effective_duration_ms <= 0:
         try:
             console.print(settled_panel)
             return True
@@ -508,16 +507,20 @@ def _render_panel_live(
             return False
 
     try:
-        first_rows = row_list[:1]
+        reveal_frames = _live_reveal_frames(row_list)
+        if len(reveal_frames) <= 1:
+            console.print(settled_panel)
+            return True
+        first_rows, first_active_row = reveal_frames[0]
         panel = _build_rich_panel(
             title,
             first_rows,
             kind=kind,
             themes=themes,
             live=True,
-            active_row=0,
+            active_row=first_active_row,
         )
-        reveal_delay = _live_reveal_delay(len(row_list), effective_duration_ms)
+        reveal_delays = _live_reveal_delays(len(reveal_frames), effective_duration_ms)
     except Exception:
         try:
             console.print(settled_panel)
@@ -536,18 +539,21 @@ def _render_panel_live(
             started = True
             _LIVE_ANIMATION_USED = True
             try:
-                for end in range(2, len(row_list) + 1):
+                for (frame_rows, active_row), reveal_delay in zip(
+                    reveal_frames[1:],
+                    reveal_delays[:-1],
+                ):
                     panel = _build_rich_panel(
                         title,
-                        row_list[:end],
+                        frame_rows,
                         kind=kind,
                         themes=themes,
                         live=True,
-                        active_row=end - 1,
+                        active_row=active_row,
                     )
                     time.sleep(reveal_delay)
                     live.update(panel, refresh=True)
-                time.sleep(reveal_delay)
+                time.sleep(reveal_delays[-1])
                 live.update(settled_panel, refresh=True)
             except Exception:
                 try:
@@ -597,18 +603,36 @@ def _reset_live_animation_state() -> None:
     _LIVE_ANIMATION_USED = False
 
 
-def _live_reveal_delay(
-    row_count: int,
+def _live_reveal_frames(rows) -> list[tuple[list[tuple[object, object]], int]]:
+    frames: list[tuple[list[tuple[object, object]], int]] = []
+    completed: list[tuple[object, object]] = []
+    for row_index, (key, value) in enumerate(rows):
+        raw_value = "" if value is None else str(value)
+        value_lines = raw_value.splitlines()
+        if len(value_lines) <= 1:
+            frames.append(([*completed, (key, value)], row_index))
+        else:
+            for visible_lines in range(1, len(value_lines) + 1):
+                partial_value = "\n".join(value_lines[:visible_lines])
+                frames.append(([*completed, (key, partial_value)], row_index))
+        completed.append((key, value))
+    return frames
+
+
+def _live_reveal_delays(
+    frame_count: int,
     duration_ms: int | float = _DEFAULT_LIVE_PANEL_DURATION_MS,
-) -> float:
-    row_count = max(0, int(row_count))
-    transitions = row_count if row_count > 1 else 0
-    if not transitions:
-        return 0.0
-    return min(
-        _LIVE_REVEAL_MAX_STEP_SECONDS,
-        (_normalized_live_duration_ms(duration_ms) / 1000.0) / transitions,
-    )
+) -> list[float]:
+    frame_count = max(0, int(frame_count))
+    total_seconds = _normalized_live_duration_ms(duration_ms) / 1000.0
+    if frame_count <= 1 or total_seconds <= 0:
+        return []
+    weights = [
+        0.75 + (0.5 * index / (frame_count - 1))
+        for index in range(frame_count)
+    ]
+    weight_total = sum(weights)
+    return [total_seconds * weight / weight_total for weight in weights]
 
 
 def render_panel(

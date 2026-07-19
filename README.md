@@ -366,6 +366,8 @@ static panel when terminal cursor control is unavailable. Set
 `live_panel_duration_ms = 160` to control the total reveal budget, or `0` to
 retain the live styling without motion. Panels that would occupy most of the
 terminal height also settle immediately to avoid scrolling and flicker.
+Multiline values reveal one line at a time with timing eased toward the final
+settled frame.
 
 For a deeper read-only check:
 

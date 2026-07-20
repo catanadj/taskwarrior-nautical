@@ -25,6 +25,12 @@ curl -L https://github.com/catanadj/taskwarrior-nautical/archive/refs/heads/main
   | tar -xz --strip-components=1 taskwarrior-nautical-main/nautical_core
 
 curl -s https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/uda.conf >> ~/.taskrc
+
+# Install the nautical command launcher
+curl -Lo ~/.task/nautical https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/nautical
+chmod +x ~/.task/nautical
+mkdir -p ~/.local/bin
+ln -sf ~/.task/nautical ~/.local/bin/nautical
 ```
 
 Optional, for formatted panels:

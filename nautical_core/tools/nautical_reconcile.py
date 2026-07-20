@@ -182,13 +182,56 @@ def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:
         print(f"  {key.replace('_', ' ')}: {value}")
 
 
-def _print_plan(plan: reconcile.ReconcilePlan, *, applied_short: str = "", fmt_dt_local=None) -> None:
-    parent = _fmt_parent(plan.parent)
+def _describe_plan(plan: reconcile.ReconcilePlan, *, hook: Any, fmt_dt_local=None) -> dict[str, Any]:
     evidence = reconcile.describe_plan(plan, fmt_dt_local=fmt_dt_local)
+    child = plan.child if isinstance(plan.child, dict) else {}
+    child_until = child.get("until")
+    if not child_until:
+        return evidence
+    try:
+        until_dt, until_err = hook._safe_parse_datetime(child_until)
+    except Exception:
+        return evidence
+    if until_err or until_dt is None:
+        return evidence
+
+    if callable(fmt_dt_local):
+        try:
+            evidence["child_expires"] = str(fmt_dt_local(until_dt))
+        except Exception:
+            evidence["child_expires"] = str(child_until)
+    else:
+        evidence["child_expires"] = str(child_until)
+
+    if plan.child_due is None:
+        return evidence
+    try:
+        add_validation = hook.core._import_sibling("add_validation")
+        carry = add_validation.describe_native_until_carry(
+            until_dt,
+            plan.child_due,
+            to_local=hook.core.to_local,
+        )
+    except Exception:
+        carry = None
+    if carry:
+        evidence["expiration"] = carry
+    return evidence
+
+
+def _print_plan(
+    plan: reconcile.ReconcilePlan,
+    evidence: dict[str, Any] | None = None,
+    *,
+    applied_short: str = "",
+) -> None:
+    parent = _fmt_parent(plan.parent)
+    if evidence is None:
+        evidence = reconcile.describe_plan(plan)
     if plan.action == "spawn":
         suffix = f" -> created {applied_short}" if applied_short else ""
         print(f"spawn: {parent}{suffix}")
-        _print_evidence(evidence, ("reason", "kind", "next_link", "child_field", "child_target", "child_due", "child_local"))
+        _print_evidence(evidence, ("reason", "kind", "next_link", "child_field", "child_target", "child_due", "child_local", "child_expires", "expiration"))
     elif plan.action == "backfill_nextlink":
         suffix = " (applied)" if applied_short else ""
         print(f"backfill nextLink: {parent}{suffix}")
@@ -196,10 +239,10 @@ def _print_plan(plan: reconcile.ReconcilePlan, *, applied_short: str = "", fmt_d
     elif plan.action == "legitimate_final":
         suffix = " -> set chain:off" if applied_short else ""
         print(f"final: {parent} ({plan.reason}){suffix}")
-        _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local"))
+        _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
     else:
         print(f"error: {parent} ({plan.reason})")
-        _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local"))
+        _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -215,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
     fmt_dt_local = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
     candidates = _candidate_rows(args.task_bin, hook)
     plans: list[reconcile.ReconcilePlan] = []
+    plan_evidence: list[dict[str, Any]] = []
     applied: list[dict[str, Any]] = []
 
     for parent in candidates:
@@ -224,23 +268,25 @@ def main(argv: list[str] | None = None) -> int:
             hook=hook,
         )
         plans.append(plan)
+        evidence = _describe_plan(plan, hook=hook, fmt_dt_local=fmt_dt_local)
+        plan_evidence.append(evidence)
         if args.apply and plan.action == "spawn":
             child_short = _apply_spawn(args.task_bin, hook, plan)
             applied.append({"action": "spawn", "parent": reconcile.short_uuid(parent.get("uuid")), "child": child_short})
             if not args.json:
-                _print_plan(plan, applied_short=child_short, fmt_dt_local=fmt_dt_local)
+                _print_plan(plan, evidence, applied_short=child_short)
         elif args.apply and plan.action == "backfill_nextlink":
             _modify_parent_nextlink(args.task_bin, parent, plan.child_short)
             applied.append({"action": "backfill_nextlink", "parent": reconcile.short_uuid(parent.get("uuid")), "child": plan.child_short})
             if not args.json:
-                _print_plan(plan, applied_short=plan.child_short, fmt_dt_local=fmt_dt_local)
+                _print_plan(plan, evidence, applied_short=plan.child_short)
         elif args.apply and plan.action == "legitimate_final":
             _disable_parent_chain(args.task_bin, parent)
             applied.append({"action": "disable_chain", "parent": reconcile.short_uuid(parent.get("uuid"))})
             if not args.json:
-                _print_plan(plan, applied_short="off", fmt_dt_local=fmt_dt_local)
+                _print_plan(plan, evidence, applied_short="off")
         elif not args.json:
-            _print_plan(plan, fmt_dt_local=fmt_dt_local)
+            _print_plan(plan, evidence)
 
     summary = {
         "mode": "apply" if args.apply else "dry-run",
@@ -252,9 +298,9 @@ def main(argv: list[str] | None = None) -> int:
         "plans": [
             {
                 "action": plan.action,
-                **reconcile.describe_plan(plan, fmt_dt_local=fmt_dt_local),
+                **evidence,
             }
-            for plan in plans
+            for plan, evidence in zip(plans, plan_evidence)
         ],
         "applied": applied,
     }

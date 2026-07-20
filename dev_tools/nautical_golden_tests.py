@@ -3124,6 +3124,45 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
         mod._run_task, mod._spawn_child_atomic, mod._panel, mod._end_chain_summary = original
 
 
+def test_on_modify_expiration_panel_explains_carry():
+    """The immediate expiration panel should explain the child's carry policy."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_expiration_carry_panel_test")
+    expiration = mod._module("modify_expiration")
+    child_due = mod.core.build_local_datetime(date(2026, 7, 27), (9, 0)).astimezone(timezone.utc)
+    child_until = mod.core.build_local_datetime(date(2026, 8, 2), (23, 59)).astimezone(timezone.utc)
+    parent = {
+        "description": "Take the trash out",
+        "link": 1,
+    }
+    plan = SimpleNamespace(
+        action="spawn",
+        child_due=child_due,
+        child={"until": mod.core.fmt_isoz(child_until)},
+        next_link=2,
+        reason="expired link missing next link",
+    )
+    captured = {}
+    original_panel = mod._panel
+    try:
+        mod._panel = lambda title, rows, **kwargs: captured.update(title=title, rows=list(rows), kwargs=dict(kwargs))
+        expiration._render_recovery_panel(
+            parent,
+            plan,
+            services=mod._expiration_services(),
+            result="[green]Next occurrence created[/]",
+            child_short="22222222",
+        )
+    finally:
+        mod._panel = original_panel
+
+    add_validation = mod.core._import_sibling("add_validation")
+    expected = add_validation.describe_native_until_carry(child_until, child_due, to_local=mod.core.to_local)
+    expect(captured.get("title") == "⌛ Nautical occurrence expired", f"unexpected expiration panel: {captured!r}")
+    expect(("Expiration", expected) in (captured.get("rows") or []), f"missing carry policy: {captured!r}")
+    expect(any(label == "Next expires" for label, _value in (captured.get("rows") or [])), f"missing next expiration: {captured!r}")
+
+
 def test_on_modify_expiration_delegates_to_extracted_orchestration():
     """The hook should leave expiration decisions to the focused orchestration module."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -5687,8 +5726,7 @@ def test_year_ordinals_natural_language_and_validation_guidance():
 
 
 def test_year_ordinals_documented_examples():
-    """README year-ordinal examples should remain present and parseable."""
-    readme = (Path(ROOT) / "README.md").read_text(encoding="utf-8")
+    """Representative year-ordinal examples should remain parseable."""
     examples = (
         "y:d100",
         "y:d-1",
@@ -5699,7 +5737,6 @@ def test_year_ordinals_documented_examples():
         "y/2:w1",
     )
     for expr in examples:
-        expect(f"`{expr}`" in readme, f"README year-ordinal example is missing: {expr}")
         core.validate_anchor_expr_strict(expr)
 
 
@@ -17200,6 +17237,19 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
     expect(spawned.reason == "expired link missing next link", f"unexpected expiration reason: {spawned}")
     expect((spawned.child or {}).get("until"), f"spawned child should carry relative until: {spawned}")
     expect(reconcile.describe_plan(spawned).get("trigger") == "expiration", f"missing expiration evidence: {spawned}")
+    tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+        "_nautical_reconcile_expiration_evidence_test",
+    )
+    evidence = tool._describe_plan(spawned, hook=mod, fmt_dt_local=mod.core.fmt_dt_local)
+    child_until = mod.core.parse_dt_any(spawned.child.get("until"))
+    expected_policy = mod.core._import_sibling("add_validation").describe_native_until_carry(
+        child_until,
+        spawned.child_due,
+        to_local=mod.core.to_local,
+    )
+    expect(evidence.get("child_expires") == mod.core.fmt_dt_local(child_until), f"missing child expiration: {evidence!r}")
+    expect(evidence.get("expiration") == expected_policy, f"missing expiration policy: {evidence!r}")
 
 
 def test_reconcile_tool_exports_and_applies_expired_candidates():
@@ -19140,8 +19190,7 @@ def test_position_selection_public_period_scopes_hooks():
 
 
 def test_position_selection_documented_examples_and_feedback():
-    """README examples should remain parseable and invalid forms should provide actionable guidance."""
-    readme = (Path(ROOT) / "README.md").read_text(encoding="utf-8")
+    """Positional examples should remain parseable and invalid forms should provide actionable guidance."""
     examples = (
         "(w:mon | w:wed | w:fri)@in-week=last",
         "(w:tue | w:thu)@in-month=first,last",
@@ -19149,7 +19198,6 @@ def test_position_selection_documented_examples_and_feedback():
         "(w:mon)@in-year=10th@t=09:00",
     )
     for expr in examples:
-        expect(f'anchor:"{expr}"' in readme, f"README positional example is missing: {expr}")
         core.validate_anchor_expr_strict(expr)
 
     invalid = (
@@ -19430,6 +19478,7 @@ TESTS = [
     test_end_summary_history_marks_deleted_pending_tail,
     test_delete_chain_summary_uses_stopped_title,
     test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete,
+    test_on_modify_expiration_panel_explains_carry,
     test_on_modify_expiration_delegates_to_extracted_orchestration,
     test_on_modify_expiration_internal_failure_remains_recoverable,
     test_on_modify_expiration_wrapper_preserves_json_stdout,

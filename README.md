@@ -4,12 +4,15 @@
 
 # Taskwarrior Nautical
 
-Nautical gives Taskwarrior practical recurring tasks. Complete a Nautical task
-as usual and it creates the next normal Taskwarrior task for you. The tasks
-remain visible, editable, and syncable with the regular `task` command.
+Nautical is a full recurrence engine for Taskwarrior. Give it a compact routine
+rule, then complete tasks as usual; Nautical creates each next occurrence as a
+normal Taskwarrior task that remains visible, editable, and in sync with the
+regular `task` command.
 
-Use it for simple repeating work today, then reach for the manual when a
-schedule needs calendar rules, business days, exclusions and all other advanced details.
+Simple routines stay simple. When a routine follows business days, exception
+dates, multiple times, changing intervals, or a fixed end point, the same system
+scales with it. If you can describe when something should happen, Nautical is
+designed to express it.
 
 ## Start Here
 
@@ -65,7 +68,9 @@ task add "Anniversary" anchor:"y:04-12"
 ```
 
 That is enough to begin. `cp` is for “after this long”; `anchor` is for “on
-these dates.”
+these dates.” Together they are a small doorway into routines as precise and
+individual as real life requires. The manual holds the deeper grammar and
+ready-to-adapt examples whenever you need them.
 
 ## Learn More
 

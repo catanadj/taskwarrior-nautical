@@ -66,6 +66,18 @@ def _render_recovery_panel(
     child_until = plan.child.get("until") if isinstance(plan.child, dict) else None
     child_until_dt, child_until_err = services.safe_parse_datetime(child_until)
     if child_until_dt is not None and not child_until_err:
+        if plan.child_due is not None:
+            try:
+                add_validation = services.core._import_sibling("add_validation")
+                carry = add_validation.describe_native_until_carry(
+                    child_until_dt,
+                    plan.child_due,
+                    to_local=services.core.to_local,
+                )
+            except Exception:
+                carry = None
+            if carry:
+                rows.append(("Expiration", carry))
         rows.append(("Next expires", services.core.fmt_dt_local(child_until_dt)))
     rows.append(("Link", f"#{plan.next_link}"))
     if child_short:

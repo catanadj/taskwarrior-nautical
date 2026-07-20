@@ -149,6 +149,14 @@ def build_child_from_parent(
             parent_anchor_field=parent_anchor_field,
             child_anchor_field=child_field,
         )
+    carry_relative_datetime(
+        parent,
+        child,
+        child_due_utc,
+        "until",
+        parent_anchor_field=parent_anchor_field,
+        child_anchor_field=child_field,
+    )
     for uda_field in configured_recurrence_uda_fields(parent):
         carry_relative_datetime(
             parent,

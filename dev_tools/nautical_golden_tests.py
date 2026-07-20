@@ -11113,6 +11113,57 @@ def test_on_modify_carry_wall_clock_across_dst():
     expect(wait_local.hour == 3 and wait_local.minute == 30, f"unexpected local wait: {wait_local}")
 
 
+def test_on_modify_build_child_carries_until_across_dst():
+    """native until should retain its local wall-clock offset from the recurrence due."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_carry_until_dst_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:
+        return
+
+    previous_tz_name = mod.core.LOCAL_TZ_NAME
+    previous_tz = mod.core._LOCAL_TZ
+    try:
+        mod.core.LOCAL_TZ_NAME = "America/New_York"
+        mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+
+        parent_due = mod.core.build_local_datetime(date(2025, 3, 8), (9, 0))
+        parent_until = mod.core.build_local_datetime(date(2025, 3, 9), (17, 0))
+        child_due = mod.core.build_local_datetime(date(2025, 3, 15), (9, 0))
+        parent = {
+            "uuid": "00000000-0000-0000-0000-000000000994",
+            "status": "completed",
+            "due": mod.core.fmt_isoz(parent_due),
+            "until": mod.core.fmt_isoz(parent_until),
+            "cp": "7d",
+            "chainID": "cid_until",
+        }
+
+        child = mod._build_child_from_parent(
+            parent,
+            child_due,
+            "due",
+            2,
+            "deadbeef",
+            "cp",
+            0,
+            None,
+        )
+        child_until_local = mod.core.to_local(mod.core.parse_dt_any(child.get("until")))
+        expect(
+            child_until_local.date() == date(2025, 3, 16)
+            and (child_until_local.hour, child_until_local.minute) == (17, 0),
+            f"unexpected carried until: {child_until_local}",
+        )
+    finally:
+        mod.core.LOCAL_TZ_NAME = previous_tz_name
+        mod.core._LOCAL_TZ = previous_tz
+
+
 def test_on_modify_cp_due_edit_preserves_relative_offsets():
     """A due edit on a cp task should retain unedited scheduled and wait offsets."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -13400,7 +13451,7 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
 
 
 def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait():
-    """scheduled-only child spawn should keep due empty and carry wait from scheduled."""
+    """scheduled-only child spawn should carry relative dates from scheduled."""
     hook = _find_hook_file("on-modify-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_modify_build_child_sched_only_test")
     if hasattr(mod, "_load_core"):
@@ -13411,6 +13462,7 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
         "status": "completed",
         "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (9, 0))),
         "wait": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (7, 0))),
+        "until": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 2), (17, 0))),
         "cp": "1d",
         "chainID": "cid_sched",
     }
@@ -13429,6 +13481,11 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
     expect(child.get("scheduled") == mod.core.fmt_isoz(child_due), f"unexpected child scheduled: {child}")
     wait_local = mod.core.to_local(mod.core.parse_dt_any(child.get("wait")))
     expect((wait_local.hour, wait_local.minute) == (7, 0), f"unexpected carried wait: {wait_local}")
+    until_local = mod.core.to_local(mod.core.parse_dt_any(child.get("until")))
+    expect(
+        until_local.date() == date(2025, 1, 3) and (until_local.hour, until_local.minute) == (17, 0),
+        f"unexpected carried until: {until_local}",
+    )
 
 
 def test_on_modify_render_anchor_completion_feedback_wrapper():
@@ -18141,6 +18198,7 @@ TESTS = [
     test_on_modify_requires_core_data_context_helper,
     test_on_exit_requires_core_data_context_helper,
     test_on_modify_carry_wall_clock_across_dst,
+    test_on_modify_build_child_carries_until_across_dst,
     test_on_modify_cp_due_edit_preserves_relative_offsets,
     test_on_modify_explicit_timing_edits_warn_on_invalid_order,
     test_on_modify_timing_warning_wrapper_preserves_json_stdout,

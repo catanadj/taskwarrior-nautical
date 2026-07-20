@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 from datetime import timedelta
+from typing import Any
 
 
 def _format_td_short(td: timedelta) -> str:
@@ -198,7 +199,12 @@ def _append_link_status_rows(
         fb.append(("Link status", "[bold red]This was the last link[/]"))
     elif base_no == cap_no - 1:
         fb.append(("Link status", second_to_last_text))
-    fb.append(("Links left", f"{max(0, cap_no - base_no)} left (cap #{cap_no})"))
+    fb.append(("Links left", str(max(0, cap_no - base_no))))
+
+
+def _effective_last_occurrence(finals: list[tuple[str, Any]]):
+    candidates = [when for _label, when in finals if when is not None]
+    return min(candidates) if candidates else None
 
 
 def _append_final_rows(
@@ -209,8 +215,43 @@ def _append_final_rows(
     fmt_dt_local,
     human_delta,
 ) -> None:
-    for label, when in finals:
-        fb.append((f"Final ({label})", f"{fmt_dt_local(when)}  ({human_delta(now_utc, when, True)})"))
+    last = _effective_last_occurrence(finals)
+    if last is None:
+        return
+    fb.append(("Last occurrence", f"{fmt_dt_local(last)}  ({human_delta(now_utc, last, True)})"))
+
+
+def _append_chain_boundary_rows(fb: list[tuple[str, object]], task: dict, until_dt, *, core) -> None:
+    chain_max = core.coerce_int(task.get("chainMax"), 0)
+    if chain_max:
+        fb.append(("Chain cap", f"#{chain_max}"))
+    if until_dt:
+        fb.append(("Chain end point", core.fmt_dt_local(until_dt)))
+
+
+def _child_expiration(core, child: dict):
+    try:
+        return core.parse_dt_any(child.get("until"))
+    except Exception:
+        return None
+
+
+def _append_next_expiration_row(
+    fb: list[tuple[str, object]],
+    child: dict,
+    child_due,
+    *,
+    core,
+    target_field: str = "due",
+) -> None:
+    expires = _child_expiration(core, child)
+    if expires is None:
+        return
+    delta = core.humanize_delta(child_due, expires, use_months_days=False)
+    if delta.startswith("in "):
+        delta = delta[3:]
+    basis = "scheduled" if target_field == "scheduled" else "due"
+    fb.append(("Next expires", f"{core.fmt_dt_local(expires)}  ({delta} after {basis})"))
 
 
 def _display_mode_name(core) -> str:
@@ -226,7 +267,7 @@ def _rows_are_notable(rows: list[tuple[str, object]]) -> bool:
         if k is None:
             continue
         lk = str(k).strip().lower()
-        if lk in notable_labels or lk.startswith("final"):
+        if lk in notable_labels or lk == "last occurrence":
             return True
         if lk == "basis":
             return True
@@ -247,6 +288,10 @@ def _build_text_feedback(
     cap_no: int | None,
     base_no: int,
     until_dt,
+    child_due=None,
+    child_expires=None,
+    expiration_basis: str = "due",
+    last_occurrence=None,
     extra_line: str | None = None,
 ) -> str:
     text = core.strip_rich_markup(preview_line or "")
@@ -274,6 +319,14 @@ def _build_text_feedback(
         line2 += f" [dim]→[/] [{due_style}]{due_part}[/]"
 
     lines = [line1, line2]
+    if child_expires:
+        expires_delta = core.humanize_delta(child_due, child_expires, use_months_days=False)
+        if expires_delta.startswith("in "):
+            expires_delta = expires_delta[3:]
+        lines.append(
+            f"[bold magenta]Next expires:[/] [white]{core.fmt_dt_local(child_expires)}[/]"
+            f" [dim]({expires_delta} after {expiration_basis})[/]"
+        )
     if summary and str(summary).strip():
         if str(kind or "").lower() == "anchor":
             label = "Sources" if str(summary).strip() == "anchor + anchor_file" else "Pattern"
@@ -286,12 +339,14 @@ def _build_text_feedback(
 
     limit_parts = []
     if cap_no:
-        limit_parts.append(f"[yellow]cap #{cap_no}[/]")
+        limit_parts.append(f"[yellow]#{cap_no}[/]")
         limit_parts.append(f"[dim]{max(0, cap_no - base_no)} left[/]")
-    if until_dt:
-        limit_parts.append(f"[dim]until[/] [white]{core.fmt_dt_local(until_dt)}[/]")
     if limit_parts:
-        lines.append("[bold yellow]Limits:[/] " + " [dim]·[/] ".join(limit_parts))
+        lines.append("[bold yellow]Last link:[/] " + " [dim]·[/] ".join(limit_parts))
+    if until_dt:
+        lines.append(f"[bold yellow]Chain end point:[/] [white]{core.fmt_dt_local(until_dt)}[/]")
+    if last_occurrence:
+        lines.append(f"[bold magenta]Last occurrence:[/] [white]{core.fmt_dt_local(last_occurrence)}[/]")
     return "\n".join(line for line in lines if line)
 
 
@@ -305,6 +360,10 @@ def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: 
         "root",
         "link status",
         "links left",
+        "chain cap",
+        "chain end point",
+        "last occurrence",
+        "next expires",
         "integrity",
         "timeline",
         "sanitised",
@@ -319,7 +378,7 @@ def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: 
         lk = str(k).strip().lower()
         if lk == "timeline" and not include_timeline:
             continue
-        if lk in keep_labels or lk.startswith("final"):
+        if lk in keep_labels:
             out.append((k, v))
     return out
 
@@ -368,6 +427,7 @@ def render_anchor_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
+            child_until_dt=_child_expiration(core, feedback.child),
             kind="anchor",
             minimal=(mode == "minimal"),
         )
@@ -385,6 +445,7 @@ def render_anchor_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
+            child_until_dt=_child_expiration(core, feedback.child),
             kind="anchor",
             minimal=False,
         )
@@ -400,6 +461,10 @@ def render_anchor_completion_feedback(
                 cap_no=feedback.cap_no,
                 base_no=feedback.base_no,
                 until_dt=feedback.until_dt,
+                child_due=feedback.child_due,
+                child_expires=_child_expiration(core, feedback.child),
+                expiration_basis=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
+                last_occurrence=_effective_last_occurrence(feedback.finals),
                 extra_line=(f"[bold cyan]Except:[/] [white]{omit_natural or omit_raw}[/]" if omit_raw else (f"[bold cyan]Omit file:[/] [white]{omit_file}[/]" if omit_file else None)),
             ),
             kind="preview_anchor",
@@ -419,6 +484,13 @@ def render_anchor_completion_feedback(
         fb.append(("Omit file", omit_file))
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=core.expr_has_m_or_y(feedback.dnf))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
+    _append_next_expiration_row(
+        fb,
+        feedback.child,
+        feedback.child_due,
+        core=core,
+        target_field=feedback.meta.get("target_field") or "due",
+    )
     if anchor_label == "Sources":
         file_expr = str(feedback.new.get("anchor_file") or "").strip()
         natural_expr = _anchor_feedback_natural(core, feedback.new, feedback.dnf)
@@ -449,6 +521,7 @@ def render_anchor_completion_feedback(
         anchor_field=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
     )
 
+    _append_chain_boundary_rows(fb, feedback.new, feedback.until_dt, core=core)
     _append_link_status_rows(
         fb,
         feedback.cap_no,
@@ -524,6 +597,7 @@ def render_cp_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
+            child_until_dt=_child_expiration(core, feedback.child),
             kind="cp",
             minimal=(mode == "minimal"),
         )
@@ -541,6 +615,7 @@ def render_cp_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
+            child_until_dt=_child_expiration(core, feedback.child),
             kind="cp",
             minimal=False,
         )
@@ -556,6 +631,10 @@ def render_cp_completion_feedback(
                 cap_no=feedback.cap_no,
                 base_no=feedback.base_no,
                 until_dt=feedback.until_dt,
+                child_due=feedback.child_due,
+                child_expires=_child_expiration(core, feedback.child),
+                expiration_basis=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
+                last_occurrence=_effective_last_occurrence(feedback.finals),
             ),
             kind="preview_cp",
             markup_body=True,
@@ -587,6 +666,13 @@ def render_cp_completion_feedback(
         suffix = f" ({step_token})" if step_token else ""
         fb.append(("Step", f"{step}/{feedback.meta.get('cp_sequence_len')}{suffix}"))
     fb.append(("Next", f"#{feedback.next_no} → {core.fmt_dt_local(feedback.child_due)}  ({delta})"))
+    _append_next_expiration_row(
+        fb,
+        feedback.child,
+        feedback.child_due,
+        core=core,
+        target_field=feedback.meta.get("target_field") or "due",
+    )
     basis_text = _pretty_basis_cp(
         feedback.new,
         feedback.meta,
@@ -607,6 +693,7 @@ def render_cp_completion_feedback(
         anchor_field=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
     )
 
+    _append_chain_boundary_rows(fb, feedback.new, feedback.until_dt, core=core)
     if feedback.cap_no:
         _append_link_status_rows(
             fb,

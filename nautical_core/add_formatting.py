@@ -31,8 +31,17 @@ def _anchor_classify_rows(
     upcoming_start: int,
 ) -> dict[str, list[tuple[str, str]]]:
     config_keys = {"Pattern", "Natural"}
-    schedule_keys = {"First due", "First scheduled", "Next anchor", "Scheduled", "Wait", "[auto-due]", "Upcoming"}
-    limits_keys = {"Limits", "Final (until)"}
+    schedule_keys = {
+        "First due",
+        "First scheduled",
+        "First expires",
+        "Next anchor",
+        "Scheduled",
+        "Wait",
+        "[auto-due]",
+        "Upcoming",
+    }
+    limits_keys = {"Chain cap", "Chain end point", "Last occurrence", "Future links"}
     grouped: dict[str, list[tuple[str, str]]] = {
         "config": [],
         "schedule": [],
@@ -116,8 +125,16 @@ def format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
             break
 
     config_keys = {"Period"}
-    schedule_keys = {"First due", "First scheduled", "Scheduled", "Wait", "[auto-due]", "Upcoming"}
-    limits_keys = {"Limits", "Final (max)", "Final (until)"}
+    schedule_keys = {
+        "First due",
+        "First scheduled",
+        "First expires",
+        "Scheduled",
+        "Wait",
+        "[auto-due]",
+        "Upcoming",
+    }
+    limits_keys = {"Chain cap", "Chain end point", "Last occurrence", "Future links"}
 
     config: list[tuple[str, str]] = []
     schedule: list[tuple[str, str]] = []

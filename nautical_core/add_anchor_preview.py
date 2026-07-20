@@ -299,26 +299,30 @@ def anchor_preview_limit_rows(
     now_utc: datetime,
     core: Any,
     human_delta: Callable[[Any, Any, bool], str],
+    final_max_dt: datetime | None = None,
 ) -> None:
     def _fmt(dt):
         return core.fmt_dt_local(dt)
 
-    lim_parts = []
+    future_counts = []
     if cpmax and cpmax > 0:
-        lim_parts.append(f"max [bold yellow]{cpmax}[/]")
+        rows.append(("Chain cap", f"[bold yellow]#{cpmax}[/]"))
+        future_counts.append(max(0, cpmax - 1))
     if until_dt:
-        lim_parts.append(f"until [bold yellow]{_fmt(until_dt)}[/]")
+        rows.append(("Chain end point", f"[bold yellow]{_fmt(until_dt)}[/]"))
         if exact_until_count is not None:
-            lim_parts.append(f"[white]{exact_until_count} more[/]")
-    if lim_parts:
-        rows.append(("Limits", " [dim]|[/] ".join(lim_parts)))
-    if final_until_dt:
+            future_counts.append(exact_until_count)
+    final_candidates = [dt for dt in (final_max_dt, final_until_dt) if dt is not None]
+    if final_candidates:
+        last = min(final_candidates)
         rows.append(
             (
-                "Final (until)",
-                f"[bright_magenta]{_fmt(final_until_dt)}[/]  [dim]({human_delta(now_utc, final_until_dt, True)})[/]",
+                "Last occurrence",
+                f"[bright_magenta]{_fmt(last)}[/]  [dim]({human_delta(now_utc, last, True)})[/]",
             )
         )
+    if future_counts:
+        rows.append(("Future links", f"[white]{min(future_counts)}[/]"))
 
 
 def _anchor_file_occurrences_local(
@@ -599,6 +603,7 @@ def handle_anchor_preview_on_add(
     anchor_warn: bool,
     upcoming_preview: int,
     preview_hard_cap: int,
+    max_summary_links: int,
     core: Any,
     root_uuid_from: Callable[[dict[str, Any]], str | None],
     short: Callable[[Any], str],
@@ -619,6 +624,7 @@ def handle_anchor_preview_on_add(
     human_delta: Callable[[Any, Any, bool], str],
     error_and_exit: Callable[[list[tuple[str, str]]], None],
     validate_native_until_after_target: Callable[[dict[str, Any], datetime, str], None],
+    append_first_expiration_row: Callable[[list[tuple[str, str]], dict[str, Any], datetime, str], None],
 ) -> None:
     rows: list[tuple[str, str]] = []
     for warning in panel_diagnostics.panel_warnings(core, task):
@@ -764,6 +770,7 @@ def handle_anchor_preview_on_add(
             rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
 
     validate_native_until_after_target(task, display_first_due_utc, recurrence_field)
+    append_first_expiration_row(rows, task, display_first_due_utc, recurrence_field)
     calendar_feedback.render_business_calendar_displacement(
         task,
         first_due_local_dt,
@@ -889,6 +896,29 @@ def handle_anchor_preview_on_add(
     rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
     rows.append(("Delta", f"[bright_yellow]{human_delta(now_utc, display_first_due_utc, bool(dnf and core.expr_has_m_or_y(dnf)))}[/]"))
 
+    final_max_dt = None
+    future_needed = max(0, cpmax - 1)
+    if cpmax == 1:
+        final_max_dt = display_first_due_utc
+    elif future_needed and future_needed <= max_summary_links:
+        future_for_max = collect_included_occurrences_local(
+            dnf=dnf,
+            anchor_file_str=anchor_file_str,
+            after_local_dt=first_due_local_dt,
+            inclusive=user_provided_due,
+            limit=future_needed,
+            fallback_hhmm=first_hhmm,
+            default_seed_date=interval_seed,
+            seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            core=core,
+            next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
+            pick_occurrence_local=anchor_pick_occurrence_local,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        )
+        if len(future_for_max) == future_needed:
+            final_max_dt = future_for_max[-1].astimezone(timezone.utc)
+
     anchor_preview_limit_rows(
         rows,
         cpmax=cpmax,
@@ -898,6 +928,7 @@ def handle_anchor_preview_on_add(
         now_utc=now_utc,
         core=core,
         human_delta=human_delta,
+        final_max_dt=final_max_dt,
     )
 
     if anchor_str and "rand" in anchor_str.lower():

@@ -1096,7 +1096,7 @@ def _format_chain_summary_rows(
         "Best early",
         "Worst late",
     }
-    limits_keys = {"Limits"}
+    limits_keys = {"Chain cap", "Chain end point", "Chain limits"}
     history_keys = {"History"}
 
     chain: list[tuple[str, str]] = []
@@ -1154,14 +1154,24 @@ def _format_next_anchor_rows(
       <blank>
       Next Due / Link status / Links left / Limits
       <blank>
-      Final(...) rows
+      Last occurrence
       <blank>
       Timeline
       <blank>
       Rand
     """
     chain_keys = {"Pattern", "Natural", "Basis", "Sanitised"}
-    next_keys = {"Next Due", "Scheduled", "Wait", "Link status", "Links left", "Limits"}
+    next_keys = {
+        "Next",
+        "Next Due",
+        "Next expires",
+        "Scheduled",
+        "Wait",
+        "Link status",
+        "Links left",
+        "Chain cap",
+        "Chain end point",
+    }
     timeline_keys = {"Timeline"}
     footer_keys = {"Rand"}
 
@@ -1177,7 +1187,7 @@ def _format_next_anchor_rows(
             chain.append((k, v))
         elif k in next_keys:
             next_sec.append((k, v))
-        elif isinstance(k, str) and k.startswith("Final ("):
+        elif k == "Last occurrence":
             finals.append((k, v))
         elif k in timeline_keys:
             timeline.append((k, v))
@@ -1270,12 +1280,22 @@ def _format_next_cp_rows(
       <blank>
       Next Due / Link status / Links left / Limits
       <blank>
-      Final(...) rows
+      Last occurrence
       <blank>
       Timeline
     """
     chain_keys = {"Period", "Basis"}
-    next_keys = {"Next Due", "Scheduled", "Wait", "Link status", "Links left", "Limits"}
+    next_keys = {
+        "Next",
+        "Next Due",
+        "Next expires",
+        "Scheduled",
+        "Wait",
+        "Link status",
+        "Links left",
+        "Chain cap",
+        "Chain end point",
+    }
     timeline_keys = {"Timeline"}
 
     chain: list[tuple[str, str]] = []
@@ -1289,7 +1309,7 @@ def _format_next_cp_rows(
             chain.append((k, v))
         elif k in next_keys:
             next_sec.append((k, v))
-        elif isinstance(k, str) and k.startswith("Final ("):
+        elif k == "Last occurrence":
             finals.append((k, v))
         elif k in timeline_keys:
             timeline.append((k, v))
@@ -1799,11 +1819,11 @@ def _format_line_cap(base_no: int, cap_no: int | None, until_dt: datetime | None
     parts = []
     if cap_no:
         left = max(0, cap_no - base_no)
-        parts.append(f"cap #{cap_no}")
+        parts.append(f"last link #{cap_no}")
         parts.append(f"{left} left")
     if until_dt:
         until_txt = _fmtlocal(until_dt)
-        parts.append(f"until {until_txt}")
+        parts.append(f"end point {until_txt}")
     return (" · " + " · ".join(parts)) if parts else ""
 
 def _format_line_preview(
@@ -1816,6 +1836,7 @@ def _format_line_preview(
     cap_no: int | None = None,
     until_dt: datetime | None = None,
     until_no: int | None = None,
+    child_until_dt: datetime | None = None,
     kind: str = "cp",
     minimal: bool = False,
 ) -> str:
@@ -1846,6 +1867,8 @@ def _format_line_preview(
         segments.append(f"[dim]({due_delta})[/]")
     line = " · ".join(seg for seg in segments if seg)
     line = line.replace("✓ · ", "✓ ", 1)
+    if child_until_dt:
+        line += f" [magenta]· expires {_fmtlocal(child_until_dt)}[/]"
     cap_txt = _format_line_cap(link_no, cap_no, until_dt, until_no)
     if cap_txt:
         line += f"[dim]{cap_txt}[/]"
@@ -2427,7 +2450,7 @@ def _validate_native_until_after_target_or_fail(task: dict) -> None:
         "❌ Invalid expiration window",
         [
             (label, core.fmt_dt_local(target_dt)),
-            ("Until", core.fmt_dt_local(until_dt)),
+            ("Expires", core.fmt_dt_local(until_dt)),
             ("Required", reason or f"until must be later than {target_field}"),
         ],
         kind="error",
@@ -4734,12 +4757,12 @@ def _end_summary_stats_rows(rows: list[tuple[str, str]], chain: list[dict], now_
 def _end_summary_limits_row(rows: list[tuple[str, str]], current: dict) -> None:
     cpmax = core.coerce_int(current.get("chainMax"), 0)
     until = _dtparse(current.get("chainUntil"))
-    lims = []
     if cpmax:
-        lims.append(f"max {cpmax}")
+        rows.append(("Chain cap", f"#{cpmax}"))
     if until:
-        lims.append(f"until {core.fmt_dt_local(until)}")
-    rows.append(("Limits", " | ".join(lims) if lims else "–"))
+        rows.append(("Chain end point", core.fmt_dt_local(until)))
+    if not cpmax and not until:
+        rows.append(("Chain limits", "None"))
 
 
 def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict = None) -> None:
@@ -4974,7 +4997,7 @@ def _got_anchor_invalid(msg: str) -> None:
     _fail_and_exit("Invalid anchor", msg)
 
 
-# chainUntil -> numeric cap and "Final (until)"
+# chainUntil -> numeric cap and final permitted occurrence
 def _cap_from_until_cp(task, next_due_utc):
     until = _dtparse(task.get("chainUntil"))
     if not until:
@@ -5527,7 +5550,7 @@ def _recurrence_update_label(field: str) -> str:
         "bc": "Business calendar",
         "cp": "Period",
         "chainMax": "Max links",
-        "chainUntil": "Until",
+        "chainUntil": "Chain end point",
     }.get(field, field)
 
 
@@ -5563,12 +5586,12 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
         deadline = core.parse_dt_any(new.get("chainUntil"))
         if max_link:
             rows.append(("Final link", f"#{max_link}"))
-        if deadline:
-            rows.append(("Deadline", _fmtlocal(deadline)))
+        if deadline and not any(field == "chainUntil" for field, _old, _new in changes):
+            rows.append(("Chain end point", _fmtlocal(deadline)))
         if max_link and deadline:
             rows.append(("Effective", "Whichever boundary is reached first"))
         elif not max_link and not deadline:
-            rows.append(("Limits", "None"))
+            rows.append(("Chain limits", "None"))
 
     anchor_expr = str(new.get("anchor") or "").strip()
     if anchor_expr and any(field == "anchor" for field, _old, _new in changes):

@@ -977,7 +977,7 @@ def _validate_native_until_after_target_or_fail(
         "❌ Invalid expiration window",
         [
             (label, core.fmt_dt_local(target_dt)),
-            ("Until", core.fmt_dt_local(until_dt)),
+            ("Expires", core.fmt_dt_local(until_dt)),
             ("Required", reason or f"until must be later than {target_field}"),
         ],
         kind="error",
@@ -1456,9 +1456,10 @@ def _cp_limit_rows(
     def _fmt(dt):
         return core.fmt_dt_local(dt)
 
-    lim_parts = []
+    final_candidates = []
+    future_counts = []
     if cpmax and cpmax > 0:
-        lim_parts.append(f"max [bold yellow]{cpmax}[/]")
+        rows.append(("Chain cap", f"[bold yellow]#{cpmax}[/]"))
         fmax = due_dt
         steps = max(0, cpmax - 1)
         link_no = start_link_no
@@ -1471,27 +1472,47 @@ def _cp_limit_rows(
                 link_no += 1
             else:
                 fmax = add_period(fmax)
-        rows.append(
-            (
-                "Final (max)",
-                f"[bright_magenta]{_fmt(fmax)}[/]  [dim]({_human_delta(now_utc, fmax, True)})[/]",
-            )
-        )
+        final_candidates.append(fmax)
+        future_counts.append(steps)
 
     if until_dt:
-        lim_parts.append(f"until [bold yellow]{_fmt(until_dt)}[/]")
+        rows.append(("Chain end point", f"[bold yellow]{_fmt(until_dt)}[/]"))
         if exact_until_count is not None:
-            lim_parts.append(f"[white]{exact_until_count} more[/]")
+            future_counts.append(exact_until_count)
         if final_until_dt:
-            rows.append(
-                (
-                    "Final (until)",
-                    f"[bright_magenta]{_fmt(final_until_dt)}[/]  [dim]({_human_delta(now_utc, final_until_dt, True)})[/]",
-                )
-            )
+            final_candidates.append(final_until_dt)
 
-    if lim_parts:
-        rows.append(("Limits", " [dim]|[/] ".join(lim_parts)))
+    if final_candidates:
+        last = min(final_candidates)
+        rows.append(
+            (
+                "Last occurrence",
+                f"[bright_magenta]{_fmt(last)}[/]  [dim]({_human_delta(now_utc, last, True)})[/]",
+            )
+        )
+    if future_counts:
+        rows.append(("Future links", f"[white]{min(future_counts)}[/]"))
+
+
+def _append_first_expiration_row(
+    rows: list[tuple[str, str]],
+    task: dict,
+    target_dt: datetime,
+    target_field: str,
+) -> None:
+    expires_dt, err = _safe_parse_datetime(task.get("until"), "until")
+    if err or expires_dt is None:
+        return
+    delta = _human_delta(target_dt, expires_dt, False)
+    if delta.startswith("in "):
+        delta = delta[3:]
+    basis = "scheduled" if target_field == "scheduled" else "due"
+    rows.append(
+        (
+            "First expires",
+            f"[bright_magenta]{core.fmt_dt_local(expires_dt)}[/]  [dim]({delta} after {basis})[/]",
+        )
+    )
 
 
 def _handle_cp_preview_on_add(
@@ -1556,6 +1577,7 @@ def _handle_cp_preview_on_add(
             step_token = _fmt_cp_interval_token(td)
         rows.append(("Step", f"[bold white]1/{len(tokens)}[/] [dim]({step_token})[/]"))
     rows.append((first_label, f"[bold bright_green]{_fmt(due_dt)}[/]"))
+    _append_first_expiration_row(rows, task, due_dt, recurrence_field)
 
     # Scheduled/Wait preview relative to the recurrence anchor.
     _append_wait_sched_rows(
@@ -1780,6 +1802,7 @@ def _handle_anchor_preview_on_add(
         anchor_warn=ANCHOR_WARN,
         upcoming_preview=UPCOMING_PREVIEW,
         preview_hard_cap=_PREVIEW_HARD_CAP,
+        max_summary_links=_MAX_PREVIEW_ITERATIONS,
         core=core,
         root_uuid_from=_root_uuid_from,
         short=_short,
@@ -1800,6 +1823,7 @@ def _handle_anchor_preview_on_add(
         human_delta=_human_delta,
         error_and_exit=_error_and_exit,
         validate_native_until_after_target=_validate_native_until_after_target_or_fail,
+        append_first_expiration_row=_append_first_expiration_row,
     )
 
 

@@ -2626,11 +2626,20 @@ def test_on_modify_limit_update_emits_effective_boundaries():
         ("Max links", "[dim]5[/] [cyan]→[/] [bold]8[/]") in rows,
         f"missing styled chainMax update: {rows!r}",
     )
-    expect(any(label == "Until" and "2026-08-10" in value and "2026-08-20" in value for label, value in rows), f"missing localized chainUntil update: {rows!r}")
+    expect(
+        any(
+            label == "Chain end point" and "2026-08-10" in value and "2026-08-20" in value
+            for label, value in rows
+        ),
+        f"missing localized chainUntil update: {rows!r}",
+    )
     expect(("Final link", "#8") in rows, f"missing final link boundary: {rows!r}")
-    expect(any(label == "Deadline" and "2026-08-20" in value for label, value in rows), f"missing deadline boundary: {rows!r}")
+    expect(
+        sum(label == "Chain end point" for label, _value in rows) == 1,
+        f"chain end point should not be repeated: {rows!r}",
+    )
     expect(("Effective", "Whichever boundary is reached first") in rows, f"missing effective limit rule: {rows!r}")
-    expect(("Limits", "None") in panels[1][1], f"clearing both limits should be explicit: {panels[1]!r}")
+    expect(("Chain limits", "None") in panels[1][1], f"clearing both limits should be explicit: {panels[1]!r}")
 
 
 def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
@@ -9054,7 +9063,7 @@ def test_on_add_native_until_requires_strictly_later_target():
         stderr_txt = _strip_markup(proc.stderr)
         label = "Scheduled" if target_field == "scheduled" else "Due"
         expect("Invalid expiration window" in stderr_txt, f"missing expiration guard panel: {stderr_txt!r}")
-        expect(label in stderr_txt and "Until" in stderr_txt, f"missing compared timestamps: {stderr_txt!r}")
+        expect(label in stderr_txt and "Expires" in stderr_txt, f"missing compared timestamps: {stderr_txt!r}")
         expect(
             f"until must be later than {target_field}" in stderr_txt,
             f"missing ordering guidance: {stderr_txt!r}",
@@ -9092,10 +9101,42 @@ def test_on_add_native_until_checks_generated_cp_due():
     expect(
         "Invalid expiration window" in stderr_txt
         and "Due" in stderr_txt
-        and "Until" in stderr_txt
+        and "Expires" in stderr_txt
         and "until must be later than due" in stderr_txt,
         stderr_txt,
     )
+
+
+def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
+    """Add previews should distinguish native expiration from chain boundaries."""
+    hook = _find_hook_file("on-add-nautical.py")
+    base = {
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "due": "20260803T100000Z",
+        "until": "20260803T180000Z",
+        "chainUntil": "20260831T210000Z",
+        "chainMax": 3,
+    }
+    cases = (
+        dict(base, uuid="00000000-0000-0000-0000-000000000141", description="CP expiry preview", cp="7d"),
+        dict(
+            base,
+            uuid="00000000-0000-0000-0000-000000000142",
+            description="Anchor expiry preview",
+            anchor="w:mon",
+            anchor_mode="skip",
+        ),
+    )
+    for task in cases:
+        proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
+        expect(proc.returncode == 0, f"preview failed: {proc.stderr!r}")
+        expect(_assert_stdout_json_only(proc.stdout).get("until") == task["until"], "native until changed")
+        panel = _strip_markup(proc.stderr)
+        for label in ("First expires", "Chain end point", "Last occurrence", "Future links"):
+            expect(label in panel, f"{label!r} missing from preview: {panel!r}")
+        expect("2026-08-17" in panel, f"chainMax should determine the effective last occurrence: {panel!r}")
+        expect("Final (until)" not in panel, f"ambiguous legacy label remains: {panel!r}")
 
 
 def test_on_add_native_until_checks_generated_anchor_due():
@@ -14388,6 +14429,76 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
     expect(("Step", "3/3 (7d)") in captured["fb"], f"expected sequence step period in feedback rows: {captured}")
 
 
+def test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundaries():
+    """Completion panels should show the next expiration and one effective last occurrence."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_expiration_boundary_feedback_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    mod._SHOW_TIMELINE_GAPS = False
+    mod._CHAIN_COLOR_PER_CHAIN = False
+    mod._append_next_wait_sched_rows = lambda *_a, **_k: None
+    mod._format_next_cp_rows = lambda rows: rows
+    mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
+    mod._timeline_lines = lambda *_a, **_k: []
+
+    child_due = datetime(2026, 8, 10, 10, 0, tzinfo=timezone.utc)
+    child_expires = child_due + timedelta(hours=8)
+    chain_end = child_due + timedelta(days=35)
+    last_by_max = child_due + timedelta(days=60)
+    last_by_end = child_due + timedelta(days=28)
+    captured = {}
+    mod._panel = lambda title, rows, **_kwargs: captured.update({"title": title, "rows": list(rows)})
+
+    previous_mode = mod.core.PANEL_MODE
+    try:
+        mod.core.PANEL_MODE = "panel"
+        mod._render_cp_completion_feedback(
+            new={
+                "cp": "7d",
+                "chainMax": 10,
+                "chainUntil": mod.core.fmt_isoz(chain_end),
+                "uuid": "00000000-0000-0000-0000-000000000143",
+                "chainID": "abcd1234",
+            },
+            child={
+                "uuid": "00000000-0000-0000-0000-000000000144",
+                "until": mod.core.fmt_isoz(child_expires),
+            },
+            child_due=child_due,
+            child_short="deadbeef",
+            next_no=2,
+            parent_short="00000000",
+            cap_no=6,
+            finals=[("max", last_by_max), ("until", last_by_end)],
+            now_utc=datetime(2026, 7, 20, 9, 0, tzinfo=timezone.utc),
+            until_dt=chain_end,
+            until_cap_no=6,
+            meta={},
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            chain_by_short=None,
+            analytics_advice=None,
+            integrity_warnings=None,
+            base_no=1,
+        )
+    finally:
+        mod.core.PANEL_MODE = previous_mode
+
+    rows = captured.get("rows") or []
+    expect(any(label == "Next expires" for label, _value in rows), f"next expiration missing: {rows!r}")
+    expect(("Chain cap", "#10") in rows, f"chain cap missing: {rows!r}")
+    expect(
+        any(label == "Chain end point" and "2026-09-14" in value for label, value in rows),
+        f"chain end point missing: {rows!r}",
+    )
+    last_rows = [(label, value) for label, value in rows if label == "Last occurrence"]
+    expect(len(last_rows) == 1, f"expected one effective last occurrence: {rows!r}")
+    expect("2026-09-07" in last_rows[0][1], f"earlier boundary should determine last occurrence: {rows!r}")
+    expect(not any(str(label).startswith("Final (") for label, _value in rows), f"legacy final label remains: {rows!r}")
+
+
 def test_on_modify_render_cp_completion_feedback_random_selected_interval():
     """CP random completion feedback should show the selected interval, not the raw rand expression."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -18921,6 +19032,7 @@ TESTS = [
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,
     test_on_add_native_until_requires_strictly_later_target,
     test_on_add_native_until_checks_generated_cp_due,
+    test_on_add_preview_distinguishes_expiration_from_chain_end_point,
     test_on_add_native_until_checks_generated_anchor_due,
     test_on_add_native_until_guard_ignores_ordinary_tasks,
     test_on_add_native_until_rejects_strict_anchor_modes,
@@ -19006,6 +19118,7 @@ TESTS = [
     test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback,
     test_on_modify_render_anchor_file_completion_feedback_wrapper,
     test_on_modify_render_cp_completion_feedback_wrapper,
+    test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundaries,
     test_on_add_rejects_oversized_stdin_early,
     test_on_modify_rejects_oversized_stdin_early,
     test_health_check_json_ok_empty_taskdata,

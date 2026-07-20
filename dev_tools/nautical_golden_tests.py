@@ -2977,6 +2977,197 @@ def test_delete_chain_summary_uses_stopped_title():
     expect(captured.get("title") == "⛔ Chain stopped – summary", f"unexpected delete summary title: {captured!r}")
 
 
+def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete():
+    """Native-until expiration should queue the next link while early deletion still stops."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_expiration_flow_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    parent = {
+        "uuid": "00000000-0000-0000-0000-000000000401",
+        "status": "pending",
+        "description": "Take the trash out",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "trash001",
+        "link": 1,
+        "due": "20260720T090000Z",
+        "until": "20260726T235900Z",
+    }
+    expired = dict(parent, status="deleted", end="20260727T000000Z")
+    captured = {"panels": [], "children": [], "stopped": 0}
+    original = (mod._get_chain_export, mod._spawn_child_atomic, mod._panel, mod._end_chain_summary)
+    try:
+        mod._get_chain_export = lambda *_args, **_kwargs: []
+
+        def queue_child(child, _parent):
+            captured["children"].append(dict(child))
+            return "22222222", set(), False, True, "queued", "si_expired"
+
+        mod._spawn_child_atomic = queue_child
+        mod._panel = lambda title, rows, *, kind=None: captured["panels"].append((title, list(rows), kind))
+        mod._end_chain_summary = lambda *_args, **_kwargs: captured.__setitem__("stopped", captured["stopped"] + 1)
+
+        mod._handle_deleted_modify(parent, expired)
+        expect(len(captured["children"]) == 1, f"expiration should queue one child: {captured!r}")
+        child = captured["children"][0]
+        child_due = mod.core.parse_dt_any(child.get("due"))
+        child_until = mod.core.parse_dt_any(child.get("until"))
+        expect(child_due == datetime(2026, 7, 27, 9, 0, tzinfo=timezone.utc), f"wrong expiration child due: {child}")
+        expect(child_until == datetime(2026, 8, 2, 23, 59, tzinfo=timezone.utc), f"wrong expiration child until: {child}")
+        expect(expired.get("chain") == "on", f"expiration should keep the chain active: {expired!r}")
+        expect(not expired.get("nextLink"), f"deferred spawn should let on-exit set nextLink: {expired!r}")
+        expect(captured["stopped"] == 0, "expiration should not render the manual-stop summary")
+        title, rows, kind = captured["panels"][0]
+        expect(title == "⌛ Nautical occurrence expired" and kind == "note", f"unexpected expiration panel: {captured!r}")
+        expect(any(label == "Result" and "Next occurrence queued" in value for label, value in rows), f"missing queued result: {rows!r}")
+
+        manual = dict(parent, status="deleted", end="20260725T000000Z")
+        mod._handle_deleted_modify(parent, manual)
+        expect(captured["stopped"] == 1, "manual deletion before until should retain stopped-chain behavior")
+        expect(len(captured["children"]) == 1, "manual deletion must not queue another occurrence")
+
+        capped_parent = dict(parent, chainMax=1)
+        capped = dict(capped_parent, status="deleted", end="20260727T000000Z")
+        mod._handle_deleted_modify(capped_parent, capped)
+        expect(capped.get("chain") == "off", f"expired final link should disable the chain: {capped!r}")
+        expect(len(captured["children"]) == 1, "chainMax final expiration must not queue a child")
+        expect(
+            captured["panels"][-1][2] == "summary"
+            and any(label == "Boundary" and "chainMax" in value for label, value in captured["panels"][-1][1]),
+            f"missing expiration-final panel: {captured['panels']!r}",
+        )
+
+        mod._spawn_child_atomic = lambda *_args, **_kwargs: (
+            "33333333",
+            set(),
+            False,
+            False,
+            "queue unavailable",
+            "si_failed",
+        )
+        retryable_parent = dict(parent, uuid="00000000-0000-0000-0000-000000000402")
+        retryable = dict(retryable_parent, status="deleted", end="20260727T000000Z")
+        mod._handle_deleted_modify(retryable_parent, retryable)
+        expect(
+            retryable.get("chain") == "on" and not retryable.get("nextLink"),
+            f"failed queue lost recovery state: {retryable!r}",
+        )
+        expect(
+            captured["panels"][-1][2] == "warning"
+            and any(
+                label == "Action" and "nautical reconcile --apply" in value
+                for label, value in captured["panels"][-1][1]
+            ),
+            f"missing deferred-recovery guidance: {captured['panels'][-1]!r}",
+        )
+    finally:
+        mod._get_chain_export, mod._spawn_child_atomic, mod._panel, mod._end_chain_summary = original
+
+
+def test_on_modify_expiration_backfills_deleted_next_slot():
+    """Expiration hook should relink an existing deleted next slot instead of duplicating it."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_expiration_backfill_test")
+    parent = {
+        "uuid": "00000000-0000-0000-0000-000000000411",
+        "status": "pending",
+        "description": "Expired chain slot",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "expire11",
+        "link": 1,
+        "due": "20260720T090000Z",
+        "until": "20260726T235900Z",
+    }
+    expired = dict(parent, status="deleted", end="20260727T000000Z")
+    existing = {
+        "uuid": "22222222-0000-0000-0000-000000000412",
+        "status": "deleted",
+        "chainID": "expire11",
+        "link": 2,
+    }
+    panels = []
+    original = (mod._get_chain_export, mod._spawn_child_atomic, mod._panel)
+    try:
+        mod._get_chain_export = lambda *_args, **_kwargs: [existing]
+        mod._spawn_child_atomic = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("existing deleted slot must not be respawned")
+        )
+        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
+        mod._handle_deleted_modify(parent, expired)
+    finally:
+        mod._get_chain_export, mod._spawn_child_atomic, mod._panel = original
+
+    expect(expired.get("nextLink") == "22222222", f"existing deleted slot was not relinked: {expired!r}")
+    expect(any("Existing next occurrence relinked" in value for _label, value in panels[0][1]), f"missing relink panel: {panels!r}")
+
+
+def test_on_modify_expiration_internal_failure_remains_recoverable():
+    """An internal expiration-path failure should warn without stopping or crashing the chain."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_expiration_failure_test")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000416",
+        "status": "pending",
+        "description": "Recoverable expiration",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "expire16",
+        "link": 1,
+        "due": "20260720T090000Z",
+        "until": "20260726T235900Z",
+    }
+    new = dict(old, status="deleted", end="20260727T000000Z")
+    panels = []
+    stopped = []
+    original = (mod._handle_expired_deleted_modify, mod._panel, mod._end_chain_summary)
+    try:
+        mod._handle_expired_deleted_modify = lambda _task: (_ for _ in ()).throw(RuntimeError("missing module"))
+        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
+        mod._end_chain_summary = lambda *_args, **_kwargs: stopped.append(True)
+        mod._handle_deleted_modify(old, new)
+    finally:
+        mod._handle_expired_deleted_modify, mod._panel, mod._end_chain_summary = original
+
+    expect(not stopped, "internal expiration failure must not be treated as an intentional deletion")
+    expect(new.get("chain") == "on" and not new.get("nextLink"), f"recovery evidence was lost: {new!r}")
+    expect(
+        panels and panels[0][2] == "warning"
+        and any(label == "Action" and "nautical reconcile --apply" in value for label, value in panels[0][1]),
+        f"missing recovery warning: {panels!r}",
+    )
+
+
+def test_on_modify_expiration_wrapper_preserves_json_stdout():
+    """Expiration feedback must stay on stderr while the hook returns one strict task object."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000421",
+        "status": "pending",
+        "description": "Expiration protocol",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "expire21",
+        "link": 1,
+        "due": "20260720T090000Z",
+        "until": "20260726T235900Z",
+    }
+    new = dict(old, status="deleted", end="20260727T000000Z")
+    with tempfile.TemporaryDirectory() as td:
+        proc = _run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"TASKDATA": td, "NO_COLOR": "1"},
+        )
+
+    expect(proc.returncode == 0, f"expiration hook failed: {proc.stderr!r}")
+    output = _assert_stdout_json_only(proc.stdout)
+    expect(output.get("status") == "deleted" and output.get("chain") == "on", f"unexpected hook task: {output!r}")
+    expect("Nautical occurrence expired" in proc.stderr, f"expiration panel missing from stderr: {proc.stderr!r}")
+
+
 def test_on_modify_invalid_anchor_has_no_stdout():
     """on-modify should keep stdout empty on semantic validation failures."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -16319,6 +16510,110 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         tool._load_on_modify, tool._export, tool._run_task = original
 
 
+def test_reconcile_expiration_real_taskwarrior_round_trip():
+    """Real Taskwarrior data should receive one linked child with a shifted until window."""
+    task_bin = shutil.which("task")
+    if not task_bin:
+        return
+
+    tool_path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        data_dir = root / "data"
+        data_dir.mkdir()
+        taskrc = root / "taskrc"
+        taskrc.write_text(
+            "\n".join(
+                [
+                    f"data.location={data_dir}",
+                    "hooks=off",
+                    "confirmation=off",
+                    "verbose=nothing",
+                    "uda.cp.type=string",
+                    "uda.chain.type=string",
+                    "uda.chainID.type=string",
+                    "uda.link.type=numeric",
+                    "uda.prevLink.type=string",
+                    "uda.nextLink.type=string",
+                    "uda.chainMax.type=numeric",
+                    "uda.chainUntil.type=date",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env.update(
+            {
+                "TASKRC": str(taskrc),
+                "TASKDATA": str(data_dir),
+                "NAUTICAL_CONFIG": str(Path(ROOT) / "config-nautical.toml"),
+                "NAUTICAL_CORE_PATH": ROOT,
+                "NO_COLOR": "1",
+            }
+        )
+        parent = {
+            "uuid": "11111111-0000-0000-0000-000000000001",
+            "status": "deleted",
+            "description": "Take the trash out",
+            "entry": "20260720T080000Z",
+            "modified": "20260727T000000Z",
+            "end": "20260727T000000Z",
+            "due": "20260720T090000Z",
+            "until": "20260726T235900Z",
+            "cp": "7d",
+            "chain": "on",
+            "chainID": "trash001",
+            "link": 1,
+        }
+        imported = subprocess.run(
+            [task_bin, "rc.hooks=off", "import"],
+            input=json.dumps(parent, ensure_ascii=False) + "\n",
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=15.0,
+        )
+        expect(imported.returncode == 0, f"Taskwarrior fixture import failed: {imported.stderr!r}")
+
+        applied = subprocess.run(
+            [sys.executable, str(tool_path), "--apply", "--task-bin", task_bin, "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=20.0,
+        )
+        expect(applied.returncode == 0, f"real expiration reconcile failed: {applied.stderr!r}")
+        summary = json.loads(applied.stdout)
+        expect(summary.get("spawn") == 1 and len(summary.get("applied") or []) == 1, f"unexpected apply: {summary!r}")
+
+        exported = subprocess.run(
+            [task_bin, "rc.hooks=off", "rc.json.array=1", "chainID:trash001", "export"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=15.0,
+        )
+        expect(exported.returncode == 0, f"Taskwarrior verification export failed: {exported.stderr!r}")
+        rows = json.loads(exported.stdout)
+        by_link = {int(float(row.get("link"))): row for row in rows}
+        expect(set(by_link) == {1, 2}, f"expected exactly two chain slots: {rows!r}")
+        expect(by_link[1].get("nextLink") == str(by_link[2].get("uuid") or "")[:8], f"parent was not linked: {rows!r}")
+        expect(by_link[2].get("status") == "pending", f"child should be pending: {by_link[2]!r}")
+        expect(by_link[2].get("due") == "20260727T090000Z", f"child advanced from the wrong basis: {by_link[2]!r}")
+        expect(by_link[2].get("until") == "20260802T235900Z", f"child until window was not shifted: {by_link[2]!r}")
+
+        repeated = subprocess.run(
+            [sys.executable, str(tool_path), "--apply", "--task-bin", task_bin, "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=20.0,
+        )
+        expect(repeated.returncode == 0, f"second expiration reconcile failed: {repeated.stderr!r}")
+        expect(json.loads(repeated.stdout).get("candidates") == 0, f"reconcile should be idempotent: {repeated.stdout!r}")
+
+
 def test_reconcile_evidence_prefers_due_over_carried_scheduled():
     """Reconcile evidence should show the recurrence target, not carried scheduled metadata."""
     import nautical_core.reconcile as reconcile
@@ -18336,6 +18631,10 @@ TESTS = [
     test_delete_chain_summary_span_uses_stop_time_without_last_end,
     test_end_summary_history_marks_deleted_pending_tail,
     test_delete_chain_summary_uses_stopped_title,
+    test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete,
+    test_on_modify_expiration_backfills_deleted_next_slot,
+    test_on_modify_expiration_internal_failure_remains_recoverable,
+    test_on_modify_expiration_wrapper_preserves_json_stdout,
     test_on_modify_invalid_anchor_has_no_stdout,
     test_timeline_completed_rows_place_uuid_before_delta,
     test_on_modify_render_anchor_completion_feedback_wrapper,
@@ -18606,6 +18905,7 @@ TESTS = [
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
     test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,
     test_reconcile_tool_exports_and_applies_expired_candidates,
+    test_reconcile_expiration_real_taskwarrior_round_trip,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_evidence_includes_local_child_time_when_formatter_available,
     test_reconcile_tool_loads_task_hooks_layout,

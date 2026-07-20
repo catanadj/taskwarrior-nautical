@@ -336,6 +336,29 @@ task add "Short experiment" cp:1d chainMax:3 due:today
 task add "Anniversary prep" anchor:"y:04-12" chainUntil:2028-04-12
 ```
 
+Native `until` has a different role: it expires one occurrence without ending
+the Nautical chain. For example:
+
+```bash
+task add "Take the trash out" due:today until:eow cp:7d chainUntil:eoy
+```
+
+If that occurrence remains unfinished at `until`, Taskwarrior deletes it and
+Nautical advances from its original `due` (or scheduled-only `scheduled`) to the
+next occurrence. The child receives an `until` shifted by the same relative
+window. `chainMax` and `chainUntil` still decide when the whole chain ends.
+
+When Taskwarrior emits the expiration through `on-modify`, Nautical queues the
+next occurrence immediately. For expirations that happen while hooks are absent
+or on a synced client, review and apply the recovery plan:
+
+```bash
+nautical reconcile
+nautical reconcile --apply
+```
+
+An intentional deletion before `until` continues to stop the chain.
+
 Nautical is built for synced Taskwarrior setups. It tracks chain identity,
 previous/next links, and equivalent children to avoid duplicate next tasks when
 multiple devices are involved.
@@ -377,8 +400,9 @@ nautical doctor --json
 ```
 
 `nautical doctor` checks hooks, UDAs, config, file directories, queue state,
-duplicate chain slots, and broken lineage. In live mode it also reports Rich
-availability, effective panel duration, clamping, and static fallback behavior.
+duplicate chain slots, broken lineage, and completion/expiration recovery plans.
+In live mode it also reports Rich availability, effective panel duration,
+clamping, and static fallback behavior.
 
 ---
 

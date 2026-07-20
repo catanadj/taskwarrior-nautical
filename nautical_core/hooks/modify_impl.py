@@ -111,6 +111,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
+from types import SimpleNamespace
 from typing import Any, Optional
 
 
@@ -446,6 +447,8 @@ _QUEUE_STORE = None
 _QUEUE_STORE_LOAD_FAILED = False
 _QUEUE_MODELS = None
 _QUEUE_MODELS_LOAD_FAILED = False
+_RECONCILE = None
+_RECONCILE_LOAD_FAILED = False
 _HOOK_RUNTIME = None
 _HOOK_MODULE_ACCESS = None
 _MODULE_SPECS = {
@@ -544,6 +547,12 @@ _MODULE_SPECS = {
         "_QUEUE_MODELS_LOAD_FAILED",
         "queue_models.py",
         "nautical_core.queue_models",
+    ),
+    "reconcile": (
+        "_RECONCILE",
+        "_RECONCILE_LOAD_FAILED",
+        "reconcile.py",
+        "nautical_core.reconcile",
     ),
     "hook_context": (
         "_HOOK_CONTEXT",
@@ -6055,11 +6064,117 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     )
 
 
+def _expiration_recovery_panel(new: dict, plan, *, result: str = "", child_short: str = "") -> None:
+    current_link = core.coerce_int(new.get("link"), 1)
+    description = str(new.get("description") or "").strip()
+    task_label = f"#{current_link}" + (f" · {description}" if description else "")
+    rows = [("Expired", task_label)]
+    if result:
+        rows.append(("Result", result))
+    if plan.child_due is not None:
+        next_label = "Blocked next" if plan.action == "legitimate_final" else "Next"
+        rows.append((next_label, core.fmt_dt_local(plan.child_due)))
+    rows.append(("Link", f"#{plan.next_link}"))
+    if child_short:
+        rows.append(("Child", child_short))
+    if plan.action == "legitimate_final":
+        rows.append(("Boundary", plan.reason))
+    panel_kind = "summary" if plan.action == "legitimate_final" else "note"
+    _panel("⌛ Nautical occurrence expired", rows, kind=panel_kind)
+
+
+def _expiration_recovery_warning(new: dict, reason: str) -> None:
+    _panel(
+        "⚠ Nautical expiration recovery deferred",
+        [
+            ("Task", _short(new.get("uuid")) or "–"),
+            ("Reason", reason or "The next occurrence could not be prepared."),
+            ("Action", "Run nautical reconcile --apply."),
+        ],
+        kind="warning",
+    )
+
+
+def _handle_expired_deleted_modify(new: dict) -> bool:
+    reconcile = _module("reconcile")
+    if not reconcile.is_orphan_expiration_candidate(new, safe_parse_datetime=_safe_parse_datetime):
+        return False
+
+    next_link = core.coerce_int(new.get("link"), 1) + 1
+    chain_id = str(new.get("chainID") or "").strip()
+    try:
+        existing_children = _get_chain_export(chain_id, extra=f"link:{next_link}")
+    except Exception as exc:
+        _diag(f"expiration next-link lookup failed: {exc}")
+        existing_children = []
+    plan_hook = SimpleNamespace(
+        core=core,
+        _safe_parse_datetime=_safe_parse_datetime,
+        _compute_anchor_child_due=_compute_anchor_child_due,
+        _compute_cp_child_due=_compute_cp_child_due,
+        _build_child_from_parent=_build_child_from_parent,
+    )
+    plan = reconcile.build_reconcile_plan(new, existing_children=existing_children, hook=plan_hook)
+
+    if plan.action == "backfill_nextlink":
+        new["nextLink"] = plan.child_short
+        _expiration_recovery_panel(
+            new,
+            plan,
+            result="[green]Existing next occurrence relinked[/]",
+            child_short=plan.child_short,
+        )
+        return True
+    if plan.action == "legitimate_final":
+        new["chain"] = "off"
+        _expiration_recovery_panel(new, plan, result="[yellow]Chain finished at configured limit[/]")
+        return True
+    if plan.action != "spawn" or not plan.child:
+        _expiration_recovery_warning(new, plan.reason)
+        return True
+
+    try:
+        child_short, _stripped, verified, deferred, reason, _intent_id = _spawn_child_atomic(plan.child, new)
+    except Exception as exc:
+        _diag(f"expiration child queue failed: {exc}")
+        _expiration_recovery_warning(new, "The next occurrence could not be queued.")
+        return True
+    if verified:
+        new["nextLink"] = child_short
+    if verified or deferred:
+        _expiration_recovery_panel(
+            new,
+            plan,
+            result="[cyan]Next occurrence queued[/]" if deferred else "[green]Next occurrence created[/]",
+            child_short=child_short,
+        )
+    else:
+        _expiration_recovery_warning(new, reason or "The next occurrence could not be queued.")
+    return True
+
+
 def _handle_deleted_modify(old: dict, new: dict) -> None:
     if str(old.get("status") or "").strip().lower() != "pending":
         return
     if not ((old.get("chainID") or new.get("chainID") or "").strip()):
         return
+    try:
+        if _handle_expired_deleted_modify(new):
+            return
+    except Exception as exc:
+        _diag(f"expiration recovery failed: {exc}")
+        until_dt, until_err = _safe_parse_datetime(new.get("until"))
+        end_dt, end_err = _safe_parse_datetime(new.get("end"))
+        has_expiration_evidence = (
+            not until_err
+            and not end_err
+            and until_dt is not None
+            and end_dt is not None
+            and until_dt <= end_dt
+        )
+        if has_expiration_evidence:
+            _expiration_recovery_warning(new, "Expiration recovery could not be initialized.")
+            return
 
     now_utc = core.now_utc()
     try:

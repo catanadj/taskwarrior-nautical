@@ -11751,6 +11751,159 @@ def test_on_modify_build_child_carries_until_across_dst():
         mod.core._LOCAL_TZ = previous_tz
 
 
+def test_on_modify_native_until_calendar_and_exact_carry_policy():
+    """native until should use calendar carry by default and exact carry with the +1s marker."""
+    import nautical_core.reconcile as reconcile
+
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_native_until_carry_policy_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    due_0900 = mod.core.build_local_datetime(date(2026, 7, 20), (9, 0))
+    due_1300 = mod.core.build_local_datetime(date(2026, 7, 20), (13, 0))
+    due_1800 = mod.core.build_local_datetime(date(2026, 7, 20), (18, 0))
+    until_2300 = mod.core.build_local_datetime(date(2026, 7, 20), (23, 0))
+
+    def build(kind, child_due, until_value):
+        parent = {
+            "uuid": "00000000-0000-0000-0000-000000000995",
+            "status": "completed",
+            "due": mod.core.fmt_isoz(due_0900),
+            "until": mod.core.fmt_isoz(until_value),
+            "chainID": "cid_until_policy",
+        }
+        if kind == "cp":
+            parent["cp"] = "8h"
+        elif kind == "anchor":
+            parent.update({"anchor": "d:*@t=09:00,13:00", "anchor_mode": "skip"})
+        else:
+            parent.update({"anchor_file": "calendar.csv", "anchor_mode": "skip"})
+        return mod._build_child_from_parent(
+            parent,
+            child_due,
+            "due",
+            2,
+            "deadbeef",
+            kind,
+            0,
+            None,
+        )
+
+    for kind in ("cp", "anchor", "anchor_file"):
+        child = build(kind, due_1300, until_2300)
+        carried = mod.core.to_local(mod.core.parse_dt_any(child.get("until")))
+        expect(
+            carried.date() == date(2026, 7, 20)
+            and (carried.hour, carried.minute, carried.second) == (23, 0, 0),
+            f"{kind} should keep a same-day calendar expiration: {carried}",
+        )
+
+    until_1700 = mod.core.build_local_datetime(date(2026, 7, 20), (17, 0))
+    cp_rollover = build("cp", due_1800, until_1700)
+    carried_rollover = mod.core.to_local(mod.core.parse_dt_any(cp_rollover.get("until")))
+    expect(
+        carried_rollover.date() == date(2026, 7, 21)
+        and (carried_rollover.hour, carried_rollover.minute) == (17, 0),
+        f"CP should roll an elapsed calendar expiration to the next local day: {carried_rollover}",
+    )
+
+    until_eod = mod.core.build_local_datetime(date(2026, 7, 20), (23, 59)) + timedelta(seconds=59)
+    eod_child = build("anchor", due_1300, until_eod)
+    carried_eod = mod.core.to_local(mod.core.parse_dt_any(eod_child.get("until")))
+    expect(
+        carried_eod.date() == date(2026, 7, 20)
+        and (carried_eod.hour, carried_eod.minute, carried_eod.second) == (23, 59, 59),
+        f"end-of-day expiration should retain calendar carry: {carried_eod}",
+    )
+
+    until_exact = until_2300 + timedelta(seconds=1)
+    for kind in ("cp", "anchor", "anchor_file"):
+        exact_child = build(kind, due_1300, until_exact)
+        carried_exact = mod.core.to_local(mod.core.parse_dt_any(exact_child.get("until")))
+        expect(
+            carried_exact.date() == date(2026, 7, 21)
+            and (carried_exact.hour, carried_exact.minute, carried_exact.second) == (3, 0, 1),
+            f"{kind} +1s expiration should retain the exact elapsed window: {carried_exact}",
+        )
+
+    expired_parent = {
+        "uuid": "00000000-0000-0000-0000-000000000996",
+        "status": "deleted",
+        "anchor": "w:mon@t=09:00,13:00",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "cid_until_reconcile",
+        "link": 1,
+        "due": mod.core.fmt_isoz(due_0900),
+        "until": mod.core.fmt_isoz(until_2300),
+        "end": mod.core.fmt_isoz(until_2300),
+    }
+    plan = reconcile.build_reconcile_plan(expired_parent, existing_children=[], hook=mod)
+    reconciled_until = mod.core.to_local(mod.core.parse_dt_any((plan.child or {}).get("until")))
+    expect(plan.action == "spawn", f"expired anchor should produce a child plan: {plan}")
+    expect(
+        reconciled_until.date() == date(2026, 7, 20)
+        and (reconciled_until.hour, reconciled_until.minute) == (23, 0),
+        f"reconciled child should use the same calendar expiration policy: {reconciled_until}",
+    )
+
+
+def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
+    """the +1s expiration marker should preserve elapsed seconds instead of local clock offset."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_native_until_exact_dst_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:
+        return
+
+    previous_tz_name = mod.core.LOCAL_TZ_NAME
+    previous_tz = mod.core._LOCAL_TZ
+    try:
+        mod.core.LOCAL_TZ_NAME = "America/New_York"
+        mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+        parent_due = mod.core.build_local_datetime(date(2025, 3, 8), (9, 0))
+        parent_until = mod.core.build_local_datetime(date(2025, 3, 9), (17, 0)) + timedelta(seconds=1)
+        child_due = mod.core.build_local_datetime(date(2025, 3, 15), (9, 0))
+        parent = {
+            "uuid": "00000000-0000-0000-0000-000000000997",
+            "status": "completed",
+            "due": mod.core.fmt_isoz(parent_due),
+            "until": mod.core.fmt_isoz(parent_until),
+            "cp": "7d",
+            "chainID": "cid_until_exact_dst",
+        }
+
+        child = mod._build_child_from_parent(
+            parent,
+            child_due,
+            "due",
+            2,
+            "deadbeef",
+            "cp",
+            0,
+            None,
+        )
+        carried = mod.core.parse_dt_any(child.get("until"))
+        expect(
+            carried - child_due == parent_until - parent_due,
+            f"exact expiration should preserve UTC elapsed time: {carried} from {child_due}",
+        )
+        carried_local = mod.core.to_local(carried)
+        expect(
+            carried_local.date() == date(2025, 3, 16)
+            and (carried_local.hour, carried_local.minute, carried_local.second) == (16, 0, 1),
+            f"exact DST carry should not preserve the old local clock offset: {carried_local}",
+        )
+    finally:
+        mod.core.LOCAL_TZ_NAME = previous_tz_name
+        mod.core._LOCAL_TZ = previous_tz
+
+
 def test_on_modify_build_child_transitions_flex_to_all():
     """A flex anchor should skip backlog once and make its child strict all mode."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -19244,6 +19397,8 @@ TESTS = [
     test_on_exit_requires_core_data_context_helper,
     test_on_modify_carry_wall_clock_across_dst,
     test_on_modify_build_child_carries_until_across_dst,
+    test_on_modify_native_until_calendar_and_exact_carry_policy,
+    test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst,
     test_on_modify_build_child_transitions_flex_to_all,
     test_on_modify_cp_due_edit_preserves_relative_offsets,
     test_on_modify_explicit_timing_edits_warn_on_invalid_order,

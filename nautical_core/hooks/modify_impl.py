@@ -4042,6 +4042,48 @@ def _carry_relative_datetime(
         return
 
 
+def _carry_native_until(
+    parent: dict,
+    child: dict,
+    child_due_utc: datetime,
+    kind: str,
+    *,
+    parent_anchor_field: str = "due",
+    child_anchor_field: str = "due",
+) -> None:
+    """Carry native expiration by calendar placement, or exact elapsed time with the +1s marker."""
+    if not isinstance(parent, dict) or not isinstance(child, dict) or not _require_core():
+        return
+    child.pop("until", None)
+    if not (parent.get("until") and parent.get(parent_anchor_field)):
+        return
+
+    parent_target = core.parse_dt_any(parent.get(parent_anchor_field))
+    parent_until = core.parse_dt_any(parent.get("until"))
+    if not (parent_target and parent_until and isinstance(child_due_utc, datetime)):
+        return
+
+    try:
+        parent_until_local = _utc_to_local_naive(parent_until)
+        if parent_until_local.second == 1:
+            child_until_utc = child_due_utc + (parent_until - parent_target)
+        else:
+            parent_target_local = _utc_to_local_naive(parent_target)
+            child_target_local = _utc_to_local_naive(child_due_utc)
+            day_gap = (parent_until_local.date() - parent_target_local.date()).days
+            child_until_local = datetime.combine(
+                child_target_local.date() + timedelta(days=day_gap),
+                parent_until_local.time(),
+            )
+            child_until_utc = _local_naive_to_utc(child_until_local)
+            if str(kind or "").strip().lower() == "cp" and child_until_utc <= child_due_utc:
+                child_until_local += timedelta(days=1)
+                child_until_utc = _local_naive_to_utc(child_until_local)
+        child["until"] = core.fmt_isoz(child_until_utc)
+    except Exception:
+        return
+
+
 def _configured_recurrence_uda_fields(parent: dict) -> tuple[str, ...]:
     if not isinstance(parent, dict):
         return ()
@@ -4092,6 +4134,7 @@ def _build_child_from_parent(
         fmt_isoz=core.fmt_isoz,
         now_utc=core.now_utc,
         carry_relative_datetime=_carry_relative_datetime,
+        carry_native_until=_carry_native_until,
         recurrence_anchor_field=_recurrence_anchor_field,
         configured_recurrence_uda_fields=_configured_recurrence_uda_fields,
         short_uuid=core.short_uuid,

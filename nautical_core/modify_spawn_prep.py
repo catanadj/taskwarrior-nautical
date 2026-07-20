@@ -97,6 +97,7 @@ def build_child_from_parent(
     fmt_isoz,
     now_utc,
     carry_relative_datetime,
+    carry_native_until,
     recurrence_anchor_field,
     configured_recurrence_uda_fields,
     short_uuid,
@@ -152,11 +153,11 @@ def build_child_from_parent(
             parent_anchor_field=parent_anchor_field,
             child_anchor_field=child_field,
         )
-    carry_relative_datetime(
+    carry_native_until(
         parent,
         child,
         child_due_utc,
-        "until",
+        kind,
         parent_anchor_field=parent_anchor_field,
         child_anchor_field=child_field,
     )

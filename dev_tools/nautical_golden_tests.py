@@ -3028,15 +3028,19 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
         expect(child_due == datetime(2026, 7, 27, 9, 0, tzinfo=timezone.utc), f"wrong expiration child due: {child}")
         expect(child_until == datetime(2026, 8, 2, 23, 59, tzinfo=timezone.utc), f"wrong expiration child until: {child}")
         expect(expired.get("chain") == "on", f"expiration should keep the chain active: {expired!r}")
-        expect(not expired.get("nextLink"), f"deferred spawn should let on-exit set nextLink: {expired!r}")
-        expect(captured["stopped"] == 0, "expiration should not render the manual-stop summary")
-        title, rows, kind = captured["panels"][0]
-        expect(title == "⌛ Nautical occurrence expired" and kind == "note", f"unexpected expiration panel: {captured!r}")
-        expect(any(label == "Result" and "Next occurrence queued" in value for label, value in rows), f"missing queued result: {rows!r}")
         expect(
-            any(label == "Next expires" and value.strip() for label, value in rows),
-            f"missing shifted expiration in panel: {rows!r}",
+            expired.get("nextLink") == "22222222",
+            f"queued expiration should mark nextLink immediately to prevent duplicate recovery: {expired!r}",
         )
+        expect(
+            not mod._module("reconcile").is_orphan_expiration_candidate(
+                expired,
+                safe_parse_datetime=mod._safe_parse_datetime,
+            ),
+            f"linked expiration should not remain retryable: {expired!r}",
+        )
+        expect(captured["stopped"] == 0, "expiration should not render the manual-stop summary")
+        expect(not captured["panels"], f"deferred expiration recovery should stay quiet: {captured!r}")
 
         manual = dict(parent, status="deleted", end="20260725T000000Z")
         mod._handle_deleted_modify(parent, manual)
@@ -3049,7 +3053,8 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
         expect(capped.get("chain") == "off", f"expired final link should disable the chain: {capped!r}")
         expect(len(captured["children"]) == 1, "chainMax final expiration must not queue a child")
         expect(
-            captured["panels"][-1][2] == "summary"
+            captured["panels"]
+            and captured["panels"][-1][2] == "summary"
             and any(label == "Boundary" and "chainMax" in value for label, value in captured["panels"][-1][1]),
             f"missing expiration-final panel: {captured['panels']!r}",
         )
@@ -3166,8 +3171,7 @@ def test_on_modify_expiration_wrapper_preserves_json_stdout():
     expect(proc.returncode == 0, f"expiration hook failed: {proc.stderr!r}")
     output = _assert_stdout_json_only(proc.stdout)
     expect(output.get("status") == "deleted" and output.get("chain") == "on", f"unexpected hook task: {output!r}")
-    expect("Nautical occurrence expired" in proc.stderr, f"expiration panel missing from stderr: {proc.stderr!r}")
-    expect("Next expires" in proc.stderr, f"shifted child expiration missing from panel: {proc.stderr!r}")
+    expect("Nautical occurrence expired" not in proc.stderr, f"deferred recovery should stay quiet: {proc.stderr!r}")
 
 
 def test_on_modify_invalid_anchor_has_no_stdout():

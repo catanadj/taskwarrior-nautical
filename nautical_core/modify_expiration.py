@@ -115,17 +115,17 @@ def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -
         services.diag(f"expiration child queue failed: {exc}")
         render_recovery_warning(task, "The next occurrence could not be queued.", services=services)
         return True
-    if verified:
-        task["nextLink"] = child_short
     if verified or deferred:
+        task["nextLink"] = child_short
+    if verified:
         _render_recovery_panel(
             task,
             plan,
             services=services,
-            result="[cyan]Next occurrence queued[/]" if deferred else "[green]Next occurrence created[/]",
+            result="[green]Next occurrence created[/]",
             child_short=child_short,
         )
-    else:
+    elif not deferred:
         render_recovery_warning(
             task,
             reason or "The next occurrence could not be queued.",

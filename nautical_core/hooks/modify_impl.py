@@ -2458,6 +2458,57 @@ def _validate_native_until_after_target_or_fail(task: dict) -> None:
     sys.exit(1)
 
 
+def _validate_native_until_anchor_slots_or_fail(task: dict) -> None:
+    until_raw = task.get("until")
+    anchor_value = str(task.get("anchor") or "").strip()
+    anchor_file_value = str(task.get("anchor_file") or "").strip()
+    if not until_raw or not (anchor_value or anchor_file_value):
+        return
+    target_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else ""
+    if not target_field:
+        return
+    target_dt, target_err = _safe_parse_datetime(task.get(target_field))
+    until_dt, until_err = _safe_parse_datetime(until_raw)
+    if target_err or until_err or target_dt is None or until_dt is None:
+        return
+    dnf = None
+    if anchor_value:
+        try:
+            dnf = _validate_anchor_expr_cached(anchor_value)
+        except Exception:
+            return
+    add_validation = core._import_sibling("add_validation")
+    target_local = _tolocal(target_dt)
+    try:
+        slots = add_validation.collect_anchor_time_slots(
+            dnf,
+            anchor_file_value,
+            (target_local.hour, target_local.minute),
+            normalize_time_slots=_norm_hhmm_list,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        )
+    except Exception:
+        return
+    is_valid, reason = add_validation.validate_native_until_calendar_slots(
+        until_dt,
+        target_dt,
+        slots,
+        to_local=_tolocal,
+    )
+    if is_valid:
+        return
+    _panel(
+        "❌ Invalid expiration window",
+        [
+            ("Expires", core.fmt_dt_local(until_dt)),
+            ("Anchor slots", ", ".join(f"{hh:02d}:{mm:02d}" for hh, mm in slots) or "none"),
+            ("Required", reason or "calendar expiration must be later than every anchor slot"),
+        ],
+        kind="error",
+    )
+    sys.exit(1)
+
+
 # ------------------------------------------------------------------------------
 # Pretty helpers
 # ------------------------------------------------------------------------------
@@ -4065,7 +4116,8 @@ def _carry_native_until(
 
     try:
         parent_until_local = _utc_to_local_naive(parent_until)
-        if parent_until_local.second == 1:
+        add_validation = core._import_sibling("add_validation")
+        if add_validation.native_until_uses_exact_carry(parent_until_local):
             child_until_utc = child_due_utc + (parent_until - parent_target)
         else:
             parent_target_local = _utc_to_local_naive(parent_target)
@@ -4079,9 +4131,11 @@ def _carry_native_until(
             if str(kind or "").strip().lower() == "cp" and child_until_utc <= child_due_utc:
                 child_until_local += timedelta(days=1)
                 child_until_utc = _local_naive_to_utc(child_until_local)
-        child["until"] = core.fmt_isoz(child_until_utc)
     except Exception:
         return
+    if child_until_utc <= child_due_utc:
+        raise ValueError("native until must be later than the child recurrence target")
+    child["until"] = core.fmt_isoz(child_until_utc)
 
 
 def _configured_recurrence_uda_fields(parent: dict) -> tuple[str, ...]:
@@ -5808,6 +5862,7 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     )
     if new_has_recurrence and (native_window_changed or recurrence_enabled):
         _validate_native_until_after_target_or_fail(new)
+        _validate_native_until_anchor_slots_or_fail(new)
     if schedule_adjustment:
         _render_cp_schedule_adjusted_panel(schedule_adjustment)
     _render_explicit_timing_order_warning(new, explicit_timing_changes)
@@ -6147,6 +6202,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     new_cp = _strip_quotes(str(new.get("cp") or "").strip())
     _preserve_cp_relative_offsets_on_due_change(old, new, new_cp)
     _validate_native_until_after_target_or_fail(new)
+    _validate_native_until_anchor_slots_or_fail(new)
     now_utc = core.now_utc()
     ctx = _completion_preflight_context(new, now_utc)
     if ctx is None:

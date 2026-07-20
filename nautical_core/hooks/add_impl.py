@@ -985,6 +985,50 @@ def _validate_native_until_after_target_or_fail(
     sys.exit(1)
 
 
+def _validate_native_until_anchor_slots_or_fail(
+    task: dict,
+    target_dt: datetime,
+    dnf,
+    anchor_file_value: str,
+    fallback_hhmm: tuple[int, int],
+) -> None:
+    until_raw = task.get("until")
+    if not until_raw or not (dnf or anchor_file_value):
+        return
+    add_validation = _module("add_validation")
+    until_dt, until_err = _safe_parse_datetime(until_raw, "until")
+    if until_err or until_dt is None:
+        return
+    try:
+        slots = add_validation.collect_anchor_time_slots(
+            dnf,
+            anchor_file_value,
+            fallback_hhmm,
+            normalize_time_slots=_norm_t_mod,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        )
+    except Exception:
+        return
+    is_valid, reason = add_validation.validate_native_until_calendar_slots(
+        until_dt,
+        target_dt,
+        slots,
+        to_local=core.to_local,
+    )
+    if is_valid:
+        return
+    _panel(
+        "❌ Invalid expiration window",
+        [
+            ("Expires", core.fmt_dt_local(until_dt)),
+            ("Anchor slots", ", ".join(f"{hh:02d}:{mm:02d}" for hh, mm in slots) or "none"),
+            ("Required", reason or "calendar expiration must be later than every anchor slot"),
+        ],
+        kind="error",
+    )
+    sys.exit(1)
+
+
 # Helper to check if due is in the past (warning only)
 def _check_due_in_past(due_dt, now_utc) -> tuple[bool, str | None]:
     add_validation = _module("add_validation")
@@ -1823,6 +1867,7 @@ def _handle_anchor_preview_on_add(
         human_delta=_human_delta,
         error_and_exit=_error_and_exit,
         validate_native_until_after_target=_validate_native_until_after_target_or_fail,
+        validate_native_until_anchor_slots=_validate_native_until_anchor_slots_or_fail,
         append_first_expiration_row=_append_first_expiration_row,
     )
 

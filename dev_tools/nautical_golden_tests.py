@@ -11904,6 +11904,99 @@ def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
         mod.core._LOCAL_TZ = previous_tz
 
 
+def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations():
+    """calendar expiration should reject fixed anchor slots at or after its clock time."""
+    add_hook = _find_hook_file("on-add-nautical.py")
+    modify_hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(modify_hook, "_nautical_native_until_slot_guard_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    anchor_day = date(2030, 7, 1)  # Monday, deliberately beyond the test clock.
+    due = mod.core.build_local_datetime(anchor_day, (9, 0))
+    until_1900 = mod.core.build_local_datetime(anchor_day, (19, 0))
+    base = {
+        "uuid": "00000000-0000-0000-0000-000000000998",
+        "description": "invalid anchor expiration slot",
+        "status": "pending",
+        "entry": "20300630T080000Z",
+        "anchor": "w:mon@t=09:00,18:00,20:00",
+        "anchor_mode": "skip",
+        "due": "20300701T090000Z",
+        "until": "20300701T190000Z",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "config-nautical.toml"
+        config.write_text('tz = "UTC"\n', encoding="utf-8")
+        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config)}
+        added = _run_hook_script(add_hook, dict(base), env_extra=env)
+        expect(added.returncode != 0, "on-add accepted a same-day expiration before an anchor slot")
+        expect(not added.stdout.strip(), f"rejected on-add leaked stdout: {added.stdout!r}")
+        added_stderr = _strip_markup(added.stderr)
+        expect("Invalid expiration window" in added_stderr, f"missing on-add expiration panel: {added_stderr!r}")
+        expect("20:00" in added_stderr, f"missing conflicting anchor slot: {added_stderr!r}")
+
+        exact = _run_hook_script(
+            add_hook,
+            dict(base, until="20300701T190001Z"),
+            env_extra=env,
+        )
+        expect(exact.returncode == 0, f"+1s exact expiration should bypass calendar slot rejection: {exact.stderr!r}")
+
+        old = dict(base, chain="on", chainID="cid_until_slots", link=1, until="20300701T210000Z")
+        new = dict(old, until="20300701T190000Z")
+        modified = _run_hook_script_raw(
+            modify_hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra=dict(env, TASKDATA=td),
+        )
+    expect(modified.returncode != 0, "on-modify accepted a same-day expiration before an anchor slot")
+    expect(not modified.stdout.strip(), f"rejected on-modify leaked stdout: {modified.stdout!r}")
+    expect("Invalid expiration window" in _strip_markup(modified.stderr), f"missing modify expiration panel: {modified.stderr!r}")
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td) / "anchor"
+        anchor_dir.mkdir()
+        (anchor_dir / "events.csv").write_text(f"date\n{anchor_day.isoformat()}\n", encoding="utf-8")
+        config = Path(td) / "config-nautical.toml"
+        config.write_text(f'tz = "UTC"\nanchor_file_dir = "{anchor_dir}"\n', encoding="utf-8")
+        file_task = dict(base, anchor=None, anchor_file="events.csv@t=09:00,18:00,20:00")
+        from_file = _run_hook_script(
+            add_hook,
+            file_task,
+            env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config)},
+        )
+    expect(from_file.returncode != 0, "anchor_file accepted a same-day expiration before a file slot")
+    expect(not from_file.stdout.strip(), f"rejected anchor_file add leaked stdout: {from_file.stdout!r}")
+    expect("20:00" in _strip_markup(from_file.stderr), f"missing anchor_file slot evidence: {from_file.stderr!r}")
+
+    invalid_parent = {
+        "uuid": "00000000-0000-0000-0000-000000000998",
+        "status": "completed",
+        "anchor": "w:mon@t=09:00,18:00,20:00",
+        "anchor_mode": "skip",
+        "due": mod.core.fmt_isoz(due),
+        "until": mod.core.fmt_isoz(until_1900),
+        "chainID": "cid_until_slots",
+    }
+    try:
+        mod._build_child_from_parent(
+            invalid_parent,
+            mod.core.build_local_datetime(anchor_day, (20, 0)),
+            "due",
+            2,
+            "deadbeef",
+            "anchor",
+            0,
+            None,
+        )
+    except ValueError as exc:
+        expect("until" in str(exc), f"unexpected child guard error: {exc!r}")
+    else:
+        raise AssertionError("child builder accepted an expiration at or before the next anchor slot")
+
+
 def test_on_modify_build_child_transitions_flex_to_all():
     """A flex anchor should skip backlog once and make its child strict all mode."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -19399,6 +19492,7 @@ TESTS = [
     test_on_modify_build_child_carries_until_across_dst,
     test_on_modify_native_until_calendar_and_exact_carry_policy,
     test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst,
+    test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations,
     test_on_modify_build_child_transitions_flex_to_all,
     test_on_modify_cp_due_edit_preserves_relative_offsets,
     test_on_modify_explicit_timing_edits_warn_on_invalid_order,

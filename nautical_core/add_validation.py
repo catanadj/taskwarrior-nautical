@@ -42,6 +42,77 @@ def validate_native_until_after_target(
     return (True, None)
 
 
+def native_until_uses_exact_carry(until_local: Any) -> bool:
+    """Return whether the stored +1s expiration marker requests exact carry."""
+    try:
+        return int(until_local.second) == 1
+    except Exception:
+        return False
+
+
+def collect_anchor_time_slots(
+    dnf: Any,
+    anchor_file_value: Any,
+    fallback_hhmm: tuple[int, int],
+    *,
+    normalize_time_slots: Callable[[Any], list[tuple[int, int]]],
+    anchor_file_dir: str,
+) -> tuple[tuple[int, int], ...]:
+    """Return every effective clock time that an anchor or anchor_file can produce."""
+    out: set[tuple[int, int]] = set()
+    try:
+        for term in dnf or ():
+            term_slots: set[tuple[int, int]] = set()
+            for atom in term or ():
+                mods = atom.get("mods") or {} if isinstance(atom, dict) else {}
+                term_slots.update(normalize_time_slots(mods.get("t")))
+            out.update(term_slots or {fallback_hhmm})
+    except Exception:
+        pass
+
+    if str(anchor_file_value or "").strip():
+        from . import anchor_files
+
+        for _date, hhmm in anchor_files.load_anchor_file_occurrence_specs(
+            str(anchor_file_value).strip(),
+            anchor_file_dir,
+            fallback_hhmm,
+        ):
+            out.add(hhmm)
+    return tuple(sorted(out))
+
+
+def validate_native_until_calendar_slots(
+    until_dt: Any,
+    target_dt: Any,
+    slots: Any,
+    *,
+    to_local: Callable[[Any], Any],
+) -> tuple[bool, str | None]:
+    """Reject same-day calendar expirations that are not later than every fixed slot."""
+    if until_dt is None or target_dt is None:
+        return (True, None)
+    try:
+        until_local = to_local(until_dt)
+        if native_until_uses_exact_carry(until_local):
+            return (True, None)
+        target_local = to_local(target_dt)
+        if until_local.date() > target_local.date():
+            return (True, None)
+        expiration = (until_local.hour, until_local.minute, until_local.second)
+        blocked = sorted(
+            (int(hh), int(mm))
+            for hh, mm in slots or ()
+            if (int(hh), int(mm), 0) >= expiration
+        )
+    except Exception:
+        return (False, "could not compare calendar expiration with anchor times")
+    if not blocked:
+        return (True, None)
+    hh, mm = blocked[0]
+    return (False, f"calendar expiration must be later than anchor slot {hh:02d}:{mm:02d}")
+
+
 def validate_native_until_anchor_mode(
     until_value: Any,
     anchor_value: Any,

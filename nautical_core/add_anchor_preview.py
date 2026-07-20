@@ -624,6 +624,7 @@ def handle_anchor_preview_on_add(
     human_delta: Callable[[Any, Any, bool], str],
     error_and_exit: Callable[[list[tuple[str, str]]], None],
     validate_native_until_after_target: Callable[[dict[str, Any], datetime, str], None],
+    validate_native_until_anchor_slots: Callable[[dict[str, Any], datetime, Any, str, tuple[int, int]], None],
     append_first_expiration_row: Callable[[list[tuple[str, str]], dict[str, Any], datetime, str], None],
 ) -> None:
     rows: list[tuple[str, str]] = []
@@ -770,6 +771,13 @@ def handle_anchor_preview_on_add(
             rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
 
     validate_native_until_after_target(task, display_first_due_utc, recurrence_field)
+    validate_native_until_anchor_slots(
+        task,
+        display_first_due_utc,
+        dnf,
+        anchor_file_str,
+        fallback_hhmm,
+    )
     append_first_expiration_row(rows, task, display_first_due_utc, recurrence_field)
     calendar_feedback.render_business_calendar_displacement(
         task,

@@ -2587,6 +2587,44 @@ def test_on_modify_recurrence_update_emits_ack_panel():
     expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
 
 
+def test_on_modify_native_until_update_explains_carry():
+    """Changing native until should acknowledge its exact or calendar carry policy."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_until_update_panel_test")
+    due = mod.core.build_local_datetime(date(2026, 8, 3), (10, 0)).astimezone(timezone.utc)
+    old_until = mod.core.build_local_datetime(date(2026, 8, 3), (18, 0)).astimezone(timezone.utc)
+    new_until = mod.core.build_local_datetime(date(2026, 8, 4), (0, 0)).astimezone(timezone.utc) + timedelta(seconds=1)
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000446",
+        "description": "nautical expiration update",
+        "status": "pending",
+        "cp": "1d",
+        "due": mod.core.fmt_isoz(due),
+        "until": mod.core.fmt_isoz(old_until),
+        "chain": "on",
+        "chainID": "abcd1234",
+    }
+    new = {**old, "until": mod.core.fmt_isoz(new_until)}
+    captured = {}
+
+    orig_panel = mod._panel
+    orig_print_task = mod._print_task
+    try:
+        mod._panel = lambda title, rows, *, kind=None: captured.update(title=title, rows=list(rows), kind=kind)
+        mod._print_task = lambda task: captured.setdefault("task", dict(task))
+        mod._handle_non_completion_modify(old, new)
+    finally:
+        mod._panel = orig_panel
+        mod._print_task = orig_print_task
+
+    rows = captured.get("rows") or []
+    expect(captured.get("title") == "⚓ Nautical recurrence updated", f"unexpected expiration panel: {captured!r}")
+    expect(captured.get("kind") == "note", f"unexpected expiration panel style: {captured!r}")
+    expect(any(label == "Expiration" and "2026-08-03" in str(value) and "2026-08-04" in str(value) for label, value in rows), f"missing expiration diff: {rows!r}")
+    expect(("Carry", "Exact · 14h 00m 01s after occurrence") in rows, f"missing exact carry explanation: {rows!r}")
+    expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
+
+
 def test_on_modify_limit_update_emits_effective_boundaries():
     """Changing chain limits should acknowledge both boundaries without speculative dates."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -9111,6 +9149,29 @@ def test_on_add_native_until_checks_generated_cp_due():
     )
 
 
+def test_native_until_carry_descriptions():
+    """Calendar and exact expiration policies should have concise, stable descriptions."""
+    add_validation = core._import_sibling("add_validation")
+    due = datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc)
+    same_day = datetime(2026, 8, 3, 18, 0, tzinfo=timezone.utc)
+    next_day = datetime(2026, 8, 4, 9, 0, tzinfo=timezone.utc)
+    exact = datetime(2026, 8, 4, 0, 0, 1, tzinfo=timezone.utc)
+    identity = lambda value: value
+
+    expect(
+        add_validation.describe_native_until_carry(same_day, due, to_local=identity) == "Same day at 18:00",
+        "same-day calendar expiration description was wrong",
+    )
+    expect(
+        add_validation.describe_native_until_carry(next_day, due, to_local=identity) == "1 calendar day later at 09:00",
+        "next-day calendar expiration description was wrong",
+    )
+    expect(
+        add_validation.describe_native_until_carry(exact, due, to_local=identity) == "Exact · 14h 00m 01s after occurrence",
+        "exact expiration description was wrong",
+    )
+
+
 def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
     """Add previews should distinguish native expiration from chain boundaries."""
     hook = _find_hook_file("on-add-nautical.py")
@@ -9137,8 +9198,11 @@ def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
         expect(proc.returncode == 0, f"preview failed: {proc.stderr!r}")
         expect(_assert_stdout_json_only(proc.stdout).get("until") == task["until"], "native until changed")
         panel = _strip_markup(proc.stderr)
-        for label in ("First expires", "Chain end point", "Last occurrence", "Future links"):
+        for label in ("Expiration", "First expires", "Chain end point", "Last occurrence", "Future links"):
             expect(label in panel, f"{label!r} missing from preview: {panel!r}")
+        expires_local = core.to_local(core.parse_dt_any(task["until"]))
+        expected_policy = f"Same day at {expires_local.hour:02d}:{expires_local.minute:02d}"
+        expect(expected_policy in panel, f"calendar expiration policy missing from preview: {panel!r}")
         expect("2026-08-17" in panel, f"chainMax should determine the effective last occurrence: {panel!r}")
         expect("Final (until)" not in panel, f"ambiguous legacy label remains: {panel!r}")
 
@@ -14737,6 +14801,13 @@ def test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundarie
         mod.core.PANEL_MODE = previous_mode
 
     rows = captured.get("rows") or []
+    add_validation = mod.core._import_sibling("add_validation")
+    expected_policy = add_validation.describe_native_until_carry(
+        child_expires,
+        child_due,
+        to_local=mod.core.to_local,
+    )
+    expect(("Expiration", expected_policy) in rows, f"expiration policy missing: {rows!r}")
     expect(any(label == "Next expires" for label, _value in rows), f"next expiration missing: {rows!r}")
     expect(("Chain cap", "#10") in rows, f"chain cap missing: {rows!r}")
     expect(
@@ -19282,6 +19353,7 @@ TESTS = [
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,
     test_on_add_native_until_requires_strictly_later_target,
     test_on_add_native_until_checks_generated_cp_due,
+    test_native_until_carry_descriptions,
     test_on_add_preview_distinguishes_expiration_from_chain_end_point,
     test_on_add_native_until_checks_generated_anchor_due,
     test_on_add_native_until_guard_ignores_ordinary_tasks,
@@ -19440,6 +19512,7 @@ TESTS = [
     test_on_modify_resumes_chain_emits_resumed_panel,
     test_on_modify_resume_wrapper_preserves_json_and_emits_panel,
     test_on_modify_recurrence_update_emits_ack_panel,
+    test_on_modify_native_until_update_explains_carry,
     test_on_modify_limit_update_emits_effective_boundaries,
     test_modify_lifecycle_routes_and_promotes_new_nautical_tasks,
     test_chainid_legacy_reads_do_not_drive_chain_identity,

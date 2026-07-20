@@ -11,6 +11,7 @@ RECURRENCE_SETTING_FIELDS = (
     "anchor_mode",
     "bc",
     "cp",
+    "until",
     "chainMax",
     "chainUntil",
 )

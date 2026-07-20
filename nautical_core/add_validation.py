@@ -50,6 +50,46 @@ def native_until_uses_exact_carry(until_local: Any) -> bool:
         return False
 
 
+def describe_native_until_carry(
+    until_dt: Any,
+    target_dt: Any,
+    *,
+    to_local: Callable[[Any], Any],
+) -> str | None:
+    """Describe the expiration carry policy represented by one occurrence."""
+    if until_dt is None or target_dt is None:
+        return None
+    try:
+        until_local = to_local(until_dt)
+        target_local = to_local(target_dt)
+        if native_until_uses_exact_carry(until_local):
+            seconds = max(0, int((until_dt - target_dt).total_seconds()))
+            days, seconds = divmod(seconds, 86400)
+            hours, seconds = divmod(seconds, 3600)
+            minutes, seconds = divmod(seconds, 60)
+            parts: list[str] = []
+            if days:
+                parts.append(f"{days}d")
+            if hours or parts:
+                parts.append(f"{hours:02d}h")
+            if minutes or parts:
+                parts.append(f"{minutes:02d}m")
+            parts.append(f"{seconds:02d}s" if parts else f"{seconds}s")
+            return "Exact · " + " ".join(parts) + " after occurrence"
+
+        day_gap = (until_local.date() - target_local.date()).days
+        clock = f"{until_local.hour:02d}:{until_local.minute:02d}"
+        if until_local.second:
+            clock += f":{until_local.second:02d}"
+        if day_gap == 0:
+            return f"Same day at {clock}"
+        if day_gap == 1:
+            return f"1 calendar day later at {clock}"
+        return f"{day_gap} calendar days later at {clock}"
+    except Exception:
+        return None
+
+
 def collect_anchor_time_slots(
     dnf: Any,
     anchor_file_value: Any,

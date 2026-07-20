@@ -1547,6 +1547,14 @@ def _append_first_expiration_row(
     expires_dt, err = _safe_parse_datetime(task.get("until"), "until")
     if err or expires_dt is None:
         return
+    add_validation = _module("add_validation")
+    carry = add_validation.describe_native_until_carry(
+        expires_dt,
+        target_dt,
+        to_local=core.to_local,
+    )
+    if carry:
+        rows.append(("Expiration", carry))
     delta = _human_delta(target_dt, expires_dt, False)
     if delta.startswith("in "):
         delta = delta[3:]

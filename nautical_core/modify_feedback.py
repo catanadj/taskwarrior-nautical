@@ -247,6 +247,17 @@ def _append_next_expiration_row(
     expires = _child_expiration(core, child)
     if expires is None:
         return
+    try:
+        add_validation = core._import_sibling("add_validation")
+        carry = add_validation.describe_native_until_carry(
+            expires,
+            child_due,
+            to_local=core.to_local,
+        )
+    except Exception:
+        carry = None
+    if carry:
+        fb.append(("Expiration", carry))
     delta = core.humanize_delta(child_due, expires, use_months_days=False)
     if delta.startswith("in "):
         delta = delta[3:]
@@ -320,6 +331,17 @@ def _build_text_feedback(
 
     lines = [line1, line2]
     if child_expires:
+        try:
+            add_validation = core._import_sibling("add_validation")
+            carry = add_validation.describe_native_until_carry(
+                child_expires,
+                child_due,
+                to_local=core.to_local,
+            )
+        except Exception:
+            carry = None
+        if carry:
+            lines.append(f"[bold magenta]Expiration:[/] [white]{carry}[/]")
         expires_delta = core.humanize_delta(child_due, child_expires, use_months_days=False)
         if expires_delta.startswith("in "):
             expires_delta = expires_delta[3:]
@@ -363,6 +385,7 @@ def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: 
         "chain cap",
         "chain end point",
         "last occurrence",
+        "expiration",
         "next expires",
         "integrity",
         "timeline",

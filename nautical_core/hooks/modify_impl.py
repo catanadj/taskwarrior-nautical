@@ -1164,6 +1164,7 @@ def _format_next_anchor_rows(
     next_keys = {
         "Next",
         "Next Due",
+        "Expiration",
         "Next expires",
         "Scheduled",
         "Wait",
@@ -1288,6 +1289,7 @@ def _format_next_cp_rows(
     next_keys = {
         "Next",
         "Next Due",
+        "Expiration",
         "Next expires",
         "Scheduled",
         "Wait",
@@ -5646,6 +5648,7 @@ def _recurrence_update_label(field: str) -> str:
         "anchor_mode": "Mode",
         "bc": "Business calendar",
         "cp": "Period",
+        "until": "Expiration",
         "chainMax": "Max links",
         "chainUntil": "Chain end point",
     }.get(field, field)
@@ -5659,7 +5662,7 @@ def _recurrence_update_value(field: str, old_value: str, new_value: str) -> str:
     def display(value: str) -> str:
         if not value:
             return "-"
-        if field == "chainUntil":
+        if field in {"until", "chainUntil"}:
             parsed = core.parse_dt_any(value)
             if parsed:
                 return _fmtlocal(parsed)
@@ -5677,6 +5680,22 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
         (_recurrence_update_label(field), _recurrence_update_value(field, old_value, new_value))
         for field, old_value, new_value in changes
     ]
+
+    if any(field == "until" for field, _old, _new in changes):
+        try:
+            target_field = "due" if new.get("due") else "scheduled" if new.get("scheduled") else ""
+            until_dt = core.parse_dt_any(new.get("until"))
+            target_dt = core.parse_dt_any(new.get(target_field)) if target_field else None
+            add_validation = core._import_sibling("add_validation")
+            carry = add_validation.describe_native_until_carry(
+                until_dt,
+                target_dt,
+                to_local=core.to_local,
+            )
+            if carry:
+                rows.append(("Carry", carry))
+        except Exception:
+            pass
 
     if any(field in {"chainMax", "chainUntil"} for field, _old, _new in changes):
         max_link = core.coerce_int(new.get("chainMax"), 0)

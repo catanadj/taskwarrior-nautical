@@ -3769,7 +3769,7 @@ def test_doctor_reports_chain_repair_plan_findings():
 
 
 def test_doctor_reports_reconcile_backfill_plans():
-    """doctor should surface hookless completion reconcile plans without mutating data."""
+    """doctor should surface completion and expiration reconcile plans without mutating data."""
     path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
@@ -3802,6 +3802,31 @@ def test_doctor_reports_reconcile_backfill_plans():
                 "link": 2,
                 "prevLink": "11111111",
             },
+            {
+                "uuid": "33333333-0000-0000-0000-000000000003",
+                "description": "expired parent",
+                "status": "deleted",
+                "cp": "7d",
+                "chain": "on",
+                "chainID": "expired",
+                "link": 1,
+                "due": "20260720T090000Z",
+                "until": "20260726T235900Z",
+                "end": "20260727T000000Z",
+            },
+            {
+                "uuid": "44444444-0000-0000-0000-000000000004",
+                "description": "already-expired next slot",
+                "status": "deleted",
+                "cp": "7d",
+                "chain": "on",
+                "chainID": "expired",
+                "link": 2,
+                "prevLink": "33333333",
+                "due": "20260727T090000Z",
+                "until": "20260802T235900Z",
+                "end": "20260803T000000Z",
+            },
         ]
         env = os.environ.copy()
         env["FAKE_HOOKS"] = str(hooks)
@@ -3818,8 +3843,12 @@ def test_doctor_reports_reconcile_backfill_plans():
         findings = {item.get("id"): item for item in obj.get("findings") or []}
         expect("chains.reconcile_available" in findings, f"missing reconcile finding: {obj}")
         details = findings["chains.reconcile_available"].get("details") or {}
-        expect((details.get("actions") or {}).get("backfill_nextlink") == 1, f"bad reconcile action counts: {details}")
+        expect((details.get("actions") or {}).get("backfill_nextlink") == 2, f"bad reconcile action counts: {details}")
         expect((details.get("plans") or [{}])[0].get("existing_child") == "22222222", f"bad reconcile plan evidence: {details}")
+        expect(
+            any(plan.get("trigger") == "expiration" and plan.get("existing_child") == "44444444" for plan in details.get("plans") or []),
+            f"missing expiration backfill evidence: {details}",
+        )
 
         text = subprocess.run(
             [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task)],
@@ -16145,6 +16174,151 @@ def test_reconcile_expiration_anchor_advances_from_recurrence_target():
     expect(meta.get("basis") == "due recurrence target (expired)", f"unexpected expiry basis: {meta!r}")
 
 
+def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
+    """Expiration plans should honor chain limits and recognize an already-expired next slot."""
+    import nautical_core.reconcile as reconcile
+
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_reconcile_expiration_plan_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "deleted",
+        "description": "expired occurrence",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "11111111",
+        "link": 1,
+        "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 20), (9, 0))),
+        "until": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))),
+        "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 27), (0, 0))),
+    }
+    deleted_child = {
+        "uuid": "22222222-0000-0000-0000-000000000002",
+        "status": "deleted",
+        "chainID": "11111111",
+        "link": 2,
+    }
+
+    backfill = reconcile.build_reconcile_plan(parent, existing_children=[deleted_child], hook=mod)
+    expect(
+        backfill.action == "backfill_nextlink" and backfill.child_short == "22222222",
+        f"deleted next slot should be backfilled rather than duplicated: {backfill}",
+    )
+
+    capped = reconcile.build_reconcile_plan(dict(parent, chainMax=1), existing_children=[], hook=mod)
+    expect(capped.action == "legitimate_final" and "chainMax" in capped.reason, f"chainMax not enforced: {capped}")
+
+    chain_until = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
+    limited = reconcile.build_reconcile_plan(
+        dict(parent, chainUntil=mod.core.fmt_isoz(chain_until)),
+        existing_children=[],
+        hook=mod,
+    )
+    expect(
+        limited.action == "legitimate_final" and "chainUntil" in limited.reason,
+        f"chainUntil not enforced against expired successor: {limited}",
+    )
+
+    spawned = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    expect(spawned.action == "spawn", f"expected expiration spawn plan: {spawned}")
+    expect(spawned.reason == "expired link missing next link", f"unexpected expiration reason: {spawned}")
+    expect((spawned.child or {}).get("until"), f"spawned child should carry relative until: {spawned}")
+    expect(reconcile.describe_plan(spawned).get("trigger") == "expiration", f"missing expiration evidence: {spawned}")
+
+
+def test_reconcile_tool_exports_and_applies_expired_candidates():
+    """Reconcile CLI should query deleted links and apply a safe expiration spawn plan."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_expiration_apply_test")
+    due = datetime(2026, 7, 20, 9, 0, tzinfo=timezone.utc)
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "deleted",
+        "description": "expired occurrence",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "11111111",
+        "link": 1,
+        "due": "20260720T090000Z",
+        "until": "20260726T235900Z",
+        "end": "20260727T000000Z",
+    }
+    exported_filters = []
+
+    class FakeCore:
+        fmt_dt_local = None
+
+        @staticmethod
+        def coerce_int(value, default=0):
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+    class FakeHook:
+        core = FakeCore()
+
+        @staticmethod
+        def _task_cmd_prefix():
+            return ["task"]
+
+        @staticmethod
+        def _safe_parse_datetime(value):
+            mapping = {
+                "20260720T090000Z": due,
+                "20260726T235900Z": datetime(2026, 7, 26, 23, 59, tzinfo=timezone.utc),
+                "20260727T000000Z": datetime(2026, 7, 27, 0, 0, tzinfo=timezone.utc),
+            }
+            return mapping.get(value), None
+
+        @staticmethod
+        def _compute_cp_child_due(calculation_parent):
+            expect(calculation_parent.get("end") == parent["due"], f"expiry calculation used deletion end: {calculation_parent}")
+            return due + timedelta(days=7), {"target_field": "due"}
+
+        @staticmethod
+        def _build_child_from_parent(parent_task, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+            return {
+                "description": parent_task.get("description"),
+                child_field: child_due,
+                "link": next_link,
+                "prevLink": parent_short,
+                "chainID": parent_task.get("chainID"),
+            }
+
+        @staticmethod
+        def _spawn_child(_child, _parent):
+            return "22222222", set()
+
+    original = (tool._load_on_modify, tool._export, tool._run_task)
+    try:
+        tool._load_on_modify = lambda _path=None: FakeHook()
+
+        def fake_export(_task_bin, filters, **_kwargs):
+            exported_filters.append(tuple(filters))
+            if "status:deleted" in filters and "chain:on" in filters:
+                return [parent]
+            return []
+
+        calls = []
+        tool._export = fake_export
+        tool._run_task = lambda task_bin, args, **_kwargs: calls.append((task_bin, args)) or SimpleNamespace(
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            expect(tool.main(["--apply", "--json"]) == 0, "expiration reconcile apply should succeed")
+        summary = json.loads(output.getvalue())
+        expect(summary.get("spawn") == 1, f"expiration candidate was not planned: {summary!r}")
+        expect((summary.get("plans") or [{}])[0].get("trigger") == "expiration", f"missing trigger: {summary!r}")
+        expect(any("status:deleted" in filters for filters in exported_filters), f"deleted links were not queried: {exported_filters}")
+        expect(any(args[-1] == "nextLink:22222222" for _bin, args in calls), f"parent nextLink not applied: {calls!r}")
+    finally:
+        tool._load_on_modify, tool._export, tool._run_task = original
+
+
 def test_reconcile_evidence_prefers_due_over_carried_scheduled():
     """Reconcile evidence should show the recurrence target, not carried scheduled metadata."""
     import nautical_core.reconcile as reconcile
@@ -16372,7 +16546,7 @@ def test_reconcile_tool_apply_disables_legitimate_final_chain():
     original = (mod._load_on_modify, mod._candidate_rows, mod._existing_children, mod._run_task)
     try:
         mod._load_on_modify = lambda _path=None: FakeHook()
-        mod._candidate_rows = lambda _task_bin: [parent] if parent["chain"] == "on" else []
+        mod._candidate_rows = lambda _task_bin, _hook: [parent] if parent["chain"] == "on" else []
         mod._existing_children = lambda _task_bin, _parent: []
 
         def fake_run_task(task_bin, args, **_kwargs):
@@ -18430,6 +18604,8 @@ TESTS = [
     test_reconcile_expiration_candidate_requires_expiry_evidence,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
+    test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,
+    test_reconcile_tool_exports_and_applies_expired_candidates,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_evidence_includes_local_child_time_when_formatter_available,
     test_reconcile_tool_loads_task_hooks_layout,

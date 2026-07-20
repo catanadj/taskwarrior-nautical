@@ -432,12 +432,13 @@ def _chain_repair_detail(repair: chain_repair.LinkRepair) -> dict[str, Any]:
 def _existing_reconcile_children(rows: list[dict[str, Any]], parent: dict[str, Any]) -> list[dict[str, Any]]:
     chain_id = str(parent.get("chainID") or "").strip()
     next_link = reconcile.int_or_default(parent.get("link"), 1) + 1
+    include_deleted = str(parent.get("status") or "").strip() == "deleted"
     return [
         row
         for row in rows
         if str(row.get("chainID") or "").strip() == chain_id
         and reconcile.int_or_default(row.get("link"), -1) == next_link
-        and str(row.get("status") or "").strip() != "deleted"
+        and (include_deleted or str(row.get("status") or "").strip() != "deleted")
     ]
 
 
@@ -464,13 +465,36 @@ def _check_reconcile_plans(
     rows: list[dict[str, Any]],
     hooks_dir: Path,
 ) -> None:
-    candidates = [row for row in rows if reconcile.is_orphan_completion_candidate(row)]
-    if not candidates:
+    completion_candidates = [row for row in rows if reconcile.is_orphan_completion_candidate(row)]
+    possible_expirations = [
+        row
+        for row in rows
+        if str(row.get("status") or "").strip() == "deleted"
+        and str(row.get("chain") or "").strip().lower() == "on"
+        and str(row.get("chainID") or "").strip()
+        and not str(row.get("nextLink") or "").strip()
+        and reconcile.is_nautical_recurrence(row)
+        and row.get("until")
+        and row.get("end")
+    ]
+    if not completion_candidates and not possible_expirations:
         return
 
     hook = None
+    expiration_candidates: list[dict[str, Any]] = []
     plans: list[reconcile.ReconcilePlan] = []
     unavailable = ""
+    if possible_expirations:
+        try:
+            hook = _load_on_modify_hook_for_reconcile(hooks_dir)
+            expiration_candidates = [
+                row
+                for row in possible_expirations
+                if reconcile.is_orphan_expiration_candidate(row, safe_parse_datetime=hook._safe_parse_datetime)
+            ]
+        except Exception as exc:
+            unavailable = str(exc)
+    candidates = [*completion_candidates, *expiration_candidates]
     for parent in candidates:
         existing_children = _existing_reconcile_children(rows, parent)
         if not existing_children and hook is None:
@@ -486,9 +510,15 @@ def _check_reconcile_plans(
             findings,
             "chains.reconcile_unavailable",
             "warn",
-            f"{len(candidates)} hookless completion candidate(s) were found, but reconcile planning could not load on-modify.",
+            f"{len(completion_candidates) + len(possible_expirations)} recurrence candidate(s) were found, but reconcile planning could not load on-modify.",
             fix="Run nautical reconcile for full diagnostics.",
-            details={"error": unavailable, "candidates": [_task_detail(row) for row in candidates[:10]]},
+            details={
+                "error": unavailable,
+                "candidates": [
+                    _task_detail(row)
+                    for row in [*completion_candidates, *possible_expirations][:10]
+                ],
+            },
         )
         return
 
@@ -503,7 +533,7 @@ def _check_reconcile_plans(
         findings,
         "chains.reconcile_available",
         "warn",
-        f"{len(plans)} hookless completion reconcile plan(s) are available.",
+        f"{len(plans)} recurrence reconcile plan(s) are available.",
         fix="Run nautical reconcile --apply after reviewing the dry-run output.",
         details={
             "actions": dict(sorted(action_counts.items())),

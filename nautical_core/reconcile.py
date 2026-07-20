@@ -96,7 +96,12 @@ def compute_expiration_child_due(parent: dict[str, Any], *, hook: Any) -> tuple[
     return child_due, result_meta
 
 
-def existing_child_short(parent: dict[str, Any], rows: list[dict[str, Any]]) -> str:
+def existing_child_short(
+    parent: dict[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    include_deleted: bool = False,
+) -> str:
     chain_id = str(parent.get("chainID") or "").strip()
     next_link = int_or_default(parent.get("link"), 1) + 1
     for row in rows:
@@ -104,7 +109,7 @@ def existing_child_short(parent: dict[str, Any], rows: list[dict[str, Any]]) -> 
             continue
         if int_or_default(row.get("link"), -1) != next_link:
             continue
-        if str(row.get("status") or "").strip() == "deleted":
+        if not include_deleted and str(row.get("status") or "").strip() == "deleted":
             continue
         return short_uuid(row.get("uuid"))
     return ""
@@ -126,6 +131,7 @@ def describe_plan(plan: ReconcilePlan, *, fmt_dt_local: Any = None) -> dict[str,
         "parent_link": int_or_default(parent.get("link"), 0),
         "next_link": plan.next_link,
         "kind": recurrence_kind(parent),
+        "trigger": "expiration" if str(parent.get("status") or "").strip() == "deleted" else "completion",
         "reason": plan.reason,
     }
     if plan.child_due is not None:
@@ -153,8 +159,14 @@ def build_reconcile_plan(
 ) -> ReconcilePlan:
     link = int_or_default(parent.get("link"), 1)
     next_link = link + 1
+    is_expiration = str(parent.get("status") or "").strip() == "deleted"
+    if is_expiration and not is_orphan_expiration_candidate(
+        parent,
+        safe_parse_datetime=hook._safe_parse_datetime,
+    ):
+        return ReconcilePlan("error", parent, next_link, "deleted task has no reliable native-until expiration evidence")
 
-    child_short = existing_child_short(parent, existing_children)
+    child_short = existing_child_short(parent, existing_children, include_deleted=is_expiration)
     if child_short:
         return ReconcilePlan("backfill_nextlink", parent, next_link, "next link already exists", child_short=child_short)
 
@@ -168,7 +180,9 @@ def build_reconcile_plan(
         return ReconcilePlan("legitimate_final", parent, next_link, "reached chainMax")
 
     try:
-        if kind in {"anchor", "anchor_file"}:
+        if is_expiration:
+            child_due, meta = compute_expiration_child_due(parent, hook=hook)
+        elif kind in {"anchor", "anchor_file"}:
             child_due, meta, _dnf = hook._compute_anchor_child_due(parent)
         else:
             child_due, meta = hook._compute_cp_child_due(parent)
@@ -186,4 +200,5 @@ def build_reconcile_plan(
         child = hook._build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt)
     except Exception as exc:
         return ReconcilePlan("error", parent, next_link, f"failed to build child: {exc}", child_due=child_due)
-    return ReconcilePlan("spawn", parent, next_link, "missing next link", child=child, child_due=child_due)
+    reason = "expired link missing next link" if is_expiration else "missing next link"
+    return ReconcilePlan("spawn", parent, next_link, reason, child=child, child_due=child_due)

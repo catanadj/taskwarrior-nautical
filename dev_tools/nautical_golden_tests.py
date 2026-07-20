@@ -16054,6 +16054,97 @@ def test_reconcile_candidate_and_plan_paths():
     expect(plan.action == "legitimate_final" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
 
 
+def test_reconcile_expiration_candidate_requires_expiry_evidence():
+    """Only native-until deletion at or after the boundary should advance a chain."""
+    import nautical_core.reconcile as reconcile
+
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_reconcile_expiration_candidate_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "deleted",
+        "description": "expired occurrence",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "11111111",
+        "link": 2,
+        "due": "20260720T060000Z",
+        "until": "20260726T205959Z",
+        "end": "20260726T205959Z",
+    }
+    is_candidate = lambda task: reconcile.is_orphan_expiration_candidate(
+        task,
+        safe_parse_datetime=mod._safe_parse_datetime,
+    )
+
+    expect(is_candidate(parent), "deletion exactly at until should be an expiration candidate")
+    expect(not is_candidate(dict(parent, end="20260726T205958Z")), "manual deletion before until must not advance")
+    expect(not is_candidate(dict(parent, status="completed")), "completed tasks use the completion candidate path")
+    expect(not is_candidate(dict(parent, until="not-a-date")), "malformed until must fail closed")
+    expect(not is_candidate(dict(parent, nextLink="22222222")), "already-linked expiration must not be reconsidered")
+
+
+def test_reconcile_expiration_cp_advances_from_recurrence_target():
+    """Expired CP links should advance from due/scheduled rather than their deletion end."""
+    import nautical_core.reconcile as reconcile
+
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_reconcile_expiration_cp_due_test")
+    due = mod.core.build_local_datetime(date(2026, 7, 20), (9, 0))
+    expired_end = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
+    parent = {
+        "status": "deleted",
+        "cp": "7d",
+        "chainID": "11111111",
+        "link": 1,
+        "due": mod.core.fmt_isoz(due),
+        "end": mod.core.fmt_isoz(expired_end),
+    }
+
+    child_due, meta = reconcile.compute_expiration_child_due(parent, hook=mod)
+    child_local = mod.core.to_local(child_due)
+    expect(
+        child_local.date() == date(2026, 7, 27) and (child_local.hour, child_local.minute) == (9, 0),
+        f"expired CP should advance from prior due: {child_local}",
+    )
+    expect(meta.get("basis") == "due recurrence target (expired)", f"unexpected expiry basis: {meta!r}")
+
+    scheduled_parent = dict(parent)
+    scheduled_parent.pop("due")
+    scheduled_parent["scheduled"] = mod.core.fmt_isoz(due)
+    child_scheduled, scheduled_meta = reconcile.compute_expiration_child_due(scheduled_parent, hook=mod)
+    expect(
+        mod.core.to_local(child_scheduled).date() == date(2026, 7, 27),
+        f"scheduled-only expiry should advance from scheduled: {child_scheduled}",
+    )
+    expect(scheduled_meta.get("target_field") == "scheduled", f"unexpected scheduled metadata: {scheduled_meta!r}")
+
+
+def test_reconcile_expiration_anchor_advances_from_recurrence_target():
+    """Expired anchor links should select the first slot after the prior recurrence target."""
+    import nautical_core.reconcile as reconcile
+
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_reconcile_expiration_anchor_due_test")
+    parent = {
+        "status": "deleted",
+        "anchor": "w:mon@t=09:00",
+        "anchor_mode": "skip",
+        "chainID": "11111111",
+        "link": 1,
+        "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 6), (9, 0))),
+        "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 15), (18, 0))),
+    }
+
+    child_due, meta = reconcile.compute_expiration_child_due(parent, hook=mod)
+    child_local = mod.core.to_local(child_due)
+    expect(
+        child_local.date() == date(2026, 7, 13) and (child_local.hour, child_local.minute) == (9, 0),
+        f"expired anchor should advance from prior due: {child_local}",
+    )
+    expect(meta.get("basis") == "due recurrence target (expired)", f"unexpected expiry basis: {meta!r}")
+
+
 def test_reconcile_evidence_prefers_due_over_carried_scheduled():
     """Reconcile evidence should show the recurrence target, not carried scheduled metadata."""
     import nautical_core.reconcile as reconcile
@@ -18336,6 +18427,9 @@ TESTS = [
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
+    test_reconcile_expiration_candidate_requires_expiry_evidence,
+    test_reconcile_expiration_cp_advances_from_recurrence_target,
+    test_reconcile_expiration_anchor_advances_from_recurrence_target,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_evidence_includes_local_child_time_when_formatter_available,
     test_reconcile_tool_loads_task_hooks_layout,

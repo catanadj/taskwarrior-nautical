@@ -38,9 +38,7 @@ def is_nautical_recurrence(task: dict[str, Any]) -> bool:
     return any(str(task.get(field) or "").strip() for field in RECURRENCE_FIELDS)
 
 
-def is_orphan_completion_candidate(task: dict[str, Any]) -> bool:
-    if str(task.get("status") or "").strip() != "completed":
-        return False
+def _is_unlinked_active_chain(task: dict[str, Any]) -> bool:
     if str(task.get("chain") or "").strip().lower() != "on":
         return False
     if not str(task.get("chainID") or "").strip():
@@ -50,6 +48,52 @@ def is_orphan_completion_candidate(task: dict[str, Any]) -> bool:
     if not is_nautical_recurrence(task):
         return False
     return True
+
+
+def is_orphan_completion_candidate(task: dict[str, Any]) -> bool:
+    return str(task.get("status") or "").strip() == "completed" and _is_unlinked_active_chain(task)
+
+
+def is_orphan_expiration_candidate(task: dict[str, Any], *, safe_parse_datetime: Any) -> bool:
+    """Return whether a deleted link has strong evidence of native until expiration."""
+    if str(task.get("status") or "").strip() != "deleted" or not _is_unlinked_active_chain(task):
+        return False
+    try:
+        until_dt, until_err = safe_parse_datetime(task.get("until"))
+        end_dt, end_err = safe_parse_datetime(task.get("end"))
+    except Exception:
+        return False
+    if until_err or end_err or until_dt is None or end_dt is None:
+        return False
+    try:
+        return until_dt <= end_dt
+    except Exception:
+        return False
+
+
+def expiration_recurrence_parent(parent: dict[str, Any]) -> dict[str, Any]:
+    """Return a computation-only parent that advances from due/scheduled, not deletion time."""
+    target = parent.get("due") or parent.get("scheduled")
+    if not str(target or "").strip():
+        raise ValueError("expired recurrence has no due or scheduled timestamp")
+    calculation_parent = dict(parent)
+    calculation_parent["end"] = target
+    return calculation_parent
+
+
+def compute_expiration_child_due(parent: dict[str, Any], *, hook: Any) -> tuple[Any, dict[str, Any]]:
+    """Compute the next recurrence target after an expired link without mutating it."""
+    calculation_parent = expiration_recurrence_parent(parent)
+    kind = recurrence_kind(parent)
+    if kind in {"anchor", "anchor_file"}:
+        child_due, meta, _dnf = hook._compute_anchor_child_due(calculation_parent)
+    else:
+        child_due, meta = hook._compute_cp_child_due(calculation_parent)
+    target_field = "scheduled" if not parent.get("due") and parent.get("scheduled") else "due"
+    result_meta = dict(meta or {})
+    result_meta["basis"] = f"{target_field} recurrence target (expired)"
+    result_meta["target_field"] = target_field
+    return child_due, result_meta
 
 
 def existing_child_short(parent: dict[str, Any], rows: list[dict[str, Any]]) -> str:

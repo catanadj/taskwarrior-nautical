@@ -9152,6 +9152,40 @@ def test_on_add_native_until_guard_ignores_ordinary_tasks():
     expect(_assert_stdout_json_only(proc.stdout) == task, "ordinary task was changed")
 
 
+def test_on_add_native_until_rejects_strict_anchor_modes():
+    """Native until should be incompatible with all and flex anchor backfill."""
+    hook = _find_hook_file("on-add-nautical.py")
+    base = {
+        "uuid": "00000000-0000-0000-0000-000000000137",
+        "description": "strict anchor expiration conflict",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "anchor": "w:mon",
+        "due": "20260803T090000Z",
+        "until": "20260804T090000Z",
+    }
+    for mode in ("all", "flex"):
+        proc = _run_hook_script(hook, dict(base, anchor_mode=mode), env_extra={"NO_COLOR": "1"})
+        expect(proc.returncode != 0, f"anchor_mode:{mode} accepted native until")
+        expect(not (proc.stdout or "").strip(), f"rejected anchor mode leaked stdout: {proc.stdout!r}")
+        stderr_txt = _strip_markup(proc.stderr)
+        expect("Invalid expiration mode" in stderr_txt, f"missing mode conflict panel: {stderr_txt!r}")
+        expect("Remove until or use anchor_mode:skip" in stderr_txt, f"missing mode resolution: {stderr_txt!r}")
+
+    proc = _run_hook_script(hook, dict(base, anchor_mode="skip"), env_extra={"NO_COLOR": "1"})
+    expect(proc.returncode == 0, f"anchor_mode:skip rejected valid native until: {proc.stderr!r}")
+    expect(_assert_stdout_json_only(proc.stdout).get("anchor_mode") == "skip", "skip mode changed")
+
+    validation = core._import_sibling("add_validation")
+    valid, reason = validation.validate_native_until_anchor_mode(
+        base["until"],
+        "",
+        "events.csv",
+        "all",
+    )
+    expect(not valid and "anchor_mode:all" in str(reason), f"anchor_file all conflict was missed: {reason!r}")
+
+
 def test_on_modify_native_until_rejects_invalid_window_changes():
     """Nautical modifications should reject target windows made invalid."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -9266,6 +9300,63 @@ def test_on_modify_native_until_validates_simultaneous_completion():
     expect(proc.returncode != 0, "simultaneous completion accepted an invalid expiration window")
     expect(not (proc.stdout or "").strip(), f"rejected completion leaked stdout: {proc.stdout!r}")
     expect("Invalid expiration window" in _strip_markup(proc.stderr), f"missing completion guard: {proc.stderr!r}")
+
+
+def test_on_modify_native_until_rejects_strict_anchor_mode_changes():
+    """Changing an expiring anchor task to all or flex should be rejected."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000138",
+        "description": "modify strict anchor expiration conflict",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "anchor": "w:mon",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "until138",
+        "link": 1,
+        "due": "20260803T090000Z",
+        "until": "20260804T090000Z",
+    }
+    with tempfile.TemporaryDirectory() as td:
+        for mode in ("all", "flex"):
+            new = dict(old, anchor_mode=mode)
+            proc = _run_hook_script_raw(
+                hook,
+                json.dumps(old) + "\n" + json.dumps(new),
+                env_extra={"NO_COLOR": "1", "TASKDATA": td},
+            )
+            expect(proc.returncode != 0, f"anchor_mode:{mode} modification accepted native until")
+            expect(not (proc.stdout or "").strip(), f"rejected mode modification leaked stdout: {proc.stdout!r}")
+            expect("Invalid expiration mode" in _strip_markup(proc.stderr), f"missing mode guard: {proc.stderr!r}")
+
+
+def test_on_modify_native_until_rejects_legacy_all_completion():
+    """Completion should not perpetuate a legacy all-plus-until configuration."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000139",
+        "description": "complete strict anchor expiration conflict",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "anchor": "w:mon",
+        "anchor_mode": "all",
+        "chain": "on",
+        "chainID": "until139",
+        "link": 1,
+        "due": "20260803T090000Z",
+        "until": "20260804T090000Z",
+    }
+    new = dict(old, status="completed", end="20260803T100000Z")
+    with tempfile.TemporaryDirectory() as td:
+        proc = _run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"NO_COLOR": "1", "TASKDATA": td},
+        )
+    expect(proc.returncode != 0, "legacy anchor_mode:all completion perpetuated native until")
+    expect(not (proc.stdout or "").strip(), f"rejected legacy completion leaked stdout: {proc.stdout!r}")
+    expect("Invalid expiration mode" in _strip_markup(proc.stderr), f"missing completion mode guard: {proc.stderr!r}")
 
 
 def test_on_add_due_context_treats_due_matching_entry_as_implicit():
@@ -11613,6 +11704,37 @@ def test_on_modify_build_child_carries_until_across_dst():
     finally:
         mod.core.LOCAL_TZ_NAME = previous_tz_name
         mod.core._LOCAL_TZ = previous_tz
+
+
+def test_on_modify_build_child_transitions_flex_to_all():
+    """A flex anchor should skip backlog once and make its child strict all mode."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_flex_child_mode_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    parent_due = mod.core.build_local_datetime(date(2026, 8, 3), (9, 0))
+    child_due = mod.core.build_local_datetime(date(2026, 8, 10), (9, 0))
+    parent = {
+        "uuid": "00000000-0000-0000-0000-000000000140",
+        "status": "completed",
+        "due": mod.core.fmt_isoz(parent_due),
+        "anchor": "w:mon",
+        "anchor_mode": "flex",
+        "chainID": "flex140",
+    }
+    child = mod._build_child_from_parent(
+        parent,
+        child_due,
+        "due",
+        2,
+        "00000000",
+        "anchor",
+        0,
+        None,
+    )
+    expect(parent.get("anchor_mode") == "flex", f"parent mode was mutated: {parent!r}")
+    expect(child.get("anchor_mode") == "all", f"flex child did not transition to all: {child!r}")
 
 
 def test_on_modify_cp_due_edit_preserves_relative_offsets():
@@ -18801,10 +18923,13 @@ TESTS = [
     test_on_add_native_until_checks_generated_cp_due,
     test_on_add_native_until_checks_generated_anchor_due,
     test_on_add_native_until_guard_ignores_ordinary_tasks,
+    test_on_add_native_until_rejects_strict_anchor_modes,
     test_on_modify_native_until_rejects_invalid_window_changes,
     test_on_modify_native_until_accepts_valid_window_change,
     test_on_modify_native_until_validates_recurrence_promotion,
     test_on_modify_native_until_validates_simultaneous_completion,
+    test_on_modify_native_until_rejects_strict_anchor_mode_changes,
+    test_on_modify_native_until_rejects_legacy_all_completion,
     test_on_add_due_context_treats_due_matching_entry_as_implicit,
     test_on_add_anchor_preview_auto_assigns_when_due_matches_entry,
     test_hook_on_add_anchor_preview_skips_omit_date,
@@ -19002,6 +19127,7 @@ TESTS = [
     test_on_exit_requires_core_data_context_helper,
     test_on_modify_carry_wall_clock_across_dst,
     test_on_modify_build_child_carries_until_across_dst,
+    test_on_modify_build_child_transitions_flex_to_all,
     test_on_modify_cp_due_edit_preserves_relative_offsets,
     test_on_modify_explicit_timing_edits_warn_on_invalid_order,
     test_on_modify_timing_warning_wrapper_preserves_json_stdout,

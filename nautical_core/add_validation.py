@@ -42,6 +42,22 @@ def validate_native_until_after_target(
     return (True, None)
 
 
+def validate_native_until_anchor_mode(
+    until_value: Any,
+    anchor_value: Any,
+    anchor_file_value: Any,
+    anchor_mode_value: Any,
+) -> tuple[bool, str | None]:
+    if not until_value or not (anchor_value or anchor_file_value):
+        return (True, None)
+    mode = str(anchor_mode_value or "skip").strip().lower()
+    if mode == "all":
+        return (False, "anchor_mode:all must retain every missed occurrence")
+    if mode == "flex":
+        return (False, "anchor_mode:flex makes the next link anchor_mode:all")
+    return (True, None)
+
+
 def validate_chain_duration_reasonable(
     until_dt: Any,
     now_utc: datetime,

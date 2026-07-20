@@ -943,10 +943,28 @@ def _validate_native_until_after_target_or_fail(
     until_raw = task.get("until")
     if not until_raw:
         return
+    add_validation = _module("add_validation")
+    mode_is_valid, mode_reason = add_validation.validate_native_until_anchor_mode(
+        until_raw,
+        task.get("anchor"),
+        task.get("anchor_file"),
+        task.get("anchor_mode"),
+    )
+    if not mode_is_valid:
+        mode = str(task.get("anchor_mode") or "skip").strip().lower()
+        _panel(
+            "❌ Invalid expiration mode",
+            [
+                ("Mode", mode),
+                ("Conflict", mode_reason or "Native until conflicts with strict anchor backfill."),
+                ("Action", "Remove until or use anchor_mode:skip."),
+            ],
+            kind="error",
+        )
+        sys.exit(1)
     until_dt, until_err = _safe_parse_datetime(until_raw, "until")
     if until_err or until_dt is None:
         _fail_and_exit("Invalid until", until_err or "until must be a valid datetime")
-    add_validation = _module("add_validation")
     is_valid, reason = add_validation.validate_native_until_after_target(
         until_dt,
         target_dt,

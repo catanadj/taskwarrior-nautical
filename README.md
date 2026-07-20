@@ -352,6 +352,9 @@ window, and the expiration panel shows both `Next` and `Next expires`.
 For Nautical tasks, native `until` must be strictly later than the effective
 `due` or scheduled-only `scheduled`. Nautical enforces this on creation,
 recurrence promotion, relevant timing changes, and completion.
+Native `until` cannot be combined with anchor modes `all` or `flex`, because
+those modes retain every missed occurrence. Use `anchor_mode:skip` for
+per-occurrence expiration, or `chainUntil` when the whole chain should end.
 
 When Taskwarrior emits the expiration through `on-modify`, Nautical queues the
 next occurrence immediately. For expirations that happen while hooks are absent

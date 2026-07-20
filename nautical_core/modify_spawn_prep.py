@@ -124,7 +124,10 @@ def build_child_from_parent(
     if kind in {"anchor", "anchor_file"}:
         child["anchor"] = parent.get("anchor")
         child["anchor_file"] = parent.get("anchor_file")
-        child["anchor_mode"] = parent.get("anchor_mode") or "skip"
+        parent_mode = parent.get("anchor_mode") or "skip"
+        child["anchor_mode"] = (
+            "all" if str(parent_mode).strip().lower() == "flex" else parent_mode
+        )
         child.pop("cp", None)
     else:
         child["cp"] = parent.get("cp")

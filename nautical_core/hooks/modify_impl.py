@@ -2387,6 +2387,25 @@ def _validate_native_until_after_target_or_fail(task: dict) -> None:
     until_raw = task.get("until")
     if not until_raw:
         return
+    add_validation = core._import_sibling("add_validation")
+    mode_is_valid, mode_reason = add_validation.validate_native_until_anchor_mode(
+        until_raw,
+        task.get("anchor"),
+        task.get("anchor_file"),
+        task.get("anchor_mode"),
+    )
+    if not mode_is_valid:
+        mode = str(task.get("anchor_mode") or "skip").strip().lower()
+        _panel(
+            "❌ Invalid expiration mode",
+            [
+                ("Mode", mode),
+                ("Conflict", mode_reason or "Native until conflicts with strict anchor backfill."),
+                ("Action", "Remove until or use anchor_mode:skip."),
+            ],
+            kind="error",
+        )
+        sys.exit(1)
     target_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else ""
     if not target_field:
         return
@@ -2396,7 +2415,6 @@ def _validate_native_until_after_target_or_fail(task: dict) -> None:
     until_dt, until_err = _safe_parse_datetime(until_raw)
     if until_err or until_dt is None:
         _fail_and_exit("Invalid until", until_err or "until must be a valid datetime")
-    add_validation = core._import_sibling("add_validation")
     is_valid, reason = add_validation.validate_native_until_after_target(
         until_dt,
         target_dt,
@@ -5720,7 +5738,7 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     )
     native_window_changed = any(
         _field_changed(old, new, field)
-        for field in ("due", "scheduled", "until")
+        for field in ("due", "scheduled", "until", "anchor_mode")
     )
     if new_has_recurrence and (native_window_changed or recurrence_enabled):
         _validate_native_until_after_target_or_fail(new)

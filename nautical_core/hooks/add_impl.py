@@ -935,6 +935,38 @@ def _validate_until_not_past(until_dt, now_utc) -> tuple[bool, str | None]:
     return add_validation.validate_until_not_past(until_dt, now_utc, core=core)
 
 
+def _validate_native_until_after_target_or_fail(
+    task: dict,
+    target_dt: datetime,
+    target_field: str,
+) -> None:
+    until_raw = task.get("until")
+    if not until_raw:
+        return
+    until_dt, until_err = _safe_parse_datetime(until_raw, "until")
+    if until_err or until_dt is None:
+        _fail_and_exit("Invalid until", until_err or "until must be a valid datetime")
+    add_validation = _module("add_validation")
+    is_valid, reason = add_validation.validate_native_until_after_target(
+        until_dt,
+        target_dt,
+        target_field,
+    )
+    if is_valid:
+        return
+    label = "Scheduled" if target_field == "scheduled" else "Due"
+    _panel(
+        "❌ Invalid expiration window",
+        [
+            (label, core.fmt_dt_local(target_dt)),
+            ("Until", core.fmt_dt_local(until_dt)),
+            ("Required", reason or f"until must be later than {target_field}"),
+        ],
+        kind="error",
+    )
+    sys.exit(1)
+
+
 # Helper to check if due is in the past (warning only)
 def _check_due_in_past(due_dt, now_utc) -> tuple[bool, str | None]:
     add_validation = _module("add_validation")
@@ -1498,6 +1530,7 @@ def _handle_cp_preview_on_add(
         due_dt = _dt(task.get("due"))
         first_label = "First due"
 
+    _validate_native_until_after_target_or_fail(task, due_dt, recurrence_field)
     rows.append(("Period", f"[bold white]{cp_str}[/]"))
     if is_dynamic:
         step_token = cp_str.split(",")[0].strip()
@@ -1748,6 +1781,7 @@ def _handle_anchor_preview_on_add(
         emit_task_json=_emit_task_json,
         human_delta=_human_delta,
         error_and_exit=_error_and_exit,
+        validate_native_until_after_target=_validate_native_until_after_target_or_fail,
     )
 
 

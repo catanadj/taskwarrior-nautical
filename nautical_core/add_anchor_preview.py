@@ -618,6 +618,7 @@ def handle_anchor_preview_on_add(
     emit_task_json: Callable[..., None],
     human_delta: Callable[[Any, Any, bool], str],
     error_and_exit: Callable[[list[tuple[str, str]]], None],
+    validate_native_until_after_target: Callable[[dict[str, Any], datetime, str], None],
 ) -> None:
     rows: list[tuple[str, str]] = []
     for warning in panel_diagnostics.panel_warnings(core, task):
@@ -762,6 +763,7 @@ def handle_anchor_preview_on_add(
             task["due"] = fmt_local_for_task(first_due_utc)
             rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
 
+    validate_native_until_after_target(task, display_first_due_utc, recurrence_field)
     calendar_feedback.render_business_calendar_displacement(
         task,
         first_due_local_dt,

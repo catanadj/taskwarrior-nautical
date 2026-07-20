@@ -26,6 +26,22 @@ def check_due_in_past(due_dt: Any, now_utc: datetime, *, core: Any) -> tuple[boo
     return (False, None)
 
 
+def validate_native_until_after_target(
+    until_dt: Any,
+    target_dt: Any,
+    target_field: str,
+) -> tuple[bool, str | None]:
+    if until_dt is None or target_dt is None:
+        return (True, None)
+    label = "scheduled" if str(target_field or "").strip().lower() == "scheduled" else "due"
+    try:
+        if until_dt <= target_dt:
+            return (False, f"until must be later than {label}")
+    except Exception:
+        return (False, f"until and {label} could not be compared")
+    return (True, None)
+
+
 def validate_chain_duration_reasonable(
     until_dt: Any,
     now_utc: datetime,

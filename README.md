@@ -346,7 +346,12 @@ task add "Take the trash out" due:today until:eow cp:7d chainUntil:eoy
 If that occurrence remains unfinished at `until`, Taskwarrior deletes it and
 Nautical advances from its original `due` (or scheduled-only `scheduled`) to the
 next occurrence. The child receives an `until` shifted by the same relative
-window. `chainMax` and `chainUntil` still decide when the whole chain ends.
+window, and the expiration panel shows both `Next` and `Next expires`.
+`chainMax` and `chainUntil` still decide when the whole chain ends.
+
+For Nautical tasks, native `until` must be strictly later than the effective
+`due` or scheduled-only `scheduled`. Nautical enforces this on creation,
+recurrence promotion, relevant timing changes, and completion.
 
 When Taskwarrior emits the expiration through `on-modify`, Nautical queues the
 next occurrence immediately. For expirations that happen while hooks are absent

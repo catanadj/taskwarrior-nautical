@@ -2997,9 +2997,11 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
     }
     expired = dict(parent, status="deleted", end="20260727T000000Z")
     captured = {"panels": [], "children": [], "stopped": 0}
-    original = (mod._get_chain_export, mod._spawn_child_atomic, mod._panel, mod._end_chain_summary)
+    original = (mod._run_task, mod._spawn_child_atomic, mod._panel, mod._end_chain_summary)
     try:
-        mod._get_chain_export = lambda *_args, **_kwargs: []
+        mod._run_task = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("expiration orchestration must not query Taskwarrior")
+        )
 
         def queue_child(child, _parent):
             captured["children"].append(dict(child))
@@ -3022,6 +3024,10 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
         title, rows, kind = captured["panels"][0]
         expect(title == "⌛ Nautical occurrence expired" and kind == "note", f"unexpected expiration panel: {captured!r}")
         expect(any(label == "Result" and "Next occurrence queued" in value for label, value in rows), f"missing queued result: {rows!r}")
+        expect(
+            any(label == "Next expires" and value.strip() for label, value in rows),
+            f"missing shifted expiration in panel: {rows!r}",
+        )
 
         manual = dict(parent, status="deleted", end="20260725T000000Z")
         mod._handle_deleted_modify(parent, manual)
@@ -3063,45 +3069,31 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
             f"missing deferred-recovery guidance: {captured['panels'][-1]!r}",
         )
     finally:
-        mod._get_chain_export, mod._spawn_child_atomic, mod._panel, mod._end_chain_summary = original
+        mod._run_task, mod._spawn_child_atomic, mod._panel, mod._end_chain_summary = original
 
 
-def test_on_modify_expiration_backfills_deleted_next_slot():
-    """Expiration hook should relink an existing deleted next slot instead of duplicating it."""
+def test_on_modify_expiration_delegates_to_extracted_orchestration():
+    """The hook should leave expiration decisions to the focused orchestration module."""
     hook = _find_hook_file("on-modify-nautical.py")
-    mod = _load_hook_module(hook, "_nautical_on_modify_expiration_backfill_test")
-    parent = {
-        "uuid": "00000000-0000-0000-0000-000000000411",
-        "status": "pending",
-        "description": "Expired chain slot",
-        "cp": "7d",
-        "chain": "on",
-        "chainID": "expire11",
-        "link": 1,
-        "due": "20260720T090000Z",
-        "until": "20260726T235900Z",
-    }
-    expired = dict(parent, status="deleted", end="20260727T000000Z")
-    existing = {
-        "uuid": "22222222-0000-0000-0000-000000000412",
-        "status": "deleted",
-        "chainID": "expire11",
-        "link": 2,
-    }
-    panels = []
-    original = (mod._get_chain_export, mod._spawn_child_atomic, mod._panel)
+    mod = _load_hook_module(hook, "_nautical_on_modify_expiration_extraction_test")
+    expiration = mod._module("modify_expiration")
+    captured = {}
+    original = expiration.handle_expired_deleted_modify
     try:
-        mod._get_chain_export = lambda *_args, **_kwargs: [existing]
-        mod._spawn_child_atomic = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("existing deleted slot must not be respawned")
-        )
-        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
-        mod._handle_deleted_modify(parent, expired)
-    finally:
-        mod._get_chain_export, mod._spawn_child_atomic, mod._panel = original
+        def handle(task, *, services):
+            captured["task"] = task
+            captured["services"] = services
+            return True
 
-    expect(expired.get("nextLink") == "22222222", f"existing deleted slot was not relinked: {expired!r}")
-    expect(any("Existing next occurrence relinked" in value for _label, value in panels[0][1]), f"missing relink panel: {panels!r}")
+        expiration.handle_expired_deleted_modify = handle
+        task = {"uuid": "00000000-0000-0000-0000-000000000411"}
+        expect(mod._handle_expired_deleted_modify(task), "extracted expiration handler result was lost")
+    finally:
+        expiration.handle_expired_deleted_modify = original
+
+    expect(captured.get("task") is task, f"expiration task was not delegated unchanged: {captured!r}")
+    services = captured.get("services")
+    expect(services is not None and services.spawn_child_atomic is mod._spawn_child_atomic, "expiration services were not wired")
 
 
 def test_on_modify_expiration_internal_failure_remains_recoverable():
@@ -3166,6 +3158,7 @@ def test_on_modify_expiration_wrapper_preserves_json_stdout():
     output = _assert_stdout_json_only(proc.stdout)
     expect(output.get("status") == "deleted" and output.get("chain") == "on", f"unexpected hook task: {output!r}")
     expect("Nautical occurrence expired" in proc.stderr, f"expiration panel missing from stderr: {proc.stderr!r}")
+    expect("Next expires" in proc.stderr, f"shifted child expiration missing from panel: {proc.stderr!r}")
 
 
 def test_on_modify_invalid_anchor_has_no_stdout():
@@ -9035,6 +9028,244 @@ def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
     expect(out_task.get("scheduled") == task["scheduled"], f"scheduled changed unexpectedly: {out_task}")
     stderr_txt = _strip_markup(p.stderr)
     expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
+
+
+def test_on_add_native_until_requires_strictly_later_target():
+    """Nautical additions should reject until at or before due/scheduled."""
+    hook = _find_hook_file("on-add-nautical.py")
+    cases = (
+        ("due", "20260801T090000Z", "20260801T085959Z"),
+        ("due", "20260801T090000Z", "20260801T090000Z"),
+        ("scheduled", "20260801T090000Z", "20260801T090000Z"),
+    )
+    for index, (target_field, target, until) in enumerate(cases):
+        task = {
+            "uuid": f"00000000-0000-0000-0000-00000000012{index}",
+            "description": f"invalid native until {target_field}",
+            "status": "pending",
+            "entry": "20260720T090000Z",
+            "cp": "7d",
+            target_field: target,
+            "until": until,
+        }
+        proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
+        expect(proc.returncode != 0, f"invalid {target_field}/until ordering was accepted: {task!r}")
+        expect(not (proc.stdout or "").strip(), f"rejected add leaked stdout: {proc.stdout!r}")
+        stderr_txt = _strip_markup(proc.stderr)
+        label = "Scheduled" if target_field == "scheduled" else "Due"
+        expect("Invalid expiration window" in stderr_txt, f"missing expiration guard panel: {stderr_txt!r}")
+        expect(label in stderr_txt and "Until" in stderr_txt, f"missing compared timestamps: {stderr_txt!r}")
+        expect(
+            f"until must be later than {target_field}" in stderr_txt,
+            f"missing ordering guidance: {stderr_txt!r}",
+        )
+
+    valid = {
+        "uuid": "00000000-0000-0000-0000-000000000129",
+        "description": "valid native until window",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "cp": "7d",
+        "due": "20260801T090000Z",
+        "until": "20260801T090001Z",
+    }
+    proc = _run_hook_script(hook, valid, env_extra={"NO_COLOR": "1"})
+    expect(proc.returncode == 0, f"strictly later until was rejected: {proc.stderr!r}")
+    expect(_assert_stdout_json_only(proc.stdout).get("until") == valid["until"], "valid until changed")
+
+
+def test_on_add_native_until_checks_generated_cp_due():
+    """The expiration guard should run after CP assigns its automatic first due."""
+    hook = _find_hook_file("on-add-nautical.py")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000130",
+        "description": "invalid until before generated CP due",
+        "status": "pending",
+        "entry": "20260801T090000Z",
+        "cp": "7d",
+        "until": "20260808T085959Z",
+    }
+    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
+    expect(proc.returncode != 0, "until before generated CP due was accepted")
+    expect(not (proc.stdout or "").strip(), f"rejected generated CP due leaked stdout: {proc.stdout!r}")
+    stderr_txt = _strip_markup(proc.stderr)
+    expect(
+        "Invalid expiration window" in stderr_txt
+        and "Due" in stderr_txt
+        and "Until" in stderr_txt
+        and "until must be later than due" in stderr_txt,
+        stderr_txt,
+    )
+
+
+def test_on_add_native_until_checks_generated_anchor_due():
+    """The expiration guard should run after an anchor resolves its automatic first due."""
+    hook = _find_hook_file("on-add-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_add_generated_anchor_until_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
+    first_due = mod.core.build_local_datetime(date(2026, 4, 13), (9, 0)).astimezone(timezone.utc)
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000131",
+        "description": "invalid until before generated anchor due",
+        "status": "pending",
+        "entry": mod.core.fmt_isoz(now_utc),
+        "anchor": "w:mon",
+        "until": mod.core.fmt_isoz(first_due - timedelta(seconds=1)),
+    }
+    ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
+    panels = []
+    original = (mod._panel, mod._emit_task_json)
+    try:
+        mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
+        mod._emit_task_json = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid generated anchor due must not emit JSON")
+        )
+        try:
+            mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
+        except SystemExit as exc:
+            expect(exc.code == 1, f"unexpected generated-anchor rejection code: {exc.code!r}")
+        else:
+            raise AssertionError("until before generated anchor due was accepted")
+    finally:
+        mod._panel, mod._emit_task_json = original
+
+    expect(task.get("due"), f"anchor target was not finalized before validation: {task!r}")
+    expect(panels and "Invalid expiration window" in panels[-1][0], f"missing guard panel: {panels!r}")
+
+
+def test_on_add_native_until_guard_ignores_ordinary_tasks():
+    """Nautical should not impose its expiration ordering on ordinary Taskwarrior tasks."""
+    hook = _find_hook_file("on-add-nautical.py")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000132",
+        "description": "ordinary task with independent until",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "due": "20260801T090000Z",
+        "until": "20260731T090000Z",
+    }
+    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
+    expect(proc.returncode == 0, f"ordinary task was rejected: {proc.stderr!r}")
+    expect(_assert_stdout_json_only(proc.stdout) == task, "ordinary task was changed")
+
+
+def test_on_modify_native_until_rejects_invalid_window_changes():
+    """Nautical modifications should reject target windows made invalid."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    base = {
+        "uuid": "00000000-0000-0000-0000-000000000133",
+        "description": "modify native until window",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "until133",
+        "link": 1,
+        "due": "20260801T090000Z",
+        "until": "20260802T090000Z",
+    }
+    cases = (
+        dict(base, due="20260802T090000Z"),
+        dict(base, until="20260801T090000Z"),
+        dict(base, due=None, scheduled="20260802T090000Z", until="20260802T090000Z"),
+    )
+    with tempfile.TemporaryDirectory() as td:
+        for new in cases:
+            proc = _run_hook_script_raw(
+                hook,
+                json.dumps(base) + "\n" + json.dumps(new),
+                env_extra={"NO_COLOR": "1", "TASKDATA": td},
+            )
+            expect(proc.returncode != 0, f"invalid modified expiration window was accepted: {new!r}")
+            expect(not (proc.stdout or "").strip(), f"rejected modification leaked stdout: {proc.stdout!r}")
+            stderr_txt = _strip_markup(proc.stderr)
+            expect("Invalid expiration window" in stderr_txt, f"missing modification guard panel: {stderr_txt!r}")
+            expect("until must be later than" in stderr_txt, f"missing modification guidance: {stderr_txt!r}")
+
+
+def test_on_modify_native_until_accepts_valid_window_change():
+    """A modified until that remains after the target should pass through normally."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000134",
+        "description": "valid modified native until",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "until134",
+        "link": 1,
+        "due": "20260801T090000Z",
+        "until": "20260802T090000Z",
+    }
+    new = dict(old, due="20260801T120000Z")
+    with tempfile.TemporaryDirectory() as td:
+        proc = _run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"NO_COLOR": "1", "TASKDATA": td},
+        )
+    expect(proc.returncode == 0, f"valid modified expiration window was rejected: {proc.stderr!r}")
+    expect(_assert_stdout_json_only(proc.stdout).get("due") == new["due"], "valid due modification changed")
+
+
+def test_on_modify_native_until_validates_recurrence_promotion():
+    """Adding Nautical recurrence should validate an existing native until window."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000135",
+        "description": "promote invalid native until",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "due": "20260802T090000Z",
+        "until": "20260801T090000Z",
+    }
+    new = dict(old, cp="7d")
+    with tempfile.TemporaryDirectory() as td:
+        proc = _run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"NO_COLOR": "1", "TASKDATA": td},
+        )
+    expect(proc.returncode != 0, "recurrence promotion accepted an invalid expiration window")
+    expect(not (proc.stdout or "").strip(), f"rejected recurrence promotion leaked stdout: {proc.stdout!r}")
+    expect("Invalid expiration window" in _strip_markup(proc.stderr), f"missing promotion guard: {proc.stderr!r}")
+
+
+def test_on_modify_native_until_validates_simultaneous_completion():
+    """Completion should not queue a child from an invalid newly modified window."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000136",
+        "description": "complete invalid native until",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "until136",
+        "link": 1,
+        "due": "20260801T090000Z",
+        "until": "20260802T090000Z",
+    }
+    new = dict(
+        old,
+        status="completed",
+        end="20260801T100000Z",
+        due="20260802T090000Z",
+        until="20260802T090000Z",
+    )
+    with tempfile.TemporaryDirectory() as td:
+        proc = _run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"NO_COLOR": "1", "TASKDATA": td},
+        )
+    expect(proc.returncode != 0, "simultaneous completion accepted an invalid expiration window")
+    expect(not (proc.stdout or "").strip(), f"rejected completion leaked stdout: {proc.stdout!r}")
+    expect("Invalid expiration window" in _strip_markup(proc.stderr), f"missing completion guard: {proc.stderr!r}")
 
 
 def test_on_add_due_context_treats_due_matching_entry_as_implicit():
@@ -18566,6 +18797,14 @@ TESTS = [
     test_hook_on_add_cp_random_malformed_fails_with_guidance,
     test_hook_on_add_cp_jitter_preview_shows_selected_periods,
     test_hook_on_add_anchor_scheduled_only_preserves_no_due,
+    test_on_add_native_until_requires_strictly_later_target,
+    test_on_add_native_until_checks_generated_cp_due,
+    test_on_add_native_until_checks_generated_anchor_due,
+    test_on_add_native_until_guard_ignores_ordinary_tasks,
+    test_on_modify_native_until_rejects_invalid_window_changes,
+    test_on_modify_native_until_accepts_valid_window_change,
+    test_on_modify_native_until_validates_recurrence_promotion,
+    test_on_modify_native_until_validates_simultaneous_completion,
     test_on_add_due_context_treats_due_matching_entry_as_implicit,
     test_on_add_anchor_preview_auto_assigns_when_due_matches_entry,
     test_hook_on_add_anchor_preview_skips_omit_date,
@@ -18632,7 +18871,7 @@ TESTS = [
     test_end_summary_history_marks_deleted_pending_tail,
     test_delete_chain_summary_uses_stopped_title,
     test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete,
-    test_on_modify_expiration_backfills_deleted_next_slot,
+    test_on_modify_expiration_delegates_to_extracted_orchestration,
     test_on_modify_expiration_internal_failure_remains_recoverable,
     test_on_modify_expiration_wrapper_preserves_json_stdout,
     test_on_modify_invalid_anchor_has_no_stdout,

@@ -111,7 +111,6 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
-from types import SimpleNamespace
 from typing import Any, Optional
 
 
@@ -443,6 +442,8 @@ _MODIFY_FEEDBACK = None
 _MODIFY_FEEDBACK_LOAD_FAILED = False
 _MODIFY_TIMELINE = None
 _MODIFY_TIMELINE_LOAD_FAILED = False
+_MODIFY_EXPIRATION = None
+_MODIFY_EXPIRATION_LOAD_FAILED = False
 _QUEUE_STORE = None
 _QUEUE_STORE_LOAD_FAILED = False
 _QUEUE_MODELS = None
@@ -523,6 +524,12 @@ _MODULE_SPECS = {
         "_MODIFY_TIMELINE_LOAD_FAILED",
         "modify_timeline.py",
         "nautical_core.modify_timeline",
+    ),
+    "modify_expiration": (
+        "_MODIFY_EXPIRATION",
+        "_MODIFY_EXPIRATION_LOAD_FAILED",
+        "modify_expiration.py",
+        "nautical_core.modify_expiration",
     ),
     "anchor_omit": (
         "_ANCHOR_OMIT",
@@ -2374,6 +2381,40 @@ def _validate_chain_limits_on_modify(task: dict) -> None:
     is_valid, until_err = _validate_until_not_past(until_dt, core.now_utc())
     if not is_valid:
         _fail_and_exit("Invalid chainUntil", until_err or "chainUntil is in the past")
+
+
+def _validate_native_until_after_target_or_fail(task: dict) -> None:
+    until_raw = task.get("until")
+    if not until_raw:
+        return
+    target_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else ""
+    if not target_field:
+        return
+    target_dt, target_err = _safe_parse_datetime(task.get(target_field))
+    if target_err or target_dt is None:
+        _fail_and_exit(f"Invalid {target_field}", target_err or f"{target_field} must be a valid datetime")
+    until_dt, until_err = _safe_parse_datetime(until_raw)
+    if until_err or until_dt is None:
+        _fail_and_exit("Invalid until", until_err or "until must be a valid datetime")
+    add_validation = core._import_sibling("add_validation")
+    is_valid, reason = add_validation.validate_native_until_after_target(
+        until_dt,
+        target_dt,
+        target_field,
+    )
+    if is_valid:
+        return
+    label = "Scheduled" if target_field == "scheduled" else "Due"
+    _panel(
+        "❌ Invalid expiration window",
+        [
+            (label, core.fmt_dt_local(target_dt)),
+            ("Until", core.fmt_dt_local(until_dt)),
+            ("Required", reason or f"until must be later than {target_field}"),
+        ],
+        kind="error",
+    )
+    sys.exit(1)
 
 
 # ------------------------------------------------------------------------------
@@ -5671,11 +5712,22 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
         _validate_chain_limits_on_modify(new)
 
     schedule_adjustment = _preserve_cp_relative_offsets_on_due_change(old, new, new_cp)
+    modify_lifecycle = _module("modify_lifecycle")
+    new_has_recurrence = modify_lifecycle.task_has_nautical_recurrence_fields(new)
+    recurrence_enabled = (
+        new_has_recurrence
+        and not modify_lifecycle.task_has_nautical_recurrence_fields(old)
+    )
+    native_window_changed = any(
+        _field_changed(old, new, field)
+        for field in ("due", "scheduled", "until")
+    )
+    if new_has_recurrence and (native_window_changed or recurrence_enabled):
+        _validate_native_until_after_target_or_fail(new)
     if schedule_adjustment:
         _render_cp_schedule_adjusted_panel(schedule_adjustment)
     _render_explicit_timing_order_warning(new, explicit_timing_changes)
 
-    modify_lifecycle = _module("modify_lifecycle")
     try:
         transition = modify_lifecycle.apply_nautical_transition(old, new, short_uuid=core.short_uuid)
     except Exception:
@@ -6010,6 +6062,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     _completion_validate_cp_and_anchor(old, new)
     new_cp = _strip_quotes(str(new.get("cp") or "").strip())
     _preserve_cp_relative_offsets_on_due_change(old, new, new_cp)
+    _validate_native_until_after_target_or_fail(new)
     now_utc = core.now_utc()
     ctx = _completion_preflight_context(new, now_utc)
     if ctx is None:
@@ -6064,26 +6117,30 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     )
 
 
-def _expiration_recovery_panel(new: dict, plan, *, result: str = "", child_short: str = "") -> None:
-    current_link = core.coerce_int(new.get("link"), 1)
-    description = str(new.get("description") or "").strip()
-    task_label = f"#{current_link}" + (f" · {description}" if description else "")
-    rows = [("Expired", task_label)]
-    if result:
-        rows.append(("Result", result))
-    if plan.child_due is not None:
-        next_label = "Blocked next" if plan.action == "legitimate_final" else "Next"
-        rows.append((next_label, core.fmt_dt_local(plan.child_due)))
-    rows.append(("Link", f"#{plan.next_link}"))
-    if child_short:
-        rows.append(("Child", child_short))
-    if plan.action == "legitimate_final":
-        rows.append(("Boundary", plan.reason))
-    panel_kind = "summary" if plan.action == "legitimate_final" else "note"
-    _panel("⌛ Nautical occurrence expired", rows, kind=panel_kind)
+def _expiration_services():
+    modify_expiration = _module("modify_expiration")
+    return modify_expiration.ExpirationServices(
+        core=core,
+        reconcile=_module("reconcile"),
+        safe_parse_datetime=_safe_parse_datetime,
+        compute_anchor_child_due=_compute_anchor_child_due,
+        compute_cp_child_due=_compute_cp_child_due,
+        build_child_from_parent=_build_child_from_parent,
+        spawn_child_atomic=_spawn_child_atomic,
+        panel=_panel,
+        short=_short,
+        diag=_diag,
+    )
 
 
 def _expiration_recovery_warning(new: dict, reason: str) -> None:
+    modify_expiration = _module("modify_expiration", required=False)
+    if modify_expiration is not None:
+        try:
+            modify_expiration.render_recovery_warning(new, reason, services=_expiration_services())
+            return
+        except Exception as exc:
+            _diag(f"expiration recovery warning render failed: {exc}")
     _panel(
         "⚠ Nautical expiration recovery deferred",
         [
@@ -6096,61 +6153,8 @@ def _expiration_recovery_warning(new: dict, reason: str) -> None:
 
 
 def _handle_expired_deleted_modify(new: dict) -> bool:
-    reconcile = _module("reconcile")
-    if not reconcile.is_orphan_expiration_candidate(new, safe_parse_datetime=_safe_parse_datetime):
-        return False
-
-    next_link = core.coerce_int(new.get("link"), 1) + 1
-    chain_id = str(new.get("chainID") or "").strip()
-    try:
-        existing_children = _get_chain_export(chain_id, extra=f"link:{next_link}")
-    except Exception as exc:
-        _diag(f"expiration next-link lookup failed: {exc}")
-        existing_children = []
-    plan_hook = SimpleNamespace(
-        core=core,
-        _safe_parse_datetime=_safe_parse_datetime,
-        _compute_anchor_child_due=_compute_anchor_child_due,
-        _compute_cp_child_due=_compute_cp_child_due,
-        _build_child_from_parent=_build_child_from_parent,
-    )
-    plan = reconcile.build_reconcile_plan(new, existing_children=existing_children, hook=plan_hook)
-
-    if plan.action == "backfill_nextlink":
-        new["nextLink"] = plan.child_short
-        _expiration_recovery_panel(
-            new,
-            plan,
-            result="[green]Existing next occurrence relinked[/]",
-            child_short=plan.child_short,
-        )
-        return True
-    if plan.action == "legitimate_final":
-        new["chain"] = "off"
-        _expiration_recovery_panel(new, plan, result="[yellow]Chain finished at configured limit[/]")
-        return True
-    if plan.action != "spawn" or not plan.child:
-        _expiration_recovery_warning(new, plan.reason)
-        return True
-
-    try:
-        child_short, _stripped, verified, deferred, reason, _intent_id = _spawn_child_atomic(plan.child, new)
-    except Exception as exc:
-        _diag(f"expiration child queue failed: {exc}")
-        _expiration_recovery_warning(new, "The next occurrence could not be queued.")
-        return True
-    if verified:
-        new["nextLink"] = child_short
-    if verified or deferred:
-        _expiration_recovery_panel(
-            new,
-            plan,
-            result="[cyan]Next occurrence queued[/]" if deferred else "[green]Next occurrence created[/]",
-            child_short=child_short,
-        )
-    else:
-        _expiration_recovery_warning(new, reason or "The next occurrence could not be queued.")
-    return True
+    modify_expiration = _module("modify_expiration")
+    return modify_expiration.handle_expired_deleted_modify(new, services=_expiration_services())
 
 
 def _handle_deleted_modify(old: dict, new: dict) -> None:
@@ -6163,15 +6167,27 @@ def _handle_deleted_modify(old: dict, new: dict) -> None:
             return
     except Exception as exc:
         _diag(f"expiration recovery failed: {exc}")
-        until_dt, until_err = _safe_parse_datetime(new.get("until"))
-        end_dt, end_err = _safe_parse_datetime(new.get("end"))
-        has_expiration_evidence = (
-            not until_err
-            and not end_err
-            and until_dt is not None
-            and end_dt is not None
-            and until_dt <= end_dt
+        modify_expiration = _module("modify_expiration", required=False)
+        has_expiration_evidence = bool(
+            modify_expiration
+            and modify_expiration.has_expiration_evidence(
+                new,
+                safe_parse_datetime=_safe_parse_datetime,
+            )
         )
+        if modify_expiration is None:
+            try:
+                until_dt, until_err = _safe_parse_datetime(new.get("until"))
+                end_dt, end_err = _safe_parse_datetime(new.get("end"))
+                has_expiration_evidence = bool(
+                    not until_err
+                    and not end_err
+                    and until_dt is not None
+                    and end_dt is not None
+                    and until_dt <= end_dt
+                )
+            except Exception:
+                has_expiration_evidence = False
         if has_expiration_evidence:
             _expiration_recovery_warning(new, "Expiration recovery could not be initialized.")
             return

@@ -1,486 +1,72 @@
 ![Nautical Banner](./nautical-banner.svg)
 
-![demo_nautical](https://github.com/user-attachments/assets/8420c1a8-907b-483e-86ec-4385eec892e3)
+![Nautical demo](https://github.com/user-attachments/assets/8420c1a8-907b-483e-86ec-4385eec892e3)
 
 # Taskwarrior Nautical
 
-Nautical is a recurrence engine for Taskwarrior.
+Nautical gives Taskwarrior practical recurring tasks. Complete a Nautical task
+as usual and it creates the next normal Taskwarrior task for you. The tasks
+remain visible, editable, and syncable with the regular `task` command.
 
-It runs as normal Taskwarrior hooks. When you complete a Nautical task, it creates
-the next task in the chain using either a period rule (`cp`) or a calendar rule
-(`anchor`). The spawned task is still a normal Taskwarrior task: visible, editable,
-syncable, and managed with the regular `task` command.
+Use it for simple repeating work today, then reach for the manual when a
+schedule needs calendar rules, business days, exclusions and all other advanced details.
 
-Use Nautical when Taskwarrior's built-in recurrence is too simple for the schedule
-you actually need.
+## Start Here
 
----
-
-## Quick Examples
-
-Period-based recurrence:
+Install the hooks and shared package beside your Taskwarrior data:
 
 ```bash
-# Every 12 days from completion
-task add "Mow the lawn" cp:12d
-
-# Every 8 hours
-task add "Take vitamin" cp:8h
-
-# Pick a repeat period between 3 and 7 days
-task add "Inspect field trap" cp:"rand(3d..7d)"
-
-# Follow a repeating sequence of periods
-task add "Insect lifecycle check" cp:4d,10d,7d,20d,3d
-```
-
-Calendar-based recurrence:
-
-```bash
-# Every Monday, Wednesday, and Friday
-task add "Workout" anchor:"w:mon,wed,fri"
-
-# One random Saturday each month
-task add "Date night" anchor:"m:rand + w:sat"
-
-# Every April 12
-task add "Anniversary" anchor:"y:04-12"
-
-# The 15th and the last business day of each month
-task add "Pay bills" anchor:"m:15,-1bd"
-```
-
-Calendar rules with exclusions:
-
-```bash
-# M/W/F workouts, except Wednesdays in April
-task add "Workout" anchor:"w:mon,wed,fri" omit:"w:wed + y:apr"
-
-# M/W/F workouts, except the holiday window
-task add "Workout" anchor:"w:mon,wed,fri" omit:"y:12-24..12-31"
-
-# Random Saturday date night, excluding dates from a file
-task add "Date night" anchor:"m:rand + w:sat" omit_file:"2026.csv"
-```
-
-File-backed dates:
-
-```bash
-# One day before each file date, at 12:00 and 18:00
-task add "Company event prep" anchor_file:"2026.csv@-1d@t=12:00,18:00"
-```
-
----
-
-## The Two Recurrence Modes
-
-### `cp`: period chains
-
-Use `cp` when the next task should happen after a duration.
-
-```bash
-task add "Follow up" cp:3d
-task add "Medication" cp:8h
-task add "Variable cycle" cp:3d,20d,7d,10d,3d
-task add "Loose weekly check" cp:"7d~2d"
-task add "Random field inspection" cp:"rand(3d..7d)"
-```
-
-Day-based periods preserve the wall-clock routine. Sub-day periods use exact time.
-Random ranges and jitter use `chainID`-scoped deterministic picks per link, so
-separate chains do not share a sequence and retries or sync do not change one.
-
-### `anchor`: calendar rules
-
-Use `anchor` when the next task is tied to the calendar.
-
-```bash
-task add "Gym" anchor:"w:mon,wed,fri"
-task add "Monthly report" anchor:"m:-1bd"
-task add "Random weekday audit" anchor:"m:2rand + w:mon..fri"
-task add "Quarter check" anchor:"y:2rand + y:apr,jul,oct"
-task add "Office day" anchor:"(w:mon | m:last-fri)@t=09:00"
-```
-
-Useful syntax:
-
-| Expression | Meaning |
-|---|---|
-| `w:mon,wed,fri` | Mondays, Wednesdays, Fridays |
-| `m:1` | First day of each month |
-| `m:-1bd` | Last business day of each month |
-| `m:-1@pbd@-2bd` | Two business days before the rolled month end |
-| `m:rand + w:sat` | One random Saturday each month |
-| `w:2rand` | Two random days each week |
-| `m:3rand + w:mon..fri` | Three random weekdays each month |
-| `y:04-12` | April 12 every year |
-| `y:d100` | 100th calendar day of each year |
-| `y:d-1` | Last calendar day of each year |
-| `y:w20 + w:mon` | Monday of ISO week 20 |
-| `y:w-1 + w:fri` | Friday of the final ISO week |
-| `w:tue,fri | y:05-05` | Tuesdays, Fridays, or May 5 |
-| `(w:mon | m:last-fri)@t=09:00` | Apply the same time to a grouped expression |
-| `(y:12-24 | y:12-31)@pbd@-1bd` | Apply shared date modifiers to OR branches |
-
-Year ordinals accept calendar days `d1` through `d366` and ISO weeks `w1`
-through `w53`; negative values count backward from the end. Lists and ranges
-repeat their prefix, as in `y:d1,d100,d-1` or `y:w10..w13`. Zero and zero-padded
-values are invalid. Missing dates such as day 366 in a common year contribute no
-date.
-
-An ISO week can cross a calendar-year boundary. A bare `y:w20` selects all seven
-days, so combine it with a weekday when one date is intended. For pure ISO-week
-selectors, a cadence such as `y/2:w1` advances in ISO-year buckets.
-
-Parenthesized OR groups accept shared time, roll, filter, calendar-offset, and
-business-day-offset modifiers. Shared `@t=` also works on groups containing
-`+`; date modifiers on `AND` groups must remain attached to their individual
-atoms so the intersection cannot acquire false rolled matches.
-
-### Positional selection
-
-Use a positional selector when the schedule depends on a date's position in a
-set of matches rather than a single built-in atom:
-
-```text
-(candidate expression)@in-<scope>=<positions>
-```
-
-Nautical evaluates it in this order:
-
-```text
-collect matches in the period -> select positions -> apply modifiers
-```
-
-Examples:
-
-```bash
-# Last Monday, Wednesday, or Friday in each Monday-Sunday week
-task add "Weekly closeout" anchor:"(w:mon | w:wed | w:fri)@in-week=last"
-
-# First and last Tuesday or Thursday in each month
-task add "Twice-monthly review" anchor:"(w:tue | w:thu)@in-month=first,last"
-
-# Last Monday in each calendar quarter, then move one business day forward
-task add "Quarter handoff" anchor:"(w:mon)@in-quarter=last@+1bd"
-
-# Tenth Monday in each calendar year at 09:00
-task add "Annual checkpoint" anchor:"(w:mon)@in-year=10th@t=09:00"
-```
-
-Positions accept `first`, `last`, positive ordinals such as `3rd`, reverse
-ordinals such as `2nd-last`, and comma-separated lists. The scope limits are:
-
-| Selector | Period boundary | Position limit |
-|---|---|---:|
-| `@in-week` | Monday through Sunday | 7 |
-| `@in-month` | Calendar month | 31 |
-| `@in-quarter` | Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec | 92 |
-| `@in-year` | Calendar year | 366 |
-
-The candidate expression must be parenthesized and deterministic. Random
-candidates, candidate-side modifiers, nested positional selectors, and `@bd`
-after the selector are intentionally rejected. Supported post-selection
-modifiers are `@t=`, calendar and business-day offsets, `@pbd`, `@nbd`, `@nw`,
-and named weekday rolls such as `@next-mon` or `@prev-fri`.
-
-If a requested position does not exist, that position contributes no date. If
-the whole period has no selected date, Nautical advances to the next period;
-for example, `(y:02-29)@in-year=first` advances across non-leap years. A roll or
-offset may move the final occurrence outside the period where its candidate was
-selected. Business-day transforms use the task's `bc` calendar.
-
-For anchors, Nautical resolves dates as:
-
-```text
-(anchor ∪ anchor_file) − (omit ∪ omit_file)
-```
-
-That separation is deliberate: schedules and blackout dates are easier to reason
-about when inclusion and exclusion stay separate.
-
----
-
-## Presets
-
-Reusable rules can live in `config-nautical.toml`:
-
-```toml
-[anchor_presets]
-payday = "m:15,-1bd"
-workout = "w:mon,wed,fri"
-
-[omit_presets]
-holidays = "y:12-24..12-31"
-april = "y:apr"
-```
-
-Use them with `@name`:
-
-```bash
-task add "Pay bills" anchor:"@payday"
-task add "April workouts" anchor:"@workout + y:apr"
-task add "Workout except April" anchor:"@workout" omit:"@april"
-```
-
-Anchor presets and omit presets are separate namespaces.
-
----
-
-## File-Backed Dates
-
-Configure trusted folders:
-
-```toml
-anchor_file_dir = "/home/user/.task/nautical_anchors"
-omit_file_dir = "/home/user/.task/nautical_omits"
-```
-
-Then reference CSV or plain date files:
-
-```bash
-task add "Company event prep" anchor_file:"2026.csv@-1d@t=12:00,18:00"
-task add "Hybrid schedule" anchor:"w:tue,fri | y:05-05" anchor_file:"2026.csv@-1d"
-task add "Workout" anchor:"w:mon,wed,fri" omit_file:"holidays.csv"
-```
-
-The singular `anchor_file` and `omit_file` UDAs also accept file expressions:
-
-```bash
-task add "Regional events" anchor_file:"north.csv@t=09:00 | south.csv@t=15:00"
-task add "Team events" anchor_file:"team-*.csv@t=09:00"
-task add "Prepared events" anchor_file:"(public.csv | company.txt)@-1d@t=12:00"
-task add "Workdays" anchor:"w:mon,tue,wed,thu,fri" omit_file:"*.*"
-```
-
-`|` merges sources, and modifiers after a parenthesized group apply to every
-source in that group. Sources retain their own `@t=` values. Patterns support
-`*` and `?` within the configured folder; recursive `**`, paths, and character
-classes are rejected. Exact `*` and `*.*` both mean every non-hidden regular
-file, including file names without a dot. An unmatched pattern contributes no
-dates and is reported by diagnostics, while a malformed matched file invalidates
-the whole expression.
-
-File modifiers are practical:
-
-| Modifier | Meaning |
-|---|---|
-| `@-1d` | Shift each file date one day earlier |
-| `@+2d` | Shift each file date two days later |
-| `@-2bd` | Shift each file date two business days earlier |
-| `@+2bd` | Shift each file date two business days later |
-| `@nbd` | Roll to next business day |
-| `@pbd` | Roll to previous business day |
-| `@bd` | Keep only business days |
-| `@t=09:00,17:00` | Create times on `anchor_file` dates |
-
-`omit_file` is date-based only; it intentionally does not support `@t=`.
-
-When combined, modifiers run in this order: roll, calendar-day offset, then
-business-day offset. Without a `bc` value, business days mean Monday through
-Friday.
-
----
-
-## Named Business Calendars
-
-Define a calendar in `config-nautical.toml` when weekends, holidays, or
-exceptional open days need to be user-controlled:
-
-```toml
-[business_calendar.work]
-anchor = "w:mon..fri"
-omit = ["y:01-01", "y:12-25"]
-# anchor_file = ["extra-open-days.csv"]
-# omit_file = ["holidays.csv", "company-closures-*.csv"]
-```
-
-Each section defines one calendar. Its open dates are:
-
-```text
-(anchor ∪ anchor_file) − (omit ∪ omit_file)
-```
-
-Every field accepts either one expression or an array of expressions. File
-expressions use `anchor_file_dir` or `omit_file_dir`, including the same `*`
-and `?` patterns supported by task-level file sources. Calendar file patterns
-must match at least one file so configuration mistakes fail early.
-
-Select the calendar with the `bc` UDA:
-
-```bash
-task add "Submit payroll" anchor:"m:-1bd@t=16:00" bc:work
-task add "Review next open day" anchor:"y:12-25@nbd@t=09:00" bc:work
-```
-
-The selected calendar applies consistently to business-day ordinals, `@bd`,
-`@nbd`, `@pbd`, `@+Nbd`, `@-Nbd`, file modifiers, previews, and spawned chain
-links. Names are case-insensitive and stored in normalized form. An empty `bc`
-uses the built-in Monday-Friday calendar; an unknown name is rejected with the
-available names.
-
-Calendar definitions must be deterministic and cannot refer back to business
-days while defining them. Therefore `/N`, random selectors, `@t=`, business-day
-ordinals, and business-day modifiers are rejected inside calendar fields. Cache
-keys include the resolved calendar rules and file dates, so changing either does
-not reuse stale recurrence hints.
-
----
-
-## Limits, Sync, And Safety
-
-Stop chains by count or date:
-
-```bash
-task add "Short experiment" cp:1d chainMax:3 due:today
-task add "Anniversary prep" anchor:"y:04-12" chainUntil:2028-04-12
-```
-
-Native `until` has a different role: it expires one occurrence without ending
-the Nautical chain. For example:
-
-```bash
-task add "Take the trash out" due:today until:eow cp:7d chainUntil:eoy
-```
-
-If that occurrence remains unfinished at `until`, Taskwarrior deletes it and
-Nautical advances from its original `due` (or scheduled-only `scheduled`) to the
-next occurrence. The child receives an `until` shifted by the same relative
-window, and the expiration panel shows both `Next` and `Next expires`.
-`chainMax` and `chainUntil` still decide when the whole chain ends.
-
-For Nautical tasks, native `until` must be strictly later than the effective
-`due` or scheduled-only `scheduled`. Nautical enforces this on creation,
-recurrence promotion, relevant timing changes, and completion.
-Native `until` cannot be combined with anchor modes `all` or `flex`, because
-those modes retain every missed occurrence. Use `anchor_mode:skip` for
-per-occurrence expiration, or `chainUntil` when the whole chain should end.
-
-When Taskwarrior emits the expiration through `on-modify`, Nautical queues the
-next occurrence immediately. For expirations that happen while hooks are absent
-or on a synced client, review and apply the recovery plan:
-
-```bash
-nautical reconcile
-nautical reconcile --apply
-```
-
-An intentional deletion before `until` continues to stop the chain.
-
-Nautical is built for synced Taskwarrior setups. It tracks chain identity,
-previous/next links, and equivalent children to avoid duplicate next tasks when
-multiple devices are involved.
-
-The completed task is the source for the next one. If you change or annotate a
-task before completing it, those changes carry forward. Changes made on another
-device after completion cannot be retroactively copied into an already spawned
-child.
-
----
-
-## Panels And Diagnostics
-
-Nautical explains what it is doing in add, completion, delete, and end-of-chain
-panels. Depending on the task, you may see:
-
-- the next generated date
-- the parsed recurrence rule
-- omitted dates in the timeline
-- file-backed sources
-- chain limits
-- chain integrity warnings
-- timezone/config/file-source diagnostics when something is degraded
-
-Set `panel_mode = "live"` in `config-nautical.toml` for a short line-by-line
-reveal on interactive terminals. It requires Rich and falls back to the normal
-static panel when terminal cursor control is unavailable. Set
-`live_panel_duration_ms = 160` to control the total reveal budget, or `0` to
-retain the live styling without motion. Panels that would occupy most of the
-terminal height also settle immediately to avoid scrolling and flicker.
-Multiline values reveal one line at a time with timing eased toward the final
-settled frame.
-
-For a deeper read-only check:
-
-```bash
-nautical doctor
-nautical doctor --json
-```
-
-`nautical doctor` checks hooks, UDAs, config, file directories, queue state,
-duplicate chain slots, broken lineage, and completion/expiration recovery plans.
-In live mode it also reports Rich availability, effective panel duration,
-clamping, and static fallback behavior.
-
----
-
-## Installation
-
-Quick install:
-
-```bash
-# 1. Install hooks
 cd ~/.task/hooks
 curl -LO https://github.com/catanadj/taskwarrior-nautical/raw/main/on-{add,modify,exit}-nautical.py
 chmod +x on-*.py
 
-# 2. Install the shared Nautical package next to Taskwarrior data
 cd ..
 curl -L https://github.com/catanadj/taskwarrior-nautical/archive/refs/heads/main.tar.gz \
   | tar -xz --strip-components=1 taskwarrior-nautical-main/nautical_core
 
-# 3. Add UDAs
 curl -s https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/uda.conf >> ~/.taskrc
-
-# 4. Optional pretty panels
-pip install rich
-
-# 5. Test
-task add "System test" anchor:"m:4mon"
 ```
 
-Install the command helper from a checkout:
+Optional, for formatted panels:
 
 ```bash
-mkdir -p ~/.local/bin
-ln -s "$PWD/nautical" ~/.local/bin/nautical
-nautical doctor
+pip install rich
 ```
 
-See the [systems manual](./Taskwarrior-Nautical-v5-Systems-Manual.pdf) for full
-installation and configuration details.
+Create a first task:
 
----
+```bash
+task add "Weekly review" anchor:"w:mon"
+```
 
-## Documentation
+Complete it with `task <id> done`; Nautical queues the next Monday review.
 
-- [Systems Manual PDF](./Taskwarrior-Nautical-v5-Systems-Manual.pdf)
-- [Cheatsheet PDF](./Taskwarrior-Nautical-v5-CheatSheet.pdf)
+## Two Ways To Repeat
+
+Use `cp` when the next task follows a period from completion:
+
+```bash
+task add "Mow lawn" cp:12d
+task add "Take vitamin" cp:8h
+```
+
+Use `anchor` when it belongs on the calendar:
+
+```bash
+task add "Workout" anchor:"w:mon,wed,fri"
+task add "Monthly report" anchor:"m:1"  # first day of the month
+task add "Anniversary" anchor:"y:04-12"
+```
+
+That is enough to begin. `cp` is for “after this long”; `anchor` is for “on
+these dates.”
+
+## Learn More
+
+- [Systems Manual PDF](./Taskwarrior-Nautical-v5-Systems-Manual.pdf): setup, configuration, grammar, examples, and recovery.
+- [Cheatsheet PDF](./Taskwarrior-Nautical-v5-CheatSheet.pdf): quick anchor and period reference.
 - [Releases](https://github.com/catanadj/taskwarrior-nautical/releases)
 - [Issues](https://github.com/catanadj/taskwarrior-nautical/issues)
-
----
-
-## Is Nautical For You?
-
-If you only need a simple daily or weekly repeat, Taskwarrior's native recurrence
-may be enough.
-
-Nautical is useful when recurrence needs real calendar logic: business days,
-random-but-repeatable choices, blackout dates, file-backed schedules, sync safety,
-and clear timelines.
-
-Hard limit: Nautical will not spawn tasks after `9999-12-31`.
-
----
-
-## Feedback
-
-Issues and real-world recurrence edge cases are welcome, especially around:
-
-- syntax that feels awkward in daily use
-- sync behavior across devices
-- schedules that are hard to express cleanly
 
 If Nautical is useful to you, support is appreciated:
 

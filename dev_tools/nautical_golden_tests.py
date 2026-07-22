@@ -11949,6 +11949,27 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         f"reconciled child should use the same calendar expiration policy: {reconciled_until}",
     )
 
+    early_until_parent = {
+        "uuid": "00000000-0000-0000-0000-000000000997",
+        "status": "deleted",
+        "anchor": "w:mon@t=09:00,13:00",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "cid_until_reconcile_eod",
+        "link": 1,
+        "due": mod.core.fmt_isoz(due_0900),
+        "until": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 20), (9, 10))),
+        "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 20), (9, 10))),
+    }
+    early_plan = reconcile.build_reconcile_plan(early_until_parent, existing_children=[], hook=mod)
+    early_until = mod.core.to_local(mod.core.parse_dt_any((early_plan.child or {}).get("until")))
+    expect(early_plan.action == "spawn", f"expired anchor should still produce a child plan: {early_plan}")
+    expect(
+        early_until.date() == date(2026, 7, 20)
+        and (early_until.hour, early_until.minute, early_until.second) == (23, 59, 59),
+        f"reconcile should fall back to end of day for expired anchor carry: {early_until}",
+    )
+
 
 def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
     """the +1s expiration marker should preserve elapsed seconds instead of local clock offset."""

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from dataclasses import dataclass
 from typing import Any
 
@@ -151,6 +152,38 @@ def describe_plan(plan: ReconcilePlan, *, fmt_dt_local: Any = None) -> dict[str,
     return evidence
 
 
+def _build_expiration_child_with_day_end(
+    parent: dict[str, Any],
+    *,
+    child_due: Any,
+    child_field: str,
+    next_link: int,
+    parent_short: str,
+    kind: str,
+    cpmax: int,
+    until_dt: Any,
+    hook: Any,
+) -> dict[str, Any]:
+    target_raw = parent.get("due") or parent.get("scheduled")
+    target_dt, target_err = hook._safe_parse_datetime(target_raw)
+    if target_err or target_dt is None:
+        raise ValueError(target_err or "expired recurrence has no due or scheduled timestamp")
+    target_local = hook.core.to_local(target_dt)
+    fallback_until = hook.core.build_local_datetime(target_local.date(), (23, 59)) + timedelta(seconds=59)
+    fallback_parent = dict(parent)
+    fallback_parent["until"] = hook.core.fmt_isoz(fallback_until)
+    return hook._build_child_from_parent(
+        fallback_parent,
+        child_due,
+        child_field,
+        next_link,
+        parent_short,
+        kind,
+        cpmax,
+        until_dt,
+    )
+
+
 def build_reconcile_plan(
     parent: dict[str, Any],
     *,
@@ -199,6 +232,22 @@ def build_reconcile_plan(
     try:
         child = hook._build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt)
     except Exception as exc:
-        return ReconcilePlan("error", parent, next_link, f"failed to build child: {exc}", child_due=child_due)
+        if is_expiration and kind in {"anchor", "anchor_file"} and "native until" in str(exc):
+            try:
+                child = _build_expiration_child_with_day_end(
+                    parent,
+                    child_due=child_due,
+                    child_field=child_field,
+                    next_link=next_link,
+                    parent_short=parent_short,
+                    kind=kind,
+                    cpmax=cpmax,
+                    until_dt=until_dt,
+                    hook=hook,
+                )
+            except Exception as fallback_exc:
+                return ReconcilePlan("error", parent, next_link, f"failed to build child: {fallback_exc}", child_due=child_due)
+        else:
+            return ReconcilePlan("error", parent, next_link, f"failed to build child: {exc}", child_due=child_due)
     reason = "expired link missing next link" if is_expiration else "missing next link"
     return ReconcilePlan("spawn", parent, next_link, reason, child=child, child_due=child_due)

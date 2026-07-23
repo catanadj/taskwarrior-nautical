@@ -19861,6 +19861,50 @@ def test_reconcile_post_apply_verification_checks_both_sides():
         raise AssertionError("post-apply verification accepted an unrelated parent pointer")
 
 
+def test_reconcile_post_apply_strict_uuid_is_compatibility_aware():
+    """New spawns enforce stable UUIDs while older backfills remain compatible."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_post_apply_uuid_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "verify02",
+        "link": 1,
+        "nextLink": "22222222",
+        "cp": "P1D",
+    }
+    child = {
+        "uuid": "22222222-0000-0000-0000-000000000002",
+        "status": "pending",
+        "chain": "on",
+        "chainID": "verify02",
+        "link": 2,
+        "prevLink": "11111111",
+        "cp": "P1D",
+    }
+    tool._fresh_parent = lambda _task_bin, _parent: dict(parent)
+    tool._existing_children = lambda _task_bin, _parent: [dict(child)]
+    hook = SimpleNamespace(_stable_child_uuid=lambda _parent, _child: "33333333-0000-0000-0000-000000000003")
+    tool._verify_applied_child("task", parent, "22222222", hook=hook)
+    try:
+        tool._verify_applied_child("task", parent, "22222222", hook=hook, strict_uuid=True)
+    except RuntimeError as exc:
+        expect("deterministic slot identity" in str(exc), f"unclear UUID diagnostic: {exc}")
+    else:
+        raise AssertionError("strict new-child UUID verification accepted a mismatch")
+
+
+def test_reconcile_expired_pending_child_is_resumable_partial():
+    """A pending child past native until should wait for Taskwarrior expiration."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_pending_until_test")
+    parent = {"uuid": "11111111-0000-0000-0000-000000000001", "link": 1}
+    plan = tool._recovery_terminal(parent, "live recovery child native until has already elapsed")
+    expect(plan.action == "partial", f"expired pending child was not resumable: {plan}")
+    expect("rerun reconcile" in plan.reason, f"partial recovery guidance missing: {plan.reason}")
+
+
 def test_reconcile_apply_rejects_ambiguous_existing_slot():
     """Atomic reconcile must not mutate a parent when its next slot is ambiguous."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -23405,6 +23449,8 @@ TESTS = [
     test_reconcile_repairs_missing_legacy_root_link_under_guard,
     test_reconcile_parent_identity_errors_are_actionable,
     test_reconcile_post_apply_verification_checks_both_sides,
+    test_reconcile_post_apply_strict_uuid_is_compatibility_aware,
+    test_reconcile_expired_pending_child_is_resumable_partial,
     test_reconcile_apply_rejects_ambiguous_existing_slot,
     test_reconcile_apply_isolates_candidate_failures,
     test_reconcile_dry_run_isolates_candidate_failures,

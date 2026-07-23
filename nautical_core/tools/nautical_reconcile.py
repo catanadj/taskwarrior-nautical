@@ -340,7 +340,14 @@ def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
         raise RuntimeError(task_command.failure_message(proc, "parent chain update"))
 
 
-def _verify_applied_child(task_bin: str, parent: dict[str, Any], child_short: str) -> None:
+def _verify_applied_child(
+    task_bin: str,
+    parent: dict[str, Any],
+    child_short: str,
+    *,
+    hook: Any = None,
+    strict_uuid: bool = False,
+) -> None:
     """Re-export both sides of an apply before declaring the repair successful."""
     expected_child = str(child_short or "").strip().lower()
     if not expected_child:
@@ -369,6 +376,23 @@ def _verify_applied_child(task_bin: str, parent: dict[str, Any], child_short: st
         raise RuntimeError(
             f"post-apply child verification found {shown}; expected {child_short}"
         )
+    if callable(getattr(hook, "_stable_child_uuid", None)):
+        matched = next(
+            (
+                row
+                for row in rows
+                if str(row.get("uuid") or "").strip().lower().startswith(expected_child)
+            ),
+            None,
+        )
+        if matched is not None:
+            expected_uuid = str(hook._stable_child_uuid(fresh_parent, matched) or "").strip().lower()
+            actual_uuid = str(matched.get("uuid") or "").strip().lower()
+            if strict_uuid and expected_uuid and actual_uuid != expected_uuid:
+                raise RuntimeError(
+                    f"post-apply child UUID {actual_uuid[:8] or '<empty>'} "
+                    f"does not match deterministic slot identity {expected_uuid[:8]}"
+                )
 
 
 def _stale_plan(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
@@ -424,11 +448,17 @@ def _apply_parent_atomic(
                 raise RuntimeError("spawn plan has no child payload")
             child_short, _stripped = hook._spawn_child(plan.child, plan.parent)
             _modify_parent_nextlink(task_bin, plan.parent, child_short)
-            _verify_applied_child(task_bin, plan.parent, child_short)
+            _verify_applied_child(
+                task_bin,
+                plan.parent,
+                child_short,
+                hook=hook,
+                strict_uuid=True,
+            )
             return plan, child_short
         if plan.action == "backfill_nextlink":
             _modify_parent_nextlink(task_bin, plan.parent, plan.child_short)
-            _verify_applied_child(task_bin, plan.parent, plan.child_short)
+            _verify_applied_child(task_bin, plan.parent, plan.child_short, hook=hook)
             return plan, plan.child_short
         if plan.action in {"legitimate_final", "manual_stop"}:
             _disable_parent_chain(task_bin, plan.parent)
@@ -443,6 +473,16 @@ def _recovery_error(parent: dict[str, Any], reason: str) -> reconcile.ReconcileP
         reconcile.int_or_default(parent.get("link"), 1) + 1,
         reason,
     )
+
+
+def _recovery_terminal(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
+    """Classify an expired-but-still-pending child as resumable, not corrupt."""
+    if reason.endswith("native until has already elapsed"):
+        return _recovery_partial(
+            parent,
+            f"{reason}; wait for Taskwarrior to mark the child deleted, then rerun reconcile",
+        )
+    return _recovery_error(parent, reason)
 
 
 def _recovery_partial(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
@@ -639,12 +679,12 @@ def _reconcile_candidate(
                     recovery_at,
                 )
                 if terminal_error:
-                    outcomes.append((_recovery_error(plan.parent, terminal_error), ""))
+                    outcomes.append((_recovery_terminal(plan.parent, terminal_error), ""))
                 break
 
         terminal_error = _terminal_recovery_error(child, hook, recovery_at)
         if terminal_error:
-            outcomes.append((_recovery_error(plan.parent, terminal_error), ""))
+            outcomes.append((_recovery_terminal(plan.parent, terminal_error), ""))
             break
         if not reconcile.is_orphan_deleted_chain_candidate(child):
             break

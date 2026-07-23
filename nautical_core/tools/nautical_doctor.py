@@ -472,6 +472,7 @@ def _check_reconcile_plans(
 
     hook = None
     plans: list[reconcile.ReconcilePlan] = []
+    delayed_expiration_candidates: list[dict[str, Any]] = []
     unavailable = ""
     if deleted_candidates:
         try:
@@ -488,7 +489,29 @@ def _check_reconcile_plans(
                 except Exception as exc:
                     unavailable = str(exc)
                     break
-            plans.append(reconcile.build_reconcile_plan(parent, existing_children=existing_children, hook=hook))
+            plan = reconcile.build_reconcile_plan(parent, existing_children=existing_children, hook=hook)
+            plans.append(plan)
+            if str(parent.get("status") or "").strip().lower() != "deleted":
+                continue
+            continues_through_deleted = any(
+                str(child.get("status") or "").strip().lower() == "deleted"
+                for child in existing_children
+            )
+            planned_until_elapsed = False
+            if plan.action == "spawn" and isinstance(plan.child, dict) and hook is not None:
+                try:
+                    until_dt, until_err = hook._safe_parse_datetime(plan.child.get("until"))
+                    now_utc = getattr(getattr(hook, "core", None), "now_utc", None)
+                    planned_until_elapsed = (
+                        not until_err
+                        and until_dt is not None
+                        and callable(now_utc)
+                        and until_dt <= now_utc()
+                    )
+                except Exception:
+                    planned_until_elapsed = False
+            if continues_through_deleted or planned_until_elapsed:
+                delayed_expiration_candidates.append(_task_detail(parent))
 
     if unavailable:
         _finding(
@@ -522,6 +545,13 @@ def _check_reconcile_plans(
         fix="Run nautical reconcile --apply after reviewing the dry-run output.",
         details={
             "actions": dict(sorted(action_counts.items())),
+            "delayed_expiration_candidates": delayed_expiration_candidates[:10],
+            "delayed_recovery": (
+                "nautical reconcile --apply will continue through expired successors "
+                "up to its configured hop limit."
+                if delayed_expiration_candidates
+                else ""
+            ),
             "plans": [
                 {
                     "action": plan.action,

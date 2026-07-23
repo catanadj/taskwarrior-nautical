@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 
@@ -30,6 +31,7 @@ _PARENT_LOCK_SLEEP_SECONDS = 0.1
 _PARENT_LOCK_STALE_SECONDS = 300.0
 _DEFAULT_EXPIRATION_HOPS = 32
 _MAX_EXPIRATION_HOPS = 1000
+_RECONCILE_PROTOCOL = 1
 
 
 def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
@@ -116,12 +118,46 @@ def _bind_hook_task_bin(hook: Any, task_bin: str) -> None:
     hook._task_cmd_prefix = _task_cmd_prefix
 
 
+def _validate_hook_protocol(hook: Any) -> None:
+    if not isinstance(hook, ModuleType):
+        return
+    protocol = getattr(hook, "NAUTICAL_RECONCILE_PROTOCOL", None)
+    if protocol != _RECONCILE_PROTOCOL:
+        raise RuntimeError(
+            f"incompatible on-modify reconcile protocol {protocol!r}; "
+            f"expected {_RECONCILE_PROTOCOL}"
+        )
+    required_hook = (
+        "_task_cmd_prefix",
+        "_safe_parse_datetime",
+        "_compute_anchor_child_due",
+        "_compute_cp_child_due",
+        "_build_child_from_parent",
+        "_spawn_child",
+    )
+    required_core = ("coerce_int", "to_local", "build_local_datetime", "fmt_isoz")
+    missing = [name for name in required_hook if not callable(getattr(hook, name, None))]
+    core = getattr(hook, "core", None)
+    missing.extend(f"core.{name}" for name in required_core if not callable(getattr(core, name, None)))
+    if missing:
+        raise RuntimeError(f"on-modify reconcile protocol is missing: {', '.join(missing)}")
+
+
+def _candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
+    return (
+        str(row.get("chainID") or "").strip().casefold(),
+        reconcile.int_or_default(row.get("link"), 0),
+        str(row.get("status") or "").strip().casefold(),
+        str(row.get("uuid") or "").strip().casefold(),
+    )
+
+
 def _candidate_rows(task_bin: str, hook: Any) -> list[dict[str, Any]]:
-    completed = _export(task_bin, ["status:completed", "chain:on", "chainID.not:"])
-    deleted = _export(task_bin, ["status:deleted", "chain:on", "chainID.not:"])
+    completed = _export(task_bin, ["status:completed", "chain:on", "chainID.not:", "nextLink:"])
+    deleted = _export(task_bin, ["status:deleted", "chain:on", "chainID.not:", "nextLink:"])
     rows = [row for row in completed if reconcile.is_orphan_completion_candidate(row)]
     rows.extend(row for row in deleted if reconcile.is_orphan_deleted_chain_candidate(row))
-    return rows
+    return sorted(rows, key=_candidate_sort_key)
 
 
 def _existing_children(task_bin: str, parent: dict[str, Any]) -> list[dict[str, Any]]:
@@ -333,6 +369,15 @@ def _recovery_error(parent: dict[str, Any], reason: str) -> reconcile.ReconcileP
     )
 
 
+def _recovery_partial(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
+    return reconcile.ReconcilePlan(
+        "partial",
+        parent,
+        reconcile.int_or_default(parent.get("link"), 1) + 1,
+        reason,
+    )
+
+
 def _validate_recovery_child(parent: dict[str, Any], child: dict[str, Any]) -> str:
     _child_short, child_error = reconcile.resolve_existing_child(
         parent,
@@ -340,6 +385,35 @@ def _validate_recovery_child(parent: dict[str, Any], child: dict[str, Any]) -> s
         include_deleted=True,
     )
     return child_error
+
+
+def _terminal_recovery_error(child: dict[str, Any], hook: Any, recovery_at: Any) -> str:
+    if str(child.get("status") or "").strip().lower() != "pending":
+        return ""
+    until_raw = child.get("until")
+    try:
+        until_dt, until_err = hook._safe_parse_datetime(until_raw)
+    except Exception:
+        return "live recovery child native until could not be parsed"
+    if until_err or until_dt is None:
+        return f"live recovery child has no reliable native until: {until_err or 'missing until'}"
+
+    target_field = "due" if child.get("due") else "scheduled"
+    target_raw = child.get(target_field)
+    try:
+        target_dt, target_err = hook._safe_parse_datetime(target_raw)
+    except Exception:
+        return f"live recovery child {target_field} could not be parsed"
+    if target_err or target_dt is None:
+        return f"live recovery child has no reliable {target_field}: {target_err or f'missing {target_field}'}"
+    try:
+        if until_dt <= target_dt:
+            return f"live recovery child native until is not later than its {target_field}"
+        if until_dt <= recovery_at:
+            return "live recovery child native until has already elapsed"
+    except Exception:
+        return "live recovery child timing could not be compared"
+    return ""
 
 
 def _next_recovery_child(
@@ -429,7 +503,7 @@ def _reconcile_candidate(
         if is_deleted and expiration_hops >= max_expiration_hops:
             outcomes.append(
                 (
-                    _recovery_error(
+                    _recovery_partial(
                         current,
                         f"expiration recovery hop limit reached at {max_expiration_hops}; "
                         "rerun to continue or increase --max-expiration-hops",
@@ -442,12 +516,17 @@ def _reconcile_candidate(
         if apply:
             if taskdata is None:
                 raise RuntimeError("Taskwarrior data location is unavailable")
-            plan, applied_short = _apply_parent_atomic(
-                task_bin,
-                hook,
-                current,
-                taskdata=taskdata,
-            )
+            try:
+                plan, applied_short = _apply_parent_atomic(
+                    task_bin,
+                    hook,
+                    current,
+                    taskdata=taskdata,
+                )
+            except Exception as exc:
+                reason = str(exc).strip() or type(exc).__name__
+                outcomes.append((_recovery_error(current, reason), ""))
+                break
         else:
             plan = reconcile.build_reconcile_plan(
                 current,
@@ -478,8 +557,19 @@ def _reconcile_candidate(
                 outcomes.append((_recovery_error(plan.parent, child_error), ""))
                 break
             if child is None:
+                terminal_error = _terminal_recovery_error(
+                    dict(plan.child or {}),
+                    hook,
+                    recovery_at,
+                )
+                if terminal_error:
+                    outcomes.append((_recovery_error(plan.parent, terminal_error), ""))
                 break
 
+        terminal_error = _terminal_recovery_error(child, hook, recovery_at)
+        if terminal_error:
+            outcomes.append((_recovery_error(plan.parent, terminal_error), ""))
+            break
         if not reconcile.is_orphan_deleted_chain_candidate(child):
             break
         current = child
@@ -567,9 +657,54 @@ def _print_plan(
         _print_evidence(evidence, ("kind", "next_link"))
     elif plan.action == "stale":
         print(f"skip: {parent} ({plan.reason})")
+    elif plan.action == "partial":
+        print(f"partial: {parent} ({plan.reason})")
     else:
         print(f"error: {parent} ({plan.reason})")
         _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
+
+
+def _print_recovery_group(
+    items: list[tuple[reconcile.ReconcilePlan, dict[str, Any], str]],
+) -> None:
+    first = items[0][0]
+    last, evidence, applied_short = items[-1]
+    hops = sum(1 for plan, _evidence, _applied in items if plan.action in {"spawn", "backfill_nextlink"})
+    noun = "occurrence" if hops == 1 else "occurrences"
+    print(f"recover: {_fmt_parent(first.parent)} -> advanced {hops} {noun}")
+    if last.action in {"error", "partial", "legitimate_final", "manual_stop", "stale"}:
+        print(f"  result: {last.action.replace('_', ' ')} ({last.reason})")
+        return
+    if applied_short:
+        print(f"  child: {applied_short}")
+    _print_evidence(evidence, ("next_link", "child_local", "child_due", "child_expires"))
+
+
+def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
+    reason = str(exc).strip() or type(exc).__name__
+    if args.json:
+        payload = {
+            "mode": "apply" if args.apply else "dry-run",
+            "status": "error",
+            "stage": stage,
+            "error": reason,
+            "candidates": 0,
+            "expiration_hops": 0,
+            "recovered_chains": 0,
+            "spawn": 0,
+            "backfill_nextlink": 0,
+            "legitimate_final": 0,
+            "manual_stop": 0,
+            "stale": 0,
+            "partial": 0,
+            "errors": 1,
+            "plans": [],
+            "applied": [],
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"error: {stage.replace('_', ' ')}: {reason}", file=sys.stderr)
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -578,6 +713,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
     parser.add_argument("--hook-path", default=None, help="Explicit on-modify hook path for non-standard installs.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
+    parser.add_argument("--verbose", action="store_true", help="Print every delayed-recovery hop.")
     parser.add_argument(
         "--max-expiration-hops",
         type=_expiration_hop_limit,
@@ -586,13 +722,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    hook = _load_on_modify(args.hook_path)
-    _bind_hook_task_bin(hook, args.task_bin)
-    fmt_dt_local = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
-    now_utc = getattr(getattr(hook, "core", None), "now_utc", None)
-    recovery_at = now_utc() if callable(now_utc) else datetime.now(timezone.utc)
-    candidates = _candidate_rows(args.task_bin, hook)
-    taskdata = _task_data_dir(args.task_bin) if args.apply else None
+    try:
+        hook = _load_on_modify(args.hook_path)
+    except Exception as exc:
+        return _startup_failure(args, "hook_load", exc)
+    try:
+        _validate_hook_protocol(hook)
+        _bind_hook_task_bin(hook, args.task_bin)
+        fmt_dt_local = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
+        now_utc = getattr(getattr(hook, "core", None), "now_utc", None)
+        recovery_at = now_utc() if callable(now_utc) else datetime.now(timezone.utc)
+    except Exception as exc:
+        return _startup_failure(args, "hook_protocol", exc)
+    try:
+        candidates = _candidate_rows(args.task_bin, hook)
+    except Exception as exc:
+        return _startup_failure(args, "candidate_export", exc)
+    try:
+        taskdata = _task_data_dir(args.task_bin) if args.apply else None
+    except Exception as exc:
+        return _startup_failure(args, "taskdata", exc)
     plans: list[reconcile.ReconcilePlan] = []
     plan_evidence: list[dict[str, Any]] = []
     applied: list[dict[str, Any]] = []
@@ -620,6 +769,7 @@ def main(argv: list[str] | None = None) -> int:
             reason = str(exc).strip() or type(exc).__name__
             outcomes = [(_recovery_error(parent, reason), "")]
         outcome_groups.append(outcomes)
+        rendered: list[tuple[reconcile.ReconcilePlan, dict[str, Any], str]] = []
         for plan, applied_short in outcomes:
             processed_slots.add(
                 (
@@ -630,6 +780,7 @@ def main(argv: list[str] | None = None) -> int:
             plans.append(plan)
             evidence = _describe_plan(plan, hook=hook, fmt_dt_local=fmt_dt_local)
             plan_evidence.append(evidence)
+            rendered.append((plan, evidence, applied_short))
             if args.apply and applied_short:
                 disabling = plan.action in {"legitimate_final", "manual_stop"}
                 action = "disable_chain" if disabling else plan.action
@@ -640,8 +791,12 @@ def main(argv: list[str] | None = None) -> int:
                 if not disabling:
                     record["child"] = applied_short
                 applied.append(record)
-            if not args.json:
-                _print_plan(plan, evidence, applied_short=applied_short)
+        if not args.json:
+            if args.verbose or len(rendered) <= 1:
+                for plan, evidence, applied_short in rendered:
+                    _print_plan(plan, evidence, applied_short=applied_short)
+            else:
+                _print_recovery_group(rendered)
 
     expiration_hops = sum(
         1
@@ -659,7 +814,7 @@ def main(argv: list[str] | None = None) -> int:
             and plan.action in {"spawn", "backfill_nextlink"}
         )
         > 1
-        and all(plan.action != "error" for plan, _applied in outcomes)
+        and all(plan.action not in {"error", "partial"} for plan, _applied in outcomes)
     )
 
     summary = {
@@ -672,6 +827,7 @@ def main(argv: list[str] | None = None) -> int:
         "legitimate_final": sum(1 for p in plans if p.action == "legitimate_final"),
         "manual_stop": sum(1 for p in plans if p.action == "manual_stop"),
         "stale": sum(1 for p in plans if p.action == "stale"),
+        "partial": sum(1 for p in plans if p.action == "partial"),
         "errors": sum(1 for p in plans if p.action == "error"),
         "plans": [
             {
@@ -691,9 +847,11 @@ def main(argv: list[str] | None = None) -> int:
             f"spawn={summary['spawn']} backfill={summary['backfill_nextlink']} "
             f"expiration_hops={summary['expiration_hops']} recovered={summary['recovered_chains']} "
             f"final={summary['legitimate_final']} manual={summary['manual_stop']} "
-            f"stale={summary['stale']} errors={summary['errors']}"
+            f"stale={summary['stale']} partial={summary['partial']} errors={summary['errors']}"
         )
-    return 1 if summary["errors"] else 0
+    if summary["errors"]:
+        return 1
+    return 2 if summary["partial"] else 0
 
 
 if __name__ == "__main__":

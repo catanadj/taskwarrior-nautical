@@ -4235,6 +4235,8 @@ def test_doctor_reports_reconcile_backfill_plans():
         expect((details.get("actions") or {}).get("backfill_nextlink") == 2, f"bad reconcile action counts: {details}")
         expect((details.get("actions") or {}).get("manual_stop") == 1, f"missing manual-stop action: {details}")
         expect((details.get("actions") or {}).get("error") == 1, f"ambiguous slot was not reported: {details}")
+        expect(details.get("delayed_expiration_candidates"), f"delayed recovery was not surfaced: {details}")
+        expect("hop limit" in details.get("delayed_recovery", ""), f"missing delayed recovery guidance: {details}")
         expect((details.get("plans") or [{}])[0].get("existing_child") == "22222222", f"bad reconcile plan evidence: {details}")
         expect(
             any(plan.get("trigger") == "expiration" and plan.get("existing_child") == "44444444" for plan in details.get("plans") or []),
@@ -17862,8 +17864,8 @@ def test_reconcile_delayed_expiration_dry_run_converges_to_live_slot():
     final_until, final_until_err = hook._safe_parse_datetime((plans[-1].child or {}).get("until"))
     expect(not final_until_err and final_until is not None and final_until > recovery_at, f"final slot is already expired: {plans[-1]}")
     expect(
-        [plan.action for plan, _applied in limited] == ["spawn", "spawn", "error"],
-        f"hop limit should leave an actionable resumable error: {limited}",
+        [plan.action for plan, _applied in limited] == ["spawn", "spawn", "partial"],
+        f"hop limit should leave an actionable resumable partial result: {limited}",
     )
     expect("hop limit" in limited[-1][0].reason, f"missing hop-limit guidance: {limited[-1][0]}")
     expect(
@@ -17887,24 +17889,48 @@ def test_reconcile_delayed_expiration_apply_follows_exact_children():
         "chain": "on",
         "chainID": "delayed1",
         "link": 1,
+        "due": "20260720T090000Z",
         "until": "20260720T100000Z",
         "end": "20260720T100000Z",
     }
     tasks = {
         1: root,
-        2: {**root, "uuid": "22222222-0000-0000-0000-000000000002", "link": 2},
-        3: {**root, "uuid": "33333333-0000-0000-0000-000000000003", "link": 3},
+        2: {
+            **root,
+            "uuid": "22222222-0000-0000-0000-000000000002",
+            "link": 2,
+            "due": "20260721T090000Z",
+            "until": "20260721T100000Z",
+        },
+        3: {
+            **root,
+            "uuid": "33333333-0000-0000-0000-000000000003",
+            "link": 3,
+            "due": "20260722T090000Z",
+            "until": "20260722T100000Z",
+        },
         4: {
             **root,
             "uuid": "44444444-0000-0000-0000-000000000004",
             "status": "pending",
             "link": 4,
+            "due": "20260723T090000Z",
             "until": "20260723T100000Z",
         },
     }
     calls = []
     original = (tool._apply_parent_atomic, tool._next_recovery_child)
     try:
+        class FakeHook:
+            @staticmethod
+            def _safe_parse_datetime(value):
+                try:
+                    return datetime.strptime(str(value), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc), None
+                except Exception:
+                    return None, "invalid datetime"
+
+        hook = FakeHook()
+
         def apply_parent(_task_bin, _hook, parent, *, taskdata):
             link = int(parent["link"])
             calls.append(("apply", link, taskdata))
@@ -17928,7 +17954,7 @@ def test_reconcile_delayed_expiration_apply_follows_exact_children():
         tool._next_recovery_child = next_child
         outcomes = tool._reconcile_candidate(
             "task",
-            SimpleNamespace(),
+            hook,
             root,
             taskdata=Path("/tmp/nautical-reconcile-delayed-test"),
             apply=True,
@@ -17937,11 +17963,53 @@ def test_reconcile_delayed_expiration_apply_follows_exact_children():
         )
         limited = tool._reconcile_candidate(
             "task",
-            SimpleNamespace(),
+            hook,
             root,
             taskdata=Path("/tmp/nautical-reconcile-delayed-test"),
             apply=True,
             max_expiration_hops=2,
+            recovery_at=datetime(2026, 7, 23, 9, 30, tzinfo=timezone.utc),
+        )
+
+        def fail_second_apply(_task_bin, _hook, parent, *, taskdata):
+            if int(parent["link"]) == 2:
+                raise TimeoutError("parent lock timed out")
+            return apply_parent(_task_bin, _hook, parent, taskdata=taskdata)
+
+        tool._apply_parent_atomic = fail_second_apply
+        interrupted = tool._reconcile_candidate(
+            "task",
+            hook,
+            root,
+            taskdata=Path("/tmp/nautical-reconcile-delayed-test"),
+            apply=True,
+            max_expiration_hops=8,
+            recovery_at=datetime(2026, 7, 23, 9, 30, tzinfo=timezone.utc),
+        )
+
+        tool._apply_parent_atomic = apply_parent
+        tool._next_recovery_child = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            TimeoutError("child lookup timed out")
+        )
+        lookup_interrupted = tool._reconcile_candidate(
+            "task",
+            hook,
+            root,
+            taskdata=Path("/tmp/nautical-reconcile-delayed-test"),
+            apply=True,
+            max_expiration_hops=8,
+            recovery_at=datetime(2026, 7, 23, 9, 30, tzinfo=timezone.utc),
+        )
+
+        tool._next_recovery_child = next_child
+        tasks[4]["until"] = "not-a-date"
+        invalid_terminal = tool._reconcile_candidate(
+            "task",
+            hook,
+            root,
+            taskdata=Path("/tmp/nautical-reconcile-delayed-test"),
+            apply=True,
+            max_expiration_hops=8,
             recovery_at=datetime(2026, 7, 23, 9, 30, tzinfo=timezone.utc),
         )
     finally:
@@ -17950,13 +18018,103 @@ def test_reconcile_delayed_expiration_apply_follows_exact_children():
     expect([plan.parent.get("link") for plan, _applied in outcomes] == [1, 2, 3], f"apply did not converge: {outcomes}")
     expect([applied for _plan, applied in outcomes] == ["22222222", "33333333", "44444444"], f"wrong child traversal: {outcomes}")
     expect(
-        [plan.action for plan, _applied in limited] == ["spawn", "spawn", "error"],
+        [plan.action for plan, _applied in limited] == ["spawn", "spawn", "partial"],
         f"apply hop limit was not enforced: {limited}",
     )
+    expect(
+        [plan.action for plan, _applied in interrupted] == ["spawn", "error"],
+        f"successful hops were lost after an apply failure: {interrupted}",
+    )
+    expect(
+        [plan.action for plan, _applied in lookup_interrupted] == ["spawn", "error"],
+        f"successful hops were lost after a lookup failure: {lookup_interrupted}",
+    )
+    expect(
+        [plan.action for plan, _applied in invalid_terminal] == ["spawn", "spawn", "spawn", "error"],
+        f"invalid live terminal occurrence was accepted: {invalid_terminal}",
+    )
+    expect("native until" in invalid_terminal[-1][0].reason, f"terminal error was unclear: {invalid_terminal[-1][0]}")
     expect(
         ("lookup", 1, "22222222") in calls and ("lookup", 2, "33333333") in calls,
         f"recovery did not use narrow child lookups: {calls}",
     )
+
+
+def test_reconcile_candidate_discovery_is_narrow_and_deterministic():
+    """Candidate exports should exclude linked parents and return stable chain/link order."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_candidate_order_test")
+    rows = [
+        {
+            "uuid": "33333333-0000-0000-0000-000000000003",
+            "status": "deleted",
+            "cp": "1d",
+            "chain": "on",
+            "chainID": "z-chain",
+            "link": 3,
+            "until": "20260720T100000Z",
+            "end": "20260720T100000Z",
+        },
+        {
+            "uuid": "11111111-0000-0000-0000-000000000001",
+            "status": "completed",
+            "cp": "1d",
+            "chain": "on",
+            "chainID": "a-chain",
+            "link": 2,
+        },
+    ]
+    filters_seen = []
+    original = tool._export
+    try:
+        def fake_export(_task_bin, filters, **_kwargs):
+            filters_seen.append(list(filters))
+            status = "completed" if "status:completed" in filters else "deleted"
+            return [row for row in reversed(rows) if row["status"] == status]
+
+        tool._export = fake_export
+        found = tool._candidate_rows("task", SimpleNamespace())
+    finally:
+        tool._export = original
+
+    expect(all("nextLink:" in filters for filters in filters_seen), f"candidate export was too broad: {filters_seen}")
+    expect(
+        [(row["chainID"], row["link"]) for row in found] == [("a-chain", 2), ("z-chain", 3)],
+        f"candidate order was not deterministic: {found}",
+    )
+
+
+def test_reconcile_json_startup_failures_are_structured():
+    """JSON mode should report hook loading and protocol failures without traceback output."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_startup_failure_test")
+    original = tool._load_on_modify
+    try:
+        def fail_load(_path=None):
+            raise RuntimeError("could not load hook Ω")
+
+        tool._load_on_modify = fail_load
+        output = io.StringIO()
+        errors = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            result = tool.main(["--json"])
+        summary = json.loads(output.getvalue())
+        expect(result == 1 and summary.get("stage") == "hook_load", f"hook load failure was not structured: {summary}")
+        expect("Ω" in summary.get("error", ""), f"Unicode startup error was escaped or lost: {summary}")
+        expect("Traceback" not in errors.getvalue(), f"startup failure leaked a traceback: {errors.getvalue()!r}")
+
+        import types
+
+        incompatible = types.ModuleType("_nautical_incompatible_hook")
+        incompatible.NAUTICAL_RECONCILE_PROTOCOL = 0
+        tool._load_on_modify = lambda _path=None: incompatible
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = tool.main(["--json"])
+        summary = json.loads(output.getvalue())
+        expect(result == 1 and summary.get("stage") == "hook_protocol", f"protocol failure was not structured: {summary}")
+    finally:
+        tool._load_on_modify = original
 
 
 def test_reconcile_expiration_cp_advances_from_recurrence_target():
@@ -18140,6 +18298,8 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
                 "20260720T090000Z": due,
                 "20260726T235900Z": datetime(2026, 7, 26, 23, 59, tzinfo=timezone.utc),
                 "20260727T000000Z": datetime(2026, 7, 27, 0, 0, tzinfo=timezone.utc),
+                "20260727T090000Z": datetime(2026, 7, 27, 9, 0, tzinfo=timezone.utc),
+                "20260802T235900Z": datetime(2026, 8, 2, 23, 59, tzinfo=timezone.utc),
             }
             return mapping.get(value), None
 
@@ -18318,6 +18478,112 @@ def test_reconcile_apply_refreshes_parent_under_lock():
             tool._fresh_parent = saved["fresh_parent"]
         tool._existing_children = saved["existing"]
         tool._modify_parent_nextlink = saved["modify"]
+
+
+def test_reconcile_apply_resumes_after_parent_update_failure():
+    """A child imported before a failed parent update must be reused on the next apply."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_resume_apply_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "description": "resume reconcile",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "resume01",
+        "link": 1,
+        "due": "20260720T090000Z",
+    }
+    world = {"parent": dict(parent), "children": [], "imports": 0, "updates": 0}
+
+    class FakeCore:
+        @staticmethod
+        def coerce_int(value, default=0):
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+    class FakeHook:
+        core = FakeCore()
+
+        @staticmethod
+        def _safe_parse_datetime(_value):
+            return None, None
+
+        @staticmethod
+        def _compute_cp_child_due(_parent):
+            return "20260721T090000Z", {"target_field": "due"}
+
+        @staticmethod
+        def _build_child_from_parent(parent_task, child_due, child_field, next_link, parent_short, _kind, _cpmax, _until_dt):
+            return {
+                "description": parent_task.get("description"),
+                child_field: child_due,
+                "chain": "on",
+                "chainID": parent_task.get("chainID"),
+                "link": next_link,
+                "prevLink": parent_short,
+            }
+
+        @staticmethod
+        def _spawn_child(child, _parent):
+            world["imports"] += 1
+            child_uuid = "22222222-0000-0000-0000-000000000002"
+            world["children"].append({**child, "uuid": child_uuid, "status": "pending"})
+            return child_uuid[:8], set()
+
+    @contextlib.contextmanager
+    def parent_lock(_taskdata, _parent_uuid):
+        yield True
+
+    saved = (
+        tool._parent_apply_lock,
+        tool._fresh_parent,
+        tool._existing_children,
+        tool._modify_parent_nextlink,
+    )
+    try:
+        tool._parent_apply_lock = parent_lock
+        tool._fresh_parent = lambda _task_bin, _parent: dict(world["parent"])
+        tool._existing_children = lambda _task_bin, _parent: list(world["children"])
+
+        def modify_parent(_task_bin, _parent, child_short):
+            world["updates"] += 1
+            if world["updates"] == 1:
+                raise TimeoutError("parent update timed out")
+            world["parent"]["nextLink"] = child_short
+
+        tool._modify_parent_nextlink = modify_parent
+        try:
+            tool._apply_parent_atomic(
+                "task",
+                FakeHook(),
+                parent,
+                taskdata=Path("/tmp/nautical-reconcile-resume-test"),
+            )
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("first parent update should fail")
+
+        resumed, resumed_applied = tool._apply_parent_atomic(
+            "task",
+            FakeHook(),
+            parent,
+            taskdata=Path("/tmp/nautical-reconcile-resume-test"),
+        )
+    finally:
+        (
+            tool._parent_apply_lock,
+            tool._fresh_parent,
+            tool._existing_children,
+            tool._modify_parent_nextlink,
+        ) = saved
+
+    expect(resumed.action == "backfill_nextlink" and resumed_applied == "22222222", f"resume did not reuse child: {resumed}")
+    expect(world["imports"] == 1, f"resume imported a duplicate child: {world}")
+    expect(world["updates"] == 2, f"parent update was not retried exactly once: {world}")
 
 
 def test_reconcile_parent_updates_are_guarded():
@@ -18926,6 +19192,85 @@ def test_reconcile_tool_print_plan_includes_evidence():
     expect("backfill nextLink:" in out, f"missing backfill headline: {out!r}")
     expect("reason: next link already exists" in out, f"missing reason evidence: {out!r}")
     expect("existing child: 22222222" in out, f"missing child evidence: {out!r}")
+
+    second_parent = {**parent, "uuid": "22222222-0000-0000-0000-000000000002", "link": 3}
+    second = reconcile.ReconcilePlan(
+        "partial",
+        second_parent,
+        4,
+        "expiration recovery hop limit reached at 2; rerun to continue",
+    )
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mod._print_recovery_group(
+            [
+                (plan, reconcile.describe_plan(plan), "22222222"),
+                (second, reconcile.describe_plan(second), ""),
+            ]
+        )
+    out = buf.getvalue()
+    expect("recover:" in out and "advanced 1 occurrence" in out, f"missing compact recovery summary: {out!r}")
+    expect("result: partial" in out and "spawn:" not in out, f"compact output leaked per-hop lines: {out!r}")
+
+
+def test_reconcile_partial_recovery_exit_and_verbose_output():
+    """Bounded recovery should exit 2, stay compact by default, and expand with --verbose."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_partial_output_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "deleted",
+        "description": "delayed recovery",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "partial1",
+        "link": 1,
+    }
+    next_parent = {**parent, "uuid": "22222222-0000-0000-0000-000000000002", "link": 2}
+    outcomes = [
+        (
+            mod.reconcile.ReconcilePlan(
+                "spawn",
+                parent,
+                2,
+                "expired link missing next link",
+                child={"uuid": next_parent["uuid"], "link": 2},
+            ),
+            "22222222",
+        ),
+        (
+            mod.reconcile.ReconcilePlan(
+                "partial",
+                next_parent,
+                3,
+                "expiration recovery hop limit reached at 1; rerun to continue",
+            ),
+            "",
+        ),
+    ]
+    hook = SimpleNamespace(
+        core=SimpleNamespace(fmt_dt_local=None),
+        _task_cmd_prefix=lambda: ["task"],
+        _safe_parse_datetime=lambda _value: (None, None),
+    )
+    original = (mod._load_on_modify, mod._candidate_rows, mod._reconcile_candidate)
+    try:
+        mod._load_on_modify = lambda _path=None: hook
+        mod._candidate_rows = lambda _task_bin, _hook: [parent]
+        mod._reconcile_candidate = lambda *_args, **_kwargs: outcomes
+
+        compact = io.StringIO()
+        with contextlib.redirect_stdout(compact):
+            compact_result = mod.main([])
+        verbose = io.StringIO()
+        with contextlib.redirect_stdout(verbose):
+            verbose_result = mod.main(["--verbose"])
+    finally:
+        mod._load_on_modify, mod._candidate_rows, mod._reconcile_candidate = original
+
+    expect(compact_result == 2 and verbose_result == 2, f"partial recovery exit was not distinct: {compact_result}, {verbose_result}")
+    expect("recover:" in compact.getvalue() and "spawn:" not in compact.getvalue(), f"default output was not compact: {compact.getvalue()!r}")
+    expect("spawn:" in verbose.getvalue() and "partial:" in verbose.getvalue(), f"verbose output omitted hops: {verbose.getvalue()!r}")
 
 
 def test_reconcile_tool_apply_disables_legitimate_final_chain():
@@ -21092,11 +21437,14 @@ TESTS = [
     test_reconcile_manual_deletion_stops_chain_without_child_lookup,
     test_reconcile_delayed_expiration_dry_run_converges_to_live_slot,
     test_reconcile_delayed_expiration_apply_follows_exact_children,
+    test_reconcile_candidate_discovery_is_narrow_and_deterministic,
+    test_reconcile_json_startup_failures_are_structured,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
     test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,
     test_reconcile_tool_exports_and_applies_expired_candidates,
     test_reconcile_apply_refreshes_parent_under_lock,
+    test_reconcile_apply_resumes_after_parent_update_failure,
     test_reconcile_parent_updates_are_guarded,
     test_reconcile_apply_rejects_ambiguous_existing_slot,
     test_reconcile_apply_isolates_candidate_failures,
@@ -21108,6 +21456,7 @@ TESTS = [
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
     test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_print_plan_includes_evidence,
+    test_reconcile_partial_recovery_exit_and_verbose_output,
     test_reconcile_tool_apply_disables_legitimate_final_chain,
     test_chain_repair_plans_only_safe_adjacent_link_updates,
     test_chain_repair_infers_missing_links_only_when_deterministic,

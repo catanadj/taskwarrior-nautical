@@ -36,6 +36,7 @@
       "hook_plain_modify": 0.8,
       "hook_nautical_ordinary_modify": 0.8,
       "hook_empty_exit": 0.8
-    }
+    },
+    "managed_layout_max_ratio": 1.5
   }
 }

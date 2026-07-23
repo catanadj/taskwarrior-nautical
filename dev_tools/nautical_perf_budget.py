@@ -33,6 +33,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 core = importlib.import_module("nautical_core")
+install_runtime = importlib.import_module("nautical_core.install_runtime")
 
 
 def _load_budget_config(path: Path) -> dict:
@@ -304,12 +305,50 @@ def _measure_hook_fast_path(
     }
 
 
+def _measure_managed_hook_latency(
+    name: str,
+    hook_path: Path,
+    *,
+    input_text: str,
+    expected_task: dict | None,
+    base_env: dict[str, str],
+    repeats: int,
+    baseline_median_s: float,
+    max_ratio: float,
+) -> dict:
+    env = dict(base_env)
+    env.pop("NAUTICAL_CORE_PATH", None)
+    env.pop("NAUTICAL_TRUST_CORE_PATH", None)
+    env.pop("NAUTICAL_BENCH_FORCE_FULL", None)
+
+    _run_hook_timed(hook_path, input_text=input_text, env=env, expected_task=expected_task)
+    samples = sorted(
+        _run_hook_timed(hook_path, input_text=input_text, env=env, expected_task=expected_task)
+        for _ in range(max(1, int(repeats)))
+    )
+    median_s = float(statistics.median(samples))
+    ratio = median_s / baseline_median_s if baseline_median_s > 0.0 else 1.0
+    return {
+        "name": name,
+        "samples_s": samples,
+        "min_s": samples[0],
+        "median_s": median_s,
+        "max_s": samples[-1],
+        "baseline_median_s": float(baseline_median_s),
+        "managed_to_source_ratio": ratio,
+        "max_ratio": float(max_ratio),
+        "budget_s": 0.0,
+        "pass": ratio <= float(max_ratio),
+    }
+
+
 def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
     hook_cfg = cfg.get("hook_fast_path")
     if not isinstance(hook_cfg, dict) or not hook_cfg.get("enabled", True):
         return {}
     repeats = max(1, int(hook_cfg.get("repeats", 7)))
     max_ratios = hook_cfg.get("max_ratio") if isinstance(hook_cfg.get("max_ratio"), dict) else {}
+    managed_max_ratio = float(hook_cfg.get("managed_layout_max_ratio", 1.5))
 
     plain = {
         "uuid": "11111111-1111-1111-1111-111111111111",
@@ -397,6 +436,29 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
                 repeats=repeats,
                 max_ratio=ratio_budget,
             )
+
+        managed_data = temp_root / "managed-data"
+        install_runtime.install_release(
+            source=ROOT,
+            taskdata=managed_data,
+            release_id="perf-managed",
+            smoke=False,
+        )
+        _init_empty_queue_db(managed_data)
+        managed_env = dict(base_env)
+        managed_env["TASKDATA"] = str(managed_data)
+        for name, source_hook, input_text, expected_task, _taskdata in cases:
+            managed_name = f"managed_{name}"
+            results[managed_name] = _measure_managed_hook_latency(
+                managed_name,
+                managed_data / "hooks" / source_hook.name,
+                input_text=input_text,
+                expected_task=expected_task,
+                base_env=managed_env,
+                repeats=repeats,
+                baseline_median_s=float(results[name]["median_s"]),
+                max_ratio=managed_max_ratio,
+            )
         return results
 
 
@@ -472,6 +534,11 @@ def main() -> int:
                 print(
                     f"- {name}: fast={r['median_s']:.4f}s full={r['full_median_s']:.4f}s "
                     f"ratio={r['fast_to_full_ratio']:.3f} max_ratio={r['max_ratio']:.3f} => {status}"
+                )
+            elif "managed_to_source_ratio" in r:
+                print(
+                    f"- {name}: managed={r['median_s']:.4f}s source={r['baseline_median_s']:.4f}s "
+                    f"ratio={r['managed_to_source_ratio']:.3f} max_ratio={r['max_ratio']:.3f} => {status}"
                 )
             else:
                 print(

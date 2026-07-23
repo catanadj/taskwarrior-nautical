@@ -3933,6 +3933,230 @@ def test_doctor_reconcile_loader_uses_validated_implementation():
     )
 
 
+def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
+    """Local installs should validate before mutation and safely reuse identical releases."""
+    from nautical_core import install_runtime
+
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td) / "taskdata"
+        dry = install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=taskdata,
+            release_id="dry-run",
+            dry_run=True,
+            smoke=False,
+        )
+        expect(dry.get("status") == "dry-run", f"unexpected dry-run result: {dry!r}")
+        expect(not taskdata.exists(), f"dry-run mutated the target: {taskdata}")
+
+        installed = install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=taskdata,
+            release_id="release-one",
+            smoke=False,
+        )
+        expect(installed.get("status") == "installed", f"fresh install failed: {installed!r}")
+        expect((taskdata / ".nautical-runtime/current").is_symlink(), "current pointer was not installed")
+        expect(os.readlink(taskdata / ".nautical-runtime/current") == "releases/release-one", "wrong active release")
+        expect((taskdata / "nautical_core").is_symlink(), "stable core path was not installed")
+        expect(
+            install_runtime.validate_installed(taskdata, taskdata / "hooks", smoke=True)
+            == {"on-add": 1, "on-modify": 1, "on-exit": 1},
+            "installed hook layout did not pass post-install validation",
+        )
+        status = install_runtime.runtime_status(taskdata)
+        expect(status.get("active_release") == "release-one", f"runtime status is wrong: {status!r}")
+        expect(not status.get("errors"), f"fresh runtime status has errors: {status!r}")
+
+        repeated = install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=taskdata,
+            release_id="release-one",
+            smoke=False,
+        )
+        expect(repeated.get("reused_release") is True, f"identical reinstall was not reused: {repeated!r}")
+
+
+def test_installer_upgrade_rollback_restores_active_runtime():
+    """A failed upgrade should restore its pointer and every managed wrapper."""
+    from nautical_core import install_runtime
+
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td) / "taskdata"
+        install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=taskdata,
+            release_id="release-one",
+            smoke=False,
+        )
+        current = taskdata / ".nautical-runtime/current"
+        wrapper = taskdata / "hooks/on-modify-nautical.py"
+        pointer_before = os.readlink(current)
+        wrapper_before = wrapper.read_bytes()
+
+        try:
+            install_runtime.install_release(
+                source=Path(ROOT),
+                taskdata=taskdata,
+                release_id="release-two",
+                smoke=False,
+                _fail_after="after_wrappers",
+            )
+            raise AssertionError("injected upgrade failure should have raised")
+        except install_runtime.InstallError as exc:
+            expect("injected failure" in str(exc), f"unexpected rollback error: {exc}")
+
+        expect(os.readlink(current) == pointer_before, "failed upgrade did not restore current")
+        expect(wrapper.read_bytes() == wrapper_before, "failed upgrade did not restore wrapper")
+        expect(not install_runtime.runtime_status(taskdata).get("errors"), "rollback left a broken managed runtime")
+
+        upgraded = install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=taskdata,
+            release_id="release-two",
+            smoke=False,
+        )
+        expect(upgraded.get("status") == "installed", f"upgrade failed: {upgraded!r}")
+        expect(os.readlink(current) == "releases/release-two", "upgrade did not atomically select release two")
+        expect((taskdata / ".nautical-runtime/releases/release-one").is_dir(), "previous release was removed")
+
+
+def test_installer_migrates_legacy_core_and_rolls_back_first_switch():
+    """Legacy migration should preserve config and restore the directory on failure."""
+    from nautical_core import install_runtime
+
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td) / "taskdata"
+        legacy = taskdata / "nautical_core"
+        legacy.mkdir(parents=True)
+        (legacy / "legacy-marker").write_text("keep", encoding="utf-8")
+        (legacy / "config-nautical.toml").write_text('tz = "UTC"\n', encoding="utf-8")
+        result = install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=taskdata,
+            release_id="migrated",
+            smoke=False,
+        )
+        backup = Path(str(result.get("legacy_backup") or ""))
+        expect(result.get("migrated_legacy_core") is True, f"legacy migration was not reported: {result!r}")
+        expect((backup / "legacy-marker").read_text(encoding="utf-8") == "keep", "legacy backup lost data")
+        expect((taskdata / "config-nautical.toml").read_text(encoding="utf-8") == 'tz = "UTC"\n', "config was not preserved")
+
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td) / "taskdata"
+        legacy = taskdata / "nautical_core"
+        legacy.mkdir(parents=True)
+        (legacy / "legacy-marker").write_text("restore", encoding="utf-8")
+        (legacy / "config-nautical.toml").write_text('tz = "UTC"\n', encoding="utf-8")
+        try:
+            install_runtime.install_release(
+                source=Path(ROOT),
+                taskdata=taskdata,
+                release_id="rollback",
+                smoke=False,
+                _fail_after="after_pointer",
+            )
+            raise AssertionError("injected migration failure should have raised")
+        except install_runtime.InstallError:
+            pass
+        expect(legacy.is_dir() and not legacy.is_symlink(), "rollback did not restore legacy core directory")
+        expect((legacy / "legacy-marker").read_text(encoding="utf-8") == "restore", "rollback lost legacy data")
+        expect(not (taskdata / "config-nautical.toml").exists(), "rollback left a migrated config copy")
+        expect(install_runtime.runtime_status(taskdata).get("managed") is False, "failed first install looks active")
+
+
+def test_installer_lock_and_duplicate_hook_guards():
+    """Concurrent installs and pre-existing duplicate Nautical hooks should fail closed."""
+    from nautical_core import install_runtime
+
+    with tempfile.TemporaryDirectory() as td:
+        lock_path = Path(td) / "install.lock"
+        with install_runtime._InstallLock(lock_path):
+            try:
+                with install_runtime._InstallLock(lock_path):
+                    raise AssertionError("second installer acquired an active lock")
+            except install_runtime.InstallError as exc:
+                expect("already running" in str(exc), f"unexpected lock error: {exc}")
+
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td) / "taskdata"
+        hooks = taskdata / "hooks"
+        hooks.mkdir(parents=True)
+        duplicate = hooks / "on-add-custom"
+        shutil.copy2(Path(ROOT) / "on-add-nautical.py", duplicate)
+        duplicate.chmod(0o755)
+        try:
+            install_runtime.install_release(
+                source=Path(ROOT),
+                taskdata=taskdata,
+                release_id="blocked",
+                smoke=False,
+            )
+            raise AssertionError("duplicate active hook should block installation")
+        except install_runtime.InstallError as exc:
+            expect("duplicate execution" in str(exc), f"unexpected duplicate-hook error: {exc}")
+
+
+def test_installer_cli_and_doctor_managed_runtime_diagnostics():
+    """Installer JSON and Doctor should expose active, abandoned, and broken runtime state."""
+    from nautical_core import install_runtime
+
+    install_tool = Path(ROOT) / "nautical_core/tools/nautical_install.py"
+    doctor_path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    doctor = _load_hook_module(doctor_path, "_nautical_doctor_managed_runtime_test")
+    with tempfile.TemporaryDirectory() as td:
+        target = Path(td) / "dry-target"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(install_tool),
+                "--source",
+                ROOT,
+                "--taskdata",
+                str(target),
+                "--release-id",
+                "cli-dry",
+                "--dry-run",
+                "--json",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=20.0,
+        )
+        expect(proc.returncode == 0, f"installer CLI dry-run failed: {proc.stderr!r}")
+        expect(json.loads(proc.stdout).get("status") == "dry-run", f"bad installer JSON: {proc.stdout!r}")
+        expect(not target.exists(), "installer CLI dry-run mutated its target")
+
+        taskdata = Path(td) / "managed"
+        install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=taskdata,
+            release_id="doctor-active",
+            smoke=False,
+        )
+        findings = []
+        doctor._check_managed_runtime(findings, taskdata / "hooks")
+        active = next(item for item in findings if item.get("id") == "install.runtime")
+        expect(active.get("severity") == "ok", f"Doctor did not recognize active runtime: {findings!r}")
+
+        abandoned = taskdata / ".nautical-runtime/.staging-abandoned"
+        abandoned.mkdir()
+        findings = []
+        doctor._check_managed_runtime(findings, taskdata / "hooks")
+        expect(
+            any(item.get("id") == "install.runtime_abandoned" for item in findings),
+            f"Doctor missed abandoned staging: {findings!r}",
+        )
+
+        current = taskdata / ".nautical-runtime/current"
+        current.unlink()
+        current.symlink_to("releases/missing")
+        findings = []
+        doctor._check_managed_runtime(findings, taskdata / "hooks")
+        broken = next(item for item in findings if item.get("id") == "install.runtime")
+        expect(broken.get("severity") == "error", f"Doctor missed broken runtime pointer: {findings!r}")
+
+
 def test_doctor_discovers_effective_taskdata_directory():
     """doctor should discover the effective data dir when --taskdata is omitted."""
     path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
@@ -4009,6 +4233,7 @@ def test_nautical_dispatches_supported_subcommands():
     prev_run_path = mod.runpy.run_path
     calls = []
     targets = {
+        "install": os.path.join(ROOT, "nautical_core", "tools", "nautical_install.py"),
         "doctor": os.path.join(ROOT, "nautical_core", "tools", "nautical_doctor.py"),
         "queue-status": os.path.join(ROOT, "nautical_core", "tools", "nautical_queue_status.py"),
         "chain-repair": os.path.join(ROOT, "nautical_core", "tools", "nautical_chain_repair.py"),
@@ -4558,6 +4783,10 @@ def test_perf_budget_config_covers_cache_io_checks():
     hook_fast_path = obj.get("hook_fast_path") if isinstance(obj, dict) else None
     expect(isinstance(hook_fast_path, dict), "hook_fast_path config must be present")
     expect(int(hook_fast_path.get("repeats") or 0) >= 3, "hook fast-path benchmark needs repeated samples")
+    expect(
+        float(hook_fast_path.get("managed_layout_max_ratio") or 0.0) >= 1.0,
+        "managed hook layout ratio budget must allow ordinary timing jitter",
+    )
     ratios = hook_fast_path.get("max_ratio") if isinstance(hook_fast_path.get("max_ratio"), dict) else {}
     expect(
         {"hook_plain_add", "hook_plain_modify", "hook_nautical_ordinary_modify", "hook_empty_exit"} <= set(ratios),
@@ -4604,6 +4833,23 @@ def test_perf_hook_fast_path_ratio_enforcement():
         max_ratio=0.8,
     )
     expect(failing.get("pass") is False, f"insufficient fast-path improvement should fail: {failing}")
+
+    perf._run_hook_timed = lambda *_args, **_kwargs: 0.060
+    managed = perf._measure_managed_hook_latency(
+        "managed_hook_test",
+        Path("unused-hook"),
+        input_text="{}",
+        expected_task={},
+        base_env={"NAUTICAL_CORE_PATH": "/source", "NAUTICAL_TRUST_CORE_PATH": "1"},
+        repeats=3,
+        baseline_median_s=0.050,
+        max_ratio=1.5,
+    )
+    expect(managed.get("pass") is True, f"reasonable managed-layout overhead should pass: {managed}")
+    expect(
+        abs(float(managed.get("managed_to_source_ratio")) - 1.2) < 0.001,
+        f"unexpected managed/source ratio: {managed}",
+    )
 
 
 def test_load_benchmark_installs_complete_hook_runtime():
@@ -21775,6 +22021,11 @@ TESTS = [
     test_doctor_hook_inventory_rejects_duplicates_without_counting_backups,
     test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch,
     test_doctor_reconcile_loader_uses_validated_implementation,
+    test_installer_dry_run_fresh_install_and_idempotent_reinstall,
+    test_installer_upgrade_rollback_restores_active_runtime,
+    test_installer_migrates_legacy_core_and_rolls_back_first_switch,
+    test_installer_lock_and_duplicate_hook_guards,
+    test_installer_cli_and_doctor_managed_runtime_diagnostics,
     test_doctor_discovers_effective_taskdata_directory,
     test_operator_doctor_loads_colocated_queue_helper,
     test_nautical_dispatches_supported_subcommands,

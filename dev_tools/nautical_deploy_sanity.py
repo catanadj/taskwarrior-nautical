@@ -22,12 +22,14 @@ REQUIRED_RUNTIME_FILES = (
     "on-add-nautical.py",
     "on-modify-nautical.py",
     "on-exit-nautical.py",
+    "nautical_core/install_runtime.py",
     "nautical_core/hooks/__init__.py",
     "nautical_core/hooks/add_impl.py",
     "nautical_core/hooks/exit_impl.py",
     "nautical_core/hooks/modify_impl.py",
     "nautical_core/native_until.py",
     "nautical_core/modify_expiration.py",
+    "nautical_core/tools/nautical_install.py",
 )
 
 

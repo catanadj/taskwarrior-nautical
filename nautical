@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 COMMANDS = {
+    "install": ROOT / "nautical_core" / "tools" / "nautical_install.py",
     "doctor": ROOT / "nautical_core" / "tools" / "nautical_doctor.py",
     "queue-status": ROOT / "nautical_core" / "tools" / "nautical_queue_status.py",
     "chain-repair": ROOT / "nautical_core" / "tools" / "nautical_chain_repair.py",
@@ -26,7 +27,7 @@ ALIASES = {
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
         print("usage: nautical <command> [options]")
-        print("commands: doctor, queue-status, chain-repair, reconcile, navigator")
+        print("commands: install, doctor, queue-status, chain-repair, reconcile, navigator")
         return 0
     command = ALIASES.get(sys.argv[1], sys.argv[1])
     target = COMMANDS.get(command)

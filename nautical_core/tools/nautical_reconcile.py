@@ -10,7 +10,6 @@ import importlib.machinery
 import importlib.util
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -23,7 +22,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
-from nautical_core import queue_store, reconcile, safe_lock  # noqa: E402
+from nautical_core import queue_store, reconcile, safe_lock, task_command  # noqa: E402
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -61,14 +60,20 @@ def _modify_implementation_path(path: Path) -> Path:
     return next((candidate for candidate in candidates if candidate.is_file()), path)
 
 
-def _run_task(task_bin: str, args: list[str], *, input_text: str | None = None, timeout: float = 60.0):
-    return subprocess.run(
-        [task_bin, *args],
-        input=input_text,
-        text=True,
-        capture_output=True,
+def _run_task(
+    task_bin: str,
+    args: list[str],
+    *,
+    input_text: str | None = None,
+    timeout: float = 60.0,
+    read_only: bool = False,
+):
+    return task_command.run_task_command(
+        task_bin,
+        args,
+        input_text=input_text,
         timeout=timeout,
-        env=os.environ.copy(),
+        retry_locks=read_only,
     )
 
 
@@ -77,10 +82,9 @@ def _export(task_bin: str, filters: list[str], *, timeout: float = 120.0) -> lis
         task_bin,
         ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", *filters, "export"],
         timeout=timeout,
+        read_only=True,
     )
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "task export failed").strip())
-    payload = json.loads((proc.stdout or "").strip() or "[]")
+    payload = task_command.load_json_result(proc, "task export", empty=[])
     if isinstance(payload, dict):
         payload = [payload]
     if not isinstance(payload, list):
@@ -203,9 +207,10 @@ def _task_data_dir(task_bin: str) -> Path:
             task_bin,
             ["rc.hooks=off", "rc.verbose=nothing", "_get", "rc.data.location"],
             timeout=10.0,
+            read_only=True,
         )
         if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or proc.stdout or "Taskwarrior data location lookup failed").strip())
+            raise RuntimeError(task_command.failure_message(proc, "Taskwarrior data location lookup"))
         raw = str(proc.stdout or "").strip()
     if not raw:
         raise RuntimeError("Taskwarrior data location is empty")
@@ -276,7 +281,7 @@ def _modify_parent_nextlink(task_bin: str, parent: dict[str, Any], child_short: 
         timeout=30.0,
     )
     if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "parent nextLink update failed").strip())
+        raise RuntimeError(task_command.failure_message(proc, "parent nextLink update"))
 
 
 def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
@@ -294,7 +299,7 @@ def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
         timeout=30.0,
     )
     if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "parent chain update failed").strip())
+        raise RuntimeError(task_command.failure_message(proc, "parent chain update"))
 
 
 def _stale_plan(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
@@ -683,7 +688,7 @@ def _print_recovery_group(
 def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
     reason = str(exc).strip() or type(exc).__name__
     if args.json:
-        payload = {
+        payload: dict[str, Any] = {
             "mode": "apply" if args.apply else "dry-run",
             "status": "error",
             "stage": stage,

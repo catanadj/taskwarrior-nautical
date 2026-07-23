@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,15 +15,15 @@ BASE_DIR = CORE_DIR.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from nautical_core import chain_repair  # noqa: E402
+from nautical_core import chain_repair, task_command  # noqa: E402
 
 
-def _run_task(task_bin: str, args: list[str], *, timeout: float = 60.0):
-    return subprocess.run(
-        [task_bin, *args],
-        text=True,
-        capture_output=True,
+def _run_task(task_bin: str, args: list[str], *, timeout: float = 60.0, read_only: bool = False):
+    return task_command.run_task_command(
+        task_bin,
+        args,
         timeout=timeout,
+        retry_locks=read_only,
     )
 
 
@@ -33,10 +32,9 @@ def _export(task_bin: str) -> list[dict[str, Any]]:
         task_bin,
         ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chainID.not:", "export"],
         timeout=120.0,
+        read_only=True,
     )
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "task export failed").strip())
-    payload = json.loads((proc.stdout or "").strip() or "[]")
+    payload = task_command.load_json_result(proc, "task export", empty=[])
     if isinstance(payload, dict):
         payload = [payload]
     if not isinstance(payload, list):
@@ -58,7 +56,7 @@ def _apply_repair(task_bin: str, repair: chain_repair.LinkRepair) -> None:
         timeout=30.0,
     )
     if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or f"failed to update {repair.short}").strip())
+        raise RuntimeError(task_command.failure_message(proc, f"failed to update {repair.short}"))
 
 
 def _print_repair(repair: chain_repair.LinkRepair, *, applied: bool) -> None:
@@ -81,6 +79,29 @@ def _print_issue(issue: chain_repair.ChainIssue) -> None:
             print(f"    why: {reason}")
 
 
+def _failure(args: argparse.Namespace, stage: str, exc: Exception) -> int:
+    reason = str(exc).strip() or type(exc).__name__
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "mode": "apply" if args.apply else "dry-run",
+                    "stage": stage,
+                    "error": reason,
+                    "repairs": 0,
+                    "issues": 0,
+                    "applied": [],
+                    "issue_details": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        print(f"error: {stage.replace('_', ' ')}: {reason}", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Repair deterministic Nautical chain link gaps.")
     parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
@@ -88,9 +109,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
     args = parser.parse_args(argv)
 
-    tasks = _export(args.task_bin)
+    try:
+        tasks = _export(args.task_bin)
+    except Exception as exc:
+        return _failure(args, "task_export", exc)
     repairs, issues = chain_repair.plan_chain_link_repairs(tasks)
     applied: list[dict[str, Any]] = []
+    apply_error: dict[str, Any] | None = None
 
     for issue in issues:
         if not args.json:
@@ -98,7 +123,16 @@ def main(argv: list[str] | None = None) -> int:
 
     for repair in repairs:
         if args.apply:
-            _apply_repair(args.task_bin, repair)
+            try:
+                _apply_repair(args.task_bin, repair)
+            except Exception as exc:
+                apply_error = {
+                    "repair": repair.__dict__,
+                    "error": str(exc).strip() or type(exc).__name__,
+                }
+                if not args.json:
+                    print(f"error: repair apply: {apply_error['error']}", file=sys.stderr)
+                break
             applied.append(repair.__dict__)
         if not args.json:
             _print_repair(repair, applied=args.apply)
@@ -110,11 +144,14 @@ def main(argv: list[str] | None = None) -> int:
         "applied": applied,
         "issue_details": [issue.__dict__ for issue in issues],
     }
+    if apply_error is not None:
+        summary["error"] = apply_error
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
-        print(f"summary: {summary['mode']}; repairs={summary['repairs']} issues={summary['issues']}")
-    return 1 if issues else 0
+        error_suffix = " errors=1" if apply_error is not None else ""
+        print(f"summary: {summary['mode']}; repairs={summary['repairs']} issues={summary['issues']}{error_suffix}")
+    return 1 if issues or apply_error is not None else 0
 
 
 if __name__ == "__main__":

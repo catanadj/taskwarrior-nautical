@@ -20585,6 +20585,171 @@ def test_chain_repair_infers_single_root_link_one_only():
     expect("not rooted" in str(orphan_reason), f"orphan singleton should explain refusal: {issues}")
 
 
+def test_task_command_classifies_boundary_failures():
+    """The operator boundary should classify launch, timeout, and malformed-output failures."""
+    from nautical_core import task_command
+
+    original = task_command.subprocess.run
+    mode = {"value": "missing"}
+
+    def fake_run(*_args, **_kwargs):
+        if mode["value"] == "missing":
+            raise FileNotFoundError
+        if mode["value"] == "timeout":
+            raise task_command.subprocess.TimeoutExpired(
+                ["task", "export"],
+                0.25,
+                output=b"partial \xce\xa9",
+                stderr=b"",
+            )
+        return SimpleNamespace(returncode=3, stdout="", stderr="bad command")
+
+    try:
+        task_command.subprocess.run = fake_run
+        missing = task_command.run_task_command("missing-task", ["export"], timeout=1.0)
+        expect(missing.kind == "missing_binary" and missing.returncode == 127, f"missing binary was not classified: {missing}")
+        expect("missing-task" in task_command.failure_message(missing, "task export"), "missing binary message was not actionable")
+
+        mode["value"] = "timeout"
+        timed_out = task_command.run_task_command("task", ["export"], timeout=0.25)
+        expect(timed_out.kind == "timeout" and "Ω" in timed_out.stdout, f"timeout output was not preserved: {timed_out}")
+        expect("0.25s" in task_command.failure_message(timed_out, "task export"), "timeout message omitted its bound")
+
+        mode["value"] = "nonzero"
+        failed = task_command.run_task_command("task", ["export"])
+        expect(failed.kind == "nonzero" and task_command.failure_message(failed, "task export") == "bad command", f"nonzero failure changed: {failed}")
+    finally:
+        task_command.subprocess.run = original
+
+    malformed = SimpleNamespace(returncode=0, stdout="{not-json", stderr="")
+    try:
+        task_command.load_json_result(malformed, "task export", empty=[])
+    except RuntimeError as exc:
+        expect("task export returned invalid JSON" in str(exc), f"malformed output error was unclear: {exc}")
+    else:
+        raise AssertionError("malformed command JSON should be rejected")
+
+
+def test_task_command_retries_only_opted_in_locks():
+    """Read retries should recover one lock while the default write policy stays single-attempt."""
+    from nautical_core import task_command
+
+    original_run = task_command.subprocess.run
+    original_sleep = task_command.time.sleep
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+    responses = [
+        SimpleNamespace(returncode=1, stdout="", stderr="database is locked"),
+        SimpleNamespace(returncode=0, stdout="[]", stderr=""),
+    ]
+
+    def fake_run(argv, **_kwargs):
+        calls.append(list(argv))
+        return responses.pop(0)
+
+    try:
+        task_command.subprocess.run = fake_run
+        task_command.time.sleep = sleeps.append
+        recovered = task_command.run_task_command("task", ["export"], retry_locks=True, retry_delay=0.05)
+        expect(recovered.ok and recovered.attempts == 2, f"read lock did not recover: {recovered}")
+        expect(len(calls) == 2 and sleeps == [0.05], f"unexpected retry schedule: calls={calls}, sleeps={sleeps}")
+
+        calls.clear()
+        responses[:] = [SimpleNamespace(returncode=1, stdout="", stderr="database is locked")]
+        write = task_command.run_task_command("task", ["modify", "chain:off"])
+        expect(write.kind == "lock_busy" and write.attempts == 1, f"write was unexpectedly retried: {write}")
+        expect(len(calls) == 1, f"write command ran more than once: {calls}")
+    finally:
+        task_command.subprocess.run = original_run
+        task_command.time.sleep = original_sleep
+
+
+def test_operator_tools_apply_read_only_retry_policy():
+    """Exports and diagnostics may retry locks; reconciliation and repair writes may not."""
+    reconcile_tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+        "_nautical_reconcile_command_policy_test",
+    )
+    repair_tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_chain_repair.py"),
+        "_nautical_chain_repair_command_policy_test",
+    )
+    doctor_tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_doctor.py"),
+        "_nautical_doctor_command_policy_test",
+    )
+    task_command = reconcile_tool.task_command
+    original = task_command.run_task_command
+    policies: list[tuple[tuple[str, ...], bool]] = []
+
+    def fake_run(_task_bin, args, **kwargs):
+        policies.append((tuple(args), bool(kwargs.get("retry_locks"))))
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+
+    try:
+        task_command.run_task_command = fake_run
+        reconcile_tool._run_task("task", ["export"], read_only=True)
+        reconcile_tool._run_task("task", ["modify", "chain:off"])
+        repair_tool._run_task("task", ["export"], read_only=True)
+        repair_tool._run_task("task", ["modify", "nextLink:abc"])
+        doctor_tool._run_task("task", ["--version"], {})
+    finally:
+        task_command.run_task_command = original
+
+    expect(
+        [retry for _args, retry in policies] == [True, False, True, False, True],
+        f"operator command policies were not separated: {policies}",
+    )
+
+
+def test_chain_repair_command_failure_is_structured():
+    """Chain repair JSON mode should report command and apply failures without a traceback."""
+    tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_chain_repair.py"),
+        "_nautical_chain_repair_command_failure_test",
+    )
+    output = io.StringIO()
+    errors = io.StringIO()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+        result = tool.main(["--json", "--task-bin", "/definitely/missing/task-Ω"])
+    payload = json.loads(output.getvalue())
+    expect(result == 1 and payload.get("stage") == "task_export", f"failure was not structured: {payload}")
+    expect("task-Ω" in payload.get("error", ""), f"Unicode command detail was lost: {payload}")
+    expect("Traceback" not in errors.getvalue(), f"chain repair leaked a traceback: {errors.getvalue()!r}")
+
+    original = (tool._export, tool._apply_repair)
+    try:
+        tool._export = lambda _task_bin: [
+            {
+                "uuid": "11111111-0000-0000-0000-000000000001",
+                "chainID": "apply-failure",
+                "link": 1,
+                "status": "completed",
+            },
+            {
+                "uuid": "22222222-0000-0000-0000-000000000002",
+                "chainID": "apply-failure",
+                "link": 2,
+                "status": "pending",
+            },
+        ]
+
+        def fail_apply(_task_bin, _repair):
+            raise RuntimeError("write rejected Ω")
+
+        tool._apply_repair = fail_apply
+        output = io.StringIO()
+        errors = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            result = tool.main(["--apply", "--json"])
+        payload = json.loads(output.getvalue())
+        expect(result == 1 and not payload.get("applied"), f"failed repair was counted as applied: {payload}")
+        expect((payload.get("error") or {}).get("error") == "write rejected Ω", f"apply failure was unclear: {payload}")
+        expect("Traceback" not in errors.getvalue(), f"repair apply leaked a traceback: {errors.getvalue()!r}")
+    finally:
+        tool._export, tool._apply_repair = original
+
+
 def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     """on-modify should reuse one full-chain export across preflight and later feedback prep when chain context is needed."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -22532,6 +22697,10 @@ TESTS = [
     test_chain_repair_plans_only_safe_adjacent_link_updates,
     test_chain_repair_infers_missing_links_only_when_deterministic,
     test_chain_repair_infers_single_root_link_one_only,
+    test_task_command_classifies_boundary_failures,
+    test_task_command_retries_only_opted_in_locks,
+    test_operator_tools_apply_read_only_retry_policy,
+    test_chain_repair_command_failure_is_structured,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,

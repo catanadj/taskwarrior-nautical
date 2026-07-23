@@ -9,7 +9,6 @@ import importlib.util
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tomllib
 import zoneinfo
@@ -26,7 +25,7 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import chain_repair, config_schema, install_runtime, reconcile  # noqa: E402
+from nautical_core import chain_repair, config_schema, install_runtime, reconcile, task_command  # noqa: E402
 import nautical_core.runtime as runtime  # noqa: E402
 
 REQUIRED_UDAS = {
@@ -67,16 +66,13 @@ def _finding(
 
 
 def _run_task(task_bin: str, args: list[str], env: dict[str, str], timeout: float = 30.0):
-    try:
-        return subprocess.run(
-            [task_bin, *args],
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=timeout,
-        )
-    except Exception as exc:
-        return subprocess.CompletedProcess([task_bin, *args], 127, "", str(exc))
+    return task_command.run_task_command(
+        task_bin,
+        args,
+        env=env,
+        timeout=timeout,
+        retry_locks=True,
+    )
 
 
 def _task_get(task_bin: str, key: str, env: dict[str, str]) -> tuple[bool, str]:
@@ -96,12 +92,10 @@ def _task_export(task_bin: str, env: dict[str, str]) -> tuple[bool, list[dict[st
         env,
         timeout=120.0,
     )
-    if proc.returncode != 0:
-        return False, [], (proc.stderr or proc.stdout or "task export failed").strip()
     try:
-        payload = json.loads((proc.stdout or "").strip() or "[]")
+        payload = task_command.load_json_result(proc, "task export", empty=[])
     except Exception as exc:
-        return False, [], f"task export returned invalid JSON: {exc}"
+        return False, [], str(exc)
     if isinstance(payload, dict):
         payload = [payload]
     if not isinstance(payload, list):
@@ -197,7 +191,7 @@ def _check_runtime(
             "error",
             "Taskwarrior could not be executed.",
             fix="Install Taskwarrior or pass --task-bin.",
-            details={"error": (proc.stderr or "").strip()},
+            details={"error": task_command.failure_message(proc, "Taskwarrior version lookup")},
         )
     else:
         _finding(

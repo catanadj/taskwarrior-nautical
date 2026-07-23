@@ -4,6 +4,8 @@ import fnmatch
 import os
 from dataclasses import dataclass
 
+from . import file_resource_limits as resource_limits
+
 
 @dataclass(frozen=True)
 class FileSource:
@@ -182,8 +184,15 @@ def resolve_file_sources(
     seen: set[tuple[str, tuple[str, ...]]] = set()
     directory_files: list[str] = []
     if any(_is_pattern(source.pattern) for source in parsed):
+        scanned = 0
         with os.scandir(root) as entries:
             for entry in entries:
+                scanned += 1
+                if scanned > resource_limits.MAX_DIRECTORY_ENTRIES:
+                    raise ValueError(
+                        f"{label}_dir contains more than "
+                        f"{resource_limits.MAX_DIRECTORY_ENTRIES} entries; use a smaller source directory."
+                    )
                 if entry.name.startswith("."):
                     continue
                 try:
@@ -217,6 +226,11 @@ def resolve_file_sources(
             if key in seen:
                 continue
             seen.add(key)
+            if len(resolved_sources) >= resource_limits.MAX_RESOLVED_FILES:
+                raise ValueError(
+                    f"{label} resolves to more than "
+                    f"{resource_limits.MAX_RESOLVED_FILES} files; narrow the expression."
+                )
             resolved_sources.append(
                 ResolvedFileSource(
                     path=path,

@@ -8,6 +8,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable
 
+from . import file_resource_limits as resource_limits
+
 
 _CACHE_BY_PATH: dict[str, tuple[int, int, str, frozenset[date], dict[date, str]]] = {}
 
@@ -26,12 +28,13 @@ def _expand_date_spec(spec: str, *, label: str) -> set[date]:
         raise ValueError(f"{label} contains an invalid date or range.")
     if end < start:
         raise ValueError(f"{label} contains a backward date range.")
-    out: set[date] = set()
-    cur = start
-    while cur <= end:
-        out.add(cur)
-        cur += timedelta(days=1)
-    return out
+    span_days = (end - start).days + 1
+    if span_days > resource_limits.MAX_DATE_RANGE_DAYS:
+        raise ValueError(
+            f"{label} range spans {span_days} days; "
+            f"the maximum is {resource_limits.MAX_DATE_RANGE_DAYS}."
+        )
+    return {start + timedelta(days=offset) for offset in range(span_days)}
 
 
 def _iter_content_lines(text: str) -> Iterable[tuple[int, str]]:
@@ -86,6 +89,10 @@ def _parse_csv_dates_and_descriptions(text: str, *, label: str) -> tuple[frozens
         nonempty_date_rows += 1
         row_dates = _expand_date_spec(value, label=f"{label} line {row_no}")
         out.update(row_dates)
+        if len(out) > resource_limits.MAX_RESOLVED_DATES:
+            raise ValueError(
+                f"{label} resolves to more than {resource_limits.MAX_RESOLVED_DATES} unique dates."
+            )
         description = str(row.get(description_key) or "").strip() if description_key is not None else ""
         if description:
             for item_date in row_dates:
@@ -102,6 +109,10 @@ def _parse_text_dates(text: str, *, label: str) -> frozenset[date]:
     out: set[date] = set()
     for line_no, raw in _iter_content_lines(text):
         out.update(_expand_date_spec(raw.strip(), label=f"{label} line {line_no}"))
+        if len(out) > resource_limits.MAX_RESOLVED_DATES:
+            raise ValueError(
+                f"{label} resolves to more than {resource_limits.MAX_RESOLVED_DATES} unique dates."
+            )
     return frozenset(out)
 
 
@@ -109,13 +120,29 @@ def load_file_date_data(path: str, *, label: str) -> tuple[frozenset[date], dict
     if not path:
         return frozenset(), {}
     st = os.stat(path)
+    if st.st_size > resource_limits.MAX_FILE_BYTES:
+        raise ValueError(
+            f"{label} is too large ({st.st_size} bytes); "
+            f"the maximum is {resource_limits.MAX_FILE_BYTES} bytes."
+        )
     raw = Path(path).read_bytes()
+    if len(raw) > resource_limits.MAX_FILE_BYTES:
+        raise ValueError(
+            f"{label} is too large ({len(raw)} bytes); "
+            f"the maximum is {resource_limits.MAX_FILE_BYTES} bytes."
+        )
     digest = hashlib.sha256(raw).hexdigest()
     cached = _CACHE_BY_PATH.get(path)
     if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size and cached[2] == digest:
         return cached[3], dict(cached[4])
 
     text = raw.decode("utf-8-sig")
+    line_count = len(text.splitlines())
+    if line_count > resource_limits.MAX_FILE_LINES:
+        raise ValueError(
+            f"{label} contains {line_count} lines; "
+            f"the maximum is {resource_limits.MAX_FILE_LINES}."
+        )
     non_comment = list(_iter_content_lines(text))
     if not non_comment:
         raise ValueError(f"{label} is empty or has no date rows.")

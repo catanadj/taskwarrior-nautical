@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from .business_calendar import ConfiguredBusinessCalendar
+from . import file_resource_limits as resource_limits
 
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -194,6 +195,11 @@ def _loaded_file_dates(
                     f"{field_label} pattern(s) matched no files: {joined}."
                 )
             out.update(load_dates(expression, directory))
+            if len(out) > resource_limits.MAX_RESOLVED_DATES:
+                raise BusinessCalendarConfigError(
+                    f"{field_label} resolves to more than "
+                    f"{resource_limits.MAX_RESOLVED_DATES} unique dates."
+                )
         except BusinessCalendarConfigError as exc:
             if field_label in str(exc):
                 raise

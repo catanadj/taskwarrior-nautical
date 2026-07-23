@@ -14058,6 +14058,155 @@ def test_file_backed_cache_detects_same_size_content_replacement():
             expect(second == frozenset({date(2026, 1, 2)}), f'{module_label} cache served stale same-size data: {second!r}')
 
 
+def test_file_backed_resource_limits_reject_oversized_inputs():
+    """File-backed dates should reject excessive bytes, lines, ranges, and unique dates."""
+    from nautical_core import file_backed_dates
+    from nautical_core import file_resource_limits as limits
+
+    saved = (
+        limits.MAX_FILE_BYTES,
+        limits.MAX_FILE_LINES,
+        limits.MAX_DATE_RANGE_DAYS,
+        limits.MAX_RESOLVED_DATES,
+    )
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+
+            limits.MAX_FILE_BYTES = 16
+            oversized = base / 'oversized.txt'
+            oversized.write_text('2026-01-01\n2026-01-02\n', encoding='utf-8')
+            try:
+                file_backed_dates.load_file_date_data(str(oversized), label='anchor_file oversized.txt')
+                expect(False, 'oversized file was accepted')
+            except ValueError as exc:
+                expect('too large' in str(exc) and '16 bytes' in str(exc), f'unexpected size error: {exc}')
+
+            limits.MAX_FILE_BYTES = saved[0]
+            limits.MAX_FILE_LINES = 2
+            too_many_lines = base / 'lines.txt'
+            too_many_lines.write_text('2026-01-01\n2026-01-02\n2026-01-03\n', encoding='utf-8')
+            try:
+                file_backed_dates.load_file_date_data(str(too_many_lines), label='omit_file lines.txt')
+                expect(False, 'excessive line count was accepted')
+            except ValueError as exc:
+                expect('contains 3 lines' in str(exc) and 'maximum is 2' in str(exc), f'unexpected line error: {exc}')
+
+            limits.MAX_FILE_LINES = saved[1]
+            limits.MAX_DATE_RANGE_DAYS = 2
+            excessive_range = base / 'range.txt'
+            excessive_range.write_text('2026-01-01..2026-01-03\n', encoding='utf-8')
+            try:
+                file_backed_dates.load_file_date_data(str(excessive_range), label='anchor_file range.txt')
+                expect(False, 'excessive date range was accepted')
+            except ValueError as exc:
+                expect('range spans 3 days' in str(exc) and 'maximum is 2' in str(exc), f'unexpected range error: {exc}')
+
+            limits.MAX_DATE_RANGE_DAYS = saved[2]
+            limits.MAX_RESOLVED_DATES = 2
+            excessive_dates = base / 'dates.txt'
+            excessive_dates.write_text('2026-01-01\n2026-01-02\n2026-01-03\n', encoding='utf-8')
+            try:
+                file_backed_dates.load_file_date_data(str(excessive_dates), label='omit_file dates.txt')
+                expect(False, 'excessive unique date count was accepted')
+            except ValueError as exc:
+                expect('more than 2 unique dates' in str(exc), f'unexpected unique-date error: {exc}')
+
+            max_date = base / 'max-date.txt'
+            max_date.write_text('9999-12-31..9999-12-31\n', encoding='utf-8')
+            dates, _descriptions = file_backed_dates.load_file_date_data(
+                str(max_date),
+                label='anchor_file max-date.txt',
+            )
+            expect(dates == frozenset({date.max}), f'date.max range did not resolve safely: {dates!r}')
+    finally:
+        (
+            limits.MAX_FILE_BYTES,
+            limits.MAX_FILE_LINES,
+            limits.MAX_DATE_RANGE_DAYS,
+            limits.MAX_RESOLVED_DATES,
+        ) = saved
+
+
+def test_file_source_resource_limits_bound_wildcard_fanout():
+    """Wildcard source resolution should cap directory scans and matched file fan-out."""
+    import nautical_core.anchor_files as anchor_files
+    from nautical_core import file_resource_limits as limits
+
+    saved = (limits.MAX_DIRECTORY_ENTRIES, limits.MAX_RESOLVED_FILES)
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            for idx in range(3):
+                (base / f'{idx}.csv').write_text(f'date\n2026-01-0{idx + 1}\n', encoding='utf-8')
+
+            limits.MAX_DIRECTORY_ENTRIES = 2
+            try:
+                anchor_files.load_anchor_file_dates('*.csv', str(base))
+                expect(False, 'oversized source directory was accepted')
+            except ValueError as exc:
+                expect('contains more than 2 entries' in str(exc), f'unexpected directory limit error: {exc}')
+
+            limits.MAX_DIRECTORY_ENTRIES = 10
+            limits.MAX_RESOLVED_FILES = 2
+            try:
+                anchor_files.load_anchor_file_dates('*.csv', str(base))
+                expect(False, 'excessive wildcard fan-out was accepted')
+            except ValueError as exc:
+                expect('more than 2 files' in str(exc), f'unexpected file fan-out error: {exc}')
+    finally:
+        limits.MAX_DIRECTORY_ENTRIES, limits.MAX_RESOLVED_FILES = saved
+
+
+def test_file_date_aggregate_limits_cover_anchor_omit_and_business_calendars():
+    """Aggregate limits should apply after resolving multiple file sources and calendar expressions."""
+    import nautical_core.anchor_files as anchor_files
+    import nautical_core.omit_files as omit_files
+    from nautical_core import file_resource_limits as limits
+
+    saved = limits.MAX_RESOLVED_DATES
+    try:
+        limits.MAX_RESOLVED_DATES = 1
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            (base / 'one.csv').write_text('date\n2026-01-01\n', encoding='utf-8')
+            (base / 'two.csv').write_text('date\n2026-01-02\n', encoding='utf-8')
+
+            for label, loader in (
+                ('anchor_file', anchor_files.load_anchor_file_dates),
+                ('omit_file', omit_files.load_omit_file_dates),
+            ):
+                try:
+                    loader('one.csv | two.csv', str(base))
+                    expect(False, f'{label} aggregate limit was not enforced')
+                except ValueError as exc:
+                    expect(f'{label} resolves to more than 1 unique dates' in str(exc), f'unexpected {label} error: {exc}')
+
+            try:
+                anchor_files.load_anchor_file_occurrence_specs(
+                    'one.csv@t=09:00,17:00',
+                    str(base),
+                    (8, 0),
+                )
+                expect(False, 'anchor_file occurrence expansion limit was not enforced')
+            except ValueError as exc:
+                expect('more than 1 occurrences' in str(exc), f'unexpected occurrence error: {exc}')
+
+            try:
+                core.resolve_business_calendar_config(
+                    {'work': {'anchor_file': ['one.csv', 'two.csv']}},
+                    anchor_file_dir=str(base),
+                )
+                expect(False, 'business calendar aggregate limit was not enforced')
+            except ValueError as exc:
+                expect(
+                    'business_calendar.work.anchor_file resolves to more than 1 unique dates' in str(exc),
+                    f'unexpected business calendar error: {exc}',
+                )
+    finally:
+        limits.MAX_RESOLVED_DATES = saved
+
+
 def test_omit_file_modifiers_roll_dates_and_carry_descriptions():
     """omit_file modifiers should transform loaded dates and move descriptions onto the transformed date."""
     import nautical_core.omit_files as omit_files
@@ -21545,6 +21694,9 @@ TESTS = [
     test_file_backed_csv_missing_date_column_reports_columns,
     test_file_backed_empty_or_no_usable_dates_fail_cleanly,
     test_file_backed_cache_detects_same_size_content_replacement,
+    test_file_backed_resource_limits_reject_oversized_inputs,
+    test_file_source_resource_limits_bound_wildcard_fanout,
+    test_file_date_aggregate_limits_cover_anchor_omit_and_business_calendars,
     test_anchor_omit_next_after_expr_skips_matching_dates,
     test_anchor_omit_next_after_expr_skips_omit_file_dates,
     test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items,

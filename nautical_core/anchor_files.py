@@ -11,6 +11,7 @@ from .business_calendar import (
     effective_business_calendar,
 )
 from .business_calendar_config import validate_calendar_rule_modifiers
+from . import file_resource_limits as resource_limits
 from .file_backed_dates import load_file_date_data
 from .file_source_expr import (
     FileSourceResolution,
@@ -203,6 +204,10 @@ def _load_anchor_file_data(
     for source in resolution.sources:
         dates, descriptions, _source_time = _load_anchor_source_data(source, business_calendar)
         out_dates.update(dates)
+        if len(out_dates) > resource_limits.MAX_RESOLVED_DATES:
+            raise ValueError(
+                f"anchor_file resolves to more than {resource_limits.MAX_RESOLVED_DATES} unique dates."
+            )
         for item_date, text in descriptions.items():
             if text:
                 out_descriptions.setdefault(item_date, text)
@@ -337,6 +342,11 @@ def load_anchor_file_occurrence_specs(
                 if occurrence in seen:
                     continue
                 seen.add(occurrence)
+                if len(seen) > resource_limits.MAX_RESOLVED_DATES:
+                    raise ValueError(
+                        f"anchor_file resolves to more than "
+                        f"{resource_limits.MAX_RESOLVED_DATES} occurrences."
+                    )
                 out.append(occurrence)
     out.sort()
     return out

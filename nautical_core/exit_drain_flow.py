@@ -71,8 +71,8 @@ def drain_queue_result(*, services: ExitDrainServices):
             state.errors += requeue_result.failed
             services.diag(f"requeue failed for {requeue_result.failed} entries")
 
-        if state.sqlite_acked_ids:
-            ack_result = services.ack_queue_entries_sqlite_result(sorted(state.sqlite_acked_ids))
+        if state.sqlite_acked_claims:
+            ack_result = services.ack_queue_entries_sqlite_result(sorted(state.sqlite_acked_claims.items()))
             if not ack_result.ok:
                 state.errors += ack_result.count
                 services.diag(f"queue db ack failed for {ack_result.count} entries")

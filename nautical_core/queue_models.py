@@ -121,6 +121,7 @@ class QueueStoredRow:
     spawn_intent_id: str
     payload: str
     attempts: int
+    claim_token: str = ""
 
     @classmethod
     def from_mapping(cls, row: Mapping[str, Any] | sqlite3.Row) -> "QueueStoredRow":
@@ -133,6 +134,7 @@ class QueueStoredRow:
             spawn_intent_id=str(_mapping_value(row, "spawn_intent_id") or "").strip(),
             payload=str(_mapping_value(row, "payload") or "").strip(),
             attempts=_clean_attempts(_mapping_value(row, "attempts")),
+            claim_token=str(_mapping_value(row, "claim_token") or "").strip(),
         )
 
 

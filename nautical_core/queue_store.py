@@ -428,9 +428,19 @@ def claim_rows_sqlite_result(
         if ids:
             conn.executemany(
                 "UPDATE queue_entries SET state='processing', claim_token=?, claimed_at=?, updated_at=? "
-                "WHERE id=?",
+                "WHERE id=? AND state='queued'",
                 [(token, now, now, rid) for rid in ids],
             )
+            rows = [
+                QueueStoredRow(
+                    id=row.id,
+                    spawn_intent_id=row.spawn_intent_id,
+                    payload=row.payload,
+                    attempts=row.attempts,
+                    claim_token=token,
+                )
+                for row in rows
+            ]
         conn.commit()
         return QueueRowClaimResult(rows=rows)
     except sqlite3.OperationalError as exc:
@@ -476,32 +486,45 @@ def rows_to_entries_result(rows: list[QueueStoredRow | sqlite3.Row]) -> QueueEnt
             obj["attempts"] = attempts_db
         obj["__queue_backend"] = "sqlite"
         obj["__queue_id"] = rid
+        obj["__queue_claim_token"] = row.claim_token
         entries.append(obj)
     return QueueEntriesBatch(entries=entries)
 
 
-def ack_entry_ids_sqlite_result(
+def ack_entry_claims_sqlite_result(
     conn: sqlite3.Connection,
-    entry_ids: Sequence[Any],
+    entry_claims: Sequence[tuple[Any, Any]],
     *,
     diag: Callable[[str], None] | None = None,
     on_lock_busy: Callable[[], None] | None = None,
 ) -> QueueWriteResult:
-    ids: list[int] = []
-    for raw in entry_ids or ():
+    claims: list[tuple[int, str]] = []
+    for raw_id, raw_token in entry_claims or ():
         try:
-            rid = int(raw)
+            rid = int(raw_id)
         except Exception:
             continue
-        if rid > 0:
-            ids.append(rid)
-    if not ids:
+        token = str(raw_token or "").strip()
+        if rid > 0 and token:
+            claims.append((rid, token))
+    if not claims:
         return QueueWriteResult(ok=True, count=0)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        conn.executemany("DELETE FROM queue_entries WHERE id=?", [(rid,) for rid in ids])
+        deleted = 0
+        for rid, token in claims:
+            cur = conn.execute(
+                "DELETE FROM queue_entries WHERE id=? AND state='processing' AND claim_token=?",
+                (rid, token),
+            )
+            deleted += max(0, int(getattr(cur, "rowcount", 0) or 0))
         conn.commit()
-        return QueueWriteResult(ok=True, count=len(ids))
+        lost = len(claims) - deleted
+        if lost:
+            if callable(diag):
+                diag(f"queue db ack lost claim ownership for {lost} entr{'y' if lost == 1 else 'ies'}")
+            return QueueWriteResult(ok=False, count=lost, err="queue claim ownership lost")
+        return QueueWriteResult(ok=True, count=deleted)
     except sqlite3.OperationalError as exc:
         try:
             conn.rollback()
@@ -514,7 +537,7 @@ def ack_entry_ids_sqlite_result(
                 on_lock_busy()
         elif callable(diag):
             diag(f"queue db ack failed: {exc}")
-        return QueueWriteResult(ok=False, count=len(ids), lock_busy=lock_busy, err=str(exc))
+        return QueueWriteResult(ok=False, count=len(claims), lock_busy=lock_busy, err=str(exc))
     except Exception as exc:
         try:
             conn.rollback()
@@ -522,7 +545,7 @@ def ack_entry_ids_sqlite_result(
             pass
         if callable(diag):
             diag(f"queue db ack failed: {exc}")
-        return QueueWriteResult(ok=False, count=len(ids), err=str(exc))
+        return QueueWriteResult(ok=False, count=len(claims), err=str(exc))
 
 
 def requeue_entries_sqlite_result(
@@ -542,25 +565,34 @@ def requeue_entries_sqlite_result(
         return QueueWriteResult(ok=True, count=0)
     try:
         conn.execute("BEGIN IMMEDIATE")
+        updated = 0
         for entry in items:
             rid = int(entry.get("__queue_id") or 0)
-            if rid <= 0:
+            token = str(entry.get("__queue_claim_token") or "").strip()
+            if rid <= 0 or not token:
                 continue
             out = dict(entry)
             out.pop("__queue_backend", None)
             out.pop("__queue_id", None)
+            out.pop("__queue_claim_token", None)
             try:
                 attempts = int(out.get("attempts") or 0)
             except Exception:
                 attempts = 0
             payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"))
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE queue_entries SET state='queued', claim_token=NULL, claimed_at=NULL, attempts=?, payload=?, updated_at=? "
-                "WHERE id=?",
-                (attempts, payload, now, rid),
+                "WHERE id=? AND state='processing' AND claim_token=?",
+                (attempts, payload, now, rid, token),
             )
+            updated += max(0, int(getattr(cur, "rowcount", 0) or 0))
         conn.commit()
-        return QueueWriteResult(ok=True, count=len(items))
+        lost = len(items) - updated
+        if lost:
+            if callable(diag):
+                diag(f"queue db requeue lost claim ownership for {lost} entr{'y' if lost == 1 else 'ies'}")
+            return QueueWriteResult(ok=False, count=lost, err="queue claim ownership lost")
+        return QueueWriteResult(ok=True, count=updated)
     except sqlite3.OperationalError as exc:
         try:
             conn.rollback()
@@ -601,6 +633,7 @@ def enqueue_entries_sqlite_result(
             out = dict(entry)
             out.pop("__queue_backend", None)
             out.pop("__queue_id", None)
+            out.pop("__queue_claim_token", None)
             try:
                 attempts = int(out.get("attempts") or 0)
             except Exception:
@@ -655,4 +688,3 @@ def enqueue_entries_sqlite_result(
         if callable(diag):
             diag(f"queue db enqueue failed: {exc}")
         return QueueWriteResult(ok=False, count=len(items), err=str(exc))
-

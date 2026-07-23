@@ -11484,6 +11484,7 @@ def test_on_exit_take_queue_reclaims_stale_sqlite_processing_row():
         entries = mod._take_queue_entries()
         expect(len(entries) == 1, f"expected one reclaimed stale sqlite entry, got: {entries}")
         expect(entries[0].get("spawn_intent_id") == "si_stale_processing", f"unexpected entry: {entries}")
+        expect(bool(entries[0].get("__queue_claim_token")), f"claimed entry is missing its ownership token: {entries}")
         with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
             row = conn.execute(
                 "SELECT state, claim_token, claimed_at FROM queue_entries WHERE spawn_intent_id='si_stale_processing'"
@@ -11608,6 +11609,7 @@ def test_on_exit_requeue_sqlite_clears_claim_metadata():
                 {
                     "__queue_backend": "sqlite",
                     "__queue_id": rid,
+                    "__queue_claim_token": "claim-a",
                     "spawn_intent_id": "si_requeue_sqlite",
                     "child_short": "deadbeef",
                     "child": {"uuid": "00000000-0000-0000-0000-000000000777"},
@@ -11625,6 +11627,88 @@ def test_on_exit_requeue_sqlite_clears_claim_metadata():
         expect(row[1] is None, f"claim_token should be cleared on requeue: {row}")
         expect(row[2] is None, f"claimed_at should be cleared on requeue: {row}")
         expect(int(row[3]) == 3, f"attempt count should persist on requeue: {row}")
+
+
+def test_queue_claim_owner_blocks_stale_ack_and_requeue():
+    """A stale drain must not acknowledge or requeue a row reclaimed by another drain."""
+    queue_store = importlib.import_module("nautical_core.queue_store")
+
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / ".nautical_queue.db"
+        _seed_sqlite_queue(
+            db_path,
+            {
+                "spawn_intent_id": "si_claim_owner",
+                "child_short": "deadbeef",
+                "child": {"uuid": "00000000-0000-0000-0000-000000000777"},
+            },
+        )
+
+        with sqlite3.connect(str(db_path)) as first, sqlite3.connect(str(db_path)) as second:
+            first.row_factory = sqlite3.Row
+            second.row_factory = sqlite3.Row
+            first_claim = queue_store.claim_rows_sqlite_result(
+                first,
+                token="claim-first",
+                now=100.0,
+                processing_stale_after=10.0,
+                max_lines=10,
+            )
+            first_entry = queue_store.rows_to_entries_result(first_claim.rows).entries[0]
+            rid = int(first_entry["__queue_id"])
+            expect(first_entry.get("__queue_claim_token") == "claim-first", f"first token was not preserved: {first_entry}")
+
+            second_claim = queue_store.claim_rows_sqlite_result(
+                second,
+                token="claim-second",
+                now=111.0,
+                processing_stale_after=10.0,
+                max_lines=10,
+            )
+            second_entry = queue_store.rows_to_entries_result(second_claim.rows).entries[0]
+            expect(second_entry.get("__queue_claim_token") == "claim-second", f"second token was not preserved: {second_entry}")
+
+            stale_ack = queue_store.ack_entry_claims_sqlite_result(first, [(rid, "claim-first")])
+            expect(not stale_ack.ok and stale_ack.count == 1, f"stale ack unexpectedly succeeded: {stale_ack}")
+            stale_requeue = queue_store.requeue_entries_sqlite_result(
+                first,
+                [{**first_entry, "attempts": 1}],
+                now=112.0,
+            )
+            expect(not stale_requeue.ok and stale_requeue.count == 1, f"stale requeue unexpectedly succeeded: {stale_requeue}")
+
+            row = second.execute(
+                "SELECT state, claim_token, attempts FROM queue_entries WHERE id=?",
+                (rid,),
+            ).fetchone()
+            expect(tuple(row) == ("processing", "claim-second", 0), f"stale owner changed the current claim: {tuple(row)}")
+
+            current_requeue = queue_store.requeue_entries_sqlite_result(
+                second,
+                [{**second_entry, "attempts": 2}],
+                now=113.0,
+            )
+            expect(current_requeue.ok, f"current owner could not requeue its row: {current_requeue}")
+            row = second.execute(
+                "SELECT state, claim_token, attempts, payload FROM queue_entries WHERE id=?",
+                (rid,),
+            ).fetchone()
+            expect(row[:3] == ("queued", None, 2), f"current requeue did not release the claim: {row}")
+            payload = json.loads(row[3])
+            expect("__queue_claim_token" not in payload, f"private claim token leaked into queue payload: {payload}")
+
+            third_claim = queue_store.claim_rows_sqlite_result(
+                first,
+                token="claim-third",
+                now=114.0,
+                processing_stale_after=10.0,
+                max_lines=10,
+            )
+            expect(len(third_claim.rows) == 1, f"requeued row was not claimable: {third_claim}")
+            current_ack = queue_store.ack_entry_claims_sqlite_result(first, [(rid, "claim-third")])
+            expect(current_ack.ok, f"current owner could not acknowledge its row: {current_ack}")
+            remaining = first.execute("SELECT COUNT(1) FROM queue_entries WHERE id=?", (rid,)).fetchone()[0]
+            expect(int(remaining) == 0, f"acknowledged row was not deleted: {remaining}")
 
 
 
@@ -21397,6 +21481,7 @@ TESTS = [
     test_on_exit_take_queue_reclaims_stale_sqlite_processing_row,
     test_on_exit_take_queue_skips_fresh_sqlite_processing_row,
     test_on_exit_requeue_sqlite_clears_claim_metadata,
+    test_queue_claim_owner_blocks_stale_ack_and_requeue,
     test_on_exit_lock_storm_circuit_requeues_remaining,
     test_cache_metrics_emits_when_enabled,
     test_sanitize_task_strings_removes_controls,

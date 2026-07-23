@@ -1520,7 +1520,7 @@ def _take_queue_entries_sqlite_batch():
     exit_models = _module("exit_models")
     if conn is None:
         return exit_models.ExitQueueBatch(entries=[])
-    token = f"drain-{os.getpid()}-{int(time.time() * 1000)}"
+    token = f"drain-{os.getpid()}-{os.urandom(8).hex()}"
     now = time.time()
     queue_store = _module("queue_store")
     claim = queue_store.claim_rows_sqlite_result(
@@ -1537,17 +1537,21 @@ def _take_queue_entries_sqlite_batch():
     return exit_models.ExitQueueBatch(entries=entries)
 
 
-def _ack_queue_entries_sqlite_result(entry_ids: list[int]):
+def _ack_queue_entries_sqlite_result(entry_claims: list[tuple[int, str]]):
     conn = _queue_db_open_fresh_ready()
     exit_models = _module("exit_models")
-    ids = [int(raw) for raw in (entry_ids or []) if str(raw).isdigit() and int(raw) > 0]
+    claims = [
+        (int(raw_id), str(raw_token or "").strip())
+        for raw_id, raw_token in (entry_claims or [])
+        if str(raw_id).isdigit() and int(raw_id) > 0 and str(raw_token or "").strip()
+    ]
     if conn is None:
-        return exit_models.ExitQueueWriteResult(ok=False, count=len(ids))
+        return exit_models.ExitQueueWriteResult(ok=False, count=len(claims))
     try:
         queue_store = _module("queue_store")
-        result = queue_store.ack_entry_ids_sqlite_result(
+        result = queue_store.ack_entry_claims_sqlite_result(
             conn,
-            ids,
+            claims,
             diag=_diag,
             on_lock_busy=_record_queue_lock_failure,
         )
@@ -1905,7 +1909,7 @@ def _requeue_entries_result(entries: list[dict]):
     claimed_result = _requeue_entries_sqlite_result(claimed) if claimed else exit_models.ExitQueueWriteResult(ok=True, count=0)
     fresh_result = _enqueue_entries_sqlite_result(fresh) if fresh else exit_models.ExitQueueWriteResult(ok=True, count=0)
     ok = claimed_result.ok and fresh_result.ok
-    failed = 0 if ok else len(items)
+    failed = (claimed_result.count if not claimed_result.ok else 0) + (fresh_result.count if not fresh_result.ok else 0)
     return exit_models.ExitRequeueResult(ok=ok, failed=failed)
 
 
@@ -1934,7 +1938,7 @@ class _DrainState:
         self.circuit_breaks = 0
         self.intent_mark_ok = 0
         self.intent_mark_fail = 0
-        self.sqlite_acked_ids: set[int] = set()
+        self.sqlite_acked_claims: dict[int, str] = {}
 
     def mark_final(self, entry: dict, status: str, reason: str) -> None:
         sid = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
@@ -1966,14 +1970,16 @@ class _DrainState:
         out = dict(entry)
         out.pop("__queue_backend", None)
         out.pop("__queue_id", None)
+        out.pop("__queue_claim_token", None)
         return out
 
     def ack_sqlite(self, entry: dict) -> None:
         if self.queue_backend(entry) != "sqlite":
             return
         rid = self.queue_id(entry)
-        if rid > 0:
-            self.sqlite_acked_ids.add(rid)
+        token = str(entry.get("__queue_claim_token") or "").strip()
+        if rid > 0 and token:
+            self.sqlite_acked_claims[rid] = token
 
     def dead_letter(self, entry: dict, reason: str) -> None:
         _write_dead_letter(self.entry_clean(entry), reason)

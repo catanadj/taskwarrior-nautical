@@ -16,24 +16,39 @@ designed to express it.
 
 ## Start Here
 
-Install the hooks and shared package beside your Taskwarrior data:
+Download Nautical, validate the release, and install it:
 
 ```bash
-cd ~/.task/hooks
-curl -LO https://github.com/catanadj/taskwarrior-nautical/raw/main/on-{add,modify,exit}-nautical.py
-chmod +x on-*.py
+git clone --depth 1 https://github.com/catanadj/taskwarrior-nautical.git
+cd taskwarrior-nautical
+./nautical install --dry-run
+./nautical install
+```
 
-cd ..
-curl -L https://github.com/catanadj/taskwarrior-nautical/archive/refs/heads/main.tar.gz \
-  | tar -xz --strip-components=1 taskwarrior-nautical-main/nautical_core
+The installer uses `$TASKDATA` when set, otherwise `~/.task`. It validates the
+hooks before switching releases and restores the active installation if an
+upgrade fails.
 
-curl -s https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/uda.conf >> ~/.taskrc
+Register Nautical's Taskwarrior fields and expose its command launcher:
 
-# Install the nautical command launcher
-curl -Lo ~/.task/nautical https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/nautical
-chmod +x ~/.task/nautical
+```bash
+cp uda.conf ~/.task/uda-nautical.conf
+grep -Fqx "include $HOME/.task/uda-nautical.conf" "$HOME/.taskrc" 2>/dev/null || \
+  printf '\ninclude %s\n' "$HOME/.task/uda-nautical.conf" >> "$HOME/.taskrc"
 mkdir -p ~/.local/bin
 ln -sf ~/.task/nautical ~/.local/bin/nautical
+~/.local/bin/nautical doctor
+```
+
+For a custom data directory, set `$TASKDATA` and substitute that path for
+`~/.task` above.
+
+To upgrade later:
+
+```bash
+git pull --ff-only
+./nautical install
+cp uda.conf "${TASKDATA:-$HOME/.task}/uda-nautical.conf"
 ```
 
 Optional, for formatted panels:

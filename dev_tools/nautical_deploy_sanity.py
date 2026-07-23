@@ -26,6 +26,7 @@ REQUIRED_RUNTIME_FILES = (
     "nautical_core/hooks/add_impl.py",
     "nautical_core/hooks/exit_impl.py",
     "nautical_core/hooks/modify_impl.py",
+    "nautical_core/native_until.py",
     "nautical_core/modify_expiration.py",
 )
 

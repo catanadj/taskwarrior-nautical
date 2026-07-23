@@ -4111,32 +4111,29 @@ def _carry_native_until(
     if not (parent.get("until") and parent.get(parent_anchor_field)):
         return
 
-    parent_target = core.parse_dt_any(parent.get(parent_anchor_field))
-    parent_until = core.parse_dt_any(parent.get("until"))
-    if not (parent_target and parent_until and isinstance(child_due_utc, datetime)):
-        return
-
+    native_until = core._import_sibling("native_until")
     try:
-        parent_until_local = _utc_to_local_naive(parent_until)
-        add_validation = core._import_sibling("add_validation")
-        if add_validation.native_until_uses_exact_carry(parent_until_local):
-            child_until_utc = child_due_utc + (parent_until - parent_target)
-        else:
-            parent_target_local = _utc_to_local_naive(parent_target)
-            child_target_local = _utc_to_local_naive(child_due_utc)
-            day_gap = (parent_until_local.date() - parent_target_local.date()).days
-            child_until_local = datetime.combine(
-                child_target_local.date() + timedelta(days=day_gap),
-                parent_until_local.time(),
-            )
-            child_until_utc = _local_naive_to_utc(child_until_local)
-            if str(kind or "").strip().lower() == "cp" and child_until_utc <= child_due_utc:
-                child_until_local += timedelta(days=1)
-                child_until_utc = _local_naive_to_utc(child_until_local)
-    except Exception:
-        return
-    if child_until_utc <= child_due_utc:
-        raise ValueError("native until must be later than the child recurrence target")
+        parent_target = core.parse_dt_any(parent.get(parent_anchor_field))
+        parent_until = core.parse_dt_any(parent.get("until"))
+    except Exception as exc:
+        raise native_until.NativeUntilCarryError(
+            native_until.CARRY_INVALID,
+            "native until carry requires valid recurrence timestamps",
+        ) from exc
+    if not (parent_target and parent_until and isinstance(child_due_utc, datetime)):
+        raise native_until.NativeUntilCarryError(
+            native_until.CARRY_INVALID,
+            "native until carry requires valid recurrence timestamps",
+        )
+
+    child_until_utc = native_until.carry(
+        parent_target,
+        parent_until,
+        child_due_utc,
+        kind,
+        utc_to_local_naive=_utc_to_local_naive,
+        local_naive_to_utc=_local_naive_to_utc,
+    )
     child["until"] = core.fmt_isoz(child_until_utc)
 
 
@@ -5841,10 +5838,13 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
         return False
     old_target_field = _recurrence_anchor_field(old)
     new_target_field = _recurrence_anchor_field(new)
-    if old_target_field != new_target_field:
+    target_changed = (
+        old_target_field != new_target_field
+        or _field_changed(old, new, old_target_field)
+    )
+    if not target_changed:
         return False
-    if not _field_changed(old, new, old_target_field):
-        return False
+    native_until = core._import_sibling("native_until")
     try:
         new_target = core.parse_dt_any(new.get(new_target_field))
         if not new_target:
@@ -5863,7 +5863,27 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
             return False
         new["until"] = carried
         return True
-    except Exception:
+    except native_until.NativeUntilCarryError as exc:
+        carry = None
+        try:
+            add_validation = core._import_sibling("add_validation")
+            carry = add_validation.describe_native_until_carry(
+                core.parse_dt_any(old.get("until")),
+                core.parse_dt_any(old.get(old_target_field)),
+                to_local=core.to_local,
+            )
+        except Exception:
+            pass
+        rows = [
+            ("Target", core.fmt_dt_local(new_target)),
+            ("Required", str(exc)),
+        ]
+        if carry:
+            rows.insert(1, ("Carry", carry))
+        _panel("❌ Invalid expiration window", rows, kind="error")
+        sys.exit(1)
+    except Exception as exc:
+        _diag(f"native until target carry failed: {exc}")
         return False
 
 
@@ -6252,9 +6272,11 @@ def _completion_build_and_spawn_child(
 
 
 def _handle_completion_modify(old: dict, new: dict) -> None:
-    _completion_validate_cp_and_anchor(old, new)
-    new_cp = _strip_quotes(str(new.get("cp") or "").strip())
+    new_cp, new_anchor, new_anchor_file = _completion_validate_cp_and_anchor(old, new)
     _preserve_cp_relative_offsets_on_due_change(old, new, new_cp)
+    if any(str(old.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
+        recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
+        _preserve_native_until_on_target_change(old, new, recurrence_kind)
     _validate_native_until_after_target_or_fail(new)
     _validate_native_until_anchor_slots_or_fail(new)
     now_utc = core.now_utc()

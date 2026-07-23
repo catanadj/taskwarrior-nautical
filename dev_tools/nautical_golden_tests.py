@@ -9350,7 +9350,6 @@ def test_on_modify_native_until_rejects_invalid_window_changes():
     cases = (
         dict(base, until="20260801T090000Z"),
         dict(base, due="20260803T090000Z", until="20260802T100000Z"),
-        dict(base, due=None, scheduled="20260802T090000Z", until="20260802T090000Z"),
     )
     with tempfile.TemporaryDirectory() as td:
         for new in cases:
@@ -9395,9 +9394,24 @@ def test_on_modify_native_until_follows_recurrence_target_move():
             {"scheduled": "20260802T090000Z"},
             "2026-08-02T23:00:00Z",
         ),
+        (
+            dict(base, due="20260801T090000Z", until="20260801T230000Z"),
+            {"due": None, "scheduled": "20260802T090000Z"},
+            "2026-08-02T23:00:00Z",
+        ),
+        (
+            dict(base, due="20260802T090000Z", until="20260802T230000Z"),
+            {"due": "20260801T090000Z"},
+            "2026-08-01T23:00:00Z",
+        ),
+        (
+            dict(base, due="20260801T090000Z", until="20260801T230000Z"),
+            {"due": "20260801T120000Z"},
+            "2026-08-01T23:00:00Z",
+        ),
     )
     with tempfile.TemporaryDirectory() as td:
-        for old, changes, expected_until in cases:
+        for idx, (old, changes, expected_until) in enumerate(cases):
             new = {**old, **changes}
             proc = _run_hook_script_raw(
                 hook,
@@ -9407,6 +9421,126 @@ def test_on_modify_native_until_follows_recurrence_target_move():
             expect(proc.returncode == 0, f"rescheduled expiration window was rejected: {proc.stderr!r}")
             result = _assert_stdout_json_only(proc.stdout)
             expect(result.get("until") == expected_until, f"until did not follow recurrence target: {result!r}")
+            if idx == 0:
+                panel = _strip_markup(proc.stderr)
+                expect("Nautical recurrence updated" in panel, f"missing automatic expiration update panel: {panel!r}")
+                expect("Expiration" in panel and "Carry" in panel, f"expiration carry was not explained: {panel!r}")
+
+
+def test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts():
+    """The shared expiration policy should cover every recurrence kind with typed conflicts."""
+    import nautical_core.native_until as native_until
+
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_native_until_shared_policy_test")
+    parent_target = mod.core.build_local_datetime(date(2026, 8, 1), (9, 0))
+    parent_until = mod.core.build_local_datetime(date(2026, 8, 1), (23, 0))
+    child_target = mod.core.build_local_datetime(date(2026, 8, 2), (9, 0))
+
+    for kind, recurrence in (
+        ("cp", {"cp": "1d"}),
+        ("anchor", {"anchor": "d:*@t=09:00", "anchor_mode": "skip"}),
+        ("anchor_file", {"anchor_file": "calendar.csv", "anchor_mode": "skip"}),
+    ):
+        old = {
+            "due": mod.core.fmt_isoz(parent_target),
+            "until": mod.core.fmt_isoz(parent_until),
+            **recurrence,
+        }
+        new = {**old, "due": mod.core.fmt_isoz(child_target)}
+        expect(mod._preserve_native_until_on_target_change(old, new, kind), f"{kind} carry was skipped")
+        carried = mod.core.to_local(mod.core.parse_dt_any(new.get("until")))
+        expect(
+            carried.date() == date(2026, 8, 2)
+            and (carried.hour, carried.minute, carried.second) == (23, 0, 0),
+            f"{kind} carry was wrong: {carried}",
+        )
+
+    late_target = mod.core.build_local_datetime(date(2026, 8, 1), (23, 30))
+    try:
+        native_until.carry(
+            parent_target,
+            parent_until,
+            late_target,
+            "anchor",
+            utc_to_local_naive=mod._utc_to_local_naive,
+            local_naive_to_utc=mod._local_naive_to_utc,
+        )
+    except native_until.NativeUntilCarryError as exc:
+        expect(exc.code == native_until.CARRY_CONFLICT, f"unexpected carry error code: {exc.code!r}")
+    else:
+        raise AssertionError("anchor carry conflict was not reported")
+
+
+def test_on_modify_native_until_rejects_uncarryable_anchor_target_move():
+    """An anchor edit must not keep a stale absolute until when calendar carry conflicts."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000448",
+        "description": "uncarryable anchor expiration",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "anchor": "w:mon@t=09:00",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "until448",
+        "link": 1,
+        "due": "20260803T090000Z",
+        "until": "20260803T170000Z",
+    }
+    new = dict(old, due="20260727T180000Z")
+    with tempfile.TemporaryDirectory() as td:
+        proc = _run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"NO_COLOR": "1", "TASKDATA": td},
+        )
+    expect(proc.returncode != 0, "uncarryable anchor target move retained a stale absolute until")
+    expect(not (proc.stdout or "").strip(), f"rejected target move leaked stdout: {proc.stdout!r}")
+    panel = _strip_markup(proc.stderr)
+    expect("Invalid expiration window" in panel and "Carry" in panel, f"missing carry conflict panel: {panel!r}")
+
+
+def test_on_modify_completion_reschedule_carries_native_until():
+    """Completion and target rescheduling in one modify should retain expiration policy."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_completion_reschedule_until_test")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000447",
+        "description": "complete rescheduled expiration",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "until447",
+        "link": 1,
+        "due": "20260801T090000Z",
+        "until": "20260801T230000Z",
+    }
+    cases = (
+        (
+            {**old, "status": "completed", "due": "20260802T090000Z", "end": "20260802T100000Z"},
+            "2026-08-02T23:00:00Z",
+        ),
+        (
+            {
+                **old,
+                "status": "completed",
+                "due": None,
+                "scheduled": "20260802T090000Z",
+                "end": "20260802T100000Z",
+            },
+            "2026-08-02T23:00:00Z",
+        ),
+    )
+    original_preflight = mod._completion_preflight_context
+    try:
+        mod._completion_preflight_context = lambda *_args, **_kwargs: None
+        for new, expected_until in cases:
+            mod._handle_completion_modify(old, new)
+            expect(new.get("until") == expected_until, f"completion reschedule lost expiration carry: {new!r}")
+    finally:
+        mod._completion_preflight_context = original_preflight
 
 
 def test_on_modify_native_until_accepts_valid_window_change():
@@ -9471,7 +9605,7 @@ def test_on_modify_native_until_validates_simultaneous_completion():
         "chainID": "until136",
         "link": 1,
         "due": "20260801T090000Z",
-        "until": "20260802T090000Z",
+        "until": "20260801T230000Z",
     }
     new = dict(
         old,
@@ -11890,6 +12024,19 @@ def test_on_modify_build_child_carries_until_across_dst():
             and (child_until_local.hour, child_until_local.minute) == (17, 0),
             f"unexpected carried until: {child_until_local}",
         )
+
+        pending_parent = dict(parent, status="pending")
+        moved_parent = dict(pending_parent, due=mod.core.fmt_isoz(child_due))
+        expect(
+            mod._preserve_native_until_on_target_change(pending_parent, moved_parent, "cp"),
+            "ordinary target move skipped native-until carry across DST",
+        )
+        moved_until_local = mod.core.to_local(mod.core.parse_dt_any(moved_parent.get("until")))
+        expect(
+            moved_until_local.date() == date(2025, 3, 16)
+            and (moved_until_local.hour, moved_until_local.minute) == (17, 0),
+            f"ordinary target move changed calendar expiration across DST: {moved_until_local}",
+        )
     finally:
         mod.core.LOCAL_TZ_NAME = previous_tz_name
         mod.core._LOCAL_TZ = previous_tz
@@ -12004,6 +12151,23 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         "until": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 20), (9, 10))),
         "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 20), (9, 10))),
     }
+    original_build_child = mod._build_child_from_parent
+    try:
+        mod._build_child_from_parent = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("native until must be later than the child recurrence target")
+        )
+        untyped_plan = reconcile.build_reconcile_plan(
+            early_until_parent,
+            existing_children=[],
+            hook=mod,
+        )
+    finally:
+        mod._build_child_from_parent = original_build_child
+    expect(
+        untyped_plan.action == "error",
+        f"reconcile treated an untyped exception message as a carry conflict: {untyped_plan}",
+    )
+
     early_plan = reconcile.build_reconcile_plan(early_until_parent, existing_children=[], hook=mod)
     early_until = mod.core.to_local(mod.core.parse_dt_any((early_plan.child or {}).get("until")))
     expect(early_plan.action == "spawn", f"expired anchor should still produce a child plan: {early_plan}")
@@ -12977,7 +13141,7 @@ def test_on_modify_completion_defers_chain_export_until_after_preflight():
         mod._load_core()
 
     called = {"chain_export": 0}
-    mod._completion_validate_cp_and_anchor = lambda *_a, **_k: None
+    mod._completion_validate_cp_and_anchor = lambda *_a, **_k: ("P1D", "", "")
     mod._completion_preflight_context = lambda *_a, **_k: None
     mod._completion_compute_next_and_limits = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("compute should not run after preflight failure"))
     mod._get_chain_export = lambda *_a, **_k: called.__setitem__("chain_export", called["chain_export"] + 1) or (_ for _ in ()).throw(AssertionError("chain export should not run before preflight succeeds"))
@@ -19472,6 +19636,9 @@ TESTS = [
     test_on_add_native_until_rejects_strict_anchor_modes,
     test_on_modify_native_until_rejects_invalid_window_changes,
     test_on_modify_native_until_follows_recurrence_target_move,
+    test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts,
+    test_on_modify_native_until_rejects_uncarryable_anchor_target_move,
+    test_on_modify_completion_reschedule_carries_native_until,
     test_on_modify_native_until_accepts_valid_window_change,
     test_on_modify_native_until_validates_recurrence_promotion,
     test_on_modify_native_until_validates_simultaneous_completion,

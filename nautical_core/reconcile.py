@@ -4,6 +4,8 @@ from datetime import timedelta
 from dataclasses import dataclass
 from typing import Any
 
+from nautical_core import native_until
+
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
 
@@ -232,7 +234,11 @@ def build_reconcile_plan(
     try:
         child = hook._build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt)
     except Exception as exc:
-        if is_expiration and kind in {"anchor", "anchor_file"} and "native until" in str(exc):
+        carry_conflict = (
+            isinstance(exc, native_until.NativeUntilCarryError)
+            and exc.code == native_until.CARRY_CONFLICT
+        )
+        if is_expiration and kind in {"anchor", "anchor_file"} and carry_conflict:
             try:
                 child = _build_expiration_child_with_day_end(
                     parent,

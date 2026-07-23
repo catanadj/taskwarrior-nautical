@@ -301,6 +301,7 @@ _parser_atoms = _import_sibling("parser_atoms")
 _parser_dnf = _import_sibling("parser_dnf")
 _parser_frontend = _import_sibling("parser_frontend")
 _position_selection = _import_sibling("position_selection")
+_season_support = _import_sibling("season_support")
 _precompute = _import_sibling("precompute")
 _quarter_helpers = _import_sibling("quarter_helpers")
 _quarter_rewrite = _import_sibling("quarter_rewrite")
@@ -2725,6 +2726,17 @@ def _validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d: date):
         for factor in term:
             if _position_selection.is_selection_node(factor):
                 _validate_and_terms_satisfiable(factor.get("expr") or [], ref_d)
+                if not _position_selection.seasonal_candidate_has_match(
+                    factor,
+                    matches_on=atom_matches_on,
+                    default_seed=ref_d,
+                ):
+                    scope = str(factor.get("scope") or "season")
+                    boundary = _season_support.fixed_season_boundary_description(scope)
+                    raise AndTermUnsatisfiable(
+                        f"@in-{scope} candidate expression has no dates within its fixed "
+                        f"{boundary} window."
+                    )
 
     plain_dnf = [
         term

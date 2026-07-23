@@ -11,6 +11,12 @@ _FIXED_BOUNDARIES = {
     "autumn": ((9, 1), (11, 30)),
     "winter": ((12, 1), (2, 28)),
 }
+_FIXED_BOUNDARY_DESCRIPTIONS = {
+    "spring": "March 1 through May 31",
+    "summer": "June 1 through August 31",
+    "autumn": "September 1 through November 30",
+    "winter": "December 1 through February 28/29",
+}
 
 
 def normalize_season_name(value: object) -> str:
@@ -20,6 +26,11 @@ def normalize_season_name(value: object) -> str:
         expected = ", ".join(SEASON_NAMES)
         raise ValueError(f"Unknown season '{value}'. Expected one of: {expected}.")
     return normalized
+
+
+def fixed_season_boundary_description(season: object) -> str:
+    """Return a concise description of one fixed seasonal window."""
+    return _FIXED_BOUNDARY_DESCRIPTIONS[normalize_season_name(season)]
 
 
 def season_bounds(season: object, start_year: int) -> tuple[date, date]:

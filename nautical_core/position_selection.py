@@ -6,7 +6,12 @@ from datetime import date, timedelta
 from functools import lru_cache
 from typing import Any, Callable, TypedDict
 
-from .season_support import SEASON_NAMES, season_bounds, season_window_on_or_after
+from .season_support import (
+    SEASON_NAMES,
+    fixed_season_boundary_description,
+    season_bounds,
+    season_window_on_or_after,
+)
 from .tokenutil import (
     WD_ABBR,
     expand_monthly_aliases,
@@ -182,6 +187,16 @@ def describe_selection(node: object, inner_description: str) -> str:
         position_text = ", ".join(labels[:-1]) + f", and {labels[-1]}"
     noun = "date" if len(labels) == 1 else "dates"
     inner = inner_description.strip() or "the candidate expression"
+    scope = normalized["scope"]
+    if scope in SEASON_SCOPES:
+        weekday = re.fullmatch(
+            r"(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)s",
+            inner,
+        )
+        if weekday:
+            weekday_noun = weekday.group(1) if len(labels) == 1 else inner
+            return f"the {position_text} {weekday_noun} of each {scope}"
+        return f"the {position_text} matching {noun} from {inner} during each {scope}"
     return f"the {position_text} matching {noun} from {inner} in each {normalized['scope']}"
 
 
@@ -531,6 +546,9 @@ def selection_advice(node: object) -> tuple[str, ...]:
             "@in-year groups ISO-week candidates by calendar year; boundary dates from adjacent "
             "ISO years may be counted, so higher positions exist only in some years."
         )
+    if normalized["scope"] in SEASON_SCOPES:
+        boundary = fixed_season_boundary_description(normalized["scope"])
+        advice.append(f"{selector} uses fixed {boundary} boundaries.")
     return tuple(advice)
 
 
@@ -548,6 +566,55 @@ def selection_advice_for_dnf(dnf: object) -> tuple[str, ...]:
                 if message not in out:
                     out.append(message)
     return tuple(out)
+
+
+def seasonal_candidate_has_match(
+    node: object,
+    *,
+    matches_on: Callable[..., bool],
+    default_seed: date,
+    years: int = 40,
+) -> bool:
+    """Return whether a seasonal candidate matches within a bounded Gregorian sample."""
+    normalized = normalize_selection_node(node)
+    scope = normalized["scope"]
+    if scope not in SEASON_SCOPES:
+        return True
+    if not callable(matches_on):
+        raise TypeError("Seasonal candidate matcher must be callable.")
+    if not isinstance(default_seed, date):
+        raise TypeError("Seasonal candidate seed must be a date.")
+    if isinstance(years, bool) or not isinstance(years, int) or years < 1:
+        raise ValueError("Seasonal candidate year count must be a positive integer.")
+
+    seed = date(default_seed.year, default_seed.month, default_seed.day)
+    candidate_expr = []
+    for term in normalized["expr"]:
+        candidate_term = []
+        for factor in term:
+            candidate = dict(factor)
+            if "ival" in candidate:
+                candidate["ival"] = 1
+            if "intv" in candidate:
+                candidate["intv"] = 1
+            candidate_term.append(candidate)
+        candidate_expr.append(candidate_term)
+
+    first_year = max(1, seed.year - 1)
+    for start_year in range(first_year, min(9999, first_year + years)):
+        try:
+            start, end = season_bounds(scope, start_year)
+        except ValueError:
+            break
+        current = start
+        while current <= end:
+            if any(
+                all(matches_on(factor, current, seed) for factor in term)
+                for term in candidate_expr
+            ):
+                return True
+            current += timedelta(days=1)
+    return False
 
 
 def validate_public_selection_node(node: object) -> SelectionNode:
@@ -948,6 +1015,7 @@ __all__ = (
     "select_positions",
     "selection_advice",
     "selection_advice_for_dnf",
+    "seasonal_candidate_has_match",
     "selected_candidates_in_period",
     "validate_public_selection_node",
 )

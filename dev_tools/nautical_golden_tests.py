@@ -22211,6 +22211,82 @@ def test_seasonal_selection_scheduler_post_modifiers():
     expect(next_year == date(2027, 6, 7), f"shifted season did not advance a year: {next_year}")
 
 
+def test_seasonal_selection_natural_language_and_advice():
+    """Seasonal rules should read naturally and disclose their fixed boundaries."""
+    from nautical_core import position_selection
+
+    descriptions = (
+        ("(w:mon)@in-spring=first", "the first Monday of each spring"),
+        (
+            "(w:mon)@in-spring=first,last",
+            "the first and last Mondays of each spring",
+        ),
+        (
+            "(m:1)@in-summer=first",
+            "the first matching date from the 1st day of each month during each summer",
+        ),
+    )
+    for expression, expected in descriptions:
+        actual = core.describe_anchor_expr(expression)
+        expect(actual == expected, f"unclear seasonal description for {expression}: {actual!r}")
+
+    advised = core.validate_anchor_expr_strict("(w:mon)@in-spring=first,15th")
+    advice = position_selection.selection_advice_for_dnf(advised)
+    expect(any("15th can never contribute" in message for message in advice), f"missing dead position: {advice}")
+    expect(
+        any("fixed March 1 through May 31 boundaries" in message for message in advice),
+        f"missing fixed season boundary advice: {advice}",
+    )
+
+
+def test_seasonal_selection_semantic_guard():
+    """Seasonal validation should reject candidates whose date domain cannot enter the window."""
+    invalid = (
+        ("(y:jan)@in-spring=first", "fixed March 1 through May 31 window"),
+        ("(y:q4)@in-summer=first", "fixed June 1 through August 31 window"),
+        ("(y:jan + w:mon)@in-spring=first", "fixed March 1 through May 31 window"),
+    )
+    for expression, message in invalid:
+        try:
+            core.validate_anchor_expr_strict(expression)
+            raise AssertionError(f"seasonally impossible candidate should fail: {expression}")
+        except core.ParseError as exc:
+            expect(message in str(exc), f"unclear seasonal semantic error: {exc}")
+
+    valid = (
+        "(y:02-29)@in-winter=first",
+        "(y:jan | w:mon)@in-spring=first",
+        "(w/100:mon)@in-spring=first",
+    )
+    for expression in valid:
+        core.validate_anchor_expr_strict(expression)
+
+
+def test_on_add_seasonal_selection_feedback():
+    """The add preview should show a readable seasonal rule and its fixed boundary."""
+    hook = _find_hook_file("on-add-nautical.py")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000783",
+        "description": "seasonal feedback",
+        "status": "pending",
+        "entry": "20260723T090000Z",
+        "anchor": "(w:mon)@in-spring=first",
+        "anchor_mode": "skip",
+    }
+    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
+    expect(proc.returncode == 0, f"on-add rejected seasonal feedback anchor: {proc.stderr}")
+    out_task = _extract_last_json(proc.stdout)
+    expect(out_task.get("anchor") == task["anchor"], f"on-add changed seasonal anchor: {out_task}")
+    stderr = _strip_markup(proc.stderr)
+    expect("the first Monday of each spring" in stderr, f"preview omitted natural season: {stderr}")
+    expect(
+        "Advice" in stderr
+        and "fixed March 1 through May 31" in stderr
+        and "boundaries." in stderr,
+        f"preview omitted season boundary: {stderr}",
+    )
+
+
 def test_position_selection_public_period_scopes_scheduler():
     """New scopes should select within calendar periods and preserve the source bucket after shifts."""
     seed = date(2026, 1, 1)
@@ -22446,6 +22522,9 @@ TESTS = [
     test_seasonal_selection_acf_round_trip,
     test_seasonal_selection_scheduler_windows_and_rollover,
     test_seasonal_selection_scheduler_post_modifiers,
+    test_seasonal_selection_natural_language_and_advice,
+    test_seasonal_selection_semantic_guard,
+    test_on_add_seasonal_selection_feedback,
     test_position_selection_public_period_scopes_scheduler,
     test_position_selection_public_period_scopes_acf_natural_and_hints,
     test_position_selection_public_period_scopes_hooks,

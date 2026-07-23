@@ -3752,6 +3752,11 @@ raise SystemExit(2)
     path.chmod(0o755)
 
 
+def _install_doctor_hook_wrappers(hooks_dir: Path) -> None:
+    for name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
+        shutil.copy2(Path(ROOT) / name, hooks_dir / name)
+
+
 def test_doctor_reports_healthy_installation():
     """doctor should report ok for a complete installation with clean chain state."""
     path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
@@ -3759,10 +3764,7 @@ def test_doctor_reports_healthy_installation():
         td_path = Path(td)
         hooks = td_path / "hooks"
         hooks.mkdir()
-        for name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
-            hook = hooks / name
-            hook.write_text("#!/bin/sh\n", encoding="utf-8")
-            hook.chmod(0o755)
+        _install_doctor_hook_wrappers(hooks)
         (td_path / "config-nautical.toml").write_text('tz = "UTC"\n', encoding="utf-8")
         fake_task = td_path / "task"
         _write_fake_task_for_doctor(fake_task)
@@ -3783,6 +3785,8 @@ def test_doctor_reports_healthy_installation():
             },
         ]
         env = os.environ.copy()
+        env["NAUTICAL_CORE_PATH"] = ROOT
+        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
         env["FAKE_HOOKS"] = str(hooks)
         env["FAKE_EXPORT"] = json.dumps(rows)
         p = subprocess.run(
@@ -3798,6 +3802,137 @@ def test_doctor_reports_healthy_installation():
         expect((obj.get("counts") or {}).get("chains") == 1, f"unexpected doctor counts: {obj}")
 
 
+def test_doctor_hook_inventory_allows_third_party_and_symlink_install():
+    """Doctor should validate symlinked Nautical hooks without rejecting unrelated hooks."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_hook_symlink_test")
+    with tempfile.TemporaryDirectory() as td:
+        hooks = Path(td) / "hooks"
+        hooks.mkdir()
+        (hooks / "on-add").symlink_to(Path(ROOT) / "on-add-nautical.py")
+        for name in ("on-modify-nautical.py", "on-exit-nautical.py"):
+            (hooks / name).symlink_to(Path(ROOT) / name)
+        third_party = hooks / "on-add-third-party"
+        third_party.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        third_party.chmod(0o755)
+
+        findings = []
+        runtimes = mod._check_hook_installation(
+            findings,
+            hooks_dir=hooks,
+            env={"NAUTICAL_CORE_PATH": ROOT, "NAUTICAL_TRUST_CORE_PATH": "1"},
+        )
+
+    expect(set(runtimes) == {"on-add", "on-modify", "on-exit"}, f"missing validated hooks: {findings!r}")
+    expect(not any(item.get("severity") == "error" for item in findings), f"valid symlink install failed: {findings!r}")
+    expect(
+        Path(runtimes["on-modify"]["implementation"]) == Path(ROOT) / "nautical_core/hooks/modify_impl.py",
+        f"wrong on-modify implementation selected: {runtimes!r}",
+    )
+
+
+def test_doctor_hook_inventory_rejects_duplicates_without_counting_backups():
+    """Doctor should reject duplicate active Nautical hooks but ignore non-executable backups."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_hook_duplicate_test")
+    with tempfile.TemporaryDirectory() as td:
+        hooks = Path(td) / "hooks"
+        hooks.mkdir()
+        _install_doctor_hook_wrappers(hooks)
+        backup = hooks / "on-add-nautical-old.py"
+        shutil.copy2(Path(ROOT) / "on-add-nautical.py", backup)
+        env = {"NAUTICAL_CORE_PATH": ROOT, "NAUTICAL_TRUST_CORE_PATH": "1"}
+
+        findings = []
+        runtimes = mod._check_hook_installation(findings, hooks_dir=hooks, env=env)
+        ids = {item.get("id") for item in findings}
+        expect("hook.on-add.duplicate" in ids, f"active duplicate was not detected: {findings!r}")
+        expect("on-add" not in runtimes, f"ambiguous on-add runtime should not be selected: {runtimes!r}")
+
+        backup.chmod(0o644)
+        findings = []
+        runtimes = mod._check_hook_installation(findings, hooks_dir=hooks, env=env)
+        ids = {item.get("id") for item in findings}
+        expect("hook.on-add.duplicate" not in ids, f"inactive backup counted as active: {findings!r}")
+        expect("on-add" in runtimes, f"active on-add wrapper was not selected: {findings!r}")
+
+    with tempfile.TemporaryDirectory() as td:
+        hooks = Path(td) / "hooks"
+        hooks.mkdir()
+        third_party = hooks / "on-add-third-party"
+        third_party.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        third_party.chmod(0o755)
+        findings = []
+        mod._check_hook_installation(findings, hooks_dir=hooks, env={})
+        ids = {item.get("id") for item in findings}
+        expect("hook.on-add.missing" in ids, f"third-party hook falsely satisfied Nautical: {findings!r}")
+
+
+def test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch():
+    """Doctor should diagnose partial core installs and wrapper/core API skew."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_hook_compatibility_test")
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        hooks = base / "hooks"
+        core_dir = base / "nautical_core"
+        hooks.mkdir()
+        core_dir.mkdir()
+        (core_dir / "__init__.py").write_text("", encoding="utf-8")
+        _install_doctor_hook_wrappers(hooks)
+
+        findings = []
+        runtimes = mod._check_hook_installation(
+            findings,
+            hooks_dir=hooks,
+            env={"NAUTICAL_CORE_PATH": str(base), "NAUTICAL_TRUST_CORE_PATH": "1"},
+        )
+        incompatible = [item for item in findings if str(item.get("id") or "").endswith(".incompatible")]
+        expect(not runtimes, f"incomplete core should not produce validated runtimes: {runtimes!r}")
+        expect(len(incompatible) == 3, f"incomplete runtime findings missing: {findings!r}")
+        expect(
+            all((item.get("details") or {}).get("missing") for item in incompatible),
+            f"missing runtime files were not identified: {findings!r}",
+        )
+
+    with tempfile.TemporaryDirectory() as td:
+        hooks = Path(td) / "hooks"
+        hooks.mkdir()
+        _install_doctor_hook_wrappers(hooks)
+        add_hook = hooks / "on-add-nautical.py"
+        add_hook.write_text(
+            add_hook.read_text(encoding="utf-8").replace("_EXPECTED_IMPL_API = 1", "_EXPECTED_IMPL_API = 999"),
+            encoding="utf-8",
+        )
+        add_hook.chmod(0o755)
+
+        findings = []
+        runtimes = mod._check_hook_installation(
+            findings,
+            hooks_dir=hooks,
+            env={"NAUTICAL_CORE_PATH": ROOT, "NAUTICAL_TRUST_CORE_PATH": "1"},
+        )
+        mismatch = next(item for item in findings if item.get("id") == "hook.on-add.incompatible")
+        details = mismatch.get("details") or {}
+        expect("on-add" not in runtimes, f"mismatched on-add runtime should not be selected: {runtimes!r}")
+        expect(details.get("expected_api") == 999, f"wrapper API missing from mismatch: {findings!r}")
+        expect(details.get("actual_api") == 1, f"implementation API missing from mismatch: {findings!r}")
+
+
+def test_doctor_reconcile_loader_uses_validated_implementation():
+    """Doctor reconcile planning should load the implementation selected by its hook inventory."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_reconcile_hook_selection_test")
+    with tempfile.TemporaryDirectory() as td:
+        implementation = Path(td) / "modify_impl.py"
+        implementation.write_text("SOURCE_MARKER = 'validated-runtime'\n", encoding="utf-8")
+        loaded = mod._load_on_modify_hook_for_reconcile(implementation)
+    expect(
+        getattr(loaded, "SOURCE_MARKER", "") == "validated-runtime",
+        "reconcile loader ignored the validated implementation path",
+    )
+
+
 def test_doctor_discovers_effective_taskdata_directory():
     """doctor should discover the effective data dir when --taskdata is omitted."""
     path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
@@ -3808,10 +3943,7 @@ def test_doctor_discovers_effective_taskdata_directory():
         config_dir.mkdir()
         hooks = data_dir / "hooks"
         hooks.mkdir(parents=True)
-        for name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
-            hook = hooks / name
-            hook.write_text("#!/bin/sh\n", encoding="utf-8")
-            hook.chmod(0o755)
+        _install_doctor_hook_wrappers(hooks)
         config = config_dir / "config-nautical.toml"
         config.write_text('tz = "UTC"\n', encoding="utf-8")
         fake_task = td_path / "task"
@@ -3833,6 +3965,8 @@ def test_doctor_discovers_effective_taskdata_directory():
             },
         ]
         env = os.environ.copy()
+        env["NAUTICAL_CORE_PATH"] = ROOT
+        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
         env["FAKE_HOOKS"] = str(hooks)
         env["FAKE_DATA_DIR"] = str(data_dir)
         env["FAKE_EXPORT"] = json.dumps(rows)
@@ -4148,6 +4282,8 @@ def test_doctor_reports_actionable_broken_installation():
             },
         ]
         env = os.environ.copy()
+        env["NAUTICAL_CORE_PATH"] = ROOT
+        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
         env["FAKE_HOOKS"] = str(hooks)
         env["FAKE_EXPORT"] = json.dumps(rows)
         env["FAKE_WRONG_UDA"] = "cp"
@@ -4200,10 +4336,7 @@ def test_doctor_reports_chain_repair_plan_findings():
         td_path = Path(td)
         hooks = td_path / "hooks"
         hooks.mkdir()
-        for name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
-            hook = hooks / name
-            hook.write_text("#!/bin/sh\n", encoding="utf-8")
-            hook.chmod(0o755)
+        _install_doctor_hook_wrappers(hooks)
         (td_path / "config-nautical.toml").write_text('tz = "UTC"\n', encoding="utf-8")
         fake_task = td_path / "task"
         _write_fake_task_for_doctor(fake_task)
@@ -4232,6 +4365,8 @@ def test_doctor_reports_chain_repair_plan_findings():
             },
         ]
         env = os.environ.copy()
+        env["NAUTICAL_CORE_PATH"] = ROOT
+        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
         env["FAKE_HOOKS"] = str(hooks)
         env["FAKE_EXPORT"] = json.dumps(rows)
         p = subprocess.run(
@@ -4270,10 +4405,7 @@ def test_doctor_reports_reconcile_backfill_plans():
         td_path = Path(td)
         hooks = td_path / "hooks"
         hooks.mkdir()
-        for name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
-            hook = hooks / name
-            hook.write_text("#!/bin/sh\n", encoding="utf-8")
-            hook.chmod(0o755)
+        _install_doctor_hook_wrappers(hooks)
         (td_path / "config-nautical.toml").write_text('tz = "UTC"\n', encoding="utf-8")
         fake_task = td_path / "task"
         _write_fake_task_for_doctor(fake_task)
@@ -4365,6 +4497,8 @@ def test_doctor_reports_reconcile_backfill_plans():
             },
         ]
         env = os.environ.copy()
+        env["NAUTICAL_CORE_PATH"] = ROOT
+        env["NAUTICAL_TRUST_CORE_PATH"] = "1"
         env["FAKE_HOOKS"] = str(hooks)
         env["FAKE_EXPORT"] = json.dumps(rows)
         p = subprocess.run(
@@ -21637,6 +21771,10 @@ TESTS = [
     test_operator_queue_status_json_ok_empty_taskdata,
     test_queue_status_warns_on_stale_processing_and_dead_letters,
     test_doctor_reports_healthy_installation,
+    test_doctor_hook_inventory_allows_third_party_and_symlink_install,
+    test_doctor_hook_inventory_rejects_duplicates_without_counting_backups,
+    test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch,
+    test_doctor_reconcile_loader_uses_validated_implementation,
     test_doctor_discovers_effective_taskdata_directory,
     test_operator_doctor_loads_colocated_queue_helper,
     test_nautical_dispatches_supported_subcommands,

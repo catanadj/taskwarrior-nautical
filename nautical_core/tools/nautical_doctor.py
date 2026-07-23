@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.machinery
 import importlib.util
 import json
@@ -26,7 +27,7 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import chain_repair, config_schema, reconcile  # noqa: E402
+from nautical_core import chain_repair, config_schema, hook_bootstrap, reconcile  # noqa: E402
 import nautical_core.runtime as runtime  # noqa: E402
 
 REQUIRED_UDAS = {
@@ -47,6 +48,12 @@ REQUIRED_UDAS = {
 }
 RECURRENCE_FIELDS = ("cp", "anchor", "anchor_file")
 SEVERITY_RANK = {"ok": 0, "warn": 1, "error": 2}
+HOOK_RUNTIME_FILES = {
+    "on-add": ("hooks/add_impl.py", "hook_bootstrap.py", "hook_protocol.py"),
+    "on-modify": ("hooks/modify_impl.py", "hook_bootstrap.py", "hook_protocol.py"),
+    "on-exit": ("hooks/exit_impl.py", "hook_bootstrap.py", "config_support.py", "exit_probe.py"),
+}
+_MAX_HOOK_SOURCE_BYTES = 2 * 1024 * 1024
 
 
 def _finding(
@@ -116,13 +123,171 @@ def _resolve_hooks_dir(task_bin: str, taskdata: Path, env: dict[str, str]) -> Pa
     return (taskdata / "hooks").resolve()
 
 
-def _find_hook(hooks_dir: Path, event: str) -> Path | None:
+def _hook_candidates(hooks_dir: Path, event: str) -> list[Path]:
     try:
         candidates = sorted(path for path in hooks_dir.glob(f"{event}*") if path.is_file())
     except Exception:
-        return None
-    nautical = [path for path in candidates if "nautical" in path.name.lower()]
-    return nautical[0] if nautical else (candidates[0] if candidates else None)
+        return []
+    nautical = []
+    for path in candidates:
+        if "nautical" in path.name.lower():
+            nautical.append(path)
+            continue
+        constants, _functions, _error = _python_contract(path)
+        if "_EXPECTED_IMPL_API" in constants or "HOOK_IMPL_API" in constants:
+            nautical.append(path)
+    return nautical
+
+
+def _python_contract(path: Path) -> tuple[dict[str, int], set[str], str]:
+    try:
+        if path.stat().st_size > _MAX_HOOK_SOURCE_BYTES:
+            return {}, set(), f"source exceeds {_MAX_HOOK_SOURCE_BYTES} bytes"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except Exception as exc:
+        return {}, set(), f"{type(exc).__name__}: {exc}"
+
+    constants: dict[str, int] = {}
+    functions: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            functions.add(node.name)
+            continue
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Constant) or not isinstance(value.value, int):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if isinstance(target, ast.Name):
+                constants[target.id] = int(value.value)
+    return constants, functions, ""
+
+
+def _inspect_hook_runtime(hook: Path, event: str, env: dict[str, str]) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+    wrapper_constants, _wrapper_functions, wrapper_error = _python_contract(hook)
+    expected_api = wrapper_constants.get("_EXPECTED_IMPL_API")
+    if wrapper_error or expected_api is None:
+        reason = wrapper_error or "wrapper does not declare _EXPECTED_IMPL_API"
+        return None, f"Nautical {event} wrapper is not compatible: {reason}.", {
+            "hook": str(hook),
+            "error": reason,
+        }
+
+    hook_dir = hook.parent
+    default_base = hook_dir if hook_bootstrap.core_target_from_base(hook_dir) is not None else hook_dir.parent
+    core_base = hook_bootstrap.trusted_core_base(default_base, env=env)
+    core_init = hook_bootstrap.core_target_from_base(core_base)
+    if core_init is None:
+        return None, f"Nautical {event} hook cannot resolve nautical_core.", {
+            "hook": str(hook),
+            "core_base": str(core_base),
+        }
+
+    core_dir = core_init.parent
+    required = HOOK_RUNTIME_FILES[event]
+    missing = [name for name in required if not (core_dir / name).is_file()]
+    if missing:
+        return None, f"Nautical {event} runtime is incomplete.", {
+            "hook": str(hook),
+            "core": str(core_init),
+            "missing": missing,
+        }
+
+    impl_path = core_dir / required[0]
+    impl_constants, impl_functions, impl_error = _python_contract(impl_path)
+    actual_api = impl_constants.get("HOOK_IMPL_API")
+    if impl_error or actual_api is None or "run_hook" not in impl_functions:
+        reason = impl_error or "implementation must declare HOOK_IMPL_API and run_hook"
+        return None, f"Nautical {event} implementation contract is invalid: {reason}.", {
+            "hook": str(hook),
+            "implementation": str(impl_path),
+            "error": reason,
+        }
+    if actual_api != expected_api:
+        return None, (
+            f"Nautical {event} wrapper/core API mismatch: "
+            f"wrapper expects {expected_api}, implementation provides {actual_api}."
+        ), {
+            "hook": str(hook),
+            "implementation": str(impl_path),
+            "expected_api": expected_api,
+            "actual_api": actual_api,
+        }
+    return {
+        "hook": hook,
+        "core": core_init,
+        "implementation": impl_path,
+        "api": actual_api,
+    }, "", {
+        "hook": str(hook),
+        "core": str(core_init),
+        "implementation": str(impl_path),
+        "api": actual_api,
+    }
+
+
+def _check_hook_installation(
+    findings: list[dict[str, Any]],
+    *,
+    hooks_dir: Path,
+    env: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    validated: dict[str, dict[str, Any]] = {}
+    for event in HOOK_RUNTIME_FILES:
+        candidates = _hook_candidates(hooks_dir, event)
+        active = [hook for hook in candidates if os.access(str(hook), os.X_OK)]
+        if not candidates:
+            _finding(
+                findings,
+                f"hook.{event}.missing",
+                "error",
+                f"No Nautical {event} hook was found in {hooks_dir}.",
+                fix="Install the Nautical hook files and make them executable.",
+            )
+            continue
+        if not active:
+            _finding(
+                findings,
+                f"hook.{event}.inactive",
+                "error",
+                f"Nautical {event} hook is not executable: {candidates[0]}",
+                fix=f"Run chmod +x {candidates[0]}",
+                details={"hooks": [str(path) for path in candidates]},
+            )
+            continue
+        if len(active) > 1:
+            _finding(
+                findings,
+                f"hook.{event}.duplicate",
+                "error",
+                f"{len(active)} active Nautical {event} hooks were found; Taskwarrior may run all of them.",
+                fix="Keep exactly one executable Nautical hook for this event.",
+                details={"hooks": [str(path) for path in active]},
+            )
+            continue
+
+        record, error, details = _inspect_hook_runtime(active[0], event, env)
+        if record is None:
+            _finding(
+                findings,
+                f"hook.{event}.incompatible",
+                "error",
+                error,
+                fix="Install the matching Nautical wrappers and nautical_core from the same release.",
+                details=details,
+            )
+            continue
+        validated[event] = record
+        _finding(
+            findings,
+            f"hook.{event}",
+            "ok",
+            f"{event} hook and core are compatible: {active[0]}",
+            details=details,
+        )
+    return validated
 
 
 def _check_runtime(
@@ -178,27 +343,8 @@ def _check_hooks_and_udas(
     task_bin: str,
     hooks_dir: Path,
     env: dict[str, str],
-) -> None:
-    for event in ("on-add", "on-modify", "on-exit"):
-        hook = _find_hook(hooks_dir, event)
-        if hook is None:
-            _finding(
-                findings,
-                f"hook.{event}.missing",
-                "error",
-                f"No {event} hook was found in {hooks_dir}.",
-                fix="Install the Nautical hook files and make them executable.",
-            )
-            continue
-        executable = os.access(str(hook), os.X_OK)
-        _finding(
-            findings,
-            f"hook.{event}",
-            "ok" if executable else "error",
-            f"{event} hook {'is ready' if executable else 'is not executable'}: {hook}",
-            fix="" if executable else f"Run chmod +x {hook}",
-        )
-
+) -> dict[str, dict[str, Any]]:
+    validated = _check_hook_installation(findings, hooks_dir=hooks_dir, env=env)
     for name, expected in REQUIRED_UDAS.items():
         ok, actual = _task_get(task_bin, f"rc.uda.{name}.type", env)
         if not ok or not actual:
@@ -217,6 +363,7 @@ def _check_hooks_and_udas(
                 f"UDA '{name}' has type '{actual}', expected '{expected}'.",
                 fix=f"Set uda.{name}.type={expected}.",
             )
+    return validated
 
 
 def _config_candidates(taskdata: Path) -> list[Path]:
@@ -495,16 +642,13 @@ def _existing_reconcile_children(rows: list[dict[str, Any]], parent: dict[str, A
     ]
 
 
-def _load_on_modify_hook_for_reconcile(hooks_dir: Path):
-    hook = _find_hook(hooks_dir, "on-modify")
-    if hook is None:
-        raise RuntimeError(f"No on-modify hook was found in {hooks_dir}.")
-    implementation = ROOT / "nautical_core" / "hooks" / "modify_impl.py"
-    source = implementation if implementation.is_file() else hook
-    loader = importlib.machinery.SourceFileLoader("_nautical_doctor_on_modify", str(source))
+def _load_on_modify_hook_for_reconcile(implementation: Path | None):
+    if implementation is None:
+        raise RuntimeError("No validated Nautical on-modify implementation is available.")
+    loader = importlib.machinery.SourceFileLoader("_nautical_doctor_on_modify", str(implementation))
     spec = importlib.util.spec_from_loader("_nautical_doctor_on_modify", loader)
     if spec is None:
-        raise RuntimeError(f"could not load {source}")
+        raise RuntimeError(f"could not load {implementation}")
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     if hasattr(module, "_load_core"):
@@ -516,7 +660,7 @@ def _check_reconcile_plans(
     findings: list[dict[str, Any]],
     *,
     rows: list[dict[str, Any]],
-    hooks_dir: Path,
+    on_modify_impl: Path | None,
 ) -> None:
     completion_candidates = [row for row in rows if reconcile.is_orphan_completion_candidate(row)]
     deleted_candidates = [row for row in rows if reconcile.is_orphan_deleted_chain_candidate(row)]
@@ -529,7 +673,7 @@ def _check_reconcile_plans(
     unavailable = ""
     if deleted_candidates:
         try:
-            hook = _load_on_modify_hook_for_reconcile(hooks_dir)
+            hook = _load_on_modify_hook_for_reconcile(on_modify_impl)
         except Exception as exc:
             unavailable = str(exc)
     candidates = [*completion_candidates, *deleted_candidates]
@@ -538,7 +682,7 @@ def _check_reconcile_plans(
             existing_children = _existing_reconcile_children(rows, parent)
             if not existing_children and hook is None:
                 try:
-                    hook = _load_on_modify_hook_for_reconcile(hooks_dir)
+                    hook = _load_on_modify_hook_for_reconcile(on_modify_impl)
                 except Exception as exc:
                     unavailable = str(exc)
                     break
@@ -621,7 +765,7 @@ def _check_chains(
     *,
     task_bin: str,
     env: dict[str, str],
-    hooks_dir: Path,
+    on_modify_impl: Path | None,
 ) -> dict[str, int]:
     ok, rows, err = _task_export(task_bin, env)
     if not ok:
@@ -669,7 +813,7 @@ def _check_chains(
                 ],
             },
         )
-    _check_reconcile_plans(findings, rows=rows, hooks_dir=hooks_dir)
+    _check_reconcile_plans(findings, rows=rows, on_modify_impl=on_modify_impl)
 
     nautical = [
         row
@@ -937,10 +1081,21 @@ def main() -> int:
         taskdata=taskdata,
         env=env,
     )
-    _check_hooks_and_udas(findings, task_bin=args.task_bin, hooks_dir=hooks_dir, env=env)
+    hook_runtimes = _check_hooks_and_udas(
+        findings,
+        task_bin=args.task_bin,
+        hooks_dir=hooks_dir,
+        env=env,
+    )
     _check_config(findings, taskdata)
     queue = _check_queue(findings, taskdata, max(0.0, args.stale_after_seconds))
-    counts = _check_chains(findings, task_bin=args.task_bin, env=env, hooks_dir=hooks_dir)
+    on_modify = hook_runtimes.get("on-modify") or {}
+    counts = _check_chains(
+        findings,
+        task_bin=args.task_bin,
+        env=env,
+        on_modify_impl=on_modify.get("implementation"),
+    )
 
     status = _overall_status(findings)
     payload = {

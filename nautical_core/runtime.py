@@ -9,6 +9,7 @@ import tempfile
 import time
 
 from . import _normalized_abspath, _validated_user_dir
+from .hook_bootstrap import env_int
 
 
 DIAG_LOG_REDACT_KEYS: frozenset[str] = frozenset(
@@ -123,7 +124,12 @@ def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
     if os.environ.get("NAUTICAL_DIAG_LOG") != "1":
         return
     path = _diag_log_path(data_dir)
-    max_bytes = int(os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES") or 262144)
+    max_bytes = env_int(
+        "NAUTICAL_DIAG_LOG_MAX_BYTES",
+        262144,
+        min_value=0,
+        max_value=100 * 1024 * 1024,
+    )
     try:
         parent = os.path.dirname(path)
         if parent:

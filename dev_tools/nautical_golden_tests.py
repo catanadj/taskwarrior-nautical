@@ -590,6 +590,120 @@ def test_hook_bootstrap_uses_symlink_path_and_core_path_rescue():
                 expect((p.stdout or "").strip() == "", f"{name} should keep stdout empty, got {p.stdout!r}")
 
 
+def test_hook_bootstrap_numeric_env_parsing_is_bounded():
+    """Hook numeric environment helpers should fall back and clamp pathological values."""
+    bootstrap = importlib.import_module("nautical_core.hook_bootstrap")
+
+    expect(bootstrap.env_int("VALUE", 5, env={"VALUE": "bad"}) == 5, "invalid integer did not use its default")
+    expect(
+        bootstrap.env_int("VALUE", 5, env={"VALUE": "-99"}, min_value=0, max_value=10) == 0,
+        "negative integer was not clamped",
+    )
+    expect(
+        bootstrap.env_int("VALUE", 5, env={"VALUE": "999"}, min_value=0, max_value=10) == 10,
+        "excessive integer was not clamped",
+    )
+    expect(
+        bootstrap.env_float("VALUE", 1.5, env={"VALUE": "nan"}, min_value=0.1, max_value=10.0) == 1.5,
+        "non-finite float did not use its default",
+    )
+    expect(
+        bootstrap.env_float("VALUE", 1.5, env={"VALUE": "-4"}, min_value=0.1, max_value=10.0) == 0.1,
+        "negative float was not clamped",
+    )
+
+
+def test_hooks_survive_malformed_numeric_environment():
+    """Malformed numeric overrides must not break hook output or disable the full implementations."""
+    malformed_names = (
+        "NAUTICAL_PROFILE",
+        "NAUTICAL_DEAD_LETTER_RETENTION_DAYS",
+        "NAUTICAL_SPAWN_QUEUE_MAX_LINES",
+        "NAUTICAL_DEAD_LETTER_MAX_BYTES",
+        "NAUTICAL_QUEUE_RETRY_MAX",
+        "NAUTICAL_TASK_TIMEOUT_EXPORT",
+        "NAUTICAL_TASK_TIMEOUT_IMPORT",
+        "NAUTICAL_TASK_TIMEOUT_MODIFY",
+        "NAUTICAL_TASK_RETRIES_EXPORT",
+        "NAUTICAL_TASK_RETRIES_MODIFY",
+        "NAUTICAL_TASK_RETRY_DELAY",
+        "NAUTICAL_QUEUE_LOCK_RETRIES",
+        "NAUTICAL_QUEUE_LOCK_SLEEP_BASE",
+        "NAUTICAL_QUEUE_LOCK_STALE_AFTER",
+        "NAUTICAL_INTENT_LOG_MAX_BYTES",
+        "NAUTICAL_INTENT_LOG_MAX_ENTRIES",
+        "NAUTICAL_LOCK_STORM_THRESHOLD",
+        "NAUTICAL_LOCK_BACKOFF_BASE",
+        "NAUTICAL_LOCK_BACKOFF_MAX",
+        "NAUTICAL_QUEUE_PROCESSING_STALE_AFTER",
+        "NAUTICAL_QUEUE_DB_CONNECT_RETRIES",
+        "NAUTICAL_QUEUE_DB_CONNECT_TIMEOUT_MAX",
+        "NAUTICAL_QUEUE_DB_CONNECT_BACKOFF_BASE",
+        "NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE",
+        "NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100",
+        "NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX",
+        "NAUTICAL_DIAG_LOG_MAX_BYTES",
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        env = {name: "not-a-number" for name in malformed_names}
+        env.update({"TASKDATA": td, "NAUTICAL_BENCH_FORCE_FULL": "1"})
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000706",
+            "status": "pending",
+            "description": "Malformed env ăîșț",
+        }
+
+        add = _run_hook_script_raw(
+            _find_hook_file("on-add-nautical.py"),
+            json.dumps(task, ensure_ascii=False),
+            env_extra=env,
+        )
+        expect(add.returncode == 0, f"on-add failed with malformed numeric env: {add.stderr!r}")
+        expect(json.loads(add.stdout) == task, f"on-add stdout was not strict passthrough JSON: {add.stdout!r}")
+        expect(add.stderr == "", f"on-add emitted diagnostics without opt-in: {add.stderr!r}")
+
+        modified = dict(task, description="Modified malformed env ăîșț")
+        modify = _run_hook_script_raw(
+            _find_hook_file("on-modify-nautical.py"),
+            json.dumps(task, ensure_ascii=False) + "\n" + json.dumps(modified, ensure_ascii=False),
+            env_extra=env,
+        )
+        expect(modify.returncode == 0, f"on-modify failed with malformed numeric env: {modify.stderr!r}")
+        expect(json.loads(modify.stdout) == modified, f"on-modify stdout was not strict JSON: {modify.stdout!r}")
+        expect(modify.stderr == "", f"on-modify emitted diagnostics without opt-in: {modify.stderr!r}")
+
+        exit_hook = _run_hook_script_raw(
+            _find_hook_file("on-exit-nautical.py"),
+            "",
+            env_extra=env,
+        )
+        expect(exit_hook.returncode == 0, f"on-exit failed with malformed numeric env: {exit_hook.stderr!r}")
+        expect(exit_hook.stdout == "", f"on-exit wrote to stdout: {exit_hook.stdout!r}")
+        expect(exit_hook.stderr == "", f"on-exit emitted diagnostics without opt-in: {exit_hook.stderr!r}")
+
+        runtime = importlib.import_module("nautical_core.runtime")
+        saved_diag_log = os.environ.get("NAUTICAL_DIAG_LOG")
+        saved_diag_max = os.environ.get("NAUTICAL_DIAG_LOG_MAX_BYTES")
+        try:
+            os.environ["NAUTICAL_DIAG_LOG"] = "1"
+            os.environ["NAUTICAL_DIAG_LOG_MAX_BYTES"] = "not-a-number"
+            runtime.diag_log("malformed env diagnostic", "golden", td)
+            diag_path = Path(td) / ".nautical_diag.jsonl"
+            expect(diag_path.is_file(), "malformed diagnostic size override prevented logging")
+            payload = json.loads(diag_path.read_text(encoding="utf-8").splitlines()[-1])
+            expect(payload.get("msg") == "malformed env diagnostic", f"unexpected diagnostic payload: {payload}")
+        finally:
+            if saved_diag_log is None:
+                os.environ.pop("NAUTICAL_DIAG_LOG", None)
+            else:
+                os.environ["NAUTICAL_DIAG_LOG"] = saved_diag_log
+            if saved_diag_max is None:
+                os.environ.pop("NAUTICAL_DIAG_LOG_MAX_BYTES", None)
+            else:
+                os.environ["NAUTICAL_DIAG_LOG_MAX_BYTES"] = saved_diag_max
+
+
 def test_on_modify_ignores_unsafe_core_path_override():
     """on-modify should ignore unsafe NAUTICAL_CORE_PATH overrides by default."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -21211,6 +21325,8 @@ TESTS = [
     test_plain_hook_fast_paths_do_not_import_core_package,
     test_on_exit_active_sqlite_queue_uses_full_drain,
     test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
+    test_hook_bootstrap_numeric_env_parsing_is_bounded,
+    test_hooks_survive_malformed_numeric_environment,
     test_hook_stdout_empty_on_exit,
     test_hook_files_are_private_permissions,
     test_safe_lock_fcntl_contention,

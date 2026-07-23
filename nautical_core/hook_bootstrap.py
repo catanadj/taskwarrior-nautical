@@ -2,10 +2,53 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import math
 import os
 import sys
 from pathlib import Path
 from typing import Any
+
+
+def env_int(
+    name: str,
+    default: int,
+    *,
+    env: Any = None,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> int:
+    env_map = env if env is not None else os.environ
+    try:
+        value = int(str(env_map.get(name, "")).strip() or default)
+    except Exception:
+        value = int(default)
+    if min_value is not None:
+        value = max(int(min_value), value)
+    if max_value is not None:
+        value = min(int(max_value), value)
+    return value
+
+
+def env_float(
+    name: str,
+    default: float,
+    *,
+    env: Any = None,
+    min_value: float | None = None,
+    max_value: float | None = None,
+) -> float:
+    env_map = env if env is not None else os.environ
+    try:
+        value = float(str(env_map.get(name, "")).strip() or default)
+    except Exception:
+        value = float(default)
+    if not math.isfinite(value):
+        value = float(default)
+    if min_value is not None:
+        value = max(float(min_value), value)
+    if max_value is not None:
+        value = min(float(max_value), value)
+    return value
 
 
 def ensure_utf8_stdio() -> None:

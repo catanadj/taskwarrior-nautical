@@ -145,11 +145,19 @@ _DEFAULT_CHAIN_EXPORT_TIMEOUT_BASE = 1.5
 _DEFAULT_CHAIN_EXPORT_TIMEOUT_PER_100 = 1.0
 _DEFAULT_CHAIN_EXPORT_TIMEOUT_MAX = 12.0
 
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(str(os.environ.get(name, "")).strip() or default)
-    except Exception:
-        return float(default)
+def _env_float(
+    name: str,
+    default: float,
+    *,
+    min_value: float | None = None,
+    max_value: float | None = None,
+) -> float:
+    return hook_bootstrap.env_float(
+        name,
+        default,
+        min_value=min_value,
+        max_value=max_value,
+    )
 
 # Panel chain index and chain caches live in the per-run modify runtime state.
 _MODIFY_RUNTIME_STATE = None
@@ -751,9 +759,25 @@ def _apply_core_config() -> None:
     _RECURRENCE_UPDATE_UDAS = tuple(core.RECURRENCE_UPDATE_UDAS) if hasattr(core, "RECURRENCE_UPDATE_UDAS") else ()
     _SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES if hasattr(core, "SPAWN_QUEUE_MAX_BYTES") else _DEFAULT_SPAWN_QUEUE_MAX_BYTES
     _MAX_CHAIN_WALK = core.MAX_CHAIN_WALK
-_CHAIN_EXPORT_TIMEOUT_BASE = _env_float("NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE", _DEFAULT_CHAIN_EXPORT_TIMEOUT_BASE)
-_CHAIN_EXPORT_TIMEOUT_PER_100 = _env_float("NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100", _DEFAULT_CHAIN_EXPORT_TIMEOUT_PER_100)
-_CHAIN_EXPORT_TIMEOUT_MAX = _env_float("NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX", _DEFAULT_CHAIN_EXPORT_TIMEOUT_MAX)
+_CHAIN_EXPORT_TIMEOUT_BASE = _env_float(
+    "NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE",
+    _DEFAULT_CHAIN_EXPORT_TIMEOUT_BASE,
+    min_value=0.1,
+    max_value=120.0,
+)
+_CHAIN_EXPORT_TIMEOUT_PER_100 = _env_float(
+    "NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100",
+    _DEFAULT_CHAIN_EXPORT_TIMEOUT_PER_100,
+    min_value=0.0,
+    max_value=120.0,
+)
+_CHAIN_EXPORT_TIMEOUT_MAX = _env_float(
+    "NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX",
+    _DEFAULT_CHAIN_EXPORT_TIMEOUT_MAX,
+    min_value=0.1,
+    max_value=300.0,
+)
+_CHAIN_EXPORT_TIMEOUT_MAX = max(_CHAIN_EXPORT_TIMEOUT_BASE, _CHAIN_EXPORT_TIMEOUT_MAX)
 _CHAIN_EXPORT_TIMES: list[float] = []
 _CHAIN_EXPORT_TIMES_MAX = 20
 _CHAIN_EXPORT_TIMEOUT_FLOOR = _CHAIN_EXPORT_TIMEOUT_BASE

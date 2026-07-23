@@ -91,7 +91,7 @@ _CORE_BASE = _trusted_core_base(TW_DIR)
 
 
 # --- Optional micro-profiler (stderr-only; enable with NAUTICAL_PROFILE=1 or 2)
-_PROFILE_LEVEL = int(os.environ.get('NAUTICAL_PROFILE', '0') or '0')
+_PROFILE_LEVEL = hook_bootstrap.env_int("NAUTICAL_PROFILE", 0, min_value=0, max_value=2)
 _IMPORT_T0 = time.perf_counter()
 _EARLY_PROTOCOL_RESULT = None
 

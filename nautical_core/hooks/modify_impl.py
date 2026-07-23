@@ -6416,6 +6416,7 @@ def _handle_deleted_modify(old: dict, new: dict) -> None:
             _expiration_recovery_warning(new, "Expiration recovery could not be initialized.")
             return
 
+    new["chain"] = "off"
     now_utc = core.now_utc()
     try:
         _end_chain_summary(new, "Pending task deleted.", now_utc, current_task=old)

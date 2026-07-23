@@ -3128,6 +3128,7 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
         manual = dict(parent, status="deleted", end="20260725T000000Z")
         mod._handle_deleted_modify(parent, manual)
         expect(captured["stopped"] == 1, "manual deletion before until should retain stopped-chain behavior")
+        expect(manual.get("chain") == "off", f"manual deletion should persist a stopped chain: {manual!r}")
         expect(len(captured["children"]) == 1, "manual deletion must not queue another occurrence")
 
         capped_parent = dict(parent, chainMax=1)
@@ -3294,6 +3295,34 @@ def test_on_modify_expiration_wrapper_preserves_json_stdout():
     output = _assert_stdout_json_only(proc.stdout)
     expect(output.get("status") == "deleted" and output.get("chain") == "on", f"unexpected hook task: {output!r}")
     expect("Nautical occurrence expired" not in proc.stderr, f"deferred recovery should stay quiet: {proc.stderr!r}")
+
+
+def test_on_modify_manual_delete_persists_chain_off():
+    """The real hook should distinguish an intentional early deletion from expiration."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000422",
+        "status": "pending",
+        "description": "Manual delete protocol",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "delete22",
+        "link": 1,
+        "due": "20260720T090000Z",
+        "until": "20260726T235900Z",
+    }
+    new = dict(old, status="deleted", end="20260725T000000Z")
+    with tempfile.TemporaryDirectory() as td:
+        proc = _run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new),
+            env_extra={"TASKDATA": td, "NO_COLOR": "1"},
+        )
+
+    expect(proc.returncode == 0, f"manual-delete hook failed: {proc.stderr!r}")
+    output = _assert_stdout_json_only(proc.stdout)
+    expect(output.get("status") == "deleted", f"manual deletion status changed: {output!r}")
+    expect(output.get("chain") == "off", f"manual deletion did not stop the chain: {output!r}")
 
 
 def test_on_modify_invalid_anchor_has_no_stdout():
@@ -20278,6 +20307,7 @@ TESTS = [
     test_on_modify_expiration_delegates_to_extracted_orchestration,
     test_on_modify_expiration_internal_failure_remains_recoverable,
     test_on_modify_expiration_wrapper_preserves_json_stdout,
+    test_on_modify_manual_delete_persists_chain_off,
     test_on_modify_invalid_anchor_has_no_stdout,
     test_timeline_completed_rows_place_uuid_before_delta,
     test_on_modify_render_anchor_completion_feedback_wrapper,

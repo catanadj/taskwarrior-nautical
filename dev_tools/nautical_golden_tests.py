@@ -10771,6 +10771,116 @@ def test_on_modify_spawn_intent_entry_rejects_missing_child_uuid():
     raise AssertionError("expected spawn intent entry validation failure")
 
 
+def test_on_modify_spawn_intent_records_parent_guard():
+    """Deferred child imports should retain the parent state that authorized them."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_spawn_parent_guard_test")
+    mod._reserve_child_uuid = lambda _env: "00000000-0000-0000-0000-00000000abcd"
+    captured = {}
+
+    def enqueue(entry):
+        captured.update(entry)
+        return True, ""
+
+    mod._enqueue_spawn_intent = enqueue
+    parent = {
+        "uuid": "00000000-0000-0000-0000-000000000111",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "abcd1234",
+        "link": 4,
+        "nextLink": "",
+    }
+    _child_short, _stripped, _verified, deferred, _reason, _intent = mod._spawn_child_atomic(
+        {"description": "guarded child"},
+        parent,
+    )
+
+    expect(deferred, "successful queue write should defer the child spawn")
+    expect(
+        captured.get("parent_guard")
+        == {
+            "status": "completed",
+            "chain": "on",
+            "chainID": "abcd1234",
+            "link": "4",
+        },
+        f"spawn intent did not retain its parent guard: {captured}",
+    )
+
+
+def test_on_exit_stale_parent_guard_prevents_child_import():
+    """A deferred intent must not spawn after its parent transition is reversed."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_stale_parent_guard_test")
+    exit_models = mod._module("exit_models")
+    parent_uuid = "11111111-0000-0000-0000-000000000111"
+    child_uuid = "22222222-0000-0000-0000-000000000222"
+    entry = {
+        "parent_uuid": parent_uuid,
+        "parent_nextlink": "",
+        "parent_guard": {
+            "status": "completed",
+            "chain": "on",
+            "chainID": "abcd1234",
+            "link": "4",
+        },
+        "child_short": child_uuid[:8],
+        "child": {"uuid": child_uuid},
+        "spawn_intent_id": "si_stale_parent",
+    }
+    calls = {"child_export": 0, "import": 0, "clear": 0}
+    saved = {
+        "export_uuid": mod._export_uuid,
+        "import_child": mod._import_child,
+        "clear": mod._clear_parent_nextlink_if_matches,
+        "dead_letter": mod._write_dead_letter,
+        "mark": mod._mark_intent_status,
+    }
+
+    def export_uuid(uuid_str, *, prefer_cache=True):
+        _ = prefer_cache
+        if uuid_str == parent_uuid:
+            return exit_models.ExitExportResult(
+                True,
+                False,
+                "",
+                {
+                    "uuid": parent_uuid,
+                    "status": "pending",
+                    "chain": "on",
+                    "chainID": "abcd1234",
+                    "link": 4,
+                    "nextLink": child_uuid[:8],
+                },
+            )
+        calls["child_export"] += 1
+        return exit_models.ExitExportResult(False, False, "not found", None)
+
+    try:
+        mod._export_uuid = export_uuid
+        mod._import_child = lambda _child: calls.__setitem__("import", calls["import"] + 1)
+        mod._clear_parent_nextlink_if_matches = lambda *_args: (
+            calls.__setitem__("clear", calls["clear"] + 1)
+            or exit_models.ExitParentUpdateResult(True, "")
+        )
+        mod._write_dead_letter = lambda *_args, **_kwargs: True
+        mod._mark_intent_status = lambda *_args, **_kwargs: True
+
+        state = mod._DrainState([entry], 1, set(), True, 0.0)
+        expect(not mod._process_queue_entry(0, entry, state), "stale intent should not circuit-break")
+        expect(state.dead_lettered == 1, f"stale intent was not dead-lettered: {state.dead_lettered}")
+        expect(calls["child_export"] == 0, "stale intent reached child lookup")
+        expect(calls["import"] == 0, "stale intent imported its child")
+        expect(calls["clear"] == 1, "stale intent did not release its matching optimistic link")
+    finally:
+        mod._export_uuid = saved["export_uuid"]
+        mod._import_child = saved["import_child"]
+        mod._clear_parent_nextlink_if_matches = saved["clear"]
+        mod._write_dead_letter = saved["dead_letter"]
+        mod._mark_intent_status = saved["mark"]
+
+
 def test_on_exit_spawn_intents_drain():
     """on-exit should import child and update parent from spawn intents."""
     hook = _find_hook_file("on-exit-nautical.py")
@@ -10792,6 +10902,12 @@ def test_on_exit_spawn_intents_drain():
         parent_uuid = "00000000-0000-0000-0000-000000000111"
         entry = {
             "parent_uuid": parent_uuid,
+            "parent_guard": {
+                "status": "completed",
+                "chain": "on",
+                "chainID": "abcd1234",
+                "link": "1",
+            },
             "child_short": "deadbeef",
             "child": {"uuid": child_uuid, "description": "test"},
             "spawn_intent_id": "si_test",
@@ -10809,7 +10925,16 @@ def test_on_exit_spawn_intents_drain():
                     return True, json.dumps({"uuid": child_uuid}), ""
                 return True, "{}", ""
             if "export" in cmd_s and f"uuid:{parent_uuid}" in cmd_s:
-                return True, json.dumps({"uuid": parent_uuid, "nextLink": parent_next["value"]}), ""
+                return True, json.dumps(
+                    {
+                        "uuid": parent_uuid,
+                        "status": "completed",
+                        "chain": "on",
+                        "chainID": "abcd1234",
+                        "link": 1,
+                        "nextLink": parent_next["value"],
+                    }
+                ), ""
             if "import" in cmd_s:
                 imported["ok"] = True
                 return True, "", ""
@@ -18464,6 +18589,12 @@ def test_on_exit_normalize_queue_entry_strips_fields():
         {
             "parent_uuid": " 00000000-0000-0000-0000-000000000111 ",
             "parent_nextlink": " deadbeef ",
+            "parent_guard": {
+                "status": " completed ",
+                "chain": " on ",
+                "chainID": " abcd1234 ",
+                "link": 4,
+            },
             "child_short": " deadbeef ",
             "child": {"uuid": " 00000000-0000-0000-0000-000000000999 "},
             "spawn_intent_id": " si_test ",
@@ -18473,6 +18604,11 @@ def test_on_exit_normalize_queue_entry_strips_fields():
 
     expect(entry["parent_uuid"] == "00000000-0000-0000-0000-000000000111", f"unexpected parent_uuid: {entry}")
     expect(entry["parent_nextlink"] == "deadbeef", f"unexpected parent_nextlink: {entry}")
+    expect(
+        entry["parent_guard"]
+        == {"status": "completed", "chain": "on", "chainID": "abcd1234", "link": "4"},
+        f"unexpected parent_guard: {entry}",
+    )
     expect(entry["child_short"] == "deadbeef", f"unexpected child_short: {entry}")
     expect(entry["child"]["uuid"] == "00000000-0000-0000-0000-000000000999", f"unexpected child uuid: {entry}")
     expect(entry["spawn_intent_id"] == "si_test", f"unexpected spawn_intent_id: {entry}")
@@ -19930,6 +20066,7 @@ TESTS = [
     test_on_exit_queue_drain_idempotent,
     test_on_exit_rolls_back_parent_nextlink_on_missing_child,
     test_on_exit_guarded_parent_clear_preserves_changed_link,
+    test_on_exit_stale_parent_guard_prevents_child_import,
     test_on_exit_uses_tw_data_dir_for_export_and_modify,
     test_on_exit_no_explicit_taskdata_skips_rc_data_location,
     test_on_exit_reads_data_arg_from_hook_argv,
@@ -20089,6 +20226,7 @@ TESTS = [
     test_core_import_deterministic,
     test_on_modify_spawn_intent_id_in_entry,
     test_on_modify_spawn_intent_entry_rejects_missing_child_uuid,
+    test_on_modify_spawn_intent_records_parent_guard,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,

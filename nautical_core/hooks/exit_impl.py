@@ -2062,6 +2062,7 @@ def _build_exit_entry_context(
     parent_uuid: str,
     child_short: str,
     expected_parent_nextlink: str | None,
+    parent_guard: dict[str, str] | None,
     child: dict,
     child_uuid: str,
     spawn_intent_id: str,
@@ -2074,6 +2075,7 @@ def _build_exit_entry_context(
         parent_uuid=parent_uuid,
         child_short=child_short,
         expected_parent_nextlink=expected_parent_nextlink,
+        parent_guard=parent_guard,
         child=child,
         child_uuid=child_uuid,
         spawn_intent_id=spawn_intent_id,
@@ -2101,6 +2103,13 @@ def _precheck_parent_link_state(ctx) -> tuple[str, bool]:
     exit_runtime = _module("exit_runtime")
     services = exit_runtime.build_precheck_services(_exit_runtime_services())
     return exit_entry_flow.precheck_parent_link_state(ctx, services=services)
+
+
+def _precheck_parent_guard(ctx) -> str:
+    exit_entry_flow = _module("exit_entry_flow")
+    exit_runtime = _module("exit_runtime")
+    services = exit_runtime.build_precheck_services(_exit_runtime_services())
+    return exit_entry_flow.precheck_parent_guard(ctx, services=services)
 
 
 def _ensure_child_exists_for_entry(ctx, *, initial_export_res=None) -> tuple[str, bool]:
@@ -2140,9 +2149,29 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
     parent_uuid = (entry.get("parent_uuid") or "").strip()
     expected_parent_nextlink = (entry.get("parent_nextlink") or "").strip()
+    parent_guard = entry.get("parent_guard")
     child = entry.get("child") or {}
     child_short = (entry.get("child_short") or "").strip()
     child_uuid = (child.get("uuid") or "").strip()
+    ctx = _build_exit_entry_context(
+        queue_entry,
+        idx,
+        state,
+        parent_uuid=parent_uuid,
+        child_short=child_short,
+        expected_parent_nextlink=expected_parent_nextlink or None,
+        parent_guard=parent_guard if isinstance(parent_guard, dict) else None,
+        child=child,
+        child_uuid=child_uuid,
+        spawn_intent_id=spawn_intent_id,
+    )
+
+    guard_action = _precheck_parent_guard(ctx)
+    if guard_action == "break":
+        return True
+    if guard_action == "continue":
+        return False
+
     exact_child = _export_uuid(child_uuid)
     if exact_child.retryable:
         return _requeue_or_dead_letter_for_lock(entry, idx, state)
@@ -2165,17 +2194,8 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
                 else:
                     _diag(f"equivalent child already exists; binding to child {child_short}")
 
-    ctx = _build_exit_entry_context(
-        queue_entry,
-        idx,
-        state,
-        parent_uuid=parent_uuid,
-        child_short=child_short,
-        expected_parent_nextlink=expected_parent_nextlink or None,
-        child=child,
-        child_uuid=child_uuid,
-        spawn_intent_id=spawn_intent_id,
-    )
+    ctx.child_short = child_short
+    ctx.child_uuid = child_uuid
 
     link_action, parent_linked_already = _precheck_parent_link_state(ctx)
     if link_action == "break":

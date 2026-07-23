@@ -49,6 +49,10 @@ def build_precheck_services(runtime: ExitRuntimeServices) -> ExitPrecheckService
         parent_nextlink_state=lambda parent_uuid, child_short, expected_prev: runtime.parent_nextlink_state(
             parent_uuid, child_short, expected_prev, prefer_cache=True
         ),
+        export_uuid=lambda uuid_str: runtime.export_uuid(uuid_str, prefer_cache=True),
+        clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,
+        is_lock_error=runtime.is_lock_error,
+        diag=runtime.diag,
         requeue_or_dead_letter_for_lock=runtime.requeue_or_dead_letter_for_lock,
     )
 

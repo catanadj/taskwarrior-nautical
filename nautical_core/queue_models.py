@@ -34,6 +34,17 @@ def _clean_attempts(value: Any) -> int:
     return attempts
 
 
+def _clean_parent_guard(value: Any) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise QueueEntryError("invalid parent_guard")
+    fields = ("status", "chain", "chainID", "link")
+    if any(field not in value for field in fields):
+        raise QueueEntryError("invalid parent_guard")
+    return {field: _clean_str(value.get(field)) for field in fields}
+
+
 def _mapping_value(mapping: Any, key: str, default: Any = None) -> Any:
     if mapping is None:
         return default
@@ -55,6 +66,7 @@ class SpawnQueueEntry:
     child_short: str
     child: dict[str, Any]
     spawn_intent_id: str
+    parent_guard: dict[str, str] | None = None
     attempts: int = 0
 
     @classmethod
@@ -73,6 +85,7 @@ class SpawnQueueEntry:
             child_short=_clean_str(entry.get("child_short")),
             child=child,
             spawn_intent_id=spawn_intent_id,
+            parent_guard=_clean_parent_guard(entry.get("parent_guard")),
             attempts=_clean_attempts(entry.get("attempts")),
         )
 
@@ -84,6 +97,8 @@ class SpawnQueueEntry:
             "child": dict(self.child),
             "spawn_intent_id": self.spawn_intent_id,
         }
+        if self.parent_guard is not None:
+            out["parent_guard"] = dict(self.parent_guard)
         if self.attempts:
             out["attempts"] = self.attempts
         return out
@@ -143,4 +158,3 @@ class QueueWriteResult:
     count: int
     lock_busy: bool = False
     err: str = ""
-

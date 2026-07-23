@@ -2019,6 +2019,7 @@ def _spawn_intent_entry(
     child_short: str,
     parent_nextlink: str | None = None,
     spawn_intent_id: str | None = None,
+    parent_guard: dict | None = None,
 ) -> dict:
     intent_id = (spawn_intent_id or "").strip()
     if not intent_id:
@@ -2031,6 +2032,7 @@ def _spawn_intent_entry(
             "child_short": child_short,
             "child": child_obj,
             "spawn_intent_id": intent_id,
+            "parent_guard": parent_guard,
         }
     )
 
@@ -2084,6 +2086,12 @@ def _spawn_child_atomic(
         child_short,
         parent_task_with_nextlink.get("nextLink") or "",
         spawn_intent_id,
+        parent_guard={
+            "status": parent_task_with_nextlink.get("status") or "",
+            "chain": parent_task_with_nextlink.get("chain") or "",
+            "chainID": parent_task_with_nextlink.get("chainID") or "",
+            "link": parent_task_with_nextlink.get("link") or "",
+        },
     )
     queued, queue_reason = _enqueue_spawn_intent(entry)
     if not queued:

@@ -11,6 +11,50 @@ if TYPE_CHECKING:
     )
 
 
+def _parent_guard_mismatch(parent: dict[str, Any], guard: dict[str, str]) -> str:
+    for field in ("status", "chain", "chainID", "link"):
+        expected = str(guard.get(field) or "").strip()
+        actual = str(parent.get(field) or "").strip()
+        if field in {"status", "chain"}:
+            expected = expected.lower()
+            actual = actual.lower()
+        if actual != expected:
+            return f"parent {field} changed (expected {expected or '-'}, found {actual or '-'})"
+    return ""
+
+
+def precheck_parent_guard(
+    ctx: ExitEntryContext,
+    *,
+    services: ExitPrecheckServices,
+) -> str:
+    if not ctx.parent_guard:
+        return "ok"
+
+    parent_res = services.export_uuid(ctx.parent_uuid)
+    if parent_res.retryable:
+        return "break" if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else "continue"
+    parent = parent_res.obj
+    if not isinstance(parent, dict):
+        ctx.state.dead_letter(ctx.entry, "stale spawn intent: parent missing")
+        ctx.state.reset_lock_streak()
+        return "continue"
+
+    mismatch = _parent_guard_mismatch(parent, ctx.parent_guard)
+    if not mismatch:
+        return "ok"
+
+    clear_res = services.clear_parent_nextlink_if_matches(ctx.parent_uuid, ctx.child_short)
+    if not clear_res.ok:
+        if clear_res.err in {"parent export locked", "parent lock busy"} or services.is_lock_error(clear_res.err):
+            return "break" if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else "continue"
+        mismatch += f"; optimistic parent link cleanup failed: {clear_res.err}"
+        services.diag(f"stale spawn intent cleanup failed: {clear_res.err}")
+    ctx.state.dead_letter(ctx.entry, f"stale spawn intent: {mismatch}")
+    ctx.state.reset_lock_streak()
+    return "continue"
+
+
 def precheck_parent_link_state(
     ctx: ExitEntryContext,
     *,

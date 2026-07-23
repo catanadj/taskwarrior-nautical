@@ -12,6 +12,7 @@ class ExitEntryContext:
     parent_uuid: str
     child_short: str
     expected_parent_nextlink: str | None
+    parent_guard: dict[str, str] | None
     child: dict[str, Any]
     child_uuid: str
     spawn_intent_id: str
@@ -20,6 +21,10 @@ class ExitEntryContext:
 @dataclass(slots=True)
 class ExitPrecheckServices:
     parent_nextlink_state: Any
+    export_uuid: Any
+    clear_parent_nextlink_if_matches: Any
+    is_lock_error: Any
+    diag: Any
     requeue_or_dead_letter_for_lock: Any
 
 

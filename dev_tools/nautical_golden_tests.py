@@ -12280,9 +12280,54 @@ def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations(
             json.dumps(old) + "\n" + json.dumps(new),
             env_extra=dict(env, TASKDATA=td),
         )
+        anchor_old = dict(
+            base,
+            anchor="w:mon@t=09:00",
+            chain="on",
+            chainID="cid_until_anchor_edit",
+            link=1,
+        )
+        anchor_invalid = _run_hook_script_raw(
+            modify_hook,
+            json.dumps(anchor_old) + "\n" + json.dumps(dict(anchor_old, anchor="w:mon@t=09:00,20:00")),
+            env_extra=dict(env, TASKDATA=td),
+        )
+        anchor_valid = _run_hook_script_raw(
+            modify_hook,
+            json.dumps(anchor_old) + "\n" + json.dumps(dict(anchor_old, anchor="w:mon@t=09:00,18:00")),
+            env_extra=dict(env, TASKDATA=td),
+        )
+        cp_old = dict(
+            anchor_old,
+            anchor=None,
+            anchor_mode=None,
+            cp="7d",
+            chainID="cid_until_cp_to_anchor",
+        )
+        cp_to_anchor = dict(
+            cp_old,
+            cp=None,
+            anchor="w:mon@t=09:00,20:00",
+            anchor_mode="skip",
+        )
+        converted = _run_hook_script_raw(
+            modify_hook,
+            json.dumps(cp_old) + "\n" + json.dumps(cp_to_anchor),
+            env_extra=dict(env, TASKDATA=td),
+        )
     expect(modified.returncode != 0, "on-modify accepted a same-day expiration before an anchor slot")
     expect(not modified.stdout.strip(), f"rejected on-modify leaked stdout: {modified.stdout!r}")
     expect("Invalid expiration window" in _strip_markup(modified.stderr), f"missing modify expiration panel: {modified.stderr!r}")
+    expect(anchor_invalid.returncode != 0, "on-modify accepted an anchor edit adding a slot after expiration")
+    expect(not anchor_invalid.stdout.strip(), f"rejected anchor edit leaked stdout: {anchor_invalid.stdout!r}")
+    expect("20:00" in _strip_markup(anchor_invalid.stderr), f"missing edited anchor slot: {anchor_invalid.stderr!r}")
+    expect(anchor_valid.returncode == 0, f"valid anchor slot edit was rejected: {anchor_valid.stderr!r}")
+    expect(
+        _assert_stdout_json_only(anchor_valid.stdout).get("anchor") == "w:mon@t=09:00,18:00",
+        f"valid anchor edit changed unexpectedly: {anchor_valid.stdout!r}",
+    )
+    expect(converted.returncode != 0, "CP-to-anchor conversion bypassed expiration slot validation")
+    expect(not converted.stdout.strip(), f"rejected CP-to-anchor conversion leaked stdout: {converted.stdout!r}")
 
     with tempfile.TemporaryDirectory() as td:
         anchor_dir = Path(td) / "anchor"
@@ -12296,9 +12341,25 @@ def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations(
             file_task,
             env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config)},
         )
+        file_old = dict(
+            file_task,
+            anchor_file="events.csv@t=09:00",
+            chain="on",
+            chainID="cid_until_file_edit",
+            link=1,
+        )
+        file_new = dict(file_old, anchor_file="events.csv@t=09:00,20:00")
+        modified_file = _run_hook_script_raw(
+            modify_hook,
+            json.dumps(file_old) + "\n" + json.dumps(file_new),
+            env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config), "TASKDATA": td},
+        )
     expect(from_file.returncode != 0, "anchor_file accepted a same-day expiration before a file slot")
     expect(not from_file.stdout.strip(), f"rejected anchor_file add leaked stdout: {from_file.stdout!r}")
     expect("20:00" in _strip_markup(from_file.stderr), f"missing anchor_file slot evidence: {from_file.stderr!r}")
+    expect(modified_file.returncode != 0, "on-modify accepted an anchor_file edit adding a slot after expiration")
+    expect(not modified_file.stdout.strip(), f"rejected anchor_file edit leaked stdout: {modified_file.stdout!r}")
+    expect("20:00" in _strip_markup(modified_file.stderr), f"missing edited anchor_file slot: {modified_file.stderr!r}")
 
     invalid_parent = {
         "uuid": "00000000-0000-0000-0000-000000000998",

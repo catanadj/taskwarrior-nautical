@@ -5932,7 +5932,7 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
         _preserve_native_until_on_target_change(old, new, recurrence_kind)
     native_window_changed = any(
         _field_changed(old, new, field)
-        for field in ("due", "scheduled", "until", "anchor_mode")
+        for field in ("due", "scheduled", "until", "anchor", "anchor_file", "anchor_mode")
     )
     if new_has_recurrence and (native_window_changed or recurrence_enabled):
         _validate_native_until_after_target_or_fail(new)

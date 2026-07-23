@@ -3996,6 +3996,39 @@ def test_doctor_reports_live_panel_configuration_health():
         mod.RICH_SPEC_FACTORY = original_rich_spec
 
 
+def test_doctor_reports_authoritative_config_schema_findings():
+    """Doctor should turn schema issues into stable, actionable warnings."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_config_schema_test")
+    findings = []
+    mod._check_config_schema(
+        findings,
+        {
+            "verify_import": False,
+            "spawn_queue_drain_max_items": 0,
+            "panel_mode": "sparkle",
+            "setting_typo": True,
+        },
+    )
+    ids = {item.get("id") for item in findings}
+    expect(
+        {
+            "config.schema.deprecated",
+            "config.schema.range",
+            "config.schema.choice",
+            "config.schema.unknown",
+        }
+        <= ids,
+        f"doctor schema findings were incomplete: {findings!r}",
+    )
+    expect(all(item.get("fix") for item in findings), f"schema finding lacked an actionable fix: {findings!r}")
+    drain = next(item for item in findings if (item.get("details") or {}).get("key") == "spawn_queue_drain_max_items")
+    expect(
+        (drain.get("details") or {}).get("effective") == 1,
+        f"doctor omitted the effective drain limit: {findings!r}",
+    )
+
+
 def test_on_add_preview_warns_when_anchor_uses_utc_fallback():
     """on-add preview helper should flag anchors when timezone data is unavailable."""
     import nautical_core.add_anchor_preview as mod
@@ -5223,6 +5256,48 @@ def test_core_live_panel_duration_config_defaults_and_clamps():
             )
 
 
+def test_spawn_queue_drain_limit_config_and_env_override():
+    """on-exit should use the config drain limit unless the process env overrides it."""
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "nautical.toml"
+        config_path.write_text("spawn_queue_drain_max_items = 7\n", encoding="utf-8")
+        script = (
+            "import json\n"
+            "from nautical_core import SPAWN_QUEUE_DRAIN_MAX_ITEMS\n"
+            "from nautical_core.hooks import exit_impl\n"
+            "print(json.dumps([SPAWN_QUEUE_DRAIN_MAX_ITEMS, exit_impl._QUEUE_MAX_LINES]))\n"
+        )
+        env = os.environ.copy()
+        env["NAUTICAL_CONFIG"] = str(config_path)
+        env["TASKDATA"] = td
+        env.pop("NAUTICAL_SPAWN_QUEUE_MAX_LINES", None)
+        plain = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(plain.returncode == 0, f"configured queue drain import failed: {plain.stderr!r}")
+        expect(json.loads(plain.stdout) == [7, 7], f"config drain limit was not effective: {plain.stdout!r}")
+
+        env["NAUTICAL_SPAWN_QUEUE_MAX_LINES"] = "3"
+        overridden = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(overridden.returncode == 0, f"queue drain override import failed: {overridden.stderr!r}")
+        expect(
+            json.loads(overridden.stdout) == [7, 3],
+            f"environment queue drain override did not win: {overridden.stdout!r}",
+        )
+
+
 def test_shipped_config_keeps_hook_toggles_top_level():
     """Preset tables in config-nautical.toml should not swallow later top-level hook settings."""
     try:
@@ -5238,6 +5313,46 @@ def test_shipped_config_keeps_hook_toggles_top_level():
     omit_presets = data.get("omit_presets") if isinstance(data.get("omit_presets"), dict) else {}
     expect("panel_mode" not in omit_presets, f"panel_mode was parsed as an omit preset: {omit_presets!r}")
     expect("show_analytics" not in omit_presets, f"show_analytics was parsed as an omit preset: {omit_presets!r}")
+
+
+def test_shipped_config_matches_authoritative_schema():
+    """Every shipped config key should be active, typed correctly, and in range."""
+    try:
+        import tomllib
+    except Exception:
+        import tomli as tomllib
+    from nautical_core import config_schema
+
+    cfg_path = Path(ROOT) / "config-nautical.toml"
+    data = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+    issues = config_schema.validate_config(data)
+    expect(not issues, f"shipped config does not match the runtime schema: {issues!r}")
+    expect("verify_import" not in data, "retired verify_import should not be advertised")
+    expect("holiday_region" not in data, "ineffective holiday_region should not be advertised")
+
+
+def test_config_schema_reports_retired_unknown_and_ineffective_values():
+    """Schema diagnostics should expose configuration drift and effective fallbacks."""
+    from nautical_core import config_schema
+
+    issues = config_schema.validate_config(
+        {
+            "verify_import": False,
+            "show_analytics": "yes",
+            "spawn_queue_drain_max_items": 0,
+            "panel_mode": "sparkle",
+            "setting_typo": True,
+        }
+    )
+    kinds = {issue["kind"] for issue in issues}
+    expect(
+        {"deprecated", "type", "range", "choice", "unknown"} <= kinds,
+        f"schema issues were incomplete: {issues!r}",
+    )
+    drain = next(issue for issue in issues if issue["key"] == "spawn_queue_drain_max_items")
+    expect(drain.get("effective") == 1, f"drain limit effective value was not reported: {issues!r}")
+    panel = next(issue for issue in issues if issue["key"] == "panel_mode")
+    expect(panel.get("effective") == "rich", f"panel fallback was not reported: {issues!r}")
 
 
 def test_on_modify_invalid_json_passthrough():
@@ -10641,17 +10756,15 @@ def test_on_add_run_task_falls_back_when_core_load_fails():
         mod._diag = saved_diag
 
 
-def test_spawn_child_verifies_even_when_verify_import_disabled():
-    """_spawn_child should verify child existence even when verify_import is disabled."""
+def test_spawn_child_always_verifies_import():
+    """_spawn_child should always verify child existence."""
     hook = _find_hook_file("on-modify-nautical.py")
     mod = _load_hook_module(hook, "_nautical_on_modify_spawn_verify_enforced_test")
 
     saved_reserve = mod._reserve_child_uuid
     saved_run_task = mod._run_task
     saved_exists = mod._task_exists_by_uuid
-    saved_verify = mod._VERIFY_IMPORT
     try:
-        mod._VERIFY_IMPORT = False
         mod._reserve_child_uuid = lambda _env: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         calls = {"import": 0, "exists": 0}
 
@@ -10677,7 +10790,6 @@ def test_spawn_child_verifies_even_when_verify_import_disabled():
         mod._reserve_child_uuid = saved_reserve
         mod._run_task = saved_run_task
         mod._task_exists_by_uuid = saved_exists
-        mod._VERIFY_IMPORT = saved_verify
 
 
 def test_core_run_task_tempfiles_accepts_text_input():
@@ -21451,7 +21563,7 @@ TESTS = [
     test_hook_task_runner_handles_nonzero,
     test_hook_run_task_falls_back_when_core_load_fails,
     test_on_add_run_task_falls_back_when_core_load_fails,
-    test_spawn_child_verifies_even_when_verify_import_disabled,
+    test_spawn_child_always_verifies_import,
     test_core_run_task_tempfiles_accepts_text_input,
     test_core_run_task_timeout_reports_timeout_with_tempfiles,
     test_core_run_task_nonzero_retries_use_expected_backoff,
@@ -21531,6 +21643,7 @@ TESTS = [
     test_doctor_reports_missing_timezone_data,
     test_doctor_text_timezone_summary,
     test_doctor_reports_live_panel_configuration_health,
+    test_doctor_reports_authoritative_config_schema_findings,
     test_on_add_preview_warns_when_anchor_uses_utc_fallback,
     test_panel_diagnostics_warns_for_missing_env_config,
     test_panel_diagnostics_warns_for_empty_file_sources,
@@ -21835,7 +21948,10 @@ TESTS = [
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_core_recurrence_update_udas_config_aliases,
     test_core_live_panel_duration_config_defaults_and_clamps,
+    test_spawn_queue_drain_limit_config_and_env_override,
     test_shipped_config_keeps_hook_toggles_top_level,
+    test_shipped_config_matches_authoritative_schema,
+    test_config_schema_reports_retired_unknown_and_ineffective_values,
     test_warn_rate_limited_any,
     test_on_modify_build_child_carries_configured_uda_datetime,
 

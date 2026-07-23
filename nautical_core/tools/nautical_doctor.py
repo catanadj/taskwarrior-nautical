@@ -26,7 +26,7 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import chain_repair, reconcile  # noqa: E402
+from nautical_core import chain_repair, config_schema, reconcile  # noqa: E402
 import nautical_core.runtime as runtime  # noqa: E402
 
 REQUIRED_UDAS = {
@@ -258,6 +258,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
         )
         return
     _finding(findings, "config.loaded", "ok", f"Nautical config is valid: {config}")
+    _check_config_schema(findings, data)
     _check_timezone(findings, data)
     _check_panel_config(findings, data)
     for key in ("anchor_file_dir", "omit_file_dir"):
@@ -274,6 +275,53 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             "ok" if valid else "error",
             f"{key} {'is accessible' if valid else 'is not accessible'}: {path.resolve()}",
             fix="" if valid else f"Create or correct the configured {key} directory.",
+        )
+
+
+def _check_config_schema(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
+    for issue in config_schema.validate_config(data, skip_keys={"live_panel_duration_ms"}):
+        kind = str(issue["kind"])
+        key = str(issue["key"])
+        details = {name: value for name, value in issue.items() if name not in {"kind", "message"}}
+        if kind == "unknown":
+            message = f"Unknown Nautical config key: {key}."
+            fix = f"Remove or correct '{key}'."
+        elif kind == "deprecated":
+            message = f"Retired Nautical config key '{key}': {issue['message']}"
+            fix = f"Remove '{key}' from the config."
+        elif kind == "type":
+            message = (
+                f"Config key '{key}' has the wrong type; expected {issue['expected']} "
+                f"and will use {issue['effective']!r}."
+            )
+            fix = f"Set '{key}' to a TOML {issue['expected']} value."
+        elif kind == "range":
+            message = (
+                f"Config key '{key}' is outside its supported range; "
+                f"{issue['effective']!r} will be used."
+            )
+            bounds = [
+                text
+                for text in (
+                    f"at least {issue['min']}" if issue.get("min") is not None else "",
+                    f"at most {issue['max']}" if issue.get("max") is not None else "",
+                )
+                if text
+            ]
+            fix = f"Set '{key}' to {' and '.join(bounds)}."
+        else:
+            message = (
+                f"Config key '{key}' has unsupported value {issue['configured']!r}; "
+                f"{issue['effective']!r} will be used."
+            )
+            fix = f"Set '{key}' to one of: {', '.join(issue['choices'])}."
+        _finding(
+            findings,
+            f"config.schema.{kind}",
+            "warn",
+            message,
+            fix=fix,
+            details=details,
         )
 
 
@@ -306,23 +354,28 @@ def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> Non
 
 def _check_panel_config(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
     mode = str(data.get("panel_mode") or "rich").strip().lower() or "rich"
-    raw_duration = data.get("live_panel_duration_ms", 160)
+    duration_spec = config_schema.CONFIG_SPECS["live_panel_duration_ms"]
+    default_duration = int(duration_spec["default"])
+    min_duration = int(duration_spec["min"])
+    max_duration = int(duration_spec["max"])
+    raw_duration = data.get("live_panel_duration_ms", default_duration)
     duration_valid = True
     try:
         configured_duration = int(str(raw_duration).strip())
     except Exception:
-        configured_duration = 160
+        configured_duration = default_duration
         duration_valid = False
 
-    effective_duration = max(0, min(1000, configured_duration))
+    effective_duration = max(min_duration, min(max_duration, configured_duration))
     if not duration_valid:
         _finding(
             findings,
             "config.panel.duration.invalid",
             "warn",
-            f"live_panel_duration_ms is invalid ({raw_duration!r}); the effective duration is 160 ms.",
-            fix="Set live_panel_duration_ms to an integer from 0 to 1000.",
-            details={"configured_duration_ms": raw_duration, "effective_duration_ms": 160},
+            f"live_panel_duration_ms is invalid ({raw_duration!r}); "
+            f"the effective duration is {default_duration} ms.",
+            fix=f"Set live_panel_duration_ms to an integer from {min_duration} to {max_duration}.",
+            details={"configured_duration_ms": raw_duration, "effective_duration_ms": default_duration},
         )
     elif effective_duration != configured_duration:
         _finding(
@@ -330,7 +383,7 @@ def _check_panel_config(findings: list[dict[str, Any]], data: dict[str, Any]) ->
             "config.panel.duration.clamped",
             "warn",
             f"live_panel_duration_ms is {configured_duration}; Nautical clamps it to {effective_duration} ms.",
-            fix="Set live_panel_duration_ms to an integer from 0 to 1000.",
+            fix=f"Set live_panel_duration_ms to an integer from {min_duration} to {max_duration}.",
             details={
                 "configured_duration_ms": configured_duration,
                 "effective_duration_ms": effective_duration,

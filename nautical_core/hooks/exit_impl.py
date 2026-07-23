@@ -361,7 +361,12 @@ def _env_int(
 
 
 _DEAD_LETTER_RETENTION_DAYS = _env_int("NAUTICAL_DEAD_LETTER_RETENTION_DAYS", 30, min_value=0, max_value=3650)
-_QUEUE_MAX_LINES = _env_int("NAUTICAL_SPAWN_QUEUE_MAX_LINES", 10000, min_value=1, max_value=100000)
+_QUEUE_MAX_LINES = _env_int(
+    "NAUTICAL_SPAWN_QUEUE_MAX_LINES",
+    int(getattr(core, "SPAWN_QUEUE_DRAIN_MAX_ITEMS", 200)),
+    min_value=1,
+    max_value=100000,
+)
 _DEAD_LETTER_MAX_BYTES = _env_int("NAUTICAL_DEAD_LETTER_MAX_BYTES", 524288, min_value=0, max_value=100 * 1024 * 1024)
 _QUEUE_RETRY_MAX = _env_int("NAUTICAL_QUEUE_RETRY_MAX", 6, min_value=0, max_value=100)
 _TASK_TIMEOUT_EXPORT = _env_float("NAUTICAL_TASK_TIMEOUT_EXPORT", 3.0, min_value=0.1, max_value=300.0)

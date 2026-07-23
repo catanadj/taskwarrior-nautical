@@ -6,7 +6,7 @@ from collections import OrderedDict
 from functools import lru_cache, wraps
 from types import MappingProxyType
 
-from nautical_core import cache_support, config_support, warnings
+from nautical_core import cache_support, config_schema, config_support, warnings
 
 try:
     import tomllib  # Python 3.11+
@@ -22,14 +22,14 @@ if tomllib is None:
 
 
 _DEFAULTS = {
-    "wrand_salt": "nautical|wrand|v3",
-    "tz": "Europe/Bucharest",
+    "wrand_salt": config_schema.spec_default("wrand_salt"),
+    "tz": config_schema.spec_default("tz"),
     "holiday_region": "",
-    "anchor_file_dir": "",
-    "omit_file_dir": "",
-    "anchor_presets": {},
-    "omit_presets": {},
-    "business_calendar": {},
+    "anchor_file_dir": config_schema.spec_default("anchor_file_dir"),
+    "omit_file_dir": config_schema.spec_default("omit_file_dir"),
+    "anchor_presets": config_schema.spec_default("anchor_presets"),
+    "omit_presets": config_schema.spec_default("omit_presets"),
+    "business_calendar": config_schema.spec_default("business_calendar"),
 }
 
 _CONF_CACHE = None
@@ -215,6 +215,34 @@ def conf_uda_field_list(key: str) -> list[str]:
     return config_support.conf_uda_field_list(_CONF, key)
 
 
+def conf_schema_str(key: str) -> str:
+    return conf_str(key, str(config_schema.spec_default(key)))
+
+
+def conf_schema_int(key: str) -> int:
+    spec = config_schema.CONFIG_SPECS[key]
+    return conf_int(
+        key,
+        int(spec["default"]),
+        min_value=spec.get("min"),
+        max_value=spec.get("max"),
+    )
+
+
+def conf_schema_bool(
+    key: str,
+    *,
+    true_values: set[str] | None = None,
+    false_values: set[str] | None = None,
+) -> bool:
+    return conf_bool(
+        key,
+        bool(config_schema.spec_default(key)),
+        true_values=true_values,
+        false_values=false_values,
+    )
+
+
 def trueish(v, default=False):
     return config_support.trueish(v, default=default)
 
@@ -229,55 +257,49 @@ ANCHOR_PRESETS = _CONF["anchor_presets"]
 OMIT_PRESETS = _CONF["omit_presets"]
 BUSINESS_CALENDAR_CONFIG = _CONF["business_calendar"]
 
-ENABLE_ANCHOR_CACHE = conf_bool("enable_anchor_cache", False)
-ANCHOR_CACHE_DIR_OVERRIDE = conf_str("anchor_cache_dir", "")
-ANCHOR_CACHE_TTL = conf_int("anchor_cache_ttl", 0, min_value=0)
+ENABLE_ANCHOR_CACHE = conf_schema_bool("enable_anchor_cache")
+ANCHOR_CACHE_DIR_OVERRIDE = conf_schema_str("anchor_cache_dir")
+ANCHOR_CACHE_TTL = conf_schema_int("anchor_cache_ttl")
 
-CHAIN_COLOR_PER_CHAIN = conf_bool(
+CHAIN_COLOR_PER_CHAIN = conf_schema_bool(
     "chain_color_per_chain",
-    False,
     true_values={"chain", "per-chain", "per"},
 )
-SHOW_TIMELINE_GAPS = conf_bool(
+SHOW_TIMELINE_GAPS = conf_schema_bool(
     "show_timeline_gaps",
-    True,
     false_values={"0", "no", "false", "off", "none"},
 )
-SHOW_ANALYTICS = conf_bool(
+SHOW_ANALYTICS = conf_schema_bool(
     "show_analytics",
-    True,
     false_values={"0", "no", "false", "off", "none"},
 )
-ANALYTICS_STYLE = conf_str("analytics_style", "clinical").lower()
-if ANALYTICS_STYLE not in ("coach", "clinical"):
-    ANALYTICS_STYLE = "clinical"
-ANALYTICS_ONTIME_TOL_SECS = conf_int("analytics_ontime_tol_secs", 4 * 60 * 60, min_value=0)
-VERIFY_IMPORT = conf_bool("verify_import", True)
-DEBUG_WAIT_SCHED = conf_bool(
+ANALYTICS_STYLE = conf_schema_str("analytics_style").lower()
+ANALYTICS_STYLE = config_schema.normalized_choice("analytics_style", ANALYTICS_STYLE)
+ANALYTICS_ONTIME_TOL_SECS = conf_schema_int("analytics_ontime_tol_secs")
+DEBUG_WAIT_SCHED = conf_schema_bool(
     "debug_wait_sched",
-    False,
     true_values={"1", "yes", "true", "on"},
 )
-CHECK_CHAIN_INTEGRITY = conf_bool(
+CHECK_CHAIN_INTEGRITY = conf_schema_bool(
     "check_chain_integrity",
-    False,
     true_values={"1", "yes", "true", "on"},
 )
-PANEL_MODE = conf_str("panel_mode", "rich").lower()
-LIVE_PANEL_DURATION_MS = conf_int("live_panel_duration_ms", 160, min_value=0, max_value=1000)
-FAST_COLOR = conf_bool("fast_color", True)
-EXIT_PROGRESS = conf_bool("exit_progress", True)
-SPAWN_QUEUE_MAX_BYTES = conf_int("spawn_queue_max_bytes", 524288, min_value=0)
-MAX_CHAIN_WALK = conf_int("max_chain_walk", 500, min_value=1)
-MAX_ANCHOR_ITER = conf_int("max_anchor_iterations", 128, min_value=32, max_value=1024)
-MAX_LINK_NUMBER = conf_int("max_link_number", 10000, min_value=1)
-SANITIZE_UDA = conf_bool("sanitize_uda", False, true_values={"1", "yes", "true", "on"})
-SANITIZE_UDA_MAX_LEN = conf_int("sanitize_uda_max_len", 1024, min_value=64, max_value=4096)
-MAX_JSON_BYTES = conf_int("max_json_bytes", 10 * 1024 * 1024, min_value=1024, max_value=100 * 1024 * 1024)
+PANEL_MODE = config_schema.normalized_choice("panel_mode", conf_schema_str("panel_mode"))
+LIVE_PANEL_DURATION_MS = conf_schema_int("live_panel_duration_ms")
+FAST_COLOR = conf_schema_bool("fast_color")
+EXIT_PROGRESS = conf_schema_bool("exit_progress")
+SPAWN_QUEUE_MAX_BYTES = conf_schema_int("spawn_queue_max_bytes")
+SPAWN_QUEUE_DRAIN_MAX_ITEMS = conf_schema_int("spawn_queue_drain_max_items")
+MAX_CHAIN_WALK = conf_schema_int("max_chain_walk")
+MAX_ANCHOR_ITER = conf_schema_int("max_anchor_iterations")
+MAX_LINK_NUMBER = conf_schema_int("max_link_number")
+SANITIZE_UDA = conf_schema_bool("sanitize_uda", true_values={"1", "yes", "true", "on"})
+SANITIZE_UDA_MAX_LEN = conf_schema_int("sanitize_uda_max_len")
+MAX_JSON_BYTES = conf_schema_int("max_json_bytes")
 RECURRENCE_UPDATE_UDAS = tuple(conf_uda_field_list("recurrence_update_udas"))
-CACHE_TTL_SECS = conf_int("cache_ttl_secs", 3600, min_value=0)
-CACHE_LOAD_MEM_MAX = conf_int("cache_load_mem_max", _CACHE_LOAD_MEM_MAX, min_value=16, max_value=4096)
-CACHE_LOAD_MEM_TTL = conf_int("cache_load_mem_ttl", _CACHE_LOAD_MEM_TTL, min_value=0, max_value=86400)
+CACHE_TTL_SECS = conf_schema_int("cache_ttl_secs")
+CACHE_LOAD_MEM_MAX = conf_schema_int("cache_load_mem_max")
+CACHE_LOAD_MEM_TTL = conf_schema_int("cache_load_mem_ttl")
 
 
 def ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):

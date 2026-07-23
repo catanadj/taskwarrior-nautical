@@ -1,7 +1,6 @@
 # Nautical config
 wrand_salt      = "nautical|wrand|v4"
 tz              = "Australia/Sydney"
-holiday_region  = "" 				# not implemented yet
 anchor_file_dir = ""                 # trusted directory for anchor_file basenames
 omit_file_dir   = ""                 # trusted directory for anchor omit_file basenames
 
@@ -21,7 +20,6 @@ show_analytics = false               # show analytics panel
 analytics_style = "clinical"         # "coach" or "clinical"
 analytics_ontime_tol_secs = 14400    # "on time" window in seconds
 check_chain_integrity = false        # enable full-chain checks here; doctor also reports integrity issues
-verify_import = true                 # verify child import via export
 debug_wait_sched = false             # include wait/scheduled debug rows
 recurrence_update_udas = []          # optional date UDAs to carry relative to due (e.g., ["rappel"])
 panel_mode = "rich"                  # "rich", "live", "fast" (aka "plain"), "line", "compact", "minimal", or "text"

@@ -734,7 +734,6 @@ _SHOW_ANALYTICS = False
 _ANALYTICS_STYLE = "compact"
 _ANALYTICS_ONTIME_TOL_SECS = 3600
 _CHECK_CHAIN_INTEGRITY = False
-_VERIFY_IMPORT = True
 _DEBUG_WAIT_SCHED = _DEFAULT_DEBUG_WAIT_SCHED
 _RECURRENCE_UPDATE_UDAS: tuple[str, ...] = ()
 _CHAIN_CACHE_CHAIN_ID = ""
@@ -744,7 +743,7 @@ _MAX_CHAIN_WALK = _MAX_CHAIN_WALK
 
 def _apply_core_config() -> None:
     global _CHAIN_COLOR_PER_CHAIN, _SHOW_TIMELINE_GAPS, _SHOW_ANALYTICS, _ANALYTICS_STYLE
-    global _ANALYTICS_ONTIME_TOL_SECS, _CHECK_CHAIN_INTEGRITY, _VERIFY_IMPORT
+    global _ANALYTICS_ONTIME_TOL_SECS, _CHECK_CHAIN_INTEGRITY
     global _DEBUG_WAIT_SCHED, _RECURRENCE_UPDATE_UDAS, _SPAWN_QUEUE_MAX_BYTES, _MAX_CHAIN_WALK
     if core is None:
         return
@@ -754,7 +753,6 @@ def _apply_core_config() -> None:
     _ANALYTICS_STYLE = core.ANALYTICS_STYLE
     _ANALYTICS_ONTIME_TOL_SECS = core.ANALYTICS_ONTIME_TOL_SECS
     _CHECK_CHAIN_INTEGRITY = core.CHECK_CHAIN_INTEGRITY
-    _VERIFY_IMPORT = core.VERIFY_IMPORT
     _DEBUG_WAIT_SCHED = core.DEBUG_WAIT_SCHED if hasattr(core, "DEBUG_WAIT_SCHED") else _DEFAULT_DEBUG_WAIT_SCHED
     _RECURRENCE_UPDATE_UDAS = tuple(core.RECURRENCE_UPDATE_UDAS) if hasattr(core, "RECURRENCE_UPDATE_UDAS") else ()
     _SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES if hasattr(core, "SPAWN_QUEUE_MAX_BYTES") else _DEFAULT_SPAWN_QUEUE_MAX_BYTES
@@ -1946,8 +1944,6 @@ def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str
             # Always verify existence to avoid reporting success on partial import failures.
             if _task_exists_by_uuid(child_uuid, env):
                 return child_uuid[:8], stripped_accum
-            if not _VERIFY_IMPORT:
-                _diag("verify_import=false configured, but strict child existence verification is enforced")
             last_stderr = "task import reported success but child task was not found by UUID"
             category, is_retryable = ("taskwarrior", True)
         else:

@@ -122,14 +122,15 @@ def compute_expiration_child_due(parent: dict[str, Any], *, hook: Any) -> tuple[
     return child_due, result_meta
 
 
-def existing_child_short(
+def resolve_existing_child(
     parent: dict[str, Any],
     rows: list[dict[str, Any]],
     *,
     include_deleted: bool = False,
-) -> str:
+) -> tuple[str, str]:
     chain_id = str(parent.get("chainID") or "").strip()
     next_link = int_or_default(parent.get("link"), 1) + 1
+    matches: dict[str, dict[str, Any]] = {}
     for row in rows:
         if str(row.get("chainID") or "").strip() != chain_id:
             continue
@@ -137,8 +138,31 @@ def existing_child_short(
             continue
         if not include_deleted and str(row.get("status") or "").strip() == "deleted":
             continue
-        return short_uuid(row.get("uuid"))
-    return ""
+        child_uuid = str(row.get("uuid") or "").strip()
+        if len(child_uuid) < 8:
+            return "", f"next slot #{next_link} contains a task without a valid UUID"
+        matches[child_uuid.lower()] = row
+
+    if not matches:
+        return "", ""
+    if len(matches) > 1:
+        children = ", ".join(sorted(short_uuid(uuid) for uuid in matches))
+        return "", f"next slot #{next_link} contains multiple tasks: {children}"
+
+    child_uuid, child = next(iter(matches.items()))
+    parent_uuid = str(parent.get("uuid") or "").strip().lower()
+    parent_short = short_uuid(parent_uuid)
+    if len(parent_uuid) < 8 or not parent_short:
+        return "", "parent task has no valid UUID for reciprocal link validation"
+    prev_link = str(child.get("prevLink") or "").strip().lower()
+    if prev_link not in {parent_short, parent_uuid}:
+        shown = prev_link or "<empty>"
+        return (
+            "",
+            f"next slot #{next_link} child {short_uuid(child_uuid)} has "
+            f"prevLink {shown}; expected {parent_short}",
+        )
+    return short_uuid(child_uuid), ""
 
 
 def recurrence_kind(task: dict[str, Any]) -> str:
@@ -239,7 +263,13 @@ def build_reconcile_plan(
                 reason or "deleted task has no reliable native-until expiration evidence",
             )
 
-    child_short = existing_child_short(parent, existing_children, include_deleted=is_expiration)
+    child_short, child_error = resolve_existing_child(
+        parent,
+        existing_children,
+        include_deleted=is_expiration,
+    )
+    if child_error:
+        return ReconcilePlan("error", parent, next_link, child_error)
     if child_short:
         return ReconcilePlan("backfill_nextlink", parent, next_link, "next link already exists", child_short=child_short)
 

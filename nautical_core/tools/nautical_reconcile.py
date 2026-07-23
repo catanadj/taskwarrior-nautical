@@ -334,15 +334,12 @@ def _recovery_error(parent: dict[str, Any], reason: str) -> reconcile.ReconcileP
 
 
 def _validate_recovery_child(parent: dict[str, Any], child: dict[str, Any]) -> str:
-    parent_chain = str(parent.get("chainID") or "").strip()
-    child_chain = str(child.get("chainID") or "").strip()
-    if not parent_chain or child_chain != parent_chain:
-        return "recovery child does not belong to the parent chain"
-    expected_link = reconcile.int_or_default(parent.get("link"), 1) + 1
-    child_link = reconcile.int_or_default(child.get("link"), -1)
-    if child_link != expected_link:
-        return f"recovery child link is {child_link}; expected {expected_link}"
-    return ""
+    _child_short, child_error = reconcile.resolve_existing_child(
+        parent,
+        [child],
+        include_deleted=True,
+    )
+    return child_error
 
 
 def _next_recovery_child(

@@ -4187,6 +4187,35 @@ def test_doctor_reports_reconcile_backfill_plans():
                 "until": "20260720T230000Z",
                 "end": "20260720T100000Z",
             },
+            {
+                "uuid": "66666666-0000-0000-0000-000000000006",
+                "description": "ambiguous completed parent",
+                "status": "completed",
+                "cp": "1d",
+                "chain": "on",
+                "chainID": "ambiguous",
+                "link": 1,
+            },
+            {
+                "uuid": "77777777-0000-0000-0000-000000000007",
+                "description": "first duplicate child",
+                "status": "pending",
+                "cp": "1d",
+                "chain": "on",
+                "chainID": "ambiguous",
+                "link": 2,
+                "prevLink": "66666666",
+            },
+            {
+                "uuid": "88888888-0000-0000-0000-000000000008",
+                "description": "second duplicate child",
+                "status": "pending",
+                "cp": "1d",
+                "chain": "on",
+                "chainID": "ambiguous",
+                "link": 2,
+                "prevLink": "66666666",
+            },
         ]
         env = os.environ.copy()
         env["FAKE_HOOKS"] = str(hooks)
@@ -4198,13 +4227,14 @@ def test_doctor_reports_reconcile_backfill_plans():
             env=env,
             timeout=8.0,
         )
-        expect(p.returncode == 1, f"expected doctor warn exit 1, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
+        expect(p.returncode == 2, f"expected doctor error exit 2, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
         findings = {item.get("id"): item for item in obj.get("findings") or []}
         expect("chains.reconcile_available" in findings, f"missing reconcile finding: {obj}")
         details = findings["chains.reconcile_available"].get("details") or {}
         expect((details.get("actions") or {}).get("backfill_nextlink") == 2, f"bad reconcile action counts: {details}")
         expect((details.get("actions") or {}).get("manual_stop") == 1, f"missing manual-stop action: {details}")
+        expect((details.get("actions") or {}).get("error") == 1, f"ambiguous slot was not reported: {details}")
         expect((details.get("plans") or [{}])[0].get("existing_child") == "22222222", f"bad reconcile plan evidence: {details}")
         expect(
             any(plan.get("trigger") == "expiration" and plan.get("existing_child") == "44444444" for plan in details.get("plans") or []),
@@ -17552,9 +17582,35 @@ def test_reconcile_candidate_and_plan_paths():
     chain_off = dict(parent, chain="off")
     expect(not reconcile.is_orphan_completion_candidate(chain_off), "chain:off completion should not be a candidate")
 
-    existing = [{"uuid": "22222222-0000-0000-0000-000000000002", "chainID": "11111111", "link": 3, "status": "pending"}]
+    existing = [
+        {
+            "uuid": "22222222-0000-0000-0000-000000000002",
+            "chainID": "11111111",
+            "link": 3,
+            "status": "pending",
+            "prevLink": "11111111",
+        }
+    ]
     plan = reconcile.build_reconcile_plan(parent, existing_children=existing, hook=None)
     expect(plan.action == "backfill_nextlink" and plan.child_short == "22222222", f"unexpected backfill plan: {plan}")
+    duplicate = {
+        **existing[0],
+        "uuid": "33333333-0000-0000-0000-000000000003",
+    }
+    ambiguous = reconcile.build_reconcile_plan(parent, existing_children=[*existing, duplicate], hook=None)
+    expect(
+        ambiguous.action == "error" and "multiple tasks" in ambiguous.reason,
+        f"duplicate next slots must fail closed: {ambiguous}",
+    )
+    nonreciprocal = reconcile.build_reconcile_plan(
+        parent,
+        existing_children=[dict(existing[0], prevLink="deadbeef")],
+        hook=None,
+    )
+    expect(
+        nonreciprocal.action == "error" and "prevLink" in nonreciprocal.reason,
+        f"nonreciprocal next slot must fail closed: {nonreciprocal}",
+    )
 
     class FakeCore:
         @staticmethod
@@ -17987,6 +18043,7 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
         "status": "deleted",
         "chainID": "11111111",
         "link": 2,
+        "prevLink": "11111111",
     }
 
     backfill = reconcile.build_reconcile_plan(parent, existing_children=[deleted_child], hook=mod)
@@ -18301,6 +18358,71 @@ def test_reconcile_parent_updates_are_guarded():
     expect(args[-1] == "nextLink:22222222", f"wrong parent update: {args}")
 
 
+def test_reconcile_apply_rejects_ambiguous_existing_slot():
+    """Atomic reconcile must not mutate a parent when its next slot is ambiguous."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_ambiguous_slot_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "ambig001",
+        "link": 1,
+    }
+    children = [
+        {
+            "uuid": f"{prefix * 8}-0000-0000-0000-00000000000{index}",
+            "status": "pending",
+            "chainID": parent["chainID"],
+            "link": 2,
+            "prevLink": "11111111",
+        }
+        for index, prefix in ((2, "2"), (3, "3"))
+    ]
+
+    @contextlib.contextmanager
+    def parent_lock(_taskdata, _parent_uuid):
+        yield True
+
+    class FakeHook:
+        core = SimpleNamespace()
+
+    def unexpected_mutation(*_args, **_kwargs):
+        raise AssertionError("ambiguous next slot must not mutate Taskwarrior")
+
+    original = (
+        tool._parent_apply_lock,
+        tool._fresh_parent,
+        tool._existing_children,
+        tool._modify_parent_nextlink,
+        tool._disable_parent_chain,
+    )
+    try:
+        tool._parent_apply_lock = parent_lock
+        tool._fresh_parent = lambda _task_bin, _parent: dict(parent)
+        tool._existing_children = lambda _task_bin, _parent: list(children)
+        tool._modify_parent_nextlink = unexpected_mutation
+        tool._disable_parent_chain = unexpected_mutation
+        plan, applied = tool._apply_parent_atomic(
+            "task",
+            FakeHook(),
+            parent,
+            taskdata=Path("/tmp/nautical-reconcile-ambiguous-slot-test"),
+        )
+    finally:
+        (
+            tool._parent_apply_lock,
+            tool._fresh_parent,
+            tool._existing_children,
+            tool._modify_parent_nextlink,
+            tool._disable_parent_chain,
+        ) = original
+
+    expect(plan.action == "error" and "multiple tasks" in plan.reason, f"ambiguous slot was not rejected: {plan}")
+    expect(not applied, f"ambiguous slot reported a mutation: {applied!r}")
+
+
 def test_reconcile_apply_isolates_candidate_failures():
     """A failed apply should not prevent later candidates from being repaired."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -18419,6 +18541,7 @@ def test_reconcile_dry_run_isolates_candidate_failures():
                     "status": "pending",
                     "chainID": parent["chainID"],
                     "link": 3,
+                    "prevLink": "22222222",
                 }
             ]
 
@@ -20975,6 +21098,7 @@ TESTS = [
     test_reconcile_tool_exports_and_applies_expired_candidates,
     test_reconcile_apply_refreshes_parent_under_lock,
     test_reconcile_parent_updates_are_guarded,
+    test_reconcile_apply_rejects_ambiguous_existing_slot,
     test_reconcile_apply_isolates_candidate_failures,
     test_reconcile_dry_run_isolates_candidate_failures,
     test_reconcile_expiration_real_taskwarrior_round_trip,

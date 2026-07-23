@@ -4117,7 +4117,7 @@ def test_doctor_reports_chain_repair_plan_findings():
 
 
 def test_doctor_reports_reconcile_backfill_plans():
-    """doctor should surface completion and expiration reconcile plans without mutating data."""
+    """doctor should surface completion and deletion reconcile plans without mutating data."""
     path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
@@ -4175,6 +4175,18 @@ def test_doctor_reports_reconcile_backfill_plans():
                 "until": "20260802T235900Z",
                 "end": "20260803T000000Z",
             },
+            {
+                "uuid": "55555555-0000-0000-0000-000000000005",
+                "description": "hookless manual deletion",
+                "status": "deleted",
+                "cp": "1d",
+                "chain": "on",
+                "chainID": "manual",
+                "link": 1,
+                "due": "20260720T090000Z",
+                "until": "20260720T230000Z",
+                "end": "20260720T100000Z",
+            },
         ]
         env = os.environ.copy()
         env["FAKE_HOOKS"] = str(hooks)
@@ -4192,10 +4204,15 @@ def test_doctor_reports_reconcile_backfill_plans():
         expect("chains.reconcile_available" in findings, f"missing reconcile finding: {obj}")
         details = findings["chains.reconcile_available"].get("details") or {}
         expect((details.get("actions") or {}).get("backfill_nextlink") == 2, f"bad reconcile action counts: {details}")
+        expect((details.get("actions") or {}).get("manual_stop") == 1, f"missing manual-stop action: {details}")
         expect((details.get("plans") or [{}])[0].get("existing_child") == "22222222", f"bad reconcile plan evidence: {details}")
         expect(
             any(plan.get("trigger") == "expiration" and plan.get("existing_child") == "44444444" for plan in details.get("plans") or []),
             f"missing expiration backfill evidence: {details}",
+        )
+        expect(
+            any(plan.get("trigger") == "manual_deletion" for plan in details.get("plans") or []),
+            f"missing manual deletion evidence: {details}",
         )
 
         text = subprocess.run(
@@ -17585,7 +17602,7 @@ def test_reconcile_candidate_and_plan_paths():
 
 
 def test_reconcile_expiration_candidate_requires_expiry_evidence():
-    """Only native-until deletion at or after the boundary should advance a chain."""
+    """Deleted chains should distinguish expiration, manual stop, and ambiguous evidence."""
     import nautical_core.reconcile as reconcile
 
     hook = _find_hook_file("on-modify-nautical.py")
@@ -17608,10 +17625,109 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
     )
 
     expect(is_candidate(parent), "deletion exactly at until should be an expiration candidate")
-    expect(not is_candidate(dict(parent, end="20260726T205958Z")), "manual deletion before until must not advance")
+    manual = dict(parent, end="20260726T205958Z")
+    expect(not is_candidate(manual), "manual deletion before until must not advance")
+    disposition, _reason = reconcile.deleted_chain_disposition(
+        manual,
+        safe_parse_datetime=mod._safe_parse_datetime,
+    )
+    expect(disposition == "manual", f"early deletion should stop the chain: {disposition!r}")
+    no_until_disposition, _reason = reconcile.deleted_chain_disposition(
+        {key: value for key, value in parent.items() if key != "until"},
+        safe_parse_datetime=mod._safe_parse_datetime,
+    )
+    expect(no_until_disposition == "manual", f"deletion without until should stop the chain: {no_until_disposition!r}")
+    malformed_disposition, _reason = reconcile.deleted_chain_disposition(
+        dict(parent, until="not-a-date"),
+        safe_parse_datetime=mod._safe_parse_datetime,
+    )
+    expect(malformed_disposition == "ambiguous", f"malformed evidence must fail closed: {malformed_disposition!r}")
+    manual_plan = reconcile.build_reconcile_plan(manual, existing_children=[], hook=mod)
+    expect(manual_plan.action == "manual_stop", f"manual deletion should disable the chain: {manual_plan}")
     expect(not is_candidate(dict(parent, status="completed")), "completed tasks use the completion candidate path")
     expect(not is_candidate(dict(parent, until="not-a-date")), "malformed until must fail closed")
     expect(not is_candidate(dict(parent, nextLink="22222222")), "already-linked expiration must not be reconsidered")
+
+
+def test_reconcile_manual_deletion_stops_chain_without_child_lookup():
+    """Hookless manual deletion should atomically persist chain:off without a child export."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_manual_delete_test")
+    hook_path = _find_hook_file("on-modify-nautical.py")
+    hook = _load_hook_module(hook_path, "_nautical_reconcile_manual_delete_hook")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "deleted",
+        "description": "manually deleted occurrence",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "manual01",
+        "link": 2,
+        "due": "20260720T060000Z",
+        "until": "20260726T205959Z",
+        "end": "20260726T205958Z",
+    }
+    world = {"parent": dict(parent), "disabled": 0}
+
+    @contextlib.contextmanager
+    def parent_lock(_taskdata, parent_uuid):
+        expect(parent_uuid == parent["uuid"], f"wrong parent lock identity: {parent_uuid}")
+        yield True
+
+    saved = {
+        "export": tool._export,
+        "lock": tool._parent_apply_lock,
+        "fresh_parent": tool._fresh_parent,
+        "existing": tool._existing_children,
+        "disable": tool._disable_parent_chain,
+    }
+    try:
+        def fake_export(_task_bin, filters, **_kwargs):
+            if "status:deleted" in filters:
+                return [dict(world["parent"])]
+            return []
+
+        tool._export = fake_export
+        candidates = tool._candidate_rows("task", hook)
+        expect([row.get("uuid") for row in candidates] == [parent["uuid"]], f"manual deletion was not discovered: {candidates}")
+
+        tool._parent_apply_lock = parent_lock
+        tool._fresh_parent = lambda _task_bin, _parent: dict(world["parent"])
+
+        def unexpected_child_lookup(*_args, **_kwargs):
+            raise AssertionError("manual deletion must not export a next-slot child")
+
+        tool._existing_children = unexpected_child_lookup
+
+        def disable_parent(_task_bin, _parent):
+            world["disabled"] += 1
+            world["parent"]["chain"] = "off"
+
+        tool._disable_parent_chain = disable_parent
+        plan, applied = tool._apply_parent_atomic(
+            "task",
+            hook,
+            parent,
+            taskdata=Path("/tmp/nautical-reconcile-manual-delete-test"),
+        )
+        expect(plan.action == "manual_stop" and applied == "off", f"manual deletion was not stopped: {plan}")
+        expect(world["disabled"] == 1, f"manual deletion should be persisted once: {world}")
+
+        world["parent"] = dict(parent, until="not-a-date")
+        ambiguous, ambiguous_applied = tool._apply_parent_atomic(
+            "task",
+            hook,
+            parent,
+            taskdata=Path("/tmp/nautical-reconcile-manual-delete-test"),
+        )
+        expect(ambiguous.action == "error" and not ambiguous_applied, f"ambiguous deletion should fail closed: {ambiguous}")
+        expect(world["disabled"] == 1, f"ambiguous deletion must not mutate the chain: {world}")
+    finally:
+        tool._export = saved["export"]
+        tool._parent_apply_lock = saved["lock"]
+        tool._fresh_parent = saved["fresh_parent"]
+        tool._existing_children = saved["existing"]
+        tool._disable_parent_chain = saved["disable"]
 
 
 def test_reconcile_expiration_cp_advances_from_recurrence_target():
@@ -20583,6 +20699,7 @@ TESTS = [
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
+    test_reconcile_manual_deletion_stops_chain_without_child_lookup,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
     test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,

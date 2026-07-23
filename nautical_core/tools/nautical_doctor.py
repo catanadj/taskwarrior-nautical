@@ -466,57 +466,42 @@ def _check_reconcile_plans(
     hooks_dir: Path,
 ) -> None:
     completion_candidates = [row for row in rows if reconcile.is_orphan_completion_candidate(row)]
-    possible_expirations = [
-        row
-        for row in rows
-        if str(row.get("status") or "").strip() == "deleted"
-        and str(row.get("chain") or "").strip().lower() == "on"
-        and str(row.get("chainID") or "").strip()
-        and not str(row.get("nextLink") or "").strip()
-        and reconcile.is_nautical_recurrence(row)
-        and row.get("until")
-        and row.get("end")
-    ]
-    if not completion_candidates and not possible_expirations:
+    deleted_candidates = [row for row in rows if reconcile.is_orphan_deleted_chain_candidate(row)]
+    if not completion_candidates and not deleted_candidates:
         return
 
     hook = None
-    expiration_candidates: list[dict[str, Any]] = []
     plans: list[reconcile.ReconcilePlan] = []
     unavailable = ""
-    if possible_expirations:
+    if deleted_candidates:
         try:
             hook = _load_on_modify_hook_for_reconcile(hooks_dir)
-            expiration_candidates = [
-                row
-                for row in possible_expirations
-                if reconcile.is_orphan_expiration_candidate(row, safe_parse_datetime=hook._safe_parse_datetime)
-            ]
         except Exception as exc:
             unavailable = str(exc)
-    candidates = [*completion_candidates, *expiration_candidates]
-    for parent in candidates:
-        existing_children = _existing_reconcile_children(rows, parent)
-        if not existing_children and hook is None:
-            try:
-                hook = _load_on_modify_hook_for_reconcile(hooks_dir)
-            except Exception as exc:
-                unavailable = str(exc)
-                break
-        plans.append(reconcile.build_reconcile_plan(parent, existing_children=existing_children, hook=hook))
+    candidates = [*completion_candidates, *deleted_candidates]
+    if not unavailable:
+        for parent in candidates:
+            existing_children = _existing_reconcile_children(rows, parent)
+            if not existing_children and hook is None:
+                try:
+                    hook = _load_on_modify_hook_for_reconcile(hooks_dir)
+                except Exception as exc:
+                    unavailable = str(exc)
+                    break
+            plans.append(reconcile.build_reconcile_plan(parent, existing_children=existing_children, hook=hook))
 
     if unavailable:
         _finding(
             findings,
             "chains.reconcile_unavailable",
             "warn",
-            f"{len(completion_candidates) + len(possible_expirations)} recurrence candidate(s) were found, but reconcile planning could not load on-modify.",
+            f"{len(candidates)} recurrence candidate(s) were found, but reconcile planning could not load on-modify.",
             fix="Run nautical reconcile for full diagnostics.",
             details={
                 "error": unavailable,
                 "candidates": [
                     _task_detail(row)
-                    for row in [*completion_candidates, *possible_expirations][:10]
+                    for row in candidates[:10]
                 ],
             },
         )

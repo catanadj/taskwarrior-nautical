@@ -57,21 +57,44 @@ def is_orphan_completion_candidate(task: dict[str, Any]) -> bool:
     return str(task.get("status") or "").strip() == "completed" and _is_unlinked_active_chain(task)
 
 
-def is_orphan_expiration_candidate(task: dict[str, Any], *, safe_parse_datetime: Any) -> bool:
-    """Return whether a deleted link has strong evidence of native until expiration."""
-    if str(task.get("status") or "").strip() != "deleted" or not _is_unlinked_active_chain(task):
-        return False
+def is_orphan_deleted_chain_candidate(task: dict[str, Any]) -> bool:
+    return str(task.get("status") or "").strip() == "deleted" and _is_unlinked_active_chain(task)
+
+
+def deleted_chain_disposition(
+    task: dict[str, Any],
+    *,
+    safe_parse_datetime: Any,
+) -> tuple[str, str]:
+    """Classify an unlinked deleted chain as expiration, manual stop, or ambiguous."""
+    if not is_orphan_deleted_chain_candidate(task):
+        return "", ""
+    if not str(task.get("until") or "").strip():
+        return "manual", "deleted without native until"
     try:
         until_dt, until_err = safe_parse_datetime(task.get("until"))
         end_dt, end_err = safe_parse_datetime(task.get("end"))
     except Exception:
-        return False
+        return "ambiguous", "deleted task has no reliable native-until expiration evidence"
     if until_err or end_err or until_dt is None or end_dt is None:
-        return False
+        return "ambiguous", "deleted task has no reliable native-until expiration evidence"
     try:
-        return until_dt <= end_dt
+        if until_dt <= end_dt:
+            return "expiration", "native until elapsed"
+        return "manual", "deleted before native until"
     except Exception:
+        return "ambiguous", "deleted task has no reliable native-until expiration evidence"
+
+
+def is_orphan_expiration_candidate(task: dict[str, Any], *, safe_parse_datetime: Any) -> bool:
+    """Return whether a deleted link has strong evidence of native until expiration."""
+    disposition, _reason = deleted_chain_disposition(
+        task,
+        safe_parse_datetime=safe_parse_datetime,
+    )
+    if not disposition:
         return False
+    return disposition == "expiration"
 
 
 def expiration_recurrence_parent(parent: dict[str, Any]) -> dict[str, Any]:
@@ -128,13 +151,19 @@ def recurrence_kind(task: dict[str, Any]) -> str:
 
 def describe_plan(plan: ReconcilePlan, *, fmt_dt_local: Any = None) -> dict[str, Any]:
     parent = plan.parent
+    if plan.action == "manual_stop":
+        trigger = "manual_deletion"
+    elif str(parent.get("status") or "").strip() == "deleted":
+        trigger = "expiration"
+    else:
+        trigger = "completion"
     evidence: dict[str, Any] = {
         "parent": short_uuid(parent.get("uuid")),
         "chainID": str(parent.get("chainID") or ""),
         "parent_link": int_or_default(parent.get("link"), 0),
         "next_link": plan.next_link,
         "kind": recurrence_kind(parent),
-        "trigger": "expiration" if str(parent.get("status") or "").strip() == "deleted" else "completion",
+        "trigger": trigger,
         "reason": plan.reason,
     }
     if plan.child_due is not None:
@@ -195,11 +224,20 @@ def build_reconcile_plan(
     link = int_or_default(parent.get("link"), 1)
     next_link = link + 1
     is_expiration = str(parent.get("status") or "").strip() == "deleted"
-    if is_expiration and not is_orphan_expiration_candidate(
-        parent,
-        safe_parse_datetime=hook._safe_parse_datetime,
-    ):
-        return ReconcilePlan("error", parent, next_link, "deleted task has no reliable native-until expiration evidence")
+    if is_expiration:
+        disposition, reason = deleted_chain_disposition(
+            parent,
+            safe_parse_datetime=hook._safe_parse_datetime,
+        )
+        if disposition == "manual":
+            return ReconcilePlan("manual_stop", parent, next_link, reason)
+        if disposition != "expiration":
+            return ReconcilePlan(
+                "error",
+                parent,
+                next_link,
+                reason or "deleted task has no reliable native-until expiration evidence",
+            )
 
     child_short = existing_child_short(parent, existing_children, include_deleted=is_expiration)
     if child_short:

@@ -117,11 +117,7 @@ def _candidate_rows(task_bin: str, hook: Any) -> list[dict[str, Any]]:
     completed = _export(task_bin, ["status:completed", "chain:on", "chainID.not:"])
     deleted = _export(task_bin, ["status:deleted", "chain:on", "chainID.not:"])
     rows = [row for row in completed if reconcile.is_orphan_completion_candidate(row)]
-    rows.extend(
-        row
-        for row in deleted
-        if reconcile.is_orphan_expiration_candidate(row, safe_parse_datetime=hook._safe_parse_datetime)
-    )
+    rows.extend(row for row in deleted if reconcile.is_orphan_deleted_chain_candidate(row))
     return rows
 
 
@@ -136,6 +132,17 @@ def _existing_children(task_bin: str, parent: dict[str, Any]) -> list[dict[str, 
             _export(task_bin, [f"chainID:{chain_id}", f"link:{next_link}", "status:deleted"], timeout=30.0)
         )
     return rows
+
+
+def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any) -> list[dict[str, Any]]:
+    if str(parent.get("status") or "").strip() == "deleted":
+        disposition, _reason = reconcile.deleted_chain_disposition(
+            parent,
+            safe_parse_datetime=hook._safe_parse_datetime,
+        )
+        if disposition != "expiration":
+            return []
+    return _existing_children(task_bin, parent)
 
 
 def _task_data_dir(task_bin: str) -> Path:
@@ -256,10 +263,7 @@ def _refresh_plan(task_bin: str, hook: Any, original_parent: dict[str, Any]) -> 
     if status == "completed":
         candidate = reconcile.is_orphan_completion_candidate(parent)
     elif status == "deleted":
-        candidate = reconcile.is_orphan_expiration_candidate(
-            parent,
-            safe_parse_datetime=hook._safe_parse_datetime,
-        )
+        candidate = reconcile.is_orphan_deleted_chain_candidate(parent)
     else:
         candidate = False
     if not candidate:
@@ -271,7 +275,7 @@ def _refresh_plan(task_bin: str, hook: Any, original_parent: dict[str, Any]) -> 
         return _stale_plan(parent, reason)
     return reconcile.build_reconcile_plan(
         parent,
-        existing_children=_existing_children(task_bin, parent),
+        existing_children=_existing_children_for_plan(task_bin, parent, hook),
         hook=hook,
     )
 
@@ -299,7 +303,7 @@ def _apply_parent_atomic(
         if plan.action == "backfill_nextlink":
             _modify_parent_nextlink(task_bin, plan.parent, plan.child_short)
             return plan, plan.child_short
-        if plan.action == "legitimate_final":
+        if plan.action in {"legitimate_final", "manual_stop"}:
             _disable_parent_chain(task_bin, plan.parent)
             return plan, "off"
         return plan, ""
@@ -379,6 +383,10 @@ def _print_plan(
         suffix = " -> set chain:off" if applied_short else ""
         print(f"final: {parent} ({plan.reason}){suffix}")
         _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
+    elif plan.action == "manual_stop":
+        suffix = " -> set chain:off" if applied_short else ""
+        print(f"manual stop: {parent} ({plan.reason}){suffix}")
+        _print_evidence(evidence, ("kind", "next_link"))
     elif plan.action == "stale":
         print(f"skip: {parent} ({plan.reason})")
     else:
@@ -387,7 +395,7 @@ def _print_plan(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Repair Nautical chains missing successors after completion or expiration.")
+    parser = argparse.ArgumentParser(description="Repair Nautical chains after hookless completion, expiration, or deletion.")
     parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
     parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
     parser.add_argument("--hook-path", default=None, help="Explicit on-modify hook path for non-standard installs.")
@@ -418,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 plan = reconcile.build_reconcile_plan(
                     parent,
-                    existing_children=_existing_children(args.task_bin, parent),
+                    existing_children=_existing_children_for_plan(args.task_bin, parent, hook),
                     hook=hook,
                 )
         except Exception as exc:
@@ -433,12 +441,13 @@ def main(argv: list[str] | None = None) -> int:
         evidence = _describe_plan(plan, hook=hook, fmt_dt_local=fmt_dt_local)
         plan_evidence.append(evidence)
         if args.apply and applied_short:
-            action = "disable_chain" if plan.action == "legitimate_final" else plan.action
+            disabling = plan.action in {"legitimate_final", "manual_stop"}
+            action = "disable_chain" if disabling else plan.action
             record = {
                 "action": action,
                 "parent": reconcile.short_uuid(plan.parent.get("uuid")),
             }
-            if plan.action != "legitimate_final":
+            if not disabling:
                 record["child"] = applied_short
             applied.append(record)
         if not args.json:
@@ -450,6 +459,7 @@ def main(argv: list[str] | None = None) -> int:
         "spawn": sum(1 for p in plans if p.action == "spawn"),
         "backfill_nextlink": sum(1 for p in plans if p.action == "backfill_nextlink"),
         "legitimate_final": sum(1 for p in plans if p.action == "legitimate_final"),
+        "manual_stop": sum(1 for p in plans if p.action == "manual_stop"),
         "stale": sum(1 for p in plans if p.action == "stale"),
         "errors": sum(1 for p in plans if p.action == "error"),
         "plans": [
@@ -468,7 +478,8 @@ def main(argv: list[str] | None = None) -> int:
             "summary: "
             f"{summary['mode']}; candidates={summary['candidates']} "
             f"spawn={summary['spawn']} backfill={summary['backfill_nextlink']} "
-            f"final={summary['legitimate_final']} stale={summary['stale']} errors={summary['errors']}"
+            f"final={summary['legitimate_final']} manual={summary['manual_stop']} "
+            f"stale={summary['stale']} errors={summary['errors']}"
         )
     return 1 if summary["errors"] else 0
 

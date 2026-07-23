@@ -498,20 +498,61 @@ def main() -> int:
     queue_schema_hot_rounds = int(workload.get("queue_schema_hot_rounds", 1000))
 
     checks = [
-        ("parse_validate", lambda: _bench_parse_validate(exprs, parse_rounds)),
-        ("describe_expr", lambda: _bench_describe_expr(exprs, describe_rounds)),
-        ("next_after", lambda: _bench_next_after(exprs, next_after_rounds)),
-        ("build_hints", lambda: _bench_build_hints(exprs, hints_rounds)),
-        ("cache_key_hot", lambda: _bench_cache_key_hot(exprs, cache_key_rounds)),
-        ("cache_save", lambda: _bench_cache_save(exprs, cache_save_rounds)),
-        ("cache_load_hot", lambda: _bench_cache_load_hot(exprs, cache_load_rounds)),
-        ("queue_schema_hot", lambda: _bench_queue_schema_hot(queue_schema_hot_rounds)),
+        ("parse_validate", lambda: _bench_parse_validate(exprs, parse_rounds), repeats),
+        ("describe_expr", lambda: _bench_describe_expr(exprs, describe_rounds), repeats),
+        ("next_after", lambda: _bench_next_after(exprs, next_after_rounds), repeats),
+        ("build_hints", lambda: _bench_build_hints(exprs, hints_rounds), repeats),
+        ("cache_key_hot", lambda: _bench_cache_key_hot(exprs, cache_key_rounds), repeats),
+        ("cache_save", lambda: _bench_cache_save(exprs, cache_save_rounds), repeats),
+        ("cache_load_hot", lambda: _bench_cache_load_hot(exprs, cache_load_rounds), repeats),
+        ("queue_schema_hot", lambda: _bench_queue_schema_hot(queue_schema_hot_rounds), repeats),
     ]
+
+    seasonal = cfg.get("seasonal_workload")
+    if isinstance(seasonal, dict):
+        seasonal_exprs = [
+            str(value)
+            for value in seasonal.get("expressions", [])
+            if str(value).strip()
+        ]
+        if seasonal_exprs:
+            seasonal_repeats = max(1, int(seasonal.get("repeats", 3)))
+            seasonal_parse_rounds = max(1, int(seasonal.get("parse_validate_rounds", 100)))
+            seasonal_next_rounds = max(1, int(seasonal.get("next_after_rounds", 100)))
+            seasonal_hint_rounds = max(1, int(seasonal.get("build_hints_rounds", 1)))
+            checks.extend(
+                [
+                    (
+                        "seasonal_parse_validate",
+                        lambda: _bench_parse_validate(
+                            seasonal_exprs,
+                            seasonal_parse_rounds,
+                        ),
+                        seasonal_repeats,
+                    ),
+                    (
+                        "seasonal_next_after",
+                        lambda: _bench_next_after(
+                            seasonal_exprs,
+                            seasonal_next_rounds,
+                        ),
+                        seasonal_repeats,
+                    ),
+                    (
+                        "seasonal_build_hints",
+                        lambda: _bench_build_hints(
+                            seasonal_exprs,
+                            seasonal_hint_rounds,
+                        ),
+                        seasonal_repeats,
+                    ),
+                ]
+            )
 
     results = {}
     failures = []
-    for name, fn in checks:
-        r = _measure(name, fn, repeats)
+    for name, fn, check_repeats in checks:
+        r = _measure(name, fn, check_repeats)
         budget = float(budgets.get(name, 0.0))
         r["budget_s"] = budget
         r["pass"] = (budget <= 0.0) or (r["median_s"] <= budget)

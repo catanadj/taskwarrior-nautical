@@ -5036,7 +5036,7 @@ def test_doctor_reports_reconcile_backfill_plans():
 
 
 def test_perf_budget_config_covers_cache_io_checks():
-    """Perf budget config should include cache IO and normalized hook latency checks."""
+    """Perf budgets should cover cache I/O, seasonal scheduling, and normalized hook latency."""
     cfg_path = Path(DEV_TOOLS) / "perf_budget.json"
     obj = json.loads(cfg_path.read_text(encoding="utf-8"))
     budgets = obj.get("budgets_seconds") if isinstance(obj, dict) else None
@@ -5052,6 +5052,26 @@ def test_perf_budget_config_covers_cache_io_checks():
     expressions = set(workload.get("expressions") or [])
     expect("y:d60,d-1" in expressions, "year-day latency workload missing")
     expect("y:w20 + w:mon" in expressions, "ISO-week latency workload missing")
+    seasonal = obj.get("seasonal_workload") if isinstance(obj, dict) else None
+    expect(isinstance(seasonal, dict), "seasonal_workload must be present")
+    seasonal_expressions = set(seasonal.get("expressions") or [])
+    expect(
+        "(w:mon)@in-spring=first,last@t=09:00,17:00" in seasonal_expressions,
+        "multi-time seasonal latency workload missing",
+    )
+    expect(
+        "(y:02-29)@in-winter=first" in seasonal_expressions,
+        "sparse seasonal latency workload missing",
+    )
+    expect(
+        {
+            "seasonal_parse_validate",
+            "seasonal_next_after",
+            "seasonal_build_hints",
+        }
+        <= set(budgets),
+        "seasonal performance budgets are incomplete",
+    )
     hook_fast_path = obj.get("hook_fast_path") if isinstance(obj, dict) else None
     expect(isinstance(hook_fast_path, dict), "hook_fast_path config must be present")
     expect(int(hook_fast_path.get("repeats") or 0) >= 3, "hook fast-path benchmark needs repeated samples")
@@ -22287,6 +22307,229 @@ def test_on_add_seasonal_selection_feedback():
     )
 
 
+def test_seasonal_selection_modify_modes_times_and_timeline():
+    """Completion modes should preserve seasonal slots, local times, and future projections."""
+    from zoneinfo import ZoneInfo
+
+    modify_hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(modify_hook, "_nautical_seasonal_modify_modes_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    previous_tz = mod.core._LOCAL_TZ
+    mod.core._LOCAL_TZ = ZoneInfo("Europe/Helsinki")
+    expression = "(w:mon)@in-spring=first,last@t=09:00,17:00"
+
+    def stamp(day, hhmm):
+        return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
+
+    try:
+        same_day_due, _same_meta, _same_dnf = mod._compute_anchor_child_due(
+            {
+                "anchor": expression,
+                "anchor_mode": "skip",
+                "due": stamp(date(2026, 3, 2), (9, 0)),
+                "end": stamp(date(2026, 3, 2), (10, 0)),
+                "chainID": "season123",
+            }
+        )
+        same_day_local = mod.core.to_local(same_day_due)
+        expect(
+            same_day_local.date() == date(2026, 3, 2)
+            and (same_day_local.hour, same_day_local.minute) == (17, 0),
+            f"completion skipped the second same-day seasonal slot: {same_day_local}",
+        )
+
+        common = {
+            "anchor": expression,
+            "due": stamp(date(2026, 3, 2), (17, 0)),
+            "end": stamp(date(2026, 7, 1), (10, 0)),
+            "chainID": "season123",
+        }
+        all_due, all_meta, _all_dnf = mod._compute_anchor_child_due(
+            dict(common, anchor_mode="all")
+        )
+        skip_due, skip_meta, skip_dnf = mod._compute_anchor_child_due(
+            dict(common, anchor_mode="skip")
+        )
+        flex_due, flex_meta, _flex_dnf = mod._compute_anchor_child_due(
+            dict(common, anchor_mode="flex")
+        )
+        all_local = mod.core.to_local(all_due)
+        skip_local = mod.core.to_local(skip_due)
+        flex_local = mod.core.to_local(flex_due)
+        expect(
+            all_local.date() == date(2026, 5, 25)
+            and (all_local.hour, all_local.minute) == (9, 0),
+            f"all mode did not backfill the missed spring slot: {all_local}",
+        )
+        expect(all_meta.get("basis") == "missed", f"all mode metadata drifted: {all_meta}")
+        expect(
+            skip_local.date() == date(2027, 3, 1)
+            and (skip_local.hour, skip_local.minute) == (9, 0),
+            f"skip mode did not advance to the next spring: {skip_local}",
+        )
+        expect(skip_meta.get("basis") == "after_end", f"skip metadata drifted: {skip_meta}")
+        expect(flex_local == skip_local, f"flex mode did not skip the seasonal backlog: {flex_local}")
+        expect(flex_meta.get("basis") == "flex", f"flex metadata drifted: {flex_meta}")
+        expect(all_local.utcoffset() == timedelta(hours=3), f"summer offset drifted: {all_local}")
+        expect(skip_local.utcoffset() == timedelta(hours=2), f"winter offset drifted: {skip_local}")
+
+        parent = {
+            **common,
+            "uuid": "00000000-0000-0000-0000-000000000784",
+            "status": "completed",
+            "anchor_mode": "flex",
+            "link": 1,
+        }
+        child = mod._build_child_from_parent(
+            parent,
+            flex_due,
+            "due",
+            2,
+            "00000000",
+            "anchor",
+            0,
+            None,
+        )
+        expect(child.get("anchor") == expression, f"child lost seasonal anchor: {child}")
+        expect(child.get("anchor_mode") == "all", f"flex child did not become all mode: {child}")
+        expect(child.get("chainID") == "season123", f"child lost chain identity: {child}")
+
+        saved_collect = getattr(mod, "_collect_prev_two", None)
+        if saved_collect is not None:
+            mod._collect_prev_two = lambda _task: []
+        try:
+            lines = _call_with_supported_kwargs(
+                mod._timeline_lines,
+                kind="anchor",
+                task={**parent, "anchor_mode": "skip"},
+                child_due_utc=skip_due,
+                child_short="0000abcd",
+                dnf=skip_dnf,
+                next_count=4,
+                cap_no=None,
+                cur_no=1,
+            )
+        finally:
+            if saved_collect is not None:
+                mod._collect_prev_two = saved_collect
+        timeline = _strip_markup("\n".join(lines))
+        expect("2027-03-01" in timeline, f"timeline omitted seasonal child: {timeline}")
+        expect("2027-05-31" in timeline, f"timeline omitted later spring slot: {timeline}")
+    finally:
+        mod.core._LOCAL_TZ = previous_tz
+
+
+def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
+    """Reconcile should compute, spawn, and deduplicate the next seasonal slot."""
+    import nautical_core.reconcile as reconcile
+
+    hook_path = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook_path, "_nautical_seasonal_reconcile_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    def stamp(day, hhmm):
+        return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
+
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "description": "seasonal reconcile",
+        "anchor": "(w:mon)@in-spring=first@t=09:00",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "season456",
+        "link": 1,
+        "due": stamp(date(2026, 3, 2), (9, 0)),
+        "end": stamp(date(2026, 7, 1), (10, 0)),
+    }
+    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    expect(plan.action == "spawn", f"reconcile did not spawn seasonal child: {plan}")
+    child_local = mod.core.to_local(plan.child_due)
+    expect(
+        child_local.date() == date(2027, 3, 1)
+        and (child_local.hour, child_local.minute) == (9, 0),
+        f"reconcile chose the wrong seasonal slot: {child_local}",
+    )
+    expect(plan.child.get("anchor") == parent["anchor"], f"reconcile child lost anchor: {plan.child}")
+
+    existing = {
+        "uuid": "22222222-0000-0000-0000-000000000002",
+        "status": "pending",
+        "chainID": "season456",
+        "link": 2,
+        "prevLink": "11111111",
+    }
+    repeated = reconcile.build_reconcile_plan(parent, existing_children=[existing], hook=mod)
+    expect(
+        repeated.action == "backfill_nextlink" and repeated.child_short == "22222222",
+        f"reconcile duplicated an existing seasonal slot: {repeated}",
+    )
+
+    expired = {
+        **parent,
+        "status": "deleted",
+        "anchor": "(w:mon)@in-winter=last@t=09:00",
+        "due": stamp(date(2027, 2, 22), (9, 0)),
+        "end": stamp(date(2027, 7, 1), (10, 0)),
+    }
+    recovered_due, recovered_meta = reconcile.compute_expiration_child_due(expired, hook=mod)
+    recovered_local = mod.core.to_local(recovered_due)
+    expect(
+        recovered_local.date() == date(2028, 2, 28),
+        f"expired winter advanced incorrectly: {recovered_local}",
+    )
+    expect(
+        recovered_meta.get("basis") == "due recurrence target (expired)",
+        f"expiration recovery lost its basis: {recovered_meta}",
+    )
+
+
+def test_seasonal_selection_business_calendar_and_cache_identity():
+    """Seasonal offsets should honor custom calendars and cache each seasonal context separately."""
+    from nautical_core import position_selection
+
+    class ClosingCalendar:
+        name = "season-closing"
+        fingerprint = "season-closing-v1"
+
+        def is_business_day(self, value):
+            return value.weekday() < 5 and value != date(2027, 3, 1)
+
+    expression = "(w:fri)@in-winter=last@+1bd"
+    dnf = core.validate_anchor_expr_strict(expression)
+    shifted, _meta = core.next_after_expr(
+        dnf,
+        date(2026, 7, 1),
+        default_seed=date(2026, 1, 1),
+        business_calendar=ClosingCalendar(),
+    )
+    expect(shifted == date(2027, 3, 2), f"seasonal offset ignored custom calendar: {shifted}")
+
+    position_selection.clear_candidate_cache()
+    seed = date(2026, 1, 1)
+    spring = core.validate_anchor_expr_strict("(w:mon)@in-spring=first")[0][0]
+    summer = core.validate_anchor_expr_strict("(w:mon)@in-summer=first")[0][0]
+    kwargs = {
+        "matches_on": core.atom_matches_on,
+        "default_seed": seed,
+        "seed_base": "season-cache",
+        "calendar_fingerprint": "calendar-a",
+    }
+    position_selection.selected_candidates_in_period(spring, seed, **kwargs)
+    position_selection.selected_candidates_in_period(spring, seed, **kwargs)
+    position_selection.selected_candidates_in_period(summer, seed, **kwargs)
+    position_selection.selected_candidates_in_period(
+        spring,
+        seed,
+        **{**kwargs, "calendar_fingerprint": "calendar-b"},
+    )
+    info = position_selection.candidate_cache_info()
+    expect(info.hits >= 1 and info.misses == 3, f"seasonal cache identity drifted: {info}")
+
+
 def test_position_selection_public_period_scopes_scheduler():
     """New scopes should select within calendar periods and preserve the source bucket after shifts."""
     seed = date(2026, 1, 1)
@@ -22525,6 +22768,9 @@ TESTS = [
     test_seasonal_selection_natural_language_and_advice,
     test_seasonal_selection_semantic_guard,
     test_on_add_seasonal_selection_feedback,
+    test_seasonal_selection_modify_modes_times_and_timeline,
+    test_seasonal_selection_reconcile_spawn_recovery_and_dedup,
+    test_seasonal_selection_business_calendar_and_cache_identity,
     test_position_selection_public_period_scopes_scheduler,
     test_position_selection_public_period_scopes_acf_natural_and_hints,
     test_position_selection_public_period_scopes_hooks,

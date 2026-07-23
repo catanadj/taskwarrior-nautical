@@ -20,6 +20,17 @@
     "cache_load_rounds": 300,
     "queue_schema_hot_rounds": 1000
   },
+  "seasonal_workload": {
+    "expressions": [
+      "(w:mon)@in-spring=first,last@t=09:00,17:00",
+      "(w:fri)@in-winter=last@+1bd",
+      "(y:02-29)@in-winter=first"
+    ],
+    "repeats": 3,
+    "parse_validate_rounds": 100,
+    "next_after_rounds": 100,
+    "build_hints_rounds": 1
+  },
   "budgets_seconds": {
     "parse_validate": 0.2,
     "describe_expr": 0.25,
@@ -28,7 +39,10 @@
     "cache_key_hot": 0.08,
     "cache_save": 0.9,
     "cache_load_hot": 0.35,
-    "queue_schema_hot": 0.2
+    "queue_schema_hot": 0.2,
+    "seasonal_parse_validate": 0.08,
+    "seasonal_next_after": 0.15,
+    "seasonal_build_hints": 0.5
   },
   "hook_fast_path": {
     "enabled": true,

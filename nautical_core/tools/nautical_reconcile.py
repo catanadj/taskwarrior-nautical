@@ -405,20 +405,29 @@ def main(argv: list[str] | None = None) -> int:
 
     for parent in candidates:
         applied_short = ""
-        if args.apply:
-            if taskdata is None:
-                raise RuntimeError("Taskwarrior data location is unavailable")
-            plan, applied_short = _apply_parent_atomic(
-                args.task_bin,
-                hook,
+        try:
+            if args.apply:
+                if taskdata is None:
+                    raise RuntimeError("Taskwarrior data location is unavailable")
+                plan, applied_short = _apply_parent_atomic(
+                    args.task_bin,
+                    hook,
+                    parent,
+                    taskdata=taskdata,
+                )
+            else:
+                plan = reconcile.build_reconcile_plan(
+                    parent,
+                    existing_children=_existing_children(args.task_bin, parent),
+                    hook=hook,
+                )
+        except Exception as exc:
+            reason = str(exc).strip() or type(exc).__name__
+            plan = reconcile.ReconcilePlan(
+                "error",
                 parent,
-                taskdata=taskdata,
-            )
-        else:
-            plan = reconcile.build_reconcile_plan(
-                parent,
-                existing_children=_existing_children(args.task_bin, parent),
-                hook=hook,
+                reconcile.int_or_default(parent.get("link"), 1) + 1,
+                reason,
             )
         plans.append(plan)
         evidence = _describe_plan(plan, hook=hook, fmt_dt_local=fmt_dt_local)

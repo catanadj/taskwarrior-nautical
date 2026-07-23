@@ -17967,6 +17967,141 @@ def test_reconcile_parent_updates_are_guarded():
     expect(args[-1] == "nextLink:22222222", f"wrong parent update: {args}")
 
 
+def test_reconcile_apply_isolates_candidate_failures():
+    """A failed apply should not prevent later candidates from being repaired."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_apply_isolation_test")
+    failed = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "description": "blocked chain",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "blocked1",
+        "link": 1,
+    }
+    repairable = {
+        "uuid": "22222222-0000-0000-0000-000000000002",
+        "status": "completed",
+        "description": "repairable chain",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "repair02",
+        "link": 2,
+    }
+
+    class FakeHook:
+        core = SimpleNamespace(fmt_dt_local=None)
+
+        @staticmethod
+        def _task_cmd_prefix():
+            return ["task"]
+
+    original = (
+        tool._load_on_modify,
+        tool._candidate_rows,
+        tool._task_data_dir,
+        tool._apply_parent_atomic,
+    )
+    try:
+        tool._load_on_modify = lambda _path=None: FakeHook()
+        tool._candidate_rows = lambda _task_bin, _hook: [failed, repairable]
+        tool._task_data_dir = lambda _task_bin: Path("/tmp/nautical-reconcile-isolation-test")
+
+        def apply_parent(_task_bin, _hook, parent, *, taskdata):
+            expect(taskdata.name == "nautical-reconcile-isolation-test", f"wrong taskdata: {taskdata}")
+            if parent["uuid"] == failed["uuid"]:
+                raise RuntimeError("parent reconcile lock busy: 11111111")
+            plan = tool.reconcile.ReconcilePlan(
+                "backfill_nextlink",
+                parent,
+                3,
+                "next link already exists",
+                child_short="33333333",
+            )
+            return plan, "33333333"
+
+        tool._apply_parent_atomic = apply_parent
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = tool.main(["--apply", "--json"])
+    finally:
+        (
+            tool._load_on_modify,
+            tool._candidate_rows,
+            tool._task_data_dir,
+            tool._apply_parent_atomic,
+        ) = original
+
+    summary = json.loads(output.getvalue())
+    expect(result == 1, f"candidate failure should keep a nonzero exit: {result}")
+    expect(summary.get("errors") == 1, f"failed candidate was not summarized: {summary!r}")
+    expect(summary.get("backfill_nextlink") == 1, f"later repair was not planned: {summary!r}")
+    expect(
+        summary.get("applied") == [{"action": "backfill_nextlink", "parent": "22222222", "child": "33333333"}],
+        f"later repair was not applied: {summary!r}",
+    )
+
+
+def test_reconcile_dry_run_isolates_candidate_failures():
+    """A failed dry-run plan should not prevent later candidates from being reported."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_dry_run_isolation_test")
+    failed = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "blocked1",
+        "link": 1,
+    }
+    repairable = {
+        "uuid": "22222222-0000-0000-0000-000000000002",
+        "status": "completed",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "repair02",
+        "link": 2,
+    }
+
+    class FakeHook:
+        core = SimpleNamespace(fmt_dt_local=None)
+
+        @staticmethod
+        def _task_cmd_prefix():
+            return ["task"]
+
+    original = (tool._load_on_modify, tool._candidate_rows, tool._existing_children)
+    try:
+        tool._load_on_modify = lambda _path=None: FakeHook()
+        tool._candidate_rows = lambda _task_bin, _hook: [failed, repairable]
+
+        def existing_children(_task_bin, parent):
+            if parent["uuid"] == failed["uuid"]:
+                raise RuntimeError("child lookup failed")
+            return [
+                {
+                    "uuid": "33333333-0000-0000-0000-000000000003",
+                    "status": "pending",
+                    "chainID": parent["chainID"],
+                    "link": 3,
+                }
+            ]
+
+        tool._existing_children = existing_children
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = tool.main(["--json"])
+    finally:
+        tool._load_on_modify, tool._candidate_rows, tool._existing_children = original
+
+    summary = json.loads(output.getvalue())
+    expect(result == 1, f"planning failure should keep a nonzero exit: {result}")
+    expect(summary.get("errors") == 1, f"failed plan was not summarized: {summary!r}")
+    expect(summary.get("backfill_nextlink") == 1, f"later candidate was not reported: {summary!r}")
+    expect(not summary.get("applied"), f"dry-run should not apply repairs: {summary!r}")
+
+
 def test_reconcile_expiration_real_taskwarrior_round_trip():
     """Real Taskwarrior data should receive one linked child with a shifted until window."""
     task_bin = shutil.which("task")
@@ -20424,6 +20559,8 @@ TESTS = [
     test_reconcile_tool_exports_and_applies_expired_candidates,
     test_reconcile_apply_refreshes_parent_under_lock,
     test_reconcile_parent_updates_are_guarded,
+    test_reconcile_apply_isolates_candidate_failures,
+    test_reconcile_dry_run_isolates_candidate_failures,
     test_reconcile_expiration_real_taskwarrior_round_trip,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_evidence_includes_local_child_time_when_formatter_available,

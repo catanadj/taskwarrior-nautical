@@ -27,6 +27,7 @@ class ExitPrecheckServices:
 class ExitEnsureChildServices:
     export_uuid: Any
     import_child: Any
+    clear_parent_nextlink_if_matches: Any
     is_lock_error: Any
     diag: Any
     requeue_or_dead_letter_for_lock: Any

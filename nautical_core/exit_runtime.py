@@ -40,6 +40,7 @@ class ExitRuntimeServices:
     is_lock_error: Any
     diag: Any
     update_parent_nextlink: Any
+    clear_parent_nextlink_if_matches: Any
     cleanup_orphan_child: Any
 
 
@@ -56,6 +57,7 @@ def build_ensure_child_services(runtime: ExitRuntimeServices) -> ExitEnsureChild
     return ExitEnsureChildServices(
         export_uuid=lambda uuid_str, prefer_cache=True: runtime.export_uuid(uuid_str, prefer_cache=prefer_cache),
         import_child=runtime.import_child,
+        clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,
         is_lock_error=runtime.is_lock_error,
         diag=runtime.diag,
         requeue_or_dead_letter_for_lock=runtime.requeue_or_dead_letter_for_lock,

@@ -121,6 +121,51 @@ def update_parent_nextlink(
         return ExitParentUpdateResult(False, state_res.err)
 
 
+def clear_parent_nextlink_if_matches(
+    parent_uuid: str,
+    child_short: str,
+    *,
+    lock_parent_nextlink: Callable[[str], Any],
+    export_uuid: Callable[[str], ExitExportResult],
+    run_task: Callable[..., tuple[bool, str, str]],
+    task_cmd_prefix: list[str],
+    timeout_modify: float,
+    retries_modify: int,
+    retry_delay: float,
+) -> ExitParentUpdateResult:
+    """Clear an optimistic parent link without overwriting a concurrent change."""
+    from nautical_core.exit_models import ExitParentUpdateResult
+
+    if not parent_uuid or not child_short:
+        return ExitParentUpdateResult(False, "missing parent or child")
+    with lock_parent_nextlink(parent_uuid) as locked:
+        if not locked:
+            return ExitParentUpdateResult(False, "parent lock busy")
+        parent_res = export_uuid(parent_uuid)
+        if parent_res.retryable:
+            return ExitParentUpdateResult(False, parent_res.err or "parent export locked")
+        parent = parent_res.obj
+        if not parent:
+            return ExitParentUpdateResult(True, "")
+        current = str(parent.get("nextLink") or "").strip()
+        if current != child_short:
+            return ExitParentUpdateResult(True, "")
+        ok, _out, err = run_task(
+            task_cmd_prefix + [
+                "rc.hooks=off",
+                "rc.verbose=nothing",
+                f"uuid:{parent_uuid}",
+                f"nextLink:{child_short}",
+                "modify",
+                "nextLink:",
+            ],
+            timeout=timeout_modify,
+            retries=retries_modify,
+            retry_delay=retry_delay,
+        )
+        return ExitParentUpdateResult(ok, err or "")
+
+
 def cleanup_orphan_child(
     child_uuid: str,
     *,

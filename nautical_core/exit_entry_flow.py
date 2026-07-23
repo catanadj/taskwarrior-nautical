@@ -57,7 +57,15 @@ def ensure_child_exists_for_entry(
                     services.diag(f"child import failed (intent={ctx.spawn_intent_id}): {import_res.err}")
                 else:
                     services.diag(f"child import failed: {import_res.err}")
-                ctx.state.dead_letter(ctx.entry, f"child import failed: {import_res.err}")
+                failure_reason = f"child import failed: {import_res.err}"
+                clear_res = services.clear_parent_nextlink_if_matches(
+                    ctx.parent_uuid,
+                    ctx.child_short,
+                )
+                if not clear_res.ok:
+                    failure_reason += f"; optimistic parent link cleanup failed: {clear_res.err}"
+                    services.diag(f"optimistic parent link cleanup failed: {clear_res.err}")
+                ctx.state.dead_letter(ctx.entry, failure_reason)
                 ctx.state.reset_lock_streak()
                 return "continue", False
         imported = True

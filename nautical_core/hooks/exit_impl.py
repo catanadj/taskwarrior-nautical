@@ -1837,6 +1837,24 @@ def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: s
     )
 
 
+def _clear_parent_nextlink_if_matches(parent_uuid: str, child_short: str):
+    exit_side_effects = _module("exit_side_effects")
+    try:
+        return exit_side_effects.clear_parent_nextlink_if_matches(
+            parent_uuid,
+            child_short,
+            lock_parent_nextlink=_lock_parent_nextlink,
+            export_uuid=lambda uuid_str: _export_uuid(uuid_str, prefer_cache=False),
+            run_task=_run_task,
+            task_cmd_prefix=_task_cmd_prefix(),
+            timeout_modify=_TASK_TIMEOUT_MODIFY,
+            retries_modify=_TASK_RETRIES_MODIFY,
+            retry_delay=_TASK_RETRY_DELAY,
+        )
+    finally:
+        _exit_runtime_state().export_cache.pop(str(parent_uuid or "").strip(), None)
+
+
 def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: str | None = None, *, prefer_cache: bool = True):
     exit_side_effects = _module("exit_side_effects")
     return exit_side_effects.parent_nextlink_state(
@@ -2073,6 +2091,7 @@ def _exit_runtime_services():
         is_lock_error=_is_lock_error,
         diag=_diag,
         update_parent_nextlink=_update_parent_nextlink,
+        clear_parent_nextlink_if_matches=_clear_parent_nextlink_if_matches,
         cleanup_orphan_child=_cleanup_orphan_child,
     )
 

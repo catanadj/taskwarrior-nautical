@@ -1898,7 +1898,7 @@ def test_on_exit_queue_drain_idempotent():
                 os.environ["TASKDATA"] = prev_taskdata
 
 def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
-    """on-exit should not update parent nextLink if child is missing after failed import."""
+    """A permanent child import failure should clear only its optimistic parent link."""
     hook = _find_hook_file("on-exit-nautical.py")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
@@ -1923,7 +1923,7 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
                         payload = {"uuid": parent_uuid, "nextLink": child_short}
                         return True, json.dumps(payload), ""
                 if "modify" in cmd and "nextLink:" in cmd:
-                    calls.append("clear_parent")
+                    calls.append(list(cmd))
                     return True, "", ""
                 return True, "", ""
 
@@ -1937,13 +1937,58 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
                 "spawn_intent_id": "si_test",
             }
             _seed_sqlite_queue(mod._QUEUE_DB_PATH, [entry])
-            mod._drain_queue()
-            expect("clear_parent" not in calls, "parent nextLink should not be updated on missing child")
+            stats = mod._drain_queue()
+            expect(len(calls) == 1, f"failed child import did not clear its optimistic link: {calls!r}")
+            expect(
+                f"nextLink:{child_short}" in calls[0] and calls[0][-1] == "nextLink:",
+                f"optimistic-link clear was not guarded by the intended child: {calls!r}",
+            )
+            expect(stats.get("dead_lettered") == 1, f"permanent import failure was not dead-lettered: {stats}")
+
+            calls.clear()
+            mod._import_child = lambda _obj: exit_models.ExitImportResult(False, "database is locked")
+            retry_entry = dict(entry, spawn_intent_id="si_retry")
+            _seed_sqlite_queue(mod._QUEUE_DB_PATH, [retry_entry])
+            retry_stats = mod._drain_queue()
+            expect(retry_stats.get("requeued") == 1, f"retryable import failure was not requeued: {retry_stats}")
+            expect(not calls, f"retryable import failure cleared the optimistic link: {calls!r}")
         finally:
             if prev_taskdata is None:
                 os.environ.pop("TASKDATA", None)
             else:
                 os.environ["TASKDATA"] = prev_taskdata
+
+
+def test_on_exit_guarded_parent_clear_preserves_changed_link():
+    """Optimistic-link cleanup must not overwrite a link changed by another process."""
+    hook = _find_hook_file("on-exit-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_exit_guarded_parent_clear_test")
+    exit_models = mod._module("exit_models")
+    side_effects = mod._module("exit_side_effects")
+    calls = []
+
+    @contextlib.contextmanager
+    def locked(_parent_uuid):
+        yield True
+
+    result = side_effects.clear_parent_nextlink_if_matches(
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "bbbbbbbb",
+        lock_parent_nextlink=locked,
+        export_uuid=lambda _uuid: exit_models.ExitExportResult(
+            True,
+            False,
+            "",
+            {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "nextLink": "cccccccc"},
+        ),
+        run_task=lambda *args, **kwargs: calls.append((args, kwargs)) or (True, "", ""),
+        task_cmd_prefix=["task"],
+        timeout_modify=3.0,
+        retries_modify=2,
+        retry_delay=0.2,
+    )
+    expect(result.ok, f"changed parent link should be preserved without error: {result}")
+    expect(not calls, f"guarded cleanup overwrote a changed parent link: {calls!r}")
 
 def test_on_exit_uses_tw_data_dir_for_export_and_modify():
     """on-exit should target TW_DATA_DIR when explicit data dir is enabled."""
@@ -19884,6 +19929,7 @@ TESTS = [
     test_on_exit_large_queue_bounded_drain,
     test_on_exit_queue_drain_idempotent,
     test_on_exit_rolls_back_parent_nextlink_on_missing_child,
+    test_on_exit_guarded_parent_clear_preserves_changed_link,
     test_on_exit_uses_tw_data_dir_for_export_and_modify,
     test_on_exit_no_explicit_taskdata_skips_rc_data_location,
     test_on_exit_reads_data_arg_from_hook_argv,

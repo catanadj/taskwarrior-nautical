@@ -5835,6 +5835,38 @@ def _preserve_cp_relative_offsets_on_due_change(
     return (old_due, new_due, adjustments) if adjustments else None
 
 
+def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> bool:
+    """Carry an untouched native until when an existing recurrence target moves."""
+    if _field_changed(old, new, "until") or not old.get("until"):
+        return False
+    old_target_field = _recurrence_anchor_field(old)
+    new_target_field = _recurrence_anchor_field(new)
+    if old_target_field != new_target_field:
+        return False
+    if not _field_changed(old, new, old_target_field):
+        return False
+    try:
+        new_target = core.parse_dt_any(new.get(new_target_field))
+        if not new_target:
+            return False
+        candidate = dict(new)
+        _carry_native_until(
+            old,
+            candidate,
+            new_target,
+            kind,
+            parent_anchor_field=old_target_field,
+            child_anchor_field=new_target_field,
+        )
+        carried = candidate.get("until")
+        if not carried:
+            return False
+        new["until"] = carried
+        return True
+    except Exception:
+        return False
+
+
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
     explicit_timing_changes = tuple(
         field for field in ("due", "scheduled", "wait") if _field_changed(old, new, field)
@@ -5875,6 +5907,9 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
         new_has_recurrence
         and not modify_lifecycle.task_has_nautical_recurrence_fields(old)
     )
+    if new_has_recurrence and not recurrence_enabled:
+        recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
+        _preserve_native_until_on_target_change(old, new, recurrence_kind)
     native_window_changed = any(
         _field_changed(old, new, field)
         for field in ("due", "scheduled", "until", "anchor_mode")

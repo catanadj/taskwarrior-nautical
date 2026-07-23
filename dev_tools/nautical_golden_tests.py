@@ -9348,8 +9348,8 @@ def test_on_modify_native_until_rejects_invalid_window_changes():
         "until": "20260802T090000Z",
     }
     cases = (
-        dict(base, due="20260802T090000Z"),
         dict(base, until="20260801T090000Z"),
+        dict(base, due="20260803T090000Z", until="20260802T100000Z"),
         dict(base, due=None, scheduled="20260802T090000Z", until="20260802T090000Z"),
     )
     with tempfile.TemporaryDirectory() as td:
@@ -9364,6 +9364,49 @@ def test_on_modify_native_until_rejects_invalid_window_changes():
             stderr_txt = _strip_markup(proc.stderr)
             expect("Invalid expiration window" in stderr_txt, f"missing modification guard panel: {stderr_txt!r}")
             expect("until must be later than" in stderr_txt, f"missing modification guidance: {stderr_txt!r}")
+
+
+def test_on_modify_native_until_follows_recurrence_target_move():
+    """An untouched native until should follow a rescheduled recurrence target."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    base = {
+        "uuid": "00000000-0000-0000-0000-000000000133",
+        "description": "rescheduled native until window",
+        "status": "pending",
+        "entry": "20260720T090000Z",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "until133",
+        "link": 1,
+    }
+    cases = (
+        (
+            dict(base, due="20260801T090000Z", until="20260801T230000Z"),
+            {"due": "20260802T090000Z"},
+            "2026-08-02T23:00:00Z",
+        ),
+        (
+            dict(base, due="20260801T090000Z", until="20260801T230001Z"),
+            {"due": "20260802T090000Z"},
+            "2026-08-02T23:00:01Z",
+        ),
+        (
+            dict(base, scheduled="20260801T090000Z", until="20260801T230000Z"),
+            {"scheduled": "20260802T090000Z"},
+            "2026-08-02T23:00:00Z",
+        ),
+    )
+    with tempfile.TemporaryDirectory() as td:
+        for old, changes, expected_until in cases:
+            new = {**old, **changes}
+            proc = _run_hook_script_raw(
+                hook,
+                json.dumps(old) + "\n" + json.dumps(new),
+                env_extra={"NO_COLOR": "1", "TASKDATA": td},
+            )
+            expect(proc.returncode == 0, f"rescheduled expiration window was rejected: {proc.stderr!r}")
+            result = _assert_stdout_json_only(proc.stdout)
+            expect(result.get("until") == expected_until, f"until did not follow recurrence target: {result!r}")
 
 
 def test_on_modify_native_until_accepts_valid_window_change():
@@ -19428,6 +19471,7 @@ TESTS = [
     test_on_add_native_until_guard_ignores_ordinary_tasks,
     test_on_add_native_until_rejects_strict_anchor_modes,
     test_on_modify_native_until_rejects_invalid_window_changes,
+    test_on_modify_native_until_follows_recurrence_target_move,
     test_on_modify_native_until_accepts_valid_window_change,
     test_on_modify_native_until_validates_recurrence_promotion,
     test_on_modify_native_until_validates_simultaneous_completion,

@@ -340,6 +340,37 @@ def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
         raise RuntimeError(task_command.failure_message(proc, "parent chain update"))
 
 
+def _verify_applied_child(task_bin: str, parent: dict[str, Any], child_short: str) -> None:
+    """Re-export both sides of an apply before declaring the repair successful."""
+    expected_child = str(child_short or "").strip().lower()
+    if not expected_child:
+        raise RuntimeError("post-apply verification has no child identity")
+    fresh_parent = _fresh_parent(task_bin, parent)
+    if fresh_parent is None:
+        raise RuntimeError("post-apply verification could not re-export the parent")
+    if str(fresh_parent.get("chainID") or "").strip() != str(parent.get("chainID") or "").strip():
+        raise RuntimeError("post-apply verification found a changed parent chainID")
+    linked_child = str(fresh_parent.get("nextLink") or "").strip().lower()
+    if linked_child != expected_child and not linked_child.startswith(expected_child):
+        shown = linked_child or "<empty>"
+        raise RuntimeError(
+            f"post-apply verification found parent nextLink {shown}; expected {child_short}"
+        )
+    rows = _existing_children(task_bin, fresh_parent)
+    resolved, child_error = reconcile.resolve_existing_child(
+        fresh_parent,
+        rows,
+        include_deleted=True,
+    )
+    if child_error:
+        raise RuntimeError(f"post-apply child verification failed: {child_error}")
+    if resolved.lower() != expected_child:
+        shown = resolved or "<missing>"
+        raise RuntimeError(
+            f"post-apply child verification found {shown}; expected {child_short}"
+        )
+
+
 def _stale_plan(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
     return reconcile.ReconcilePlan(
         "stale",
@@ -393,9 +424,11 @@ def _apply_parent_atomic(
                 raise RuntimeError("spawn plan has no child payload")
             child_short, _stripped = hook._spawn_child(plan.child, plan.parent)
             _modify_parent_nextlink(task_bin, plan.parent, child_short)
+            _verify_applied_child(task_bin, plan.parent, child_short)
             return plan, child_short
         if plan.action == "backfill_nextlink":
             _modify_parent_nextlink(task_bin, plan.parent, plan.child_short)
+            _verify_applied_child(task_bin, plan.parent, plan.child_short)
             return plan, plan.child_short
         if plan.action in {"legitimate_final", "manual_stop"}:
             _disable_parent_chain(task_bin, plan.parent)

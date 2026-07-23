@@ -19476,6 +19476,8 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
             exported_filters.append(tuple(filters))
             if "uuid:22222222" in filters:
                 return [child]
+            if "link:2" in filters and parent.get("nextLink"):
+                return [child]
             if any(str(value).startswith("uuid:") for value in filters):
                 return [parent]
             if "status:deleted" in filters and "chain:on" in filters:
@@ -19490,11 +19492,15 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         tool._export = fake_export
         tool._parent_apply_lock = parent_lock
         tool._task_data_dir = lambda _task_bin: Path("/tmp/nautical-reconcile-expiration-test")
-        tool._run_task = lambda task_bin, args, **_kwargs: calls.append((task_bin, args)) or SimpleNamespace(
-            returncode=0,
-            stdout="",
-            stderr="",
-        )
+
+        def fake_run_task(task_bin, args, **_kwargs):
+            calls.append((task_bin, args))
+            for value in args:
+                if str(value).startswith("nextLink:"):
+                    parent["nextLink"] = str(value).split(":", 1)[1]
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        tool._run_task = fake_run_task
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             expect(tool.main(["--apply", "--json"]) == 0, "expiration reconcile apply should succeed")
@@ -19818,6 +19824,41 @@ def test_reconcile_parent_identity_errors_are_actionable():
             expect(expected in str(exc), f"unclear identity diagnostic: {exc}")
         else:
             raise AssertionError(f"invalid parent identity was accepted: {parent!r}")
+
+
+def test_reconcile_post_apply_verification_checks_both_sides():
+    """Post-apply verification must reject a missing or unrelated parent pointer."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_post_apply_verify_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "verify01",
+        "link": 1,
+        "nextLink": "22222222",
+        "cp": "P1D",
+    }
+    child = {
+        "uuid": "22222222-0000-0000-0000-000000000002",
+        "status": "pending",
+        "chain": "on",
+        "chainID": "verify01",
+        "link": 2,
+        "prevLink": "11111111",
+        "cp": "P1D",
+    }
+    tool._fresh_parent = lambda _task_bin, _parent: dict(parent)
+    tool._existing_children = lambda _task_bin, _parent: [dict(child)]
+    tool._verify_applied_child("task", parent, "22222222")
+
+    tool._fresh_parent = lambda _task_bin, _parent: dict(parent, nextLink="33333333")
+    try:
+        tool._verify_applied_child("task", parent, "22222222")
+    except RuntimeError as exc:
+        expect("nextLink" in str(exc), f"unclear post-apply pointer diagnostic: {exc}")
+    else:
+        raise AssertionError("post-apply verification accepted an unrelated parent pointer")
 
 
 def test_reconcile_apply_rejects_ambiguous_existing_slot():
@@ -23363,6 +23404,7 @@ TESTS = [
     test_reconcile_parent_updates_are_guarded,
     test_reconcile_repairs_missing_legacy_root_link_under_guard,
     test_reconcile_parent_identity_errors_are_actionable,
+    test_reconcile_post_apply_verification_checks_both_sides,
     test_reconcile_apply_rejects_ambiguous_existing_slot,
     test_reconcile_apply_isolates_candidate_failures,
     test_reconcile_dry_run_isolates_candidate_failures,

@@ -22064,6 +22064,80 @@ def test_fixed_season_calendar_rejects_invalid_contract_values():
         pass
 
 
+def test_seasonal_selection_parser_contract():
+    """Seasonal selectors should parse into bounded normalized nodes without becoming executable."""
+    from nautical_core import position_selection
+
+    limits = {
+        "spring": 92,
+        "summer": 92,
+        "autumn": 91,
+        "winter": 91,
+    }
+    for scope, limit in limits.items():
+        final_position = position_selection.format_position(limit)
+        parsed = position_selection.parse_group_selection_modifier(
+            f"@in-{scope}=first,{final_position},last@+1d"
+        )
+        expect(parsed == (scope, (1, limit, -1), "@+1d"), f"bad {scope} parse: {parsed}")
+        node = position_selection.normalize_selection_node(
+            {
+                "kind": "select",
+                "scope": scope,
+                "positions": parsed[1],
+                "expr": [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {}}]],
+                "mods": {"day_offset": 1},
+            }
+        )
+        expect(node["scope"] == scope, f"bad normalized {scope} scope: {node}")
+
+        try:
+            position_selection.parse_positions(str(limit + 1), scope)
+            raise AssertionError(f"{scope} position limit was not enforced")
+        except ValueError as exc:
+            expect(f"{scope} limit of {limit}" in str(exc), f"unclear {scope} limit error: {exc}")
+
+
+def test_seasonal_selection_acf_round_trip_and_public_gate():
+    """ACF should preserve seasonal scope while strict parsing remains gated until scheduling exists."""
+    from nautical_core import acf_support, position_selection
+
+    node = {
+        "kind": "select",
+        "scope": "spring",
+        "positions": (1, -1),
+        "expr": [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {}}]],
+        "mods": {},
+    }
+    terms = acf_support._build_acf_terms(
+        [[node]],
+        coerce_int=lambda value, default: int(value or default),
+        normalize_spec_for_acf=lambda _typ, spec: spec,
+        mods_to_acf=lambda _mods: {},
+        atom_sort_key=lambda atom: acf_support.atom_sort_key(atom, json_mod=json),
+        json_mod=json,
+    )
+    expect(terms[0][0].get("c") == "spring", f"ACF lost seasonal scope: {terms}")
+    rendered = acf_support.acf_to_original_format(
+        "valid:payload",
+        is_valid_acf=lambda _value: True,
+        acf_unpack=lambda _payload: {"terms": terms},
+        acf_spec_to_string=lambda _typ, spec: spec,
+        acf_mods_to_string=lambda _mods: "",
+        format_selection_positions=position_selection.format_positions,
+    )
+    expect(
+        rendered == "(w:mon)@in-spring=first,last",
+        f"seasonal ACF did not round-trip: {rendered!r}",
+    )
+
+    try:
+        core.validate_anchor_expr_strict("(w:mon)@in-spring=first")
+        raise AssertionError("seasonal selector became executable before scheduler support")
+    except core.ParseError as exc:
+        expect("seasonal scheduling is not available yet" in str(exc), f"unclear gate: {exc}")
+
+
 def test_position_selection_public_period_scopes_scheduler():
     """New scopes should select within calendar periods and preserve the source bucket after shifts."""
     seed = date(2026, 1, 1)
@@ -22295,6 +22369,8 @@ TESTS = [
     test_fixed_season_calendar_boundaries,
     test_fixed_season_calendar_finds_active_or_next_window,
     test_fixed_season_calendar_rejects_invalid_contract_values,
+    test_seasonal_selection_parser_contract,
+    test_seasonal_selection_acf_round_trip_and_public_gate,
     test_position_selection_public_period_scopes_scheduler,
     test_position_selection_public_period_scopes_acf_natural_and_hints,
     test_position_selection_public_period_scopes_hooks,

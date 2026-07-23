@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from functools import lru_cache
 from typing import Any, Callable, TypedDict
 
+from .season_support import SEASON_NAMES
 from .tokenutil import (
     WD_ABBR,
     expand_monthly_aliases,
@@ -28,11 +29,18 @@ POSITION_LIMITS = {
     "month": 31,
     "quarter": 92,
     "year": 366,
+    "spring": 92,
+    "summer": 92,
+    "autumn": 91,
+    "winter": 91,
 }
+SEASON_SCOPES = frozenset(SEASON_NAMES)
 
 _ORDINAL_RE = re.compile(r"^(\d+)(st|nd|rd|th)?$")
 _REVERSE_ORDINAL_RE = re.compile(r"^(\d+)(st|nd|rd|th)-last$")
-_GROUP_SELECTION_RE = re.compile(r"^in-(week|month|quarter|year)=(.*)$")
+_GROUP_SELECTION_RE = re.compile(
+    rf"^in-(week|month|quarter|year|{'|'.join(SEASON_NAMES)})=(.*)$"
+)
 _MAX_POSITION_TEXT_LENGTH = 4096
 _DEFAULT_PERIOD_SCAN_LIMIT = 128
 
@@ -140,7 +148,8 @@ def parse_group_selection_modifier(
     if match is None:
         raise ValueError(
             "Invalid positional selector. Use @in-week, @in-month, @in-quarter, "
-            "or @in-year on a parenthesized expression."
+            "or @in-year, or a seasonal selector such as @in-spring, "
+            "on a parenthesized expression."
         )
     scope, raw_positions = match.groups()
     remaining = "".join(f"@{token}" for token in tokens[1:])
@@ -527,6 +536,11 @@ def validate_public_selection_node(node: object) -> SelectionNode:
     """Apply deterministic public positional-selection limits."""
     normalized = normalize_selection_node(node)
     selector = f"@in-{normalized['scope']}"
+    if normalized["scope"] in SEASON_SCOPES:
+        raise ValueError(
+            f"{selector} is reserved for seasonal selection, but seasonal scheduling "
+            "is not available yet."
+        )
     mods = normalized["mods"]
     active = {
         key
@@ -887,6 +901,7 @@ def candidate_cache_info():
 
 __all__ = (
     "POSITION_LIMITS",
+    "SEASON_SCOPES",
     "SelectionNode",
     "candidate_capacity_upper_bound",
     "candidate_cache_info",

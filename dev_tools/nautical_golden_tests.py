@@ -21989,6 +21989,81 @@ def test_position_selection_public_period_scopes_validation():
             expect(message in str(exc), f"unexpected error for {expr!r}: {exc}")
 
 
+def test_fixed_season_calendar_boundaries():
+    """Fixed seasons should expose deterministic inclusive windows identified by start year."""
+    from nautical_core import season_support
+
+    expected = {
+        "spring": (date(2026, 3, 1), date(2026, 5, 31)),
+        "summer": (date(2026, 6, 1), date(2026, 8, 31)),
+        "autumn": (date(2026, 9, 1), date(2026, 11, 30)),
+        "winter": (date(2026, 12, 1), date(2027, 2, 28)),
+    }
+    expect(season_support.SEASON_NAMES == tuple(expected), "season names changed unexpectedly")
+    for name, bounds in expected.items():
+        expect(season_support.season_bounds(name, 2026) == bounds, f"bad {name} bounds")
+        expect(
+            season_support.season_bounds(f" {name.upper()} ", 2026) == bounds,
+            f"{name} normalization changed its bounds",
+        )
+
+    expect(
+        season_support.season_bounds("winter", 2027)
+        == (date(2027, 12, 1), date(2028, 2, 29)),
+        "winter did not include leap day",
+    )
+
+
+def test_fixed_season_calendar_finds_active_or_next_window():
+    """Season lookup should retain an active window and otherwise advance to that season."""
+    from nautical_core import season_support
+
+    cases = (
+        ("spring", date(2026, 1, 15), (date(2026, 3, 1), date(2026, 5, 31))),
+        ("spring", date(2026, 4, 15), (date(2026, 3, 1), date(2026, 5, 31))),
+        ("spring", date(2026, 5, 31), (date(2026, 3, 1), date(2026, 5, 31))),
+        ("spring", date(2026, 6, 1), (date(2027, 3, 1), date(2027, 5, 31))),
+        ("winter", date(2026, 1, 15), (date(2025, 12, 1), date(2026, 2, 28))),
+        ("winter", date(2026, 2, 28), (date(2025, 12, 1), date(2026, 2, 28))),
+        ("winter", date(2026, 7, 1), (date(2026, 12, 1), date(2027, 2, 28))),
+        ("winter", date(2026, 12, 1), (date(2026, 12, 1), date(2027, 2, 28))),
+    )
+    for name, probe, expected in cases:
+        actual = season_support.season_window_on_or_after(name, probe)
+        expect(actual == expected, f"bad {name} window for {probe}: {actual}")
+
+
+def test_fixed_season_calendar_rejects_invalid_contract_values():
+    """Season primitives should reject ambiguous names, years, and reference values."""
+    from nautical_core import season_support
+
+    for value in ("", "rainy", "monsoon"):
+        try:
+            season_support.season_bounds(value, 2026)
+            raise AssertionError(f"invalid season should fail: {value!r}")
+        except ValueError as exc:
+            expect("Expected one of" in str(exc), f"unclear invalid-season error: {exc}")
+
+    for year in (True, 2026.0):
+        try:
+            season_support.season_bounds("spring", year)
+            raise AssertionError(f"non-integer year should fail: {year!r}")
+        except TypeError:
+            pass
+
+    try:
+        season_support.season_bounds("winter", 9999)
+        raise AssertionError("unrepresentable winter should fail")
+    except ValueError as exc:
+        expect("supported date range" in str(exc), f"unclear winter overflow error: {exc}")
+
+    try:
+        season_support.season_window_on_or_after("spring", "2026-03-01")
+        raise AssertionError("non-date season reference should fail")
+    except TypeError:
+        pass
+
+
 def test_position_selection_public_period_scopes_scheduler():
     """New scopes should select within calendar periods and preserve the source bucket after shifts."""
     seed = date(2026, 1, 1)
@@ -22217,6 +22292,9 @@ TESTS = [
     test_position_selection_post_modifiers_acf_natural_and_time,
     test_position_selection_post_modifiers_modify_completion,
     test_position_selection_public_period_scopes_validation,
+    test_fixed_season_calendar_boundaries,
+    test_fixed_season_calendar_finds_active_or_next_window,
+    test_fixed_season_calendar_rejects_invalid_contract_values,
     test_position_selection_public_period_scopes_scheduler,
     test_position_selection_public_period_scopes_acf_natural_and_hints,
     test_position_selection_public_period_scopes_hooks,

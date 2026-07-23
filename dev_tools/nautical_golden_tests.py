@@ -18744,6 +18744,15 @@ def test_reconcile_candidate_and_plan_paths():
         nonreciprocal.action == "error" and "prevLink" in nonreciprocal.reason,
         f"nonreciprocal next slot must fail closed: {nonreciprocal}",
     )
+    recurrence_mismatch = reconcile.build_reconcile_plan(
+        parent,
+        existing_children=[dict(existing[0], cp="P2D")],
+        hook=None,
+    )
+    expect(
+        recurrence_mismatch.action == "error" and "recurrence field cp" in recurrence_mismatch.reason,
+        f"mismatched recurrence child must fail closed: {recurrence_mismatch}",
+    )
 
     class FakeCore:
         @staticmethod
@@ -19782,6 +19791,33 @@ def test_reconcile_repairs_missing_legacy_root_link_under_guard():
     args = calls[0][1]
     expect("link:" in args[: args.index("modify")], f"missing absent-link guard: {args!r}")
     expect("link:1" in args and "nextLink:22222222" in args, f"legacy root was not repaired atomically: {args!r}")
+
+
+def test_reconcile_parent_identity_errors_are_actionable():
+    """Parent guard failures should identify the exact broken identity field."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_identity_diagnostics_test")
+    base = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "chain001",
+        "link": 2,
+        "nextLink": "",
+    }
+    cases = (
+        (dict(base, chainID=""), "parent chainID is missing"),
+        (dict(base, link=""), "parent link is missing"),
+        (dict(base, link="not-a-number"), "parent link is invalid"),
+        (dict(base, link=0), "parent link must be positive"),
+    )
+    for parent, expected in cases:
+        try:
+            tool._parent_guard_filters(parent)
+        except RuntimeError as exc:
+            expect(expected in str(exc), f"unclear identity diagnostic: {exc}")
+        else:
+            raise AssertionError(f"invalid parent identity was accepted: {parent!r}")
 
 
 def test_reconcile_apply_rejects_ambiguous_existing_slot():
@@ -23326,6 +23362,7 @@ TESTS = [
     test_reconcile_apply_resumes_after_parent_update_failure,
     test_reconcile_parent_updates_are_guarded,
     test_reconcile_repairs_missing_legacy_root_link_under_guard,
+    test_reconcile_parent_identity_errors_are_actionable,
     test_reconcile_apply_rejects_ambiguous_existing_slot,
     test_reconcile_apply_isolates_candidate_failures,
     test_reconcile_dry_run_isolates_candidate_failures,

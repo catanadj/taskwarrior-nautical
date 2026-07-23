@@ -122,6 +122,20 @@ def compute_expiration_child_due(parent: dict[str, Any], *, hook: Any) -> tuple[
     return child_due, result_meta
 
 
+def _child_recurrence_mismatch(parent: dict[str, Any], child: dict[str, Any]) -> str:
+    """Return a mismatch when a candidate child carries a different recurrence."""
+    if not any(str(child.get(field) or "").strip() for field in RECURRENCE_FIELDS):
+        return ""
+    for field in RECURRENCE_FIELDS:
+        parent_value = str(parent.get(field) or "").strip()
+        child_value = str(child.get(field) or "").strip()
+        if child_value and child_value != parent_value:
+            expected = parent_value or "<empty>"
+            actual = child_value or "<empty>"
+            return f"recurrence field {field} is {actual}; expected {expected}"
+    return ""
+
+
 def resolve_existing_child(
     parent: dict[str, Any],
     rows: list[dict[str, Any]],
@@ -161,6 +175,13 @@ def resolve_existing_child(
             "",
             f"next slot #{next_link} child {short_uuid(child_uuid)} has "
             f"prevLink {shown}; expected {parent_short}",
+        )
+    recurrence_error = _child_recurrence_mismatch(parent, child)
+    if recurrence_error:
+        return (
+            "",
+            f"next slot #{next_link} child {short_uuid(child_uuid)} has "
+            f"{recurrence_error}",
         )
     return short_uuid(child_uuid), ""
 

@@ -253,6 +253,28 @@ def _is_legacy_root_without_link(parent: dict[str, Any]) -> bool:
     return not str(parent.get("prevLink") or "").strip()
 
 
+def _parent_identity_error(parent: dict[str, Any]) -> str:
+    """Explain why a parent cannot be used as an atomic reconcile target."""
+    chain_id = str(parent.get("chainID") or "").strip()
+    if not chain_id:
+        return "parent chainID is missing"
+    if _is_legacy_root_without_link(parent):
+        return ""
+
+    raw_link = parent.get("link")
+    if raw_link is None or not str(raw_link).strip():
+        return "parent link is missing; run chain-repair --apply if the chain is deterministic"
+    if isinstance(raw_link, bool):
+        return f"parent link is invalid: {raw_link!r}"
+    try:
+        parsed_link = int(raw_link)
+    except (TypeError, ValueError, OverflowError):
+        return f"parent link is invalid: {raw_link!r}"
+    if parsed_link <= 0:
+        return f"parent link must be positive; got {parsed_link}"
+    return ""
+
+
 def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
     parent_uuid = str(parent.get("uuid") or "").strip()
     status = str(parent.get("status") or "").strip().lower()
@@ -264,9 +286,10 @@ def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
         raise RuntimeError("parent status is no longer reconcilable")
     if str(parent.get("chain") or "").strip().lower() != "on":
         raise RuntimeError("parent chain is no longer active")
+    identity_error = _parent_identity_error(parent)
+    if identity_error:
+        raise RuntimeError(identity_error)
     legacy_root = _is_legacy_root_without_link(parent)
-    if not chain_id or (link <= 0 and not legacy_root):
-        raise RuntimeError("parent chain identity is incomplete")
     if str(parent.get("nextLink") or "").strip():
         raise RuntimeError("parent nextLink is already set")
     return [

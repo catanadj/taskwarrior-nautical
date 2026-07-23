@@ -19755,6 +19755,35 @@ def test_reconcile_parent_updates_are_guarded():
     expect(args[-1] == "nextLink:22222222", f"wrong parent update: {args}")
 
 
+def test_reconcile_repairs_missing_legacy_root_link_under_guard():
+    """A UUID-rooted legacy parent may acquire link 1 only in the guarded update."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_legacy_root_link_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "11111111",
+        "nextLink": "",
+    }
+    calls = []
+    original = tool._run_task
+    try:
+        tool._run_task = lambda task_bin, args, **_kwargs: calls.append((task_bin, args)) or SimpleNamespace(
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        tool._modify_parent_nextlink("task", parent, "22222222")
+    finally:
+        tool._run_task = original
+
+    expect(len(calls) == 1, f"unexpected legacy root update calls: {calls!r}")
+    args = calls[0][1]
+    expect("link:" in args[: args.index("modify")], f"missing absent-link guard: {args!r}")
+    expect("link:1" in args and "nextLink:22222222" in args, f"legacy root was not repaired atomically: {args!r}")
+
+
 def test_reconcile_apply_rejects_ambiguous_existing_slot():
     """Atomic reconcile must not mutate a parent when its next slot is ambiguous."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -23296,6 +23325,7 @@ TESTS = [
     test_reconcile_apply_refreshes_parent_under_lock,
     test_reconcile_apply_resumes_after_parent_update_failure,
     test_reconcile_parent_updates_are_guarded,
+    test_reconcile_repairs_missing_legacy_root_link_under_guard,
     test_reconcile_apply_rejects_ambiguous_existing_slot,
     test_reconcile_apply_isolates_candidate_failures,
     test_reconcile_dry_run_isolates_candidate_failures,

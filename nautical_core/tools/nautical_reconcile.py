@@ -241,6 +241,18 @@ def _fresh_parent(task_bin: str, parent: dict[str, Any]) -> dict[str, Any] | Non
     return None
 
 
+def _is_legacy_root_without_link(parent: dict[str, Any]) -> bool:
+    """Recognize only old root records whose link UDA was never stamped."""
+    raw_link = parent.get("link")
+    if raw_link is not None and str(raw_link).strip():
+        return False
+    parent_uuid = str(parent.get("uuid") or "").strip().lower()
+    chain_id = str(parent.get("chainID") or "").strip().lower()
+    if not parent_uuid or chain_id not in {parent_uuid, reconcile.short_uuid(parent_uuid).lower()}:
+        return False
+    return not str(parent.get("prevLink") or "").strip()
+
+
 def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
     parent_uuid = str(parent.get("uuid") or "").strip()
     status = str(parent.get("status") or "").strip().lower()
@@ -252,7 +264,8 @@ def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
         raise RuntimeError("parent status is no longer reconcilable")
     if str(parent.get("chain") or "").strip().lower() != "on":
         raise RuntimeError("parent chain is no longer active")
-    if not chain_id or link <= 0:
+    legacy_root = _is_legacy_root_without_link(parent)
+    if not chain_id or (link <= 0 and not legacy_root):
         raise RuntimeError("parent chain identity is incomplete")
     if str(parent.get("nextLink") or "").strip():
         raise RuntimeError("parent nextLink is already set")
@@ -261,13 +274,15 @@ def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
         f"status:{status}",
         "chain:on",
         f"chainID:{chain_id}",
-        f"link:{link}",
+        "link:" if legacy_root else f"link:{link}",
         "nextLink:",
     ]
 
 
 def _modify_parent_nextlink(task_bin: str, parent: dict[str, Any], child_short: str) -> None:
     filters = _parent_guard_filters(parent)
+    updates = ["link:1"] if _is_legacy_root_without_link(parent) else []
+    updates.append(f"nextLink:{child_short}")
     proc = _run_task(
         task_bin,
         [
@@ -276,7 +291,7 @@ def _modify_parent_nextlink(task_bin: str, parent: dict[str, Any], child_short: 
             "rc.verbose=nothing",
             *filters,
             "modify",
-            f"nextLink:{child_short}",
+            *updates,
         ],
         timeout=30.0,
     )

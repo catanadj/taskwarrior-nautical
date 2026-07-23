@@ -4157,6 +4157,8 @@ def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
             smoke=False,
         )
         expect(dry.get("status") == "dry-run", f"unexpected dry-run result: {dry!r}")
+        expect(dry.get("operation") == "install", f"fresh dry-run did not plan an install: {dry!r}")
+        expect(dry.get("changed") is False, f"dry-run reported target changes: {dry!r}")
         expect(not taskdata.exists(), f"dry-run mutated the target: {taskdata}")
 
         installed = install_runtime.install_release(
@@ -4166,6 +4168,9 @@ def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
             smoke=False,
         )
         expect(installed.get("status") == "installed", f"fresh install failed: {installed!r}")
+        expect(installed.get("operation") == "install", f"fresh install action was unclear: {installed!r}")
+        expect(installed.get("changed") is True, f"fresh install did not report its change: {installed!r}")
+        expect(installed.get("active_release") == "release-one", f"active release was not reported: {installed!r}")
         expect((taskdata / ".nautical-runtime/current").is_symlink(), "current pointer was not installed")
         expect(os.readlink(taskdata / ".nautical-runtime/current") == "releases/release-one", "wrong active release")
         expect((taskdata / "nautical_core").is_symlink(), "stable core path was not installed")
@@ -4178,6 +4183,10 @@ def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
         expect(status.get("active_release") == "release-one", f"runtime status is wrong: {status!r}")
         expect(not status.get("errors"), f"fresh runtime status has errors: {status!r}")
 
+        current = taskdata / ".nautical-runtime/current"
+        wrapper = taskdata / "hooks/on-modify-nautical.py"
+        current_inode = os.lstat(current).st_ino
+        wrapper_stamp = wrapper.stat().st_mtime_ns
         repeated = install_runtime.install_release(
             source=Path(ROOT),
             taskdata=taskdata,
@@ -4185,6 +4194,20 @@ def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
             smoke=False,
         )
         expect(repeated.get("reused_release") is True, f"identical reinstall was not reused: {repeated!r}")
+        expect(repeated.get("operation") == "reuse", f"identical reinstall was not a no-op: {repeated!r}")
+        expect(repeated.get("changed") is False, f"identical reinstall reported changes: {repeated!r}")
+        expect(os.lstat(current).st_ino == current_inode, "same-release install rewrote the active pointer")
+        expect(wrapper.stat().st_mtime_ns == wrapper_stamp, "same-release install rewrote a valid wrapper")
+
+        wrapper.unlink()
+        repaired = install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=taskdata,
+            release_id="release-one",
+            smoke=False,
+        )
+        expect(repaired.get("operation") == "repair", f"damaged active release was not repaired: {repaired!r}")
+        expect(repaired.get("changed") is True and wrapper.is_file(), f"repair did not restore the wrapper: {repaired!r}")
 
 
 def test_installer_upgrade_rollback_restores_active_runtime():
@@ -4220,6 +4243,17 @@ def test_installer_upgrade_rollback_restores_active_runtime():
         expect(wrapper.read_bytes() == wrapper_before, "failed upgrade did not restore wrapper")
         expect(not install_runtime.runtime_status(taskdata).get("errors"), "rollback left a broken managed runtime")
 
+        planned = install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=taskdata,
+            release_id="release-two",
+            dry_run=True,
+            smoke=False,
+        )
+        expect(planned.get("operation") == "upgrade", f"upgrade dry-run was not identified: {planned!r}")
+        expect(planned.get("previous_release") == "release-one", f"upgrade plan lost prior release: {planned!r}")
+        expect(os.readlink(current) == pointer_before, "upgrade dry-run changed the active release")
+
         upgraded = install_runtime.install_release(
             source=Path(ROOT),
             taskdata=taskdata,
@@ -4227,6 +4261,9 @@ def test_installer_upgrade_rollback_restores_active_runtime():
             smoke=False,
         )
         expect(upgraded.get("status") == "installed", f"upgrade failed: {upgraded!r}")
+        expect(upgraded.get("operation") == "upgrade", f"upgrade action was unclear: {upgraded!r}")
+        expect(upgraded.get("previous_release") == "release-one", f"upgrade lost prior release: {upgraded!r}")
+        expect(upgraded.get("active_release") == "release-two", f"upgrade lost active release: {upgraded!r}")
         expect(os.readlink(current) == "releases/release-two", "upgrade did not atomically select release two")
         expect((taskdata / ".nautical-runtime/releases/release-one").is_dir(), "previous release was removed")
 
@@ -4334,8 +4371,31 @@ def test_installer_cli_and_doctor_managed_runtime_diagnostics():
             timeout=20.0,
         )
         expect(proc.returncode == 0, f"installer CLI dry-run failed: {proc.stderr!r}")
-        expect(json.loads(proc.stdout).get("status") == "dry-run", f"bad installer JSON: {proc.stdout!r}")
+        cli_payload = json.loads(proc.stdout)
+        expect(cli_payload.get("status") == "dry-run", f"bad installer JSON: {proc.stdout!r}")
+        expect(cli_payload.get("operation") == "install", f"installer JSON omitted its plan: {proc.stdout!r}")
         expect(not target.exists(), "installer CLI dry-run mutated its target")
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(install_tool),
+                "--source",
+                ROOT,
+                "--taskdata",
+                str(target),
+                "--release-id",
+                "cli-dry",
+                "--dry-run",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=20.0,
+        )
+        expect(proc.returncode == 0, f"installer text dry-run failed: {proc.stderr!r}")
+        expect("Plan: Install" in proc.stdout, f"installer text omitted its plan: {proc.stdout!r}")
+        expect("Changes: none (dry run)" in proc.stdout, f"installer text obscured dry-run behavior: {proc.stdout!r}")
+        expect(not target.exists(), "installer text dry-run mutated its target")
 
         taskdata = Path(td) / "managed"
         install_runtime.install_release(

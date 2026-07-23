@@ -474,6 +474,73 @@ def _release_manifest(path: Path) -> dict[str, Any]:
     return value
 
 
+def _active_release_name(current: Path, releases_dir: Path) -> str:
+    if not current.is_symlink():
+        return ""
+    try:
+        resolved = current.resolve(strict=True)
+        resolved.relative_to(releases_dir.resolve())
+        return resolved.name
+    except Exception:
+        return ""
+
+
+def _target_has_nautical(base: Path, hooks_dir: Path, current: Path) -> bool:
+    paths = [
+        current,
+        base / "nautical_core",
+        *(base / name for name in MANAGED_ROOT_FILES),
+        *(hooks_dir / name for name in HOOK_FILES.values()),
+    ]
+    return any(_lexists(path) for path in paths)
+
+
+def _target_plan(
+    *,
+    base: Path,
+    hooks_dir: Path,
+    releases_dir: Path,
+    current: Path,
+    release_id: str,
+    digest: str,
+    apis: dict[str, int],
+    smoke: bool,
+) -> dict[str, Any]:
+    conflicts = _hook_conflicts(hooks_dir)
+    if conflicts:
+        raise InstallError(
+            "other active Nautical hooks would cause duplicate execution: "
+            + ", ".join(conflicts)
+        )
+    _verify_running_wrappers(hooks_dir, apis)
+
+    release_dir = releases_dir / release_id
+    release_exists = release_dir.exists()
+    if release_exists:
+        manifest = _release_manifest(release_dir)
+        if str(manifest.get("content_sha256") or "") != digest:
+            raise InstallError(f"release ID already exists with different content: {release_id}")
+        if source_digest(release_dir) != digest:
+            raise InstallError(f"release content does not match its manifest: {release_id}")
+        validate_release(release_dir, smoke=smoke)
+
+    previous_release = _active_release_name(current, releases_dir)
+    has_existing = _target_has_nautical(base, hooks_dir, current)
+    operation = "upgrade" if has_existing else "install"
+    if previous_release == release_id and release_exists:
+        try:
+            validate_installed(base, hooks_dir, smoke=smoke)
+        except InstallError:
+            operation = "repair"
+        else:
+            operation = "reuse"
+    return {
+        "operation": operation,
+        "previous_release": previous_release,
+        "release_exists": release_exists,
+    }
+
+
 def install_release(
     *,
     source: Path,
@@ -495,13 +562,33 @@ def install_release(
     if not _RELEASE_ID_RE.fullmatch(release_id):
         raise InstallError("release ID must use 1-64 letters, numbers, dots, underscores, or hyphens")
 
+    runtime_root = base / ".nautical-runtime"
+    releases_dir = runtime_root / "releases"
+    current = runtime_root / "current"
+    core_link = base / "nautical_core"
+    lock_path = runtime_root / "install.lock"
+
     if dry_run:
         with tempfile.TemporaryDirectory(prefix="nautical-install-stage-") as td:
             stage = Path(td) / release_id
             _copy_release(source, stage)
             apis = validate_release(stage, smoke=smoke)
+        plan = _target_plan(
+            base=base,
+            hooks_dir=hooks_dir,
+            releases_dir=releases_dir,
+            current=current,
+            release_id=release_id,
+            digest=digest,
+            apis=apis,
+            smoke=smoke,
+        )
         return {
             "status": "dry-run",
+            "operation": plan["operation"],
+            "changed": False,
+            "previous_release": plan["previous_release"],
+            "active_release": plan["previous_release"],
             "release_id": release_id,
             "content_sha256": digest,
             "source": str(source),
@@ -510,23 +597,11 @@ def install_release(
             "hook_impl_api": apis,
         }
 
-    runtime_root = base / ".nautical-runtime"
-    releases_dir = runtime_root / "releases"
-    current = runtime_root / "current"
-    core_link = base / "nautical_core"
-    lock_path = runtime_root / "install.lock"
     hooks_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     releases_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     with _InstallLock(lock_path):
-        conflicts = _hook_conflicts(hooks_dir)
-        if conflicts:
-            raise InstallError(
-                "other active Nautical hooks would cause duplicate execution: "
-                + ", ".join(conflicts)
-            )
-
         token = uuid.uuid4().hex
         stage = runtime_root / f".staging-{token}"
         rollback_dir = runtime_root / f".rollback-{token}"
@@ -543,21 +618,45 @@ def install_release(
             _copy_release(source, stage)
             apis = validate_release(stage, smoke=smoke)
             _write_manifest(stage, release_id=release_id, digest=digest, source=source, apis=apis)
-            _verify_running_wrappers(hooks_dir, apis)
+            plan = _target_plan(
+                base=base,
+                hooks_dir=hooks_dir,
+                releases_dir=releases_dir,
+                current=current,
+                release_id=release_id,
+                digest=digest,
+                apis=apis,
+                smoke=smoke,
+            )
 
-            if release_dir.exists():
-                manifest = _release_manifest(release_dir)
-                if str(manifest.get("content_sha256") or "") != digest:
-                    raise InstallError(f"release ID already exists with different content: {release_id}")
-                if source_digest(release_dir) != digest:
-                    raise InstallError(f"release content does not match its manifest: {release_id}")
-                validate_release(release_dir, smoke=smoke)
+            if plan["release_exists"]:
                 reused_release = True
                 shutil.rmtree(stage)
             else:
                 os.replace(stage, release_dir)
             if _fail_after == "after_release":
                 raise InstallError("injected failure after release staging")
+
+            if plan["operation"] == "reuse":
+                shutil.rmtree(rollback_dir, ignore_errors=True)
+                return {
+                    "status": "installed",
+                    "operation": "reuse",
+                    "changed": False,
+                    "previous_release": plan["previous_release"],
+                    "active_release": release_id,
+                    "release_id": release_id,
+                    "content_sha256": digest,
+                    "source": str(source),
+                    "base": str(base),
+                    "hooks_dir": str(hooks_dir),
+                    "current": str(current),
+                    "reused_release": True,
+                    "migrated_legacy_core": False,
+                    "legacy_backup": "",
+                    "migrated_configs": [],
+                    "hook_impl_api": apis,
+                }
 
             pointer_before = _pointer_snapshot(current)
             switched = True
@@ -607,6 +706,10 @@ def install_release(
             shutil.rmtree(rollback_dir, ignore_errors=True)
             return {
                 "status": "installed",
+                "operation": plan["operation"],
+                "changed": True,
+                "previous_release": plan["previous_release"],
+                "active_release": release_id,
                 "release_id": release_id,
                 "content_sha256": digest,
                 "source": str(source),

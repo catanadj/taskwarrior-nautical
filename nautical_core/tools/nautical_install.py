@@ -18,12 +18,41 @@ if str(ROOT) not in sys.path:
 from nautical_core import install_runtime  # noqa: E402
 
 
+_PLAN_LABELS = {
+    "install": "Install",
+    "upgrade": "Upgrade",
+    "repair": "Repair",
+    "reuse": "No changes",
+}
+_RESULT_LABELS = {
+    "install": "Installed",
+    "upgrade": "Upgraded",
+    "repair": "Repaired",
+    "reuse": "Already current",
+}
+
+
 def _render(payload: dict) -> None:
-    print(f"Nautical install: {payload['status']}")
+    operation = str(payload.get("operation") or "install")
+    if payload.get("status") == "dry-run":
+        print("Nautical install check: passed")
+        print(f"Plan: {_PLAN_LABELS.get(operation, operation.replace('_', ' ').title())}")
+    else:
+        print("Nautical install: complete")
+        print(f"Action: {_RESULT_LABELS.get(operation, operation.replace('_', ' ').title())}")
     print(f"Release: {payload['release_id']}")
-    print(f"Source: {payload['source']}")
-    print(f"Install base: {payload['base']}")
+    previous = str(payload.get("previous_release") or "")
+    if previous and payload.get("status") == "dry-run":
+        print(f"Current: {previous}")
+    elif previous and previous != payload.get("active_release"):
+        print(f"Previous: {previous}")
+    print(f"Target: {payload['base']}")
     print(f"Hooks: {payload['hooks_dir']}")
+    if payload.get("status") == "dry-run":
+        print("Changes: none (dry run)")
+    else:
+        print(f"Launcher: {Path(payload['base']) / 'nautical'}")
+        print("Validation: passed")
     if payload.get("migrated_legacy_core"):
         print(f"Legacy core backup: {payload.get('legacy_backup')}")
     for path in payload.get("migrated_configs") or []:

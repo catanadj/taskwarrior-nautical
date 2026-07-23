@@ -16,7 +16,7 @@ designed to express it.
 
 ## Start Here
 
-Download Nautical, validate the release, and install it:
+Download Nautical and run the installer:
 
 ```bash
 git clone --depth 1 https://github.com/catanadj/taskwarrior-nautical.git
@@ -25,9 +25,19 @@ cd taskwarrior-nautical
 ./nautical install
 ```
 
+The same `./nautical install` command handles first installation, upgrades,
+repairs, and safe re-runs. For later upgrades, update the checkout and run it
+again:
+
+```bash
+git pull --ff-only
+./nautical install
+```
+
 The installer uses `$TASKDATA` when set, otherwise `~/.task`. It validates the
-hooks before switching releases and restores the active installation if an
-upgrade fails.
+complete runtime before switching releases, keeps the previous release
+available during upgrades, and leaves an already-current installation
+unchanged.
 
 Register Nautical's Taskwarrior fields and expose its command launcher:
 
@@ -42,14 +52,6 @@ ln -sf ~/.task/nautical ~/.local/bin/nautical
 
 For a custom data directory, set `$TASKDATA` and substitute that path for
 `~/.task` above.
-
-To upgrade later:
-
-```bash
-git pull --ff-only
-./nautical install
-cp uda.conf "${TASKDATA:-$HOME/.task}/uda-nautical.conf"
-```
 
 Optional, for formatted panels:
 

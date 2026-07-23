@@ -22065,7 +22065,7 @@ def test_fixed_season_calendar_rejects_invalid_contract_values():
 
 
 def test_seasonal_selection_parser_contract():
-    """Seasonal selectors should parse into bounded normalized nodes without becoming executable."""
+    """Seasonal selectors should parse into bounded normalized nodes."""
     from nautical_core import position_selection
 
     limits = {
@@ -22097,10 +22097,21 @@ def test_seasonal_selection_parser_contract():
         except ValueError as exc:
             expect(f"{scope} limit of {limit}" in str(exc), f"unclear {scope} limit error: {exc}")
 
+    impossible = (
+        ("(w:mon)@in-autumn=15th", "at most 14 matching dates per autumn"),
+        ("(m:1)@in-winter=4th", "at most 3 matching dates per winter"),
+    )
+    for expression, message in impossible:
+        try:
+            core.validate_anchor_expr_strict(expression)
+            raise AssertionError(f"impossible seasonal position should fail: {expression}")
+        except core.ParseError as exc:
+            expect(message in str(exc), f"unclear seasonal capacity error: {exc}")
 
-def test_seasonal_selection_acf_round_trip_and_public_gate():
-    """ACF should preserve seasonal scope while strict parsing remains gated until scheduling exists."""
-    from nautical_core import acf_support, position_selection
+
+def test_seasonal_selection_acf_round_trip():
+    """Public parsing and ACF should preserve seasonal scope and modifiers."""
+    from nautical_core import acf_support, cache_payload, position_selection
 
     node = {
         "kind": "select",
@@ -22131,11 +22142,73 @@ def test_seasonal_selection_acf_round_trip_and_public_gate():
         f"seasonal ACF did not round-trip: {rendered!r}",
     )
 
-    try:
-        core.validate_anchor_expr_strict("(w:mon)@in-spring=first")
-        raise AssertionError("seasonal selector became executable before scheduler support")
-    except core.ParseError as exc:
-        expect("seasonal scheduling is not available yet" in str(exc), f"unclear gate: {exc}")
+    expression = "(w:mon)@in-spring=last@+7d"
+    dnf = core.validate_anchor_expr_strict(expression)
+    expect(dnf[0][0].get("scope") == "spring", f"strict parser lost season: {dnf}")
+    expect(cache_payload.is_selection_like(dnf[0][0]), "cache shape rejected seasonal scope")
+    acf = core.build_acf(expression)
+    expect(acf not in ("", "!PARSE_ERROR"), f"public ACF rejected a season: {acf!r}")
+    expect(core.acf_to_original_format(acf) == expression, "public ACF lost seasonal syntax")
+
+
+def test_seasonal_selection_scheduler_windows_and_rollover():
+    """Seasonal scheduling should traverse fixed windows, winter rollover, and leap years."""
+    from nautical_core import position_selection
+
+    seed = date(2026, 1, 1)
+    expect(
+        position_selection.next_period_start("spring", date(2026, 4, 1))
+        == date(2027, 3, 1),
+        "spring traversal did not advance to the next opening date",
+    )
+    expect(
+        position_selection.next_period_start("winter", date(2026, 1, 1))
+        == date(2026, 12, 1),
+        "winter traversal did not advance from the active cross-year window",
+    )
+    cases = (
+        ("(w:mon)@in-spring=first", date(2026, 1, 1), date(2026, 3, 2)),
+        ("(w:mon)@in-spring=last", date(2026, 1, 1), date(2026, 5, 25)),
+        ("(w:mon)@in-summer=first", date(2026, 1, 1), date(2026, 6, 1)),
+        ("(w:fri)@in-autumn=last", date(2026, 1, 1), date(2026, 11, 27)),
+        ("(w:mon)@in-winter=first", date(2026, 7, 1), date(2026, 12, 7)),
+        ("(w:mon)@in-winter=last", date(2026, 7, 1), date(2027, 2, 22)),
+        ("(w:mon)@in-winter=last", date(2027, 2, 22), date(2028, 2, 28)),
+        ("(y:02-29)@in-winter=first", date(2026, 3, 1), date(2028, 2, 29)),
+    )
+    for expression, after_date, expected in cases:
+        dnf = core.validate_anchor_expr_strict(expression)
+        actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
+        expect(actual == expected, f"unexpected seasonal date for {expression}: {actual}")
+        expect(
+            core.factor_matches_on(dnf[0][0], expected, seed),
+            f"seasonal factor did not match its scheduled date: {expression}",
+        )
+
+
+def test_seasonal_selection_scheduler_post_modifiers():
+    """Seasonal modifiers should select first, then move dates across window boundaries."""
+    seed = date(2026, 1, 1)
+    cases = (
+        ("(w:mon)@in-spring=last@+7d", date(2026, 1, 1), date(2026, 6, 1)),
+        ("(w:mon)@in-spring=first@-7d", date(2026, 1, 1), date(2026, 2, 23)),
+        ("(w:fri)@in-winter=last@+1bd", date(2026, 7, 1), date(2027, 3, 1)),
+    )
+    for expression, after_date, expected in cases:
+        dnf = core.validate_anchor_expr_strict(expression)
+        actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
+        expect(actual == expected, f"unexpected shifted season date for {expression}: {actual}")
+        expect(
+            core.factor_matches_on(dnf[0][0], expected, seed),
+            f"shifted seasonal factor did not match its output: {expression}",
+        )
+
+    next_year, _meta = core.next_after_expr(
+        core.validate_anchor_expr_strict("(w:mon)@in-spring=last@+7d"),
+        date(2026, 6, 1),
+        default_seed=seed,
+    )
+    expect(next_year == date(2027, 6, 7), f"shifted season did not advance a year: {next_year}")
 
 
 def test_position_selection_public_period_scopes_scheduler():
@@ -22370,7 +22443,9 @@ TESTS = [
     test_fixed_season_calendar_finds_active_or_next_window,
     test_fixed_season_calendar_rejects_invalid_contract_values,
     test_seasonal_selection_parser_contract,
-    test_seasonal_selection_acf_round_trip_and_public_gate,
+    test_seasonal_selection_acf_round_trip,
+    test_seasonal_selection_scheduler_windows_and_rollover,
+    test_seasonal_selection_scheduler_post_modifiers,
     test_position_selection_public_period_scopes_scheduler,
     test_position_selection_public_period_scopes_acf_natural_and_hints,
     test_position_selection_public_period_scopes_hooks,

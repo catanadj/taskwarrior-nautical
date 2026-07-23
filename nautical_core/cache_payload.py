@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from .season_support import SEASON_NAMES
+
+
+_SELECTION_SCOPES = frozenset(("week", "month", "quarter", "year", *SEASON_NAMES))
+
 
 def is_atom_like(atom) -> bool:
     if not isinstance(atom, dict):
@@ -19,7 +24,7 @@ def is_atom_like(atom) -> bool:
 def is_selection_like(value) -> bool:
     if not isinstance(value, dict) or value.get("kind") != "select":
         return False
-    if value.get("scope") not in ("week", "month", "quarter", "year"):
+    if value.get("scope") not in _SELECTION_SCOPES:
         return False
     positions = value.get("positions")
     if not isinstance(positions, (list, tuple)) or not positions:

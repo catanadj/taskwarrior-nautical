@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from functools import lru_cache
 from typing import Any, Callable, TypedDict
 
-from .season_support import SEASON_NAMES
+from .season_support import SEASON_NAMES, season_bounds, season_window_on_or_after
 from .tokenutil import (
     WD_ABBR,
     expand_monthly_aliases,
@@ -426,13 +426,31 @@ def _atom_capacity_upper(atom: dict[str, Any], scope: str) -> int:
         weekdays = _weekly_weekdays(spec)
         if weekdays is None:
             return limit
-        per_weekday = {"week": 1, "month": 5, "quarter": 14, "year": 53}[scope]
+        per_weekday = {
+            "week": 1,
+            "month": 5,
+            "quarter": 14,
+            "year": 53,
+            "spring": 14,
+            "summer": 14,
+            "autumn": 14,
+            "winter": 14,
+        }[scope]
         return min(limit, len(weekdays) * per_weekday)
     if typ == "m":
         per_month = _monthly_capacity_per_month(spec)
         if per_month is None:
             return limit
-        months = {"week": 1, "month": 1, "quarter": 3, "year": 12}[scope]
+        months = {
+            "week": 1,
+            "month": 1,
+            "quarter": 3,
+            "year": 12,
+            "spring": 3,
+            "summer": 3,
+            "autumn": 3,
+            "winter": 3,
+        }[scope]
         return min(limit, per_month * months)
     if typ == "y":
         per_year = _yearly_capacity_per_calendar_year(spec, scope)
@@ -536,11 +554,6 @@ def validate_public_selection_node(node: object) -> SelectionNode:
     """Apply deterministic public positional-selection limits."""
     normalized = normalize_selection_node(node)
     selector = f"@in-{normalized['scope']}"
-    if normalized["scope"] in SEASON_SCOPES:
-        raise ValueError(
-            f"{selector} is reserved for seasonal selection, but seasonal scheduling "
-            "is not available yet."
-        )
     mods = normalized["mods"]
     active = {
         key
@@ -608,7 +621,7 @@ def _has_date_modifiers(mods: dict[str, Any]) -> bool:
 
 
 def period_bounds(scope: str, value: date) -> tuple[date, date]:
-    """Return inclusive period boundaries containing ``value``."""
+    """Return the containing calendar period or the active/upcoming season."""
     normalized_scope = _normalize_scope(scope)
     if not isinstance(value, date):
         raise TypeError("Period boundary value must be a date.")
@@ -635,13 +648,28 @@ def period_bounds(scope: str, value: date) -> tuple[date, date]:
             next_start = date(day.year, start_month + 3, 1)
         return start, next_start - timedelta(days=1)
 
+    if normalized_scope in SEASON_SCOPES:
+        return season_window_on_or_after(normalized_scope, day)
+
     return date(day.year, 1, 1), date(day.year, 12, 31)
 
 
 def next_period_start(scope: str, value: date) -> date:
-    """Return the first day of the period following the one containing ``value``."""
-    _, end = period_bounds(scope, value)
+    """Return the first day of the following scope window."""
+    start, end = period_bounds(scope, value)
+    normalized_scope = _normalize_scope(scope)
+    if normalized_scope in SEASON_SCOPES:
+        return season_bounds(normalized_scope, start.year + 1)[0]
     return end + timedelta(days=1)
+
+
+def _previous_period_probe(scope: str, period_start: date) -> date:
+    if scope not in SEASON_SCOPES:
+        return period_start - timedelta(days=1)
+    previous_year = period_start.year - 1
+    if previous_year < 1:
+        raise OverflowError("No previous representable seasonal window.")
+    return season_bounds(scope, previous_year)[0]
 
 
 def select_positions(candidates: list[date] | tuple[date, ...], positions: tuple[int, ...]) -> tuple[date, ...]:
@@ -863,7 +891,7 @@ def next_selected_date_with_modifiers(
             break
         period_start, _ = period_bounds(normalized["scope"], period_probe)
         try:
-            period_probe = period_start - timedelta(days=1)
+            period_probe = _previous_period_probe(normalized["scope"], period_start)
         except (OverflowError, ValueError):
             return None
 

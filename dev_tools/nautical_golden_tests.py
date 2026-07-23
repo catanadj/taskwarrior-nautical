@@ -17730,6 +17730,179 @@ def test_reconcile_manual_deletion_stops_chain_without_child_lookup():
         tool._disable_parent_chain = saved["disable"]
 
 
+def test_reconcile_delayed_expiration_dry_run_converges_to_live_slot():
+    """Dry-run should preview every elapsed expiration hop through the first live slot."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_delayed_dry_run_test")
+    hook_path = _find_hook_file("on-modify-nautical.py")
+    hook = _load_hook_module(hook_path, "_nautical_reconcile_delayed_dry_run_hook")
+    recovery_at = hook.core.build_local_datetime(date(2026, 7, 23), (9, 30))
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "deleted",
+        "description": "delayed daily occurrence",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "delayed1",
+        "link": 1,
+        "due": hook.core.fmt_isoz(hook.core.build_local_datetime(date(2026, 7, 20), (9, 0))),
+        "until": hook.core.fmt_isoz(hook.core.build_local_datetime(date(2026, 7, 20), (10, 0))),
+        "end": hook.core.fmt_isoz(hook.core.build_local_datetime(date(2026, 7, 20), (10, 0))),
+    }
+    original = tool._existing_children_for_plan
+    try:
+        tool._existing_children_for_plan = lambda _task_bin, _parent, _hook: []
+        outcomes = tool._reconcile_candidate(
+            "task",
+            hook,
+            parent,
+            taskdata=None,
+            apply=False,
+            max_expiration_hops=8,
+            recovery_at=recovery_at,
+        )
+        limited = tool._reconcile_candidate(
+            "task",
+            hook,
+            parent,
+            taskdata=None,
+            apply=False,
+            max_expiration_hops=2,
+            recovery_at=recovery_at,
+        )
+        capped = tool._reconcile_candidate(
+            "task",
+            hook,
+            dict(parent, chainMax=2),
+            taskdata=None,
+            apply=False,
+            max_expiration_hops=8,
+            recovery_at=recovery_at,
+        )
+        anchor_parent = {
+            **parent,
+            "anchor": "w:mon..sun@t=09:00,13:00",
+            "anchor_mode": "skip",
+            "chainID": "delayed-anchor",
+            "until": hook.core.fmt_isoz(hook.core.build_local_datetime(date(2026, 7, 20), (14, 0))),
+            "end": hook.core.fmt_isoz(hook.core.build_local_datetime(date(2026, 7, 20), (14, 0))),
+        }
+        anchor_parent.pop("cp")
+        anchor_outcomes = tool._reconcile_candidate(
+            "task",
+            hook,
+            anchor_parent,
+            taskdata=None,
+            apply=False,
+            max_expiration_hops=8,
+            recovery_at=hook.core.build_local_datetime(date(2026, 7, 21), (14, 30)),
+        )
+    finally:
+        tool._existing_children_for_plan = original
+
+    plans = [plan for plan, _applied in outcomes]
+    expect([plan.action for plan in plans] == ["spawn", "spawn", "spawn"], f"unexpected recovery path: {plans}")
+    expect([plan.parent.get("link") for plan in plans] == [1, 2, 3], f"recovery skipped chain links: {plans}")
+    final_until, final_until_err = hook._safe_parse_datetime((plans[-1].child or {}).get("until"))
+    expect(not final_until_err and final_until is not None and final_until > recovery_at, f"final slot is already expired: {plans[-1]}")
+    expect(
+        [plan.action for plan, _applied in limited] == ["spawn", "spawn", "error"],
+        f"hop limit should leave an actionable resumable error: {limited}",
+    )
+    expect("hop limit" in limited[-1][0].reason, f"missing hop-limit guidance: {limited[-1][0]}")
+    expect(
+        [plan.action for plan, _applied in capped] == ["spawn", "legitimate_final"],
+        f"chainMax was not enforced during delayed recovery: {capped}",
+    )
+    expect(
+        [plan.next_link for plan, _applied in anchor_outcomes] == [2, 3, 4, 5],
+        f"multi-time anchor recovery skipped slots: {anchor_outcomes}",
+    )
+
+
+def test_reconcile_delayed_expiration_apply_follows_exact_children():
+    """Apply should follow exact adjacent children and stop after reaching a live occurrence."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_delayed_apply_test")
+    root = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "deleted",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "delayed1",
+        "link": 1,
+        "until": "20260720T100000Z",
+        "end": "20260720T100000Z",
+    }
+    tasks = {
+        1: root,
+        2: {**root, "uuid": "22222222-0000-0000-0000-000000000002", "link": 2},
+        3: {**root, "uuid": "33333333-0000-0000-0000-000000000003", "link": 3},
+        4: {
+            **root,
+            "uuid": "44444444-0000-0000-0000-000000000004",
+            "status": "pending",
+            "link": 4,
+            "until": "20260723T100000Z",
+        },
+    }
+    calls = []
+    original = (tool._apply_parent_atomic, tool._next_recovery_child)
+    try:
+        def apply_parent(_task_bin, _hook, parent, *, taskdata):
+            link = int(parent["link"])
+            calls.append(("apply", link, taskdata))
+            child = tasks[link + 1]
+            plan = tool.reconcile.ReconcilePlan(
+                "spawn",
+                parent,
+                link + 1,
+                "expired link missing next link",
+                child=child,
+                child_due=child.get("due"),
+            )
+            return plan, str(child["uuid"])[:8]
+
+        def next_child(_task_bin, parent, child_short):
+            link = int(parent["link"])
+            calls.append(("lookup", link, child_short))
+            return tasks[link + 1]
+
+        tool._apply_parent_atomic = apply_parent
+        tool._next_recovery_child = next_child
+        outcomes = tool._reconcile_candidate(
+            "task",
+            SimpleNamespace(),
+            root,
+            taskdata=Path("/tmp/nautical-reconcile-delayed-test"),
+            apply=True,
+            max_expiration_hops=8,
+            recovery_at=datetime(2026, 7, 23, 9, 30, tzinfo=timezone.utc),
+        )
+        limited = tool._reconcile_candidate(
+            "task",
+            SimpleNamespace(),
+            root,
+            taskdata=Path("/tmp/nautical-reconcile-delayed-test"),
+            apply=True,
+            max_expiration_hops=2,
+            recovery_at=datetime(2026, 7, 23, 9, 30, tzinfo=timezone.utc),
+        )
+    finally:
+        tool._apply_parent_atomic, tool._next_recovery_child = original
+
+    expect([plan.parent.get("link") for plan, _applied in outcomes] == [1, 2, 3], f"apply did not converge: {outcomes}")
+    expect([applied for _plan, applied in outcomes] == ["22222222", "33333333", "44444444"], f"wrong child traversal: {outcomes}")
+    expect(
+        [plan.action for plan, _applied in limited] == ["spawn", "spawn", "error"],
+        f"apply hop limit was not enforced: {limited}",
+    )
+    expect(
+        ("lookup", 1, "22222222") in calls and ("lookup", 2, "33333333") in calls,
+        f"recovery did not use narrow child lookups: {calls}",
+    )
+
+
 def test_reconcile_expiration_cp_advances_from_recurrence_target():
     """Expired CP links should advance from due/scheduled rather than their deletion end."""
     import nautical_core.reconcile as reconcile
@@ -17873,6 +18046,18 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         "until": "20260726T235900Z",
         "end": "20260727T000000Z",
     }
+    child = {
+        "uuid": "22222222-0000-0000-0000-000000000002",
+        "status": "pending",
+        "description": parent["description"],
+        "cp": parent["cp"],
+        "chain": "on",
+        "chainID": parent["chainID"],
+        "link": 2,
+        "prevLink": "11111111",
+        "due": "20260727T090000Z",
+        "until": "20260802T235900Z",
+    }
     exported_filters = []
 
     class FakeCore:
@@ -17932,6 +18117,8 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
 
         def fake_export(_task_bin, filters, **_kwargs):
             exported_filters.append(tuple(filters))
+            if "uuid:22222222" in filters:
+                return [child]
             if any(str(value).startswith("uuid:") for value in filters):
                 return [parent]
             if "status:deleted" in filters and "chain:on" in filters:
@@ -17956,6 +18143,8 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
             expect(tool.main(["--apply", "--json"]) == 0, "expiration reconcile apply should succeed")
         summary = json.loads(output.getvalue())
         expect(summary.get("spawn") == 1, f"expiration candidate was not planned: {summary!r}")
+        expect(summary.get("expiration_hops") == 1, f"expiration hop was not summarized: {summary!r}")
+        expect(summary.get("recovered_chains") == 0, f"single-hop recovery was mislabeled as delayed: {summary!r}")
         expect((summary.get("plans") or [{}])[0].get("trigger") == "expiration", f"missing trigger: {summary!r}")
         expect(any("status:deleted" in filters for filters in exported_filters), f"deleted links were not queried: {exported_filters}")
         expect(any(args[-1] == "nextLink:22222222" for _bin, args in calls), f"parent nextLink not applied: {calls!r}")
@@ -18349,6 +18538,84 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
         )
         expect(repeated.returncode == 0, f"second expiration reconcile failed: {repeated.stderr!r}")
         expect(json.loads(repeated.stdout).get("candidates") == 0, f"reconcile should be idempotent: {repeated.stdout!r}")
+
+        recovery_at = datetime.now(timezone.utc).replace(microsecond=0)
+        delayed_due = recovery_at - timedelta(days=3)
+        delayed_until = delayed_due + timedelta(hours=1)
+        delayed_parent = {
+            "uuid": "55555555-0000-0000-0000-000000000005",
+            "status": "deleted",
+            "description": "Delayed expiration recovery",
+            "entry": (delayed_due - timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ"),
+            "modified": delayed_until.strftime("%Y%m%dT%H%M%SZ"),
+            "end": delayed_until.strftime("%Y%m%dT%H%M%SZ"),
+            "due": delayed_due.strftime("%Y%m%dT%H%M%SZ"),
+            "until": delayed_until.strftime("%Y%m%dT%H%M%SZ"),
+            "cp": "1d",
+            "chain": "on",
+            "chainID": "delayed1",
+            "link": 1,
+        }
+        imported_delayed = subprocess.run(
+            [task_bin, "rc.hooks=off", "import"],
+            input=json.dumps(delayed_parent, ensure_ascii=False) + "\n",
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=15.0,
+        )
+        expect(imported_delayed.returncode == 0, f"delayed fixture import failed: {imported_delayed.stderr!r}")
+
+        recovered = subprocess.run(
+            [
+                sys.executable,
+                str(tool_path),
+                "--apply",
+                "--task-bin",
+                task_bin,
+                "--max-expiration-hops",
+                "8",
+                "--json",
+            ],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=30.0,
+        )
+        expect(recovered.returncode == 0, f"delayed expiration reconcile failed: {recovered.stderr!r} {recovered.stdout!r}")
+        recovered_summary = json.loads(recovered.stdout)
+        expect(recovered_summary.get("expiration_hops") == 3, f"wrong delayed recovery depth: {recovered_summary!r}")
+        expect(recovered_summary.get("recovered_chains") == 1, f"delayed chain was not summarized: {recovered_summary!r}")
+
+        exported_delayed = subprocess.run(
+            [task_bin, "rc.hooks=off", "rc.json.array=1", "chainID:delayed1", "export"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=15.0,
+        )
+        expect(exported_delayed.returncode == 0, f"delayed verification export failed: {exported_delayed.stderr!r}")
+        delayed_rows = json.loads(exported_delayed.stdout)
+        delayed_by_link = {int(float(row.get("link"))): row for row in delayed_rows}
+        expect(set(delayed_by_link) == {1, 2, 3, 4}, f"delayed recovery skipped chain slots: {delayed_rows!r}")
+        expect(
+            [delayed_by_link[link].get("status") for link in (1, 2, 3, 4)]
+            == ["deleted", "deleted", "deleted", "pending"],
+            f"delayed recovery stopped at the wrong occurrence: {delayed_rows!r}",
+        )
+
+        repeated_delayed = subprocess.run(
+            [sys.executable, str(tool_path), "--apply", "--task-bin", task_bin, "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=20.0,
+        )
+        expect(repeated_delayed.returncode == 0, f"repeated delayed reconcile failed: {repeated_delayed.stderr!r}")
+        expect(
+            json.loads(repeated_delayed.stdout).get("candidates") == 0,
+            f"delayed recovery should be idempotent: {repeated_delayed.stdout!r}",
+        )
 
 
 def test_reconcile_evidence_prefers_due_over_carried_scheduled():
@@ -20700,6 +20967,8 @@ TESTS = [
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
     test_reconcile_manual_deletion_stops_chain_without_child_lookup,
+    test_reconcile_delayed_expiration_dry_run_converges_to_live_slot,
+    test_reconcile_delayed_expiration_apply_follows_exact_children,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
     test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,

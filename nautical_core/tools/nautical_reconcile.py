@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import importlib.machinery
 import importlib.util
 import json
@@ -27,6 +28,8 @@ from nautical_core import queue_store, reconcile, safe_lock  # noqa: E402
 _PARENT_LOCK_RETRIES = 600
 _PARENT_LOCK_SLEEP_SECONDS = 0.1
 _PARENT_LOCK_STALE_SECONDS = 300.0
+_DEFAULT_EXPIRATION_HOPS = 32
+_MAX_EXPIRATION_HOPS = 1000
 
 
 def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
@@ -143,6 +146,18 @@ def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any
         if disposition != "expiration":
             return []
     return _existing_children(task_bin, parent)
+
+
+def _expiration_hop_limit(value: str) -> int:
+    try:
+        parsed = int(value)
+    except Exception as exc:
+        raise argparse.ArgumentTypeError("expiration hop limit must be an integer") from exc
+    if parsed < 1 or parsed > _MAX_EXPIRATION_HOPS:
+        raise argparse.ArgumentTypeError(
+            f"expiration hop limit must be between 1 and {_MAX_EXPIRATION_HOPS}"
+        )
+    return parsed
 
 
 def _task_data_dir(task_bin: str) -> Path:
@@ -309,6 +324,172 @@ def _apply_parent_atomic(
         return plan, ""
 
 
+def _recovery_error(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
+    return reconcile.ReconcilePlan(
+        "error",
+        parent,
+        reconcile.int_or_default(parent.get("link"), 1) + 1,
+        reason,
+    )
+
+
+def _validate_recovery_child(parent: dict[str, Any], child: dict[str, Any]) -> str:
+    parent_chain = str(parent.get("chainID") or "").strip()
+    child_chain = str(child.get("chainID") or "").strip()
+    if not parent_chain or child_chain != parent_chain:
+        return "recovery child does not belong to the parent chain"
+    expected_link = reconcile.int_or_default(parent.get("link"), 1) + 1
+    child_link = reconcile.int_or_default(child.get("link"), -1)
+    if child_link != expected_link:
+        return f"recovery child link is {child_link}; expected {expected_link}"
+    return ""
+
+
+def _next_recovery_child(
+    task_bin: str,
+    parent: dict[str, Any],
+    child_short: str,
+) -> dict[str, Any]:
+    wanted = str(child_short or "").strip().lower()
+    if not wanted:
+        raise RuntimeError("recovery action did not identify its child")
+    rows = _export(task_bin, [f"uuid:{wanted}"], timeout=30.0)
+    matches = [
+        row
+        for row in rows
+        if str(row.get("uuid") or "").strip().lower().startswith(wanted)
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"recovery child {wanted} lookup returned {len(matches)} exact match(es)"
+        )
+    child = matches[0]
+    validation_error = _validate_recovery_child(parent, child)
+    if validation_error:
+        raise RuntimeError(validation_error)
+    return child
+
+
+def _virtual_expired_child(
+    plan: reconcile.ReconcilePlan,
+    *,
+    hook: Any,
+    recovery_at: Any,
+) -> tuple[dict[str, Any] | None, str]:
+    child = dict(plan.child or {})
+    until_raw = child.get("until")
+    try:
+        until_dt, until_err = hook._safe_parse_datetime(until_raw)
+    except Exception:
+        return None, "planned child expiration could not be parsed"
+    if until_err or until_dt is None:
+        return None, f"planned child has no reliable native until: {until_err or 'missing until'}"
+    try:
+        if until_dt > recovery_at:
+            return None, ""
+    except Exception:
+        return None, "planned child expiration could not be compared with recovery time"
+
+    child["status"] = "deleted"
+    child["end"] = until_raw
+    child["uuid"] = (
+        f"dryrun-{str(child.get('chainID') or 'chain')}-"
+        f"{reconcile.int_or_default(child.get('link'), plan.next_link)}"
+    )
+    child.pop("nextLink", None)
+    validation_error = _validate_recovery_child(plan.parent, child)
+    if validation_error:
+        return None, validation_error
+    return child, ""
+
+
+def _reconcile_candidate(
+    task_bin: str,
+    hook: Any,
+    parent: dict[str, Any],
+    *,
+    taskdata: Path | None,
+    apply: bool,
+    max_expiration_hops: int,
+    recovery_at: Any,
+) -> list[tuple[reconcile.ReconcilePlan, str]]:
+    outcomes: list[tuple[reconcile.ReconcilePlan, str]] = []
+    current = parent
+    visited: set[tuple[str, int]] = set()
+    expiration_hops = 0
+
+    while True:
+        slot = (
+            str(current.get("chainID") or "").strip(),
+            reconcile.int_or_default(current.get("link"), 0),
+        )
+        if slot in visited:
+            outcomes.append((_recovery_error(current, "expiration recovery made no progress"), ""))
+            break
+        visited.add(slot)
+
+        is_deleted = str(current.get("status") or "").strip().lower() == "deleted"
+        if is_deleted and expiration_hops >= max_expiration_hops:
+            outcomes.append(
+                (
+                    _recovery_error(
+                        current,
+                        f"expiration recovery hop limit reached at {max_expiration_hops}; "
+                        "rerun to continue or increase --max-expiration-hops",
+                    ),
+                    "",
+                )
+            )
+            break
+
+        if apply:
+            if taskdata is None:
+                raise RuntimeError("Taskwarrior data location is unavailable")
+            plan, applied_short = _apply_parent_atomic(
+                task_bin,
+                hook,
+                current,
+                taskdata=taskdata,
+            )
+        else:
+            plan = reconcile.build_reconcile_plan(
+                current,
+                existing_children=_existing_children_for_plan(task_bin, current, hook),
+                hook=hook,
+            )
+            applied_short = ""
+        outcomes.append((plan, applied_short))
+
+        if not is_deleted or plan.action not in {"spawn", "backfill_nextlink"}:
+            break
+        expiration_hops += 1
+
+        if apply or plan.action == "backfill_nextlink":
+            child_short = applied_short or plan.child_short
+            try:
+                child = _next_recovery_child(task_bin, plan.parent, child_short)
+            except Exception as exc:
+                outcomes.append((_recovery_error(plan.parent, str(exc)), ""))
+                break
+        else:
+            child, child_error = _virtual_expired_child(
+                plan,
+                hook=hook,
+                recovery_at=recovery_at,
+            )
+            if child_error:
+                outcomes.append((_recovery_error(plan.parent, child_error), ""))
+                break
+            if child is None:
+                break
+
+        if not reconcile.is_orphan_deleted_chain_candidate(child):
+            break
+        current = child
+
+    return outcomes
+
+
 def _fmt_parent(parent: dict[str, Any]) -> str:
     uuid = reconcile.short_uuid(parent.get("uuid")) or "????????"
     chain_id = str(parent.get("chainID") or "?")
@@ -400,62 +581,95 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
     parser.add_argument("--hook-path", default=None, help="Explicit on-modify hook path for non-standard installs.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
+    parser.add_argument(
+        "--max-expiration-hops",
+        type=_expiration_hop_limit,
+        default=_DEFAULT_EXPIRATION_HOPS,
+        help=f"Maximum expired links recovered per chain (default: {_DEFAULT_EXPIRATION_HOPS}).",
+    )
     args = parser.parse_args(argv)
 
     hook = _load_on_modify(args.hook_path)
     _bind_hook_task_bin(hook, args.task_bin)
     fmt_dt_local = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
+    now_utc = getattr(getattr(hook, "core", None), "now_utc", None)
+    recovery_at = now_utc() if callable(now_utc) else datetime.now(timezone.utc)
     candidates = _candidate_rows(args.task_bin, hook)
     taskdata = _task_data_dir(args.task_bin) if args.apply else None
     plans: list[reconcile.ReconcilePlan] = []
     plan_evidence: list[dict[str, Any]] = []
     applied: list[dict[str, Any]] = []
+    outcome_groups: list[list[tuple[reconcile.ReconcilePlan, str]]] = []
+    processed_slots: set[tuple[str, int]] = set()
 
     for parent in candidates:
-        applied_short = ""
+        parent_slot = (
+            str(parent.get("chainID") or "").strip(),
+            reconcile.int_or_default(parent.get("link"), 0),
+        )
+        if parent_slot in processed_slots:
+            continue
         try:
-            if args.apply:
-                if taskdata is None:
-                    raise RuntimeError("Taskwarrior data location is unavailable")
-                plan, applied_short = _apply_parent_atomic(
-                    args.task_bin,
-                    hook,
-                    parent,
-                    taskdata=taskdata,
-                )
-            else:
-                plan = reconcile.build_reconcile_plan(
-                    parent,
-                    existing_children=_existing_children_for_plan(args.task_bin, parent, hook),
-                    hook=hook,
-                )
+            outcomes = _reconcile_candidate(
+                args.task_bin,
+                hook,
+                parent,
+                taskdata=taskdata,
+                apply=args.apply,
+                max_expiration_hops=args.max_expiration_hops,
+                recovery_at=recovery_at,
+            )
         except Exception as exc:
             reason = str(exc).strip() or type(exc).__name__
-            plan = reconcile.ReconcilePlan(
-                "error",
-                parent,
-                reconcile.int_or_default(parent.get("link"), 1) + 1,
-                reason,
+            outcomes = [(_recovery_error(parent, reason), "")]
+        outcome_groups.append(outcomes)
+        for plan, applied_short in outcomes:
+            processed_slots.add(
+                (
+                    str(plan.parent.get("chainID") or "").strip(),
+                    reconcile.int_or_default(plan.parent.get("link"), 0),
+                )
             )
-        plans.append(plan)
-        evidence = _describe_plan(plan, hook=hook, fmt_dt_local=fmt_dt_local)
-        plan_evidence.append(evidence)
-        if args.apply and applied_short:
-            disabling = plan.action in {"legitimate_final", "manual_stop"}
-            action = "disable_chain" if disabling else plan.action
-            record = {
-                "action": action,
-                "parent": reconcile.short_uuid(plan.parent.get("uuid")),
-            }
-            if not disabling:
-                record["child"] = applied_short
-            applied.append(record)
-        if not args.json:
-            _print_plan(plan, evidence, applied_short=applied_short)
+            plans.append(plan)
+            evidence = _describe_plan(plan, hook=hook, fmt_dt_local=fmt_dt_local)
+            plan_evidence.append(evidence)
+            if args.apply and applied_short:
+                disabling = plan.action in {"legitimate_final", "manual_stop"}
+                action = "disable_chain" if disabling else plan.action
+                record = {
+                    "action": action,
+                    "parent": reconcile.short_uuid(plan.parent.get("uuid")),
+                }
+                if not disabling:
+                    record["child"] = applied_short
+                applied.append(record)
+            if not args.json:
+                _print_plan(plan, evidence, applied_short=applied_short)
+
+    expiration_hops = sum(
+        1
+        for plan in plans
+        if str(plan.parent.get("status") or "").strip() == "deleted"
+        and plan.action in {"spawn", "backfill_nextlink"}
+    )
+    recovered_chains = sum(
+        1
+        for outcomes in outcome_groups
+        if sum(
+            1
+            for plan, _applied in outcomes
+            if str(plan.parent.get("status") or "").strip() == "deleted"
+            and plan.action in {"spawn", "backfill_nextlink"}
+        )
+        > 1
+        and all(plan.action != "error" for plan, _applied in outcomes)
+    )
 
     summary = {
         "mode": "apply" if args.apply else "dry-run",
         "candidates": len(candidates),
+        "expiration_hops": expiration_hops,
+        "recovered_chains": recovered_chains,
         "spawn": sum(1 for p in plans if p.action == "spawn"),
         "backfill_nextlink": sum(1 for p in plans if p.action == "backfill_nextlink"),
         "legitimate_final": sum(1 for p in plans if p.action == "legitimate_final"),
@@ -478,6 +692,7 @@ def main(argv: list[str] | None = None) -> int:
             "summary: "
             f"{summary['mode']}; candidates={summary['candidates']} "
             f"spawn={summary['spawn']} backfill={summary['backfill_nextlink']} "
+            f"expiration_hops={summary['expiration_hops']} recovered={summary['recovered_chains']} "
             f"final={summary['legitimate_final']} manual={summary['manual_stop']} "
             f"stale={summary['stale']} errors={summary['errors']}"
         )

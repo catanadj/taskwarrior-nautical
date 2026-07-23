@@ -34,6 +34,7 @@ if str(ROOT) not in sys.path:
 
 core = importlib.import_module("nautical_core")
 install_runtime = importlib.import_module("nautical_core.install_runtime")
+queue_store = importlib.import_module("nautical_core.queue_store")
 
 
 def _load_budget_config(path: Path) -> dict:
@@ -165,6 +166,16 @@ def _bench_cache_load_hot(exprs: list[str], rounds: int) -> float:
                 if not isinstance(obj, dict):
                     raise RuntimeError("cache_load benchmark read failed")
         return time.perf_counter() - t0
+
+
+def _bench_queue_schema_hot(rounds: int) -> float:
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-queue-") as td:
+        with sqlite3.connect(str(Path(td) / "queue.db")) as conn:
+            queue_store.init_queue_db(conn)
+            t0 = time.perf_counter()
+            for _ in range(rounds):
+                queue_store.init_queue_db(conn)
+            return time.perf_counter() - t0
 
 
 def _measure(name: str, fn, repeats: int) -> dict:
@@ -484,6 +495,7 @@ def main() -> int:
     cache_key_rounds = int(workload.get("cache_key_rounds", 2500))
     cache_save_rounds = int(workload.get("cache_save_rounds", 120))
     cache_load_rounds = int(workload.get("cache_load_rounds", 300))
+    queue_schema_hot_rounds = int(workload.get("queue_schema_hot_rounds", 1000))
 
     checks = [
         ("parse_validate", lambda: _bench_parse_validate(exprs, parse_rounds)),
@@ -493,6 +505,7 @@ def main() -> int:
         ("cache_key_hot", lambda: _bench_cache_key_hot(exprs, cache_key_rounds)),
         ("cache_save", lambda: _bench_cache_save(exprs, cache_save_rounds)),
         ("cache_load_hot", lambda: _bench_cache_load_hot(exprs, cache_load_rounds)),
+        ("queue_schema_hot", lambda: _bench_queue_schema_hot(queue_schema_hot_rounds)),
     ]
 
     results = {}

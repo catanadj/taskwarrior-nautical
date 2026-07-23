@@ -13,6 +13,7 @@ _MIGRATABLE_STATE_NAMES = (
     ".nautical_dead_letter.jsonl",
     ".nautical_spawn_intents.jsonl",
 )
+_QUEUE_DB_SCHEMA_VERSION = 1
 
 
 class ExitWorkProbe:
@@ -45,6 +46,10 @@ def _sqlite_may_have_work(path: Path) -> bool | None:
         uri = path.resolve().as_uri() + "?mode=ro"
         conn = sqlite3.connect(uri, uri=True, timeout=0.0)
         try:
+            row = conn.execute("PRAGMA user_version").fetchone()
+            version = int(row[0] if row else 0)
+            if version > _QUEUE_DB_SCHEMA_VERSION:
+                return None
             row = conn.execute(
                 "SELECT 1 FROM queue_entries WHERE state IN ('queued', 'processing') LIMIT 1"
             ).fetchone()

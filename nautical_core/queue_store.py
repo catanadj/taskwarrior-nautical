@@ -17,6 +17,29 @@ from nautical_core.queue_models import (
 )
 
 
+QUEUE_DB_SCHEMA_VERSION = 1
+_QUEUE_COLUMNS = (
+    ("id", "INTEGER", 0, None, 1),
+    ("spawn_intent_id", "TEXT", 0, None, 0),
+    ("payload", "TEXT", 1, None, 0),
+    ("attempts", "INTEGER", 1, "0", 0),
+    ("state", "TEXT", 1, "'queued'", 0),
+    ("claim_token", "TEXT", 0, None, 0),
+    ("claimed_at", "REAL", 0, None, 0),
+    ("created_at", "REAL", 1, None, 0),
+    ("updated_at", "REAL", 1, None, 0),
+)
+_QUEUE_INDEXES = {
+    "idx_queue_entries_spawn_intent": (("spawn_intent_id",), 1, 1),
+    "idx_queue_entries_state_id": (("state", "id"), 0, 0),
+    "idx_queue_entries_claimed_at": (("claimed_at",), 0, 0),
+}
+
+
+class QueueSchemaError(RuntimeError):
+    pass
+
+
 def nautical_state_dir_path(tw_data_dir: Path) -> Path:
     return tw_data_dir / ".nautical-state"
 
@@ -226,7 +249,118 @@ def quarantine_sqlite_db(
 
 
 
-def init_queue_db(conn: sqlite3.Connection) -> None:
+def _queue_table_exists(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='queue_entries'"
+    ).fetchone()
+    return row is not None
+
+
+def _validate_queue_table(conn: sqlite3.Connection, *, require_indexes: bool) -> None:
+    rows = list(conn.execute("PRAGMA table_info(queue_entries)"))
+    actual = tuple(
+        (
+            str(row[1]),
+            str(row[2]).upper(),
+            int(row[3] or 0),
+            None if row[4] is None else str(row[4]),
+            int(row[5] or 0),
+        )
+        for row in rows
+    )
+    if actual != _QUEUE_COLUMNS:
+        actual_names = [item[0] for item in actual]
+        expected_names = [item[0] for item in _QUEUE_COLUMNS]
+        raise QueueSchemaError(
+            "queue database schema is incompatible: "
+            f"queue_entries columns are {actual_names}, expected {expected_names}"
+        )
+
+    if not require_indexes:
+        return
+
+    index_rows = {str(row[1]): row for row in conn.execute("PRAGMA index_list(queue_entries)")}
+    for name, (expected_columns, expected_unique, expected_partial) in _QUEUE_INDEXES.items():
+        row = index_rows.get(name)
+        if row is None:
+            raise QueueSchemaError(f"queue database schema is incomplete: missing index {name}")
+        actual_columns = tuple(
+            str(index_row[2])
+            for index_row in conn.execute(f"PRAGMA index_info({name})")
+        )
+        unique = int(row[2] or 0)
+        partial = int(row[4] or 0) if len(row) > 4 else 0
+        if (
+            actual_columns != expected_columns
+            or unique != expected_unique
+            or partial != expected_partial
+        ):
+            raise QueueSchemaError(f"queue database schema is incompatible: index {name} differs")
+
+
+def _validate_no_duplicate_intents(conn: sqlite3.Connection) -> None:
+    duplicate = conn.execute(
+        """
+        SELECT spawn_intent_id
+        FROM queue_entries
+        WHERE spawn_intent_id IS NOT NULL AND spawn_intent_id <> ''
+        GROUP BY spawn_intent_id
+        HAVING COUNT(*) > 1
+        LIMIT 1
+        """
+    ).fetchone()
+    if duplicate is not None:
+        raise QueueSchemaError(
+            "queue database schema is incompatible: duplicate spawn_intent_id values"
+        )
+
+
+def queue_schema_status(conn: sqlite3.Connection) -> dict[str, Any]:
+    try:
+        row = conn.execute("PRAGMA user_version").fetchone()
+        version = int(row[0] if row else 0)
+        table_present = _queue_table_exists(conn)
+        if version > QUEUE_DB_SCHEMA_VERSION:
+            raise QueueSchemaError(
+                f"queue database schema v{version} is newer than supported v{QUEUE_DB_SCHEMA_VERSION}"
+            )
+        if version < 0:
+            raise QueueSchemaError(f"queue database schema version is invalid: {version}")
+        if version == 0:
+            if table_present:
+                _validate_queue_table(conn, require_indexes=False)
+                _validate_no_duplicate_intents(conn)
+            return {
+                "status": "legacy",
+                "version": 0,
+                "expected_version": QUEUE_DB_SCHEMA_VERSION,
+                "compatible": True,
+                "table_present": table_present,
+                "error": "",
+            }
+        if not table_present:
+            raise QueueSchemaError("queue database schema is incomplete: queue_entries table is missing")
+        _validate_queue_table(conn, require_indexes=True)
+        return {
+            "status": "ok",
+            "version": version,
+            "expected_version": QUEUE_DB_SCHEMA_VERSION,
+            "compatible": True,
+            "table_present": True,
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "version": locals().get("version", -1),
+            "expected_version": QUEUE_DB_SCHEMA_VERSION,
+            "compatible": False,
+            "table_present": locals().get("table_present", False),
+            "error": str(exc),
+        }
+
+
+def _create_queue_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS queue_entries (
@@ -251,7 +385,31 @@ def init_queue_db(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_state_id ON queue_entries (state, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_entries_claimed_at ON queue_entries (claimed_at)")
-    conn.commit()
+
+
+def init_queue_db(conn: sqlite3.Connection) -> None:
+    status = queue_schema_status(conn)
+    if status["status"] == "ok":
+        return
+    if status["status"] == "error":
+        raise QueueSchemaError(str(status["error"]))
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        status = queue_schema_status(conn)
+        if status["status"] == "error":
+            raise QueueSchemaError(str(status["error"]))
+        if status["status"] == "legacy":
+            _create_queue_schema(conn)
+            _validate_queue_table(conn, require_indexes=True)
+            conn.execute(f"PRAGMA user_version = {QUEUE_DB_SCHEMA_VERSION}")
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
 
 
 def connect_queue_db_result(

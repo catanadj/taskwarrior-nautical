@@ -530,11 +530,46 @@ def _check_queue(findings: list[dict[str, Any]], taskdata: Path, stale_after: fl
             details={"error": str(exc)},
         )
         return {}
+    queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
+    schema = queue.get("schema") if isinstance(queue.get("schema"), dict) else {}
+    schema_status = str(schema.get("status") or "absent")
+    if schema_status == "error":
+        _finding(
+            findings,
+            "queue.schema",
+            "error",
+            "Queue database schema is incompatible with this Nautical runtime.",
+            fix="Preserve the database, then upgrade Nautical or restore a compatible queue database.",
+            details=schema,
+        )
+    elif schema_status == "legacy":
+        _finding(
+            findings,
+            "queue.schema",
+            "warn",
+            "Queue database uses the compatible unversioned schema.",
+            fix="The next queue write or drain will migrate it transactionally.",
+            details=schema,
+        )
+    else:
+        _finding(
+            findings,
+            "queue.schema",
+            "ok",
+            (
+                f"Queue database schema v{schema.get('version')} is compatible."
+                if schema_status == "ok"
+                else "Queue database has not been created yet."
+            ),
+            details=schema,
+        )
+
     issues = payload.get("issues") or []
+    queue_status = str(payload.get("status") or "ok")
     _finding(
         findings,
         "queue.state",
-        "warn" if issues else "ok",
+        "error" if queue_status == "error" else ("warn" if issues else "ok"),
         "Queue state has findings." if issues else "Queue and dead-letter state are clean.",
         fix="Run nautical queue-status for queue details." if issues else "",
         details={"issues": issues} if issues else None,

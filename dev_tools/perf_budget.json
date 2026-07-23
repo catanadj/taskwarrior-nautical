@@ -17,7 +17,8 @@
     "build_hints_rounds": 180,
     "cache_key_rounds": 2500,
     "cache_save_rounds": 120,
-    "cache_load_rounds": 300
+    "cache_load_rounds": 300,
+    "queue_schema_hot_rounds": 1000
   },
   "budgets_seconds": {
     "parse_validate": 0.2,
@@ -26,7 +27,8 @@
     "build_hints": 0.15,
     "cache_key_hot": 0.08,
     "cache_save": 0.9,
-    "cache_load_hot": 0.35
+    "cache_load_hot": 0.35,
+    "queue_schema_hot": 0.2
   },
   "hook_fast_path": {
     "enabled": true,

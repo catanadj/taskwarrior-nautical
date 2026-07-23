@@ -1001,6 +1001,12 @@ def test_exit_probe_is_conservative_across_queue_states():
         expect(probe.probe_exit_work(root).definitely_empty, "empty sqlite queue should not force a drain")
 
         with sqlite3.connect(str(queue_db)) as conn:
+            conn.execute("PRAGMA user_version = 2")
+            conn.commit()
+        expect(probe.probe_exit_work(root).may_have_work, "future queue schema should force the full hook")
+
+        with sqlite3.connect(str(queue_db)) as conn:
+            conn.execute("PRAGMA user_version = 0")
             conn.execute("INSERT INTO queue_entries (payload, state) VALUES ('{}', 'queued')")
             conn.commit()
         expect(probe.probe_exit_work(root).may_have_work, "queued sqlite row should force a drain")
@@ -3594,6 +3600,210 @@ def test_health_check_critical_queue_db_rows():
         expect(int(metrics.get("queue_db_rows") or 0) == 1, f"expected queue_db_rows=1, got {metrics}")
 
 
+def test_queue_schema_initializes_and_adopts_legacy_rows():
+    """Queue schema adoption should be versioned, idempotent, and row preserving."""
+    from nautical_core import queue_store
+
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "queue.db"
+        entry = {
+            "spawn_intent_id": "si_schema_legacy",
+            "child": {"uuid": "11111111-1111-1111-1111-111111111111"},
+            "__queue_state": "processing",
+            "__claim_token": "claim-legacy",
+            "__claimed_at": 123.0,
+            "__created_at": 100.0,
+            "__updated_at": 123.0,
+            "attempts": 2,
+        }
+        _seed_sqlite_queue(db_path, entry)
+        with sqlite3.connect(str(db_path)) as conn:
+            before = conn.execute(
+                "SELECT spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at "
+                "FROM queue_entries"
+            ).fetchone()
+            expect(conn.execute("PRAGMA user_version").fetchone()[0] == 0, "legacy fixture was versioned")
+            queue_store.init_queue_db(conn)
+            after = conn.execute(
+                "SELECT spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at "
+                "FROM queue_entries"
+            ).fetchone()
+            expect(after == before, f"schema adoption changed a queued row: before={before!r} after={after!r}")
+            expect(
+                conn.execute("PRAGMA user_version").fetchone()[0] == queue_store.QUEUE_DB_SCHEMA_VERSION,
+                "schema adoption did not record its version",
+            )
+            expect(queue_store.queue_schema_status(conn).get("status") == "ok", "adopted schema is not healthy")
+            queue_store.init_queue_db(conn)
+
+    with sqlite3.connect(":memory:") as conn:
+        queue_store.init_queue_db(conn)
+        status = queue_store.queue_schema_status(conn)
+        expect(status.get("status") == "ok", f"fresh schema did not initialize: {status!r}")
+
+
+def test_queue_schema_rejects_incompatible_databases_without_quarantine():
+    """Partial and future schemas should fail closed and remain available for inspection."""
+    from nautical_core import queue_store
+
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "future.db"
+        _seed_sqlite_queue(
+            db_path,
+            {
+                "spawn_intent_id": "si_future",
+                "child": {"uuid": "22222222-2222-2222-2222-222222222222"},
+            },
+        )
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(f"PRAGMA user_version = {queue_store.QUEUE_DB_SCHEMA_VERSION + 1}")
+        diagnostics = []
+        result = queue_store.open_ready_queue_db_result(
+            db_path,
+            connect_fn=lambda: queue_store.connect_queue_db_result(
+                db_path,
+                attempts=1,
+                timeout_base=1.0,
+                timeout_max=1.0,
+                backoff_base=0.0,
+            ),
+            init_fn=queue_store.init_queue_db,
+            close_fn=queue_store.close_silent,
+            diag=diagnostics.append,
+        )
+        expect(result.conn is None, "future queue schema was opened")
+        expect("newer than supported" in result.err, f"future schema error was unclear: {result.err!r}")
+        expect(db_path.exists(), "future queue database was quarantined")
+        expect(not list(Path(td).glob("*.corrupt.*")), "future schema was mistaken for corruption")
+
+        partial = Path(td) / "partial.db"
+        with sqlite3.connect(str(partial)) as conn:
+            conn.execute("CREATE TABLE queue_entries (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, state TEXT)")
+            try:
+                queue_store.init_queue_db(conn)
+                raise AssertionError("partial queue schema should fail")
+            except queue_store.QueueSchemaError:
+                pass
+            expect(conn.execute("PRAGMA user_version").fetchone()[0] == 0, "partial schema was versioned")
+            columns = [row[1] for row in conn.execute("PRAGMA table_info(queue_entries)")]
+            expect(columns == ["id", "payload", "state"], f"partial schema was mutated: {columns!r}")
+
+        duplicate = Path(td) / "duplicate.db"
+        _seed_sqlite_queue(
+            duplicate,
+            [
+                {"spawn_intent_id": "si_duplicate", "child": {"uuid": "44444444-4444-4444-4444-444444444444"}},
+                {"spawn_intent_id": "si_duplicate", "child": {"uuid": "55555555-5555-5555-5555-555555555555"}},
+            ],
+        )
+        with sqlite3.connect(str(duplicate)) as conn:
+            status = queue_store.queue_schema_status(conn)
+            expect(status.get("status") == "error", f"duplicate intents looked migratable: {status!r}")
+            expect("duplicate spawn_intent_id" in str(status.get("error")), f"duplicate error was unclear: {status!r}")
+
+
+def test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers():
+    """Failed migrations should roll back, while simultaneous valid adoption converges."""
+    from nautical_core import queue_store
+    import threading
+
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "rollback.db"
+        _seed_sqlite_queue(
+            db_path,
+            {
+                "spawn_intent_id": "si_rollback",
+                "child": {"uuid": "33333333-3333-3333-3333-333333333333"},
+            },
+        )
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute("CREATE INDEX idx_queue_entries_state_id ON queue_entries(payload)")
+            conn.commit()
+            try:
+                queue_store.init_queue_db(conn)
+                raise AssertionError("conflicting index should fail migration")
+            except queue_store.QueueSchemaError:
+                pass
+            expect(conn.execute("PRAGMA user_version").fetchone()[0] == 0, "failed migration recorded v1")
+            indexes = {row[1] for row in conn.execute("PRAGMA index_list(queue_entries)")}
+            expect(
+                indexes == {"idx_queue_entries_state_id"},
+                f"failed migration did not roll back its new indexes: {indexes!r}",
+            )
+            expect(conn.execute("SELECT COUNT(*) FROM queue_entries").fetchone()[0] == 1, "rollback lost queue rows")
+
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "concurrent.db"
+        barrier = threading.Barrier(4)
+        errors = []
+
+        def _open_and_initialize():
+            try:
+                with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+                    conn.execute("PRAGMA busy_timeout=5000")
+                    barrier.wait(timeout=5.0)
+                    queue_store.init_queue_db(conn)
+            except Exception as exc:
+                errors.append(str(exc))
+
+        threads = [threading.Thread(target=_open_and_initialize) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=8.0)
+        expect(not any(thread.is_alive() for thread in threads), "concurrent schema initialization hung")
+        expect(not errors, f"concurrent schema initialization failed: {errors!r}")
+        with sqlite3.connect(str(db_path)) as conn:
+            status = queue_store.queue_schema_status(conn)
+            expect(status.get("status") == "ok", f"concurrent adoption did not converge: {status!r}")
+
+
+def test_queue_status_and_doctor_report_schema_health():
+    """Operator diagnostics should distinguish healthy, legacy, and incompatible schemas."""
+    from nautical_core import queue_store
+
+    status_path = os.path.join(CORE_TOOLS, "nautical_queue_status.py")
+    doctor = _load_hook_module(
+        os.path.join(CORE_TOOLS, "nautical_doctor.py"),
+        "_nautical_doctor_queue_schema_test",
+    )
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td)
+        db_path = taskdata / ".nautical-state/.nautical_queue.db"
+        db_path.parent.mkdir()
+        with sqlite3.connect(str(db_path)) as conn:
+            queue_store.init_queue_db(conn)
+
+        proc = subprocess.run(
+            [sys.executable, status_path, "--taskdata", td, "--json"],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(proc.returncode == 0, f"healthy schema status failed: {proc.stderr!r}")
+        payload = json.loads(proc.stdout)
+        schema = (payload.get("queue") or {}).get("schema") or {}
+        expect(schema.get("status") == "ok", f"healthy schema was not reported: {payload!r}")
+        expect((payload.get("queue") or {}).get("integrity") == "ok", f"integrity was not checked: {payload!r}")
+
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(f"PRAGMA user_version = {queue_store.QUEUE_DB_SCHEMA_VERSION + 1}")
+        proc = subprocess.run(
+            [sys.executable, status_path, "--taskdata", td, "--json"],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(proc.returncode == 2, f"future schema should be an operator error: {proc.stdout!r}")
+        payload = json.loads(proc.stdout)
+        expect(payload.get("status") == "error", f"future schema status was not error: {payload!r}")
+
+        findings = []
+        doctor._check_queue(findings, taskdata, 300.0)
+        schema_finding = next(item for item in findings if item.get("id") == "queue.schema")
+        expect(schema_finding.get("severity") == "error", f"Doctor missed future schema: {findings!r}")
+
+
 def test_queue_status_json_ok_empty_taskdata():
     """queue status should report ok for empty taskdata."""
     path = os.path.join(DEV_TOOLS, "nautical_queue_status.py")
@@ -4775,8 +4985,10 @@ def test_perf_budget_config_covers_cache_io_checks():
     expect(isinstance(workload, dict), "workload must be present")
     expect("cache_save" in budgets, "cache_save budget missing")
     expect("cache_load_hot" in budgets, "cache_load_hot budget missing")
+    expect("queue_schema_hot" in budgets, "queue_schema_hot budget missing")
     expect("cache_save_rounds" in workload, "cache_save_rounds missing from workload")
     expect("cache_load_rounds" in workload, "cache_load_rounds missing from workload")
+    expect("queue_schema_hot_rounds" in workload, "queue_schema_hot_rounds missing from workload")
     expressions = set(workload.get("expressions") or [])
     expect("y:d60,d-1" in expressions, "year-day latency workload missing")
     expect("y:w20 + w:mon" in expressions, "ISO-week latency workload missing")
@@ -22013,6 +22225,10 @@ TESTS = [
     test_health_check_json_ok_empty_taskdata,
     test_health_check_critical_queue_bytes,
     test_health_check_critical_queue_db_rows,
+    test_queue_schema_initializes_and_adopts_legacy_rows,
+    test_queue_schema_rejects_incompatible_databases_without_quarantine,
+    test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,
+    test_queue_status_and_doctor_report_schema_health,
     test_queue_status_json_ok_empty_taskdata,
     test_operator_queue_status_json_ok_empty_taskdata,
     test_queue_status_warns_on_stale_processing_and_dead_letters,

@@ -8,9 +8,18 @@ import argparse
 import json
 import os
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import Any, cast
+
+
+TOOLS_DIR = Path(__file__).resolve().parent
+ROOT = TOOLS_DIR.parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from nautical_core import queue_store  # noqa: E402
 
 
 def _prefer_path(primary: Path, legacy: Path) -> Path:
@@ -86,6 +95,15 @@ def _safe_sqlite_summary(path: Path, stale_after: float, limit: int) -> tuple[di
         "max_attempts": 0,
         "oldest_claimed_age_s": 0,
         "sample": [],
+        "schema": {
+            "status": "absent",
+            "version": 0,
+            "expected_version": queue_store.QUEUE_DB_SCHEMA_VERSION,
+            "compatible": True,
+            "table_present": False,
+            "error": "",
+        },
+        "integrity": "not_checked",
     }
     issues: list[str] = []
     try:
@@ -101,6 +119,25 @@ def _safe_sqlite_summary(path: Path, stale_after: float, limit: int) -> tuple[di
     now = time.time()
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.5)
+        integrity_row = conn.execute("PRAGMA quick_check").fetchone()
+        integrity = str(integrity_row[0] if integrity_row else "unknown")
+        summary["integrity"] = integrity
+        if integrity.lower() != "ok":
+            issues.append(f"queue db integrity check failed: {integrity}")
+
+        schema = queue_store.queue_schema_status(conn)
+        summary["schema"] = schema
+        schema_status = str(schema.get("status") or "error")
+        if schema_status == "error":
+            issues.append(f"queue db schema error: {schema.get('error') or 'incompatible schema'}")
+            return summary, issues
+        if schema_status == "legacy":
+            issues.append(
+                f"queue db schema migration pending: v0 to v{queue_store.QUEUE_DB_SCHEMA_VERSION}"
+            )
+            if not schema.get("table_present"):
+                return summary, issues
+
         row = conn.execute(
             """
             SELECT
@@ -229,7 +266,10 @@ def _status_payload(taskdata: Path, *, stale_after: float, limit: int) -> dict[s
     if locks["queue_lock_failure_marker"]:
         issues.append("queue lock failure marker present")
 
-    status = "warn" if issues else "ok"
+    schema = queue.get("schema") if isinstance(queue.get("schema"), dict) else {}
+    schema_error = schema.get("status") == "error"
+    integrity_error = str(queue.get("integrity") or "").lower() not in {"ok", "not_checked"}
+    status = "error" if schema_error or integrity_error else ("warn" if issues else "ok")
     return {
         "status": status,
         "taskdata": str(taskdata),
@@ -272,6 +312,14 @@ def main() -> int:
             f" stale_processing={queue.get('stale_processing', 0)}"
             f" max_attempts={queue.get('max_attempts', 0)}"
         )
+        schema = cast(dict[str, Any], queue.get("schema") or {})
+        print(
+            "schema:"
+            f" status={schema.get('status', 'unknown')}"
+            f" version={schema.get('version', '?')}"
+            f" expected={schema.get('expected_version', '?')}"
+            f" integrity={queue.get('integrity', 'unknown')}"
+        )
         files = cast(dict[str, dict[str, Any]], payload["files"])
         print(
             "files:"
@@ -301,6 +349,8 @@ def main() -> int:
                     f"claimed_age_s={row.get('claimed_age_s')}"
                 )
 
+    if payload["status"] == "error":
+        return 2
     return 1 if payload["status"] == "warn" else 0
 
 

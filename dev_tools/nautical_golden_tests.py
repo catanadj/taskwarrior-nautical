@@ -17775,18 +17775,32 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         def _spawn_child(_child, _parent):
             return "22222222", set()
 
-    original = (tool._load_on_modify, tool._export, tool._run_task)
+    original = (
+        tool._load_on_modify,
+        tool._export,
+        tool._run_task,
+        tool._parent_apply_lock,
+        tool._task_data_dir,
+    )
     try:
         tool._load_on_modify = lambda _path=None: FakeHook()
 
         def fake_export(_task_bin, filters, **_kwargs):
             exported_filters.append(tuple(filters))
+            if any(str(value).startswith("uuid:") for value in filters):
+                return [parent]
             if "status:deleted" in filters and "chain:on" in filters:
                 return [parent]
             return []
 
+        @contextlib.contextmanager
+        def parent_lock(_taskdata, _parent_uuid):
+            yield True
+
         calls = []
         tool._export = fake_export
+        tool._parent_apply_lock = parent_lock
+        tool._task_data_dir = lambda _task_bin: Path("/tmp/nautical-reconcile-expiration-test")
         tool._run_task = lambda task_bin, args, **_kwargs: calls.append((task_bin, args)) or SimpleNamespace(
             returncode=0,
             stdout="",
@@ -17801,7 +17815,156 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         expect(any("status:deleted" in filters for filters in exported_filters), f"deleted links were not queried: {exported_filters}")
         expect(any(args[-1] == "nextLink:22222222" for _bin, args in calls), f"parent nextLink not applied: {calls!r}")
     finally:
-        tool._load_on_modify, tool._export, tool._run_task = original
+        (
+            tool._load_on_modify,
+            tool._export,
+            tool._run_task,
+            tool._parent_apply_lock,
+            tool._task_data_dir,
+        ) = original
+
+
+def test_reconcile_apply_refreshes_parent_under_lock():
+    """Two applies from one stale candidate snapshot must import at most one child."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_atomic_apply_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "description": "atomic reconcile",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "atomic01",
+        "link": 1,
+        "due": "20260720T090000Z",
+    }
+    world = {"parent": dict(parent), "children": [], "imports": 0, "updates": 0, "locks": 0}
+
+    class FakeCore:
+        @staticmethod
+        def coerce_int(value, default=0):
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+    class FakeHook:
+        core = FakeCore()
+
+        @staticmethod
+        def _safe_parse_datetime(_value):
+            return None, None
+
+        @staticmethod
+        def _compute_cp_child_due(_parent):
+            return "20260727T090000Z", {"target_field": "due"}
+
+        @staticmethod
+        def _build_child_from_parent(parent_task, child_due, child_field, next_link, parent_short, _kind, _cpmax, _until_dt):
+            return {
+                "description": parent_task.get("description"),
+                child_field: child_due,
+                "chainID": parent_task.get("chainID"),
+                "link": next_link,
+                "prevLink": parent_short,
+            }
+
+        @staticmethod
+        def _spawn_child(child, _parent):
+            world["imports"] += 1
+            child_uuid = "22222222-0000-0000-0000-000000000002"
+            world["children"].append({**child, "uuid": child_uuid, "status": "pending"})
+            return child_uuid[:8], set()
+
+    @contextlib.contextmanager
+    def parent_lock(_taskdata, parent_uuid):
+        expect(parent_uuid == parent["uuid"], f"wrong parent lock identity: {parent_uuid}")
+        world["locks"] += 1
+        yield True
+
+    saved = {
+        "lock": getattr(tool, "_parent_apply_lock", None),
+        "fresh_parent": getattr(tool, "_fresh_parent", None),
+        "existing": tool._existing_children,
+        "modify": tool._modify_parent_nextlink,
+    }
+    try:
+        tool._parent_apply_lock = parent_lock
+        tool._fresh_parent = lambda _task_bin, _parent: dict(world["parent"])
+        tool._existing_children = lambda _task_bin, _parent: list(world["children"])
+
+        def modify_parent(_task_bin, _parent, child_short):
+            world["updates"] += 1
+            world["parent"]["nextLink"] = child_short
+
+        tool._modify_parent_nextlink = modify_parent
+        first, first_applied = tool._apply_parent_atomic(
+            "task",
+            FakeHook(),
+            parent,
+            taskdata=Path("/tmp/nautical-reconcile-atomic-test"),
+        )
+        second, second_applied = tool._apply_parent_atomic(
+            "task",
+            FakeHook(),
+            parent,
+            taskdata=Path("/tmp/nautical-reconcile-atomic-test"),
+        )
+
+        expect(first.action == "spawn" and first_applied == "22222222", f"first apply did not spawn: {first}")
+        expect(second.action == "stale" and not second_applied, f"stale second apply was not skipped: {second}")
+        expect(world["imports"] == 1, f"stale apply imported duplicate children: {world}")
+        expect(world["updates"] == 1, f"stale apply rewrote the parent: {world}")
+        expect(world["locks"] == 2, f"each apply should refresh under the parent lock: {world}")
+    finally:
+        if saved["lock"] is None:
+            tool.__dict__.pop("_parent_apply_lock", None)
+        else:
+            tool._parent_apply_lock = saved["lock"]
+        if saved["fresh_parent"] is None:
+            tool.__dict__.pop("_fresh_parent", None)
+        else:
+            tool._fresh_parent = saved["fresh_parent"]
+        tool._existing_children = saved["existing"]
+        tool._modify_parent_nextlink = saved["modify"]
+
+
+def test_reconcile_parent_updates_are_guarded():
+    """Reconcile writes should compare the parent state that authorized the plan."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_guarded_update_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "deleted",
+        "chain": "on",
+        "chainID": "atomic01",
+        "link": 7,
+        "nextLink": "",
+    }
+    calls = []
+    original = tool._run_task
+    try:
+        tool._run_task = lambda task_bin, args, **_kwargs: calls.append((task_bin, args)) or SimpleNamespace(
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        tool._modify_parent_nextlink("task", parent, "22222222")
+    finally:
+        tool._run_task = original
+
+    expect(len(calls) == 1, f"unexpected parent update calls: {calls}")
+    args = calls[0][1]
+    for expected in (
+        f"uuid:{parent['uuid']}",
+        "status:deleted",
+        "chain:on",
+        "chainID:atomic01",
+        "link:7",
+        "nextLink:",
+    ):
+        expect(expected in args[: args.index("modify")], f"missing guarded filter {expected!r}: {args}")
+    expect(args[-1] == "nextLink:22222222", f"wrong parent update: {args}")
 
 
 def test_reconcile_expiration_real_taskwarrior_round_trip():
@@ -18132,11 +18295,27 @@ def test_reconcile_tool_apply_disables_legitimate_final_chain():
             return None, None
 
     calls = []
-    original = (mod._load_on_modify, mod._candidate_rows, mod._existing_children, mod._run_task)
+    original = (
+        mod._load_on_modify,
+        mod._candidate_rows,
+        mod._existing_children,
+        mod._run_task,
+        mod._fresh_parent,
+        mod._parent_apply_lock,
+        mod._task_data_dir,
+    )
     try:
         mod._load_on_modify = lambda _path=None: FakeHook()
         mod._candidate_rows = lambda _task_bin, _hook: [parent] if parent["chain"] == "on" else []
         mod._existing_children = lambda _task_bin, _parent: []
+        mod._fresh_parent = lambda _task_bin, _parent: dict(parent)
+        mod._task_data_dir = lambda _task_bin: Path("/tmp/nautical-reconcile-final-test")
+
+        @contextlib.contextmanager
+        def parent_lock(_taskdata, _parent_uuid):
+            yield True
+
+        mod._parent_apply_lock = parent_lock
 
         def fake_run_task(task_bin, args, **_kwargs):
             calls.append((task_bin, args))
@@ -18157,7 +18336,15 @@ def test_reconcile_tool_apply_disables_legitimate_final_chain():
         second = json.loads(second_out.getvalue())
         expect(second.get("candidates") == 0, f"disabled final task should not be reconsidered: {second!r}")
     finally:
-        mod._load_on_modify, mod._candidate_rows, mod._existing_children, mod._run_task = original
+        (
+            mod._load_on_modify,
+            mod._candidate_rows,
+            mod._existing_children,
+            mod._run_task,
+            mod._fresh_parent,
+            mod._parent_apply_lock,
+            mod._task_data_dir,
+        ) = original
 
 
 def test_chain_repair_plans_only_safe_adjacent_link_updates():
@@ -20235,6 +20422,8 @@ TESTS = [
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
     test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,
     test_reconcile_tool_exports_and_applies_expired_candidates,
+    test_reconcile_apply_refreshes_parent_under_lock,
+    test_reconcile_parent_updates_are_guarded,
     test_reconcile_expiration_real_taskwarrior_round_trip,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_evidence_includes_local_child_time_when_formatter_available,

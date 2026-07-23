@@ -1217,6 +1217,9 @@ def _lock_intent_log():
 
 
 def _parent_nextlink_lock_path(parent_uuid: str) -> Path:
+    queue_store = _module("queue_store", required=False)
+    if queue_store is not None:
+        return queue_store.parent_nextlink_lock_path(_tw_data_dir_path(), parent_uuid)
     raw = (parent_uuid or "").strip().lower()
     safe = "".join(ch for ch in raw if ch.isalnum())
     if not safe:

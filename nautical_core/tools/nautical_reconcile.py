@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import importlib.machinery
 import importlib.util
 import json
@@ -20,7 +21,12 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
-from nautical_core import reconcile  # noqa: E402
+from nautical_core import queue_store, reconcile, safe_lock  # noqa: E402
+
+
+_PARENT_LOCK_RETRIES = 600
+_PARENT_LOCK_SLEEP_SECONDS = 0.1
+_PARENT_LOCK_STALE_SECONDS = 300.0
 
 
 def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
@@ -132,13 +138,83 @@ def _existing_children(task_bin: str, parent: dict[str, Any]) -> list[dict[str, 
     return rows
 
 
-def _modify_parent_nextlink(task_bin: str, parent: dict[str, Any], child_short: str) -> None:
+def _task_data_dir(task_bin: str) -> Path:
+    raw = str(os.environ.get("TASKDATA") or "").strip()
+    if not raw:
+        proc = _run_task(
+            task_bin,
+            ["rc.hooks=off", "rc.verbose=nothing", "_get", "rc.data.location"],
+            timeout=10.0,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "Taskwarrior data location lookup failed").strip())
+        raw = str(proc.stdout or "").strip()
+    if not raw:
+        raise RuntimeError("Taskwarrior data location is empty")
+    return Path(os.path.expandvars(raw)).expanduser().resolve()
+
+
+@contextmanager
+def _parent_apply_lock(taskdata: Path, parent_uuid: str):
+    lock_path = queue_store.parent_nextlink_lock_path(taskdata, parent_uuid)
+    with safe_lock(
+        lock_path,
+        retries=_PARENT_LOCK_RETRIES,
+        sleep_base=_PARENT_LOCK_SLEEP_SECONDS,
+        stale_after=_PARENT_LOCK_STALE_SECONDS,
+    ) as acquired:
+        yield acquired
+
+
+def _fresh_parent(task_bin: str, parent: dict[str, Any]) -> dict[str, Any] | None:
     parent_uuid = str(parent.get("uuid") or "").strip()
     if not parent_uuid:
         raise RuntimeError("parent task has no UUID")
+    rows = _export(task_bin, [f"uuid:{parent_uuid}"], timeout=30.0)
+    wanted = parent_uuid.lower()
+    for row in rows:
+        if str(row.get("uuid") or "").strip().lower() == wanted:
+            return row
+    return None
+
+
+def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
+    parent_uuid = str(parent.get("uuid") or "").strip()
+    status = str(parent.get("status") or "").strip().lower()
+    chain_id = str(parent.get("chainID") or "").strip()
+    link = reconcile.int_or_default(parent.get("link"), 0)
+    if not parent_uuid:
+        raise RuntimeError("parent task has no UUID")
+    if status not in {"completed", "deleted"}:
+        raise RuntimeError("parent status is no longer reconcilable")
+    if str(parent.get("chain") or "").strip().lower() != "on":
+        raise RuntimeError("parent chain is no longer active")
+    if not chain_id or link <= 0:
+        raise RuntimeError("parent chain identity is incomplete")
+    if str(parent.get("nextLink") or "").strip():
+        raise RuntimeError("parent nextLink is already set")
+    return [
+        f"uuid:{parent_uuid}",
+        f"status:{status}",
+        "chain:on",
+        f"chainID:{chain_id}",
+        f"link:{link}",
+        "nextLink:",
+    ]
+
+
+def _modify_parent_nextlink(task_bin: str, parent: dict[str, Any], child_short: str) -> None:
+    filters = _parent_guard_filters(parent)
     proc = _run_task(
         task_bin,
-        ["rc.hooks=off", "rc.confirmation=off", "rc.verbose=nothing", f"uuid:{parent_uuid}", "modify", f"nextLink:{child_short}"],
+        [
+            "rc.hooks=off",
+            "rc.confirmation=off",
+            "rc.verbose=nothing",
+            *filters,
+            "modify",
+            f"nextLink:{child_short}",
+        ],
         timeout=30.0,
     )
     if proc.returncode != 0:
@@ -146,24 +222,87 @@ def _modify_parent_nextlink(task_bin: str, parent: dict[str, Any], child_short: 
 
 
 def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
-    parent_uuid = str(parent.get("uuid") or "").strip()
-    if not parent_uuid:
-        raise RuntimeError("parent task has no UUID")
+    filters = _parent_guard_filters(parent)
     proc = _run_task(
         task_bin,
-        ["rc.hooks=off", "rc.confirmation=off", "rc.verbose=nothing", f"uuid:{parent_uuid}", "modify", "chain:off"],
+        [
+            "rc.hooks=off",
+            "rc.confirmation=off",
+            "rc.verbose=nothing",
+            *filters,
+            "modify",
+            "chain:off",
+        ],
         timeout=30.0,
     )
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout or "parent chain update failed").strip())
 
 
-def _apply_spawn(task_bin: str, hook: Any, plan: reconcile.ReconcilePlan) -> str:
-    if not plan.child:
-        raise RuntimeError("spawn plan has no child payload")
-    child_short, _stripped = hook._spawn_child(plan.child, plan.parent)
-    _modify_parent_nextlink(task_bin, plan.parent, child_short)
-    return child_short
+def _stale_plan(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
+    return reconcile.ReconcilePlan(
+        "stale",
+        parent,
+        reconcile.int_or_default(parent.get("link"), 1) + 1,
+        reason,
+    )
+
+
+def _refresh_plan(task_bin: str, hook: Any, original_parent: dict[str, Any]) -> reconcile.ReconcilePlan:
+    parent = _fresh_parent(task_bin, original_parent)
+    if parent is None:
+        return _stale_plan(original_parent, "parent no longer exists")
+    status = str(parent.get("status") or "").strip().lower()
+    if status == "completed":
+        candidate = reconcile.is_orphan_completion_candidate(parent)
+    elif status == "deleted":
+        candidate = reconcile.is_orphan_expiration_candidate(
+            parent,
+            safe_parse_datetime=hook._safe_parse_datetime,
+        )
+    else:
+        candidate = False
+    if not candidate:
+        reason = (
+            "parent nextLink already set"
+            if str(parent.get("nextLink") or "").strip()
+            else "parent no longer needs reconciliation"
+        )
+        return _stale_plan(parent, reason)
+    return reconcile.build_reconcile_plan(
+        parent,
+        existing_children=_existing_children(task_bin, parent),
+        hook=hook,
+    )
+
+
+def _apply_parent_atomic(
+    task_bin: str,
+    hook: Any,
+    original_parent: dict[str, Any],
+    *,
+    taskdata: Path,
+) -> tuple[reconcile.ReconcilePlan, str]:
+    parent_uuid = str(original_parent.get("uuid") or "").strip()
+    if not parent_uuid:
+        raise RuntimeError("parent task has no UUID")
+    with _parent_apply_lock(taskdata, parent_uuid) as acquired:
+        if not acquired:
+            raise RuntimeError(f"parent reconcile lock busy: {reconcile.short_uuid(parent_uuid)}")
+        plan = _refresh_plan(task_bin, hook, original_parent)
+        if plan.action == "spawn":
+            if not plan.child:
+                raise RuntimeError("spawn plan has no child payload")
+            child_short, _stripped = hook._spawn_child(plan.child, plan.parent)
+            _modify_parent_nextlink(task_bin, plan.parent, child_short)
+            return plan, child_short
+        if plan.action == "backfill_nextlink":
+            _modify_parent_nextlink(task_bin, plan.parent, plan.child_short)
+            return plan, plan.child_short
+        if plan.action == "legitimate_final":
+            _disable_parent_chain(task_bin, plan.parent)
+            return plan, "off"
+        return plan, ""
 
 
 def _fmt_parent(parent: dict[str, Any]) -> str:
@@ -240,6 +379,8 @@ def _print_plan(
         suffix = " -> set chain:off" if applied_short else ""
         print(f"final: {parent} ({plan.reason}){suffix}")
         _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
+    elif plan.action == "stale":
+        print(f"skip: {parent} ({plan.reason})")
     else:
         print(f"error: {parent} ({plan.reason})")
         _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
@@ -257,36 +398,42 @@ def main(argv: list[str] | None = None) -> int:
     _bind_hook_task_bin(hook, args.task_bin)
     fmt_dt_local = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
     candidates = _candidate_rows(args.task_bin, hook)
+    taskdata = _task_data_dir(args.task_bin) if args.apply else None
     plans: list[reconcile.ReconcilePlan] = []
     plan_evidence: list[dict[str, Any]] = []
     applied: list[dict[str, Any]] = []
 
     for parent in candidates:
-        plan = reconcile.build_reconcile_plan(
-            parent,
-            existing_children=_existing_children(args.task_bin, parent),
-            hook=hook,
-        )
+        applied_short = ""
+        if args.apply:
+            if taskdata is None:
+                raise RuntimeError("Taskwarrior data location is unavailable")
+            plan, applied_short = _apply_parent_atomic(
+                args.task_bin,
+                hook,
+                parent,
+                taskdata=taskdata,
+            )
+        else:
+            plan = reconcile.build_reconcile_plan(
+                parent,
+                existing_children=_existing_children(args.task_bin, parent),
+                hook=hook,
+            )
         plans.append(plan)
         evidence = _describe_plan(plan, hook=hook, fmt_dt_local=fmt_dt_local)
         plan_evidence.append(evidence)
-        if args.apply and plan.action == "spawn":
-            child_short = _apply_spawn(args.task_bin, hook, plan)
-            applied.append({"action": "spawn", "parent": reconcile.short_uuid(parent.get("uuid")), "child": child_short})
-            if not args.json:
-                _print_plan(plan, evidence, applied_short=child_short)
-        elif args.apply and plan.action == "backfill_nextlink":
-            _modify_parent_nextlink(args.task_bin, parent, plan.child_short)
-            applied.append({"action": "backfill_nextlink", "parent": reconcile.short_uuid(parent.get("uuid")), "child": plan.child_short})
-            if not args.json:
-                _print_plan(plan, evidence, applied_short=plan.child_short)
-        elif args.apply and plan.action == "legitimate_final":
-            _disable_parent_chain(args.task_bin, parent)
-            applied.append({"action": "disable_chain", "parent": reconcile.short_uuid(parent.get("uuid"))})
-            if not args.json:
-                _print_plan(plan, evidence, applied_short="off")
-        elif not args.json:
-            _print_plan(plan, evidence)
+        if args.apply and applied_short:
+            action = "disable_chain" if plan.action == "legitimate_final" else plan.action
+            record = {
+                "action": action,
+                "parent": reconcile.short_uuid(plan.parent.get("uuid")),
+            }
+            if plan.action != "legitimate_final":
+                record["child"] = applied_short
+            applied.append(record)
+        if not args.json:
+            _print_plan(plan, evidence, applied_short=applied_short)
 
     summary = {
         "mode": "apply" if args.apply else "dry-run",
@@ -294,6 +441,7 @@ def main(argv: list[str] | None = None) -> int:
         "spawn": sum(1 for p in plans if p.action == "spawn"),
         "backfill_nextlink": sum(1 for p in plans if p.action == "backfill_nextlink"),
         "legitimate_final": sum(1 for p in plans if p.action == "legitimate_final"),
+        "stale": sum(1 for p in plans if p.action == "stale"),
         "errors": sum(1 for p in plans if p.action == "error"),
         "plans": [
             {
@@ -311,7 +459,7 @@ def main(argv: list[str] | None = None) -> int:
             "summary: "
             f"{summary['mode']}; candidates={summary['candidates']} "
             f"spawn={summary['spawn']} backfill={summary['backfill_nextlink']} "
-            f"final={summary['legitimate_final']} errors={summary['errors']}"
+            f"final={summary['legitimate_final']} stale={summary['stale']} errors={summary['errors']}"
         )
     return 1 if summary["errors"] else 0
 

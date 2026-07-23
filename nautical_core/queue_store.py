@@ -25,6 +25,12 @@ def nautical_lock_dir_path(tw_data_dir: Path) -> Path:
     return tw_data_dir / ".nautical-locks"
 
 
+def parent_nextlink_lock_path(tw_data_dir: Path, parent_uuid: str) -> Path:
+    raw = str(parent_uuid or "").strip().lower()
+    safe = "".join(ch for ch in raw if ch.isalnum())[:64] or "unknown"
+    return nautical_lock_dir_path(tw_data_dir) / f".nautical_parent_nextlink.{safe}.lock"
+
+
 def legacy_state_path(tw_data_dir: Path, name: str) -> Path:
     return tw_data_dir / name
 
@@ -649,5 +655,4 @@ def enqueue_entries_sqlite_result(
         if callable(diag):
             diag(f"queue db enqueue failed: {exc}")
         return QueueWriteResult(ok=False, count=len(items), err=str(exc))
-
 

@@ -22381,6 +22381,63 @@ def test_seasonal_selection_scheduler_post_modifiers():
     expect(next_year == date(2027, 6, 7), f"shifted season did not advance a year: {next_year}")
 
 
+def test_seasonal_selection_boundary_and_overflow_contract():
+    """Season selectors should include exact edges and fail clearly at date limits."""
+    from nautical_core import position_selection, season_support
+
+    seed = date(2026, 1, 1)
+    edge_cases = (
+        ("(y:03-01)@in-spring=first", date(2026, 3, 1)),
+        ("(y:05-31)@in-spring=first", date(2026, 5, 31)),
+        ("(y:06-01)@in-summer=first", date(2026, 6, 1)),
+        ("(y:08-31)@in-summer=first", date(2026, 8, 31)),
+        ("(y:09-01)@in-autumn=first", date(2026, 9, 1)),
+        ("(y:11-30)@in-autumn=first", date(2026, 11, 30)),
+        ("(y:12-01)@in-winter=first", date(2026, 12, 1)),
+        ("(y:02-28)@in-winter=first", date(2026, 2, 28)),
+    )
+    for expression, expected in edge_cases:
+        actual, _meta = core.next_after_expr(
+            core.validate_anchor_expr_strict(expression),
+            date(2026, 1, 1),
+            default_seed=seed,
+        )
+        expect(actual == expected, f"season edge was excluded for {expression}: {actual}")
+
+    crossing_cases = (
+        ("(y:05-31)@in-spring=first@+1d", date(2026, 6, 1)),
+        ("(y:03-01)@in-spring=first@-1d", date(2026, 2, 28)),
+        ("(y:12-01)@in-winter=first@-1d", date(2026, 11, 30)),
+    )
+    for expression, expected in crossing_cases:
+        actual, _meta = core.next_after_expr(
+            core.validate_anchor_expr_strict(expression),
+            date(2026, 1, 1),
+            default_seed=seed,
+        )
+        expect(actual == expected, f"season boundary modifier drifted for {expression}: {actual}")
+
+    expect(
+        season_support.season_bounds("spring", 9999)
+        == (date(9999, 3, 1), date(9999, 5, 31)),
+        "last representable spring window changed unexpectedly",
+    )
+    try:
+        season_support.season_window_on_or_after("spring", date(9999, 6, 1))
+    except OverflowError:
+        pass
+    except Exception as exc:
+        raise AssertionError(f"unexpected season overflow type: {exc!r}")
+    else:
+        raise AssertionError("season lookup beyond year 9999 should overflow")
+    try:
+        position_selection.next_period_start("spring", date(9999, 4, 1))
+    except ValueError as exc:
+        expect("between 1 and 9999" in str(exc), f"unclear period overflow: {exc}")
+    else:
+        raise AssertionError("season next-period lookup beyond year 9999 should fail")
+
+
 def test_seasonal_selection_natural_language_and_advice():
     """Seasonal rules should read naturally and disclose their fixed boundaries."""
     from nautical_core import position_selection
@@ -22915,6 +22972,7 @@ TESTS = [
     test_seasonal_selection_acf_round_trip,
     test_seasonal_selection_scheduler_windows_and_rollover,
     test_seasonal_selection_scheduler_post_modifiers,
+    test_seasonal_selection_boundary_and_overflow_contract,
     test_seasonal_selection_natural_language_and_advice,
     test_seasonal_selection_semantic_guard,
     test_on_add_seasonal_selection_feedback,

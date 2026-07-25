@@ -6,6 +6,11 @@ from typing import Any
 CONFIG_SPECS: dict[str, dict[str, Any]] = {
     "wrand_salt": {"type": "string", "default": "nautical|wrand|v4"},
     "tz": {"type": "string", "default": "Europe/Bucharest"},
+    "season_hemisphere": {
+        "type": "choice",
+        "default": "north",
+        "choices": {"north": "north", "south": "south"},
+    },
     "anchor_file_dir": {"type": "string", "default": ""},
     "omit_file_dir": {"type": "string", "default": ""},
     "enable_anchor_cache": {"type": "bool", "default": False},

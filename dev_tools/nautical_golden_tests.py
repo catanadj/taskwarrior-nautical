@@ -22234,6 +22234,47 @@ def test_fixed_season_calendar_rejects_invalid_contract_values():
         pass
 
 
+def test_fixed_season_calendar_supports_southern_hemisphere_profile():
+    """Southern fixed seasons should remap names and retain cross-year semantics."""
+    from nautical_core import position_selection, season_support
+
+    previous = season_support.active_hemisphere()
+    try:
+        expect(season_support.configure_hemisphere("south") == "south", "south profile was not selected")
+        expect(
+            season_support.season_bounds("spring", 2026)
+            == (date(2026, 9, 1), date(2026, 11, 30)),
+            "southern spring boundaries are incorrect",
+        )
+        expect(
+            season_support.season_bounds("summer", 2026)
+            == (date(2026, 12, 1), date(2027, 2, 28)),
+            "southern summer should cross the calendar year",
+        )
+        expect(
+            season_support.fixed_season_boundary_description("winter") == "June 1 through August 31",
+            "southern winter description is incorrect",
+        )
+        expect(
+            position_selection.period_bounds("summer", date(2027, 1, 15))
+            == (date(2026, 12, 1), date(2027, 2, 28)),
+            "southern summer period lookup is incorrect",
+        )
+        actual, _meta = core.next_after_expr(
+            core.validate_anchor_expr_strict("(y:12-01)@in-summer=first"),
+            date(2026, 7, 1),
+            default_seed=date(2026, 1, 1),
+        )
+        expect(actual == date(2026, 12, 1), f"southern summer selector drifted: {actual}")
+        try:
+            season_support.configure_hemisphere("equatorial")
+            raise AssertionError("invalid hemisphere should fail")
+        except ValueError as exc:
+            expect("north, south" in str(exc), f"unclear hemisphere error: {exc}")
+    finally:
+        season_support.configure_hemisphere(previous)
+
+
 def test_seasonal_selection_parser_contract():
     """Seasonal selectors should parse into bounded normalized nodes."""
     from nautical_core import position_selection
@@ -22968,6 +23009,7 @@ TESTS = [
     test_fixed_season_calendar_boundaries,
     test_fixed_season_calendar_finds_active_or_next_window,
     test_fixed_season_calendar_rejects_invalid_contract_values,
+    test_fixed_season_calendar_supports_southern_hemisphere_profile,
     test_seasonal_selection_parser_contract,
     test_seasonal_selection_acf_round_trip,
     test_seasonal_selection_scheduler_windows_and_rollover,

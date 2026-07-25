@@ -1,6 +1,7 @@
 # Nautical config
 wrand_salt      = "nautical|wrand|v4"
 tz              = "Australia/Sydney"
+season_hemisphere = "south"          # fixed seasons: north or south
 anchor_file_dir = ""                 # trusted directory for anchor_file basenames
 omit_file_dir   = ""                 # trusted directory for anchor omit_file basenames
 

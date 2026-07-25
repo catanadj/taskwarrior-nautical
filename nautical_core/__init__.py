@@ -249,6 +249,7 @@ def render_panel(*args, **kwargs):
 ANCHOR_YEAR_FMT = _core_config.ANCHOR_YEAR_FMT
 WRAND_SALT = _core_config.WRAND_SALT
 LOCAL_TZ_NAME = _core_config.LOCAL_TZ_NAME
+SEASON_HEMISPHERE = _core_config.SEASON_HEMISPHERE
 HOLIDAY_REGION = _core_config.HOLIDAY_REGION
 ANCHOR_FILE_DIR = _core_config.ANCHOR_FILE_DIR
 OMIT_FILE_DIR = _core_config.OMIT_FILE_DIR
@@ -302,6 +303,7 @@ _parser_dnf = _import_sibling("parser_dnf")
 _parser_frontend = _import_sibling("parser_frontend")
 _position_selection = _import_sibling("position_selection")
 _season_support = _import_sibling("season_support")
+_season_support.configure_hemisphere(SEASON_HEMISPHERE)
 _precompute = _import_sibling("precompute")
 _quarter_helpers = _import_sibling("quarter_helpers")
 _quarter_rewrite = _import_sibling("quarter_rewrite")
@@ -754,10 +756,11 @@ def _cache_key(
 ) -> str:
     _cache_support = _import_sibling("cache_support")
 
+    profile_fingerprint = f"{business_calendar_fingerprint}|season:{SEASON_HEMISPHERE}"
     return _cache_support.cache_key(
         acf,
         anchor_mode,
-        business_calendar_fingerprint=business_calendar_fingerprint,
+        business_calendar_fingerprint=profile_fingerprint,
         anchor_year_fmt=ANCHOR_YEAR_FMT,
         wrand_salt=WRAND_SALT,
         local_tz_name=LOCAL_TZ_NAME,
@@ -3770,6 +3773,7 @@ __all__ = (
     'DEFAULT_BUSINESS_CALENDAR',
     'ENABLE_ANCHOR_CACHE',
     'LOCAL_TZ_NAME',
+    'SEASON_HEMISPHERE',
     'OMIT_FILE_DIR',
     'MAX_LINK_NUMBER',
     'PANEL_MODE',

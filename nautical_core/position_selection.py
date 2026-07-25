@@ -8,6 +8,7 @@ from typing import Any, Callable, TypedDict
 
 from .season_support import (
     SEASON_NAMES,
+    active_hemisphere,
     fixed_season_boundary_description,
     season_bounds,
     season_window_on_or_after,
@@ -793,6 +794,7 @@ def _matching_candidates_cached(
     default_seed: date,
     seed_base: str | None,
     _calendar_fingerprint: str,
+    _season_hemisphere: str,
     matches_on: Callable[..., bool],
 ) -> tuple[date, ...]:
     expr = json.loads(expr_key)
@@ -829,6 +831,7 @@ def _selected_candidates_in_period(
         default_seed,
         None if seed_base is None else str(seed_base),
         str(calendar_fingerprint or ""),
+        active_hemisphere(),
         matches_on,
     )
     return select_positions(candidates, node["positions"])

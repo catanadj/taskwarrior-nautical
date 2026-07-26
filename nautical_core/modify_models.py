@@ -9,6 +9,12 @@ class CompletionChainSnapshot:
     mode: str
     rows: list[dict[str, Any]]
     loaded: bool
+    chain_id: str = ""
+
+    @property
+    def coverage(self) -> str:
+        """The strongest lookup coverage represented by this snapshot."""
+        return self.mode
 
 
 @dataclass(slots=True)

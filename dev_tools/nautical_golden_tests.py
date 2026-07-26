@@ -21186,6 +21186,42 @@ def test_on_modify_read_query_broker_deduplicates_and_invalidates_exports():
         mod._reset_modify_runtime_state()
 
 
+def test_on_modify_completion_snapshot_reuses_full_chain_read():
+    """A full completion snapshot should satisfy a later unfiltered chain read."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_completion_snapshot_reuse_test")
+    mod._reset_modify_runtime_state()
+    saved_analytics = mod._SHOW_ANALYTICS
+    mod._SHOW_ANALYTICS = True
+    calls = {"count": 0}
+    original_export_snapshot = mod._module("modify_queries").export_completion_chain_snapshot
+    original_run_task = mod._run_task
+    try:
+        rows = [{"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1}]
+
+        def fake_snapshot(*_args, **_kwargs):
+            calls["count"] += 1
+            return True, list(rows)
+
+        def unexpected_run_task(*_args, **_kwargs):
+            raise AssertionError("full chain reuse should not launch another Taskwarrior command")
+
+        queries = mod._module("modify_queries")
+        queries.export_completion_chain_snapshot = fake_snapshot
+        mod._run_task = unexpected_run_task
+        snapshot = mod._completion_chain_snapshot("reuse01", 1, 2)
+        expect(snapshot.loaded and snapshot.coverage == "full", f"unexpected full snapshot: {snapshot!r}")
+        reused = mod._get_chain_export("reuse01")
+        expect(reused == rows, f"full snapshot was not reused: {reused!r}")
+        expect(calls["count"] == 1, f"full snapshot was exported more than once: {calls}")
+    finally:
+        queries = mod._module("modify_queries")
+        queries.export_completion_chain_snapshot = original_export_snapshot
+        mod._run_task = original_run_task
+        mod._SHOW_ANALYTICS = saved_analytics
+        mod._reset_modify_runtime_state()
+
+
 def test_on_modify_cp_completion_spawns_next_link():
     """on-modify should spawn the next CP link on completion."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -23688,6 +23724,7 @@ TESTS = [
     test_chain_repair_command_failure_is_structured,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_read_query_broker_deduplicates_and_invalidates_exports,
+    test_on_modify_completion_snapshot_reuses_full_chain_read,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,
     test_on_add_run_task_timeout,

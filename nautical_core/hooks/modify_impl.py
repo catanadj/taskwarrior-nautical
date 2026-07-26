@@ -2838,6 +2838,15 @@ def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | 
     return _tw_export_chain_cached_key(chain_id, since_key, extra_key, limit)
 
 
+def _chain_read_key(chain_id: str, since: datetime | None, extra: str | None, limit: int) -> tuple:
+    return (
+        str(chain_id or ""),
+        since.isoformat() if isinstance(since, datetime) else "",
+        str(extra or ""),
+        int(limit or 0),
+    )
+
+
 def _cached_chain_token_match(task: dict, token: str) -> bool:
     if not isinstance(task, dict) or not isinstance(token, str) or not token:
         return False
@@ -5457,16 +5466,16 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     args = _tw_export_chain_args(chain_id, since=since, extra=extra, limit=limit)
     if args is None:
         return []
-    read_key = (
-        str(chain_id),
-        since.isoformat() if isinstance(since, datetime) else "",
-        str(extra or ""),
-        int(limit or 0),
-    )
+    read_key = _chain_read_key(chain_id, since, extra, limit or 0)
     if env is None:
         cached_read = _read_query_get("chain", read_key)
         if cached_read is not _READ_QUERY_MISSING:
             return cached_read if isinstance(cached_read, list) else []
+        if not since and not extra and int(limit or 0) > 0:
+            full_read = _read_query_get("chain", _chain_read_key(chain_id, None, None, 0))
+            if full_read is not _READ_QUERY_MISSING:
+                rows = full_read if isinstance(full_read, list) else []
+                return rows[: int(limit)]
 
     start = _time.perf_counter()
     timeout = _chain_export_timeout(chain_id)
@@ -6213,6 +6222,16 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
     links = None if mode == "full" else ([next_no] if mode == "next" else [base_no - 2, base_no - 1, next_no])
     if links is not None:
         links = sorted({link for link in links if link > 0})
+    snapshot_key = (str(chain_id), tuple(links) if links is not None else None)
+    cached_snapshot = _read_query_get("chain_snapshot", snapshot_key)
+    if cached_snapshot is not _READ_QUERY_MISSING:
+        rows = cached_snapshot if isinstance(cached_snapshot, list) else []
+        return modify_models.CompletionChainSnapshot(
+            mode=mode,
+            rows=rows,
+            loaded=True,
+            chain_id=str(chain_id),
+        )
     loaded, rows = modify_queries.export_completion_chain_snapshot(
         chain_id,
         links,
@@ -6222,7 +6241,22 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
         diag=_diag,
         timeout=_chain_export_timeout(chain_id),
     )
-    return modify_models.CompletionChainSnapshot(mode=mode, rows=rows, loaded=loaded)
+    if loaded:
+        _read_query_set("chain_snapshot", snapshot_key, rows)
+        if links is None:
+            # A full snapshot is interchangeable with an unfiltered chain
+            # export. Narrow snapshots deliberately remain separate entries.
+            _read_query_set(
+                "chain",
+                _chain_read_key(chain_id, None, None, 0),
+                rows,
+            )
+    return modify_models.CompletionChainSnapshot(
+        mode=mode,
+        rows=rows,
+        loaded=loaded,
+        chain_id=str(chain_id),
+    )
 
 
 def _completion_preflight_context(new: dict, now_utc: datetime):

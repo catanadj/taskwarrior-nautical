@@ -238,24 +238,48 @@ def cache_load(
         st = os_mod.stat(path)
         if anchor_cache_ttl and (time_mod.time() - st.st_mtime) > anchor_cache_ttl:
             return None
-        stamp = (int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))), int(st.st_size))
+        def _stamp(stat_result):
+            mtime_ns = getattr(stat_result, "st_mtime_ns", None)
+            if mtime_ns is None:
+                mtime_ns = int(stat_result.st_mtime * 1_000_000_000)
+            return (
+                int(getattr(stat_result, "st_dev", 0)),
+                int(getattr(stat_result, "st_ino", 0)),
+                int(mtime_ns),
+                int(stat_result.st_size),
+            )
+
+        stamp = _stamp(st)
         now = time_mod.time()
         if cache_load_mem_ttl > 0 and cache_load_mem:
             expired = [
                 memo_key
-                for memo_key, (_mt, _sz, _obj, loaded_at) in cache_load_mem.items()
+                for memo_key, (_stamp, _obj, loaded_at) in cache_load_mem.items()
                 if (now - loaded_at) > cache_load_mem_ttl
             ]
             for memo_key in expired:
                 cache_load_mem.pop(memo_key, None)
         memo = cache_load_mem.get(key)
-        if memo and memo[0] == stamp[0] and memo[1] == stamp[1]:
-            if cache_load_mem_ttl <= 0 or (now - memo[3]) <= cache_load_mem_ttl:
+        if memo and memo[0] == stamp:
+            if cache_load_mem_ttl <= 0 or (now - memo[2]) <= cache_load_mem_ttl:
                 cache_load_mem.move_to_end(key)
-                return clone_cache_payload(memo[2])
+                return clone_cache_payload(memo[1])
             cache_load_mem.pop(key, None)
-        with open(path, "rb") as fh:
-            blob = fh.read()
+        # Atomic replacement protects each individual read, but a reader can
+        # still stat one generation and open the next. Confirm the stamp after
+        # reading and retry once before treating the cache as unavailable.
+        for attempt in range(2):
+            with open(path, "rb") as fh:
+                blob = fh.read()
+            end_stamp = _stamp(os_mod.stat(path))
+            if end_stamp == stamp:
+                break
+            if attempt:
+                return None
+            st = os_mod.stat(path)
+            if anchor_cache_ttl and (time_mod.time() - st.st_mtime) > anchor_cache_ttl:
+                return None
+            stamp = _stamp(st)
         data = zlib_mod.decompress(base64_mod.b85decode(blob))
         obj = json_mod.loads(data.decode("utf-8"))
         if isinstance(obj, dict) and "dnf" in obj:
@@ -265,7 +289,7 @@ def cache_load(
                 if os_mod.environ.get("NAUTICAL_DIAG") == "1":
                     diag(f"cache_load rejected invalid payload shape for key={key}")
                 return None
-            cache_load_mem[key] = (stamp[0], stamp[1], obj, now)
+            cache_load_mem[key] = (stamp, obj, now)
             cache_load_mem.move_to_end(key)
             if len(cache_load_mem) > cache_load_mem_max:
                 cache_load_mem.popitem(last=False)
@@ -333,6 +357,9 @@ def cache_save(
                     if n == 0:
                         raise OSError("write returned 0")
                     written += n
+                fsync = getattr(os_mod, "fsync", None)
+                if callable(fsync):
+                    fsync(fd)
             finally:
                 try:
                     os_mod.close(fd)

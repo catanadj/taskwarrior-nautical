@@ -216,6 +216,26 @@ def _scenario_duplicate_guard(env: dict[str, str], cp_result: dict) -> dict:
     return {"child": after[0]["uuid"], "count": len(after)}
 
 
+def _scenario_modify(env: dict[str, str]) -> dict:
+    """Exercise the real on-modify hook across separate Taskwarrior processes."""
+    description = "blackbox modify"
+    _task(["add", description, "cp:1d", "due:today"], env)
+    root = _one(env, f"description:{description}", "status:pending")
+    root_uuid = str(root.get("uuid") or "").strip()
+    target = datetime.now(timezone.utc) + timedelta(days=2)
+    target_token = target.strftime("%Y%m%dT090000Z")
+    _task([f"uuid:{root_uuid}", "modify", f"due:{target_token}"], env)
+    updated = _one(env, f"uuid:{root_uuid}")
+    if updated.get("chain") != "on":
+        raise AssertionError("on-modify disabled the chain during a due-date edit")
+    if _parse_tw_datetime(updated.get("due")) != target.replace(hour=9, minute=0, second=0, microsecond=0):
+        raise AssertionError("on-modify did not persist the requested due date")
+    children = _export(env, f"chainID:{updated.get('chainID')}", "link:2", "status.not:deleted")
+    if children:
+        raise AssertionError("editing an uncompleted root unexpectedly spawned a child")
+    return {"root": root_uuid, "due": updated.get("due")}
+
+
 def _assert_clean_state(data_dir: Path) -> None:
     for dead_letter in (
         data_dir / ".nautical-state" / ".nautical_dead_letter.jsonl",
@@ -277,6 +297,7 @@ def main() -> int:
         scenarios["cp"] = _scenario_cp(env)
         scenarios["preset"] = _scenario_anchor_preset(env)
         scenarios["files"] = _scenario_files(env, anchor_dir, omit_dir)
+        scenarios["modify"] = _scenario_modify(env)
         scenarios["duplicate_guard"] = _scenario_duplicate_guard(env, scenarios["cp"])
         _assert_clean_state(data_dir)
         result["ok"] = True

@@ -324,6 +324,8 @@ def _modify_parent_nextlink(task_bin: str, parent: dict[str, Any], child_short: 
 
 def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
     filters = _parent_guard_filters(parent)
+    updates = ["link:1"] if _is_legacy_root_without_link(parent) else []
+    updates.append("chain:off")
     proc = _run_task(
         task_bin,
         [
@@ -332,7 +334,7 @@ def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
             "rc.verbose=nothing",
             *filters,
             "modify",
-            "chain:off",
+            *updates,
         ],
         timeout=30.0,
     )

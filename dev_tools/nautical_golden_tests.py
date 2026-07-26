@@ -17855,6 +17855,47 @@ def test_cache_save_writes_all_bytes():
         expect(st.st_size > 0, "cache file should not be empty")
 
 
+def test_cache_load_retries_when_file_is_replaced_during_read():
+    """A reader should retry if another process publishes a new generation."""
+    import nautical_core as core
+    with tempfile.TemporaryDirectory() as td:
+        saved_enabled = core.ENABLE_ANCHOR_CACHE
+        saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
+        original_stat = core.os.stat
+        try:
+            core.ENABLE_ANCHOR_CACHE = True
+            core.ANCHOR_CACHE_DIR_OVERRIDE = td
+            key = "stable-read"
+            old_obj = {"dnf": [[{"typ": "w", "spec": "mon"}]]}
+            new_obj = {"dnf": [[{"typ": "w", "spec": "fri"}]]}
+            core.cache_save(key, old_obj)
+            path = core._cache_path(key)
+            replacement = os.path.join(td, "replacement.cache")
+            core.cache_save("replacement", new_obj)
+            shutil.copyfile(core._cache_path("replacement"), replacement)
+            core._CACHE_LOAD_MEM.clear()
+
+            calls = 0
+
+            def stat_with_publish(target):
+                nonlocal calls
+                result = original_stat(target)
+                calls += 1
+                # The second stat is the post-read check for the first attempt.
+                if calls == 2:
+                    shutil.copyfile(replacement, path)
+                return result
+
+            core.os.stat = stat_with_publish
+            loaded = core.cache_load(key)
+            expect(loaded == new_obj, f"replacement generation should be loaded, got {loaded!r}")
+            expect(calls >= 4, "cache load should perform a second stable-read check")
+        finally:
+            core.os.stat = original_stat
+            core.ENABLE_ANCHOR_CACHE = saved_enabled
+            core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
+
+
 def test_cache_save_returns_false_when_lock_busy():
     """cache_save should return False when cache lock is unavailable."""
     import nautical_core as core
@@ -19797,6 +19838,36 @@ def test_reconcile_repairs_missing_legacy_root_link_under_guard():
     args = calls[0][1]
     expect("link:" in args[: args.index("modify")], f"missing absent-link guard: {args!r}")
     expect("link:1" in args and "nextLink:22222222" in args, f"legacy root was not repaired atomically: {args!r}")
+
+
+def test_reconcile_repairs_legacy_root_metadata_when_chain_stops():
+    """Terminal reconciliation must repair a legacy root before disabling it."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_legacy_terminal_repair_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "deleted",
+        "chain": "on",
+        "chainID": "11111111",
+        "nextLink": "",
+    }
+    calls = []
+    original = tool._run_task
+    try:
+        tool._run_task = lambda task_bin, args, **_kwargs: calls.append((task_bin, args)) or SimpleNamespace(
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        tool._disable_parent_chain("task", parent)
+    finally:
+        tool._run_task = original
+
+    expect(len(calls) == 1, f"unexpected legacy terminal update calls: {calls!r}")
+    args = calls[0][1]
+    modify_index = args.index("modify")
+    expect("link:" in args[:modify_index], f"missing absent-link guard: {args!r}")
+    expect(args[modify_index + 1:] == ["link:1", "chain:off"], f"legacy metadata was not repaired atomically: {args!r}")
 
 
 def test_reconcile_parent_identity_errors_are_actionable():
@@ -23094,6 +23165,7 @@ TESTS = [
     test_validate_year_tokens_in_dnf_characterization,
     test_parse_y_token_characterization,
     test_cache_consistency,
+    test_cache_load_retries_when_file_is_replaced_during_read,
     test_parse_cache_returns_isolated_dnf_instances,
     test_build_and_cache_hints_returns_isolated_cached_payload,
     test_cache_key_for_task_caches_build_acf_results,
@@ -23547,6 +23619,7 @@ TESTS = [
     test_reconcile_apply_resumes_after_parent_update_failure,
     test_reconcile_parent_updates_are_guarded,
     test_reconcile_repairs_missing_legacy_root_link_under_guard,
+    test_reconcile_repairs_legacy_root_metadata_when_chain_stops,
     test_reconcile_parent_identity_errors_are_actionable,
     test_reconcile_post_apply_verification_checks_both_sides,
     test_reconcile_post_apply_strict_uuid_is_compatibility_aware,

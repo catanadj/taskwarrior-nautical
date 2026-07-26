@@ -17199,6 +17199,24 @@ def test_ui_live_renderer_reveals_multiline_values_progressively():
     expect(sleep_delays[0] < sleep_delays[-1], f"multiline reveal did not ease toward settle: {sleep_delays!r}")
 
 
+def test_ui_live_renderer_reveals_timeline_bottom_up_with_stable_height():
+    """Timeline frames should reveal the newest line first without changing row height."""
+    import nautical_core.ui as ui
+
+    frames = ui._live_reveal_frames(
+        [("Summary", "ready"), ("Timeline", "old\ncurrent\nnext"), ("Chain", "on")]
+    )
+    timeline_frames = [rows[-1][1] for rows, active in frames if active == 1]
+    expect(
+        timeline_frames == ["\n\nnext", "\ncurrent\nnext", "old\ncurrent\nnext"],
+        f"timeline did not reveal bottom-up: {timeline_frames!r}",
+    )
+    expect(
+        all(value.count("\n") == 2 for value in timeline_frames),
+        f"timeline frame height changed during reveal: {timeline_frames!r}",
+    )
+
+
 def test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels():
     """Only one eligible panel should animate; warnings shorten motion and errors remain immediate."""
     import nautical_core.ui as ui
@@ -23631,6 +23649,7 @@ TESTS = [
     test_ui_static_rich_renderer_delegates_to_shared_builder,
     test_ui_live_renderer_reveals_cumulative_row_frames,
     test_ui_live_renderer_reveals_multiline_values_progressively,
+    test_ui_live_renderer_reveals_timeline_bottom_up_with_stable_height,
     test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels,
     test_ui_live_mid_animation_failure_settles_without_static_duplicate,
     test_ui_live_oversized_panel_settles_without_starting_animation,

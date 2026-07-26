@@ -635,6 +635,13 @@ def _live_reveal_frames(rows) -> list[tuple[list[tuple[object, object]], int]]:
         value_lines = raw_value.splitlines()
         if len(value_lines) <= 1:
             frames.append(([*completed, (key, value)], row_index))
+        elif str(key or "").strip().lower() == "timeline":
+            # Keep the final height reserved while timeline entries arrive from
+            # the bottom upward; this prevents the panel from jumping vertically.
+            for visible_lines in range(1, len(value_lines) + 1):
+                hidden = [""] * (len(value_lines) - visible_lines)
+                partial_value = "\n".join(hidden + value_lines[-visible_lines:])
+                frames.append(([*completed, (key, partial_value)], row_index))
         else:
             for visible_lines in range(1, len(value_lines) + 1):
                 partial_value = "\n".join(value_lines[:visible_lines])

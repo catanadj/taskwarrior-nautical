@@ -17200,7 +17200,7 @@ def test_ui_live_renderer_reveals_multiline_values_progressively():
 
 
 def test_ui_live_renderer_highlights_timeline_bottom_up_without_layout_shift():
-    """Timeline focus should sweep upward while keeping every line visible."""
+    """Timeline focus should sweep top-down while keeping every line visible."""
     import nautical_core.ui as ui
 
     frames = ui._live_reveal_frames(
@@ -17209,11 +17209,11 @@ def test_ui_live_renderer_highlights_timeline_bottom_up_without_layout_shift():
     timeline_frames = [rows[-1][1] for rows, active in frames if active is None and len(rows) >= 2]
     expect(
         timeline_frames == [
-            "old\ncurrent\n▸ [bold bright_cyan]next[/]",
-            "old\n▸ [bold bright_cyan]current[/]\nnext",
             "▸ [bold bright_cyan]old[/]\ncurrent\nnext",
+            "old\n▸ [bold bright_cyan]current[/]\nnext",
+            "old\ncurrent\n▸ [bold bright_cyan]next[/]",
         ],
-        f"timeline highlight did not sweep bottom-up: {timeline_frames!r}",
+        f"timeline highlight did not sweep top-down: {timeline_frames!r}",
     )
     expect(
         all(value.count("\n") == 2 for value in timeline_frames),

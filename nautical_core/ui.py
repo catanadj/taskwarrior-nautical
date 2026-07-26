@@ -636,9 +636,9 @@ def _live_reveal_frames(rows) -> list[tuple[list[tuple[object, object]], int]]:
         if len(value_lines) <= 1:
             frames.append(([*completed, (key, value)], row_index))
         elif str(key or "").strip().lower() == "timeline":
-            # Keep the complete timeline visible and sweep focus upward from
+            # Keep the complete timeline visible and sweep focus down toward
             # the newest line; the settled frame remains the original value.
-            for active_line in range(len(value_lines) - 1, -1, -1):
+            for active_line in range(len(value_lines)):
                 highlighted = list(value_lines)
                 highlighted[active_line] = (
                     f"▸ [bold bright_cyan]{highlighted[active_line]}[/]"

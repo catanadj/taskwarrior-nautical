@@ -21149,6 +21149,43 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     expect(export_calls["count"] == 1, f"expected one underlying chain export, got {export_calls}")
 
 
+def test_on_modify_read_query_broker_deduplicates_and_invalidates_exports():
+    """Read-only Taskwarrior exports should be shared only within one hook request."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_read_query_broker_test")
+    mod._reset_modify_runtime_state()
+    mod._tw_export_chain_cached_key.cache_clear()
+    calls = {"count": 0}
+    original_run_task = mod._run_task
+    try:
+        def fake_run_task(_cmd, **_kwargs):
+            calls["count"] += 1
+            if any(str(part).startswith("chainID:") for part in _cmd):
+                payload = [{"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1}]
+            else:
+                payload = {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1}
+            return True, json.dumps(payload), ""
+
+        mod._run_task = fake_run_task
+        first = mod.tw_export_chain("broker01")
+        first[0]["link"] = 99
+        second = mod.tw_export_chain("broker01")
+        expect(calls["count"] == 1, f"duplicate chain reads launched extra Taskwarrior calls: {calls}")
+        expect(second[0]["link"] == 1, "cached chain rows were not returned as defensive copies")
+
+        uuid_task = mod._export_uuid_short("aaaaaaaa")
+        expect(uuid_task and uuid_task.get("uuid"), "UUID export did not return a task")
+        expect(mod._task_exists_by_uuid_uncached("aaaaaaaa", None), "UUID existence lookup rejected cached task")
+        expect(calls["count"] == 2, f"UUID export and existence lookup were not shared: {calls}")
+
+        mod._invalidate_read_query_cache()
+        mod.tw_export_chain("broker01")
+        expect(calls["count"] == 3, f"cache invalidation did not force a fresh export: {calls}")
+    finally:
+        mod._run_task = original_run_task
+        mod._reset_modify_runtime_state()
+
+
 def test_on_modify_cp_completion_spawns_next_link():
     """on-modify should spawn the next CP link on completion."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -23650,6 +23687,7 @@ TESTS = [
     test_operator_tools_apply_read_only_retry_policy,
     test_chain_repair_command_failure_is_structured,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
+    test_on_modify_read_query_broker_deduplicates_and_invalidates_exports,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,
     test_on_add_run_task_timeout,

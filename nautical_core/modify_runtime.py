@@ -21,6 +21,7 @@ class ModifyRuntimeState:
         default_factory=lambda: {
             "task_text": {},
             "tw_get": {},
+            "read_query": {},
             "chain_root_age": {},
             "format_root_age": {},
         }
@@ -62,6 +63,10 @@ class ModifyRuntimeState:
             "chain_root_age_cache_misses": 0,
             "format_root_age_cache_hits": 0,
             "format_root_age_cache_misses": 0,
+            "read_query_cache_hits": 0,
+            "read_query_cache_misses": 0,
+            "read_query_cache_invalidations": 0,
+            "read_query_cache_entries": 0,
             "unexpected_cache_misses": 0,
             "chain_cache_seeded": 0,
             "run_task_seconds": 0.0,

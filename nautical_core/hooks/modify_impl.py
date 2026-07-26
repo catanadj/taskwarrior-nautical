@@ -10,6 +10,7 @@
 
 import sys, json, os, importlib, importlib.util
 import time as _ptime
+import copy
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -339,6 +340,63 @@ def _query_ctx_set(bucket: str, key, value) -> None:
             state.diag_stats[f"query_ctx_{bucket}_entries"] = len(store)
     except Exception:
         pass
+
+
+_READ_QUERY_MISSING = object()
+
+
+def _read_query_get(kind: str, key):
+    """Return a defensive copy of a read-only Taskwarrior query result."""
+    try:
+        state = _modify_runtime_state()
+        bucket = state.query_ctx.get("read_query")
+        cache_key = (str(kind), key)
+        if not isinstance(bucket, dict) or cache_key not in bucket:
+            _diag_count("read_query_cache_misses")
+            return _READ_QUERY_MISSING
+        _diag_count("read_query_cache_hits")
+        return copy.deepcopy(bucket[cache_key])
+    except Exception:
+        _diag_count("read_query_cache_misses")
+        return _READ_QUERY_MISSING
+
+
+def _read_query_set(kind: str, key, value) -> None:
+    try:
+        state = _modify_runtime_state()
+        bucket = state.query_ctx.get("read_query")
+        if not isinstance(bucket, dict):
+            return
+        bucket[(str(kind), key)] = copy.deepcopy(value)
+        state.diag_stats["read_query_cache_entries"] = len(bucket)
+    except Exception:
+        pass
+
+
+def _invalidate_read_query_cache() -> None:
+    """Invalidate all request-scoped reads after a Taskwarrior mutation."""
+    try:
+        state = _modify_runtime_state()
+        bucket = state.query_ctx.get("read_query")
+        if isinstance(bucket, dict):
+            bucket.clear()
+        state.diag_stats["read_query_cache_entries"] = 0
+        state.diag_stats["read_query_cache_invalidations"] = (
+            state.diag_stats.get("read_query_cache_invalidations", 0) + 1
+        )
+    except Exception:
+        pass
+    for name in (
+        "_export_uuid_short_cached",
+        "_task_exists_by_uuid_cached",
+        "_tw_export_chain_cached_key",
+    ):
+        try:
+            clear = getattr(globals().get(name), "cache_clear", None)
+            if callable(clear):
+                clear()
+        except Exception:
+            pass
 
 
 def _task_args_cacheable(args) -> bool:
@@ -1667,6 +1725,10 @@ def _run_task(
 
 
 def _export_uuid_short(u_short: str, env=None):
+    if env is None:
+        cached_read = _read_query_get("uuid", str(u_short or "").lower())
+        if cached_read is not _READ_QUERY_MISSING:
+            return cached_read
     cache_chain_id = ""
     if env is None and u_short:
         state = _modify_chain_state()
@@ -1694,6 +1756,7 @@ def _export_uuid_short(u_short: str, env=None):
             diag=_diag,
         )
         if env is None and isinstance(obj, dict):
+            _read_query_set("uuid", str(u_short or "").lower(), obj)
             return _seed_runtime_lookup_task(obj)
         return obj
     env = env or os.environ.copy()
@@ -1714,6 +1777,7 @@ def _export_uuid_short(u_short: str, env=None):
             _diag(f"uuid prefix mismatch for {u_short}")
             return None
         if env is None:
+            _read_query_set("uuid", str(u_short or "").lower(), obj)
             return _seed_runtime_lookup_task(obj)
         return obj
     except Exception:
@@ -1732,6 +1796,10 @@ def _task_exists_by_uuid_cached(u: str) -> bool:
 
 
 def _task_exists_by_uuid_uncached(u: str, env: dict | None) -> bool:
+    if env is None:
+        cached_read = _read_query_get("uuid", str(u or "").lower())
+        if cached_read is not _READ_QUERY_MISSING:
+            return isinstance(cached_read, dict) and bool(cached_read.get("uuid"))
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.task_exists_by_uuid_uncached(
@@ -1752,6 +1820,8 @@ def _task_exists_by_uuid_uncached(u: str, env: dict | None) -> bool:
         data = json.loads(out.strip() or "{}")
     except Exception:
         data = {}
+    if env is None:
+        _read_query_set("uuid", str(u or "").lower(), data if isinstance(data, dict) else {})
     return bool(data.get("uuid"))
 
 def _reserve_child_uuid(env: dict) -> str:
@@ -1941,6 +2011,7 @@ def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str
             continue
 
         if ok:
+            _invalidate_read_query_cache()
             # Always verify existence to avoid reporting success on partial import failures.
             if _task_exists_by_uuid(child_uuid, env):
                 return child_uuid[:8], stripped_accum
@@ -5386,6 +5457,16 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     args = _tw_export_chain_args(chain_id, since=since, extra=extra, limit=limit)
     if args is None:
         return []
+    read_key = (
+        str(chain_id),
+        since.isoformat() if isinstance(since, datetime) else "",
+        str(extra or ""),
+        int(limit or 0),
+    )
+    if env is None:
+        cached_read = _read_query_get("chain", read_key)
+        if cached_read is not _READ_QUERY_MISSING:
+            return cached_read if isinstance(cached_read, list) else []
 
     start = _time.perf_counter()
     timeout = _chain_export_timeout(chain_id)
@@ -5399,7 +5480,10 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
     elapsed = _time.perf_counter() - start
     if ok:
         _tw_export_chain_success(elapsed)
-        return _tw_export_chain_parse(out)
+        rows = _tw_export_chain_parse(out)
+        if env is None:
+            _read_query_set("chain", read_key, rows)
+        return rows
     _tw_export_chain_failure(chain_id, err, timeout)
     return []
 

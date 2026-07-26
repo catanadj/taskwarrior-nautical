@@ -949,6 +949,12 @@ def test_hook_protocol_classifies_safe_nautical_ordinary_edits():
         ("priority", "H"),
         ("tags", ["next", "phone"]),
         ("depends", ["11111111-1111-1111-1111-111111111111"]),
+        ("start", "20260101T090000Z"),
+        ("parent", "22222222-2222-2222-2222-222222222222"),
+        ("blocks", ["33333333-3333-3333-3333-333333333333"]),
+        ("mask", "20270101T090000Z"),
+        ("imask", "20270101T090000Z"),
+        ("context", "work"),
     ):
         new = dict(old, **{field: value}, modified="20260101T000001Z")
         expect(protocol.is_safe_nautical_ordinary_modify(old, new), f"ordinary {field} edit should use the thin path")

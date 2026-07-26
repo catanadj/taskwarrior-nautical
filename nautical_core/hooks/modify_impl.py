@@ -367,7 +367,14 @@ def _read_query_set(kind: str, key, value) -> None:
         bucket = state.query_ctx.get("read_query")
         if not isinstance(bucket, dict):
             return
-        bucket[(str(kind), key)] = copy.deepcopy(value)
+        stored = copy.deepcopy(value)
+        if str(kind) in {"chain", "chain_snapshot"} and isinstance(stored, list):
+            if len(stored) > _MAX_CHAIN_WALK:
+                stored = stored[:_MAX_CHAIN_WALK]
+                state.diag_stats["chain_snapshot_truncations"] = (
+                    state.diag_stats.get("chain_snapshot_truncations", 0) + 1
+                )
+        bucket[(str(kind), key)] = stored
         state.diag_stats["read_query_cache_entries"] = len(bucket)
     except Exception:
         pass
@@ -397,6 +404,14 @@ def _invalidate_read_query_cache() -> None:
                 clear()
         except Exception:
             pass
+
+
+def _record_chain_snapshot_stat(name: str, inc: int = 1) -> None:
+    try:
+        state = _modify_runtime_state()
+        state.diag_stats[name] = state.diag_stats.get(name, 0) + inc
+    except Exception:
+        pass
 
 
 def _task_args_cacheable(args) -> bool:
@@ -2884,12 +2899,38 @@ def _filter_cached_chain_rows(chain: list[dict], *, extra: str | None, limit: in
     return rows
 
 
+def _filter_full_snapshot_rows(chain: list[dict], *, extra: str | None, limit: int | None) -> list[dict] | None:
+    """Filter a full snapshot only for predicates with equivalent semantics."""
+    tokens = _parse_extra_tokens(extra)
+    if tokens is None:
+        return None
+    for token in tokens:
+        if token.startswith("+"):
+            continue
+        key = token.split(":", 1)[0]
+        base_key = key[:-4] if key.endswith(".not") else key
+        if base_key not in {"chainID", "link", "id", "project", "status"}:
+            return None
+    return _filter_cached_chain_rows(chain, extra=extra, limit=limit)
+
+
 def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
     """Return a safe list copy of a chain export (cached when env is None)."""
     if not chain_id:
         return []
     if env is not None:
         return tw_export_chain(chain_id, since=since, extra=extra, env=env, limit=_MAX_CHAIN_WALK)
+    if not since:
+        full_snapshot = _read_query_get("chain", _chain_read_key(chain_id, None, None, 0))
+        if full_snapshot is not _READ_QUERY_MISSING:
+            filtered = _filter_full_snapshot_rows(
+                full_snapshot if isinstance(full_snapshot, list) else [],
+                extra=extra,
+                limit=_MAX_CHAIN_WALK,
+            )
+            if filtered is not None:
+                _record_chain_snapshot_stat("chain_snapshot_filter_hits")
+                return filtered
     state = _modify_chain_state()
     with state.chain_cache_lock:
         cached_chain = list(state.chain_cache) if state.chain_cache_chain_id and chain_id == state.chain_cache_chain_id else []
@@ -6225,6 +6266,7 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
     snapshot_key = (str(chain_id), tuple(links) if links is not None else None)
     cached_snapshot = _read_query_get("chain_snapshot", snapshot_key)
     if cached_snapshot is not _READ_QUERY_MISSING:
+        _record_chain_snapshot_stat("chain_snapshot_hits")
         rows = cached_snapshot if isinstance(cached_snapshot, list) else []
         return modify_models.CompletionChainSnapshot(
             mode=mode,
@@ -6232,6 +6274,7 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
             loaded=True,
             chain_id=str(chain_id),
         )
+    _record_chain_snapshot_stat("chain_snapshot_misses")
     loaded, rows = modify_queries.export_completion_chain_snapshot(
         chain_id,
         links,

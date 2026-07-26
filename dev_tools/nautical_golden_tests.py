@@ -21213,6 +21213,8 @@ def test_on_modify_completion_snapshot_reuses_full_chain_read():
         expect(snapshot.loaded and snapshot.coverage == "full", f"unexpected full snapshot: {snapshot!r}")
         reused = mod._get_chain_export("reuse01")
         expect(reused == rows, f"full snapshot was not reused: {reused!r}")
+        filtered = mod._get_chain_export("reuse01", extra="status:completed")
+        expect(filtered == [], f"safe in-memory snapshot filter returned wrong rows: {filtered!r}")
         expect(calls["count"] == 1, f"full snapshot was exported more than once: {calls}")
     finally:
         queries = mod._module("modify_queries")

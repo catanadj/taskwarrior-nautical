@@ -2686,6 +2686,11 @@ def test_on_modify_disables_chain_emits_disabled_panel():
             )
             summary_rows = next(rows for title, rows, _kind in captured["panels"] if title == "⛔ Chain finished – summary")
             expect(any(label == "Pattern" and "w:mon" in str(value) for label, value in summary_rows), f"summary should retain removed recurrence metadata: {captured!r}")
+        elif case["label"] == "chain_off":
+            expect(
+                any(title == "⛔ Chain finished – summary" and panel_kind == "summary" for title, _rows, panel_kind in captured["panels"]),
+                f"{case['label']} should also show the finished-chain summary: {captured!r}",
+            )
         expect(new.get("chain") == "off", f"{case['label']} should set chain:off, got {new!r}")
 
 

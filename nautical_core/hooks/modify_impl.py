@@ -6087,24 +6087,19 @@ def _render_explicit_timing_order_warning(new: dict, changed_fields: tuple[str, 
     _panel("⚠ Nautical timing order", rows, kind="warning")
 
 
-def _render_removed_recurrence_chain_summary(old: dict, new: dict) -> None:
-    """Show the normal finished-chain summary when recurrence UDAs are cleared."""
+def _render_disabled_chain_summary(old: dict, new: dict, reason: str) -> None:
+    """Show the normal finished-chain summary when an active chain is stopped."""
     if not (old.get("chainID") or new.get("chainID")):
         return
     now_utc = core.now_utc()
     try:
-        _end_chain_summary(
-            old,
-            "Nautical recurrence removed.",
-            now_utc,
-            current_task=old,
-        )
+        _end_chain_summary(old, reason, now_utc, current_task=old)
     except Exception as exc:
         _diag(f"removed recurrence chain summary failed: {exc}")
         _panel(
             "⛔ Nautical chain stopped",
             [
-                ("Reason", "Nautical recurrence was removed from the task."),
+                ("Reason", reason),
                 ("Root", _format_root_and_age(old, now_utc)),
                 ("Task", _short(old.get("uuid")) or "–"),
             ],
@@ -6272,6 +6267,10 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
         modify_lifecycle.task_has_nautical_recurrence_fields(old)
         and not modify_lifecycle.task_has_nautical_recurrence_fields(new)
     )
+    chain_was_disabled = (
+        str(old.get("chain") or "").strip().lower() == "on"
+        and str(new.get("chain") or "").strip().lower() == "off"
+    )
     if transition and transition.state == "enabled":
         rows = [
             ("Reason", transition.reason or "This task just gained Nautical recurrence and was promoted to chain:on."),
@@ -6289,8 +6288,9 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
             rows.append(("Source", transition.source))
         rows.append(("Chain", "off"))
         _panel("⚓ Nautical disabled", rows, kind="disabled")
-        if recurrence_removed:
-            _render_removed_recurrence_chain_summary(old, new)
+        if recurrence_removed or chain_was_disabled:
+            reason = "Nautical recurrence removed." if recurrence_removed else "Chain manually disabled."
+            _render_disabled_chain_summary(old, new, reason)
     elif transition and transition.state == "resumed":
         rows = [("Reason", transition.reason or "This task's Nautical recurrence was resumed.")]
         if transition.source:

@@ -5893,6 +5893,13 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
         except Exception:
             pass
 
+    recurrence_fields = {"anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc"}
+    if any(field in recurrence_fields for field, _old, _new in changes):
+        source = "anchor" if anchor_expr else "anchor_file" if str(new.get("anchor_file") or "").strip() else "cp"
+        first = _first_recurrence_target(new, source)
+        if first:
+            rows.append(("First next", _fmtlocal(first)))
+
     _panel("⚓ Nautical recurrence updated", rows, kind="note")
 
 

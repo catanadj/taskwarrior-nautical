@@ -2761,6 +2761,7 @@ def test_on_modify_recurrence_update_emits_ack_panel():
         "description": "nautical task",
         "status": "pending",
         "anchor": "w:mon",
+        "due": "20260727T090000Z",
         "chain": "on",
         "chainID": "abcd1234",
     }
@@ -2790,6 +2791,7 @@ def test_on_modify_recurrence_update_emits_ack_panel():
         f"expected styled anchor change row, got {rows!r}",
     )
     expect(any(k == "Natural" and "Tuesday" in str(v) and "Thursday" in str(v) for k, v in rows), f"expected natural row, got {rows!r}")
+    expect(any(k == "First next" for k, _v in rows), f"expected recalculated first occurrence, got {rows!r}")
     expect(not any(k == "Chain" for k, _v in rows), f"recurrence panel should omit redundant chain:on row, got {rows!r}")
     expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
 

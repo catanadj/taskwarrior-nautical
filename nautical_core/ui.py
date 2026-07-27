@@ -630,10 +630,16 @@ def _reset_live_animation_state() -> None:
 def _live_reveal_frames(rows) -> list[tuple[list[tuple[object, object]], int]]:
     frames: list[tuple[list[tuple[object, object]], int]] = []
     completed: list[tuple[object, object]] = []
+
+    def _dimmed(value: object) -> str:
+        raw = "" if value is None else str(value)
+        return f"[dim]{raw}[/]"
+
     for row_index, (key, value) in enumerate(rows):
         raw_value = "" if value is None else str(value)
         value_lines = raw_value.splitlines()
         if len(value_lines) <= 1:
+            frames.append(([*completed, (key, _dimmed(value))], row_index))
             frames.append(([*completed, (key, value)], row_index))
         elif str(key or "").strip().lower() == "timeline":
             # Keep the complete timeline visible and sweep focus down toward

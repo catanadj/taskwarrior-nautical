@@ -17113,15 +17113,18 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
     expect(
         built_rows == [
             [("One", "1"), ("Two", "2"), ("Three", "3")],
+            [("One", "[dim]1[/]")],
             [("One", "1")],
+            [("One", "1"), ("Two", "[dim]2[/]")],
             [("One", "1"), ("Two", "2")],
+            [("One", "1"), ("Two", "2"), ("Three", "[dim]3[/]")],
             [("One", "1"), ("Two", "2"), ("Three", "3")],
         ],
         f"live renderer should prebuild recovery then reveal cumulative rows: {built_rows!r}",
     )
-    expect(built_live_flags == [True, True, True, True], f"live frames lost their live styling: {built_live_flags!r}")
-    expect(built_active_rows == [None, 0, 1, 2], f"live recovery/focus frames changed: {built_active_rows!r}")
-    expect(len(sleep_delays) == 3 and all(delay > 0 for delay in sleep_delays), f"unexpected live pacing: {sleep_delays!r}")
+    expect(built_live_flags == [True, True, True, True, True, True, True], f"live frames lost their live styling: {built_live_flags!r}")
+    expect(built_active_rows == [None, 0, 0, 1, 1, 2, 2], f"live recovery/focus frames changed: {built_active_rows!r}")
+    expect(len(sleep_delays) == 6 and all(delay > 0 for delay in sleep_delays), f"unexpected live pacing: {sleep_delays!r}")
     expect(abs(sum(sleep_delays) - 0.16) < 0.001, f"live reveal did not use its configured duration: {sleep_delays!r}")
     expect(sleep_delays[0] < sleep_delays[-1], f"live reveal did not ease into its final frame: {sleep_delays!r}")
     expect(live_frames[-1] == tuple(built_rows[-1]), f"final live frame is incomplete: {live_frames!r}")
@@ -17189,12 +17192,13 @@ def test_ui_live_renderer_reveals_multiline_values_progressively():
             [("Upcoming", "one")],
             [("Upcoming", "one\ntwo")],
             [("Upcoming", "one\ntwo\nthree")],
+            [("Upcoming", "one\ntwo\nthree"), ("Chain", "[dim]enabled[/]")],
             [("Upcoming", "one\ntwo\nthree"), ("Chain", "enabled")],
         ],
         f"multiline values did not reveal progressively: {built_rows!r}",
     )
-    expect(active_rows == [None, 0, 0, 0, 1], f"multiline focus moved before the row completed: {active_rows!r}")
-    expect(len(sleep_delays) == 4, f"unexpected multiline transition count: {sleep_delays!r}")
+    expect(active_rows == [None, 0, 0, 0, 1, 1], f"multiline focus moved before the row completed: {active_rows!r}")
+    expect(len(sleep_delays) == 5, f"unexpected multiline transition count: {sleep_delays!r}")
     expect(abs(sum(sleep_delays) - 0.16) < 0.001, f"multiline reveal exceeded its total budget: {sleep_delays!r}")
     expect(sleep_delays[0] < sleep_delays[-1], f"multiline reveal did not ease toward settle: {sleep_delays!r}")
 

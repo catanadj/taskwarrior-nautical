@@ -2786,7 +2786,7 @@ def test_on_modify_recurrence_update_emits_ack_panel():
     expect(captured.get("kind") == "note", f"expected note panel, got {captured!r}")
     rows = captured.get("rows") or []
     expect(
-        ("Anchor", "[dim]w:mon[/] [cyan]→[/] [bold]w:tue,thu[/]") in rows,
+        ("Changed", "Anchor: [dim]w:mon[/] [cyan]→[/] [bold]w:tue,thu[/]") in rows,
         f"expected styled anchor change row, got {rows!r}",
     )
     expect(any(k == "Natural" and "Tuesday" in str(v) and "Thursday" in str(v) for k, v in rows), f"expected natural row, got {rows!r}")
@@ -2827,7 +2827,7 @@ def test_on_modify_native_until_update_explains_carry():
     rows = captured.get("rows") or []
     expect(captured.get("title") == "⚓ Nautical recurrence updated", f"unexpected expiration panel: {captured!r}")
     expect(captured.get("kind") == "note", f"unexpected expiration panel style: {captured!r}")
-    expect(any(label == "Expiration" and "2026-08-03" in str(value) and "2026-08-04" in str(value) for label, value in rows), f"missing expiration diff: {rows!r}")
+    expect(any(label == "Changed" and "Expiration:" in str(value) and "2026-08-03" in str(value) and "2026-08-04" in str(value) for label, value in rows), f"missing expiration diff: {rows!r}")
     expect(("Carry", "Exact · 14h 00m 01s after occurrence") in rows, f"missing exact carry explanation: {rows!r}")
     expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
 
@@ -2868,23 +2868,25 @@ def test_on_modify_limit_update_emits_effective_boundaries():
     title, rows, kind = panels[0]
     expect(title == "⚓ Nautical recurrence updated" and kind == "note", f"unexpected limit panel: {panels!r}")
     expect(
-        ("Max links", "[dim]5[/] [cyan]→[/] [bold]8[/]") in rows,
+        ("Changed", "Max links: [dim]5[/] [cyan]→[/] [bold]8[/]") in rows,
         f"missing styled chainMax update: {rows!r}",
     )
     expect(
         any(
-            label == "Chain end point" and "2026-08-10" in value and "2026-08-20" in value
+            label == "Changed" and "Chain end point:" in value and "2026-08-10" in value and "2026-08-20" in value
             for label, value in rows
         ),
         f"missing localized chainUntil update: {rows!r}",
     )
     expect(("Final link", "#8") in rows, f"missing final link boundary: {rows!r}")
     expect(
-        sum(label == "Chain end point" for label, _value in rows) == 1,
+        sum(label == "Changed" and "Chain end point:" in str(value) for label, value in rows) == 1,
         f"chain end point should not be repeated: {rows!r}",
     )
     expect(("Effective", "Whichever boundary is reached first") in rows, f"missing effective limit rule: {rows!r}")
     expect(("Chain limits", "None") in panels[1][1], f"clearing both limits should be explicit: {panels[1]!r}")
+    expect(("Removed", "Max links: [dim]8[/]") in panels[1][1], f"cleared max link should be marked removed: {panels[1]!r}")
+    expect(any(label == "Removed" and "Chain end point:" in str(value) for label, value in panels[1][1]), f"cleared chain end should be marked removed: {panels[1]!r}")
 
 
 def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():

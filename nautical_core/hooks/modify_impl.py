@@ -5818,26 +5818,36 @@ def _semantic_diff_value(old_text: str, new_text: str) -> str:
     return f"[dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
 
 
-def _recurrence_update_value(field: str, old_value: str, new_value: str) -> str:
-    def display(value: str) -> str:
-        if not value:
-            return "-"
-        if field in {"until", "chainUntil"}:
-            parsed = core.parse_dt_any(value)
-            if parsed:
-                return _fmtlocal(parsed)
-        return value
+def _recurrence_display_value(field: str, value: str) -> str:
+    if not value:
+        return "-"
+    if field in {"until", "chainUntil"}:
+        parsed = core.parse_dt_any(value)
+        if parsed:
+            return _fmtlocal(parsed)
+    return value
 
-    old_text = display(old_value)
-    new_text = display(new_value)
+
+def _recurrence_update_value(field: str, old_value: str, new_value: str) -> str:
+    old_text = _recurrence_display_value(field, old_value)
+    new_text = _recurrence_display_value(field, new_value)
     return _semantic_diff_value(old_text, new_text)
+
+
+def _recurrence_change_row(field: str, old_value: str, new_value: str) -> tuple[str, str]:
+    label = _recurrence_update_label(field)
+    if old_value and new_value:
+        return "Changed", f"{label}: {_recurrence_update_value(field, old_value, new_value)}"
+    if new_value:
+        return "Added", f"{label}: [bold]{_recurrence_display_value(field, new_value)}[/]"
+    return "Removed", f"{label}: [dim]{_recurrence_display_value(field, old_value)}[/]"
 
 
 def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: dict) -> None:
     if not changes:
         return
     rows: list[tuple[str, str]] = [
-        (_recurrence_update_label(field), _recurrence_update_value(field, old_value, new_value))
+        _recurrence_change_row(field, old_value, new_value)
         for field, old_value, new_value in changes
     ]
 

@@ -2703,6 +2703,7 @@ def test_on_modify_resumes_chain_emits_resumed_panel():
         "description": "paused nautical task",
         "status": "pending",
         "anchor": "w:mon",
+        "due": "20260727T090000Z",
         "chain": "off",
         "chainID": "abcd1234",
         "chainMax": 8,
@@ -2733,7 +2734,7 @@ def test_on_modify_resumes_chain_emits_resumed_panel():
         ("Chain", "[dim]off[/] [cyan]→[/] [bold]on[/]") in rows,
         f"expected styled chain transition row, got {rows!r}",
     )
-    expect(any(k == "Effect" and "subject to chain limits" in str(v) for k, v in rows), f"expected bounded resume effect, got {rows!r}")
+    expect(any(k == "Next" for k, _v in rows), f"expected next resumed occurrence, got {rows!r}")
     expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
 
 

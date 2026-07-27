@@ -6298,9 +6298,12 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
         rows.extend(
             [
                 ("Chain", _semantic_diff_value("off", "on")),
-                ("Effect", "Completion can spawn the next link, subject to chain limits."),
             ]
         )
+        source = "anchor" if new.get("anchor") else "anchor_file" if new.get("anchor_file") else "cp"
+        first = _first_recurrence_target(new, source)
+        if first:
+            rows.append(("Next", _fmtlocal(first)))
         _panel("⚓ Nautical resumed", rows, kind="note")
     else:
         try:

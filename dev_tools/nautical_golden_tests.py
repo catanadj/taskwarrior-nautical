@@ -2796,6 +2796,31 @@ def test_on_modify_recurrence_update_emits_ack_panel():
     expect(captured.get("task") == new, f"modified task should still be printed: {captured!r}")
 
 
+def test_on_modify_recurrence_update_groups_and_flattens_changes():
+    """Multi-field recurrence updates stay grouped and readable in one-line modes."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_recurrence_update_layout_test")
+    changes = [
+        ("anchor", "w:mon", "w:tue"),
+        ("chainMax", "5", "8"),
+    ]
+    rich_rows = [
+        ("Changed", "Anchor: [dim]w:mon[/] [cyan]→[/] [bold]w:tue[/]"),
+        ("Changed", "Max links: [dim]5[/] [cyan]→[/] [bold]8[/]"),
+    ]
+    grouped = mod._recurrence_update_panel_rows(changes, rich_rows)
+    expect(grouped[1][0] is None, f"expected spacing between recurrence and limits: {grouped!r}")
+
+    previous_mode = mod.core.PANEL_MODE
+    try:
+        mod.core.PANEL_MODE = "text"
+        flattened = mod._recurrence_update_panel_rows(changes, rich_rows)
+    finally:
+        mod.core.PANEL_MODE = previous_mode
+    expect(flattened[0][0] == "Changes", f"expected one-line change summary: {flattened!r}")
+    expect("Anchor:" in flattened[0][1] and "Max links:" in flattened[0][1], f"one-line summary omitted a change: {flattened!r}")
+
+
 def test_on_modify_native_until_update_explains_carry():
     """Changing native until should acknowledge its exact or calendar carry policy."""
     hook = _find_hook_file("on-modify-nautical.py")
@@ -23554,6 +23579,7 @@ TESTS = [
     test_on_modify_resumes_chain_emits_resumed_panel,
     test_on_modify_resume_wrapper_preserves_json_and_emits_panel,
     test_on_modify_recurrence_update_emits_ack_panel,
+    test_on_modify_recurrence_update_groups_and_flattens_changes,
     test_on_modify_native_until_update_explains_carry,
     test_on_modify_limit_update_emits_effective_boundaries,
     test_modify_lifecycle_routes_and_promotes_new_nautical_tasks,

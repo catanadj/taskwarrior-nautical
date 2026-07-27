@@ -5843,6 +5843,35 @@ def _recurrence_change_row(field: str, old_value: str, new_value: str) -> tuple[
     return "Removed", f"{label}: [dim]{_recurrence_display_value(field, old_value)}[/]"
 
 
+def _recurrence_update_panel_rows(changes: list[tuple[str, str, str]], rows: list[tuple[str | None, str]]) -> list[tuple[str | None, str]]:
+    """Keep multi-field updates scannable and preserve all changes in one-line modes."""
+    if len(changes) > 1:
+        recurrence_fields = {"anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc"}
+        limit_fields = {"chainMax", "chainUntil"}
+        first_limit = next((idx for idx, (field, _old, _new) in enumerate(changes) if field in limit_fields), None)
+        if first_limit is not None and any(field in recurrence_fields for field, _old, _new in changes):
+            rows = list(rows)
+            rows.insert(first_limit, (None, ""))
+
+    mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
+    if mode == "quiet":
+        mode = "text"
+    if mode == "minimal":
+        mode = "line"
+    if mode in {"line", "text"}:
+        change_rows = [(label, value) for label, value in rows if label in {"Added", "Changed", "Removed"}]
+        if len(change_rows) > 1:
+            summary = " · ".join(
+                f"{label}: {core.strip_rich_markup(str(value))}" for label, value in change_rows
+            )
+            rows = [("Changes", summary)] + [
+                (label, value)
+                for label, value in rows
+                if label not in {"Added", "Changed", "Removed"}
+            ]
+    return rows
+
+
 def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: dict) -> None:
     if not changes:
         return
@@ -5900,6 +5929,7 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
         if first:
             rows.append(("First next", _fmtlocal(first)))
 
+    rows = _recurrence_update_panel_rows(changes, rows)
     _panel("⚓ Nautical recurrence updated", rows, kind="note")
 
 

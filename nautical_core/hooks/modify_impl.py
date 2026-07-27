@@ -6087,6 +6087,31 @@ def _render_explicit_timing_order_warning(new: dict, changed_fields: tuple[str, 
     _panel("⚠ Nautical timing order", rows, kind="warning")
 
 
+def _render_removed_recurrence_chain_summary(old: dict, new: dict) -> None:
+    """Show the normal finished-chain summary when recurrence UDAs are cleared."""
+    if not (old.get("chainID") or new.get("chainID")):
+        return
+    now_utc = core.now_utc()
+    try:
+        _end_chain_summary(
+            old,
+            "Nautical recurrence removed.",
+            now_utc,
+            current_task=old,
+        )
+    except Exception as exc:
+        _diag(f"removed recurrence chain summary failed: {exc}")
+        _panel(
+            "⛔ Nautical chain stopped",
+            [
+                ("Reason", "Nautical recurrence was removed from the task."),
+                ("Root", _format_root_and_age(old, now_utc)),
+                ("Task", _short(old.get("uuid")) or "–"),
+            ],
+            kind="summary",
+        )
+
+
 def _preserve_cp_relative_offsets_on_due_change(
     old: dict,
     new: dict,
@@ -6243,6 +6268,10 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
         transition = modify_lifecycle.apply_nautical_transition(old, new, short_uuid=core.short_uuid)
     except Exception:
         transition = None
+    recurrence_removed = (
+        modify_lifecycle.task_has_nautical_recurrence_fields(old)
+        and not modify_lifecycle.task_has_nautical_recurrence_fields(new)
+    )
     if transition and transition.state == "enabled":
         rows = [
             ("Reason", transition.reason or "This task just gained Nautical recurrence and was promoted to chain:on."),
@@ -6260,6 +6289,8 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
             rows.append(("Source", transition.source))
         rows.append(("Chain", "off"))
         _panel("⚓ Nautical disabled", rows, kind="disabled")
+        if recurrence_removed:
+            _render_removed_recurrence_chain_summary(old, new)
     elif transition and transition.state == "resumed":
         rows = [("Reason", transition.reason or "This task's Nautical recurrence was resumed.")]
         if transition.source:

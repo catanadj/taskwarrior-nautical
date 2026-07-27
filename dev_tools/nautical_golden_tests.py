@@ -2654,15 +2654,13 @@ def test_on_modify_disables_chain_emits_disabled_panel():
     for case in disable_cases:
         old = dict(base_old)
         new = dict(case["new"])
-        captured = {}
+        captured = {"panels": []}
 
         orig_panel = mod._panel
         orig_print_task = mod._print_task
         try:
             def fake_panel(title, rows, *, kind=None):
-                captured["title"] = title
-                captured["rows"] = list(rows)
-                captured["kind"] = kind
+                captured["panels"].append((title, list(rows), kind))
 
             mod._panel = fake_panel
             mod._print_task = lambda task: captured.setdefault("task", dict(task))
@@ -2671,15 +2669,23 @@ def test_on_modify_disables_chain_emits_disabled_panel():
             mod._panel = orig_panel
             mod._print_task = orig_print_task
 
-        expect(captured.get("title") == "⚓ Nautical disabled", f"{case['label']} expected disabled panel, got {captured!r}")
-        expect(captured.get("kind") == "disabled", f"{case['label']} expected disabled panel kind, got {captured!r}")
-        rows = captured.get("rows") or []
+        disabled_panels = [panel for panel in captured["panels"] if panel[0] == "⚓ Nautical disabled"]
+        expect(disabled_panels, f"{case['label']} expected disabled panel, got {captured!r}")
+        _title, rows, kind = disabled_panels[-1]
+        expect(kind == "disabled", f"{case['label']} expected disabled panel kind, got {captured!r}")
         expect(any(k == "Reason" and case["expect_reason"] in str(v) for k, v in rows), f"{case['label']} expected reason row, got {rows!r}")
         if case["expect_source"] is None:
             expect(not any(k == "Source" for k, _v in rows), f"{case['label']} should not include source row, got {rows!r}")
         else:
             expect(any(k == "Source" and v == case["expect_source"] for k, v in rows), f"{case['label']} expected source row, got {rows!r}")
         expect(any(k == "Chain" and v == "off" for k, v in rows), f"{case['label']} expected chain:off row, got {rows!r}")
+        if case["label"] == "fields_cleared":
+            expect(
+                any(title == "⛔ Chain finished – summary" and panel_kind == "summary" for title, _rows, panel_kind in captured["panels"]),
+                f"{case['label']} should also show the finished-chain summary: {captured!r}",
+            )
+            summary_rows = next(rows for title, rows, _kind in captured["panels"] if title == "⛔ Chain finished – summary")
+            expect(any(label == "Pattern" and "w:mon" in str(value) for label, value in summary_rows), f"summary should retain removed recurrence metadata: {captured!r}")
         expect(new.get("chain") == "off", f"{case['label']} should set chain:off, got {new!r}")
 
 

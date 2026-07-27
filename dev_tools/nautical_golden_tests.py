@@ -2529,6 +2529,7 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
         "description": "already nautical",
         "status": "pending",
         "anchor": "w:mon",
+        "due": "20260727T090000Z",
         "chain": "off",
     }
     already_new = dict(already_old)
@@ -2552,6 +2553,7 @@ def test_on_modify_promotes_chain_emits_upgrade_panel():
         "description": "plain task",
         "status": "pending",
         "anchor": "w:mon",
+        "due": "20260727T090000Z",
         "chain": "off",
     }
     captured = {}
@@ -2576,8 +2578,42 @@ def test_on_modify_promotes_chain_emits_upgrade_panel():
     rows = captured.get("rows") or []
     expect(not any(k == "Chain" for k, _v in rows), f"enabled panel should omit redundant chain:on row, got {rows!r}")
     expect(any(k == "Source" and v == "anchor" for k, v in rows), f"expected anchor source row, got {rows!r}")
+    expect(any(k == "Anchor" and v == "w:mon" for k, v in rows), f"expected added anchor row, got {rows!r}")
+    expect(any(k == "Natural" and "Monday" in v for k, v in rows), f"expected natural anchor explanation, got {rows!r}")
+    expect(any(k == "Mode" and v.startswith("SKIP —") for k, v in rows), f"expected anchor mode explanation, got {rows!r}")
+    expect(any(k == "First next" for k, _v in rows), f"expected first calculated occurrence, got {rows!r}")
     expect(new.get("chain") == "on", f"promotion should set chain:on, got {new!r}")
     expect(bool((new.get("chainID") or "").strip()), f"promotion should stamp chainID, got {new!r}")
+
+
+def test_on_modify_promotes_cp_emits_period_explanation():
+    """Promotion by cp should show the configured period and readable meaning."""
+    hook = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook, "_nautical_on_modify_cp_upgrade_panel_test")
+    old = {
+        "uuid": "00000000-0000-0000-0000-000000000448",
+        "description": "plain task",
+        "status": "pending",
+    }
+    new = {**old, "cp": "7d", "due": "20260727T090000Z", "chain": "off"}
+    captured = {}
+    original_panel = mod._panel
+    original_print_task = mod._print_task
+    try:
+        mod._panel = lambda title, rows, *, kind=None: captured.update(
+            title=title, rows=list(rows), kind=kind
+        )
+        mod._print_task = lambda task: None
+        mod._handle_non_completion_modify(old, new)
+    finally:
+        mod._panel = original_panel
+        mod._print_task = original_print_task
+
+    rows = captured.get("rows") or []
+    expect(captured.get("title") == "⚓ Nautical enabled", f"expected upgrade panel, got {captured!r}")
+    expect(any(k == "Period" and v == "7d" for k, v in rows), f"expected added period row, got {rows!r}")
+    expect(any(k == "Natural" and v == "Every 7d" for k, v in rows), f"expected natural period explanation, got {rows!r}")
+    expect(any(k == "First next" for k, _v in rows), f"expected first calculated occurrence, got {rows!r}")
 
 
 def test_on_modify_disables_chain_emits_disabled_panel():
@@ -23509,6 +23545,7 @@ TESTS = [
     test_on_modify_ignores_unsafe_core_path_override,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_on_modify_promotes_chain_emits_upgrade_panel,
+    test_on_modify_promotes_cp_emits_period_explanation,
     test_on_modify_disables_chain_emits_disabled_panel,
     test_on_modify_resumes_chain_emits_resumed_panel,
     test_on_modify_resume_wrapper_preserves_json_and_emits_panel,

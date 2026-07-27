@@ -5886,6 +5886,94 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
     _panel("⚓ Nautical recurrence updated", rows, kind="note")
 
 
+def _first_recurrence_target(new: dict, source: str):
+    target_field = "due" if new.get("due") else "scheduled" if new.get("scheduled") else ""
+    if not target_field:
+        return None
+    target = core.parse_dt_any(new.get(target_field))
+    if not target:
+        return None
+    parent = dict(new)
+    parent["end"] = core.fmt_isoz(target)
+    try:
+        if source in {"anchor", "anchor_file"}:
+            result = _compute_anchor_child_due(parent)
+            return result[0] if result else None
+        result = _compute_cp_child_due(parent)
+        return result[0] if result else None
+    except Exception:
+        return None
+
+
+def _recurrence_enabled_rows(new: dict, source: str) -> list[tuple[str, str]]:
+    """Describe the recurrence that was added during a plain-task upgrade."""
+    if source == "anchor":
+        value = str(new.get("anchor") or "").strip()
+        rows = [("Anchor", value)]
+        try:
+            natural = core.describe_anchor_expr(value)
+        except Exception:
+            natural = None
+        if natural:
+            rows.append(("Natural", natural))
+        mode = (new.get("anchor_mode") or "skip").strip().lower()
+        mode_explanations = {
+            "skip": "Skip missed anchors; use the next anchor after completion",
+            "all": "Backfill every missed anchor in order",
+            "flex": "Skip missed anchors and continue from the next available anchor",
+        }
+        rows.append(("Mode", f"{mode.upper()} — {mode_explanations.get(mode, mode)}"))
+        first = _first_recurrence_target(new, source)
+        if first:
+            rows.append(("First next", _fmtlocal(first)))
+        return rows
+
+    if source == "anchor_file":
+        value = str(new.get("anchor_file") or "").strip()
+        rows = [("Anchor file", value), ("Natural", f"Dates from {value.split('@', 1)[0]}")]
+        mode = (new.get("anchor_mode") or "skip").strip().lower()
+        rows.append(("Mode", f"{mode.upper()}"))
+        first = _first_recurrence_target(new, source)
+        if first:
+            rows.append(("First next", _fmtlocal(first)))
+        return rows
+
+    value = str(new.get("cp") or "").strip()
+    rows = [("Period", value)]
+    natural = None
+    try:
+        def _duration_label(duration) -> str:
+            seconds = int(duration.total_seconds())
+            if seconds % 86400 == 0:
+                return f"{seconds // 86400}d"
+            if seconds % 3600 == 0:
+                return f"{seconds // 3600}h"
+            if seconds % 60 == 0:
+                return f"{seconds // 60}m"
+            return f"{seconds}s"
+
+        tokens = core.parse_cp_sequence_tokens(value) or []
+        descriptions = []
+        for token in tokens:
+            if token.get("kind") == "rand":
+                descriptions.append(f"random interval {token.get('raw') or value}")
+            else:
+                duration = token.get("duration")
+                descriptions.append(_duration_label(duration) if duration else str(token.get("raw") or value))
+        if len(descriptions) == 1:
+            natural = f"Every {descriptions[0]}"
+        elif descriptions:
+            natural = "Cycle through " + ", then ".join(descriptions)
+    except Exception:
+        natural = None
+    if natural:
+        rows.append(("Natural", natural))
+    first = _first_recurrence_target(new, source)
+    if first:
+        rows.append(("First next", _fmtlocal(first)))
+    return rows
+
+
 def _render_cp_schedule_adjusted_panel(
     adjustment: tuple[
         datetime,
@@ -6109,12 +6197,14 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
     except Exception:
         transition = None
     if transition and transition.state == "enabled":
+        rows = [
+            ("Reason", transition.reason or "This task just gained Nautical recurrence and was promoted to chain:on."),
+            ("Source", transition.source),
+        ]
+        rows.extend(_recurrence_enabled_rows(new, transition.source))
         _panel(
             "⚓ Nautical enabled",
-            [
-                ("Reason", transition.reason or "This task just gained Nautical recurrence and was promoted to chain:on."),
-                ("Source", transition.source),
-            ],
+            rows,
             kind="note",
         )
     elif transition and transition.state == "disabled":

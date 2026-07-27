@@ -17203,25 +17203,25 @@ def test_ui_live_renderer_reveals_multiline_values_progressively():
     expect(sleep_delays[0] < sleep_delays[-1], f"multiline reveal did not ease toward settle: {sleep_delays!r}")
 
 
-def test_ui_live_renderer_highlights_timeline_bottom_up_without_layout_shift():
-    """Timeline focus should sweep top-down while keeping every line visible."""
+def test_ui_live_renderer_reveals_timeline_without_highlight():
+    """Timeline content should reveal plainly without injected markers or colors."""
     import nautical_core.ui as ui
 
     frames = ui._live_reveal_frames(
         [("Summary", "ready"), ("Timeline", "old\ncurrent\nnext"), ("Chain", "on")]
     )
-    timeline_frames = [rows[-1][1] for rows, active in frames if active is None and len(rows) >= 2]
+    timeline_frames = [rows[-1][1] for rows, active in frames if active == 1]
     expect(
         timeline_frames == [
-            "▸ [bold bright_cyan]old[/]\ncurrent\nnext",
-            "old\n▸ [bold bright_cyan]current[/]\nnext",
-            "old\ncurrent\n▸ [bold bright_cyan]next[/]",
+            "old",
+            "old\ncurrent",
+            "old\ncurrent\nnext",
         ],
-        f"timeline highlight did not sweep top-down: {timeline_frames!r}",
+        f"timeline did not reveal plainly: {timeline_frames!r}",
     )
     expect(
-        all(value.count("\n") == 2 for value in timeline_frames),
-        f"timeline highlight changed panel height: {timeline_frames!r}",
+        all("▸" not in value and "bright_cyan" not in value for value in timeline_frames),
+        f"timeline retained highlight markup: {timeline_frames!r}",
     )
 
 
@@ -23657,7 +23657,7 @@ TESTS = [
     test_ui_static_rich_renderer_delegates_to_shared_builder,
     test_ui_live_renderer_reveals_cumulative_row_frames,
     test_ui_live_renderer_reveals_multiline_values_progressively,
-    test_ui_live_renderer_highlights_timeline_bottom_up_without_layout_shift,
+    test_ui_live_renderer_reveals_timeline_without_highlight,
     test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels,
     test_ui_live_mid_animation_failure_settles_without_static_duplicate,
     test_ui_live_oversized_panel_settles_without_starting_animation,

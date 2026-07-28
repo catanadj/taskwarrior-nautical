@@ -11,6 +11,12 @@ from .moon_phase import PHASES, canonical_phase
 EVENT_NAMES = frozenset({"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"})
 ASTRONOMICAL_TIMES = EVENT_NAMES
 PHASE_TARGETS = {"new": 0.0, "first-quarter": 7.0, "full": 14.0, "last-quarter": 21.0}
+PHASE_RANGES = {
+    "new": (0.0, 6.99),
+    "first-quarter": (7.0, 13.99),
+    "full": (14.0, 20.99),
+    "last-quarter": (21.0, 27.99),
+}
 
 
 class AstronomyUnavailableError(RuntimeError):
@@ -41,6 +47,12 @@ def _phase_distance(value: float, target: float) -> float:
     return min(distance, 28.0 - distance)
 
 
+def _phase_matches(value: float, phase: str) -> bool:
+    """Return whether Astral's 0..27.99 phase age is in a named band."""
+    bounds = PHASE_RANGES[phase]
+    return bounds[0] <= float(value) <= bounds[1]
+
+
 def _timezone_for_profile(config: dict[str, Any] | None, name: str | None = None) -> tuple[str, str]:
     selected, profile = _profile(config, name)
     timezone = str(profile.get("timezone") or "").strip()
@@ -65,7 +77,7 @@ def resolve_phase_date(
     location_name: str | None = None,
     horizon_days: int = 60,
 ) -> date:
-    """Return the next local calendar date nearest the requested phase target."""
+    """Return the first local calendar date in the requested phase band."""
     name = canonical_phase(phase)
     if name is None:
         raise ValueError(f"unknown moon phase '{phase}'")
@@ -91,9 +103,7 @@ def _resolve_phase_date_cached(
         raise AstronomyUnavailableError(
             "moon phase anchors require the optional 'astral' package"
         ) from exc
-    target = PHASE_TARGETS[phase]
     start = reference_day + timedelta(days=1)
-    samples: list[tuple[float, date]] = []
     for offset in range(horizon_days):
         day = start + timedelta(days=offset)
         try:
@@ -102,10 +112,9 @@ def _resolve_phase_date_cached(
             raise LookupError(
                 f"moon phase '{phase}' is unavailable on {day.isoformat()} at {selected} ({timezone})"
             ) from exc
-        samples.append((_phase_distance(value, target), day))
-    if not samples:
-        raise LookupError(f"moon phase '{phase}' has no lookup result")
-    return min(samples, key=lambda item: (item[0], item[1]))[1]
+        if _phase_matches(value, phase):
+            return day
+    raise LookupError(f"moon phase '{phase}' has no matching date within {horizon_days} days")
 
 
 def _profile(config: dict[str, Any] | None, name: str | None = None) -> tuple[str, dict[str, Any]]:
@@ -214,6 +223,7 @@ __all__ = (
     "AstronomyConfigurationError",
     "AstronomyUnavailableError",
     "EVENT_NAMES",
+    "PHASE_RANGES",
     "is_event_name",
     "resolve_event",
     "resolve_phase_date",

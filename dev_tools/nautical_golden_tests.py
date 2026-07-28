@@ -8949,6 +8949,14 @@ def test_moon_phase_resolver_uses_circular_phase_distance():
         expect(False, f"unexpected phase resolver error: {exc!r}")
 
 
+def test_moon_phase_resolver_uses_documented_phase_bands():
+    """Moon matching follows Astral's documented seven-day phase bands."""
+    astronomy = core._import_sibling("astronomy")
+    expect(astronomy._phase_matches(14.0, "full"), "full phase lower bound should match")
+    expect(astronomy._phase_matches(20.99, "full"), "full phase upper bound should match")
+    expect(not astronomy._phase_matches(13.99, "full"), "first-quarter value should not match full")
+
+
 def test_moon_phase_source_and_filter_compose_with_weekday():
     """Moon sources and @moon filters must preserve the other AND-term constraints."""
     astronomy = core._import_sibling("astronomy")
@@ -23498,6 +23506,7 @@ TESTS = [
     test_moon_phase_anchor_grammar_normalizes_canonical_names,
     test_astronomy_profile_requires_explicit_timezone,
     test_moon_phase_resolver_uses_circular_phase_distance,
+    test_moon_phase_resolver_uses_documented_phase_bands,
     test_moon_phase_source_and_filter_compose_with_weekday,
     test_moon_phase_operational_errors_are_actionable,
     test_moon_phase_natural_language_is_explicit,

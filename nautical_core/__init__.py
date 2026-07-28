@@ -668,7 +668,7 @@ def _normalize_spec_for_acf_uncached(typ: str, spec: str):
 
 @_ttl_lru_cache(maxsize=512)
 def _normalize_spec_for_acf_cached(typ: str, spec: str, fmt: str):
-    typ = (typ or "").strip().lower()[:1]
+    typ = (typ or "").strip().lower()
     if typ not in ("w", "m", "y"):
         return None
     spec = (spec or "").strip().lower()[:256]
@@ -2573,6 +2573,7 @@ def _build_anchor_atom_dnf(head: str, full_tail: str):
         normalize_monthly_ordinal_spec=_normalize_monthly_ordinal_spec,
         split_csv_lower=_split_csv_lower,
         parse_atom_mods=_parse_atom_mods,
+        parse_error_cls=ParseError,
     )
 
 

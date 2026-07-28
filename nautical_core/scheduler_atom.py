@@ -24,6 +24,9 @@ def base_next_after_atom(
     spec = (atom.get("spec") or "").lower()
     mods = atom.get("mods") or {}
 
+    if typ == "moon":
+        raise ValueError("Moon phase anchors are recognized but not schedulable yet")
+
     if typ == "w" and "rand" in spec:
         atom_identity = json.dumps(
             {

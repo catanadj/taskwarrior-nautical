@@ -1,6 +1,8 @@
 from __future__ import annotations
 import re
 
+from .moon_phase import canonical_phase
+
 
 _HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
 ASTRONOMICAL_TIMES = frozenset({"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"})
@@ -24,10 +26,12 @@ def _time_padding_hint(tok: str) -> str | None:
 def parse_atom_head(head: str, *, re_mod, parse_error_cls) -> tuple[str, int]:
     h = (head or "").strip().lower()
     match = re_mod.fullmatch(r"(w|m|y)(?:/(\d{1,3}))?$", h)
+    if not match and h == "moon":
+        return "moon", 1
     if not match:
         raise parse_error_cls(
-            f"Invalid anchor head '{head}'. Expected 'w', 'm', or 'y' with optional '/N', "
-            "e.g., 'w/2', 'm/3', 'y/4'."
+            f"Invalid anchor head '{head}'. Expected 'w', 'm', 'y', or 'moon' with optional '/N', "
+            "e.g., 'w/2', 'm/3', 'y/4', or 'moon:full'."
         )
     typ = match.group(1)
     ival = int(match.group(2) or 1)
@@ -161,6 +165,7 @@ def build_anchor_atom_dnf(
     normalize_monthly_ordinal_spec,
     split_csv_lower,
     parse_atom_mods,
+    parse_error_cls,
 ):
     typ, ival = parse_atom_head(head)
     tlo = (typ or "").lower()
@@ -180,6 +185,13 @@ def build_anchor_atom_dnf(
             return [[{"typ": "w", "spec": t, "ival": ival, "mods": mods}] for t in toks]
 
     mods = parse_atom_mods(mods_str)
+    if tlo == "moon":
+        phase = canonical_phase(spec)
+        if phase is None:
+            raise parse_error_cls(
+                f"Unknown moon phase '{spec}'. Expected new, first-quarter, full, or last-quarter."
+            )
+        spec = phase
     return [[{"typ": tlo, "spec": spec.strip().lower(), "ival": ival, "mods": mods}]]
 
 

@@ -8898,6 +8898,26 @@ def test_symbolic_anchor_time_modifiers_accept_supported_events():
     expect(offset[0][0]["mods"]["time_offset_minutes"] == -45, f"astronomical time offset was not preserved: {offset!r}")
 
 
+def test_moon_phase_anchor_grammar_normalizes_canonical_names():
+    """Moon-phase anchors should parse to stable canonical phase names before scheduling support lands."""
+    cases = {
+        "moon:new": "new",
+        "moon:first_quarter": "first-quarter",
+        "moon:full-moon": "full",
+        "moon:third-quarter": "last-quarter",
+    }
+    for expression, expected in cases.items():
+        dnf = core.validate_anchor_expr_strict(expression)
+        expect(dnf[0][0]["typ"] == "moon", f"moon source type was not preserved: {dnf!r}")
+        expect(dnf[0][0]["spec"] == expected, f"moon phase was not canonicalized: {dnf!r}")
+    try:
+        core.validate_anchor_expr_strict("moon:blue")
+    except Exception as exc:
+        expect("moon phase" in str(exc).lower(), f"invalid moon phase error was unclear: {exc}")
+    else:
+        raise AssertionError("unknown moon phase should be rejected")
+
+
 def test_astronomy_profile_requires_explicit_timezone():
     """Astronomy profiles must state the civil timezone explicitly."""
     astronomy = core._import_sibling("astronomy")
@@ -23373,6 +23393,7 @@ TESTS = [
     test_counted_random_cadence_time_and_canonical_round_trip,
     test_counted_random_validation_and_natural_text,
     test_symbolic_anchor_time_modifiers_accept_supported_events,
+    test_moon_phase_anchor_grammar_normalizes_canonical_names,
     test_astronomy_profile_requires_explicit_timezone,
     test_anchor_date_calculations,
     test_interval_patterns,

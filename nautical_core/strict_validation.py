@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from .moon_phase import PHASES
+
 
 def normalize_anchor_input_to_dnf(expr, *, parse_anchor_expr_to_dnf_cached, parse_error_cls):
     """Normalize user input to parsed DNF, preserving current error messages."""
@@ -100,6 +102,16 @@ def validate_anchor_atom_strict(
                 raise parse_error_cls(f"y:{spec} does not support @{', '.join(bad)}")
         else:
             validate_yearly_token_format(spec)
+        return
+
+    if typ == "moon":
+        if spec not in PHASES:
+            raise parse_error_cls(f"Unknown moon phase '{spec}'")
+        if interval != 1:
+            raise parse_error_cls("Moon phases do not support /N intervals")
+        bad = [key for key in active_mod_keys(mods) if key not in ("t", "time_offset_minutes")]
+        if bad:
+            raise parse_error_cls(f"moon:{spec} does not support @{', '.join(bad)}")
         return
 
     raise parse_error_cls(f"Unknown anchor type '{typ}'")

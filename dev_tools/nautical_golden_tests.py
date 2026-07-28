@@ -9011,6 +9011,18 @@ def test_moon_phase_operational_errors_are_actionable():
     expect("Moon-phase scheduling unavailable" in plan.reason, plan.reason)
 
 
+def test_moon_phase_natural_language_is_explicit():
+    """Natural descriptions must identify moon sources and filters."""
+    expect(
+        core.describe_anchor_expr("moon:full + y:jul") == "full moon in Jul each year",
+        core.describe_anchor_expr("moon:full + y:jul"),
+    )
+    expect(
+        core.describe_anchor_expr("w:fri@moon=full") == "Fridays on full moon dates",
+        core.describe_anchor_expr("w:fri@moon=full"),
+    )
+
+
 def test_anchor_date_calculations():
     """Test specific date calculations for various anchor patterns"""
     test_cases = [
@@ -23488,6 +23500,7 @@ TESTS = [
     test_moon_phase_resolver_uses_circular_phase_distance,
     test_moon_phase_source_and_filter_compose_with_weekday,
     test_moon_phase_operational_errors_are_actionable,
+    test_moon_phase_natural_language_is_explicit,
     test_anchor_date_calculations,
     test_interval_patterns,
     test_complex_dnf_expressions,

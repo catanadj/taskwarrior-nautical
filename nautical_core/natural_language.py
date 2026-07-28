@@ -428,6 +428,8 @@ def describe_anchor_term_collect(
     wk_ival = mo_ival = yr_ival = 1
     monthly_specs = []
     yearly_specs = []
+    moon_source = None
+    moon_filter = None
 
     for atom in term:
         typ = (atom.get("typ") or atom.get("type") or "").lower()
@@ -456,11 +458,27 @@ def describe_anchor_term_collect(
                 if phr and qmap and tok in qmap and not phr.startswith("one random day"):
                     phr = f"{phr} ({qmap[tok]})"
                 y_parts.append(phr)
+        elif typ == "moon":
+            moon_source = spec.replace("-quarter", " quarter")
 
         mods = atom.get("mods") or {}
+        if mods.get("moon"):
+            moon_filter = str(mods["moon"]).replace("-quarter", " quarter")
         bd_filter = bd_filter or bool(mods.get("bd") or (mods.get("wd") is True))
 
-    return w_phrase, m_parts, y_parts, bd_filter, wk_ival, mo_ival, yr_ival, monthly_specs, yearly_specs
+    return (
+        w_phrase,
+        m_parts,
+        y_parts,
+        bd_filter,
+        wk_ival,
+        mo_ival,
+        yr_ival,
+        monthly_specs,
+        yearly_specs,
+        moon_source,
+        moon_filter,
+    )
 
 
 def describe_yearly_rand_filter(
@@ -714,6 +732,8 @@ def describe_anchor_term(
         yr_ival,
         monthly_specs,
         yearly_specs,
+        moon_source,
+        moon_filter,
     ) = describe_anchor_term_collect(
         term,
         fmt_weekdays_list=fmt_weekdays_list,
@@ -786,6 +806,16 @@ def describe_anchor_term(
     txt = " ".join(part for part in parts if part)
     if interval_prefix:
         txt = interval_prefix + txt
+
+    if moon_source:
+        moon_label = f"{moon_source} moon"
+        if txt:
+            txt = f"{moon_label} {'on' if w_phrase else 'in'} {txt}"
+        else:
+            txt = moon_label
+    elif moon_filter:
+        moon_label = f"{moon_filter} moon dates"
+        txt = f"{txt} on {moon_label}" if txt else f"on {moon_label}"
 
     txt = inject_prevnext_phrase(txt, term, wdname=_WDNAME)
     txt = describe_inject_schedule_suffixes(txt or "any day", term)

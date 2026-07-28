@@ -122,6 +122,65 @@ def compute_expiration_child_due(parent: dict[str, Any], *, hook: Any) -> tuple[
     return child_due, result_meta
 
 
+def native_until_target_field(task: dict[str, Any]) -> str:
+    """Return the recurrence target field used by a task."""
+    return "due" if task.get("due") else "scheduled"
+
+
+def invalid_native_until_reason(
+    task: dict[str, Any],
+    *,
+    safe_parse_datetime: Any,
+) -> str | None:
+    """Describe an invalid native expiration window, if one is present."""
+    until_raw = task.get("until")
+    target_field = native_until_target_field(task)
+    target_raw = task.get(target_field)
+    if not until_raw or not target_raw:
+        return None
+    until_dt, until_err = safe_parse_datetime(until_raw)
+    target_dt, target_err = safe_parse_datetime(target_raw)
+    if until_err or target_err or until_dt is None or target_dt is None:
+        return "native until or recurrence target is not parseable"
+    if until_dt <= target_dt:
+        return f"native until is not later than {target_field}"
+    return None
+
+
+def repair_native_until_from_previous(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+    *,
+    kind: str,
+    safe_parse_datetime: Any,
+    fmt_isoz: Any,
+    utc_to_local_naive: Any,
+    local_naive_to_utc: Any,
+) -> tuple[str | None, str | None]:
+    """Carry the previous link's native expiration policy onto the current target."""
+    parent_field = native_until_target_field(previous)
+    child_field = native_until_target_field(current)
+    parent_target, parent_target_err = safe_parse_datetime(previous.get(parent_field))
+    parent_until, parent_until_err = safe_parse_datetime(previous.get("until"))
+    child_target, child_target_err = safe_parse_datetime(current.get(child_field))
+    if parent_target_err or parent_until_err or child_target_err:
+        return None, "previous link lacks parseable target/until state"
+    if not all((parent_target, parent_until, child_target)):
+        return None, "previous link lacks target or native until"
+    try:
+        repaired = native_until.carry(
+            parent_target,
+            parent_until,
+            child_target,
+            kind,
+            utc_to_local_naive=utc_to_local_naive,
+            local_naive_to_utc=local_naive_to_utc,
+        )
+    except native_until.NativeUntilCarryError as exc:
+        return None, str(exc)
+    return fmt_isoz(repaired), None
+
+
 def _child_recurrence_mismatch(parent: dict[str, Any], child: dict[str, Any]) -> str:
     """Return a mismatch when a candidate child carries a different recurrence."""
     if not any(str(child.get(field) or "").strip() for field in RECURRENCE_FIELDS):

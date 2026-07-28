@@ -164,6 +164,122 @@ def _candidate_rows(task_bin: str, hook: Any) -> list[dict[str, Any]]:
     return sorted(rows, key=_candidate_sort_key)
 
 
+def _active_chain_rows(task_bin: str) -> list[dict[str, Any]]:
+    """Export live Nautical links for integrity checks, independently of recovery candidates."""
+    rows = _export(task_bin, ["chain:on", "chainID.not:"])
+    return sorted(
+        (
+            row
+            for row in rows
+            if str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
+        ),
+        key=_candidate_sort_key,
+    )
+
+
+def _native_until_repairs(task_bin: str, hook: Any, *, apply: bool) -> tuple[list[dict[str, Any]], list[str]]:
+    """Find invalid native windows and repair only those with a reliable predecessor."""
+    rows = _active_chain_rows(task_bin)
+    by_chain_link = {
+        (
+            str(row.get("chainID") or "").strip(),
+            reconcile.int_or_default(row.get("link"), 0),
+        ): row
+        for row in rows
+    }
+    repairs: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for row in rows:
+        reason = reconcile.invalid_native_until_reason(row, safe_parse_datetime=hook._safe_parse_datetime)
+        if not reason:
+            continue
+        chain_id = str(row.get("chainID") or "").strip()
+        link = reconcile.int_or_default(row.get("link"), 0)
+        previous = by_chain_link.get((chain_id, link - 1))
+        item = {
+            "task": reconcile.short_uuid(row.get("uuid")),
+            "chainID": chain_id,
+            "link": link,
+            "target": row.get("due") or row.get("scheduled"),
+            "until": row.get("until"),
+            "reason": reason,
+        }
+        if previous is None:
+            item["action"] = "manual_review"
+            repairs.append(item)
+            errors.append(f"{item['task']} chain {chain_id} link {link}: no predecessor for native-until repair")
+            continue
+        previous_reason = reconcile.invalid_native_until_reason(
+            previous,
+            safe_parse_datetime=hook._safe_parse_datetime,
+        )
+        if previous_reason:
+            item["action"] = "manual_review"
+            item["repair_error"] = f"previous link is invalid: {previous_reason}"
+            repairs.append(item)
+            errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
+            continue
+        kind = reconcile.recurrence_kind(row)
+        repaired, repair_error = reconcile.repair_native_until_from_previous(
+            previous,
+            row,
+            kind=kind,
+            safe_parse_datetime=hook._safe_parse_datetime,
+            fmt_isoz=hook.core.fmt_isoz,
+            utc_to_local_naive=getattr(hook, "_utc_to_local_naive"),
+            local_naive_to_utc=getattr(hook, "_local_naive_to_utc"),
+        )
+        if repair_error or not repaired:
+            item["action"] = "manual_review"
+            item["repair_error"] = repair_error or "could not calculate repaired until"
+            repairs.append(item)
+            errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
+            continue
+        item["action"] = "repair_until"
+        item["new_until"] = repaired
+        if apply:
+            try:
+                _modify_native_until(task_bin, row, repaired)
+            except Exception as exc:
+                item["action"] = "repair_error"
+                item["repair_error"] = str(exc).strip() or type(exc).__name__
+                errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
+                continue
+            fresh = _fresh_parent(task_bin, row)
+            if fresh is None or str(fresh.get("until") or "") != repaired:
+                errors.append(f"{item['task']} chain {chain_id} link {link}: native until repair verification failed")
+                item["action"] = "repair_error"
+            else:
+                item["applied"] = True
+        repairs.append(item)
+    return repairs, errors
+
+
+def _modify_native_until(task_bin: str, row: dict[str, Any], new_until: str) -> None:
+    uuid = str(row.get("uuid") or "").strip()
+    chain_id = str(row.get("chainID") or "").strip()
+    link = reconcile.int_or_default(row.get("link"), 0)
+    if not uuid or not chain_id or link <= 0:
+        raise RuntimeError("native until repair lacks task identity")
+    proc = _run_task(
+        task_bin,
+        [
+            "rc.hooks=off",
+            "rc.confirmation=off",
+            "rc.verbose=nothing",
+            f"uuid:{uuid}",
+            "chain:on",
+            f"chainID:{chain_id}",
+            f"link:{link}",
+            "modify",
+            f"until:{new_until}",
+        ],
+        timeout=30.0,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(task_command.failure_message(proc, "native until repair"))
+
+
 def _existing_children(task_bin: str, parent: dict[str, Any]) -> list[dict[str, Any]]:
     chain_id = str(parent.get("chainID") or "").strip()
     next_link = reconcile.int_or_default(parent.get("link"), 1) + 1
@@ -856,6 +972,31 @@ def main(argv: list[str] | None = None) -> int:
         candidates = _candidate_rows(args.task_bin, hook)
     except Exception as exc:
         return _startup_failure(args, "candidate_export", exc)
+    native_until_audit_warning = ""
+    try:
+        native_until_repairs, native_until_errors = _native_until_repairs(
+            args.task_bin,
+            hook,
+            apply=args.apply,
+        )
+    except Exception as exc:
+        # The integrity pass is supplementary; preserve normal recovery when its
+        # independent export cannot run (for example while Taskwarrior is locked).
+        native_until_repairs, native_until_errors = [], []
+        native_until_audit_warning = str(exc).strip() or type(exc).__name__
+        if not args.json:
+            print(f"warning: native-until audit skipped: {native_until_audit_warning}", file=sys.stderr)
+    if not args.json:
+        for item in native_until_repairs:
+            action = item.get("action") or "native_until"
+            suffix = f" -> {item['new_until']}" if item.get("new_until") else ""
+            print(
+                f"native-until:{action} {item.get('task') or '?'} "
+                f"chain {item.get('chainID') or '?'} link {item.get('link') or '?'}"
+                f" ({item.get('reason') or 'invalid native until'}){suffix}"
+            )
+        for error in native_until_errors:
+            print(f"error: native-until: {error}", file=sys.stderr)
     try:
         taskdata = _task_data_dir(args.task_bin) if args.apply else None
     except Exception as exc:
@@ -955,6 +1096,9 @@ def main(argv: list[str] | None = None) -> int:
             for plan, evidence in zip(plans, plan_evidence)
         ],
         "applied": applied,
+        "native_until_repairs": native_until_repairs,
+        "native_until_errors": native_until_errors,
+        "native_until_audit_warning": native_until_audit_warning,
     }
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -966,8 +1110,9 @@ def main(argv: list[str] | None = None) -> int:
             f"expiration_hops={summary['expiration_hops']} recovered={summary['recovered_chains']} "
             f"final={summary['legitimate_final']} manual={summary['manual_stop']} "
             f"stale={summary['stale']} partial={summary['partial']} errors={summary['errors']}"
+            f" native_until={len(summary['native_until_repairs'])}"
         )
-    if summary["errors"]:
+    if summary["errors"] or summary["native_until_errors"]:
         return 1
     return 2 if summary["partial"] else 0
 

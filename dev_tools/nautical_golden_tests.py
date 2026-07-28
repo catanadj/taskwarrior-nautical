@@ -23015,6 +23015,44 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
     )
 
 
+def test_reconcile_repairs_invalid_native_until_from_previous_link():
+    """Hookless due moves should recover the prior link's native-until carry policy."""
+    import nautical_core.reconcile as reconcile
+
+    hook_path = _find_hook_file("on-modify-nautical.py")
+    mod = _load_hook_module(hook_path, "_nautical_until_reconcile_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    def stamp(day, hhmm):
+        return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
+
+    previous = {
+        "link": 1,
+        "due": stamp(date(2026, 7, 20), (9, 0)),
+        "until": stamp(date(2026, 7, 20), (23, 0)),
+    }
+    current = {
+        "link": 2,
+        "due": stamp(date(2026, 7, 22), (9, 0)),
+        "until": stamp(date(2026, 7, 21), (23, 0)),
+    }
+    expect(
+        reconcile.invalid_native_until_reason(current, safe_parse_datetime=mod._safe_parse_datetime),
+        "invalid native-until window was not detected",
+    )
+    repaired, error = reconcile.repair_native_until_from_previous(
+        previous,
+        current,
+        kind="anchor",
+        safe_parse_datetime=mod._safe_parse_datetime,
+        fmt_isoz=mod.core.fmt_isoz,
+        utc_to_local_naive=mod._utc_to_local_naive,
+        local_naive_to_utc=mod._local_naive_to_utc,
+    )
+    expect(not error and repaired == stamp(date(2026, 7, 22), (23, 0)), f"wrong carried until: {repaired}, {error}")
+
+
 def test_seasonal_selection_business_calendar_and_cache_identity():
     """Seasonal offsets should honor custom calendars and cache each seasonal context separately."""
     from nautical_core import position_selection
@@ -23819,6 +23857,7 @@ TESTS = [
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
+    test_reconcile_repairs_invalid_native_until_from_previous_link,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
     test_reconcile_manual_deletion_stops_chain_without_child_lookup,
     test_reconcile_delayed_expiration_dry_run_converges_to_live_slot,

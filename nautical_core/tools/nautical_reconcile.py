@@ -32,6 +32,38 @@ _DEFAULT_EXPIRATION_HOPS = 32
 _MAX_EXPIRATION_HOPS = 1000
 _RECONCILE_PROTOCOL = 1
 
+_ANSI = {
+    "dim": "\033[2m",
+    "cyan": "\033[36m",
+    "green": "\033[32m",
+    "yellow": "\033[33m",
+    "red": "\033[31m",
+    "reset": "\033[0m",
+}
+
+
+def _style(text: str, color: str, *, stream: Any = None) -> str:
+    """Apply terminal color only for interactive, color-capable output."""
+    stream = stream or sys.stdout
+    if os.environ.get("NO_COLOR") or not getattr(stream, "isatty", lambda: False)():
+        return text
+    return f"{_ANSI.get(color, '')}{text}{_ANSI['reset']}"
+
+
+def _action_style(action: str) -> str:
+    return {
+        "spawn": "green",
+        "backfill_nextlink": "cyan",
+        "repair_until": "green",
+        "legitimate_final": "yellow",
+        "manual_stop": "yellow",
+        "stale": "dim",
+        "partial": "yellow",
+        "error": "red",
+        "repair_error": "red",
+        "manual_review": "yellow",
+    }.get(action, "cyan")
+
 
 def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
     candidates: list[Path] = []
@@ -875,26 +907,26 @@ def _print_plan(
         evidence = reconcile.describe_plan(plan)
     if plan.action == "spawn":
         suffix = f" -> created {applied_short}" if applied_short else ""
-        print(f"spawn: {parent}{suffix}")
+        print(_style(f"spawn: {parent}{suffix}", _action_style(plan.action)))
         _print_evidence(evidence, ("reason", "kind", "next_link", "child_field", "child_target", "child_due", "child_local", "child_expires", "expiration"))
     elif plan.action == "backfill_nextlink":
         suffix = " (applied)" if applied_short else ""
-        print(f"backfill nextLink: {parent}{suffix}")
+        print(_style(f"backfill nextLink: {parent}{suffix}", _action_style(plan.action)))
         _print_evidence(evidence, ("reason", "next_link", "existing_child"))
     elif plan.action == "legitimate_final":
         suffix = " -> set chain:off" if applied_short else ""
-        print(f"final: {parent} ({plan.reason}){suffix}")
+        print(_style(f"final: {parent} ({plan.reason}){suffix}", _action_style(plan.action)))
         _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
     elif plan.action == "manual_stop":
         suffix = " -> set chain:off" if applied_short else ""
-        print(f"manual stop: {parent} ({plan.reason}){suffix}")
+        print(_style(f"manual stop: {parent} ({plan.reason}){suffix}", _action_style(plan.action)))
         _print_evidence(evidence, ("kind", "next_link"))
     elif plan.action == "stale":
-        print(f"skip: {parent} ({plan.reason})")
+        print(_style(f"skip: {parent} ({plan.reason})", _action_style(plan.action)))
     elif plan.action == "partial":
-        print(f"partial: {parent} ({plan.reason})")
+        print(_style(f"partial: {parent} ({plan.reason})", _action_style(plan.action)))
     else:
-        print(f"error: {parent} ({plan.reason})")
+        print(_style(f"error: {parent} ({plan.reason})", _action_style("error")))
         _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
 
 
@@ -905,9 +937,9 @@ def _print_recovery_group(
     last, evidence, applied_short = items[-1]
     hops = sum(1 for plan, _evidence, _applied in items if plan.action in {"spawn", "backfill_nextlink"})
     noun = "occurrence" if hops == 1 else "occurrences"
-    print(f"recover: {_fmt_parent(first.parent)} -> advanced {hops} {noun}")
+    print(_style(f"recover: {_fmt_parent(first.parent)} -> advanced {hops} {noun}", "cyan"))
     if last.action in {"error", "partial", "legitimate_final", "manual_stop", "stale"}:
-        print(f"  result: {last.action.replace('_', ' ')} ({last.reason})")
+        print(_style(f"  result: {last.action.replace('_', ' ')} ({last.reason})", _action_style(last.action)))
         return
     if applied_short:
         print(f"  child: {applied_short}")
@@ -937,7 +969,7 @@ def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        print(f"error: {stage.replace('_', ' ')}: {reason}", file=sys.stderr)
+        print(_style(f"error: {stage.replace('_', ' ')}: {reason}", "red", stream=sys.stderr), file=sys.stderr)
     return 1
 
 
@@ -985,18 +1017,26 @@ def main(argv: list[str] | None = None) -> int:
         native_until_repairs, native_until_errors = [], []
         native_until_audit_warning = str(exc).strip() or type(exc).__name__
         if not args.json:
-            print(f"warning: native-until audit skipped: {native_until_audit_warning}", file=sys.stderr)
+            print(
+                _style(
+                    f"warning: native-until audit skipped: {native_until_audit_warning}",
+                    "yellow",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
     if not args.json:
         for item in native_until_repairs:
             action = item.get("action") or "native_until"
             suffix = f" -> {item['new_until']}" if item.get("new_until") else ""
-            print(
-                f"native-until:{action} {item.get('task') or '?'} "
-                f"chain {item.get('chainID') or '?'} link {item.get('link') or '?'}"
-                f" ({item.get('reason') or 'invalid native until'}){suffix}"
+            line = (
+                f"native-until: {action:<13} {item.get('task') or '?'} "
+                f"chain={item.get('chainID') or '?'} link={item.get('link') or '?'}"
+                f"  {item.get('reason') or 'invalid native until'}{suffix}"
             )
+            print(_style(line, _action_style(action)))
         for error in native_until_errors:
-            print(f"error: native-until: {error}", file=sys.stderr)
+            print(_style(f"error: native-until: {error}", "red", stream=sys.stderr), file=sys.stderr)
     try:
         taskdata = _task_data_dir(args.task_bin) if args.apply else None
     except Exception as exc:
@@ -1103,7 +1143,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
-        print(
+        summary_line = (
             "summary: "
             f"{summary['mode']}; candidates={summary['candidates']} "
             f"spawn={summary['spawn']} backfill={summary['backfill_nextlink']} "
@@ -1112,6 +1152,8 @@ def main(argv: list[str] | None = None) -> int:
             f"stale={summary['stale']} partial={summary['partial']} errors={summary['errors']}"
             f" native_until={len(summary['native_until_repairs'])}"
         )
+        summary_color = "red" if summary["errors"] or summary["native_until_errors"] else "yellow" if summary["partial"] else "green"
+        print(_style(summary_line, summary_color))
     if summary["errors"] or summary["native_until_errors"]:
         return 1
     return 2 if summary["partial"] else 0

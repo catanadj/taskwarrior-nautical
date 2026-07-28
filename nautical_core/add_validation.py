@@ -58,6 +58,8 @@ def collect_anchor_time_slots(
     *,
     normalize_time_slots: Callable[[Any], list[tuple[int, int]]],
     anchor_file_dir: str,
+    target_date: Any = None,
+    resolve_time_slots: Callable[[Any, Any], list[tuple[int, int]]] | None = None,
 ) -> tuple[tuple[int, int], ...]:
     """Return every effective clock time that an anchor or anchor_file can produce."""
     out: set[tuple[int, int]] = set()
@@ -66,9 +68,15 @@ def collect_anchor_time_slots(
             term_slots: set[tuple[int, int]] = set()
             for atom in term or ():
                 mods = atom.get("mods") or {} if isinstance(atom, dict) else {}
-                term_slots.update(normalize_time_slots(mods.get("t")))
+                value = mods.get("t")
+                if resolve_time_slots is not None and target_date is not None:
+                    term_slots.update(resolve_time_slots(mods, target_date))
+                else:
+                    term_slots.update(normalize_time_slots(value))
             out.update(term_slots or {fallback_hhmm})
-    except Exception:
+    except Exception as exc:
+        if exc.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
+            raise
         pass
 
     if str(anchor_file_value or "").strip():

@@ -256,6 +256,7 @@ OMIT_FILE_DIR = _core_config.OMIT_FILE_DIR
 ANCHOR_PRESETS = _core_config.ANCHOR_PRESETS
 OMIT_PRESETS = _core_config.OMIT_PRESETS
 BUSINESS_CALENDAR_CONFIG = _core_config.BUSINESS_CALENDAR_CONFIG
+ASTRONOMY_CONFIG = _core_config.ASTRONOMY_CONFIG
 ENABLE_ANCHOR_CACHE = _core_config.ENABLE_ANCHOR_CACHE
 ANCHOR_CACHE_DIR_OVERRIDE = _core_config.ANCHOR_CACHE_DIR_OVERRIDE
 ANCHOR_CACHE_TTL = _core_config.ANCHOR_CACHE_TTL
@@ -1837,7 +1838,10 @@ def _split_inline_items_respecting_t_lists(s: str) -> list[str]:
                 while k < n and s[k] != ",":
                     k += 1
                 nxt = s[j:k].strip()
-                if nxt and ("@" not in nxt) and (not nxt[0].isalpha()) and (nxt[0] not in "-(|&"):
+                if nxt and ("@" not in nxt) and (
+                    nxt.lower() in {"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"}
+                    or ((not nxt[0].isalpha()) and nxt[0] not in "-(|&")
+                ):
                     buf.append(ch)
                     i += 1
                     continue
@@ -3770,6 +3774,7 @@ __all__ = (
     'BusinessCalendarConfigError',
     'ANCHOR_CACHE_DIR_OVERRIDE',
     'BUSINESS_CALENDAR_CONFIG',
+    'ASTRONOMY_CONFIG',
     'DEFAULT_BUSINESS_CALENDAR',
     'ENABLE_ANCHOR_CACHE',
     'LOCAL_TZ_NAME',

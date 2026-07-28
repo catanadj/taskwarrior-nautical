@@ -8887,6 +8887,31 @@ def test_interval_patterns():
             assert next_date == exp, f"{anchor} iteration {i}: got {next_date}, expected {exp}"
             current = next_date + timedelta(days=1)
 
+def test_symbolic_anchor_time_modifiers_accept_supported_events():
+    """Astronomical @t values should parse without changing numeric time storage."""
+    for event in ("sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"):
+        dnf = core.validate_anchor_expr_strict(f"w:mon@t={event}")
+        expect(dnf[0][0]["mods"]["t"] == event, f"symbolic time was not preserved: {event!r} -> {dnf!r}")
+    numeric = core.validate_anchor_expr_strict("w:mon@t=09:00")
+    expect(numeric[0][0]["mods"]["t"] == (9, 0), f"numeric time representation changed: {numeric!r}")
+    offset = core.validate_anchor_expr_strict("w:mon@t=dawn@-45m")
+    expect(offset[0][0]["mods"]["time_offset_minutes"] == -45, f"astronomical time offset was not preserved: {offset!r}")
+
+
+def test_astronomy_profile_requires_explicit_timezone():
+    """Astronomy profiles must state the civil timezone explicitly."""
+    astronomy = core._import_sibling("astronomy")
+    try:
+        astronomy._observer(
+            {"locations": {"home": {"latitude": 40.0, "longitude": -74.0}}},
+            "home",
+        )
+    except ValueError as exc:
+        expect("explicit timezone" in str(exc), f"unexpected astronomy profile error: {exc!r}")
+    else:
+        raise AssertionError("astronomy profile without timezone should be rejected")
+
+
 def test_anchor_date_calculations():
     """Test specific date calculations for various anchor patterns"""
     test_cases = [
@@ -23309,6 +23334,8 @@ TESTS = [
     test_counted_random_omit_redraws_from_remaining_pool,
     test_counted_random_cadence_time_and_canonical_round_trip,
     test_counted_random_validation_and_natural_text,
+    test_symbolic_anchor_time_modifiers_accept_supported_events,
+    test_astronomy_profile_requires_explicit_timezone,
     test_anchor_date_calculations,
     test_interval_patterns,
     test_complex_dnf_expressions,

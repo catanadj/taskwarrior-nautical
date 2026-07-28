@@ -65,6 +65,7 @@ CONFIG_SPECS: dict[str, dict[str, Any]] = {
     "anchor_presets": {"type": "table", "default": {}},
     "omit_presets": {"type": "table", "default": {}},
     "business_calendar": {"type": "table", "default": {}},
+    "astronomy": {"type": "table", "default": {}},
     "recurrence": {"type": "table", "default": {}},
     "recurrence.update_udas": {"type": "string_list", "default": []},
 }

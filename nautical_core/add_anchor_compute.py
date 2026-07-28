@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta, timezone
+from datetime import date, timedelta, timezone
 from typing import Any, Callable
 
 
@@ -94,6 +94,7 @@ def anchor_times_for_date(
     *,
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
+    resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
 ):
     times = set()
     for term in dnf:
@@ -122,7 +123,8 @@ def anchor_times_for_date(
         if term_matches:
             for atom in term:
                 mods = atom.get("mods") or {}
-                for hhmm in norm_t_mod(mods.get("t")):
+                slots = resolve_time_slots(mods, d) if resolve_time_slots else norm_t_mod(mods.get("t"))
+                for hhmm in slots:
                     times.add(hhmm)
     return sorted(times)
 
@@ -138,6 +140,7 @@ def anchor_pick_occurrence_local(
     *,
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
+    resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
 ):
     d0 = ref_dt_local.date()
     if anchor_expr_fires_on_date_with_omit(dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core):
@@ -149,6 +152,7 @@ def anchor_pick_occurrence_local(
             omit_dnf=omit_dnf,
             core=core,
             norm_t_mod=norm_t_mod,
+            resolve_time_slots=resolve_time_slots,
         ) or [fallback_hhmm]
         for hhmm in tlist:
             cand_utc = core.build_local_datetime(d0, hhmm)
@@ -176,6 +180,7 @@ def anchor_pick_occurrence_local(
         omit_dnf=omit_dnf,
         core=core,
         norm_t_mod=norm_t_mod,
+        resolve_time_slots=resolve_time_slots,
     ) or [fallback_hhmm]
     return core.to_local(core.build_local_datetime(nxt_d, tlist[0]))
 
@@ -190,6 +195,7 @@ def anchor_next_occurrence_after_local_dt(
     *,
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
+    resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
 ):
     d0 = after_dt_local.date()
     if anchor_expr_fires_on_date_with_omit(
@@ -208,6 +214,7 @@ def anchor_next_occurrence_after_local_dt(
             omit_dnf=omit_dnf,
             core=core,
             norm_t_mod=norm_t_mod,
+            resolve_time_slots=resolve_time_slots,
         ) or [fallback_hhmm]
         for hhmm in tlist:
             cand_utc = core.build_local_datetime(d0, hhmm)
@@ -226,6 +233,7 @@ def anchor_next_occurrence_after_local_dt(
         omit_dnf=omit_dnf,
         core=core,
         norm_t_mod=norm_t_mod,
+        resolve_time_slots=resolve_time_slots,
     ) or [fallback_hhmm]
     return core.to_local(core.build_local_datetime(nxt_d, tlist[0]))
 
@@ -243,6 +251,7 @@ def anchor_until_summary(
     to_local_cached: Callable[[Any], Any],
     max_preview_iterations: int,
     max_iterations: int,
+    resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
 ):
     if not until_dt:
         return None, None
@@ -264,12 +273,25 @@ def anchor_until_summary(
     exact_until_count = max(0, count - 1)
     if not last:
         return exact_until_count, None
-    final_hhmm = core.pick_hhmm_from_dnf_for_date(
-        dnf,
-        last,
-        first_date_local,
-        seed_base=seed_base,
-    ) or first_hhmm
+    final_hhmm = None
+    if resolve_time_slots:
+        for term in dnf:
+            if all(core.factor_matches_on(atom, last, first_date_local, seed_base=seed_base) for atom in term):
+                for atom in term:
+                    mods = atom.get("mods") or {}
+                    slots = resolve_time_slots(mods, last)
+                    if slots:
+                        final_hhmm = slots[0]
+                        break
+                if final_hhmm:
+                    break
+    if final_hhmm is None:
+        final_hhmm = core.pick_hhmm_from_dnf_for_date(
+            dnf,
+            last,
+            first_date_local,
+            seed_base=seed_base,
+        ) or first_hhmm
     final_until_dt = core.build_local_datetime(last, final_hhmm).astimezone(timezone.utc)
     return exact_until_count, final_until_dt
 
@@ -286,6 +308,7 @@ def anchor_build_preview(
     *,
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
+    resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
 ):
     preview = []
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
@@ -300,6 +323,7 @@ def anchor_build_preview(
             omit_dnf=omit_dnf,
             core=core,
             norm_t_mod=norm_t_mod,
+            resolve_time_slots=resolve_time_slots,
         )
         if not nxt_dt:
             break

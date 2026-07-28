@@ -2603,8 +2603,13 @@ def _validate_native_until_anchor_slots_or_fail(task: dict) -> None:
             (target_local.hour, target_local.minute),
             normalize_time_slots=_norm_hhmm_list,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            target_date=target_local.date(),
+            resolve_time_slots=lambda value, target_date: _norm_hhmm_list(value, target_date),
         )
-    except Exception:
+    except Exception as exc:
+        if exc.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
+            _panel("❌ Invalid astronomy time", [("Required", str(exc))], kind="error")
+            sys.exit(1)
         return
     is_valid, reason = add_validation.validate_native_until_calendar_slots(
         until_dt,
@@ -3067,38 +3072,60 @@ def _parse_hhmm_token(tok: str) -> tuple[int, int] | None:
     return (int(hh), int(mm))
 
 
-def _norm_hhmm_list(v) -> list[tuple[int, int]]:
+def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
     """Normalize various core representations of @t into a sorted list of (hh, mm)."""
     if v is None:
         return []
+    offset_minutes = 0
+    if isinstance(v, dict):
+        offset_minutes = int(v.get("time_offset_minutes", 0) or 0)
+        v = v.get("t")
     if isinstance(v, tuple) and len(v) == 2 and all(isinstance(x, int) for x in v):
         hh, mm = v
-        return [(hh, mm)]
+        minute = (hh * 60 + mm + offset_minutes) % (24 * 60)
+        return [(minute // 60, minute % 60)]
     if isinstance(v, str):
+        event_name = v.strip().lower()
+        if target_date is not None and event_name in {"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"}:
+            astronomy = core._import_sibling("astronomy")
+            event = astronomy.resolve_event(
+                event_name,
+                target_date,
+                config=getattr(core, "ASTRONOMY_CONFIG", {}),
+            )
+            local = core.to_local(event)
+            minute = (local.hour * 60 + local.minute + offset_minutes) % (24 * 60)
+            return [(minute // 60, minute % 60)]
         out: list[tuple[int, int]] = []
         for part in v.split(","):
             t = _parse_hhmm_token(part)
             if t is not None:
                 out.append(t)
+        if offset_minutes:
+            out = [((hh * 60 + mm + offset_minutes) % (24 * 60) // 60, (hh * 60 + mm + offset_minutes) % 60) for hh, mm in out]
         return out
     if isinstance(v, list):
         out_list: list[tuple[int, int]] = []
         for it in v:
-            out_list.extend(_norm_hhmm_list(it))
+            out_list.extend(_norm_hhmm_list(it, target_date))
+        if offset_minutes:
+            out_list = [((hh * 60 + mm + offset_minutes) % (24 * 60) // 60, (hh * 60 + mm + offset_minutes) % 60) for hh, mm in out_list]
         return out_list
     return []
 
 
-def _extract_time_slots_from_dnf(dnf) -> list[tuple[int, int]]:
+def _extract_time_slots_from_dnf(dnf, target_date=None) -> list[tuple[int, int]]:
     """Extract a unique, sorted list of time slots from a parsed anchor DNF."""
     out: set[tuple[int, int]] = set()
     try:
         for term in dnf:
             for atom in term:
                 mods = atom.get("mods") or {}
-                for hhmm in _norm_hhmm_list(mods.get("t")):
+                for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
                     out.add(hhmm)
-    except Exception:
+    except Exception as exc:
+        if exc.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
+            raise
         return []
     return sorted(out)
 
@@ -3120,13 +3147,15 @@ def _extract_time_slots_for_date(
                 matched = True
                 for atom in term:
                     mods = atom.get("mods") or {}
-                    for hhmm in _norm_hhmm_list(mods.get("t")):
+                    for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
                         out.add(hhmm)
-    except Exception:
+    except Exception as exc:
+        if exc.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
+            raise
         return []
     if matched:
         return sorted(out)
-    return _extract_time_slots_from_dnf(dnf)
+    return _extract_time_slots_from_dnf(dnf, target_date)
 
 def _anchor_slot_local_dt(target_date, hhmm: tuple[int, int]) -> datetime:
     """Build a configured-local anchor slot for @t=HH:MM."""
@@ -3197,7 +3226,7 @@ def _next_occurrence_after_local_dt(
     """
     if not dnf:
         return None
-    slots = _extract_time_slots_from_dnf(dnf)
+    slots = _extract_time_slots_from_dnf(dnf, after_local_dt.date())
 
     # same-day: only if the expression hits on that date
     adate = after_local_dt.date()

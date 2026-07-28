@@ -31,6 +31,7 @@ _DEFAULTS = {
     "anchor_presets": config_schema.spec_default("anchor_presets"),
     "omit_presets": config_schema.spec_default("omit_presets"),
     "business_calendar": config_schema.spec_default("business_calendar"),
+    "astronomy": config_schema.spec_default("astronomy"),
 }
 
 _CONF_CACHE = None
@@ -258,6 +259,7 @@ OMIT_FILE_DIR = _CONF["omit_file_dir"]
 ANCHOR_PRESETS = _CONF["anchor_presets"]
 OMIT_PRESETS = _CONF["omit_presets"]
 BUSINESS_CALENDAR_CONFIG = _CONF["business_calendar"]
+ASTRONOMY_CONFIG = _CONF["astronomy"]
 
 ENABLE_ANCHOR_CACHE = conf_schema_bool("enable_anchor_cache")
 ANCHOR_CACHE_DIR_OVERRIDE = conf_schema_str("anchor_cache_dir")

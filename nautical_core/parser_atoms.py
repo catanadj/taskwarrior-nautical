@@ -3,6 +3,7 @@ import re
 
 
 _HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
+ASTRONOMICAL_TIMES = frozenset({"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"})
 
 
 def parse_hhmm(s: str, *, hhmm_re):
@@ -65,12 +66,20 @@ def parse_atom_mods(
         out = []
         seen = set()
         for p in parts:
+            symbolic = str(p or "").strip().lower()
+            if symbolic in ASTRONOMICAL_TIMES:
+                if symbolic not in seen:
+                    out.append(symbolic)
+                    seen.add(symbolic)
+                continue
             hhmm = parse_hhmm(p)
             if not hhmm:
                 hint = _time_padding_hint(p)
                 if hint:
                     raise parse_error_cls(hint)
-                raise parse_error_cls(f"Invalid time in @t=HH:MM[,HH:MM...]: '{p}'")
+                raise parse_error_cls(
+                    f"Invalid time in @t=HH:MM[,HH:MM...] or astronomical event name: '{p}'"
+                )
             if hhmm not in seen:
                 out.append(hhmm)
                 seen.add(hhmm)
@@ -102,8 +111,16 @@ def parse_atom_mods(
                 hint = _time_padding_hint(tval)
                 if hint:
                     raise parse_error_cls(hint)
-                raise parse_error_cls(f"Invalid time in @t=HH:MM[,HH:MM...]: '{tok}'")
+                raise parse_error_cls(
+                    f"Invalid time in @t=HH:MM[,HH:MM...] or astronomical event name: '{tok}'"
+                )
             mods["t"] = tlist[0] if len(tlist) == 1 else tlist
+            continue
+        match = re.fullmatch(r"([+-]\d+)m", tok)
+        if match:
+            if mods["t"] is None:
+                raise parse_error_cls("Time offsets require an @t= value")
+            mods["time_offset_minutes"] = mods.get("time_offset_minutes", 0) + int(match.group(1))
             continue
         match = day_offset_re.match(tok)
         if match:

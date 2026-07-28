@@ -1006,8 +1006,13 @@ def _validate_native_until_anchor_slots_or_fail(
             fallback_hhmm,
             normalize_time_slots=_norm_t_mod,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            target_date=core.to_local(target_dt).date(),
+            resolve_time_slots=_resolve_time_slots,
         )
-    except Exception:
+    except Exception as exc:
+        if exc.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
+            _panel("❌ Invalid astronomy time", [("Required", str(exc))], kind="error")
+            sys.exit(1)
         return
     is_valid, reason = add_validation.validate_native_until_calendar_slots(
         until_dt,
@@ -1241,6 +1246,30 @@ def _norm_t_mod(v):
     return []
 
 
+def _resolve_time_slots(v, target_date):
+    offset_minutes = 0
+    if isinstance(v, dict):
+        offset_minutes = int(v.get("time_offset_minutes", 0) or 0)
+        v = v.get("t")
+    if isinstance(v, str) and v.strip().lower() in {"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"}:
+        astronomy = core._import_sibling("astronomy")
+        event = astronomy.resolve_event(v, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}))
+        local = core.to_local(event)
+        minute = (local.hour * 60 + local.minute + offset_minutes) % (24 * 60)
+        return [(minute // 60, minute % 60)]
+    if isinstance(v, list):
+        out = []
+        for item in v:
+            out.extend(_resolve_time_slots(item, target_date))
+        if offset_minutes:
+            out = [((hh * 60 + mm + offset_minutes) % (24 * 60) // 60, (hh * 60 + mm + offset_minutes) % 60) for hh, mm in out]
+        return out
+    slots = _norm_t_mod(v)
+    if offset_minutes:
+        slots = [((hh * 60 + mm + offset_minutes) % (24 * 60) // 60, (hh * 60 + mm + offset_minutes) % 60) for hh, mm in slots]
+    return slots
+
+
 def _anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, omit_dnf=None):
     add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_step_once_with_omit(
@@ -1271,6 +1300,7 @@ def _anchor_times_for_date(dnf, d, interval_seed, seed_base):
         seed_base,
         core=core,
         norm_t_mod=_norm_t_mod,
+        resolve_time_slots=_resolve_time_slots,
     )
 
 
@@ -1286,6 +1316,7 @@ def _anchor_pick_occurrence_local(dnf, ref_dt_local, inclusive: bool, fallback_h
         omit_dnf=omit_dnf,
         core=core,
         norm_t_mod=_norm_t_mod,
+        resolve_time_slots=_resolve_time_slots,
     )
 
 
@@ -1300,6 +1331,7 @@ def _anchor_next_occurrence_after_local_dt(dnf, after_dt_local, fallback_hhmm, i
         omit_dnf=omit_dnf,
         core=core,
         norm_t_mod=_norm_t_mod,
+        resolve_time_slots=_resolve_time_slots,
     )
 
 
@@ -1317,6 +1349,7 @@ def _anchor_until_summary(dnf, until_dt, first_date_local, first_hhmm, interval_
         to_local_cached=_to_local_cached,
         max_preview_iterations=_MAX_PREVIEW_ITERATIONS,
         max_iterations=_MAX_ITERATIONS,
+        resolve_time_slots=_resolve_time_slots,
     )
 
 
@@ -1342,6 +1375,7 @@ def _anchor_build_preview(
         omit_dnf=omit_dnf,
         core=core,
         norm_t_mod=_norm_t_mod,
+        resolve_time_slots=_resolve_time_slots,
     )
 
 

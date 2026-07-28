@@ -8969,6 +8969,48 @@ def test_moon_phase_source_and_filter_compose_with_weekday():
         astronomy.resolve_phase_date = original
 
 
+def test_moon_phase_operational_errors_are_actionable():
+    """Missing astronomy support must become an actionable reconcile error."""
+    astronomy = core._import_sibling("astronomy")
+    message = astronomy.scheduling_error_message(
+        astronomy.AstronomyUnavailableError("moon phase anchors require astral")
+    )
+    expect("Install astral" in message and "moon-based recurrence" in message, message)
+
+    import nautical_core.reconcile as reconcile
+
+    class FakeCore:
+        @staticmethod
+        def coerce_int(value, default=0):
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+    class FakeHook:
+        core = FakeCore()
+
+        @staticmethod
+        def _safe_parse_datetime(_value):
+            return None, None
+
+        @staticmethod
+        def _compute_anchor_child_due(_parent):
+            raise astronomy.AstronomyUnavailableError("moon phase anchors require astral")
+
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "11111111",
+        "link": 1,
+        "anchor": "moon:full",
+    }
+    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=FakeHook())
+    expect(plan.action == "error", f"moon resolver failure should fail closed: {plan}")
+    expect("Moon-phase scheduling unavailable" in plan.reason, plan.reason)
+
+
 def test_anchor_date_calculations():
     """Test specific date calculations for various anchor patterns"""
     test_cases = [
@@ -23445,6 +23487,7 @@ TESTS = [
     test_astronomy_profile_requires_explicit_timezone,
     test_moon_phase_resolver_uses_circular_phase_distance,
     test_moon_phase_source_and_filter_compose_with_weekday,
+    test_moon_phase_operational_errors_are_actionable,
     test_anchor_date_calculations,
     test_interval_patterns,
     test_complex_dnf_expressions,

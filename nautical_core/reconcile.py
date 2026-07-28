@@ -10,6 +10,16 @@ from nautical_core import native_until
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
 
 
+def scheduling_error_message(exc: BaseException) -> str:
+    """Keep astronomy failures actionable in dry-run and apply plans."""
+    text = str(exc).strip() or type(exc).__name__
+    if exc.__class__.__name__ == "AstronomyUnavailableError":
+        return f"Moon-phase scheduling unavailable: {text}. Install astral or configure a non-moon recurrence."
+    if exc.__class__.__name__ == "AstronomyConfigurationError":
+        return f"Moon-phase astronomy profile invalid: {text}. Configure [astronomy] and retry reconcile."
+    return text
+
+
 @dataclass(frozen=True)
 class ReconcilePlan:
     action: str
@@ -370,7 +380,7 @@ def build_reconcile_plan(
         else:
             child_due, meta = hook._compute_cp_child_due(parent)
     except Exception as exc:
-        return ReconcilePlan("error", parent, next_link, str(exc))
+        return ReconcilePlan("error", parent, next_link, scheduling_error_message(exc))
 
     if not child_due:
         return ReconcilePlan("error", parent, next_link, "could not compute next recurrence timestamp")
@@ -400,8 +410,8 @@ def build_reconcile_plan(
                     hook=hook,
                 )
             except Exception as fallback_exc:
-                return ReconcilePlan("error", parent, next_link, f"failed to build child: {fallback_exc}", child_due=child_due)
+                return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
         else:
-            return ReconcilePlan("error", parent, next_link, f"failed to build child: {exc}", child_due=child_due)
+            return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
     reason = "expired link missing next link" if is_expiration else "missing next link"
     return ReconcilePlan("spawn", parent, next_link, reason, child=child, child_due=child_due)

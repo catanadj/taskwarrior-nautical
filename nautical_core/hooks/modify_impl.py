@@ -5796,6 +5796,9 @@ def _non_completion_validate_anchor(old: dict, new: dict, new_anchor: str) -> No
     except TypeError:
         _ = core.validate_anchor_expr_strict(new_anchor)
     except Exception as e:
+        if e.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
+            astronomy = core._import_sibling("astronomy")
+            _got_anchor_invalid(astronomy.scheduling_error_message(e))
         _got_anchor_invalid(_non_completion_anchor_error_message(new_anchor, str(e)))
 
 

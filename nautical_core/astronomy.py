@@ -21,6 +21,16 @@ class AstronomyConfigurationError(ValueError):
     """Raised when an astronomy location profile is incomplete."""
 
 
+def scheduling_error_message(exc: BaseException) -> str:
+    """Return an actionable, stable message for astronomy scheduling failures."""
+    text = str(exc).strip() or type(exc).__name__
+    if isinstance(exc, AstronomyUnavailableError):
+        return f"Astronomy provider unavailable: {text}. Install astral or remove the moon-based recurrence."
+    if isinstance(exc, AstronomyConfigurationError):
+        return f"Astronomy profile invalid: {text}. Configure [astronomy] before using moon recurrence."
+    return text
+
+
 def is_event_name(value: Any) -> bool:
     return str(value or "").strip().lower() in EVENT_NAMES
 
@@ -207,4 +217,5 @@ __all__ = (
     "is_event_name",
     "resolve_event",
     "resolve_phase_date",
+    "scheduling_error_message",
 )

@@ -8957,6 +8957,25 @@ def test_moon_phase_resolver_uses_documented_phase_bands():
     expect(not astronomy._phase_matches(13.99, "full"), "first-quarter value should not match full")
 
 
+def test_moon_phase_real_astral_boundary_smoke():
+    """When Astral is installed, verify the real provider returns a phase boundary."""
+    try:
+        import astral  # noqa: F401
+    except ImportError:
+        return
+    astronomy = core._import_sibling("astronomy")
+    config = {
+        "default_location": "test",
+        "locations": {"test": {"latitude": 40.0, "longitude": -74.0, "timezone": "UTC"}},
+    }
+    boundary = astronomy.resolve_phase_date("full", date(2026, 1, 1), config=config)
+    expect(astronomy.phase_matches_date("full", boundary, config=config), "real Astral boundary is not in full band")
+    expect(
+        not astronomy.phase_matches_date("full", boundary - timedelta(days=1), config=config),
+        "real Astral resolver did not return the beginning of the full band",
+    )
+
+
 def test_moon_phase_source_and_filter_compose_with_weekday():
     """Moon sources and @moon filters must preserve the other AND-term constraints."""
     astronomy = core._import_sibling("astronomy")
@@ -23571,6 +23590,7 @@ TESTS = [
     test_astronomy_profile_requires_explicit_timezone,
     test_moon_phase_resolver_uses_circular_phase_distance,
     test_moon_phase_resolver_uses_documented_phase_bands,
+    test_moon_phase_real_astral_boundary_smoke,
     test_moon_phase_source_and_filter_compose_with_weekday,
     test_moon_phase_source_emits_once_per_phase_window,
     test_moon_phase_operational_errors_are_actionable,

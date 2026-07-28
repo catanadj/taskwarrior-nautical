@@ -22,7 +22,7 @@ jobs:
       - name: Install Python deps
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install rich prompt_toolkit python-dateutil asciichartpy
+          python3 -m pip install rich prompt_toolkit python-dateutil asciichartpy astral
 
       - name: Install Taskwarrior
         run: |

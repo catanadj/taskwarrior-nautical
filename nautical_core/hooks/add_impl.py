@@ -366,7 +366,9 @@ _DNF_DISK_CACHE: OrderedDict[str, Any] | None = None
 _DNF_DISK_CACHE_DIRTY = False
 _DNF_DISK_CACHE_MAX = 256
 _DNF_DISK_CACHE_LOCK = _DNF_DISK_CACHE_PATH.with_suffix(".lock")
-_DNF_DISK_CACHE_VERSION = 1
+# Bump when the serialized DNF shape changes so stale entries cannot be
+# compared with the current parser output.
+_DNF_DISK_CACHE_VERSION = 2
 _DNF_DISK_CACHE_MAX_BYTES = 256 * 1024
 _DNF_LOCK_RETRIES = 6
 _DNF_LOCK_SLEEP_BASE = 0.03

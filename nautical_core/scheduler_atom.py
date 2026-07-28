@@ -19,13 +19,16 @@ def base_next_after_atom(
     weekly_rand_pick,
     week_monday,
     date_cls,
+    resolve_moon_phase_date=None,
 ) -> object:
     typ = (atom.get("typ") or "").lower()
     spec = (atom.get("spec") or "").lower()
     mods = atom.get("mods") or {}
 
     if typ == "moon":
-        raise ValueError("Moon phase anchors are recognized but not schedulable yet")
+        if resolve_moon_phase_date is None:
+            raise ValueError("Moon phase scheduling requires the astronomy resolver")
+        return resolve_moon_phase_date(spec, ref_d)
 
     if typ == "w" and "rand" in spec:
         atom_identity = json.dumps(
@@ -204,6 +207,7 @@ def next_after_atom_with_mods(
     max_anchor_iter: int,
     warn_once_per_day,
     os_mod,
+    resolve_moon_phase_date=None,
 ) -> object:
     ival = int(atom.get("ival", 1) or 1)
     if ival > 100:
@@ -240,6 +244,13 @@ def next_after_atom_with_mods(
 
         rolled = roll_apply(base, mods)
         cand = apply_day_offset(rolled, mods)
+        phase_filter = mods.get("moon")
+        if phase_filter:
+            if resolve_moon_phase_date is None:
+                raise ValueError("Moon phase filters require the astronomy resolver")
+            if resolve_moon_phase_date(phase_filter, cand - timedelta(days=1)) != cand:
+                probe = cand
+                continue
         if accept_roll_candidate(ref_d, base, cand, roll_kind):
             return cand
         probe = base + timedelta(days=1)
@@ -252,7 +263,17 @@ def next_after_atom_with_mods(
     return ref_d + timedelta(days=365)
 
 
-def atom_matches_on(atom, d, default_seed, seed_base=None, *, next_after_atom_with_mods) -> bool:
+def atom_matches_on(atom, d, default_seed, seed_base=None, *, next_after_atom_with_mods, resolve_moon_phase_date=None) -> bool:
+    phase = (atom.get("mods") or {}).get("moon")
+    if phase:
+        if resolve_moon_phase_date is None:
+            raise ValueError("Moon phase filters require the astronomy resolver")
+        if resolve_moon_phase_date(phase, d - timedelta(days=1)) != d:
+            return False
+        atom = dict(atom)
+        mods = dict(atom.get("mods") or {})
+        mods.pop("moon", None)
+        atom["mods"] = mods
     for k in range(1, _atom_match_lookback_days(atom) + 1):
         if next_after_atom_with_mods(atom, d - timedelta(days=k), default_seed, seed_base=seed_base) == d:
             return True

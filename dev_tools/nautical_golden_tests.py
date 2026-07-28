@@ -8949,6 +8949,26 @@ def test_moon_phase_resolver_uses_circular_phase_distance():
         expect(False, f"unexpected phase resolver error: {exc!r}")
 
 
+def test_moon_phase_source_and_filter_compose_with_weekday():
+    """Moon sources and @moon filters must preserve the other AND-term constraints."""
+    astronomy = core._import_sibling("astronomy")
+    original = astronomy.resolve_phase_date
+    try:
+        def fake_resolve(phase, reference_day, **_kwargs):
+            expect(phase == "full", f"unexpected phase passed to resolver: {phase!r}")
+            return date(2026, 8, 7) if reference_day < date(2026, 8, 7) else date(2026, 9, 4)
+
+        astronomy.resolve_phase_date = fake_resolve
+        source = core.validate_anchor_expr_strict("moon:full + w:fri")
+        source_next, _ = core.next_after_expr(source, date(2026, 7, 1), default_seed=date(2026, 7, 1))
+        expect(source_next == date(2026, 8, 7), f"moon source did not intersect Friday: {source_next}")
+        filtered = core.validate_anchor_expr_strict("w:fri@moon=full")
+        filtered_next, _ = core.next_after_expr(filtered, date(2026, 7, 1), default_seed=date(2026, 7, 1))
+        expect(filtered_next == date(2026, 8, 7), f"moon filter did not preserve Friday constraint: {filtered_next}")
+    finally:
+        astronomy.resolve_phase_date = original
+
+
 def test_anchor_date_calculations():
     """Test specific date calculations for various anchor patterns"""
     test_cases = [
@@ -18858,6 +18878,10 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
     mod._export_uuid_short_cached = lambda _short: None
+    modify_models = mod._module("modify_models")
+    mod._completion_chain_snapshot = lambda chain_id, _base, _next: modify_models.CompletionChainSnapshot(
+        mode="recent", rows=[], loaded=False, chain_id=str(chain_id)
+    )
 
     def _get_chain_export_stub(chain_id, since=None, extra=None, env=None):
         if chain_id == "abcd1234" and extra and "link:2" in extra:
@@ -21255,11 +21279,18 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
         }
     ]
 
+    def _run_task_stub(cmd, **_kwargs):
+        if "export" in cmd and any(str(part).startswith("chainID:") for part in cmd):
+            export_calls["count"] += 1
+            return True, json.dumps(chain_rows), ""
+        return True, "[]", ""
+
     def _tw_export_chain_stub(chain_id, since=None, extra=None, env=None, limit=None):
         export_calls["count"] += 1
         return list(chain_rows)
 
     modify_models = mod._module("modify_models")
+    mod._run_task = _run_task_stub
     mod.tw_export_chain = _tw_export_chain_stub
     mod._completion_compute_next_and_limits = lambda *_a, **_k: modify_models.CompletionComputeResult(
         child_due=child_due,
@@ -23413,6 +23444,7 @@ TESTS = [
     test_moon_phase_anchor_grammar_normalizes_canonical_names,
     test_astronomy_profile_requires_explicit_timezone,
     test_moon_phase_resolver_uses_circular_phase_distance,
+    test_moon_phase_source_and_filter_compose_with_weekday,
     test_anchor_date_calculations,
     test_interval_patterns,
     test_complex_dnf_expressions,

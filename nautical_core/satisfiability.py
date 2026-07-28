@@ -68,6 +68,8 @@ def term_has_any_match_within(
     def matches_or_flexible(atom, d):
         typ = (atom.get("typ") or "").lower()
         spec = (atom.get("spec") or "").lower()
+        if typ == "moon" or (atom.get("mods") or {}).get("moon"):
+            return True
         if typ in ("w", "m", "y") and "rand" in spec:
             return True
         return atom_matches_on(atom, d, seed)

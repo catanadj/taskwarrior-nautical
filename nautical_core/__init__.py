@@ -757,7 +757,9 @@ def _cache_key(
 ) -> str:
     _cache_support = _import_sibling("cache_support")
 
-    profile_fingerprint = f"{business_calendar_fingerprint}|season:{SEASON_HEMISPHERE}"
+    # Include the serialized parser shape so cache entries from older
+    # releases cannot be compared with the current DNF representation.
+    profile_fingerprint = f"{business_calendar_fingerprint}|season:{SEASON_HEMISPHERE}|parser:2"
     return _cache_support.cache_key(
         acf,
         anchor_mode,
@@ -3142,6 +3144,16 @@ def base_next_after_atom(
         ),
         week_monday=_week_monday,
         date_cls=date,
+        resolve_moon_phase_date=_resolve_moon_phase_date,
+    )
+
+
+def _resolve_moon_phase_date(phase: str, reference_day: date) -> date:
+    astronomy = _import_sibling("astronomy")
+    return astronomy.resolve_phase_date(
+        phase,
+        reference_day,
+        config=ASTRONOMY_CONFIG,
     )
 
 
@@ -3344,6 +3356,7 @@ def next_after_atom_with_mods(
         max_anchor_iter=MAX_ANCHOR_ITER,
         warn_once_per_day=_warn_once_per_day,
         os_mod=os,
+        resolve_moon_phase_date=_resolve_moon_phase_date,
     )
 
 
@@ -3363,6 +3376,7 @@ def atom_matches_on(
         default_seed,
         seed_base=seed_base,
         next_after_atom_with_mods=next_atom,
+        resolve_moon_phase_date=_resolve_moon_phase_date,
     )
 
 

@@ -120,6 +120,14 @@ def parse_atom_mods(
                 )
             mods["t"] = tlist[0] if len(tlist) == 1 else tlist
             continue
+        if tok.startswith("moon="):
+            if mods.get("moon") is not None:
+                raise parse_error_cls("Duplicate '@moon=' modifier.")
+            phase = canonical_phase(tok.split("=", 1)[1])
+            if phase is None:
+                raise parse_error_cls("Unknown moon phase. Expected new, first-quarter, full, or last-quarter.")
+            mods["moon"] = phase
+            continue
         match = re.fullmatch(r"([+-]\d+)m", tok)
         if match:
             if mods["t"] is None:

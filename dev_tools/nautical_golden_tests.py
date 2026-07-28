@@ -8932,6 +8932,23 @@ def test_astronomy_profile_requires_explicit_timezone():
         raise AssertionError("astronomy profile without timezone should be rejected")
 
 
+def test_moon_phase_resolver_uses_circular_phase_distance():
+    """Phase lookup must treat the new-moon boundary as circular, not linear."""
+    astronomy = core._import_sibling("astronomy")
+    expect(abs(astronomy._phase_distance(27.8, 0.0) - 0.2) < 1e-9, "new-moon wraparound distance is incorrect")
+    expect(astronomy._phase_distance(14.0, 14.0) == 0.0, "full-moon target distance is incorrect")
+    try:
+        astronomy.resolve_phase_date(
+            "full",
+            date(2026, 7, 28),
+            config={"locations": {"home": {"timezone": "UTC"}}},
+        )
+    except astronomy.AstronomyUnavailableError:
+        pass
+    except Exception as exc:
+        expect(False, f"unexpected phase resolver error: {exc!r}")
+
+
 def test_anchor_date_calculations():
     """Test specific date calculations for various anchor patterns"""
     test_cases = [
@@ -23395,6 +23412,7 @@ TESTS = [
     test_symbolic_anchor_time_modifiers_accept_supported_events,
     test_moon_phase_anchor_grammar_normalizes_canonical_names,
     test_astronomy_profile_requires_explicit_timezone,
+    test_moon_phase_resolver_uses_circular_phase_distance,
     test_anchor_date_calculations,
     test_interval_patterns,
     test_complex_dnf_expressions,

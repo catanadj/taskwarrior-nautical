@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
+from .moon_phase import PHASES, canonical_phase
+
 EVENT_NAMES = frozenset({"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"})
 ASTRONOMICAL_TIMES = EVENT_NAMES
+PHASE_TARGETS = {"new": 0.0, "first-quarter": 7.0, "full": 14.0, "last-quarter": 21.0}
 
 
 class AstronomyUnavailableError(RuntimeError):
@@ -20,6 +23,79 @@ class AstronomyConfigurationError(ValueError):
 
 def is_event_name(value: Any) -> bool:
     return str(value or "").strip().lower() in EVENT_NAMES
+
+
+def _phase_distance(value: float, target: float) -> float:
+    """Distance on Astral's circular 0..28 phase scale."""
+    distance = abs(float(value) - float(target))
+    return min(distance, 28.0 - distance)
+
+
+def _timezone_for_profile(config: dict[str, Any] | None, name: str | None = None) -> tuple[str, str]:
+    selected, profile = _profile(config, name)
+    timezone = str(profile.get("timezone") or "").strip()
+    if not timezone:
+        raise AstronomyConfigurationError(f"astronomy location '{selected}' requires an explicit timezone")
+    try:
+        from zoneinfo import ZoneInfo
+
+        ZoneInfo(timezone)
+    except Exception as exc:
+        raise AstronomyConfigurationError(
+            f"astronomy location '{selected}' has invalid timezone '{timezone}'"
+        ) from exc
+    return selected, timezone
+
+
+def resolve_phase_date(
+    phase: str,
+    reference_day: date,
+    *,
+    config: dict[str, Any] | None = None,
+    location_name: str | None = None,
+    horizon_days: int = 60,
+) -> date:
+    """Return the next local calendar date nearest the requested phase target."""
+    name = canonical_phase(phase)
+    if name is None:
+        raise ValueError(f"unknown moon phase '{phase}'")
+    if not isinstance(reference_day, date):
+        raise TypeError("reference_day must be a date")
+    if horizon_days < 28:
+        raise ValueError("moon phase lookup horizon must cover at least one lunar cycle")
+    selected, timezone = _timezone_for_profile(config, location_name)
+    return _resolve_phase_date_cached(name, reference_day, selected, timezone, int(horizon_days))
+
+
+@lru_cache(maxsize=256)
+def _resolve_phase_date_cached(
+    phase: str,
+    reference_day: date,
+    selected: str,
+    timezone: str,
+    horizon_days: int,
+) -> date:
+    try:
+        from astral import moon
+    except ImportError as exc:
+        raise AstronomyUnavailableError(
+            "moon phase anchors require the optional 'astral' package"
+        ) from exc
+    target = PHASE_TARGETS[phase]
+    start = reference_day + timedelta(days=1)
+    samples: list[tuple[float, date]] = []
+    for offset in range(horizon_days):
+        day = start + timedelta(days=offset)
+        try:
+            value = float(moon.phase(day))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise LookupError(
+                f"moon phase '{phase}' is unavailable on {day.isoformat()} at {selected} ({timezone})"
+            ) from exc
+        samples.append((_phase_distance(value, target), day))
+    if not samples:
+        raise LookupError(f"moon phase '{phase}' has no lookup result")
+    return min(samples, key=lambda item: (item[0], item[1]))[1]
 
 
 def _profile(config: dict[str, Any] | None, name: str | None = None) -> tuple[str, dict[str, Any]]:
@@ -130,4 +206,5 @@ __all__ = (
     "EVENT_NAMES",
     "is_event_name",
     "resolve_event",
+    "resolve_phase_date",
 )

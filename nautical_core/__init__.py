@@ -3157,6 +3157,15 @@ def _resolve_moon_phase_date(phase: str, reference_day: date) -> date:
     )
 
 
+def _moon_phase_matches_date(phase: str, day: date) -> bool:
+    astronomy = _import_sibling("astronomy")
+    return astronomy.phase_matches_date(
+        phase,
+        day,
+        config=ASTRONOMY_CONFIG,
+    )
+
+
 # ------------------------------------------------------------------------------
 # Anchor scheduling & iteration helpers
 # ------------------------------------------------------------------------------
@@ -3357,6 +3366,7 @@ def next_after_atom_with_mods(
         warn_once_per_day=_warn_once_per_day,
         os_mod=os,
         resolve_moon_phase_date=_resolve_moon_phase_date,
+        moon_phase_matches_date=_moon_phase_matches_date,
     )
 
 
@@ -3376,7 +3386,7 @@ def atom_matches_on(
         default_seed,
         seed_base=seed_base,
         next_after_atom_with_mods=next_atom,
-        resolve_moon_phase_date=_resolve_moon_phase_date,
+        moon_phase_matches_date=_moon_phase_matches_date,
     )
 
 

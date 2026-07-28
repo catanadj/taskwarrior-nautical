@@ -208,6 +208,7 @@ def next_after_atom_with_mods(
     warn_once_per_day,
     os_mod,
     resolve_moon_phase_date=None,
+    moon_phase_matches_date=None,
 ) -> object:
     ival = int(atom.get("ival", 1) or 1)
     if ival > 100:
@@ -246,9 +247,9 @@ def next_after_atom_with_mods(
         cand = apply_day_offset(rolled, mods)
         phase_filter = mods.get("moon")
         if phase_filter:
-            if resolve_moon_phase_date is None:
+            if moon_phase_matches_date is None:
                 raise ValueError("Moon phase filters require the astronomy resolver")
-            if resolve_moon_phase_date(phase_filter, cand - timedelta(days=1)) != cand:
+            if not moon_phase_matches_date(phase_filter, cand):
                 probe = cand
                 continue
         if accept_roll_candidate(ref_d, base, cand, roll_kind):
@@ -263,12 +264,25 @@ def next_after_atom_with_mods(
     return ref_d + timedelta(days=365)
 
 
-def atom_matches_on(atom, d, default_seed, seed_base=None, *, next_after_atom_with_mods, resolve_moon_phase_date=None) -> bool:
+def atom_matches_on(
+    atom,
+    d,
+    default_seed,
+    seed_base=None,
+    *,
+    next_after_atom_with_mods,
+    moon_phase_matches_date=None,
+) -> bool:
+    typ = (atom.get("typ") or atom.get("type") or "").lower()
+    if typ == "moon":
+        if moon_phase_matches_date is None:
+            raise ValueError("Moon phase matching requires the astronomy resolver")
+        return moon_phase_matches_date(atom.get("spec") or atom.get("value"), d)
     phase = (atom.get("mods") or {}).get("moon")
     if phase:
-        if resolve_moon_phase_date is None:
+        if moon_phase_matches_date is None:
             raise ValueError("Moon phase filters require the astronomy resolver")
-        if resolve_moon_phase_date(phase, d - timedelta(days=1)) != d:
+        if not moon_phase_matches_date(phase, d):
             return False
         atom = dict(atom)
         mods = dict(atom.get("mods") or {})

@@ -8960,13 +8960,19 @@ def test_moon_phase_resolver_uses_documented_phase_bands():
 def test_moon_phase_source_and_filter_compose_with_weekday():
     """Moon sources and @moon filters must preserve the other AND-term constraints."""
     astronomy = core._import_sibling("astronomy")
-    original = astronomy.resolve_phase_date
+    original_resolve = astronomy.resolve_phase_date
+    original_matches = astronomy.phase_matches_date
     try:
         def fake_resolve(phase, reference_day, **_kwargs):
             expect(phase == "full", f"unexpected phase passed to resolver: {phase!r}")
             return date(2026, 8, 7) if reference_day < date(2026, 8, 7) else date(2026, 9, 4)
 
+        def fake_matches(phase, day, **_kwargs):
+            expect(phase == "full", f"unexpected phase passed to matcher: {phase!r}")
+            return date(2026, 8, 7) <= day <= date(2026, 8, 13) or date(2026, 9, 4) <= day <= date(2026, 9, 10)
+
         astronomy.resolve_phase_date = fake_resolve
+        astronomy.phase_matches_date = fake_matches
         source = core.validate_anchor_expr_strict("moon:full + w:fri")
         source_next, _ = core.next_after_expr(source, date(2026, 7, 1), default_seed=date(2026, 7, 1))
         expect(source_next == date(2026, 8, 7), f"moon source did not intersect Friday: {source_next}")
@@ -8974,7 +8980,37 @@ def test_moon_phase_source_and_filter_compose_with_weekday():
         filtered_next, _ = core.next_after_expr(filtered, date(2026, 7, 1), default_seed=date(2026, 7, 1))
         expect(filtered_next == date(2026, 8, 7), f"moon filter did not preserve Friday constraint: {filtered_next}")
     finally:
-        astronomy.resolve_phase_date = original
+        astronomy.resolve_phase_date = original_resolve
+        astronomy.phase_matches_date = original_matches
+
+
+def test_moon_phase_source_emits_once_per_phase_window():
+    """A multi-day phase band must still create only one source occurrence."""
+    astronomy = core._import_sibling("astronomy")
+    original_resolve = astronomy.resolve_phase_date
+    original_matches = astronomy.phase_matches_date
+    windows = (
+        (date(2026, 7, 30), date(2026, 7, 31)),
+        (date(2027, 7, 19), date(2027, 7, 22)),
+        (date(2027, 8, 17), date(2027, 8, 23)),
+    )
+    try:
+        def fake_resolve(_phase, reference_day, **_kwargs):
+            return next(start for start, _end in windows if start > reference_day)
+
+        def fake_matches(_phase, day, **_kwargs):
+            return any(start <= day <= end for start, end in windows)
+
+        astronomy.resolve_phase_date = fake_resolve
+        astronomy.phase_matches_date = fake_matches
+        dnf = core.validate_anchor_expr_strict("moon:full + y:jul")
+        first, _ = core.next_after_expr(dnf, date(2026, 7, 1), default_seed=date(2026, 7, 1))
+        second, _ = core.next_after_expr(dnf, first, default_seed=date(2026, 7, 1))
+        expect(first == date(2026, 7, 30), f"unexpected first phase window: {first}")
+        expect(second == date(2027, 7, 19), f"same phase window emitted twice: {second}")
+    finally:
+        astronomy.resolve_phase_date = original_resolve
+        astronomy.phase_matches_date = original_matches
 
 
 def test_moon_phase_operational_errors_are_actionable():
@@ -23508,6 +23544,7 @@ TESTS = [
     test_moon_phase_resolver_uses_circular_phase_distance,
     test_moon_phase_resolver_uses_documented_phase_bands,
     test_moon_phase_source_and_filter_compose_with_weekday,
+    test_moon_phase_source_emits_once_per_phase_window,
     test_moon_phase_operational_errors_are_actionable,
     test_moon_phase_natural_language_is_explicit,
     test_anchor_date_calculations,

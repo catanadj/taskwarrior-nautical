@@ -89,6 +89,40 @@ def resolve_phase_date(
     return _resolve_phase_date_cached(name, reference_day, selected, timezone, int(horizon_days))
 
 
+def phase_matches_date(
+    phase: str,
+    day: date,
+    *,
+    config: dict[str, Any] | None = None,
+    location_name: str | None = None,
+) -> bool:
+    """Return whether a local calendar date belongs to a phase band."""
+    name = canonical_phase(phase)
+    if name is None:
+        raise ValueError(f"unknown moon phase '{phase}'")
+    if not isinstance(day, date):
+        raise TypeError("day must be a date")
+    selected, timezone = _timezone_for_profile(config, location_name)
+    return _phase_matches_date_cached(name, day, selected, timezone)
+
+
+@lru_cache(maxsize=1024)
+def _phase_matches_date_cached(phase: str, day: date, selected: str, timezone: str) -> bool:
+    try:
+        from astral import moon
+    except ImportError as exc:
+        raise AstronomyUnavailableError(
+            "moon phase anchors require the optional 'astral' package"
+        ) from exc
+    try:
+        value = float(moon.phase(day))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise LookupError(
+            f"moon phase '{phase}' is unavailable on {day.isoformat()} at {selected} ({timezone})"
+        ) from exc
+    return _phase_matches(value, phase)
+
+
 @lru_cache(maxsize=256)
 def _resolve_phase_date_cached(
     phase: str,
@@ -97,24 +131,14 @@ def _resolve_phase_date_cached(
     timezone: str,
     horizon_days: int,
 ) -> date:
-    try:
-        from astral import moon
-    except ImportError as exc:
-        raise AstronomyUnavailableError(
-            "moon phase anchors require the optional 'astral' package"
-        ) from exc
     start = reference_day + timedelta(days=1)
     for offset in range(horizon_days):
         day = start + timedelta(days=offset)
-        try:
-            value = float(moon.phase(day))
-        except (TypeError, ValueError, AttributeError) as exc:
-            raise LookupError(
-                f"moon phase '{phase}' is unavailable on {day.isoformat()} at {selected} ({timezone})"
-            ) from exc
-        if _phase_matches(value, phase):
+        if _phase_matches_date_cached(phase, day, selected, timezone) and not _phase_matches_date_cached(
+            phase, day - timedelta(days=1), selected, timezone
+        ):
             return day
-    raise LookupError(f"moon phase '{phase}' has no matching date within {horizon_days} days")
+    raise LookupError(f"moon phase '{phase}' has no new phase window within {horizon_days} days")
 
 
 def _profile(config: dict[str, Any] | None, name: str | None = None) -> tuple[str, dict[str, Any]]:
@@ -225,6 +249,7 @@ __all__ = (
     "EVENT_NAMES",
     "PHASE_RANGES",
     "is_event_name",
+    "phase_matches_date",
     "resolve_event",
     "resolve_phase_date",
     "scheduling_error_message",

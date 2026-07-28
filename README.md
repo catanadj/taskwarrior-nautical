@@ -83,7 +83,14 @@ task add "Workout" anchor:"w:mon,wed,fri"
 task add "Monthly report" anchor:"m:1"  # first day of the month
 task add "Anniversary" anchor:"y:04-12"
 task add "Spring planning" anchor:"(w:mon)@in-spring=first,last"
+task add "Full moon check" anchor:"moon:full"
+task add "Friday full moon check" anchor:"w:fri@moon=full"
 ```
+
+Moon-phase anchors use the optional `astral` package and an explicit timezone
+profile in `config-nautical.toml`. They match the phase's local calendar date;
+if astronomy is unavailable, Nautical reports the configuration problem rather
+than creating an invented occurrence.
 
 That is enough to begin. `cp` is for “after this long”; `anchor` is for “on
 these dates.” Together they are a small doorway into routines as precise and

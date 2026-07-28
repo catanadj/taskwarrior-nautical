@@ -31,7 +31,8 @@ spawn_queue_max_bytes = 524288       # max queued JSONL bytes before fast-drain
 spawn_queue_drain_max_items = 200    # max items drained per pass
 max_chain_walk = 500                 # cap for chain summaries/analytics
 
-# Optional astronomical @t= event times. Astral is only needed when these are used.
+# Optional astronomical @t= event times and moon-phase anchors. Astral is only
+# needed when these features are used; keep the civil timezone explicit.
 # Keep the timezone explicit; coordinates do not determine civil-time rules.
 [astronomy]
 default_location = "home"

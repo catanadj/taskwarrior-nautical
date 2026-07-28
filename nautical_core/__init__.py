@@ -2716,6 +2716,13 @@ def _quick_yearly_and_check(term: list[dict]) -> None:
     )
 
 
+def _quick_moon_and_check(term: list[dict]) -> None:
+    _satisfiability.quick_moon_and_check(
+        term,
+        and_term_unsatisfiable_cls=AndTermUnsatisfiable,
+    )
+
+
 def _term_has_any_match_within(
     term: list[dict], start: date, seed: date, years: int = 8
 ) -> bool:
@@ -2760,6 +2767,7 @@ def _validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d: date):
         ref_d,
         quick_weekly_and_check=_quick_weekly_and_check,
         quick_yearly_and_check=_quick_yearly_and_check,
+        quick_moon_and_check=_quick_moon_and_check,
         term_has_any_match_within=_term_has_any_match_within,
         normalize_spec_for_acf=_normalize_spec_for_acf,
         month_from_alias=_month_from_alias,

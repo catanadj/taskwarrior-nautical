@@ -57,6 +57,22 @@ def quick_yearly_and_check(term: list[dict], *, md_pairs_from_yearly_spec, and_t
             )
 
 
+def quick_moon_and_check(term: list[dict], *, and_term_unsatisfiable_cls) -> None:
+    phases = []
+    for atom in term:
+        typ = (atom.get("typ") or atom.get("type") or "").lower()
+        if typ == "moon":
+            phases.append(str(atom.get("spec") or atom.get("value") or "").lower())
+        phase_filter = (atom.get("mods") or {}).get("moon")
+        if phase_filter:
+            phases.append(str(phase_filter).lower())
+    if len(set(phases)) > 1:
+        names = ", ".join(sorted(set(phases)))
+        raise and_term_unsatisfiable_cls(
+            f"AND term contains incompatible moon phases ({names}); use one phase or '|' for alternatives."
+        )
+
+
 def term_has_any_match_within(
     term: list[dict],
     start,
@@ -89,6 +105,7 @@ def validate_and_terms_satisfiable(
     *,
     quick_weekly_and_check,
     quick_yearly_and_check,
+    quick_moon_and_check,
     term_has_any_match_within,
     normalize_spec_for_acf,
     month_from_alias,
@@ -100,6 +117,7 @@ def validate_and_terms_satisfiable(
             continue
         quick_weekly_and_check(term)
         quick_yearly_and_check(term)
+        quick_moon_and_check(term)
         # Leap-day weekday alignments can be 40 years apart in the Gregorian cycle.
         if not term_has_any_match_within(term, ref_d, seed, years=40):
             pieces = []

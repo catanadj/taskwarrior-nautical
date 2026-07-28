@@ -151,6 +151,21 @@ def validate_anchor_dnf_atoms_strict(
                 counted_randoms += 1
         if counted_randoms > 1:
             raise parse_error_cls("An AND term can contain only one counted random selector.")
+        moon_phases = []
+        for atom in term:
+            if is_selection_node(atom):
+                continue
+            typ = str(atom.get("typ") or atom.get("type") or "").lower()
+            if typ == "moon":
+                moon_phases.append(str(atom.get("spec") or atom.get("value") or "").lower())
+            phase_filter = (atom.get("mods") or {}).get("moon")
+            if phase_filter:
+                moon_phases.append(str(phase_filter).lower())
+        if len(set(moon_phases)) > 1:
+            phases = ", ".join(sorted(set(moon_phases)))
+            raise parse_error_cls(
+                f"AND term contains incompatible moon phases ({phases}); use one phase or '|' for alternatives."
+            )
 
 
 def validate_anchor_expr_strict(

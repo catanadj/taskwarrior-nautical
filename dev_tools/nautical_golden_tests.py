@@ -9067,6 +9067,34 @@ def test_moon_phase_natural_language_is_explicit():
     )
 
 
+def test_moon_phase_contradictions_are_rejected():
+    """Different moon phases in one AND term must fail before scheduling."""
+    for parser in (core.validate_anchor_expr_strict, core.parse_anchor_expr_to_dnf):
+        try:
+            parser("moon:full + moon:new")
+        except Exception as exc:
+            expect("incompatible moon phases" in str(exc), f"unclear contradiction error: {exc}")
+        else:
+            raise AssertionError("incompatible moon phases should be rejected")
+
+
+def test_moon_phase_intersection_fails_closed_without_synthetic_date():
+    """Moon intersections must return no candidate instead of ref+365 fallback."""
+    from nautical_core import scheduler_expr
+
+    ref = date(2026, 7, 1)
+    term = [{"typ": "moon", "spec": "full"}, {"typ": "w", "spec": "fri"}]
+    result = scheduler_expr.next_after_term(
+        term,
+        ref,
+        ref,
+        next_after_atom_with_mods=lambda _atom, current, _seed, seed_base=None: current + timedelta(days=1),
+        atom_matches_on=lambda *_args, **_kwargs: False,
+        intersection_guard_steps=2,
+    )
+    expect(result == (None, None), f"moon intersection fabricated a fallback date: {result}")
+
+
 def test_anchor_date_calculations():
     """Test specific date calculations for various anchor patterns"""
     test_cases = [
@@ -23547,6 +23575,8 @@ TESTS = [
     test_moon_phase_source_emits_once_per_phase_window,
     test_moon_phase_operational_errors_are_actionable,
     test_moon_phase_natural_language_is_explicit,
+    test_moon_phase_contradictions_are_rejected,
+    test_moon_phase_intersection_fails_closed_without_synthetic_date,
     test_anchor_date_calculations,
     test_interval_patterns,
     test_complex_dnf_expressions,

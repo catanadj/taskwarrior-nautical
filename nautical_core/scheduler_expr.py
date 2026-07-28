@@ -39,6 +39,14 @@ def _term_year_specs(term: list[dict]) -> list[str]:
     return [str(a.get("spec") or "") for a in term if (a.get("typ") or a.get("type")) == "y"]
 
 
+def _term_has_moon(term: list[dict]) -> bool:
+    return any(
+        (str(a.get("typ") or a.get("type") or "").lower() == "moon")
+        or bool((a.get("mods") or {}).get("moon"))
+        for a in term
+    )
+
+
 def _first_day_next_month(y: int, m: int, *, date_cls, days_in_month) -> object:
     return date_cls(y, m, 1) + timedelta(days=days_in_month(y, m))
 
@@ -159,6 +167,10 @@ def next_for_and_fast_path(
         if all(atom_matches_on(atom, target, seed, seed_base=seed_base) for atom in term):
             return target
         probe = target
+    if _term_has_moon(term):
+        raise parse_error_cls(
+            "Moon anchor intersection found no occurrence within the scheduler guard; refusing to invent a date."
+        )
     if os_mod.environ.get("NAUTICAL_DIAG") == "1":
         warn_once_per_day(
             "next_for_and_fallback",
@@ -195,7 +207,7 @@ def next_for_and(
     """
     has_m_rand = _term_has_monthly_rand(term)
     y_specs = _term_year_specs(term)
-    if has_m_rand and y_specs:
+    if has_m_rand and y_specs and not _term_has_moon(term):
         rand_yearly = next_for_and_rand_yearly(
             term,
             ref_d,
@@ -275,6 +287,8 @@ def next_after_term(
 
         cur = nxt
 
+    if _term_has_moon(term):
+        return None, None
     return ref_d + timedelta(days=365), None
 
 

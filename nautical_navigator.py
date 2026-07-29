@@ -68,7 +68,12 @@ def _add_months(d: date, n: int) -> date:
 # ──────────────────────────────────────────────────────────────────────────────
 console = Console()
 UTC_ZONE = tz.tzutc()
-LOCAL_ZONE = tz.tzlocal()
+try:
+    from zoneinfo import ZoneInfo
+
+    LOCAL_ZONE = ZoneInfo(getattr(core, "LOCAL_TZ_NAME", "UTC"))
+except Exception:
+    LOCAL_ZONE = tz.tzlocal()
 
 COLORS = {
     'primary': 'bright_cyan',
@@ -158,6 +163,14 @@ def _emit_check(status: str, label: str, detail: str) -> None:
     }.get(status, COLORS["muted"])
     console.print(f"[{color}]{status:>4}[/] {label}: {detail}")
 
+
+def _format_runtime_error(exc: BaseException) -> str:
+    """Add actionable interpreter context to optional-runtime failures."""
+    text = str(exc).strip() or type(exc).__name__
+    if type(exc).__name__ == "AstronomyUnavailableError":
+        return f"{text}. Interpreter: {sys.executable}. Install with: {sys.executable} -m pip install astral"
+    return text
+
 def _print_diag_report(hook_dir: Path | None) -> None:
     console.print("\n[bold]Diagnostics[/bold]")
     console.print(f"nautical_core={getattr(core, '__file__', 'unknown')}")
@@ -221,6 +234,14 @@ def _self_check() -> int:
     else:
         ok = False
         _emit_check("FAIL", "task", "not found in PATH")
+
+    try:
+        import astral  # noqa: F401
+        _emit_check("OK", "astral", f"available to {sys.executable}")
+    except ImportError:
+        _emit_check("WARN", "astral", f"not available to {sys.executable}; install with '{sys.executable} -m pip install astral'")
+
+    _emit_check("OK", "timezone", str(getattr(core, "LOCAL_TZ_NAME", LOCAL_ZONE)))
 
     cfg_paths = []
     if hasattr(core, "_config_paths"):
@@ -379,7 +400,7 @@ def _anchor_explain(expr: str) -> int:
     try:
         natural, next_dates = _anchor_preview(expr, count=5)
     except Exception as exc:
-        console.print(f"[{COLORS['error']}]Unable to project anchor:[/] {exc}")
+        console.print(f"[{COLORS['error']}]Unable to project anchor:[/] {_format_runtime_error(exc)}")
         return 1
     table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
     table.add_row("Expression", expr)
@@ -2874,7 +2895,7 @@ def main():
         console.print(f"\n[{COLORS['warning']}]Operation cancelled[/]")
         sys.exit(0)
     except Exception as e:
-        console.print(f"[{COLORS['error']}]Error: {e}[/]")
+        console.print(f"[{COLORS['error']}]Error: {_format_runtime_error(e)}[/]")
         sys.exit(1)
 
 

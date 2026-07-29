@@ -15785,6 +15785,28 @@ def test_navigator_uses_task_business_calendar_for_anchor_projection():
         navigator.core.configured_business_calendars = saved_registry
 
 
+def test_navigator_normalizes_extended_scheduler_results():
+    """Navigator projections should tolerate scheduler metadata appended by newer core versions."""
+    module_name = "_nautical_navigator_scheduler_result_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+        original = navigator.core.next_after_expr
+        navigator.core.next_after_expr = lambda *_args, **_kwargs: ("2026-08-03", {"basis": "test"}, "diagnostic")
+        try:
+            expect(
+                navigator._next_after_expr_pair([], date(2026, 7, 29)) == ("2026-08-03", {"basis": "test"}),
+                "navigator did not preserve the first two scheduler result values",
+            )
+        finally:
+            navigator.core.next_after_expr = original
+    finally:
+        sys.modules.pop(module_name, None)
+
+
 def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain():
     """Navigator direct task lookup should prefer chainID and resolve the full chain from short links."""
     module_name = "_nautical_navigator_direct_chain_test"
@@ -24033,6 +24055,7 @@ TESTS = [
     test_file_source_symlink_must_remain_inside_configured_directory,
     test_config_exposes_anchor_file_dir,
     test_navigator_uses_task_business_calendar_for_anchor_projection,
+    test_navigator_normalizes_extended_scheduler_results,
     test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_anchor_file_root_gets_chainid_stamp,
     test_hook_on_add_anchor_file_preview_auto_assigns_first_match,

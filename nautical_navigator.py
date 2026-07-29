@@ -340,7 +340,9 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
         after_date = core.to_local(core.now_utc()).date()
         seed = after_date
         for _ in range(count):
-            nxt, _meta = core.next_after_expr(dnf, after_date, default_seed=seed, seed_base="preview")
+            nxt, _meta = _next_after_expr_pair(
+                dnf, after_date, default_seed=seed, seed_base="preview"
+            )
             if not nxt:
                 break
             hhmm = core.pick_hhmm_from_dnf_for_date(dnf, nxt, seed)
@@ -353,6 +355,20 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
 
     return natural, next_dates[:count]
 
+
+def _next_after_expr_pair(dnf, after_date, **kwargs):
+    """Normalize core scheduler results for navigator compatibility.
+
+    Core historically returned ``(date, metadata)``; newer versions may append
+    diagnostic fields. The navigator only needs the first two values.
+    """
+    result = core.next_after_expr(dnf, after_date, **kwargs)
+    if isinstance(result, (tuple, list)):
+        if len(result) < 2:
+            raise ValueError("next_after_expr returned fewer than two values")
+        return result[0], result[1]
+    raise TypeError("next_after_expr returned a non-sequence result")
+
 def _anchor_explain(expr: str) -> int:
     try:
         core.validate_anchor_expr_strict(expr)
@@ -360,7 +376,11 @@ def _anchor_explain(expr: str) -> int:
         console.print(f"[{COLORS['error']}]Invalid anchor:[/] {e}")
         return 1
 
-    natural, next_dates = _anchor_preview(expr, count=5)
+    try:
+        natural, next_dates = _anchor_preview(expr, count=5)
+    except Exception as exc:
+        console.print(f"[{COLORS['error']}]Unable to project anchor:[/] {exc}")
+        return 1
     table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
     table.add_row("Expression", expr)
     table.add_row("Natural", natural or "—")
@@ -681,7 +701,7 @@ class TaskAnalyzer:
                 seed_day = core.to_local(due_dt).date()
                 clock = (core.to_local(due_dt).hour, core.to_local(due_dt).minute)
             else:
-                seed_day, hhmm = core.next_after_expr(
+                seed_day, hhmm = _next_after_expr_pair(
                     dnf,
                     window_start,
                     default_seed=window_start,
@@ -694,7 +714,7 @@ class TaskAnalyzer:
             prev = None
             future_taken = 0
             for _ in range(MAX_CAL_FUTURE_STEPS):
-                nxt, _ = core.next_after_expr(
+                nxt, _ = _next_after_expr_pair(
                     dnf,
                     cur,
                     default_seed=seed_day,
@@ -2024,7 +2044,7 @@ class TaskAnalyzer:
                 dnf = None
             if dnf:
                 def step(prev_date: date):
-                    nxt_date, _ = core.next_after_expr(
+                    nxt_date, _ = _next_after_expr_pair(
                         dnf,
                         prev_date,
                         default_seed=prev_date,
@@ -2152,7 +2172,7 @@ class TaskAnalyzer:
                 dnf = None
             if dnf:
                 def step(prev_date: date):
-                    nxt_date, _ = core.next_after_expr(
+                    nxt_date, _ = _next_after_expr_pair(
                         dnf,
                         prev_date,
                         default_seed=prev_date,
@@ -2694,6 +2714,11 @@ class TaskAnalyzer:
 
 
     def _panel(self, title, rows, style="cyan", border_style="blue"):
+        def row_pairs():
+            for row in rows or []:
+                if isinstance(row, (tuple, list)) and len(row) >= 2:
+                    yield row[0], row[1]
+
         try:
             from rich.table import Table as RTable
             from rich.panel import Panel as RPanel
@@ -2701,13 +2726,14 @@ class TaskAnalyzer:
             t = RTable.grid(padding=(0, 2), expand=False)
             t.add_column(style="bold cyan", no_wrap=True, justify="right")
             t.add_column(style="white")
-            for k, v in rows:
+            for k, v in row_pairs():
                 t.add_row(f"{k}", v if isinstance(v, str) else str(v))
             console.print(RPanel(t, title=Text(title, style=f"bold {style}"),
                                  border_style=border_style, expand=False, padding=(0, 1)))
         except Exception:
             console.print(title)
-            for k, v in rows: console.print(f"{k}: {v}")
+            for k, v in row_pairs():
+                console.print(f"{k}: {v}")
 
     def _display_summary(self, total_tasks: int, displayed_tasks: int, completion_dates: List[date]):
         items = [

@@ -15807,6 +15807,46 @@ def test_navigator_normalizes_extended_scheduler_results():
         sys.modules.pop(module_name, None)
 
 
+def test_navigator_resolves_symbolic_anchor_time_offsets():
+    """Navigator projections should convert symbolic event times and preserve offsets."""
+    try:
+        import astral  # noqa: F401
+    except ImportError:
+        return
+    module_name = "_nautical_navigator_symbolic_time_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+        old_config = navigator.core.ASTRONOMY_CONFIG
+        navigator.core.ASTRONOMY_CONFIG = {
+            "default_location": "test",
+            "locations": {"test": {"latitude": 40.7128, "longitude": -74.0060, "timezone": "America/New_York"}},
+        }
+        try:
+            analyzer = navigator.TaskAnalyzer()
+            task = {
+                "uuid": "00000000-0000-0000-0000-000000000902",
+                "description": "symbolic navigator time",
+                "anchor": "w:mon@t=sunset@+45m",
+            }
+            projected = analyzer._project_anchor_dates(task, limit=1, start_from_date=date(2026, 7, 1))
+            expect(projected, "symbolic anchor time produced no projection")
+            astronomy = navigator.core._import_sibling("astronomy")
+            event = astronomy.resolve_event("sunset", date(2026, 7, 6), config=navigator.core.ASTRONOMY_CONFIG)
+            expected = (navigator.core.to_local(event) + timedelta(minutes=45)).replace(second=0, microsecond=0)
+            expect(
+                projected[0].hour == expected.hour and projected[0].minute == expected.minute,
+                f"symbolic time offset was not applied: {projected[0]!r} != {expected!r}",
+            )
+        finally:
+            navigator.core.ASTRONOMY_CONFIG = old_config
+    finally:
+        sys.modules.pop(module_name, None)
+
+
 def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain():
     """Navigator direct task lookup should prefer chainID and resolve the full chain from short links."""
     module_name = "_nautical_navigator_direct_chain_test"
@@ -24056,6 +24096,7 @@ TESTS = [
     test_config_exposes_anchor_file_dir,
     test_navigator_uses_task_business_calendar_for_anchor_projection,
     test_navigator_normalizes_extended_scheduler_results,
+    test_navigator_resolves_symbolic_anchor_time_offsets,
     test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_anchor_file_root_gets_chainid_stamp,
     test_hook_on_add_anchor_file_preview_auto_assigns_first_match,

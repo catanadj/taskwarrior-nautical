@@ -2034,6 +2034,45 @@ class TaskAnalyzer:
         default_hhmm = (due_local_dt.hour, due_local_dt.minute) if due_local_dt else (9, 0)
         after_dt_local = due_local_dt if due_local_dt else core.build_local_datetime(start_from_date, default_hhmm)
 
+        def resolve_hhmm(dnf, target_date, seed_date):
+            """Resolve numeric or astronomical anchor time to a wall-clock tuple."""
+            value = core.pick_hhmm_from_dnf_for_date(
+                dnf,
+                target_date,
+                seed_date,
+                business_calendar=business_calendar,
+            )
+            if isinstance(value, tuple) and len(value) == 2:
+                return value
+            if isinstance(value, list):
+                value = value[0] if value else None
+            if not isinstance(value, str):
+                return default_hhmm
+
+            event_name = value.strip().lower()
+            if event_name not in {"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"}:
+                return default_hhmm
+            astronomy = core._import_sibling("astronomy")
+            event = astronomy.resolve_event(
+                event_name,
+                target_date,
+                config=getattr(core, "ASTRONOMY_CONFIG", {}),
+            )
+            local = core.to_local(event)
+            offset = 0
+            for term in dnf:
+                for atom in term:
+                    mods = atom.get("mods") or {}
+                    if mods.get("t") == event_name:
+                        offset = int(mods.get("time_offset_minutes", 0) or 0)
+                        break
+                if offset or any(
+                    (atom.get("mods") or {}).get("t") == event_name for atom in term
+                ):
+                    break
+            minute = (local.hour * 60 + local.minute + offset) % (24 * 60)
+            return minute // 60, minute % 60
+
         anchor_out: List[datetime.datetime] = []
         file_out: List[datetime.datetime] = []
 
@@ -2056,12 +2095,7 @@ class TaskAnalyzer:
                 # First date strictly AFTER start_from_date
                 first_date = step(start_from_date)
                 if first_date:
-                    first_hhmm = core.pick_hhmm_from_dnf_for_date(
-                        dnf,
-                        first_date,
-                        first_date,
-                        business_calendar=business_calendar,
-                    ) or default_hhmm
+                    first_hhmm = resolve_hhmm(dnf, first_date, first_date)
                     cur_date, cur_hhmm = first_date, first_hhmm
                     for _ in range(limit):
                         dt_utc = core.build_local_datetime(cur_date, cur_hhmm)
@@ -2070,12 +2104,7 @@ class TaskAnalyzer:
                         nxt_date = step(cur_date)
                         if not nxt_date:
                             break
-                        cur_hhmm = core.pick_hhmm_from_dnf_for_date(
-                            dnf,
-                            nxt_date,
-                            first_date,
-                            business_calendar=business_calendar,
-                        ) or cur_hhmm
+                        cur_hhmm = resolve_hhmm(dnf, nxt_date, first_date)
                         cur_date = nxt_date
 
         if anchor_file:

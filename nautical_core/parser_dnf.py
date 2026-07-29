@@ -34,6 +34,12 @@ def _apply_group_modifiers(res, mods: dict, *, parse_error_cls) -> None:
                 if atom_mods.get("moon"):
                     raise parse_error_cls("Cannot apply a grouped @moon modifier because the group already has a moon filter.")
                 atom_mods["moon"] = mods["moon"]
+            if "time_offset_minutes" in mods:
+                if "time_offset_minutes" in atom_mods:
+                    raise parse_error_cls(
+                        "Cannot apply a grouped time offset because a branch already has one."
+                    )
+                atom_mods["time_offset_minutes"] = int(mods["time_offset_minutes"] or 0)
             if not has_date_modifiers:
                 continue
             if _group_has_date_modifiers(atom_mods):

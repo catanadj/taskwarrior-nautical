@@ -7869,6 +7869,21 @@ def test_group_time_modifier_supports_multiple_times():
     )
 
 
+def test_group_astronomical_time_offset_distributes_to_all_branches():
+    """A grouped astronomical time offset must survive distribution to each branch."""
+    expr = "(moon:full + y:jul)@t=sunset@+45m"
+    dnf = core.parse_anchor_expr_to_dnf(expr)
+    expect(len(dnf) == 1 and len(dnf[0]) == 2, f"unexpected grouped moon DNF: {dnf!r}")
+    expect(
+        all(
+            (atom.get("mods") or {}).get("t") == "sunset"
+            and (atom.get("mods") or {}).get("time_offset_minutes") == 45
+            for atom in dnf[0]
+        ),
+        f"grouped astronomical time offset was dropped: {dnf!r}",
+    )
+
+
 def test_group_date_modifiers_distribute_across_or_branches():
     """Date modifiers on OR-only groups should schedule and round-trip exactly."""
     expr = "(y:12-24 | (y:12-30 | y:12-31))@pbd@-1bd@t=09:00"
@@ -8976,6 +8991,47 @@ def test_moon_phase_real_astral_boundary_smoke():
     )
 
 
+def test_moon_astral_events_preserve_timezone_and_dst():
+    """Real Astral event times stay timezone-aware across civil-time transitions."""
+    try:
+        import astral  # noqa: F401
+    except ImportError:
+        return
+    astronomy = core._import_sibling("astronomy")
+    config = {
+        "default_location": "new-york",
+        "locations": {"new-york": {"latitude": 40.7128, "longitude": -74.0060, "timezone": "America/New_York"}},
+    }
+    before = astronomy.resolve_event("sunrise", date(2026, 3, 8), config=config)
+    after = astronomy.resolve_event("sunrise", date(2026, 3, 9), config=config)
+    expect(before.tzinfo is not None and after.tzinfo is not None, "Astral event must be timezone-aware")
+    expect(before.tzinfo.key == "America/New_York", f"unexpected pre-DST timezone: {before.tzinfo!r}")
+    expect(after.tzinfo.key == "America/New_York", f"unexpected post-DST timezone: {after.tzinfo!r}")
+    expect(before.utcoffset() != after.utcoffset(), "DST transition did not change the UTC offset")
+
+
+def test_moonrise_unavailable_location_fails_closed():
+    """A real Astral location without a moonrise must produce a clear lookup failure."""
+    try:
+        import astral  # noqa: F401
+    except ImportError:
+        return
+    astronomy = core._import_sibling("astronomy")
+    config = {
+        "default_location": "tromso",
+        "locations": {"tromso": {"latitude": 69.6492, "longitude": 18.9553, "timezone": "Europe/Oslo"}},
+    }
+    unavailable = False
+    for day_offset in range(7):
+        try:
+            astronomy.resolve_event("moonrise", date(2026, 6, 21) + timedelta(days=day_offset), config=config)
+        except LookupError as exc:
+            expect("moonrise" in str(exc), f"unavailable event error omitted event name: {exc}")
+            unavailable = True
+            break
+    expect(unavailable, "expected at least one unavailable Tromso moonrise during polar summer")
+
+
 def test_moon_phase_source_and_filter_compose_with_weekday():
     """Moon sources and @moon filters must preserve the other AND-term constraints."""
     astronomy = core._import_sibling("astronomy")
@@ -9077,11 +9133,11 @@ def test_moon_phase_operational_errors_are_actionable():
 def test_moon_phase_natural_language_is_explicit():
     """Natural descriptions must identify moon sources and filters."""
     expect(
-        core.describe_anchor_expr("moon:full + y:jul") == "full moon in Jul each year",
+        core.describe_anchor_expr("moon:full + y:jul") == "full-moon phase window begins in Jul each year",
         core.describe_anchor_expr("moon:full + y:jul"),
     )
     expect(
-        core.describe_anchor_expr("w:fri@moon=full") == "Fridays on full moon dates",
+        core.describe_anchor_expr("w:fri@moon=full") == "Fridays on full-moon phase dates",
         core.describe_anchor_expr("w:fri@moon=full"),
     )
 
@@ -23578,6 +23634,7 @@ TESTS = [
     test_weekly_trailing_time_modifier_applies_to_whole_list,
     test_group_time_modifier_distributes_to_all_branches,
     test_group_time_modifier_supports_multiple_times,
+    test_group_astronomical_time_offset_distributes_to_all_branches,
     test_group_date_modifiers_distribute_across_or_branches,
     test_group_modifiers_reject_ambiguous_combinations,
     test_counted_random_selects_unique_dates_per_period,
@@ -23591,6 +23648,8 @@ TESTS = [
     test_moon_phase_resolver_uses_circular_phase_distance,
     test_moon_phase_resolver_uses_documented_phase_bands,
     test_moon_phase_real_astral_boundary_smoke,
+    test_moon_astral_events_preserve_timezone_and_dst,
+    test_moonrise_unavailable_location_fails_closed,
     test_moon_phase_source_and_filter_compose_with_weekday,
     test_moon_phase_source_emits_once_per_phase_window,
     test_moon_phase_operational_errors_are_actionable,

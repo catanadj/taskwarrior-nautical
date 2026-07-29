@@ -808,13 +808,13 @@ def describe_anchor_term(
         txt = interval_prefix + txt
 
     if moon_source:
-        moon_label = f"{moon_source} moon"
+        moon_label = f"{moon_source}-moon phase window begins"
         if txt:
             txt = f"{moon_label} {'on' if w_phrase else 'in'} {txt}"
         else:
             txt = moon_label
     elif moon_filter:
-        moon_label = f"{moon_filter} moon dates"
+        moon_label = f"{moon_filter}-moon phase dates"
         txt = f"{txt} on {moon_label}" if txt else f"on {moon_label}"
 
     txt = inject_prevnext_phrase(txt, term, wdname=_WDNAME)

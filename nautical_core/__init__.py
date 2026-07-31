@@ -147,6 +147,7 @@ _warn_missing_toml_parser = _core_config._warn_missing_toml_parser
 _warn_toml_parse_error = _core_config._warn_toml_parse_error
 _get_config = _core_config._get_config
 effective_config_snapshot = _core_config.effective_config_snapshot
+effective_config_fingerprint = _core_config.effective_config_fingerprint
 _CONF = _core_config._CONF
 _conf_raw = _core_config.conf_raw
 _conf_str = _core_config.conf_str
@@ -761,7 +762,11 @@ def _cache_key(
 
     # Include the serialized parser shape so cache entries from older
     # releases cannot be compared with the current DNF representation.
-    profile_fingerprint = f"{business_calendar_fingerprint}|season:{SEASON_HEMISPHERE}|parser:2"
+    config_fingerprint = effective_config_fingerprint()
+    profile_fingerprint = (
+        f"{business_calendar_fingerprint}|season:{SEASON_HEMISPHERE}"
+        f"|config:{config_fingerprint}|parser:2"
+    )
     return _cache_support.cache_key(
         acf,
         anchor_mode,
@@ -1006,7 +1011,9 @@ def _cache_key_for_task_cached(
     anchor_mode: str,
     fmt: str,
     business_calendar_fingerprint: str = "",
+    config_fingerprint: str = "",
 ) -> str:
+    _ = config_fingerprint
     return _cache_payload.cache_key_for_task_cached(
         anchor_expr,
         anchor_mode,
@@ -1029,6 +1036,7 @@ def cache_key_for_task(
         anchor_mode or "",
         _yearfmt(),
         calendar_fingerprint,
+        effective_config_fingerprint(),
     )
 
 
@@ -3811,6 +3819,7 @@ __all__ = (
     'BUSINESS_CALENDAR_CONFIG',
     'ASTRONOMY_CONFIG',
     'effective_config_snapshot',
+    'effective_config_fingerprint',
     'DEFAULT_BUSINESS_CALENDAR',
     'ENABLE_ANCHOR_CACHE',
     'LOCAL_TZ_NAME',

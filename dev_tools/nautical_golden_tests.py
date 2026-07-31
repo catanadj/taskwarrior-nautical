@@ -4681,6 +4681,28 @@ def test_effective_config_snapshot_isolated_and_provenanced():
     expect(core.LOCAL_TZ_NAME == original_tz, "effective config snapshot leaked mutable state")
 
 
+def test_config_fingerprint_invalidates_persistent_cache_keys():
+    """Changing the selected config file must produce a new cache fingerprint and key."""
+    previous = os.environ.get("NAUTICAL_CONFIG")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "config-nautical.toml"
+            path.write_text('tz = "UTC"\n', encoding="utf-8")
+            os.environ["NAUTICAL_CONFIG"] = str(path)
+            first = core.effective_config_snapshot()
+            first_key = core.cache_key_for_task("w:mon", "skip")
+            path.write_text('tz = "Europe/Bucharest"\n', encoding="utf-8")
+            second = core.effective_config_snapshot()
+            second_key = core.cache_key_for_task("w:mon", "skip")
+            expect(first.get("fingerprint") != second.get("fingerprint"), "config edits did not change fingerprint")
+            expect(first_key != second_key, "config edits did not invalidate cache key")
+    finally:
+        if previous is None:
+            os.environ.pop("NAUTICAL_CONFIG", None)
+        else:
+            os.environ["NAUTICAL_CONFIG"] = previous
+
+
 def test_doctor_reports_missing_navigator_dependencies():
     """doctor should identify missing required Navigator packages."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
@@ -24597,6 +24619,7 @@ TESTS.extend([
     test_doctor_reports_missing_timezone_configuration,
     test_doctor_reports_astronomy_preflight_health,
     test_effective_config_snapshot_isolated_and_provenanced,
+    test_config_fingerprint_invalidates_persistent_cache_keys,
     test_doctor_reports_missing_navigator_dependencies,
     test_installer_initializes_explicit_timezone_config,
 ])

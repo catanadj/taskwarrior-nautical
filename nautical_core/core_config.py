@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import copy
+import hashlib
+import json
 import time
 from collections import OrderedDict
 from functools import lru_cache, wraps
@@ -187,7 +189,26 @@ def effective_config_snapshot() -> dict:
                     break
     except Exception:
         source = "auto"
-    return {"values": values, "source": source}
+    source_stat = None
+    if source not in {"defaults", "auto"}:
+        try:
+            stat_result = os.stat(source)
+            source_stat = (
+                int(getattr(stat_result, "st_mtime_ns", int(stat_result.st_mtime * 1_000_000_000))),
+                int(stat_result.st_size),
+            )
+        except Exception:
+            source_stat = None
+    fingerprint_payload = {"values": values, "source": source, "source_stat": source_stat}
+    fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()[:24]
+    return {"values": values, "source": source, "fingerprint": fingerprint}
+
+
+def effective_config_fingerprint() -> str:
+    """Return a stable, non-sensitive fingerprint of effective configuration."""
+    return str(effective_config_snapshot().get("fingerprint") or "")
 
 
 def conf_raw(key: str):

@@ -228,6 +228,7 @@ def cache_load(
     json_mod,
     zlib_mod,
     base64_mod,
+    quarantine_cache=None,
 ):
     if not enable_anchor_cache:
         return None
@@ -288,16 +289,22 @@ def cache_load(
             if not cache_payload_shape_ok(obj):
                 if os_mod.environ.get("NAUTICAL_DIAG") == "1":
                     diag(f"cache_load rejected invalid payload shape for key={key}")
+                if quarantine_cache is not None:
+                    quarantine_cache(key, path)
                 return None
             cache_load_mem[key] = (stamp, obj, now)
             cache_load_mem.move_to_end(key)
             if len(cache_load_mem) > cache_load_mem_max:
                 cache_load_mem.popitem(last=False)
             return clone_cache_payload(obj)
+        if quarantine_cache is not None:
+            quarantine_cache(key, path)
         return None
     except (OSError, ValueError, json_mod.JSONDecodeError, zlib_mod.error) as exc:
         if os_mod.environ.get("NAUTICAL_DIAG") == "1":
             diag(f"cache_load failed: {exc}")
+        if quarantine_cache is not None:
+            quarantine_cache(key, path)
         return None
 
 
@@ -468,6 +475,11 @@ def cache_gc(
                     result["errors"] += 1
             else:
                 result["locks_skipped"] += 1
+            continue
+        if ".jsonz.bad." in name:
+            key = name.split(".jsonz.bad.", 1)[0]
+            if age >= max(0.0, float(stale_tmp_age)) and key:
+                remove_path(path, kind="temporary", key=key)
             continue
         if not name.endswith(".jsonz") or not os_mod.path.isfile(path):
             continue

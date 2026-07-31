@@ -18635,6 +18635,38 @@ def test_cache_save_writes_all_bytes():
         expect(st.st_size > 0, "cache file should not be empty")
 
 
+def test_cache_load_quarantines_corrupt_entries_and_gc_removes_them():
+    """Broken cache payloads should become misses and be removed by explicit GC."""
+    import nautical_core as core
+    import base64
+    import zlib
+
+    saved_enabled = core.ENABLE_ANCHOR_CACHE
+    saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
+    saved_cache_dir = core._CACHE_DIR
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            core.ENABLE_ANCHOR_CACHE = True
+            core.ANCHOR_CACHE_DIR_OVERRIDE = td
+            core._CACHE_DIR = None
+            for key, payload in (("broken", b"not-a-cache"), ("invalid", None)):
+                path = Path(core._cache_path(key))
+                if payload is None:
+                    raw = json.dumps({"dnf": "invalid"}, separators=(",", ":")).encode("utf-8")
+                    payload = base64.b85encode(zlib.compress(raw))
+                path.write_bytes(payload)
+                expect(core.cache_load(key) is None, f"corrupt cache {key} should be a miss")
+            quarantined = list(Path(td).glob("*.jsonz.bad.*"))
+            expect(len(quarantined) == 2, f"corrupt cache entries were not quarantined: {quarantined!r}")
+            result = core.cache_gc(stale_tmp_age=0)
+            expect(result.get("temporary") >= 2, f"quarantine artifacts were not collected: {result}")
+            expect(not list(Path(td).glob("*.jsonz.bad.*")), "quarantine artifacts remained after GC")
+    finally:
+        core.ENABLE_ANCHOR_CACHE = saved_enabled
+        core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
+        core._CACHE_DIR = saved_cache_dir
+
+
 def test_cache_load_retries_when_file_is_replaced_during_read():
     """A reader should retry if another process publishes a new generation."""
     import nautical_core as core
@@ -24499,6 +24531,7 @@ TESTS = [
     test_sanitize_task_strings_removes_controls,
     test_clear_all_caches_env,
     test_cache_save_writes_all_bytes,
+    test_cache_load_quarantines_corrupt_entries_and_gc_removes_them,
     test_cache_save_returns_false_when_lock_busy,
     test_cache_save_returns_false_when_atomic_replace_fails,
     test_cache_load_rejects_invalid_payload_shape,

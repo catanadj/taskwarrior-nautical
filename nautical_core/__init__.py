@@ -968,6 +968,21 @@ def _cache_payload_shape_ok(obj: dict) -> bool:
 def _cache_atomic_replace(src: str, dst: str) -> None:
     _cache_payload.cache_atomic_replace(src, dst, os_mod=os)
 
+
+def _quarantine_cache(key: str, path: str) -> bool:
+    """Move a broken cache entry aside so future reads become clean misses."""
+    try:
+        with _cache_lock(key) as locked:
+            if not locked or not os.path.exists(path):
+                return False
+            target = f"{path}.bad.{os.getpid()}.{time.time_ns()}"
+            os.replace(path, target)
+            _CACHE_LOAD_MEM.pop(key, None)
+            return True
+    except Exception:
+        return False
+
+
 def cache_load(key: str) -> dict | None:
     return _cache_payload.cache_load(
         key,
@@ -982,6 +997,7 @@ def cache_load(key: str) -> dict | None:
         cache_payload_shape_ok=_cache_payload_shape_ok,
         cache_load_mem_max=_CACHE_LOAD_MEM_MAX,
         diag=diag,
+        quarantine_cache=_quarantine_cache,
         os_mod=os,
         json_mod=json,
         zlib_mod=zlib,

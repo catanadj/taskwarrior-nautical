@@ -57,6 +57,12 @@ def _render(payload: dict) -> None:
         print(f"Legacy core backup: {payload.get('legacy_backup')}")
     for path in payload.get("migrated_configs") or []:
         print(f"Config preserved: {path}")
+    initialized = str(payload.get("initialized_config") or "")
+    if initialized:
+        print(f"Config initialized: {initialized}")
+    planned_config = payload.get("config_initialization")
+    if isinstance(planned_config, dict) and planned_config:
+        print(f"Config to initialize: {planned_config.get('path')} (tz={planned_config.get('tz')})")
 
 
 def main() -> int:

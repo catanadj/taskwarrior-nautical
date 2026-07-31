@@ -324,6 +324,8 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             "warn",
             "No Nautical config file was found; built-in defaults will be used.",
         )
+        _check_timezone(findings, {})
+        _check_navigator_dependencies(findings, {})
         return
     try:
         data = tomllib.loads(config.read_text(encoding="utf-8"))
@@ -340,6 +342,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     _finding(findings, "config.loaded", "ok", f"Nautical config is valid: {config}")
     _check_config_schema(findings, data)
     _check_timezone(findings, data)
+    _check_navigator_dependencies(findings, data)
     _check_panel_config(findings, data)
     for key in ("anchor_file_dir", "omit_file_dir"):
         raw = str(data.get(key) or "").strip()
@@ -406,7 +409,18 @@ def _check_config_schema(findings: list[dict[str, Any]], data: dict[str, Any]) -
 
 
 def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
-    tz_name = str(data.get("tz") or "Europe/Bucharest").strip() or "Europe/Bucharest"
+    raw_tz = data.get("tz")
+    tz_name = str(raw_tz or "UTC").strip() or "UTC"
+    if not str(raw_tz or "").strip():
+        _finding(
+            findings,
+            "config.timezone.missing",
+            "warn",
+            "No explicit Nautical timezone is configured; UTC fallback is active.",
+            fix="Run Nautical install on a fresh target or set tz to an explicit IANA timezone in config-nautical.toml.",
+            details={"tz": tz_name},
+        )
+        return
     if ZONEINFO_FACTORY is None:
         _finding(
             findings,
@@ -430,6 +444,52 @@ def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> Non
         )
         return
     _finding(findings, "config.timezone", "ok", f"Nautical timezone is available: {tz_name}")
+
+
+def _check_navigator_dependencies(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
+    """Report dependencies required by the optional Navigator command."""
+    def available(name: str) -> bool:
+        try:
+            return RICH_SPEC_FACTORY(name) is not None
+        except Exception:
+            return False
+
+    required = {
+        "rich": "formatted panels",
+        "prompt_toolkit": "interactive chain selection",
+        "dateutil": "datetime parsing",
+    }
+    missing = [name for name in required if not available(name)]
+    if missing:
+        _finding(
+            findings,
+            "navigator.dependencies",
+            "warn",
+            "Navigator dependencies are incomplete: " + ", ".join(missing) + ".",
+            fix="Run python3 -m pip install -r requirements.txt.",
+            details={"missing": missing, "python": sys.executable},
+        )
+    else:
+        _finding(
+            findings,
+            "navigator.dependencies",
+            "ok",
+            "Navigator dependencies are available.",
+            details={"python": sys.executable},
+        )
+
+    astronomy = data.get("astronomy")
+    astronomy_configured = isinstance(astronomy, dict) and bool(astronomy.get("locations"))
+    astral_available = available("astral")
+    if astronomy_configured and not astral_available:
+        _finding(
+            findings,
+            "navigator.astronomy_dependency",
+            "warn",
+            "Astronomy locations are configured, but Astral is not installed.",
+            fix="Run python3 -m pip install -r requirements-astronomy.txt.",
+            details={"python": sys.executable},
+        )
 
 
 def _check_panel_config(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
@@ -1012,7 +1072,7 @@ def _timezone_summary(findings: list[dict[str, Any]]) -> str:
         check_id = item.get("id")
         if check_id == "config.timezone":
             return str(item.get("message") or "").replace("Nautical timezone is available: ", "")
-        if check_id in {"config.timezone.invalid", "config.timezone.unavailable"}:
+        if check_id in {"config.timezone.missing", "config.timezone.invalid", "config.timezone.unavailable"}:
             details = item.get("details") if isinstance(item.get("details"), dict) else {}
             tz_name = str(details.get("tz") or "?")
             return f"{tz_name} unavailable; UTC fallback active"

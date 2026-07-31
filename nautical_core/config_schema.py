@@ -5,7 +5,9 @@ from typing import Any
 
 CONFIG_SPECS: dict[str, dict[str, Any]] = {
     "wrand_salt": {"type": "string", "default": "nautical|wrand|v4"},
-    "tz": {"type": "string", "default": "Europe/Bucharest"},
+    # Installations write an explicit detected timezone; UTC is the portable
+    # fallback for an unconfigured or incomplete installation.
+    "tz": {"type": "string", "default": "UTC"},
     "season_hemisphere": {
         "type": "choice",
         "default": "north",

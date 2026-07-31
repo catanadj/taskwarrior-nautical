@@ -232,8 +232,10 @@ def _self_check() -> int:
     if task_bin:
         _emit_check("OK", "task", task_bin)
     else:
-        ok = False
-        _emit_check("FAIL", "task", "not found in PATH")
+        install_smoke = os.environ.get("NAUTICAL_INSTALL_SMOKE") == "1"
+        if not install_smoke:
+            ok = False
+        _emit_check("WARN" if install_smoke else "FAIL", "task", "not found in PATH")
 
     try:
         import astral  # noqa: F401

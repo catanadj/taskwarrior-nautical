@@ -4644,6 +4644,55 @@ def test_doctor_reports_missing_timezone_data():
     expect("pip install tzdata" in fix, f"missing tzdata fix hint: {findings!r}")
 
 
+def test_doctor_reports_missing_timezone_configuration():
+    """doctor should distinguish an absent timezone from an unavailable one."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_missing_timezone_config_test")
+    findings = []
+    mod._check_timezone(findings, {})
+    item = next((item for item in findings if item.get("id") == "config.timezone.missing"), None)
+    expect(item is not None, f"missing timezone configuration was not reported: {findings!r}")
+    expect((item.get("details") or {}).get("tz") == "UTC", f"missing timezone did not use UTC fallback: {item!r}")
+
+
+def test_doctor_reports_missing_navigator_dependencies():
+    """doctor should identify missing required Navigator packages."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_navigator_dependencies_test")
+    previous = mod.RICH_SPEC_FACTORY
+    try:
+        mod.RICH_SPEC_FACTORY = lambda name: None if name in {"rich", "dateutil"} else object()
+        findings = []
+        mod._check_navigator_dependencies(findings, {})
+    finally:
+        mod.RICH_SPEC_FACTORY = previous
+    item = next((item for item in findings if item.get("id") == "navigator.dependencies"), None)
+    expect(item is not None and item.get("severity") == "warn", f"missing Navigator packages were not reported: {findings!r}")
+    expect(set((item.get("details") or {}).get("missing") or []) == {"rich", "dateutil"}, f"wrong missing packages: {item!r}")
+
+
+def test_installer_initializes_explicit_timezone_config():
+    """fresh installs should write an explicit detected timezone without touching upgrades."""
+    from nautical_core import install_runtime
+
+    previous = install_runtime.detect_local_timezone
+    install_runtime.detect_local_timezone = lambda: "UTC"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            taskdata = Path(td) / "taskdata"
+            result = install_runtime.install_release(
+                source=Path(ROOT),
+                taskdata=taskdata,
+                release_id="timezone-config",
+                smoke=False,
+            )
+            config = taskdata / "config-nautical.toml"
+            expect(result.get("initialized_config") == str(config), f"fresh config was not reported: {result!r}")
+            expect(config.read_text(encoding="utf-8") == "# Nautical timezone detected during installation.\ntz = \"UTC\"\n", "fresh config content was wrong")
+    finally:
+        install_runtime.detect_local_timezone = previous
+
+
 def test_doctor_text_timezone_summary():
     """doctor text output should surface timezone health near the top."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
@@ -24416,6 +24465,9 @@ TESTS.extend([
     test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored,
     test_performance_large_expressions,
     test_weekday_weekend_single_time,
+    test_doctor_reports_missing_timezone_configuration,
+    test_doctor_reports_missing_navigator_dependencies,
+    test_installer_initializes_explicit_timezone_config,
 ])
 
 TESTS.append(test_core_explicit_facade_all_contains_supported_symbols)

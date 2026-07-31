@@ -53,11 +53,22 @@ ln -sf ~/.task/nautical ~/.local/bin/nautical
 For a custom data directory, set `$TASKDATA` and substitute that path for
 `~/.task` above.
 
-Optional, for formatted panels:
+Install Navigator and the formatted-panel dependencies:
 
 ```bash
-pip install rich
+python3 -m pip install -r requirements.txt
 ```
+
+For astronomical `@t=` events or moon-phase anchors, install the optional
+provider as well:
+
+```bash
+python3 -m pip install -r requirements-astronomy.txt
+```
+
+The installer writes an explicit local IANA timezone to a new installation's
+`config-nautical.toml`. Existing configurations are preserved; Doctor reports
+when a timezone is missing or unavailable.
 
 Create a first task:
 

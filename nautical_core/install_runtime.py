@@ -38,6 +38,44 @@ _MAX_HOOK_SOURCE_BYTES = 2 * 1024 * 1024
 _RELEASE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
+def detect_local_timezone() -> str:
+    """Return a valid local IANA timezone, falling back safely to UTC."""
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception:
+        return "UTC"
+
+    candidates: list[str] = []
+    raw_tz = os.environ.get("TZ", "").strip()
+    if raw_tz:
+        candidates.append(raw_tz[1:] if raw_tz.startswith(":") else raw_tz)
+    try:
+        resolved = Path("/etc/localtime").resolve(strict=True)
+        marker = "/zoneinfo/"
+        resolved_text = str(resolved)
+        if marker in resolved_text:
+            candidates.append(resolved_text.split(marker, 1)[1])
+    except Exception:
+        pass
+    for candidate in candidates:
+        if not candidate or candidate.startswith(("/", "..")):
+            continue
+        try:
+            ZoneInfo(candidate)
+        except Exception:
+            continue
+        return candidate
+    return "UTC"
+
+
+def _target_config_path(taskdata: Path) -> Path | None:
+    for name in ("config-nautical.toml", "nautical.toml"):
+        path = taskdata / name
+        if path.is_file() or path.is_symlink():
+            return path
+    return None
+
+
 class InstallError(RuntimeError):
     pass
 
@@ -264,6 +302,37 @@ def _smoke_hooks(
                 raise InstallError(f"{event} validation wrote unexpected stdout")
 
 
+def _smoke_navigator(base: Path) -> None:
+    navigator = base / "nautical_navigator.py"
+    if not navigator.is_file():
+        raise InstallError(f"Navigator is missing: {navigator}")
+    env = os.environ.copy()
+    env.update({
+        "NAUTICAL_INSTALL_SMOKE": "1",
+        "NAUTICAL_CORE_PATH": str(base),
+        "NAUTICAL_TRUST_CORE_PATH": "1",
+        "TASKDATA": str(base),
+        "TASKRC": str(base / "hooks" / "taskrc"),
+        "NAUTICAL_CONFIG": str(base / ".navigator-smoke-config.toml"),
+        "TZ": "UTC",
+    })
+    env.pop("NAUTICAL_DIAG", None)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(navigator), "--self-check"],
+            cwd=str(base),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=12.0,
+        )
+    except Exception as exc:
+        raise InstallError(f"Navigator validation could not run: {exc}") from exc
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+        raise InstallError(f"Navigator validation failed: {detail}")
+
+
 def validate_release(root: Path, *, smoke: bool = True) -> dict[str, int]:
     for path in root.rglob("*.py"):
         try:
@@ -283,6 +352,7 @@ def validate_release(root: Path, *, smoke: bool = True) -> dict[str, int]:
             {event: root / name for event, name in HOOK_FILES.items()},
             core_base=root,
         )
+        _smoke_navigator(root)
     return apis
 
 
@@ -299,6 +369,7 @@ def validate_installed(base: Path, hooks_dir: Path, *, smoke: bool = True) -> di
             {event: hooks_dir / name for event, name in HOOK_FILES.items()},
             core_base=None,
         )
+        _smoke_navigator(base)
     launcher = base / "nautical"
     if not (launcher.is_file() and os.access(str(launcher), os.X_OK)):
         raise InstallError(f"installed launcher is missing or not executable: {launcher}")
@@ -368,6 +439,18 @@ def _atomic_copy(source: Path, target: Path, *, executable: bool = False) -> Non
         shutil.copy2(source, temp)
         if executable:
             temp.chmod(0o755)
+        os.replace(temp, target)
+    finally:
+        if _lexists(temp):
+            temp.unlink()
+
+
+def _atomic_write_text(text: str, target: Path) -> None:
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temp = target.parent / f".{target.name}.tmp-{uuid.uuid4().hex}"
+    try:
+        temp.write_text(text, encoding="utf-8")
+        temp.chmod(0o600)
         os.replace(temp, target)
     finally:
         if _lexists(temp):
@@ -583,6 +666,7 @@ def install_release(
             apis=apis,
             smoke=smoke,
         )
+        config_path = _target_config_path(taskdata)
         return {
             "status": "dry-run",
             "operation": plan["operation"],
@@ -595,6 +679,11 @@ def install_release(
             "base": str(base),
             "hooks_dir": str(hooks_dir),
             "hook_impl_api": apis,
+            "config_initialization": (
+                {"path": str(taskdata / "config-nautical.toml"), "tz": detect_local_timezone()}
+                if plan["operation"] == "install" and config_path is None
+                else {}
+            ),
         }
 
     hooks_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -610,6 +699,7 @@ def install_release(
         reused_release = False
         legacy_core: Path | None = None
         migrated_configs: list[str] = []
+        initialized_config = ""
         pointer_before: dict[str, Any] | None = None
         core_before: dict[str, Any] | None = None
         file_snapshots: dict[Path, dict[str, Any]] = {}
@@ -655,6 +745,7 @@ def install_release(
                     "migrated_legacy_core": False,
                     "legacy_backup": "",
                     "migrated_configs": [],
+                    "initialized_config": "",
                     "hook_impl_api": apis,
                 }
 
@@ -677,6 +768,17 @@ def install_release(
                 core_before = {"kind": "symlink", "target": os.readlink(core_link)}
             else:
                 core_before = {"kind": "missing"}
+
+            if plan["operation"] == "install" and _target_config_path(taskdata) is None:
+                config_path = taskdata / "config-nautical.toml"
+                file_snapshots[config_path] = _snapshot_file(config_path, rollback_dir)
+                timezone_name = detect_local_timezone()
+                _atomic_write_text(
+                    "# Nautical timezone detected during installation.\n"
+                    f'tz = "{timezone_name}"\n',
+                    config_path,
+                )
+                initialized_config = str(config_path)
 
             _atomic_symlink(f"releases/{release_id}", current)
             _atomic_symlink(".nautical-runtime/current/nautical_core", core_link)
@@ -720,6 +822,7 @@ def install_release(
                 "migrated_legacy_core": bool(migrated_backup),
                 "legacy_backup": migrated_backup,
                 "migrated_configs": migrated_configs,
+                "initialized_config": initialized_config,
                 "hook_impl_api": apis,
             }
         except Exception:

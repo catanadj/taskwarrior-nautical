@@ -6364,18 +6364,29 @@ def test_anchor_cache_garbage_collection_prunes_expired_and_overflow():
             old_path = Path(td) / "old-entry.jsonz"
             new_path = Path(td) / "new-entry.jsonz"
             stale_tmp = Path(td) / ".orphan.tmp"
+            stale_lock = Path(td) / ".orphan.lock"
+            active_lock = Path(td) / ".active.lock"
+            malformed_lock = Path(td) / ".malformed.lock"
             ignored = Path(td) / "notes.txt"
             old_path.write_bytes(b"old")
             new_path.write_bytes(b"new")
             stale_tmp.write_bytes(b"tmp")
+            stale_lock.write_text("999999 1\n", encoding="ascii")
+            active_lock.write_text(f"{os.getpid()} {int(time.time())}\n", encoding="ascii")
+            malformed_lock.write_text("not-a-lock\n", encoding="ascii")
             ignored.write_text("keep", encoding="utf-8")
             old_time = time.time() - 10
             os.utime(old_path, (old_time, old_time))
             os.utime(stale_tmp, (old_time, old_time))
-            result = core.cache_gc(max_entries=1, stale_tmp_age=1)
+            os.utime(stale_lock, (old_time, old_time))
+            os.utime(malformed_lock, (old_time, old_time))
+            result = core.cache_gc(max_entries=1, stale_tmp_age=1, stale_lock_age=1)
             expect(result.get("expired") == 1, f"expired cache entry was not pruned: {result}")
             expect(result.get("temporary") == 1, f"stale temp was not pruned: {result}")
             expect(old_path.exists() is False and new_path.exists(), "cache GC removed the wrong entry")
+            expect(result.get("locks_removed") == 1, f"stale lock was not pruned: {result}")
+            expect(result.get("locks_skipped", 0) >= 1, f"ambiguous locks were not preserved: {result}")
+            expect(not stale_lock.exists() and active_lock.exists() and malformed_lock.exists(), "lock cleanup was unsafe")
             expect(ignored.exists(), "cache GC touched an unrelated file")
     finally:
         core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir

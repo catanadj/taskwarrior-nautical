@@ -1007,14 +1007,22 @@ def cache_save(key: str, obj: dict) -> bool:
     )
 
 
-def cache_gc(*, max_entries: int = 512, stale_tmp_age: float = 86400.0) -> dict:
+def cache_gc(
+    *,
+    max_entries: int = 512,
+    stale_tmp_age: float = 86400.0,
+    stale_lock_age: float = 86400.0,
+) -> dict:
     """Prune expired and orphaned anchor cache files outside hook hot paths."""
     return _cache_payload.cache_gc(
         _cache_dir(),
         ttl=ANCHOR_CACHE_TTL,
         max_entries=max_entries,
         stale_tmp_age=stale_tmp_age,
+        stale_lock_age=stale_lock_age,
         cache_lock=_cache_lock,
+        stale_lock_check=lambda path, age: _safe_lock_stale_pid(path, age)
+        and (_safe_lock_age(path) or 0.0) >= float(age),
         time_mod=time,
         os_mod=os,
     )

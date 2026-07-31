@@ -386,12 +386,23 @@ def cache_gc(
     ttl: int = 0,
     max_entries: int = 512,
     stale_tmp_age: float = 86400.0,
+    stale_lock_age: float = 86400.0,
     cache_lock,
+    stale_lock_check,
     time_mod,
     os_mod,
 ) -> dict:
     """Prune expired/temporary cache files without touching active writers."""
-    result = {"removed": 0, "bytes": 0, "temporary": 0, "expired": 0, "overflow": 0, "errors": 0}
+    result = {
+        "removed": 0,
+        "bytes": 0,
+        "temporary": 0,
+        "expired": 0,
+        "overflow": 0,
+        "locks_removed": 0,
+        "locks_skipped": 0,
+        "errors": 0,
+    }
     if not base or not os_mod.path.isdir(base):
         return result
     now = time_mod.time()
@@ -434,6 +445,29 @@ def cache_gc(
         if name.startswith(".") and name.endswith(".tmp"):
             if age >= max(0.0, float(stale_tmp_age)):
                 remove_path(path, kind="temporary")
+            continue
+        if name.startswith(".") and name.endswith(".lock"):
+            if age < max(0.0, float(stale_lock_age)):
+                continue
+            key = name[1:-5]
+            if not key:
+                result["locks_skipped"] += 1
+                continue
+            try:
+                stale = bool(stale_lock_check(path, float(stale_lock_age)))
+            except Exception:
+                stale = False
+            if stale:
+                try:
+                    size = int(os_mod.path.getsize(path))
+                    os_mod.unlink(path)
+                    result["removed"] += 1
+                    result["bytes"] += size
+                    result["locks_removed"] += 1
+                except Exception:
+                    result["errors"] += 1
+            else:
+                result["locks_skipped"] += 1
             continue
         if not name.endswith(".jsonz") or not os_mod.path.isfile(path):
             continue

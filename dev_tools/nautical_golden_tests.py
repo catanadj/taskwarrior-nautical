@@ -7091,7 +7091,7 @@ def test_weekday_weekend_single_time():
     )
     seen = set()
     for d in dates[:8]:
-        slots = _hook._extract_time_slots_for_date(dnf, d, date(2026, 1, 5))
+        slots = _hook._extract_time_slots_for_date(dnf, d, date(2026, 1, 5), "test")
         if d.weekday() < 5:
             expect(slots == [(9, 0)], f"{d} should use 09:00, got {slots}")
         else:
@@ -11244,7 +11244,8 @@ def test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omi
             raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
         stderr_txt = _strip_markup(p.stderr)
         expect(
-            "either Tuesdays, Fridays, or May 5 each year; skip Sundays and Dates from 2026.csv" in stderr_txt,
+            "either Tuesdays, Fridays, or May 5 each year; omit" in stderr_txt
+            and "Sundays and Dates from 2026.csv" in stderr_txt,
             f"expected omit-aware natural preview wording. stderr={stderr_txt[:700]!r}",
         )
         expect(
@@ -11282,7 +11283,7 @@ def test_hook_on_add_anchor_preview_skips_omit_file_modifier_date():
 
 
 def test_hook_on_add_anchor_preview_marks_omitted_future_slots():
-    """on-add preview should keep omitted future anchor slots visible in Upcoming."""
+    """on-add preview should skip omitted future anchor slots in Upcoming."""
     hook = _find_hook_file("on-add-nautical.py")
     env = {"NO_COLOR": "1"}
     task = {
@@ -11300,15 +11301,15 @@ def test_hook_on_add_anchor_preview_marks_omitted_future_slots():
     if p.returncode != 0:
         raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
     stderr_txt = _strip_markup(p.stderr)
-    expect("(omitted)" in stderr_txt, f"expected omitted marker in on-add preview: {stderr_txt[:700]!r}")
+    expect("(omitted)" not in stderr_txt, f"on-add should not render omitted slots as upcoming: {stderr_txt[:700]!r}")
     expect(
-        "2025-01-14" in stderr_txt or "Wed 2025-01-14" in stderr_txt or "2025-01-14 09:00" in stderr_txt,
-        f"expected omitted Wednesday slot to remain visible in Upcoming: {stderr_txt[:700]!r}",
+        "2025-01-15" not in stderr_txt and "Wed 2025-01-15" not in stderr_txt,
+        f"expected omitted Wednesday slot to be skipped in Upcoming: {stderr_txt[:700]!r}",
     )
 
 
 def test_hook_on_add_anchor_preview_uses_omit_file_description_in_upcoming():
-    """on-add preview should use omit_file descriptions for omitted Upcoming entries when available."""
+    """on-add preview should skip omit_file dates instead of rendering them as upcoming entries."""
     hook = _find_hook_file("on-add-nautical.py")
     with tempfile.TemporaryDirectory() as td:
         omit_dir = Path(td) / "omit"
@@ -11332,13 +11333,10 @@ def test_hook_on_add_anchor_preview_uses_omit_file_description_in_upcoming():
         if p.returncode != 0:
             raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
         stderr_txt = _strip_markup(p.stderr)
+        expect("Company holida..." not in stderr_txt, f"on-add should not render omitted descriptions: {stderr_txt[:700]!r}")
         expect(
-            "(Company holida...)" in stderr_txt,
-            f"expected omit_file description marker in on-add preview: {stderr_txt[:700]!r}",
-        )
-        expect(
-            "Fri 2025-01-10" in stderr_txt or "2025-01-10 09:00" in stderr_txt,
-            f"expected omitted omit_file date to remain visible in Upcoming: {stderr_txt[:700]!r}",
+            "Fri 2025-01-10" not in stderr_txt and "2025-01-10 09:00" not in stderr_txt,
+            f"expected omitted omit_file date to be skipped in Upcoming: {stderr_txt[:700]!r}",
         )
 
 
@@ -16131,39 +16129,48 @@ def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_ch
     mod = _load_hook_module(hook, "_nautical_on_modify_shifted_anchor_file_timeline_test")
     if hasattr(mod, "_collect_prev_two"):
         setattr(mod, "_collect_prev_two", lambda _task: [])
+    from zoneinfo import ZoneInfo
+    previous_tz_name = mod.core.LOCAL_TZ_NAME
+    previous_tz = mod.core._LOCAL_TZ
+    mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
+    mod.core._LOCAL_TZ = ZoneInfo("Europe/Bucharest")
 
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        (anchor_dir / "2026.csv").write_text("date\n2026-04-25\n", encoding="utf-8")
-        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
-        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
-        try:
-            parent = {
-                "uuid": "00000000-0000-0000-0000-000000000555",
-                "description": "shifted anchor_file timeline",
-                "anchor": "y:04-25@t=12:00",
-                "anchor_file": "2026.csv@-1d@t=12:00",
-                "anchor_mode": "skip",
-                "link": 1,
-                "chainID": "abcd1234",
-                "due": "2026-04-23T12:00:00Z",
-                "end": "2026-04-23T13:00:00Z",
-            }
-            child_due, _meta, dnf = mod._compute_anchor_child_due(parent)
-            expect(mod.core.fmt_isoz(child_due) == "2026-04-24T09:00:00Z", f"unexpected shifted child due: {mod.core.fmt_isoz(child_due)}")
-            lines = _call_with_supported_kwargs(
-                mod._timeline_lines,
-                kind="anchor",
-                task=parent,
-                child_due_utc=child_due,
-                child_short="deadbeef",
-                dnf=dnf,
-                next_count=4,
-                cap_no=None,
-                cur_no=1,
-            )
-        finally:
-            mod.core.ANCHOR_FILE_DIR = old_dir
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            anchor_dir = Path(td)
+            (anchor_dir / "2026.csv").write_text("date\n2026-04-25\n", encoding="utf-8")
+            old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+            mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+            try:
+                parent = {
+                    "uuid": "00000000-0000-0000-0000-000000000555",
+                    "description": "shifted anchor_file timeline",
+                    "anchor": "y:04-25@t=12:00",
+                    "anchor_file": "2026.csv@-1d@t=12:00",
+                    "anchor_mode": "skip",
+                    "link": 1,
+                    "chainID": "abcd1234",
+                    "due": "2026-04-23T12:00:00Z",
+                    "end": "2026-04-23T13:00:00Z",
+                }
+                child_due, _meta, dnf = mod._compute_anchor_child_due(parent)
+                expect(mod.core.fmt_isoz(child_due) == "2026-04-24T09:00:00Z", f"unexpected shifted child due: {mod.core.fmt_isoz(child_due)}")
+                lines = _call_with_supported_kwargs(
+                    mod._timeline_lines,
+                    kind="anchor",
+                    task=parent,
+                    child_due_utc=child_due,
+                    child_short="deadbeef",
+                    dnf=dnf,
+                    next_count=4,
+                    cap_no=None,
+                    cur_no=1,
+                )
+            finally:
+                mod.core.ANCHOR_FILE_DIR = old_dir
+    finally:
+        mod.core.LOCAL_TZ_NAME = previous_tz_name
+        mod.core._LOCAL_TZ = previous_tz
 
     txt = _strip_markup("\n".join(lines))
     expect("Fri 2026-04-24 12:00" in txt, f"expected shifted anchor_file child in timeline: {txt!r}")
@@ -16176,14 +16183,20 @@ def test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_strea
     mod = _load_hook_module(hook, "_nautical_on_modify_shifted_anchor_file_omit_timeline_test")
     if hasattr(mod, "_collect_prev_two"):
         setattr(mod, "_collect_prev_two", lambda _task: [])
+    from zoneinfo import ZoneInfo
+    previous_tz_name = mod.core.LOCAL_TZ_NAME
+    previous_tz = mod.core._LOCAL_TZ
+    mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
+    mod.core._LOCAL_TZ = ZoneInfo("Europe/Bucharest")
 
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        (anchor_dir / "2026.csv").write_text("date\n2026-05-01\n2026-05-05\n", encoding="utf-8")
-        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
-        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
-        try:
-            parent = {
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            anchor_dir = Path(td)
+            (anchor_dir / "2026.csv").write_text("date\n2026-05-01\n2026-05-05\n", encoding="utf-8")
+            old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+            mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+            try:
+                parent = {
                 "uuid": "00000000-0000-0000-0000-000000000556",
                 "description": "shifted anchor_file omit timeline",
                 "anchor": "w:tue,fri | y:05-05",
@@ -16194,27 +16207,30 @@ def test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_strea
                 "chainID": "abcd1234",
                 "due": "2026-04-24T09:00:00Z",
                 "end": "2026-04-24T09:00:00Z",
-            }
-            child_due = mod.core.parse_dt_any("2026-04-24T09:00:00Z")
-            dnf = mod.core.validate_anchor_expr_strict(parent["anchor"])
-            lines = _call_with_supported_kwargs(
-                mod._timeline_lines,
-                kind="anchor",
-                task=parent,
-                child_due_utc=child_due,
-                child_short="f17ca92b",
-                dnf=dnf,
-                next_count=6,
-                cap_no=None,
-                cur_no=4,
-            )
-        finally:
-            mod.core.ANCHOR_FILE_DIR = old_dir
+                }
+                child_due = mod.core.parse_dt_any("2026-04-24T09:00:00Z")
+                dnf = mod.core.validate_anchor_expr_strict(parent["anchor"])
+                lines = _call_with_supported_kwargs(
+                    mod._timeline_lines,
+                    kind="anchor",
+                    task=parent,
+                    child_due_utc=child_due,
+                    child_short="f17ca92b",
+                    dnf=dnf,
+                    next_count=6,
+                    cap_no=None,
+                    cur_no=4,
+                )
+            finally:
+                mod.core.ANCHOR_FILE_DIR = old_dir
+    finally:
+        mod.core.LOCAL_TZ_NAME = previous_tz_name
+        mod.core._LOCAL_TZ = previous_tz
 
     txt = _strip_markup("\n".join(lines))
-    expect("Thu 2026-04-30 12:00" not in txt, f"shifted omitted anchor_file date leaked into timeline: {txt!r}")
-    expect("Thu 2026-04-30 18:00" not in txt, f"shifted omitted anchor_file date leaked into timeline: {txt!r}")
-    expect("Mon 2026-05-04 12:00" not in txt, f"shifted omitted anchor_file date leaked into timeline: {txt!r}")
+    expect("Thu 2026-04-30 12:00" in txt and "(omitted)" in txt, f"shifted omitted anchor_file date was not marked: {txt!r}")
+    expect("Thu 2026-04-30 18:00" in txt and "(omitted)" in txt, f"shifted omitted anchor_file date was not marked: {txt!r}")
+    expect("Mon 2026-05-04 12:00" in txt and "(omitted)" in txt, f"shifted omitted anchor_file date was not marked: {txt!r}")
 
 
 def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream():
@@ -16223,17 +16239,23 @@ def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_str
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_side_omit_file_timeline_test")
     if hasattr(mod, "_collect_prev_two"):
         setattr(mod, "_collect_prev_two", lambda _task: [])
+    from zoneinfo import ZoneInfo
+    previous_tz_name = mod.core.LOCAL_TZ_NAME
+    previous_tz = mod.core._LOCAL_TZ
+    mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
+    mod.core._LOCAL_TZ = ZoneInfo("Europe/Bucharest")
 
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        omit_dir = Path(td)
-        (anchor_dir / "2026.csv").write_text("date\n2026-05-01\n2026-05-05\n", encoding="utf-8")
-        old_anchor_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
-        old_omit_dir = getattr(mod.core, "OMIT_FILE_DIR", "")
-        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
-        mod.core.OMIT_FILE_DIR = str(omit_dir)
-        try:
-            parent = {
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            anchor_dir = Path(td)
+            omit_dir = Path(td)
+            (anchor_dir / "2026.csv").write_text("date\n2026-05-01\n2026-05-05\n", encoding="utf-8")
+            old_anchor_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+            old_omit_dir = getattr(mod.core, "OMIT_FILE_DIR", "")
+            mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+            mod.core.OMIT_FILE_DIR = str(omit_dir)
+            try:
+                parent = {
                 "uuid": "00000000-0000-0000-0000-000000000557",
                 "description": "anchor side omit_file timeline",
                 "anchor": "w:tue,fri | y:05-05",
@@ -16244,23 +16266,26 @@ def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_str
                 "chainID": "abcd1234",
                 "due": "2026-04-30T15:00:00Z",
                 "end": "2026-04-30T15:00:00Z",
-            }
-            child_due = mod.core.parse_dt_any("2026-04-30T15:00:00Z")
-            dnf = mod.core.validate_anchor_expr_strict(parent["anchor"])
-            lines = _call_with_supported_kwargs(
-                mod._timeline_lines,
-                kind="anchor",
-                task=parent,
-                child_due_utc=child_due,
-                child_short="ba5b8228",
-                dnf=dnf,
-                next_count=4,
-                cap_no=None,
-                cur_no=7,
-            )
-        finally:
-            mod.core.ANCHOR_FILE_DIR = old_anchor_dir
-            mod.core.OMIT_FILE_DIR = old_omit_dir
+                }
+                child_due = mod.core.parse_dt_any("2026-04-30T15:00:00Z")
+                dnf = mod.core.validate_anchor_expr_strict(parent["anchor"])
+                lines = _call_with_supported_kwargs(
+                    mod._timeline_lines,
+                    kind="anchor",
+                    task=parent,
+                    child_due_utc=child_due,
+                    child_short="ba5b8228",
+                    dnf=dnf,
+                    next_count=4,
+                    cap_no=None,
+                    cur_no=7,
+                )
+            finally:
+                mod.core.ANCHOR_FILE_DIR = old_anchor_dir
+                mod.core.OMIT_FILE_DIR = old_omit_dir
+    finally:
+        mod.core.LOCAL_TZ_NAME = previous_tz_name
+        mod.core._LOCAL_TZ = previous_tz
 
     txt = _strip_markup("\n".join(lines))
     expect("Tue 2026-05-05" in txt, f"expected omitted anchor-side date to remain visible: {txt!r}")
@@ -24357,7 +24382,44 @@ def test_core_explicit_facade_all_contains_supported_symbols() -> None:
     assert '_import_sibling' not in exported
 
 
+def test_all_golden_tests_are_registered() -> None:
+    """Every top-level test function must be covered by the normal runner."""
+    test_functions = {
+        name for name, value in globals().items()
+        if name.startswith("test_") and callable(value)
+    }
+    registered = {
+        fn.__name__ for fn in (*TESTS, *DEEP_TESTS)
+        if callable(fn)
+    }
+    missing = sorted(test_functions - registered)
+    expect(not missing, f"unregistered golden tests: {', '.join(missing)}")
+
+
+TESTS.extend([
+    test_anchor_file_spec_rejects_unpadded_times,
+    test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
+    test_hook_on_add_anchor_file_time_padding_hint,
+    test_hook_on_add_anchor_preview_marks_omitted_future_slots,
+    test_hook_on_add_anchor_preview_skips_omit_file_modifier_date,
+    test_hook_on_add_anchor_preview_uses_omit_file_description_in_upcoming,
+    test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_child,
+    test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream,
+    test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,
+    test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain,
+    test_navigator_uses_anchor_and_anchor_file_sources,
+    test_omit_file_modifiers_apply_even_when_base_file_is_cached,
+    test_omit_file_modifiers_reject_time_modifiers,
+    test_omit_file_modifiers_roll_dates_and_carry_descriptions,
+    test_omit_file_modifiers_support_negative_day_offsets,
+    test_on_modify_read_two_single_plain_delete_without_uuid_is_ignored,
+    test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored,
+    test_performance_large_expressions,
+    test_weekday_weekend_single_time,
+])
+
 TESTS.append(test_core_explicit_facade_all_contains_supported_symbols)
+TESTS.append(test_all_golden_tests_are_registered)
 
 if __name__ == "__main__":
     main()

@@ -2082,28 +2082,35 @@ class TaskAnalyzer:
                 return default_hhmm
 
             event_name = value.strip().lower()
-            if event_name not in {"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"}:
+            time_slots = core._import_sibling("time_slots")
+            if event_name not in time_slots.astronomy.EVENT_NAMES:
                 return default_hhmm
-            astronomy = core._import_sibling("astronomy")
-            event = astronomy.resolve_event(
-                event_name,
-                target_date,
-                config=getattr(core, "ASTRONOMY_CONFIG", {}),
-            )
-            local = core.to_local(event)
+
+            def matches_event(candidate):
+                return candidate == event_name or (
+                    isinstance(candidate, list) and event_name in candidate
+                )
+
             offset = 0
             for term in dnf:
                 for atom in term:
                     mods = atom.get("mods") or {}
-                    if mods.get("t") == event_name:
+                    tval = mods.get("t")
+                    if matches_event(tval):
                         offset = int(mods.get("time_offset_minutes", 0) or 0)
                         break
                 if offset or any(
-                    (atom.get("mods") or {}).get("t") == event_name for atom in term
+                    matches_event((atom.get("mods") or {}).get("t"))
+                    for atom in term
                 ):
                     break
-            minute = (local.hour * 60 + local.minute + offset) % (24 * 60)
-            return minute // 60, minute % 60
+            resolved = time_slots.resolve_time_slots(
+                {"t": event_name, "time_offset_minutes": offset},
+                target_date,
+                config=getattr(core, "ASTRONOMY_CONFIG", {}),
+                to_local=core.to_local,
+            )
+            return resolved[0] if resolved else default_hhmm
 
         anchor_out: List[datetime.datetime] = []
         file_out: List[datetime.datetime] = []

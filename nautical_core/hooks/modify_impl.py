@@ -3061,57 +3061,17 @@ def _merge_spawned_child_into_chain(chain: list[dict], parent_task: dict, child_
 # Multi-time occurrence helpers (hook-level)
 # ------------------------------------------------------------------------------
 
-_HHMM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-
-
-def _parse_hhmm_token(tok: str) -> tuple[int, int] | None:
-    tok = (tok or "").strip()
-    if not tok or not _HHMM_RE.match(tok):
-        return None
-    hh, mm = tok.split(":", 1)
-    return (int(hh), int(mm))
-
-
 def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
     """Normalize various core representations of @t into a sorted list of (hh, mm)."""
     if v is None:
         return []
-    offset_minutes = 0
-    if isinstance(v, dict):
-        offset_minutes = int(v.get("time_offset_minutes", 0) or 0)
-        v = v.get("t")
-    if isinstance(v, tuple) and len(v) == 2 and all(isinstance(x, int) for x in v):
-        hh, mm = v
-        minute = (hh * 60 + mm + offset_minutes) % (24 * 60)
-        return [(minute // 60, minute % 60)]
-    if isinstance(v, str):
-        event_name = v.strip().lower()
-        if target_date is not None and event_name in {"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"}:
-            astronomy = core._import_sibling("astronomy")
-            event = astronomy.resolve_event(
-                event_name,
-                target_date,
-                config=getattr(core, "ASTRONOMY_CONFIG", {}),
-            )
-            local = core.to_local(event)
-            minute = (local.hour * 60 + local.minute + offset_minutes) % (24 * 60)
-            return [(minute // 60, minute % 60)]
-        out: list[tuple[int, int]] = []
-        for part in v.split(","):
-            t = _parse_hhmm_token(part)
-            if t is not None:
-                out.append(t)
-        if offset_minutes:
-            out = [((hh * 60 + mm + offset_minutes) % (24 * 60) // 60, (hh * 60 + mm + offset_minutes) % 60) for hh, mm in out]
-        return out
-    if isinstance(v, list):
-        out_list: list[tuple[int, int]] = []
-        for it in v:
-            out_list.extend(_norm_hhmm_list(it, target_date))
-        if offset_minutes:
-            out_list = [((hh * 60 + mm + offset_minutes) % (24 * 60) // 60, (hh * 60 + mm + offset_minutes) % 60) for hh, mm in out_list]
-        return out_list
-    return []
+    time_slots = core._import_sibling("time_slots")
+    return time_slots.resolve_time_slots(
+        v,
+        target_date,
+        config=getattr(core, "ASTRONOMY_CONFIG", {}),
+        to_local=core.to_local,
+    )
 
 
 def _extract_time_slots_from_dnf(dnf, target_date=None) -> list[tuple[int, int]]:

@@ -1249,27 +1249,13 @@ def _norm_t_mod(v):
 
 
 def _resolve_time_slots(v, target_date):
-    offset_minutes = 0
-    if isinstance(v, dict):
-        offset_minutes = int(v.get("time_offset_minutes", 0) or 0)
-        v = v.get("t")
-    if isinstance(v, str) and v.strip().lower() in {"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"}:
-        astronomy = core._import_sibling("astronomy")
-        event = astronomy.resolve_event(v, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}))
-        local = core.to_local(event)
-        minute = (local.hour * 60 + local.minute + offset_minutes) % (24 * 60)
-        return [(minute // 60, minute % 60)]
-    if isinstance(v, list):
-        out = []
-        for item in v:
-            out.extend(_resolve_time_slots(item, target_date))
-        if offset_minutes:
-            out = [((hh * 60 + mm + offset_minutes) % (24 * 60) // 60, (hh * 60 + mm + offset_minutes) % 60) for hh, mm in out]
-        return out
-    slots = _norm_t_mod(v)
-    if offset_minutes:
-        slots = [((hh * 60 + mm + offset_minutes) % (24 * 60) // 60, (hh * 60 + mm + offset_minutes) % 60) for hh, mm in slots]
-    return slots
+    time_slots = core._import_sibling("time_slots")
+    return time_slots.resolve_time_slots(
+        v,
+        target_date,
+        config=getattr(core, "ASTRONOMY_CONFIG", {}),
+        to_local=core.to_local,
+    )
 
 
 def _anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, omit_dnf=None):

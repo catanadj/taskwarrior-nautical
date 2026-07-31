@@ -15894,6 +15894,33 @@ def test_navigator_resolves_symbolic_anchor_time_offsets():
         sys.modules.pop(module_name, None)
 
 
+def test_shared_time_slot_resolver_keeps_hook_and_navigator_parity():
+    """add, modify, and Navigator should resolve the same symbolic slot and offset."""
+    import nautical_core.time_slots as time_slots
+
+    add_mod = _load_hook_module(_find_hook_file("on-add-nautical.py"), "_nautical_add_time_slots_parity_test")
+    modify_mod = _load_hook_module(_find_hook_file("on-modify-nautical.py"), "_nautical_modify_time_slots_parity_test")
+    original_event = time_slots.astronomy.resolve_event
+    original_to_local = core.to_local
+    original_add_to_local = add_mod.core.to_local
+    original_modify_to_local = modify_mod.core.to_local
+    try:
+        time_slots.astronomy.resolve_event = lambda *_args, **_kwargs: datetime(2026, 7, 6, 18, 0, tzinfo=timezone.utc)
+        core.to_local = lambda value: value
+        add_mod.core.to_local = lambda value: value
+        modify_mod.core.to_local = lambda value: value
+        value = {"t": "sunset", "time_offset_minutes": 45}
+        expected = [(18, 45)]
+        expect(time_slots.resolve_time_slots(value, date(2026, 7, 6), to_local=core.to_local) == expected, "shared resolver drifted")
+        expect(add_mod._resolve_time_slots(value, date(2026, 7, 6)) == expected, "on-add resolver drifted")
+        expect(modify_mod._norm_hhmm_list(value, date(2026, 7, 6)) == expected, "on-modify resolver drifted")
+    finally:
+        time_slots.astronomy.resolve_event = original_event
+        core.to_local = original_to_local
+        add_mod.core.to_local = original_add_to_local
+        modify_mod.core.to_local = original_modify_to_local
+
+
 def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain():
     """Navigator direct task lookup should prefer chainID and resolve the full chain from short links."""
     module_name = "_nautical_navigator_direct_chain_test"
@@ -24482,6 +24509,7 @@ TESTS.extend([
     test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream,
     test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,
     test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain,
+    test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
     test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_uses_anchor_and_anchor_file_sources,
     test_omit_file_modifiers_apply_even_when_base_file_is_cached,

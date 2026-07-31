@@ -211,6 +211,22 @@ def effective_config_fingerprint() -> str:
     return str(effective_config_snapshot().get("fingerprint") or "")
 
 
+_LOADED_CONFIG_FINGERPRINT = effective_config_fingerprint()
+
+
+def configuration_drift() -> dict:
+    """Report whether the loaded process configuration differs from disk."""
+    current = effective_config_snapshot()
+    changed = current.get("fingerprint") != _LOADED_CONFIG_FINGERPRINT
+    return {
+        "changed": bool(changed),
+        "status": "changed" if changed else "ok",
+        "loaded_fingerprint": _LOADED_CONFIG_FINGERPRINT,
+        "current_fingerprint": current.get("fingerprint", ""),
+        "source": current.get("source", "unknown"),
+    }
+
+
 def conf_raw(key: str):
     return config_support.conf_raw(_CONF, key)
 

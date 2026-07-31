@@ -148,6 +148,7 @@ _warn_toml_parse_error = _core_config._warn_toml_parse_error
 _get_config = _core_config._get_config
 effective_config_snapshot = _core_config.effective_config_snapshot
 effective_config_fingerprint = _core_config.effective_config_fingerprint
+configuration_drift = _core_config.configuration_drift
 _CONF = _core_config._CONF
 _conf_raw = _core_config.conf_raw
 _conf_str = _core_config.conf_str
@@ -3820,6 +3821,7 @@ __all__ = (
     'ASTRONOMY_CONFIG',
     'effective_config_snapshot',
     'effective_config_fingerprint',
+    'configuration_drift',
     'DEFAULT_BUSINESS_CALENDAR',
     'ENABLE_ANCHOR_CACHE',
     'LOCAL_TZ_NAME',

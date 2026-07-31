@@ -4703,6 +4703,35 @@ def test_config_fingerprint_invalidates_persistent_cache_keys():
             os.environ["NAUTICAL_CONFIG"] = previous
 
 
+def test_configuration_drift_detects_edit_and_removal():
+    """A long-lived core process should report config edits and removal without reloading partially."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "config-nautical.toml"
+        path.write_text('tz = "UTC"\n', encoding="utf-8")
+        script = (
+            "import json, os\n"
+            "from pathlib import Path\n"
+            "import nautical_core as core\n"
+            "p = Path(os.environ['NAUTICAL_CONFIG'])\n"
+            "before = core.configuration_drift()\n"
+            "p.write_text('tz = \\\"Europe/Bucharest\\\"\\n', encoding='utf-8')\n"
+            "edited = core.configuration_drift()\n"
+            "p.unlink()\n"
+            "removed = core.configuration_drift()\n"
+            "print(json.dumps({'before': before, 'edited': edited, 'removed': removed}))\n"
+        )
+        env = os.environ.copy()
+        env["PYTHONPATH"] = ROOT + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        env["NAUTICAL_CONFIG"] = str(path)
+        env["NAUTICAL_TRUST_CONFIG_PATH"] = "1"
+        proc = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True, env=env, timeout=10)
+        expect(proc.returncode == 0, f"configuration drift probe failed: {proc.stderr}")
+        payload = json.loads(proc.stdout)
+        expect(payload["before"]["status"] == "ok", f"fresh config reported drift: {payload}")
+        expect(payload["edited"]["status"] == "changed", f"edited config drift missing: {payload}")
+        expect(payload["removed"]["status"] == "changed", f"removed config drift missing: {payload}")
+
+
 def test_doctor_reports_missing_navigator_dependencies():
     """doctor should identify missing required Navigator packages."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
@@ -24620,6 +24649,7 @@ TESTS.extend([
     test_doctor_reports_astronomy_preflight_health,
     test_effective_config_snapshot_isolated_and_provenanced,
     test_config_fingerprint_invalidates_persistent_cache_keys,
+    test_configuration_drift_detects_edit_and_removal,
     test_doctor_reports_missing_navigator_dependencies,
     test_installer_initializes_explicit_timezone_config,
 ])

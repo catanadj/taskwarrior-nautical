@@ -216,8 +216,10 @@ def _print_diag_report(hook_dir: Path | None) -> None:
         snapshot = core.effective_config_snapshot()
         values = snapshot.get("values") or {}
         result = astronomy.preflight(values.get("astronomy"))
+        drift = core.configuration_drift()
         console.print(f"config.source={snapshot.get('source', 'unknown')}")
         console.print(f"config.timezone={values.get('tz', 'UTC')}")
+        console.print(f"config.drift={drift.get('status', 'unknown')}")
         console.print(f"astronomy.preflight={result.get('status')}: {result.get('message', 'ok')}")
     except Exception:
         pass

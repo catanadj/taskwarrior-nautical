@@ -4659,10 +4659,26 @@ def test_doctor_reports_astronomy_preflight_health():
     """doctor should expose astronomy setup health without mutating Taskwarrior."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
     mod = _load_hook_module(path, "_nautical_doctor_astronomy_preflight_test")
-    findings = []
-    mod._check_astronomy(findings, {})
+    previous = mod.effective_config_snapshot
+    try:
+        mod.effective_config_snapshot = lambda: {"values": {}, "source": "defaults"}
+        findings = []
+        mod._check_astronomy(findings, {})
+    finally:
+        mod.effective_config_snapshot = previous
     item = next((item for item in findings if item.get("id") == "astronomy.not_configured"), None)
     expect(item is not None and item.get("severity") == "ok", f"doctor astronomy status missing: {findings!r}")
+
+
+def test_effective_config_snapshot_isolated_and_provenanced():
+    """The effective configuration snapshot must be isolated and identify its source."""
+    snapshot = core.effective_config_snapshot()
+    values = snapshot.get("values")
+    expect(isinstance(values, dict), f"effective config values missing: {snapshot!r}")
+    expect(str(snapshot.get("source") or ""), f"effective config source missing: {snapshot!r}")
+    original_tz = values.get("tz")
+    values["tz"] = "mutated-in-test"
+    expect(core.LOCAL_TZ_NAME == original_tz, "effective config snapshot leaked mutable state")
 
 
 def test_doctor_reports_missing_navigator_dependencies():
@@ -24580,6 +24596,7 @@ TESTS.extend([
     test_weekday_weekend_single_time,
     test_doctor_reports_missing_timezone_configuration,
     test_doctor_reports_astronomy_preflight_health,
+    test_effective_config_snapshot_isolated_and_provenanced,
     test_doctor_reports_missing_navigator_dependencies,
     test_installer_initializes_explicit_timezone_config,
 ])

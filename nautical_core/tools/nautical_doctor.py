@@ -25,7 +25,7 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import astronomy, chain_repair, config_schema, install_runtime, reconcile, task_command  # noqa: E402
+from nautical_core import astronomy, chain_repair, config_schema, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
 import nautical_core.runtime as runtime  # noqa: E402
 
 REQUIRED_UDAS = {
@@ -325,7 +325,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             "No Nautical config file was found; built-in defaults will be used.",
         )
         _check_timezone(findings, {})
-        _check_astronomy(findings, {})
+        _check_astronomy(findings, {}, source_hint="defaults")
         _check_navigator_dependencies(findings, {})
         return
     try:
@@ -343,7 +343,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     _finding(findings, "config.loaded", "ok", f"Nautical config is valid: {config}")
     _check_config_schema(findings, data)
     _check_timezone(findings, data)
-    _check_astronomy(findings, data)
+    _check_astronomy(findings, data, source_hint=str(config))
     _check_navigator_dependencies(findings, data)
     _check_panel_config(findings, data)
     for key in ("anchor_file_dir", "omit_file_dir"):
@@ -448,9 +448,21 @@ def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> Non
     _finding(findings, "config.timezone", "ok", f"Nautical timezone is available: {tz_name}")
 
 
-def _check_astronomy(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
+def _check_astronomy(
+    findings: list[dict[str, Any]],
+    data: dict[str, Any],
+    *,
+    source_hint: str = "",
+) -> None:
     """Check optional astronomy setup without touching Taskwarrior state."""
-    config = data.get("astronomy") if isinstance(data, dict) else None
+    snapshot = effective_config_snapshot()
+    effective = snapshot.get("values") if isinstance(snapshot.get("values"), dict) else {}
+    if isinstance(data, dict) and data:
+        config = data.get("astronomy")
+        effective_timezone = data.get("tz", effective.get("tz", "UTC"))
+    else:
+        config = effective.get("astronomy")
+        effective_timezone = effective.get("tz", "UTC")
     result = astronomy.preflight(config)
     status = str(result.get("status") or "error")
     if status == "not_configured":
@@ -464,6 +476,8 @@ def _check_astronomy(findings: list[dict[str, Any]], data: dict[str, Any]) -> No
         return
     severity = {"ok": "ok", "warning": "warn", "error": "error"}.get(status, "error")
     details = {key: value for key, value in result.items() if key not in {"status", "message"}}
+    details["config_source"] = source_hint or snapshot.get("source", "unknown")
+    details["effective_timezone"] = effective_timezone
     _finding(
         findings,
         "astronomy.preflight",

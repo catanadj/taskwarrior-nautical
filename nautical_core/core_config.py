@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import copy
 import time
 from collections import OrderedDict
 from functools import lru_cache, wraps
@@ -169,6 +170,24 @@ def _get_config() -> dict:
 
 
 _CONF = MappingProxyType(_get_config())
+
+
+def effective_config_snapshot() -> dict:
+    """Return the effective immutable-at-call-time config and its source hint."""
+    values = copy.deepcopy(dict(_CONF))
+    source = "defaults"
+    try:
+        configured = str(os.environ.get("NAUTICAL_CONFIG") or "").strip()
+        if configured:
+            source = os.path.abspath(os.path.expanduser(configured))
+        else:
+            for path in _config_paths():
+                if os.path.isfile(path):
+                    source = os.path.abspath(path)
+                    break
+    except Exception:
+        source = "auto"
+    return {"values": values, "source": source}
 
 
 def conf_raw(key: str):

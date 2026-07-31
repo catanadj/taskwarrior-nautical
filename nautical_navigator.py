@@ -213,7 +213,11 @@ def _print_diag_report(hook_dir: Path | None) -> None:
         console.print(f"core.anchor_cache_dir={getattr(core, 'ANCHOR_CACHE_DIR_OVERRIDE', '')}")
         console.print(f"core.anchor_cache_ttl={getattr(core, 'ANCHOR_CACHE_TTL', None)}")
         astronomy = core._import_sibling("astronomy")
-        result = astronomy.preflight(getattr(core, "ASTRONOMY_CONFIG", {}))
+        snapshot = core.effective_config_snapshot()
+        values = snapshot.get("values") or {}
+        result = astronomy.preflight(values.get("astronomy"))
+        console.print(f"config.source={snapshot.get('source', 'unknown')}")
+        console.print(f"config.timezone={values.get('tz', 'UTC')}")
         console.print(f"astronomy.preflight={result.get('status')}: {result.get('message', 'ok')}")
     except Exception:
         pass

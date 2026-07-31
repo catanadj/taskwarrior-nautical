@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import sys
-import subprocess
 import datetime
 import argparse
 import calendar
@@ -148,6 +147,24 @@ def _find_nautical_core() -> Optional[Any]:
     return None
 
 core = _find_nautical_core()
+try:
+    from nautical_core import task_command as _task_command
+except Exception:
+    _task_command = None
+
+
+def _run_task_export(filters: tuple[str, ...]) -> Any:
+    """Run a read-only Taskwarrior export through Nautical's command boundary."""
+    if _task_command is None:
+        raise RuntimeError("Nautical Taskwarrior command support is unavailable")
+    task_bin = shutil.which("task") or "task"
+    result = _task_command.run_task_command(
+        task_bin,
+        ["rc.hooks=off", "rc.json.array=1", *filters, "export"],
+        timeout=30.0,
+        retry_locks=True,
+    )
+    return _task_command.load_json_result(result, "Navigator Taskwarrior export", empty=[])
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Navigator helpers (explain/validate/self-check)
@@ -568,9 +585,8 @@ class TaskAnalyzer:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
             spinner = progress.add_task("Loading chained tasks…", total=None)
             try:
-                # includes completed/waiting/pending/etc.
-                result = subprocess.run(["task", "chain:on", "export", "all"], capture_output=True, text=True, check=True)
-                tasks = json.loads(result.stdout)
+                # Includes completed/waiting/pending/etc.; interactive pickers need this.
+                tasks = self._export_tasks("chain:on", "all")
 
                 for t in tasks:
                     if t.get("id"):
@@ -584,13 +600,8 @@ class TaskAnalyzer:
                 progress.update(spinner, description=f"✅ Loaded {len(tasks)} chained tasks")
                 return tasks
 
-            except subprocess.CalledProcessError as e:
-                console.print(f"[{COLORS['error']}]Error: Failed to retrieve tasks (exit {e.returncode})[/]")
-                if e.stderr:
-                    console.print(f"[{COLORS['muted']}]{e.stderr.strip()}[/]")
-                sys.exit(1)
-            except json.JSONDecodeError as e:
-                console.print(f"[{COLORS['error']}]JSON parse error: {e}[/]")
+            except Exception as e:
+                console.print(f"[{COLORS['error']}]Error: Failed to retrieve tasks: {e}[/]")
                 sys.exit(1)
 
     # ── Chain discovery ──────────────────────────────────────────────────────
@@ -946,9 +957,7 @@ class TaskAnalyzer:
             self._uuid_by_short[u[:8]] = self._uuid_by_short.get(u[:8], u)
 
     def _export_tasks(self, *args: str) -> List[Dict]:
-        cmd = ["task", "rc.json.array=1", *args, "export"]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        payload = json.loads(result.stdout)
+        payload = _run_task_export(tuple(str(arg) for arg in args))
         if isinstance(payload, dict):
             payload = [payload]
         if not isinstance(payload, list):
@@ -2358,19 +2367,18 @@ class TaskAnalyzer:
             return Panel(empty, title="📅 Calendar", border_style=COLORS['warning'], padding=(0,1), expand=False)
 
         all_dates = sorted(set(completed_dates + upcoming_dates + pending_due_dates))
-        first_date, last_date = all_dates[0], all_dates[-1]
         cal = calendar.TextCalendar(calendar.MONDAY)
 
         cset, uset, pset = set(completed_dates), set(upcoming_dates), set(pending_due_dates)
 
+        # Sparse annual/lunar chains should not render every empty month between
+        # two occurrences; display only months that contain relevant activity.
+        active_months = sorted({(item.year, item.month) for item in all_dates})
         panels = []
-        for year in range(first_date.year, last_date.year + 1):
-            start_m = first_date.month if year == first_date.year else 1
-            end_m = last_date.month if year == last_date.year else 12
-            for month in range(start_m, end_m + 1):
-                mtable = self._create_month_table(cal, year, month, cset, uset, pset)
-                panels.append(Panel(mtable, title=f"{calendar.month_name[month]} {year}",
-                                    border_style=COLORS['secondary'], padding=(0,1), expand=False))
+        for year, month in active_months:
+            mtable = self._create_month_table(cal, year, month, cset, uset, pset)
+            panels.append(Panel(mtable, title=f"{calendar.month_name[month]} {year}",
+                                border_style=COLORS['secondary'], padding=(0,1), expand=False))
 
         mpr = self._months_per_row()
         rows = []
@@ -2662,8 +2670,6 @@ class TaskAnalyzer:
     def analyze_chain(self, chain: List[Dict], count: Optional[int] = None):
         console.print(Panel(Align.center("🔗 Taskwarrior Chain Analyzer (Pro)"),
                             style=f"bold {COLORS['primary']}", border_style=COLORS['primary'], expand=False))
-
-        _ = self.get_all_chained_tasks()
 
         full_chain = chain
         display_chain = full_chain if count is None else full_chain[-count:]

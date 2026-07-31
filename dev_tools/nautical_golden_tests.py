@@ -15939,28 +15939,54 @@ def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_cha
     }
 
     calls = []
-    original_run = navigator.subprocess.run
+    original_run = navigator._task_command.run_task_command
 
-    def fake_run(cmd, capture_output=True, text=True, check=True):
-        calls.append(list(cmd))
-        if cmd[:4] == ["task", "rc.json.array=1", "2", "export"]:
-            return SimpleNamespace(returncode=0, stdout=json.dumps([mid]), stderr="")
-        if cmd[:4] == ["task", "rc.json.array=1", "chainID:cid123", "export"]:
-            return SimpleNamespace(returncode=0, stdout=json.dumps([root, mid, tail]), stderr="")
+    def fake_run(task_bin, args, **_kwargs):
+        cmd = [task_bin, *args]
+        calls.append(cmd)
+        if list(args) == ["rc.hooks=off", "rc.json.array=1", "2", "export"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps([mid]), stderr="", kind="ok")
+        if list(args) == ["rc.hooks=off", "rc.json.array=1", "chainID:cid123", "export"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps([root, mid, tail]), stderr="", kind="ok")
         raise AssertionError(f"unexpected task command: {cmd!r}")
 
-    navigator.subprocess.run = fake_run
+    navigator._task_command.run_task_command = fake_run
     try:
         analyzer = navigator.TaskAnalyzer()
         chain = analyzer.build_chain_from_tasks(2)
         expect([task["uuid"] for task in chain] == [root["uuid"], mid["uuid"], tail["uuid"]],
                f"unexpected rebuilt chain: {chain!r}")
-        expect(any(cmd == ["task", "rc.json.array=1", "chainID:cid123", "export"] for cmd in calls),
+        expect(any(cmd[1:] == ["rc.hooks=off", "rc.json.array=1", "chainID:cid123", "export"] for cmd in calls),
                f"expected targeted chainID export, got: {calls!r}")
-        expect(not any(cmd == ["task", "chain:on", "export", "all"] for cmd in calls),
+        expect(not any(cmd[1:] == ["rc.hooks=off", "rc.json.array=1", "chain:on", "all", "export"] for cmd in calls),
                f"direct task selection should not export all chains: {calls!r}")
     finally:
-        navigator.subprocess.run = original_run
+        navigator._task_command.run_task_command = original_run
+
+
+def test_navigator_sparse_calendar_renders_only_active_months():
+    """Sparse recurrence projections should not render empty months between occurrences."""
+    module_name = "_nautical_navigator_sparse_calendar_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+        analyzer = navigator.TaskAnalyzer()
+        panel = analyzer.create_enhanced_calendar(
+            completed_dates=[date(2026, 7, 1)],
+            upcoming_dates=[date(2027, 7, 1), date(2035, 7, 1)],
+            pending_due_dates=[],
+        )
+        from rich.console import Console
+        rendered = Console(record=True, width=120)
+        rendered.print(panel)
+        output = rendered.export_text()
+        expect("July 2026" in output and "July 2027" in output and "July 2035" in output, f"active months missing: {output!r}")
+        expect("August 2026" not in output and "January 2035" not in output, f"empty months were rendered: {output!r}")
+    finally:
+        sys.modules.pop(module_name, None)
 
 
 def test_on_add_anchor_and_anchor_file_can_coexist():
@@ -24456,6 +24482,7 @@ TESTS.extend([
     test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream,
     test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,
     test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain,
+    test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_uses_anchor_and_anchor_file_sources,
     test_omit_file_modifiers_apply_even_when_base_file_is_cached,
     test_omit_file_modifiers_reject_time_modifiers,

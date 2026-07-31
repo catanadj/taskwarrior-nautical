@@ -766,7 +766,7 @@ def _cache_key(
     config_fingerprint = effective_config_fingerprint()
     profile_fingerprint = (
         f"{business_calendar_fingerprint}|season:{SEASON_HEMISPHERE}"
-        f"|config:{config_fingerprint}|parser:2"
+        f"|config:{config_fingerprint}|parser:2|cache:2"
     )
     return _cache_support.cache_key(
         acf,

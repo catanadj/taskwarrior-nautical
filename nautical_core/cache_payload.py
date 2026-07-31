@@ -3,6 +3,8 @@ from __future__ import annotations
 from .season_support import SEASON_NAMES
 
 
+CACHE_SCHEMA_VERSION = 2
+_CACHE_VERSION_KEY = "_nautical_cache_version"
 _SELECTION_SCOPES = frozenset(("week", "month", "quarter", "year", *SEASON_NAMES))
 
 
@@ -283,6 +285,13 @@ def cache_load(
             stamp = _stamp(st)
         data = zlib_mod.decompress(base64_mod.b85decode(blob))
         obj = json_mod.loads(data.decode("utf-8"))
+        version = obj.pop(_CACHE_VERSION_KEY, None) if isinstance(obj, dict) else None
+        if type(version) is not int or version != CACHE_SCHEMA_VERSION:
+            if os_mod.environ.get("NAUTICAL_DIAG") == "1":
+                diag(f"cache_load rejected unsupported schema for key={key}: {version!r}")
+            if quarantine_cache is not None:
+                quarantine_cache(key, path)
+            return None
         if isinstance(obj, dict) and "dnf" in obj:
             obj["dnf"] = normalize_dnf_cached(obj.get("dnf"))
         if isinstance(obj, dict):
@@ -327,7 +336,9 @@ def cache_save(
 ):
     if not enable_anchor_cache:
         return False
-    data = json_mod.dumps(obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload = dict(obj)
+    payload[_CACHE_VERSION_KEY] = CACHE_SCHEMA_VERSION
+    data = json_mod.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     blob = base64_mod.b85encode(zlib_mod.compress(data, 9))
     path = cache_path(key)
     if not path:

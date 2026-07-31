@@ -18667,6 +18667,34 @@ def test_cache_load_quarantines_corrupt_entries_and_gc_removes_them():
         core._CACHE_DIR = saved_cache_dir
 
 
+def test_cache_schema_rejects_legacy_and_future_versions():
+    """Cache reads should quarantine missing and unsupported schema versions."""
+    import nautical_core as core
+    import base64
+    import zlib
+
+    saved_enabled = core.ENABLE_ANCHOR_CACHE
+    saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
+    saved_cache_dir = core._CACHE_DIR
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            core.ENABLE_ANCHOR_CACHE = True
+            core.ANCHOR_CACHE_DIR_OVERRIDE = td
+            core._CACHE_DIR = None
+            for key, version in (("legacy", None), ("future", 99)):
+                payload = {"dnf": []}
+                if version is not None:
+                    payload["_nautical_cache_version"] = version
+                raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+                Path(core._cache_path(key)).write_bytes(base64.b85encode(zlib.compress(raw)))
+                expect(core.cache_load(key) is None, f"cache schema {version!r} should be rejected")
+            expect(len(list(Path(td).glob("*.jsonz.bad.*"))) == 2, "unsupported cache versions were not quarantined")
+    finally:
+        core.ENABLE_ANCHOR_CACHE = saved_enabled
+        core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
+        core._CACHE_DIR = saved_cache_dir
+
+
 def test_cache_load_retries_when_file_is_replaced_during_read():
     """A reader should retry if another process publishes a new generation."""
     import nautical_core as core
@@ -24532,6 +24560,7 @@ TESTS = [
     test_clear_all_caches_env,
     test_cache_save_writes_all_bytes,
     test_cache_load_quarantines_corrupt_entries_and_gc_removes_them,
+    test_cache_schema_rejects_legacy_and_future_versions,
     test_cache_save_returns_false_when_lock_busy,
     test_cache_save_returns_false_when_atomic_replace_fails,
     test_cache_load_rejects_invalid_payload_shape,

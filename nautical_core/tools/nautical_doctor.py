@@ -25,7 +25,7 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import astronomy, chain_repair, config_schema, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
+from nautical_core import astronomy, chain_repair, configuration_drift, config_schema, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
 import nautical_core.runtime as runtime  # noqa: E402
 
 REQUIRED_UDAS = {
@@ -326,6 +326,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
         )
         _check_timezone(findings, {})
         _check_astronomy(findings, {}, source_hint="defaults")
+        _check_config_drift(findings, "")
         _check_navigator_dependencies(findings, {})
         return
     try:
@@ -344,6 +345,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     _check_config_schema(findings, data)
     _check_timezone(findings, data)
     _check_astronomy(findings, data, source_hint=str(config))
+    _check_config_drift(findings, str(config))
     _check_navigator_dependencies(findings, data)
     _check_panel_config(findings, data)
     for key in ("anchor_file_dir", "omit_file_dir"):
@@ -494,6 +496,36 @@ def _check_astronomy(
         ),
         details=details,
     )
+
+
+def _check_config_drift(findings: list[dict[str, Any]], source_path: str) -> None:
+    """Report runtime config drift when Doctor and core use the same source."""
+    drift = configuration_drift()
+    loaded_source = str(drift.get("source") or "")
+    expected_source = os.path.abspath(str(source_path)) if source_path else "defaults"
+    if loaded_source != expected_source:
+        return
+    if drift.get("changed"):
+        _finding(
+            findings,
+            "config.drift",
+            "warn",
+            "The loaded Nautical configuration differs from the current file.",
+            fix="Restart Navigator; Taskwarrior hooks will use the new configuration on their next invocation.",
+            details={
+                "source": loaded_source,
+                "loaded_fingerprint": drift.get("loaded_fingerprint", ""),
+                "current_fingerprint": drift.get("current_fingerprint", ""),
+            },
+        )
+    else:
+        _finding(
+            findings,
+            "config.drift",
+            "ok",
+            "Loaded Nautical configuration matches the current file.",
+            details={"source": loaded_source, "fingerprint": drift.get("current_fingerprint", "")},
+        )
 
 
 def _check_navigator_dependencies(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:

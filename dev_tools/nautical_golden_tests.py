@@ -4670,6 +4670,39 @@ def test_doctor_reports_astronomy_preflight_health():
     expect(item is not None and item.get("severity") == "ok", f"doctor astronomy status missing: {findings!r}")
 
 
+def test_doctor_reports_matching_config_drift():
+    """Doctor should report unchanged and changed state only for its active config source."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_config_drift_test")
+    source = os.path.join(tempfile.gettempdir(), "nautical-config-drift-test.toml")
+    previous = mod.configuration_drift
+    try:
+        mod.configuration_drift = lambda: {
+            "changed": False,
+            "status": "ok",
+            "source": os.path.abspath(source),
+            "loaded_fingerprint": "abc",
+            "current_fingerprint": "abc",
+        }
+        findings = []
+        mod._check_config_drift(findings, source)
+        expect(findings and findings[0].get("severity") == "ok", f"healthy config drift finding missing: {findings!r}")
+
+        mod.configuration_drift = lambda: {
+            "changed": True,
+            "status": "changed",
+            "source": os.path.abspath(source),
+            "loaded_fingerprint": "abc",
+            "current_fingerprint": "def",
+        }
+        findings = []
+        mod._check_config_drift(findings, source)
+        expect(findings and findings[0].get("severity") == "warn", f"changed config drift finding missing: {findings!r}")
+        expect("Restart Navigator" in findings[0].get("fix", ""), f"drift restart guidance missing: {findings!r}")
+    finally:
+        mod.configuration_drift = previous
+
+
 def test_effective_config_snapshot_isolated_and_provenanced():
     """The effective configuration snapshot must be isolated and identify its source."""
     snapshot = core.effective_config_snapshot()
@@ -24647,6 +24680,7 @@ TESTS.extend([
     test_weekday_weekend_single_time,
     test_doctor_reports_missing_timezone_configuration,
     test_doctor_reports_astronomy_preflight_health,
+    test_doctor_reports_matching_config_drift,
     test_effective_config_snapshot_isolated_and_provenanced,
     test_config_fingerprint_invalidates_persistent_cache_keys,
     test_configuration_drift_detects_edit_and_removal,

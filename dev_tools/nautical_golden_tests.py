@@ -6350,6 +6350,38 @@ def test_anchor_cache_cleans_stale_tmp_files():
         mod.cache_save(key, {"dnf": []})
     expect(not os.path.exists(stale), "stale cache tmp file should be cleaned")
 
+
+def test_anchor_cache_garbage_collection_prunes_expired_and_overflow():
+    """Explicit cache GC should remove expired/overflow entries and stale temps only."""
+    saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
+    saved_cache_dir = core._CACHE_DIR
+    saved_ttl = core.ANCHOR_CACHE_TTL
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            core.ANCHOR_CACHE_DIR_OVERRIDE = td
+            core._CACHE_DIR = None
+            core.ANCHOR_CACHE_TTL = 1
+            old_path = Path(td) / "old-entry.jsonz"
+            new_path = Path(td) / "new-entry.jsonz"
+            stale_tmp = Path(td) / ".orphan.tmp"
+            ignored = Path(td) / "notes.txt"
+            old_path.write_bytes(b"old")
+            new_path.write_bytes(b"new")
+            stale_tmp.write_bytes(b"tmp")
+            ignored.write_text("keep", encoding="utf-8")
+            old_time = time.time() - 10
+            os.utime(old_path, (old_time, old_time))
+            os.utime(stale_tmp, (old_time, old_time))
+            result = core.cache_gc(max_entries=1, stale_tmp_age=1)
+            expect(result.get("expired") == 1, f"expired cache entry was not pruned: {result}")
+            expect(result.get("temporary") == 1, f"stale temp was not pruned: {result}")
+            expect(old_path.exists() is False and new_path.exists(), "cache GC removed the wrong entry")
+            expect(ignored.exists(), "cache GC touched an unrelated file")
+    finally:
+        core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
+        core._CACHE_DIR = saved_cache_dir
+        core.ANCHOR_CACHE_TTL = saved_ttl
+
 def test_weeks_between_iso_boundary():
     """_weeks_between should honor ISO week boundaries across years."""
     d1 = date(2024, 12, 31)  # ISO week 2025-W01
@@ -24259,6 +24291,7 @@ TESTS = [
     test_next_for_and_transient_stall_recovers,
     test_roll_apply_has_guard,
     test_anchor_cache_cleans_stale_tmp_files,
+    test_anchor_cache_garbage_collection_prunes_expired_and_overflow,
     test_weeks_between_iso_boundary,
     test_short_uuid_invalid_inputs,
     test_anchor_expr_length_limit,

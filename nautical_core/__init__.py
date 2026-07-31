@@ -1006,6 +1006,19 @@ def cache_save(key: str, obj: dict) -> bool:
         cache_load_mem=_CACHE_LOAD_MEM,
     )
 
+
+def cache_gc(*, max_entries: int = 512, stale_tmp_age: float = 86400.0) -> dict:
+    """Prune expired and orphaned anchor cache files outside hook hot paths."""
+    return _cache_payload.cache_gc(
+        _cache_dir(),
+        ttl=ANCHOR_CACHE_TTL,
+        max_entries=max_entries,
+        stale_tmp_age=stale_tmp_age,
+        cache_lock=_cache_lock,
+        time_mod=time,
+        os_mod=os,
+    )
+
 @_ttl_lru_cache(maxsize=1024)
 def _cache_key_for_task_cached(
     anchor_expr: str,
@@ -3888,6 +3901,7 @@ __all__ = (
     'cache_key_for_task',
     'cache_load',
     'cache_save',
+    'cache_gc',
     'capture_business_calendar_displacements',
     'coerce_int',
     'describe_anchor_dnf',

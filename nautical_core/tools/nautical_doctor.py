@@ -25,7 +25,7 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import astronomy, chain_repair, configuration_drift, config_schema, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
+from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
 import nautical_core.runtime as runtime  # noqa: E402
 
 REQUIRED_UDAS = {
@@ -1167,6 +1167,7 @@ def main() -> int:
     parser.add_argument("--task-bin", default=shutil.which("task") or "task")
     parser.add_argument("--json", action="store_true", help="emit JSON only")
     parser.add_argument("--stale-after-seconds", type=float, default=300.0)
+    parser.add_argument("--clean-cache", action="store_true", help="prune expired and orphaned anchor cache files")
     args = parser.parse_args()
 
     env = os.environ.copy()
@@ -1199,6 +1200,16 @@ def main() -> int:
     )
     _check_managed_runtime(findings, hooks_dir)
     _check_config(findings, taskdata)
+    if args.clean_cache:
+        gc_result = run_cache_gc()
+        gc_errors = int(gc_result.get("errors", 0) or 0)
+        _finding(
+            findings,
+            "cache.gc",
+            "error" if gc_errors else "ok",
+            "Anchor cache cleanup completed." if not gc_errors else "Anchor cache cleanup completed with errors.",
+            details=gc_result,
+        )
     queue = _check_queue(findings, taskdata, max(0.0, args.stale_after_seconds))
     on_modify = hook_runtimes.get("on-modify") or {}
     counts = _check_chains(

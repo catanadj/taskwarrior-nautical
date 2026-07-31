@@ -380,6 +380,76 @@ def cache_save(
     return ok_saved
 
 
+def cache_gc(
+    base: str,
+    *,
+    ttl: int = 0,
+    max_entries: int = 512,
+    stale_tmp_age: float = 86400.0,
+    cache_lock,
+    time_mod,
+    os_mod,
+) -> dict:
+    """Prune expired/temporary cache files without touching active writers."""
+    result = {"removed": 0, "bytes": 0, "temporary": 0, "expired": 0, "overflow": 0, "errors": 0}
+    if not base or not os_mod.path.isdir(base):
+        return result
+    now = time_mod.time()
+
+    def remove_path(path: str, *, kind: str, key: str = "") -> bool:
+        try:
+            size = int(os_mod.path.getsize(path))
+        except Exception:
+            size = 0
+        try:
+            if key:
+                with cache_lock(key) as locked:
+                    if not locked:
+                        return False
+                    if not os_mod.path.exists(path):
+                        return False
+                    os_mod.unlink(path)
+            else:
+                os_mod.unlink(path)
+            result["removed"] += 1
+            result["bytes"] += size
+            result[kind] += 1
+            return True
+        except Exception:
+            result["errors"] += 1
+            return False
+
+    entries = []
+    try:
+        names = os_mod.listdir(base)
+    except Exception:
+        return result
+    for name in names:
+        path = os_mod.path.join(base, name)
+        try:
+            stat_result = os_mod.stat(path)
+            age = max(0.0, now - float(stat_result.st_mtime))
+        except Exception:
+            continue
+        if name.startswith(".") and name.endswith(".tmp"):
+            if age >= max(0.0, float(stale_tmp_age)):
+                remove_path(path, kind="temporary")
+            continue
+        if not name.endswith(".jsonz") or not os_mod.path.isfile(path):
+            continue
+        key = name[:-6]
+        if ttl and age > max(0, int(ttl)):
+            remove_path(path, kind="expired", key=key)
+            continue
+        entries.append((float(stat_result.st_mtime), path, key))
+
+    limit = max(0, int(max_entries))
+    if limit and len(entries) > limit:
+        for _mtime, path, key in sorted(entries)[: len(entries) - limit]:
+            remove_path(path, kind="overflow", key=key)
+    return result
+
+
 def cache_key_for_task_cached(
     anchor_expr: str,
     anchor_mode: str,

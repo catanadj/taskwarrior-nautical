@@ -298,6 +298,7 @@ _nth_monthly = _import_sibling("nth_monthly")
 _expansion_support = _import_sibling("expansion_support")
 _monthly_support = _import_sibling("monthly_support")
 _natural_language = _import_sibling("natural_language")
+_astronomy = _import_sibling("astronomy")
 _linting = _import_sibling("linting")
 _parser_atoms = _import_sibling("parser_atoms")
 _parser_dnf = _import_sibling("parser_dnf")
@@ -1841,7 +1842,7 @@ def _split_inline_items_respecting_t_lists(s: str) -> list[str]:
                     k += 1
                 nxt = s[j:k].strip()
                 if nxt and ("@" not in nxt) and (
-                    nxt.lower() in {"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"}
+                    _astronomy.is_event_name(nxt)
                     or ((not nxt[0].isalpha()) and nxt[0] not in "-(|&")
                 ):
                     buf.append(ch)

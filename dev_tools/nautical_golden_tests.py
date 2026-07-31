@@ -15921,6 +15921,23 @@ def test_shared_time_slot_resolver_keeps_hook_and_navigator_parity():
         modify_mod.core.to_local = original_modify_to_local
 
 
+def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
+    """Every supported astronomical event must parse through the shared vocabulary."""
+    import nautical_core.astronomy as astronomy
+
+    for event in sorted(astronomy.EVENT_NAMES):
+        dnf = core.parse_anchor_expr_to_dnf(f"w:mon@t={event}")
+        expect(dnf[0][0]["mods"]["t"] == event, f"parser rejected shared event {event!r}")
+        expect(astronomy.is_event_name(event), f"runtime rejected shared event {event!r}")
+
+    try:
+        core.parse_anchor_expr_to_dnf("w:mon@t=not-an-event")
+    except Exception:
+        pass
+    else:
+        raise AssertionError("parser accepted an unknown astronomical event")
+
+
 def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain():
     """Navigator direct task lookup should prefer chainID and resolve the full chain from short links."""
     module_name = "_nautical_navigator_direct_chain_test"
@@ -24509,6 +24526,7 @@ TESTS.extend([
     test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream,
     test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,
     test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain,
+    test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
     test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_uses_anchor_and_anchor_file_sources,

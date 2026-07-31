@@ -1,11 +1,11 @@
 from __future__ import annotations
 import re
 
+from . import astronomy
 from .moon_phase import canonical_phase
 
 
 _HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
-ASTRONOMICAL_TIMES = frozenset({"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"})
 
 
 def parse_hhmm(s: str, *, hhmm_re):
@@ -71,7 +71,7 @@ def parse_atom_mods(
         seen = set()
         for p in parts:
             symbolic = str(p or "").strip().lower()
-            if symbolic in ASTRONOMICAL_TIMES:
+            if astronomy.is_event_name(symbolic):
                 if symbolic not in seen:
                     out.append(symbolic)
                     seen.add(symbolic)

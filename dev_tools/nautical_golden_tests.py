@@ -16076,6 +16076,35 @@ def test_navigator_resolves_symbolic_anchor_time_offsets():
         sys.modules.pop(module_name, None)
 
 
+def test_navigator_surfaces_configuration_drift_warning():
+    """Navigator should visibly warn about stale configuration before forecasting."""
+    module_name = "_nautical_navigator_config_drift_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    loader.exec_module(navigator)
+    original_drift = navigator.core.configuration_drift
+    original_print = navigator.console.print
+    printed = []
+    try:
+        navigator.core.configuration_drift = lambda: {"changed": True, "source": "/tmp/config-nautical.toml"}
+        navigator.console.print = printed.append
+        expect(navigator._show_config_drift_warning(), "drift warning was not emitted")
+        expect(
+            printed and getattr(printed[0], "title", "") == "⚠ Configuration changed",
+            f"unexpected drift warning: {printed!r}",
+        )
+        printed.clear()
+        navigator.core.configuration_drift = lambda: {"changed": False, "status": "ok"}
+        expect(not navigator._show_config_drift_warning(), "clean config should not emit a warning")
+        expect(not printed, f"clean config emitted output: {printed!r}")
+    finally:
+        navigator.core.configuration_drift = original_drift
+        navigator.console.print = original_print
+        sys.modules.pop(module_name, None)
+
+
 def test_shared_time_slot_resolver_keeps_hook_and_navigator_parity():
     """add, modify, and Navigator should resolve the same symbolic slot and offset."""
     import nautical_core.time_slots as time_slots
@@ -24772,6 +24801,7 @@ TESTS.extend([
     test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,
     test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain,
     test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime,
+    test_navigator_surfaces_configuration_drift_warning,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
     test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,

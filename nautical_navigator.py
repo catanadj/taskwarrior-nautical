@@ -194,6 +194,28 @@ def _format_runtime_error(exc: BaseException) -> str:
         pass
     return str(exc).strip() or type(exc).__name__
 
+
+def _show_config_drift_warning() -> bool:
+    """Warn before forecasts when the loaded config no longer matches disk."""
+    try:
+        drift = core.configuration_drift()
+    except Exception:
+        return False
+    if not drift.get("changed"):
+        return False
+    source = str(drift.get("source") or "unknown")
+    console.print(
+        Panel(
+            f"Loaded configuration differs from {source}.\n"
+            "Restart Navigator to use the updated settings; Taskwarrior hooks reload on their next run.",
+            title="⚠ Configuration changed",
+            border_style=COLORS["warning"],
+            expand=False,
+        )
+    )
+    return True
+
+
 def _print_diag_report(hook_dir: Path | None) -> None:
     console.print("\n[bold]Diagnostics[/bold]")
     console.print(f"nautical_core={getattr(core, '__file__', 'unknown')}")
@@ -2873,6 +2895,8 @@ def main():
     if not core:
         console.print(f"[{COLORS['error']}]Error: nautical_core package not found.[/]")
         sys.exit(1)
+
+    _show_config_drift_warning()
 
     if args.self_check or args.explain or args.validate or args.recover_dead_letter:
         code = 0

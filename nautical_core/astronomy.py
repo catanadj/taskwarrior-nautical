@@ -218,6 +218,34 @@ def resolve_event(event: str, day: date, *, config: dict[str, Any] | None = None
     return _resolve_event_cached(name, day, selected, latitude, longitude, elevation, timezone)
 
 
+def preflight(config: dict[str, Any] | None = None, *, reference_day: date | None = None) -> dict[str, Any]:
+    """Validate configured astronomy support without changing task state."""
+    data = config if isinstance(config, dict) else {}
+    locations = data.get("locations") if isinstance(data.get("locations"), dict) else {}
+    if not locations:
+        return {"status": "not_configured", "message": "No astronomy locations are configured."}
+
+    day = reference_day if isinstance(reference_day, date) else date.today()
+    try:
+        selected, _observer_value, timezone = _observer(data)
+        event = resolve_event("sunrise", day, config=data, location_name=selected)
+    except Exception as exc:
+        status = "warning" if isinstance(exc, LookupError) else "error"
+        return {
+            "status": status,
+            "location": str(data.get("default_location") or "").strip() or None,
+            "message": scheduling_error_message(exc),
+        }
+
+    return {
+        "status": "ok",
+        "location": selected,
+        "timezone": timezone,
+        "event": "sunrise",
+        "event_time": event.isoformat(),
+    }
+
+
 @lru_cache(maxsize=512)
 def _resolve_event_cached(
     name: str,
@@ -264,6 +292,7 @@ __all__ = (
     "is_astronomy_error",
     "is_astronomy_unavailable",
     "is_event_name",
+    "preflight",
     "phase_matches_date",
     "resolve_event",
     "resolve_phase_date",

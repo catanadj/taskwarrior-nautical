@@ -4655,6 +4655,16 @@ def test_doctor_reports_missing_timezone_configuration():
     expect((item.get("details") or {}).get("tz") == "UTC", f"missing timezone did not use UTC fallback: {item!r}")
 
 
+def test_doctor_reports_astronomy_preflight_health():
+    """doctor should expose astronomy setup health without mutating Taskwarrior."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_astronomy_preflight_test")
+    findings = []
+    mod._check_astronomy(findings, {})
+    item = next((item for item in findings if item.get("id") == "astronomy.not_configured"), None)
+    expect(item is not None and item.get("severity") == "ok", f"doctor astronomy status missing: {findings!r}")
+
+
 def test_doctor_reports_missing_navigator_dependencies():
     """doctor should identify missing required Navigator packages."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
@@ -9057,6 +9067,32 @@ def test_moon_astral_events_preserve_timezone_and_dst():
     expect(before.tzinfo.key == "America/New_York", f"unexpected pre-DST timezone: {before.tzinfo!r}")
     expect(after.tzinfo.key == "America/New_York", f"unexpected post-DST timezone: {after.tzinfo!r}")
     expect(before.utcoffset() != after.utcoffset(), "DST transition did not change the UTC offset")
+
+
+def test_astronomy_preflight_reports_configuration_and_provider_health():
+    """Astronomy preflight should distinguish disabled, invalid, and healthy profiles."""
+    astronomy = core._import_sibling("astronomy")
+    expect(astronomy.preflight({}).get("status") == "not_configured", "empty astronomy config should be disabled")
+
+    invalid = astronomy.preflight(
+        {"default_location": "home", "locations": {"home": {"latitude": "bad", "longitude": 0, "timezone": "UTC"}}}
+    )
+    expect(invalid.get("status") == "error", f"invalid profile was not rejected: {invalid}")
+
+    original_observer = astronomy._observer
+    original_resolve = astronomy.resolve_event
+    try:
+        astronomy._observer = lambda _config: ("home", object(), "UTC")
+        astronomy.resolve_event = lambda *_args, **_kwargs: datetime(2026, 7, 31, 6, 0, tzinfo=timezone.utc)
+        healthy = astronomy.preflight(
+            {"default_location": "home", "locations": {"home": {"latitude": 1, "longitude": 2, "timezone": "UTC"}}},
+            reference_day=date(2026, 7, 31),
+        )
+    finally:
+        astronomy._observer = original_observer
+        astronomy.resolve_event = original_resolve
+    expect(healthy.get("status") == "ok", f"healthy astronomy profile failed preflight: {healthy}")
+    expect(healthy.get("event") == "sunrise", f"preflight event missing: {healthy}")
 
 
 def test_moonrise_unavailable_location_fails_closed():
@@ -24531,6 +24567,7 @@ TESTS.extend([
     test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain,
     test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
+    test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_uses_anchor_and_anchor_file_sources,
     test_omit_file_modifiers_apply_even_when_base_file_is_cached,
@@ -24542,6 +24579,7 @@ TESTS.extend([
     test_performance_large_expressions,
     test_weekday_weekend_single_time,
     test_doctor_reports_missing_timezone_configuration,
+    test_doctor_reports_astronomy_preflight_health,
     test_doctor_reports_missing_navigator_dependencies,
     test_installer_initializes_explicit_timezone_config,
 ])

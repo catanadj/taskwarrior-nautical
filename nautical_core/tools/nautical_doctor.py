@@ -25,7 +25,7 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import chain_repair, config_schema, install_runtime, reconcile, task_command  # noqa: E402
+from nautical_core import astronomy, chain_repair, config_schema, install_runtime, reconcile, task_command  # noqa: E402
 import nautical_core.runtime as runtime  # noqa: E402
 
 REQUIRED_UDAS = {
@@ -325,6 +325,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             "No Nautical config file was found; built-in defaults will be used.",
         )
         _check_timezone(findings, {})
+        _check_astronomy(findings, {})
         _check_navigator_dependencies(findings, {})
         return
     try:
@@ -342,6 +343,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     _finding(findings, "config.loaded", "ok", f"Nautical config is valid: {config}")
     _check_config_schema(findings, data)
     _check_timezone(findings, data)
+    _check_astronomy(findings, data)
     _check_navigator_dependencies(findings, data)
     _check_panel_config(findings, data)
     for key in ("anchor_file_dir", "omit_file_dir"):
@@ -444,6 +446,40 @@ def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> Non
         )
         return
     _finding(findings, "config.timezone", "ok", f"Nautical timezone is available: {tz_name}")
+
+
+def _check_astronomy(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
+    """Check optional astronomy setup without touching Taskwarrior state."""
+    config = data.get("astronomy") if isinstance(data, dict) else None
+    result = astronomy.preflight(config)
+    status = str(result.get("status") or "error")
+    if status == "not_configured":
+        _finding(
+            findings,
+            "astronomy.not_configured",
+            "ok",
+            "Astronomy is not configured; astronomical anchor times are disabled.",
+            fix="Define [astronomy] locations only if using sunrise, sunset, moonrise, or moonset anchors.",
+        )
+        return
+    severity = {"ok": "ok", "warning": "warn", "error": "error"}.get(status, "error")
+    details = {key: value for key, value in result.items() if key not in {"status", "message"}}
+    _finding(
+        findings,
+        "astronomy.preflight",
+        severity,
+        "Astronomy provider and location profile are usable."
+        if status == "ok"
+        else str(result.get("message") or "Astronomy preflight failed."),
+        fix=(
+            "Install astral in the active interpreter and verify the selected profile."
+            if status == "error"
+            else "Review the astronomy location and event availability before scheduling."
+            if status == "warning"
+            else ""
+        ),
+        details=details,
+    )
 
 
 def _check_navigator_dependencies(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:

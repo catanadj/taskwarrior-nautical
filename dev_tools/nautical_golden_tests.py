@@ -23894,6 +23894,25 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         late_fallback is None and "at or after local 23:00" in (late_error or ""),
         f"late due did not fail closed: {late_fallback}, {late_error}",
     )
+    tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+        "_nautical_reconcile_until_format_test",
+    )
+    expected_until = stamp(date(2026, 7, 23), (23, 0))
+    compact_expected = expected_until.replace("-", "").replace(":", "")
+    actual_dt, actual_parse_error = mod._safe_parse_datetime(compact_expected)
+    expected_dt, expected_parse_error = mod._safe_parse_datetime(expected_until)
+    expect(
+        tool._native_until_matches({"until": compact_expected}, expected_until, mod),
+        f"Taskwarrior's compact UTC timestamp should verify against the fallback instant: "
+        f"{actual_dt!r}/{actual_parse_error!r} != {expected_dt!r}/{expected_parse_error!r}",
+    )
+    expect(
+        not tool._native_until_matches(
+            {"until": mod.core.fmt_isoz(expected_dt + timedelta(hours=1))}, expected_until, mod
+        ),
+        "a different native-until instant must fail verification",
+    )
 
 
 def test_seasonal_selection_business_calendar_and_cache_identity():

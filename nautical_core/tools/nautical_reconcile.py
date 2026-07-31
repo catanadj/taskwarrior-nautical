@@ -305,8 +305,12 @@ def _native_until_repairs(task_bin: str, hook: Any, *, apply: bool) -> tuple[lis
                 errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
                 continue
             fresh = _fresh_parent(task_bin, row)
-            if fresh is None or str(fresh.get("until") or "") != repaired:
-                errors.append(f"{item['task']} chain {chain_id} link {link}: native until repair verification failed")
+            if fresh is None or not _native_until_matches(fresh, repaired, hook):
+                actual = str((fresh or {}).get("until") or "<missing>")
+                item["repair_error"] = (
+                    f"native until repair verification failed (expected {repaired}; found {actual})"
+                )
+                errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
                 item["action"] = "repair_error"
             else:
                 item["applied"] = True
@@ -337,6 +341,19 @@ def _modify_native_until(task_bin: str, row: dict[str, Any], new_until: str) -> 
     )
     if proc.returncode != 0:
         raise RuntimeError(task_command.failure_message(proc, "native until repair"))
+
+
+def _native_until_matches(fresh: dict[str, Any], expected: str, hook: Any) -> bool:
+    """Compare native-until timestamps by instant, tolerating Taskwarrior formatting."""
+    actual = str(fresh.get("until") or "").strip()
+    if actual == str(expected or "").strip():
+        return True
+    try:
+        actual_dt, actual_err = hook._safe_parse_datetime(actual)
+        expected_dt, expected_err = hook._safe_parse_datetime(expected)
+        return not actual_err and not expected_err and actual_dt is not None and actual_dt == expected_dt
+    except Exception:
+        return False
 
 
 def _existing_children(task_bin: str, parent: dict[str, Any]) -> list[dict[str, Any]]:

@@ -25,6 +25,7 @@ import importlib
 import importlib.machinery
 import importlib.util
 import shutil
+import weakref
 from pathlib import Path
 from functools import lru_cache
 from typing import Dict, List, Optional, Tuple, Any, Set
@@ -52,6 +53,7 @@ except Exception:
 
 
 MAX_CAL_FUTURE_STEPS = 2000  # safety cap
+_ACTIVE_ANALYZERS = weakref.WeakSet()
 
 def _first_of_month(d: date) -> date:
     return date(d.year, d.month, 1)
@@ -195,6 +197,21 @@ def _format_runtime_error(exc: BaseException) -> str:
     return str(exc).strip() or type(exc).__name__
 
 
+def _reset_navigator_runtime_state() -> None:
+    """Drop process-local indexes/caches so stale data cannot survive a drift check."""
+    for analyzer in list(_ACTIVE_ANALYZERS):
+        analyzer._task_cache.clear()
+        analyzer._uuid_cache.clear()
+        analyzer._children.clear()
+    analyzer_cls = globals().get("TaskAnalyzer")
+    if analyzer_cls is None:
+        return
+    for method_name in ("get_all_chained_tasks", "convert_to_local"):
+        cache_clear = getattr(getattr(analyzer_cls, method_name, None), "cache_clear", None)
+        if cache_clear:
+            cache_clear()
+
+
 def _show_config_drift_warning() -> bool:
     """Warn before forecasts when the loaded config no longer matches disk."""
     try:
@@ -203,6 +220,7 @@ def _show_config_drift_warning() -> bool:
         return False
     if not drift.get("changed"):
         return False
+    _reset_navigator_runtime_state()
     source = str(drift.get("source") or "unknown")
     console.print(
         Panel(
@@ -614,6 +632,7 @@ class TaskAnalyzer:
         self._task_cache: Dict[int, Dict] = {}
         self._uuid_cache: Dict[str, Dict] = {}
         self._children: Dict[str, List[Dict]] = {}  # prev_uuid -> [children]
+        _ACTIVE_ANALYZERS.add(self)
 
     # ── Task retrieval ───────────────────────────────────────────────────────
     @lru_cache(maxsize=1)
@@ -2896,7 +2915,7 @@ def main():
         console.print(f"[{COLORS['error']}]Error: nautical_core package not found.[/]")
         sys.exit(1)
 
-    _show_config_drift_warning()
+    config_drifted = _show_config_drift_warning()
 
     if args.self_check or args.explain or args.validate or args.recover_dead_letter:
         code = 0
@@ -2916,6 +2935,13 @@ def main():
                 ),
             )
         sys.exit(code)
+
+    if config_drifted:
+        console.print(
+            f"[{COLORS['warning']}]Forecast paused because configuration changed. "
+            "Restart Navigator and run it again.[/]"
+        )
+        sys.exit(2)
 
     analyzer = TaskAnalyzer()
     if args.vertical:

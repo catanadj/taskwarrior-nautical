@@ -16088,9 +16088,24 @@ def test_navigator_surfaces_configuration_drift_warning():
     original_print = navigator.console.print
     printed = []
     try:
+        navigator.TaskAnalyzer.convert_to_local("20260731T090000Z")
+        analyzer = navigator.TaskAnalyzer()
+        analyzer._task_cache[1] = {"uuid": "stale"}
+        analyzer._uuid_cache["stale"] = analyzer._task_cache[1]
+        analyzer._children["stale"] = [analyzer._task_cache[1]]
+        expect(
+            navigator.TaskAnalyzer.convert_to_local.cache_info().currsize > 0,
+            "test did not seed Navigator's conversion cache",
+        )
         navigator.core.configuration_drift = lambda: {"changed": True, "source": "/tmp/config-nautical.toml"}
         navigator.console.print = printed.append
         expect(navigator._show_config_drift_warning(), "drift warning was not emitted")
+        expect(
+            navigator.TaskAnalyzer.convert_to_local.cache_info().currsize == 0,
+            "configuration drift left stale conversion cache entries",
+        )
+        expect(not analyzer._task_cache and not analyzer._uuid_cache and not analyzer._children,
+               "configuration drift left stale analyzer indexes")
         expect(
             printed and getattr(printed[0], "title", "") == "⚠ Configuration changed",
             f"unexpected drift warning: {printed!r}",

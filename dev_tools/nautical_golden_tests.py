@@ -9144,6 +9144,9 @@ def test_moon_phase_operational_errors_are_actionable():
         astronomy.AstronomyUnavailableError("moon phase anchors require astral")
     )
     expect("Install astral" in message and "moon-based recurrence" in message, message)
+    foreign_error = type("AstronomyUnavailableError", (RuntimeError,), {})("provider missing")
+    expect(astronomy.is_astronomy_error(foreign_error), "foreign hook-loaded astronomy error was not classified")
+    expect("Install astral" in astronomy.scheduling_error_message(foreign_error), "foreign error message was not actionable")
 
     import nautical_core.reconcile as reconcile
 
@@ -9176,7 +9179,7 @@ def test_moon_phase_operational_errors_are_actionable():
     }
     plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=FakeHook())
     expect(plan.action == "error", f"moon resolver failure should fail closed: {plan}")
-    expect("Moon-phase scheduling unavailable" in plan.reason, plan.reason)
+    expect("Astronomy provider unavailable" in plan.reason, plan.reason)
 
 
 def test_moon_phase_natural_language_is_explicit():

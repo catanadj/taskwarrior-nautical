@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from nautical_core import native_until
+from nautical_core import astronomy, native_until
 
 
 def validate_until_not_past(until_dt: Any, now_utc: datetime, *, core: Any) -> tuple[bool, str | None]:
@@ -75,7 +75,7 @@ def collect_anchor_time_slots(
                     term_slots.update(normalize_time_slots(value))
             out.update(term_slots or {fallback_hhmm})
     except Exception as exc:
-        if exc.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
+        if astronomy.is_astronomy_error(exc):
             raise
         pass
 

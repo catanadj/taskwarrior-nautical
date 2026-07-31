@@ -1012,8 +1012,9 @@ def _validate_native_until_anchor_slots_or_fail(
             resolve_time_slots=_resolve_time_slots,
         )
     except Exception as exc:
-        if exc.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
-            _panel("❌ Invalid astronomy time", [("Required", str(exc))], kind="error")
+        astronomy = core._import_sibling("astronomy")
+        if astronomy.is_astronomy_error(exc):
+            _panel("❌ Invalid astronomy time", [("Required", astronomy.scheduling_error_message(exc))], kind="error")
             sys.exit(1)
         return
     is_valid, reason = add_validation.validate_native_until_calendar_slots(
@@ -1902,8 +1903,8 @@ def _handle_anchor_preview_on_add(
             append_first_expiration_row=_append_first_expiration_row,
         )
     except Exception as exc:
-        if exc.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
-            astronomy = core._import_sibling("astronomy")
+        astronomy = core._import_sibling("astronomy")
+        if astronomy.is_astronomy_error(exc):
             _error_and_exit([("Astronomy", astronomy.scheduling_error_message(exc))])
         raise
 

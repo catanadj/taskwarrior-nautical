@@ -2607,8 +2607,13 @@ def _validate_native_until_anchor_slots_or_fail(task: dict) -> None:
             resolve_time_slots=lambda value, target_date: _norm_hhmm_list(value, target_date),
         )
     except Exception as exc:
-        if exc.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
-            _panel("❌ Invalid astronomy time", [("Required", str(exc))], kind="error")
+        astronomy = core._import_sibling("astronomy")
+        if astronomy.is_astronomy_error(exc):
+            _panel(
+                "❌ Invalid astronomy time",
+                [("Required", astronomy.scheduling_error_message(exc))],
+                kind="error",
+            )
             sys.exit(1)
         return
     is_valid, reason = add_validation.validate_native_until_calendar_slots(
@@ -3084,7 +3089,8 @@ def _extract_time_slots_from_dnf(dnf, target_date=None) -> list[tuple[int, int]]
                 for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
                     out.add(hhmm)
     except Exception as exc:
-        if exc.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
+        astronomy = core._import_sibling("astronomy")
+        if astronomy.is_astronomy_error(exc):
             raise
         return []
     return sorted(out)
@@ -3110,7 +3116,8 @@ def _extract_time_slots_for_date(
                     for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
                         out.add(hhmm)
     except Exception as exc:
-        if exc.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
+        astronomy = core._import_sibling("astronomy")
+        if astronomy.is_astronomy_error(exc):
             raise
         return []
     if matched:
@@ -5756,8 +5763,8 @@ def _non_completion_validate_anchor(old: dict, new: dict, new_anchor: str) -> No
     except TypeError:
         _ = core.validate_anchor_expr_strict(new_anchor)
     except Exception as e:
-        if e.__class__.__name__ in {"AstronomyConfigurationError", "AstronomyUnavailableError"}:
-            astronomy = core._import_sibling("astronomy")
+        astronomy = core._import_sibling("astronomy")
+        if astronomy.is_astronomy_error(e):
             _got_anchor_invalid(astronomy.scheduling_error_message(e))
         _got_anchor_invalid(_non_completion_anchor_error_message(new_anchor, str(e)))
 

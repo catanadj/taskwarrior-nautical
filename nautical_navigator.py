@@ -183,10 +183,16 @@ def _emit_check(status: str, label: str, detail: str) -> None:
 
 def _format_runtime_error(exc: BaseException) -> str:
     """Add actionable interpreter context to optional-runtime failures."""
-    text = str(exc).strip() or type(exc).__name__
-    if type(exc).__name__ == "AstronomyUnavailableError":
-        return f"{text}. Interpreter: {sys.executable}. Install with: {sys.executable} -m pip install astral"
-    return text
+    try:
+        astronomy = core._import_sibling("astronomy")
+        if astronomy.is_astronomy_error(exc):
+            text = astronomy.scheduling_error_message(exc)
+            if astronomy.is_astronomy_unavailable(exc):
+                return f"{text} Interpreter: {sys.executable}."
+            return text
+    except Exception:
+        pass
+    return str(exc).strip() or type(exc).__name__
 
 def _print_diag_report(hook_dir: Path | None) -> None:
     console.print("\n[bold]Diagnostics[/bold]")

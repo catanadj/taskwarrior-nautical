@@ -4,7 +4,7 @@ from datetime import timedelta
 from dataclasses import dataclass
 from typing import Any
 
-from nautical_core import native_until
+from nautical_core import astronomy, native_until
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
@@ -12,12 +12,7 @@ RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
 
 def scheduling_error_message(exc: BaseException) -> str:
     """Keep astronomy failures actionable in dry-run and apply plans."""
-    text = str(exc).strip() or type(exc).__name__
-    if exc.__class__.__name__ == "AstronomyUnavailableError":
-        return f"Moon-phase scheduling unavailable: {text}. Install astral or configure a non-moon recurrence."
-    if exc.__class__.__name__ == "AstronomyConfigurationError":
-        return f"Moon-phase astronomy profile invalid: {text}. Configure [astronomy] and retry reconcile."
-    return text
+    return astronomy.scheduling_error_message(exc)
 
 
 @dataclass(frozen=True)

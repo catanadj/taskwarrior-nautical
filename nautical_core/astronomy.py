@@ -30,11 +30,24 @@ class AstronomyConfigurationError(ValueError):
 def scheduling_error_message(exc: BaseException) -> str:
     """Return an actionable, stable message for astronomy scheduling failures."""
     text = str(exc).strip() or type(exc).__name__
-    if isinstance(exc, AstronomyUnavailableError):
+    if is_astronomy_unavailable(exc):
         return f"Astronomy provider unavailable: {text}. Install astral or remove the moon-based recurrence."
-    if isinstance(exc, AstronomyConfigurationError):
+    if isinstance(exc, AstronomyConfigurationError) or type(exc).__name__ == "AstronomyConfigurationError":
         return f"Astronomy profile invalid: {text}. Configure [astronomy] before using moon recurrence."
     return text
+
+
+def is_astronomy_error(exc: BaseException) -> bool:
+    """Return whether an exception represents an expected astronomy failure."""
+    return isinstance(exc, (AstronomyUnavailableError, AstronomyConfigurationError)) or type(exc).__name__ in {
+        "AstronomyUnavailableError",
+        "AstronomyConfigurationError",
+    }
+
+
+def is_astronomy_unavailable(exc: BaseException) -> bool:
+    """Return whether an expected astronomy failure is a missing provider."""
+    return isinstance(exc, AstronomyUnavailableError) or type(exc).__name__ == "AstronomyUnavailableError"
 
 
 def is_event_name(value: Any) -> bool:
@@ -248,6 +261,8 @@ __all__ = (
     "AstronomyUnavailableError",
     "EVENT_NAMES",
     "PHASE_RANGES",
+    "is_astronomy_error",
+    "is_astronomy_unavailable",
     "is_event_name",
     "phase_matches_date",
     "resolve_event",

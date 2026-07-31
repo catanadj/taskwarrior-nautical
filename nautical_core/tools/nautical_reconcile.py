@@ -255,37 +255,45 @@ def _native_until_repairs(task_bin: str, hook: Any, *, apply: bool) -> tuple[lis
             "until": row.get("until"),
             "reason": reason,
         }
+        repaired: str | None = None
+        repair_error: str | None = None
         if previous is None:
-            item["action"] = "manual_review"
-            repairs.append(item)
-            errors.append(f"{item['task']} chain {chain_id} link {link}: no predecessor for native-until repair")
-            continue
-        previous_reason = reconcile.invalid_native_until_reason(
-            previous,
-            safe_parse_datetime=hook._safe_parse_datetime,
-        )
-        if previous_reason:
-            item["action"] = "manual_review"
-            item["repair_error"] = f"previous link is invalid: {previous_reason}"
-            repairs.append(item)
-            errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
-            continue
-        kind = reconcile.recurrence_kind(row)
-        repaired, repair_error = reconcile.repair_native_until_from_previous(
-            previous,
-            row,
-            kind=kind,
-            safe_parse_datetime=hook._safe_parse_datetime,
-            fmt_isoz=hook.core.fmt_isoz,
-            utc_to_local_naive=getattr(hook, "_utc_to_local_naive"),
-            local_naive_to_utc=getattr(hook, "_local_naive_to_utc"),
-        )
+            repair_error = "previous link is unavailable"
+        else:
+            previous_reason = reconcile.invalid_native_until_reason(
+                previous,
+                safe_parse_datetime=hook._safe_parse_datetime,
+            )
+            if previous_reason:
+                repair_error = f"previous link is invalid: {previous_reason}"
+            else:
+                kind = reconcile.recurrence_kind(row)
+                repaired, repair_error = reconcile.repair_native_until_from_previous(
+                    previous,
+                    row,
+                    kind=kind,
+                    safe_parse_datetime=hook._safe_parse_datetime,
+                    fmt_isoz=hook.core.fmt_isoz,
+                    utc_to_local_naive=getattr(hook, "_utc_to_local_naive"),
+                    local_naive_to_utc=getattr(hook, "_local_naive_to_utc"),
+                )
         if repair_error or not repaired:
-            item["action"] = "manual_review"
-            item["repair_error"] = repair_error or "could not calculate repaired until"
-            repairs.append(item)
-            errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
-            continue
+            fallback, fallback_error = reconcile.fallback_native_until_at_day_end(
+                row,
+                safe_parse_datetime=hook._safe_parse_datetime,
+                fmt_isoz=hook.core.fmt_isoz,
+                utc_to_local_naive=getattr(hook, "_utc_to_local_naive"),
+                local_naive_to_utc=getattr(hook, "_local_naive_to_utc"),
+            )
+            if fallback_error or not fallback:
+                item["action"] = "manual_review"
+                item["repair_error"] = fallback_error or repair_error or "could not calculate repaired until"
+                errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
+                repairs.append(item)
+                continue
+            repaired = fallback
+            item["fallback"] = "local 23:00"
+            item["reason"] = repair_error or item["reason"]
         item["action"] = "repair_until"
         item["new_until"] = repaired
         if apply:

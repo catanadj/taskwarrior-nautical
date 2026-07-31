@@ -23872,6 +23872,28 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         local_naive_to_utc=mod._local_naive_to_utc,
     )
     expect(not error and repaired == stamp(date(2026, 7, 22), (23, 0)), f"wrong carried until: {repaired}, {error}")
+    fallback, fallback_error = reconcile.fallback_native_until_at_day_end(
+        {"due": stamp(date(2026, 7, 23), (9, 0))},
+        safe_parse_datetime=mod._safe_parse_datetime,
+        fmt_isoz=mod.core.fmt_isoz,
+        utc_to_local_naive=mod._utc_to_local_naive,
+        local_naive_to_utc=mod._local_naive_to_utc,
+    )
+    expect(
+        not fallback_error and fallback == stamp(date(2026, 7, 23), (23, 0)),
+        f"fallback did not use local 23:00: {fallback}, {fallback_error}",
+    )
+    late_fallback, late_error = reconcile.fallback_native_until_at_day_end(
+        {"due": stamp(date(2026, 7, 23), (23, 0))},
+        safe_parse_datetime=mod._safe_parse_datetime,
+        fmt_isoz=mod.core.fmt_isoz,
+        utc_to_local_naive=mod._utc_to_local_naive,
+        local_naive_to_utc=mod._local_naive_to_utc,
+    )
+    expect(
+        late_fallback is None and "at or after local 23:00" in (late_error or ""),
+        f"late due did not fail closed: {late_fallback}, {late_error}",
+    )
 
 
 def test_seasonal_selection_business_calendar_and_cache_identity():

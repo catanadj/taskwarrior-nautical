@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from dataclasses import dataclass
 from typing import Any
 
@@ -184,6 +184,29 @@ def repair_native_until_from_previous(
     except native_until.NativeUntilCarryError as exc:
         return None, str(exc)
     return fmt_isoz(repaired), None
+
+
+def fallback_native_until_at_day_end(
+    current: dict[str, Any],
+    *,
+    safe_parse_datetime: Any,
+    fmt_isoz: Any,
+    utc_to_local_naive: Any,
+    local_naive_to_utc: Any,
+) -> tuple[str | None, str | None]:
+    """Use local 23:00 when a prior link cannot provide an expiration policy."""
+    target_field = native_until_target_field(current)
+    target, target_err = safe_parse_datetime(current.get(target_field))
+    if target_err or target is None:
+        return None, f"cannot infer native until without a parseable {target_field}"
+    try:
+        target_local = utc_to_local_naive(target)
+        fallback_local = datetime.combine(target_local.date(), time(23, 0))
+        if fallback_local <= target_local:
+            return None, f"cannot infer native until: {target_field} is at or after local 23:00"
+        return fmt_isoz(local_naive_to_utc(fallback_local)), None
+    except Exception:
+        return None, "cannot infer native until at local 23:00"
 
 
 def _child_recurrence_mismatch(parent: dict[str, Any], child: dict[str, Any]) -> str:

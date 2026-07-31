@@ -196,6 +196,25 @@ def _candidate_rows(task_bin: str, hook: Any) -> list[dict[str, Any]]:
     return sorted(rows, key=_candidate_sort_key)
 
 
+def _ambiguous_candidate_slots(rows: list[dict[str, Any]]) -> dict[tuple[str, int], str]:
+    """Return candidate slots with more than one distinct parent identity."""
+    grouped: dict[tuple[str, int], set[str]] = {}
+    for row in rows:
+        chain_id = str(row.get("chainID") or "").strip()
+        link = reconcile.int_or_default(row.get("link"), 0)
+        uuid = str(row.get("uuid") or "").strip().lower()
+        if chain_id and link > 0 and uuid:
+            grouped.setdefault((chain_id, link), set()).add(uuid)
+    return {
+        slot: (
+            f"ambiguous candidate slot chain {slot[0]} link {slot[1]} "
+            f"has {len(uuids)} distinct parent tasks"
+        )
+        for slot, uuids in grouped.items()
+        if len(uuids) > 1
+    }
+
+
 def _active_chain_rows(task_bin: str) -> list[dict[str, Any]]:
     """Export live Nautical links for integrity checks, independently of recovery candidates."""
     rows = _export(task_bin, ["chain:on", "chainID.not:"])
@@ -490,6 +509,16 @@ def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
         raise RuntimeError(task_command.failure_message(proc, "parent chain update"))
 
 
+def _verify_disabled_parent(task_bin: str, parent: dict[str, Any]) -> None:
+    """Re-export a terminal parent before reporting chain disablement as applied."""
+    fresh_parent = _fresh_parent(task_bin, parent)
+    if fresh_parent is None:
+        raise RuntimeError("post-apply verification could not re-export the disabled parent")
+    if str(fresh_parent.get("chain") or "").strip().lower() != "off":
+        shown = str(fresh_parent.get("chain") or "<empty>").strip() or "<empty>"
+        raise RuntimeError(f"post-apply verification found parent chain {shown}; expected off")
+
+
 def _verify_applied_child(
     task_bin: str,
     parent: dict[str, Any],
@@ -612,6 +641,7 @@ def _apply_parent_atomic(
             return plan, plan.child_short
         if plan.action in {"legitimate_final", "manual_stop"}:
             _disable_parent_chain(task_bin, plan.parent)
+            _verify_disabled_parent(task_bin, plan.parent)
             return plan, "off"
         return plan, ""
 
@@ -1046,6 +1076,7 @@ def main(argv: list[str] | None = None) -> int:
     applied: list[dict[str, Any]] = []
     outcome_groups: list[list[tuple[reconcile.ReconcilePlan, str]]] = []
     processed_slots: set[tuple[str, int]] = set()
+    ambiguous_slots = _ambiguous_candidate_slots(candidates)
 
     for parent in candidates:
         parent_slot = (
@@ -1054,19 +1085,22 @@ def main(argv: list[str] | None = None) -> int:
         )
         if parent_slot in processed_slots:
             continue
-        try:
-            outcomes = _reconcile_candidate(
-                args.task_bin,
-                hook,
-                parent,
-                taskdata=taskdata,
-                apply=args.apply,
-                max_expiration_hops=args.max_expiration_hops,
-                recovery_at=recovery_at,
-            )
-        except Exception as exc:
-            reason = str(exc).strip() or type(exc).__name__
-            outcomes = [(_recovery_error(parent, reason), "")]
+        if parent_slot in ambiguous_slots:
+            outcomes = [(_recovery_error(parent, ambiguous_slots[parent_slot]), "")]
+        else:
+            try:
+                outcomes = _reconcile_candidate(
+                    args.task_bin,
+                    hook,
+                    parent,
+                    taskdata=taskdata,
+                    apply=args.apply,
+                    max_expiration_hops=args.max_expiration_hops,
+                    recovery_at=recovery_at,
+                )
+            except Exception as exc:
+                reason = str(exc).strip() or type(exc).__name__
+                outcomes = [(_recovery_error(parent, reason), "")]
         outcome_groups.append(outcomes)
         rendered: list[tuple[reconcile.ReconcilePlan, dict[str, Any], str]] = []
         for plan, applied_short in outcomes:

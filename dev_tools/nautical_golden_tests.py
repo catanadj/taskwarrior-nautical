@@ -20151,6 +20151,10 @@ def test_reconcile_candidate_discovery_is_narrow_and_deterministic():
         [(row["chainID"], row["link"]) for row in found] == [("a-chain", 2), ("z-chain", 3)],
         f"candidate order was not deterministic: {found}",
     )
+    duplicate = {**rows[1], "uuid": "22222222-0000-0000-0000-000000000002"}
+    conflicts = tool._ambiguous_candidate_slots([rows[1], duplicate])
+    expect(("a-chain", 2) in conflicts and "2 distinct parent tasks" in conflicts[("a-chain", 2)],
+           f"duplicate candidate slot was not rejected: {conflicts!r}")
 
 
 def test_reconcile_json_startup_failures_are_structured():
@@ -21599,6 +21603,62 @@ def test_reconcile_tool_apply_disables_legitimate_final_chain():
             mod._fresh_parent,
             mod._parent_apply_lock,
             mod._task_data_dir,
+        ) = original
+
+
+def test_reconcile_disable_verification_fails_closed():
+    """A terminal apply must fail if chain:off is not visible after the modify."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_disable_verify_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "verify01",
+        "link": 1,
+        "chainMax": 1,
+    }
+
+    class FakeHook:
+        core = SimpleNamespace()
+
+    @contextlib.contextmanager
+    def parent_lock(_taskdata, _parent_uuid):
+        yield True
+
+    original = (
+        mod._parent_apply_lock,
+        mod._fresh_parent,
+        mod._existing_children,
+        mod._disable_parent_chain,
+        mod._refresh_plan,
+    )
+    try:
+        mod._parent_apply_lock = parent_lock
+        mod._fresh_parent = lambda _task_bin, _parent: dict(parent)
+        mod._existing_children = lambda _task_bin, _parent: []
+        mod._disable_parent_chain = lambda _task_bin, _parent: None
+        mod._refresh_plan = lambda _task_bin, _hook, _parent: mod.reconcile.ReconcilePlan(
+            "legitimate_final", parent, 2, "reached chainMax"
+        )
+        try:
+            mod._apply_parent_atomic(
+                "task",
+                FakeHook(),
+                parent,
+                taskdata=Path("/tmp/nautical-reconcile-disable-verify-test"),
+            )
+        except RuntimeError as exc:
+            expect("expected off" in str(exc), f"disable verification error was unclear: {exc}")
+        else:
+            raise AssertionError("unverified chain disable was reported as applied")
+    finally:
+        (
+            mod._parent_apply_lock,
+            mod._fresh_parent,
+            mod._existing_children,
+            mod._disable_parent_chain,
+            mod._refresh_plan,
         ) = original
 
 
@@ -24668,6 +24728,7 @@ TESTS = [
     test_reconcile_tool_print_plan_includes_evidence,
     test_reconcile_partial_recovery_exit_and_verbose_output,
     test_reconcile_tool_apply_disables_legitimate_final_chain,
+    test_reconcile_disable_verification_fails_closed,
     test_chain_repair_plans_only_safe_adjacent_link_updates,
     test_chain_repair_infers_missing_links_only_when_deterministic,
     test_chain_repair_infers_single_root_link_one_only,

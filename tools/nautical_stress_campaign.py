@@ -31,9 +31,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-ON_ADD = ROOT / "on-add-nautical.py"
-ON_MODIFY = ROOT / "on-modify-nautical.py"
-ON_EXIT = ROOT / "on-exit-nautical.py"
+ON_ADD = ROOT / "on-add.nautical"
+ON_MODIFY = ROOT / "on-modify.nautical"
+ON_EXIT = ROOT / "on-exit.nautical"
 TASK_BIN = shutil.which("task")
 RNG = random.Random(1337)
 

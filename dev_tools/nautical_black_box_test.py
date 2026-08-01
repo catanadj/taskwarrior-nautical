@@ -53,9 +53,9 @@ def _install_runtime(data_dir: Path) -> None:
     hooks_dir = data_dir / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     for source, target in (
-        ("on-add-nautical.py", "on-add"),
-        ("on-modify-nautical.py", "on-modify"),
-        ("on-exit-nautical.py", "on-exit"),
+        ("on-add.nautical", "on-add"),
+        ("on-modify.nautical", "on-modify"),
+        ("on-exit.nautical", "on-exit"),
     ):
         shutil.copy2(ROOT / source, hooks_dir / target)
         (hooks_dir / target).chmod(0o755)

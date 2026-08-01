@@ -24,9 +24,9 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 DEFAULT_CORPUS = HERE / "nautical_hook_replay_corpus.jsonl"
 HOOK_FILES = {
-    "on-add": ROOT / "on-add-nautical.py",
-    "on-modify": ROOT / "on-modify-nautical.py",
-    "on-exit": ROOT / "on-exit-nautical.py",
+    "on-add": ROOT / "on-add.nautical",
+    "on-modify": ROOT / "on-modify.nautical",
+    "on-exit": ROOT / "on-exit.nautical",
 }
 
 

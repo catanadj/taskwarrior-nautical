@@ -294,11 +294,11 @@ def _extract_last_json(stdout_text: str) -> dict:
 
 def _load_hook_module(path: str, module_name: str):
     _force_tz_utc()
-    if os.path.basename(path) == "on-add-nautical.py":
+    if os.path.basename(path) == "on-add.nautical":
         path = os.path.join(ROOT, "nautical_core", "hooks", "add_impl.py")
-    elif os.path.basename(path) == "on-modify-nautical.py":
+    elif os.path.basename(path) == "on-modify.nautical":
         path = os.path.join(ROOT, "nautical_core", "hooks", "modify_impl.py")
-    elif os.path.basename(path) == "on-exit-nautical.py":
+    elif os.path.basename(path) == "on-exit.nautical":
         path = os.path.join(ROOT, "nautical_core", "hooks", "exit_impl.py")
     loader = importlib.machinery.SourceFileLoader(module_name, path)
     spec = importlib.util.spec_from_loader(module_name, loader)
@@ -430,7 +430,7 @@ def test_warn_once_per_day_any_no_diag_silent():
 
 def test_on_add_fail_and_exit_emits_json():
     """_fail_and_exit should fail-closed without emitting task JSON."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_fail_test")
     task = {"uuid": "00000000-0000-0000-0000-000000000abc", "description": "fail test"}
     mod._PARSED_TASK = dict(task)
@@ -449,7 +449,7 @@ def test_on_add_fail_and_exit_emits_json():
 
 def test_on_add_panic_passthrough_emits_valid_json():
     """on-add panic passthrough should always emit a valid JSON object."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_panic_passthrough_test")
     mod._PARSED_TASK = {"uuid": "00000000-0000-0000-0000-000000000111", "description": "panic-add"}
     mod._RAW_INPUT_TEXT = "{not-json"
@@ -464,7 +464,7 @@ def test_on_add_panic_passthrough_emits_valid_json():
 
 def test_on_modify_panic_passthrough_uses_latest_task():
     """on-modify panic passthrough should emit the latest task object."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_panic_passthrough_test")
     mod._PARSED_NEW = None
     old = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"}
@@ -481,7 +481,7 @@ def test_on_modify_panic_passthrough_uses_latest_task():
 
 def test_on_add_ignores_unsafe_core_path_override():
     """on-add should ignore unsafe NAUTICAL_CORE_PATH overrides by default."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_unsafe_core_path_test")
     prev = os.environ.get("NAUTICAL_CORE_PATH")
     prev_trust = os.environ.get("NAUTICAL_TRUST_CORE_PATH")
@@ -518,7 +518,7 @@ def test_hook_bootstrap_uses_symlink_path_and_core_path_rescue():
         hooks.mkdir(parents=True, exist_ok=True)
         taskdata.mkdir(parents=True, exist_ok=True)
 
-        hook_names = ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py")
+        hook_names = ("on-add.nautical", "on-modify.nautical", "on-exit.nautical")
         for name in hook_names:
             src = Path(ROOT) / name
             dst = staging / name
@@ -556,19 +556,19 @@ def test_hook_bootstrap_uses_symlink_path_and_core_path_rescue():
         cases = [
             (
                 "on-add",
-                hooks / "on-add-nautical.py",
+                hooks / "on-add.nautical",
                 json.dumps(add_task, ensure_ascii=False),
                 True,
             ),
             (
                 "on-modify",
-                hooks / "on-modify-nautical.py",
+                hooks / "on-modify.nautical",
                 json.dumps(modify_old, ensure_ascii=False) + "\n" + json.dumps(modify_new, ensure_ascii=False),
                 True,
             ),
             (
                 "on-exit",
-                hooks / "on-exit-nautical.py",
+                hooks / "on-exit.nautical",
                 "",
                 False,
             ),
@@ -655,7 +655,7 @@ def test_hooks_survive_malformed_numeric_environment():
         }
 
         add = _run_hook_script_raw(
-            _find_hook_file("on-add-nautical.py"),
+            _find_hook_file("on-add.nautical"),
             json.dumps(task, ensure_ascii=False),
             env_extra=env,
         )
@@ -665,7 +665,7 @@ def test_hooks_survive_malformed_numeric_environment():
 
         modified = dict(task, description="Modified malformed env ăîșț")
         modify = _run_hook_script_raw(
-            _find_hook_file("on-modify-nautical.py"),
+            _find_hook_file("on-modify.nautical"),
             json.dumps(task, ensure_ascii=False) + "\n" + json.dumps(modified, ensure_ascii=False),
             env_extra=env,
         )
@@ -674,7 +674,7 @@ def test_hooks_survive_malformed_numeric_environment():
         expect(modify.stderr == "", f"on-modify emitted diagnostics without opt-in: {modify.stderr!r}")
 
         exit_hook = _run_hook_script_raw(
-            _find_hook_file("on-exit-nautical.py"),
+            _find_hook_file("on-exit.nautical"),
             "",
             env_extra=env,
         )
@@ -706,7 +706,7 @@ def test_hooks_survive_malformed_numeric_environment():
 
 def test_on_modify_ignores_unsafe_core_path_override():
     """on-modify should ignore unsafe NAUTICAL_CORE_PATH overrides by default."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_unsafe_core_path_test")
     prev = os.environ.get("NAUTICAL_CORE_PATH")
     prev_trust = os.environ.get("NAUTICAL_TRUST_CORE_PATH")
@@ -734,7 +734,7 @@ def test_on_modify_ignores_unsafe_core_path_override():
 
 def test_hook_stdout_strict_json_with_diag_on_add():
     """on-add must keep stdout JSON-only even when diagnostics are enabled."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         env = {
             "NAUTICAL_DIAG": "1",
@@ -752,7 +752,7 @@ def test_hook_stdout_strict_json_with_diag_on_add():
 
 def test_hook_stdout_strict_json_with_diag_on_modify():
     """on-modify must keep stdout JSON-only even when diagnostics are enabled."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     with tempfile.TemporaryDirectory() as td:
         env = {
             "NAUTICAL_DIAG": "1",
@@ -765,7 +765,7 @@ def test_hook_stdout_strict_json_with_diag_on_modify():
 
 def test_hook_stdout_unicode_unescaped_on_add():
     """on-add passthrough stdout should preserve Unicode (ensure_ascii=False)."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     task = {
         "uuid": "00000000-0000-0000-0000-000000000445",
         "status": "pending",
@@ -780,7 +780,7 @@ def test_hook_stdout_unicode_unescaped_on_add():
 
 def test_hook_stdout_unicode_unescaped_on_modify():
     """on-modify passthrough stdout should preserve Unicode (ensure_ascii=False)."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     raw = json.dumps(
         {
             "uuid": "00000000-0000-0000-0000-000000000446",
@@ -1078,7 +1078,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         core_dir = root / "nautical_core"
         hooks_dir.mkdir()
         core_dir.mkdir()
-        for hook_name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
+        for hook_name in ("on-add.nautical", "on-modify.nautical", "on-exit.nautical"):
             shutil.copy2(_find_hook_file(hook_name), hooks_dir / hook_name)
         shutil.copy2(Path(ROOT) / "nautical_core" / "hook_bootstrap.py", core_dir / "hook_bootstrap.py")
         shutil.copy2(Path(ROOT) / "nautical_core" / "hook_protocol.py", core_dir / "hook_protocol.py")
@@ -1099,7 +1099,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         }
 
         add = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-add-nautical.py")],
+            [sys.executable, str(hooks_dir / "on-add.nautical")],
             input=json.dumps(plain, ensure_ascii=False),
             text=True,
             capture_output=True,
@@ -1112,7 +1112,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
 
         modified = dict(plain, description="Modified ăîșț ✅")
         modify = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-modify-nautical.py")],
+            [sys.executable, str(hooks_dir / "on-modify.nautical")],
             input=json.dumps(plain, ensure_ascii=False) + "\n" + json.dumps(modified, ensure_ascii=False),
             text=True,
             capture_output=True,
@@ -1133,7 +1133,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         )
         nautical_new = dict(nautical_old, description="Modified nautical ăîșț ✅")
         nautical_modify = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-modify-nautical.py")],
+            [sys.executable, str(hooks_dir / "on-modify.nautical")],
             input=json.dumps(nautical_old, ensure_ascii=False) + "\n" + json.dumps(nautical_new, ensure_ascii=False),
             text=True,
             capture_output=True,
@@ -1144,7 +1144,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         expect(json.loads(nautical_modify.stdout) == nautical_new, f"ordinary Nautical edit changed task: {nautical_modify.stdout!r}")
 
         exit_hook = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-exit-nautical.py")],
+            [sys.executable, str(hooks_dir / "on-exit.nautical")],
             text=True,
             capture_output=True,
             env=env,
@@ -1157,16 +1157,16 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         forced_env = dict(env)
         forced_env["NAUTICAL_BENCH_FORCE_FULL"] = "1"
         forced_cases = (
-            (hooks_dir / "on-add-nautical.py", json.dumps(plain, ensure_ascii=False)),
+            (hooks_dir / "on-add.nautical", json.dumps(plain, ensure_ascii=False)),
             (
-                hooks_dir / "on-modify-nautical.py",
+                hooks_dir / "on-modify.nautical",
                 json.dumps(plain, ensure_ascii=False) + "\n" + json.dumps(modified, ensure_ascii=False),
             ),
             (
-                hooks_dir / "on-modify-nautical.py",
+                hooks_dir / "on-modify.nautical",
                 json.dumps(nautical_old, ensure_ascii=False) + "\n" + json.dumps(nautical_new, ensure_ascii=False),
             ),
-            (hooks_dir / "on-exit-nautical.py", ""),
+            (hooks_dir / "on-exit.nautical", ""),
         )
         for hook_path, input_text in forced_cases:
             forced = subprocess.run(
@@ -1189,7 +1189,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         )
         nautical = dict(plain, cp="P1D")
         mismatch = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-add-nautical.py")],
+            [sys.executable, str(hooks_dir / "on-add.nautical")],
             input=json.dumps(nautical, ensure_ascii=False),
             text=True,
             capture_output=True,
@@ -1203,7 +1203,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         diag_env = dict(env)
         diag_env["NAUTICAL_DIAG"] = "1"
         mismatch_diag = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-add-nautical.py")],
+            [sys.executable, str(hooks_dir / "on-add.nautical")],
             input=json.dumps(nautical, ensure_ascii=False),
             text=True,
             capture_output=True,
@@ -1225,7 +1225,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
             ensure_ascii=False,
         )
         modify_mismatch = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-modify-nautical.py")],
+            [sys.executable, str(hooks_dir / "on-modify.nautical")],
             input=modify_input,
             text=True,
             capture_output=True,
@@ -1243,7 +1243,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         )
 
         modify_mismatch_diag = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-modify-nautical.py")],
+            [sys.executable, str(hooks_dir / "on-modify.nautical")],
             input=modify_input,
             text=True,
             capture_output=True,
@@ -1263,7 +1263,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         )
         (root / ".nautical_spawn_queue.jsonl").write_text("{}\n", encoding="utf-8")
         exit_mismatch = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-exit-nautical.py")],
+            [sys.executable, str(hooks_dir / "on-exit.nautical")],
             text=True,
             capture_output=True,
             env=env,
@@ -1277,7 +1277,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         )
 
         exit_mismatch_diag = subprocess.run(
-            [sys.executable, str(hooks_dir / "on-exit-nautical.py")],
+            [sys.executable, str(hooks_dir / "on-exit.nautical")],
             text=True,
             capture_output=True,
             env=diag_env,
@@ -1288,7 +1288,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
 
 def test_on_exit_active_sqlite_queue_uses_full_drain():
     """An active sqlite row must bypass the early exit guard and enter the full drain."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         state_dir = root / ".nautical-state"
@@ -1342,7 +1342,7 @@ def test_on_exit_active_sqlite_queue_uses_full_drain():
 
 def test_hook_stdout_empty_on_exit():
     """on-exit should not emit stdout (stdout is redirected to /dev/null)."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     env = {"NAUTICAL_DIAG": "1"}
     p = _run_hook_script_raw(hook, "", env_extra=env)
     expect(p.returncode == 0, f"on-exit returned {p.returncode}")
@@ -1363,7 +1363,7 @@ def test_hook_files_are_private_permissions():
                 mode = stat.S_IMODE(os.stat(lock_path).st_mode)
                 expect((mode & 0o077) == 0, f"lock file has group/other perms: {oct(mode)}")
 
-            hook_modify = _find_hook_file("on-modify-nautical.py")
+            hook_modify = _find_hook_file("on-modify.nautical")
             mod_modify = _load_hook_module(hook_modify, "_nautical_on_modify_perm_test")
             mod_modify._enqueue_deferred_spawn(
                 {"spawn_intent_id": "si_perm", "child": {"uuid": "00000000-0000-0000-0000-000000000999"}}
@@ -1373,7 +1373,7 @@ def test_hook_files_are_private_permissions():
             mode = stat.S_IMODE(db_path.stat().st_mode)
             expect((mode & 0o077) == 0, f"sqlite queue file has group/other perms: {oct(mode)}")
 
-            hook_exit = _find_hook_file("on-exit-nautical.py")
+            hook_exit = _find_hook_file("on-exit.nautical")
             mod_exit = _load_hook_module(hook_exit, "_nautical_on_exit_perm_test")
             mod_exit._write_dead_letter({"uuid": "00000000-0000-0000-0000-000000000888"}, "perm test")
             dl_path = mod_exit._DEAD_LETTER_PATH
@@ -1478,7 +1478,7 @@ def test_safe_lock_fallback_stale_pid_cleanup():
 
 def test_on_modify_queue_repairs_permissions():
     """Existing sqlite queue file permissions should be repaired on enqueue."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
@@ -1501,7 +1501,7 @@ def test_on_modify_queue_repairs_permissions():
 
 def test_on_exit_repairs_queue_and_dead_letter_permissions():
     """Existing sqlite queue/dead-letter permissions should be repaired on write."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
@@ -1549,7 +1549,7 @@ def test_on_exit_repairs_queue_and_dead_letter_permissions():
 
 def test_on_exit_timeouts_configurable():
     """on-exit should honor timeout env vars for task commands."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         prev_export = os.environ.get("NAUTICAL_TASK_TIMEOUT_EXPORT")
@@ -1595,7 +1595,7 @@ def test_on_exit_timeouts_configurable():
 
 def test_on_exit_queue_db_connect_retries_and_scales_busy_timeout():
     """on-exit queue DB connect should retry once and scale busy_timeout from connect timeout."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         prev_retry = os.environ.get("NAUTICAL_QUEUE_DB_CONNECT_RETRIES")
@@ -1671,7 +1671,7 @@ def test_on_exit_queue_db_connect_retries_and_scales_busy_timeout():
 
 def test_diag_log_rotation_bounds():
     """Persistent diag log should rotate when exceeding max size."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         prev_diag_log = os.environ.get("NAUTICAL_DIAG_LOG")
@@ -1705,7 +1705,7 @@ def test_diag_log_rotation_bounds():
 
 def test_diag_log_redacts_sensitive_fields():
     """Persistent diag log should redact sensitive fields."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         prev_diag_log = os.environ.get("NAUTICAL_DIAG_LOG")
@@ -1732,8 +1732,8 @@ def test_diag_log_redacts_sensitive_fields():
 
 def test_hook_diag_redact_msg_masks_sensitive_json_fields():
     """Hook-level diag redaction helper should mask sensitive JSON fields."""
-    hook_add = _find_hook_file("on-add-nautical.py")
-    hook_exit = _find_hook_file("on-exit-nautical.py")
+    hook_add = _find_hook_file("on-add.nautical")
+    hook_exit = _find_hook_file("on-exit.nautical")
     mod_add = _load_hook_module(hook_add, "_nautical_on_add_diag_redact_msg_test")
     mod_exit = _load_hook_module(hook_exit, "_nautical_on_exit_diag_redact_msg_test")
     raw = json.dumps(
@@ -1813,7 +1813,7 @@ def test_warn_rate_limited_any():
 
 def test_on_exit_requeues_when_task_lock_recent():
     """on-exit should requeue when Taskwarrior export reports a lock."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
@@ -1916,7 +1916,7 @@ def test_core_cache_dir_rejects_symlink_override():
 
 def test_on_exit_large_queue_bounded_drain():
     """Large queues should drain in bounded batches and leave remainder."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         prev_max_lines = os.environ.get("NAUTICAL_SPAWN_QUEUE_MAX_LINES")
@@ -1958,7 +1958,7 @@ def test_on_exit_large_queue_bounded_drain():
 
 def test_on_exit_queue_drain_idempotent():
     """Re-draining after a mid-run failure should not re-import children."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
@@ -2025,7 +2025,7 @@ def test_on_exit_queue_drain_idempotent():
 
 def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
     """A permanent child import failure should clear only its optimistic parent link."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
@@ -2087,7 +2087,7 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
 
 def test_on_exit_guarded_parent_clear_preserves_changed_link():
     """Optimistic-link cleanup must not overwrite a link changed by another process."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_guarded_parent_clear_test")
     exit_models = mod._module("exit_models")
     side_effects = mod._module("exit_side_effects")
@@ -2118,7 +2118,7 @@ def test_on_exit_guarded_parent_clear_preserves_changed_link():
 
 def test_on_exit_uses_tw_data_dir_for_export_and_modify():
     """on-exit should target TW_DATA_DIR when explicit data dir is enabled."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_data_dir_test")
     calls = []
 
@@ -2142,12 +2142,12 @@ def test_on_exit_uses_tw_data_dir_for_export_and_modify():
 
 def test_on_exit_no_explicit_taskdata_skips_rc_data_location():
     """on-exit should not force rc.data.location when data dir is not explicit."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
     if "TASKDATA" in os.environ:
         del os.environ["TASKDATA"]
-    sys.argv = ["on-exit-nautical.py"]
+    sys.argv = ["on-exit.nautical"]
     try:
         mod = _load_hook_module(hook, "_nautical_on_exit_no_data_override_test")
     finally:
@@ -2170,12 +2170,12 @@ def test_on_exit_no_explicit_taskdata_skips_rc_data_location():
 
 def test_on_exit_reads_data_arg_from_hook_argv():
     """on-exit should resolve TW_DATA_DIR from hook argv data: token."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
     if "TASKDATA" in os.environ:
         del os.environ["TASKDATA"]
-    sys.argv = ["on-exit-nautical.py", "api:2", "command:modify", "data:/tmp/nautical_data_arg_test"]
+    sys.argv = ["on-exit.nautical", "api:2", "command:modify", "data:/tmp/nautical_data_arg_test"]
     try:
         mod = _load_hook_module(hook, "_nautical_on_exit_data_arg_test")
     finally:
@@ -2187,12 +2187,12 @@ def test_on_exit_reads_data_arg_from_hook_argv():
 
 def test_on_modify_no_explicit_taskdata_skips_rc_data_location():
     """on-modify should not force rc.data.location when data dir is not explicit."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
     if "TASKDATA" in os.environ:
         del os.environ["TASKDATA"]
-    sys.argv = ["on-modify-nautical.py"]
+    sys.argv = ["on-modify.nautical"]
     try:
         mod = _load_hook_module(hook, "_nautical_on_modify_no_data_override_test")
     finally:
@@ -2215,12 +2215,12 @@ def test_on_modify_no_explicit_taskdata_skips_rc_data_location():
 
 def test_on_modify_reads_data_arg_from_hook_argv():
     """on-modify should resolve TW_DATA_DIR from hook argv data: token."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
     if "TASKDATA" in os.environ:
         del os.environ["TASKDATA"]
-    sys.argv = ["on-modify-nautical.py", "api:2", "command:modify", "data:/tmp/nautical_data_arg_mod_test"]
+    sys.argv = ["on-modify.nautical", "api:2", "command:modify", "data:/tmp/nautical_data_arg_mod_test"]
     try:
         mod = _load_hook_module(hook, "_nautical_on_modify_data_arg_test")
     finally:
@@ -2232,12 +2232,12 @@ def test_on_modify_reads_data_arg_from_hook_argv():
 
 def test_on_add_no_explicit_taskdata_skips_rc_data_location():
     """on-add should not force rc.data.location when data dir is not explicit."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
     if "TASKDATA" in os.environ:
         del os.environ["TASKDATA"]
-    sys.argv = ["on-add-nautical.py"]
+    sys.argv = ["on-add.nautical"]
     try:
         mod = _load_hook_module(hook, "_nautical_on_add_no_data_override_test")
     finally:
@@ -2260,12 +2260,12 @@ def test_on_add_no_explicit_taskdata_skips_rc_data_location():
 
 def test_on_add_reads_data_arg_from_hook_argv():
     """on-add should resolve TW_DATA_DIR from hook argv data: token."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
     if "TASKDATA" in os.environ:
         del os.environ["TASKDATA"]
-    sys.argv = ["on-add-nautical.py", "api:2", "command:add", "data:/tmp/nautical_data_arg_add_test"]
+    sys.argv = ["on-add.nautical", "api:2", "command:add", "data:/tmp/nautical_data_arg_add_test"]
     try:
         mod = _load_hook_module(hook, "_nautical_on_add_data_arg_test")
     finally:
@@ -2277,11 +2277,11 @@ def test_on_add_reads_data_arg_from_hook_argv():
 
 def test_on_exit_data_arg_overrides_taskdata_env():
     """on-exit should prefer hook argv data: over TASKDATA env when both are present."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
     os.environ["TASKDATA"] = "/tmp/nautical_env_exit_test"
-    sys.argv = ["on-exit-nautical.py", "api:2", "command:modify", "data:/tmp/nautical_arg_exit_test"]
+    sys.argv = ["on-exit.nautical", "api:2", "command:modify", "data:/tmp/nautical_arg_exit_test"]
     try:
         mod = _load_hook_module(hook, "_nautical_on_exit_data_arg_precedence_test")
     finally:
@@ -2294,11 +2294,11 @@ def test_on_exit_data_arg_overrides_taskdata_env():
 
 def test_on_modify_data_arg_overrides_taskdata_env():
     """on-modify should prefer hook argv data: over TASKDATA env when both are present."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
     os.environ["TASKDATA"] = "/tmp/nautical_env_modify_test"
-    sys.argv = ["on-modify-nautical.py", "api:2", "command:modify", "data:/tmp/nautical_arg_modify_test"]
+    sys.argv = ["on-modify.nautical", "api:2", "command:modify", "data:/tmp/nautical_arg_modify_test"]
     try:
         mod = _load_hook_module(hook, "_nautical_on_modify_data_arg_precedence_test")
     finally:
@@ -2311,11 +2311,11 @@ def test_on_modify_data_arg_overrides_taskdata_env():
 
 def test_on_add_data_arg_overrides_taskdata_env():
     """on-add should prefer hook argv data: over TASKDATA env when both are present."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
     os.environ["TASKDATA"] = "/tmp/nautical_env_add_test"
-    sys.argv = ["on-add-nautical.py", "api:2", "command:add", "data:/tmp/nautical_arg_add_test"]
+    sys.argv = ["on-add.nautical", "api:2", "command:add", "data:/tmp/nautical_arg_add_test"]
     try:
         mod = _load_hook_module(hook, "_nautical_on_add_data_arg_precedence_test")
     finally:
@@ -2490,19 +2490,19 @@ def _assert_hook_requires_core_data_context(hook_name: str, module_name: str):
 
 def test_on_add_requires_core_data_context_helper():
     """on-add should fail closed when core data-context resolver is unavailable."""
-    _assert_hook_requires_core_data_context("on-add-nautical.py", "_nautical_on_add_requires_core_data_ctx_test")
+    _assert_hook_requires_core_data_context("on-add.nautical", "_nautical_on_add_requires_core_data_ctx_test")
 
 def test_on_modify_requires_core_data_context_helper():
     """on-modify should fail closed when core data-context resolver is unavailable."""
-    _assert_hook_requires_core_data_context("on-modify-nautical.py", "_nautical_on_modify_requires_core_data_ctx_test")
+    _assert_hook_requires_core_data_context("on-modify.nautical", "_nautical_on_modify_requires_core_data_ctx_test")
 
 def test_on_exit_requires_core_data_context_helper():
     """on-exit should fail closed when core data-context resolver is unavailable."""
-    _assert_hook_requires_core_data_context("on-exit-nautical.py", "_nautical_on_exit_requires_core_data_ctx_test")
+    _assert_hook_requires_core_data_context("on-exit.nautical", "_nautical_on_exit_requires_core_data_ctx_test")
 
 def test_on_modify_promotes_chain_when_task_becomes_nautical():
     """Tasks that gain Nautical fields on modify should be promoted to chain:on."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_chain_promotion_test")
     lifecycle = mod._module("modify_lifecycle")
 
@@ -2541,7 +2541,7 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
 
 def test_on_modify_promotes_chain_emits_upgrade_panel():
     """Promotion to Nautical should show a small informative panel."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_chain_upgrade_panel_test")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000446",
@@ -2588,7 +2588,7 @@ def test_on_modify_promotes_chain_emits_upgrade_panel():
 
 def test_on_modify_promotes_cp_emits_period_explanation():
     """Promotion by cp should show the configured period and readable meaning."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_upgrade_panel_test")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000448",
@@ -2618,7 +2618,7 @@ def test_on_modify_promotes_cp_emits_period_explanation():
 
 def test_on_modify_disables_chain_emits_disabled_panel():
     """Disabling Nautical recurrence should show a small informative panel."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_chain_disabled_panel_test")
 
     base_old = {
@@ -2696,7 +2696,7 @@ def test_on_modify_disables_chain_emits_disabled_panel():
 
 def test_on_modify_resumes_chain_emits_resumed_panel():
     """Explicitly resuming an existing recurrence should acknowledge its effect."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_chain_resumed_panel_test")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000451",
@@ -2740,7 +2740,7 @@ def test_on_modify_resumes_chain_emits_resumed_panel():
 
 def test_on_modify_resume_wrapper_preserves_json_and_emits_panel():
     """The thin wrapper must route chain resume through feedback without polluting stdout."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000452",
         "description": "paused nautical task",
@@ -2766,7 +2766,7 @@ def test_on_modify_resume_wrapper_preserves_json_and_emits_panel():
 
 def test_on_modify_recurrence_update_emits_ack_panel():
     """Changing recurrence settings on an existing Nautical task should be acknowledged."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_recurrence_update_panel_test")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000449",
@@ -2810,7 +2810,7 @@ def test_on_modify_recurrence_update_emits_ack_panel():
 
 def test_on_modify_recurrence_update_groups_and_flattens_changes():
     """Multi-field recurrence updates stay grouped and readable in one-line modes."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_recurrence_update_layout_test")
     changes = [
         ("anchor", "w:mon", "w:tue"),
@@ -2835,7 +2835,7 @@ def test_on_modify_recurrence_update_groups_and_flattens_changes():
 
 def test_on_modify_native_until_update_explains_carry():
     """Changing native until should acknowledge its exact or calendar carry policy."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_until_update_panel_test")
     due = mod.core.build_local_datetime(date(2026, 8, 3), (10, 0)).astimezone(timezone.utc)
     old_until = mod.core.build_local_datetime(date(2026, 8, 3), (18, 0)).astimezone(timezone.utc)
@@ -2873,7 +2873,7 @@ def test_on_modify_native_until_update_explains_carry():
 
 def test_on_modify_limit_update_emits_effective_boundaries():
     """Changing chain limits should acknowledge both boundaries without speculative dates."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_limit_update_panel_test")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000450",
@@ -3024,7 +3024,7 @@ def test_chainid_legacy_reads_do_not_drive_chain_identity():
 
 def test_on_add_lowercase_chainid_does_not_mark_nautical():
     """on-add should ignore lowercase chainid when deciding whether a task is Nautical."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_chainid_alias_test")
     expect(
         not mod._task_has_nautical_fields({"chainid": "legacy-1234"}),
@@ -3037,7 +3037,7 @@ def test_on_add_lowercase_chainid_does_not_mark_nautical():
 
 def test_on_modify_read_two_fuzz_inputs():
     """on-modify input parsing should be strict and return JSON errors on bad input."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     cases = [
         ("", "empty"),
         ("{not-json}", "invalid"),
@@ -3056,7 +3056,7 @@ def test_on_modify_read_two_fuzz_inputs():
 
 def test_on_add_read_one_fuzz_inputs():
     """on-add input parsing should reject malformed JSON and empty input."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     cases = [
         ("", "empty"),
         ("{not-json}", "invalid"),
@@ -3070,7 +3070,7 @@ def test_on_add_read_one_fuzz_inputs():
 
 def test_on_modify_read_two_invalid_trailing():
     """on-modify should fail on extra garbage after JSON objects."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     raw = json.dumps({"status": "pending"}) + "\n" + json.dumps({"status": "pending"}) + "\n" + "{bad"
     p = _run_hook_script_raw(hook, raw)
     expect(p.returncode != 0, "on-modify should fail on trailing garbage")
@@ -3078,7 +3078,7 @@ def test_on_modify_read_two_invalid_trailing():
 
 def test_on_modify_read_two_array_uuid_mismatch_fails():
     """on-modify array input should reject old/new UUID mismatches for Nautical tasks."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     raw = json.dumps(
         [
             {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending", "anchor": "w:mon"},
@@ -3091,7 +3091,7 @@ def test_on_modify_read_two_array_uuid_mismatch_fails():
 
 def test_on_modify_read_two_array_single_missing_uuid_fails():
     """on-modify array input with one dict and no Nautical fields should be ignored."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     raw = json.dumps([{"status": "deleted"}])
     p = _run_hook_script_raw(hook, raw)
     expect(p.returncode == 0, "on-modify should ignore array input with one plain non-nautical task lacking UUID")
@@ -3100,7 +3100,7 @@ def test_on_modify_read_two_array_single_missing_uuid_fails():
 
 def test_on_modify_read_two_single_plain_delete_without_uuid_is_ignored():
     """on-modify single-task plain deletes without Nautical fields should not fail on missing UUID."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     raw = json.dumps({"status": "deleted", "description": "plain taskwarrior recurrence delete"})
     p = _run_hook_script_raw(hook, raw)
     expect(p.returncode == 0, f"expected plain delete without uuid to be ignored, got rc={p.returncode}, stderr={p.stderr!r}")
@@ -3109,7 +3109,7 @@ def test_on_modify_read_two_single_plain_delete_without_uuid_is_ignored():
 
 def test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored():
     """on-modify should not fail UUID mismatch for plain Taskwarrior deletes without Nautical fields."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_uuid_mismatch_non_nautical_test")
     old = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"}
     new = {"uuid": "00000000-0000-0000-0000-000000000222", "status": "deleted"}
@@ -3178,7 +3178,7 @@ def test_hook_engine_reports_pending_nautical_delete_without_spawning():
 
 def test_delete_chain_summary_span_uses_stop_time_without_last_end():
     """Deletion summaries should show active chain span even when the deleted pending task has no end."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_delete_chain_summary_span_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -3197,7 +3197,7 @@ def test_delete_chain_summary_span_uses_stop_time_without_last_end():
 
 def test_end_summary_history_marks_deleted_pending_tail():
     """End-summary history should not mark deleted pending tasks as completed."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_delete_chain_summary_history_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -3227,7 +3227,7 @@ def test_end_summary_history_marks_deleted_pending_tail():
 
 def test_delete_chain_summary_uses_stopped_title():
     """Deletion-stopped summaries should use stopped wording in the panel title."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_delete_chain_summary_title_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -3274,7 +3274,7 @@ def test_delete_chain_summary_uses_stopped_title():
 
 def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete():
     """Native-until expiration should queue the next link while early deletion still stops."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_expiration_flow_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -3375,7 +3375,7 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
 
 def test_on_modify_expiration_panel_explains_carry():
     """The immediate expiration panel should explain the child's carry policy."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_expiration_carry_panel_test")
     expiration = mod._module("modify_expiration")
     child_due = mod.core.build_local_datetime(date(2026, 7, 27), (9, 0)).astimezone(timezone.utc)
@@ -3414,7 +3414,7 @@ def test_on_modify_expiration_panel_explains_carry():
 
 def test_on_modify_expiration_delegates_to_extracted_orchestration():
     """The hook should leave expiration decisions to the focused orchestration module."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_expiration_extraction_test")
     expiration = mod._module("modify_expiration")
     captured = {}
@@ -3438,7 +3438,7 @@ def test_on_modify_expiration_delegates_to_extracted_orchestration():
 
 def test_on_modify_expiration_internal_failure_remains_recoverable():
     """An internal expiration-path failure should warn without stopping or crashing the chain."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_expiration_failure_test")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000416",
@@ -3474,7 +3474,7 @@ def test_on_modify_expiration_internal_failure_remains_recoverable():
 
 def test_on_modify_expiration_wrapper_preserves_json_stdout():
     """Expiration feedback must stay on stderr while the hook returns one strict task object."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000421",
         "status": "pending",
@@ -3502,7 +3502,7 @@ def test_on_modify_expiration_wrapper_preserves_json_stdout():
 
 def test_on_modify_manual_delete_persists_chain_off():
     """The real hook should distinguish an intentional early deletion from expiration."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000422",
         "status": "pending",
@@ -3530,7 +3530,7 @@ def test_on_modify_manual_delete_persists_chain_off():
 
 def test_on_modify_invalid_anchor_has_no_stdout():
     """on-modify should keep stdout empty on semantic validation failures."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000611",
         "status": "pending",
@@ -3545,7 +3545,7 @@ def test_on_modify_invalid_anchor_has_no_stdout():
 
 def test_on_add_rejects_oversized_stdin_early():
     """on-add should reject stdin over _MAX_JSON_BYTES before JSON parsing."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_oversized_input_test")
     mod._MAX_JSON_BYTES = 32
     raw = json.dumps({"uuid": "u", "status": "pending", "description": "x" * 256})
@@ -3567,7 +3567,7 @@ def test_on_add_rejects_oversized_stdin_early():
 
 def test_on_modify_rejects_oversized_stdin_early():
     """on-modify should reject stdin over _MAX_JSON_BYTES before object parsing."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_oversized_input_test")
     mod._MAX_JSON_BYTES = 32
     raw = json.dumps({"uuid": "u", "status": "pending", "description": "x" * 256})
@@ -4046,7 +4046,7 @@ raise SystemExit(2)
 
 
 def _install_doctor_hook_wrappers(hooks_dir: Path) -> None:
-    for name in ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"):
+    for name in ("on-add.nautical", "on-modify.nautical", "on-exit.nautical"):
         shutil.copy2(Path(ROOT) / name, hooks_dir / name)
 
 
@@ -4102,8 +4102,8 @@ def test_doctor_hook_inventory_allows_third_party_and_symlink_install():
     with tempfile.TemporaryDirectory() as td:
         hooks = Path(td) / "hooks"
         hooks.mkdir()
-        (hooks / "on-add").symlink_to(Path(ROOT) / "on-add-nautical.py")
-        for name in ("on-modify-nautical.py", "on-exit-nautical.py"):
+        (hooks / "on-add").symlink_to(Path(ROOT) / "on-add.nautical")
+        for name in ("on-modify.nautical", "on-exit.nautical"):
             (hooks / name).symlink_to(Path(ROOT) / name)
         third_party = hooks / "on-add-third-party"
         third_party.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -4133,7 +4133,7 @@ def test_doctor_hook_inventory_rejects_duplicates_without_counting_backups():
         hooks.mkdir()
         _install_doctor_hook_wrappers(hooks)
         backup = hooks / "on-add-nautical-old.py"
-        shutil.copy2(Path(ROOT) / "on-add-nautical.py", backup)
+        shutil.copy2(Path(ROOT) / "on-add.nautical", backup)
         env = {"NAUTICAL_CORE_PATH": ROOT, "NAUTICAL_TRUST_CORE_PATH": "1"}
 
         findings = []
@@ -4192,7 +4192,7 @@ def test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch():
         hooks = Path(td) / "hooks"
         hooks.mkdir()
         _install_doctor_hook_wrappers(hooks)
-        add_hook = hooks / "on-add-nautical.py"
+        add_hook = hooks / "on-add.nautical"
         add_hook.write_text(
             add_hook.read_text(encoding="utf-8").replace("_EXPECTED_IMPL_API = 1", "_EXPECTED_IMPL_API = 999"),
             encoding="utf-8",
@@ -4413,7 +4413,7 @@ def test_installer_lock_and_duplicate_hook_guards():
         hooks = taskdata / "hooks"
         hooks.mkdir(parents=True)
         duplicate = hooks / "on-add-custom"
-        shutil.copy2(Path(ROOT) / "on-add-nautical.py", duplicate)
+        shutil.copy2(Path(ROOT) / "on-add.nautical", duplicate)
         duplicate.chmod(0o755)
         try:
             install_runtime.install_release(
@@ -5560,7 +5560,7 @@ def test_ops_templates_present_and_runner_executable():
 
 def test_on_modify_queue_full_drops_with_dead_letter():
     """on-modify should drop spawn intent when queue exceeds max bytes."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
@@ -5584,7 +5584,7 @@ def test_on_modify_queue_full_drops_with_dead_letter():
 
 def test_on_modify_enqueue_uses_sqlite_when_legacy_empty():
     """on-modify should enqueue spawn intents into SQLite when legacy JSONL is empty."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
@@ -5618,7 +5618,7 @@ def test_on_modify_enqueue_uses_sqlite_when_legacy_empty():
 
 def test_on_modify_enqueue_uses_sqlite_only_queue_backend():
     """on-modify should enqueue directly to SQLite as the only live queue backend."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
@@ -5654,7 +5654,7 @@ def test_on_modify_enqueue_uses_sqlite_only_queue_backend():
 
 def test_on_modify_enqueue_recovers_from_corrupt_sqlite_db():
     """on-modify enqueue should quarantine a corrupt sqlite queue db and recreate it."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
         os.environ["TASKDATA"] = td
@@ -5690,7 +5690,7 @@ def test_on_modify_enqueue_recovers_from_corrupt_sqlite_db():
 
 def test_on_modify_chain_export_timeout_scales():
     """tw_export_chain should scale timeout based on cached chain size."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     prev_base = os.environ.get("NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE")
     prev_per = os.environ.get("NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100")
     prev_max = os.environ.get("NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX")
@@ -5727,7 +5727,7 @@ def test_on_modify_chain_export_timeout_scales():
 
 def test_tw_export_chain_extra_validation():
     """tw_export_chain should reject unsafe extra arguments."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_chain_export_extra_test")
     mod._tw_lock_recent = lambda: False
     called = {"run": False}
@@ -5744,7 +5744,7 @@ def test_tw_export_chain_extra_validation():
 
 def test_tw_export_chain_extra_rejects_dash_prefixed_tokens():
     """tw_export_chain extra parser should reject dash-prefixed tokens."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_chain_export_extra_dash_test")
     mod._tw_lock_recent = lambda: False
     called = {"run": False}
@@ -5761,7 +5761,7 @@ def test_tw_export_chain_extra_rejects_dash_prefixed_tokens():
 
 def test_on_add_tw_export_chain_extra_validation():
     """on-add tw_export_chain should reject unsafe extra arguments."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_chain_export_extra_test")
     called = {"run": False}
 
@@ -5778,7 +5778,7 @@ def test_on_add_tw_export_chain_extra_validation():
 
 def test_on_modify_diag_blocks_pretty_print():
     """on-modify diag output should emit indented multi-line blocks."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_diag_pretty_test")
 
     buf = io.StringIO()
@@ -5793,7 +5793,7 @@ def test_on_modify_diag_blocks_pretty_print():
 
 def test_on_modify_run_task_diag_bucket_stats():
     """on-modify should classify Taskwarrior calls into stable diagnostic buckets."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_diag_bucket_test")
 
     mod._reset_modify_runtime_state()
@@ -5819,7 +5819,7 @@ def test_on_modify_run_task_diag_bucket_stats():
 
 def test_on_exit_drain_updates_progress_per_entry():
     """on-exit drain should advance progress once per processed queue entry."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_progress_updates_test")
     exit_models = mod._module("exit_models")
 
@@ -5854,7 +5854,7 @@ def test_on_exit_drain_updates_progress_per_entry():
 
 def test_on_exit_diag_blocks_pretty_print():
     """on-exit diag output should emit indented multi-line blocks."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_diag_pretty_test")
 
     prev = os.environ.get("NAUTICAL_DIAG")
@@ -5878,7 +5878,7 @@ def test_on_exit_diag_blocks_pretty_print():
 
 def test_on_exit_run_task_diag_bucket_stats():
     """on-exit should classify Taskwarrior calls into stable diagnostic buckets."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_diag_bucket_test")
 
     mod._reset_exit_diag_stats()
@@ -5909,7 +5909,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     """Concurrent chain cache set/read paths should not crash or return invalid shapes."""
     import threading
 
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_chain_cache_thread_safety_test")
 
     full_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -5962,7 +5962,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
 
 def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
     """Filtered chain reads should use the in-memory chain cache before falling back to Taskwarrior export."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_get_chain_export_cached_filter_test")
 
     mod._set_chain_cache(
@@ -5994,7 +5994,7 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
 
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_integrity_test")
     chain = [
         {
@@ -6017,7 +6017,7 @@ def test_chain_integrity_warnings_detects_issues():
 
 def test_chain_health_advice_coach_healthy_streak():
     """Chain health advice should report healthy streak for steady on-time completions."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_health_advice_healthy_test")
     chain = [
         {"uuid": "a", "link": 1, "status": "completed", "due": "20250101T090000Z", "end": "20250101T090500Z"},
@@ -6034,7 +6034,7 @@ def test_chain_health_advice_coach_healthy_streak():
 
 def test_chain_health_advice_coach_low_ontime_issue():
     """Chain health advice should flag low on-time rate with actionable guidance."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_health_advice_issue_test")
     chain = [
         {"uuid": "a", "link": 1, "status": "completed", "due": "20250101T090000Z", "end": "20250102T120000Z"},
@@ -6051,7 +6051,7 @@ def test_chain_health_advice_coach_low_ontime_issue():
 
 def test_chain_health_advice_clinical_drift_and_style_normalization():
     """Clinical style should include OT, drift, streak, and volatility with normalized style input."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_health_advice_clinical_test")
     chain = [
         {"uuid": "a", "link": 1, "status": "completed", "due": "20250101T090000Z", "end": "20250101T100000Z"},
@@ -6271,7 +6271,7 @@ def test_config_schema_reports_retired_unknown_and_ineffective_values():
 
 def test_on_modify_invalid_json_passthrough():
     """Malformed JSON should fail fast without stdout JSON."""
-    path = _find_hook_file("on-modify-nautical.py")
+    path = _find_hook_file("on-modify.nautical")
     raw = "{not-json}"
     p = _run_hook_script_raw(path, raw)
     expect(p.returncode != 0, "on-modify should fail on invalid JSON input")
@@ -6488,7 +6488,7 @@ def test_build_local_datetime_dst_gap_and_ambiguous():
 
 def test_on_modify_chain_export_cache_key_includes_params():
     """Chain export cache should include since/extra in its key."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cache_key_test")
     if not hasattr(mod, "_tw_export_chain_cached_key"):
         raise AssertionError("on-modify hook does not expose chain cache helper")
@@ -6511,7 +6511,7 @@ def test_on_modify_chain_export_cache_key_includes_params():
 
 def test_on_modify_chain_export_skips_when_locked():
     """tw_export_chain should treat lock errors as non-fatal and return empty."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_lock_skip_test")
     if not hasattr(mod, "tw_export_chain"):
         raise AssertionError("on-modify hook does not expose tw_export_chain")
@@ -6529,7 +6529,7 @@ def test_on_modify_chain_export_skips_when_locked():
 
 def test_on_modify_collect_prev_two_prefers_live_statuses():
     """Previous-link lookup should prefer live tasks over deleted duplicates."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_collect_prev_two_test")
     current = {"chainID": "abcd1234", "link": 4}
     chain_by_link = {
@@ -7051,7 +7051,7 @@ def test_year_ordinals_documented_examples():
 
 def test_year_ordinals_hooks_modes_calendar_and_timeline():
     """Ordinal selectors should work through add, completion modes, named calendars, and timelines."""
-    add_hook = _find_hook_file("on-add-nautical.py")
+    add_hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         config_path = Path(td) / "config-nautical.toml"
         config_path.write_text(
@@ -7083,7 +7083,7 @@ def test_year_ordinals_hooks_modes_calendar_and_timeline():
         expect(due.date() == date(2026, 12, 30), f"calendar did not roll closed d-1 backward: {due}")
         expect("last day of each year" in _strip_markup(proc.stderr), f"add preview omitted ordinal natural text: {proc.stderr}")
 
-    modify_hook = _find_hook_file("on-modify-nautical.py")
+    modify_hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(modify_hook, "_nautical_year_ordinal_hook_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -7152,7 +7152,7 @@ def test_reconcile_tool_computes_year_ordinal_anchor():
     """The reconciler's installed hook path should schedule ordinal anchor children."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     mod = _load_hook_module(str(path), "_nautical_reconcile_year_ordinal_test")
-    hook = mod._load_on_modify(str(Path(ROOT) / "on-modify-nautical.py"))
+    hook = mod._load_on_modify(str(Path(ROOT) / "on-modify.nautical"))
     due = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (9, 0)))
     end = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (10, 0)))
     child_due, meta, _dnf = hook._compute_anchor_child_due(
@@ -8720,7 +8720,7 @@ def test_business_calendar_fingerprint_invalidates_rule_file_and_hint_caches():
 
 def test_hook_on_add_uses_and_normalizes_business_calendar():
     """on-add should use bc for recurrence calculation and emit its canonical name."""
-    hook = _find_hook_file('on-add-nautical.py')
+    hook = _find_hook_file('on-add.nautical')
     with tempfile.TemporaryDirectory() as td:
         config_path = Path(td) / 'config-nautical.toml'
         config_path.write_text(
@@ -8751,7 +8751,7 @@ def test_hook_on_add_uses_and_normalizes_business_calendar():
 
 def test_hook_on_add_reports_business_calendar_displacement_only_when_shifted():
     """On-add should explain a named-calendar roll while leaving unchanged anchors quiet."""
-    hook = _find_hook_file('on-add-nautical.py')
+    hook = _find_hook_file('on-add.nautical')
     with tempfile.TemporaryDirectory() as td:
         config_path = Path(td) / 'config-nautical.toml'
         config_path.write_text(
@@ -8792,7 +8792,7 @@ def test_hook_on_add_reports_business_calendar_displacement_only_when_shifted():
 
 def test_hook_on_add_rejects_unknown_business_calendar_cleanly():
     """unknown bc values should fail before recurrence scheduling with an actionable error."""
-    hook = _find_hook_file('on-add-nautical.py')
+    hook = _find_hook_file('on-add.nautical')
     with tempfile.TemporaryDirectory() as td:
         config_path = Path(td) / 'config-nautical.toml'
         config_path.write_text(
@@ -8823,7 +8823,7 @@ def test_hook_on_add_rejects_unknown_business_calendar_cleanly():
 
 def test_hook_on_modify_rejects_unknown_business_calendar_cleanly():
     """changing bc to an unknown name should fail before recurrence is evaluated."""
-    hook = _find_hook_file('on-modify-nautical.py')
+    hook = _find_hook_file('on-modify.nautical')
     with tempfile.TemporaryDirectory() as td:
         config_path = Path(td) / 'config-nautical.toml'
         config_path.write_text(
@@ -8856,7 +8856,7 @@ def test_hook_on_modify_rejects_unknown_business_calendar_cleanly():
 
 def test_on_modify_spawned_child_preserves_business_calendar():
     """completion spawning should copy the parent's canonical bc value unchanged."""
-    hook = _find_hook_file('on-modify-nautical.py')
+    hook = _find_hook_file('on-modify.nautical')
     mod = _load_hook_module(hook, '_nautical_on_modify_business_calendar_child_test')
     child_due = mod.core.build_local_datetime(date(2026, 7, 18), (9, 0))
     parent = {
@@ -8922,8 +8922,8 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
     import nautical_core.anchor_omit as anchor_omit
     import nautical_core.modify_timeline as modify_timeline
 
-    add_mod = _load_hook_module(_find_hook_file("on-add-nautical.py"), "_nautical_modifier_boundary_add_test")
-    modify_mod = _load_hook_module(_find_hook_file("on-modify-nautical.py"), "_nautical_modifier_boundary_modify_test")
+    add_mod = _load_hook_module(_find_hook_file("on-add.nautical"), "_nautical_modifier_boundary_add_test")
+    modify_mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modifier_boundary_modify_test")
     if hasattr(add_mod, "_load_core"):
         add_mod._load_core()
     if hasattr(modify_mod, "_load_core"):
@@ -9799,7 +9799,7 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
 def test_chain_colour_uses_complete_root_identity():
     """Chain colours should hash the full root instead of its final UUID suffix."""
     hook = _load_hook_module(
-        _find_hook_file("on-modify-nautical.py"),
+        _find_hook_file("on-modify.nautical"),
         "_nautical_chain_colour_full_identity_test",
     )
 
@@ -9856,7 +9856,7 @@ def test_chain_colour_uses_complete_root_identity():
 def test_on_add_preview_uses_configured_chain_colour():
     """on-add should use the same chain colour as on-modify when enabled."""
     hook = _load_hook_module(
-        _find_hook_file("on-add-nautical.py"),
+        _find_hook_file("on-add.nautical"),
         "_nautical_on_add_chain_colour_test",
     )
     task = {"chainID": "12345678", "anchor": "w:mon"}
@@ -10085,8 +10085,8 @@ def test_cp_random_seed_is_chain_scoped_and_normalized():
 
 def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
     """on-add preview and on-modify completion should select the same cp interval for the same link."""
-    add_mod = _load_hook_module(_find_hook_file("on-add-nautical.py"), "_nautical_on_add_cp_interval_agreement_test")
-    modify_mod = _load_hook_module(_find_hook_file("on-modify-nautical.py"), "_nautical_on_modify_cp_interval_agreement_test")
+    add_mod = _load_hook_module(_find_hook_file("on-add.nautical"), "_nautical_on_add_cp_interval_agreement_test")
+    modify_mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_on_modify_cp_interval_agreement_test")
     if hasattr(add_mod, "_load_core"):
         add_mod._load_core()
     if hasattr(modify_mod, "_load_core"):
@@ -10111,7 +10111,7 @@ def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
 
 def test_hook_on_add_multitime_preview_emits_all_slots():
     """on-add must accept @t=HH:MM list and preview intra-day slots when due is explicit."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     # Disable ANSI colors for deterministic output.
     env = {"NO_COLOR": "1"}
     expr = "w:wed@t=06:00,12:00,22:00"
@@ -10141,7 +10141,7 @@ def test_hook_on_add_multitime_preview_emits_all_slots():
 
 def test_hook_on_add_live_panel_mode_preserves_captured_protocol():
     """Configured live panels should fall back cleanly when a hook's stderr is captured."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     task = {
         "uuid": "00000000-0000-0000-0000-000000000121",
         "description": "live panel protocol test",
@@ -10174,7 +10174,7 @@ def test_hook_on_add_live_panel_mode_preserves_captured_protocol():
 
 def test_hook_on_add_counted_random_preview_uses_group_time():
     """on-add should schedule and explain a constrained counted-random anchor."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     expr = "(m:2rand + w:mon..fri)@t=09:00"
     task = {
@@ -10201,7 +10201,7 @@ def test_hook_on_add_counted_random_preview_uses_group_time():
 
 def test_hook_on_add_accepts_group_date_modifiers():
     """on-add should accept and schedule date modifiers shared by OR branches."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     task = {
         "uuid": "00000000-0000-0000-0000-000000000120",
         "description": "hook test grouped date modifiers",
@@ -10223,7 +10223,7 @@ def test_hook_on_add_accepts_group_date_modifiers():
 
 def test_hook_on_add_cp_scheduled_only_preserves_no_due():
     """scheduled-only recurring cp tasks should remain scheduled-only on add."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000112",
@@ -10317,7 +10317,7 @@ def test_core_nested_preset_display_shows_resolved_leaf():
 
 def test_hook_on_add_anchor_preset_resolves_from_config():
     """on-add should resolve @anchor presets from config before validation/preview."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         conf = Path(td) / "config-nautical.toml"
         conf.write_text('[anchor_presets]\npayday = "m:15"\n', encoding="utf-8")
@@ -10345,7 +10345,7 @@ def test_hook_on_add_anchor_preset_resolves_from_config():
 
 def test_hook_on_add_anchor_unknown_preset_fails_cleanly():
     """on-add should fail clearly when an anchor preset is not configured."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         conf = Path(td) / "config-nautical.toml"
         conf.write_text("[anchor_presets]\n", encoding="utf-8")
@@ -10370,7 +10370,7 @@ def test_hook_on_add_anchor_unknown_preset_fails_cleanly():
 
 def test_hook_on_add_anchor_composed_preset_resolves_from_config():
     """on-add should allow presets to compose with normal anchor filters."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         conf = Path(td) / "config-nautical.toml"
         conf.write_text('[anchor_presets]\nworkout = "w:mon,wed,fri"\n', encoding="utf-8")
@@ -10395,7 +10395,7 @@ def test_hook_on_add_anchor_composed_preset_resolves_from_config():
 
 def test_hook_on_add_anchor_recursive_preset_fails_cleanly():
     """on-add should reject recursive preset definitions with a clear message."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         conf = Path(td) / "config-nautical.toml"
         conf.write_text('[anchor_presets]\na = "@b"\nb = "@a"\n', encoding="utf-8")
@@ -10420,7 +10420,7 @@ def test_hook_on_add_anchor_recursive_preset_fails_cleanly():
 
 def test_hook_on_add_omit_preset_resolves_from_config():
     """on-add should resolve @omit presets from config before omit validation/preview."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         conf = Path(td) / "config-nautical.toml"
         conf.write_text('[omit_presets]\napril = "y:apr"\n', encoding="utf-8")
@@ -10449,7 +10449,7 @@ def test_hook_on_add_omit_preset_resolves_from_config():
 
 def test_hook_on_add_omit_unknown_preset_fails_cleanly():
     """on-add should fail clearly when an omit preset is not configured."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         conf = Path(td) / "config-nautical.toml"
         conf.write_text("[omit_presets]\n", encoding="utf-8")
@@ -10475,7 +10475,7 @@ def test_hook_on_add_omit_unknown_preset_fails_cleanly():
 
 def test_hook_on_add_omit_recursive_preset_fails_cleanly():
     """on-add should reject recursive omit preset definitions with a clear message."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         conf = Path(td) / "config-nautical.toml"
         conf.write_text('[omit_presets]\na = "@b"\nb = "@a"\n', encoding="utf-8")
@@ -10501,7 +10501,7 @@ def test_hook_on_add_omit_recursive_preset_fails_cleanly():
 
 def test_hook_on_add_omit_timed_preset_rejected():
     """omit presets should remain date-based and reject timed expressions."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         conf = Path(td) / "config-nautical.toml"
         conf.write_text('[omit_presets]\ntimed = "w:mon@t=09:00"\n', encoding="utf-8")
@@ -10527,7 +10527,7 @@ def test_hook_on_add_omit_timed_preset_rejected():
 
 def test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance():
     """on-add should surface parser-specific guidance for malformed cp strings."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     cases = [
         ("rand(7d..3d)", ("lower", "bound", "<=", "upper")),
@@ -10557,7 +10557,7 @@ def test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance():
 
 def test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance():
     """on-modify completion should surface parser-specific guidance for malformed cp strings."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     env = {"NO_COLOR": "1"}
     cases = [
         ("rand(7d..3d)", ("lower", "bound", "<=", "upper")),
@@ -10593,7 +10593,7 @@ def test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance():
 
 def test_hook_on_add_cp_sequence_preview_accepts_string_periods():
     """on-add should accept comma-separated cp sequences now that cp is string-backed."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000114",
@@ -10618,7 +10618,7 @@ def test_hook_on_add_cp_sequence_preview_accepts_string_periods():
 
 def test_hook_on_add_cp_random_preview_shows_selected_periods():
     """on-add random cp previews should show selected intervals, not reuse the raw rand expression."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000115",
@@ -10644,7 +10644,7 @@ def test_hook_on_add_cp_random_preview_shows_selected_periods():
 
 def test_hook_on_add_cp_random_preview_uses_stamped_chain_id():
     """on-add should scope random previews to the chain ID stamped on the new root task."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     cp = "rand(11d..14d)"
     chain_id = "12345678"
     task = {
@@ -10673,7 +10673,7 @@ def test_hook_on_add_cp_random_preview_uses_stamped_chain_id():
 
 def test_hook_on_add_cp_random_malformed_fails_with_guidance():
     """on-add should surface clear rand syntax guidance for malformed random cp ranges."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000116",
@@ -10694,7 +10694,7 @@ def test_hook_on_add_cp_random_malformed_fails_with_guidance():
 
 def test_hook_on_add_cp_jitter_preview_shows_selected_periods():
     """on-add jitter cp previews should show selected intervals, not the raw jitter expression."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000117",
@@ -10717,7 +10717,7 @@ def test_hook_on_add_cp_jitter_preview_shows_selected_periods():
 
 def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
     """scheduled-only anchor tasks should remain scheduled-only on add."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000113",
@@ -10741,7 +10741,7 @@ def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
 
 def test_on_add_native_until_requires_strictly_later_target():
     """Nautical additions should reject until at or before due/scheduled."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     cases = (
         ("due", "20260801T090000Z", "20260801T085959Z"),
         ("due", "20260801T090000Z", "20260801T090000Z"),
@@ -10785,7 +10785,7 @@ def test_on_add_native_until_requires_strictly_later_target():
 
 def test_on_add_native_until_checks_generated_cp_due():
     """The expiration guard should run after CP assigns its automatic first due."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     task = {
         "uuid": "00000000-0000-0000-0000-000000000130",
         "description": "invalid until before generated CP due",
@@ -10832,7 +10832,7 @@ def test_native_until_carry_descriptions():
 
 def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
     """Add previews should distinguish native expiration from chain boundaries."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     base = {
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -10867,7 +10867,7 @@ def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
 
 def test_on_add_native_until_checks_generated_anchor_due():
     """The expiration guard should run after an anchor resolves its automatic first due."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_generated_anchor_until_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -10905,7 +10905,7 @@ def test_on_add_native_until_checks_generated_anchor_due():
 
 def test_on_add_native_until_guard_ignores_ordinary_tasks():
     """Nautical should not impose its expiration ordering on ordinary Taskwarrior tasks."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     task = {
         "uuid": "00000000-0000-0000-0000-000000000132",
         "description": "ordinary task with independent until",
@@ -10921,7 +10921,7 @@ def test_on_add_native_until_guard_ignores_ordinary_tasks():
 
 def test_on_add_native_until_rejects_strict_anchor_modes():
     """Native until should be incompatible with all and flex anchor backfill."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     base = {
         "uuid": "00000000-0000-0000-0000-000000000137",
         "description": "strict anchor expiration conflict",
@@ -10955,7 +10955,7 @@ def test_on_add_native_until_rejects_strict_anchor_modes():
 
 def test_on_modify_native_until_rejects_invalid_window_changes():
     """Nautical modifications should reject target windows made invalid."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     base = {
         "uuid": "00000000-0000-0000-0000-000000000133",
         "description": "modify native until window",
@@ -10988,7 +10988,7 @@ def test_on_modify_native_until_rejects_invalid_window_changes():
 
 def test_on_modify_native_until_follows_recurrence_target_move():
     """An untouched native until should follow a rescheduled recurrence target."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     base = {
         "uuid": "00000000-0000-0000-0000-000000000133",
         "description": "rescheduled native until window",
@@ -11052,7 +11052,7 @@ def test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts():
     """The shared expiration policy should cover every recurrence kind with typed conflicts."""
     import nautical_core.native_until as native_until
 
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_native_until_shared_policy_test")
     parent_target = mod.core.build_local_datetime(date(2026, 8, 1), (9, 0))
     parent_until = mod.core.build_local_datetime(date(2026, 8, 1), (23, 0))
@@ -11095,7 +11095,7 @@ def test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts():
 
 def test_on_modify_native_until_rejects_uncarryable_anchor_target_move():
     """An anchor edit must not keep a stale absolute until when calendar carry conflicts."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000448",
         "description": "uncarryable anchor expiration",
@@ -11124,7 +11124,7 @@ def test_on_modify_native_until_rejects_uncarryable_anchor_target_move():
 
 def test_on_modify_completion_reschedule_carries_native_until():
     """Completion and target rescheduling in one modify should retain expiration policy."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_completion_reschedule_until_test")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000447",
@@ -11166,7 +11166,7 @@ def test_on_modify_completion_reschedule_carries_native_until():
 
 def test_on_modify_native_until_accepts_valid_window_change():
     """A modified until that remains after the target should pass through normally."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000134",
         "description": "valid modified native until",
@@ -11192,7 +11192,7 @@ def test_on_modify_native_until_accepts_valid_window_change():
 
 def test_on_modify_native_until_validates_recurrence_promotion():
     """Adding Nautical recurrence should validate an existing native until window."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000135",
         "description": "promote invalid native until",
@@ -11215,7 +11215,7 @@ def test_on_modify_native_until_validates_recurrence_promotion():
 
 def test_on_modify_native_until_validates_simultaneous_completion():
     """Completion should not queue a child from an invalid newly modified window."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000136",
         "description": "complete invalid native until",
@@ -11248,7 +11248,7 @@ def test_on_modify_native_until_validates_simultaneous_completion():
 
 def test_on_modify_native_until_rejects_strict_anchor_mode_changes():
     """Changing an expiring anchor task to all or flex should be rejected."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000138",
         "description": "modify strict anchor expiration conflict",
@@ -11277,7 +11277,7 @@ def test_on_modify_native_until_rejects_strict_anchor_mode_changes():
 
 def test_on_modify_native_until_rejects_legacy_all_completion():
     """Completion should not perpetuate a legacy all-plus-until configuration."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000139",
         "description": "complete strict anchor expiration conflict",
@@ -11305,7 +11305,7 @@ def test_on_modify_native_until_rejects_legacy_all_completion():
 
 def test_on_add_due_context_treats_due_matching_entry_as_implicit():
     """on-add should not treat due==entry as an explicit anchor due."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_due_context_entry_due_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -11330,7 +11330,7 @@ def test_on_add_due_context_treats_due_matching_entry_as_implicit():
 
 def test_on_add_anchor_preview_auto_assigns_when_due_matches_entry():
     """on-add anchor preview should auto-assign first anchor when incoming due merely mirrors entry."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_anchor_entry_due_preview_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -11385,7 +11385,7 @@ def test_on_add_anchor_preview_auto_assigns_when_due_matches_entry():
 
 def test_hook_on_add_anchor_preview_skips_omit_date():
     """on-add anchor preview should skip omitted dates when selecting the next anchor."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000114",
@@ -11412,7 +11412,7 @@ def test_hook_on_add_anchor_preview_skips_omit_date():
 
 def test_hook_on_add_anchor_preview_skips_omit_file_date():
     """on-add anchor preview should skip dates loaded from omit_file."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         omit_dir = Path(td) / "omit"
         omit_dir.mkdir()
@@ -11444,7 +11444,7 @@ def test_hook_on_add_anchor_preview_skips_omit_file_date():
 
 def test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules():
     """mixed anchor previews should describe explicit omit rules instead of the generic skip-mode tail."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         anchor_dir = Path(td) / "anchor"
         omit_dir = Path(td) / "omit"
@@ -11487,7 +11487,7 @@ def test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omi
 
 def test_hook_on_add_anchor_preview_skips_omit_file_modifier_date():
     """on-add anchor preview should apply omit_file modifiers before skipping matching dates."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         omit_dir = Path(td) / "omit"
         omit_dir.mkdir()
@@ -11515,7 +11515,7 @@ def test_hook_on_add_anchor_preview_skips_omit_file_modifier_date():
 
 def test_hook_on_add_anchor_preview_marks_omitted_future_slots():
     """on-add preview should skip omitted future anchor slots in Upcoming."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000114g",
@@ -11541,7 +11541,7 @@ def test_hook_on_add_anchor_preview_marks_omitted_future_slots():
 
 def test_hook_on_add_anchor_preview_uses_omit_file_description_in_upcoming():
     """on-add preview should skip omit_file dates instead of rendering them as upcoming entries."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     with tempfile.TemporaryDirectory() as td:
         omit_dir = Path(td) / "omit"
         omit_dir.mkdir()
@@ -11573,7 +11573,7 @@ def test_hook_on_add_anchor_preview_uses_omit_file_description_in_upcoming():
 
 def test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot():
     """on-add preview should keep @t times when a yearly anchor rolls forward to the next business day."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     expr = "y:04-25@nbd@t=12:00,17:00"
     task = {
@@ -11600,7 +11600,7 @@ def test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot():
 
 def test_hook_on_add_anchor_preview_positive_day_offset_uses_timed_slot():
     """on-add preview should keep @t times when an anchor date is shifted forward by @+Nd."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     expr = "y:04-25@+10d@t=12:00"
     task = {
@@ -11626,7 +11626,7 @@ def test_hook_on_add_anchor_preview_positive_day_offset_uses_timed_slot():
 
 def test_hook_on_add_anchor_preview_negative_day_offset_uses_timed_slot():
     """on-add preview should keep @t times when an anchor date is shifted earlier by @-Nd."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     expr = "y:04-25@-2d@t=12:00"
     task = {
@@ -11652,7 +11652,7 @@ def test_hook_on_add_anchor_preview_negative_day_offset_uses_timed_slot():
 
 def test_hook_on_add_timed_omit_rejected():
     """on-add should reject timed omit expressions with a clear error."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000115",
@@ -11677,7 +11677,7 @@ def test_hook_on_add_timed_omit_rejected():
 
 def test_hook_on_add_invalid_omit_file_rejected():
     """on-add should reject omit_file values that are paths instead of basenames."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000115a",
@@ -11699,7 +11699,7 @@ def test_hook_on_add_invalid_omit_file_rejected():
 
 def test_hook_on_add_anchor_file_time_padding_hint():
     """on-add should tell the user to pad single-digit hours in anchor_file @t."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000115b",
@@ -11720,7 +11720,7 @@ def test_hook_on_add_anchor_file_time_padding_hint():
 
 def test_hook_on_add_unsatisfiable_omit_fails_cleanly():
     """on-add should fail cleanly when omit removes every future anchor date."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
         "uuid": "00000000-0000-0000-0000-000000000116",
@@ -11742,7 +11742,7 @@ def test_hook_on_add_unsatisfiable_omit_fails_cleanly():
 
 def test_hook_on_modify_timeline_multitime_includes_all_slots():
     """on-modify timeline generator must step occurrences (date+time), not only dates."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_test")
     if not hasattr(mod, "_timeline_lines"):
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate timeline stepping.")
@@ -11788,7 +11788,7 @@ def test_hook_on_modify_timeline_multitime_includes_all_slots():
 
 def test_hook_on_modify_timeline_cp_sequence_labels_future_intervals():
     """cp sequence timelines should show the interval used for future rows."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_sequence_timeline_test")
     if not hasattr(mod, "_timeline_lines"):
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate cp sequence timeline.")
@@ -11821,7 +11821,7 @@ def test_hook_on_modify_timeline_cp_sequence_labels_future_intervals():
 
 def test_hook_on_modify_timeline_cp_random_labels_selected_intervals():
     """cp random timelines should display the selected interval for each future row."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_random_timeline_test")
     if not hasattr(mod, "_timeline_lines"):
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate cp random timeline.")
@@ -11866,7 +11866,7 @@ def test_hook_on_modify_timeline_cp_random_labels_selected_intervals():
 
 def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
     """anchor timelines should mark omitted future slots instead of showing them as normal links."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_omit_timeline_test")
     if not hasattr(mod, "_timeline_lines"):
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate omit timeline handling.")
@@ -11907,7 +11907,7 @@ def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
 
 def test_hook_on_modify_timeline_uses_omit_file_description_label():
     """anchor timelines should use omit_file description text for omitted markers when available."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_omit_file_desc_timeline_test")
     if not hasattr(mod, "_timeline_lines"):
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate omit timeline handling.")
@@ -11957,7 +11957,7 @@ def test_hook_on_modify_timeline_uses_omit_file_description_label():
 
 def test_hook_task_runner_handles_nonzero():
     """Hook _run_task handles success and non-zero exit codes."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_run_task_test")
     if not hasattr(mod, "_run_task"):
         raise AssertionError("on-modify hook does not expose _run_task")
@@ -11975,7 +11975,7 @@ def test_hook_task_runner_handles_nonzero():
 
 def test_hook_run_task_falls_back_when_core_load_fails():
     """on-modify _run_task should fall back to subprocess if core load fails."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_run_task_fallback_test")
     saved_load_core = mod._load_core
     saved_core = mod.core
@@ -11996,7 +11996,7 @@ def test_hook_run_task_falls_back_when_core_load_fails():
 
 def test_on_add_run_task_falls_back_when_core_load_fails():
     """on-add _run_task should fall back to subprocess if core load fails."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_run_task_fallback_test")
     saved_load_core = mod._load_core
     saved_core = mod.core
@@ -12025,7 +12025,7 @@ def test_on_add_run_task_falls_back_when_core_load_fails():
 
 def test_spawn_child_always_verifies_import():
     """_spawn_child should always verify child existence."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_spawn_verify_enforced_test")
 
     saved_reserve = mod._reserve_child_uuid
@@ -12131,7 +12131,7 @@ def test_core_run_task_tempfiles_fallback_handles_bytes_input():
 
 def test_on_add_dnf_cache_versioned_payload():
     """on-add DNF cache uses versioned payload and can round-trip."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_cache_test")
     if not hasattr(mod, "_save_dnf_disk_cache") or not hasattr(mod, "_load_dnf_disk_cache"):
         raise AssertionError("on-add hook does not expose DNF cache helpers")
@@ -12156,7 +12156,7 @@ def test_on_add_dnf_cache_versioned_payload():
 
 def test_on_add_dnf_cache_corrupt_payload_recovers():
     """on-add DNF cache load should quarantine and continue on invalid JSONL."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_cache_corrupt_test")
     if not hasattr(mod, "_load_dnf_disk_cache"):
         raise AssertionError("on-add hook does not expose DNF cache helpers")
@@ -12179,7 +12179,7 @@ def test_on_add_dnf_cache_corrupt_payload_recovers():
 
 def test_on_add_dnf_cache_quarantines_invalid_jsonl():
     """on-add DNF cache quarantines JSONL files with no valid JSON objects."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_cache_quarantine_test")
     if not hasattr(mod, "_load_dnf_disk_cache"):
         raise AssertionError("on-add hook does not expose DNF cache helpers")
@@ -12206,7 +12206,7 @@ def test_on_add_dnf_cache_quarantines_invalid_jsonl():
 
 def test_on_add_dnf_cache_checksum_mismatch_salvages():
     """on-add DNF cache should salvage entries on checksum mismatch."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_cache_checksum_test")
     if not hasattr(mod, "_load_dnf_disk_cache"):
         raise AssertionError("on-add hook does not expose DNF cache helpers")
@@ -12230,7 +12230,7 @@ def test_on_add_dnf_cache_checksum_mismatch_salvages():
 
 def test_on_add_dnf_cache_size_guard_skips_load():
     """on-add DNF cache skips load when file is too large."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_cache_size_guard_test")
     if not hasattr(mod, "_load_dnf_disk_cache"):
         raise AssertionError("on-add hook does not expose DNF cache helpers")
@@ -12255,7 +12255,7 @@ def test_on_add_dnf_cache_size_guard_skips_load():
 
 def test_on_add_dnf_cache_skips_non_jsonable_values():
     """on-add DNF cache should skip non-JSON-serializable values."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_cache_non_jsonable_test")
     if not hasattr(mod, "_validate_anchor_expr_cached"):
         raise AssertionError("on-add hook does not expose DNF cache helpers")
@@ -12287,7 +12287,7 @@ def test_hooks_require_package_core_layout():
     """Hooks should resolve only the package-based nautical_core layout."""
     import tempfile
 
-    hook_names = ["on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py"]
+    hook_names = ["on-add.nautical", "on-modify.nautical", "on-exit.nautical"]
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         pkg = td_path / "nautical_core"
@@ -12311,7 +12311,7 @@ def test_core_import_deterministic():
         os.environ["TASKDATA"] = td
         os.environ.pop("NAUTICAL_DEV", None)
         try:
-            hook = _find_hook_file("on-add-nautical.py")
+            hook = _find_hook_file("on-add.nautical")
             _ = _load_hook_module(hook, "_nautical_on_add_import_deterministic_test").core
         finally:
             os.environ.pop("TASKDATA", None)
@@ -12320,7 +12320,7 @@ def test_core_import_deterministic():
 
 def test_on_modify_spawn_intent_id_in_entry():
     """on-modify spawn intent entries should include a correlation id."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_spawn_intent_id_test")
     if not hasattr(mod, "_spawn_intent_entry"):
         raise AssertionError("on-modify hook does not expose spawn intent helper")
@@ -12331,7 +12331,7 @@ def test_on_modify_spawn_intent_id_in_entry():
 
 def test_on_modify_spawn_intent_entry_rejects_missing_child_uuid():
     """on-modify spawn intent builder should reject invalid child payloads."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_spawn_intent_validate_test")
 
     try:
@@ -12344,7 +12344,7 @@ def test_on_modify_spawn_intent_entry_rejects_missing_child_uuid():
 
 def test_on_modify_spawn_intent_records_parent_guard():
     """Deferred child imports should retain the parent state that authorized them."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_spawn_parent_guard_test")
     mod._reserve_child_uuid = lambda _env: "00000000-0000-0000-0000-00000000abcd"
     captured = {}
@@ -12382,7 +12382,7 @@ def test_on_modify_spawn_intent_records_parent_guard():
 
 def test_on_exit_stale_parent_guard_prevents_child_import():
     """A deferred intent must not spawn after its parent transition is reversed."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_stale_parent_guard_test")
     exit_models = mod._module("exit_models")
     parent_uuid = "11111111-0000-0000-0000-000000000111"
@@ -12454,7 +12454,7 @@ def test_on_exit_stale_parent_guard_prevents_child_import():
 
 def test_on_exit_spawn_intents_drain():
     """on-exit should import child and update parent from spawn intents."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_drain_test")
     if not hasattr(mod, "_drain_queue"):
         raise AssertionError("on-exit hook does not expose drain helper")
@@ -12528,7 +12528,7 @@ def test_on_exit_spawn_intents_drain():
 
 def test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links():
     """Spawn retries and cross-device equivalents should create at most one child slot."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_spawn_lifecycle_matrix_test")
     exit_models = mod._module("exit_models")
 
@@ -12676,7 +12676,7 @@ def test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links():
 
 def test_cross_device_spawn_intents_converge_in_either_merge_order():
     """Two devices should converge on one child slot regardless of queue order."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_cross_device_spawn_test")
     exit_models = mod._module("exit_models")
     exit_queries = mod._module("exit_queries")
@@ -12821,7 +12821,7 @@ def test_cross_device_spawn_intents_converge_in_either_merge_order():
 
 def test_on_exit_take_queue_recovers_from_corrupt_sqlite_db():
     """on-exit queue drain should quarantine a corrupt sqlite queue db and continue."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_take_queue_corrupt_sqlite_test")
     if not hasattr(mod, "_take_queue_entries"):
         raise AssertionError("on-exit hook does not expose queue helper")
@@ -12845,7 +12845,7 @@ def test_on_exit_take_queue_recovers_from_corrupt_sqlite_db():
 
 def test_on_exit_drain_skips_finalized_sqlite_intent():
     """on-exit should skip and ack SQLite entries already finalized in intent log."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_skip_test")
     if not hasattr(mod, "_drain_queue"):
         raise AssertionError("on-exit hook does not expose drain helper")
@@ -12925,7 +12925,7 @@ def test_on_exit_drain_skips_finalized_sqlite_intent():
 
 def test_on_exit_take_queue_reclaims_stale_sqlite_processing_row():
     """on-exit should reclaim stale sqlite processing rows back into the drain."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_reclaim_stale_test")
     if not hasattr(mod, "_take_queue_entries"):
         raise AssertionError("on-exit hook does not expose queue helper")
@@ -12989,7 +12989,7 @@ def test_on_exit_take_queue_reclaims_stale_sqlite_processing_row():
 
 def test_on_exit_take_queue_skips_fresh_sqlite_processing_row():
     """on-exit should not reclaim sqlite processing rows that are still fresh."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_skip_fresh_test")
     if not hasattr(mod, "_take_queue_entries"):
         raise AssertionError("on-exit hook does not expose queue helper")
@@ -13052,7 +13052,7 @@ def test_on_exit_take_queue_skips_fresh_sqlite_processing_row():
 
 def test_on_exit_requeue_sqlite_clears_claim_metadata():
     """on-exit sqlite requeue should clear claim_token and claimed_at."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_requeue_claims_test")
     if not hasattr(mod, "_requeue_entries_sqlite_result"):
         raise AssertionError("on-exit hook does not expose sqlite requeue result helper")
@@ -13209,7 +13209,7 @@ def test_queue_claim_owner_blocks_stale_ack_and_requeue():
 
 def test_on_exit_dead_letter_on_missing_fields():
     """on-exit should dead-letter entries missing required fields."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_missing_fields_test")
     if not hasattr(mod, "_drain_queue"):
         raise AssertionError("on-exit hook does not expose drain helper")
@@ -13251,7 +13251,7 @@ def test_on_exit_dead_letter_on_missing_fields():
 
 def test_on_exit_parent_nextlink_changed_dead_letter():
     """on-exit should dead-letter when parent nextLink changed unexpectedly."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_parent_nextlink_changed_test")
     if not hasattr(mod, "_drain_queue"):
         raise AssertionError("on-exit hook does not expose drain helper")
@@ -13308,7 +13308,7 @@ def test_on_exit_parent_nextlink_changed_dead_letter():
 
 def test_on_exit_parent_update_lock_busy_requeues():
     """on-exit should requeue (not dead-letter) when parent nextLink lock is busy."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_parent_lock_busy_requeue_test")
     if not hasattr(mod, "_drain_queue"):
         raise AssertionError("on-exit hook does not expose drain helper")
@@ -13376,7 +13376,7 @@ def test_on_exit_parent_update_lock_busy_requeues():
 
 def test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter():
     """on-exit should count dead-lettered retries when post-import confirm stays locked."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_post_import_retry_budget_test")
     if not hasattr(mod, "_drain_queue"):
         raise AssertionError("on-exit hook does not expose drain helper")
@@ -13420,7 +13420,7 @@ def test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter():
 
 def test_on_exit_post_import_parent_conflict_cleans_orphan():
     """on-exit should clean up an imported child when parent CAS loses the race."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_post_import_cleanup_test")
     if not hasattr(mod, "_drain_queue"):
         raise AssertionError("on-exit hook does not expose drain helper")
@@ -13476,7 +13476,7 @@ def test_on_exit_post_import_parent_conflict_cleans_orphan():
 
 def test_on_exit_idempotent_skip_for_finalized_intent():
     """on-exit should skip queue entries already finalized in the intent log."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_intent_skip_test")
     if not hasattr(mod, "_drain_queue"):
         raise AssertionError("on-exit hook does not expose drain helper")
@@ -13516,7 +13516,7 @@ def test_on_exit_idempotent_skip_for_finalized_intent():
 
 def test_on_exit_sqlite_payload_uses_row_spawn_intent_id_for_finalized_skip():
     """on-exit should preserve sqlite spawn_intent_id even when payload JSON is malformed."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_finalized_sid_test")
     if not hasattr(mod, "_drain_queue"):
         raise AssertionError("on-exit hook does not expose drain helper")
@@ -13582,7 +13582,7 @@ def test_on_exit_sqlite_payload_uses_row_spawn_intent_id_for_finalized_skip():
 
 def test_on_exit_sqlite_malformed_payload_dead_letter_keeps_spawn_intent_id():
     """on-exit dead-letter payloads from sqlite should retain the row spawn_intent_id."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_bad_payload_test")
     if not hasattr(mod, "_drain_queue"):
         raise AssertionError("on-exit hook does not expose drain helper")
@@ -13631,7 +13631,7 @@ def test_on_exit_sqlite_malformed_payload_dead_letter_keeps_spawn_intent_id():
 
 def test_on_exit_lock_storm_circuit_requeues_remaining():
     """on-exit should trip circuit breaker and requeue remaining entries under lock storm."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_lock_storm_circuit_test")
     if not hasattr(mod, "_drain_queue"):
         raise AssertionError("on-exit hook does not expose drain helper")
@@ -13681,7 +13681,7 @@ def test_on_exit_lock_storm_circuit_requeues_remaining():
 
 def test_on_exit_import_child_retries_on_lock():
     """on-exit should retry child import on lock errors with backoff."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_retry_test")
 
     import tempfile
@@ -13709,7 +13709,7 @@ def test_on_exit_import_child_retries_on_lock():
 
 def test_on_exit_dead_letter_on_import_failure():
     """on-exit should dead-letter entries that fail to import."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_dead_letter_test")
 
     import tempfile
@@ -13771,7 +13771,7 @@ def test_on_exit_dead_letter_on_import_failure():
 
 def test_on_modify_carry_wall_clock_across_dst():
     """carry-forward should preserve local wall-clock offset across DST."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_carry_dst_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -13805,7 +13805,7 @@ def test_on_modify_carry_wall_clock_across_dst():
 
 def test_on_modify_build_child_carries_until_across_dst():
     """native until should retain its local wall-clock offset from the recurrence due."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_carry_until_dst_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -13871,7 +13871,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
     """native until should use calendar carry by default and exact carry with the +1s marker."""
     import nautical_core.reconcile as reconcile
 
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_native_until_carry_policy_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -14005,7 +14005,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
 
 def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
     """the +1s expiration marker should preserve elapsed seconds instead of local clock offset."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_native_until_exact_dst_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -14060,8 +14060,8 @@ def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
 
 def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations():
     """calendar expiration should reject fixed anchor slots at or after its clock time."""
-    add_hook = _find_hook_file("on-add-nautical.py")
-    modify_hook = _find_hook_file("on-modify-nautical.py")
+    add_hook = _find_hook_file("on-add.nautical")
+    modify_hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(modify_hook, "_nautical_native_until_slot_guard_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -14214,7 +14214,7 @@ def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations(
 
 def test_on_modify_build_child_transitions_flex_to_all():
     """A flex anchor should skip backlog once and make its child strict all mode."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_flex_child_mode_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -14245,7 +14245,7 @@ def test_on_modify_build_child_transitions_flex_to_all():
 
 def test_on_modify_cp_due_edit_preserves_relative_offsets():
     """A due edit on a cp task should retain unedited scheduled and wait offsets."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_due_scheduled_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -14369,7 +14369,7 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
 
 def test_on_modify_explicit_timing_edits_warn_on_invalid_order():
     """Explicit timing edits should warn, not fail, when they leave an invalid order."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_timing_order_panel_test")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000992",
@@ -14418,7 +14418,7 @@ def test_on_modify_explicit_timing_edits_warn_on_invalid_order():
 
 def test_on_modify_timing_warning_wrapper_preserves_json_stdout():
     """Timing warnings must stay on stderr while the thin wrapper returns strict task JSON."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     old = {
         "uuid": "00000000-0000-0000-0000-000000000993",
         "description": "timing warning protocol",
@@ -14445,7 +14445,7 @@ def test_on_modify_timing_warning_wrapper_preserves_json_stdout():
 
 def test_on_modify_build_child_carries_configured_uda_datetime():
     """configured recurrence_update_udas fields should carry with wall-clock delta."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_carry_uda_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -14496,7 +14496,7 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
 
 def test_on_modify_stable_child_uuid_is_slot_deterministic():
     """stable child UUID should be deterministic for the same parent slot and change with link."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_stable_child_uuid_test")
 
     parent = {
@@ -14535,7 +14535,7 @@ def test_normalize_spec_for_acf_cache_guards():
 
 def test_on_modify_link_limit():
     """on-modify should block spawns when link exceeds max."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_link_limit_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -14579,7 +14579,7 @@ def test_on_modify_link_limit():
 
 def test_on_modify_completion_preflight_context_happy_path():
     """completion preflight should derive link numbers, kind, and chain id for a valid chain task."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_preflight_context_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -14630,7 +14630,7 @@ def test_on_modify_completion_preflight_context_happy_path():
 
 def test_on_modify_completion_compute_next_and_limits_happy_path():
     """completion compute should assemble child due and cap metadata from helper results."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_compute_next_limits_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -14758,7 +14758,7 @@ def test_completion_caps_earliest_limit_wins():
 
 def test_cap_from_until_cp_includes_exact_deadline():
     """CP chainUntil counting should include a due timestamp exactly equal to the deadline."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cap_until_exact_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -14797,7 +14797,7 @@ def test_chain_max_parser_requires_positive_integer():
 
 def test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor():
     """on-add should reject invalid chainMax values for both recurrence branches."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     cases = [
         ({"cp": "1d", "chainMax": 0}, "cp zero"),
@@ -14824,7 +14824,7 @@ def test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor():
 
 def test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor():
     """on-modify should reject invalid chainMax values before completion or spawn."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     env = {"NO_COLOR": "1"}
     cases = [
         ({"cp": "1d"}, 0, "cp zero"),
@@ -14857,7 +14857,7 @@ def test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor():
 
 def test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change():
     """Unrelated edits should pass, but changing chainUntil should trigger strict validation."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     env = {"NO_COLOR": "1"}
     old = {
         "uuid": "00000000-0000-0000-0000-000000000220",
@@ -14962,7 +14962,7 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
 
 def test_on_modify_completion_chain_snapshot_modes_and_query():
     """completion snapshots should broaden only for feedback or explicit full-chain features."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_completion_snapshot_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -15021,7 +15021,7 @@ def test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export():
 
 def test_on_modify_completion_defers_chain_export_until_after_preflight():
     """completion handling should not export the chain before preflight succeeds."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_preflight_export_deferral_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -15061,7 +15061,7 @@ def test_on_modify_completion_defers_chain_export_until_after_preflight():
 
 def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
     """scheduled-only cp chains should preserve scheduled wall clock on completion."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_sched_only_compute_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -15080,7 +15080,7 @@ def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
 
 def test_on_modify_compute_cp_sequence_selects_interval_by_link():
     """cp sequences should derive the active interval from the current link number."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_sequence_compute_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -15102,7 +15102,7 @@ def test_on_modify_compute_cp_sequence_selects_interval_by_link():
 
 def test_on_modify_compute_cp_random_selects_deterministic_interval():
     """random cp ranges should resolve deterministically for the active link."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_random_compute_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -15128,7 +15128,7 @@ def test_on_modify_compute_cp_random_selects_deterministic_interval():
 
 def test_on_modify_cp_sequence_estimates_chainmax_final_date():
     """chainMax final-date estimation should advance through cp sequence intervals."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_sequence_chainmax_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -15145,7 +15145,7 @@ def test_on_modify_cp_sequence_estimates_chainmax_final_date():
 
 def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
     """scheduled-only anchor chains should compute missed occurrences from scheduled, not completion time."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_sched_only_compute_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -15166,7 +15166,7 @@ def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
 
 def test_on_modify_compute_anchor_child_due_builds_timed_slots_in_configured_timezone():
     """@t slots are local wall-clock anchors, not UTC clock values."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_timed_timezone_compute_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -15188,8 +15188,8 @@ def test_on_modify_compute_anchor_child_due_builds_timed_slots_in_configured_tim
 
 def test_on_add_preview_and_completion_skip_choose_same_next_anchor():
     """Preview and completion should agree when given the same occurrence and chain seed."""
-    add_hook = _find_hook_file("on-add-nautical.py")
-    modify_hook = _find_hook_file("on-modify-nautical.py")
+    add_hook = _find_hook_file("on-add.nautical")
+    modify_hook = _find_hook_file("on-modify.nautical")
     add_mod = _load_hook_module(add_hook, "_nautical_on_add_preview_completion_agreement_test")
     modify_mod = _load_hook_module(modify_hook, "_nautical_on_modify_preview_completion_agreement_test")
     if hasattr(add_mod, "_load_core"):
@@ -15257,7 +15257,7 @@ def test_on_add_preview_and_completion_skip_choose_same_next_anchor():
 
 def test_on_modify_anchor_dnf_accepts_configured_preset():
     """completion-side anchor validation should resolve configured preset aliases."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_preset_dnf_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -15275,7 +15275,7 @@ def test_on_modify_anchor_dnf_accepts_configured_preset():
 
 def test_on_modify_omit_dnf_accepts_configured_preset():
     """completion-side omit validation should resolve configured omit preset aliases."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_omit_preset_dnf_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -16124,8 +16124,8 @@ def test_shared_time_slot_resolver_keeps_hook_and_navigator_parity():
     """add, modify, and Navigator should resolve the same symbolic slot and offset."""
     import nautical_core.time_slots as time_slots
 
-    add_mod = _load_hook_module(_find_hook_file("on-add-nautical.py"), "_nautical_add_time_slots_parity_test")
-    modify_mod = _load_hook_module(_find_hook_file("on-modify-nautical.py"), "_nautical_modify_time_slots_parity_test")
+    add_mod = _load_hook_module(_find_hook_file("on-add.nautical"), "_nautical_add_time_slots_parity_test")
+    modify_mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_time_slots_parity_test")
     original_event = time_slots.astronomy.resolve_event
     original_to_local = core.to_local
     original_add_to_local = add_mod.core.to_local
@@ -16261,7 +16261,7 @@ def test_navigator_sparse_calendar_renders_only_active_months():
 
 def test_on_add_anchor_and_anchor_file_can_coexist():
     """on-add should allow anchor and anchor_file to coexist as inclusion sources."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_anchor_and_file_allowed_test")
 
     with tempfile.TemporaryDirectory() as td:
@@ -16286,7 +16286,7 @@ def test_on_add_anchor_and_anchor_file_can_coexist():
 
 def test_on_add_anchor_file_root_gets_chainid_stamp():
     """on-add should stamp chainID for anchor_file roots so later completion can proceed."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_anchor_file_chainid_stamp_test")
 
     task = {
@@ -16299,7 +16299,7 @@ def test_on_add_anchor_file_root_gets_chainid_stamp():
 
 def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
     """on-add anchor_file preview should auto-assign due from the first future file occurrence and keep task-level time."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_anchor_file_preview_test")
 
     with tempfile.TemporaryDirectory() as td:
@@ -16338,7 +16338,7 @@ def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
 
 def test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match():
     """combined anchor sources should preview from the earliest merged occurrence."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_anchor_and_file_preview_test")
 
     with tempfile.TemporaryDirectory() as td:
@@ -16375,7 +16375,7 @@ def test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match():
 
 def test_on_modify_compute_anchor_child_due_from_anchor_file():
     """on-modify completion should compute the next child due from anchor_file occurrences."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_file_due_test")
 
     with tempfile.TemporaryDirectory() as td:
@@ -16408,7 +16408,7 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
 
 def test_on_modify_compute_anchor_child_due_from_multiple_file_times():
     """completion should retain independent times and select a later same-day occurrence from another file."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_multiple_anchor_file_due_test")
 
     with tempfile.TemporaryDirectory() as td:
@@ -16440,7 +16440,7 @@ def test_on_modify_compute_anchor_child_due_from_multiple_file_times():
 
 def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
     """completion should use the earliest next occurrence from anchor and anchor_file together."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_combined_anchor_due_test")
 
     with tempfile.TemporaryDirectory() as td:
@@ -16470,7 +16470,7 @@ def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
 
 def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_child():
     """when anchor_file is shifted and anchor matches the original file date, timeline should still show the original date as the next future anchor."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_shifted_anchor_file_timeline_test")
     if hasattr(mod, "_collect_prev_two"):
         setattr(mod, "_collect_prev_two", lambda _task: [])
@@ -16524,7 +16524,7 @@ def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_ch
 
 def test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream():
     """merged anchor timelines should still omit shifted anchor_file dates when omit matches their shifted local date."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_shifted_anchor_file_omit_timeline_test")
     if hasattr(mod, "_collect_prev_two"):
         setattr(mod, "_collect_prev_two", lambda _task: [])
@@ -16580,7 +16580,7 @@ def test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_strea
 
 def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream():
     """merged timelines should still show omitted anchor-side dates when omit_file blocks them."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_side_omit_file_timeline_test")
     if hasattr(mod, "_collect_prev_two"):
         setattr(mod, "_collect_prev_two", lambda _task: [])
@@ -16741,7 +16741,7 @@ def test_anchor_omit_positive_day_offset_matches_shifted_date():
 
 def test_on_modify_compute_anchor_child_due_skips_omit_date():
     """anchor completion should skip omitted anchor dates and choose the next valid one."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_omit_skip_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -16763,7 +16763,7 @@ def test_on_modify_compute_anchor_child_due_skips_omit_date():
 
 def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due():
     """anchor completion should not crash when scheduled is later than due."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_sched_after_due_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -16786,7 +16786,7 @@ def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due():
 
 def test_on_modify_compute_counted_random_advances_within_period():
     """Counted-random completion should emit the remaining selection in the same period."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_counted_random_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -16822,7 +16822,7 @@ def test_on_modify_compute_counted_random_advances_within_period():
 
 def test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails():
     """anchor completion should fail cleanly when omit removes every future anchor date."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_omit_unsat_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -16848,7 +16848,7 @@ def test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails():
 
 def test_on_modify_completion_build_and_spawn_child_happy_path():
     """completion spawn wrapper should return child info and stamp nextLink when verified."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_completion_spawn_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -16883,7 +16883,7 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
 
 def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait():
     """scheduled-only child spawn should carry relative dates from scheduled."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_build_child_sched_only_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -16921,7 +16921,7 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
 
 def test_on_modify_render_anchor_completion_feedback_wrapper():
     """anchor completion feedback wrapper should delegate and emit a preview panel title."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_feedback_wrapper_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -16985,7 +16985,7 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
 
 def test_on_modify_reports_business_calendar_displacement():
     """Completion feedback should report the captured calendar roll in every panel mode."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_calendar_displacement_test")
     mod._SHOW_TIMELINE_GAPS = False
     mod._CHAIN_COLOR_PER_CHAIN = False
@@ -17052,7 +17052,7 @@ def test_on_modify_reports_business_calendar_displacement():
 
 def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
     """Timed anchors should show a warning when timezone data is unavailable."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_timezone_warning_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -17103,7 +17103,7 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
 
 def test_on_modify_render_anchor_file_completion_feedback_wrapper():
     """anchor_file completion feedback should not crash when anchor DNF is absent."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_anchor_file_feedback_wrapper_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -17198,7 +17198,7 @@ def test_timeline_completed_rows_place_uuid_before_delta():
 
 def test_on_modify_render_cp_completion_feedback_wrapper():
     """CP completion feedback wrapper should delegate and emit a preview panel title."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_feedback_wrapper_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -17248,7 +17248,7 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
 
 def test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundaries():
     """Completion panels should show the next expiration and one effective last occurrence."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_expiration_boundary_feedback_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -17325,7 +17325,7 @@ def test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundarie
 
 def test_on_modify_render_cp_completion_feedback_random_selected_interval():
     """CP random completion feedback should show the selected interval, not the raw rand expression."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_random_feedback_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -17383,7 +17383,7 @@ def test_on_modify_render_cp_completion_feedback_random_selected_interval():
 
 def test_on_modify_render_cp_completion_feedback_jitter_selected_interval():
     """CP jitter completion feedback should show the selected interval, not the raw jitter expression."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_jitter_feedback_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -17433,7 +17433,7 @@ def test_on_modify_render_cp_completion_feedback_jitter_selected_interval():
 
 def test_on_modify_render_cp_completion_feedback_text_mode():
     """CP completion feedback should use concise ASCII text output in text mode."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_feedback_text_mode_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -17489,7 +17489,7 @@ def test_on_modify_render_cp_completion_feedback_text_mode():
 
 def test_on_add_preview_hard_cap():
     """on-add preview loop should respect hard cap even with large preview setting."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_preview_cap_test")
 
     mod.UPCOMING_PREVIEW = 1000
@@ -17517,7 +17517,7 @@ def test_on_add_preview_hard_cap():
 
 def test_on_add_flushes_stdout():
     """on-add should flush stdout after emitting JSON."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_flush_test")
 
     class _FlushIO(io.StringIO):
@@ -17548,7 +17548,7 @@ def test_on_add_flushes_stdout():
 
 def test_on_add_profiler_lazy_init():
     """on-add should not register profiler when disabled."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_profiler_lazy_test")
     mod._PROFILE_LEVEL = 0
 
@@ -17576,7 +17576,7 @@ def test_on_add_profiler_lazy_init():
 
 def test_on_add_format_anchor_rows_numbers_upcoming_from_three_with_next_anchor():
     """on-add anchor formatting should number upcoming entries from 3 when Next anchor exists."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_format_rows_next_anchor_test")
     if not hasattr(mod, "_format_anchor_rows"):
         raise AssertionError("on-add hook does not expose _format_anchor_rows")
@@ -17597,7 +17597,7 @@ def test_on_add_format_anchor_rows_numbers_upcoming_from_three_with_next_anchor(
 
 def test_on_add_format_anchor_rows_numbers_upcoming_from_two_without_next_anchor():
     """on-add anchor formatting should number upcoming entries from 2 without Next anchor."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_format_rows_no_next_anchor_test")
     if not hasattr(mod, "_format_anchor_rows"):
         raise AssertionError("on-add hook does not expose _format_anchor_rows")
@@ -17617,7 +17617,7 @@ def test_on_add_format_anchor_rows_numbers_upcoming_from_two_without_next_anchor
 
 def test_on_modify_panel_fallback():
     """on-modify panel should fall back to plain output on errors."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_panel_fallback_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -17639,7 +17639,7 @@ def test_on_modify_panel_fallback():
 
 def test_on_modify_panel_forwards_live_duration():
     """on-modify should pass the configured total live duration to the shared renderer."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_live_duration_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -18318,7 +18318,7 @@ def test_ui_live_failure_preserves_rows_for_static_fallback():
 
 def test_on_exit_equivalent_child_cache_reuses_slot_lookup():
     """on-exit should reuse equivalent-child lookups for the same slot within one run."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_equiv_cache_test")
 
     mod._reset_exit_equiv_child_cache()
@@ -18344,7 +18344,7 @@ def test_on_exit_equivalent_child_cache_reuses_slot_lookup():
 
 def test_on_exit_preloads_equivalent_child_slots_for_early_checks():
     """on-exit should bulk-preload equivalent-child slots and satisfy early lookups from cache."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_equiv_preload_test")
 
     mod._reset_exit_equiv_child_cache()
@@ -18394,7 +18394,7 @@ def test_on_exit_preloads_equivalent_child_slots_for_early_checks():
 
 def test_on_exit_combines_uuid_and_equivalent_slot_preloads():
     """One export should seed exact UUID and equivalent-slot caches for a normal queue entry."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_combined_preload_test")
     mod._reset_exit_export_cache()
     mod._reset_exit_equiv_child_cache()
@@ -18442,7 +18442,7 @@ def test_on_exit_combines_uuid_and_equivalent_slot_preloads():
 
 def test_on_exit_preloads_uuid_exports_for_early_checks():
     """on-exit should bulk-preload early parent/child exports and keep locked parent rechecks live."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_bulk_preload_test")
 
     import tempfile
@@ -18510,7 +18510,7 @@ def test_on_exit_preloads_uuid_exports_for_early_checks():
 
 def test_on_exit_successful_import_reuses_initial_child_export():
     """on-exit should not live-export or import the child when preload already proves it exists."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_import_reuse_test")
 
     import tempfile
@@ -18568,7 +18568,7 @@ def test_on_exit_successful_import_reuses_initial_child_export():
 
 def test_on_exit_import_error_but_child_exists():
     """on-exit should proceed if import reports failure but child exists."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_import_error_child_exists_test")
 
     import tempfile
@@ -19236,7 +19236,7 @@ def test_next_after_expr_branch_characterization():
 
 def test_on_exit_local_safe_lock_fails_closed_on_network_mount_without_fcntl():
     """on-exit local lock fallback should fail closed on network mounts when fcntl is unavailable."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_network_lock_fail_closed_test")
     with tempfile.TemporaryDirectory() as td:
         lock_path = Path(td) / "network.lock"
@@ -19257,7 +19257,7 @@ def test_on_exit_local_safe_lock_fails_closed_on_network_mount_without_fcntl():
 
 def test_on_exit_dead_letter_rotation():
     """dead-letter should rotate when exceeding size cap."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_dead_letter_rotation_test")
 
     import tempfile
@@ -19279,7 +19279,7 @@ def test_on_exit_dead_letter_rotation():
 
 def test_on_exit_dead_letter_carries_spawn_intent_id():
     """dead-letter should include spawn_intent_id when present."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_dead_letter_spawn_id_test")
     if not hasattr(mod, "_write_dead_letter"):
         raise AssertionError("on-exit hook does not expose dead-letter helper")
@@ -19307,7 +19307,7 @@ def test_on_exit_dead_letter_carries_spawn_intent_id():
 
 def test_on_exit_requeue_failure_leaves_sqlite_entry_processing():
     """on-exit should report requeue failure and keep sqlite claim state for investigation."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_requeue_fail_sqlite_processing_test")
 
     with tempfile.TemporaryDirectory() as td:
@@ -19365,7 +19365,7 @@ def test_on_exit_requeue_failure_leaves_sqlite_entry_processing():
 
 def test_on_exit_export_uuid_noisy_stdout():
     """on-exit export should tolerate noisy stdout when UUID present."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_export_uuid_noisy_test")
 
     def _run_task_noisy(*_a, **_k):
@@ -19378,7 +19378,7 @@ def test_on_exit_export_uuid_noisy_stdout():
 
 def test_on_exit_emit_exit_feedback_reaches_stdout_contract():
     """on-exit failing-hook feedback should still reach stdout even after stdout redirection."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_emit_feedback_test")
 
     class _DevNullLike:
@@ -19408,7 +19408,7 @@ def test_on_exit_emit_exit_feedback_reaches_stdout_contract():
 
 def test_on_exit_drain_failure_panel_is_actionable_and_retry_quiet():
     """Permanent drain failures should show one panel; successful requeues should stay quiet."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_drain_failure_panel_test")
     captured = []
     original_render_panel = mod.core.render_panel
@@ -19464,7 +19464,7 @@ def test_on_exit_drain_failure_panel_is_actionable_and_retry_quiet():
 
 def test_on_exit_parent_nextlink_lock_uses_dedicated_dir():
     """on-exit parent-nextlink locks should live under .nautical-locks."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_parent_lock_dir_test")
 
     with tempfile.TemporaryDirectory() as td:
@@ -19480,7 +19480,7 @@ def test_on_exit_parent_nextlink_lock_uses_dedicated_dir():
 
 def test_on_exit_state_files_use_dedicated_dir():
     """on-exit queue/dead-letter state should live under .nautical-state."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_state_dir_test")
 
     expect(mod._QUEUE_DB_PATH.parent.name == ".nautical-state", f"unexpected queue db dir: {mod._QUEUE_DB_PATH}")
@@ -19490,7 +19490,7 @@ def test_on_exit_state_files_use_dedicated_dir():
 
 def test_on_modify_state_files_use_dedicated_dir():
     """on-modify queue/dead-letter state should live under .nautical-state."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_state_dir_test")
 
     expect(mod._SPAWN_QUEUE_DB_PATH.parent.name == ".nautical-state", f"unexpected queue db dir: {mod._SPAWN_QUEUE_DB_PATH}")
@@ -19501,7 +19501,7 @@ def test_on_modify_state_files_use_dedicated_dir():
 
 def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
     """Re-completing a reactivated task should not spawn when nextLink already exists."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_recomplete_skip_spawn_test")
     mod._SHOW_TIMELINE_GAPS = False
     mod._SHOW_ANALYTICS = False
@@ -19557,7 +19557,7 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
 
 def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
     """Re-completing should not spawn when link #N+1 already exists in chain even if nextLink is empty."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_recomplete_link_guard_test")
     mod._SHOW_TIMELINE_GAPS = False
     mod._SHOW_ANALYTICS = False
@@ -19732,7 +19732,7 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
     """Deleted chains should distinguish expiration, manual stop, and ambiguous evidence."""
     import nautical_core.reconcile as reconcile
 
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_candidate_test")
     parent = {
         "uuid": "11111111-0000-0000-0000-000000000001",
@@ -19780,7 +19780,7 @@ def test_reconcile_manual_deletion_stops_chain_without_child_lookup():
     """Hookless manual deletion should atomically persist chain:off without a child export."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     tool = _load_hook_module(str(path), "_nautical_reconcile_manual_delete_test")
-    hook_path = _find_hook_file("on-modify-nautical.py")
+    hook_path = _find_hook_file("on-modify.nautical")
     hook = _load_hook_module(hook_path, "_nautical_reconcile_manual_delete_hook")
     parent = {
         "uuid": "11111111-0000-0000-0000-000000000001",
@@ -19861,7 +19861,7 @@ def test_reconcile_delayed_expiration_dry_run_converges_to_live_slot():
     """Dry-run should preview every elapsed expiration hop through the first live slot."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     tool = _load_hook_module(str(path), "_nautical_reconcile_delayed_dry_run_test")
-    hook_path = _find_hook_file("on-modify-nautical.py")
+    hook_path = _find_hook_file("on-modify.nautical")
     hook = _load_hook_module(hook_path, "_nautical_reconcile_delayed_dry_run_hook")
     recovery_at = hook.core.build_local_datetime(date(2026, 7, 23), (9, 30))
     parent = {
@@ -20173,6 +20173,8 @@ def test_reconcile_json_startup_failures_are_structured():
             result = tool.main(["--json"])
         summary = json.loads(output.getvalue())
         expect(result == 1 and summary.get("stage") == "hook_load", f"hook load failure was not structured: {summary}")
+        expect(summary.get("schema") == "nautical.reconcile" and summary.get("schema_version") == 1,
+               f"startup JSON schema metadata missing: {summary}")
         expect("Ω" in summary.get("error", ""), f"Unicode startup error was escaped or lost: {summary}")
         expect("Traceback" not in errors.getvalue(), f"startup failure leaked a traceback: {errors.getvalue()!r}")
 
@@ -20194,7 +20196,7 @@ def test_reconcile_expiration_cp_advances_from_recurrence_target():
     """Expired CP links should advance from due/scheduled rather than their deletion end."""
     import nautical_core.reconcile as reconcile
 
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_cp_due_test")
     due = mod.core.build_local_datetime(date(2026, 7, 20), (9, 0))
     expired_end = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
@@ -20230,7 +20232,7 @@ def test_reconcile_expiration_anchor_advances_from_recurrence_target():
     """Expired anchor links should select the first slot after the prior recurrence target."""
     import nautical_core.reconcile as reconcile
 
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_anchor_due_test")
     parent = {
         "status": "deleted",
@@ -20255,7 +20257,7 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
     """Expiration plans should honor chain limits and recognize an already-expired next slot."""
     import nautical_core.reconcile as reconcile
 
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_plan_test")
     parent = {
         "uuid": "11111111-0000-0000-0000-000000000001",
@@ -21365,7 +21367,7 @@ def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
     try:
         os.environ.pop("NAUTICAL_CORE_PATH", None)
         mod = _load_hook_module(str(path), "_nautical_reconcile_tool_timed_anchor_test")
-        hook = mod._load_on_modify(str(Path(ROOT) / "on-modify-nautical.py"))
+        hook = mod._load_on_modify(str(Path(ROOT) / "on-modify.nautical"))
         child_due, _meta, _dnf = hook._compute_anchor_child_due(
             {
                 "uuid": "c3f2c233-0000-0000-0000-000000000001",
@@ -21533,6 +21535,7 @@ def test_reconcile_degraded_audit_status_is_structured():
             manual_result = mod.main(["--json"])
         manual_summary = json.loads(manual_output.getvalue())
         expect(manual_result == 2, f"manual review should be degraded: {manual_result}")
+        expect(manual_summary.get("schema_version") == 1, f"JSON schema version missing: {manual_summary!r}")
         expect(manual_summary.get("status") == "degraded", f"wrong manual status: {manual_summary!r}")
         expect(manual_summary.get("native_until_manual_review") == 1, f"manual review was not counted: {manual_summary!r}")
 
@@ -22045,7 +22048,7 @@ def test_chain_repair_command_failure_is_structured():
 
 def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     """on-modify should reuse one full-chain export across preflight and later feedback prep when chain context is needed."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_single_chain_export_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -22144,7 +22147,7 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
 
 def test_on_modify_read_query_broker_deduplicates_and_invalidates_exports():
     """Read-only Taskwarrior exports should be shared only within one hook request."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_read_query_broker_test")
     mod._reset_modify_runtime_state()
     mod._tw_export_chain_cached_key.cache_clear()
@@ -22181,7 +22184,7 @@ def test_on_modify_read_query_broker_deduplicates_and_invalidates_exports():
 
 def test_on_modify_completion_snapshot_reuses_full_chain_read():
     """A full completion snapshot should satisfy a later unfiltered chain read."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_completion_snapshot_reuse_test")
     mod._reset_modify_runtime_state()
     saved_analytics = mod._SHOW_ANALYTICS
@@ -22219,7 +22222,7 @@ def test_on_modify_completion_snapshot_reuses_full_chain_read():
 
 def test_on_modify_cp_completion_spawns_next_link():
     """on-modify should spawn the next CP link on completion."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_spawn_test")
     mod._SHOW_TIMELINE_GAPS = False
     mod._SHOW_ANALYTICS = False
@@ -22273,7 +22276,7 @@ def test_on_modify_cp_completion_spawns_next_link():
 
 def test_on_modify_spawn_intent_queue_failure_is_reported():
     """_spawn_child_atomic should report queue failure instead of claiming deferred success."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_spawn_queue_failure_test")
     mod._reserve_child_uuid = lambda _env: "00000000-0000-0000-0000-00000000abcd"
     mod._enqueue_spawn_intent = lambda _entry: (False, "queue lock busy")
@@ -22291,7 +22294,7 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
 
 def test_on_add_run_task_timeout():
     """on-add _run_task returns timeout on subprocess timeouts."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_run_task_timeout_test")
     if not hasattr(mod, "_run_task"):
         raise AssertionError("on-add hook does not expose _run_task")
@@ -22324,7 +22327,7 @@ def test_on_add_run_task_timeout():
 
 def test_on_modify_run_task_timeout():
     """on-modify _run_task returns timeout on subprocess timeouts."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_run_task_timeout_test")
     if not hasattr(mod, "_run_task"):
         raise AssertionError("on-modify hook does not expose _run_task")
@@ -22357,7 +22360,7 @@ def test_on_modify_run_task_timeout():
 
 def test_on_exit_run_task_accepts_env():
     """on-exit _run_task should accept env and pass it through."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_run_task_env_test")
     if not hasattr(mod, "_run_task"):
         raise AssertionError("on-exit hook does not expose _run_task")
@@ -22375,7 +22378,7 @@ def test_on_exit_run_task_accepts_env():
 
 def test_on_exit_normalize_queue_entry_strips_fields():
     """on-exit queue normalization should canonicalize queue entry fields."""
-    hook = _find_hook_file("on-exit-nautical.py")
+    hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_queue_normalize_test")
 
     entry = mod._normalize_queue_entry(
@@ -22410,7 +22413,7 @@ def test_on_exit_normalize_queue_entry_strips_fields():
 
 def test_on_modify_export_uuid_short_seeds_runtime_lookup_cache():
     """Successful short UUID export should seed runtime lookup maps and later entry lookups."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_export_uuid_seed_cache_test")
 
     calls = {"export": 0, "get": 0}
@@ -22447,7 +22450,7 @@ def test_on_modify_export_uuid_short_seeds_runtime_lookup_cache():
 
 def test_on_modify_export_uuid_short_invalid_json():
     """on-modify _export_uuid_short returns None on invalid JSON."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_export_uuid_invalid_json_test")
     if not hasattr(mod, "_export_uuid_short"):
         raise AssertionError("on-modify hook does not expose _export_uuid_short")
@@ -22467,7 +22470,7 @@ def test_on_modify_export_uuid_short_invalid_json():
 
 def test_on_modify_export_uuid_short_prefix_mismatch():
     """on-modify _export_uuid_short returns None on prefix mismatch."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_export_uuid_prefix_mismatch_test")
     if not hasattr(mod, "_export_uuid_short"):
         raise AssertionError("on-modify hook does not expose _export_uuid_short")
@@ -22487,7 +22490,7 @@ def test_on_modify_export_uuid_short_prefix_mismatch():
 
 def test_on_modify_export_uuid_full_cached():
     """Full UUID export should be cached within a hook run."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_export_full_cache_test")
     calls = {"count": 0}
     uuid_full = "00000000-0000-0000-0000-000000000abc"
@@ -22508,7 +22511,7 @@ def test_on_modify_export_uuid_full_cached():
 
 def test_on_modify_missing_taskdata_uses_tw_dir():
     """on-modify uses TW_DIR when TASKDATA is missing."""
-    hook = _find_hook_file("on-modify-nautical.py")
+    hook = _find_hook_file("on-modify.nautical")
     orig = os.environ.get("TASKDATA")
     if "TASKDATA" in os.environ:
         del os.environ["TASKDATA"]
@@ -22557,7 +22560,7 @@ def test_hooks_no_direct_subprocess_run():
         Visitor().visit(tree)
         return bad
 
-    for hook_name in ("on-add-nautical.py", "on-modify-nautical.py"):
+    for hook_name in ("on-add.nautical", "on-modify.nautical"):
         path = _find_hook_file(hook_name)
         bad = _bad_calls(path)
         expect(not bad, f"Direct subprocess.run found in {hook_name}: {bad}")
@@ -22735,7 +22738,7 @@ def test_position_selection_semantic_advice():
 
 def test_on_add_position_selection_renders_semantic_advice():
     """The on-add preview should include one advice row without disturbing hook JSON."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     task = {
         "uuid": "00000000-0000-0000-0000-000000000782",
         "description": "positional semantic advice",
@@ -23049,7 +23052,7 @@ def test_position_selection_public_acf_natural_and_cache_shape():
 def test_position_selection_on_add_and_modify_completion():
     """Add preview and modify completion should agree on monthly positional anchors."""
     expr = "(w:tue | w:thu)@in-month=last"
-    add_hook = _find_hook_file("on-add-nautical.py")
+    add_hook = _find_hook_file("on-add.nautical")
     task = {
         "uuid": "00000000-0000-0000-0000-000000000777",
         "description": "positional anchor integration",
@@ -23069,7 +23072,7 @@ def test_position_selection_on_add_and_modify_completion():
         f"on-add preview omitted positional natural text: {result.stderr}",
     )
 
-    modify_hook = _find_hook_file("on-modify-nautical.py")
+    modify_hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(modify_hook, "_nautical_position_selection_modify_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -23210,7 +23213,7 @@ def test_position_selection_post_modifiers_acf_natural_and_time():
 def test_position_selection_post_modifiers_modify_completion():
     """Modify completion should schedule the next transformed positional occurrence and time."""
     expr = "(w:tue | w:thu)@in-month=last@+2d@t=09:00"
-    add_hook = _find_hook_file("on-add-nautical.py")
+    add_hook = _find_hook_file("on-add.nautical")
     task = {
         "uuid": "00000000-0000-0000-0000-000000000779",
         "description": "post-selection modifier integration",
@@ -23226,7 +23229,7 @@ def test_position_selection_post_modifiers_modify_completion():
     expect(out_task.get("anchor") == expr, f"on-add changed selector modifiers: {out_task}")
     expect("2 days later at 09:00" in _strip_markup(result.stderr), f"bad add preview: {result.stderr}")
 
-    modify_hook = _find_hook_file("on-modify-nautical.py")
+    modify_hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(modify_hook, "_nautical_position_selection_modifier_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -23677,7 +23680,7 @@ def test_seasonal_selection_semantic_guard():
 
 def test_on_add_seasonal_selection_feedback():
     """The add preview should show a readable seasonal rule and its fixed boundary."""
-    hook = _find_hook_file("on-add-nautical.py")
+    hook = _find_hook_file("on-add.nautical")
     task = {
         "uuid": "00000000-0000-0000-0000-000000000783",
         "description": "seasonal feedback",
@@ -23704,7 +23707,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
     """Completion modes should preserve seasonal slots, local times, and future projections."""
     from zoneinfo import ZoneInfo
 
-    modify_hook = _find_hook_file("on-modify-nautical.py")
+    modify_hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(modify_hook, "_nautical_seasonal_modify_modes_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -23818,7 +23821,7 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
     """Reconcile should compute, spawn, and deduplicate the next seasonal slot."""
     import nautical_core.reconcile as reconcile
 
-    hook_path = _find_hook_file("on-modify-nautical.py")
+    hook_path = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook_path, "_nautical_seasonal_reconcile_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -23884,7 +23887,7 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
     """Hookless due moves should recover the prior link's native-until carry policy."""
     import nautical_core.reconcile as reconcile
 
-    hook_path = _find_hook_file("on-modify-nautical.py")
+    hook_path = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook_path, "_nautical_until_reconcile_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
@@ -24090,7 +24093,7 @@ def test_position_selection_public_period_scopes_acf_natural_and_hints():
 def test_position_selection_public_period_scopes_hooks():
     """Add, completion, and timeline paths should support shifted yearly selections."""
     expr = "(w:mon)@in-year=last@+7d@t=09:00"
-    add_hook = _find_hook_file("on-add-nautical.py")
+    add_hook = _find_hook_file("on-add.nautical")
     task = {
         "uuid": "00000000-0000-0000-0000-000000000780",
         "description": "yearly positional integration",
@@ -24106,7 +24109,7 @@ def test_position_selection_public_period_scopes_hooks():
     expect(out_task.get("anchor") == expr, f"on-add changed yearly selection: {out_task}")
     expect("in each year" in _strip_markup(result.stderr), f"bad add preview: {result.stderr}")
 
-    modify_hook = _find_hook_file("on-modify-nautical.py")
+    modify_hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(modify_hook, "_nautical_period_selection_hook_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()

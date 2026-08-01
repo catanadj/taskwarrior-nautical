@@ -34,7 +34,7 @@ def _write_taskrc(taskdata: Path) -> Path:
     return taskrc
 
 def _check_hook_exec(hooks_dir: Path) -> None:
-    hook = hooks_dir / "on-exit-nautical.py"
+    hook = hooks_dir / "on-exit.nautical"
     if not hook.exists():
         print(f"[smoke] warning: missing hook {hook}")
         return

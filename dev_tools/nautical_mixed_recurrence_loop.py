@@ -100,9 +100,9 @@ def _write_fixture_files(anchor_dir: Path, omit_dir: Path) -> dict[str, str]:
 def _install_hooks(data_dir: Path) -> None:
     hooks_dir = data_dir / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "on-add-nautical.py", hooks_dir / "on-add")
-    shutil.copy2(ROOT / "on-modify-nautical.py", hooks_dir / "on-modify")
-    shutil.copy2(ROOT / "on-exit-nautical.py", hooks_dir / "on-exit")
+    shutil.copy2(ROOT / "on-add.nautical", hooks_dir / "on-add")
+    shutil.copy2(ROOT / "on-modify.nautical", hooks_dir / "on-modify")
+    shutil.copy2(ROOT / "on-exit.nautical", hooks_dir / "on-exit")
     shutil.copytree(ROOT / "nautical_core", data_dir / "nautical_core", dirs_exist_ok=True)
     for p in (hooks_dir / "on-add", hooks_dir / "on-modify", hooks_dir / "on-exit"):
         try:

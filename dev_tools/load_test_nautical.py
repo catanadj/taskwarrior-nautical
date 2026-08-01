@@ -50,9 +50,9 @@ def _install_hooks(hooks_dir: Path) -> None:
     task_root = hooks_dir.parent
     installed = []
     for source_name, target_name in (
-        ("on-add-nautical.py", "on-add"),
-        ("on-modify-nautical.py", "on-modify"),
-        ("on-exit-nautical.py", "on-exit"),
+        ("on-add.nautical", "on-add"),
+        ("on-modify.nautical", "on-modify"),
+        ("on-exit.nautical", "on-exit"),
     ):
         target = hooks_dir / target_name
         shutil.copy2(REPO_ROOT / source_name, target)

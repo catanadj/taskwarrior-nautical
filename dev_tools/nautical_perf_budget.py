@@ -393,7 +393,7 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
         cases.append(
             (
                 "hook_plain_add",
-                ROOT / "on-add-nautical.py",
+                ROOT / "on-add.nautical",
                 json.dumps(plain, ensure_ascii=False),
                 plain,
                 add_data,
@@ -404,7 +404,7 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
         cases.append(
             (
                 "hook_plain_modify",
-                ROOT / "on-modify-nautical.py",
+                ROOT / "on-modify.nautical",
                 json.dumps(plain, ensure_ascii=False) + "\n" + json.dumps(modified, ensure_ascii=False),
                 modified,
                 modify_data,
@@ -422,7 +422,7 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
         cases.append(
             (
                 "hook_nautical_ordinary_modify",
-                ROOT / "on-modify-nautical.py",
+                ROOT / "on-modify.nautical",
                 json.dumps(nautical_old, ensure_ascii=False) + "\n" + json.dumps(nautical_modified, ensure_ascii=False),
                 nautical_modified,
                 modify_data,
@@ -431,7 +431,7 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
         exit_data = temp_root / "exit-data"
         exit_data.mkdir()
         _init_empty_queue_db(exit_data)
-        cases.append(("hook_empty_exit", ROOT / "on-exit-nautical.py", "", None, exit_data))
+        cases.append(("hook_empty_exit", ROOT / "on-exit.nautical", "", None, exit_data))
 
         results = {}
         for name, hook_path, input_text, expected_task, taskdata in cases:

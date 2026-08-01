@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # Python 3.10 and earlier
         import tomli as tomllib
     except ModuleNotFoundError:
         tomllib = None
+import zoneinfo
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -503,20 +504,19 @@ def _task_data_dir(task_bin: str) -> Path:
     return Path(os.path.expandvars(raw)).expanduser().resolve()
 
 
-def _synchronize_taskdata_astronomy(hook: Any, taskdata: Path | None) -> None:
-    """Load installer-managed astronomy config when core imported too early.
+def _synchronize_taskdata_config(hook: Any, taskdata: Path | None) -> None:
+    """Load installer-managed config when core imported too early.
 
     Reconcile imports the hook/core before it can ask Taskwarrior for its data
-    directory.  For custom TASKDATA installations that leaves the static core
-    astronomy snapshot empty even though the installed config is valid.  Do not
-    override an explicit NAUTICAL_CONFIG; it has already been selected (or
-    deliberately rejected) by the normal core loader.
+    directory. For custom TASKDATA installations that leaves the static core
+    timezone and astronomy snapshots at their defaults even though the
+    installed config is valid. Do not override an explicit NAUTICAL_CONFIG; it
+    has already been selected (or deliberately rejected) by the normal loader.
     """
     if taskdata is None or tomllib is None or str(os.environ.get("NAUTICAL_CONFIG") or "").strip():
         return
     core = getattr(hook, "core", None)
-    existing = getattr(core, "ASTRONOMY_CONFIG", None) if core is not None else None
-    if core is None or (isinstance(existing, dict) and existing):
+    if core is None:
         return
     candidates = (
         taskdata / "config-nautical.toml",
@@ -532,12 +532,23 @@ def _synchronize_taskdata_astronomy(hook: Any, taskdata: Path | None) -> None:
         except Exception:
             continue
         astronomy = data.get("astronomy") if isinstance(data, dict) else None
-        if not isinstance(astronomy, dict):
-            continue
-        core.ASTRONOMY_CONFIG = astronomy
+        if isinstance(data, dict) and "astronomy" in data and isinstance(astronomy, dict):
+            core.ASTRONOMY_CONFIG = astronomy
+        timezone_name = str(data.get("tz") or "").strip() if isinstance(data, dict) else ""
+        if timezone_name:
+            try:
+                local_tz = zoneinfo.ZoneInfo(timezone_name)
+            except Exception:
+                local_tz = None
+            if local_tz is not None:
+                core.LOCAL_TZ_NAME = timezone_name
+                core._LOCAL_TZ = local_tz
         core_config = getattr(core, "_core_config", None)
         if core_config is not None:
-            core_config.ASTRONOMY_CONFIG = astronomy
+            if isinstance(data, dict) and "astronomy" in data and isinstance(astronomy, dict):
+                core_config.ASTRONOMY_CONFIG = astronomy
+            if timezone_name:
+                core_config.LOCAL_TZ_NAME = timezone_name
         return
 
 
@@ -1208,14 +1219,15 @@ def main(argv: list[str] | None = None) -> int:
     runtime_taskdata = taskdata
     if runtime_taskdata is None:
         try:
-            if (
-                not str(os.environ.get("NAUTICAL_CONFIG") or "").strip()
-                and not getattr(hook.core, "ASTRONOMY_CONFIG", {})
-            ):
-                runtime_taskdata = _task_data_dir(args.task_bin)
+            if not str(os.environ.get("NAUTICAL_CONFIG") or "").strip():
+                env_taskdata = str(os.environ.get("TASKDATA") or "").strip()
+                if env_taskdata:
+                    runtime_taskdata = Path(env_taskdata).expanduser().resolve()
+                elif not getattr(hook.core, "ASTRONOMY_CONFIG", {}):
+                    runtime_taskdata = _task_data_dir(args.task_bin)
         except Exception:
             runtime_taskdata = None
-    _synchronize_taskdata_astronomy(hook, runtime_taskdata)
+    _synchronize_taskdata_config(hook, runtime_taskdata)
     configuration_drift_reason = _configuration_drift_reason(hook)
     native_until_audit_warning = ""
     if configuration_drift_reason:

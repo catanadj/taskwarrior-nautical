@@ -648,8 +648,10 @@ class TaskAnalyzer:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
             spinner = progress.add_task("Loading chained tasks…", total=None)
             try:
-                # Includes completed/waiting/pending/etc.; interactive pickers need this.
-                tasks = self._export_tasks("chain:on", "all")
+                # chainID is the authoritative chain marker.  ``chain:on``
+                # excludes completed/disabled history because Nautical
+                # intentionally turns chain off at those lifecycle points.
+                tasks = self._export_tasks("chainID.not:", "all")
 
                 for t in tasks:
                     if t.get("id"):

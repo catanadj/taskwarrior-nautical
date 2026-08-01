@@ -228,7 +228,48 @@ def _active_chain_rows(task_bin: str) -> list[dict[str, Any]]:
     )
 
 
-def _native_until_repairs(task_bin: str, hook: Any, *, apply: bool) -> tuple[list[dict[str, Any]], list[str]]:
+def _native_until_guard_error(expected: dict[str, Any], fresh: dict[str, Any]) -> str | None:
+    """Detect target or recurrence changes made after the audit export."""
+    fields = (
+        "uuid", "status", "chain", "chainID", "link", "due", "scheduled", "until",
+        "anchor", "anchor_file", "cp", "chainMax", "chainUntil",
+    )
+    for field in fields:
+        left = expected.get(field)
+        right = fresh.get(field)
+        if field == "link":
+            left = reconcile.int_or_default(left, 0)
+            right = reconcile.int_or_default(right, 0)
+        else:
+            left = str(left or "").strip()
+            right = str(right or "").strip()
+        if left != right:
+            return f"native-until target changed ({field}: {left or '<empty>'} -> {right or '<empty>'})"
+    return None
+
+
+def _fresh_native_until_previous(task_bin: str, row: dict[str, Any]) -> dict[str, Any] | None:
+    chain_id = str(row.get("chainID") or "").strip()
+    link = reconcile.int_or_default(row.get("link"), 0)
+    if not chain_id or link <= 1:
+        return None
+    rows = _export(task_bin, [f"chainID:{chain_id}", f"link:{link - 1}"], timeout=30.0)
+    matches = [
+        candidate
+        for candidate in rows
+        if str(candidate.get("chainID") or "").strip() == chain_id
+        and reconcile.int_or_default(candidate.get("link"), 0) == link - 1
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _native_until_repairs(
+    task_bin: str,
+    hook: Any,
+    *,
+    apply: bool,
+    taskdata: Path | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
     """Find invalid native windows and repair only those with a reliable predecessor."""
     rows = _active_chain_rows(task_bin)
     by_chain_link = {
@@ -297,23 +338,45 @@ def _native_until_repairs(task_bin: str, hook: Any, *, apply: bool) -> tuple[lis
         item["action"] = "repair_until"
         item["new_until"] = repaired
         if apply:
-            try:
-                _modify_native_until(task_bin, row, repaired)
-            except Exception as exc:
+            if taskdata is None:
                 item["action"] = "repair_error"
-                item["repair_error"] = str(exc).strip() or type(exc).__name__
+                item["repair_error"] = "Taskwarrior data location is unavailable for native-until locking"
                 errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
+                repairs.append(item)
                 continue
-            fresh = _fresh_parent(task_bin, row)
-            if fresh is None or not _native_until_matches(fresh, repaired, hook):
-                actual = str((fresh or {}).get("until") or "<missing>")
-                item["repair_error"] = (
-                    f"native until repair verification failed (expected {repaired}; found {actual})"
-                )
-                errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
-                item["action"] = "repair_error"
-            else:
-                item["applied"] = True
+            with _parent_apply_lock(taskdata, str(row.get("uuid") or "")) as acquired:
+                if not acquired:
+                    item["action"] = "repair_error"
+                    item["repair_error"] = "native-until repair lock busy"
+                else:
+                    fresh = _fresh_parent(task_bin, row)
+                    guard_error = _native_until_guard_error(row, fresh) if fresh else "native-until target disappeared"
+                    fresh_previous = _fresh_native_until_previous(task_bin, fresh or row)
+                    if not guard_error:
+                        if (previous is None) != (fresh_previous is None):
+                            guard_error = "native-until predecessor changed during repair"
+                        elif previous is not None and fresh_previous is not None:
+                            guard_error = _native_until_guard_error(previous, fresh_previous)
+                    if guard_error:
+                        item["action"] = "repair_error"
+                        item["repair_error"] = guard_error
+                    else:
+                        try:
+                            _modify_native_until(task_bin, fresh, repaired)
+                            verified = _fresh_parent(task_bin, fresh)
+                            if verified is None or not _native_until_matches(verified, repaired, hook):
+                                actual = str((verified or {}).get("until") or "<missing>")
+                                item["action"] = "repair_error"
+                                item["repair_error"] = (
+                                    f"native until repair verification failed (expected {repaired}; found {actual})"
+                                )
+                            else:
+                                item["applied"] = True
+                        except Exception as exc:
+                            item["action"] = "repair_error"
+                            item["repair_error"] = str(exc).strip() or type(exc).__name__
+                if item.get("action") == "repair_error":
+                    errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
         repairs.append(item)
     return repairs, errors
 
@@ -1059,12 +1122,17 @@ def main(argv: list[str] | None = None) -> int:
         candidates = _candidate_rows(args.task_bin, hook)
     except Exception as exc:
         return _startup_failure(args, "candidate_export", exc)
+    try:
+        taskdata = _task_data_dir(args.task_bin) if args.apply else None
+    except Exception as exc:
+        return _startup_failure(args, "taskdata", exc)
     native_until_audit_warning = ""
     try:
         native_until_repairs, native_until_errors = _native_until_repairs(
             args.task_bin,
             hook,
             apply=args.apply,
+            taskdata=taskdata,
         )
     except Exception as exc:
         # The integrity pass is supplementary; preserve normal recovery when its
@@ -1092,10 +1160,6 @@ def main(argv: list[str] | None = None) -> int:
             print(_style(line, _action_style(action)))
         for error in native_until_errors:
             print(_style(f"error: native-until: {error}", "red", stream=sys.stderr), file=sys.stderr)
-    try:
-        taskdata = _task_data_dir(args.task_bin) if args.apply else None
-    except Exception as exc:
-        return _startup_failure(args, "taskdata", exc)
     plans: list[reconcile.ReconcilePlan] = []
     plan_evidence: list[dict[str, Any]] = []
     applied: list[dict[str, Any]] = []

@@ -23913,6 +23913,11 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         ),
         "a different native-until instant must fail verification",
     )
+    guard_error = tool._native_until_guard_error(
+        {"uuid": "u1", "chainID": "cid", "link": 2, "due": "old"},
+        {"uuid": "u1", "chainID": "cid", "link": 2, "due": "new"},
+    )
+    expect(guard_error and "due" in guard_error, f"target drift was not detected: {guard_error!r}")
 
 
 def test_seasonal_selection_business_calendar_and_cache_identity():

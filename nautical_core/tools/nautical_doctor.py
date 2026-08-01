@@ -46,6 +46,41 @@ REQUIRED_UDAS = {
 }
 RECURRENCE_FIELDS = ("cp", "anchor", "anchor_file")
 SEVERITY_RANK = {"ok": 0, "warn": 1, "error": 2}
+_ANSI = {
+    "reset": "\033[0m",
+    "bold": "\033[1m",
+    "cyan": "\033[36m",
+    "green": "\033[32m",
+    "yellow": "\033[33m",
+    "red": "\033[31m",
+}
+
+
+def _color_enabled(stream: Any = None) -> bool:
+    """Use color only for an interactive terminal, unless explicitly forced."""
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    target = stream if stream is not None else sys.stdout
+    try:
+        return bool(target.isatty())
+    except Exception:
+        return False
+
+
+def _paint(text: str, color: str, *, enabled: bool) -> str:
+    if not enabled:
+        return text
+    return f"{_ANSI[color]}{text}{_ANSI['reset']}"
+
+
+def _status_label(status: str, *, enabled: bool) -> str:
+    labels = {"ok": "[OK]", "warn": "[WARN]", "error": "[FAIL]"}
+    colors = {"ok": "green", "warn": "yellow", "error": "red"}
+    normalized = str(status or "").strip().lower()
+    label = labels.get(normalized, f"[{normalized.upper() or 'INFO'}]")
+    return _paint(label, colors.get(normalized, "cyan"), enabled=enabled)
 
 
 def _finding(
@@ -1056,15 +1091,20 @@ def _format_task(task: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
-def _render_details(details: dict[str, Any]) -> None:
+def _render_details(details: dict[str, Any], *, stream: Any = None, enabled: bool = False) -> None:
+    stream = stream if stream is not None else sys.stdout
+
+    def write(line: str = "") -> None:
+        print(line, file=stream)
+
     error = str(details.get("error") or "").strip()
     if error:
-        print(f"  Detail: {error}")
+        write(f"  Detail: {error}")
     for issue in details.get("issues") or []:
         if not isinstance(issue, dict):
-            print(f"  Detail: {issue}")
+            write(f"  Detail: {issue}")
             continue
-        print(
+        write(
             "  Issue: "
             f"{issue.get('kind') or '?'} chain={issue.get('chainID') or '?'} "
             f"{issue.get('message') or ''}".rstrip()
@@ -1072,47 +1112,47 @@ def _render_details(details: dict[str, Any]) -> None:
         for task in issue.get("tasks") or []:
             if not isinstance(task, dict):
                 continue
-            print(f"    Task: {_format_task(task)}")
+            write(f"    Task: {_format_task(task)}")
             reason = str(task.get("reason") or "").strip()
             if reason:
-                print(f"      Why: {reason}")
+                write(f"      Why: {reason}")
     for reason, count in (details.get("reasons") or {}).items():
-        print(f"  Reason: {reason} ({count})")
+        write(f"  Reason: {reason} ({count})")
     for repair in details.get("repairs") or []:
         if not isinstance(repair, dict):
             continue
-        print(
+        write(
             "  Repair: "
             f"{repair.get('task') or '?'} chain={repair.get('chainID') or '?'} "
             f"link={repair.get('link') or '?'} {repair.get('field') or '?'}: "
             f"{repair.get('old') or '-'} -> {repair.get('new') or '-'}"
         )
     for action, count in (details.get("actions") or {}).items():
-        print(f"  Action: {action} ({count})")
+        write(f"  Action: {action} ({count})")
     for plan in details.get("plans") or []:
         if not isinstance(plan, dict):
             continue
-        print(
+        write(
             "  Plan: "
             f"{plan.get('action') or '?'} parent={plan.get('parent') or '?'} "
             f"chain={plan.get('chainID') or '?'} next={plan.get('next_link') or '?'}"
         )
         reason = str(plan.get("reason") or "").strip()
         if reason:
-            print(f"    Reason: {reason}")
+            write(f"    Reason: {reason}")
         child = plan.get("existing_child") or plan.get("child_target") or plan.get("child_due")
         if child:
-            print(f"    Child: {child}")
+            write(f"    Child: {child}")
     for task in details.get("tasks") or []:
         if isinstance(task, dict):
-            print(f"  Affected: {_format_task(task)}")
+            write(f"  Affected: {_format_task(task)}")
     for slot in details.get("slots") or []:
         if not isinstance(slot, dict):
             continue
-        print(f"  Slot: chain={slot.get('chainID') or '?'} link={slot.get('link')}")
+        write(f"  Slot: chain={slot.get('chainID') or '?'} link={slot.get('link')}")
         for task in slot.get("tasks") or []:
             if isinstance(task, dict):
-                print(f"    Task: {_format_task(task)}")
+                write(f"    Task: {_format_task(task)}")
     for link in details.get("links") or []:
         if not isinstance(link, dict):
             continue
@@ -1123,28 +1163,52 @@ def _render_details(details: dict[str, Any]) -> None:
         field = str(link.get("field") or "link")
         matches = link.get("matches")
         suffix = f" ({matches} matches)" if matches is not None else ""
-        print(f"  Affected: {source}")
-        print(f"    {field} -> {target_text}{suffix}")
+        write(f"  Affected: {source}")
+        write(f"    {field} -> {target_text}{suffix}")
 
 
-def _render_text(payload: dict[str, Any]) -> None:
-    print(f"Nautical doctor: {payload['status']}")
-    print(f"Taskdata: {payload['taskdata']}")
+def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
+    stream = stream if stream is not None else sys.stdout
+    enabled = _color_enabled(stream)
+    findings = [item for item in payload.get("findings") or [] if isinstance(item, dict)]
+    counts = {
+        severity: sum(1 for item in findings if item.get("severity") == severity)
+        for severity in ("ok", "warn", "error")
+    }
+    status = str(payload.get("status") or "unknown")
+
+    def write(line: str = "") -> None:
+        print(line, file=stream)
+
+    write(f"Nautical doctor: {_status_label(status, enabled=enabled)}")
+    write(f"Taskdata: {payload.get('taskdata') or '?'}")
+    ok_text = _paint(f"{counts['ok']} ok", "green", enabled=enabled)
+    warn_text = _paint(f"{counts['warn']} warnings", "yellow", enabled=enabled)
+    error_text = _paint(f"{counts['error']} failures", "red", enabled=enabled)
+    write(
+        "Checks: "
+        f"{len(findings)} total | "
+        f"{ok_text} | {warn_text} | {error_text}"
+    )
     timezone = _timezone_summary(payload.get("findings") or [])
     if timezone:
-        print(f"Timezone: {timezone}")
+        write(f"Timezone: {timezone}")
     for section in ("error", "warn", "ok"):
-        items = [item for item in payload["findings"] if item["severity"] == section]
+        items = [item for item in findings if item.get("severity") == section]
         if not items:
             continue
-        print(f"\n{section.upper()} ({len(items)})")
-        for item in items:
-            print(f"- [{item['id']}] {item['message']}")
+        heading = f"{_status_label(section, enabled=enabled)} {section.upper()} ({len(items)})"
+        write(f"\n{heading}")
+        for index, item in enumerate(items):
+            if index:
+                write()
+            write(f"  {_status_label(section, enabled=enabled)} {item.get('id') or '?'}")
+            write(f"    {item.get('message') or ''}")
             details = item.get("details")
             if isinstance(details, dict):
-                _render_details(details)
+                _render_details(details, stream=stream, enabled=enabled)
             if item.get("fix"):
-                print(f"  Fix: {item['fix']}")
+                write(f"    Fix: {_paint(str(item['fix']), 'yellow', enabled=enabled)}")
 
 
 def _timezone_summary(findings: list[dict[str, Any]]) -> str:

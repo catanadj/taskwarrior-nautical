@@ -32,6 +32,10 @@ _DEFAULT_EXPIRATION_HOPS = 32
 _MAX_EXPIRATION_HOPS = 1000
 _RECONCILE_PROTOCOL = 1
 
+
+class _ConfigurationDrift(RuntimeError):
+    """Signal that this run must stop before applying under a new configuration."""
+
 _ANSI = {
     "dim": "\033[2m",
     "cyan": "\033[36m",
@@ -177,6 +181,17 @@ def _validate_hook_protocol(hook: Any) -> None:
     missing.extend(f"core.{name}" for name in required_core if not callable(getattr(core, name, None)))
     if missing:
         raise RuntimeError(f"on-modify reconcile protocol is missing: {', '.join(missing)}")
+
+
+def _configuration_drift_reason(hook: Any) -> str:
+    try:
+        drift = hook.core.configuration_drift()
+    except Exception:
+        return ""
+    if not isinstance(drift, dict) or not drift.get("changed"):
+        return ""
+    source = str(drift.get("source") or "unknown")
+    return f"configuration changed during reconcile (source: {source}); restart and rerun"
 
 
 def _candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
@@ -361,6 +376,13 @@ def _native_until_repairs(
                         item["action"] = "repair_error"
                         item["repair_error"] = guard_error
                     else:
+                        drift_reason = _configuration_drift_reason(hook)
+                        if drift_reason:
+                            item["action"] = "manual_review"
+                            item["repair_error"] = drift_reason
+                            item["configuration_drift"] = True
+                            repairs.append(item)
+                            return repairs, errors
                         try:
                             _modify_native_until(task_bin, fresh, repaired)
                             verified = _fresh_parent(task_bin, fresh)
@@ -709,6 +731,9 @@ def _apply_parent_atomic(
     with _parent_apply_lock(taskdata, parent_uuid) as acquired:
         if not acquired:
             raise RuntimeError(f"parent reconcile lock busy: {reconcile.short_uuid(parent_uuid)}")
+        drift_reason = _configuration_drift_reason(hook)
+        if drift_reason:
+            raise _ConfigurationDrift(drift_reason)
         plan = _refresh_plan(task_bin, hook, original_parent)
         if plan.action == "spawn":
             if not plan.child:
@@ -907,6 +932,9 @@ def _reconcile_candidate(
                     current,
                     taskdata=taskdata,
                 )
+            except _ConfigurationDrift as exc:
+                outcomes.append((_recovery_partial(current, str(exc)), ""))
+                break
             except Exception as exc:
                 reason = str(exc).strip() or type(exc).__name__
                 outcomes.append((_recovery_error(current, reason), ""))
@@ -1081,6 +1109,8 @@ def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
             "manual_stop": 0,
             "stale": 0,
             "partial": 0,
+            "native_until_manual_review": 0,
+            "native_until_audit_skipped": 0,
             "errors": 1,
             "plans": [],
             "applied": [],
@@ -1126,28 +1156,41 @@ def main(argv: list[str] | None = None) -> int:
         taskdata = _task_data_dir(args.task_bin) if args.apply else None
     except Exception as exc:
         return _startup_failure(args, "taskdata", exc)
+    configuration_drift_reason = _configuration_drift_reason(hook)
     native_until_audit_warning = ""
-    try:
-        native_until_repairs, native_until_errors = _native_until_repairs(
-            args.task_bin,
-            hook,
-            apply=args.apply,
-            taskdata=taskdata,
-        )
-    except Exception as exc:
-        # The integrity pass is supplementary; preserve normal recovery when its
-        # independent export cannot run (for example while Taskwarrior is locked).
+    if configuration_drift_reason:
         native_until_repairs, native_until_errors = [], []
-        native_until_audit_warning = str(exc).strip() or type(exc).__name__
-        if not args.json:
-            print(
-                _style(
-                    f"warning: native-until audit skipped: {native_until_audit_warning}",
-                    "yellow",
-                    stream=sys.stderr,
-                ),
-                file=sys.stderr,
+    else:
+        try:
+            native_until_repairs, native_until_errors = _native_until_repairs(
+                args.task_bin,
+                hook,
+                apply=args.apply,
+                taskdata=taskdata,
             )
+        except Exception as exc:
+            # The integrity pass is supplementary; preserve normal recovery when its
+            # independent export cannot run (for example while Taskwarrior is locked).
+            native_until_repairs, native_until_errors = [], []
+            native_until_audit_warning = str(exc).strip() or type(exc).__name__
+            if not args.json:
+                print(
+                    _style(
+                        f"warning: native-until audit skipped: {native_until_audit_warning}",
+                        "yellow",
+                        stream=sys.stderr,
+                    ),
+                    file=sys.stderr,
+                )
+    if not configuration_drift_reason:
+        configuration_drift_reason = next(
+            (
+                str(item.get("repair_error") or "")
+                for item in native_until_repairs
+                if item.get("configuration_drift")
+            ),
+            "",
+        )
     if not args.json:
         for item in native_until_repairs:
             action = item.get("action") or "native_until"
@@ -1168,6 +1211,10 @@ def main(argv: list[str] | None = None) -> int:
     ambiguous_slots = _ambiguous_candidate_slots(candidates)
 
     for parent in candidates:
+        if not configuration_drift_reason:
+            configuration_drift_reason = _configuration_drift_reason(hook)
+        if configuration_drift_reason:
+            break
         parent_slot = (
             str(parent.get("chainID") or "").strip(),
             reconcile.int_or_default(parent.get("link"), 0),
@@ -1191,6 +1238,15 @@ def main(argv: list[str] | None = None) -> int:
                 reason = str(exc).strip() or type(exc).__name__
                 outcomes = [(_recovery_error(parent, reason), "")]
         outcome_groups.append(outcomes)
+        if not configuration_drift_reason:
+            configuration_drift_reason = next(
+                (
+                    plan.reason
+                    for plan, _applied in outcomes
+                    if plan.action == "partial" and "configuration changed during reconcile" in plan.reason
+                ),
+                "",
+            )
         rendered: list[tuple[reconcile.ReconcilePlan, dict[str, Any], str]] = []
         for plan, applied_short in outcomes:
             processed_slots.add(
@@ -1238,8 +1294,22 @@ def main(argv: list[str] | None = None) -> int:
         > 1
         and all(plan.action not in {"error", "partial"} for plan, _applied in outcomes)
     )
+    native_until_manual_review = sum(
+        1 for item in native_until_repairs if item.get("action") == "manual_review"
+    )
+    native_until_audit_skipped = int(bool(native_until_audit_warning))
+    degraded = (
+        any(plan.action == "partial" for plan in plans)
+        or native_until_manual_review > 0
+        or native_until_audit_skipped > 0
+        or bool(configuration_drift_reason)
+    )
+    has_errors = any(plan.action == "error" for plan in plans) or bool(native_until_errors)
 
     summary = {
+        "status": "error" if has_errors else "degraded" if degraded else "ok",
+        "configuration_drifted": int(bool(configuration_drift_reason)),
+        "configuration_drift": configuration_drift_reason,
         "mode": "apply" if args.apply else "dry-run",
         "candidates": len(candidates),
         "expiration_hops": expiration_hops,
@@ -1251,6 +1321,8 @@ def main(argv: list[str] | None = None) -> int:
         "stale": sum(1 for p in plans if p.action == "stale"),
         "partial": sum(1 for p in plans if p.action == "partial"),
         "errors": sum(1 for p in plans if p.action == "error"),
+        "native_until_manual_review": native_until_manual_review,
+        "native_until_audit_skipped": native_until_audit_skipped,
         "plans": [
             {
                 "action": plan.action,
@@ -1274,12 +1346,15 @@ def main(argv: list[str] | None = None) -> int:
             f"final={summary['legitimate_final']} manual={summary['manual_stop']} "
             f"stale={summary['stale']} partial={summary['partial']} errors={summary['errors']}"
             f" native_until={len(summary['native_until_repairs'])}"
+            f" manual_review={summary['native_until_manual_review']}"
+            f" audit_skipped={summary['native_until_audit_skipped']}"
+            f" config_drift={summary['configuration_drifted']}"
         )
-        summary_color = "red" if summary["errors"] or summary["native_until_errors"] else "yellow" if summary["partial"] else "green"
+        summary_color = "red" if has_errors else "yellow" if degraded else "green"
         print(_style(summary_line, summary_color))
-    if summary["errors"] or summary["native_until_errors"]:
+    if has_errors:
         return 1
-    return 2 if summary["partial"] else 0
+    return 2 if degraded else 0
 
 
 if __name__ == "__main__":

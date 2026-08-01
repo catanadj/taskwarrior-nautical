@@ -21517,6 +21517,50 @@ def test_reconcile_partial_recovery_exit_and_verbose_output():
     expect("spawn:" in verbose.getvalue() and "partial:" in verbose.getvalue(), f"verbose output omitted hops: {verbose.getvalue()!r}")
 
 
+def test_reconcile_degraded_audit_status_is_structured():
+    """Skipped audits and manual review must return a distinct degraded status."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_degraded_status_test")
+    original = (mod._candidate_rows, mod._native_until_repairs, mod._configuration_drift_reason)
+    try:
+        mod._candidate_rows = lambda _task_bin, _hook: []
+        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: (
+            [{"action": "manual_review", "task": "11111111"}],
+            [],
+        )
+        manual_output = io.StringIO()
+        with contextlib.redirect_stdout(manual_output):
+            manual_result = mod.main(["--json"])
+        manual_summary = json.loads(manual_output.getvalue())
+        expect(manual_result == 2, f"manual review should be degraded: {manual_result}")
+        expect(manual_summary.get("status") == "degraded", f"wrong manual status: {manual_summary!r}")
+        expect(manual_summary.get("native_until_manual_review") == 1, f"manual review was not counted: {manual_summary!r}")
+
+        def skipped_audit(_task_bin, _hook, **_kwargs):
+            raise RuntimeError("Taskwarrior lock active")
+
+        mod._native_until_repairs = skipped_audit
+        skipped_output = io.StringIO()
+        with contextlib.redirect_stdout(skipped_output):
+            skipped_result = mod.main(["--json"])
+        skipped_summary = json.loads(skipped_output.getvalue())
+        expect(skipped_result == 2, f"skipped audit should be degraded: {skipped_result}")
+        expect(skipped_summary.get("status") == "degraded", f"wrong skipped status: {skipped_summary!r}")
+        expect(skipped_summary.get("native_until_audit_skipped") == 1, f"skipped audit was not counted: {skipped_summary!r}")
+
+        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: ([], [])
+        mod._configuration_drift_reason = lambda _hook: "configuration changed during reconcile (source: test)"
+        drift_output = io.StringIO()
+        with contextlib.redirect_stdout(drift_output):
+            drift_result = mod.main(["--json"])
+        drift_summary = json.loads(drift_output.getvalue())
+        expect(drift_result == 2, f"configuration drift should be degraded: {drift_result}")
+        expect(drift_summary.get("configuration_drifted") == 1, f"configuration drift was not counted: {drift_summary!r}")
+        expect(drift_summary.get("status") == "degraded", f"wrong drift status: {drift_summary!r}")
+    finally:
+        mod._candidate_rows, mod._native_until_repairs, mod._configuration_drift_reason = original
+
+
 def test_reconcile_tool_apply_disables_legitimate_final_chain():
     """Applying a cap-final plan should persist chain:off so it is not reconsidered."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -24773,6 +24817,7 @@ TESTS = [
     test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_print_plan_includes_evidence,
     test_reconcile_partial_recovery_exit_and_verbose_output,
+    test_reconcile_degraded_audit_status_is_structured,
     test_reconcile_tool_apply_disables_legitimate_final_chain,
     test_reconcile_disable_verification_fails_closed,
     test_chain_repair_plans_only_safe_adjacent_link_updates,

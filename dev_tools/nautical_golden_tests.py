@@ -16234,6 +16234,37 @@ def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_cha
         navigator._task_command.run_task_command = original_run
 
 
+def test_navigator_empty_task_export_treats_no_matches_as_empty():
+    """Taskwarrior's empty-filter exit must not abort Navigator startup."""
+    module_name = "_nautical_navigator_empty_export_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+        original_run = navigator._task_command.run_task_command
+        try:
+            navigator._task_command.run_task_command = lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=1, stdout="", stderr="No matches.", kind="nonzero"
+            )
+            expect(navigator._run_task_export(("chain:on", "all")) == [], "No matches was not treated as an empty export")
+
+            navigator._task_command.run_task_command = lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=1, stdout="", stderr="database is locked", kind="lock_busy"
+            )
+            try:
+                navigator._run_task_export(("chain:on", "all"))
+            except RuntimeError as exc:
+                expect("database is locked" in str(exc), f"real export failure was obscured: {exc}")
+            else:
+                raise AssertionError("non-empty export failure was silently ignored")
+        finally:
+            navigator._task_command.run_task_command = original_run
+    finally:
+        sys.modules.pop(module_name, None)
+
+
 def test_navigator_sparse_calendar_renders_only_active_months():
     """Sparse recurrence projections should not render empty months between occurrences."""
     module_name = "_nautical_navigator_sparse_calendar_test"
@@ -24970,6 +25001,7 @@ TESTS.extend([
     test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream,
     test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,
     test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain,
+    test_navigator_empty_task_export_treats_no_matches_as_empty,
     test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime,
     test_navigator_surfaces_configuration_drift_warning,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,

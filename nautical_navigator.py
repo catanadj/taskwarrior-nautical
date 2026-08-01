@@ -166,6 +166,13 @@ def _run_task_export(filters: tuple[str, ...]) -> Any:
         timeout=30.0,
         retry_locks=True,
     )
+    # Taskwarrior reports an empty filter result as a non-zero "No matches"
+    # command result.  For Navigator this is a valid empty collection, not a
+    # retrieval failure; preserve all other command failures as errors.
+    if result.returncode != 0:
+        detail = "\n".join((str(result.stderr or ""), str(result.stdout or ""))).lower()
+        if "no matches" in detail:
+            return []
     return _task_command.load_json_result(result, "Navigator Taskwarrior export", empty=[])
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -20,7 +20,7 @@ PHASE_RANGES = {
 
 
 class AstronomyUnavailableError(RuntimeError):
-    """Raised when symbolic times are used without the optional provider."""
+    """Raised when symbolic times are used without the Astral provider."""
 
 
 class AstronomyConfigurationError(ValueError):
@@ -125,7 +125,7 @@ def _phase_matches_date_cached(phase: str, day: date, selected: str, timezone: s
         from astral import moon
     except ImportError as exc:
         raise AstronomyUnavailableError(
-            "moon phase anchors require the optional 'astral' package"
+            "moon phase anchors require the 'astral' package"
         ) from exc
     try:
         value = float(moon.phase(day))
@@ -193,7 +193,7 @@ def _observer(config: dict[str, Any] | None, location_name: str | None = None):
         from astral import Observer
     except ImportError as exc:
         raise AstronomyUnavailableError(
-            "astronomical anchor times require the optional 'astral' package"
+            "astronomical anchor times require the 'astral' package"
         ) from exc
     return selected, Observer(latitude=latitude, longitude=longitude, elevation=float(profile.get("elevation", 0) or 0)), tzinfo
 
@@ -264,7 +264,7 @@ def _resolve_event_cached(
         observer = Observer(latitude=latitude, longitude=longitude, elevation=elevation)
     except ImportError as exc:
         raise AstronomyUnavailableError(
-            "astronomical anchor times require the optional 'astral' package"
+            "astronomical anchor times require the 'astral' package"
         ) from exc
     except Exception as exc:
         raise AstronomyConfigurationError(

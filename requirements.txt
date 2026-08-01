@@ -2,3 +2,4 @@
 rich>=13
 prompt_toolkit>=3
 python-dateutil>=2.8
+astral>=3.2

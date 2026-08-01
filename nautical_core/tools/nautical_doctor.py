@@ -627,7 +627,7 @@ def _check_navigator_dependencies(findings: list[dict[str, Any]], data: dict[str
             "navigator.astronomy_dependency",
             "warn",
             "Astronomy locations are configured, but Astral is not installed.",
-            fix="Run python3 -m pip install -r requirements-astronomy.txt.",
+            fix="Run python3 -m pip install -r requirements.txt.",
             details={"python": sys.executable},
         )
 

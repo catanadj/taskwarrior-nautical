@@ -59,13 +59,6 @@ Install Navigator and the formatted-panel dependencies:
 python3 -m pip install -r requirements.txt
 ```
 
-For astronomical `@t=` events or moon-phase anchors, install the optional
-provider as well:
-
-```bash
-python3 -m pip install -r requirements-astronomy.txt
-```
-
 The installer writes an explicit local IANA timezone to a new installation's
 `config-nautical.toml`. Existing configurations are preserved; Doctor reports
 when a timezone is missing or unavailable.
@@ -98,10 +91,10 @@ task add "Full moon check" anchor:"moon:full"
 task add "Friday full moon check" anchor:"w:fri@moon=full"
 ```
 
-Moon-phase anchors use the optional `astral` package and an explicit timezone
-profile in `config-nautical.toml`. They match the phase's local calendar date;
-if astronomy is unavailable, Nautical reports the configuration problem rather
-than creating an invented occurrence.
+Astronomical `@t=` events and moon-phase anchors use Astral and an explicit
+timezone profile in `config-nautical.toml`. They match the phase's local
+calendar date; if the profile is unavailable, Nautical reports the
+configuration problem rather than creating an invented occurrence.
 
 That is enough to begin. `cp` is for “after this long”; `anchor` is for “on
 these dates.” Together they are a small doorway into routines as precise and

@@ -264,6 +264,13 @@ def config_paths(*, warn_env_config_missing) -> list[str]:
         if os.path.basename(trc_dir) == ".task":
             paths.extend(_candidates_in_dir(trc_dir))
 
+    # The installer stores the user-editable config beside Taskwarrior's data.
+    # Keep this after TASKRC candidates so an explicit Taskwarrior config still
+    # wins, but before package and global fallbacks.
+    taskdata = os.environ.get("TASKDATA")
+    if taskdata:
+        paths.extend(_candidates_in_dir(taskdata))
+
     moddir = os.path.dirname(os.path.abspath(__file__))
     paths.extend(_candidates_in_dir(moddir))
 

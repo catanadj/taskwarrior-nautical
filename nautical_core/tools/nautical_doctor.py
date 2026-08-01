@@ -337,17 +337,40 @@ def _check_managed_runtime(findings: list[dict[str, Any]], hooks_dir: Path) -> N
 def _config_candidates(taskdata: Path) -> list[Path]:
     explicit = os.environ.get("NAUTICAL_CONFIG", "").strip()
     candidates = [Path(explicit).expanduser()] if explicit else []
+    taskrc = os.environ.get("TASKRC", "").strip()
+    if taskrc:
+        taskrc_dir = Path(taskrc).expanduser().resolve().parent
+        candidates.extend(
+            [
+                taskrc_dir / "config-nautical.toml",
+                taskrc_dir / "nautical.toml",
+                taskrc_dir / ".task" / "config-nautical.toml",
+                taskrc_dir / ".task" / "nautical.toml",
+            ]
+        )
     candidates.extend(
         [
-            taskdata / "nautical_core" / "config-nautical.toml",
-            taskdata / "nautical_core" / "nautical.toml",
-            Path("~/.config/nautical/config-nautical.toml").expanduser(),
-            Path("~/.config/nautical/nautical.toml").expanduser(),
             taskdata / "config-nautical.toml",
             taskdata / "nautical.toml",
+            taskdata / "nautical_core" / "config-nautical.toml",
+            taskdata / "nautical_core" / "nautical.toml",
+            TOOLS_DIR.parent / "config-nautical.toml",
+            TOOLS_DIR.parent / "nautical.toml",
+            Path("~/.config/nautical/config-nautical.toml").expanduser(),
+            Path("~/.config/nautical/nautical.toml").expanduser(),
+            Path("~/.task/config-nautical.toml").expanduser(),
+            Path("~/.task/nautical.toml").expanduser(),
         ]
     )
-    return candidates
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.expanduser().resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(resolved)
+    return unique
 
 
 def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:

@@ -4267,7 +4267,7 @@ def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
         expect(not status.get("errors"), f"fresh runtime status has errors: {status!r}")
 
         current = taskdata / ".nautical-runtime/current"
-        wrapper = taskdata / "hooks/on-modify-nautical.py"
+        wrapper = taskdata / "hooks/on-modify.nautical"
         current_inode = os.lstat(current).st_ino
         wrapper_stamp = wrapper.stat().st_mtime_ns
         repeated = install_runtime.install_release(
@@ -4306,7 +4306,7 @@ def test_installer_upgrade_rollback_restores_active_runtime():
             smoke=False,
         )
         current = taskdata / ".nautical-runtime/current"
-        wrapper = taskdata / "hooks/on-modify-nautical.py"
+        wrapper = taskdata / "hooks/on-modify.nautical"
         pointer_before = os.readlink(current)
         wrapper_before = wrapper.read_bytes()
 

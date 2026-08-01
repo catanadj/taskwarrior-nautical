@@ -23,6 +23,11 @@ except Exception:
 
 
 HOOK_FILES = {
+    "on-add": "on-add.nautical",
+    "on-modify": "on-modify.nautical",
+    "on-exit": "on-exit.nautical",
+}
+LEGACY_HOOK_FILES = {
     "on-add": "on-add-nautical.py",
     "on-modify": "on-modify-nautical.py",
     "on-exit": "on-exit-nautical.py",
@@ -500,8 +505,13 @@ def _hook_conflicts(hooks_dir: Path) -> list[str]:
     conflicts = []
     for event, canonical_name in HOOK_FILES.items():
         canonical = hooks_dir / canonical_name
+        legacy = hooks_dir / LEGACY_HOOK_FILES[event]
         for hook in hook_candidates(hooks_dir, event):
             if hook != canonical and os.access(str(hook), os.X_OK):
+                if hook == legacy:
+                    constants, _functions, _error = python_contract(hook)
+                    if "_EXPECTED_IMPL_API" in constants or "HOOK_IMPL_API" in constants:
+                        continue
                 conflicts.append(str(hook))
     return sorted(set(conflicts))
 
@@ -509,6 +519,8 @@ def _hook_conflicts(hooks_dir: Path) -> list[str]:
 def _verify_running_wrappers(hooks_dir: Path, new_apis: dict[str, int]) -> None:
     for event, name in HOOK_FILES.items():
         hook = hooks_dir / name
+        if not (hook.is_file() and os.access(str(hook), os.X_OK)):
+            hook = hooks_dir / LEGACY_HOOK_FILES[event]
         if not (hook.is_file() and os.access(str(hook), os.X_OK)):
             continue
         constants, _functions, error = python_contract(hook)
@@ -574,6 +586,7 @@ def _target_has_nautical(base: Path, hooks_dir: Path, current: Path) -> bool:
         base / "nautical_core",
         *(base / name for name in MANAGED_ROOT_FILES),
         *(hooks_dir / name for name in HOOK_FILES.values()),
+        *(hooks_dir / name for name in LEGACY_HOOK_FILES.values()),
     ]
     return any(_lexists(path) for path in paths)
 
@@ -789,6 +802,17 @@ def install_release(
                 target = (hooks_dir / name) if name in HOOK_FILES.values() else (base / name)
                 file_snapshots[target] = _snapshot_file(target, rollback_dir)
                 _atomic_copy(release_dir / name, target, executable=(name != "nautical_navigator.py"))
+
+            # Remove only Nautical's exact legacy names after the canonical
+            # wrappers are installed. Snapshots make this rollback-safe.
+            for legacy_name in LEGACY_HOOK_FILES.values():
+                legacy_path = hooks_dir / legacy_name
+                if _lexists(legacy_path):
+                    constants, _functions, _error = python_contract(legacy_path)
+                    if "_EXPECTED_IMPL_API" not in constants and "HOOK_IMPL_API" not in constants:
+                        continue
+                    file_snapshots[legacy_path] = _snapshot_file(legacy_path, rollback_dir)
+                    legacy_path.unlink()
             if _fail_after == "after_wrappers":
                 raise InstallError("injected failure after wrapper install")
             if _fail_after == "before_postcheck":

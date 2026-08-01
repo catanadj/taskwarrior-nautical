@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -19,9 +20,9 @@ ROOT = HERE.parent
 
 
 REQUIRED_RUNTIME_FILES = (
-    "on-add-nautical.py",
-    "on-modify-nautical.py",
-    "on-exit-nautical.py",
+    "on-add.nautical",
+    "on-modify.nautical",
+    "on-exit.nautical",
     "nautical_core/install_runtime.py",
     "nautical_core/task_command.py",
     "nautical_core/hooks/__init__.py",
@@ -91,14 +92,18 @@ def _check_package_layout(root: Path, env: dict[str, str]) -> list[dict]:
     if not (pkg_init.exists() and pkg_init.is_file()):
         return [{"kind": "layout", "name": "package_core", "ok": False, "message": "nautical_core/__init__.py missing"}]
 
-    hook_names = ("on-add-nautical.py", "on-modify-nautical.py", "on-exit-nautical.py")
+    hook_names = ("on-add.nautical", "on-modify.nautical", "on-exit.nautical")
     for hook_name in hook_names:
         hook_path = root / hook_name
         if not (hook_path.exists() and hook_path.is_file()):
             out.append({"kind": "layout", "name": hook_name, "ok": False, "message": "hook missing"})
             continue
         try:
-            spec = importlib.util.spec_from_file_location(f"_nautical_layout_check_{hook_name.replace('-', '_')}", hook_path)
+            loader = importlib.machinery.SourceFileLoader(
+                f"_nautical_layout_check_{hook_name.replace('-', '_')}",
+                str(hook_path),
+            )
+            spec = importlib.util.spec_from_loader(loader.name, loader)
             if spec is None or spec.loader is None:
                 raise RuntimeError("spec_from_file_location failed")
             old_env = os.environ.copy()
@@ -128,9 +133,9 @@ def _check_hook_contracts(root: Path, taskdata: Path) -> list[dict]:
     env.pop("NAUTICAL_DIAG", None)
     env.pop("NAUTICAL_DIAG_LOG", None)
 
-    hook_add = root / "on-add-nautical.py"
-    hook_modify = root / "on-modify-nautical.py"
-    hook_exit = root / "on-exit-nautical.py"
+    hook_add = root / "on-add.nautical"
+    hook_modify = root / "on-modify.nautical"
+    hook_exit = root / "on-exit.nautical"
 
     base_task = {
         "uuid": "11111111-1111-1111-1111-111111111111",

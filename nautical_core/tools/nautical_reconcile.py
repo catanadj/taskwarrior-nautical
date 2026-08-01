@@ -87,9 +87,12 @@ def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
     candidates.extend(
         [
             CORE_DIR / "hooks" / "modify_impl.py",
+            BASE_DIR / "on-modify.nautical",
+            BASE_DIR / "hooks" / "on-modify.nautical",
             BASE_DIR / "on-modify-nautical.py",
             BASE_DIR / "hooks" / "on-modify-nautical.py",
             BASE_DIR / "hooks" / "on-modify",
+            CORE_DIR / "on-modify.nautical",
             CORE_DIR / "on-modify-nautical.py",
         ]
     )

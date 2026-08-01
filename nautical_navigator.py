@@ -290,8 +290,8 @@ def _find_hook_dir() -> Path | None:
         _add(Path(os.environ["TASKRC"]).parent)
     _add(Path.home() / ".task")
     for base in candidates:
-        on_add = base / "on-add-nautical.py"
-        on_mod = base / "on-modify-nautical.py"
+        on_add = next((base / name for name in ("on-add.nautical", "on-add-nautical.py") if (base / name).exists()), base / "on-add.nautical")
+        on_mod = next((base / name for name in ("on-modify.nautical", "on-modify-nautical.py") if (base / name).exists()), base / "on-modify.nautical")
         if on_add.exists() or on_mod.exists():
             return base
     return None
@@ -344,8 +344,8 @@ def _self_check() -> int:
 
     hook_dir = _find_hook_dir()
     if hook_dir:
-        on_add = hook_dir / "on-add-nautical.py"
-        on_mod = hook_dir / "on-modify-nautical.py"
+        on_add = next((hook_dir / name for name in ("on-add.nautical", "on-add-nautical.py") if (hook_dir / name).exists()), hook_dir / "on-add.nautical")
+        on_mod = next((hook_dir / name for name in ("on-modify.nautical", "on-modify-nautical.py") if (hook_dir / name).exists()), hook_dir / "on-modify.nautical")
         if on_add.exists():
             ok_add, msg = _load_hook_module(on_add, "_nautical_on_add_check")
             _emit_check("OK" if ok_add else "FAIL", "on-add hook", msg)

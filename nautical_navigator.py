@@ -652,6 +652,14 @@ class TaskAnalyzer:
                 # excludes completed/disabled history because Nautical
                 # intentionally turns chain off at those lifecycle points.
                 tasks = self._export_tasks("chainID.not:", "all")
+                # Some Taskwarrior configurations do not make UDA ``.not:``
+                # queries match reliably.  Keep the indexed path fast, but
+                # recover valid chain history from a broad export once.
+                if not tasks:
+                    tasks = [
+                        task for task in self._export_tasks("all")
+                        if str(task.get("chainID") or "").strip()
+                    ]
 
                 for t in tasks:
                     if t.get("id"):

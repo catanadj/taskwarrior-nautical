@@ -162,7 +162,14 @@ def _run_task_export(filters: tuple[str, ...]) -> Any:
     task_bin = shutil.which("task") or "task"
     result = _task_command.run_task_command(
         task_bin,
-        ["rc.hooks=off", "rc.json.array=1", *filters, "export"],
+        [
+            "rc.hooks=off",
+            "rc.json.array=1",
+            "rc.verbose=nothing",
+            "rc.color=off",
+            *filters,
+            "export",
+        ],
         timeout=30.0,
         retry_locks=True,
     )
@@ -651,7 +658,7 @@ class TaskAnalyzer:
                 # chainID is the authoritative chain marker.  ``chain:on``
                 # excludes completed/disabled history because Nautical
                 # intentionally turns chain off at those lifecycle points.
-                tasks = self._export_tasks("chainID.not:", "all")
+                tasks = self._export_tasks("chainID.not:")
                 # Some Taskwarrior configurations do not make UDA ``.not:``
                 # queries match reliably.  Keep the indexed path fast, but
                 # recover valid chain history from a broad export once.

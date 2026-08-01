@@ -16214,9 +16214,9 @@ def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_cha
     def fake_run(task_bin, args, **_kwargs):
         cmd = [task_bin, *args]
         calls.append(cmd)
-        if list(args) == ["rc.hooks=off", "rc.json.array=1", "2", "export"]:
+        if list(args) == ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "2", "export"]:
             return SimpleNamespace(returncode=0, stdout=json.dumps([mid]), stderr="", kind="ok")
-        if list(args) == ["rc.hooks=off", "rc.json.array=1", "chainID:cid123", "export"]:
+        if list(args) == ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chainID:cid123", "export"]:
             return SimpleNamespace(returncode=0, stdout=json.dumps([root, mid, tail]), stderr="", kind="ok")
         raise AssertionError(f"unexpected task command: {cmd!r}")
 
@@ -16226,9 +16226,9 @@ def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_cha
         chain = analyzer.build_chain_from_tasks(2)
         expect([task["uuid"] for task in chain] == [root["uuid"], mid["uuid"], tail["uuid"]],
                f"unexpected rebuilt chain: {chain!r}")
-        expect(any(cmd[1:] == ["rc.hooks=off", "rc.json.array=1", "chainID:cid123", "export"] for cmd in calls),
+        expect(any(cmd[1:] == ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chainID:cid123", "export"] for cmd in calls),
                f"expected targeted chainID export, got: {calls!r}")
-        expect(not any(cmd[1:] == ["rc.hooks=off", "rc.json.array=1", "chain:on", "all", "export"] for cmd in calls),
+        expect(not any(cmd[1:] == ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chain:on", "all", "export"] for cmd in calls),
                f"direct task selection should not export all chains: {calls!r}")
     finally:
         navigator._task_command.run_task_command = original_run

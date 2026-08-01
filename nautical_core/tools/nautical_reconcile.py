@@ -11,6 +11,13 @@ import importlib.util
 import json
 import os
 import sys
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 and earlier
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -31,6 +38,8 @@ _PARENT_LOCK_STALE_SECONDS = 300.0
 _DEFAULT_EXPIRATION_HOPS = 32
 _MAX_EXPIRATION_HOPS = 1000
 _RECONCILE_PROTOCOL = 1
+_JSON_SCHEMA = "nautical.reconcile"
+_JSON_SCHEMA_VERSION = 1
 
 
 class _ConfigurationDrift(RuntimeError):
@@ -492,6 +501,44 @@ def _task_data_dir(task_bin: str) -> Path:
     if not raw:
         raise RuntimeError("Taskwarrior data location is empty")
     return Path(os.path.expandvars(raw)).expanduser().resolve()
+
+
+def _synchronize_taskdata_astronomy(hook: Any, taskdata: Path | None) -> None:
+    """Load installer-managed astronomy config when core imported too early.
+
+    Reconcile imports the hook/core before it can ask Taskwarrior for its data
+    directory.  For custom TASKDATA installations that leaves the static core
+    astronomy snapshot empty even though the installed config is valid.  Do not
+    override an explicit NAUTICAL_CONFIG; it has already been selected (or
+    deliberately rejected) by the normal core loader.
+    """
+    if taskdata is None or tomllib is None or str(os.environ.get("NAUTICAL_CONFIG") or "").strip():
+        return
+    core = getattr(hook, "core", None)
+    existing = getattr(core, "ASTRONOMY_CONFIG", None) if core is not None else None
+    if core is None or (isinstance(existing, dict) and existing):
+        return
+    candidates = (
+        taskdata / "config-nautical.toml",
+        taskdata / "nautical.toml",
+        taskdata / "nautical_core" / "config-nautical.toml",
+        taskdata / "nautical_core" / "nautical.toml",
+    )
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        astronomy = data.get("astronomy") if isinstance(data, dict) else None
+        if not isinstance(astronomy, dict):
+            continue
+        core.ASTRONOMY_CONFIG = astronomy
+        core_config = getattr(core, "_core_config", None)
+        if core_config is not None:
+            core_config.ASTRONOMY_CONFIG = astronomy
+        return
 
 
 @contextmanager
@@ -1096,6 +1143,8 @@ def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
     reason = str(exc).strip() or type(exc).__name__
     if args.json:
         payload: dict[str, Any] = {
+            "schema": _JSON_SCHEMA,
+            "schema_version": _JSON_SCHEMA_VERSION,
             "mode": "apply" if args.apply else "dry-run",
             "status": "error",
             "stage": stage,
@@ -1156,6 +1205,17 @@ def main(argv: list[str] | None = None) -> int:
         taskdata = _task_data_dir(args.task_bin) if args.apply else None
     except Exception as exc:
         return _startup_failure(args, "taskdata", exc)
+    runtime_taskdata = taskdata
+    if runtime_taskdata is None:
+        try:
+            if (
+                not str(os.environ.get("NAUTICAL_CONFIG") or "").strip()
+                and not getattr(hook.core, "ASTRONOMY_CONFIG", {})
+            ):
+                runtime_taskdata = _task_data_dir(args.task_bin)
+        except Exception:
+            runtime_taskdata = None
+    _synchronize_taskdata_astronomy(hook, runtime_taskdata)
     configuration_drift_reason = _configuration_drift_reason(hook)
     native_until_audit_warning = ""
     if configuration_drift_reason:
@@ -1307,6 +1367,8 @@ def main(argv: list[str] | None = None) -> int:
     has_errors = any(plan.action == "error" for plan in plans) or bool(native_until_errors)
 
     summary = {
+        "schema": _JSON_SCHEMA,
+        "schema_version": _JSON_SCHEMA_VERSION,
         "status": "error" if has_errors else "degraded" if degraded else "ok",
         "configuration_drifted": int(bool(configuration_drift_reason)),
         "configuration_drift": configuration_drift_reason,

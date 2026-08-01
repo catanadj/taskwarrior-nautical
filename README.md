@@ -86,7 +86,6 @@ Use `anchor` when it belongs on the calendar:
 task add "Workout" anchor:"w:mon,wed,fri"
 task add "Monthly report" anchor:"m:1"  # first day of the month
 task add "Anniversary" anchor:"y:04-12"
-task add "Spring planning" anchor:"(w:mon)@in-spring=first,last"
 ```
 
 That is enough to begin. `cp` is for “after this long”; `anchor` is for “on

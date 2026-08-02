@@ -3725,6 +3725,37 @@ def test_queue_schema_initializes_and_adopts_legacy_rows():
         expect(status.get("status") == "ok", f"fresh schema did not initialize: {status!r}")
 
 
+def test_queue_database_durable_mode_uses_full_synchronous():
+    """Durable queue mode must apply SQLite FULL synchronous semantics."""
+    from nautical_core import queue_store
+
+    with tempfile.TemporaryDirectory() as td:
+        durable_path = Path(td) / "durable.db"
+        durable = queue_store.connect_queue_db_result(
+            durable_path,
+            attempts=1,
+            timeout_base=1.0,
+            timeout_max=1.0,
+            backoff_base=0.0,
+            durable=True,
+        )
+        expect(durable.conn is not None, f"durable queue database failed to open: {durable.err!r}")
+        expect(durable.conn.execute("PRAGMA synchronous").fetchone()[0] == 2, "durable queue did not use FULL synchronous")
+        queue_store.close_silent(durable.conn)
+
+        normal_path = Path(td) / "normal.db"
+        normal = queue_store.connect_queue_db_result(
+            normal_path,
+            attempts=1,
+            timeout_base=1.0,
+            timeout_max=1.0,
+            backoff_base=0.0,
+        )
+        expect(normal.conn is not None, f"normal queue database failed to open: {normal.err!r}")
+        expect(normal.conn.execute("PRAGMA synchronous").fetchone()[0] == 1, "normal queue did not use NORMAL synchronous")
+        queue_store.close_silent(normal.conn)
+
+
 def test_queue_schema_rejects_incompatible_databases_without_quarantine():
     """Partial and future schemas should fail closed and remain available for inspection."""
     from nautical_core import queue_store
@@ -24618,6 +24649,7 @@ TESTS = [
     test_health_check_critical_queue_bytes,
     test_health_check_critical_queue_db_rows,
     test_queue_schema_initializes_and_adopts_legacy_rows,
+    test_queue_database_durable_mode_uses_full_synchronous,
     test_queue_schema_rejects_incompatible_databases_without_quarantine,
     test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,
     test_queue_status_and_doctor_report_schema_health,

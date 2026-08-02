@@ -1534,6 +1534,7 @@ def _spawn_queue_db_connect_result():
         timeout_base=timeout_base,
         timeout_max=timeout_base,
         backoff_base=0.0,
+        durable=_DURABLE_QUEUE,
         diag=_diag,
     )
 

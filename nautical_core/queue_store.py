@@ -419,6 +419,7 @@ def connect_queue_db_result(
     timeout_base: float,
     timeout_max: float,
     backoff_base: float,
+    durable: bool = False,
     row_factory: Any = None,
     diag: Callable[[str], None] | None = None,
     sleep_fn: Callable[[float], None] | None = None,
@@ -440,7 +441,7 @@ def connect_queue_db_result(
             if row_factory is not None:
                 conn.row_factory = row_factory
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute(f"PRAGMA synchronous={'FULL' if durable else 'NORMAL'}")
             conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
             try:
                 if db_path.exists():

@@ -1491,6 +1491,7 @@ def _queue_db_connect_result():
         timeout_base=timeout_base,
         timeout_max=timeout_max,
         backoff_base=float(_QUEUE_DB_CONNECT_BACKOFF_BASE or 0.0),
+        durable=_DURABLE_QUEUE,
         row_factory=sqlite3.Row,
         diag=_diag,
         sleep_fn=_sleep,

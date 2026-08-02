@@ -6205,7 +6205,7 @@ def test_spawn_queue_drain_limit_config_and_env_override():
     """on-exit should use the config drain limit unless the process env overrides it."""
     with tempfile.TemporaryDirectory() as td:
         config_path = Path(td) / "nautical.toml"
-        config_path.write_text("spawn_queue_drain_max_items = 7\n", encoding="utf-8")
+        config_path.write_text("\n", encoding="utf-8")
         script = (
             "import json\n"
             "from nautical_core import SPAWN_QUEUE_DRAIN_MAX_ITEMS\n"
@@ -6216,7 +6216,7 @@ def test_spawn_queue_drain_limit_config_and_env_override():
         env["NAUTICAL_CONFIG"] = str(config_path)
         env["TASKDATA"] = td
         env.pop("NAUTICAL_SPAWN_QUEUE_MAX_LINES", None)
-        plain = subprocess.run(
+        defaulted = subprocess.run(
             [sys.executable, "-c", script],
             cwd=ROOT,
             env=env,
@@ -6224,8 +6224,20 @@ def test_spawn_queue_drain_limit_config_and_env_override():
             capture_output=True,
             timeout=8.0,
         )
-        expect(plain.returncode == 0, f"configured queue drain import failed: {plain.stderr!r}")
-        expect(json.loads(plain.stdout) == [7, 7], f"config drain limit was not effective: {plain.stdout!r}")
+        expect(defaulted.returncode == 0, f"default queue drain import failed: {defaulted.stderr!r}")
+        expect(json.loads(defaulted.stdout) == [32, 32], f"unexpected default drain limit: {defaulted.stdout!r}")
+
+        config_path.write_text("spawn_queue_drain_max_items = 7\n", encoding="utf-8")
+        configured = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(configured.returncode == 0, f"configured queue drain import failed: {configured.stderr!r}")
+        expect(json.loads(configured.stdout) == [7, 7], f"config drain limit was not effective: {configured.stdout!r}")
 
         env["NAUTICAL_SPAWN_QUEUE_MAX_LINES"] = "3"
         overridden = subprocess.run(

@@ -28,7 +28,7 @@ live_panel_duration_ms = 160          # total live reveal budget (0 = no motion,
 exit_progress = true                 # show Rich drain progress on on-exit when stderr is a TTY
 fast_color = true                    # allow ANSI color in fast mode
 spawn_queue_max_bytes = 524288       # max queued JSONL bytes before fast-drain
-spawn_queue_drain_max_items = 200    # max items drained per pass
+spawn_queue_drain_max_items = 32     # max items drained per pass; keep batches short on slow devices
 max_chain_walk = 500                 # cap for chain summaries/analytics
 
 # Optional astronomical @t= event times and moon-phase anchors. Astral is only

@@ -38,6 +38,16 @@ _hook = importlib.import_module("nautical_core.hooks.modify_impl")
 
 # -------- Helpers -------------------------------------------------------------
 
+def _astral_test_available() -> bool:
+    """Require Astral only in the CI astronomy matrix; keep local tests optional."""
+    try:
+        from astral import Observer, moon, sun  # noqa: F401
+        return True
+    except ImportError:
+        if os.environ.get("NAUTICAL_REQUIRE_ASTRAL") == "1":
+            raise AssertionError("Astral is required for this test job; install requirements.txt")
+        return False
+
 def iso(d):
     if isinstance(d, (datetime, )):
         return d.date().isoformat()
@@ -9219,9 +9229,7 @@ def test_moon_phase_resolver_uses_documented_phase_bands():
 
 def test_moon_phase_real_astral_boundary_smoke():
     """When Astral is installed, verify the real provider returns a phase boundary."""
-    try:
-        import astral  # noqa: F401
-    except ImportError:
+    if not _astral_test_available():
         return
     astronomy = core._import_sibling("astronomy")
     config = {
@@ -9238,9 +9246,7 @@ def test_moon_phase_real_astral_boundary_smoke():
 
 def test_moon_astral_events_preserve_timezone_and_dst():
     """Real Astral event times stay timezone-aware across civil-time transitions."""
-    try:
-        import astral  # noqa: F401
-    except ImportError:
+    if not _astral_test_available():
         return
     astronomy = core._import_sibling("astronomy")
     config = {
@@ -9283,9 +9289,7 @@ def test_astronomy_preflight_reports_configuration_and_provider_health():
 
 def test_moonrise_unavailable_location_fails_closed():
     """A real Astral location without a moonrise must produce a clear lookup failure."""
-    try:
-        import astral  # noqa: F401
-    except ImportError:
+    if not _astral_test_available():
         return
     astronomy = core._import_sibling("astronomy")
     config = {
@@ -16111,9 +16115,7 @@ def test_navigator_normalizes_extended_scheduler_results():
 
 def test_navigator_resolves_symbolic_anchor_time_offsets():
     """Navigator projections should convert symbolic event times and preserve offsets."""
-    try:
-        import astral  # noqa: F401
-    except ImportError:
+    if not _astral_test_available():
         return
     module_name = "_nautical_navigator_symbolic_time_test"
     loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))

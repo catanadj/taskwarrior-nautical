@@ -22,7 +22,7 @@ jobs:
       - name: Install Python deps
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install rich prompt_toolkit python-dateutil asciichartpy astral
+          python3 -m pip install -r requirements.txt asciichartpy
 
       - name: Install Taskwarrior
         run: |
@@ -35,6 +35,8 @@ jobs:
           task --version
 
       - name: Run golden correctness suite
+        env:
+          NAUTICAL_REQUIRE_ASTRAL: "1"
         run: |
           python3 dev_tools/nautical_golden_tests.py
 

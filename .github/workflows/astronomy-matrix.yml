@@ -1,0 +1,46 @@
+name: Astronomy Compatibility
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  astronomy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+        astral-version: ["3.2", "latest"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install project dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt asciichartpy
+          if [ "${{ matrix.astral-version }}" = "3.2" ]; then
+            python3 -m pip install --force-reinstall "astral==3.2"
+          fi
+
+      - name: Show astronomy versions
+        run: |
+          python3 --version
+          python3 - <<'PY'
+          from importlib.metadata import version
+          print(f"astral {version('astral')}")
+          PY
+
+      - name: Run Astral-backed golden tests
+        env:
+          NAUTICAL_REQUIRE_ASTRAL: "1"
+        run: python3 dev_tools/nautical_golden_tests.py

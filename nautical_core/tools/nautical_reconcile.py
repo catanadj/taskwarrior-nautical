@@ -12,10 +12,10 @@ import json
 import os
 import sys
 try:
-    import tomllib
+    tomllib = importlib.import_module("tomllib")
 except ModuleNotFoundError:  # Python 3.10 and earlier
     try:
-        import tomli as tomllib
+        tomllib = importlib.import_module("tomli")
     except ModuleNotFoundError:
         tomllib = None
 import zoneinfo
@@ -1234,7 +1234,8 @@ def main(argv: list[str] | None = None) -> int:
     configuration_drift_reason = _configuration_drift_reason(hook)
     native_until_audit_warning = ""
     if configuration_drift_reason:
-        native_until_repairs, native_until_errors = [], []
+        native_until_repairs: list[dict[str, Any]] = []
+        native_until_errors: list[str] = []
     else:
         try:
             native_until_repairs, native_until_errors = _native_until_repairs(

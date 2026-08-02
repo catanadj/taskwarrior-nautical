@@ -143,7 +143,23 @@ def _scenario_cp(env: dict[str, str]) -> dict:
     delta = _parse_tw_datetime(child.get("due")) - _parse_tw_datetime(root.get("due"))
     if delta != timedelta(days=1):
         raise AssertionError(f"cp child delta was {delta}, expected 1 day")
-    return {"root": root["uuid"], "child": child["uuid"]}
+    return {"root": root["uuid"], "root_id": root["id"], "child": child["uuid"]}
+
+
+def _scenario_navigator(env: dict[str, str], cp_result: dict) -> dict:
+    """Exercise Navigator's real Taskwarrior export contract."""
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "nautical_navigator.py"), "--mode", "chain", "--id", str(cp_result["root_id"]), "--count", "1"],
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"Navigator failed against Taskwarrior: stdout={proc.stdout!r} stderr={proc.stderr!r}")
+    if "Total chain length" not in proc.stdout:
+        raise AssertionError(f"Navigator did not render the selected chain: {proc.stdout!r}")
+    return {"root_id": cp_result["root_id"], "rendered": True}
 
 
 def _scenario_anchor_preset(env: dict[str, str]) -> dict:
@@ -295,6 +311,7 @@ def main() -> int:
         scenarios = result["scenarios"]
         assert isinstance(scenarios, dict)
         scenarios["cp"] = _scenario_cp(env)
+        scenarios["navigator"] = _scenario_navigator(env, scenarios["cp"])
         scenarios["preset"] = _scenario_anchor_preset(env)
         scenarios["files"] = _scenario_files(env, anchor_dir, omit_dir)
         scenarios["modify"] = _scenario_modify(env)

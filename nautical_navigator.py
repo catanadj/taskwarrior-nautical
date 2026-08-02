@@ -668,7 +668,7 @@ class TaskAnalyzer:
                 # recover valid chain history from a broad export once.
                 if not tasks:
                     tasks = [
-                        task for task in self._export_tasks("all")
+                        task for task in self._export_tasks()
                         if str(task.get("chainID") or "").strip()
                     ]
 

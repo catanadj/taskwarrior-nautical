@@ -16169,6 +16169,41 @@ def test_navigator_uses_nautical_configured_timezone():
         sys.modules.pop(module_name, None)
 
 
+def test_navigator_fallback_export_uses_empty_filter():
+    """Navigator's broad fallback must use Taskwarrior's valid empty filter."""
+    module_name = "_nautical_navigator_export_fallback_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    calls = []
+    try:
+        loader.exec_module(navigator)
+        original_run = navigator._task_command.run_task_command
+
+        def fake_run(task_bin, args, **_kwargs):
+            calls.append(list(args))
+            if "chainID.not:" in args:
+                return SimpleNamespace(returncode=0, stdout="[]", stderr="", kind="ok")
+            if list(args) == ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "export"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps([{"id": 1, "uuid": "u1", "chainID": "c1", "link": 1}]),
+                    stderr="",
+                    kind="ok",
+                )
+            raise AssertionError(f"unexpected fallback command: {args!r}")
+
+        navigator._task_command.run_task_command = fake_run
+        tasks = navigator.TaskAnalyzer().get_all_chained_tasks()
+        expect(len(tasks) == 1 and tasks[0].get("chainID") == "c1", f"fallback export failed: {tasks!r}")
+        expect(any(call[-1:] == ["export"] and "chainID.not:" not in call for call in calls), f"missing empty-filter export: {calls!r}")
+        expect(not any("all" in call for call in calls), f"invalid Taskwarrior 'all' filter remains: {calls!r}")
+    finally:
+        navigator._task_command.run_task_command = original_run
+        sys.modules.pop(module_name, None)
+
+
 def test_shared_time_slot_resolver_keeps_hook_and_navigator_parity():
     """add, modify, and Navigator should resolve the same symbolic slot and offset."""
     import nautical_core.time_slots as time_slots
@@ -25055,6 +25090,7 @@ TESTS.extend([
     test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime,
     test_navigator_surfaces_configuration_drift_warning,
     test_navigator_uses_nautical_configured_timezone,
+    test_navigator_fallback_export_uses_empty_filter,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
     test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,

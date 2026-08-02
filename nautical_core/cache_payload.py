@@ -375,9 +375,9 @@ def cache_save(
                     if n == 0:
                         raise OSError("write returned 0")
                     written += n
-                fsync = getattr(os_mod, "fsync", None)
-                if callable(fsync):
-                    fsync(fd)
+                # Anchor caches are disposable and rebuilt on a miss. Keep the
+                # atomic replace, but avoid a costly per-entry fsync on slow
+                # devices; durable queue state uses its own FULL-sync path.
             finally:
                 try:
                     os_mod.close(fd)

@@ -206,9 +206,46 @@ def effective_config_snapshot() -> dict:
     return {"values": values, "source": source, "fingerprint": fingerprint}
 
 
+_CONFIG_FINGERPRINT_CACHE: str | None = None
+_CONFIG_FINGERPRINT_CACHE_KEY: tuple[str, int | None, int | None] | None = None
+_CONFIG_SOURCE_PATH_CACHE: str | None = None
+
+
+def _config_source_signature() -> tuple[str, int | None, int | None]:
+    """Return a cheap change marker for the config source."""
+    try:
+        configured = str(os.environ.get("NAUTICAL_CONFIG") or "").strip()
+        if configured:
+            source = os.path.abspath(os.path.expanduser(configured))
+        else:
+            # Reuse the source found during the initial snapshot. If there
+            # was no file, avoid rescanning all candidate locations here.
+            source = _CONFIG_SOURCE_PATH_CACHE
+            if not source or source in {"defaults", "auto"}:
+                return "auto", None, None
+        if source in {"defaults", "auto"}:
+            return source, None, None
+        stat_result = os.stat(source)
+        return (
+            source,
+            int(getattr(stat_result, "st_mtime_ns", int(stat_result.st_mtime * 1_000_000_000))),
+            int(stat_result.st_size),
+        )
+    except Exception:
+        return "auto", None, None
+
+
 def effective_config_fingerprint() -> str:
-    """Return a stable, non-sensitive fingerprint of effective configuration."""
-    return str(effective_config_snapshot().get("fingerprint") or "")
+    """Return the config fingerprint, avoiding work until its source changes."""
+    global _CONFIG_FINGERPRINT_CACHE, _CONFIG_FINGERPRINT_CACHE_KEY, _CONFIG_SOURCE_PATH_CACHE
+    signature = _config_source_signature()
+    if _CONFIG_FINGERPRINT_CACHE is None or signature != _CONFIG_FINGERPRINT_CACHE_KEY:
+        snapshot = effective_config_snapshot()
+        _CONFIG_FINGERPRINT_CACHE = str(snapshot.get("fingerprint") or "")
+        _CONFIG_SOURCE_PATH_CACHE = str(snapshot.get("source") or "auto")
+        signature = _config_source_signature()
+        _CONFIG_FINGERPRINT_CACHE_KEY = signature
+    return _CONFIG_FINGERPRINT_CACHE
 
 
 _LOADED_CONFIG_FINGERPRINT = effective_config_fingerprint()

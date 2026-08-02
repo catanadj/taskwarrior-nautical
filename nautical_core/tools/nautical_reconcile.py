@@ -357,6 +357,7 @@ def _native_until_repairs(
     apply: bool,
     taskdata: Path | None = None,
     snapshot: _ReconcileSnapshot | None = None,
+    lease_held: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Find invalid native windows and repair only those with a reliable predecessor."""
     all_rows = _active_chain_rows(
@@ -441,7 +442,7 @@ def _native_until_repairs(
                 errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
                 repairs.append(item)
                 continue
-            with _reconcile_apply_lock(taskdata) as reconcile_acquired:
+            with _reconcile_mutation_lock(taskdata, lease_held=lease_held) as reconcile_acquired:
                 if not reconcile_acquired:
                     _LOCK_STATS["reconcile_busy"] += 1
                     item["action"] = "repair_error"
@@ -654,6 +655,16 @@ def _reconcile_apply_lock(taskdata: Path):
         sleep_base=0.0,
         stale_after=_RECONCILE_LOCK_STALE_SECONDS,
     ) as acquired:
+        yield acquired
+
+
+@contextmanager
+def _reconcile_mutation_lock(taskdata: Path, *, lease_held: bool):
+    """Reuse the run lease when present, otherwise protect a direct mutation call."""
+    if lease_held:
+        yield True
+        return
+    with _reconcile_apply_lock(taskdata) as acquired:
         yield acquired
 
 
@@ -875,11 +886,12 @@ def _apply_parent_atomic(
     original_parent: dict[str, Any],
     *,
     taskdata: Path,
+    lease_held: bool = False,
 ) -> tuple[reconcile.ReconcilePlan, str]:
     parent_uuid = str(original_parent.get("uuid") or "").strip()
     if not parent_uuid:
         raise RuntimeError("parent task has no UUID")
-    with _reconcile_apply_lock(taskdata) as reconcile_acquired:
+    with _reconcile_mutation_lock(taskdata, lease_held=lease_held) as reconcile_acquired:
         if not reconcile_acquired:
             _LOCK_STATS["reconcile_busy"] += 1
             raise RuntimeError("another reconcile apply is already running")
@@ -1048,6 +1060,7 @@ def _reconcile_candidate(
     apply: bool,
     max_expiration_hops: int,
     recovery_at: Any,
+    lease_held: bool = False,
 ) -> list[tuple[reconcile.ReconcilePlan, str]]:
     outcomes: list[tuple[reconcile.ReconcilePlan, str]] = []
     current = parent
@@ -1087,6 +1100,7 @@ def _reconcile_candidate(
                     hook,
                     current,
                     taskdata=taskdata,
+                    lease_held=lease_held,
                 )
             except _ConfigurationDrift as exc:
                 outcomes.append((_recovery_partial(current, str(exc)), ""))
@@ -1279,7 +1293,12 @@ def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
     return 1
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    _apply_lease_held: bool = False,
+    _locked_taskdata: Path | None = None,
+) -> int:
     parser = argparse.ArgumentParser(description="Repair Nautical chains after hookless completion, expiration, or deletion.")
     parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
     parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
@@ -1295,6 +1314,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _EXPORT_STATS.update(calls=0, rows=0, snapshot_hits=0)
     _LOCK_STATS.update(reconcile_busy=0, parent_busy=0)
+    if args.apply and not _apply_lease_held:
+        try:
+            taskdata = _task_data_dir(args.task_bin)
+        except Exception as exc:
+            return _startup_failure(args, "taskdata", exc)
+        with _reconcile_apply_lock(taskdata) as acquired:
+            if not acquired:
+                _LOCK_STATS["reconcile_busy"] += 1
+                return _startup_failure(args, "apply_lock", RuntimeError("another reconcile apply is already running"))
+            return main(argv, _apply_lease_held=True, _locked_taskdata=taskdata)
 
     try:
         hook = _load_on_modify(args.hook_path)
@@ -1316,7 +1345,9 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         return _startup_failure(args, "candidate_export", exc)
     try:
-        taskdata = _task_data_dir(args.task_bin) if args.apply else None
+        taskdata = _locked_taskdata if args.apply else None
+        if args.apply and taskdata is None:
+            taskdata = _task_data_dir(args.task_bin)
     except Exception as exc:
         return _startup_failure(args, "taskdata", exc)
     runtime_taskdata = taskdata
@@ -1343,6 +1374,7 @@ def main(argv: list[str] | None = None) -> int:
                 hook,
                 apply=args.apply,
                 taskdata=taskdata,
+                lease_held=_apply_lease_held,
             )
         except Exception as exc:
             # The integrity pass is supplementary; preserve normal recovery when its
@@ -1409,6 +1441,7 @@ def main(argv: list[str] | None = None) -> int:
                     apply=args.apply,
                     max_expiration_hops=args.max_expiration_hops,
                     recovery_at=recovery_at,
+                    lease_held=_apply_lease_held,
                 )
             except Exception as exc:
                 reason = str(exc).strip() or type(exc).__name__

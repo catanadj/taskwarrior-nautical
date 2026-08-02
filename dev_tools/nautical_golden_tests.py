@@ -20297,7 +20297,7 @@ def test_reconcile_delayed_expiration_apply_follows_exact_children():
 
         hook = FakeHook()
 
-        def apply_parent(_task_bin, _hook, parent, *, taskdata):
+        def apply_parent(_task_bin, _hook, parent, *, taskdata, lease_held=False):
             link = int(parent["link"])
             calls.append(("apply", link, taskdata))
             child = tasks[link + 1]
@@ -20337,10 +20337,10 @@ def test_reconcile_delayed_expiration_apply_follows_exact_children():
             recovery_at=datetime(2026, 7, 23, 9, 30, tzinfo=timezone.utc),
         )
 
-        def fail_second_apply(_task_bin, _hook, parent, *, taskdata):
+        def fail_second_apply(_task_bin, _hook, parent, *, taskdata, lease_held=False):
             if int(parent["link"]) == 2:
                 raise TimeoutError("parent lock timed out")
-            return apply_parent(_task_bin, _hook, parent, taskdata=taskdata)
+            return apply_parent(_task_bin, _hook, parent, taskdata=taskdata, lease_held=lease_held)
 
         tool._apply_parent_atomic = fail_second_apply
         interrupted = tool._reconcile_candidate(
@@ -20801,6 +20801,34 @@ def test_reconcile_apply_lease_serializes_mutations():
                 expect(not second, "reconcile apply lease allowed concurrent acquisition")
         with tool._reconcile_apply_lock(taskdata) as released:
             expect(released, "reconcile apply lease was not released")
+
+
+def test_reconcile_apply_refuses_a_second_full_run():
+    """A held apply lease must reject another reconcile before it loads hooks or exports tasks."""
+    tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+        "_nautical_reconcile_full_run_lease_test",
+    )
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td)
+        original_taskdata = tool._task_data_dir
+        original_hook = tool._load_on_modify
+        try:
+            tool._task_data_dir = lambda _task_bin: taskdata
+            tool._load_on_modify = lambda _path=None: (_ for _ in ()).throw(
+                AssertionError("busy reconcile loaded its hook")
+            )
+            output = io.StringIO()
+            with tool._reconcile_apply_lock(taskdata) as held:
+                expect(held, "test could not acquire reconcile lease")
+                with contextlib.redirect_stdout(output):
+                    result = tool.main(["--apply", "--json"])
+        finally:
+            tool._task_data_dir = original_taskdata
+            tool._load_on_modify = original_hook
+    summary = json.loads(output.getvalue())
+    expect(result == 1, f"busy reconcile returned {result}")
+    expect(summary.get("stage") == "apply_lock", f"busy reconcile was not reported as a lease conflict: {summary!r}")
 
 
 def test_reconcile_apply_refreshes_parent_under_lock():
@@ -21323,7 +21351,7 @@ def test_reconcile_apply_isolates_candidate_failures():
         tool._candidate_rows = lambda _task_bin, _hook: [failed, repairable]
         tool._task_data_dir = lambda _task_bin: Path("/tmp/nautical-reconcile-isolation-test")
 
-        def apply_parent(_task_bin, _hook, parent, *, taskdata):
+        def apply_parent(_task_bin, _hook, parent, *, taskdata, lease_held=False):
             expect(taskdata.name == "nautical-reconcile-isolation-test", f"wrong taskdata: {taskdata}")
             if parent["uuid"] == failed["uuid"]:
                 raise RuntimeError("parent reconcile lock busy: 11111111")
@@ -25202,6 +25230,7 @@ TESTS = [
     test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,
     test_reconcile_tool_exports_and_applies_expired_candidates,
     test_reconcile_apply_lease_serializes_mutations,
+    test_reconcile_apply_refuses_a_second_full_run,
     test_reconcile_apply_refreshes_parent_under_lock,
     test_reconcile_apply_resumes_after_parent_update_failure,
     test_reconcile_parent_updates_are_guarded,

@@ -36,6 +36,7 @@ from nautical_core import queue_store, reconcile, safe_lock, task_command  # noq
 _PARENT_LOCK_RETRIES = 600
 _PARENT_LOCK_SLEEP_SECONDS = 0.1
 _PARENT_LOCK_STALE_SECONDS = 300.0
+_RECONCILE_LOCK_STALE_SECONDS = 300.0
 _DEFAULT_EXPIRATION_HOPS = 32
 _MAX_EXPIRATION_HOPS = 1000
 _RECONCILE_PROTOCOL = 1
@@ -378,44 +379,50 @@ def _native_until_repairs(
                 errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
                 repairs.append(item)
                 continue
-            with _parent_apply_lock(taskdata, str(row.get("uuid") or "")) as acquired:
-                if not acquired:
+            with _reconcile_apply_lock(taskdata) as reconcile_acquired:
+                if not reconcile_acquired:
                     item["action"] = "repair_error"
-                    item["repair_error"] = "native-until repair lock busy"
+                    item["repair_error"] = "another reconcile apply is already running"
                 else:
-                    fresh = _fresh_parent(task_bin, row)
-                    guard_error = _native_until_guard_error(row, fresh) if fresh else "native-until target disappeared"
-                    fresh_previous = _fresh_native_until_previous(task_bin, fresh or row)
-                    if not guard_error:
-                        if (previous is None) != (fresh_previous is None):
-                            guard_error = "native-until predecessor changed during repair"
-                        elif previous is not None and fresh_previous is not None:
-                            guard_error = _native_until_guard_error(previous, fresh_previous)
-                    if guard_error:
-                        item["action"] = "repair_error"
-                        item["repair_error"] = guard_error
-                    else:
-                        drift_reason = _configuration_drift_reason(hook)
-                        if drift_reason:
-                            item["action"] = "manual_review"
-                            item["repair_error"] = drift_reason
-                            item["configuration_drift"] = True
-                            repairs.append(item)
-                            return repairs, errors
-                        try:
-                            _modify_native_until(task_bin, fresh, repaired)
-                            verified = _fresh_parent(task_bin, fresh)
-                            if verified is None or not _native_until_matches(verified, repaired, hook):
-                                actual = str((verified or {}).get("until") or "<missing>")
-                                item["action"] = "repair_error"
-                                item["repair_error"] = (
-                                    f"native until repair verification failed (expected {repaired}; found {actual})"
-                                )
-                            else:
-                                item["applied"] = True
-                        except Exception as exc:
+                    parent_lock = _parent_apply_lock(taskdata, str(row.get("uuid") or ""))
+                    with parent_lock as acquired:
+                        if not acquired:
                             item["action"] = "repair_error"
-                            item["repair_error"] = str(exc).strip() or type(exc).__name__
+                            item["repair_error"] = "native-until repair lock busy"
+                        else:
+                            fresh = _fresh_parent(task_bin, row)
+                            guard_error = _native_until_guard_error(row, fresh) if fresh else "native-until target disappeared"
+                            fresh_previous = _fresh_native_until_previous(task_bin, fresh or row)
+                            if not guard_error:
+                                if (previous is None) != (fresh_previous is None):
+                                    guard_error = "native-until predecessor changed during repair"
+                                elif previous is not None and fresh_previous is not None:
+                                    guard_error = _native_until_guard_error(previous, fresh_previous)
+                            if guard_error:
+                                item["action"] = "repair_error"
+                                item["repair_error"] = guard_error
+                            else:
+                                drift_reason = _configuration_drift_reason(hook)
+                                if drift_reason:
+                                    item["action"] = "manual_review"
+                                    item["repair_error"] = drift_reason
+                                    item["configuration_drift"] = True
+                                    repairs.append(item)
+                                    return repairs, errors
+                                try:
+                                    _modify_native_until(task_bin, fresh, repaired)
+                                    verified = _fresh_parent(task_bin, fresh)
+                                    if verified is None or not _native_until_matches(verified, repaired, hook):
+                                        actual = str((verified or {}).get("until") or "<missing>")
+                                        item["action"] = "repair_error"
+                                        item["repair_error"] = (
+                                            f"native until repair verification failed (expected {repaired}; found {actual})"
+                                        )
+                                    else:
+                                        item["applied"] = True
+                                except Exception as exc:
+                                    item["action"] = "repair_error"
+                                    item["repair_error"] = str(exc).strip() or type(exc).__name__
                 if item.get("action") == "repair_error":
                     errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
         repairs.append(item)
@@ -569,6 +576,19 @@ def _parent_apply_lock(taskdata: Path, parent_uuid: str):
         retries=_PARENT_LOCK_RETRIES,
         sleep_base=_PARENT_LOCK_SLEEP_SECONDS,
         stale_after=_PARENT_LOCK_STALE_SECONDS,
+    ) as acquired:
+        yield acquired
+
+
+@contextmanager
+def _reconcile_apply_lock(taskdata: Path):
+    """Serialize reconciler mutations without blocking a second invocation."""
+    lock_path = queue_store.reconcile_lock_path(taskdata)
+    with safe_lock(
+        lock_path,
+        retries=1,
+        sleep_base=0.0,
+        stale_after=_RECONCILE_LOCK_STALE_SECONDS,
     ) as acquired:
         yield acquired
 
@@ -795,35 +815,38 @@ def _apply_parent_atomic(
     parent_uuid = str(original_parent.get("uuid") or "").strip()
     if not parent_uuid:
         raise RuntimeError("parent task has no UUID")
-    with _parent_apply_lock(taskdata, parent_uuid) as acquired:
-        if not acquired:
-            raise RuntimeError(f"parent reconcile lock busy: {reconcile.short_uuid(parent_uuid)}")
-        drift_reason = _configuration_drift_reason(hook)
-        if drift_reason:
-            raise _ConfigurationDrift(drift_reason)
-        plan = _refresh_plan(task_bin, hook, original_parent)
-        if plan.action == "spawn":
-            if not plan.child:
-                raise RuntimeError("spawn plan has no child payload")
-            child_short, _stripped = hook._spawn_child(plan.child, plan.parent)
-            _modify_parent_nextlink(task_bin, plan.parent, child_short)
-            _verify_applied_child(
-                task_bin,
-                plan.parent,
-                child_short,
-                hook=hook,
-                strict_uuid=True,
-            )
-            return plan, child_short
-        if plan.action == "backfill_nextlink":
-            _modify_parent_nextlink(task_bin, plan.parent, plan.child_short)
-            _verify_applied_child(task_bin, plan.parent, plan.child_short, hook=hook)
-            return plan, plan.child_short
-        if plan.action in {"legitimate_final", "manual_stop"}:
-            _disable_parent_chain(task_bin, plan.parent)
-            _verify_disabled_parent(task_bin, plan.parent)
-            return plan, "off"
-        return plan, ""
+    with _reconcile_apply_lock(taskdata) as reconcile_acquired:
+        if not reconcile_acquired:
+            raise RuntimeError("another reconcile apply is already running")
+        with _parent_apply_lock(taskdata, parent_uuid) as acquired:
+            if not acquired:
+                raise RuntimeError(f"parent reconcile lock busy: {reconcile.short_uuid(parent_uuid)}")
+            drift_reason = _configuration_drift_reason(hook)
+            if drift_reason:
+                raise _ConfigurationDrift(drift_reason)
+            plan = _refresh_plan(task_bin, hook, original_parent)
+            if plan.action == "spawn":
+                if not plan.child:
+                    raise RuntimeError("spawn plan has no child payload")
+                child_short, _stripped = hook._spawn_child(plan.child, plan.parent)
+                _modify_parent_nextlink(task_bin, plan.parent, child_short)
+                _verify_applied_child(
+                    task_bin,
+                    plan.parent,
+                    child_short,
+                    hook=hook,
+                    strict_uuid=True,
+                )
+                return plan, child_short
+            if plan.action == "backfill_nextlink":
+                _modify_parent_nextlink(task_bin, plan.parent, plan.child_short)
+                _verify_applied_child(task_bin, plan.parent, plan.child_short, hook=hook)
+                return plan, plan.child_short
+            if plan.action in {"legitimate_final", "manual_stop"}:
+                _disable_parent_chain(task_bin, plan.parent)
+                _verify_disabled_parent(task_bin, plan.parent)
+                return plan, "off"
+            return plan, ""
 
 
 def _recovery_error(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:

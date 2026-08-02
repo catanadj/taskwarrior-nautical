@@ -54,6 +54,11 @@ def parent_nextlink_lock_path(tw_data_dir: Path, parent_uuid: str) -> Path:
     return nautical_lock_dir_path(tw_data_dir) / f".nautical_parent_nextlink.{safe}.lock"
 
 
+def reconcile_lock_path(tw_data_dir: Path) -> Path:
+    """Return the process-wide lock used by reconciler mutations."""
+    return nautical_lock_dir_path(tw_data_dir) / ".nautical_reconcile.lock"
+
+
 def legacy_state_path(tw_data_dir: Path, name: str) -> Path:
     return tw_data_dir / name
 

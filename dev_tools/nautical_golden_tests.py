@@ -20753,6 +20753,22 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         ) = original
 
 
+def test_reconcile_apply_lease_serializes_mutations():
+    """Concurrent reconcile apply attempts must not share the mutation lease."""
+    tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+        "_nautical_reconcile_apply_lease_test",
+    )
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td)
+        with tool._reconcile_apply_lock(taskdata) as first:
+            expect(first, "reconcile apply lease was not acquired")
+            with tool._reconcile_apply_lock(taskdata) as second:
+                expect(not second, "reconcile apply lease allowed concurrent acquisition")
+        with tool._reconcile_apply_lock(taskdata) as released:
+            expect(released, "reconcile apply lease was not released")
+
+
 def test_reconcile_apply_refreshes_parent_under_lock():
     """Two applies from one stale candidate snapshot must import at most one child."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -25150,6 +25166,7 @@ TESTS = [
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
     test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,
     test_reconcile_tool_exports_and_applies_expired_candidates,
+    test_reconcile_apply_lease_serializes_mutations,
     test_reconcile_apply_refreshes_parent_under_lock,
     test_reconcile_apply_resumes_after_parent_update_failure,
     test_reconcile_parent_updates_are_guarded,

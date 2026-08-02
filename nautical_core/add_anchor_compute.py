@@ -169,6 +169,9 @@ def anchor_pick_occurrence_local(
             )
             if not nxt_d:
                 break
+            if nxt_d <= candidate:
+                candidate = candidate + timedelta(days=1)
+                continue
             candidate = nxt_d
             try:
                 tlist = anchor_times_for_date(
@@ -228,6 +231,9 @@ def anchor_next_occurrence_after_local_dt(
         nxt_d = anchor_step_once_with_omit(dnf, candidate, interval_seed, seed_base, omit_dnf=omit_dnf, core=core)
         if not nxt_d:
             break
+        if nxt_d <= candidate:
+            candidate = candidate + timedelta(days=1)
+            continue
         candidate = nxt_d
         try:
             tlist = anchor_times_for_date(

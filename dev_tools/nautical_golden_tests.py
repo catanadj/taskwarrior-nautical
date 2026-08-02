@@ -13769,6 +13769,36 @@ def test_on_exit_dead_letter_on_import_failure():
         expect("child import failed" in dead, "dead letter should capture import failure")
 
 
+def test_on_exit_dead_letter_write_failure_keeps_entry_recoverable():
+    """A failed DLQ write must not finalize or acknowledge the queue entry."""
+    hook = _find_hook_file("on-exit.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_exit_dead_letter_write_failure_test")
+    entry = {
+        "__queue_backend": "sqlite",
+        "__queue_id": 41,
+        "__queue_claim_token": "claim-41",
+        "spawn_intent_id": "si_dlq_failure",
+    }
+    state = mod._DrainState(
+        entries=[entry],
+        entries_total=1,
+        finalized_intents=set(),
+        intent_log_ready=True,
+        intent_log_load_ms=0.0,
+    )
+    original_write = mod._write_dead_letter
+    mod._write_dead_letter = lambda *_args, **_kwargs: False
+    try:
+        state.dead_letter(entry, "dead-letter storage unavailable")
+    finally:
+        mod._write_dead_letter = original_write
+    expect(state.errors == 1, f"DLQ write failure should count as an error: {state.errors}")
+    expect(state.dead_lettered == 0, f"failed DLQ write was counted as durable: {state.dead_lettered}")
+    expect(state.requeue == [entry], f"failed DLQ entry was not retained for retry: {state.requeue!r}")
+    expect(not state.sqlite_acked_claims, f"failed DLQ entry was acknowledged: {state.sqlite_acked_claims!r}")
+    expect(not state.finalized_intents, f"failed DLQ entry was finalized: {state.finalized_intents!r}")
+
+
 def test_on_modify_carry_wall_clock_across_dst():
     """carry-forward should preserve local wall-clock offset across DST."""
     hook = _find_hook_file("on-modify.nautical")
@@ -24662,6 +24692,7 @@ TESTS = [
     test_on_exit_preloads_uuid_exports_for_early_checks,
     test_on_exit_successful_import_reuses_initial_child_export,
     test_on_exit_dead_letter_on_import_failure,
+    test_on_exit_dead_letter_write_failure_keeps_entry_recoverable,
     test_on_exit_large_queue_bounded_drain,
     test_on_exit_queue_drain_idempotent,
     test_on_exit_rolls_back_parent_nextlink_on_missing_child,

@@ -1442,7 +1442,7 @@ def _lock_backoff_delay(streak: int) -> float:
     return delay + jitter
 
 
-def _write_dead_letter(entry: dict, reason: str) -> None:
+def _write_dead_letter(entry: dict, reason: str) -> bool:
     queue_store = _module("queue_store")
     payload = queue_store.build_dead_letter_payload(
         hook="on-exit",
@@ -1450,7 +1450,7 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
         entry=entry,
         reason=reason,
     )
-    queue_store.append_dead_letter_jsonl(
+    return bool(queue_store.append_dead_letter_jsonl(
         path=_DEAD_LETTER_PATH,
         payload=payload,
         durable=_DURABLE_QUEUE,
@@ -1458,7 +1458,7 @@ def _write_dead_letter(entry: dict, reason: str) -> None:
         diag=_diag,
         max_bytes=_DEAD_LETTER_MAX_BYTES,
         retention_days=_DEAD_LETTER_RETENTION_DAYS,
-    )
+    ))
 
 def _fsync_dir(path: Path) -> None:
     queue_store = _module("queue_store", required=False)
@@ -2020,7 +2020,13 @@ class _DrainState:
             self.sqlite_acked_claims[rid] = token
 
     def dead_letter(self, entry: dict, reason: str) -> None:
-        _write_dead_letter(self.entry_clean(entry), reason)
+        if not _write_dead_letter(self.entry_clean(entry), reason):
+            # Keep the claimed row recoverable when the DLQ itself is
+            # unavailable. It will be requeued below and retried later.
+            self.requeue.append(entry)
+            self.errors += 1
+            _diag("dead-letter write failed; entry retained for retry")
+            return
         self.dead_lettered += 1
         self.errors += 1
         self.mark_final(entry, "dead", reason)

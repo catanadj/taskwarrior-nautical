@@ -9466,6 +9466,30 @@ def test_astronomical_time_skips_unavailable_candidate_dates():
         compute.anchor_step_once_with_omit = original_step
 
 
+def test_astronomy_none_event_is_actionable():
+    """Astral providers returning None must become a typed unavailable event."""
+    astronomy = core._import_sibling("astronomy")
+    original = astronomy._resolve_event_cached
+    try:
+        astronomy._resolve_event_cached = lambda *_args, **_kwargs: None
+        try:
+            astronomy.resolve_event(
+                "moonrise",
+                date(2027, 7, 1),
+                config={"default_location": "home", "locations": {"home": {
+                    "latitude": 45, "longitude": 27, "timezone": "UTC"
+                }}},
+            )
+        except AttributeError as exc:
+            raise AssertionError(f"None event leaked as AttributeError: {exc}")
+        except astronomy.AstronomyEventUnavailableError as exc:
+            expect("moonrise" in str(exc), f"event name missing from error: {exc}")
+        else:
+            raise AssertionError("None event should be rejected as unavailable")
+    finally:
+        astronomy._resolve_event_cached = original
+
+
 def test_moon_phase_natural_language_is_explicit():
     """Natural descriptions must identify moon sources and filters."""
     expect(
@@ -24519,6 +24543,7 @@ TESTS = [
     test_moon_astral_events_preserve_timezone_and_dst,
     test_moonrise_unavailable_location_fails_closed,
     test_astronomical_time_skips_unavailable_candidate_dates,
+    test_astronomy_none_event_is_actionable,
     test_moon_phase_source_and_filter_compose_with_weekday,
     test_moon_phase_source_emits_once_per_phase_window,
     test_moon_phase_operational_errors_are_actionable,

@@ -222,7 +222,12 @@ def resolve_event(event: str, day: date, *, config: dict[str, Any] | None = None
     timezone = str(profile.get("timezone") or "").strip()
     if not timezone:
         raise AstronomyConfigurationError(f"astronomy location '{selected}' requires an explicit timezone")
-    return _resolve_event_cached(name, day, selected, latitude, longitude, elevation, timezone)
+    value = _resolve_event_cached(name, day, selected, latitude, longitude, elevation, timezone)
+    if value is None:
+        raise AstronomyEventUnavailableError(
+            f"astronomical event '{name}' is unavailable on {day.isoformat()} at {selected}"
+        )
+    return value
 
 
 def preflight(config: dict[str, Any] | None = None, *, reference_day: date | None = None) -> dict[str, Any]:
@@ -285,6 +290,10 @@ def _resolve_event_cached(
             value = getattr(sun, name)(observer, date=day, tzinfo=tzinfo)
         else:
             value = getattr(moon, name)(observer, date=day, tzinfo=tzinfo)
+        if value is None:
+            raise AstronomyEventUnavailableError(
+                f"astronomical event '{name}' is unavailable on {day.isoformat()} at {selected}"
+            )
     except (ValueError, AttributeError) as exc:
         raise AstronomyEventUnavailableError(
             f"astronomical event '{name}' is unavailable on {day.isoformat()} at {selected}"

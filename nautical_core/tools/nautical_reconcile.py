@@ -243,14 +243,15 @@ def _ambiguous_candidate_slots(rows: list[dict[str, Any]]) -> dict[tuple[str, in
     }
 
 
-def _active_chain_rows(task_bin: str) -> list[dict[str, Any]]:
+def _active_chain_rows(task_bin: str, *, include_inactive: bool = False) -> list[dict[str, Any]]:
     """Export live Nautical links for integrity checks, independently of recovery candidates."""
     rows = _export(task_bin, ["chain:on", "chainID.not:"])
     return sorted(
         (
             row
             for row in rows
-            if str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
+            if include_inactive
+            or str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
         ),
         key=_candidate_sort_key,
     )
@@ -299,13 +300,18 @@ def _native_until_repairs(
     taskdata: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Find invalid native windows and repair only those with a reliable predecessor."""
-    rows = _active_chain_rows(task_bin)
+    all_rows = _active_chain_rows(task_bin, include_inactive=True)
+    rows = [
+        row
+        for row in all_rows
+        if str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
+    ]
     by_chain_link = {
         (
             str(row.get("chainID") or "").strip(),
             reconcile.int_or_default(row.get("link"), 0),
         ): row
-        for row in rows
+        for row in all_rows
     }
     repairs: list[dict[str, Any]] = []
     errors: list[str] = []

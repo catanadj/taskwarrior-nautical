@@ -24264,6 +24264,47 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
     expect(guard_error and "due" in guard_error, f"target drift was not detected: {guard_error!r}")
 
 
+def test_reconcile_native_until_uses_completed_predecessor_snapshot():
+    """A completed predecessor must remain available for native-until carry repair."""
+    hook_path = _find_hook_file("on-modify.nautical")
+    hook = _load_hook_module(hook_path, "_nautical_reconcile_completed_predecessor_test")
+    if hasattr(hook, "_load_core"):
+        hook._load_core()
+    tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+        "_nautical_reconcile_completed_predecessor_tool_test",
+    )
+
+    def stamp(day, hhmm):
+        return hook.core.fmt_isoz(hook.core.build_local_datetime(day, hhmm))
+
+    previous = {
+        "uuid": "previous-uuid",
+        "chainID": "chain-1",
+        "link": 9,
+        "status": "completed",
+        "due": stamp(date(2026, 7, 20), (9, 0)),
+        "until": stamp(date(2026, 7, 20), (23, 0)),
+    }
+    current = {
+        "uuid": "current-uuid",
+        "chainID": "chain-1",
+        "link": 10,
+        "status": "pending",
+        "chain": "on",
+        "due": stamp(date(2026, 7, 22), (9, 0)),
+        "until": stamp(date(2026, 7, 21), (23, 0)),
+    }
+    original_export = tool._export
+    tool._export = lambda _task_bin, _filters, **_kwargs: [previous, current]
+    try:
+        repairs, errors = tool._native_until_repairs("task", hook, apply=False)
+    finally:
+        tool._export = original_export
+    expect(not errors, f"completed predecessor caused an unexpected repair error: {errors!r}")
+    expect(repairs and repairs[0].get("new_until") == stamp(date(2026, 7, 22), (23, 0)), f"repair missed predecessor: {repairs!r}")
+
+
 def test_seasonal_selection_business_calendar_and_cache_identity():
     """Seasonal offsets should honor custom calendars and cache each seasonal context separately."""
     from nautical_core import position_selection
@@ -25098,6 +25139,7 @@ TESTS = [
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_repairs_invalid_native_until_from_previous_link,
+    test_reconcile_native_until_uses_completed_predecessor_snapshot,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
     test_reconcile_manual_deletion_stops_chain_without_child_lookup,
     test_reconcile_delayed_expiration_dry_run_converges_to_live_slot,

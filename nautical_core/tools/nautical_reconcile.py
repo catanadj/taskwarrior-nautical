@@ -536,12 +536,7 @@ def _existing_children(task_bin: str, parent: dict[str, Any]) -> list[dict[str, 
     next_link = reconcile.int_or_default(parent.get("link"), 1) + 1
     if not chain_id:
         return []
-    rows = _export(task_bin, [f"chainID:{chain_id}", f"link:{next_link}", "status.not:deleted"], timeout=30.0)
-    if str(parent.get("status") or "").strip() == "deleted":
-        rows.extend(
-            _export(task_bin, [f"chainID:{chain_id}", f"link:{next_link}", "status:deleted"], timeout=30.0)
-        )
-    return rows
+    return _export(task_bin, [f"chainID:{chain_id}", f"link:{next_link}"], timeout=30.0)
 
 
 def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any) -> list[dict[str, Any]]:
@@ -797,7 +792,7 @@ def _verify_applied_child(
     *,
     hook: Any = None,
     strict_uuid: bool = False,
-) -> None:
+) -> dict[str, Any]:
     """Re-export both sides of an apply before declaring the repair successful."""
     expected_child = str(child_short or "").strip().lower()
     if not expected_child:
@@ -826,23 +821,25 @@ def _verify_applied_child(
         raise RuntimeError(
             f"post-apply child verification found {shown}; expected {child_short}"
         )
+    matched = next(
+        (
+            row
+            for row in rows
+            if str(row.get("uuid") or "").strip().lower().startswith(expected_child)
+        ),
+        None,
+    )
+    if matched is None:
+        raise RuntimeError("post-apply child verification could not identify the resolved child")
     if callable(getattr(hook, "_stable_child_uuid", None)):
-        matched = next(
-            (
-                row
-                for row in rows
-                if str(row.get("uuid") or "").strip().lower().startswith(expected_child)
-            ),
-            None,
-        )
-        if matched is not None:
-            expected_uuid = str(hook._stable_child_uuid(fresh_parent, matched) or "").strip().lower()
-            actual_uuid = str(matched.get("uuid") or "").strip().lower()
-            if strict_uuid and expected_uuid and actual_uuid != expected_uuid:
-                raise RuntimeError(
-                    f"post-apply child UUID {actual_uuid[:8] or '<empty>'} "
-                    f"does not match deterministic slot identity {expected_uuid[:8]}"
-                )
+        expected_uuid = str(hook._stable_child_uuid(fresh_parent, matched) or "").strip().lower()
+        actual_uuid = str(matched.get("uuid") or "").strip().lower()
+        if strict_uuid and expected_uuid and actual_uuid != expected_uuid:
+            raise RuntimeError(
+                f"post-apply child UUID {actual_uuid[:8] or '<empty>'} "
+                f"does not match deterministic slot identity {expected_uuid[:8]}"
+            )
+    return matched
 
 
 def _stale_plan(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
@@ -886,6 +883,7 @@ def _apply_parent_atomic(
     *,
     taskdata: Path,
     lease_held: bool = False,
+    verified_children: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[reconcile.ReconcilePlan, str]:
     parent_uuid = str(original_parent.get("uuid") or "").strip()
     if not parent_uuid:
@@ -907,17 +905,21 @@ def _apply_parent_atomic(
                     raise RuntimeError("spawn plan has no child payload")
                 child_short, _stripped = hook._spawn_child(plan.child, plan.parent)
                 _modify_parent_nextlink(task_bin, plan.parent, child_short)
-                _verify_applied_child(
+                verified = _verify_applied_child(
                     task_bin,
                     plan.parent,
                     child_short,
                     hook=hook,
                     strict_uuid=True,
                 )
+                if verified_children is not None:
+                    verified_children[str(child_short).strip().lower()] = verified
                 return plan, child_short
             if plan.action == "backfill_nextlink":
                 _modify_parent_nextlink(task_bin, plan.parent, plan.child_short)
-                _verify_applied_child(task_bin, plan.parent, plan.child_short, hook=hook)
+                verified = _verify_applied_child(task_bin, plan.parent, plan.child_short, hook=hook)
+                if verified_children is not None:
+                    verified_children[str(plan.child_short).strip().lower()] = verified
                 return plan, plan.child_short
             if plan.action in {"legitimate_final", "manual_stop"}:
                 _disable_parent_chain(task_bin, plan.parent)
@@ -1065,6 +1067,7 @@ def _reconcile_candidate(
     current = parent
     visited: set[tuple[str, int]] = set()
     expiration_hops = 0
+    verified_children: dict[str, dict[str, Any]] = {}
 
     while True:
         slot = (
@@ -1100,6 +1103,7 @@ def _reconcile_candidate(
                     current,
                     taskdata=taskdata,
                     lease_held=lease_held,
+                    verified_children=verified_children,
                 )
             except _ConfigurationDrift as exc:
                 outcomes.append((_recovery_partial(current, str(exc)), ""))
@@ -1124,7 +1128,11 @@ def _reconcile_candidate(
         if apply or plan.action == "backfill_nextlink":
             child_short = applied_short or plan.child_short
             try:
-                child = _next_recovery_child(task_bin, plan.parent, child_short)
+                cached_child = verified_children.get(str(child_short or "").strip().lower())
+                if cached_child is not None and str(cached_child.get("status") or "").strip().lower() != "deleted":
+                    child = cached_child
+                else:
+                    child = _next_recovery_child(task_bin, plan.parent, child_short)
             except Exception as exc:
                 outcomes.append((_recovery_error(plan.parent, str(exc)), ""))
                 break

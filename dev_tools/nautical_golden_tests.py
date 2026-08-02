@@ -20297,7 +20297,7 @@ def test_reconcile_delayed_expiration_apply_follows_exact_children():
 
         hook = FakeHook()
 
-        def apply_parent(_task_bin, _hook, parent, *, taskdata, lease_held=False):
+        def apply_parent(_task_bin, _hook, parent, *, taskdata, lease_held=False, verified_children=None):
             link = int(parent["link"])
             calls.append(("apply", link, taskdata))
             child = tasks[link + 1]
@@ -20337,10 +20337,17 @@ def test_reconcile_delayed_expiration_apply_follows_exact_children():
             recovery_at=datetime(2026, 7, 23, 9, 30, tzinfo=timezone.utc),
         )
 
-        def fail_second_apply(_task_bin, _hook, parent, *, taskdata, lease_held=False):
+        def fail_second_apply(_task_bin, _hook, parent, *, taskdata, lease_held=False, verified_children=None):
             if int(parent["link"]) == 2:
                 raise TimeoutError("parent lock timed out")
-            return apply_parent(_task_bin, _hook, parent, taskdata=taskdata, lease_held=lease_held)
+            return apply_parent(
+                _task_bin,
+                _hook,
+                parent,
+                taskdata=taskdata,
+                lease_held=lease_held,
+                verified_children=verified_children,
+            )
 
         tool._apply_parent_atomic = fail_second_apply
         interrupted = tool._reconcile_candidate(
@@ -20404,6 +20411,69 @@ def test_reconcile_delayed_expiration_apply_follows_exact_children():
         ("lookup", 1, "22222222") in calls and ("lookup", 2, "33333333") in calls,
         f"recovery did not use narrow child lookups: {calls}",
     )
+
+
+def test_reconcile_reuses_verified_live_recovery_child():
+    """A freshly verified live child should not require a second export before recovery stops."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_verified_child_reuse_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "deleted",
+        "chain": "on",
+        "chainID": "verified1",
+        "link": 1,
+        "cp": "1d",
+    }
+    child = {
+        "uuid": "22222222-0000-0000-0000-000000000002",
+        "status": "pending",
+        "chain": "on",
+        "chainID": "verified1",
+        "link": 2,
+        "prevLink": "11111111",
+        "due": "20260723T090000Z",
+        "until": "20260723T100000Z",
+    }
+
+    def parse(value):
+        try:
+            return datetime.strptime(str(value), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc), None
+        except Exception:
+            return None, "invalid datetime"
+
+    hook = SimpleNamespace(_safe_parse_datetime=parse)
+    original_apply = tool._apply_parent_atomic
+    original_lookup = tool._next_recovery_child
+    try:
+        def apply_parent(_task_bin, _hook, current, *, taskdata, lease_held=False, verified_children=None):
+            expect(verified_children is not None, "recovery did not provide verified-child cache")
+            verified_children["22222222"] = dict(child)
+            return tool.reconcile.ReconcilePlan(
+                "spawn",
+                current,
+                2,
+                "expired link missing next link",
+                child=dict(child),
+            ), "22222222"
+
+        tool._apply_parent_atomic = apply_parent
+        tool._next_recovery_child = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("live verified child was exported again")
+        )
+        outcomes = tool._reconcile_candidate(
+            "task",
+            hook,
+            parent,
+            taskdata=Path("/tmp/nautical-reconcile-verified-child-test"),
+            apply=True,
+            max_expiration_hops=8,
+            recovery_at=datetime(2026, 7, 22, 9, 30, tzinfo=timezone.utc),
+        )
+    finally:
+        tool._apply_parent_atomic = original_apply
+        tool._next_recovery_child = original_lookup
+    expect([plan.action for plan, _applied in outcomes] == ["spawn"], f"unexpected recovery outcomes: {outcomes!r}")
 
 
 def test_reconcile_candidate_discovery_is_narrow_and_deterministic():
@@ -20775,7 +20845,10 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         expect(summary.get("expiration_hops") == 1, f"expiration hop was not summarized: {summary!r}")
         expect(summary.get("recovered_chains") == 0, f"single-hop recovery was mislabeled as delayed: {summary!r}")
         expect((summary.get("plans") or [{}])[0].get("trigger") == "expiration", f"missing trigger: {summary!r}")
-        expect(any("status:deleted" in filters for filters in exported_filters), f"deleted links were not queried: {exported_filters}")
+        expect(
+            any("chainID:11111111" in filters and "link:2" in filters for filters in exported_filters),
+            f"next slot was not queried: {exported_filters}",
+        )
         expect(any(args[-1] == "nextLink:22222222" for _bin, args in calls), f"parent nextLink not applied: {calls!r}")
     finally:
         (
@@ -21351,7 +21424,7 @@ def test_reconcile_apply_isolates_candidate_failures():
         tool._candidate_rows = lambda _task_bin, _hook: [failed, repairable]
         tool._task_data_dir = lambda _task_bin: Path("/tmp/nautical-reconcile-isolation-test")
 
-        def apply_parent(_task_bin, _hook, parent, *, taskdata, lease_held=False):
+        def apply_parent(_task_bin, _hook, parent, *, taskdata, lease_held=False, verified_children=None):
             expect(taskdata.name == "nautical-reconcile-isolation-test", f"wrong taskdata: {taskdata}")
             if parent["uuid"] == failed["uuid"]:
                 raise RuntimeError("parent reconcile lock busy: 11111111")
@@ -25278,6 +25351,7 @@ TESTS = [
     test_reconcile_manual_deletion_stops_chain_without_child_lookup,
     test_reconcile_delayed_expiration_dry_run_converges_to_live_slot,
     test_reconcile_delayed_expiration_apply_follows_exact_children,
+    test_reconcile_reuses_verified_live_recovery_child,
     test_reconcile_candidate_discovery_is_narrow_and_deterministic,
     test_reconcile_snapshot_reuses_initial_chain_export,
     test_reconcile_json_startup_failures_are_structured,

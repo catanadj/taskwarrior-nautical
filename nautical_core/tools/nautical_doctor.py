@@ -287,7 +287,11 @@ def _check_hooks_and_udas(
     return validated
 
 
-def _check_managed_runtime(findings: list[dict[str, Any]], hooks_dir: Path) -> None:
+def _check_managed_runtime(
+    findings: list[dict[str, Any]],
+    hooks_dir: Path,
+    hook_runtimes: dict[str, dict[str, Any]] | None = None,
+) -> None:
     try:
         status = install_runtime.runtime_status(hooks_dir.parent)
     except Exception as exc:
@@ -331,6 +335,36 @@ def _check_managed_runtime(findings: list[dict[str, Any]], hooks_dir: Path) -> N
             "ok",
             f"Managed Nautical runtime is active: {release_id}.",
             details=status,
+        )
+        manifest = status.get("manifest") if isinstance(status.get("manifest"), dict) else {}
+        runtime_root = Path(str(status.get("runtime_root") or hooks_dir.parent)).expanduser()
+        current_root = runtime_root / "current"
+        provenance_errors: list[str] = []
+        for event, record in (hook_runtimes or {}).items():
+            implementation = record.get("implementation")
+            if not implementation:
+                provenance_errors.append(f"{event} implementation path is missing")
+                continue
+            try:
+                Path(str(implementation)).resolve().relative_to(current_root.resolve())
+            except Exception:
+                provenance_errors.append(f"{event} implementation is outside the active release")
+        provenance_details = {
+            "release_id": release_id,
+            "source": manifest.get("source", ""),
+            "content_sha256": manifest.get("content_sha256", ""),
+            "created_at": manifest.get("created_at", ""),
+            "hook_impl_api": manifest.get("hook_impl_api", {}),
+        }
+        _finding(
+            findings,
+            "install.provenance",
+            "error" if provenance_errors else "ok",
+            "Active hooks resolve to one managed Nautical release."
+            if not provenance_errors
+            else "Active hooks do not share the managed Nautical release.",
+            fix=("Reinstall Nautical so wrappers and nautical_core come from the same release." if provenance_errors else ""),
+            details={**provenance_details, "errors": provenance_errors},
         )
 
 
@@ -1285,7 +1319,7 @@ def main() -> int:
         hooks_dir=hooks_dir,
         env=env,
     )
-    _check_managed_runtime(findings, hooks_dir)
+    _check_managed_runtime(findings, hooks_dir, hook_runtimes)
     _check_config(findings, taskdata)
     if args.clean_cache:
         gc_result = run_cache_gc()

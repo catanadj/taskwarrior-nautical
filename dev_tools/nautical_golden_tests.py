@@ -9425,6 +9425,14 @@ def test_astronomical_time_skips_unavailable_candidate_dates():
                 return True
 
             @staticmethod
+            def dnf_has_counted_random(_dnf):
+                return False
+
+            @staticmethod
+            def _import_sibling(name):
+                return core._import_sibling(name)
+
+            @staticmethod
             def build_local_datetime(day, hhmm):
                 return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=timezone.utc)
 
@@ -9433,7 +9441,7 @@ def test_astronomical_time_skips_unavailable_candidate_dates():
                 return value
 
         def fake_step(_dnf, previous, *_args, **_kwargs):
-            return previous + timedelta(days=1)
+            return None
 
         def fake_slots(_mods, day):
             if day == first:
@@ -9445,7 +9453,7 @@ def test_astronomical_time_skips_unavailable_candidate_dates():
         compute.anchor_step_once_with_omit = fake_step
         result = compute.anchor_next_occurrence_after_local_dt(
             [[{"mods": {"t": "moonrise"}}]],
-            datetime(2027, 6, 30, 12, 0, tzinfo=timezone.utc),
+            datetime(2027, 7, 1, 12, 0, tzinfo=timezone.utc),
             (9, 0),
             first,
             first,

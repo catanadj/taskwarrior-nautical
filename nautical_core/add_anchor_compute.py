@@ -129,6 +129,37 @@ def anchor_times_for_date(
     return sorted(times)
 
 
+def _available_time_after_date(
+    dnf,
+    start_date,
+    interval_seed,
+    seed_base,
+    fallback_hhmm,
+    omit_dnf,
+    *,
+    core: Any,
+    norm_t_mod: Callable[[Any], list[tuple[int, int]]],
+    resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None,
+    max_days: int = 32,
+):
+    """Search the current phase/month window after an unavailable event date."""
+    for offset in range(1, max_days + 1):
+        candidate = start_date + timedelta(days=offset)
+        if not anchor_expr_fires_on_date_with_omit(
+            dnf, candidate, interval_seed, seed_base, omit_dnf=omit_dnf, core=core
+        ):
+            continue
+        try:
+            tlist = anchor_times_for_date(
+                dnf, candidate, interval_seed, seed_base, omit_dnf=omit_dnf,
+                core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+            ) or [fallback_hhmm]
+        except LookupError:
+            continue
+        return candidate, tlist
+    return None
+
+
 def anchor_pick_occurrence_local(
     dnf,
     ref_dt_local,
@@ -157,6 +188,13 @@ def anchor_pick_occurrence_local(
                     return cand_local
         except LookupError as exc:
             unavailable = exc
+            same_window = _available_time_after_date(
+                dnf, d0, interval_seed, seed_base, fallback_hhmm, omit_dnf,
+                core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+            )
+            if same_window:
+                candidate, tlist = same_window
+                return core.to_local(core.build_local_datetime(candidate, tlist[0]))
 
     try:
         anchor_omit = core._import_sibling("anchor_omit")
@@ -180,6 +218,13 @@ def anchor_pick_occurrence_local(
                 ) or [fallback_hhmm]
             except LookupError as exc:
                 unavailable = exc
+                same_window = _available_time_after_date(
+                    dnf, candidate, interval_seed, seed_base, fallback_hhmm, omit_dnf,
+                    core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+                )
+                if same_window:
+                    candidate, tlist = same_window
+                    return core.to_local(core.build_local_datetime(candidate, tlist[0]))
                 continue
             return core.to_local(core.build_local_datetime(candidate, tlist[0]))
     except Exception:
@@ -225,6 +270,13 @@ def anchor_next_occurrence_after_local_dt(
                     return cand_local
         except LookupError as exc:
             unavailable = exc
+            same_window = _available_time_after_date(
+                dnf, d0, interval_seed, seed_base, fallback_hhmm, omit_dnf,
+                core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+            )
+            if same_window:
+                candidate, tlist = same_window
+                return core.to_local(core.build_local_datetime(candidate, tlist[0]))
 
     candidate = d0
     for _ in range(max(getattr(core, "MAX_ANCHOR_ITER", 128), 128)):
@@ -242,6 +294,13 @@ def anchor_next_occurrence_after_local_dt(
             ) or [fallback_hhmm]
         except LookupError as exc:
             unavailable = exc
+            same_window = _available_time_after_date(
+                dnf, candidate, interval_seed, seed_base, fallback_hhmm, omit_dnf,
+                core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+            )
+            if same_window:
+                candidate, tlist = same_window
+                return core.to_local(core.build_local_datetime(candidate, tlist[0]))
             continue
         return core.to_local(core.build_local_datetime(candidate, tlist[0]))
     if unavailable is not None:

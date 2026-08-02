@@ -9374,6 +9374,7 @@ def test_moon_phase_operational_errors_are_actionable():
     expect(astronomy.is_astronomy_error(foreign_error), "foreign hook-loaded astronomy error was not classified")
     expect("Install astral" in astronomy.scheduling_error_message(foreign_error), "foreign error message was not actionable")
 
+
     import nautical_core.reconcile as reconcile
 
     class FakeCore:
@@ -9406,6 +9407,55 @@ def test_moon_phase_operational_errors_are_actionable():
     plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=FakeHook())
     expect(plan.action == "error", f"moon resolver failure should fail closed: {plan}")
     expect("Astronomy provider unavailable" in plan.reason, plan.reason)
+
+
+def test_astronomical_time_skips_unavailable_candidate_dates():
+    """A missing moonrise on one phase date should advance to the next candidate."""
+    import nautical_core.add_anchor_compute as compute
+    astronomy = core._import_sibling("astronomy")
+    original_step = compute.anchor_step_once_with_omit
+    try:
+        first = date(2027, 7, 1)
+
+        class FakeCore:
+            MAX_ANCHOR_ITER = 4
+
+            @staticmethod
+            def factor_matches_on(_atom, _day, _seed, seed_base=None):
+                return True
+
+            @staticmethod
+            def build_local_datetime(day, hhmm):
+                return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=timezone.utc)
+
+            @staticmethod
+            def to_local(value):
+                return value
+
+        def fake_step(_dnf, previous, *_args, **_kwargs):
+            return previous + timedelta(days=1)
+
+        def fake_slots(_mods, day):
+            if day == first:
+                raise astronomy.AstronomyEventUnavailableError(
+                    "astronomical event 'moonrise' is unavailable on 2027-07-01 at home"
+                )
+            return [(6, 10)]
+
+        compute.anchor_step_once_with_omit = fake_step
+        result = compute.anchor_next_occurrence_after_local_dt(
+            [[{"mods": {"t": "moonrise"}}]],
+            datetime(2027, 6, 30, 12, 0, tzinfo=timezone.utc),
+            (9, 0),
+            first,
+            first,
+            core=FakeCore(),
+            norm_t_mod=lambda _value: [],
+            resolve_time_slots=fake_slots,
+        )
+        expect(result == datetime(2027, 7, 2, 6, 10, tzinfo=timezone.utc), f"unavailable candidate was not skipped: {result!r}")
+    finally:
+        compute.anchor_step_once_with_omit = original_step
 
 
 def test_moon_phase_natural_language_is_explicit():
@@ -24460,6 +24510,7 @@ TESTS = [
     test_moon_phase_real_astral_boundary_smoke,
     test_moon_astral_events_preserve_timezone_and_dst,
     test_moonrise_unavailable_location_fails_closed,
+    test_astronomical_time_skips_unavailable_candidate_dates,
     test_moon_phase_source_and_filter_compose_with_weekday,
     test_moon_phase_source_emits_once_per_phase_window,
     test_moon_phase_operational_errors_are_actionable,

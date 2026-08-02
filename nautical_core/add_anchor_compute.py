@@ -143,46 +143,49 @@ def anchor_pick_occurrence_local(
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
 ):
     d0 = ref_dt_local.date()
+    unavailable = None
     if anchor_expr_fires_on_date_with_omit(dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core):
-        tlist = anchor_times_for_date(
-            dnf,
-            d0,
-            interval_seed,
-            seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-            norm_t_mod=norm_t_mod,
-            resolve_time_slots=resolve_time_slots,
-        ) or [fallback_hhmm]
-        for hhmm in tlist:
-            cand_utc = core.build_local_datetime(d0, hhmm)
-            cand_local = core.to_local(cand_utc)
-            if (cand_local >= ref_dt_local) if inclusive else (cand_local > ref_dt_local):
-                return cand_local
+        try:
+            tlist = anchor_times_for_date(
+                dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core,
+                norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+            ) or [fallback_hhmm]
+            for hhmm in tlist:
+                cand_utc = core.build_local_datetime(d0, hhmm)
+                cand_local = core.to_local(cand_utc)
+                if (cand_local >= ref_dt_local) if inclusive else (cand_local > ref_dt_local):
+                    return cand_local
+        except LookupError as exc:
+            unavailable = exc
+
     try:
         anchor_omit = core._import_sibling("anchor_omit")
-        nxt_d, _ = anchor_omit.next_after_expr_with_omit(
-            dnf,
-            d0,
-            default_seed=interval_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-            max_skip_iterations=max(getattr(core, "MAX_ANCHOR_ITER", 128), 128),
-        )
+        candidate = d0
+        for _ in range(max(getattr(core, "MAX_ANCHOR_ITER", 128), 128)):
+            nxt_d, _ = anchor_omit.next_after_expr_with_omit(
+                dnf, candidate, default_seed=interval_seed, seed_base=seed_base,
+                omit_dnf=omit_dnf, core=core,
+                max_skip_iterations=max(getattr(core, "MAX_ANCHOR_ITER", 128), 128),
+            )
+            if not nxt_d:
+                break
+            candidate = nxt_d
+            try:
+                tlist = anchor_times_for_date(
+                    dnf, candidate, interval_seed, seed_base, omit_dnf=omit_dnf, core=core,
+                    norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+                ) or [fallback_hhmm]
+            except LookupError as exc:
+                unavailable = exc
+                continue
+            return core.to_local(core.build_local_datetime(candidate, tlist[0]))
     except Exception:
+        if unavailable is not None:
+            raise unavailable
         return None
-    tlist = anchor_times_for_date(
-        dnf,
-        nxt_d,
-        interval_seed,
-        seed_base,
-        omit_dnf=omit_dnf,
-        core=core,
-        norm_t_mod=norm_t_mod,
-        resolve_time_slots=resolve_time_slots,
-    ) or [fallback_hhmm]
-    return core.to_local(core.build_local_datetime(nxt_d, tlist[0]))
+    if unavailable is not None:
+        raise unavailable
+    return None
 
 
 def anchor_next_occurrence_after_local_dt(
@@ -198,6 +201,7 @@ def anchor_next_occurrence_after_local_dt(
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
 ):
     d0 = after_dt_local.date()
+    unavailable = None
     if anchor_expr_fires_on_date_with_omit(
         dnf,
         d0,
@@ -206,36 +210,37 @@ def anchor_next_occurrence_after_local_dt(
         omit_dnf=omit_dnf,
         core=core,
     ):
-        tlist = anchor_times_for_date(
-            dnf,
-            d0,
-            interval_seed,
-            seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-            norm_t_mod=norm_t_mod,
-            resolve_time_slots=resolve_time_slots,
-        ) or [fallback_hhmm]
-        for hhmm in tlist:
-            cand_utc = core.build_local_datetime(d0, hhmm)
-            cand_local = core.to_local(cand_utc)
-            if cand_local > after_dt_local:
-                return cand_local
+        try:
+            tlist = anchor_times_for_date(
+                dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core,
+                norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+            ) or [fallback_hhmm]
+            for hhmm in tlist:
+                cand_utc = core.build_local_datetime(d0, hhmm)
+                cand_local = core.to_local(cand_utc)
+                if cand_local > after_dt_local:
+                    return cand_local
+        except LookupError as exc:
+            unavailable = exc
 
-    nxt_d = anchor_step_once_with_omit(dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core)
-    if not nxt_d:
-        return None
-    tlist = anchor_times_for_date(
-        dnf,
-        nxt_d,
-        interval_seed,
-        seed_base,
-        omit_dnf=omit_dnf,
-        core=core,
-        norm_t_mod=norm_t_mod,
-        resolve_time_slots=resolve_time_slots,
-    ) or [fallback_hhmm]
-    return core.to_local(core.build_local_datetime(nxt_d, tlist[0]))
+    candidate = d0
+    for _ in range(max(getattr(core, "MAX_ANCHOR_ITER", 128), 128)):
+        nxt_d = anchor_step_once_with_omit(dnf, candidate, interval_seed, seed_base, omit_dnf=omit_dnf, core=core)
+        if not nxt_d:
+            break
+        candidate = nxt_d
+        try:
+            tlist = anchor_times_for_date(
+                dnf, candidate, interval_seed, seed_base, omit_dnf=omit_dnf, core=core,
+                norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+            ) or [fallback_hhmm]
+        except LookupError as exc:
+            unavailable = exc
+            continue
+        return core.to_local(core.build_local_datetime(candidate, tlist[0]))
+    if unavailable is not None:
+        raise unavailable
+    return None
 
 
 def anchor_until_summary(

@@ -23,6 +23,10 @@ class AstronomyUnavailableError(RuntimeError):
     """Raised when symbolic times are used without the Astral provider."""
 
 
+class AstronomyEventUnavailableError(LookupError):
+    """Raised when Astral has no requested event on a candidate date."""
+
+
 class AstronomyConfigurationError(ValueError):
     """Raised when an astronomy location profile is incomplete."""
 
@@ -32,6 +36,8 @@ def scheduling_error_message(exc: BaseException) -> str:
     text = str(exc).strip() or type(exc).__name__
     if is_astronomy_unavailable(exc):
         return f"Astronomy provider unavailable: {text}. Install astral or remove the moon-based recurrence."
+    if isinstance(exc, AstronomyEventUnavailableError) or type(exc).__name__ == "AstronomyEventUnavailableError":
+        return f"Astronomical event unavailable: {text}. Choose a date/event with an available rise or set."
     if isinstance(exc, AstronomyConfigurationError) or type(exc).__name__ == "AstronomyConfigurationError":
         return f"Astronomy profile invalid: {text}. Configure [astronomy] before using moon recurrence."
     return text
@@ -39,8 +45,9 @@ def scheduling_error_message(exc: BaseException) -> str:
 
 def is_astronomy_error(exc: BaseException) -> bool:
     """Return whether an exception represents an expected astronomy failure."""
-    return isinstance(exc, (AstronomyUnavailableError, AstronomyConfigurationError)) or type(exc).__name__ in {
+    return isinstance(exc, (AstronomyUnavailableError, AstronomyEventUnavailableError, AstronomyConfigurationError)) or type(exc).__name__ in {
         "AstronomyUnavailableError",
+        "AstronomyEventUnavailableError",
         "AstronomyConfigurationError",
     }
 
@@ -279,7 +286,9 @@ def _resolve_event_cached(
         else:
             value = getattr(moon, name)(observer, date=day, tzinfo=tzinfo)
     except (ValueError, AttributeError) as exc:
-        raise LookupError(f"astronomical event '{name}' is unavailable on {day.isoformat()} at {selected}") from exc
+        raise AstronomyEventUnavailableError(
+            f"astronomical event '{name}' is unavailable on {day.isoformat()} at {selected}"
+        ) from exc
     # Astral versions differ in how they attach the requested timezone.  A
     # final conversion through the configured ZoneInfo keeps DST offsets tied
     # to the event date instead of retaining a stale fixed offset.
@@ -291,6 +300,7 @@ def _resolve_event_cached(
 __all__ = (
     "ASTRONOMICAL_TIMES",
     "AstronomyConfigurationError",
+    "AstronomyEventUnavailableError",
     "AstronomyUnavailableError",
     "EVENT_NAMES",
     "PHASE_RANGES",

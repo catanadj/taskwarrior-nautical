@@ -522,6 +522,15 @@ def handle_anchor_file_preview_on_add(
         )
 
     if until_dt:
+        if until_dt < first_due_utc:
+            error_and_exit(
+                [
+                    ("Invalid chainUntil", "Chain end point is earlier than the first matching anchor occurrence."),
+                    ("First due", core.fmt_dt_local(first_due_utc)),
+                    ("Chain end point", core.fmt_dt_local(until_dt)),
+                    ("Required", "Set chainUntil on or after the first anchor occurrence, or adjust the anchor."),
+                ]
+            )
         is_reasonable, warn_msg = validate_chain_duration_reasonable(until_dt, now_utc, first_due_utc, "anchor")
         if not is_reasonable and warn_msg:
             rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
@@ -808,6 +817,15 @@ def handle_anchor_preview_on_add(
         )
 
     if until_dt:
+        if until_dt < first_due_utc:
+            error_and_exit(
+                [
+                    ("Invalid chainUntil", "Chain end point is earlier than the first matching anchor occurrence."),
+                    ("First due", core.fmt_dt_local(first_due_utc)),
+                    ("Chain end point", core.fmt_dt_local(until_dt)),
+                    ("Required", "Set chainUntil on or after the first anchor occurrence, or adjust the anchor."),
+                ]
+            )
         is_reasonable, warn_msg = validate_chain_duration_reasonable(
             until_dt,
             now_utc,

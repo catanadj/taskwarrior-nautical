@@ -11048,6 +11048,43 @@ def test_on_add_native_until_guard_ignores_ordinary_tasks():
     expect(_assert_stdout_json_only(proc.stdout) == task, "ordinary task was changed")
 
 
+def test_on_add_chain_until_rejects_before_first_anchor_occurrence():
+    """An auto-due anchor must not be accepted when chainUntil precedes its first match."""
+    hook = _find_hook_file("on-add.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_add_chain_until_first_match_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+    now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000133",
+        "description": "chain endpoint before first anchor",
+        "status": "pending",
+        "entry": mod.core.fmt_isoz(now_utc),
+        "anchor": "w:mon",
+        "chainUntil": mod.core.fmt_isoz(now_utc + timedelta(hours=12)),
+    }
+    ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
+    panels = []
+    original = (mod._panel, mod._emit_task_json)
+    try:
+        mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
+        mod._emit_task_json = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("chainUntil-before-first must not emit JSON")
+        )
+        try:
+            mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
+        except SystemExit as exc:
+            expect(exc.code == 1, f"unexpected chainUntil rejection code: {exc.code!r}")
+        else:
+            raise AssertionError("chainUntil before first anchor occurrence was accepted")
+    finally:
+        mod._panel, mod._emit_task_json = original
+    expect(
+        panels and any(label == "Invalid chainUntil" for label, _value in panels[-1][1]),
+        f"missing chainUntil guard panel: {panels!r}",
+    )
+
+
 def test_on_add_native_until_rejects_strict_anchor_modes():
     """Native until should be incompatible with all and flex anchor backfill."""
     hook = _find_hook_file("on-add.nautical")
@@ -24654,6 +24691,7 @@ TESTS = [
     test_on_add_preview_distinguishes_expiration_from_chain_end_point,
     test_on_add_native_until_checks_generated_anchor_due,
     test_on_add_native_until_guard_ignores_ordinary_tasks,
+    test_on_add_chain_until_rejects_before_first_anchor_occurrence,
     test_on_add_native_until_rejects_strict_anchor_modes,
     test_on_modify_native_until_rejects_invalid_window_changes,
     test_on_modify_native_until_follows_recurrence_target_move,

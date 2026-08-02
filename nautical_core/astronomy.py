@@ -280,7 +280,12 @@ def _resolve_event_cached(
             value = getattr(moon, name)(observer, date=day, tzinfo=tzinfo)
     except (ValueError, AttributeError) as exc:
         raise LookupError(f"astronomical event '{name}' is unavailable on {day.isoformat()} at {selected}") from exc
-    return value
+    # Astral versions differ in how they attach the requested timezone.  A
+    # final conversion through the configured ZoneInfo keeps DST offsets tied
+    # to the event date instead of retaining a stale fixed offset.
+    if value.tzinfo is None:
+        return value.replace(tzinfo=tzinfo)
+    return value.astimezone(tzinfo)
 
 
 __all__ = (

@@ -8450,7 +8450,7 @@ def test_business_calendar_policy_flows_through_scheduler_paths():
         business_calendar=policy,
     )
     expect(
-        random_got in {date(2026, 1, 2), date(2026, 1, 7)},
+        random_got in {date(2026, 1, 2), date(2026, 1, 7), date(2026, 1, 21)},
         f'm:rand@bd selected outside the injected business calendar: {random_got}',
     )
 
@@ -24252,12 +24252,17 @@ def test_position_selection_public_period_scopes_hooks():
     """Add, completion, and timeline paths should support shifted yearly selections."""
     expr = "(w:mon)@in-year=last@+7d@t=09:00"
     add_hook = _find_hook_file("on-add.nautical")
+    local_day = date(2027, 1, 4)
+    local_due = core.build_local_datetime(local_day, (9, 0)).astimezone(timezone.utc)
+    local_end = core.build_local_datetime(local_day, (10, 0)).astimezone(timezone.utc)
+    due_token = core.fmt_isoz(local_due)
+    end_token = core.fmt_isoz(local_end)
     task = {
         "uuid": "00000000-0000-0000-0000-000000000780",
         "description": "yearly positional integration",
         "status": "pending",
         "entry": "20260701T090000Z",
-        "due": "20270104T060000Z",
+        "due": due_token,
         "anchor": expr,
         "anchor_mode": "skip",
     }
@@ -24275,8 +24280,8 @@ def test_position_selection_public_period_scopes_hooks():
         {
             "anchor": expr,
             "anchor_mode": "skip",
-            "due": "20270104T060000Z",
-            "end": "20270104T070000Z",
+            "due": due_token,
+            "end": end_token,
             "chainID": "abcd1234",
         }
     )

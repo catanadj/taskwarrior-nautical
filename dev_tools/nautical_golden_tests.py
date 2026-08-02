@@ -20485,6 +20485,7 @@ def test_reconcile_snapshot_reuses_initial_chain_export():
     finally:
         tool._export = original
     expect(len(calls) == 1, f"initial chain export was not reused: {calls!r}")
+    expect(tool._EXPORT_STATS["snapshot_hits"] == 1, f"snapshot hit was not recorded: {tool._EXPORT_STATS!r}")
 
 
 def test_reconcile_json_startup_failures_are_structured():

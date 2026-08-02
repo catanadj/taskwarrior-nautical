@@ -42,6 +42,8 @@ _MAX_EXPIRATION_HOPS = 1000
 _RECONCILE_PROTOCOL = 1
 _JSON_SCHEMA = "nautical.reconcile"
 _JSON_SCHEMA_VERSION = 1
+_EXPORT_STATS = {"calls": 0, "rows": 0, "snapshot_hits": 0}
+_LOCK_STATS = {"reconcile_busy": 0, "parent_busy": 0}
 
 
 class _ConfigurationDrift(RuntimeError):
@@ -128,6 +130,7 @@ def _run_task(
 
 
 def _export(task_bin: str, filters: list[str], *, timeout: float = 120.0) -> list[dict[str, Any]]:
+    _EXPORT_STATS["calls"] += 1
     proc = _run_task(
         task_bin,
         ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", *filters, "export"],
@@ -139,7 +142,9 @@ def _export(task_bin: str, filters: list[str], *, timeout: float = 120.0) -> lis
         payload = [payload]
     if not isinstance(payload, list):
         raise RuntimeError("task export returned a non-list payload")
-    return [row for row in payload if isinstance(row, dict)]
+    rows = [row for row in payload if isinstance(row, dict)]
+    _EXPORT_STATS["rows"] += len(rows)
+    return rows
 
 
 def _load_on_modify(hook_path: str | None = None):
@@ -227,6 +232,8 @@ class _ReconcileSnapshot:
     def chain_rows(self) -> list[dict[str, Any]]:
         if self._chain_rows is None:
             self._chain_rows = _export(self.task_bin, ["chain:on", "chainID.not:"])
+        else:
+            _EXPORT_STATS["snapshot_hits"] += 1
         return self._chain_rows
 
 
@@ -436,12 +443,14 @@ def _native_until_repairs(
                 continue
             with _reconcile_apply_lock(taskdata) as reconcile_acquired:
                 if not reconcile_acquired:
+                    _LOCK_STATS["reconcile_busy"] += 1
                     item["action"] = "repair_error"
                     item["repair_error"] = "another reconcile apply is already running"
                 else:
                     parent_lock = _parent_apply_lock(taskdata, str(row.get("uuid") or ""))
                     with parent_lock as acquired:
                         if not acquired:
+                            _LOCK_STATS["parent_busy"] += 1
                             item["action"] = "repair_error"
                             item["repair_error"] = "native-until repair lock busy"
                         else:
@@ -872,9 +881,11 @@ def _apply_parent_atomic(
         raise RuntimeError("parent task has no UUID")
     with _reconcile_apply_lock(taskdata) as reconcile_acquired:
         if not reconcile_acquired:
+            _LOCK_STATS["reconcile_busy"] += 1
             raise RuntimeError("another reconcile apply is already running")
         with _parent_apply_lock(taskdata, parent_uuid) as acquired:
             if not acquired:
+                _LOCK_STATS["parent_busy"] += 1
                 raise RuntimeError(f"parent reconcile lock busy: {reconcile.short_uuid(parent_uuid)}")
             drift_reason = _configuration_drift_reason(hook)
             if drift_reason:
@@ -1282,6 +1293,8 @@ def main(argv: list[str] | None = None) -> int:
         help=f"Maximum expired links recovered per chain (default: {_DEFAULT_EXPIRATION_HOPS}).",
     )
     args = parser.parse_args(argv)
+    _EXPORT_STATS.update(calls=0, rows=0, snapshot_hits=0)
+    _LOCK_STATS.update(reconcile_busy=0, parent_busy=0)
 
     try:
         hook = _load_on_modify(args.hook_path)
@@ -1488,6 +1501,10 @@ def main(argv: list[str] | None = None) -> int:
         "errors": sum(1 for p in plans if p.action == "error"),
         "native_until_manual_review": native_until_manual_review,
         "native_until_audit_skipped": native_until_audit_skipped,
+        "export_calls": _EXPORT_STATS["calls"],
+        "export_rows": _EXPORT_STATS["rows"],
+        "snapshot_hits": _EXPORT_STATS["snapshot_hits"],
+        "lock_contention": dict(_LOCK_STATS),
         "plans": [
             {
                 "action": plan.action,
@@ -1514,6 +1531,9 @@ def main(argv: list[str] | None = None) -> int:
             f" manual_review={summary['native_until_manual_review']}"
             f" audit_skipped={summary['native_until_audit_skipped']}"
             f" config_drift={summary['configuration_drifted']}"
+            f" exports={summary['export_calls']}"
+            f" snapshot_hits={summary['snapshot_hits']}"
+            f" lock_busy={sum(summary['lock_contention'].values())}"
         )
         summary_color = "red" if has_errors else "yellow" if degraded else "green"
         print(_style(summary_line, summary_color))

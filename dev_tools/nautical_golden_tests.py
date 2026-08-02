@@ -4551,6 +4551,24 @@ def test_installer_cli_and_doctor_managed_runtime_diagnostics():
         expect(broken.get("severity") == "error", f"Doctor missed broken runtime pointer: {findings!r}")
 
 
+def test_runtime_cleanup_preserves_active_and_rollback_releases():
+    """Runtime cleanup must retain the active release and newest rollback."""
+    from nautical_core import install_runtime
+
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td) / "taskdata"
+        for release_id in ("oldest", "middle", "active"):
+            install_runtime.install_release(source=Path(ROOT), taskdata=taskdata, release_id=release_id, smoke=False)
+        planned = install_runtime.cleanup_runtime(taskdata, keep_releases=1, apply=False)
+        expect(planned.get("active_release") == "active", f"wrong active release: {planned}")
+        expect(set(planned.get("kept_releases") or {}) == {"active", "middle"}, f"rollback retention failed: {planned}")
+        expect(any(path.endswith("oldest") for path in planned.get("remove_releases") or []), f"old release not planned: {planned}")
+        applied = install_runtime.cleanup_runtime(taskdata, keep_releases=1, apply=True)
+        expect(applied.get("removed"), f"cleanup did not remove old release: {applied}")
+        remaining = {path.name for path in (taskdata / ".nautical-runtime" / "releases").iterdir() if path.is_dir()}
+        expect(remaining == {"active", "middle"}, f"cleanup removed a protected release: {remaining}")
+
+
 def test_doctor_discovers_effective_taskdata_directory():
     """doctor should discover the effective data dir when --taskdata is omitted."""
     path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
@@ -24807,6 +24825,7 @@ TESTS = [
     test_installer_migrates_legacy_core_and_rolls_back_first_switch,
     test_installer_lock_and_duplicate_hook_guards,
     test_installer_cli_and_doctor_managed_runtime_diagnostics,
+    test_runtime_cleanup_preserves_active_and_rollback_releases,
     test_doctor_discovers_effective_taskdata_directory,
     test_operator_doctor_loads_colocated_queue_helper,
     test_nautical_dispatches_supported_subcommands,

@@ -549,7 +549,7 @@ def _write_manifest(
         "schema": 1,
         "release_id": release_id,
         "content_sha256": digest,
-        "created_at": int(time.time()),
+        "created_at": time.time_ns() / 1_000_000_000,
         "source": str(source),
         "hook_impl_api": apis,
     }
@@ -937,5 +937,71 @@ def runtime_status(base: Path) -> dict[str, Any]:
         "active_release": active_release,
         "manifest": manifest,
         "abandoned": staging,
+        "errors": errors,
+    }
+
+
+def cleanup_runtime(
+    base: Path,
+    *,
+    keep_releases: int = 1,
+    stale_after_seconds: float = 86400.0,
+    apply: bool = False,
+) -> dict[str, Any]:
+    """Plan or apply safe cleanup of inactive managed runtime artifacts."""
+    status = runtime_status(base)
+    runtime_root = Path(str(status.get("runtime_root") or (base / ".nautical-runtime"))).expanduser()
+    releases_dir = runtime_root / "releases"
+    active = str(status.get("active_release") or "")
+    keep_names = {active} if active else set()
+    releases: list[tuple[float, str, Path]] = []
+    if releases_dir.is_dir():
+        for path in releases_dir.iterdir():
+            if not path.is_dir() or path.name == active:
+                continue
+            try:
+                manifest = _release_manifest(path)
+                stamp = float(manifest.get("created_at") or path.stat().st_mtime)
+            except Exception:
+                stamp = path.stat().st_mtime
+            releases.append((stamp, path.name, path))
+    releases.sort(reverse=True)
+    keep_names.update(name for _stamp, name, _path in releases[: max(0, int(keep_releases))])
+    remove_releases = [str(path) for _stamp, name, path in releases if name not in keep_names]
+    now = time.time()
+    stale_cutoff = now - max(0.0, float(stale_after_seconds))
+    remove_abandoned: list[str] = []
+    for raw in status.get("abandoned") or []:
+        path = Path(str(raw))
+        try:
+            if path.exists() and path.stat().st_mtime <= stale_cutoff:
+                remove_abandoned.append(str(path))
+        except OSError:
+            continue
+    removed: list[str] = []
+    errors: list[str] = []
+    if apply:
+        try:
+            with _InstallLock(runtime_root / "install.lock"):
+                for raw in [*remove_releases, *remove_abandoned]:
+                    path = Path(raw)
+                    try:
+                        if path.is_dir() and not path.is_symlink():
+                            shutil.rmtree(path)
+                        elif path.exists() or path.is_symlink():
+                            path.unlink()
+                        removed.append(raw)
+                    except Exception as exc:
+                        errors.append(f"{raw}: {exc}")
+        except InstallError as exc:
+            errors.append(str(exc))
+    return {
+        "status": "applied" if apply else "dry-run",
+        "base": str(Path(base).expanduser().resolve()),
+        "active_release": active,
+        "kept_releases": sorted(keep_names),
+        "remove_releases": remove_releases,
+        "remove_abandoned": remove_abandoned,
+        "removed": removed,
         "errors": errors,
     }

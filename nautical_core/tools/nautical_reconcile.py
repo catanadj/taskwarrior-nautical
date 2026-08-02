@@ -427,7 +427,6 @@ def _native_until_repairs(
             if fallback_error or not fallback:
                 item["action"] = "manual_review"
                 item["repair_error"] = fallback_error or repair_error or "could not calculate repaired until"
-                errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
                 repairs.append(item)
                 continue
             repaired = fallback
@@ -1284,6 +1283,9 @@ def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
             "native_until_manual_review": 0,
             "native_until_audit_skipped": 0,
             "errors": 1,
+            "startup_errors": 1,
+            "plan_errors": 0,
+            "native_until_error_count": 0,
             "plans": [],
             "applied": [],
         }
@@ -1403,10 +1405,11 @@ def main(
         for item in native_until_repairs:
             action = item.get("action") or "native_until"
             suffix = f" -> {item['new_until']}" if item.get("new_until") else ""
+            outcome = " (no change applied)" if action == "manual_review" else ""
             line = (
                 f"native-until: {action:<13} {item.get('task') or '?'} "
                 f"chain={item.get('chainID') or '?'} link={item.get('link') or '?'}"
-                f"  {item.get('reason') or 'invalid native until'}{suffix}"
+                f"  {item.get('reason') or 'invalid native until'}{suffix}{outcome}"
             )
             print(_style(line, _action_style(action)))
         for error in native_until_errors:
@@ -1513,7 +1516,10 @@ def main(
         or native_until_audit_skipped > 0
         or bool(configuration_drift_reason)
     )
-    has_errors = any(plan.action == "error" for plan in plans) or bool(native_until_errors)
+    plan_errors = sum(1 for plan in plans if plan.action == "error")
+    native_until_error_count = len(native_until_errors)
+    total_errors = plan_errors + native_until_error_count
+    has_errors = total_errors > 0
 
     summary = {
         "schema": _JSON_SCHEMA,
@@ -1531,7 +1537,10 @@ def main(
         "manual_stop": sum(1 for p in plans if p.action == "manual_stop"),
         "stale": sum(1 for p in plans if p.action == "stale"),
         "partial": sum(1 for p in plans if p.action == "partial"),
-        "errors": sum(1 for p in plans if p.action == "error"),
+        "errors": total_errors,
+        "startup_errors": 0,
+        "plan_errors": plan_errors,
+        "native_until_error_count": native_until_error_count,
         "native_until_manual_review": native_until_manual_review,
         "native_until_audit_skipped": native_until_audit_skipped,
         "export_calls": _EXPORT_STATS["calls"],
@@ -1560,6 +1569,8 @@ def main(
             f"expiration_hops={summary['expiration_hops']} recovered={summary['recovered_chains']} "
             f"final={summary['legitimate_final']} manual={summary['manual_stop']} "
             f"stale={summary['stale']} partial={summary['partial']} errors={summary['errors']}"
+            f" plan_errors={summary['plan_errors']}"
+            f" native_until_errors={summary['native_until_error_count']}"
             f" native_until={len(summary['native_until_repairs'])}"
             f" manual_review={summary['native_until_manual_review']}"
             f" audit_skipped={summary['native_until_audit_skipped']}"

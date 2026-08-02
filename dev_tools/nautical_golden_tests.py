@@ -21913,6 +21913,28 @@ def test_reconcile_degraded_audit_status_is_structured():
         expect(manual_summary.get("schema_version") == 1, f"JSON schema version missing: {manual_summary!r}")
         expect(manual_summary.get("status") == "degraded", f"wrong manual status: {manual_summary!r}")
         expect(manual_summary.get("native_until_manual_review") == 1, f"manual review was not counted: {manual_summary!r}")
+        expect(manual_summary.get("errors") == 0, f"manual review was counted as an error: {manual_summary!r}")
+        expect(manual_summary.get("plan_errors") == 0, f"manual review changed plan errors: {manual_summary!r}")
+        expect(manual_summary.get("native_until_error_count") == 0, f"manual review changed native errors: {manual_summary!r}")
+
+        manual_text = io.StringIO()
+        with contextlib.redirect_stdout(manual_text):
+            manual_text_result = mod.main([])
+        expect(manual_text_result == 2, f"manual review text output returned {manual_text_result}")
+        expect("no change applied" in manual_text.getvalue(), f"manual review text was not actionable: {manual_text.getvalue()!r}")
+
+        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: (
+            [{"action": "repair_error", "task": "22222222"}],
+            ["22222222 chain test link 2: verification failed"],
+        )
+        error_output = io.StringIO()
+        with contextlib.redirect_stdout(error_output):
+            error_result = mod.main(["--json"])
+        error_summary = json.loads(error_output.getvalue())
+        expect(error_result == 1 and error_summary.get("status") == "error", f"native repair error was not fatal: {error_summary!r}")
+        expect(error_summary.get("errors") == 1, f"native repair error was omitted from total: {error_summary!r}")
+        expect(error_summary.get("plan_errors") == 0, f"native repair error changed plan count: {error_summary!r}")
+        expect(error_summary.get("native_until_error_count") == 1, f"native repair error count missing: {error_summary!r}")
 
         def skipped_audit(_task_bin, _hook, **_kwargs):
             raise RuntimeError("Taskwarrior lock active")
@@ -24383,6 +24405,39 @@ def test_reconcile_native_until_uses_completed_predecessor_snapshot():
     expect(repairs and repairs[0].get("new_until") == stamp(date(2026, 7, 22), (23, 0)), f"repair missed predecessor: {repairs!r}")
 
 
+def test_reconcile_native_until_manual_review_is_not_a_hard_error():
+    """An unrecoverable native-until window must be reported without claiming a failed mutation."""
+    hook_path = _find_hook_file("on-modify.nautical")
+    hook = _load_hook_module(hook_path, "_nautical_reconcile_manual_until_hook_test")
+    if hasattr(hook, "_load_core"):
+        hook._load_core()
+    tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+        "_nautical_reconcile_manual_until_tool_test",
+    )
+
+    def stamp(day, hhmm):
+        return hook.core.fmt_isoz(hook.core.build_local_datetime(day, hhmm))
+
+    row = {
+        "uuid": "manual-until-uuid",
+        "chain": "on",
+        "chainID": "manual-until",
+        "link": 1,
+        "status": "pending",
+        "due": stamp(date(2026, 7, 23), (23, 0)),
+        "until": stamp(date(2026, 7, 23), (22, 0)),
+    }
+    original_rows = tool._active_chain_rows
+    try:
+        tool._active_chain_rows = lambda *_args, **_kwargs: [row]
+        repairs, errors = tool._native_until_repairs("task", hook, apply=False)
+    finally:
+        tool._active_chain_rows = original_rows
+    expect(not errors, f"manual review was reported as a failed mutation: {errors!r}")
+    expect(repairs and repairs[0].get("action") == "manual_review", f"manual review was not preserved: {repairs!r}")
+
+
 def test_seasonal_selection_business_calendar_and_cache_identity():
     """Seasonal offsets should honor custom calendars and cache each seasonal context separately."""
     from nautical_core import position_selection
@@ -25218,6 +25273,7 @@ TESTS = [
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_repairs_invalid_native_until_from_previous_link,
     test_reconcile_native_until_uses_completed_predecessor_snapshot,
+    test_reconcile_native_until_manual_review_is_not_a_hard_error,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
     test_reconcile_manual_deletion_stops_chain_without_child_lookup,
     test_reconcile_delayed_expiration_dry_run_converges_to_live_slot,

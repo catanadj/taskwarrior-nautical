@@ -217,7 +217,52 @@ def _candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
     )
 
 
-def _candidate_rows(task_bin: str, hook: Any) -> list[dict[str, Any]]:
+class _ReconcileSnapshot:
+    """Immutable read-phase chain export shared by candidate and audit scans."""
+
+    def __init__(self, task_bin: str):
+        self.task_bin = task_bin
+        self._chain_rows: list[dict[str, Any]] | None = None
+
+    def chain_rows(self) -> list[dict[str, Any]]:
+        if self._chain_rows is None:
+            self._chain_rows = _export(self.task_bin, ["chain:on", "chainID.not:"])
+        return self._chain_rows
+
+
+_READ_SNAPSHOT: _ReconcileSnapshot | None = None
+
+
+def _candidate_rows(
+    task_bin: str,
+    hook: Any,
+    *,
+    snapshot: _ReconcileSnapshot | None = None,
+) -> list[dict[str, Any]]:
+    snapshot = snapshot or _READ_SNAPSHOT
+    if snapshot is not None:
+        rows = snapshot.chain_rows()
+        if not rows:
+            # Preserve compatibility with Taskwarrior wrappers that only honor
+            # the older status-scoped export filters.
+            completed = _export(task_bin, ["status:completed", "chain:on", "chainID.not:", "nextLink:"])
+            deleted = _export(task_bin, ["status:deleted", "chain:on", "chainID.not:", "nextLink:"])
+            candidates = [row for row in completed if reconcile.is_orphan_completion_candidate(row)]
+            candidates.extend(row for row in deleted if reconcile.is_orphan_deleted_chain_candidate(row))
+            return sorted(candidates, key=_candidate_sort_key)
+        candidates = [
+            row
+            for row in rows
+            if str(row.get("status") or "").strip().lower() == "completed"
+            and reconcile.is_orphan_completion_candidate(row)
+        ]
+        candidates.extend(
+            row
+            for row in rows
+            if str(row.get("status") or "").strip().lower() == "deleted"
+            and reconcile.is_orphan_deleted_chain_candidate(row)
+        )
+        return sorted(candidates, key=_candidate_sort_key)
     completed = _export(task_bin, ["status:completed", "chain:on", "chainID.not:", "nextLink:"])
     deleted = _export(task_bin, ["status:deleted", "chain:on", "chainID.not:", "nextLink:"])
     rows = [row for row in completed if reconcile.is_orphan_completion_candidate(row)]
@@ -244,9 +289,14 @@ def _ambiguous_candidate_slots(rows: list[dict[str, Any]]) -> dict[tuple[str, in
     }
 
 
-def _active_chain_rows(task_bin: str, *, include_inactive: bool = False) -> list[dict[str, Any]]:
+def _active_chain_rows(
+    task_bin: str,
+    *,
+    include_inactive: bool = False,
+    snapshot: _ReconcileSnapshot | None = None,
+) -> list[dict[str, Any]]:
     """Export live Nautical links for integrity checks, independently of recovery candidates."""
-    rows = _export(task_bin, ["chain:on", "chainID.not:"])
+    rows = snapshot.chain_rows() if snapshot is not None else _export(task_bin, ["chain:on", "chainID.not:"])
     return sorted(
         (
             row
@@ -299,9 +349,14 @@ def _native_until_repairs(
     *,
     apply: bool,
     taskdata: Path | None = None,
+    snapshot: _ReconcileSnapshot | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Find invalid native windows and repair only those with a reliable predecessor."""
-    all_rows = _active_chain_rows(task_bin, include_inactive=True)
+    all_rows = _active_chain_rows(
+        task_bin,
+        include_inactive=True,
+        snapshot=snapshot or _READ_SNAPSHOT,
+    )
     rows = [
         row
         for row in all_rows
@@ -1240,6 +1295,9 @@ def main(argv: list[str] | None = None) -> int:
         recovery_at = now_utc() if callable(now_utc) else datetime.now(timezone.utc)
     except Exception as exc:
         return _startup_failure(args, "hook_protocol", exc)
+    global _READ_SNAPSHOT
+    snapshot = _ReconcileSnapshot(args.task_bin)
+    _READ_SNAPSHOT = snapshot
     try:
         candidates = _candidate_rows(args.task_bin, hook)
     except Exception as exc:

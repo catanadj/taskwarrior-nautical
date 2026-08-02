@@ -20454,6 +20454,39 @@ def test_reconcile_candidate_discovery_is_narrow_and_deterministic():
            f"duplicate candidate slot was not rejected: {conflicts!r}")
 
 
+def test_reconcile_snapshot_reuses_initial_chain_export():
+    """Candidate and native audit scans should share one immutable chain export."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_snapshot_reuse_test")
+    rows = [
+        {
+            "uuid": "11111111-0000-0000-0000-000000000001",
+            "status": "completed",
+            "cp": "1d",
+            "chain": "on",
+            "chainID": "chain-1",
+            "link": 1,
+        },
+        {
+            "uuid": "22222222-0000-0000-0000-000000000002",
+            "status": "pending",
+            "chain": "on",
+            "chainID": "chain-1",
+            "link": 2,
+        },
+    ]
+    calls = []
+    original = tool._export
+    try:
+        tool._export = lambda _task_bin, filters, **_kwargs: calls.append(list(filters)) or rows
+        snapshot = tool._ReconcileSnapshot("task")
+        tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+        tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
+    finally:
+        tool._export = original
+    expect(len(calls) == 1, f"initial chain export was not reused: {calls!r}")
+
+
 def test_reconcile_json_startup_failures_are_structured():
     """JSON mode should report hook loading and protocol failures without traceback output."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -25161,6 +25194,7 @@ TESTS = [
     test_reconcile_delayed_expiration_dry_run_converges_to_live_slot,
     test_reconcile_delayed_expiration_apply_follows_exact_children,
     test_reconcile_candidate_discovery_is_narrow_and_deterministic,
+    test_reconcile_snapshot_reuses_initial_chain_export,
     test_reconcile_json_startup_failures_are_structured,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
     test_reconcile_expiration_anchor_advances_from_recurrence_target,

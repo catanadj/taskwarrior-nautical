@@ -16120,6 +16120,25 @@ def test_navigator_surfaces_configuration_drift_warning():
         sys.modules.pop(module_name, None)
 
 
+def test_navigator_uses_nautical_configured_timezone():
+    """Navigator display conversions must use Nautical's configured timezone."""
+    module_name = "_nautical_navigator_timezone_initialization_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+        configured = str(getattr(navigator.core, "LOCAL_TZ_NAME", "")).strip()
+        expect(configured, "Nautical core did not expose a configured timezone")
+        expect(
+            getattr(navigator.LOCAL_ZONE, "key", "") == configured,
+            f"Navigator ignored Nautical timezone {configured!r}: {navigator.LOCAL_ZONE!r}",
+        )
+    finally:
+        sys.modules.pop(module_name, None)
+
+
 def test_shared_time_slot_resolver_keeps_hook_and_navigator_parity():
     """add, modify, and Navigator should resolve the same symbolic slot and offset."""
     import nautical_core.time_slots as time_slots
@@ -25004,6 +25023,7 @@ TESTS.extend([
     test_navigator_empty_task_export_treats_no_matches_as_empty,
     test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime,
     test_navigator_surfaces_configuration_drift_warning,
+    test_navigator_uses_nautical_configured_timezone,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
     test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,

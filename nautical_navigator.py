@@ -69,12 +69,6 @@ def _add_months(d: date, n: int) -> date:
 # ──────────────────────────────────────────────────────────────────────────────
 console = Console()
 UTC_ZONE = tz.tzutc()
-try:
-    from zoneinfo import ZoneInfo
-
-    LOCAL_ZONE = ZoneInfo(getattr(core, "LOCAL_TZ_NAME", "UTC"))
-except Exception:
-    LOCAL_ZONE = tz.tzlocal()
 
 COLORS = {
     'primary': 'bright_cyan',
@@ -153,6 +147,16 @@ try:
     from nautical_core import task_command as _task_command
 except Exception:
     _task_command = None
+
+# Resolve the display timezone only after Nautical core has loaded.  The core
+# profile is authoritative; the host timezone remains a safe fallback when
+# Navigator is run without a Nautical installation.
+try:
+    from zoneinfo import ZoneInfo
+
+    LOCAL_ZONE = ZoneInfo(str(getattr(core, "LOCAL_TZ_NAME", "UTC"))) if core is not None else tz.tzlocal()
+except Exception:
+    LOCAL_ZONE = tz.tzlocal()
 
 
 def _run_task_export(filters: tuple[str, ...]) -> Any:

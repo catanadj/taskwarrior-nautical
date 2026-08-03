@@ -21,6 +21,7 @@ from .file_source_expr import (
     resolve_file_sources,
 )
 from .schedule_utils import apply_day_offset, roll_apply
+from .time_windows import parse_time_window_spec
 
 
 _WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
@@ -83,6 +84,14 @@ def parse_anchor_file_spec(value: str | None) -> tuple[str, dict]:
             if mods["t"] is not None:
                 raise ValueError("Duplicate '@t=' modifier. Use a single '@t=HH:MM,HH:MM,...' list.")
             values = [part.strip() for part in tok.split("=", 1)[1].split(",") if part.strip()]
+            try:
+                window = parse_time_window_spec(tok.split("=", 1)[1].strip())
+            except ValueError as exc:
+                raise ValueError(f"anchor_file @t: {exc}") from None
+            if window is not None:
+                mods["t"] = list(window.slots)
+                mods["time_window"] = window.canonical
+                continue
             times: list[tuple[int, int]] = []
             seen: set[tuple[int, int]] = set()
             for item in values:

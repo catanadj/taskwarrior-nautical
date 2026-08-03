@@ -15910,6 +15910,45 @@ def test_anchor_file_spec_parses_time_and_negative_offset():
     expect(mods.get('business_day_offset') == 1, f'unexpected anchor_file business-day offset: {mods!r}')
 
 
+def test_anchor_file_spec_parses_bounded_time_window():
+    """anchor_file should share bounded time-window syntax with ordinary anchors."""
+    import nautical_core.anchor_files as anchor_files
+
+    file_name, mods = anchor_files.parse_anchor_file_spec("calendar.csv@t=06..17/3h")
+    expect(file_name == "calendar.csv", f"unexpected window anchor_file name: {file_name!r}")
+    expect(mods.get("time_window") == "06:00..17:00/3h", f"anchor_file window metadata was lost: {mods!r}")
+    expect(mods.get("t") == [(6, 0), (9, 0), (12, 0), (15, 0)], f"anchor_file window slots are wrong: {mods!r}")
+
+    try:
+        anchor_files.parse_anchor_file_spec("calendar.csv@t=18..06/2h")
+        expect(False, "reversed anchor_file time window was accepted")
+    except ValueError as exc:
+        expect("end time must be later" in str(exc), f"unexpected anchor_file window error: {exc}")
+
+
+def test_anchor_file_occurrences_expand_bounded_time_window():
+    """File-backed occurrence expansion should emit only generated window slots."""
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        sample = Path(td) / "calendar.csv"
+        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
+        occurrences = anchor_files.load_anchor_file_occurrence_specs(
+            "calendar.csv@t=06..17/3h",
+            td,
+            (8, 0),
+        )
+    expect(
+        occurrences == [
+            (date(2026, 8, 3), (6, 0)),
+            (date(2026, 8, 3), (9, 0)),
+            (date(2026, 8, 3), (12, 0)),
+            (date(2026, 8, 3), (15, 0)),
+        ],
+        f"unexpected anchor_file window occurrences: {occurrences!r}",
+    )
+
+
 def test_anchor_file_spec_rejects_unpadded_times():
     """anchor_file spec should reject 3:00 with a leading-zero hint."""
     import nautical_core.anchor_files as anchor_files
@@ -25545,6 +25584,8 @@ TESTS = [
     test_anchor_omit_rejects_time_modifiers,
     test_anchor_file_name_rejects_paths,
     test_anchor_file_spec_parses_time_and_negative_offset,
+    test_anchor_file_spec_parses_bounded_time_window,
+    test_anchor_file_occurrences_expand_bounded_time_window,
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,
     test_anchor_file_next_occurrence_after_uses_task_level_time,
     test_file_source_expression_flattens_groups_and_rejects_unsafe_patterns,

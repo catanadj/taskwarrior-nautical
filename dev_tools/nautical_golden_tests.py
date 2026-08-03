@@ -20558,6 +20558,26 @@ def test_reconcile_snapshot_reuses_initial_chain_export():
     expect(tool._EXPORT_STATS["snapshot_hits"] == 1, f"snapshot hit was not recorded: {tool._EXPORT_STATS!r}")
 
 
+def test_reconcile_export_diagnostics_include_elapsed_time():
+    """Export diagnostics should report total and slowest elapsed time."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_export_timing_test")
+    original_run = tool._run_task
+    original_clock = tool.time.perf_counter
+    ticks = iter((10.0, 10.125))
+    try:
+        tool._EXPORT_STATS.update(calls=0, rows=0, seconds=0.0, slowest_seconds=0.0, snapshot_hits=0)
+        tool._run_task = lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout='[{"uuid":"u1"}]', stderr="")
+        tool.time.perf_counter = lambda: next(ticks)
+        rows = tool._export("task", ["chain:on"])
+    finally:
+        tool._run_task = original_run
+        tool.time.perf_counter = original_clock
+    expect(rows == [{"uuid": "u1"}], f"timed export returned wrong rows: {rows!r}")
+    expect(tool._EXPORT_STATS["seconds"] == 0.125, f"total export timing missing: {tool._EXPORT_STATS!r}")
+    expect(tool._EXPORT_STATS["slowest_seconds"] == 0.125, f"slowest export timing missing: {tool._EXPORT_STATS!r}")
+
+
 def test_reconcile_json_startup_failures_are_structured():
     """JSON mode should report hook loading and protocol failures without traceback output."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -25475,6 +25495,7 @@ TESTS = [
     test_reconcile_reuses_verified_live_recovery_child,
     test_reconcile_candidate_discovery_is_narrow_and_deterministic,
     test_reconcile_snapshot_reuses_initial_chain_export,
+    test_reconcile_export_diagnostics_include_elapsed_time,
     test_reconcile_json_startup_failures_are_structured,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
     test_reconcile_expiration_anchor_advances_from_recurrence_target,

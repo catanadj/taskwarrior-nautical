@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 import sys
+import time
 try:
     tomllib = importlib.import_module("tomllib")
 except ModuleNotFoundError:  # Python 3.10 and earlier
@@ -42,7 +43,7 @@ _MAX_EXPIRATION_HOPS = 1000
 _RECONCILE_PROTOCOL = 1
 _JSON_SCHEMA = "nautical.reconcile"
 _JSON_SCHEMA_VERSION = 1
-_EXPORT_STATS = {"calls": 0, "rows": 0, "snapshot_hits": 0}
+_EXPORT_STATS = {"calls": 0, "rows": 0, "seconds": 0.0, "slowest_seconds": 0.0, "snapshot_hits": 0}
 _LOCK_STATS = {"reconcile_busy": 0, "parent_busy": 0}
 
 
@@ -131,20 +132,26 @@ def _run_task(
 
 def _export(task_bin: str, filters: list[str], *, timeout: float = 120.0) -> list[dict[str, Any]]:
     _EXPORT_STATS["calls"] += 1
-    proc = _run_task(
-        task_bin,
-        ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", *filters, "export"],
-        timeout=timeout,
-        read_only=True,
-    )
-    payload = task_command.load_json_result(proc, "task export", empty=[])
-    if isinstance(payload, dict):
-        payload = [payload]
-    if not isinstance(payload, list):
-        raise RuntimeError("task export returned a non-list payload")
-    rows = [row for row in payload if isinstance(row, dict)]
-    _EXPORT_STATS["rows"] += len(rows)
-    return rows
+    started = time.perf_counter()
+    try:
+        proc = _run_task(
+            task_bin,
+            ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", *filters, "export"],
+            timeout=timeout,
+            read_only=True,
+        )
+        payload = task_command.load_json_result(proc, "task export", empty=[])
+        if isinstance(payload, dict):
+            payload = [payload]
+        if not isinstance(payload, list):
+            raise RuntimeError("task export returned a non-list payload")
+        rows = [row for row in payload if isinstance(row, dict)]
+        _EXPORT_STATS["rows"] += len(rows)
+        return rows
+    finally:
+        elapsed = time.perf_counter() - started
+        _EXPORT_STATS["seconds"] += elapsed
+        _EXPORT_STATS["slowest_seconds"] = max(_EXPORT_STATS["slowest_seconds"], elapsed)
 
 
 def _load_on_modify(hook_path: str | None = None):
@@ -1332,7 +1339,7 @@ def main(
         help=f"Maximum expired links recovered per chain (default: {_DEFAULT_EXPIRATION_HOPS}).",
     )
     args = parser.parse_args(argv)
-    _EXPORT_STATS.update(calls=0, rows=0, snapshot_hits=0)
+    _EXPORT_STATS.update(calls=0, rows=0, seconds=0.0, slowest_seconds=0.0, snapshot_hits=0)
     _LOCK_STATS.update(reconcile_busy=0, parent_busy=0)
     if args.apply and not _apply_lease_held:
         try:
@@ -1563,6 +1570,8 @@ def main(
         "native_until_audit_skipped": native_until_audit_skipped,
         "export_calls": _EXPORT_STATS["calls"],
         "export_rows": _EXPORT_STATS["rows"],
+        "export_seconds": round(_EXPORT_STATS["seconds"], 4),
+        "slowest_export_seconds": round(_EXPORT_STATS["slowest_seconds"], 4),
         "snapshot_hits": _EXPORT_STATS["snapshot_hits"],
         "lock_contention": dict(_LOCK_STATS),
         "plans": [
@@ -1594,6 +1603,8 @@ def main(
             f" audit_skipped={summary['native_until_audit_skipped']}"
             f" config_drift={summary['configuration_drifted']}"
             f" exports={summary['export_calls']}"
+            f" export_s={summary['export_seconds']:.4f}"
+            f" slowest_export_s={summary['slowest_export_seconds']:.4f}"
             f" snapshot_hits={summary['snapshot_hits']}"
             f" lock_busy={sum(summary['lock_contention'].values())}"
         )

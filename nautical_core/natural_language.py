@@ -75,6 +75,16 @@ def fmt_hhmm_for_term(term: list, default_due_dt):
     return None
 
 
+def fmt_time_window_for_term(term: list) -> str | None:
+    """Describe a compact bounded time window without exposing its expanded slots."""
+    value = term_collect_mods(term).get("time_window")
+    if not isinstance(value, str) or ".." not in value or "/" not in value:
+        return None
+    start, rest = value.split("..", 1)
+    end, interval = rest.split("/", 1)
+    return f"every {interval} within {start}\N{EN DASH}{end}"
+
+
 def fmt_weekdays_list(spec: str, *, expand_weekly_aliases, split_csv_lower, wday_idx_any) -> str:
     spec = expand_weekly_aliases(spec)
     tokens = split_csv_lower(spec)
@@ -773,8 +783,11 @@ def describe_anchor_term(
         bd_filter,
     )
     if random_weekday_pool is not None:
+        window = fmt_time_window_for_term(term)
         hhmm = fmt_hhmm_for_term(term, default_due_dt)
-        if hhmm:
+        if window:
+            random_weekday_pool = f"{random_weekday_pool} {window}"
+        elif hhmm:
             random_weekday_pool = f"{random_weekday_pool} at {hhmm}"
         return describe_inject_schedule_suffixes(random_weekday_pool, term)
 
@@ -794,14 +807,19 @@ def describe_anchor_term(
         ]
     parts = describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter)
     hhmm = fmt_hhmm_for_term(term, default_due_dt)
+    window = fmt_time_window_for_term(term)
 
     if suppress_tail:
         txt = interval_prefix
-        if hhmm:
+        if window:
+            txt = f"{txt} {window}"
+        elif hhmm:
             txt = f"{txt} at {hhmm}"
         return describe_inject_schedule_suffixes(txt or "any day", term)
 
-    if hhmm:
+    if window:
+        parts.append(window)
+    elif hhmm:
         parts.append(f"at {hhmm}")
     txt = " ".join(part for part in parts if part)
     if interval_prefix:

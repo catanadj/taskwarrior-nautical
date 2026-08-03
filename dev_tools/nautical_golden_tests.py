@@ -10303,7 +10303,7 @@ def test_hook_on_add_time_window_preview_emits_bounded_slots():
     expect(proc.returncode == 0, f"on-add window hook failed: {proc.stderr[:500]!r}")
     stderr_txt = _strip_markup(proc.stderr)
     expect("09:00" in stderr_txt and "15:00" in stderr_txt, f"window preview omitted generated slots: {stderr_txt[:700]!r}")
-    expect("17:00" not in stderr_txt, f"non-divisible window bound was shown as an occurrence: {stderr_txt[:700]!r}")
+    expect("17:00 EET" not in stderr_txt, f"non-divisible window bound was shown as an occurrence: {stderr_txt[:700]!r}")
 
 
 def test_on_modify_time_window_completion_advances_within_same_day():
@@ -16593,6 +16593,13 @@ def test_grouped_time_window_metadata_distributes_to_each_branch():
         mods = term[0]["mods"]
         expect(mods.get("time_window") == "06:00..18:00/3h", f"group window metadata was lost: {dnf!r}")
         expect(len(mods.get("t") or []) == 5, f"group window slots were not distributed: {dnf!r}")
+
+
+def test_time_window_natural_language_uses_bounded_interval():
+    """Natural descriptions should explain a window rather than list every generated slot."""
+    text = core.describe_anchor_expr("w:mon..fri@t=06..17/3h")
+    expect("every 3h within 06:00\N{EN DASH}17:00" in text, f"window natural language is unclear: {text!r}")
+    expect("06:00, 09:00" not in text, f"window natural language leaked expanded slots: {text!r}")
 def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
     """Every supported astronomical event must parse through the shared vocabulary."""
     import nautical_core.astronomy as astronomy
@@ -25909,6 +25916,7 @@ TESTS.extend([
     test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints,
     test_time_window_grammar_expands_and_round_trips_through_acf,
     test_grouped_time_window_metadata_distributes_to_each_branch,
+    test_time_window_natural_language_uses_bounded_interval,
     test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_uses_anchor_and_anchor_file_sources,

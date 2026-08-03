@@ -6247,6 +6247,17 @@ def test_core_live_panel_duration_config_defaults_and_clamps():
             )
 
 
+def test_core_live_panel_footer_config_defaults_and_customizes():
+    """Live panel footer should default to Nautical and accept custom text."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
+    for index, (config_text, expected) in enumerate((("", "NAUTICAL"), ('live_panel_footer = "STATUS"\n', "STATUS"))):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = os.path.join(td, "nautical.toml")
+            Path(cfg).write_text(config_text, encoding="utf-8")
+            mod = _load_core_module(core_path, f"_nautical_core_live_footer_{index}", cfg)
+            expect(mod.LIVE_PANEL_FOOTER == expected, f"unexpected live footer: {mod.LIVE_PANEL_FOOTER!r}")
+
+
 def test_core_uda_aliases_config_defaults_disabled_and_can_enable():
     """Description-based UDA aliases should be opt-in through config."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
@@ -18759,6 +18770,16 @@ def test_ui_live_panel_has_nautical_branding_without_changing_static_panels():
     Console(file=narrow_output, width=40, color_system=None).print(narrow_panel)
     expect("NAUTICAL" in narrow_output.getvalue(), f"narrow live panel truncated its footer: {narrow_output.getvalue()!r}")
 
+    custom_panel = ui._build_rich_panel(
+        "Custom",
+        [("First", "one")],
+        kind="info",
+        themes=None,
+        live=True,
+        live_footer="STATUS",
+    )
+    expect(str(custom_panel.subtitle) == "STATUS", f"custom live footer was not applied: {custom_panel.subtitle!r}")
+
     semantic_panel = ui._build_rich_panel(
         "Semantic",
         [("Warning", "late")],
@@ -26276,6 +26297,7 @@ TESTS = [
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_core_recurrence_update_udas_config_aliases,
     test_core_live_panel_duration_config_defaults_and_clamps,
+    test_core_live_panel_footer_config_defaults_and_customizes,
     test_core_uda_aliases_config_defaults_disabled_and_can_enable,
     test_on_add_expands_enabled_description_uda_aliases,
     test_hook_on_add_uda_aliases_emit_canonical_json_and_reject_conflicts,

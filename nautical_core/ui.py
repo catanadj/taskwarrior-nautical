@@ -381,6 +381,7 @@ def _build_rich_panel(
     themes: dict | None,
     live: bool = False,
     active_row: int | None = None,
+    live_footer: str = "NAUTICAL",
 ) -> object:
     from rich.panel import Panel
     from rich.table import Table
@@ -399,8 +400,9 @@ def _build_rich_panel(
     }
 
     t = Table.grid(padding=(0, 1), expand=False)
-    if live:
-        t.min_width = len("NAUTICAL") + 2
+    footer = str(live_footer or "").strip()
+    if live and footer:
+        t.min_width = len(footer) + 2
     t.add_column(style=f"bold {lstyle}", no_wrap=True, justify="right")
     t.add_column(style="white")
 
@@ -453,9 +455,9 @@ def _build_rich_panel(
         t.add_row(label_text, value_text)
 
     panel_kwargs = {}
-    if live:
+    if live and footer:
         panel_kwargs = {
-            "subtitle": Text("NAUTICAL", style=f"dim {tstyle}"),
+            "subtitle": Text(footer, style=f"dim {tstyle}"),
             "subtitle_align": "right",
         }
 
@@ -499,6 +501,7 @@ def _render_panel_live(
     kind: str,
     themes: dict | None,
     duration_ms: int | float = _DEFAULT_LIVE_PANEL_DURATION_MS,
+    live_footer: str = "NAUTICAL",
 ) -> bool:
     global _LIVE_ANIMATION_USED
 
@@ -515,6 +518,7 @@ def _render_panel_live(
             kind=kind,
             themes=themes,
             live=True,
+            live_footer=live_footer,
         )
         console = Console(file=sys.stderr, force_terminal=True)
     except Exception:
@@ -543,6 +547,7 @@ def _render_panel_live(
             themes=themes,
             live=True,
             active_row=first_active_row,
+            live_footer=live_footer,
         )
         reveal_delays = _live_reveal_delays(len(reveal_frames), effective_duration_ms)
     except Exception:
@@ -574,6 +579,7 @@ def _render_panel_live(
                         themes=themes,
                         live=True,
                         active_row=active_row,
+                        live_footer=live_footer,
                     )
                     time.sleep(reveal_delay)
                     live.update(panel, refresh=True)
@@ -672,6 +678,7 @@ def render_panel(
     kind: str = "info",
     panel_mode: str = "rich",
     live_duration_ms: int | float = _DEFAULT_LIVE_PANEL_DURATION_MS,
+    live_footer: str = "NAUTICAL",
     fast_color: bool = True,
     themes: dict | None = None,
     allow_line: bool = True,
@@ -721,6 +728,7 @@ def render_panel(
                 kind=kind,
                 themes=themes,
                 duration_ms=live_duration_ms,
+                live_footer=live_footer,
             ):
                 return
             rows = live_rows

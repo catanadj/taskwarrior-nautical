@@ -47,6 +47,7 @@ CONFIG_SPECS: dict[str, dict[str, Any]] = {
         },
     },
     "live_panel_duration_ms": {"type": "int", "default": 160, "min": 0, "max": 1000},
+    "live_panel_footer": {"type": "string", "default": "NAUTICAL"},
     "exit_progress": {"type": "bool", "default": True},
     "fast_color": {"type": "bool", "default": True},
     "spawn_queue_max_bytes": {"type": "int", "default": 524288, "min": 0},

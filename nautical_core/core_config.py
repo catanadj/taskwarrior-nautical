@@ -384,6 +384,7 @@ CHECK_CHAIN_INTEGRITY = conf_schema_bool(
 )
 PANEL_MODE = config_schema.normalized_choice("panel_mode", conf_schema_str("panel_mode"))
 LIVE_PANEL_DURATION_MS = conf_schema_int("live_panel_duration_ms")
+LIVE_PANEL_FOOTER = conf_schema_str("live_panel_footer")
 FAST_COLOR = conf_schema_bool("fast_color")
 EXIT_PROGRESS = conf_schema_bool("exit_progress")
 SPAWN_QUEUE_MAX_BYTES = conf_schema_int("spawn_queue_max_bytes")

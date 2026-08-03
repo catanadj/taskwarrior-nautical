@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -14,6 +15,14 @@ HOOK_DIR = Path(__file__).parent
 TW_DIR = HOOK_DIR.parent
 _MAX_JSON_BYTES = 10 * 1024 * 1024
 _EXPECTED_IMPL_API = 1
+_DESCRIPTION_ALIAS_HINT_RE = re.compile(r"(?<!\S)(?:a|af|am|o|of|cm|cu):", re.IGNORECASE)
+
+
+def _description_alias_hint(task: object) -> bool:
+    if not isinstance(task, dict):
+        return False
+    description = task.get("description")
+    return isinstance(description, str) and bool(_DESCRIPTION_ALIAS_HINT_RE.search(description))
 
 
 def _load_bootstrap():
@@ -126,9 +135,10 @@ def main() -> int:
             protocol_error = exc
 
     if probe is not None and probe.valid:
-        plain_fast_path = not probe.is_nautical and os.environ.get("NAUTICAL_BENCH_FORCE_FULL") != "1"
+        alias_hint = _description_alias_hint(probe.old) or _description_alias_hint(probe.new)
+        plain_fast_path = not probe.is_nautical and not alias_hint and os.environ.get("NAUTICAL_BENCH_FORCE_FULL") != "1"
         ordinary_nautical_fast_path = False
-        if probe.is_nautical and not _full_path_requested():
+        if probe.is_nautical and not alias_hint and not _full_path_requested():
             try:
                 classify_ordinary = getattr(protocol, "is_safe_nautical_ordinary_modify", None)
                 ordinary_nautical_fast_path = bool(

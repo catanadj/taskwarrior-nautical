@@ -15,6 +15,23 @@ ALIAS_TO_FIELD = {
     "cu": "chainUntil",
 }
 _ALIAS_RE = re.compile(r"(?<!\S)(a|af|am|o|of|cm|cu):", re.IGNORECASE)
+_ANCHOR_VALUE_RE = re.compile(r"^(?:-|\(|@|(?:w|m|y|d|bd|moon|in-)[^\s:]*:)", re.IGNORECASE)
+_CHAIN_UNTIL_RE = re.compile(r"^(?:-|today|tomorrow|eow|eom|eoy|sow|som|\d)", re.IGNORECASE)
+
+
+def _alias_value_is_plausible(field: str, value: str) -> bool:
+    """Reject obvious prose collisions before aliases reach full validation."""
+    if value == "-":
+        return True
+    if field in {"anchor", "omit"}:
+        return bool(_ANCHOR_VALUE_RE.match(value))
+    if field == "anchor_mode":
+        return value.lower() in {"skip", "all", "flex"}
+    if field == "chainMax":
+        return value.isdigit() and int(value) > 0
+    if field == "chainUntil":
+        return bool(_CHAIN_UNTIL_RE.match(value))
+    return True
 
 
 def parse_description_aliases(description: object) -> tuple[str, dict[str, str]]:
@@ -40,6 +57,9 @@ def parse_description_aliases(description: object) -> tuple[str, dict[str, str]]
             if not value:
                 raise ValueError(f"Description alias '{alias}:' requires a value.")
             if text[match.end():match.end() + 1].isspace():
+                valid = False
+                break
+            if not _alias_value_is_plausible(field, value):
                 valid = False
                 break
             if field in values:

@@ -418,6 +418,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
         )
         _check_timezone(findings, {})
         _check_astronomy(findings, {}, source_hint="defaults")
+        _check_uda_aliases(findings, {})
         _check_config_drift(findings, "")
         _check_navigator_dependencies(findings, {})
         return

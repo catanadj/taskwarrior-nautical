@@ -4970,6 +4970,11 @@ def test_doctor_reports_uda_alias_configuration():
     expect((item.get("details") or {}).get("enabled") is True, f"enabled state missing: {item!r}")
     expect((item.get("details") or {}).get("clear_syntax") == "alias:-", f"clear syntax missing: {item!r}")
     expect("Description UDA aliases are enabled" in str(item.get("message") or ""), f"message is unclear: {item!r}")
+    with tempfile.TemporaryDirectory() as td:
+        missing_findings = []
+        mod._check_config(missing_findings, Path(td))
+        missing = next(item for item in missing_findings if item.get("id") == "config.uda_aliases")
+        expect((missing.get("details") or {}).get("enabled") is False, f"missing config should default aliases off: {missing!r}")
 
 
 def test_on_add_preview_warns_when_anchor_uses_utc_fallback():
@@ -6270,6 +6275,56 @@ def test_on_add_expands_enabled_description_uda_aliases():
     finally:
         mod.core.ENABLE_UDA_ALIASES = previous
     expect(task == {"description": "test task", "anchor": "w:mon", "anchor_mode": "all"}, f"on-add alias expansion failed: {task!r}")
+
+
+def test_hook_on_add_uda_aliases_emit_canonical_json_and_reject_conflicts():
+    """The real on-add boundary should normalize aliases without contaminating stdout."""
+    hook = _find_hook_file("on-add.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text("enable_uda_aliases = true\ntz = \"UTC\"\n", encoding="utf-8")
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000114",
+            "description": "hook alias test a:w:mon am:all",
+            "status": "pending",
+            "project": "testing",
+            "entry": "20260803T000000Z",
+            "due": "20260810T090000Z",
+        }
+        env = {"NAUTICAL_CONFIG": str(config), "NAUTICAL_TRUST_CONFIG_PATH": "1", "TASKDATA": td, "NO_COLOR": "1"}
+        proc = _run_hook_script(hook, task, env_extra=env)
+        expect(proc.returncode == 0, f"enabled alias hook failed: {proc.stderr[:600]!r}")
+        _assert_stdout_json_only(proc.stdout)
+        normalized = _extract_last_json(proc.stdout)
+        expect(normalized.get("description") == "hook alias test", f"alias text remained in description: {normalized!r}; stderr={proc.stderr[:500]!r}")
+        expect(normalized.get("anchor") == "w:mon" and normalized.get("anchor_mode") == "all", f"canonical aliases missing: {normalized!r}")
+
+        conflict = dict(task, description="hook alias conflict a:w:tue", anchor="w:mon", anchor_mode="skip")
+        rejected = _run_hook_script(hook, conflict, env_extra=env)
+        expect(rejected.returncode != 0, "conflicting canonical and alias values were accepted")
+        expect("different value" in (rejected.stderr or ""), f"conflict error was not actionable: {rejected.stderr[:600]!r}")
+
+
+def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
+    """Alias-bearing plain modifies must not be swallowed by the thin fast path."""
+    hook = _find_hook_file("on-modify.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text("enable_uda_aliases = true\ntz = \"UTC\"\n", encoding="utf-8")
+        old = {
+            "uuid": "00000000-0000-0000-0000-000000000115",
+            "description": "plain",
+            "status": "pending",
+        }
+        new = dict(old, description="plain a:w:mon")
+        raw = json.dumps(old) + "\n" + json.dumps(new)
+        env = {"NAUTICAL_CONFIG": str(config), "NAUTICAL_TRUST_CONFIG_PATH": "1", "TASKDATA": td, "NO_COLOR": "1"}
+        proc = _run_hook_script_raw(hook, raw, env_extra=env)
+        expect(proc.returncode == 0, f"enabled alias modify hook failed: {proc.stderr[:600]!r}")
+        _assert_stdout_json_only(proc.stdout)
+        normalized = _extract_last_json(proc.stdout)
+        expect(normalized.get("description") == "plain", f"modify alias remained in description: {normalized!r}")
+        expect(normalized.get("anchor") == "w:mon", f"modify alias did not reach canonical UDA: {normalized!r}")
 
 
 def test_on_modify_expands_and_clears_description_uda_aliases():
@@ -16926,6 +16981,9 @@ def test_description_alias_parser_avoids_prose_and_rejects_duplicates():
     except ValueError as exc:
         expect("requires a value" in str(exc), f"unexpected empty alias error: {exc}")
 
+    description, fields = parse_description_aliases("note a:book today")
+    expect(description == "note a:book today" and not fields, "obvious prose collision was accepted")
+
 
 def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
     """Every supported astronomical event must parse through the shared vocabulary."""
@@ -26119,6 +26177,8 @@ TESTS = [
     test_core_live_panel_duration_config_defaults_and_clamps,
     test_core_uda_aliases_config_defaults_disabled_and_can_enable,
     test_on_add_expands_enabled_description_uda_aliases,
+    test_hook_on_add_uda_aliases_emit_canonical_json_and_reject_conflicts,
+    test_hook_on_modify_uda_aliases_route_through_thin_wrapper,
     test_on_modify_expands_and_clears_description_uda_aliases,
     test_spawn_queue_drain_limit_config_and_env_override,
     test_shipped_config_keeps_hook_toggles_top_level,

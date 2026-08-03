@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -14,6 +15,14 @@ HOOK_DIR = Path(__file__).parent
 TW_DIR = HOOK_DIR.parent
 _MAX_JSON_BYTES = 10 * 1024 * 1024
 _EXPECTED_IMPL_API = 1
+_DESCRIPTION_ALIAS_HINT_RE = re.compile(r"(?<!\S)(?:a|af|am|o|of|cm|cu):", re.IGNORECASE)
+
+
+def _description_alias_hint(task: object) -> bool:
+    if not isinstance(task, dict):
+        return False
+    description = task.get("description")
+    return isinstance(description, str) and bool(_DESCRIPTION_ALIAS_HINT_RE.search(description))
 
 
 def _load_bootstrap():
@@ -129,6 +138,7 @@ def main() -> int:
         probe is not None
         and probe.valid
         and not probe.is_nautical
+        and not _description_alias_hint(probe.task)
         and not _full_path_requested()
     ):
         protocol.emit_passthrough_json(probe.task)

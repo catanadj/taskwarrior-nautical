@@ -516,7 +516,7 @@ def _check_uda_aliases(findings: list[dict[str, Any]], data: dict[str, Any]) -> 
         "config.uda_aliases",
         "ok",
         f"Description UDA aliases are {state}.",
-        details={"enabled": enabled, "aliases": aliases, "clear_syntax": "alias:-"},
+        details={"enabled": enabled, "aliases": aliases, "clear_syntax": "alias:"},
     )
 
 

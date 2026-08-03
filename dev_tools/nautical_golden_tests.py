@@ -4968,7 +4968,7 @@ def test_doctor_reports_uda_alias_configuration():
     item = next(item for item in findings if item.get("id") == "config.uda_aliases")
     expect(item.get("severity") == "ok", f"UDA alias config should be healthy: {findings!r}")
     expect((item.get("details") or {}).get("enabled") is True, f"enabled state missing: {item!r}")
-    expect((item.get("details") or {}).get("clear_syntax") == "alias:-", f"clear syntax missing: {item!r}")
+    expect((item.get("details") or {}).get("clear_syntax") == "alias:", f"clear syntax missing: {item!r}")
     expect("Description UDA aliases are enabled" in str(item.get("message") or ""), f"message is unclear: {item!r}")
     with tempfile.TemporaryDirectory() as td:
         missing_findings = []
@@ -6341,7 +6341,7 @@ def test_on_modify_expands_and_clears_description_uda_aliases():
             new == {"description": "test task", "anchor": "w:tue", "anchor_mode": "all"},
             f"on-modify alias expansion failed: {new!r}",
         )
-        clear = {"description": "test task a:-", "anchor": "w:mon"}
+        clear = {"description": "test task a:", "anchor": "w:mon"}
         mod._apply_description_uda_aliases({"description": "test task", "anchor": "w:mon"}, clear)
         expect("anchor" not in clear and clear["description"] == "test task", f"alias clear failed: {clear!r}")
     finally:
@@ -16975,11 +16975,13 @@ def test_description_alias_parser_avoids_prose_and_rejects_duplicates():
         expect(False, "duplicate description aliases were accepted")
     except ValueError as exc:
         expect("more than once" in str(exc), f"unexpected duplicate alias error: {exc}")
+    description, fields = parse_description_aliases("test am:")
+    expect(description == "test" and fields == {"anchor_mode": ""}, f"empty alias was not normalized as clear: {description!r}, {fields!r}")
     try:
-        parse_description_aliases("test am:")
-        expect(False, "empty description aliases were accepted")
+        parse_description_aliases("test am:-")
+        expect(False, "dash clearing syntax was accepted")
     except ValueError as exc:
-        expect("requires a value" in str(exc), f"unexpected empty alias error: {exc}")
+        expect("leave it empty" in str(exc), f"unexpected dash clearing error: {exc}")
 
     description, fields = parse_description_aliases("note a:book today")
     expect(description == "note a:book today" and not fields, "obvious prose collision was accepted")

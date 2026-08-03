@@ -6327,6 +6327,52 @@ def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
         expect(normalized.get("anchor") == "w:mon", f"modify alias did not reach canonical UDA: {normalized!r}")
 
 
+def test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper():
+    """The native empty-value clearing form must survive the wrapper boundary."""
+    hook = _find_hook_file("on-modify.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text("enable_uda_aliases = true\ntz = \"UTC\"\n", encoding="utf-8")
+        old = {
+            "uuid": "00000000-0000-0000-0000-000000000116",
+            "description": "plain",
+            "status": "pending",
+            "anchor": "w:mon",
+            "anchor_mode": "skip",
+            "chain": "on",
+        }
+        new = dict(old, description="plain a:")
+        raw = json.dumps(old) + "\n" + json.dumps(new)
+        env = {"NAUTICAL_CONFIG": str(config), "NAUTICAL_TRUST_CONFIG_PATH": "1", "TASKDATA": td, "NO_COLOR": "1"}
+        proc = _run_hook_script_raw(hook, raw, env_extra=env)
+        expect(proc.returncode == 0, f"empty alias clear failed: {proc.stderr[:600]!r}")
+        _assert_stdout_json_only(proc.stdout)
+        normalized = _extract_last_json(proc.stdout)
+        expect(normalized.get("description") == "plain", f"empty alias remained in description: {normalized!r}")
+        expect("anchor" not in normalized, f"empty alias did not clear anchor: {normalized!r}")
+
+
+def test_hook_on_add_disabled_uda_aliases_leave_description_untouched():
+    """Disabling aliases must preserve alias-looking text as ordinary description content."""
+    hook = _find_hook_file("on-add.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text("enable_uda_aliases = false\ntz = \"UTC\"\n", encoding="utf-8")
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000117",
+            "description": "ordinary prose a:book",
+            "status": "pending",
+            "entry": "20260803T000000Z",
+        }
+        env = {"NAUTICAL_CONFIG": str(config), "NAUTICAL_TRUST_CONFIG_PATH": "1", "TASKDATA": td, "NO_COLOR": "1"}
+        proc = _run_hook_script(hook, task, env_extra=env)
+        expect(proc.returncode == 0, f"disabled alias hook failed: {proc.stderr[:600]!r}")
+        _assert_stdout_json_only(proc.stdout)
+        normalized = _extract_last_json(proc.stdout)
+        expect(normalized.get("description") == task["description"], f"disabled alias changed description: {normalized!r}")
+        expect("anchor" not in normalized, f"disabled alias created a canonical UDA: {normalized!r}")
+
+
 def test_on_modify_expands_and_clears_description_uda_aliases():
     """on-modify aliases should update unchanged fields and support explicit clearing."""
     hook = _find_hook_file("on-modify.nautical")
@@ -26181,6 +26227,8 @@ TESTS = [
     test_on_add_expands_enabled_description_uda_aliases,
     test_hook_on_add_uda_aliases_emit_canonical_json_and_reject_conflicts,
     test_hook_on_modify_uda_aliases_route_through_thin_wrapper,
+    test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper,
+    test_hook_on_add_disabled_uda_aliases_leave_description_untouched,
     test_on_modify_expands_and_clears_description_uda_aliases,
     test_spawn_queue_drain_limit_config_and_env_override,
     test_shipped_config_keeps_hook_toggles_top_level,

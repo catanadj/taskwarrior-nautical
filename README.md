@@ -71,6 +71,10 @@ task add "Weekly review" anchor:"w:mon"
 
 Complete it with `task <id> done`; Nautical queues the next Monday review.
 
+Short UDA aliases are optional. Set `enable_uda_aliases = true` in Nautical's
+config to use forms such as `a:w:mon am:all`; clear a field with its standard
+empty value, for example `a:`.
+
 ## Two Ways To Repeat
 
 Use `cp` when the next task follows a period from completion:

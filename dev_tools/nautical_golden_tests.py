@@ -10286,6 +10286,48 @@ def test_hook_on_add_multitime_preview_emits_all_slots():
         raise AssertionError(f"on-add preview missing expected intra-day times. stderr={stderr_txt[:500]!r}")
 
 
+def test_hook_on_add_time_window_preview_emits_bounded_slots():
+    """on-add should preview generated window slots without forcing its end bound."""
+    hook = _find_hook_file("on-add.nautical")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000112",
+        "description": "hook test time window",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20251217T000000Z",
+        "anchor": "w:wed@t=06..17/3h",
+        "anchor_mode": "skip",
+        "due": "20251217T060000Z",
+    }
+    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": ""})
+    expect(proc.returncode == 0, f"on-add window hook failed: {proc.stderr[:500]!r}")
+    stderr_txt = _strip_markup(proc.stderr)
+    expect("09:00" in stderr_txt and "15:00" in stderr_txt, f"window preview omitted generated slots: {stderr_txt[:700]!r}")
+    expect("17:00" not in stderr_txt, f"non-divisible window bound was shown as an occurrence: {stderr_txt[:700]!r}")
+
+
+def test_on_modify_time_window_completion_advances_within_same_day():
+    """Completion should advance to the next generated slot before moving to a new date."""
+    mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_time_window_runtime_test")
+    local_due = mod.core.build_local_datetime(date(2025, 12, 17), (6, 0))
+    local_end = mod.core.build_local_datetime(date(2025, 12, 17), (6, 30))
+    parent = {
+        "uuid": "00000000-0000-0000-0000-000000000113",
+        "description": "window completion",
+        "anchor": "w:mon..sun@t=06..18/3h",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "window1234",
+        "link": 1,
+        "due": mod.core.fmt_isoz(local_due.astimezone(timezone.utc)),
+        "end": mod.core.fmt_isoz(local_end.astimezone(timezone.utc)),
+    }
+    child_due, meta, _dnf = mod._compute_anchor_child_due(parent)
+    child_local = mod.core.to_local(child_due)
+    expect((child_local.date(), child_local.hour, child_local.minute) == (date(2025, 12, 17), 9, 0), f"window did not advance within day: {child_local}")
+    expect(meta.get("basis") == "after_end", f"unexpected window completion basis: {meta!r}")
+
+
 def test_hook_on_add_live_panel_mode_preserves_captured_protocol():
     """Configured live panels should fall back cleanly when a hook's stderr is captured."""
     hook = _find_hook_file("on-add.nautical")
@@ -25203,6 +25245,8 @@ TESTS = [
     test_on_modify_compute_cp_random_selects_deterministic_interval,
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_hook_on_add_multitime_preview_emits_all_slots,
+    test_hook_on_add_time_window_preview_emits_bounded_slots,
+    test_on_modify_time_window_completion_advances_within_same_day,
     test_hook_on_add_live_panel_mode_preserves_captured_protocol,
     test_hook_on_add_counted_random_preview_uses_group_time,
     test_hook_on_add_accepts_group_date_modifiers,

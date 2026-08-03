@@ -16744,6 +16744,11 @@ def test_navigator_projects_all_slots_in_a_time_window():
             [item.strftime("%H:%M") for item in dates] == ["04:30", "08:00", "11:30", "15:00", "18:30"],
             f"Navigator collapsed same-day time-window slots: {dates!r}",
         )
+        _natural, preview = navigator._anchor_preview("w:mon..sun@t=04:30..19:30/3h30min", count=5)
+        expect(
+            [item.rsplit(" ", 2)[-2] for item in preview] == ["04:30", "08:00", "11:30", "15:00", "18:30"],
+            f"Navigator preview did not resolve all time-window slots: {preview!r}",
+        )
     finally:
         sys.modules.pop(module_name, None)
 

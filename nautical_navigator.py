@@ -458,10 +458,29 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
             )
             if not nxt:
                 break
-            hhmm = core.pick_hhmm_from_dnf_for_date(dnf, nxt, seed)
-            if hhmm:
-                dt_utc = core.build_local_datetime(nxt, hhmm)
-                next_dates.append(core.fmt_dt_local(dt_utc))
+            time_slots = core._import_sibling("time_slots")
+            slots = []
+            for term in dnf:
+                if not all(core.atom_matches_on(atom, nxt, seed, seed_base="preview") for atom in term):
+                    continue
+                for atom in term:
+                    mods = atom.get("mods") or {}
+                    if mods.get("t"):
+                        slots = time_slots.resolve_time_slots(
+                            mods,
+                            nxt,
+                            config=getattr(core, "ASTRONOMY_CONFIG", {}),
+                            to_local=core.to_local,
+                        )
+                        break
+                if slots:
+                    break
+            if slots:
+                for slot in slots:
+                    if len(next_dates) >= count:
+                        break
+                    dt_utc = core.build_local_datetime(nxt, slot)
+                    next_dates.append(core.fmt_dt_local(dt_utc))
             else:
                 next_dates.append(str(nxt))
             after_date = nxt

@@ -16600,6 +16600,22 @@ def test_time_window_parser_accepts_hour_only_and_mixed_endpoints():
     expect(mixed.canonical == "06:30..18:00/2h", f"bad mixed canonical form: {mixed.canonical!r}")
 
 
+def test_hour_only_time_lists_normalize_across_anchor_and_anchor_file():
+    """Ordinary @t lists should accept hour-only tokens consistently across sources."""
+    dnf = core.parse_anchor_expr_to_dnf("w:mon@t=06,12:30,18")
+    expect(
+        dnf[0][0]["mods"].get("t") == [(6, 0), (12, 30), (18, 0)],
+        f"hour-only anchor list was not normalized: {dnf!r}",
+    )
+    import nautical_core.anchor_files as anchor_files
+
+    _name, mods = anchor_files.parse_anchor_file_spec("events.csv@t=06,12:30,18")
+    expect(
+        mods.get("t") == [(6, 0), (12, 30), (18, 0)],
+        f"hour-only anchor_file list was not normalized: {mods!r}",
+    )
+
+
 def test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints():
     """Hour shorthand remains strict about padding and valid clock bounds."""
     from nautical_core.time_windows import parse_time_window_spec
@@ -25984,6 +26000,7 @@ TESTS.extend([
     test_time_window_slot_limit_uses_shared_resource_policy,
     test_time_window_parser_accepts_compound_minute_intervals,
     test_time_window_parser_accepts_hour_only_and_mixed_endpoints,
+    test_hour_only_time_lists_normalize_across_anchor_and_anchor_file,
     test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints,
     test_time_window_grammar_expands_and_round_trips_through_acf,
     test_grouped_time_window_metadata_distributes_to_each_branch,

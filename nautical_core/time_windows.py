@@ -14,6 +14,7 @@ _WINDOW_RE = re.compile(
     r"(?P<interval>(?:(?:\d+)h)?(?:(?:\d+)m)?)$"
 )
 _DURATION_RE = re.compile(r"^(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?$")
+_CLOCK_TOKEN_RE = re.compile(r"^(?:[01]\d|2[0-3])(?::[0-5]\d)?$")
 
 
 def _parse_clock(value: str) -> tuple[int, int]:
@@ -21,6 +22,14 @@ def _parse_clock(value: str) -> tuple[int, int]:
         return int(value), 0
     hour, minute = value.split(":", 1)
     return int(hour), int(minute)
+
+
+def parse_clock_value(value: str) -> tuple[int, int] | None:
+    """Parse a strict ``HH`` or ``HH:MM`` clock token."""
+    text = str(value or "").strip()
+    if not _CLOCK_TOKEN_RE.fullmatch(text):
+        return None
+    return _parse_clock(text)
 
 
 def _clock_minutes(value: tuple[int, int]) -> int:
@@ -122,4 +131,4 @@ def validate_time_window_slots(spec: str, slots: object) -> None:
         raise ValueError("Cached time window metadata does not match its expanded slots.")
 
 
-__all__ = ("TimeWindow", "parse_time_window_spec", "validate_time_window_slots")
+__all__ = ("TimeWindow", "parse_clock_value", "parse_time_window_spec", "validate_time_window_slots")

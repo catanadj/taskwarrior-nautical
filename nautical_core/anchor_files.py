@@ -21,7 +21,7 @@ from .file_source_expr import (
     resolve_file_sources,
 )
 from .schedule_utils import apply_day_offset, roll_apply
-from .time_windows import parse_time_window_spec
+from .time_windows import parse_clock_value, parse_time_window_spec
 
 
 _WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
@@ -58,7 +58,7 @@ def _parse_hhmm(text: str) -> tuple[int, int] | None:
         pad = _HOUR_PAD_RE.match(raw)
         if pad:
             raise ValueError(f"Time '{raw}' needs a leading zero. Use '0{pad.group(1)}:{pad.group(2)}'.")
-        return None
+        return parse_clock_value(raw)
     hh = int(match.group(1))
     mm = int(match.group(2))
     if hh > 23 or mm > 59:
@@ -97,12 +97,12 @@ def parse_anchor_file_spec(value: str | None) -> tuple[str, dict]:
             for item in values:
                 hhmm = _parse_hhmm(item)
                 if not hhmm:
-                    raise ValueError(f"Invalid time in anchor_file @t=HH:MM[,HH:MM...]: '{item}'")
+                    raise ValueError(f"Invalid time in anchor_file @t=HH[:MM][,HH[:MM]...]: '{item}'")
                 if hhmm not in seen:
                     times.append(hhmm)
                     seen.add(hhmm)
             if not times:
-                raise ValueError(f"Invalid time in anchor_file @t=HH:MM[,HH:MM...]: '{tok}'")
+                raise ValueError(f"Invalid time in anchor_file @t=HH[:MM][,HH[:MM]...]: '{tok}'")
             mods["t"] = times[0] if len(times) == 1 else times
             continue
         if tok in ("nw", "pbd", "nbd"):

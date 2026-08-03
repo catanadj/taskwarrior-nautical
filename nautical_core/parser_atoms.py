@@ -3,7 +3,7 @@ import re
 
 from . import astronomy
 from .moon_phase import canonical_phase
-from .time_windows import parse_time_window_spec
+from .time_windows import parse_clock_value, parse_time_window_spec
 
 
 _HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
@@ -77,13 +77,13 @@ def parse_atom_mods(
                     out.append(symbolic)
                     seen.add(symbolic)
                 continue
-            hhmm = parse_hhmm(p)
+            hhmm = parse_hhmm(p) or parse_clock_value(p)
             if not hhmm:
                 hint = _time_padding_hint(p)
                 if hint:
                     raise parse_error_cls(hint)
                 raise parse_error_cls(
-                    f"Invalid time in @t=HH:MM[,HH:MM...] or astronomical event name: '{p}'"
+                    f"Invalid time in @t=HH[:MM][,HH[:MM]...] or astronomical event name: '{p}'"
                 )
             if hhmm not in seen:
                 out.append(hhmm)
@@ -125,7 +125,7 @@ def parse_atom_mods(
                 if hint:
                     raise parse_error_cls(hint)
                 raise parse_error_cls(
-                    f"Invalid time in @t=HH:MM[,HH:MM...] or astronomical event name: '{tok}'"
+                    f"Invalid time in @t=HH[:MM][,HH[:MM]...] or astronomical event name: '{tok}'"
                 )
             mods["t"] = tlist[0] if len(tlist) == 1 else tlist
             continue

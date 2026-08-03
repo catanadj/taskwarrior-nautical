@@ -279,21 +279,22 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
     window = mods.get("time_window")
     if window:
         out["tw"] = str(window)
-        return out
-    tval = mods.get("t")
-    if tval:
-        if isinstance(tval, tuple):
-            out["t"] = f"{tval[0]:02d}:{tval[1]:02d}"
-        elif isinstance(tval, str) and hhmm_re.fullmatch(tval):
-            out["t"] = tval
-        elif isinstance(tval, list):
-            times = [
-                f"{value[0]:02d}:{value[1]:02d}"
-                for value in tval
-                if isinstance(value, tuple) and len(value) == 2
-            ]
-            if times:
-                out["t"] = ",".join(times)
+        tval = None
+    else:
+        tval = mods.get("t")
+        if tval:
+            if isinstance(tval, tuple):
+                out["t"] = f"{tval[0]:02d}:{tval[1]:02d}"
+            elif isinstance(tval, str) and hhmm_re.fullmatch(tval):
+                out["t"] = tval
+            elif isinstance(tval, list):
+                times = [
+                    f"{value[0]:02d}:{value[1]:02d}"
+                    for value in tval
+                    if isinstance(value, tuple) and len(value) == 2
+                ]
+                if times:
+                    out["t"] = ",".join(times)
     roll = mods.get("roll")
     if roll in ("pbd", "nbd", "nw", "next-wd", "prev-wd"):
         out["roll"] = roll
@@ -307,6 +308,9 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
     business_off = int(mods.get("business_day_offset") or 0)
     if business_off:
         out["+bd"] = business_off
+    time_off = int(mods.get("time_offset_minutes") or 0)
+    if time_off:
+        out["+m"] = time_off
     return out
 
 
@@ -330,6 +334,8 @@ def acf_mods_to_string(m: dict, *, wd_abbr) -> str:
         parts.append(f"@{m['+d']:+d}d")
     if isinstance(m.get("+bd"), int) and m["+bd"]:
         parts.append(f"@{m['+bd']:+d}bd")
+    if isinstance(m.get("+m"), int) and m["+m"]:
+        parts.append(f"@{m['+m']:+d}m")
     return "".join(parts)
 
 

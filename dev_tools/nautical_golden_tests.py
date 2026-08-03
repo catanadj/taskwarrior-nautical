@@ -16583,6 +16583,9 @@ def test_time_window_grammar_expands_and_round_trips_through_acf():
     acf = core.build_acf(expr)
     round_trip = core.acf_to_original_format(acf)
     expect("@t=06:00..18:00/3h" in round_trip, f"ACF did not preserve compact window: {round_trip!r}")
+    decorated = core.acf_to_original_format(core.build_acf("w:mon@t=06..17/3h@+1d@+15m"))
+    expect("@t=06:00..17:00/3h" in decorated, f"decorated window was not preserved: {decorated!r}")
+    expect("@+1d" in decorated and "@+15m" in decorated, f"window modifiers were lost in ACF: {decorated!r}")
 
 
 def test_grouped_time_window_metadata_distributes_to_each_branch():

@@ -355,6 +355,7 @@ BUSINESS_CALENDAR_CONFIG = _CONF["business_calendar"]
 ASTRONOMY_CONFIG = _CONF["astronomy"]
 
 ENABLE_ANCHOR_CACHE = conf_schema_bool("enable_anchor_cache")
+ENABLE_UDA_ALIASES = conf_schema_bool("enable_uda_aliases")
 ANCHOR_CACHE_DIR_OVERRIDE = conf_schema_str("anchor_cache_dir")
 ANCHOR_CACHE_TTL = conf_schema_int("anchor_cache_ttl")
 

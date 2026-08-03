@@ -6229,6 +6229,22 @@ def test_core_live_panel_duration_config_defaults_and_clamps():
             )
 
 
+def test_core_uda_aliases_config_defaults_disabled_and_can_enable():
+    """Description-based UDA aliases should be opt-in through config."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
+    cases = [("", False), ("enable_uda_aliases = true\n", True), ("enable_uda_aliases = false\n", False)]
+    for index, (config_text, expected) in enumerate(cases):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = os.path.join(td, "nautical.toml")
+            with open(cfg, "w", encoding="utf-8") as f:
+                f.write(config_text)
+            mod = _load_core_module(core_path, f"_nautical_core_uda_aliases_{index}", cfg)
+            expect(
+                mod.ENABLE_UDA_ALIASES is expected,
+                f"unexpected UDA alias setting for {config_text!r}: {mod.ENABLE_UDA_ALIASES!r}",
+            )
+
+
 def test_spawn_queue_drain_limit_config_and_env_override():
     """on-exit should use the config drain limit unless the process env overrides it."""
     with tempfile.TemporaryDirectory() as td:
@@ -26052,6 +26068,7 @@ TESTS = [
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_core_recurrence_update_udas_config_aliases,
     test_core_live_panel_duration_config_defaults_and_clamps,
+    test_core_uda_aliases_config_defaults_disabled_and_can_enable,
     test_spawn_queue_drain_limit_config_and_env_override,
     test_shipped_config_keeps_hook_toggles_top_level,
     test_shipped_config_matches_authoritative_schema,

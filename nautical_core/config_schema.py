@@ -16,6 +16,7 @@ CONFIG_SPECS: dict[str, dict[str, Any]] = {
     "anchor_file_dir": {"type": "string", "default": ""},
     "omit_file_dir": {"type": "string", "default": ""},
     "enable_anchor_cache": {"type": "bool", "default": False},
+    "enable_uda_aliases": {"type": "bool", "default": False},
     "anchor_cache_dir": {"type": "string", "default": ""},
     "anchor_cache_ttl": {"type": "int", "default": 0, "min": 0},
     "chain_color_per_chain": {"type": "bool", "default": False},

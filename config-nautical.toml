@@ -9,6 +9,7 @@ omit_file_dir   = ""                 # trusted directory for anchor omit_file ba
 
 # Toggle file cache
 enable_anchor_cache = true
+enable_uda_aliases = false              # parse short UDA aliases from task descriptions (a:, am:, etc.)
 anchor_cache_dir = ""  # optional; defaults beside core
 anchor_cache_ttl = 0                               # optional; 0 = never expires
 

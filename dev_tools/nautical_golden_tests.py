@@ -6245,6 +6245,20 @@ def test_core_uda_aliases_config_defaults_disabled_and_can_enable():
             )
 
 
+def test_on_add_expands_enabled_description_uda_aliases():
+    """on-add should expand enabled aliases before recurrence classification."""
+    hook = _find_hook_file("on-add.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_add_description_aliases_test")
+    previous = mod.core.ENABLE_UDA_ALIASES
+    try:
+        mod.core.ENABLE_UDA_ALIASES = True
+        task = {"description": "test task a:w:mon am:all"}
+        mod._apply_description_uda_aliases(task)
+    finally:
+        mod.core.ENABLE_UDA_ALIASES = previous
+    expect(task == {"description": "test task", "anchor": "w:mon", "anchor_mode": "all"}, f"on-add alias expansion failed: {task!r}")
+
+
 def test_spawn_queue_drain_limit_config_and_env_override():
     """on-exit should use the config drain limit unless the process env overrides it."""
     with tempfile.TemporaryDirectory() as td:
@@ -26069,6 +26083,7 @@ TESTS = [
     test_core_recurrence_update_udas_config_aliases,
     test_core_live_panel_duration_config_defaults_and_clamps,
     test_core_uda_aliases_config_defaults_disabled_and_can_enable,
+    test_on_add_expands_enabled_description_uda_aliases,
     test_spawn_queue_drain_limit_config_and_env_override,
     test_shipped_config_keeps_hook_toggles_top_level,
     test_shipped_config_matches_authoritative_schema,

@@ -2018,6 +2018,29 @@ def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *,
             prof.add_ms('validate:cp_vs_anchor', (time.perf_counter() - _t_conf) * 1000.0)
 
 
+def _apply_description_uda_aliases(task: dict) -> None:
+    """Expand opt-in short UDA directives before normal on-add validation."""
+    if not bool(getattr(core, "ENABLE_UDA_ALIASES", False)):
+        return
+    description = task.get("description")
+    if not isinstance(description, str) or not description:
+        return
+    aliases = core._import_sibling("description_aliases")
+    try:
+        clean_description, fields = aliases.parse_description_aliases(description)
+    except ValueError as exc:
+        _error_and_exit([("Invalid UDA alias", str(exc))])
+        return
+    for field, value in fields.items():
+        current = task.get(field)
+        if current not in (None, "") and str(current) != value:
+            _error_and_exit([("Conflicting UDA alias", f"{field} is already set to a different value")])
+            return
+        task[field] = value
+    if fields:
+        task["description"] = clean_description
+
+
 def _handle_anchor_preview_on_add_context(ctx, *, prof) -> None:
     _handle_anchor_preview_on_add(
         task=ctx.task,
@@ -2150,6 +2173,7 @@ def _due_context_on_add(task: dict, now_utc: datetime) -> tuple[bool, str, datet
 def main():
     prof = _build_profiler()
     task = _read_on_add_task(prof)
+    _apply_description_uda_aliases(task)
     try:
         calendar_context = core.use_task_business_calendar(task)
     except Exception as exc:

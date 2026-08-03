@@ -83,6 +83,24 @@ def _action_style(action: str) -> str:
     }.get(action, "cyan")
 
 
+def _format_local_until(hook: Any, value: Any) -> str:
+    """Render a repaired native-until target in configured local time when possible."""
+    raw = str(value or "").strip()
+    if not raw:
+        return raw
+    parser = getattr(hook, "_safe_parse_datetime", None)
+    formatter = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
+    if not callable(parser) or not callable(formatter):
+        return raw
+    try:
+        parsed, error = parser(raw)
+        if parsed is not None and not error:
+            return str(formatter(parsed))
+    except Exception:
+        pass
+    return raw
+
+
 def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
     candidates: list[Path] = []
     for raw in (explicit, os.environ.get("NAUTICAL_ON_MODIFY_PATH")):
@@ -1429,7 +1447,7 @@ def main(
     if not args.json:
         for item in native_until_repairs:
             action = item.get("action") or "native_until"
-            suffix = f" -> {item['new_until']}" if item.get("new_until") else ""
+            suffix = f" -> {_format_local_until(hook, item['new_until'])}" if item.get("new_until") else ""
             outcome = " (no change applied)" if action == "manual_review" else ""
             line = (
                 f"native-until: {action:<13} {item.get('task') or '?'} "
@@ -1602,14 +1620,18 @@ def main(
             f" manual_review={summary['native_until_manual_review']}"
             f" audit_skipped={summary['native_until_audit_skipped']}"
             f" config_drift={summary['configuration_drifted']}"
-            f" exports={summary['export_calls']}"
-            f" export_s={summary['export_seconds']:.4f}"
-            f" slowest_export_s={summary['slowest_export_seconds']:.4f}"
-            f" snapshot_hits={summary['snapshot_hits']}"
-            f" lock_busy={sum(summary['lock_contention'].values())}"
         )
         summary_color = "red" if has_errors else "yellow" if degraded else "green"
         print(_style(summary_line, summary_color))
+        diagnostics_line = (
+            "diagnostics: "
+            f"exports={summary['export_calls']} rows={summary['export_rows']} "
+            f"export_s={summary['export_seconds']:.4f} "
+            f"slowest_export_s={summary['slowest_export_seconds']:.4f} "
+            f"snapshot_hits={summary['snapshot_hits']} "
+            f"lock_busy={sum(summary['lock_contention'].values())}"
+        )
+        print(_style(diagnostics_line, "dim"))
     if has_errors:
         return 1
     return 2 if degraded else 0

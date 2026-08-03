@@ -22074,6 +22074,44 @@ def test_reconcile_degraded_audit_status_is_structured():
         mod._candidate_rows, mod._native_until_repairs, mod._configuration_drift_reason = original
 
 
+def test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs():
+    """Human reconcile output should keep outcomes concise and display repaired until locally."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_human_diagnostics_test")
+    until_utc = datetime(2026, 8, 3, 20, 0, tzinfo=timezone.utc)
+    hook = SimpleNamespace(
+        core=SimpleNamespace(
+            fmt_dt_local=lambda value: f"Mon 2026-08-03 23:00 EEST ({value.tzname()})",
+            now_utc=lambda: until_utc,
+        ),
+        _safe_parse_datetime=lambda _value: (until_utc, None),
+        _task_cmd_prefix=lambda: ["task"],
+    )
+    original = (mod._load_on_modify, mod._candidate_rows, mod._native_until_repairs)
+    try:
+        mod._load_on_modify = lambda _path=None: hook
+        mod._candidate_rows = lambda _task_bin, _hook: []
+        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: (
+            [{"action": "repair_until", "task": "11111111", "chainID": "chain", "link": 2,
+              "reason": "native until must be later than due", "new_until": "20260803T200000Z"}],
+            [],
+        )
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = mod.main([])
+    finally:
+        mod._load_on_modify, mod._candidate_rows, mod._native_until_repairs = original
+
+    text = output.getvalue()
+    summary_line = next(line for line in text.splitlines() if line.startswith("summary: "))
+    diagnostics_line = next(line for line in text.splitlines() if line.startswith("diagnostics: "))
+    expect(result == 0, f"human diagnostics run failed: {result}")
+    expect("-> Mon 2026-08-03 23:00 EEST" in text, f"native-until target was not localized: {text!r}")
+    expect("exports=" not in summary_line, f"summary still contains diagnostics: {summary_line!r}")
+    expect("exports=0 rows=0" in diagnostics_line, f"diagnostics line missing export counters: {diagnostics_line!r}")
+    expect("slowest_export_s=0.0000" in diagnostics_line, f"diagnostics line missing export timing: {diagnostics_line!r}")
+
+
 def test_reconcile_tool_apply_disables_legitimate_final_chain():
     """Applying a cap-final plan should persist chain:off so it is not reconsidered."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -25524,6 +25562,7 @@ TESTS = [
     test_reconcile_tool_print_plan_includes_evidence,
     test_reconcile_partial_recovery_exit_and_verbose_output,
     test_reconcile_degraded_audit_status_is_structured,
+    test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs,
     test_reconcile_tool_apply_disables_legitimate_final_chain,
     test_reconcile_disable_verification_fails_closed,
     test_chain_repair_plans_only_safe_adjacent_link_updates,

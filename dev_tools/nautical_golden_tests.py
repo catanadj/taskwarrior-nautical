@@ -4959,6 +4959,19 @@ def test_doctor_reports_authoritative_config_schema_findings():
     )
 
 
+def test_doctor_reports_uda_alias_configuration():
+    """Doctor should make the opt-in alias state and clearing syntax discoverable."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_uda_aliases_test")
+    findings = []
+    mod._check_uda_aliases(findings, {"enable_uda_aliases": True})
+    item = next(item for item in findings if item.get("id") == "config.uda_aliases")
+    expect(item.get("severity") == "ok", f"UDA alias config should be healthy: {findings!r}")
+    expect((item.get("details") or {}).get("enabled") is True, f"enabled state missing: {item!r}")
+    expect((item.get("details") or {}).get("clear_syntax") == "alias:-", f"clear syntax missing: {item!r}")
+    expect("Description UDA aliases are enabled" in str(item.get("message") or ""), f"message is unclear: {item!r}")
+
+
 def test_on_add_preview_warns_when_anchor_uses_utc_fallback():
     """on-add preview helper should flag anchors when timezone data is unavailable."""
     import nautical_core.add_anchor_preview as mod
@@ -25762,6 +25775,7 @@ TESTS = [
     test_doctor_text_timezone_summary,
     test_doctor_reports_live_panel_configuration_health,
     test_doctor_reports_authoritative_config_schema_findings,
+    test_doctor_reports_uda_alias_configuration,
     test_on_add_preview_warns_when_anchor_uses_utc_fallback,
     test_panel_diagnostics_warns_for_missing_env_config,
     test_panel_diagnostics_warns_for_empty_file_sources,

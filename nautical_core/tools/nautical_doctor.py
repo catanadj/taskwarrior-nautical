@@ -25,7 +25,7 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
+from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
 import nautical_core.runtime as runtime  # noqa: E402
 
 REQUIRED_UDAS = {
@@ -435,6 +435,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
         return
     _finding(findings, "config.loaded", "ok", f"Nautical config is valid: {config}")
     _check_config_schema(findings, data)
+    _check_uda_aliases(findings, data)
     _check_timezone(findings, data)
     _check_astronomy(findings, data, source_hint=str(config))
     _check_config_drift(findings, str(config))
@@ -502,6 +503,20 @@ def _check_config_schema(findings: list[dict[str, Any]], data: dict[str, Any]) -
             fix=fix,
             details=details,
         )
+
+
+def _check_uda_aliases(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
+    """Report whether description-based UDA aliases are active."""
+    enabled = data.get("enable_uda_aliases") is True
+    aliases = {alias: field for alias, field in description_aliases.ALIAS_TO_FIELD.items()}
+    state = "enabled" if enabled else "disabled"
+    _finding(
+        findings,
+        "config.uda_aliases",
+        "ok",
+        f"Description UDA aliases are {state}.",
+        details={"enabled": enabled, "aliases": aliases, "clear_syntax": "alias:-"},
+    )
 
 
 def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:

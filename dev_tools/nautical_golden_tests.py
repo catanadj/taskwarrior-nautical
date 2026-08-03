@@ -16643,7 +16643,7 @@ def test_composable_time_schedule_unions_windows_and_clock_slots():
     round_trip = core.acf_to_original_format(core.build_acf(expr))
     expect("@t=06:00..18:00/3h,22:00" in round_trip, f"schedule ACF round-trip failed: {round_trip!r}")
     natural = core.describe_anchor_expr(expr)
-    expect("every 3h within 06:00\N{EN DASH}18:00 and 22:00" in natural, f"schedule natural language is unclear: {natural!r}")
+    expect("every 3h within 06:00\N{EN DASH}18:00 plus 22:00" in natural, f"schedule natural language is unclear: {natural!r}")
 
 
 def test_composable_time_schedule_rejects_non_numeric_members():

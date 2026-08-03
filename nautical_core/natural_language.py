@@ -90,15 +90,20 @@ def fmt_time_schedule_for_term(term: list) -> str | None:
     value = term_collect_mods(term).get("time_schedule")
     if not isinstance(value, str) or not value:
         return None
-    parts = []
+    windows = []
+    clocks = []
     for item in value.split(","):
         if ".." in item and "/" in item:
             start, rest = item.split("..", 1)
             end, interval = rest.split("/", 1)
-            parts.append(f"every {interval} within {start}\N{EN DASH}{end}")
+            windows.append(f"every {interval} within {start}\N{EN DASH}{end}")
         else:
-            parts.append(item)
-    return " and ".join(parts)
+            clocks.append(item)
+    description = "; ".join(windows)
+    if clocks:
+        clock_text = ", ".join(clocks)
+        description = f"{description} plus {clock_text}" if description else clock_text
+    return description
 
 
 def fmt_weekdays_list(spec: str, *, expand_weekly_aliases, split_csv_lower, wday_idx_any) -> str:

@@ -16000,6 +16000,17 @@ def test_anchor_file_spec_rejects_unpadded_times():
         expect('leading zero' in msg and '03:00' in msg, f'unexpected padding hint: {e}')
 
 
+def test_anchor_file_composable_schedule_rejects_empty_members():
+    """anchor_file should expose the same empty-member guard as ordinary anchors."""
+    import nautical_core.anchor_files as anchor_files
+
+    try:
+        anchor_files.parse_anchor_file_spec("calendar.csv@t=06..12/2h,,18")
+        expect(False, "malformed anchor_file schedule was accepted")
+    except ValueError as exc:
+        expect("empty" in str(exc).lower(), f"unexpected anchor_file schedule error: {exc}")
+
+
 def test_anchor_file_loader_transforms_dates_and_carries_descriptions():
     """anchor_file should transform file dates and carry descriptions to the transformed date."""
     import nautical_core.anchor_files as anchor_files
@@ -16781,6 +16792,45 @@ def test_cached_time_window_metadata_rejects_slot_drift():
         expect(False, "inconsistent cached window slots were accepted")
     except ValueError as exc:
         expect("does not match" in str(exc), f"unexpected cache consistency error: {exc}")
+
+
+def test_cached_time_schedule_metadata_rejects_slot_drift():
+    """Cached composable schedules must agree with their expanded slots."""
+    valid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
+        "time_schedule": "06:00..12:00/2h,18:00",
+        "t": [[6, 0], [8, 0], [10, 0], [12, 0], [18, 0]],
+    }}]]
+    normalized = core._normalize_dnf_cached(valid)
+    expect(
+        normalized[0][0]["mods"]["t"] == [(6, 0), (8, 0), (10, 0), (12, 0), (18, 0)],
+        "valid schedule cache was not normalized",
+    )
+    invalid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
+        "time_schedule": "06:00..12:00/2h,18:00",
+        "t": [[6, 0], [8, 0], [10, 0], [18, 0]],
+    }}]]
+    try:
+        core._normalize_dnf_cached(invalid)
+        expect(False, "inconsistent cached schedule slots were accepted")
+    except ValueError as exc:
+        expect("does not match" in str(exc), f"unexpected schedule cache error: {exc}")
+
+
+def test_composable_time_schedule_enforces_aggregate_slot_limit():
+    """The shared slot limit applies to a union, not just each individual window."""
+    from nautical_core import file_resource_limits
+    from nautical_core.time_windows import parse_time_schedule_spec
+
+    original = file_resource_limits.MAX_TIME_WINDOW_SLOTS
+    try:
+        file_resource_limits.MAX_TIME_WINDOW_SLOTS = 4
+        try:
+            parse_time_schedule_spec("06..12/2h,16..20/2h")
+            expect(False, "composed schedule exceeded the injected aggregate slot limit")
+        except ValueError as exc:
+            expect("too many slots" in str(exc), f"unexpected aggregate limit error: {exc}")
+    finally:
+        file_resource_limits.MAX_TIME_WINDOW_SLOTS = original
 
 
 def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
@@ -25779,6 +25829,7 @@ TESTS = [
     test_anchor_file_occurrences_expand_bounded_time_window,
     test_anchor_file_occurrences_expand_composable_time_schedule,
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,
+    test_anchor_file_composable_schedule_rejects_empty_members,
     test_anchor_file_next_occurrence_after_uses_task_level_time,
     test_file_source_expression_flattens_groups_and_rejects_unsafe_patterns,
     test_anchor_file_expression_merges_sources_and_applies_group_modifiers,
@@ -26110,6 +26161,8 @@ TESTS.extend([
     test_composable_schedule_preserves_offsets_and_group_validation,
     test_time_window_natural_language_uses_bounded_interval,
     test_cached_time_window_metadata_rejects_slot_drift,
+    test_cached_time_schedule_metadata_rejects_slot_drift,
+    test_composable_time_schedule_enforces_aggregate_slot_limit,
     test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_uses_anchor_and_anchor_file_sources,

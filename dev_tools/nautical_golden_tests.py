@@ -16487,6 +16487,31 @@ def test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints():
         except ValueError:
             continue
         raise AssertionError(f"invalid hour endpoint was accepted: {value}")
+
+
+def test_time_window_grammar_expands_and_round_trips_through_acf():
+    """The parser expands windows for runtime while ACF preserves compact syntax."""
+    expr = "w:mon@t=06..18/3h"
+    dnf = core.parse_anchor_expr_to_dnf(expr)
+    mods = dnf[0][0]["mods"]
+    expect(mods.get("time_window") == "06:00..18:00/3h", f"window metadata was lost: {mods!r}")
+    expect(
+        mods.get("t") == [(6, 0), (9, 0), (12, 0), (15, 0), (18, 0)],
+        f"window was not expanded into runtime slots: {mods!r}",
+    )
+    acf = core.build_acf(expr)
+    round_trip = core.acf_to_original_format(acf)
+    expect("@t=06:00..18:00/3h" in round_trip, f"ACF did not preserve compact window: {round_trip!r}")
+
+
+def test_grouped_time_window_metadata_distributes_to_each_branch():
+    """A grouped window modifier must reach every branch without duplicating slots."""
+    dnf = core.parse_anchor_expr_to_dnf("(w:mon | w:fri)@t=06..18/3h")
+    expect(len(dnf) == 2, f"unexpected grouped window DNF: {dnf!r}")
+    for term in dnf:
+        mods = term[0]["mods"]
+        expect(mods.get("time_window") == "06:00..18:00/3h", f"group window metadata was lost: {dnf!r}")
+        expect(len(mods.get("t") or []) == 5, f"group window slots were not distributed: {dnf!r}")
 def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
     """Every supported astronomical event must parse through the shared vocabulary."""
     import nautical_core.astronomy as astronomy
@@ -25797,6 +25822,8 @@ TESTS.extend([
     test_time_window_parser_accepts_compound_minute_intervals,
     test_time_window_parser_accepts_hour_only_and_mixed_endpoints,
     test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints,
+    test_time_window_grammar_expands_and_round_trips_through_acf,
+    test_grouped_time_window_metadata_distributes_to_each_branch,
     test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_uses_anchor_and_anchor_file_sources,

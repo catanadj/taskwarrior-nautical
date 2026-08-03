@@ -3,6 +3,7 @@ import re
 
 from . import astronomy
 from .moon_phase import canonical_phase
+from .time_windows import parse_time_window_spec
 
 
 _HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
@@ -110,6 +111,14 @@ def parse_atom_mods(
                     "Duplicate '@t=' modifier. Use a single '@t=HH:MM,HH:MM,...' list."
                 )
             tval = tok.split("=", 1)[1].strip()
+            try:
+                window = parse_time_window_spec(tval)
+            except ValueError as exc:
+                raise parse_error_cls(str(exc)) from None
+            if window is not None:
+                mods["t"] = list(window.slots)
+                mods["time_window"] = window.canonical
+                continue
             tlist = parse_time_list(tval)
             if not tlist:
                 hint = _time_padding_hint(tval)

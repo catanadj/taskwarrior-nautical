@@ -30,6 +30,12 @@ def _apply_group_modifiers(res, mods: dict, *, parse_error_cls) -> None:
                     )
                 tval = mods["t"]
                 atom_mods["t"] = list(tval) if isinstance(tval, list) else tval
+            if mods.get("time_window"):
+                if atom_mods.get("time_window"):
+                    raise parse_error_cls(
+                        "Cannot apply a grouped time-window modifier because the group already has a timed term."
+                    )
+                atom_mods["time_window"] = str(mods["time_window"])
             if mods.get("moon"):
                 if atom_mods.get("moon"):
                     raise parse_error_cls("Cannot apply a grouped @moon modifier because the group already has a moon filter.")

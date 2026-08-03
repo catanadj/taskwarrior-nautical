@@ -276,6 +276,10 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
     out: dict[str, object] = {}
     if not mods:
         return out
+    window = mods.get("time_window")
+    if window:
+        out["tw"] = str(window)
+        return out
     tval = mods.get("t")
     if tval:
         if isinstance(tval, tuple):
@@ -308,7 +312,9 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
 
 def acf_mods_to_string(m: dict, *, wd_abbr) -> str:
     parts = []
-    if m.get("t"):
+    if m.get("tw"):
+        parts.append(f"@t={m['tw']}")
+    elif m.get("t"):
         parts.append(f"@t={m['t']}")
     roll = m.get("roll")
     if roll in ("pbd", "nbd", "nw"):

@@ -73,7 +73,7 @@ def validate_anchor_atom_strict(
             if (mods.get("bd") or mods.get("wd") is True) and count > 23:
                 raise parse_error_cls("Monthly business-day random count cannot exceed 23 days.")
             active = active_mod_keys(mods)
-            bad = [key for key in active if key not in ("t", "moon", "bd", "wd", "time_offset_minutes")]
+            bad = [key for key in active if key not in ("t", "time_window", "moon", "bd", "wd", "time_offset_minutes")]
             if bad:
                 raise parse_error_cls(f"m:rand does not support @{', '.join(bad)}")
             if interval < 1:
@@ -97,7 +97,7 @@ def validate_anchor_atom_strict(
                     raise parse_error_cls(f"Invalid month in y:{spec}")
             if active is None:
                 active = active_mod_keys(mods)
-                bad = [key for key in active if key not in ("t", "moon", "bd", "wd", "time_offset_minutes")]
+                bad = [key for key in active if key not in ("t", "time_window", "moon", "bd", "wd", "time_offset_minutes")]
             if bad:
                 raise parse_error_cls(f"y:{spec} does not support @{', '.join(bad)}")
         else:
@@ -109,7 +109,7 @@ def validate_anchor_atom_strict(
             raise parse_error_cls(f"Unknown moon phase '{spec}'")
         if interval != 1:
             raise parse_error_cls("Moon phases do not support /N intervals")
-        bad = [key for key in active_mod_keys(mods) if key not in ("t", "time_offset_minutes")]
+        bad = [key for key in active_mod_keys(mods) if key not in ("t", "time_window", "time_offset_minutes")]
         if bad:
             raise parse_error_cls(f"moon:{spec} does not support @{', '.join(bad)}")
         return

@@ -16711,6 +16711,29 @@ def test_shared_time_slot_resolver_keeps_hook_and_navigator_parity():
         modify_mod.core.to_local = original_modify_to_local
 
 
+def test_navigator_projects_all_slots_in_a_time_window():
+    """Navigator analysis should retain every same-day slot in a bounded window."""
+    module_name = "_nautical_navigator_time_window_projection_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+        analyzer = navigator.TaskAnalyzer()
+        dates = analyzer._project_anchor_dates(
+            {"anchor": "w:mon..sun@t=04:30..19:30/3h30min", "uuid": "navigator-window-test"},
+            limit=5,
+            start_from_date=date(2026, 8, 2),
+        )
+        expect(
+            [item.strftime("%H:%M") for item in dates] == ["04:30", "08:00", "11:30", "15:00", "18:30"],
+            f"Navigator collapsed same-day time-window slots: {dates!r}",
+        )
+    finally:
+        sys.modules.pop(module_name, None)
+
+
 def test_time_window_parser_expands_inclusive_exact_boundary():
     """A time window expands by interval and includes the end only when reached exactly."""
     from nautical_core.time_windows import parse_time_window_spec
@@ -26364,6 +26387,7 @@ TESTS.extend([
     test_navigator_uses_nautical_configured_timezone,
     test_navigator_fallback_export_uses_empty_filter,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
+    test_navigator_projects_all_slots_in_a_time_window,
     test_time_window_parser_expands_inclusive_exact_boundary,
     test_time_window_parser_rejects_unsafe_or_ambiguous_ranges,
     test_time_window_slot_limit_uses_shared_resource_policy,

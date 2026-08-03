@@ -2150,51 +2150,32 @@ class TaskAnalyzer:
         default_hhmm = (due_local_dt.hour, due_local_dt.minute) if due_local_dt else (9, 0)
         after_dt_local = due_local_dt if due_local_dt else core.build_local_datetime(start_from_date, default_hhmm)
 
-        def resolve_hhmm(dnf, target_date, seed_date):
-            """Resolve numeric or astronomical anchor time to a wall-clock tuple."""
-            value = core.pick_hhmm_from_dnf_for_date(
-                dnf,
-                target_date,
-                seed_date,
-                business_calendar=business_calendar,
-            )
-            if isinstance(value, tuple) and len(value) == 2:
-                return value
-            if isinstance(value, list):
-                value = value[0] if value else None
-            if not isinstance(value, str):
-                return default_hhmm
-
-            event_name = value.strip().lower()
+        def resolve_hhmms(dnf, target_date, seed_date):
+            """Resolve every wall-clock slot belonging to the matching term."""
             time_slots = core._import_sibling("time_slots")
-            if event_name not in time_slots.astronomy.EVENT_NAMES:
-                return default_hhmm
-
-            def matches_event(candidate):
-                return candidate == event_name or (
-                    isinstance(candidate, list) and event_name in candidate
-                )
-
-            offset = 0
             for term in dnf:
-                for atom in term:
-                    mods = atom.get("mods") or {}
-                    tval = mods.get("t")
-                    if matches_event(tval):
-                        offset = int(mods.get("time_offset_minutes", 0) or 0)
-                        break
-                if offset or any(
-                    matches_event((atom.get("mods") or {}).get("t"))
+                if not all(
+                    core.atom_matches_on(
+                        atom,
+                        target_date,
+                        seed_date,
+                        seed_base=task.get("uuid") or "analyzer",
+                        business_calendar=business_calendar,
+                    )
                     for atom in term
                 ):
-                    break
-            resolved = time_slots.resolve_time_slots(
-                {"t": event_name, "time_offset_minutes": offset},
-                target_date,
-                config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                to_local=core.to_local,
-            )
-            return resolved[0] if resolved else default_hhmm
+                    continue
+                for atom in term:
+                    mods = atom.get("mods") or {}
+                    if mods.get("t"):
+                        resolved = time_slots.resolve_time_slots(
+                            mods,
+                            target_date,
+                            config=getattr(core, "ASTRONOMY_CONFIG", {}),
+                            to_local=core.to_local,
+                        )
+                        return resolved or [default_hhmm]
+            return [default_hhmm]
 
         anchor_out: List[datetime.datetime] = []
         file_out: List[datetime.datetime] = []
@@ -2218,16 +2199,19 @@ class TaskAnalyzer:
                 # First date strictly AFTER start_from_date
                 first_date = step(start_from_date)
                 if first_date:
-                    first_hhmm = resolve_hhmm(dnf, first_date, first_date)
-                    cur_date, cur_hhmm = first_date, first_hhmm
+                    cur_date = first_date
                     for _ in range(limit):
-                        dt_utc = core.build_local_datetime(cur_date, cur_hhmm)
-                        anchor_out.append(core.to_local(dt_utc))
+                        for cur_hhmm in resolve_hhmms(dnf, cur_date, first_date):
+                            if len(anchor_out) >= limit:
+                                break
+                            dt_utc = core.build_local_datetime(cur_date, cur_hhmm)
+                            anchor_out.append(core.to_local(dt_utc))
+                        if len(anchor_out) >= limit:
+                            break
 
                         nxt_date = step(cur_date)
                         if not nxt_date:
                             break
-                        cur_hhmm = resolve_hhmm(dnf, nxt_date, first_date)
                         cur_date = nxt_date
 
         if anchor_file:

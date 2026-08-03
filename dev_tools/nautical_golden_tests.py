@@ -16683,6 +16683,13 @@ def test_composable_time_schedule_deduplicates_overlaps_and_boundaries():
         f"overlapping slots were not deduplicated and sorted: {overlap.slots!r}",
     )
 
+    reordered = parse_time_schedule_spec("22,06..18/3h,06..18/3h,02")
+    expect(reordered is not None, "reordered schedule was not parsed")
+    expect(
+        reordered.canonical == "02:00,06:00..18:00/3h,22:00",
+        f"schedule canonicalization was unstable: {reordered.canonical!r}",
+    )
+
 
 def test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints():
     """Hour shorthand remains strict about padding and valid clock bounds."""

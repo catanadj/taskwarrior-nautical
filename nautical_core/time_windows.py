@@ -133,14 +133,17 @@ def parse_time_schedule_spec(value: str) -> TimeSchedule | None:
     parts = [part.strip() for part in raw_parts]
     if not parts:
         return None
-    canonical_parts: list[str] = []
+    members: list[tuple[int, int, str]] = []
+    seen_members: set[str] = set()
     slots: set[tuple[int, int]] = set()
     has_window = False
     for part in parts:
         window = parse_time_window_spec(part)
         if window is not None:
             has_window = True
-            canonical_parts.append(window.canonical)
+            if window.canonical not in seen_members:
+                members.append((_clock_minutes(window.start), 0, window.canonical))
+                seen_members.add(window.canonical)
             slots.update(window.slots)
             continue
         clock = parse_clock_value(part)
@@ -149,7 +152,10 @@ def parse_time_schedule_spec(value: str) -> TimeSchedule | None:
                 "Invalid composable time schedule. Use numeric windows and clocks, "
                 "for example 06..18/3h,22."
             )
-        canonical_parts.append(f"{clock[0]:02d}:{clock[1]:02d}")
+        canonical = f"{clock[0]:02d}:{clock[1]:02d}"
+        if canonical not in seen_members:
+            members.append((_clock_minutes(clock), 1, canonical))
+            seen_members.add(canonical)
         slots.add(clock)
     if not has_window:
         return None
@@ -159,7 +165,8 @@ def parse_time_schedule_spec(value: str) -> TimeSchedule | None:
             f"Time schedule produces too many slots ({len(slots)}); "
             f"increase the interval or keep it below {limit} slots."
         )
-    return TimeSchedule(",".join(canonical_parts), tuple(sorted(slots)))
+    members.sort(key=lambda item: (item[0], item[1], item[2]))
+    return TimeSchedule(",".join(item[2] for item in members), tuple(sorted(slots)))
 
 
 def validate_time_window_slots(spec: str, slots: object) -> None:

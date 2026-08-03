@@ -16768,13 +16768,22 @@ def test_time_window_slot_limit_uses_shared_resource_policy():
 
 
 def test_time_window_parser_accepts_compound_minute_intervals():
-    """Window intervals accept compact hour-and-minute durations."""
+    """Window intervals accept compact, long-form, and decimal durations."""
     from nautical_core.time_windows import parse_time_window_spec
 
     window = parse_time_window_spec("08:00..12:00/1h30m")
     expect(window is not None, "compound interval was not parsed")
     expect(window.interval_minutes == 90, f"compound interval was misparsed: {window!r}")
     expect(window.slots == ((8, 0), (9, 30), (11, 0)), f"compound slots are wrong: {window.slots!r}")
+
+    long_form = parse_time_window_spec("04:30..19:30/3h30min")
+    expect(long_form is not None, "long-form minute interval was not parsed")
+    expect(long_form.interval_minutes == 210, f"long-form interval was misparsed: {long_form!r}")
+    expect(long_form.slots == ((4, 30), (8, 0), (11, 30), (15, 0), (18, 30)), f"long-form slots are wrong: {long_form.slots!r}")
+    decimal = parse_time_window_spec("04:30..19:30/3.5h")
+    expect(decimal is not None, "decimal-hour interval was not parsed")
+    expect(decimal.interval_minutes == 210, f"decimal interval was misparsed: {decimal!r}")
+    expect(decimal.canonical == "04:30..19:30/3h30m", f"decimal interval canonical form drifted: {decimal.canonical!r}")
 
 
 def test_time_window_parser_accepts_hour_only_and_mixed_endpoints():

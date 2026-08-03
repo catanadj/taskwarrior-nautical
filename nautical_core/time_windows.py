@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 
 from . import file_resource_limits as resource_limits
 
@@ -11,9 +12,12 @@ from . import file_resource_limits as resource_limits
 _WINDOW_RE = re.compile(
     r"^(?P<start>(?:[01]\d|2[0-3])(?::[0-5]\d)?)\.\."
     r"(?P<end>(?:[01]\d|2[0-3])(?::[0-5]\d)?)/"
-    r"(?P<interval>(?:(?:\d+)h)?(?:(?:\d+)m)?)$"
+    r"(?P<interval>(?:(?:\d+(?:\.\d+)?)h(?:(?:\d+)(?:m|min))?|(?:\d+)(?:m|min)))$"
 )
-_DURATION_RE = re.compile(r"^(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?$")
+_DURATION_RE = re.compile(
+    r"^(?:(?P<hours>\d+(?:\.\d+)?)h(?:(?P<minutes>\d+)(?:m|min))?|"
+    r"(?P<minutes_only>\d+)(?:m|min))$"
+)
 _CLOCK_TOKEN_RE = re.compile(r"^(?:[01]\d|2[0-3])(?::[0-5]\d)?$")
 
 
@@ -86,6 +90,27 @@ def _format_duration(minutes: int) -> str:
     return "".join(parts)
 
 
+def _parse_duration_minutes(value: str) -> int:
+    """Parse a clock interval into exact whole minutes."""
+    match = _DURATION_RE.fullmatch(value)
+    if not match:
+        raise ValueError("Invalid time window interval: use a positive duration such as 30m, 3h30min, or 3.5h.")
+    try:
+        if match.group("minutes_only") is not None:
+            total = Decimal(match.group("minutes_only"))
+        else:
+            hours = Decimal(match.group("hours") or "0")
+            minutes = Decimal(match.group("minutes") or "0")
+            if hours != hours.to_integral_value() and minutes:
+                raise ValueError("Invalid time window interval: do not combine decimal hours with minutes.")
+            total = hours * 60 + minutes
+    except InvalidOperation:
+        raise ValueError("Invalid time window interval: use a positive duration such as 30m, 3h30min, or 3.5h.") from None
+    if total != total.to_integral_value():
+        raise ValueError("Invalid time window interval: decimal hours must resolve to whole minutes.")
+    return int(total)
+
+
 def parse_time_window_spec(value: str) -> TimeWindow | None:
     """Parse ``HH[:MM]..HH[:MM]/interval`` or return ``None`` for ordinary times."""
     text = str(value or "").strip().lower()
@@ -94,7 +119,7 @@ def parse_time_window_spec(value: str) -> TimeWindow | None:
     match = _WINDOW_RE.fullmatch(text)
     if not match:
         raise ValueError(
-            "Invalid time window. Use HH[:MM]..HH[:MM]/interval, for example 06..18/3h."
+            "Invalid time window. Use HH[:MM]..HH[:MM]/interval, for example 06..18/3h or 04:30..19:30/3h30min."
         )
 
     start = _parse_clock(match.group("start"))
@@ -107,8 +132,8 @@ def parse_time_window_spec(value: str) -> TimeWindow | None:
     interval_text = match.group("interval")
     duration = _DURATION_RE.fullmatch(interval_text)
     if not duration or not interval_text:
-        raise ValueError("Invalid time window interval: use a positive duration such as 30m or 2h.")
-    interval_minutes = int(duration.group("hours") or 0) * 60 + int(duration.group("minutes") or 0)
+        raise ValueError("Invalid time window interval: use a positive duration such as 30m, 3h30min, or 3.5h.")
+    interval_minutes = _parse_duration_minutes(interval_text)
     if interval_minutes <= 0:
         raise ValueError("Invalid time window interval: it must be greater than zero.")
     span = end_minutes - start_minutes

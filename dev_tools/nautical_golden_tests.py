@@ -6259,6 +6259,27 @@ def test_on_add_expands_enabled_description_uda_aliases():
     expect(task == {"description": "test task", "anchor": "w:mon", "anchor_mode": "all"}, f"on-add alias expansion failed: {task!r}")
 
 
+def test_on_modify_expands_and_clears_description_uda_aliases():
+    """on-modify aliases should update unchanged fields and support explicit clearing."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_description_aliases_test")
+    previous = mod.core.ENABLE_UDA_ALIASES
+    try:
+        mod.core.ENABLE_UDA_ALIASES = True
+        old = {"description": "test task", "anchor": "w:mon", "anchor_mode": "skip"}
+        new = dict(old, description="test task a:w:tue am:all")
+        mod._apply_description_uda_aliases(old, new)
+        expect(
+            new == {"description": "test task", "anchor": "w:tue", "anchor_mode": "all"},
+            f"on-modify alias expansion failed: {new!r}",
+        )
+        clear = {"description": "test task a:-", "anchor": "w:mon"}
+        mod._apply_description_uda_aliases({"description": "test task", "anchor": "w:mon"}, clear)
+        expect("anchor" not in clear and clear["description"] == "test task", f"alias clear failed: {clear!r}")
+    finally:
+        mod.core.ENABLE_UDA_ALIASES = previous
+
+
 def test_spawn_queue_drain_limit_config_and_env_override():
     """on-exit should use the config drain limit unless the process env overrides it."""
     with tempfile.TemporaryDirectory() as td:
@@ -26084,6 +26105,7 @@ TESTS = [
     test_core_live_panel_duration_config_defaults_and_clamps,
     test_core_uda_aliases_config_defaults_disabled_and_can_enable,
     test_on_add_expands_enabled_description_uda_aliases,
+    test_on_modify_expands_and_clears_description_uda_aliases,
     test_spawn_queue_drain_limit_config_and_env_override,
     test_shipped_config_keeps_hook_toggles_top_level,
     test_shipped_config_matches_authoritative_schema,

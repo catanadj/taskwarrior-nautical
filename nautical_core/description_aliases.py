@@ -51,4 +51,34 @@ def parse_description_aliases(description: object) -> tuple[str, dict[str, str]]
     return text, {}
 
 
-__all__ = ("ALIAS_TO_FIELD", "parse_description_aliases")
+def apply_description_aliases(task: dict, previous: dict | None = None) -> bool:
+    """Apply parsed aliases to a task, returning whether any were found.
+
+    On modification, an alias may replace a canonical value when that value
+    was unchanged from the previous task. ``alias:-`` explicitly clears it.
+    """
+    description = task.get("description")
+    if not isinstance(description, str) or not description:
+        return False
+    clean_description, fields = parse_description_aliases(description)
+    if not fields:
+        return False
+    for field, value in fields.items():
+        current = task.get(field)
+        old = previous.get(field) if isinstance(previous, dict) else None
+        changed_since_previous = previous is not None and current != old
+        if changed_since_previous and current not in (None, "") and str(current) != value:
+            raise ValueError(f"{field} is already set to a different value")
+        if value == "-":
+            if changed_since_previous:
+                raise ValueError(f"{field} was changed separately; cannot clear it with an alias")
+            task.pop(field, None)
+        else:
+            if previous is None and current not in (None, "") and str(current) != value:
+                raise ValueError(f"{field} is already set to a different value")
+            task[field] = value
+    task["description"] = clean_description
+    return True
+
+
+__all__ = ("ALIAS_TO_FIELD", "apply_description_aliases", "parse_description_aliases")

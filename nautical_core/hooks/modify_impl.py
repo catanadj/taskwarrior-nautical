@@ -1058,6 +1058,21 @@ def _read_two():
 
     _fail_invalid_input("on-modify must receive two JSON tasks")
 
+
+def _apply_description_uda_aliases(old: dict, new: dict) -> None:
+    """Expand enabled short UDA directives before on-modify dispatch."""
+    if not bool(getattr(core, "ENABLE_UDA_ALIASES", False)):
+        return
+    description = new.get("description")
+    if not isinstance(description, str) or not description:
+        return
+    aliases = core._import_sibling("description_aliases")
+    try:
+        aliases.apply_description_aliases(new, previous=old)
+    except ValueError as exc:
+        _fail_and_exit("Invalid UDA alias", str(exc))
+
+
 def _panic_passthrough() -> None:
     hook_results = _module("hook_results")
     hook_results.panic_passthrough(
@@ -6803,6 +6818,7 @@ def main():
     state.diag_stats["startup_module_ms"] = round((_ptime.perf_counter() - module_t0) * 1000.0, 3)
     read_t0 = _ptime.perf_counter()
     old, new = _read_two()
+    _apply_description_uda_aliases(old, new)
     state.diag_stats["startup_read_input_ms"] = round((_ptime.perf_counter() - read_t0) * 1000.0, 3)
     try:
         calendar_context = core.use_task_business_calendar(new)

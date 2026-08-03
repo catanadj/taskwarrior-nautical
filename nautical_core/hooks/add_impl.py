@@ -2027,18 +2027,10 @@ def _apply_description_uda_aliases(task: dict) -> None:
         return
     aliases = core._import_sibling("description_aliases")
     try:
-        clean_description, fields = aliases.parse_description_aliases(description)
+        aliases.apply_description_aliases(task)
     except ValueError as exc:
         _error_and_exit([("Invalid UDA alias", str(exc))])
         return
-    for field, value in fields.items():
-        current = task.get(field)
-        if current not in (None, "") and str(current) != value:
-            _error_and_exit([("Conflicting UDA alias", f"{field} is already set to a different value")])
-            return
-        task[field] = value
-    if fields:
-        task["description"] = clean_description
 
 
 def _handle_anchor_preview_on_add_context(ctx, *, prof) -> None:

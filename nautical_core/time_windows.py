@@ -101,4 +101,23 @@ def parse_time_window_spec(value: str) -> TimeWindow | None:
     return window
 
 
-__all__ = ("TimeWindow", "parse_time_window_spec")
+def validate_time_window_slots(spec: str, slots: object) -> None:
+    """Reject serialized window metadata whose expanded slots no longer agree."""
+    window = parse_time_window_spec(spec)
+    if window is None:
+        raise ValueError("Invalid cached time window metadata.")
+    if not isinstance(slots, (list, tuple)):
+        raise ValueError("Cached time window slots must be a list.")
+    normalized = []
+    for value in slots:
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            raise ValueError("Cached time window slots contain an invalid clock value.")
+        try:
+            normalized.append((int(value[0]), int(value[1])))
+        except (TypeError, ValueError):
+            raise ValueError("Cached time window slots contain an invalid clock value.") from None
+    if tuple(normalized) != window.slots:
+        raise ValueError("Cached time window metadata does not match its expanded slots.")
+
+
+__all__ = ("TimeWindow", "parse_time_window_spec", "validate_time_window_slots")

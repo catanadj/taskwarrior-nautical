@@ -16603,6 +16603,30 @@ def test_time_window_natural_language_uses_bounded_interval():
     text = core.describe_anchor_expr("w:mon..fri@t=06..17/3h")
     expect("every 3h within 06:00\N{EN DASH}17:00" in text, f"window natural language is unclear: {text!r}")
     expect("06:00, 09:00" not in text, f"window natural language leaked expanded slots: {text!r}")
+
+
+def test_cached_time_window_metadata_rejects_slot_drift():
+    """Cached window metadata must agree with the expanded runtime slot list."""
+    valid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
+        "time_window": "06:00..17:00/3h",
+        "t": [[6, 0], [9, 0], [12, 0], [15, 0]],
+    }}]]
+    normalized = core._normalize_dnf_cached(valid)
+    expect(
+        normalized[0][0]["mods"]["t"] == [(6, 0), (9, 0), (12, 0), (15, 0)],
+        "valid window cache was not normalized",
+    )
+    invalid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
+        "time_window": "06:00..17:00/3h",
+        "t": [[6, 0], [10, 0]],
+    }}]]
+    try:
+        core._normalize_dnf_cached(invalid)
+        expect(False, "inconsistent cached window slots were accepted")
+    except ValueError as exc:
+        expect("does not match" in str(exc), f"unexpected cache consistency error: {exc}")
+
+
 def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
     """Every supported astronomical event must parse through the shared vocabulary."""
     import nautical_core.astronomy as astronomy
@@ -25920,6 +25944,7 @@ TESTS.extend([
     test_time_window_grammar_expands_and_round_trips_through_acf,
     test_grouped_time_window_metadata_distributes_to_each_branch,
     test_time_window_natural_language_uses_bounded_interval,
+    test_cached_time_window_metadata_rejects_slot_drift,
     test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_uses_anchor_and_anchor_file_sources,

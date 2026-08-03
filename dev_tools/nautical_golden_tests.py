@@ -16460,6 +16460,33 @@ def test_time_window_parser_accepts_compound_minute_intervals():
     expect(window is not None, "compound interval was not parsed")
     expect(window.interval_minutes == 90, f"compound interval was misparsed: {window!r}")
     expect(window.slots == ((8, 0), (9, 30), (11, 0)), f"compound slots are wrong: {window.slots!r}")
+
+
+def test_time_window_parser_accepts_hour_only_and_mixed_endpoints():
+    """Window endpoints may omit minutes and normalize to :00."""
+    from nautical_core.time_windows import parse_time_window_spec
+
+    shorthand = parse_time_window_spec("06..18/3h")
+    expect(shorthand is not None, "hour-only window was not parsed")
+    expect(shorthand.slots == ((6, 0), (9, 0), (12, 0), (15, 0), (18, 0)), f"bad shorthand slots: {shorthand.slots!r}")
+    expect(shorthand.canonical == "06:00..18:00/3h", f"bad shorthand canonical form: {shorthand.canonical!r}")
+
+    mixed = parse_time_window_spec("06:30..18/2h")
+    expect(mixed is not None, "mixed-precision window was not parsed")
+    expect(mixed.slots == ((6, 30), (8, 30), (10, 30), (12, 30), (14, 30), (16, 30)), f"bad mixed slots: {mixed.slots!r}")
+    expect(mixed.canonical == "06:30..18:00/2h", f"bad mixed canonical form: {mixed.canonical!r}")
+
+
+def test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints():
+    """Hour shorthand remains strict about padding and valid clock bounds."""
+    from nautical_core.time_windows import parse_time_window_spec
+
+    for value in ("6..18/3h", "06:0..18/3h", "06..24/3h"):
+        try:
+            parse_time_window_spec(value)
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid hour endpoint was accepted: {value}")
 def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
     """Every supported astronomical event must parse through the shared vocabulary."""
     import nautical_core.astronomy as astronomy
@@ -25768,6 +25795,8 @@ TESTS.extend([
     test_time_window_parser_expands_inclusive_exact_boundary,
     test_time_window_parser_rejects_unsafe_or_ambiguous_ranges,
     test_time_window_parser_accepts_compound_minute_intervals,
+    test_time_window_parser_accepts_hour_only_and_mixed_endpoints,
+    test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints,
     test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_uses_anchor_and_anchor_file_sources,

@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 
 _WINDOW_RE = re.compile(
-    r"^(?P<start>(?:[01]\d|2[0-3]):[0-5]\d)\.\."
-    r"(?P<end>(?:[01]\d|2[0-3]):[0-5]\d)/"
+    r"^(?P<start>(?:[01]\d|2[0-3])(?::[0-5]\d)?)\.\."
+    r"(?P<end>(?:[01]\d|2[0-3])(?::[0-5]\d)?)/"
     r"(?P<interval>(?:(?:\d+)h)?(?:(?:\d+)m)?)$"
 )
 _DURATION_RE = re.compile(r"^(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?$")
@@ -16,6 +16,8 @@ _MAX_WINDOW_SLOTS = 288
 
 
 def _parse_clock(value: str) -> tuple[int, int]:
+    if ":" not in value:
+        return int(value), 0
     hour, minute = value.split(":", 1)
     return int(hour), int(minute)
 
@@ -66,14 +68,14 @@ def _format_duration(minutes: int) -> str:
 
 
 def parse_time_window_spec(value: str) -> TimeWindow | None:
-    """Parse ``HH:MM..HH:MM/interval`` or return ``None`` for ordinary times."""
+    """Parse ``HH[:MM]..HH[:MM]/interval`` or return ``None`` for ordinary times."""
     text = str(value or "").strip().lower()
     if ".." not in text or "/" not in text:
         return None
     match = _WINDOW_RE.fullmatch(text)
     if not match:
         raise ValueError(
-            "Invalid time window. Use HH:MM..HH:MM/interval, for example 09:00..17:00/2h."
+            "Invalid time window. Use HH[:MM]..HH[:MM]/interval, for example 06..18/3h."
         )
 
     start = _parse_clock(match.group("start"))

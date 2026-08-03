@@ -16413,6 +16413,53 @@ def test_shared_time_slot_resolver_keeps_hook_and_navigator_parity():
         modify_mod.core.to_local = original_modify_to_local
 
 
+def test_time_window_parser_expands_inclusive_exact_boundary():
+    """A time window expands by interval and includes the end only when reached exactly."""
+    from nautical_core.time_windows import parse_time_window_spec
+
+    exact = parse_time_window_spec("09:00..17:00/2h")
+    expect(exact is not None, "exact time window was not parsed")
+    expect(
+        exact.slots == ((9, 0), (11, 0), (13, 0), (15, 0), (17, 0)),
+        f"unexpected exact-boundary slots: {exact.slots!r}",
+    )
+    bounded = parse_time_window_spec("09:00..18:00/2h")
+    expect(bounded is not None, "bounded time window was not parsed")
+    expect(
+        bounded.slots == ((9, 0), (11, 0), (13, 0), (15, 0), (17, 0)),
+        f"non-divisible boundary was incorrectly forced: {bounded.slots!r}",
+    )
+    expect(bounded.canonical == "09:00..18:00/2h", f"window canonical form drifted: {bounded.canonical!r}")
+
+
+def test_time_window_parser_rejects_unsafe_or_ambiguous_ranges():
+    """Time windows reject reversed, overnight, invalid, and excessively dense ranges."""
+    from nautical_core.time_windows import parse_time_window_spec
+
+    expect(parse_time_window_spec("09:00") is None, "ordinary time was mistaken for a window")
+    cases = (
+        "18:00..09:00/2h",
+        "09:00..17:00/0m",
+        "09:00..17:00/2d",
+        "09:00..17:00/9h",
+        "09:00..17:00/1m",
+    )
+    for value in cases:
+        try:
+            parse_time_window_spec(value)
+        except ValueError:
+            continue
+        raise AssertionError(f"unsafe time window was accepted: {value}")
+
+
+def test_time_window_parser_accepts_compound_minute_intervals():
+    """Window intervals accept compact hour-and-minute durations."""
+    from nautical_core.time_windows import parse_time_window_spec
+
+    window = parse_time_window_spec("08:00..12:00/1h30m")
+    expect(window is not None, "compound interval was not parsed")
+    expect(window.interval_minutes == 90, f"compound interval was misparsed: {window!r}")
+    expect(window.slots == ((8, 0), (9, 30), (11, 0)), f"compound slots are wrong: {window.slots!r}")
 def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
     """Every supported astronomical event must parse through the shared vocabulary."""
     import nautical_core.astronomy as astronomy
@@ -25718,6 +25765,9 @@ TESTS.extend([
     test_navigator_uses_nautical_configured_timezone,
     test_navigator_fallback_export_uses_empty_filter,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
+    test_time_window_parser_expands_inclusive_exact_boundary,
+    test_time_window_parser_rejects_unsafe_or_ambiguous_ranges,
+    test_time_window_parser_accepts_compound_minute_intervals,
     test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_uses_anchor_and_anchor_file_sources,

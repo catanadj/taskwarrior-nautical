@@ -20755,6 +20755,10 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         fmt_dt_local = None
 
         @staticmethod
+        def now_utc():
+            return datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc)
+
+        @staticmethod
         def coerce_int(value, default=0):
             try:
                 return int(value)
@@ -21561,15 +21565,25 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
                 "NO_COLOR": "1",
             }
         )
+        fixture_due = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+            hour=9,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        fixture_until = fixture_due + timedelta(days=6, hours=14, minutes=59)
+        fixture_end = fixture_until + timedelta(minutes=1)
+        child_due = fixture_due + timedelta(days=7)
+        child_until = fixture_until + timedelta(days=7)
         parent = {
             "uuid": "11111111-0000-0000-0000-000000000001",
             "status": "deleted",
             "description": "Take the trash out",
-            "entry": "20260720T080000Z",
-            "modified": "20260727T000000Z",
-            "end": "20260727T000000Z",
-            "due": "20260720T090000Z",
-            "until": "20260726T235900Z",
+            "entry": (fixture_due - timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ"),
+            "modified": fixture_end.strftime("%Y%m%dT%H%M%SZ"),
+            "end": fixture_end.strftime("%Y%m%dT%H%M%SZ"),
+            "due": fixture_due.strftime("%Y%m%dT%H%M%SZ"),
+            "until": fixture_until.strftime("%Y%m%dT%H%M%SZ"),
             "cp": "7d",
             "chain": "on",
             "chainID": "trash001",
@@ -21609,8 +21623,14 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
         expect(set(by_link) == {1, 2}, f"expected exactly two chain slots: {rows!r}")
         expect(by_link[1].get("nextLink") == str(by_link[2].get("uuid") or "")[:8], f"parent was not linked: {rows!r}")
         expect(by_link[2].get("status") == "pending", f"child should be pending: {by_link[2]!r}")
-        expect(by_link[2].get("due") == "20260727T090000Z", f"child advanced from the wrong basis: {by_link[2]!r}")
-        expect(by_link[2].get("until") == "20260802T235900Z", f"child until window was not shifted: {by_link[2]!r}")
+        expect(
+            by_link[2].get("due") == child_due.strftime("%Y%m%dT%H%M%SZ"),
+            f"child advanced from the wrong basis: {by_link[2]!r}",
+        )
+        expect(
+            by_link[2].get("until") == child_until.strftime("%Y%m%dT%H%M%SZ"),
+            f"child until window was not shifted: {by_link[2]!r}",
+        )
 
         repeated = subprocess.run(
             [sys.executable, str(tool_path), "--apply", "--task-bin", task_bin, "--json"],
@@ -24511,6 +24531,106 @@ def test_reconcile_native_until_manual_review_is_not_a_hard_error():
     expect(repairs and repairs[0].get("action") == "manual_review", f"manual review was not preserved: {repairs!r}")
 
 
+def test_reconcile_native_until_repairs_consecutive_links_from_verified_state():
+    """Later repairs must inherit the verified predecessor repaired earlier in the same run."""
+    hook_path = _find_hook_file("on-modify.nautical")
+    hook = _load_hook_module(hook_path, "_nautical_reconcile_consecutive_until_hook_test")
+    if hasattr(hook, "_load_core"):
+        hook._load_core()
+    tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+        "_nautical_reconcile_consecutive_until_tool_test",
+    )
+
+    def stamp(day, hhmm):
+        return hook.core.fmt_isoz(hook.core.build_local_datetime(day, hhmm))
+
+    snapshot_rows = [
+        {
+            "uuid": "previous-uuid",
+            "chain": "on",
+            "chainID": "consecutive-until",
+            "link": 9,
+            "status": "completed",
+            "due": stamp(date(2026, 7, 20), (9, 0)),
+            "until": stamp(date(2026, 7, 20), (13, 0)),
+        },
+        {
+            "uuid": "first-uuid",
+            "chain": "on",
+            "chainID": "consecutive-until",
+            "link": 10,
+            "status": "pending",
+            "due": stamp(date(2026, 7, 22), (9, 0)),
+            "until": stamp(date(2026, 7, 21), (13, 0)),
+        },
+        {
+            "uuid": "second-uuid",
+            "chain": "on",
+            "chainID": "consecutive-until",
+            "link": 11,
+            "status": "pending",
+            "due": stamp(date(2026, 7, 24), (9, 0)),
+            "until": stamp(date(2026, 7, 23), (13, 0)),
+        },
+    ]
+    live_rows = {str(row["uuid"]): dict(row) for row in snapshot_rows}
+    original = {
+        "rows": tool._active_chain_rows,
+        "fresh": tool._fresh_parent,
+        "previous": tool._fresh_native_until_previous,
+        "modify": tool._modify_native_until,
+        "reconcile_lock": tool._reconcile_mutation_lock,
+        "parent_lock": tool._parent_apply_lock,
+        "drift": tool._configuration_drift_reason,
+    }
+    try:
+        tool._active_chain_rows = lambda *_args, **_kwargs: [dict(row) for row in snapshot_rows]
+        tool._fresh_parent = lambda _task_bin, row: dict(live_rows[str(row["uuid"])])
+
+        def fresh_previous(_task_bin, row):
+            wanted_link = int(row["link"]) - 1
+            return next(
+                (
+                    dict(candidate)
+                    for candidate in live_rows.values()
+                    if candidate["chainID"] == row["chainID"] and int(candidate["link"]) == wanted_link
+                ),
+                None,
+            )
+
+        def modify_until(_task_bin, row, new_until):
+            live_rows[str(row["uuid"])]["until"] = new_until
+
+        @contextlib.contextmanager
+        def acquired_lock(*_args, **_kwargs):
+            yield True
+
+        tool._fresh_native_until_previous = fresh_previous
+        tool._modify_native_until = modify_until
+        tool._reconcile_mutation_lock = acquired_lock
+        tool._parent_apply_lock = acquired_lock
+        tool._configuration_drift_reason = lambda _hook: ""
+        repairs, errors = tool._native_until_repairs(
+            "task",
+            hook,
+            apply=True,
+            taskdata=Path("/tmp/nautical-reconcile-consecutive-until-test"),
+        )
+    finally:
+        tool._active_chain_rows = original["rows"]
+        tool._fresh_parent = original["fresh"]
+        tool._fresh_native_until_previous = original["previous"]
+        tool._modify_native_until = original["modify"]
+        tool._reconcile_mutation_lock = original["reconcile_lock"]
+        tool._parent_apply_lock = original["parent_lock"]
+        tool._configuration_drift_reason = original["drift"]
+    expected = stamp(date(2026, 7, 24), (13, 0))
+    expect(not errors, f"consecutive repairs reported a false predecessor conflict: {errors!r}")
+    expect(all(item.get("applied") for item in repairs), f"consecutive repairs were not applied: {repairs!r}")
+    expect(live_rows["second-uuid"]["until"] == expected, f"second link lost predecessor policy: {live_rows!r}")
+
+
 def test_seasonal_selection_business_calendar_and_cache_identity():
     """Seasonal offsets should honor custom calendars and cache each seasonal context separately."""
     from nautical_core import position_selection
@@ -25347,6 +25467,7 @@ TESTS = [
     test_reconcile_repairs_invalid_native_until_from_previous_link,
     test_reconcile_native_until_uses_completed_predecessor_snapshot,
     test_reconcile_native_until_manual_review_is_not_a_hard_error,
+    test_reconcile_native_until_repairs_consecutive_links_from_verified_state,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
     test_reconcile_manual_deletion_stops_chain_without_child_lookup,
     test_reconcile_delayed_expiration_dry_run_converges_to_live_slot,

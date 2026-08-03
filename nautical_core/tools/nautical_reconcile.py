@@ -484,6 +484,7 @@ def _native_until_repairs(
                                         )
                                     else:
                                         item["applied"] = True
+                                        by_chain_link[(chain_id, link)] = dict(verified)
                                 except Exception as exc:
                                     item["action"] = "repair_error"
                                     item["repair_error"] = str(exc).strip() or type(exc).__name__
@@ -1129,7 +1130,16 @@ def _reconcile_candidate(
             child_short = applied_short or plan.child_short
             try:
                 cached_child = verified_children.get(str(child_short or "").strip().lower())
-                if cached_child is not None and str(cached_child.get("status") or "").strip().lower() != "deleted":
+                cached_terminal_error = (
+                    _terminal_recovery_error(cached_child, hook, recovery_at)
+                    if cached_child is not None
+                    else ""
+                )
+                if (
+                    cached_child is not None
+                    and str(cached_child.get("status") or "").strip().lower() != "deleted"
+                    and not cached_terminal_error
+                ):
                     child = cached_child
                 else:
                     child = _next_recovery_child(task_bin, plan.parent, child_short)

@@ -6326,6 +6326,14 @@ def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
         expect(normalized.get("description") == "plain", f"modify alias remained in description: {normalized!r}")
         expect(normalized.get("anchor") == "w:mon", f"modify alias did not reach canonical UDA: {normalized!r}")
 
+        alias_only = dict(old, description="a:w:tue")
+        proc = _run_hook_script_raw(hook, json.dumps(old) + "\n" + json.dumps(alias_only), env_extra=env)
+        expect(proc.returncode == 0, f"alias-only modify failed: {proc.stderr[:600]!r}")
+        _assert_stdout_json_only(proc.stdout)
+        normalized = _extract_last_json(proc.stdout)
+        expect(normalized.get("description") == "plain", f"alias-only modify erased description: {normalized!r}")
+        expect(normalized.get("anchor") == "w:tue", f"alias-only modify did not update canonical UDA: {normalized!r}")
+
 
 def test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper():
     """The native empty-value clearing form must survive the wrapper boundary."""
@@ -6390,6 +6398,12 @@ def test_on_modify_expands_and_clears_description_uda_aliases():
         clear = {"description": "test task a:", "anchor": "w:mon"}
         mod._apply_description_uda_aliases({"description": "test task", "anchor": "w:mon"}, clear)
         expect("anchor" not in clear and clear["description"] == "test task", f"alias clear failed: {clear!r}")
+        alias_only = {"description": "a:w:fri"}
+        mod._apply_description_uda_aliases({"description": "test task", "anchor": "w:mon"}, alias_only)
+        expect(
+            alias_only == {"description": "test task", "anchor": "w:fri"},
+            f"alias-only modify erased the description: {alias_only!r}",
+        )
     finally:
         mod.core.ENABLE_UDA_ALIASES = previous
 

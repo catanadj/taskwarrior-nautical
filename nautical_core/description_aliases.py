@@ -100,7 +100,15 @@ def apply_description_aliases(task: dict, previous: dict | None = None) -> bool:
             if previous is None and current not in (None, "") and str(current) != value:
                 raise ValueError(f"{field} is already set to a different value")
             task[field] = value
-    task["description"] = clean_description
+    if clean_description:
+        task["description"] = clean_description
+    elif isinstance(previous, dict) and str(previous.get("description") or "").strip():
+        # Taskwarrior rejects an empty description. A modify command that
+        # contains only aliases should update UDAs without erasing the task's
+        # existing human-readable description.
+        task["description"] = str(previous["description"])
+    else:
+        raise ValueError("UDA aliases must accompany a non-empty task description")
     return True
 
 

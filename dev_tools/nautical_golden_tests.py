@@ -16665,6 +16665,25 @@ def test_composable_time_schedule_rejects_empty_members():
             expect("empty" in str(exc).lower(), f"unexpected empty-member error: {exc}")
 
 
+def test_composable_time_schedule_deduplicates_overlaps_and_boundaries():
+    """Overlapping windows and exact day boundaries should produce stable slots."""
+    from nautical_core.time_windows import parse_time_schedule_spec
+
+    schedule = parse_time_schedule_spec("00..04/2h,04..08/2h,08,23")
+    expect(schedule is not None, "boundary schedule was not parsed")
+    expect(
+        schedule.slots == ((0, 0), (2, 0), (4, 0), (6, 0), (8, 0), (23, 0)),
+        f"overlap or boundary slots were expanded incorrectly: {schedule.slots!r}",
+    )
+
+    overlap = parse_time_schedule_spec("06..12/2h,08..14/3h,08")
+    expect(overlap is not None, "overlapping schedule was not parsed")
+    expect(
+        overlap.slots == ((6, 0), (8, 0), (10, 0), (11, 0), (12, 0), (14, 0)),
+        f"overlapping slots were not deduplicated and sorted: {overlap.slots!r}",
+    )
+
+
 def test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints():
     """Hour shorthand remains strict about padding and valid clock bounds."""
     from nautical_core.time_windows import parse_time_window_spec
@@ -26054,6 +26073,7 @@ TESTS.extend([
     test_composable_time_schedule_unions_windows_and_clock_slots,
     test_composable_time_schedule_rejects_non_numeric_members,
     test_composable_time_schedule_rejects_empty_members,
+    test_composable_time_schedule_deduplicates_overlaps_and_boundaries,
     test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints,
     test_time_window_grammar_expands_and_round_trips_through_acf,
     test_grouped_time_window_metadata_distributes_to_each_branch,

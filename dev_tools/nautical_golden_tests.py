@@ -9436,8 +9436,10 @@ def test_moon_astral_events_preserve_timezone_and_dst():
         "default_location": "new-york",
         "locations": {"new-york": {"latitude": 40.7128, "longitude": -74.0060, "timezone": "America/New_York"}},
     }
-    before = astronomy.resolve_event("sunrise", date(2026, 3, 8), config=config)
-    after = astronomy.resolve_event("sunrise", date(2026, 3, 9), config=config)
+    # DST starts on March 8, 2026 before sunrise; use the preceding day so
+    # the two event times are guaranteed to carry different UTC offsets.
+    before = astronomy.resolve_event("sunrise", date(2026, 3, 7), config=config)
+    after = astronomy.resolve_event("sunrise", date(2026, 3, 8), config=config)
     expect(before.tzinfo is not None and after.tzinfo is not None, "Astral event must be timezone-aware")
     expect(before.tzinfo.key == "America/New_York", f"unexpected pre-DST timezone: {before.tzinfo!r}")
     expect(after.tzinfo.key == "America/New_York", f"unexpected post-DST timezone: {after.tzinfo!r}")

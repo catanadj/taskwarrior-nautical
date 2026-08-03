@@ -16833,6 +16833,36 @@ def test_composable_time_schedule_enforces_aggregate_slot_limit():
         file_resource_limits.MAX_TIME_WINDOW_SLOTS = original
 
 
+def test_description_alias_parser_extracts_short_udas():
+    """Description aliases should map to canonical fields and leave clean text."""
+    from nautical_core.description_aliases import parse_description_aliases
+
+    description, fields = parse_description_aliases("test task a:(w:mon | w:fri) am:all")
+    expect(description == "test task", f"alias directives were not removed: {description!r}")
+    expect(
+        fields == {"anchor": "(w:mon | w:fri)", "anchor_mode": "all"},
+        f"alias fields were not normalized: {fields!r}",
+    )
+
+
+def test_description_alias_parser_avoids_prose_and_rejects_duplicates():
+    """Whitespace prose stays intact while duplicate aliases fail clearly."""
+    from nautical_core.description_aliases import parse_description_aliases
+
+    description, fields = parse_description_aliases("read a: book today")
+    expect(description == "read a: book today" and not fields, "ordinary prose was treated as an alias")
+    try:
+        parse_description_aliases("test a:w:mon a:w:tue")
+        expect(False, "duplicate description aliases were accepted")
+    except ValueError as exc:
+        expect("more than once" in str(exc), f"unexpected duplicate alias error: {exc}")
+    try:
+        parse_description_aliases("test am:")
+        expect(False, "empty description aliases were accepted")
+    except ValueError as exc:
+        expect("requires a value" in str(exc), f"unexpected empty alias error: {exc}")
+
+
 def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
     """Every supported astronomical event must parse through the shared vocabulary."""
     import nautical_core.astronomy as astronomy
@@ -26163,6 +26193,8 @@ TESTS.extend([
     test_cached_time_window_metadata_rejects_slot_drift,
     test_cached_time_schedule_metadata_rejects_slot_drift,
     test_composable_time_schedule_enforces_aggregate_slot_limit,
+    test_description_alias_parser_extracts_short_udas,
+    test_description_alias_parser_avoids_prose_and_rejects_duplicates,
     test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_uses_anchor_and_anchor_file_sources,

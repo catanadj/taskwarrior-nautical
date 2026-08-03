@@ -16533,6 +16533,23 @@ def test_time_window_parser_rejects_unsafe_or_ambiguous_ranges():
         raise AssertionError(f"unsafe time window was accepted: {value}")
 
 
+def test_time_window_slot_limit_uses_shared_resource_policy():
+    """Window density should follow the shared resource-limit module."""
+    from nautical_core import file_resource_limits
+    from nautical_core.time_windows import parse_time_window_spec
+
+    original = file_resource_limits.MAX_TIME_WINDOW_SLOTS
+    try:
+        file_resource_limits.MAX_TIME_WINDOW_SLOTS = 3
+        try:
+            parse_time_window_spec("06:00..18:00/3h")
+            expect(False, "window exceeded the injected shared slot limit")
+        except ValueError as exc:
+            expect("below 3 slots" in str(exc), f"unexpected shared slot-limit error: {exc}")
+    finally:
+        file_resource_limits.MAX_TIME_WINDOW_SLOTS = original
+
+
 def test_time_window_parser_accepts_compound_minute_intervals():
     """Window intervals accept compact hour-and-minute durations."""
     from nautical_core.time_windows import parse_time_window_spec
@@ -25938,6 +25955,7 @@ TESTS.extend([
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
     test_time_window_parser_expands_inclusive_exact_boundary,
     test_time_window_parser_rejects_unsafe_or_ambiguous_ranges,
+    test_time_window_slot_limit_uses_shared_resource_policy,
     test_time_window_parser_accepts_compound_minute_intervals,
     test_time_window_parser_accepts_hour_only_and_mixed_endpoints,
     test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints,

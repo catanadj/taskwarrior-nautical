@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from . import file_resource_limits as resource_limits
+
 
 _WINDOW_RE = re.compile(
     r"^(?P<start>(?:[01]\d|2[0-3])(?::[0-5]\d)?)\.\."
@@ -12,7 +14,6 @@ _WINDOW_RE = re.compile(
     r"(?P<interval>(?:(?:\d+)h)?(?:(?:\d+)m)?)$"
 )
 _DURATION_RE = re.compile(r"^(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?$")
-_MAX_WINDOW_SLOTS = 288
 
 
 def _parse_clock(value: str) -> tuple[int, int]:
@@ -42,10 +43,11 @@ class TimeWindow:
             (minute // 60, minute % 60)
             for minute in range(start, end + 1, self.interval_minutes)
         )
-        if len(values) > _MAX_WINDOW_SLOTS:
+        limit = int(resource_limits.MAX_TIME_WINDOW_SLOTS)
+        if len(values) > limit:
             raise ValueError(
                 f"Time window produces too many slots ({len(values)}); "
-                f"increase the interval or keep it below {_MAX_WINDOW_SLOTS} slots."
+                f"increase the interval or keep it below {limit} slots."
             )
         return values
 

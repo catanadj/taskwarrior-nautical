@@ -10328,6 +10328,31 @@ def test_on_modify_time_window_completion_advances_within_same_day():
     expect(meta.get("basis") == "after_end", f"unexpected window completion basis: {meta!r}")
 
 
+def test_time_window_dst_gap_deduplicates_shifted_local_slot():
+    """A spring-forward slot shifted onto the next slot must not duplicate the occurrence."""
+    hook = _find_hook_file("on-add.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text('tz = "America/New_York"\n', encoding="utf-8")
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000114",
+            "description": "DST window",
+            "status": "pending",
+            "entry": "20250301T000000Z",
+            "anchor": "w:sun@t=01..04/1h",
+            "anchor_mode": "skip",
+            "due": "20250309T060000Z",
+        }
+        proc = _run_hook_script(
+            hook,
+            task,
+            env_extra={"NAUTICAL_CONFIG": str(config), "NO_COLOR": "1"},
+        )
+    expect(proc.returncode == 0, f"DST window hook failed: {proc.stderr[:500]!r}")
+    text = _strip_markup(proc.stderr)
+    expect(text.count("Sun 2025-03-09 03:00 EDT") == 1, f"DST-shifted slot was duplicated: {text[:1200]!r}")
+
+
 def test_hook_on_add_live_panel_mode_preserves_captured_protocol():
     """Configured live panels should fall back cleanly when a hook's stderr is captured."""
     hook = _find_hook_file("on-add.nautical")
@@ -25337,6 +25362,7 @@ TESTS = [
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_time_window_preview_emits_bounded_slots,
     test_on_modify_time_window_completion_advances_within_same_day,
+    test_time_window_dst_gap_deduplicates_shifted_local_slot,
     test_hook_on_add_live_panel_mode_preserves_captured_protocol,
     test_hook_on_add_counted_random_preview_uses_group_time,
     test_hook_on_add_accepts_group_date_modifiers,

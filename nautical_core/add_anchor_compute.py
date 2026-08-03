@@ -129,6 +129,19 @@ def anchor_times_for_date(
     return sorted(times)
 
 
+def _unique_local_candidates(d: date, slots, *, core: Any):
+    """Build local candidates once so DST gap normalization cannot duplicate an instant."""
+    seen = set()
+    for hhmm in slots:
+        cand_utc = core.build_local_datetime(d, hhmm)
+        cand_local = core.to_local(cand_utc)
+        key = cand_utc
+        if key in seen:
+            continue
+        seen.add(key)
+        yield cand_local
+
+
 def _available_time_after_date(
     dnf,
     start_date,
@@ -181,9 +194,7 @@ def anchor_pick_occurrence_local(
                 dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core,
                 norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
             ) or [fallback_hhmm]
-            for hhmm in tlist:
-                cand_utc = core.build_local_datetime(d0, hhmm)
-                cand_local = core.to_local(cand_utc)
+            for cand_local in _unique_local_candidates(d0, tlist, core=core):
                 if (cand_local >= ref_dt_local) if inclusive else (cand_local > ref_dt_local):
                     return cand_local
         except LookupError as exc:
@@ -263,9 +274,7 @@ def anchor_next_occurrence_after_local_dt(
                 dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core,
                 norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
             ) or [fallback_hhmm]
-            for hhmm in tlist:
-                cand_utc = core.build_local_datetime(d0, hhmm)
-                cand_local = core.to_local(cand_utc)
+            for cand_local in _unique_local_candidates(d0, tlist, core=core):
                 if cand_local > after_dt_local:
                     return cand_local
         except LookupError as exc:

@@ -68,6 +68,14 @@ class TimeWindow:
         )
 
 
+@dataclass(frozen=True)
+class TimeSchedule:
+    """A deduplicated union of numeric windows and fixed clock slots."""
+
+    canonical: str
+    slots: tuple[tuple[int, int], ...]
+
+
 def _format_duration(minutes: int) -> str:
     hours, remainder = divmod(minutes, 60)
     parts: list[str] = []
@@ -81,7 +89,7 @@ def _format_duration(minutes: int) -> str:
 def parse_time_window_spec(value: str) -> TimeWindow | None:
     """Parse ``HH[:MM]..HH[:MM]/interval`` or return ``None`` for ordinary times."""
     text = str(value or "").strip().lower()
-    if ".." not in text or "/" not in text:
+    if "," in text or ".." not in text or "/" not in text:
         return None
     match = _WINDOW_RE.fullmatch(text)
     if not match:
@@ -112,6 +120,43 @@ def parse_time_window_spec(value: str) -> TimeWindow | None:
     return window
 
 
+def parse_time_schedule_spec(value: str) -> TimeSchedule | None:
+    """Parse a comma-separated union containing at least one time window."""
+    text = str(value or "").strip().lower()
+    if ".." not in text:
+        return None
+    parts = [part.strip() for part in text.split(",") if part.strip()]
+    if not parts:
+        return None
+    canonical_parts: list[str] = []
+    slots: set[tuple[int, int]] = set()
+    has_window = False
+    for part in parts:
+        window = parse_time_window_spec(part)
+        if window is not None:
+            has_window = True
+            canonical_parts.append(window.canonical)
+            slots.update(window.slots)
+            continue
+        clock = parse_clock_value(part)
+        if clock is None:
+            raise ValueError(
+                "Invalid composable time schedule. Use numeric windows and clocks, "
+                "for example 06..18/3h,22."
+            )
+        canonical_parts.append(f"{clock[0]:02d}:{clock[1]:02d}")
+        slots.add(clock)
+    if not has_window:
+        return None
+    limit = int(resource_limits.MAX_TIME_WINDOW_SLOTS)
+    if len(slots) > limit:
+        raise ValueError(
+            f"Time schedule produces too many slots ({len(slots)}); "
+            f"increase the interval or keep it below {limit} slots."
+        )
+    return TimeSchedule(",".join(canonical_parts), tuple(sorted(slots)))
+
+
 def validate_time_window_slots(spec: str, slots: object) -> None:
     """Reject serialized window metadata whose expanded slots no longer agree."""
     window = parse_time_window_spec(spec)
@@ -131,4 +176,31 @@ def validate_time_window_slots(spec: str, slots: object) -> None:
         raise ValueError("Cached time window metadata does not match its expanded slots.")
 
 
-__all__ = ("TimeWindow", "parse_clock_value", "parse_time_window_spec", "validate_time_window_slots")
+def validate_time_schedule_slots(spec: str, slots: object) -> None:
+    """Reject serialized schedule metadata whose expanded slots no longer agree."""
+    schedule = parse_time_schedule_spec(spec)
+    if schedule is None:
+        raise ValueError("Invalid cached time schedule metadata.")
+    if not isinstance(slots, (list, tuple)):
+        raise ValueError("Cached time schedule slots must be a list.")
+    normalized = []
+    for value in slots:
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            raise ValueError("Cached time schedule slots contain an invalid clock value.")
+        try:
+            normalized.append((int(value[0]), int(value[1])))
+        except (TypeError, ValueError):
+            raise ValueError("Cached time schedule slots contain an invalid clock value.") from None
+    if tuple(normalized) != schedule.slots:
+        raise ValueError("Cached time schedule metadata does not match its expanded slots.")
+
+
+__all__ = (
+    "TimeSchedule",
+    "TimeWindow",
+    "parse_clock_value",
+    "parse_time_schedule_spec",
+    "parse_time_window_spec",
+    "validate_time_schedule_slots",
+    "validate_time_window_slots",
+)

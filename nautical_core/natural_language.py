@@ -85,6 +85,22 @@ def fmt_time_window_for_term(term: list) -> str | None:
     return f"every {interval} within {start}\N{EN DASH}{end}"
 
 
+def fmt_time_schedule_for_term(term: list) -> str | None:
+    """Describe a composable numeric time schedule in compact natural language."""
+    value = term_collect_mods(term).get("time_schedule")
+    if not isinstance(value, str) or not value:
+        return None
+    parts = []
+    for item in value.split(","):
+        if ".." in item and "/" in item:
+            start, rest = item.split("..", 1)
+            end, interval = rest.split("/", 1)
+            parts.append(f"every {interval} within {start}\N{EN DASH}{end}")
+        else:
+            parts.append(item)
+    return " and ".join(parts)
+
+
 def fmt_weekdays_list(spec: str, *, expand_weekly_aliases, split_csv_lower, wday_idx_any) -> str:
     spec = expand_weekly_aliases(spec)
     tokens = split_csv_lower(spec)
@@ -783,7 +799,7 @@ def describe_anchor_term(
         bd_filter,
     )
     if random_weekday_pool is not None:
-        window = fmt_time_window_for_term(term)
+        window = fmt_time_schedule_for_term(term) or fmt_time_window_for_term(term)
         hhmm = fmt_hhmm_for_term(term, default_due_dt)
         if window:
             random_weekday_pool = f"{random_weekday_pool} {window}"
@@ -807,7 +823,7 @@ def describe_anchor_term(
         ]
     parts = describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter)
     hhmm = fmt_hhmm_for_term(term, default_due_dt)
-    window = fmt_time_window_for_term(term)
+    window = fmt_time_schedule_for_term(term) or fmt_time_window_for_term(term)
 
     if suppress_tail:
         txt = interval_prefix

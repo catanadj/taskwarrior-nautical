@@ -15974,6 +15974,20 @@ def test_anchor_file_occurrences_expand_bounded_time_window():
     )
 
 
+def test_anchor_file_occurrences_expand_composable_time_schedule():
+    """anchor_file should expand a window plus an explicit clock slot."""
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        sample = Path(td) / "calendar.csv"
+        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
+        occurrences = anchor_files.load_anchor_file_occurrence_specs("calendar.csv@t=06..12/3h,18", td, (8, 0))
+    expect(
+        [hhmm for _day, hhmm in occurrences] == [(6, 0), (9, 0), (12, 0), (18, 0)],
+        f"unexpected composable anchor_file occurrences: {occurrences!r}",
+    )
+
+
 def test_anchor_file_spec_rejects_unpadded_times():
     """anchor_file spec should reject 3:00 with a leading-zero hint."""
     import nautical_core.anchor_files as anchor_files
@@ -16614,6 +16628,31 @@ def test_hour_only_time_lists_normalize_across_anchor_and_anchor_file():
         mods.get("t") == [(6, 0), (12, 30), (18, 0)],
         f"hour-only anchor_file list was not normalized: {mods!r}",
     )
+
+
+def test_composable_time_schedule_unions_windows_and_clock_slots():
+    """A composable schedule should expand, sort, deduplicate, and round-trip."""
+    expr = "w:mon@t=06..18/3h,22"
+    dnf = core.parse_anchor_expr_to_dnf(expr)
+    mods = dnf[0][0]["mods"]
+    expect(mods.get("time_schedule") == "06:00..18:00/3h,22:00", f"schedule metadata was lost: {mods!r}")
+    expect(
+        mods.get("t") == [(6, 0), (9, 0), (12, 0), (15, 0), (18, 0), (22, 0)],
+        f"composable schedule slots are wrong: {mods!r}",
+    )
+    round_trip = core.acf_to_original_format(core.build_acf(expr))
+    expect("@t=06:00..18:00/3h,22:00" in round_trip, f"schedule ACF round-trip failed: {round_trip!r}")
+    natural = core.describe_anchor_expr(expr)
+    expect("every 3h within 06:00\N{EN DASH}18:00 and 22:00" in natural, f"schedule natural language is unclear: {natural!r}")
+
+
+def test_composable_time_schedule_rejects_non_numeric_members():
+    """Composable schedules fail clearly instead of partially accepting a member."""
+    try:
+        core.parse_anchor_expr_to_dnf("w:mon@t=06..18/3h,sunset")
+        expect(False, "astronomical member was accepted in a numeric schedule")
+    except core.ParseError as exc:
+        expect("numeric" in str(exc).lower(), f"unexpected schedule error: {exc}")
 
 
 def test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints():
@@ -25679,6 +25718,7 @@ TESTS = [
     test_anchor_file_spec_parses_time_and_negative_offset,
     test_anchor_file_spec_parses_bounded_time_window,
     test_anchor_file_occurrences_expand_bounded_time_window,
+    test_anchor_file_occurrences_expand_composable_time_schedule,
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,
     test_anchor_file_next_occurrence_after_uses_task_level_time,
     test_file_source_expression_flattens_groups_and_rejects_unsafe_patterns,
@@ -26001,6 +26041,8 @@ TESTS.extend([
     test_time_window_parser_accepts_compound_minute_intervals,
     test_time_window_parser_accepts_hour_only_and_mixed_endpoints,
     test_hour_only_time_lists_normalize_across_anchor_and_anchor_file,
+    test_composable_time_schedule_unions_windows_and_clock_slots,
+    test_composable_time_schedule_rejects_non_numeric_members,
     test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints,
     test_time_window_grammar_expands_and_round_trips_through_acf,
     test_grouped_time_window_metadata_distributes_to_each_branch,

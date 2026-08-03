@@ -3,7 +3,7 @@ import re
 
 from . import astronomy
 from .moon_phase import canonical_phase
-from .time_windows import parse_clock_value, parse_time_window_spec
+from .time_windows import parse_clock_value, parse_time_schedule_spec, parse_time_window_spec
 
 
 _HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
@@ -118,6 +118,14 @@ def parse_atom_mods(
             if window is not None:
                 mods["t"] = list(window.slots)
                 mods["time_window"] = window.canonical
+                continue
+            try:
+                schedule = parse_time_schedule_spec(tval)
+            except ValueError as exc:
+                raise parse_error_cls(str(exc)) from None
+            if schedule is not None:
+                mods["t"] = list(schedule.slots)
+                mods["time_schedule"] = schedule.canonical
                 continue
             tlist = parse_time_list(tval)
             if not tlist:

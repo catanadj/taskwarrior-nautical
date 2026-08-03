@@ -276,8 +276,12 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
     out: dict[str, object] = {}
     if not mods:
         return out
+    schedule = mods.get("time_schedule")
     window = mods.get("time_window")
-    if window:
+    if schedule:
+        out["ts"] = str(schedule)
+        tval = None
+    elif window:
         out["tw"] = str(window)
         tval = None
     else:
@@ -316,7 +320,9 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
 
 def acf_mods_to_string(m: dict, *, wd_abbr) -> str:
     parts = []
-    if m.get("tw"):
+    if m.get("ts"):
+        parts.append(f"@t={m['ts']}")
+    elif m.get("tw"):
         parts.append(f"@t={m['tw']}")
     elif m.get("t"):
         parts.append(f"@t={m['t']}")

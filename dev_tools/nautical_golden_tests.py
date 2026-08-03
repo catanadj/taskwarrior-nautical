@@ -16724,6 +16724,29 @@ def test_grouped_time_window_metadata_distributes_to_each_branch():
         expect(len(mods.get("t") or []) == 5, f"group window slots were not distributed: {dnf!r}")
 
 
+def test_composable_schedule_preserves_offsets_and_group_validation():
+    """Schedules should survive grouped distribution, offsets, and strict validation."""
+    expr = "(w:mon | w:fri)@t=06..12/2h,16..20/2h,22@+15m"
+    dnf = core.parse_anchor_expr_to_dnf(expr)
+    expect(len(dnf) == 2, f"unexpected grouped schedule DNF: {dnf!r}")
+    for term in dnf:
+        mods = term[0]["mods"]
+        expect(
+            mods.get("time_schedule") == "06:00..12:00/2h,16:00..20:00/2h,22:00",
+            f"group schedule metadata was lost: {dnf!r}",
+        )
+        expect(mods.get("time_offset_minutes") == 15, f"schedule offset was lost: {dnf!r}")
+    core.validate_anchor_expr_strict(expr)
+    round_trip = core.acf_to_original_format(core.build_acf(expr))
+    expect("@+15m" in round_trip, f"schedule offset was lost in ACF: {round_trip!r}")
+
+    try:
+        core.parse_anchor_expr_to_dnf("(w:mon@t=06..12/2h | w:fri)@t=16..20/2h")
+        expect(False, "duplicate grouped schedule was accepted")
+    except core.ParseError as exc:
+        expect("timed term" in str(exc), f"unexpected duplicate schedule error: {exc}")
+
+
 def test_time_window_natural_language_uses_bounded_interval():
     """Natural descriptions should explain a window rather than list every generated slot."""
     text = core.describe_anchor_expr("w:mon..fri@t=06..17/3h")
@@ -26077,6 +26100,7 @@ TESTS.extend([
     test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints,
     test_time_window_grammar_expands_and_round_trips_through_acf,
     test_grouped_time_window_metadata_distributes_to_each_branch,
+    test_composable_schedule_preserves_offsets_and_group_validation,
     test_time_window_natural_language_uses_bounded_interval,
     test_cached_time_window_metadata_rejects_slot_drift,
     test_astronomy_preflight_reports_configuration_and_provider_health,

@@ -125,7 +125,12 @@ def parse_time_schedule_spec(value: str) -> TimeSchedule | None:
     text = str(value or "").strip().lower()
     if ".." not in text:
         return None
-    parts = [part.strip() for part in text.split(",") if part.strip()]
+    raw_parts = text.split(",")
+    if any(not part.strip() for part in raw_parts):
+        raise ValueError(
+            "Invalid composable time schedule. Remove empty comma-separated members."
+        )
+    parts = [part.strip() for part in raw_parts]
     if not parts:
         return None
     canonical_parts: list[str] = []

@@ -16655,6 +16655,16 @@ def test_composable_time_schedule_rejects_non_numeric_members():
         expect("numeric" in str(exc).lower(), f"unexpected schedule error: {exc}")
 
 
+def test_composable_time_schedule_rejects_empty_members():
+    """Composable schedules should reject trailing and repeated commas."""
+    for value in ("06..18/3h,", "06..18/3h,,22"):
+        try:
+            core.parse_anchor_expr_to_dnf(f"w:mon@t={value}")
+            expect(False, f"malformed schedule was accepted: {value}")
+        except core.ParseError as exc:
+            expect("empty" in str(exc).lower(), f"unexpected empty-member error: {exc}")
+
+
 def test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints():
     """Hour shorthand remains strict about padding and valid clock bounds."""
     from nautical_core.time_windows import parse_time_window_spec
@@ -26043,6 +26053,7 @@ TESTS.extend([
     test_hour_only_time_lists_normalize_across_anchor_and_anchor_file,
     test_composable_time_schedule_unions_windows_and_clock_slots,
     test_composable_time_schedule_rejects_non_numeric_members,
+    test_composable_time_schedule_rejects_empty_members,
     test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints,
     test_time_window_grammar_expands_and_round_trips_through_acf,
     test_grouped_time_window_metadata_distributes_to_each_branch,

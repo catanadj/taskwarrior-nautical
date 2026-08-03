@@ -1884,6 +1884,12 @@ def _split_inline_items_respecting_t_lists(s: str) -> list[str]:
                 j = i + 1
                 while j < n and s[j].isspace():
                     j += 1
+                if j < n and s[j] == ",":
+                    # Preserve repeated commas so @t schedule validation can
+                    # report the malformed empty member.
+                    buf.append(ch)
+                    i += 1
+                    continue
                 k = j
                 while k < n and s[k] != ",":
                     k += 1

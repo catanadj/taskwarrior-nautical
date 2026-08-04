@@ -16347,6 +16347,32 @@ def test_anchor_file_occurrences_expand_bounded_time_window():
     )
 
 
+def test_anchor_file_occurrences_expand_overnight_time_window():
+    """File dates own overnight slots even when generated times land next day."""
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        sample = Path(td) / "calendar.csv"
+        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
+        occurrences = anchor_files.load_anchor_file_occurrence_specs(
+            "calendar.csv@t=22:30..06:30/7",
+            td,
+            (9, 0),
+        )
+    expect(
+        occurrences == [
+            (date(2026, 8, 3), (22, 30)),
+            (date(2026, 8, 3), (23, 50)),
+            (date(2026, 8, 4), (1, 10)),
+            (date(2026, 8, 4), (2, 30)),
+            (date(2026, 8, 4), (3, 50)),
+            (date(2026, 8, 4), (5, 10)),
+            (date(2026, 8, 4), (6, 30)),
+        ],
+        f"unexpected overnight anchor_file occurrences: {occurrences!r}",
+    )
+
+
 def test_anchor_file_occurrences_expand_composable_time_schedule():
     """anchor_file should expand a window plus an explicit clock slot."""
     import nautical_core.anchor_files as anchor_files
@@ -26457,6 +26483,7 @@ TESTS = [
     test_anchor_file_spec_parses_time_and_negative_offset,
     test_anchor_file_spec_parses_bounded_time_window,
     test_anchor_file_occurrences_expand_bounded_time_window,
+    test_anchor_file_occurrences_expand_overnight_time_window,
     test_anchor_file_occurrences_expand_composable_time_schedule,
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,
     test_anchor_file_composable_schedule_rejects_empty_members,

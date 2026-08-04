@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Callable
 
 from .business_calendar import (
@@ -182,7 +182,9 @@ def _parse_source_mod_layers(
                 raise ValueError(
                     f"anchor_file '{display_name}' has more than one @t modifier across its expression groups."
                 )
-            source_time = tval
+            window_spec = mods.get("time_window")
+            window = parse_time_window_spec(str(window_spec)) if window_spec else None
+            source_time = list(window.slots_with_offsets) if window is not None and window.crosses_midnight else tval
         layers.append(mods)
     if not layers:
         layers.append(_default_mods())
@@ -352,10 +354,17 @@ def load_anchor_file_occurrence_specs(
     seen: set[tuple[date, tuple[int, int]]] = set()
     for source in resolution.sources:
         dates, _descriptions, source_time = _load_anchor_source_data(source, business_calendar)
-        times = _norm_t_list(source_time) or [fallback_hhmm]
+        if source_time and all(isinstance(item, tuple) and len(item) == 3 for item in source_time):
+            times = list(source_time)
+        else:
+            times = _norm_t_list(source_time) or [fallback_hhmm]
         for item_date in sorted(dates):
-            for hhmm in times:
-                occurrence = (item_date, hhmm)
+            for slot in times:
+                if isinstance(slot, tuple) and len(slot) == 3:
+                    day_offset, hour, minute = slot
+                    occurrence = (item_date + timedelta(days=int(day_offset)), (int(hour), int(minute)))
+                else:
+                    occurrence = (item_date, slot)
                 if occurrence in seen:
                     continue
                 seen.add(occurrence)

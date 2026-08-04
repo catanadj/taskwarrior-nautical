@@ -12,7 +12,7 @@ from . import file_resource_limits as resource_limits
 _WINDOW_RE = re.compile(
     r"^(?P<start>(?:[01]\d|2[0-3])(?::[0-5]\d)?)\.\."
     r"(?P<end>(?:[01]\d|2[0-3])(?::[0-5]\d)?)/"
-    r"(?P<interval>(?:(?:\d+(?:\.\d+)?)h(?:(?:\d+)(?:m|min))?|(?:\d+)(?:m|min)))$"
+    r"(?P<interval>(?:\d+|(?:(?:\d+(?:\.\d+)?)h(?:(?:\d+)(?:m|min))?|(?:\d+)(?:m|min))))$"
 )
 _DURATION_RE = re.compile(
     r"^(?:(?P<hours>\d+(?:\.\d+)?)h(?:(?P<minutes>\d+)(?:m|min))?|"
@@ -42,20 +42,31 @@ def _clock_minutes(value: tuple[int, int]) -> int:
 
 @dataclass(frozen=True)
 class TimeWindow:
-    """A same-day inclusive clock range with a fixed minute interval."""
+    """A same-day inclusive clock range with a duration or slot count."""
 
     start: tuple[int, int]
     end: tuple[int, int]
-    interval_minutes: int
+    interval_minutes: int | None = None
+    partition_count: int | None = None
 
     @property
     def slots(self) -> tuple[tuple[int, int], ...]:
         start = _clock_minutes(self.start)
         end = _clock_minutes(self.end)
-        values = tuple(
-            (minute // 60, minute % 60)
-            for minute in range(start, end + 1, self.interval_minutes)
-        )
+        span = end - start
+        if self.partition_count is not None:
+            divisor = self.partition_count - 1
+            values = tuple(
+                ((start + (span * index + divisor // 2) // divisor) // 60,
+                 (start + (span * index + divisor // 2) // divisor) % 60)
+                for index in range(self.partition_count)
+            )
+        else:
+            interval = self.interval_minutes or 0
+            values = tuple(
+                (minute // 60, minute % 60)
+                for minute in range(start, end + 1, interval)
+            )
         limit = int(resource_limits.MAX_TIME_WINDOW_SLOTS)
         if len(values) > limit:
             raise ValueError(
@@ -68,7 +79,8 @@ class TimeWindow:
     def canonical(self) -> str:
         return (
             f"{self.start[0]:02d}:{self.start[1]:02d}.."
-            f"{self.end[0]:02d}:{self.end[1]:02d}/{_format_duration(self.interval_minutes)}"
+            f"{self.end[0]:02d}:{self.end[1]:02d}/"
+            f"{self.partition_count if self.partition_count is not None else _format_duration(self.interval_minutes or 0)}"
         )
 
 
@@ -119,7 +131,7 @@ def parse_time_window_spec(value: str) -> TimeWindow | None:
     match = _WINDOW_RE.fullmatch(text)
     if not match:
         raise ValueError(
-            "Invalid time window. Use HH[:MM]..HH[:MM]/interval, for example 06..18/3h or 04:30..19:30/3h30min."
+            "Invalid time window. Use HH[:MM]..HH[:MM]/interval, for example 06..18/3h, 06..18/4, or 04:30..19:30/3h30min."
         )
 
     start = _parse_clock(match.group("start"))
@@ -130,17 +142,24 @@ def parse_time_window_spec(value: str) -> TimeWindow | None:
         raise ValueError("Invalid time window: the end time must be later than the start time.")
 
     interval_text = match.group("interval")
-    duration = _DURATION_RE.fullmatch(interval_text)
-    if not duration or not interval_text:
-        raise ValueError("Invalid time window interval: use a positive duration such as 30m, 3h30min, or 3.5h.")
-    interval_minutes = _parse_duration_minutes(interval_text)
-    if interval_minutes <= 0:
-        raise ValueError("Invalid time window interval: it must be greater than zero.")
     span = end_minutes - start_minutes
-    if interval_minutes > span:
-        raise ValueError("Invalid time window interval: it cannot exceed the window span.")
-
-    window = TimeWindow(start, end, interval_minutes)
+    if re.fullmatch(r"\d+", interval_text):
+        partition_count = int(interval_text)
+        if partition_count < 2:
+            raise ValueError("Invalid time window partition count: use at least 2 total slots.")
+        if partition_count > span + 1:
+            raise ValueError("Invalid time window partition count: it cannot create duplicate minute slots.")
+        window = TimeWindow(start, end, partition_count=partition_count)
+    else:
+        duration = _DURATION_RE.fullmatch(interval_text)
+        if not duration or not interval_text:
+            raise ValueError("Invalid time window interval: use a positive duration such as 30m, 3h30min, or 3.5h, or use a unitless slot count such as /4.")
+        interval_minutes = _parse_duration_minutes(interval_text)
+        if interval_minutes <= 0:
+            raise ValueError("Invalid time window interval: it must be greater than zero.")
+        if interval_minutes > span:
+            raise ValueError("Invalid time window interval: it cannot exceed the window span.")
+        window = TimeWindow(start, end, interval_minutes=interval_minutes)
     _ = window.slots
     return window
 

@@ -16979,6 +16979,33 @@ def test_time_window_parser_accepts_hour_only_and_mixed_endpoints():
     expect(mixed.canonical == "06:30..18:00/2h", f"bad mixed canonical form: {mixed.canonical!r}")
 
 
+def test_time_window_parser_accepts_even_partition_counts():
+    """Unitless window divisors select an inclusive, evenly partitioned slot count."""
+    from nautical_core.time_windows import parse_time_window_spec
+
+    window = parse_time_window_spec("04:30..19:30/3")
+    expect(window is not None, "partitioned time window was not parsed")
+    expect(window.partition_count == 3, f"partition count was not retained: {window!r}")
+    expect(window.interval_minutes is None, f"partitioned window gained a duration interval: {window!r}")
+    expect(window.slots == ((4, 30), (12, 0), (19, 30)), f"partitioned slots are wrong: {window.slots!r}")
+    expect(window.canonical == "04:30..19:30/3", f"partitioned canonical form drifted: {window.canonical!r}")
+
+    four = parse_time_window_spec("06..18/4")
+    expect(four is not None and four.slots == ((6, 0), (10, 0), (14, 0), (18, 0)), f"hour-only partition failed: {four!r}")
+
+    dnf = core.parse_anchor_expr_to_dnf("w:mon@t=04:30..19:30/3")
+    mods = dnf[0][0]["mods"]
+    expect(mods.get("time_window") == "04:30..19:30/3", f"partition metadata was lost: {mods!r}")
+    expect(mods.get("t") == [(4, 30), (12, 0), (19, 30)], f"partition slots did not reach the parser: {mods!r}")
+
+    for invalid in ("06..18/1", "06..18/800"):
+        try:
+            parse_time_window_spec(invalid)
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid partition count was accepted: {invalid}")
+
+
 def test_hour_only_time_lists_normalize_across_anchor_and_anchor_file():
     """Ordinary @t lists should accept hour-only tokens consistently across sources."""
     dnf = core.parse_anchor_expr_to_dnf("w:mon@t=06,12:30,18")
@@ -26577,6 +26604,7 @@ TESTS.extend([
     test_time_window_slot_limit_uses_shared_resource_policy,
     test_time_window_parser_accepts_compound_minute_intervals,
     test_time_window_parser_accepts_hour_only_and_mixed_endpoints,
+    test_time_window_parser_accepts_even_partition_counts,
     test_hour_only_time_lists_normalize_across_anchor_and_anchor_file,
     test_composable_time_schedule_unions_windows_and_clock_slots,
     test_composable_time_schedule_rejects_non_numeric_members,

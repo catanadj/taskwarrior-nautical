@@ -2250,7 +2250,12 @@ class TaskAnalyzer:
                                 slot_date = cur_date
                                 cur_hhmm = cur_slot
                             dt_utc = core.build_local_datetime(slot_date, cur_hhmm)
-                            anchor_out.append(core.to_local(dt_utc))
+                            projected_local = core.to_local(dt_utc)
+                            if (projected_local.date(), projected_local.hour, projected_local.minute) != (slot_date, cur_hhmm[0], cur_hhmm[1]):
+                                self._record_projection_warning(
+                                    f"DST normalized {slot_date.isoformat()} {cur_hhmm[0]:02d}:{cur_hhmm[1]:02d} to {projected_local.strftime('%Y-%m-%d %H:%M %Z')}"
+                                )
+                            anchor_out.append(projected_local)
                         if len(anchor_out) >= limit:
                             break
 

@@ -27,5 +27,21 @@ jobs:
       - name: Run mypy
         run: python3 -m mypy --config-file mypy.ini
 
+      - name: Run strict boundary mypy
+        run: >-
+          python3 -m mypy --config-file mypy.ini
+          --enable-error-code=union-attr
+          --enable-error-code=attr-defined
+          --enable-error-code=assignment
+          --enable-error-code=arg-type
+          --enable-error-code=return-value
+          --enable-error-code=operator
+          nautical_core/queue_models.py
+          nautical_core/queue_store.py
+          nautical_core/hook_protocol.py
+          nautical_core/task_command.py
+          nautical_core/runtime.py
+          nautical_core/hook_support.py
+
       - name: Run deployment sanity checks
         run: python3 dev_tools/nautical_deploy_sanity.py --json

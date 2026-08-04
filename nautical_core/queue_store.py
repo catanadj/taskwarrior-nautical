@@ -553,7 +553,7 @@ def queue_rows_from_sqlite(rows: list[sqlite3.Row]) -> list[QueueStoredRow]:
     return stored_rows
 
 
-def row_ids(rows: list[QueueStoredRow | sqlite3.Row]) -> list[int]:
+def row_ids(rows: Sequence[QueueStoredRow | sqlite3.Row]) -> list[int]:
     ids: list[int] = []
     for row in rows:
         try:

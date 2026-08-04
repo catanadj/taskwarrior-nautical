@@ -90,7 +90,7 @@ class SpawnQueueEntry:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        out = {
+        out: dict[str, Any] = {
             "parent_uuid": self.parent_uuid,
             "parent_nextlink": self.parent_nextlink,
             "child_short": self.child_short,

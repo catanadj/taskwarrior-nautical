@@ -323,20 +323,24 @@ def run_task(
                 env=env,
             )
             try:
-                out, err = proc.communicate(input=normalized_input, timeout=timeout)
+                out_bytes, err_bytes = proc.communicate(input=normalized_input, timeout=timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 try:
-                    out, err = proc.communicate(timeout=1.0)
+                    out_bytes, err_bytes = proc.communicate(timeout=1.0)
                 except Exception:
-                    out, err = "", ""
-                out, err = _run_task_collect_outputs(out_f, err_f, out_path, err_path, out, err)
+                    out_bytes, err_bytes = b"", b""
+                out, err = _run_task_collect_outputs(
+                    out_f, err_f, out_path, err_path, out_bytes, err_bytes
+                )
                 last_err = "timeout"
                 if _run_task_should_retry(attempt, retries):
                     _run_task_retry_sleep(attempt, retry_delay)
                     continue
                 return False, out or "", last_err
-            out, err = _run_task_collect_outputs(out_f, err_f, out_path, err_path, out, err)
+            out, err = _run_task_collect_outputs(
+                out_f, err_f, out_path, err_path, out_bytes, err_bytes
+            )
             last_out = out or ""
             last_err = err or ""
             if proc.returncode == 0:

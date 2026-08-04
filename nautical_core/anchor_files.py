@@ -91,6 +91,8 @@ def parse_anchor_file_spec(value: str | None) -> tuple[str, dict]:
             if window is not None:
                 mods["t"] = list(window.slots)
                 mods["time_window"] = window.canonical
+                if window.crosses_midnight:
+                    mods["time_window_offsets"] = list(window.slots_with_offsets)
                 continue
             try:
                 schedule = parse_time_schedule_spec(tok.split("=", 1)[1].strip())

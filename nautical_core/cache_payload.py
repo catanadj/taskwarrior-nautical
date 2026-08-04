@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .season_support import SEASON_NAMES
-from .time_windows import validate_time_schedule_slots, validate_time_window_slots
+from .time_windows import validate_time_schedule_slots, validate_time_window_offsets, validate_time_window_slots
 
 
 CACHE_SCHEMA_VERSION = 2
@@ -165,6 +165,9 @@ def normalize_dnf_cached(dnf):
             window = mods.get("time_window")
             if window:
                 validate_time_window_slots(str(window), mods.get("t"))
+                offsets = mods.get("time_window_offsets")
+                if offsets is not None:
+                    validate_time_window_offsets(str(window), offsets)
             schedule = mods.get("time_schedule")
             if schedule:
                 validate_time_schedule_slots(str(schedule), mods.get("t"))

@@ -17145,6 +17145,10 @@ def test_time_window_parser_accepts_even_partition_counts():
     )
     parsed_overnight = core.parse_anchor_expr_to_dnf("w:mon@t=22:30..06:30/7")
     expect(parsed_overnight[0][0]["mods"].get("time_window") == "22:30..06:30/7", "overnight metadata was not retained")
+    expect(
+        parsed_overnight[0][0]["mods"].get("time_window_offsets") == [(0, 22, 30), (0, 23, 50), (1, 1, 10), (1, 2, 30), (1, 3, 50), (1, 5, 10), (1, 6, 30)],
+        "overnight slot ownership metadata was not retained",
+    )
 
     from nautical_core.time_slots import resolve_time_slots_with_offsets
     resolved = resolve_time_slots_with_offsets(
@@ -17372,6 +17376,19 @@ def test_cached_time_window_metadata_rejects_slot_drift():
         expect(False, "inconsistent partitioned window slots were accepted")
     except ValueError as exc:
         expect("does not match" in str(exc), f"unexpected partition cache consistency error: {exc}")
+
+    overnight = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
+        "time_window": "22:30..06:30/7",
+        "time_window_offsets": [[0, 22, 30], [0, 23, 50], [1, 1, 10], [1, 2, 30], [1, 3, 50], [1, 5, 10], [1, 6, 30]],
+        "t": [[22, 30], [23, 50], [1, 10], [2, 30], [3, 50], [5, 10], [6, 30]],
+    }}]]
+    core._normalize_dnf_cached(overnight)
+    overnight[0][0]["mods"]["time_window_offsets"][2] = [0, 1, 10]
+    try:
+        core._normalize_dnf_cached(overnight)
+        expect(False, "inconsistent overnight offset metadata was accepted")
+    except ValueError as exc:
+        expect("offset metadata" in str(exc), f"unexpected overnight cache consistency error: {exc}")
 
 
 def test_cached_time_schedule_metadata_rejects_slot_drift():

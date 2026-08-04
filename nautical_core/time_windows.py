@@ -234,6 +234,25 @@ def validate_time_window_slots(spec: str, slots: object) -> None:
         raise ValueError("Cached time window metadata does not match its expanded slots.")
 
 
+def validate_time_window_offsets(spec: str, offsets: object) -> None:
+    """Reject serialized day-offset metadata that disagrees with a window."""
+    window = parse_time_window_spec(spec)
+    if window is None:
+        raise ValueError("Invalid cached time window metadata.")
+    if not isinstance(offsets, (list, tuple)):
+        raise ValueError("Cached time window offsets must be a list.")
+    normalized = []
+    for value in offsets:
+        if not isinstance(value, (list, tuple)) or len(value) != 3:
+            raise ValueError("Cached time window offsets contain an invalid slot.")
+        try:
+            normalized.append((int(value[0]), int(value[1]), int(value[2])))
+        except (TypeError, ValueError):
+            raise ValueError("Cached time window offsets contain an invalid slot.") from None
+    if tuple(normalized) != window.slots_with_offsets:
+        raise ValueError("Cached time window offset metadata does not match its expanded slots.")
+
+
 def validate_time_schedule_slots(spec: str, slots: object) -> None:
     """Reject serialized schedule metadata whose expanded slots no longer agree."""
     schedule = parse_time_schedule_spec(spec)
@@ -260,5 +279,6 @@ __all__ = (
     "parse_time_schedule_spec",
     "parse_time_window_spec",
     "validate_time_schedule_slots",
+    "validate_time_window_offsets",
     "validate_time_window_slots",
 )

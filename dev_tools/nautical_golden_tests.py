@@ -17335,6 +17335,11 @@ def test_time_window_natural_language_uses_bounded_interval():
     )
     approximate = core.describe_anchor_expr("w:mon..fri@t=06:00..18:01/4")
     expect("4 evenly spaced times (every ~4h)" in approximate, f"approximate partition interval was unclear: {approximate!r}")
+    overnight = core.describe_anchor_expr("w:mon@t=22:30..06:30/7")
+    expect(
+        "7 evenly spaced times (every 1h20m) within 22:30\N{EN DASH}06:30 next day" in overnight,
+        f"overnight window natural language was unclear: {overnight!r}",
+    )
 
 
 def test_cached_time_window_metadata_rejects_slot_drift():

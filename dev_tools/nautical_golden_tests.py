@@ -17844,6 +17844,36 @@ def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
             mod.core.ANCHOR_FILE_DIR = old_dir
 
 
+def test_on_modify_compute_combined_overnight_sources_in_time_order():
+    """Combined anchor sources should merge an overnight continuation before later file events."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_combined_overnight_due_test")
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / "calendar.csv").write_text("date\n2026-08-04\n", encoding="utf-8")
+        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        try:
+            due = mod.core.build_local_datetime(date(2026, 8, 3), (22, 30))
+            end = mod.core.build_local_datetime(date(2026, 8, 4), (6, 40))
+            parent = {
+                "description": "combined overnight sources",
+                "anchor": "w:mon@t=22:30..06:30/7",
+                "anchor_file": "calendar.csv@t=07:00",
+                "anchor_mode": "skip",
+                "link": 1,
+                "chainID": "cid",
+                "due": mod.core.fmt_isoz(due.astimezone(timezone.utc)),
+                "end": mod.core.fmt_isoz(end.astimezone(timezone.utc)),
+            }
+            child_due, _meta, _dnf = mod._compute_anchor_child_due(parent)
+            expected_due = mod.core.build_local_datetime(date(2026, 8, 4), (7, 0)).astimezone(timezone.utc)
+            expect(child_due == expected_due, f"combined overnight sources were not time-ordered: {child_due!r}")
+        finally:
+            mod.core.ANCHOR_FILE_DIR = old_dir
+
+
 def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_child():
     """when anchor_file is shifted and anchor matches the original file date, timeline should still show the original date as the next future anchor."""
     hook = _find_hook_file("on-modify.nautical")
@@ -26541,6 +26571,7 @@ TESTS = [
     test_on_modify_compute_anchor_child_due_from_anchor_file,
     test_on_modify_compute_anchor_child_due_from_multiple_file_times,
     test_on_modify_compute_anchor_child_due_from_combined_anchor_sources,
+    test_on_modify_compute_combined_overnight_sources_in_time_order,
     test_omit_file_name_rejects_paths,
     test_omit_file_csv_header_parsing_is_order_independent_and_dedupes,
     test_omit_file_csv_description_mapping_is_order_independent,

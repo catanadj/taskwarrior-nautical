@@ -248,6 +248,34 @@ def effective_config_fingerprint() -> str:
     return _CONFIG_FINGERPRINT_CACHE
 
 
+_SCHEDULER_CONFIG_KEYS = (
+    "wrand_salt",
+    "tz",
+    "season_hemisphere",
+    "holiday_region",
+    "anchor_file_dir",
+    "omit_file_dir",
+    "anchor_presets",
+    "omit_presets",
+    "business_calendar",
+    "astronomy",
+)
+
+
+def scheduler_config_fingerprint() -> str:
+    """Fingerprint only settings that can change recurrence projection results."""
+    values = effective_config_snapshot().get("values")
+    if not isinstance(values, dict):
+        values = {}
+    payload = {
+        "version": 1,
+        "values": {key: values.get(key) for key in _SCHEDULER_CONFIG_KEYS},
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()[:24]
+
+
 _LOADED_CONFIG_FINGERPRINT = effective_config_fingerprint()
 
 

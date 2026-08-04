@@ -148,6 +148,7 @@ _warn_toml_parse_error = _core_config._warn_toml_parse_error
 _get_config = _core_config._get_config
 effective_config_snapshot = _core_config.effective_config_snapshot
 effective_config_fingerprint = _core_config.effective_config_fingerprint
+scheduler_config_fingerprint = _core_config.scheduler_config_fingerprint
 configuration_drift = _core_config.configuration_drift
 _CONF = _core_config._CONF
 _conf_raw = _core_config.conf_raw
@@ -765,7 +766,7 @@ def _cache_key(
 
     # Include the serialized parser shape so cache entries from older
     # releases cannot be compared with the current DNF representation.
-    config_fingerprint = effective_config_fingerprint()
+    config_fingerprint = scheduler_config_fingerprint()
     profile_fingerprint = (
         f"{business_calendar_fingerprint}|season:{SEASON_HEMISPHERE}"
         f"|config:{config_fingerprint}|parser:2|cache:2"
@@ -3866,6 +3867,7 @@ __all__ = (
     'ASTRONOMY_CONFIG',
     'effective_config_snapshot',
     'effective_config_fingerprint',
+    'scheduler_config_fingerprint',
     'configuration_drift',
     'DEFAULT_BUSINESS_CALENDAR',
     'ENABLE_ANCHOR_CACHE',

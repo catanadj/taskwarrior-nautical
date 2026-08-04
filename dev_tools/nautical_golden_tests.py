@@ -4807,15 +4807,39 @@ def test_config_fingerprint_invalidates_persistent_cache_keys():
     try:
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "config-nautical.toml"
-            path.write_text('tz = "UTC"\n', encoding="utf-8")
+            path.write_text('tz = "UTC"\nlive_panel_footer = "ONE"\n', encoding="utf-8")
             os.environ["NAUTICAL_CONFIG"] = str(path)
             first = core.effective_config_snapshot()
-            first_key = core.cache_key_for_task("w:mon", "skip")
-            path.write_text('tz = "Europe/Bucharest"\n', encoding="utf-8")
+            path.write_text('tz = "Europe/Bucharest"\nlive_panel_footer = "TWO"\n', encoding="utf-8")
             second = core.effective_config_snapshot()
-            second_key = core.cache_key_for_task("w:mon", "skip")
             expect(first.get("fingerprint") != second.get("fingerprint"), "config edits did not change fingerprint")
-            expect(first_key != second_key, "config edits did not invalidate cache key")
+
+            def key_in_fresh_process(config_text):
+                path.write_text(config_text, encoding="utf-8")
+                env = os.environ.copy()
+                env.update(
+                    {
+                        "NAUTICAL_CONFIG": str(path),
+                        "NAUTICAL_TRUST_CONFIG_PATH": "1",
+                        "PYTHONPATH": ROOT + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""),
+                    }
+                )
+                proc = subprocess.run(
+                    [sys.executable, "-c", "import nautical_core; print(nautical_core.cache_key_for_task('w:mon', 'skip'))"],
+                    text=True,
+                    capture_output=True,
+                    env=env,
+                    timeout=8.0,
+                )
+                expect(proc.returncode == 0, f"fresh cache-key process failed: {proc.stderr!r}")
+                return (proc.stdout or "").strip().splitlines()[-1]
+
+            footer_one_key = key_in_fresh_process('tz = "UTC"\nlive_panel_footer = "ONE"\n')
+            footer_two_key = key_in_fresh_process('tz = "UTC"\nlive_panel_footer = "TWO"\n')
+            expect(footer_one_key == footer_two_key, "UI-only config edits unnecessarily invalidated cache key")
+            tz_one_key = key_in_fresh_process('tz = "UTC"\nlive_panel_footer = "TWO"\n')
+            tz_two_key = key_in_fresh_process('tz = "Europe/Bucharest"\nlive_panel_footer = "TWO"\n')
+            expect(tz_one_key != tz_two_key, "scheduler config edits did not invalidate cache key")
     finally:
         if previous is None:
             os.environ.pop("NAUTICAL_CONFIG", None)

@@ -4,6 +4,8 @@ import os
 import re
 from calendar import month_name
 
+from .time_windows import parse_random_time_window_spec
+
 
 _WDNAME = {
     0: "Monday",
@@ -123,6 +125,22 @@ def fmt_time_window_for_term(term: list) -> str | None:
         suffix = f" (every {'~' if interval_info[1] else ''}{interval_info[0]})" if interval_info else ""
         return f"{interval} evenly spaced times{suffix} within {start}\N{EN DASH}{end}{boundary}"
     return f"every {interval} within {start}\N{EN DASH}{end}{boundary}"
+
+
+def fmt_random_time_window_for_term(term: list) -> str | None:
+    """Describe deterministic random minute selections in a compact form."""
+    value = term_collect_mods(term).get("time_random")
+    if not isinstance(value, str):
+        return None
+    window = parse_random_time_window_spec(value)
+    if window is None:
+        return None
+    start = f"{window.start[0]:02d}:{window.start[1]:02d}"
+    end = f"{window.end[0]:02d}:{window.end[1]:02d}"
+    boundary = _overnight_suffix(start, end)
+    if window.count == 1:
+        return f"one deterministic random time within {start}\N{EN DASH}{end}{boundary}"
+    return f"{window.count} deterministic random times, one per bucket, within {start}\N{EN DASH}{end}{boundary}"
 
 
 def fmt_time_schedule_for_term(term: list) -> str | None:
@@ -850,7 +868,7 @@ def describe_anchor_term(
         bd_filter,
     )
     if random_weekday_pool is not None:
-        window = fmt_time_schedule_for_term(term) or fmt_time_window_for_term(term)
+        window = fmt_time_schedule_for_term(term) or fmt_time_window_for_term(term) or fmt_random_time_window_for_term(term)
         hhmm = fmt_hhmm_for_term(term, default_due_dt)
         if window:
             random_weekday_pool = f"{random_weekday_pool} {window}"
@@ -874,7 +892,7 @@ def describe_anchor_term(
         ]
     parts = describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter)
     hhmm = fmt_hhmm_for_term(term, default_due_dt)
-    window = fmt_time_schedule_for_term(term) or fmt_time_window_for_term(term)
+    window = fmt_time_schedule_for_term(term) or fmt_time_window_for_term(term) or fmt_random_time_window_for_term(term)
 
     if suppress_tail:
         txt = interval_prefix

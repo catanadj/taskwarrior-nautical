@@ -54,6 +54,15 @@ def validate_anchor_atom_strict(
     spec = (atom.get("spec") or atom.get("value") or "").lower()
     interval = int(atom.get("ival") or atom.get("intv") or 1)
     mods = atom.get("mods") or {}
+    if mods.get("time_random"):
+        conflicting = []
+        if mods.get("t"):
+            conflicting.append("t")
+        conflicting.extend(key for key in ("time_window", "time_schedule") if mods.get(key))
+        if conflicting:
+            raise parse_error_cls(
+                "Random time windows cannot be combined with fixed times, time windows, or time schedules."
+            )
     active = None
     random_match = re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", spec)
 

@@ -173,6 +173,8 @@ def normalize_dnf_cached(dnf):
                 validate_time_schedule_slots(str(schedule), mods.get("t"))
             random_spec = mods.get("time_random")
             if random_spec:
+                if mods.get("t") or mods.get("time_window") or mods.get("time_schedule"):
+                    raise ValueError("Conflicting cached random time metadata")
                 random_window = parse_random_time_window_spec(str(random_spec))
                 if random_window is None or random_window.canonical != str(random_spec):
                     raise ValueError("Invalid cached random time window metadata")

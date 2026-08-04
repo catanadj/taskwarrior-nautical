@@ -17535,6 +17535,25 @@ def test_time_window_natural_language_uses_bounded_interval():
         "7 evenly spaced times (every 1h20m) within 22:30\N{EN DASH}06:30 next day" in overnight,
         f"overnight window natural language was unclear: {overnight!r}",
     )
+    random = core.describe_anchor_expr("w:mon@t=rand(06..18/3)")
+    expect(
+        "3 deterministic random times, one per bucket, within 06:00\N{EN DASH}18:00" in random,
+        f"random window natural language was unclear: {random!r}",
+    )
+
+
+def test_random_time_metadata_rejects_contradictory_cached_shapes():
+    """Random time metadata must not coexist with another timed representation."""
+    contradictory = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
+        "time_random": "rand(06:00..18:00/3)",
+        "time_window": "06:00..18:00/3h",
+        "t": [],
+    }}]]
+    try:
+        core.validate_anchor_expr_strict(contradictory)
+        expect(False, "contradictory random timing metadata was accepted")
+    except core.ParseError as exc:
+        expect("cannot be combined" in str(exc), f"unexpected contradictory timing error: {exc}")
 
 
 def test_cached_time_window_metadata_rejects_slot_drift():
@@ -27139,6 +27158,7 @@ TESTS.extend([
     test_grouped_time_window_metadata_distributes_to_each_branch,
     test_composable_schedule_preserves_offsets_and_group_validation,
     test_time_window_natural_language_uses_bounded_interval,
+    test_random_time_metadata_rejects_contradictory_cached_shapes,
     test_cached_time_window_metadata_rejects_slot_drift,
     test_cached_random_time_metadata_rejects_invalid_specs,
     test_cached_time_schedule_metadata_rejects_slot_drift,

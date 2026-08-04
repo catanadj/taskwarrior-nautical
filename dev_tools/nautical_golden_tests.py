@@ -16880,6 +16880,15 @@ def test_navigator_projects_all_slots_in_a_time_window():
             [item.strftime("%H:%M") for item in dates] == ["04:30", "08:00", "11:30", "15:00", "18:30"],
             f"Navigator collapsed same-day time-window slots: {dates!r}",
         )
+        partitioned = analyzer._project_anchor_dates(
+            {"anchor": "w:mon..sun@t=04:30..19:30/3", "uuid": "navigator-partition-test"},
+            limit=3,
+            start_from_date=date(2026, 8, 2),
+        )
+        expect(
+            [item.strftime("%H:%M") for item in partitioned] == ["04:30", "12:00", "19:30"],
+            f"Navigator did not retain evenly partitioned slots: {partitioned!r}",
+        )
         _natural, preview = navigator._anchor_preview("w:mon..sun@t=04:30..19:30/3h30min", count=5)
         expect(
             [item.rsplit(" ", 2)[-2] for item in preview] == ["04:30", "08:00", "11:30", "15:00", "18:30"],
@@ -17151,6 +17160,11 @@ def test_time_window_natural_language_uses_bounded_interval():
     text = core.describe_anchor_expr("w:mon..fri@t=06..17/3h")
     expect("every 3h within 06:00\N{EN DASH}17:00" in text, f"window natural language is unclear: {text!r}")
     expect("06:00, 09:00" not in text, f"window natural language leaked expanded slots: {text!r}")
+    partitioned = core.describe_anchor_expr("w:mon..fri@t=06..18/3")
+    expect(
+        "3 evenly spaced times within 06:00\N{EN DASH}18:00" in partitioned,
+        f"partitioned window natural language is unclear: {partitioned!r}",
+    )
 
 
 def test_cached_time_window_metadata_rejects_slot_drift():

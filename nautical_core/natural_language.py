@@ -82,6 +82,8 @@ def fmt_time_window_for_term(term: list) -> str | None:
         return None
     start, rest = value.split("..", 1)
     end, interval = rest.split("/", 1)
+    if interval.isdigit():
+        return f"{interval} evenly spaced times within {start}\N{EN DASH}{end}"
     return f"every {interval} within {start}\N{EN DASH}{end}"
 
 
@@ -96,7 +98,10 @@ def fmt_time_schedule_for_term(term: list) -> str | None:
         if ".." in item and "/" in item:
             start, rest = item.split("..", 1)
             end, interval = rest.split("/", 1)
-            windows.append(f"every {interval} within {start}\N{EN DASH}{end}")
+            if interval.isdigit():
+                windows.append(f"{interval} evenly spaced times within {start}\N{EN DASH}{end}")
+            else:
+                windows.append(f"every {interval} within {start}\N{EN DASH}{end}")
         else:
             clocks.append(item)
     description = "; ".join(windows)

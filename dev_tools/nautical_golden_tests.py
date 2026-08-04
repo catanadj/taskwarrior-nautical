@@ -17102,6 +17102,8 @@ def test_navigator_projects_all_slots_in_a_time_window():
             [item.rsplit(" ", 2)[-2] for item in preview] == ["04:30", "08:00", "11:30", "15:00", "18:30"],
             f"Navigator preview did not resolve all time-window slots: {preview!r}",
         )
+        overnight_natural, _overnight_preview = navigator._anchor_preview("w:mon@t=22:30..06:30/7", count=3)
+        expect("next day" in (overnight_natural or "").lower(), f"Navigator omitted overnight ownership wording: {overnight_natural!r}")
     finally:
         sys.modules.pop(module_name, None)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
@@ -19,6 +20,10 @@ _DURATION_RE = re.compile(
     r"(?P<minutes_only>\d+)(?:m|min))$"
 )
 _CLOCK_TOKEN_RE = re.compile(r"^(?:[01]\d|2[0-3])(?::[0-5]\d)?$")
+_RANDOM_WINDOW_RE = re.compile(
+    r"^rand\((?P<start>(?:[01]\d|2[0-3])(?::[0-5]\d)?)\.\."
+    r"(?P<end>(?:[01]\d|2[0-3])(?::[0-5]\d)?)(?:/(?P<count>\d+))?\)$"
+)
 
 
 def _parse_clock(value: str) -> tuple[int, int]:
@@ -92,6 +97,64 @@ class TimeSchedule:
 
     canonical: str
     slots: tuple[tuple[int, int], ...]
+
+
+@dataclass(frozen=True)
+class RandomTimeWindow:
+    """A deterministic random selection of one minute per time bucket."""
+
+    start: tuple[int, int]
+    end: tuple[int, int]
+    count: int = 1
+
+    @property
+    def crosses_midnight(self) -> bool:
+        return self.end < self.start
+
+    @property
+    def canonical(self) -> str:
+        suffix = "" if self.count == 1 else f"/{self.count}"
+        return f"rand({self.start[0]:02d}:{self.start[1]:02d}..{self.end[0]:02d}:{self.end[1]:02d}{suffix})"
+
+    def slots_with_offsets(self, seed: str) -> tuple[tuple[int, int, int], ...]:
+        start = _clock_minutes(self.start)
+        end = _clock_minutes(self.end) + (24 * 60 if self.crosses_midnight else 0)
+        total = end - start + 1
+        if self.count > total:
+            raise ValueError("Random time count cannot exceed the window's available minutes.")
+        base, remainder = divmod(total, self.count)
+        selected: list[int] = []
+        for index in range(self.count):
+            extra_before = max(0, index - (self.count - remainder))
+            bucket_start = start + base * index + extra_before
+            bucket_size = base + (1 if index >= self.count - remainder else 0)
+            digest = hashlib.sha256(
+                f"nautical-rand-time-v1\0{seed}\0{self.canonical}\0{index}".encode("utf-8")
+            ).digest()
+            selected.append(bucket_start + int.from_bytes(digest[:8], "big") % bucket_size)
+        return tuple(
+            (minute // (24 * 60), (minute % (24 * 60)) // 60, minute % 60)
+            for minute in selected
+        )
+
+
+def parse_random_time_window_spec(value: str) -> RandomTimeWindow | None:
+    """Parse ``rand(HH[:MM]..HH[:MM][/count])`` or return ``None``."""
+    text = str(value or "").strip().lower()
+    if not text.startswith("rand("):
+        return None
+    match = _RANDOM_WINDOW_RE.fullmatch(text)
+    if not match:
+        raise ValueError("Invalid random time window. Use rand(HH..HH) or rand(HH..HH/count).")
+    start = _parse_clock(match.group("start"))
+    end = _parse_clock(match.group("end"))
+    if start == end:
+        raise ValueError("Invalid random time window: the end time must differ from the start time.")
+    count = int(match.group("count") or "1")
+    span = ((_clock_minutes(end) - _clock_minutes(start)) % (24 * 60)) + 1
+    if count < 1 or count > span:
+        raise ValueError("Invalid random time window count: it must fit within the available minutes.")
+    return RandomTimeWindow(start, end, count)
 
 
 def _format_duration(minutes: int) -> str:
@@ -273,9 +336,11 @@ def validate_time_schedule_slots(spec: str, slots: object) -> None:
 
 
 __all__ = (
+    "RandomTimeWindow",
     "TimeSchedule",
     "TimeWindow",
     "parse_clock_value",
+    "parse_random_time_window_spec",
     "parse_time_schedule_spec",
     "parse_time_window_spec",
     "validate_time_schedule_slots",

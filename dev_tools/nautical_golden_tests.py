@@ -17254,6 +17254,29 @@ def test_time_window_parser_accepts_even_partition_counts():
         raise AssertionError(f"invalid partition count was accepted: {invalid}")
 
 
+def test_random_time_window_parser_selects_deterministic_bucketed_slots():
+    """Random time windows select stable, ordered minutes from separate buckets."""
+    from nautical_core.time_windows import parse_random_time_window_spec
+
+    single = parse_random_time_window_spec("rand(06..18)")
+    expect(single is not None and single.count == 1, f"single random window was not parsed: {single!r}")
+    first = single.slots_with_offsets("chain-a/2026-08-04")
+    expect(first == single.slots_with_offsets("chain-a/2026-08-04"), "random time selection was not deterministic")
+    expect(0 <= first[0][1] <= 18 and (first[0][1], first[0][2]) >= (6, 0), f"random slot escaped bounds: {first!r}")
+
+    grouped = parse_random_time_window_spec("rand(06..18/3)")
+    expect(grouped is not None and grouped.count == 3, f"bucketed random window was not parsed: {grouped!r}")
+    slots = grouped.slots_with_offsets("chain-a/2026-08-04")
+    minutes = [offset * 1440 + hour * 60 + minute for offset, hour, minute in slots]
+    expect(len(set(minutes)) == 3 and minutes == sorted(minutes), f"random slots were not unique and ordered: {slots!r}")
+    expect(all(6 * 60 <= minute <= 18 * 60 for minute in minutes), f"bucketed random slots escaped bounds: {slots!r}")
+
+    overnight = parse_random_time_window_spec("rand(22:30..02:30/3)")
+    expect(overnight is not None and overnight.crosses_midnight, "overnight random window was not recognized")
+    overnight_slots = overnight.slots_with_offsets("chain-a/2026-08-04")
+    expect(all(slot[0] in (0, 1) for slot in overnight_slots), f"overnight random offsets were invalid: {overnight_slots!r}")
+
+
 def test_time_window_partition_rounding_preserves_boundaries():
     """Non-divisible partitions retain endpoints and use deterministic minute rounding."""
     from nautical_core.time_windows import parse_time_window_spec
@@ -26997,6 +27020,7 @@ TESTS.extend([
     test_time_window_parser_accepts_compound_minute_intervals,
     test_time_window_parser_accepts_hour_only_and_mixed_endpoints,
     test_time_window_parser_accepts_even_partition_counts,
+    test_random_time_window_parser_selects_deterministic_bucketed_slots,
     test_time_window_partition_rounding_preserves_boundaries,
     test_hour_only_time_lists_normalize_across_anchor_and_anchor_file,
     test_composable_time_schedule_unions_windows_and_clock_slots,

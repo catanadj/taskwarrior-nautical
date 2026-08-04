@@ -10729,14 +10729,27 @@ def test_partitioned_time_window_dst_gap_deduplicates_shifted_local_slot():
 
 def test_overnight_time_window_dst_fallback_deduplicates_repeated_local_slot():
     """A fall-back repeated hour in an overnight window must remain one occurrence."""
-    from nautical_core.time_slots import resolve_time_slots_with_offsets
-
-    slots = resolve_time_slots_with_offsets(
-        {"t": [(22, 30)], "time_window": "22:30..02:30/5"},
-        date(2026, 10, 31),
-    )
-    repeated = [slot for slot in slots if slot[0] == 1 and slot[1:] == (1, 30)]
-    expect(repeated == [(1, 1, 30)], f"fallback window produced duplicate logical slots: {slots!r}")
+    hook = _find_hook_file("on-add.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text('tz = "America/New_York"\n', encoding="utf-8")
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000118",
+            "description": "DST overnight fallback",
+            "status": "pending",
+            "entry": "20261020T000000Z",
+            "anchor": "w:sat@t=22:30..02:30/5",
+            "anchor_mode": "skip",
+            "due": "20261101T023000Z",
+        }
+        proc = _run_hook_script(
+            hook,
+            task,
+            env_extra={"NAUTICAL_CONFIG": str(config), "NO_COLOR": "1"},
+        )
+    expect(proc.returncode == 0, f"DST fallback overnight hook failed: {proc.stderr[:500]!r}")
+    text = _strip_markup(proc.stderr)
+    expect(text.count("Sun 2026-11-01 01:30") == 1, f"repeated fallback slot was duplicated or omitted: {text[:1400]!r}")
 
 
 def test_hook_on_add_live_panel_mode_preserves_captured_protocol():

@@ -307,6 +307,20 @@ def anchor_next_occurrence_after_local_dt(
                 candidate, tlist = same_window
                 return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
 
+    # An overnight window belongs to the previous anchor date. Continue any
+    # after-midnight slots before advancing to the next anchor date.
+    previous_date = d0 - timedelta(days=1)
+    if anchor_expr_fires_on_date_with_omit(
+        dnf, previous_date, interval_seed, seed_base, omit_dnf=omit_dnf, core=core
+    ):
+        previous_slots = anchor_times_for_date(
+            dnf, previous_date, interval_seed, seed_base, omit_dnf=omit_dnf,
+            core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+        )
+        for cand_local in _unique_local_candidates(previous_date, previous_slots, core=core):
+            if cand_local > after_dt_local:
+                return cand_local
+
     candidate = d0
     for _ in range(max(getattr(core, "MAX_ANCHOR_ITER", 128), 128)):
         nxt_d = anchor_step_once_with_omit(dnf, candidate, interval_seed, seed_base, omit_dnf=omit_dnf, core=core)

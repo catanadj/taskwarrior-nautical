@@ -17188,6 +17188,25 @@ def test_cached_time_window_metadata_rejects_slot_drift():
     except ValueError as exc:
         expect("does not match" in str(exc), f"unexpected cache consistency error: {exc}")
 
+    partitioned = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
+        "time_window": "04:30..19:30/3",
+        "t": [[4, 30], [12, 0], [19, 30]],
+    }}]]
+    normalized_partitioned = core._normalize_dnf_cached(partitioned)
+    expect(
+        normalized_partitioned[0][0]["mods"]["t"] == [(4, 30), (12, 0), (19, 30)],
+        "valid partitioned window cache was not normalized",
+    )
+    invalid_partitioned = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
+        "time_window": "04:30..19:30/3",
+        "t": [[4, 30], [11, 0], [19, 30]],
+    }}]]
+    try:
+        core._normalize_dnf_cached(invalid_partitioned)
+        expect(False, "inconsistent partitioned window slots were accepted")
+    except ValueError as exc:
+        expect("does not match" in str(exc), f"unexpected partition cache consistency error: {exc}")
+
 
 def test_cached_time_schedule_metadata_rejects_slot_drift():
     """Cached composable schedules must agree with their expanded slots."""
@@ -17209,6 +17228,16 @@ def test_cached_time_schedule_metadata_rejects_slot_drift():
         expect(False, "inconsistent cached schedule slots were accepted")
     except ValueError as exc:
         expect("does not match" in str(exc), f"unexpected schedule cache error: {exc}")
+
+    partitioned = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
+        "time_schedule": "04:30..19:30/3,22:00",
+        "t": [[4, 30], [12, 0], [19, 30], [22, 0]],
+    }}]]
+    normalized_partitioned = core._normalize_dnf_cached(partitioned)
+    expect(
+        normalized_partitioned[0][0]["mods"]["t"] == [(4, 30), (12, 0), (19, 30), (22, 0)],
+        "valid partitioned schedule cache was not normalized",
+    )
 
 
 def test_composable_time_schedule_enforces_aggregate_slot_limit():

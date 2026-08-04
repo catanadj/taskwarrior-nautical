@@ -17070,6 +17070,16 @@ def test_time_window_parser_accepts_even_partition_counts():
     except core.ParseError as exc:
         expect("not schedulable yet" in str(exc), f"unexpected overnight parser error: {exc}")
 
+    from nautical_core.time_slots import resolve_time_slots_with_offsets
+    resolved = resolve_time_slots_with_offsets(
+        {"t": [(22, 30)], "time_window": "22:30..06:30/7"},
+        date(2026, 8, 4),
+    )
+    expect(
+        resolved == [(0, 22, 30), (0, 23, 50), (1, 1, 10), (1, 2, 30), (1, 3, 50), (1, 5, 10), (1, 6, 30)],
+        f"offset-aware resolver lost overnight slots: {resolved!r}",
+    )
+
     for invalid in ("06..18/1", "06..18/800"):
         try:
             parse_time_window_spec(invalid)

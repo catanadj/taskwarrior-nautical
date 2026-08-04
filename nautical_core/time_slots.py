@@ -7,6 +7,7 @@ from datetime import date
 from typing import Any, Callable
 
 from . import astronomy
+from .time_windows import parse_time_window_spec
 
 
 _HHMM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -77,4 +78,39 @@ def resolve_time_slots(
     return []
 
 
-__all__ = ("resolve_time_slots",)
+def resolve_time_slots_with_offsets(
+    value: Any,
+    target_date: date,
+    *,
+    config: dict[str, Any] | None = None,
+    to_local: Callable[[Any], Any] | None = None,
+) -> list[tuple[int, int, int]]:
+    """Resolve slots as ``(day_offset, hour, minute)`` values.
+
+    This preserves the date ownership of overnight windows while retaining
+    the ordinary resolver's behavior for clocks and astronomical events.
+    """
+    offset_minutes = 0
+    raw = value
+    if isinstance(raw, dict):
+        offset_minutes = int(raw.get("time_offset_minutes", 0) or 0)
+        raw = raw.get("t")
+        window_spec = value.get("time_window")
+        if isinstance(window_spec, str):
+            window = parse_time_window_spec(window_spec)
+            if window is not None:
+                slots = list(window.slots_with_offsets)
+                if offset_minutes:
+                    adjusted = []
+                    for day_offset, hour, minute in slots:
+                        total = day_offset * 1440 + hour * 60 + minute + offset_minutes
+                        adjusted.append((total // 1440, (total % 1440) // 60, total % 60))
+                    return adjusted
+                return slots
+    ordinary = resolve_time_slots(raw, target_date, config=config, to_local=to_local)
+    if offset_minutes:
+        ordinary = resolve_time_slots({"t": ordinary, "time_offset_minutes": offset_minutes}, target_date, config=config, to_local=to_local)
+    return [(0, hour, minute) for hour, minute in ordinary]
+
+
+__all__ = ("resolve_time_slots", "resolve_time_slots_with_offsets")

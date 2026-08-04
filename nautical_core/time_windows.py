@@ -50,30 +50,32 @@ class TimeWindow:
     partition_count: int | None = None
 
     @property
-    def slots(self) -> tuple[tuple[int, int], ...]:
+    def crosses_midnight(self) -> bool:
+        return self.end < self.start
+
+    @property
+    def slots_with_offsets(self) -> tuple[tuple[int, int, int], ...]:
+        """Expand slots as ``(day_offset, hour, minute)`` values."""
         start = _clock_minutes(self.start)
-        end = _clock_minutes(self.end)
+        end = _clock_minutes(self.end) + (24 * 60 if self.crosses_midnight else 0)
         span = end - start
         if self.partition_count is not None:
             divisor = self.partition_count - 1
-            values = tuple(
-                ((start + (span * index + divisor // 2) // divisor) // 60,
-                 (start + (span * index + divisor // 2) // divisor) % 60)
-                for index in range(self.partition_count)
-            )
+            minutes = tuple(start + (span * index + divisor // 2) // divisor for index in range(self.partition_count))
         else:
             interval = self.interval_minutes or 0
-            values = tuple(
-                (minute // 60, minute % 60)
-                for minute in range(start, end + 1, interval)
-            )
+            minutes = tuple(range(start, end + 1, interval))
         limit = int(resource_limits.MAX_TIME_WINDOW_SLOTS)
-        if len(values) > limit:
+        if len(minutes) > limit:
             raise ValueError(
-                f"Time window produces too many slots ({len(values)}); "
+                f"Time window produces too many slots ({len(minutes)}); "
                 f"increase the interval or keep it below {limit} slots."
             )
-        return values
+        return tuple((minute // 1440, (minute % 1440) // 60, minute % 60) for minute in minutes)
+
+    @property
+    def slots(self) -> tuple[tuple[int, int], ...]:
+        return tuple((hour, minute) for _offset, hour, minute in self.slots_with_offsets)
 
     @property
     def canonical(self) -> str:
@@ -138,11 +140,11 @@ def parse_time_window_spec(value: str) -> TimeWindow | None:
     end = _parse_clock(match.group("end"))
     start_minutes = _clock_minutes(start)
     end_minutes = _clock_minutes(end)
-    if start_minutes >= end_minutes:
-        raise ValueError("Invalid time window: the end time must be later than the start time.")
+    if start_minutes == end_minutes:
+        raise ValueError("Invalid time window: the end time must differ from the start time.")
 
     interval_text = match.group("interval")
-    span = end_minutes - start_minutes
+    span = (end_minutes - start_minutes) % (24 * 60)
     if re.fullmatch(r"\d+", interval_text):
         partition_count = int(interval_text)
         if partition_count < 2:
@@ -184,6 +186,8 @@ def parse_time_schedule_spec(value: str) -> TimeSchedule | None:
     for part in parts:
         window = parse_time_window_spec(part)
         if window is not None:
+            if window.crosses_midnight:
+                raise ValueError("Overnight time windows are parsed but not schedulable yet; use a same-day window.")
             has_window = True
             if window.canonical not in seen_members:
                 members.append((_clock_minutes(window.start), 0, window.canonical))

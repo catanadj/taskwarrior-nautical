@@ -116,6 +116,8 @@ def parse_atom_mods(
             except ValueError as exc:
                 raise parse_error_cls(str(exc)) from None
             if window is not None:
+                if window.crosses_midnight:
+                    raise parse_error_cls("Overnight time windows are parsed but not schedulable yet; use a same-day window.")
                 mods["t"] = list(window.slots)
                 mods["time_window"] = window.canonical
                 continue

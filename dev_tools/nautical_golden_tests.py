@@ -16969,12 +16969,12 @@ def test_time_window_parser_expands_inclusive_exact_boundary():
 
 
 def test_time_window_parser_rejects_unsafe_or_ambiguous_ranges():
-    """Time windows reject reversed, overnight, invalid, and excessively dense ranges."""
+    """Time windows reject equal, invalid, and excessively dense ranges."""
     from nautical_core.time_windows import parse_time_window_spec
 
     expect(parse_time_window_spec("09:00") is None, "ordinary time was mistaken for a window")
     cases = (
-        "18:00..09:00/2h",
+        "09:00..09:00/2h",
         "09:00..17:00/0m",
         "09:00..17:00/2d",
         "09:00..17:00/9h",
@@ -17057,6 +17057,18 @@ def test_time_window_parser_accepts_even_partition_counts():
     mods = dnf[0][0]["mods"]
     expect(mods.get("time_window") == "04:30..19:30/3", f"partition metadata was lost: {mods!r}")
     expect(mods.get("t") == [(4, 30), (12, 0), (19, 30)], f"partition slots did not reach the parser: {mods!r}")
+
+    overnight = parse_time_window_spec("22:30..06:30/7")
+    expect(overnight is not None and overnight.crosses_midnight, "overnight window was not recognized")
+    expect(
+        overnight.slots_with_offsets == ((0, 22, 30), (0, 23, 50), (1, 1, 10), (1, 2, 30), (1, 3, 50), (1, 5, 10), (1, 6, 30)),
+        f"overnight partition slots were wrong: {overnight!r}",
+    )
+    try:
+        core.parse_anchor_expr_to_dnf("w:mon@t=22:30..06:30/7")
+        expect(False, "unschedulable overnight window was accepted by the anchor parser")
+    except core.ParseError as exc:
+        expect("not schedulable yet" in str(exc), f"unexpected overnight parser error: {exc}")
 
     for invalid in ("06..18/1", "06..18/800"):
         try:

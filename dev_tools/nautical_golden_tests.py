@@ -17066,6 +17066,21 @@ def test_time_window_parser_accepts_even_partition_counts():
         raise AssertionError(f"invalid partition count was accepted: {invalid}")
 
 
+def test_time_window_partition_rounding_preserves_boundaries():
+    """Non-divisible partitions retain endpoints and use deterministic minute rounding."""
+    from nautical_core.time_windows import parse_time_window_spec
+
+    window = parse_time_window_spec("06:00..18:01/4")
+    expect(window is not None, "non-divisible partition window was not parsed")
+    expect(
+        window.slots == ((6, 0), (10, 0), (14, 1), (18, 1)),
+        f"unexpected rounded partition slots: {window.slots!r}",
+    )
+    minutes = [hour * 60 + minute for hour, minute in window.slots]
+    expect(minutes[0] == 6 * 60 and minutes[-1] == 18 * 60 + 1, "partition endpoints were not preserved")
+    expect(all(left < right for left, right in zip(minutes, minutes[1:])), "partition slots were not strictly increasing")
+
+
 def test_hour_only_time_lists_normalize_across_anchor_and_anchor_file():
     """Ordinary @t lists should accept hour-only tokens consistently across sources."""
     dnf = core.parse_anchor_expr_to_dnf("w:mon@t=06,12:30,18")
@@ -26701,6 +26716,7 @@ TESTS.extend([
     test_time_window_parser_accepts_compound_minute_intervals,
     test_time_window_parser_accepts_hour_only_and_mixed_endpoints,
     test_time_window_parser_accepts_even_partition_counts,
+    test_time_window_partition_rounding_preserves_boundaries,
     test_hour_only_time_lists_normalize_across_anchor_and_anchor_file,
     test_composable_time_schedule_unions_windows_and_clock_slots,
     test_composable_time_schedule_rejects_non_numeric_members,

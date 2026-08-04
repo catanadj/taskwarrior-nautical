@@ -117,6 +117,13 @@ class RandomTimeWindow:
         return f"rand({self.start[0]:02d}:{self.start[1]:02d}..{self.end[0]:02d}:{self.end[1]:02d}{suffix})"
 
     def slots_with_offsets(self, seed: str) -> tuple[tuple[int, int, int], ...]:
+        if not str(seed):
+            raise ValueError("Random time windows require a stable chain seed.")
+        if self.count > int(resource_limits.MAX_TIME_WINDOW_SLOTS):
+            raise ValueError(
+                f"Random time window produces too many slots ({self.count}); "
+                f"keep it below {int(resource_limits.MAX_TIME_WINDOW_SLOTS)} slots."
+            )
         start = _clock_minutes(self.start)
         end = _clock_minutes(self.end) + (24 * 60 if self.crosses_midnight else 0)
         total = end - start + 1
@@ -154,6 +161,11 @@ def parse_random_time_window_spec(value: str) -> RandomTimeWindow | None:
     span = ((_clock_minutes(end) - _clock_minutes(start)) % (24 * 60)) + 1
     if count < 1 or count > span:
         raise ValueError("Invalid random time window count: it must fit within the available minutes.")
+    if count > int(resource_limits.MAX_TIME_WINDOW_SLOTS):
+        raise ValueError(
+            f"Random time window produces too many slots ({count}); "
+            f"keep it below {int(resource_limits.MAX_TIME_WINDOW_SLOTS)} slots."
+        )
     return RandomTimeWindow(start, end, count)
 
 

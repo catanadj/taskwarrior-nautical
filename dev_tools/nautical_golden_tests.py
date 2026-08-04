@@ -17335,6 +17335,18 @@ def test_random_time_window_parser_selects_deterministic_bucketed_slots():
     overnight_slots = overnight.slots_with_offsets("chain-a/2026-08-04")
     expect(all(slot[0] in (0, 1) for slot in overnight_slots), f"overnight random offsets were invalid: {overnight_slots!r}")
 
+    try:
+        single.slots_with_offsets("")
+        expect(False, "random slot generation accepted an empty stability seed")
+    except ValueError as exc:
+        expect("stable chain seed" in str(exc), f"unexpected empty-seed error: {exc}")
+    for invalid in ("rand(06..18/0)", "rand(06..18/1441)"):
+        try:
+            parse_random_time_window_spec(invalid)
+            expect(False, f"invalid random count was accepted: {invalid}")
+        except ValueError:
+            pass
+
 
 def test_random_time_window_flows_through_anchor_parser_and_resolver():
     """Random @t expressions retain canonical metadata and resolve from the chain seed."""

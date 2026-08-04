@@ -123,7 +123,15 @@ def anchor_times_for_date(
         if term_matches:
             for atom in term:
                 mods = atom.get("mods") or {}
-                if mods.get("time_window") and getattr(core._import_sibling("time_windows").parse_time_window_spec(str(mods["time_window"])), "crosses_midnight", False):
+                if mods.get("time_random"):
+                    slots = core._import_sibling("time_slots").resolve_time_slots_with_offsets(
+                        mods,
+                        d,
+                        config=getattr(core, "ASTRONOMY_CONFIG", {}),
+                        to_local=core.to_local,
+                        seed_base=seed_base,
+                    )
+                elif mods.get("time_window") and getattr(core._import_sibling("time_windows").parse_time_window_spec(str(mods["time_window"])), "crosses_midnight", False):
                     slots = core._import_sibling("time_slots").resolve_time_slots_with_offsets(
                         mods, d, config=getattr(core, "ASTRONOMY_CONFIG", {}), to_local=core.to_local
                     )

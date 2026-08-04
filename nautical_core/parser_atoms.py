@@ -3,7 +3,7 @@ import re
 
 from . import astronomy
 from .moon_phase import canonical_phase
-from .time_windows import parse_clock_value, parse_time_schedule_spec, parse_time_window_spec
+from .time_windows import parse_clock_value, parse_random_time_window_spec, parse_time_schedule_spec, parse_time_window_spec
 
 
 _HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
@@ -111,6 +111,14 @@ def parse_atom_mods(
                     "Duplicate '@t=' modifier. Use a single '@t=HH:MM,HH:MM,...' list."
                 )
             tval = tok.split("=", 1)[1].strip()
+            try:
+                random_window = parse_random_time_window_spec(tval)
+            except ValueError as exc:
+                raise parse_error_cls(str(exc)) from None
+            if random_window is not None:
+                mods["t"] = []
+                mods["time_random"] = random_window.canonical
+                continue
             try:
                 window = parse_time_window_spec(tval)
             except ValueError as exc:
@@ -243,9 +251,18 @@ def parse_anchor_atom_at(
     i += 1
 
     start = i
+    modifier_depth = 0
     while i < n:
         ch = s[i]
-        if ch in ")|":
+        if ch == "(" and i > start:
+            modifier_depth += 1
+            i += 1
+            continue
+        if ch == ")" and modifier_depth:
+            modifier_depth -= 1
+            i += 1
+            continue
+        if ch in ")|" and modifier_depth == 0:
             break
         if ch == "+" and not (i > start and s[i - 1] == "@"):
             break

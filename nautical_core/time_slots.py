@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from . import astronomy
 from .time_windows import parse_time_window_spec
+from .time_windows import parse_random_time_window_spec
 
 
 _HHMM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -84,6 +85,7 @@ def resolve_time_slots_with_offsets(
     *,
     config: dict[str, Any] | None = None,
     to_local: Callable[[Any], Any] | None = None,
+    seed_base: str = "",
 ) -> list[tuple[int, int, int]]:
     """Resolve slots as ``(day_offset, hour, minute)`` values.
 
@@ -107,6 +109,14 @@ def resolve_time_slots_with_offsets(
                         adjusted.append((total // 1440, (total % 1440) // 60, total % 60))
                     return adjusted
                 return slots
+        random_spec = value.get("time_random")
+        if isinstance(random_spec, str):
+            random_window = parse_random_time_window_spec(random_spec)
+            if random_window is None:
+                return []
+            if not seed_base:
+                raise ValueError("Random time windows require a stable chain seed.")
+            return list(random_window.slots_with_offsets(f"{seed_base}/{target_date.isoformat()}"))
     ordinary = resolve_time_slots(raw, target_date, config=config, to_local=to_local)
     if offset_minutes:
         ordinary = resolve_time_slots({"t": ordinary, "time_offset_minutes": offset_minutes}, target_date, config=config, to_local=to_local)

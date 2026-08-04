@@ -10593,6 +10593,28 @@ def test_hook_on_add_overnight_window_keeps_json_and_next_day_preview():
     expect("23:50" in stderr_txt and "01:10" in stderr_txt, f"overnight preview omitted next-day slots: {stderr_txt[:1000]!r}")
 
 
+def test_hook_on_add_random_time_window_keeps_json_and_preview():
+    """The add hook should resolve deterministic random slots without corrupting stdout JSON."""
+    hook = _find_hook_file("on-add.nautical")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000120",
+        "description": "hook random window",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20260803T000000Z",
+        "anchor": "w:mon@t=rand(06..18/3)",
+        "anchor_mode": "skip",
+        "chainID": "randomhook1",
+        "due": "20260803T060000Z",
+    }
+    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": ""})
+    expect(proc.returncode == 0, f"on-add random hook failed: {proc.stderr[:700]!r}")
+    out_task = _extract_last_json(proc.stdout)
+    expect(out_task.get("anchor") == task["anchor"], f"random anchor was lost from stdout JSON: {out_task!r}")
+    stderr_txt = _strip_markup(proc.stderr)
+    expect("Upcoming" in stderr_txt, f"random preview did not render upcoming slots: {stderr_txt[:1000]!r}")
+
+
 def test_on_modify_time_window_completion_advances_within_same_day():
     """Completion should advance to the next generated slot before moving to a new date."""
     mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_time_window_runtime_test")
@@ -17275,6 +17297,19 @@ def test_random_time_window_parser_selects_deterministic_bucketed_slots():
     expect(overnight is not None and overnight.crosses_midnight, "overnight random window was not recognized")
     overnight_slots = overnight.slots_with_offsets("chain-a/2026-08-04")
     expect(all(slot[0] in (0, 1) for slot in overnight_slots), f"overnight random offsets were invalid: {overnight_slots!r}")
+
+
+def test_random_time_window_flows_through_anchor_parser_and_resolver():
+    """Random @t expressions retain canonical metadata and resolve from the chain seed."""
+    from nautical_core.time_slots import resolve_time_slots_with_offsets
+
+    dnf = core.parse_anchor_expr_to_dnf("w:mon@t=rand(06..18/3)")
+    mods = dnf[0][0]["mods"]
+    expect(mods.get("time_random") == "rand(06:00..18:00/3)", f"random metadata was not canonicalized: {mods!r}")
+    resolved = resolve_time_slots_with_offsets(mods, date(2026, 8, 3), seed_base="chain-a")
+    expect(resolved == resolve_time_slots_with_offsets(mods, date(2026, 8, 3), seed_base="chain-a"), "random resolver was not deterministic")
+    expect(len(resolved) == 3, f"random resolver returned the wrong slot count: {resolved!r}")
+    expect(resolved == sorted(resolved), f"random resolver slots were not ordered: {resolved!r}")
 
 
 def test_time_window_partition_rounding_preserves_boundaries():
@@ -26373,6 +26408,7 @@ TESTS = [
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_time_window_preview_emits_bounded_slots,
     test_hook_on_add_overnight_window_keeps_json_and_next_day_preview,
+    test_hook_on_add_random_time_window_keeps_json_and_preview,
     test_on_modify_time_window_completion_advances_within_same_day,
     test_on_modify_partitioned_window_completion_rolls_to_next_day,
     test_on_modify_overnight_window_completion_uses_next_day_slots,
@@ -27021,6 +27057,7 @@ TESTS.extend([
     test_time_window_parser_accepts_hour_only_and_mixed_endpoints,
     test_time_window_parser_accepts_even_partition_counts,
     test_random_time_window_parser_selects_deterministic_bucketed_slots,
+    test_random_time_window_flows_through_anchor_parser_and_resolver,
     test_time_window_partition_rounding_preserves_boundaries,
     test_hour_only_time_lists_normalize_across_anchor_and_anchor_file,
     test_composable_time_schedule_unions_windows_and_clock_slots,

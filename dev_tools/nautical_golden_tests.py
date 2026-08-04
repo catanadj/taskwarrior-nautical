@@ -4971,10 +4971,32 @@ def test_doctor_reports_uda_alias_configuration():
     expect((item.get("details") or {}).get("clear_syntax") == "alias:", f"clear syntax missing: {item!r}")
     expect("Description UDA aliases are enabled" in str(item.get("message") or ""), f"message is unclear: {item!r}")
     with tempfile.TemporaryDirectory() as td:
-        missing_findings = []
-        mod._check_config(missing_findings, Path(td))
-        missing = next(item for item in missing_findings if item.get("id") == "config.uda_aliases")
-        expect((missing.get("details") or {}).get("enabled") is False, f"missing config should default aliases off: {missing!r}")
+        previous_home = os.environ.get("HOME")
+        previous_taskrc = os.environ.get("TASKRC")
+        previous_config = os.environ.get("NAUTICAL_CONFIG")
+        try:
+            # Keep this missing-config assertion independent of the developer's
+            # real Taskwarrior and Nautical configuration files.
+            os.environ["HOME"] = td
+            os.environ["TASKRC"] = os.path.join(td, ".taskrc")
+            os.environ["NAUTICAL_CONFIG"] = os.path.join(td, "missing-nautical.toml")
+            missing_findings = []
+            mod._check_config(missing_findings, Path(td))
+            missing = next(item for item in missing_findings if item.get("id") == "config.uda_aliases")
+            expect((missing.get("details") or {}).get("enabled") is False, f"missing config should default aliases off: {missing!r}")
+        finally:
+            if previous_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = previous_home
+            if previous_taskrc is None:
+                os.environ.pop("TASKRC", None)
+            else:
+                os.environ["TASKRC"] = previous_taskrc
+            if previous_config is None:
+                os.environ.pop("NAUTICAL_CONFIG", None)
+            else:
+                os.environ["NAUTICAL_CONFIG"] = previous_config
 
 
 def test_on_add_preview_warns_when_anchor_uses_utc_fallback():
@@ -18851,7 +18873,8 @@ def test_ui_live_renderer_reveals_cumulative_row_frames():
     original_live = rich.live.Live
     original_sleep = ui.time.sleep
     try:
-        def fake_builder(_title, rows, *, kind, themes, live=False, active_row=None):
+        def fake_builder(_title, rows, *, kind, themes, live=False, active_row=None, live_footer="NAUTICAL"):
+            expect(live_footer == "NAUTICAL", f"live footer was not forwarded: {live_footer!r}")
             snapshot = list(rows)
             built_rows.append(snapshot)
             built_live_flags.append(live)

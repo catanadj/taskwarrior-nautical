@@ -1,0 +1,45 @@
+name: Taskwarrior Compatibility
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  taskwarrior:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y taskwarrior
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt asciichartpy
+
+      - name: Show runtime versions
+        run: |
+          python3 --version
+          task --version
+
+      - name: Run golden correctness suite
+        env:
+          NAUTICAL_REQUIRE_ASTRAL: "1"
+        run: python3 dev_tools/nautical_golden_tests.py
+
+      - name: Run Taskwarrior integration lifecycle
+        run: python3 dev_tools/nautical_black_box_test.py --json

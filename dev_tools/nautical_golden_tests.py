@@ -12438,6 +12438,26 @@ def test_hook_task_runner_handles_nonzero():
     expect(not ok2, "_run_task expected non-zero exit to return ok=False")
 
 
+def test_shared_hook_subprocess_runner_preserves_output_and_status():
+    """The shared hook subprocess primitive should preserve UTF-8 output and exit status."""
+    support = importlib.import_module("nautical_core.hook_support")
+    ok, out, err = support.run_subprocess_once(
+        [sys.executable, "-c", "print('shared ✓')"],
+        env=os.environ.copy(),
+        input_text=None,
+        timeout=2.0,
+    )
+    expect(ok and out.strip() == "shared ✓", f"shared runner lost successful output: {ok=}, {out=!r}, {err=!r}")
+
+    failed, _failed_out, _failed_err = support.run_subprocess_once(
+        [sys.executable, "-c", "import sys; sys.exit(3)"],
+        env=os.environ.copy(),
+        input_text=None,
+        timeout=2.0,
+    )
+    expect(not failed, "shared runner should preserve a non-zero exit status")
+
+
 def test_hook_run_task_falls_back_when_core_load_fails():
     """on-modify _run_task should fall back to subprocess if core load fails."""
     hook = _find_hook_file("on-modify.nautical")
@@ -25911,6 +25931,7 @@ TESTS = [
     test_hook_on_modify_timeline_cp_sequence_labels_future_intervals,
     test_hook_on_modify_timeline_cp_random_labels_selected_intervals,
     test_hook_task_runner_handles_nonzero,
+    test_shared_hook_subprocess_runner_preserves_output_and_status,
     test_hook_run_task_falls_back_when_core_load_fails,
     test_on_add_run_task_falls_back_when_core_load_fails,
     test_spawn_child_always_verifies_import,

@@ -15,13 +15,14 @@ def build_task_cmd_prefix(*, use_rc_data_location: bool, tw_data_dir) -> list[st
     return cmd
 
 
-def _run_task_attempt(
+def run_subprocess_once(
     cmd: list[str],
     *,
     env: dict[str, str],
     input_text: str | None,
     timeout: float,
 ) -> tuple[bool, str, str]:
+    """Run one bounded Taskwarrior subprocess with consistent cleanup semantics."""
     proc = None
     try:
         proc = subprocess.Popen(
@@ -35,19 +36,8 @@ def _run_task_attempt(
             close_fds=True,
             env=env,
         )
-        try:
-            out, err = proc.communicate(input=input_text, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            if proc is not None:
-                proc.kill()
-            try:
-                out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
-            except Exception:
-                out, err = "", ""
-            return False, out or "", "timeout"
-        out = out or ""
-        err = err or ""
-        return (proc.returncode == 0, out, err)
+        out, err = proc.communicate(input=input_text, timeout=timeout)
+        return proc.returncode == 0, out or "", err or ""
     except subprocess.TimeoutExpired:
         if proc is not None:
             try:
@@ -55,10 +45,12 @@ def _run_task_attempt(
             except Exception:
                 pass
             try:
-                proc.wait(timeout=1.0)
+                out, err = proc.communicate(timeout=1.0)
             except Exception:
-                pass
-        return False, "", "timeout"
+                out, err = "", ""
+        else:
+            out, err = "", ""
+        return False, out or "", "timeout"
     except Exception as exc:
         if proc is not None:
             try:
@@ -70,6 +62,16 @@ def _run_task_attempt(
             except Exception:
                 pass
         return False, "", str(exc)
+
+
+def _run_task_attempt(
+    cmd: list[str],
+    *,
+    env: dict[str, str],
+    input_text: str | None,
+    timeout: float,
+) -> tuple[bool, str, str]:
+    return run_subprocess_once(cmd, env=env, input_text=input_text, timeout=timeout)
 
 
 def run_task(

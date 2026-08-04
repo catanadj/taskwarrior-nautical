@@ -294,14 +294,31 @@ def run_task(
             out_f, err_f, out_path, err_path = _run_task_prepare_tempfiles(use_tempfiles)
             text_mode = not bool(out_f)
             normalized_input = _run_task_normalize_input(input_text, text_mode)
+            if out_f is None:
+                from . import hook_support
+
+                ok, out, err = hook_support.run_subprocess_once(
+                    cmd,
+                    env=env,
+                    input_text=normalized_input,
+                    timeout=timeout,
+                )
+                out, err = _run_task_collect_outputs(out_f, err_f, out_path, err_path, out, err)
+                last_out = out or ""
+                last_err = err or ""
+                if ok:
+                    return True, last_out, last_err
+                if _run_task_should_retry(attempt, retries):
+                    _run_task_retry_sleep(attempt, retry_delay)
+                    continue
+                return False, last_out, last_err
+
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
-                stdout=(out_f if out_f is not None else subprocess.PIPE),
-                stderr=(err_f if err_f is not None else subprocess.PIPE),
-                text=text_mode,
-                encoding=("utf-8" if text_mode else None),
-                errors=("replace" if text_mode else None),
+                stdout=out_f,
+                stderr=err_f,
+                text=False,
                 close_fds=True,
                 env=env,
             )

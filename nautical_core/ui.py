@@ -9,6 +9,7 @@ import time
 _RICH_TAG_RE = re.compile(r"\[/\]|\[/?[A-Za-z0-9_ ]+\]")
 _DEFAULT_LIVE_PANEL_DURATION_MS = 160
 _MAX_LIVE_PANEL_DURATION_MS = 1000
+_MAX_LIVE_PANEL_FOOTER_CHARS = 32
 _LIVE_PANEL_MAX_HEIGHT_RATIO = 0.75
 _LIVE_PANEL_MIN_SPARE_LINES = 3
 _LIVE_ANIMATION_USED = False
@@ -43,6 +44,14 @@ def strip_rich_markup(s: str) -> str:
     if not s:
         return s
     return _RICH_TAG_RE.sub("", s)
+
+
+def _normalize_live_panel_footer(value: object) -> str:
+    """Keep configurable live branding bounded on narrow terminals."""
+    footer = str(value or "").strip()
+    if len(footer) <= _MAX_LIVE_PANEL_FOOTER_CHARS:
+        return footer
+    return footer[: _MAX_LIVE_PANEL_FOOTER_CHARS - 3] + "..."
 
 
 def term_width_stderr(default: int = 80) -> int:
@@ -400,7 +409,7 @@ def _build_rich_panel(
     }
 
     t = Table.grid(padding=(0, 1), expand=False)
-    footer = str(live_footer or "").strip()
+    footer = _normalize_live_panel_footer(live_footer)
     if live and footer:
         t.min_width = len(footer) + 2
     t.add_column(style=f"bold {lstyle}", no_wrap=True, justify="right")

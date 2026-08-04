@@ -18905,6 +18905,20 @@ def test_ui_live_panel_has_nautical_branding_without_changing_static_panels():
     )
     expect(str(custom_panel.subtitle) == "STATUS", f"custom live footer was not applied: {custom_panel.subtitle!r}")
 
+    long_footer = "A" * 80
+    bounded_panel = ui._build_rich_panel(
+        "Bounded",
+        [("First", "one")],
+        kind="info",
+        themes=None,
+        live=True,
+        live_footer=long_footer,
+    )
+    expect(
+        str(bounded_panel.subtitle) == ("A" * 29 + "..."),
+        f"long live footer was not bounded: {bounded_panel.subtitle!r}",
+    )
+
     semantic_panel = ui._build_rich_panel(
         "Semantic",
         [("Warning", "late")],

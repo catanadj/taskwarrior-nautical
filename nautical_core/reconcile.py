@@ -132,6 +132,41 @@ def native_until_target_field(task: dict[str, Any]) -> str:
     return "due" if task.get("due") else "scheduled"
 
 
+def invalid_relative_carry_reason(
+    parent: dict[str, Any],
+    child: dict[str, Any],
+    *,
+    child_field: str,
+    hook: Any,
+) -> str | None:
+    """Verify that scheduled/wait retain their local offset from the recurrence target."""
+    if not callable(getattr(getattr(hook, "core", None), "parse_dt_any", None)) or not callable(getattr(hook, "_utc_to_local_naive", None)):
+        return None
+    parent_field = native_until_target_field(parent)
+    fields = ["wait"]
+    if child_field != "scheduled":
+        fields.append("scheduled")
+    for field in fields:
+        if not parent.get(field):
+            continue
+        if not child.get(field):
+            return f"{field} carry is missing from the reconciled child"
+        try:
+            parent_target = hook.core.parse_dt_any(parent.get(parent_field))
+            parent_value = hook.core.parse_dt_any(parent.get(field))
+            child_target = hook.core.parse_dt_any(child.get(child_field))
+            child_value = hook.core.parse_dt_any(child.get(field))
+            if not all((parent_target, parent_value, child_target, child_value)):
+                return f"{field} carry contains an unparseable timestamp"
+            parent_delta = hook._utc_to_local_naive(parent_value) - hook._utc_to_local_naive(parent_target)
+            child_delta = hook._utc_to_local_naive(child_value) - hook._utc_to_local_naive(child_target)
+        except Exception as exc:
+            return f"{field} carry could not be verified: {exc}"
+        if child_delta != parent_delta:
+            return f"{field} carry changed its recurrence-target offset"
+    return None
+
+
 def invalid_native_until_reason(
     task: dict[str, Any],
     *,
@@ -431,5 +466,8 @@ def build_reconcile_plan(
                 return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
         else:
             return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
+    carry_reason = invalid_relative_carry_reason(parent, child, child_field=child_field, hook=hook)
+    if carry_reason:
+        return ReconcilePlan("error", parent, next_link, carry_reason, child_due=child_due)
     reason = "expired link missing next link" if is_expiration else "missing next link"
     return ReconcilePlan("spawn", parent, next_link, reason, child=child, child_due=child_due)

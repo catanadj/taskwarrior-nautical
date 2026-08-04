@@ -21857,6 +21857,42 @@ def test_reconcile_expiration_cp_advances_from_recurrence_target():
     expect(scheduled_meta.get("target_field") == "scheduled", f"unexpected scheduled metadata: {scheduled_meta!r}")
 
 
+def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
+    """Hookless recovery should preserve and verify scheduled/wait offsets."""
+    import nautical_core.reconcile as reconcile
+
+    mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_reconcile_hookless_carry_test")
+    due = mod.core.build_local_datetime(date(2026, 7, 20), (10, 0))
+    scheduled = mod.core.build_local_datetime(date(2026, 7, 20), (9, 30))
+    wait = mod.core.build_local_datetime(date(2026, 7, 20), (8, 0))
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "cp": "7d",
+        "chain": "on",
+        "chainID": "11111111",
+        "link": 1,
+        "due": mod.core.fmt_isoz(due),
+        "scheduled": mod.core.fmt_isoz(scheduled),
+        "wait": mod.core.fmt_isoz(wait),
+        "end": mod.core.fmt_isoz(due + timedelta(hours=1)),
+    }
+    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    expect(plan.action == "spawn" and plan.child is not None, f"valid hookless carry did not produce a child: {plan}")
+    child_due = mod.core.parse_dt_any(plan.child.get("due"))
+    child_scheduled = mod.core.parse_dt_any(plan.child.get("scheduled"))
+    child_wait = mod.core.parse_dt_any(plan.child.get("wait"))
+    expect(child_scheduled - child_due == scheduled - due, f"scheduled carry drifted: {plan.child!r}")
+    expect(child_wait - child_due == wait - due, f"wait carry drifted: {plan.child!r}")
+
+    malformed = dict(parent, scheduled="not-a-date")
+    failed = reconcile.build_reconcile_plan(malformed, existing_children=[], hook=mod)
+    expect(failed.action == "error" and "scheduled field" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
+    malformed_wait = dict(parent, wait="not-a-date")
+    failed_wait = reconcile.build_reconcile_plan(malformed_wait, existing_children=[], hook=mod)
+    expect(failed_wait.action == "error" and "wait carry" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
+
+
 def test_reconcile_expiration_anchor_advances_from_recurrence_target():
     """Expired anchor links should select the first slot after the prior recurrence target."""
     import nautical_core.reconcile as reconcile
@@ -26763,6 +26799,7 @@ TESTS = [
     test_reconcile_export_diagnostics_include_elapsed_time,
     test_reconcile_json_startup_failures_are_structured,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
+    test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
     test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,
     test_reconcile_tool_exports_and_applies_expired_candidates,

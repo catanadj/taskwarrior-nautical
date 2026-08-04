@@ -17126,6 +17126,19 @@ def test_navigator_projects_all_slots_in_a_time_window():
             [item.strftime("%H:%M") for item in partitioned] == ["04:30", "12:00", "19:30"],
             f"Navigator did not retain evenly partitioned slots: {partitioned!r}",
         )
+        random_uuid = "navigator-random-test"
+        random_dates = analyzer._project_anchor_dates(
+            {"anchor": "w:mon@t=rand(06..18/3)", "uuid": random_uuid},
+            limit=3,
+            start_from_date=date(2026, 8, 2),
+        )
+        random_window = core._import_sibling("time_windows").parse_random_time_window_spec("rand(06..18/3)")
+        expected_random = random_window.slots_with_offsets(f"{random_uuid}/2026-08-03")
+        expect(
+            [(item.hour, item.minute) for item in random_dates]
+            == [(slot[1], slot[2]) for slot in expected_random],
+            f"Navigator did not reuse deterministic random slots: {random_dates!r}",
+        )
         overnight = analyzer._project_anchor_dates(
             {"anchor": "w:mon@t=22:30..06:30/7", "uuid": "navigator-overnight-test"},
             limit=7,
@@ -17564,6 +17577,24 @@ def test_cached_time_window_metadata_rejects_slot_drift():
         expect(False, "inconsistent overnight offset metadata was accepted")
     except ValueError as exc:
         expect("offset metadata" in str(exc), f"unexpected overnight cache consistency error: {exc}")
+
+
+def test_cached_random_time_metadata_rejects_invalid_specs():
+    """Cached random-time metadata must remain canonical and parseable."""
+    valid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
+        "time_random": "rand(06:00..18:00/3)",
+        "t": [],
+    }}]]
+    core._normalize_dnf_cached(valid)
+    invalid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
+        "time_random": "rand(06..18/3)",
+        "t": [],
+    }}]]
+    try:
+        core._normalize_dnf_cached(invalid)
+        expect(False, "non-canonical cached random metadata was accepted")
+    except ValueError as exc:
+        expect("random" in str(exc).lower(), f"unexpected random cache error: {exc}")
 
 
 def test_cached_time_schedule_metadata_rejects_slot_drift():
@@ -27097,6 +27128,7 @@ TESTS.extend([
     test_composable_schedule_preserves_offsets_and_group_validation,
     test_time_window_natural_language_uses_bounded_interval,
     test_cached_time_window_metadata_rejects_slot_drift,
+    test_cached_random_time_metadata_rejects_invalid_specs,
     test_cached_time_schedule_metadata_rejects_slot_drift,
     test_composable_time_schedule_enforces_aggregate_slot_limit,
     test_description_alias_parser_extracts_short_udas,

@@ -465,7 +465,15 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
                     continue
                 for atom in term:
                     mods = atom.get("mods") or {}
-                    if mods.get("t"):
+                    if mods.get("time_random"):
+                        slots = time_slots.resolve_time_slots_with_offsets(
+                            mods,
+                            nxt,
+                            config=getattr(core, "ASTRONOMY_CONFIG", {}),
+                            to_local=core.to_local,
+                            seed_base="preview",
+                        )
+                    elif mods.get("t"):
                         slots = time_slots.resolve_time_slots(
                             mods,
                             nxt,
@@ -2194,7 +2202,15 @@ class TaskAnalyzer:
                     continue
                 for atom in term:
                     mods = atom.get("mods") or {}
-                    if mods.get("t"):
+                    if mods.get("time_random"):
+                        resolved = time_slots.resolve_time_slots_with_offsets(
+                            mods,
+                            target_date,
+                            config=getattr(core, "ASTRONOMY_CONFIG", {}),
+                            to_local=core.to_local,
+                            seed_base=task.get("uuid") or "analyzer",
+                        )
+                    elif mods.get("t"):
                         window = mods.get("time_window")
                         parsed_window = core._import_sibling("time_windows").parse_time_window_spec(str(window)) if window else None
                         if parsed_window is not None and parsed_window.crosses_midnight:
@@ -2211,7 +2227,7 @@ class TaskAnalyzer:
                                 config=getattr(core, "ASTRONOMY_CONFIG", {}),
                                 to_local=core.to_local,
                             )
-                        return resolved or [default_hhmm]
+                    return resolved or [default_hhmm]
             return [default_hhmm]
 
         anchor_out: List[datetime.datetime] = []

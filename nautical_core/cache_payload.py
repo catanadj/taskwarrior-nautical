@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .season_support import SEASON_NAMES
-from .time_windows import validate_time_schedule_slots, validate_time_window_offsets, validate_time_window_slots
+from .time_windows import parse_random_time_window_spec, validate_time_schedule_slots, validate_time_window_offsets, validate_time_window_slots
 
 
 CACHE_SCHEMA_VERSION = 2
@@ -171,6 +171,11 @@ def normalize_dnf_cached(dnf):
             schedule = mods.get("time_schedule")
             if schedule:
                 validate_time_schedule_slots(str(schedule), mods.get("t"))
+            random_spec = mods.get("time_random")
+            if random_spec:
+                random_window = parse_random_time_window_spec(str(random_spec))
+                if random_window is None or random_window.canonical != str(random_spec):
+                    raise ValueError("Invalid cached random time window metadata")
     return dnf
 
 

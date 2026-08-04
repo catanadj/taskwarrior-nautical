@@ -3103,8 +3103,13 @@ def _extract_time_slots_from_dnf(dnf, target_date=None) -> list[tuple[int, int]]
         for term in dnf:
             for atom in term:
                 mods = atom.get("mods") or {}
-                for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
-                    out.add(hhmm)
+                window = mods.get("time_window")
+                parsed_window = core._import_sibling("time_windows").parse_time_window_spec(str(window)) if window else None
+                if parsed_window is not None and parsed_window.crosses_midnight:
+                    out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}), to_local=core.to_local))
+                else:
+                    for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
+                        out.add(hhmm)
     except Exception as exc:
         astronomy = core._import_sibling("astronomy")
         if astronomy.is_astronomy_error(exc):
@@ -3130,8 +3135,13 @@ def _extract_time_slots_for_date(
                 matched = True
                 for atom in term:
                     mods = atom.get("mods") or {}
-                    for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
-                        out.add(hhmm)
+                    window = mods.get("time_window")
+                    parsed_window = core._import_sibling("time_windows").parse_time_window_spec(str(window)) if window else None
+                    if parsed_window is not None and parsed_window.crosses_midnight:
+                        out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}), to_local=core.to_local))
+                    else:
+                        for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
+                            out.add(hhmm)
     except Exception as exc:
         astronomy = core._import_sibling("astronomy")
         if astronomy.is_astronomy_error(exc):
@@ -3141,8 +3151,12 @@ def _extract_time_slots_for_date(
         return sorted(out)
     return _extract_time_slots_from_dnf(dnf, target_date)
 
-def _anchor_slot_local_dt(target_date, hhmm: tuple[int, int]) -> datetime:
-    """Build a configured-local anchor slot for @t=HH:MM."""
+def _anchor_slot_local_dt(target_date, hhmm) -> datetime:
+    """Build a configured-local anchor slot, including an optional day offset."""
+    if isinstance(hhmm, tuple) and len(hhmm) == 3:
+        day_offset, hour, minute = hhmm
+        target_date = target_date + timedelta(days=int(day_offset))
+        hhmm = (int(hour), int(minute))
     return core.to_local(core.build_local_datetime(target_date, hhmm))
 
 def _skip_reference_dt_local(
@@ -3180,13 +3194,11 @@ def _skip_reference_dt_local(
     if end_local.date() != due_local.date():
         return due_local
 
-    end_hhmm = (end_local.hour, end_local.minute)
-    prev_slots = [s for s in slots if s <= end_hhmm]
+    prev_slots = [s for s in slots if _anchor_slot_local_dt(due_local.date(), s) <= end_local]
     if not prev_slots:
         return due_local
 
-    hh, mm = prev_slots[-1]
-    return _anchor_slot_local_dt(end_local.date(), (hh, mm))
+    return _anchor_slot_local_dt(due_local.date(), prev_slots[-1])
 
 def _as_local_dt(d: datetime | None) -> datetime | None:
     if d is None:
@@ -3238,8 +3250,8 @@ def _next_occurrence_after_local_dt(
         slots = _extract_time_slots_for_date(dnf, adate, default_seed_date, seed_base)
         if not slots:
             slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
-        for hh, mm in slots:
-            cand = _anchor_slot_local_dt(adate, (hh, mm))
+        for slot in slots:
+            cand = _anchor_slot_local_dt(adate, slot)
             if cand > after_local_dt:
                 return cand
 
@@ -3257,8 +3269,7 @@ def _next_occurrence_after_local_dt(
     slots = _extract_time_slots_for_date(dnf, nxt_date, default_seed_date, seed_base)
     if not slots:
         slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
-    hh, mm = slots[0]
-    return _anchor_slot_local_dt(nxt_date, (hh, mm))
+    return _anchor_slot_local_dt(nxt_date, slots[0])
 
 
 def _missed_occurrences_between_local(

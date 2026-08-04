@@ -10620,6 +10620,32 @@ def test_on_modify_partitioned_window_completion_rolls_to_next_day():
     expect(mod.core.to_local(next_day).strftime("%Y-%m-%d %H:%M") == "2025-12-18 04:30", "partitioned window did not roll to the next day")
 
 
+def test_on_modify_overnight_window_completion_uses_next_day_slots():
+    """Completion across midnight should advance within the owning overnight window."""
+    mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_overnight_window_runtime_test")
+
+    def parent(local_due, local_end):
+        return {
+            "uuid": "00000000-0000-0000-0000-000000000117",
+            "description": "overnight completion",
+            "anchor": "w:mon@t=22:30..06:30/7",
+            "anchor_mode": "skip",
+            "chain": "on",
+            "chainID": "overnight123",
+            "link": 1,
+            "due": mod.core.fmt_isoz(local_due.astimezone(timezone.utc)),
+            "end": mod.core.fmt_isoz(local_end.astimezone(timezone.utc)),
+        }
+
+    due = mod.core.build_local_datetime(date(2025, 12, 15), (22, 30))
+    child_due, _meta, _dnf = mod._compute_anchor_child_due(parent(due, due + timedelta(minutes=10)))
+    expect(mod.core.to_local(child_due).strftime("%Y-%m-%d %H:%M") == "2025-12-15 23:50", "overnight completion skipped the same-night slot")
+
+    after_midnight = mod.core.build_local_datetime(date(2025, 12, 16), (6, 30))
+    child_due, _meta, _dnf = mod._compute_anchor_child_due(parent(due, after_midnight + timedelta(minutes=10)))
+    expect(mod.core.to_local(child_due).strftime("%Y-%m-%d %H:%M") == "2025-12-22 22:30", "overnight completion did not advance to the next Monday window")
+
+
 def test_time_window_dst_gap_deduplicates_shifted_local_slot():
     """A spring-forward slot shifted onto the next slot must not duplicate the occurrence."""
     hook = _find_hook_file("on-add.nautical")
@@ -26115,6 +26141,7 @@ TESTS = [
     test_hook_on_add_time_window_preview_emits_bounded_slots,
     test_on_modify_time_window_completion_advances_within_same_day,
     test_on_modify_partitioned_window_completion_rolls_to_next_day,
+    test_on_modify_overnight_window_completion_uses_next_day_slots,
     test_time_window_dst_gap_deduplicates_shifted_local_slot,
     test_partitioned_time_window_dst_gap_deduplicates_shifted_local_slot,
     test_hook_on_add_live_panel_mode_preserves_captured_protocol,

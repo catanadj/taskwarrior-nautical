@@ -10706,6 +10706,18 @@ def test_partitioned_time_window_dst_gap_deduplicates_shifted_local_slot():
     expect(text.count("Sun 2025-03-09 03:00 EDT") == 1, f"partitioned DST slot was duplicated: {text[:1200]!r}")
 
 
+def test_overnight_time_window_dst_fallback_deduplicates_repeated_local_slot():
+    """A fall-back repeated hour in an overnight window must remain one occurrence."""
+    from nautical_core.time_slots import resolve_time_slots_with_offsets
+
+    slots = resolve_time_slots_with_offsets(
+        {"t": [(22, 30)], "time_window": "22:30..02:30/5"},
+        date(2026, 10, 31),
+    )
+    repeated = [slot for slot in slots if slot[0] == 1 and slot[1:] == (1, 30)]
+    expect(repeated == [(1, 1, 30)], f"fallback window produced duplicate logical slots: {slots!r}")
+
+
 def test_hook_on_add_live_panel_mode_preserves_captured_protocol():
     """Configured live panels should fall back cleanly when a hook's stderr is captured."""
     hook = _find_hook_file("on-add.nautical")
@@ -26202,6 +26214,7 @@ TESTS = [
     test_on_modify_overnight_window_completion_uses_next_day_slots,
     test_time_window_dst_gap_deduplicates_shifted_local_slot,
     test_partitioned_time_window_dst_gap_deduplicates_shifted_local_slot,
+    test_overnight_time_window_dst_fallback_deduplicates_repeated_local_slot,
     test_hook_on_add_live_panel_mode_preserves_captured_protocol,
     test_hook_on_add_counted_random_preview_uses_group_time,
     test_hook_on_add_accepts_group_date_modifiers,

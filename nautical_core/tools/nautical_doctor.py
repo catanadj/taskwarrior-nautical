@@ -28,6 +28,9 @@ if str(ROOT) not in sys.path:
 from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
 import nautical_core.runtime as runtime  # noqa: E402
 
+_JSON_SCHEMA = "nautical.doctor"
+_JSON_SCHEMA_VERSION = 1
+
 REQUIRED_UDAS = {
     "cp": "string",
     "chain": "string",
@@ -1358,6 +1361,8 @@ def main() -> int:
 
     status = _overall_status(findings)
     payload = {
+        "schema": _JSON_SCHEMA,
+        "schema_version": _JSON_SCHEMA_VERSION,
         "status": status,
         "taskdata": str(taskdata),
         "hooks_dir": str(hooks_dir),

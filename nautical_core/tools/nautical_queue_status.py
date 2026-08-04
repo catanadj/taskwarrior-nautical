@@ -21,6 +21,9 @@ if str(ROOT) not in sys.path:
 
 from nautical_core import queue_store  # noqa: E402
 
+_JSON_SCHEMA = "nautical.queue_status"
+_JSON_SCHEMA_VERSION = 1
+
 
 def _prefer_path(primary: Path, legacy: Path) -> Path:
     try:
@@ -271,6 +274,8 @@ def _status_payload(taskdata: Path, *, stale_after: float, limit: int) -> dict[s
     integrity_error = str(queue.get("integrity") or "").lower() not in {"ok", "not_checked"}
     status = "error" if schema_error or integrity_error else ("warn" if issues else "ok")
     return {
+        "schema": _JSON_SCHEMA,
+        "schema_version": _JSON_SCHEMA_VERSION,
         "status": status,
         "taskdata": str(taskdata),
         "paths": {

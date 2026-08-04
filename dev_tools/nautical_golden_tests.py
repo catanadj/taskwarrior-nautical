@@ -3906,6 +3906,8 @@ def test_queue_status_and_doctor_report_schema_health():
         )
         expect(proc.returncode == 0, f"healthy schema status failed: {proc.stderr!r}")
         payload = json.loads(proc.stdout)
+        expect(payload.get("schema") == "nautical.queue_status", f"queue status schema missing: {payload!r}")
+        expect(payload.get("schema_version") == 1, f"queue status schema version missing: {payload!r}")
         schema = (payload.get("queue") or {}).get("schema") or {}
         expect(schema.get("status") == "ok", f"healthy schema was not reported: {payload!r}")
         expect((payload.get("queue") or {}).get("integrity") == "ok", f"integrity was not checked: {payload!r}")
@@ -3943,6 +3945,32 @@ def test_queue_status_json_ok_empty_taskdata():
         expect(obj.get("status") == "ok", f"unexpected queue status: {obj}")
         expect((obj.get("queue") or {}).get("queued") == 0, f"unexpected queued count: {obj}")
         expect((obj.get("queue") or {}).get("processing") == 0, f"unexpected processing count: {obj}")
+
+
+def test_doctor_json_has_stable_schema_marker():
+    """Doctor JSON should expose a stable schema marker for automation."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    with tempfile.TemporaryDirectory() as td:
+        env = os.environ.copy()
+        env.update(
+            {
+                "HOME": td,
+                "TASKRC": os.path.join(td, ".taskrc"),
+                "NAUTICAL_CONFIG": os.path.join(td, "missing-nautical.toml"),
+                "TASKDATA": td,
+            }
+        )
+        proc = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=10.0,
+        )
+        expect(proc.returncode in (0, 1, 2), f"doctor returned an invalid status: {proc.returncode}: {proc.stderr!r}")
+        payload = json.loads((proc.stdout or "").strip() or "{}")
+        expect(payload.get("schema") == "nautical.doctor", f"doctor schema missing: {payload!r}")
+        expect(payload.get("schema_version") == 1, f"doctor schema version missing: {payload!r}")
 
 
 def test_operator_queue_status_json_ok_empty_taskdata():
@@ -26010,6 +26038,7 @@ TESTS = [
     test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,
     test_queue_status_and_doctor_report_schema_health,
     test_queue_status_json_ok_empty_taskdata,
+    test_doctor_json_has_stable_schema_marker,
     test_operator_queue_status_json_ok_empty_taskdata,
     test_queue_status_warns_on_stale_processing_and_dead_letters,
     test_doctor_reports_healthy_installation,

@@ -10572,6 +10572,27 @@ def test_hook_on_add_time_window_preview_emits_bounded_slots():
     expect("17:00 EET" not in stderr_txt, f"non-divisible window bound was shown as an occurrence: {stderr_txt[:700]!r}")
 
 
+def test_hook_on_add_overnight_window_keeps_json_and_next_day_preview():
+    """The real on-add hook should accept overnight anchors without polluting JSON stdout."""
+    hook = _find_hook_file("on-add.nautical")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000119",
+        "description": "hook overnight window",
+        "status": "pending",
+        "project": "testing",
+        "entry": "20260804T000000Z",
+        "anchor": "w:mon@t=22:30..06:30/7",
+        "anchor_mode": "skip",
+        "due": "20260810T193000Z",
+    }
+    proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": ""})
+    expect(proc.returncode == 0, f"on-add overnight hook failed: {proc.stderr[:700]!r}")
+    out_task = _extract_last_json(proc.stdout)
+    expect(out_task.get("uuid") == task["uuid"], f"on-add overnight stdout lost task JSON: {out_task!r}")
+    stderr_txt = _strip_markup(proc.stderr)
+    expect("23:50" in stderr_txt and "01:10" in stderr_txt, f"overnight preview omitted next-day slots: {stderr_txt[:1000]!r}")
+
+
 def test_on_modify_time_window_completion_advances_within_same_day():
     """Completion should advance to the next generated slot before moving to a new date."""
     mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_time_window_runtime_test")
@@ -26239,6 +26260,7 @@ TESTS = [
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_time_window_preview_emits_bounded_slots,
+    test_hook_on_add_overnight_window_keeps_json_and_next_day_preview,
     test_on_modify_time_window_completion_advances_within_same_day,
     test_on_modify_partitioned_window_completion_rolls_to_next_day,
     test_on_modify_overnight_window_completion_uses_next_day_slots,

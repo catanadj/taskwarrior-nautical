@@ -123,23 +123,43 @@ def anchor_times_for_date(
         if term_matches:
             for atom in term:
                 mods = atom.get("mods") or {}
-                slots = resolve_time_slots(mods, d) if resolve_time_slots else norm_t_mod(mods.get("t"))
-                for hhmm in slots:
-                    times.add(hhmm)
+                if mods.get("time_window") and getattr(core._import_sibling("time_windows").parse_time_window_spec(str(mods["time_window"])), "crosses_midnight", False):
+                    slots = core._import_sibling("time_slots").resolve_time_slots_with_offsets(
+                        mods, d, config=getattr(core, "ASTRONOMY_CONFIG", {}), to_local=core.to_local
+                    )
+                else:
+                    slots = resolve_time_slots(mods, d) if resolve_time_slots else norm_t_mod(mods.get("t"))
+                for slot in slots:
+                    times.add(slot)
     return sorted(times)
 
 
 def _unique_local_candidates(d: date, slots, *, core: Any):
     """Build local candidates once so DST gap normalization cannot duplicate an instant."""
     seen = set()
-    for hhmm in slots:
-        cand_utc = core.build_local_datetime(d, hhmm)
+    for slot in slots:
+        if isinstance(slot, tuple) and len(slot) == 3:
+            day_offset, hour, minute = slot
+            candidate_date = d + timedelta(days=int(day_offset))
+            hhmm = (int(hour), int(minute))
+        else:
+            candidate_date = d
+            hhmm = slot
+        cand_utc = core.build_local_datetime(candidate_date, hhmm)
         cand_local = core.to_local(cand_utc)
         key = cand_utc
         if key in seen:
             continue
         seen.add(key)
         yield cand_local
+
+
+def _build_slot_datetime(d: date, slot, *, core: Any):
+    if isinstance(slot, tuple) and len(slot) == 3:
+        day_offset, hour, minute = slot
+        d = d + timedelta(days=int(day_offset))
+        slot = (int(hour), int(minute))
+    return core.build_local_datetime(d, slot)
 
 
 def _available_time_after_date(
@@ -205,7 +225,7 @@ def anchor_pick_occurrence_local(
             )
             if same_window:
                 candidate, tlist = same_window
-                return core.to_local(core.build_local_datetime(candidate, tlist[0]))
+                return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
 
     try:
         anchor_omit = core._import_sibling("anchor_omit")
@@ -235,9 +255,9 @@ def anchor_pick_occurrence_local(
                 )
                 if same_window:
                     candidate, tlist = same_window
-                    return core.to_local(core.build_local_datetime(candidate, tlist[0]))
+                    return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
                 continue
-            return core.to_local(core.build_local_datetime(candidate, tlist[0]))
+            return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
     except Exception:
         if unavailable is not None:
             raise unavailable
@@ -285,7 +305,7 @@ def anchor_next_occurrence_after_local_dt(
             )
             if same_window:
                 candidate, tlist = same_window
-                return core.to_local(core.build_local_datetime(candidate, tlist[0]))
+                return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
 
     candidate = d0
     for _ in range(max(getattr(core, "MAX_ANCHOR_ITER", 128), 128)):
@@ -309,9 +329,9 @@ def anchor_next_occurrence_after_local_dt(
             )
             if same_window:
                 candidate, tlist = same_window
-                return core.to_local(core.build_local_datetime(candidate, tlist[0]))
+                return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
             continue
-        return core.to_local(core.build_local_datetime(candidate, tlist[0]))
+        return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
     if unavailable is not None:
         raise unavailable
     return None

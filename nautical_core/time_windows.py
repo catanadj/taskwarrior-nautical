@@ -186,8 +186,6 @@ def parse_time_schedule_spec(value: str) -> TimeSchedule | None:
     for part in parts:
         window = parse_time_window_spec(part)
         if window is not None:
-            if window.crosses_midnight:
-                raise ValueError("Overnight time windows are parsed but not schedulable yet; use a same-day window.")
             has_window = True
             if window.canonical not in seen_members:
                 members.append((_clock_minutes(window.start), 0, window.canonical))

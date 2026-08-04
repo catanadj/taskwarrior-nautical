@@ -16282,10 +16282,10 @@ def test_anchor_file_spec_parses_bounded_time_window():
     expect(mods.get("t") == [(6, 0), (9, 0), (12, 0), (15, 0)], f"anchor_file window slots are wrong: {mods!r}")
 
     try:
-        anchor_files.parse_anchor_file_spec("calendar.csv@t=18..06/2h")
+        anchor_files.parse_anchor_file_spec("calendar.csv@t=18..18/2h")
         expect(False, "reversed anchor_file time window was accepted")
     except ValueError as exc:
-        expect("end time must be later" in str(exc), f"unexpected anchor_file window error: {exc}")
+        expect("end time must differ" in str(exc), f"unexpected anchor_file window error: {exc}")
 
 
 def test_anchor_file_occurrences_expand_bounded_time_window():
@@ -17064,11 +17064,8 @@ def test_time_window_parser_accepts_even_partition_counts():
         overnight.slots_with_offsets == ((0, 22, 30), (0, 23, 50), (1, 1, 10), (1, 2, 30), (1, 3, 50), (1, 5, 10), (1, 6, 30)),
         f"overnight partition slots were wrong: {overnight!r}",
     )
-    try:
-        core.parse_anchor_expr_to_dnf("w:mon@t=22:30..06:30/7")
-        expect(False, "unschedulable overnight window was accepted by the anchor parser")
-    except core.ParseError as exc:
-        expect("not schedulable yet" in str(exc), f"unexpected overnight parser error: {exc}")
+    parsed_overnight = core.parse_anchor_expr_to_dnf("w:mon@t=22:30..06:30/7")
+    expect(parsed_overnight[0][0]["mods"].get("time_window") == "22:30..06:30/7", "overnight metadata was not retained")
 
     from nautical_core.time_slots import resolve_time_slots_with_offsets
     resolved = resolve_time_slots_with_offsets(

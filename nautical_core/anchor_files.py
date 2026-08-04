@@ -89,8 +89,6 @@ def parse_anchor_file_spec(value: str | None) -> tuple[str, dict]:
             except ValueError as exc:
                 raise ValueError(f"anchor_file @t: {exc}") from None
             if window is not None:
-                if window.crosses_midnight:
-                    raise ValueError("anchor_file @t: overnight time windows are parsed but not schedulable yet; use a same-day window.")
                 mods["t"] = list(window.slots)
                 mods["time_window"] = window.canonical
                 continue

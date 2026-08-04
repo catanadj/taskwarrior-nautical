@@ -75,8 +75,8 @@ def fmt_hhmm_for_term(term: list, default_due_dt):
     return None
 
 
-def _partition_interval_label(start: str, end: str, count: str) -> str | None:
-    """Return a fixed interval label when partition endpoints divide evenly."""
+def _partition_interval_label(start: str, end: str, count: str) -> tuple[str, bool] | None:
+    """Return an interval label and whether it is approximate."""
     try:
         start_minutes = sum(int(part) * factor for part, factor in zip(start.split(":"), (60, 1)))
         end_minutes = sum(int(part) * factor for part, factor in zip(end.split(":"), (60, 1)))
@@ -87,15 +87,18 @@ def _partition_interval_label(start: str, end: str, count: str) -> str | None:
     if divisor <= 0:
         return None
     span = end_minutes - start_minutes
-    if span <= 0 or span % divisor:
+    if span <= 0:
         return None
-    minutes = span // divisor
+    approximate = bool(span % divisor)
+    minutes = (span + divisor // 2) // divisor
     hours, remainder = divmod(minutes, 60)
     if hours and remainder:
-        return f"{hours}h{remainder}m"
-    if hours:
-        return f"{hours}h"
-    return f"{remainder}m"
+        label = f"{hours}h{remainder}m"
+    elif hours:
+        label = f"{hours}h"
+    else:
+        label = f"{remainder}m"
+    return label, approximate
 
 
 def fmt_time_window_for_term(term: list) -> str | None:
@@ -106,8 +109,8 @@ def fmt_time_window_for_term(term: list) -> str | None:
     start, rest = value.split("..", 1)
     end, interval = rest.split("/", 1)
     if interval.isdigit():
-        fixed_interval = _partition_interval_label(start, end, interval)
-        suffix = f" (every {fixed_interval})" if fixed_interval else ""
+        interval_info = _partition_interval_label(start, end, interval)
+        suffix = f" (every {'~' if interval_info[1] else ''}{interval_info[0]})" if interval_info else ""
         return f"{interval} evenly spaced times{suffix} within {start}\N{EN DASH}{end}"
     return f"every {interval} within {start}\N{EN DASH}{end}"
 
@@ -124,8 +127,8 @@ def fmt_time_schedule_for_term(term: list) -> str | None:
             start, rest = item.split("..", 1)
             end, interval = rest.split("/", 1)
             if interval.isdigit():
-                fixed_interval = _partition_interval_label(start, end, interval)
-                suffix = f" (every {fixed_interval})" if fixed_interval else ""
+                interval_info = _partition_interval_label(start, end, interval)
+                suffix = f" (every {'~' if interval_info[1] else ''}{interval_info[0]})" if interval_info else ""
                 windows.append(f"{interval} evenly spaced times{suffix} within {start}\N{EN DASH}{end}")
             else:
                 windows.append(f"every {interval} within {start}\N{EN DASH}{end}")

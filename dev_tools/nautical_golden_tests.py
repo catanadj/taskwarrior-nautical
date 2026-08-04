@@ -10645,6 +10645,31 @@ def test_time_window_dst_gap_deduplicates_shifted_local_slot():
     expect(text.count("Sun 2025-03-09 03:00 EDT") == 1, f"DST-shifted slot was duplicated: {text[:1200]!r}")
 
 
+def test_partitioned_time_window_dst_gap_deduplicates_shifted_local_slot():
+    """A partition slot shifted across a spring-forward gap must not duplicate a later slot."""
+    hook = _find_hook_file("on-add.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text('tz = "America/New_York"\n', encoding="utf-8")
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000116",
+            "description": "DST partitioned window",
+            "status": "pending",
+            "entry": "20250301T000000Z",
+            "anchor": "w:sun@t=01..05/5",
+            "anchor_mode": "skip",
+            "due": "20250309T060000Z",
+        }
+        proc = _run_hook_script(
+            hook,
+            task,
+            env_extra={"NAUTICAL_CONFIG": str(config), "NO_COLOR": "1"},
+        )
+    expect(proc.returncode == 0, f"DST partitioned window hook failed: {proc.stderr[:500]!r}")
+    text = _strip_markup(proc.stderr)
+    expect(text.count("Sun 2025-03-09 03:00 EDT") == 1, f"partitioned DST slot was duplicated: {text[:1200]!r}")
+
+
 def test_hook_on_add_live_panel_mode_preserves_captured_protocol():
     """Configured live panels should fall back cleanly when a hook's stderr is captured."""
     hook = _find_hook_file("on-add.nautical")
@@ -26038,6 +26063,7 @@ TESTS = [
     test_on_modify_time_window_completion_advances_within_same_day,
     test_on_modify_partitioned_window_completion_rolls_to_next_day,
     test_time_window_dst_gap_deduplicates_shifted_local_slot,
+    test_partitioned_time_window_dst_gap_deduplicates_shifted_local_slot,
     test_hook_on_add_live_panel_mode_preserves_captured_protocol,
     test_hook_on_add_counted_random_preview_uses_group_time,
     test_hook_on_add_accepts_group_date_modifiers,

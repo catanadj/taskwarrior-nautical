@@ -17223,6 +17223,12 @@ def test_time_window_parser_accepts_even_partition_counts():
         overnight.slots_with_offsets == ((0, 22, 30), (0, 23, 50), (1, 1, 10), (1, 2, 30), (1, 3, 50), (1, 5, 10), (1, 6, 30)),
         f"overnight partition slots were wrong: {overnight!r}",
     )
+    overnight_interval = parse_time_window_spec("22:30..06:30/2h")
+    expect(overnight_interval is not None and overnight_interval.interval_minutes == 120, "overnight duration window was not parsed")
+    expect(
+        overnight_interval.slots_with_offsets == ((0, 22, 30), (1, 0, 30), (1, 2, 30), (1, 4, 30), (1, 6, 30)),
+        f"overnight duration slots were wrong: {overnight_interval!r}",
+    )
     parsed_overnight = core.parse_anchor_expr_to_dnf("w:mon@t=22:30..06:30/7")
     expect(parsed_overnight[0][0]["mods"].get("time_window") == "22:30..06:30/7", "overnight metadata was not retained")
     expect(

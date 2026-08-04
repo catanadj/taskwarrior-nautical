@@ -16940,6 +16940,23 @@ def test_navigator_projects_all_slots_in_a_time_window():
             [item.strftime("%H:%M") for item in partitioned] == ["04:30", "12:00", "19:30"],
             f"Navigator did not retain evenly partitioned slots: {partitioned!r}",
         )
+        overnight = analyzer._project_anchor_dates(
+            {"anchor": "w:mon@t=22:30..06:30/7", "uuid": "navigator-overnight-test"},
+            limit=7,
+            start_from_date=date(2026, 8, 2),
+        )
+        expect(
+            [(item.date().isoformat(), item.strftime("%H:%M")) for item in overnight] == [
+                ("2026-08-03", "22:30"),
+                ("2026-08-03", "23:50"),
+                ("2026-08-04", "01:10"),
+                ("2026-08-04", "02:30"),
+                ("2026-08-04", "03:50"),
+                ("2026-08-04", "05:10"),
+                ("2026-08-04", "06:30"),
+            ],
+            f"Navigator misplaced overnight slots: {overnight!r}",
+        )
         _natural, preview = navigator._anchor_preview("w:mon..sun@t=04:30..19:30/3h30min", count=5)
         expect(
             [item.rsplit(" ", 2)[-2] for item in preview] == ["04:30", "08:00", "11:30", "15:00", "18:30"],

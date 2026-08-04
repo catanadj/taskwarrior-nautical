@@ -2195,12 +2195,22 @@ class TaskAnalyzer:
                 for atom in term:
                     mods = atom.get("mods") or {}
                     if mods.get("t"):
-                        resolved = time_slots.resolve_time_slots(
-                            mods,
-                            target_date,
-                            config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                            to_local=core.to_local,
-                        )
+                        window = mods.get("time_window")
+                        parsed_window = core._import_sibling("time_windows").parse_time_window_spec(str(window)) if window else None
+                        if parsed_window is not None and parsed_window.crosses_midnight:
+                            resolved = time_slots.resolve_time_slots_with_offsets(
+                                mods,
+                                target_date,
+                                config=getattr(core, "ASTRONOMY_CONFIG", {}),
+                                to_local=core.to_local,
+                            )
+                        else:
+                            resolved = time_slots.resolve_time_slots(
+                                mods,
+                                target_date,
+                                config=getattr(core, "ASTRONOMY_CONFIG", {}),
+                                to_local=core.to_local,
+                            )
                         return resolved or [default_hhmm]
             return [default_hhmm]
 
@@ -2229,10 +2239,17 @@ class TaskAnalyzer:
                 if first_date:
                     cur_date = first_date
                     for _ in range(limit):
-                        for cur_hhmm in resolve_hhmms(dnf, cur_date, first_date):
+                        for cur_slot in resolve_hhmms(dnf, cur_date, first_date):
                             if len(anchor_out) >= limit:
                                 break
-                            dt_utc = core.build_local_datetime(cur_date, cur_hhmm)
+                            if isinstance(cur_slot, tuple) and len(cur_slot) == 3:
+                                day_offset, hour, minute = cur_slot
+                                slot_date = cur_date + datetime.timedelta(days=int(day_offset))
+                                cur_hhmm = (int(hour), int(minute))
+                            else:
+                                slot_date = cur_date
+                                cur_hhmm = cur_slot
+                            dt_utc = core.build_local_datetime(slot_date, cur_hhmm)
                             anchor_out.append(core.to_local(dt_utc))
                         if len(anchor_out) >= limit:
                             break

@@ -10594,6 +10594,32 @@ def test_on_modify_time_window_completion_advances_within_same_day():
     expect(meta.get("basis") == "after_end", f"unexpected window completion basis: {meta!r}")
 
 
+def test_on_modify_partitioned_window_completion_rolls_to_next_day():
+    """A partitioned window should use each slot once, then roll to the next day."""
+    mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_partitioned_window_runtime_test")
+
+    def completed_parent(local_due, local_end):
+        return {
+            "uuid": "00000000-0000-0000-0000-000000000115",
+            "description": "partitioned completion",
+            "anchor": "w:mon..sun@t=04:30..19:30/3",
+            "anchor_mode": "skip",
+            "chain": "on",
+            "chainID": "partition123",
+            "link": 1,
+            "due": mod.core.fmt_isoz(local_due.astimezone(timezone.utc)),
+            "end": mod.core.fmt_isoz(local_end.astimezone(timezone.utc)),
+        }
+
+    first = mod.core.build_local_datetime(date(2025, 12, 17), (4, 30))
+    next_slot, _meta, _dnf = mod._compute_anchor_child_due(completed_parent(first, first + timedelta(minutes=10)))
+    expect(mod.core.to_local(next_slot).strftime("%Y-%m-%d %H:%M") == "2025-12-17 12:00", "partitioned window skipped its middle slot")
+
+    last = mod.core.build_local_datetime(date(2025, 12, 17), (19, 30))
+    next_day, _meta, _dnf = mod._compute_anchor_child_due(completed_parent(last, last + timedelta(minutes=10)))
+    expect(mod.core.to_local(next_day).strftime("%Y-%m-%d %H:%M") == "2025-12-18 04:30", "partitioned window did not roll to the next day")
+
+
 def test_time_window_dst_gap_deduplicates_shifted_local_slot():
     """A spring-forward slot shifted onto the next slot must not duplicate the occurrence."""
     hook = _find_hook_file("on-add.nautical")
@@ -26010,6 +26036,7 @@ TESTS = [
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_time_window_preview_emits_bounded_slots,
     test_on_modify_time_window_completion_advances_within_same_day,
+    test_on_modify_partitioned_window_completion_rolls_to_next_day,
     test_time_window_dst_gap_deduplicates_shifted_local_slot,
     test_hook_on_add_live_panel_mode_preserves_captured_protocol,
     test_hook_on_add_counted_random_preview_uses_group_time,

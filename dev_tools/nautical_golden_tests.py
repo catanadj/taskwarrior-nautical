@@ -10752,6 +10752,38 @@ def test_overnight_time_window_dst_fallback_deduplicates_repeated_local_slot():
     expect(text.count("Sun 2026-11-01 01:30") == 1, f"repeated fallback slot was duplicated or omitted: {text[:1400]!r}")
 
 
+def test_chain_until_overnight_window_survives_dst_fallback():
+    """chainUntil should include the final overnight slot across a repeated local hour."""
+    from zoneinfo import ZoneInfo
+
+    mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_dst_fallback_until_test")
+    old_name = mod.core.LOCAL_TZ_NAME
+    old_tz = mod.core._LOCAL_TZ
+    mod.core.LOCAL_TZ_NAME = "America/New_York"
+    mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+    try:
+        due = mod.core.build_local_datetime(date(2026, 10, 31), (22, 30))
+        until = mod.core.build_local_datetime(date(2026, 11, 1), (2, 30))
+        parent = {
+            "description": "DST fallback chain end",
+            "anchor": "w:sat@t=22:30..02:30/5",
+            "anchor_mode": "skip",
+            "chain": "on",
+            "chainID": "dstuntil",
+            "link": 1,
+            "chainUntil": mod.core.fmt_isoz(until.astimezone(timezone.utc)),
+            "due": mod.core.fmt_isoz(due.astimezone(timezone.utc)),
+            "end": mod.core.fmt_isoz(due.astimezone(timezone.utc)),
+        }
+        _expr, dnf = mod._anchor_dnf_from_parent(parent)
+        final_no, final_dt = mod._cap_from_until_anchor(parent, due.astimezone(timezone.utc), dnf)
+        expect(final_no == 6, f"DST fallback chainUntil counted the wrong final link: {final_no!r}")
+        expect(final_dt is not None and mod.core.to_local(final_dt).strftime("%Y-%m-%d %H:%M") == "2026-11-01 02:30", f"DST fallback chainUntil stopped early: {final_dt!r}")
+    finally:
+        mod.core.LOCAL_TZ_NAME = old_name
+        mod.core._LOCAL_TZ = old_tz
+
+
 def test_hook_on_add_live_panel_mode_preserves_captured_protocol():
     """Configured live panels should fall back cleanly when a hook's stderr is captured."""
     hook = _find_hook_file("on-add.nautical")
@@ -26280,6 +26312,7 @@ TESTS = [
     test_time_window_dst_gap_deduplicates_shifted_local_slot,
     test_partitioned_time_window_dst_gap_deduplicates_shifted_local_slot,
     test_overnight_time_window_dst_fallback_deduplicates_repeated_local_slot,
+    test_chain_until_overnight_window_survives_dst_fallback,
     test_hook_on_add_live_panel_mode_preserves_captured_protocol,
     test_hook_on_add_counted_random_preview_uses_group_time,
     test_hook_on_add_accepts_group_date_modifiers,

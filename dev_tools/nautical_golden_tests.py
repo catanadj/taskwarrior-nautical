@@ -17228,7 +17228,7 @@ def test_time_window_natural_language_uses_bounded_interval():
     expect("06:00, 09:00" not in text, f"window natural language leaked expanded slots: {text!r}")
     partitioned = core.describe_anchor_expr("w:mon..fri@t=06..18/3")
     expect(
-        "3 evenly spaced times within 06:00\N{EN DASH}18:00" in partitioned,
+        "3 evenly spaced times (every 6h) within 06:00\N{EN DASH}18:00" in partitioned,
         f"partitioned window natural language is unclear: {partitioned!r}",
     )
 

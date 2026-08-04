@@ -669,7 +669,14 @@ class TaskAnalyzer:
         self._task_cache: Dict[int, Dict] = {}
         self._uuid_cache: Dict[str, Dict] = {}
         self._children: Dict[str, List[Dict]] = {}  # prev_uuid -> [children]
+        self._projection_warnings: List[str] = []
         _ACTIVE_ANALYZERS.add(self)
+
+    def _record_projection_warning(self, message: str) -> None:
+        """Keep projection failures visible without turning an empty result into a crash."""
+        text = str(message or "").strip()
+        if text and text not in self._projection_warnings:
+            self._projection_warnings.append(text)
 
     # ── Task retrieval ───────────────────────────────────────────────────────
     @lru_cache(maxsize=1)
@@ -2156,7 +2163,8 @@ class TaskAnalyzer:
             return []
         try:
             business_calendar = core.business_calendar_for_task(task)
-        except Exception:
+        except Exception as exc:
+            self._record_projection_warning(f"Business calendar: {_format_runtime_error(exc)}")
             return []
 
         # Base local date
@@ -2202,7 +2210,8 @@ class TaskAnalyzer:
         if anchor_expr:
             try:
                 dnf = core.validate_anchor_expr_strict(anchor_expr)
-            except Exception:
+            except Exception as exc:
+                self._record_projection_warning(f"Anchor expression: {_format_runtime_error(exc)}")
                 dnf = None
             if dnf:
                 def step(prev_date: date):
@@ -2252,8 +2261,8 @@ class TaskAnalyzer:
                         break
                     file_out.append(nxt)
                     cur_after = nxt
-            except Exception:
-                pass
+            except Exception as exc:
+                self._record_projection_warning(f"Anchor file: {_format_runtime_error(exc)}")
 
         out = sorted(set(anchor_out + file_out))
         if len(out) > limit:
@@ -2804,6 +2813,7 @@ class TaskAnalyzer:
         is_active = False
 
         if tail:
+            self._projection_warnings = []
             is_active = tail.get("status") in ("pending", "waiting")
 
             if is_active:
@@ -2811,9 +2821,13 @@ class TaskAnalyzer:
                 # For anchors: start strictly AFTER the due *date* (so overdue tasks show next anchors right away)
                 if ((tail.get("anchor") or tail.get("anchor_file")) and core):
                     start_from_date = due_local_dt.date() if due_local_dt else None
-                    upcoming_local_datetimes = self._project_anchor_dates(
-                        tail, limit=UPCOMING_MAX, start_from_date=start_from_date
-                    )
+                    try:
+                        upcoming_local_datetimes = self._project_anchor_dates(
+                            tail, limit=UPCOMING_MAX, start_from_date=start_from_date
+                        )
+                    except Exception as exc:
+                        self._record_projection_warning(f"Anchor projection: {_format_runtime_error(exc)}")
+                        upcoming_local_datetimes = []
                 # For cp: start strictly AFTER the due *datetime*
                 elif (tail.get("cp") or "").strip():
                     start_from_dt_local = due_local_dt if due_local_dt else None
@@ -2846,6 +2860,8 @@ class TaskAnalyzer:
                 ))
             elif not core:
                 rows.append(("Note", "Anchors present but chained_core.py not found — anchor projection disabled."))
+            for warning in self._projection_warnings:
+                rows.append(("Warning", warning))
 
             console.print()  # simple blank line spacer
             self._panel("⛵ Anchor Analysis", rows, "bright_cyan", "bright_cyan")

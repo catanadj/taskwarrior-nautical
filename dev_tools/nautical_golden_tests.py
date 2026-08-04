@@ -16573,6 +16573,37 @@ def test_navigator_uses_task_business_calendar_for_anchor_projection():
         navigator.core.configured_business_calendars = saved_registry
 
 
+def test_navigator_surfaces_anchor_projection_failures():
+    """Navigator should retain actionable projection failures instead of showing a blank forecast."""
+    module_name = "_nautical_navigator_projection_warning_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+        analyzer = navigator.TaskAnalyzer()
+        original = navigator.core.business_calendar_for_task
+        navigator.core.business_calendar_for_task = lambda _task: (_ for _ in ()).throw(
+            ValueError("calendar is invalid")
+        )
+        try:
+            projected = analyzer._project_anchor_dates(
+                {"anchor": "w:mon", "uuid": "navigator-warning-test"},
+                limit=1,
+                start_from_date=date(2026, 8, 2),
+            )
+        finally:
+            navigator.core.business_calendar_for_task = original
+        expect(projected == [], f"failed projection should not fabricate dates: {projected!r}")
+        expect(
+            analyzer._projection_warnings == ["Business calendar: calendar is invalid"],
+            f"projection failure was not retained: {analyzer._projection_warnings!r}",
+        )
+    finally:
+        sys.modules.pop(module_name, None)
+
+
 def test_navigator_normalizes_extended_scheduler_results():
     """Navigator projections should tolerate scheduler metadata appended by newer core versions."""
     module_name = "_nautical_navigator_scheduler_result_test"
@@ -26137,6 +26168,7 @@ TESTS = [
     test_file_source_symlink_must_remain_inside_configured_directory,
     test_config_exposes_anchor_file_dir,
     test_navigator_uses_task_business_calendar_for_anchor_projection,
+    test_navigator_surfaces_anchor_projection_failures,
     test_navigator_normalizes_extended_scheduler_results,
     test_navigator_resolves_symbolic_anchor_time_offsets,
     test_on_add_anchor_and_anchor_file_can_coexist,

@@ -3096,13 +3096,19 @@ def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
     )
 
 
-def _extract_time_slots_from_dnf(dnf, target_date=None) -> list[tuple[int, int]]:
+def _extract_time_slots_from_dnf(dnf, target_date=None, seed_base: str = "") -> list[tuple[int, int]]:
     """Extract a unique, sorted list of time slots from a parsed anchor DNF."""
     out: set[tuple[int, int]] = set()
     try:
         for term in dnf:
             for atom in term:
                 mods = atom.get("mods") or {}
+                if mods.get("time_random"):
+                    out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(
+                        mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}),
+                        to_local=core.to_local, seed_base=seed_base,
+                    ))
+                    continue
                 window = mods.get("time_window")
                 parsed_window = core._import_sibling("time_windows").parse_time_window_spec(str(window)) if window else None
                 if parsed_window is not None and parsed_window.crosses_midnight:
@@ -3135,6 +3141,12 @@ def _extract_time_slots_for_date(
                 matched = True
                 for atom in term:
                     mods = atom.get("mods") or {}
+                    if mods.get("time_random"):
+                        out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(
+                            mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}),
+                            to_local=core.to_local, seed_base=seed_base,
+                        ))
+                        continue
                     window = mods.get("time_window")
                     parsed_window = core._import_sibling("time_windows").parse_time_window_spec(str(window)) if window else None
                     if parsed_window is not None and parsed_window.crosses_midnight:
@@ -3149,7 +3161,7 @@ def _extract_time_slots_for_date(
         return []
     if matched:
         return sorted(out)
-    return _extract_time_slots_from_dnf(dnf, target_date)
+    return _extract_time_slots_from_dnf(dnf, target_date, seed_base)
 
 def _anchor_slot_local_dt(target_date, hhmm) -> datetime:
     """Build a configured-local anchor slot, including an optional day offset."""
@@ -3222,7 +3234,7 @@ def _next_occurrence_after_local_dt(
     """
     if not dnf:
         return None
-    slots = _extract_time_slots_from_dnf(dnf, after_local_dt.date())
+    slots = _extract_time_slots_from_dnf(dnf, after_local_dt.date(), seed_base)
 
     # same-day: only if the expression hits on that date
     adate = after_local_dt.date()

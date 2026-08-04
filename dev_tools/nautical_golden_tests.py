@@ -10699,6 +10699,30 @@ def test_on_modify_overnight_window_completion_uses_next_day_slots():
     )
 
 
+def test_on_modify_random_time_window_completion_reuses_stable_slots():
+    """Completion should select the next deterministic random slot, not redraw it."""
+    mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_modify_random_window_runtime_test")
+    chain_id = "randommodify1"
+    target_date = date(2025, 12, 15)
+    mods = {"time_random": "rand(06:00..18:00/3)", "t": []}
+    slots = mod.core._import_sibling("time_slots").resolve_time_slots_with_offsets(mods, target_date, seed_base=chain_id)
+    first = mod._anchor_slot_local_dt(target_date, slots[0])
+    expected = mod._anchor_slot_local_dt(target_date, slots[1])
+    parent = {
+        "uuid": "00000000-0000-0000-0000-000000000121",
+        "description": "random completion",
+        "anchor": "w:mon@t=rand(06..18/3)",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": chain_id,
+        "link": 1,
+        "due": mod.core.fmt_isoz(first.astimezone(timezone.utc)),
+        "end": mod.core.fmt_isoz((first + timedelta(minutes=10)).astimezone(timezone.utc)),
+    }
+    child_due, _meta, _dnf = mod._compute_anchor_child_due(parent)
+    expect(mod.core.to_local(child_due) == expected, "random completion redrew or skipped the next stable slot")
+
+
 def test_time_window_dst_gap_deduplicates_shifted_local_slot():
     """A spring-forward slot shifted onto the next slot must not duplicate the occurrence."""
     hook = _find_hook_file("on-add.nautical")
@@ -17306,6 +17330,8 @@ def test_random_time_window_flows_through_anchor_parser_and_resolver():
     dnf = core.parse_anchor_expr_to_dnf("w:mon@t=rand(06..18/3)")
     mods = dnf[0][0]["mods"]
     expect(mods.get("time_random") == "rand(06:00..18:00/3)", f"random metadata was not canonicalized: {mods!r}")
+    round_trip = core.acf_to_original_format(core.build_acf("w:mon@t=rand(06..18/3)"))
+    expect("@t=rand(06:00..18:00/3)" in round_trip, f"random time metadata was lost in ACF round-trip: {round_trip!r}")
     resolved = resolve_time_slots_with_offsets(mods, date(2026, 8, 3), seed_base="chain-a")
     expect(resolved == resolve_time_slots_with_offsets(mods, date(2026, 8, 3), seed_base="chain-a"), "random resolver was not deterministic")
     expect(len(resolved) == 3, f"random resolver returned the wrong slot count: {resolved!r}")
@@ -26412,6 +26438,7 @@ TESTS = [
     test_on_modify_time_window_completion_advances_within_same_day,
     test_on_modify_partitioned_window_completion_rolls_to_next_day,
     test_on_modify_overnight_window_completion_uses_next_day_slots,
+    test_on_modify_random_time_window_completion_reuses_stable_slots,
     test_time_window_dst_gap_deduplicates_shifted_local_slot,
     test_partitioned_time_window_dst_gap_deduplicates_shifted_local_slot,
     test_overnight_time_window_dst_fallback_deduplicates_repeated_local_slot,

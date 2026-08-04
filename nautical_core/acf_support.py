@@ -278,7 +278,11 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
         return out
     schedule = mods.get("time_schedule")
     window = mods.get("time_window")
-    if schedule:
+    random_window = mods.get("time_random")
+    if random_window:
+        out["tr"] = str(random_window)
+        tval = None
+    elif schedule:
         out["ts"] = str(schedule)
         tval = None
     elif window:
@@ -320,7 +324,9 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
 
 def acf_mods_to_string(m: dict, *, wd_abbr) -> str:
     parts = []
-    if m.get("ts"):
+    if m.get("tr"):
+        parts.append(f"@t={m['tr']}")
+    elif m.get("ts"):
         parts.append(f"@t={m['ts']}")
     elif m.get("tw"):
         parts.append(f"@t={m['tw']}")

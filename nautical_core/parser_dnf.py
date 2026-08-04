@@ -42,6 +42,12 @@ def _apply_group_modifiers(res, mods: dict, *, parse_error_cls) -> None:
                         "Cannot apply a grouped time-schedule modifier because the group already has a timed term."
                     )
                 atom_mods["time_schedule"] = str(mods["time_schedule"])
+            if mods.get("time_random"):
+                if atom_mods.get("time_random"):
+                    raise parse_error_cls(
+                        "Cannot apply a grouped random-time modifier because the branch already has one."
+                    )
+                atom_mods["time_random"] = str(mods["time_random"])
             if mods.get("moon"):
                 if atom_mods.get("moon"):
                     raise parse_error_cls("Cannot apply a grouped @moon modifier because the group already has a moon filter.")

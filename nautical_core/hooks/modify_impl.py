@@ -3255,6 +3255,27 @@ def _next_occurrence_after_local_dt(
             if cand > after_local_dt:
                 return cand
 
+    # An overnight window belongs to the previous anchor date. Continue its
+    # after-midnight slots before searching for the next matching anchor date.
+    previous_date = adate - timedelta(days=1)
+    try:
+        previous_matches = any(
+            all(
+                core.factor_matches_on(atom, previous_date, default_seed_date, seed_base=seed_base)
+                for atom in term
+            )
+            for term in dnf
+        )
+    except Exception:
+        previous_matches = False
+    if previous_matches:
+        previous_slots = _extract_time_slots_for_date(dnf, previous_date, default_seed_date, seed_base)
+        for slot in previous_slots:
+            if isinstance(slot, tuple) and len(slot) == 3 and int(slot[0]) > 0:
+                cand = _anchor_slot_local_dt(previous_date, slot)
+                if cand > after_local_dt:
+                    return cand
+
     # otherwise, find the next matching date strictly after adate
     anchor_omit = _module("anchor_omit")
     nxt_date, _ = anchor_omit.next_after_expr_with_omit(

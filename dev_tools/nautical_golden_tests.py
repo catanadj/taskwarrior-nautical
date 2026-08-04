@@ -10645,6 +10645,16 @@ def test_on_modify_overnight_window_completion_uses_next_day_slots():
     child_due, _meta, _dnf = mod._compute_anchor_child_due(parent(due, after_midnight + timedelta(minutes=10)))
     expect(mod.core.to_local(child_due).strftime("%Y-%m-%d %H:%M") == "2025-12-22 22:30", "overnight completion did not advance to the next Monday window")
 
+    capped = parent(due, due + timedelta(minutes=10))
+    capped["chainUntil"] = "20251216T063000Z"
+    _expr, capped_dnf = mod._anchor_dnf_from_parent(capped)
+    final_no, final_dt = mod._cap_from_until_anchor(capped, due.astimezone(timezone.utc), capped_dnf)
+    expect(final_no == 8, f"overnight chainUntil counted the wrong number of links: {final_no!r}, final={final_dt!r}")
+    expect(
+        final_dt is not None and mod.core.to_local(final_dt).strftime("%Y-%m-%d %H:%M") == "2025-12-16 06:30",
+        f"overnight chainUntil stopped before the final morning slot: {final_dt!r}",
+    )
+
 
 def test_time_window_dst_gap_deduplicates_shifted_local_slot():
     """A spring-forward slot shifted onto the next slot must not duplicate the occurrence."""

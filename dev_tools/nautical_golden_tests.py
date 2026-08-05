@@ -17363,6 +17363,54 @@ def test_random_time_window_flows_through_anchor_parser_and_resolver():
     expect(resolved == sorted(resolved), f"random resolver slots were not ordered: {resolved!r}")
 
 
+def test_random_time_window_composition_and_anchor_file_guidance():
+    """Unsupported random-time compositions fail with actionable guidance."""
+    try:
+        core.parse_anchor_expr_to_dnf("w:mon@t=rand(06..18),22")
+        expect(False, "random time was accepted inside a composable schedule")
+    except core.ParseError as exc:
+        expect("separate anchor branches" in str(exc), f"unexpected composition error: {exc}")
+    from nautical_core.anchor_files import parse_anchor_file_spec
+
+    try:
+        parse_anchor_file_spec("events.csv@t=rand(06..18)")
+        expect(False, "anchor_file accepted unsupported random time metadata")
+    except ValueError as exc:
+        expect("chain identity" in str(exc), f"unexpected anchor_file random-time error: {exc}")
+
+
+def test_random_time_window_is_stable_across_processes():
+    """The random-time seed must not depend on interpreter-local state."""
+    script = (
+        "import json; from nautical_core.time_windows import parse_random_time_window_spec; "
+        "w=parse_random_time_window_spec('rand(22:30..02:30/3)'); "
+        "print(json.dumps(w.slots_with_offsets('cross-process/2026-08-05')))"
+    )
+    outputs = [
+        subprocess.check_output([sys.executable, "-c", script], cwd=str(ROOT), text=True).strip()
+        for _ in range(2)
+    ]
+    expect(outputs[0] == outputs[1], f"random slots changed across processes: {outputs!r}")
+
+
+def test_random_time_window_dst_projection_is_deterministic():
+    """Random wall-clock slots remain deterministic through DST gap/fallback handling."""
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
+    with tempfile.TemporaryDirectory() as td:
+        cfg = os.path.join(td, "nautical.toml")
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write('tz = "America/New_York"\n')
+        mod = _load_core_module(core_path, "_nautical_core_random_dst_test", cfg)
+        from nautical_core.time_windows import parse_random_time_window_spec
+
+        window = parse_random_time_window_spec("rand(01:00..04:00/3)")
+        for day in (date(2025, 3, 9), date(2025, 11, 2)):
+            slots = window.slots_with_offsets(f"dst/{day.isoformat()}")
+            instants = [mod.build_local_datetime(day, (slot[1], slot[2])) for slot in slots]
+            expect(len(instants) == len(set(instants)), f"random DST slots duplicated: {day} {instants!r}")
+            expect(all(mod.to_local(value).tzinfo is not None for value in instants), f"random DST slot lost timezone: {day}")
+
+
 def test_time_window_partition_rounding_preserves_boundaries():
     """Non-divisible partitions retain endpoints and use deterministic minute rounding."""
     from nautical_core.time_windows import parse_time_window_spec
@@ -27147,6 +27195,9 @@ TESTS.extend([
     test_time_window_parser_accepts_even_partition_counts,
     test_random_time_window_parser_selects_deterministic_bucketed_slots,
     test_random_time_window_flows_through_anchor_parser_and_resolver,
+    test_random_time_window_composition_and_anchor_file_guidance,
+    test_random_time_window_is_stable_across_processes,
+    test_random_time_window_dst_projection_is_deterministic,
     test_time_window_partition_rounding_preserves_boundaries,
     test_hour_only_time_lists_normalize_across_anchor_and_anchor_file,
     test_composable_time_schedule_unions_windows_and_clock_slots,

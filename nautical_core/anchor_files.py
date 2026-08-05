@@ -21,7 +21,7 @@ from .file_source_expr import (
     resolve_file_sources,
 )
 from .schedule_utils import apply_day_offset, roll_apply
-from .time_windows import parse_clock_value, parse_time_schedule_spec, parse_time_window_spec
+from .time_windows import parse_clock_value, parse_random_time_window_spec, parse_time_schedule_spec, parse_time_window_spec
 
 
 _WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
@@ -84,6 +84,12 @@ def parse_anchor_file_spec(value: str | None) -> tuple[str, dict]:
             if mods["t"] is not None:
                 raise ValueError("Duplicate '@t=' modifier. Use a single '@t=HH:MM,HH:MM,...' list.")
             values = [part.strip() for part in tok.split("=", 1)[1].split(",") if part.strip()]
+            random_window = parse_random_time_window_spec(tok.split("=", 1)[1].strip())
+            if random_window is not None:
+                raise ValueError(
+                    "anchor_file @t does not support random time windows; "
+                    "use anchor @t=rand(...) so selection can be tied to the chain identity."
+                )
             try:
                 window = parse_time_window_spec(tok.split("=", 1)[1].strip())
             except ValueError as exc:

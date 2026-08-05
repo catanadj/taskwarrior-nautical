@@ -111,6 +111,11 @@ def parse_atom_mods(
                     "Duplicate '@t=' modifier. Use a single '@t=HH:MM,HH:MM,...' list."
                 )
             tval = tok.split("=", 1)[1].strip()
+            if "rand(" in tval and "," in tval:
+                raise parse_error_cls(
+                    "Random time windows cannot be combined in a comma time schedule; "
+                    "use separate anchor branches instead."
+                )
             try:
                 random_window = parse_random_time_window_spec(tval)
             except ValueError as exc:

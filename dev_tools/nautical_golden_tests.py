@@ -16528,6 +16528,25 @@ def test_anchor_file_occurrence_provider_supports_lazy_next_after():
     expect(occurrence is not None and occurrence.hhmm == (12, 30), f"unexpected lazy occurrence: {occurrence!r}")
 
 
+def test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup():
+    """Ordinary anchor projections share the typed provider contract."""
+    from datetime import datetime
+    from nautical_core.occurrence_provider import AnchorOccurrenceProvider, Occurrence
+
+    values = [Occurrence(date(2026, 8, 3), 9, 0)]
+    provider = AnchorOccurrenceProvider(
+        lambda: values,
+        lambda after: datetime(2026, 8, 4, 9, 0) if after < datetime(2026, 8, 4, 9, 0) else None,
+    )
+    expect(provider.occurrences() == values, "ordinary provider changed typed occurrences")
+    next_value = provider.next_after(
+        datetime(2026, 8, 3, 9, 0),
+        build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
+        to_local=lambda value: value,
+    )
+    expect(next_value == Occurrence(date(2026, 8, 4), 9, 0), f"unexpected ordinary provider value: {next_value!r}")
+
+
 def test_anchor_file_occurrences_expand_overnight_time_window():
     """File dates own overnight slots even when generated times land next day."""
     import nautical_core.anchor_files as anchor_files
@@ -26991,6 +27010,7 @@ TESTS = [
     test_anchor_file_occurrences_expand_random_time_window_with_context,
     test_anchor_file_occurrence_provider_exposes_typed_values,
     test_anchor_file_occurrence_provider_supports_lazy_next_after,
+    test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_anchor_file_occurrences_expand_overnight_time_window,
     test_anchor_file_occurrences_expand_composable_time_schedule,
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,

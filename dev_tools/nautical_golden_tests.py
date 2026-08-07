@@ -16669,6 +16669,109 @@ def test_occurrence_values_reject_inconsistent_fields():
             pass
 
 
+def test_occurrence_collection_fails_closed_on_invalid_values_and_exhaustion():
+    """Bounded collection must reject malformed lazy values and cap exhaustion."""
+    from datetime import datetime, timedelta
+    from nautical_core.occurrence_provider import Occurrence, collect_after
+
+    after = datetime(2026, 8, 3, 9, 0)
+
+    class MissingLocal:
+        def next_after(self, *args, **kwargs):
+            return Occurrence(date(2026, 8, 3), 10, 0)
+
+    try:
+        collect_after(
+            MissingLocal(), after_local=after, limit=1, max_iterations=2,
+            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+            to_local=lambda value: value,
+        )
+        expect(False, "collection accepted an occurrence without lazy local datetime")
+    except ValueError as exc:
+        expect("no local datetime" in str(exc), f"unexpected lazy-value error: {exc}")
+
+    class NeverIncluded:
+        def __init__(self):
+            self.value = after
+
+        def next_after(self, *args, **kwargs):
+            self.value += timedelta(hours=1)
+            return Occurrence(
+                self.value.date(), self.value.hour, self.value.minute,
+                local_datetime=self.value, omitted=True,
+            )
+
+    try:
+        collect_after(
+            NeverIncluded(), after_local=after, limit=1, max_iterations=2,
+            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+            to_local=lambda value: value,
+        )
+        expect(False, "collection silently truncated after its iteration cap")
+    except ValueError as exc:
+        expect("iteration limit" in str(exc), f"unexpected cap error: {exc}")
+
+
+def test_occurrence_event_provider_requires_boolean_omitted_flag():
+    """Event adapters must preserve the typed omission contract."""
+    from datetime import datetime, timedelta
+    from nautical_core.occurrence_provider import AnchorEventOccurrenceProvider
+
+    provider = AnchorEventOccurrenceProvider(
+        lambda value: (value + timedelta(hours=1), "false")
+    )
+    try:
+        provider.next_after(
+            datetime(2026, 8, 3, 9, 0),
+            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+            to_local=lambda value: value,
+        )
+        expect(False, "event provider accepted a non-boolean omitted flag")
+    except TypeError as exc:
+        expect("non-boolean" in str(exc), f"unexpected omitted-flag error: {exc}")
+
+
+def test_anchor_file_provider_rejects_incomparable_datetimes():
+    """Anchor-file lookup should explain mixed naive and aware datetime inputs."""
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        Path(td, "calendar.csv").write_text("date\n2026-08-04\n", encoding="utf-8")
+        provider = anchor_files.AnchorFileOccurrenceProvider("calendar.csv@t=09:00", td, (8, 0))
+        try:
+            provider.next_after(
+                datetime(2026, 8, 3, 9, 0),
+                build_local_datetime=core.build_local_datetime,
+                to_local=core.to_local,
+            )
+            expect(False, "anchor-file provider accepted incomparable datetime values")
+        except ValueError as exc:
+            expect("incomparable" in str(exc), f"unexpected anchor-file comparison error: {exc}")
+
+
+def test_anchor_file_omit_evaluation_failures_propagate():
+    """An omit-rule failure must not be treated as an allowed occurrence."""
+    import nautical_core.anchor_inclusion as inclusion
+    import nautical_core.anchor_omit as anchor_omit
+
+    original = anchor_omit.omit_expr_fires_on_date
+    anchor_omit.omit_expr_fires_on_date = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("broken omit"))
+    try:
+        try:
+            inclusion._anchor_file_occurrence_is_omitted(
+                datetime(2026, 8, 3, 9, 0),
+                omit_dnf=[["omit"]],
+                default_seed_date=date(2026, 8, 3),
+                seed_base="omit-test",
+                core=core,
+            )
+            expect(False, "omit-rule failure was silently ignored")
+        except ValueError as exc:
+            expect("Unable to evaluate omit rule" in str(exc), f"unexpected omit error: {exc}")
+    finally:
+        anchor_omit.omit_expr_fires_on_date = original
+
+
 def test_add_preview_event_collection_counts_only_included_occurrences():
     """Omitted events may fill the stream but must not consume the included limit."""
     from datetime import datetime, timedelta, timezone
@@ -27224,6 +27327,10 @@ TESTS = [
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_occurrence_providers_reject_non_advancing_values,
     test_occurrence_values_reject_inconsistent_fields,
+    test_occurrence_collection_fails_closed_on_invalid_values_and_exhaustion,
+    test_occurrence_event_provider_requires_boolean_omitted_flag,
+    test_anchor_file_provider_rejects_incomparable_datetimes,
+    test_anchor_file_omit_evaluation_failures_propagate,
     test_add_preview_event_collection_counts_only_included_occurrences,
     test_anchor_file_occurrences_expand_overnight_time_window,
     test_anchor_file_occurrences_expand_composable_time_schedule,

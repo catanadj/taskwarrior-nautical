@@ -3657,8 +3657,10 @@ def _anchor_file_is_omitted(omit_dnf, item_local: datetime, *, seed_base: str) -
                 core=core,
             )
         )
-    except Exception:
-        return False
+    except Exception as exc:
+        raise ValueError(
+            f"Unable to evaluate omit rule for {item_local.date().isoformat()}: {exc}"
+        ) from exc
 
 
 def _anchor_file_future_occurrences(parent: dict, *, fallback_hhmm: tuple[int, int], omit_dnf, seed_base: str) -> list[datetime]:

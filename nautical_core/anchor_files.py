@@ -449,7 +449,11 @@ class AnchorFileOccurrenceProvider:
         value = None
         for d0, hhmm in self._specs():
             candidate = to_local(build_local_datetime(d0, hhmm))
-            if candidate > after_local:
+            try:
+                is_after = candidate > after_local
+            except TypeError as exc:
+                raise ValueError("Anchor-file provider returned an incomparable datetime.") from exc
+            if is_after:
                 value = candidate
                 break
         if value is None:

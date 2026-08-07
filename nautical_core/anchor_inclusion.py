@@ -110,8 +110,10 @@ def _anchor_file_occurrence_is_omitted(
                 core=core,
             )
         )
-    except Exception:
-        return False
+    except Exception as exc:
+        raise ValueError(
+            f"Unable to evaluate omit rule for {item_local.date().isoformat()}: {exc}"
+        ) from exc
 
 
 def next_included_occurrence_local(

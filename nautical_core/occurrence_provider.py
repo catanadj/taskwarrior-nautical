@@ -66,6 +66,12 @@ def collect_after(
     to_local: Callable[[datetime], datetime],
 ) -> list[Occurrence]:
     """Collect a bounded stream while counting only non-omitted occurrences."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+        raise ValueError("Occurrence collection limit must be a non-negative integer.")
+    if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations <= 0:
+        raise ValueError("Occurrence collection iteration limit must be a positive integer.")
+    if limit == 0:
+        return []
     cursor = after_local - timedelta(microseconds=1) if inclusive else after_local
     out: list[Occurrence] = []
     included_count = 0
@@ -77,16 +83,24 @@ def collect_after(
             build_local_datetime=build_local_datetime,
             to_local=to_local,
         )
-        if occurrence is None or occurrence.local_datetime is None:
+        if occurrence is None:
             break
+        if not isinstance(occurrence, Occurrence):
+            raise TypeError("Occurrence provider returned an invalid value.")
+        if occurrence.local_datetime is None:
+            raise ValueError("Lazy occurrence provider returned no local datetime.")
         cursor = occurrence.local_datetime
         out.append(occurrence)
         if not occurrence.omitted:
             included_count += 1
+    if included_count < limit and iterations >= max_iterations:
+        raise ValueError("Occurrence provider exceeded its collection iteration limit.")
     return out
 
 
 def _require_forward_progress(after_local: datetime, value: datetime) -> None:
+    if not isinstance(after_local, datetime) or not isinstance(value, datetime):
+        raise TypeError("Occurrence provider must return datetime values.")
     try:
         advanced = value > after_local
     except TypeError as exc:
@@ -120,6 +134,8 @@ class AnchorOccurrenceProvider:
         if value is None:
             return None
         local = to_local(value)
+        if not isinstance(local, datetime):
+            raise TypeError("Occurrence provider returned a non-datetime local value.")
         _require_forward_progress(after_local, local)
         return Occurrence(day=local.date(), hour=local.hour, minute=local.minute, local_datetime=local)
 
@@ -143,13 +159,17 @@ class AnchorEventOccurrenceProvider:
             return None
         value, omitted = event
         local = to_local(value)
+        if not isinstance(local, datetime):
+            raise TypeError("Occurrence event provider returned a non-datetime local value.")
+        if not isinstance(omitted, bool):
+            raise TypeError("Occurrence event provider returned a non-boolean omitted flag.")
         _require_forward_progress(after_local, local)
         return Occurrence(
             day=local.date(),
             hour=local.hour,
             minute=local.minute,
             local_datetime=local,
-            omitted=bool(omitted),
+            omitted=omitted,
         )
 
 

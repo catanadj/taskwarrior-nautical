@@ -367,7 +367,7 @@ def _load_anchor_file_occurrence_records(
     business_calendar = effective_business_calendar(business_calendar)
     resolution = _resolved_anchor_sources(name, anchor_file_dir)
     out: list[tuple[date, tuple[int, int], str]] = []
-    seen: set[tuple[date, tuple[int, int]]] = set()
+    seen: dict[tuple[date, tuple[int, int]], int] = {}
     for source in resolution.sources:
         dates, _descriptions, source_time = _load_anchor_source_data(source, business_calendar)
         if isinstance(source_time, dict) and source_time.get("time_random"):
@@ -390,15 +390,19 @@ def _load_anchor_file_occurrence_records(
                     occurrence = (item_date + timedelta(days=int(day_offset)), (int(hour), int(minute)))
                 else:
                     occurrence = (item_date, slot)
-                if occurrence in seen:
+                description = str(_descriptions.get(item_date) or "").strip()
+                existing_index = seen.get(occurrence)
+                if existing_index is not None:
+                    if not out[existing_index][2] and description:
+                        out[existing_index] = (occurrence[0], occurrence[1], description)
                     continue
-                seen.add(occurrence)
+                seen[occurrence] = len(out)
                 if len(seen) > resource_limits.MAX_RESOLVED_DATES:
                     raise ValueError(
                         f"anchor_file resolves to more than "
                         f"{resource_limits.MAX_RESOLVED_DATES} occurrences."
                     )
-                out.append((occurrence[0], occurrence[1], str(_descriptions.get(item_date) or "").strip()))
+                out.append((occurrence[0], occurrence[1], description))
     out.sort()
     return out
 
@@ -527,14 +531,24 @@ class AnchorFileOccurrenceProvider:
                 ordered = _sort_datetimes(candidates)
             except (TypeError, ValueError) as exc:
                 raise ValueError("Anchor-file provider returned incomparable local datetimes.") from exc
-            description_by_candidate: dict[datetime, str] = {}
-            for candidate, description in zip(candidates, descriptions):
-                description_by_candidate.setdefault(candidate, description)
-            self._candidate_cache = []
+            remaining = list(zip(candidates, descriptions))
+            ordered_descriptions: list[str] = []
             for candidate in ordered:
+                for index, (original, description) in enumerate(remaining):
+                    if _compare_datetimes(original, candidate) == 0:
+                        ordered_descriptions.append(description)
+                        remaining.pop(index)
+                        break
+                else:
+                    ordered_descriptions.append("")
+            self._candidate_cache = []
+            self._candidate_descriptions = []
+            for candidate, description in zip(ordered, ordered_descriptions):
                 if not self._candidate_cache or _compare_datetimes(candidate, self._candidate_cache[-1]) != 0:
                     self._candidate_cache.append(candidate)
-            self._candidate_descriptions = [description_by_candidate.get(candidate, "") for candidate in self._candidate_cache]
+                    self._candidate_descriptions.append(description)
+                elif not self._candidate_descriptions[-1] and description:
+                    self._candidate_descriptions[-1] = description
         candidates = self._candidate_cache
         start = self._next_index
         if self._last_after is None:

@@ -16999,6 +16999,45 @@ def test_anchor_file_provider_keeps_description_for_overnight_slots():
     expect(all(item.description == "Overnight maintenance" for item in occurrences), f"source description was lost: {occurrences!r}")
 
 
+def test_anchor_file_provider_merges_duplicate_source_descriptions():
+    """A later duplicate source may supply metadata missing from the first source."""
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "first.csv").write_text("date,description\n2026-08-08,\n", encoding="utf-8")
+        (Path(td) / "second.csv").write_text("date,description\n2026-08-08,Backup description\n", encoding="utf-8")
+        provider = anchor_files.AnchorFileOccurrenceProvider(
+            "first.csv@t=09:00 | second.csv@t=09:00",
+            td,
+            (9, 0),
+        )
+        occurrences = provider.occurrences()
+    expect(len(occurrences) == 1, f"duplicate source occurrence was not deduplicated: {occurrences!r}")
+    expect(occurrences[0].description == "Backup description", f"duplicate source metadata was lost: {occurrences!r}")
+
+
+def test_anchor_file_provider_preserves_dst_fold_descriptions():
+    """Descriptions must follow DST-fold instants, not wall-clock equality."""
+    import nautical_core.anchor_files as anchor_files
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("Europe/Bucharest")
+    provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
+    provider._record_cache = [
+        (date(2026, 10, 25), (3, 30), "first fold"),
+        (date(2026, 10, 25), (3, 45), "second fold"),
+    ]
+
+    def build(day, hhmm):
+        fold = 1 if hhmm == (3, 45) else 0
+        return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=zone, fold=fold)
+
+    after = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
+    occurrence = provider.next_after(after, build_local_datetime=build, to_local=lambda value: value)
+    expect(occurrence is not None, "DST-fold provider returned no successor")
+    expect(occurrence.description == "second fold", f"DST-fold description was misassigned: {occurrence!r}")
+
+
 def test_included_provider_reuses_shared_anchor_file_provider():
     """Repeated included projections should reuse one anchor-file expansion."""
     import nautical_core.add_anchor_preview as preview
@@ -28258,6 +28297,8 @@ TESTS = [
     test_event_provider_preserves_anchor_file_source_description,
     test_included_provider_preserves_anchor_file_source_description,
     test_anchor_file_provider_keeps_description_for_overnight_slots,
+    test_anchor_file_provider_merges_duplicate_source_descriptions,
+    test_anchor_file_provider_preserves_dst_fold_descriptions,
     test_included_provider_reuses_shared_anchor_file_provider,
     test_anchor_file_provider_retries_after_failed_load,
     test_included_provider_rebuilds_shared_provider_when_fallback_changes,

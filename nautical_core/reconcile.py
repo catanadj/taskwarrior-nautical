@@ -389,7 +389,7 @@ def _build_expiration_child_with_day_end(
     )
 
 
-def build_reconcile_plan(
+def _build_reconcile_plan_unscoped(
     parent: dict[str, Any],
     *,
     existing_children: list[dict[str, Any]],
@@ -478,3 +478,37 @@ def build_reconcile_plan(
         return ReconcilePlan("error", parent, next_link, carry_reason, child_due=child_due)
     reason = "expired link missing next link" if is_expiration else "missing next link"
     return ReconcilePlan("spawn", parent, next_link, reason, child=child, child_due=child_due)
+
+
+def build_reconcile_plan(
+    parent: dict[str, Any],
+    *,
+    existing_children: list[dict[str, Any]],
+    hook: Any,
+) -> ReconcilePlan:
+    """Build one plan inside the parent task's business-calendar context."""
+    core = getattr(hook, "core", None)
+    use_task_calendar = getattr(core, "use_task_business_calendar", None)
+    if not callable(use_task_calendar):
+        return _build_reconcile_plan_unscoped(
+            parent,
+            existing_children=existing_children,
+            hook=hook,
+        )
+
+    next_link = int_or_default(parent.get("link"), 1) + 1
+    try:
+        calendar_context = use_task_calendar(parent)
+    except Exception as exc:
+        return ReconcilePlan(
+            "error",
+            parent,
+            next_link,
+            f"invalid business calendar: {exc}",
+        )
+    with calendar_context:
+        return _build_reconcile_plan_unscoped(
+            parent,
+            existing_children=existing_children,
+            hook=hook,
+        )

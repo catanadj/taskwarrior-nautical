@@ -3659,10 +3659,7 @@ def _anchor_file_occurrences_local(parent: dict, fallback_hhmm: tuple[int, int])
         return []
     anchor_files = core._import_sibling("anchor_files")
     context = recurrence_spec.context
-    try:
-        business_calendar = core.business_calendar_for_task(parent)
-    except Exception:
-        business_calendar = None
+    business_calendar = core.business_calendar_for_task(parent)
     provider = anchor_files.AnchorFileOccurrenceProvider(
         anchor_file,
         getattr(core, "ANCHOR_FILE_DIR", ""),

@@ -22886,6 +22886,71 @@ def test_reconcile_candidate_and_plan_paths():
     expect(plan.action == "legitimate_final" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
 
 
+def test_reconcile_plan_uses_task_business_calendar_context():
+    """Reconcile scheduling and child construction must share the task calendar."""
+    import nautical_core.reconcile as reconcile
+
+    class FakeCore:
+        active = False
+        entered: list[str] = []
+
+        @staticmethod
+        def coerce_int(value, default=0):
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+        @classmethod
+        def use_task_business_calendar(cls, task):
+            if str(task.get("bc") or "") == "missing":
+                raise ValueError("Unknown business calendar 'missing'")
+            @contextlib.contextmanager
+            def active_context():
+                cls.entered.append(str(task.get("bc") or "default"))
+                cls.active = True
+                try:
+                    yield
+                finally:
+                    cls.active = False
+            return active_context()
+
+    class FakeHook:
+        core = FakeCore
+
+        @staticmethod
+        def _safe_parse_datetime(_value):
+            return None, None
+
+        @staticmethod
+        def _compute_cp_child_due(_parent):
+            expect(FakeCore.active, "reconcile computed a child outside the task calendar context")
+            return "20260102T090000Z", {"target_field": "due"}
+
+        @staticmethod
+        def _build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+            expect(FakeCore.active, "reconcile built a child outside the task calendar context")
+            return {child_field: child_due, "link": next_link, "prevLink": parent_short, "chainID": parent.get("chainID")}
+
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "11111111",
+        "link": 1,
+        "cp": "1d",
+        "bc": "work",
+    }
+    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=FakeHook())
+    expect(plan.action == "spawn", f"calendar-scoped reconcile did not spawn: {plan}")
+    expect(FakeCore.entered == ["work"], f"unexpected calendar context entries: {FakeCore.entered!r}")
+    expect(not FakeCore.active, "task business-calendar context leaked after planning")
+
+    invalid = reconcile.build_reconcile_plan(dict(parent, bc="missing"), existing_children=[], hook=FakeHook())
+    expect(invalid.action == "error", f"invalid calendar was not rejected: {invalid}")
+    expect("invalid business calendar" in invalid.reason and "missing" in invalid.reason, invalid.reason)
+
+
 def test_reconcile_expiration_candidate_requires_expiry_evidence():
     """Deleted chains should distinguish expiration, manual stop, and ambiguous evidence."""
     import nautical_core.reconcile as reconcile
@@ -28483,6 +28548,7 @@ TESTS = [
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
+    test_reconcile_plan_uses_task_business_calendar_context,
     test_reconcile_repairs_invalid_native_until_from_previous_link,
     test_reconcile_native_until_uses_completed_predecessor_snapshot,
     test_reconcile_native_until_manual_review_is_not_a_hard_error,

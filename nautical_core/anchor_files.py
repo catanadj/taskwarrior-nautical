@@ -418,16 +418,22 @@ class AnchorFileOccurrenceProvider:
         self.fallback_hhmm = fallback_hhmm
         self.business_calendar = business_calendar
         self.context = context
+        self._spec_cache: list[tuple[date, tuple[int, int]]] | None = None
+
+    def _specs(self) -> list[tuple[date, tuple[int, int]]]:
+        if self._spec_cache is None:
+            self._spec_cache = load_anchor_file_occurrence_specs(
+                self.name,
+                self.anchor_file_dir,
+                self.fallback_hhmm,
+                business_calendar=self.business_calendar,
+                context=self.context,
+            )
+        return self._spec_cache
 
     def occurrences(self) -> list[Occurrence]:
         values: list[Occurrence] = []
-        for d0, hhmm in load_anchor_file_occurrence_specs(
-            self.name,
-            self.anchor_file_dir,
-            self.fallback_hhmm,
-            business_calendar=self.business_calendar,
-            context=self.context,
-        ):
+        for d0, hhmm in self._specs():
             values.append(Occurrence(day=d0, hour=hhmm[0], minute=hhmm[1], source="anchor_file"))
         return values
 
@@ -438,16 +444,12 @@ class AnchorFileOccurrenceProvider:
         build_local_datetime: Callable[[date, tuple[int, int]], datetime],
         to_local: Callable[[datetime], datetime],
     ) -> Occurrence | None:
-        value = next_anchor_file_occurrence_after(
-            self.name,
-            self.anchor_file_dir,
-            after_local,
-            self.fallback_hhmm,
-            build_local_datetime=build_local_datetime,
-            to_local=to_local,
-            business_calendar=self.business_calendar,
-            context=self.context,
-        )
+        value = None
+        for d0, hhmm in self._specs():
+            candidate = to_local(build_local_datetime(d0, hhmm))
+            if candidate > after_local:
+                value = candidate
+                break
         if value is None:
             return None
         local = to_local(value)

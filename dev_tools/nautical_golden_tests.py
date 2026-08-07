@@ -16528,6 +16528,39 @@ def test_anchor_file_occurrence_provider_supports_lazy_next_after():
     expect(occurrence is not None and occurrence.hhmm == (12, 30), f"unexpected lazy occurrence: {occurrence!r}")
 
 
+def test_anchor_file_occurrence_provider_caches_expanded_specs():
+    """Repeated lazy lookups should expand an anchor file only once per provider."""
+    import nautical_core.anchor_files as anchor_files
+    from datetime import datetime
+
+    original = anchor_files.load_anchor_file_occurrence_specs
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    with tempfile.TemporaryDirectory() as td:
+        sample = Path(td) / "calendar.csv"
+        sample.write_text("date\n2026-08-03\n2026-08-04\n", encoding="utf-8")
+        anchor_files.load_anchor_file_occurrence_specs = counted
+        try:
+            provider = anchor_files.AnchorFileOccurrenceProvider("calendar.csv@t=09:00", td, (8, 0))
+            provider.next_after(
+                datetime(2026, 8, 2, 9, 0),
+                build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
+                to_local=lambda value: value,
+            )
+            provider.next_after(
+                datetime(2026, 8, 3, 9, 0),
+                build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
+                to_local=lambda value: value,
+            )
+        finally:
+            anchor_files.load_anchor_file_occurrence_specs = original
+    expect(len(calls) == 1, f"anchor file specs were expanded {len(calls)} times")
+
+
 def test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup():
     """Ordinary anchor projections share the typed provider contract."""
     from datetime import datetime
@@ -27092,6 +27125,7 @@ TESTS = [
     test_anchor_file_occurrences_expand_random_time_window_with_context,
     test_anchor_file_occurrence_provider_exposes_typed_values,
     test_anchor_file_occurrence_provider_supports_lazy_next_after,
+    test_anchor_file_occurrence_provider_caches_expanded_specs,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_occurrence_providers_reject_non_advancing_values,
     test_occurrence_values_reject_inconsistent_fields,

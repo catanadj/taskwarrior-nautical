@@ -5470,6 +5470,12 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
         if cursor is None:
             break
 
+    if cursor is not None and cursor <= until_local and iterations >= _MAX_ITERATIONS:
+        raise ValueError(
+            f"Anchor chainUntil projection exceeded {_MAX_ITERATIONS} occurrences; "
+            "narrow chainUntil or use a larger recurrence interval."
+        )
+
     if count == 0 or last_hit is None:
         return (None, None)
 

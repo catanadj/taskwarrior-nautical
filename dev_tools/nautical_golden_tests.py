@@ -17442,6 +17442,31 @@ def test_modify_until_projection_reuses_anchor_file_provider():
         _hook._anchor_included_occurrences = original_included
 
 
+def test_modify_until_projection_fails_closed_at_iteration_limit():
+    """A long until horizon must not return a silently truncated cap."""
+    original_next = _hook._next_occurrence_after_local_dt
+
+    def next_daily(_dnf, value, **_kwargs):
+        return value + timedelta(days=1)
+
+    _hook._next_occurrence_after_local_dt = next_daily
+    try:
+        task = {
+            "chainID": "projection-limit",
+            "link": 1,
+            "due": "20260801T090000Z",
+            "chainUntil": "20350801T090000Z",
+        }
+        try:
+            _hook._cap_from_until_anchor(task, datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc), None)
+        except ValueError as exc:
+            expect("projection exceeded" in str(exc), f"unexpected iteration-limit error: {exc}")
+        else:
+            expect(False, "until projection silently truncated at its iteration limit")
+    finally:
+        _hook._next_occurrence_after_local_dt = original_next
+
+
 def test_anchor_file_provider_rejects_incomparable_datetimes():
     """Anchor-file lookup should explain mixed naive and aware datetime inputs."""
     import nautical_core.anchor_files as anchor_files
@@ -28094,6 +28119,7 @@ TESTS = [
     test_anchor_inclusion_scheduler_dispatch_preserves_legacy_and_internal_errors,
     test_modify_inclusion_collection_uses_shared_progress_guard,
     test_modify_until_projection_reuses_anchor_file_provider,
+    test_modify_until_projection_fails_closed_at_iteration_limit,
     test_anchor_file_provider_rejects_incomparable_datetimes,
     test_anchor_file_omit_evaluation_failures_propagate,
     test_add_preview_event_collection_counts_only_included_occurrences,

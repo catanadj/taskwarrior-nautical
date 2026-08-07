@@ -5180,6 +5180,7 @@ def _timeline_lines(
         dnf_for_merge = dnf if kind == "anchor" else None
         anchor_inclusion = core._import_sibling("anchor_inclusion")
         AnchorEventOccurrenceProvider = core._import_sibling("occurrence_provider").AnchorEventOccurrenceProvider
+        collect_after = core._import_sibling("occurrence_provider").collect_after
 
         event_provider = AnchorEventOccurrenceProvider(
             lambda value: anchor_inclusion.next_occurrence_event_local(
@@ -5196,18 +5197,19 @@ def _timeline_lines(
                 anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             )
         )
-        events: list[tuple[datetime, bool]] = []
-        event_cursor = child_local - timedelta(microseconds=1)
-        while len(events) < max(8, next_count + 6):
-            occurrence = event_provider.next_after(
-                event_cursor,
+        events = [
+            (occurrence.local_datetime, occurrence.omitted)
+            for occurrence in collect_after(
+                event_provider,
+                child_local,
+                limit=max(8, next_count + 6),
+                inclusive=True,
+                max_iterations=_MAX_ITERATIONS,
                 build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
                 to_local=lambda value: value,
             )
-            if occurrence is None or occurrence.local_datetime is None:
-                break
-            event_cursor = occurrence.local_datetime
-            events.append((event_cursor, occurrence.omitted))
+            if occurrence.local_datetime is not None
+        ]
         cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
         nxt_no = cur_no + 1
         allowed_future = next_count if cap_no is None else max(0, min(next_count, cap_no - nxt_no))

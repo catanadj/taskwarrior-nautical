@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Callable, Protocol
 
 
@@ -38,6 +38,37 @@ class LazyOccurrenceProvider(Protocol):
 class OccurrenceProvider(LazyOccurrenceProvider, Protocol):
     def occurrences(self) -> list[Occurrence]:
         """Return sorted, deduplicated local occurrences."""
+
+
+def collect_after(
+    provider: LazyOccurrenceProvider,
+    after_local: datetime,
+    *,
+    limit: int,
+    inclusive: bool = False,
+    max_iterations: int = 512,
+    build_local_datetime: Callable[[date, tuple[int, int]], datetime],
+    to_local: Callable[[datetime], datetime],
+) -> list[Occurrence]:
+    """Collect a bounded stream while counting only non-omitted occurrences."""
+    cursor = after_local - timedelta(microseconds=1) if inclusive else after_local
+    out: list[Occurrence] = []
+    included_count = 0
+    iterations = 0
+    while included_count < limit and iterations < max_iterations:
+        iterations += 1
+        occurrence = provider.next_after(
+            cursor,
+            build_local_datetime=build_local_datetime,
+            to_local=to_local,
+        )
+        if occurrence is None or occurrence.local_datetime is None:
+            break
+        cursor = occurrence.local_datetime
+        out.append(occurrence)
+        if not occurrence.omitted:
+            included_count += 1
+    return out
 
 
 def _require_forward_progress(after_local: datetime, value: datetime) -> None:
@@ -107,4 +138,4 @@ class AnchorEventOccurrenceProvider:
         )
 
 
-__all__ = ("AnchorEventOccurrenceProvider", "AnchorOccurrenceProvider", "LazyOccurrenceProvider", "Occurrence", "OccurrenceProvider")
+__all__ = ("AnchorEventOccurrenceProvider", "AnchorOccurrenceProvider", "LazyOccurrenceProvider", "Occurrence", "OccurrenceProvider", "collect_after")

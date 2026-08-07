@@ -206,7 +206,7 @@ def anchor_preview_first_due(
 
     fallback_hhmm = due_hhmm if user_provided_due else (9, 0)
     t_first = time.perf_counter()
-    from .occurrence_provider import AnchorOccurrenceProvider
+    from .occurrence_provider import AnchorOccurrenceProvider, collect_after
 
     inclusive = not user_provided_due
     reference_local = to_local_cached(due_dt) if user_provided_due else now_local
@@ -469,21 +469,19 @@ def _collect_included_with_provider(
             anchor_file_dir=anchor_file_dir,
         ),
     )
-    cursor = after_local_dt - timedelta(microseconds=1) if inclusive else after_local_dt
-    out: list[datetime] = []
-    iterations = 0
-    while len(out) < limit and iterations < max_iterations:
-        iterations += 1
-        occurrence = provider.next_after(
-            cursor,
+    return [
+        occurrence.local_datetime
+        for occurrence in collect_after(
+            provider,
+            after_local_dt,
+            limit=limit,
+            inclusive=inclusive,
+            max_iterations=max_iterations,
             build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
             to_local=lambda value: value,
         )
-        if occurrence is None or occurrence.local_datetime is None:
-            break
-        cursor = occurrence.local_datetime
-        out.append(cursor)
-    return out
+        if occurrence.local_datetime is not None
+    ]
 
 
 def _collect_events_with_provider(
@@ -504,7 +502,7 @@ def _collect_events_with_provider(
     max_iterations: int = 512,
 ) -> list[tuple[datetime, bool]]:
     from .anchor_inclusion import next_occurrence_event_local
-    from .occurrence_provider import AnchorEventOccurrenceProvider
+    from .occurrence_provider import AnchorEventOccurrenceProvider, collect_after
 
     provider = AnchorEventOccurrenceProvider(
         lambda value: next_occurrence_event_local(
@@ -522,24 +520,19 @@ def _collect_events_with_provider(
             anchor_file_dir=anchor_file_dir,
         )
     )
-    cursor = after_local_dt - timedelta(microseconds=1) if inclusive else after_local_dt
-    out: list[tuple[datetime, bool]] = []
-    included_count = 0
-    iterations = 0
-    while included_count < limit_included and iterations < max_iterations:
-        iterations += 1
-        occurrence = provider.next_after(
-            cursor,
+    return [
+        (occurrence.local_datetime, occurrence.omitted)
+        for occurrence in collect_after(
+            provider,
+            after_local_dt,
+            limit=limit_included,
+            inclusive=inclusive,
+            max_iterations=max_iterations,
             build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
             to_local=lambda value: value,
         )
-        if occurrence is None or occurrence.local_datetime is None:
-            break
-        cursor = occurrence.local_datetime
-        out.append((cursor, occurrence.omitted))
-        if not occurrence.omitted:
-            included_count += 1
-    return out
+        if occurrence.local_datetime is not None
+    ]
 
 
 def handle_anchor_file_preview_on_add(

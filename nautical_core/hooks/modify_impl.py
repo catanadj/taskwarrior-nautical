@@ -4215,7 +4215,7 @@ def _validate_until_not_past(
 
     # Allow small grace period (1 minute) for race conditions
     grace = timedelta(minutes=1)
-    if until_dt < (now_utc - grace):
+    if _compare_datetimes(until_dt, now_utc - grace) < 0:
         past_by = now_utc - until_dt
         past_s = core.humanize_delta(until_dt, now_utc, use_months_days=False)
         return (False, f"chainUntil is in the past (was {past_s} ago)")

@@ -995,6 +995,14 @@ def _validate_native_until_anchor_slots_or_fail(
     anchor_file_value: str,
     fallback_hhmm: tuple[int, int],
 ) -> None:
+    recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
+        chain_id=task.get("chainID") or task.get("uuid") or "preview"
+    )
+    recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
+        task,
+        context=recurrence_context,
+    )
+    anchor_file_value = recurrence_spec.anchor_file
     until_raw = task.get("until")
     if not until_raw or not (dnf or anchor_file_value):
         return
@@ -1011,7 +1019,7 @@ def _validate_native_until_anchor_slots_or_fail(
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             target_date=core.to_local(target_dt).date(),
             resolve_time_slots=_resolve_time_slots,
-            recurrence_context=core._import_sibling("recurrence_context").RecurrenceContext.from_task(task),
+            recurrence_context=recurrence_spec.context,
         )
     except Exception as exc:
         astronomy = core._import_sibling("astronomy")

@@ -2210,7 +2210,7 @@ class TaskAnalyzer:
                         atom,
                         target_date,
                         seed_date,
-                        seed_base=task.get("uuid") or "analyzer",
+                        seed_base=recurrence_context.seed_base,
                         business_calendar=business_calendar,
                     )
                     for atom in term
@@ -2261,7 +2261,7 @@ class TaskAnalyzer:
                         dnf,
                         prev_date,
                         default_seed=prev_date,
-                        seed_base=task.get("uuid") or "analyzer",
+                        seed_base=recurrence_context.seed_base,
                         business_calendar=business_calendar,
                     )
                     return nxt_date
@@ -2381,6 +2381,9 @@ class TaskAnalyzer:
         anchor_file = (task.get("anchor_file") or "").strip()
         if not anchor_expr and not anchor_file:
             return None
+        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
+            chain_id=task.get("chainID") or task.get("uuid") or "analyzer"
+        )
         try:
             business_calendar = core.business_calendar_for_task(task)
         except Exception:
@@ -2400,7 +2403,7 @@ class TaskAnalyzer:
                         dnf,
                         prev_date,
                         default_seed=prev_date,
-                        seed_base=task.get("uuid") or "analyzer",
+                        seed_base=recurrence_context.seed_base,
                         business_calendar=business_calendar,
                     )
                     return nxt_date

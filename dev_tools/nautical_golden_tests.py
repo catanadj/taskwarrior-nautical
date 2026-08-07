@@ -16571,6 +16571,54 @@ def test_anchor_file_occurrence_provider_caches_expanded_specs():
     expect(len(calls) == 1, f"anchor file specs were expanded {len(calls)} times")
 
 
+def test_anchor_file_occurrence_provider_advances_cached_lookup_cursor():
+    """Sequential successor lookup should scan cached specs once and still reset backward."""
+    import nautical_core.anchor_files as anchor_files
+    from datetime import datetime
+
+    provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
+    provider._spec_cache = [
+        (date(2026, 1, 1) + timedelta(days=index), (9, 0))
+        for index in range(1000)
+    ]
+    repeat_provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
+    repeat_provider._spec_cache = provider._spec_cache
+    calls = []
+
+    def build(day, hhmm):
+        calls.append(day)
+        return datetime(day.year, day.month, day.day, *hhmm)
+
+    identity = lambda value: value
+    repeat_cursor = datetime(2025, 12, 31, 9, 0)
+    repeat_first = repeat_provider.next_after(
+        repeat_cursor, build_local_datetime=build, to_local=identity
+    )
+    repeat_again = repeat_provider.next_after(
+        repeat_cursor, build_local_datetime=build, to_local=identity
+    )
+    expect(
+        repeat_first is not None
+        and repeat_again is not None
+        and repeat_first.local_datetime == repeat_again.local_datetime,
+        "repeating the same cursor returned a different successor",
+    )
+    calls.clear()
+    cursor = datetime(2025, 12, 31, 9, 0)
+    for _ in range(100):
+        occurrence = provider.next_after(cursor, build_local_datetime=build, to_local=identity)
+        expect(occurrence is not None, "cached provider unexpectedly exhausted during sequential lookup")
+        cursor = occurrence.local_datetime
+    expect(len(calls) == 100, f"sequential lookup rescanned cached specs: {len(calls)} builds")
+
+    reset = provider.next_after(
+        datetime(2026, 1, 1, 9, 0),
+        build_local_datetime=build,
+        to_local=identity,
+    )
+    expect(reset is not None and reset.day == date(2026, 1, 2), "backward lookup did not reset the cached cursor")
+
+
 def test_merged_anchor_file_provider_carries_context_and_reuses_specs():
     """Merged preview streams should carry chain context and expand files once."""
     import nautical_core.add_anchor_preview as preview
@@ -27431,6 +27479,7 @@ TESTS = [
     test_anchor_file_occurrence_provider_exposes_typed_values,
     test_anchor_file_occurrence_provider_supports_lazy_next_after,
     test_anchor_file_occurrence_provider_caches_expanded_specs,
+    test_anchor_file_occurrence_provider_advances_cached_lookup_cursor,
     test_merged_anchor_file_provider_carries_context_and_reuses_specs,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_occurrence_providers_reject_non_advancing_values,

@@ -421,6 +421,11 @@ class AnchorFileOccurrenceProvider:
         self.business_calendar = business_calendar
         self.context = context
         self._spec_cache: list[tuple[date, tuple[int, int]]] | None = None
+        self._next_index = 0
+        self._last_after: datetime | None = None
+        self._last_candidate: datetime | None = None
+        self._last_candidate_index: int | None = None
+        self._conversion_key: tuple[object, ...] | None = None
 
     def _specs(self) -> list[tuple[date, tuple[int, int]]]:
         if self._spec_cache is None:
@@ -446,8 +451,28 @@ class AnchorFileOccurrenceProvider:
         build_local_datetime: Callable[[date, tuple[int, int]], datetime],
         to_local: Callable[[datetime], datetime],
     ) -> Occurrence | None:
+        specs = self._specs()
+        conversion_key = (
+            getattr(build_local_datetime, "__self__", None),
+            getattr(build_local_datetime, "__func__", build_local_datetime),
+            getattr(to_local, "__self__", None),
+            getattr(to_local, "__func__", to_local),
+        )
+        start = self._next_index
+        if self._conversion_key != conversion_key or self._last_after is None:
+            start = 0
+        else:
+            try:
+                if after_local <= self._last_after:
+                    start = 0
+                elif self._last_candidate is not None and self._last_candidate_index is not None:
+                    start = self._last_candidate_index + (1 if after_local >= self._last_candidate else 0)
+            except TypeError:
+                start = 0
         value = None
-        for d0, hhmm in self._specs():
+        selected_index = None
+        for index in range(start, len(specs)):
+            d0, hhmm = specs[index]
             candidate = to_local(build_local_datetime(d0, hhmm))
             try:
                 is_after = candidate > after_local
@@ -455,13 +480,24 @@ class AnchorFileOccurrenceProvider:
                 raise ValueError("Anchor-file provider returned an incomparable datetime.") from exc
             if is_after:
                 value = candidate
+                selected_index = index
                 break
         if value is None:
+            self._next_index = len(specs)
+            self._last_after = after_local
+            self._last_candidate = None
+            self._last_candidate_index = None
+            self._conversion_key = conversion_key
             return None
         local = to_local(value)
         from .occurrence_provider import _require_forward_progress
 
         _require_forward_progress(after_local, local)
+        self._next_index = selected_index + 1 if selected_index is not None else len(specs)
+        self._last_after = after_local
+        self._last_candidate = local
+        self._last_candidate_index = selected_index
+        self._conversion_key = conversion_key
         return Occurrence(
             day=local.date(),
             hour=local.hour,

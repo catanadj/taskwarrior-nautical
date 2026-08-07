@@ -16899,6 +16899,26 @@ def test_included_provider_preserves_anchor_file_source_description():
     expect(occurrences[0].description == "Water the plants", f"included description was not preserved: {occurrences!r}")
 
 
+def test_anchor_file_provider_keeps_description_for_overnight_slots():
+    """Overnight slots retain the description from their source calendar date."""
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "calendar.csv").write_text(
+            "date,description\n2026-08-03,Overnight maintenance\n",
+            encoding="utf-8",
+        )
+        provider = anchor_files.AnchorFileOccurrenceProvider(
+            "calendar.csv@t=22:30..06:30/2",
+            td,
+            (9, 0),
+        )
+        occurrences = provider.occurrences()
+    expect(len(occurrences) == 2, f"unexpected overnight slots: {occurrences!r}")
+    expect(occurrences[1].day == date(2026, 8, 4), f"overnight slot did not roll date: {occurrences!r}")
+    expect(all(item.description == "Overnight maintenance" for item in occurrences), f"source description was lost: {occurrences!r}")
+
+
 def test_included_provider_reuses_shared_anchor_file_provider():
     """Repeated included projections should reuse one anchor-file expansion."""
     import nautical_core.add_anchor_preview as preview
@@ -16914,14 +16934,14 @@ def test_included_provider_reuses_shared_anchor_file_provider():
             seed_base="shared-provider-test",
             core=core,
         )
-        original = anchor_files.load_anchor_file_occurrence_specs
+        original = anchor_files._load_anchor_file_occurrence_records
         calls = []
 
         def counted(*args, **kwargs):
             calls.append(1)
             return original(*args, **kwargs)
 
-        anchor_files.load_anchor_file_occurrence_specs = counted
+        anchor_files._load_anchor_file_occurrence_records = counted
         try:
             kwargs = dict(
                 dnf=None,
@@ -16948,7 +16968,7 @@ def test_included_provider_reuses_shared_anchor_file_provider():
                 **kwargs,
             )
         finally:
-            anchor_files.load_anchor_file_occurrence_specs = original
+            anchor_files._load_anchor_file_occurrence_records = original
     expect(len(calls) == 1, f"shared anchor-file provider expanded specs {len(calls)} times")
 
 
@@ -28102,6 +28122,7 @@ TESTS = [
     test_merged_anchor_file_provider_carries_context_and_reuses_specs,
     test_event_provider_preserves_anchor_file_source_description,
     test_included_provider_preserves_anchor_file_source_description,
+    test_anchor_file_provider_keeps_description_for_overnight_slots,
     test_included_provider_reuses_shared_anchor_file_provider,
     test_included_provider_rebuilds_shared_provider_when_fallback_changes,
     test_included_provider_bounds_anchor_file_omission_scan,

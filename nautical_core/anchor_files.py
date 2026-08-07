@@ -356,17 +356,17 @@ def anchor_file_description_for_date(
     return text or None
 
 
-def load_anchor_file_occurrence_specs(
+def _load_anchor_file_occurrence_records(
     name: str | None,
     anchor_file_dir: str | None,
     fallback_hhmm: tuple[int, int],
     *,
     business_calendar: BusinessCalendar | None = None,
     context: RecurrenceContext | None = None,
-) -> list[tuple[date, tuple[int, int]]]:
+) -> list[tuple[date, tuple[int, int], str]]:
     business_calendar = effective_business_calendar(business_calendar)
     resolution = _resolved_anchor_sources(name, anchor_file_dir)
-    out: list[tuple[date, tuple[int, int]]] = []
+    out: list[tuple[date, tuple[int, int], str]] = []
     seen: set[tuple[date, tuple[int, int]]] = set()
     for source in resolution.sources:
         dates, _descriptions, source_time = _load_anchor_source_data(source, business_calendar)
@@ -398,9 +398,33 @@ def load_anchor_file_occurrence_specs(
                         f"anchor_file resolves to more than "
                         f"{resource_limits.MAX_RESOLVED_DATES} occurrences."
                     )
-                out.append(occurrence)
+                out.append((occurrence[0], occurrence[1], str(_descriptions.get(item_date) or "").strip()))
     out.sort()
     return out
+
+
+def load_anchor_file_occurrence_specs(
+    name: str | None,
+    anchor_file_dir: str | None,
+    fallback_hhmm: tuple[int, int],
+    *,
+    business_calendar: BusinessCalendar | None = None,
+    context: RecurrenceContext | None = None,
+    _records_sink: list[tuple[date, tuple[int, int], str]] | None = None,
+) -> list[tuple[date, tuple[int, int]]]:
+    records = _load_anchor_file_occurrence_records(
+        name,
+        anchor_file_dir,
+        fallback_hhmm,
+        business_calendar=business_calendar,
+        context=context,
+    )
+    if _records_sink is not None:
+        _records_sink.extend(records)
+    return [
+        (item_date, hhmm)
+        for item_date, hhmm, _description in records
+    ]
 
 
 class AnchorFileOccurrenceProvider:
@@ -421,47 +445,48 @@ class AnchorFileOccurrenceProvider:
         self.business_calendar = business_calendar
         self.context = context
         self._spec_cache: list[tuple[date, tuple[int, int]]] | None = None
+        self._record_cache: list[tuple[date, tuple[int, int], str]] | None = None
         self._next_index = 0
         self._last_after: datetime | None = None
         self._last_candidate: datetime | None = None
         self._last_candidate_index: int | None = None
         self._conversion_key: tuple[object, ...] | None = None
         self._candidate_cache: list[datetime] | None = None
-        self._description_cache: dict[date, str] | None = None
+        self._candidate_descriptions: list[str] = []
 
-    def _specs(self) -> list[tuple[date, tuple[int, int]]]:
-        if self._spec_cache is None:
-            self._spec_cache = load_anchor_file_occurrence_specs(
+    def _records(self) -> list[tuple[date, tuple[int, int], str]]:
+        if self._record_cache is None:
+            if self._spec_cache is not None:
+                self._record_cache = [(item_date, hhmm, "") for item_date, hhmm in self._spec_cache]
+                return self._record_cache
+            self._record_cache = []
+            specs = load_anchor_file_occurrence_specs(
                 self.name,
                 self.anchor_file_dir,
                 self.fallback_hhmm,
                 business_calendar=self.business_calendar,
                 context=self.context,
+                _records_sink=self._record_cache,
             )
-        return self._spec_cache
+            if not self._record_cache:
+                self._record_cache = [(item_date, hhmm, "") for item_date, hhmm in specs]
+        return self._record_cache
 
-    def _description_for_date(self, target: date) -> str:
-        if self._description_cache is None:
-            try:
-                self._description_cache = load_anchor_file_descriptions(
-                    self.name,
-                    self.anchor_file_dir,
-                    business_calendar=self.business_calendar,
-                )
-            except Exception:
-                self._description_cache = {}
-        return str(self._description_cache.get(target) or "").strip()
+    def _specs(self) -> list[tuple[date, tuple[int, int]]]:
+        if self._spec_cache is None:
+            self._spec_cache = [(item_date, hhmm) for item_date, hhmm, _description in self._records()]
+        return self._spec_cache
 
     def occurrences(self) -> list[Occurrence]:
         values: list[Occurrence] = []
-        for d0, hhmm in self._specs():
+        for d0, hhmm, description in self._records():
             values.append(
                 Occurrence(
                     day=d0,
                     hour=hhmm[0],
                     minute=hhmm[1],
                     source="anchor_file",
-                    description=self._description_for_date(d0),
+                    description=description,
                 )
             )
         return values
@@ -473,7 +498,8 @@ class AnchorFileOccurrenceProvider:
         build_local_datetime: Callable[[date, tuple[int, int]], datetime],
         to_local: Callable[[datetime], datetime],
     ) -> Occurrence | None:
-        specs = self._specs()
+        records = self._records()
+        specs = [(item_date, hhmm) for item_date, hhmm, _description in records]
         conversion_key = (
             getattr(build_local_datetime, "__self__", None),
             getattr(build_local_datetime, "__func__", build_local_datetime),
@@ -488,7 +514,8 @@ class AnchorFileOccurrenceProvider:
             self._last_candidate_index = None
         if self._candidate_cache is None:
             candidates: list[datetime] = []
-            for d0, hhmm in specs:
+            descriptions: list[str] = []
+            for (d0, hhmm), (_record_date, _record_hhmm, description) in zip(specs, records):
                 raw_candidate = build_local_datetime(d0, hhmm)
                 if not isinstance(raw_candidate, datetime):
                     raise TypeError("Anchor-file provider returned a non-datetime candidate.")
@@ -496,14 +523,19 @@ class AnchorFileOccurrenceProvider:
                 if not isinstance(candidate, datetime):
                     raise TypeError("Anchor-file provider returned a non-datetime local value.")
                 candidates.append(candidate)
+                descriptions.append(description)
             try:
-                candidates = _sort_datetimes(candidates)
+                ordered = _sort_datetimes(candidates)
             except (TypeError, ValueError) as exc:
                 raise ValueError("Anchor-file provider returned incomparable local datetimes.") from exc
+            description_by_candidate: dict[datetime, str] = {}
+            for candidate, description in zip(candidates, descriptions):
+                description_by_candidate.setdefault(candidate, description)
             self._candidate_cache = []
-            for candidate in candidates:
+            for candidate in ordered:
                 if not self._candidate_cache or _compare_datetimes(candidate, self._candidate_cache[-1]) != 0:
                     self._candidate_cache.append(candidate)
+            self._candidate_descriptions = [description_by_candidate.get(candidate, "") for candidate in self._candidate_cache]
         candidates = self._candidate_cache
         start = self._next_index
         if self._last_after is None:
@@ -551,7 +583,7 @@ class AnchorFileOccurrenceProvider:
             hour=local.hour,
             minute=local.minute,
             source="anchor_file",
-            description=self._description_for_date(local.date()),
+            description=self._candidate_descriptions[selected_index] if selected_index is not None else "",
             local_datetime=local,
         )
 

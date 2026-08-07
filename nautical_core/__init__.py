@@ -243,6 +243,7 @@ panel_line_from_rows = _ui.panel_line_from_rows
 panel_line = _ui.panel_line
 panel_themes = _ui.panel_themes
 chain_colour_root = _import_sibling("panel_colours").chain_colour_root
+DiagnosticEvent = _import_sibling("diagnostic_models").DiagnosticEvent
 
 
 def render_panel(*args, **kwargs):

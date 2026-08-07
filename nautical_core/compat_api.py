@@ -31,7 +31,7 @@ PUBLIC_EXPORTS = (
     'business_calendar_displacement_for_date', 'business_calendar_for_task',
     'business_calendar_definitions', 'cache_key_for_task', 'cache_load', 'cache_save',
     'cache_gc', 'capture_business_calendar_displacements', 'coerce_int',
-    'describe_anchor_dnf', 'describe_anchor_expr', 'diag', 'enable_anchor_cache',
+    'describe_anchor_dnf', 'describe_anchor_expr', 'DiagnosticEvent', 'diag', 'enable_anchor_cache',
     'factor_matches_on', 'fcntl', 'fmt_dt_local', 'fmt_isoz',
     'configured_business_calendars', 'get_configured_business_calendar',
     'lint_anchor_expr', 'next_after_atom_with_mods', 'next_after_factor',

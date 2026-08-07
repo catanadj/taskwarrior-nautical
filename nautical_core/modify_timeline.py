@@ -4,6 +4,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 
+def _timeline_seed_base(task: dict[str, Any]) -> str:
+    """Return the stable recurrence identity used by timeline projections."""
+    from .recurrence_context import RecurrenceContext
+
+    return RecurrenceContext.from_task(task, fallback_chain_id="preview").seed_base
+
+
 def _timeline_omit_label(
     omit_dnf,
     omit_date,
@@ -158,7 +165,7 @@ def _timeline_future_anchor_items(
 ) -> list[tuple[object, datetime, dict[str, Any], str]]:
     items: list[tuple[object, datetime, dict[str, Any], str]] = []
     fut_no = start_no
-    seed_base = (task.get("chainID") or "").strip() or "preview"
+    seed_base = _timeline_seed_base(task)
     nxt_local = to_local_cached(child_due_utc)
     fallback_hhmm = (nxt_local.hour, nxt_local.minute)
     due0, _ = safe_parse_datetime(task.get("due"))
@@ -241,7 +248,7 @@ def _timeline_omitted_before_next_anchor_items(
         return []
 
     items: list[tuple[object, datetime, dict[str, Any], str]] = []
-    seed_base = (task.get("chainID") or "").strip() or "preview"
+    seed_base = _timeline_seed_base(task)
     child_local = to_local_cached(child_due_utc)
     after_local = to_local_cached(cur_end)
     fallback_hhmm = (child_local.hour, child_local.minute)

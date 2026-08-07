@@ -17458,6 +17458,17 @@ def test_recurrence_spec_normalizes_task_fields_and_context():
     expect(RecurrenceSpec.from_task({"anchor": "w:fri"}, context=supplied).context is supplied, "supplied context was replaced")
 
 
+def test_modify_timeline_uses_explicit_recurrence_identity():
+    """Timeline seed selection should honor chainID and require fallback opt-in."""
+    from nautical_core.modify_timeline import _timeline_seed_base
+
+    expect(
+        _timeline_seed_base({"chainID": "chain-a", "uuid": "uuid-a"}) == "chain-a",
+        "timeline preferred UUID over chainID",
+    )
+    expect(_timeline_seed_base({}) == "preview", "timeline fallback identity changed")
+
+
 def test_random_time_window_composition_and_anchor_file_guidance():
     """Unsupported random-time compositions fail with actionable guidance."""
     try:
@@ -27291,6 +27302,7 @@ TESTS.extend([
     test_random_time_window_parser_selects_deterministic_bucketed_slots,
     test_random_time_window_flows_through_anchor_parser_and_resolver,
     test_recurrence_spec_normalizes_task_fields_and_context,
+    test_modify_timeline_uses_explicit_recurrence_identity,
     test_random_time_window_composition_and_anchor_file_guidance,
     test_random_time_window_is_stable_across_processes,
     test_random_time_window_dst_projection_is_deterministic,

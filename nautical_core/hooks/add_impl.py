@@ -1011,6 +1011,7 @@ def _validate_native_until_anchor_slots_or_fail(
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             target_date=core.to_local(target_dt).date(),
             resolve_time_slots=_resolve_time_slots,
+            recurrence_context=core._import_sibling("recurrence_context").RecurrenceContext.from_task(task),
         )
     except Exception as exc:
         astronomy = core._import_sibling("astronomy")

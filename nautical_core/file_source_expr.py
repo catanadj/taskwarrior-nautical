@@ -89,11 +89,20 @@ class _ExpressionParser:
 
     def _read_until_delimiter(self, *, stop: str | None) -> str:
         start = self.pos
+        modifier_depth = 0
         while self.pos < len(self.value):
             char = self.value[self.pos]
-            if char == "|" or char == ")" or (stop is not None and char == stop):
+            if char == "(" and "@t=rand(" in self.value[start:self.pos + 1].lower():
+                modifier_depth += 1
+                self.pos += 1
+                continue
+            if char == ")" and modifier_depth:
+                modifier_depth -= 1
+                self.pos += 1
+                continue
+            if modifier_depth == 0 and (char == "|" or char == ")" or (stop is not None and char == stop)):
                 break
-            if char == "(":
+            if char == "(" and modifier_depth == 0:
                 raise self._error("'(' is only allowed at the start of a branch")
             self.pos += 1
         return self.value[start:self.pos]

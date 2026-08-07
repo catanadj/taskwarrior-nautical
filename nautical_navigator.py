@@ -2287,6 +2287,9 @@ class TaskAnalyzer:
         if anchor_file:
             try:
                 anchor_files = core._import_sibling("anchor_files")
+                recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
+                    chain_id=task.get("chainID") or task.get("uuid") or "analyzer"
+                )
                 fallback = default_hhmm
                 cur_after = after_dt_local
                 while len(file_out) < limit:
@@ -2298,6 +2301,7 @@ class TaskAnalyzer:
                         build_local_datetime=core.build_local_datetime,
                         to_local=core.to_local,
                         business_calendar=business_calendar,
+                        context=recurrence_context,
                     )
                     if not nxt:
                         break

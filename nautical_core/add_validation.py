@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from nautical_core import astronomy, native_until
+from nautical_core.recurrence_context import RecurrenceContext
 
 
 def validate_until_not_past(until_dt: Any, now_utc: datetime, *, core: Any) -> tuple[bool, str | None]:
@@ -60,6 +61,7 @@ def collect_anchor_time_slots(
     anchor_file_dir: str,
     target_date: Any = None,
     resolve_time_slots: Callable[[Any, Any], list[tuple[int, int]]] | None = None,
+    recurrence_context: RecurrenceContext | None = None,
 ) -> tuple[tuple[int, int], ...]:
     """Return every effective clock time that an anchor or anchor_file can produce."""
     out: set[tuple[int, int]] = set()
@@ -86,6 +88,7 @@ def collect_anchor_time_slots(
             str(anchor_file_value).strip(),
             anchor_file_dir,
             fallback_hhmm,
+            context=recurrence_context,
         ):
             out.add(hhmm)
     return tuple(sorted(out))

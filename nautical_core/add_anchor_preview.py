@@ -330,12 +330,15 @@ def _anchor_file_occurrences_local(
     *,
     core: Any,
     fallback_hhmm: tuple[int, int],
+    seed_base: str = "",
 ) -> list[datetime]:
     anchor_files = core._import_sibling("anchor_files")
+    context = core._import_sibling("recurrence_context").RecurrenceContext(chain_id=seed_base) if seed_base else None
     occurrence_specs = anchor_files.load_anchor_file_occurrence_specs(
         anchor_file_str,
         getattr(core, "ANCHOR_FILE_DIR", ""),
         fallback_hhmm,
+        context=context,
     )
     out = [
         core.to_local(core.build_local_datetime(d0, hhmm))
@@ -415,7 +418,7 @@ def _anchor_file_preview_occurrences(
     seed_base: str,
 ) -> list[datetime]:
     out: list[datetime] = []
-    for item_local in _anchor_file_occurrences_local(anchor_file_str, core=core, fallback_hhmm=fallback_hhmm):
+    for item_local in _anchor_file_occurrences_local(anchor_file_str, core=core, fallback_hhmm=fallback_hhmm, seed_base=seed_base):
         if _anchor_file_is_omitted(omit_dnf, item_local, core=core, seed_base=seed_base):
             continue
         out.append(item_local)

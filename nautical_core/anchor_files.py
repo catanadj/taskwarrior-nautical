@@ -21,6 +21,7 @@ from .file_source_expr import (
     resolve_file_sources,
 )
 from .schedule_utils import apply_day_offset, roll_apply
+from .recurrence_context import RecurrenceContext
 from .time_windows import parse_clock_value, parse_random_time_window_spec, parse_time_schedule_spec, parse_time_window_spec
 
 
@@ -86,10 +87,9 @@ def parse_anchor_file_spec(value: str | None) -> tuple[str, dict]:
             values = [part.strip() for part in tok.split("=", 1)[1].split(",") if part.strip()]
             random_window = parse_random_time_window_spec(tok.split("=", 1)[1].strip())
             if random_window is not None:
-                raise ValueError(
-                    "anchor_file @t does not support random time windows; "
-                    "use anchor @t=rand(...) so selection can be tied to the chain identity."
-                )
+                mods["t"] = []
+                mods["time_random"] = random_window.canonical
+                continue
             try:
                 window = parse_time_window_spec(tok.split("=", 1)[1].strip())
             except ValueError as exc:
@@ -179,13 +179,19 @@ def validate_business_calendar_anchor_file(value: str) -> None:
 def _parse_source_mod_layers(
     display_name: str,
     modifier_layers: tuple[str, ...],
-) -> tuple[list[dict], tuple[int, int] | list[tuple[int, int]] | None]:
+) -> tuple[list[dict], object | None]:
     layers: list[dict] = []
-    source_time: tuple[int, int] | list[tuple[int, int]] | None = None
+    source_time: object | None = None
     for modifier_text in modifier_layers:
         _file_name, mods = parse_anchor_file_spec(f"source{modifier_text}")
         tval = mods.get("t")
-        if tval is not None:
+        if mods.get("time_random"):
+            if source_time is not None:
+                raise ValueError(
+                    f"anchor_file '{display_name}' has more than one @t modifier across its expression groups."
+                )
+            source_time = {"t": [], "time_random": str(mods["time_random"])}
+        elif tval is not None:
             if source_time is not None:
                 raise ValueError(
                     f"anchor_file '{display_name}' has more than one @t modifier across its expression groups."
@@ -202,7 +208,7 @@ def _parse_source_mod_layers(
 def _load_anchor_source_data(
     source: ResolvedFileSource,
     business_calendar: BusinessCalendar,
-) -> tuple[frozenset[date], dict[date, str], tuple[int, int] | list[tuple[int, int]] | None]:
+) -> tuple[frozenset[date], dict[date, str], object | None]:
     dates, descriptions = load_file_date_data(
         source.path,
         label=f"anchor_file '{source.display_name}'",
@@ -355,6 +361,7 @@ def load_anchor_file_occurrence_specs(
     fallback_hhmm: tuple[int, int],
     *,
     business_calendar: BusinessCalendar | None = None,
+    context: RecurrenceContext | None = None,
 ) -> list[tuple[date, tuple[int, int]]]:
     business_calendar = effective_business_calendar(business_calendar)
     resolution = _resolved_anchor_sources(name, anchor_file_dir)
@@ -362,11 +369,18 @@ def load_anchor_file_occurrence_specs(
     seen: set[tuple[date, tuple[int, int]]] = set()
     for source in resolution.sources:
         dates, _descriptions, source_time = _load_anchor_source_data(source, business_calendar)
-        if source_time and all(isinstance(item, tuple) and len(item) == 3 for item in source_time):
+        if isinstance(source_time, dict) and source_time.get("time_random"):
+            if context is None:
+                raise ValueError("anchor_file random time windows require recurrence context with chain ID.")
+            times = None
+        elif source_time and all(isinstance(item, tuple) and len(item) == 3 for item in source_time):
             times = list(source_time)
         else:
             times = _norm_t_list(source_time) or [fallback_hhmm]
         for item_date in sorted(dates):
+            if isinstance(source_time, dict) and source_time.get("time_random"):
+                from .time_slots import resolve_time_slots_with_offsets
+                times = resolve_time_slots_with_offsets(source_time, item_date, context=context)
             for slot in times:
                 if isinstance(slot, tuple) and len(slot) == 3:
                     day_offset, hour, minute = slot
@@ -395,12 +409,14 @@ def next_anchor_file_occurrence_after(
     build_local_datetime: Callable[[date, tuple[int, int]], datetime],
     to_local: Callable[[datetime], datetime],
     business_calendar: BusinessCalendar | None = None,
+    context: RecurrenceContext | None = None,
 ) -> datetime | None:
     for d0, hhmm in load_anchor_file_occurrence_specs(
         name,
         anchor_file_dir,
         fallback_hhmm,
         business_calendar=business_calendar,
+        context=context,
     ):
         cand_local = to_local(build_local_datetime(d0, hhmm))
         if cand_local > after_dt_local:

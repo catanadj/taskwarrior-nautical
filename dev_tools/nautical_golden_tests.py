@@ -16471,6 +16471,26 @@ def test_anchor_file_occurrences_expand_bounded_time_window():
     )
 
 
+def test_anchor_file_occurrences_expand_random_time_window_with_context():
+    """File dates should use the supplied recurrence context for random times."""
+    import nautical_core.anchor_files as anchor_files
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.time_windows import parse_random_time_window_spec
+
+    with tempfile.TemporaryDirectory() as td:
+        sample = Path(td) / "calendar.csv"
+        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
+        occurrences = anchor_files.load_anchor_file_occurrence_specs(
+            "calendar.csv@t=rand(06..18/3)",
+            td,
+            (8, 0),
+            context=RecurrenceContext(chain_id="file-chain"),
+        )
+    slots = parse_random_time_window_spec("rand(06..18/3)").slots_with_offsets("file-chain/2026-08-03")
+    expected = [(date(2026, 8, 3), (slot[1], slot[2])) for slot in slots]
+    expect(occurrences == expected, f"unexpected random anchor_file occurrences: {occurrences!r}")
+
+
 def test_anchor_file_occurrences_expand_overnight_time_window():
     """File dates own overnight slots even when generated times land next day."""
     import nautical_core.anchor_files as anchor_files
@@ -17384,12 +17404,9 @@ def test_random_time_window_composition_and_anchor_file_guidance():
     except core.ParseError as exc:
         expect("separate anchor branches" in str(exc), f"unexpected composition error: {exc}")
     from nautical_core.anchor_files import parse_anchor_file_spec
-
-    try:
-        parse_anchor_file_spec("events.csv@t=rand(06..18)")
-        expect(False, "anchor_file accepted unsupported random time metadata")
-    except ValueError as exc:
-        expect("chain identity" in str(exc), f"unexpected anchor_file random-time error: {exc}")
+    file_name, file_mods = parse_anchor_file_spec("events.csv@t=rand(06..18)")
+    expect(file_name == "events.csv", f"anchor_file name changed: {file_name!r}")
+    expect(file_mods.get("time_random") == "rand(06:00..18:00)", f"anchor_file random metadata was lost: {file_mods!r}")
 
 
 def test_random_time_window_is_stable_across_processes():
@@ -26869,6 +26886,7 @@ TESTS = [
     test_anchor_file_spec_parses_time_and_negative_offset,
     test_anchor_file_spec_parses_bounded_time_window,
     test_anchor_file_occurrences_expand_bounded_time_window,
+    test_anchor_file_occurrences_expand_random_time_window_with_context,
     test_anchor_file_occurrences_expand_overnight_time_window,
     test_anchor_file_occurrences_expand_composable_time_schedule,
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,

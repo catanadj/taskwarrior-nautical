@@ -2622,6 +2622,7 @@ def _validate_native_until_anchor_slots_or_fail(task: dict) -> None:
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             target_date=target_local.date(),
             resolve_time_slots=lambda value, target_date: _norm_hhmm_list(value, target_date),
+            recurrence_context=core._import_sibling("recurrence_context").RecurrenceContext.from_task(task),
         )
     except Exception as exc:
         astronomy = core._import_sibling("astronomy")
@@ -3613,10 +3614,12 @@ def _anchor_file_occurrences_local(parent: dict, fallback_hhmm: tuple[int, int])
     if not anchor_file:
         return []
     anchor_files = core._import_sibling("anchor_files")
+    context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(parent)
     occurrence_specs = anchor_files.load_anchor_file_occurrence_specs(
         anchor_file,
         getattr(core, "ANCHOR_FILE_DIR", ""),
         fallback_hhmm,
+        context=context,
     )
     out = [
         _tolocal(core.build_local_datetime(d0, hhmm))

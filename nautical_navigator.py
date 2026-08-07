@@ -2173,15 +2173,8 @@ class TaskAnalyzer:
         Project the next anchor and anchor_file datetimes in LOCAL TZ, strictly after
         `start_from_date` (exclusive). If start_from_date is None, we fall back to *today*.
         """
-        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
-            task, fallback_chain_id=task.get("uuid") or "analyzer"
-        )
-        recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
-            task,
-            context=recurrence_context,
-        )
-        anchor_expr = recurrence_spec.anchor
-        anchor_file = recurrence_spec.anchor_file
+        anchor_expr = (task.get("anchor") or "").strip()
+        anchor_file = (task.get("anchor_file") or "").strip()
         if not core or (not anchor_expr and not anchor_file):
             return []
         try:
@@ -2189,6 +2182,15 @@ class TaskAnalyzer:
         except Exception as exc:
             self._record_projection_warning(f"Business calendar: {_format_runtime_error(exc)}")
             return []
+        recurrence_evaluator = core._import_sibling("recurrence_evaluator").RecurrenceEvaluator.from_task(
+            task,
+            fallback_chain_id=task.get("uuid") or "analyzer",
+            timezone=getattr(core, "_LOCAL_TZ", None),
+            business_calendar=business_calendar,
+            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        )
+        recurrence_context = recurrence_evaluator.context
 
         # Base local date
         if start_from_date is None:
@@ -2203,7 +2205,7 @@ class TaskAnalyzer:
         def resolve_hhmms(dnf, target_date, seed_date):
             """Resolve every wall-clock slot belonging to the matching term."""
             time_slots = core._import_sibling("time_slots")
-            recurrence_context = recurrence_spec.context
+            recurrence_context = recurrence_evaluator.context
             for term in dnf:
                 if not all(
                     core.atom_matches_on(
@@ -2251,7 +2253,7 @@ class TaskAnalyzer:
 
         if anchor_expr:
             try:
-                dnf = core.validate_anchor_expr_strict(anchor_expr)
+                dnf = recurrence_evaluator.anchor_dnf
             except Exception as exc:
                 self._record_projection_warning(f"Anchor expression: {_format_runtime_error(exc)}")
                 dnf = None
@@ -2337,9 +2339,6 @@ class TaskAnalyzer:
             try:
                 occurrence_provider = core._import_sibling("occurrence_provider")
                 anchor_files = core._import_sibling("anchor_files")
-                recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
-                    task, fallback_chain_id=task.get("uuid") or "analyzer"
-                )
                 provider = anchor_files.AnchorFileOccurrenceProvider(
                     anchor_file,
                     getattr(core, "ANCHOR_FILE_DIR", ""),

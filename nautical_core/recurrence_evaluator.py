@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
 from .recurrence_context import RecurrenceContext
@@ -26,6 +26,21 @@ class RecurrenceLimits:
 
     chain_max: int | None = None
     chain_until: datetime | None = None
+
+    def allows(self, link_no: int, candidate_utc: datetime) -> bool:
+        """Return whether a projected link remains inside chain limits."""
+        if isinstance(link_no, bool) or not isinstance(link_no, int) or link_no <= 0:
+            raise ValueError("Recurrence link number must be a positive integer.")
+        if not isinstance(candidate_utc, datetime):
+            raise TypeError("Recurrence limit checks require a datetime candidate.")
+        if self.chain_max is not None and link_no > self.chain_max:
+            return False
+        if self.chain_until is not None:
+            from .timeutil import compare_datetimes
+
+            if compare_datetimes(candidate_utc, self.chain_until) > 0:
+                return False
+        return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +177,34 @@ class RecurrenceEvaluator:
         if self.spec.chain_max is not None and self.spec.chain_max <= 0:
             raise ValueError("chainMax must be greater than zero.")
         return RecurrenceLimits(chain_max=self.spec.chain_max, chain_until=chain_until)
+
+    def cp_interval_for_link(self, link_no: int) -> timedelta | None:
+        """Resolve one CP interval using this evaluator's stable chain identity."""
+        if self.kind != "cp":
+            raise ValueError("CP interval lookup requires a CP recurrence.")
+        from . import cp_sequence_interval_for_link
+
+        return cp_sequence_interval_for_link(self.spec.cp, link_no, chain_id=self.chain_id)
+
+    def project_cp(self, base_utc: datetime, link_no: int) -> datetime:
+        """Project a CP link from an existing UTC due instant."""
+        if not isinstance(base_utc, datetime):
+            raise TypeError("CP projection requires a datetime base.")
+        interval = self.cp_interval_for_link(link_no)
+        if interval is None:
+            raise ValueError(f"Unable to resolve CP interval for link {link_no}.")
+        return base_utc + interval
+
+    def limits_allow(self, candidate: datetime, link_no: int) -> bool:
+        """Check chain limits for a local or UTC candidate occurrence."""
+        if not isinstance(candidate, datetime):
+            raise TypeError("Recurrence limit checks require a datetime candidate.")
+        candidate_utc = (
+            self.local_naive_to_utc(candidate)
+            if candidate.tzinfo is None
+            else candidate.astimezone(timezone.utc)
+        )
+        return self.limits.allows(link_no, candidate_utc)
 
     def next_after(
         self,

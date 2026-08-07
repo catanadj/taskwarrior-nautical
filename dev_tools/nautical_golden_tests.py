@@ -19247,6 +19247,23 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         {"chainID": "cp-chain", "cp": "1d,rand(2d..3d)"}
     )
     expect(len(cp_evaluator.cp_tokens or []) == 2, "CP token parsing was not owned by evaluator")
+    expect(
+        cp_evaluator.cp_interval_for_link(1) == timedelta(days=1),
+        "fixed CP interval projection changed",
+    )
+    random_interval = cp_evaluator.cp_interval_for_link(2)
+    expect(
+        random_interval is not None and timedelta(days=2) <= random_interval <= timedelta(days=3),
+        f"random CP interval was not projected through chain identity: {random_interval!r}",
+    )
+    expect(
+        cp_evaluator.project_cp(datetime(2025, 1, 1, tzinfo=timezone.utc), 1)
+        == datetime(2025, 1, 2, tzinfo=timezone.utc),
+        "CP due-date projection changed",
+    )
+    expect(parsed.limits_allow(datetime(2025, 12, 31, 22, 0), 4), "valid chain limit was rejected")
+    expect(not parsed.limits_allow(datetime(2026, 1, 1, 0, 0), 4), "chainUntil limit was ignored")
+    expect(not parsed.limits_allow(datetime(2025, 12, 31, 22, 0), 5), "chainMax limit was ignored")
 
     def next_day(_dnf, after_local, **_kwargs):
         return after_local + timedelta(days=1)

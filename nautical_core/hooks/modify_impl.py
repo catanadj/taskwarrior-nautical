@@ -5179,21 +5179,35 @@ def _timeline_lines(
         default_seed = child_local.date()
         dnf_for_merge = dnf if kind == "anchor" else None
         anchor_inclusion = core._import_sibling("anchor_inclusion")
-        events = anchor_inclusion.collect_occurrence_events_local(
-            dnf=dnf_for_merge,
-            anchor_file_str=(task.get("anchor_file") or "").strip(),
-            after_local_dt=child_local,
-            inclusive=True,
-            limit_included=max(8, next_count + 6),
-            fallback_hhmm=fallback_hhmm,
-            default_seed_date=default_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-            next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            max_iterations=_MAX_ITERATIONS,
+        AnchorEventOccurrenceProvider = core._import_sibling("occurrence_provider").AnchorEventOccurrenceProvider
+
+        event_provider = AnchorEventOccurrenceProvider(
+            lambda value: anchor_inclusion.next_occurrence_event_local(
+                dnf=dnf_for_merge,
+                anchor_file_str=(task.get("anchor_file") or "").strip(),
+                after_local_dt=value,
+                inclusive=False,
+                fallback_hhmm=fallback_hhmm,
+                default_seed_date=default_seed,
+                seed_base=seed_base,
+                omit_dnf=omit_dnf,
+                core=core,
+                next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
+                anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            )
         )
+        events: list[tuple[datetime, bool]] = []
+        event_cursor = child_local - timedelta(microseconds=1)
+        while len(events) < max(8, next_count + 6):
+            occurrence = event_provider.next_after(
+                event_cursor,
+                build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+                to_local=lambda value: value,
+            )
+            if occurrence is None or occurrence.local_datetime is None:
+                break
+            event_cursor = occurrence.local_datetime
+            events.append((event_cursor, occurrence.omitted))
         cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
         nxt_no = cur_no + 1
         allowed_future = next_count if cap_no is None else max(0, min(next_count, cap_no - nxt_no))

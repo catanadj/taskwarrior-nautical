@@ -16967,6 +16967,35 @@ def test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates():
     )
 
 
+def test_modify_anchor_file_mode_orders_dst_fold_by_instant():
+    """A repeated local hour must be filtered by instant, not wall-clock labels."""
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("Europe/Bucharest")
+    due = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
+    end = datetime(2026, 10, 25, 3, 30, tzinfo=zone, fold=1)
+    first_fold = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=0)
+    second_fold = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)
+    after_end = datetime(2026, 10, 25, 3, 45, tzinfo=zone, fold=1)
+    original = _hook._anchor_file_future_occurrences
+    _hook._anchor_file_future_occurrences = lambda *args, **kwargs: [first_fold, second_fold, after_end]
+    try:
+        next_local, info = _hook._anchor_file_due_for_mode(
+            "all",
+            parent={"anchor_file": "fold.csv"},
+            omit_dnf=None,
+            due_local=due,
+            end_local=end,
+            due_dt_utc=due.astimezone(timezone.utc),
+            fallback_hhmm=(3, 15),
+            seed_base="dst-fold",
+        )
+    finally:
+        _hook._anchor_file_future_occurrences = original
+    expect(next_local is second_fold, f"DST fold selected the wrong occurrence: {next_local!r}")
+    expect(info.get("missed_count") == 1, f"DST fold counted wall-clock duplicate: {info!r}")
+
+
 def test_merged_anchor_file_provider_carries_context_and_reuses_specs():
     """Merged preview streams should carry chain context and expand files once."""
     import nautical_core.add_anchor_preview as preview
@@ -28459,6 +28488,7 @@ TESTS = [
     test_anchor_file_occurrence_provider_caches_expanded_specs,
     test_anchor_file_occurrence_provider_advances_cached_lookup_cursor,
     test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates,
+    test_modify_anchor_file_mode_orders_dst_fold_by_instant,
     test_merged_anchor_file_provider_carries_context_and_reuses_specs,
     test_event_provider_preserves_anchor_file_source_description,
     test_included_provider_preserves_anchor_file_source_description,

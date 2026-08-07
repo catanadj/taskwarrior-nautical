@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from nautical_core import astronomy, native_until
+from nautical_core.occurrence_provider import _compare_datetimes
 from nautical_core.recurrence_spec import RecurrenceSpec
 
 
@@ -85,7 +86,7 @@ def deleted_chain_disposition(
     if until_err or end_err or until_dt is None or end_dt is None:
         return "ambiguous", "deleted task has no reliable native-until expiration evidence"
     try:
-        if until_dt <= end_dt:
+        if _compare_datetimes(until_dt, end_dt) <= 0:
             return "expiration", "native until elapsed"
         return "manual", "deleted before native until"
     except Exception:
@@ -183,7 +184,7 @@ def invalid_native_until_reason(
     target_dt, target_err = safe_parse_datetime(target_raw)
     if until_err or target_err or until_dt is None or target_dt is None:
         return "native until or recurrence target is not parseable"
-    if until_dt <= target_dt:
+    if _compare_datetimes(until_dt, target_dt) <= 0:
         return f"native until is not later than {target_field}"
     return None
 
@@ -444,7 +445,7 @@ def _build_reconcile_plan_unscoped(
 
     if not child_due:
         return ReconcilePlan("error", parent, next_link, "could not compute next recurrence timestamp")
-    if until_dt and child_due > until_dt:
+    if until_dt and _compare_datetimes(child_due, until_dt) > 0:
         return ReconcilePlan("legitimate_final", parent, next_link, "reached chainUntil", child_due=child_due)
 
     child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"

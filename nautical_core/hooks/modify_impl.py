@@ -517,11 +517,11 @@ def _append_next_wait_sched_rows(
     # Informative order validation: due > scheduled > wait
     # This can be violated when due is auto-assigned but scheduled/wait are user-specified.
     issues: list[str] = []
-    if anchor_field != "scheduled" and isinstance(dt_s, datetime) and dt_s > nxt_due_utc:
+    if anchor_field != "scheduled" and isinstance(dt_s, datetime) and _compare_datetimes(dt_s, nxt_due_utc) > 0:
         issues.append(f"scheduled is after {anchor_label} by {_fmt_td_dd_hhmm(dt_s - nxt_due_utc)}")
-    if isinstance(dt_w, datetime) and dt_w > nxt_due_utc:
+    if isinstance(dt_w, datetime) and _compare_datetimes(dt_w, nxt_due_utc) > 0:
         issues.append(f"wait is after {anchor_label} by {_fmt_td_dd_hhmm(dt_w - nxt_due_utc)}")
-    if anchor_field != "scheduled" and isinstance(dt_s, datetime) and isinstance(dt_w, datetime) and dt_w > dt_s:
+    if anchor_field != "scheduled" and isinstance(dt_s, datetime) and isinstance(dt_w, datetime) and _compare_datetimes(dt_w, dt_s) > 0:
         issues.append(f"wait is after scheduled by {_fmt_td_dd_hhmm(dt_w - dt_s)}")
 
     if issues:
@@ -957,6 +957,15 @@ def _fmtlocal(dt):
 
 def _tolocal(dt):
     return _to_local_cached(dt)
+
+
+def _compare_datetimes(left: datetime, right: datetime) -> int:
+    """Compare aware datetimes by instant, preserving DST fold ordering."""
+    return core._import_sibling("occurrence_provider")._compare_datetimes(left, right)
+
+
+def _later_datetime(left: datetime, right: datetime) -> datetime:
+    return left if _compare_datetimes(left, right) >= 0 else right
 
 
 # ------------------------------------------------------------------------------
@@ -3245,7 +3254,7 @@ def _skip_reference_dt_local(
     if due_local is None:
         return end_local
 
-    if end_local >= due_local:
+    if _compare_datetimes(end_local, due_local) >= 0:
         return end_local
 
     slots = _extract_time_slots_for_date(dnf, due_local.date(), default_seed_date, seed_base)
@@ -3255,7 +3264,7 @@ def _skip_reference_dt_local(
     if end_local.date() != due_local.date():
         return due_local
 
-    prev_slots = [s for s in slots if _anchor_slot_local_dt(due_local.date(), s) <= end_local]
+    prev_slots = [s for s in slots if _compare_datetimes(_anchor_slot_local_dt(due_local.date(), s), end_local) <= 0]
     if not prev_slots:
         return due_local
 
@@ -3365,7 +3374,7 @@ def _missed_occurrences_between_local(
     guard: int = 512,
 ):
     """Return occurrences strictly after due and <= end."""
-    if end_local_dt <= due_local_dt:
+    if _compare_datetimes(end_local_dt, due_local_dt) <= 0:
         return []
     missed: list[datetime] = []
     probe = due_local_dt
@@ -3378,7 +3387,7 @@ def _missed_occurrences_between_local(
             omit_dnf=omit_dnf,
             fallback_hhmm=fallback_hhmm,
         )
-        if nxt is None or nxt > end_local_dt:
+        if nxt is None or _compare_datetimes(nxt, end_local_dt) > 0:
             break
         missed.append(nxt)
         probe = nxt
@@ -3806,10 +3815,10 @@ def _anchor_file_due_for_mode(
     )
     if not occurrences:
         return None, info
-    after_due = [dt for dt in occurrences if dt > due_local]
-    after_end = [dt for dt in occurrences if dt > end_local]
+    after_due = [dt for dt in occurrences if _compare_datetimes(dt, due_local) > 0]
+    after_end = [dt for dt in occurrences if _compare_datetimes(dt, end_local) > 0]
     if mode == "all":
-        missed = [dt for dt in occurrences if dt > due_local and dt <= end_local]
+        missed = [dt for dt in occurrences if _compare_datetimes(dt, due_local) > 0 and _compare_datetimes(dt, end_local) <= 0]
         info["missed_count"] = len(missed)
         info["missed_preview"] = [x.isoformat() for x in missed[:5]]
         if missed:
@@ -3818,7 +3827,7 @@ def _anchor_file_due_for_mode(
         info["basis"] = "after_due"
         return (after_due[0] if after_due else None), info
     if mode == "flex":
-        missed = [dt for dt in occurrences if due_dt_utc and dt > due_local and dt <= end_local]
+        missed = [dt for dt in occurrences if due_dt_utc and _compare_datetimes(dt, due_local) > 0 and _compare_datetimes(dt, end_local) <= 0]
         info["basis"] = "flex"
         info["missed_count"] = len(missed)
         info["missed_preview"] = [x.isoformat() for x in missed[:5]]
@@ -3887,7 +3896,7 @@ def _anchor_due_mode_flex(
     fallback_hhmm,
 ) -> tuple[object, dict]:
     missed_dts = []
-    if due_dt_utc and end_local > due_local:
+    if due_dt_utc and _compare_datetimes(end_local, due_local) > 0:
         missed_dts = _collect_missed_occurrences(
             dnf,
             after_local_dt=due_local,
@@ -3927,7 +3936,7 @@ def _anchor_due_mode_skip(
 ) -> tuple[object, dict]:
     nxt_local = _next_occurrence_after_local_dt(
         dnf,
-        after_local_dt=(max(end_local, due_local) if due_local else end_local),
+        after_local_dt=(_later_datetime(end_local, due_local) if due_local else end_local),
         default_seed_date=default_seed_date,
         seed_base=seed_base,
         omit_dnf=omit_dnf,
@@ -4037,7 +4046,7 @@ def _compute_anchor_child_due(parent: dict):
     else:
         occurrences = _anchor_included_occurrences(
             parent,
-            after_local_dt=(due_local if mode == "all" else (end_local if mode == "flex" else max(end_local, due_local))),
+            after_local_dt=(due_local if mode == "all" else (end_local if mode == "flex" else _later_datetime(end_local, due_local))),
             inclusive=False,
             limit=32,
             fallback_hhmm=fallback_hhmm,
@@ -4059,7 +4068,7 @@ def _compute_anchor_child_due(parent: dict):
                 default_seed_date=default_seed,
                 dnf=dnf,
                 anchor_file_provider=anchor_file_provider,
-            ) if dt <= end_local]
+            ) if _compare_datetimes(dt, end_local) <= 0]
             if missed:
                 nxt_local = missed[0]
                 info = {"mode": "all", "basis": "missed", "missed_count": len(missed), "missed_preview": [x.isoformat() for x in missed[:5]]}
@@ -5348,7 +5357,7 @@ def _timeline_lines(
             if item_local is None:
                 continue
             item_utc = item_local.astimezone(timezone.utc)
-            if item_utc <= child_due_utc:
+            if _compare_datetimes(item_utc, child_due_utc) <= 0:
                 continue
             if is_omitted:
                 items.append(
@@ -5465,7 +5474,7 @@ def _cap_from_until_cp(task, next_due_utc):
     last_dt = None
     iterations = 0
 
-    while ndt and ndt <= until and iterations < _MAX_ITERATIONS:
+    while ndt and _compare_datetimes(ndt, until) <= 0 and iterations < _MAX_ITERATIONS:
         iterations += 1
         last_no, last_dt = nno, ndt
         td = _cp_sequence_period_for_link(
@@ -5511,7 +5520,7 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
     iterations = 0
 
     # Count occurrences starting with the already-computed next due.
-    while iterations < _MAX_ITERATIONS and cursor <= until_local:
+    while iterations < _MAX_ITERATIONS and _compare_datetimes(cursor, until_local) <= 0:
         iterations += 1
         count += 1
         last_hit = cursor
@@ -5541,7 +5550,7 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
         if cursor is None:
             break
 
-    if cursor is not None and cursor <= until_local and iterations >= _MAX_ITERATIONS:
+    if cursor is not None and _compare_datetimes(cursor, until_local) <= 0 and iterations >= _MAX_ITERATIONS:
         raise ValueError(
             f"Anchor chainUntil projection exceeded {_MAX_ITERATIONS} occurrences; "
             "narrow chainUntil or use a larger recurrence interval."
@@ -6982,7 +6991,7 @@ def _handle_deleted_modify(old: dict, new: dict) -> None:
                     and not end_err
                     and until_dt is not None
                     and end_dt is not None
-                    and until_dt <= end_dt
+                    and _compare_datetimes(until_dt, end_dt) <= 0
                 )
             except Exception:
                 has_expiration_evidence = False

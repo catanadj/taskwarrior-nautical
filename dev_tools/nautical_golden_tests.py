@@ -17431,6 +17431,8 @@ def test_random_time_window_flows_through_anchor_parser_and_resolver():
         expect(False, "recurrence context accepted a task without chainID")
     except ValueError as exc:
         expect("chain ID" in str(exc), f"unexpected missing-chain-id error: {exc}")
+    fallback = RecurrenceContext.from_task({"uuid": "preview-uuid"}, fallback_chain_id="preview")
+    expect(fallback.chain_id == "preview", "explicit preview fallback did not set context identity")
 
 
 def test_recurrence_spec_normalizes_task_fields_and_context():

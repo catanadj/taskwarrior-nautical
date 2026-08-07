@@ -34,9 +34,16 @@ class RecurrenceContext:
         return self.chain_id
 
     @classmethod
-    def from_task(cls, task: Mapping[str, Any], **kwargs: Any) -> "RecurrenceContext":
-        """Build context from a task without silently accepting a missing identity."""
-        return cls(chain_id=str(task.get("chainID") or ""), **kwargs)
+    def from_task(
+        cls,
+        task: Mapping[str, Any],
+        *,
+        fallback_chain_id: str | None = None,
+        **kwargs: Any,
+    ) -> "RecurrenceContext":
+        """Build context, with any non-chain fallback requiring explicit opt-in."""
+        chain_id = task.get("chainID") or fallback_chain_id or ""
+        return cls(chain_id=str(chain_id), **kwargs)
 
 
 __all__ = ("RecurrenceContext",)

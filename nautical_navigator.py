@@ -2137,8 +2137,8 @@ class TaskAnalyzer:
     # ── Anchor / CP analysis helpers ─────────────────────────────────────────
     def _anchor_summary(self, task: Dict) -> Optional[Tuple[str, str]]:
         """Return a concise summary for anchor / anchor_file sources."""
-        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
-            chain_id=task.get("chainID") or task.get("uuid") or "analyzer"
+        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
+            task, fallback_chain_id=task.get("uuid") or "analyzer"
         )
         recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
             task,
@@ -2173,8 +2173,8 @@ class TaskAnalyzer:
         Project the next anchor and anchor_file datetimes in LOCAL TZ, strictly after
         `start_from_date` (exclusive). If start_from_date is None, we fall back to *today*.
         """
-        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
-            chain_id=task.get("chainID") or task.get("uuid") or "analyzer"
+        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
+            task, fallback_chain_id=task.get("uuid") or "analyzer"
         )
         recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
             task,
@@ -2299,8 +2299,8 @@ class TaskAnalyzer:
         if anchor_file:
             try:
                 anchor_files = core._import_sibling("anchor_files")
-                recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
-                    chain_id=task.get("chainID") or task.get("uuid") or "analyzer"
+                recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
+                    task, fallback_chain_id=task.get("uuid") or "analyzer"
                 )
                 provider = anchor_files.AnchorFileOccurrenceProvider(
                     anchor_file,
@@ -2381,8 +2381,8 @@ class TaskAnalyzer:
         anchor_file = (task.get("anchor_file") or "").strip()
         if not anchor_expr and not anchor_file:
             return None
-        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
-            chain_id=task.get("chainID") or task.get("uuid") or "analyzer"
+        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
+            task, fallback_chain_id=task.get("uuid") or "analyzer"
         )
         try:
             business_calendar = core.business_calendar_for_task(task)

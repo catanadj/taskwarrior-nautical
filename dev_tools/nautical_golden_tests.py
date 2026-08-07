@@ -16095,6 +16095,49 @@ def test_on_modify_anchor_chainmax_forecast_is_bounded():
     expect(cp_final is None, "unbounded CP forecast returned a fabricated final date")
 
 
+def test_on_modify_anchor_file_child_projection_reuses_provider():
+    """Combined all-mode child projection should build one anchor-file provider."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_file_session_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+    anchor_inclusion = mod.core._import_sibling("anchor_inclusion")
+    original_builder = anchor_inclusion._build_anchor_file_provider
+    original_included = mod._anchor_included_occurrences
+    builders = []
+    providers = []
+
+    def build_provider(*_args, **_kwargs):
+        provider = object()
+        builders.append(provider)
+        return provider
+
+    def included(_parent, *, after_local_dt, anchor_file_provider=None, **_kwargs):
+        providers.append(anchor_file_provider)
+        return [after_local_dt + timedelta(minutes=30)]
+
+    anchor_inclusion._build_anchor_file_provider = build_provider
+    mod._anchor_included_occurrences = included
+    try:
+        due = mod.core.build_local_datetime(date(2026, 8, 3), (9, 0))
+        child_due, _meta, _dnf = mod._compute_anchor_child_due(
+            {
+                "anchor": "w:mon@t=09:00",
+                "anchor_file": "calendar.csv@t=09:00",
+                "anchor_mode": "all",
+                "chainID": "anchor-file-session",
+                "due": mod.core.fmt_isoz(due),
+                "end": mod.core.fmt_isoz(due + timedelta(hours=1)),
+            }
+        )
+    finally:
+        anchor_inclusion._build_anchor_file_provider = original_builder
+        mod._anchor_included_occurrences = original_included
+    expect(len(builders) == 1, f"child projection rebuilt anchor-file provider {len(builders)} times")
+    expect(providers and all(value is builders[0] for value in providers), "child projection did not reuse its provider")
+    expect(mod.core.to_local(child_due).strftime("%H:%M") == "09:30", f"unexpected projected child due: {child_due!r}")
+
+
 def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
     """scheduled-only anchor chains should compute missed occurrences from scheduled, not completion time."""
     hook = _find_hook_file("on-modify.nautical")
@@ -27889,6 +27932,7 @@ TESTS = [
     test_on_modify_compute_cp_random_selects_deterministic_interval,
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_on_modify_anchor_chainmax_forecast_is_bounded,
+    test_on_modify_anchor_file_child_projection_reuses_provider,
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_time_window_preview_emits_bounded_slots,
     test_hook_on_add_overnight_window_keeps_json_and_next_day_preview,

@@ -3946,6 +3946,15 @@ def _compute_anchor_child_due(parent: dict):
     seed_base = (parent.get("chainID") or "").strip() or "preview"
     fallback_hhmm = (due_local.hour, due_local.minute)
     target_field = "scheduled" if not due_dt_utc and parent.get("scheduled") else "due"
+    anchor_file_provider = None
+    if anchor_file_str and dnf:
+        anchor_file_provider = core._import_sibling("anchor_inclusion")._build_anchor_file_provider(
+            anchor_file_str,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+        )
     if anchor_file_str and not dnf:
         nxt_local, info = _anchor_file_due_for_mode(
             mode,
@@ -3980,6 +3989,7 @@ def _compute_anchor_child_due(parent: dict):
             seed_base=seed_base,
             default_seed_date=default_seed,
             dnf=dnf,
+            anchor_file_provider=anchor_file_provider,
         )
         if mode == "all":
             missed = [dt for dt in _anchor_included_occurrences(
@@ -3992,6 +4002,7 @@ def _compute_anchor_child_due(parent: dict):
                 seed_base=seed_base,
                 default_seed_date=default_seed,
                 dnf=dnf,
+                anchor_file_provider=anchor_file_provider,
             ) if dt <= end_local]
             if missed:
                 nxt_local = missed[0]

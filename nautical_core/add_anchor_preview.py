@@ -447,6 +447,7 @@ def _collect_included_with_provider(
     next_occurrence_after_local_dt: Callable[..., Any],
     pick_occurrence_local: Callable[..., Any] | None = None,
     anchor_file_dir: str = "",
+    max_iterations: int = 512,
 ) -> list[datetime]:
     """Collect included occurrences through the typed provider boundary."""
     from .anchor_inclusion import next_included_occurrence_local
@@ -470,7 +471,9 @@ def _collect_included_with_provider(
     )
     cursor = after_local_dt - timedelta(microseconds=1) if inclusive else after_local_dt
     out: list[datetime] = []
-    while len(out) < limit:
+    iterations = 0
+    while len(out) < limit and iterations < max_iterations:
+        iterations += 1
         occurrence = provider.next_after(
             cursor,
             build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
@@ -498,6 +501,7 @@ def _collect_events_with_provider(
     next_occurrence_after_local_dt: Callable[..., Any],
     pick_occurrence_local: Callable[..., Any] | None = None,
     anchor_file_dir: str = "",
+    max_iterations: int = 512,
 ) -> list[tuple[datetime, bool]]:
     from .anchor_inclusion import next_occurrence_event_local
     from .occurrence_provider import AnchorEventOccurrenceProvider
@@ -520,7 +524,10 @@ def _collect_events_with_provider(
     )
     cursor = after_local_dt - timedelta(microseconds=1) if inclusive else after_local_dt
     out: list[tuple[datetime, bool]] = []
-    while len(out) < limit_included:
+    included_count = 0
+    iterations = 0
+    while included_count < limit_included and iterations < max_iterations:
+        iterations += 1
         occurrence = provider.next_after(
             cursor,
             build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
@@ -530,6 +537,8 @@ def _collect_events_with_provider(
             break
         cursor = occurrence.local_datetime
         out.append((cursor, occurrence.omitted))
+        if not occurrence.omitted:
+            included_count += 1
     return out
 
 

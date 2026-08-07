@@ -16562,6 +16562,43 @@ def test_occurrence_providers_reject_non_advancing_values():
             expect("non-advancing" in str(exc), f"unexpected progress guard error: {exc}")
 
 
+def test_add_preview_event_collection_counts_only_included_occurrences():
+    """Omitted events may fill the stream but must not consume the included limit."""
+    from datetime import datetime, timedelta, timezone
+    import nautical_core.add_anchor_preview as preview
+    import nautical_core.anchor_inclusion as inclusion
+
+    original = inclusion.next_occurrence_event_local
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
+
+    def fake_next(**kwargs):
+        cursor = kwargs["after_local_dt"]
+        step = int((cursor - start).total_seconds() // 3600) + 1
+        if step > 5:
+            return None
+        return (start + timedelta(hours=step), step <= 3)
+
+    inclusion.next_occurrence_event_local = fake_next
+    try:
+        events = preview._collect_events_with_provider(
+            dnf=None,
+            anchor_file_str="",
+            after_local_dt=start,
+            inclusive=False,
+            limit_included=2,
+            fallback_hhmm=(9, 0),
+            default_seed_date=start.date(),
+            seed_base="provider-test",
+            omit_dnf=None,
+            core=core,
+            next_occurrence_after_local_dt=lambda *args, **kwargs: None,
+        )
+    finally:
+        inclusion.next_occurrence_event_local = original
+    expect(len(events) == 5, f"omitted events consumed included limit: {events!r}")
+    expect(sum(not omitted for _value, omitted in events) == 2, "event collector returned the wrong included count")
+
+
 def test_anchor_file_occurrences_expand_overnight_time_window():
     """File dates own overnight slots even when generated times land next day."""
     import nautical_core.anchor_files as anchor_files
@@ -27027,6 +27064,7 @@ TESTS = [
     test_anchor_file_occurrence_provider_supports_lazy_next_after,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_occurrence_providers_reject_non_advancing_values,
+    test_add_preview_event_collection_counts_only_included_occurrences,
     test_anchor_file_occurrences_expand_overnight_time_window,
     test_anchor_file_occurrences_expand_composable_time_schedule,
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,

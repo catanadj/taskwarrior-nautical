@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Callable, Protocol, Sequence
 
@@ -16,6 +16,7 @@ class Occurrence:
     minute: int
     source: str = "anchor"
     description: str = ""
+    local_datetime: datetime | None = field(default=None, compare=False, repr=False)
 
     @property
     def hhmm(self) -> tuple[int, int]:
@@ -66,7 +67,7 @@ class AnchorOccurrenceProvider:
         if value is None:
             return None
         local = to_local(value)
-        return Occurrence(day=local.date(), hour=local.hour, minute=local.minute)
+        return Occurrence(day=local.date(), hour=local.hour, minute=local.minute, local_datetime=local)
 
 
 __all__ = ("AnchorOccurrenceProvider", "Occurrence", "OccurrenceProvider")

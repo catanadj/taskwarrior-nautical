@@ -2333,7 +2333,7 @@ class TaskAnalyzer:
                     )
                     if occurrence is None:
                         break
-                    nxt = core.to_local(core.build_local_datetime(occurrence.day, occurrence.hhmm))
+                    nxt = occurrence.local_datetime or core.to_local(core.build_local_datetime(occurrence.day, occurrence.hhmm))
                     anchor_out.append(nxt)
                     cur_after = nxt
 
@@ -2360,7 +2360,7 @@ class TaskAnalyzer:
                     )
                     if occurrence is None:
                         break
-                    nxt = core.to_local(core.build_local_datetime(occurrence.day, occurrence.hhmm))
+                    nxt = occurrence.local_datetime or core.to_local(core.build_local_datetime(occurrence.day, occurrence.hhmm))
                     file_out.append(nxt)
                     cur_after = nxt
             except Exception as exc:

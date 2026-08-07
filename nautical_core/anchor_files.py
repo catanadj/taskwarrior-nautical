@@ -420,16 +420,16 @@ class AnchorFileOccurrenceProvider:
         self.context = context
 
     def occurrences(self) -> list[Occurrence]:
-        return [
-            Occurrence(day=d0, hour=hhmm[0], minute=hhmm[1], source="anchor_file")
-            for d0, hhmm in load_anchor_file_occurrence_specs(
-                self.name,
-                self.anchor_file_dir,
-                self.fallback_hhmm,
-                business_calendar=self.business_calendar,
-                context=self.context,
-            )
-        ]
+        values: list[Occurrence] = []
+        for d0, hhmm in load_anchor_file_occurrence_specs(
+            self.name,
+            self.anchor_file_dir,
+            self.fallback_hhmm,
+            business_calendar=self.business_calendar,
+            context=self.context,
+        ):
+            values.append(Occurrence(day=d0, hour=hhmm[0], minute=hhmm[1], source="anchor_file"))
+        return values
 
     def next_after(
         self,
@@ -456,6 +456,7 @@ class AnchorFileOccurrenceProvider:
             hour=local.hour,
             minute=local.minute,
             source="anchor_file",
+            local_datetime=local,
         )
 
 

@@ -6821,6 +6821,64 @@ def test_build_local_datetime_dst_gap_and_ambiguous():
         offset = back.utcoffset()
         expect(offset is not None and offset.total_seconds() == -4 * 3600, f"DST fall back should choose earlier: {back}")
 
+
+def test_local_datetime_non_hour_dst_gap_is_shared_by_modify():
+    """A 30-minute DST gap must shift by its actual transition size everywhere."""
+    from zoneinfo import ZoneInfo
+    from nautical_core.timeutil import build_local_datetime
+
+    zone = ZoneInfo("Australia/Lord_Howe")
+    scheduled = build_local_datetime(date(2026, 10, 4), (2, 15), zone)
+    scheduled_local = scheduled.astimezone(zone)
+    expect(
+        (scheduled_local.hour, scheduled_local.minute) == (2, 45),
+        f"non-hour DST gap should preserve the 30-minute shift: {scheduled_local}",
+    )
+
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_modify_non_hour_dst_gap_test")
+    old_name = mod.core.LOCAL_TZ_NAME
+    old_tz = mod.core._LOCAL_TZ
+    try:
+        mod.core.LOCAL_TZ_NAME = "Australia/Lord_Howe"
+        mod.core._LOCAL_TZ = zone
+        carried = mod._local_naive_to_utc(datetime(2026, 10, 4, 2, 15))
+    finally:
+        mod.core.LOCAL_TZ_NAME = old_name
+        mod.core._LOCAL_TZ = old_tz
+    carried_local = carried.astimezone(zone)
+    expect(
+        (carried_local.hour, carried_local.minute) == (2, 45),
+        f"modify DST resolver diverged from scheduling: {carried_local}",
+    )
+
+
+def test_hook_datetime_comparator_resolves_once():
+    """Thin hooks should resolve the shared datetime comparator once per process."""
+    for hook_name, module_name in (
+        ("on-add.nautical", "_nautical_add_comparator_cache_test"),
+        ("on-modify.nautical", "_nautical_modify_comparator_cache_test"),
+    ):
+        mod = _load_hook_module(_find_hook_file(hook_name), module_name)
+        mod._load_core()
+        original_import = mod.core._import_sibling
+        calls = []
+
+        def counted_import(name):
+            if name == "timeutil":
+                calls.append(name)
+            return original_import(name)
+
+        mod.core._import_sibling = counted_import
+        mod._DATETIME_COMPARATOR = None
+        instant = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        try:
+            mod._compare_datetimes(instant, instant)
+            mod._compare_datetimes(instant, instant)
+        finally:
+            mod.core._import_sibling = original_import
+        expect(len(calls) == 1, f"{hook_name} resolved comparator {len(calls)} times")
+
 def test_on_modify_chain_export_cache_key_includes_params():
     """Chain export cache should include since/extra in its key."""
     hook = _find_hook_file("on-modify.nautical")
@@ -28463,6 +28521,8 @@ TESTS = [
     test_parser_frontend_comma_join_guard_characterization,
     test_anchor_parse_term_explosion_guard,
     test_build_local_datetime_dst_gap_and_ambiguous,
+    test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
+    test_hook_datetime_comparator_resolves_once,
     test_on_modify_chain_export_cache_key_includes_params,
     test_on_modify_chain_export_skips_when_locked,
     test_on_modify_collect_prev_two_prefers_live_statuses,

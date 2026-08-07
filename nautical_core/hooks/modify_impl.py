@@ -4340,29 +4340,8 @@ def _local_naive_to_utc(dt_local_naive: datetime) -> datetime:
     if not isinstance(dt_local_naive, datetime):
         raise TypeError("dt_local_naive must be datetime")
     tz = _nautical_local_tz()
-    if tz:
-        naive = dt_local_naive.replace(microsecond=0)
-        aware0 = naive.replace(tzinfo=tz, fold=0)
-        aware1 = naive.replace(tzinfo=tz, fold=1)
-
-        # Ambiguous time (fall back): choose earlier instance (fold=0).
-        if aware0.utcoffset() != aware1.utcoffset():
-            return aware0.astimezone(timezone.utc)
-
-        # Non-existent time (spring forward): shift forward to next valid minute.
-        back = aware0.astimezone(timezone.utc).astimezone(tz)
-        if back.replace(tzinfo=None) != naive:
-            cand = naive
-            for _ in range(180):
-                cand += timedelta(minutes=1)
-                aware = cand.replace(tzinfo=tz, fold=0)
-                back = aware.astimezone(timezone.utc).astimezone(tz)
-                if back.replace(tzinfo=None) == cand:
-                    return aware.astimezone(timezone.utc)
-            return aware0.astimezone(timezone.utc)
-
-        return aware0.astimezone(timezone.utc)
-    return dt_local_naive.replace(tzinfo=timezone.utc).replace(microsecond=0)
+    naive = dt_local_naive.replace(microsecond=0)
+    return core._import_sibling("timeutil").local_naive_to_utc(naive, tz)
 
 
 def _recurrence_anchor_field(task: dict | None) -> str:

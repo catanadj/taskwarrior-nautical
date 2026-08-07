@@ -46,6 +46,48 @@ def fmt_isoz(dt_utc: datetime) -> str:
     return ensure_utc(dt_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def local_naive_to_utc(naive: datetime, local_tz) -> datetime:
+    """Resolve a local wall time to UTC across arbitrary DST transitions."""
+    if not isinstance(naive, datetime):
+        raise TypeError("Local datetime must be a datetime.")
+    if naive.tzinfo is not None:
+        raise ValueError("Local datetime must be naive.")
+    if local_tz is None:
+        return naive.replace(tzinfo=timezone.utc)
+
+    candidates = []
+    for fold in (0, 1):
+        aware = naive.replace(tzinfo=local_tz, fold=fold)
+        back = aware.astimezone(timezone.utc).astimezone(local_tz)
+        wall = back.replace(tzinfo=None)
+        if wall == naive:
+            candidates.append(aware)
+    if candidates:
+        return min(candidates, key=lambda value: value.astimezone(timezone.utc)).astimezone(timezone.utc)
+
+    # For a nonexistent wall time, choose the first round-tripped wall time after it.
+    after = []
+    for fold in (0, 1):
+        aware = naive.replace(tzinfo=local_tz, fold=fold)
+        back = aware.astimezone(timezone.utc).astimezone(local_tz)
+        wall = back.replace(tzinfo=None)
+        if wall > naive:
+            after.append((wall, aware))
+    if after:
+        return min(after, key=lambda item: item[0])[1].astimezone(timezone.utc)
+
+    # Defensive fallback for unusual timezone implementations.
+    probe = naive + timedelta(minutes=1)
+    for _ in range(2880):
+        for fold in (0, 1):
+            aware = probe.replace(tzinfo=local_tz, fold=fold)
+            back = aware.astimezone(timezone.utc).astimezone(local_tz)
+            if back.replace(tzinfo=None) == probe:
+                return aware.astimezone(timezone.utc)
+        probe += timedelta(minutes=1)
+    raise ValueError("Local datetime could not be resolved in the configured timezone.")
+
+
 def parse_dt_any(s: str, date_formats) -> datetime | None:
     """Parse datetime from string using multiple formats."""
     if not s:
@@ -67,27 +109,4 @@ def build_local_datetime(d: date, hhmm, local_tz) -> datetime:
     """Build a UTC datetime from local wall-clock date+time with DST handling."""
     hh, mm = hhmm
     naive = datetime(d.year, d.month, d.day, hh, mm, 0)
-    if not local_tz:
-        return naive.replace(tzinfo=timezone.utc)
-
-    candidates = []
-    for fold in (0, 1):
-        aware = naive.replace(tzinfo=local_tz, fold=fold)
-        back = aware.astimezone(timezone.utc).astimezone(local_tz)
-        if back.replace(tzinfo=None) == naive:
-            candidates.append(aware)
-    if candidates:
-        # Ambiguous time: choose the earlier UTC instant for determinism.
-        best = min(candidates, key=lambda dt: dt.astimezone(timezone.utc))
-        return best.astimezone(timezone.utc)
-
-    # Non-existent time (spring forward): shift forward by 1 hour, then to next valid minute.
-    cand = naive + timedelta(hours=1)
-    for _ in range(180):
-        for fold in (0, 1):
-            aware = cand.replace(tzinfo=local_tz, fold=fold)
-            back = aware.astimezone(timezone.utc).astimezone(local_tz)
-            if back.replace(tzinfo=None) == cand:
-                return aware.astimezone(timezone.utc)
-        cand += timedelta(minutes=1)
-    return naive.replace(tzinfo=local_tz, fold=0).astimezone(timezone.utc)
+    return local_naive_to_utc(naive, local_tz)

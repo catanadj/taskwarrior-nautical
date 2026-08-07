@@ -17427,6 +17427,16 @@ def test_random_time_window_flows_through_anchor_parser_and_resolver():
     )
     expect(contextual == resolved, "recurrence context drifted from the compatibility seed path")
     try:
+        resolve_time_slots_with_offsets(
+            mods,
+            date(2026, 8, 3),
+            seed_base="chain-a",
+            context=RecurrenceContext(chain_id="chain-b"),
+        )
+        expect(False, "random resolver accepted conflicting recurrence identities")
+    except ValueError as exc:
+        expect("Conflicting recurrence identities" in str(exc), f"unexpected identity mismatch error: {exc}")
+    try:
         RecurrenceContext.from_task({"uuid": "missing-chain-id"})
         expect(False, "recurrence context accepted a task without chainID")
     except ValueError as exc:

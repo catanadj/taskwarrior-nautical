@@ -116,7 +116,13 @@ def resolve_time_slots_with_offsets(
             random_window = parse_random_time_window_spec(random_spec)
             if random_window is None:
                 return []
-            effective_seed = seed_base or (context.seed_base if context is not None else "")
+            explicit_seed = str(seed_base or "").strip()
+            context_seed = context.seed_base if context is not None else ""
+            if explicit_seed and context_seed and explicit_seed != context_seed:
+                raise ValueError(
+                    "Conflicting recurrence identities: seed_base does not match context.chain_id."
+                )
+            effective_seed = explicit_seed or context_seed
             if not effective_seed:
                 raise ValueError("Random time windows require a stable chain seed.")
             return list(random_window.slots_with_offsets(f"{effective_seed}/{target_date.isoformat()}"))

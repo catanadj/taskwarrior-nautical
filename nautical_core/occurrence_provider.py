@@ -162,7 +162,7 @@ class AnchorOccurrenceProvider:
 
     def __init__(
         self,
-        next_occurrence_after: Callable[[datetime], datetime | None],
+        next_occurrence_after: Callable[[datetime], Occurrence | datetime | None],
         *,
         source: str = "anchor",
         description: str = "",
@@ -182,6 +182,11 @@ class AnchorOccurrenceProvider:
         value = self._next_occurrence_after(after_local)
         if value is None:
             return None
+        if isinstance(value, Occurrence):
+            if value.local_datetime is None:
+                raise ValueError("Occurrence provider returned an event without local datetime.")
+            _require_forward_progress(after_local, value.local_datetime)
+            return value
         if not isinstance(value, datetime):
             raise TypeError("Occurrence provider returned a non-datetime value.")
         local = to_local(value)

@@ -16885,7 +16885,7 @@ def test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup():
 def test_occurrence_provider_adapters_preserve_stream_metadata():
     """Provider adapters should retain source and description metadata."""
     from datetime import datetime, timedelta
-    from nautical_core.occurrence_provider import AnchorEventOccurrenceProvider, AnchorOccurrenceProvider
+    from nautical_core.occurrence_provider import AnchorEventOccurrenceProvider, AnchorOccurrenceProvider, Occurrence
 
     after = datetime(2026, 8, 3, 9, 0)
     identity = lambda value: value
@@ -16899,9 +16899,20 @@ def test_occurrence_provider_adapters_preserve_stream_metadata():
         source="anchor_file",
         description="calendar entry",
     )
+    typed_ordinary = AnchorOccurrenceProvider(
+        lambda value: Occurrence(
+            value.date(),
+            value.hour + 1,
+            value.minute,
+            source="astronomy",
+            description="sunrise",
+            local_datetime=value + timedelta(hours=1),
+        )
+    )
     for provider, expected_source, expected_description in (
         (ordinary, "anchor+anchor_file", "merged source"),
         (event, "anchor_file", "calendar entry"),
+        (typed_ordinary, "astronomy", "sunrise"),
     ):
         occurrence = provider.next_after(
             after,

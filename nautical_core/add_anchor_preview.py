@@ -465,8 +465,26 @@ def _collect_included_with_provider(
     max_iterations: int = 512,
     return_occurrences: bool = False,
     anchor_file_provider: Any | None = None,
+    evaluator: Any | None = None,
 ) -> list[datetime] | list[Occurrence]:
     """Collect included occurrences through the typed provider boundary."""
+    if evaluator is not None:
+        collected = evaluator.collect_after(
+            after_local_dt,
+            limit=limit,
+            next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            inclusive=inclusive,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            max_iterations=max_iterations,
+            max_file_skips=max_iterations,
+        )
+        if return_occurrences:
+            return collected
+        return [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None]
+
     from .anchor_inclusion import next_included_occurrence
     from . import anchor_inclusion
     from .occurrence_provider import AnchorOccurrenceProvider, Occurrence, collect_after
@@ -933,6 +951,22 @@ def handle_anchor_preview_on_add(
             core=core,
         )
 
+    recurrence_evaluator = None
+    try:
+        from .recurrence_evaluator import RecurrenceEvaluator
+
+        recurrence_evaluator = RecurrenceEvaluator.from_task(
+            task,
+            fallback_chain_id=seed_base or None,
+            timezone=getattr(core, "_LOCAL_TZ", None),
+            business_calendar=core.business_calendar_for_task(task),
+            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        )
+    except Exception:
+        # Keep the existing injected path available for incomplete legacy rows.
+        recurrence_evaluator = None
+
     if not dnf:
         occurrences = _collect_included_with_provider(
             dnf=None,
@@ -949,6 +983,7 @@ def handle_anchor_preview_on_add(
             pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
+            evaluator=recurrence_evaluator,
         )
         if not occurrences:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
@@ -1010,6 +1045,7 @@ def handle_anchor_preview_on_add(
             pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
+            evaluator=recurrence_evaluator,
         )
         if not occurrences:
             error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])
@@ -1140,6 +1176,7 @@ def handle_anchor_preview_on_add(
             pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
+            evaluator=recurrence_evaluator,
         )
         if until_dt:
             until_local = core.to_local(until_dt)
@@ -1211,6 +1248,7 @@ def handle_anchor_preview_on_add(
             pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
+            evaluator=recurrence_evaluator,
         )
         if len(future_for_max) == future_needed:
             final_max_dt = future_for_max[-1].astimezone(timezone.utc)

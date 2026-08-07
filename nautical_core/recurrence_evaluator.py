@@ -197,7 +197,15 @@ class RecurrenceEvaluator:
         interval = self.cp_interval_for_link(link_no)
         if interval is None:
             raise ValueError(f"Unable to resolve CP interval for link {link_no}.")
-        return base_utc.astimezone(timezone.utc) + interval
+        base_utc = base_utc.astimezone(timezone.utc)
+        if interval.total_seconds() % 86400 == 0 and self.timezone is not None:
+            local = self.to_local(base_utc)
+            shifted_day = local.date() + timedelta(days=int(interval.total_seconds() // 86400))
+            return self.build_local_datetime(
+                shifted_day,
+                (local.hour, local.minute),
+            )
+        return base_utc + interval
 
     def limits_allow(self, candidate: datetime, link_no: int) -> bool:
         """Check chain limits for a local or UTC candidate occurrence."""
@@ -219,6 +227,7 @@ class RecurrenceEvaluator:
         default_seed_date: date | None = None,
         inclusive: bool = False,
         pick_occurrence_local: Callable[..., Any] | None = None,
+        anchor_file_provider: Any | None = None,
         max_file_skips: int = 512,
     ) -> Occurrence | None:
         """Return the next included expression/file occurrence.
@@ -248,6 +257,7 @@ class RecurrenceEvaluator:
             next_occurrence_after_local_dt=next_occurrence_after_local_dt,
             pick_occurrence_local=pick_occurrence_local,
             anchor_file_dir=self.context.anchor_file_dir,
+            anchor_file_provider=anchor_file_provider,
             recurrence_context=self.context,
             business_calendar=self.context.business_calendar,
             max_file_skips=max_file_skips,
@@ -263,6 +273,7 @@ class RecurrenceEvaluator:
         default_seed_date: date | None = None,
         inclusive: bool = False,
         pick_occurrence_local: Callable[..., Any] | None = None,
+        anchor_file_provider: Any | None = None,
         max_iterations: int = 512,
         max_file_skips: int = 512,
     ) -> list[Occurrence]:
@@ -277,6 +288,7 @@ class RecurrenceEvaluator:
                 fallback_hhmm=fallback_hhmm,
                 default_seed_date=default_seed_date,
                 pick_occurrence_local=pick_occurrence_local,
+                anchor_file_provider=anchor_file_provider,
                 max_file_skips=max_file_skips,
             )
         )

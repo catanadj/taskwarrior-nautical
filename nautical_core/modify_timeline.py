@@ -106,7 +106,16 @@ def _timeline_future_cp_items(
     max_iterations: int,
 ) -> list[tuple[int, datetime, dict[str, Any], str]]:
     cp_str = str(task.get("cp") or "")
-    tokens = core.parse_cp_sequence_tokens(cp_str)
+    from .recurrence_evaluator import RecurrenceEvaluator
+
+    evaluator = RecurrenceEvaluator.from_task(
+        task,
+        fallback_chain_id=task.get("uuid") or "preview",
+        timezone=getattr(core, "_LOCAL_TZ", None),
+        astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+    )
+    tokens = evaluator.cp_tokens
     if not tokens:
         return []
     cp_tokens = [p.strip() for p in cp_str.split(",")]
@@ -120,25 +129,11 @@ def _timeline_future_cp_items(
             break
         iterations += 1
         token_idx = (max(1, fut_no) - 1) % len(tokens)
-        td = core.cp_sequence_interval_for_token(
-            tokens[token_idx],
-            cp=cp_str,
-            link_no=fut_no,
-            token_index=token_idx,
-            chain_id=str(task.get("chainID") or "").strip(),
-        )
+        td = evaluator.cp_interval_for_link(fut_no)
         if td is None:
             break
         fut_no += 1
-        secs = int(td.total_seconds())
-        if secs % 86400 == 0:
-            dl = tolocal(fut_dt)
-            fut_dt = core.build_local_datetime(
-                (dl + timedelta(days=int(secs // 86400))).date(),
-                (dl.hour, dl.minute),
-            ).astimezone(timezone.utc)
-        else:
-            fut_dt = fut_dt + td
+        fut_dt = evaluator.project_cp(fut_dt, fut_no - 1)
         if cap_no is not None and fut_no > cap_no:
             break
         meta: dict[str, Any] = {"is_future": True}

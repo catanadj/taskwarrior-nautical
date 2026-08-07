@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
-from .anchor_inclusion import collect_occurrence_events_local
 from . import calendar_feedback, panel_diagnostics
 
 
@@ -486,6 +485,56 @@ def _collect_included_with_provider(
     return out
 
 
+def _collect_events_with_provider(
+    *,
+    dnf,
+    anchor_file_str: str,
+    after_local_dt: datetime,
+    inclusive: bool,
+    limit_included: int,
+    fallback_hhmm: tuple[int, int],
+    default_seed_date,
+    seed_base: str,
+    omit_dnf,
+    core: Any,
+    next_occurrence_after_local_dt: Callable[..., Any],
+    pick_occurrence_local: Callable[..., Any] | None = None,
+    anchor_file_dir: str = "",
+) -> list[tuple[datetime, bool]]:
+    from .anchor_inclusion import next_occurrence_event_local
+    from .occurrence_provider import AnchorEventOccurrenceProvider
+
+    provider = AnchorEventOccurrenceProvider(
+        lambda value: next_occurrence_event_local(
+            dnf=dnf,
+            anchor_file_str=anchor_file_str,
+            after_local_dt=value,
+            inclusive=False,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            core=core,
+            next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_dir=anchor_file_dir,
+        )
+    )
+    cursor = after_local_dt - timedelta(microseconds=1) if inclusive else after_local_dt
+    out: list[tuple[datetime, bool]] = []
+    while len(out) < limit_included:
+        occurrence = provider.next_after(
+            cursor,
+            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+            to_local=lambda value: value,
+        )
+        if occurrence is None or occurrence.local_datetime is None:
+            break
+        cursor = occurrence.local_datetime
+        out.append((cursor, occurrence.omitted))
+    return out
+
+
 def handle_anchor_file_preview_on_add(
     *,
     task: dict[str, Any],
@@ -611,7 +660,7 @@ def handle_anchor_file_preview_on_add(
     allow_by_until = exact_until_count if exact_until_count is not None else 10**9
     preview_limit = max(0, min(upcoming_preview, allow_by_max, allow_by_until, preview_hard_cap))
     event_limit = max(1, preview_limit + 1)
-    events = collect_occurrence_events_local(
+    events = _collect_events_with_provider(
         dnf=None,
         anchor_file_str=anchor_file_str,
         after_local_dt=first_due_local_dt,
@@ -955,7 +1004,7 @@ def handle_anchor_preview_on_add(
         allow_by_until = exact_until_count if exact_until_count is not None else 10**9
         preview_limit = max(0, min(upcoming_preview, allow_by_max, allow_by_until, preview_hard_cap))
         event_limit = max(1, preview_limit + 1)
-        events = collect_occurrence_events_local(
+        events = _collect_events_with_provider(
             dnf=dnf,
             anchor_file_str=anchor_file_str,
             after_local_dt=first_due_local_dt,

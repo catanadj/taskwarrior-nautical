@@ -17,6 +17,7 @@ class Occurrence:
     source: str = "anchor"
     description: str = ""
     local_datetime: datetime | None = field(default=None, compare=False, repr=False)
+    omitted: bool = field(default=False, compare=False)
 
     @property
     def hhmm(self) -> tuple[int, int]:
@@ -70,4 +71,32 @@ class AnchorOccurrenceProvider:
         return Occurrence(day=local.date(), hour=local.hour, minute=local.minute, local_datetime=local)
 
 
-__all__ = ("AnchorOccurrenceProvider", "Occurrence", "OccurrenceProvider")
+class AnchorEventOccurrenceProvider:
+    """Typed adapter for anchor streams that retain omitted-event markers."""
+
+    def __init__(self, next_event_after: Callable[[datetime], tuple[datetime, bool] | None]) -> None:
+        self._next_event_after = next_event_after
+
+    def next_after(
+        self,
+        after_local: datetime,
+        *,
+        build_local_datetime: Callable[[date, tuple[int, int]], datetime],
+        to_local: Callable[[datetime], datetime],
+    ) -> Occurrence | None:
+        del build_local_datetime
+        event = self._next_event_after(after_local)
+        if event is None:
+            return None
+        value, omitted = event
+        local = to_local(value)
+        return Occurrence(
+            day=local.date(),
+            hour=local.hour,
+            minute=local.minute,
+            local_datetime=local,
+            omitted=bool(omitted),
+        )
+
+
+__all__ = ("AnchorEventOccurrenceProvider", "AnchorOccurrenceProvider", "Occurrence", "OccurrenceProvider")

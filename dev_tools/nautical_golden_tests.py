@@ -29292,6 +29292,33 @@ def test_core_explicit_facade_all_contains_supported_symbols() -> None:
     assert 'parent' not in exported
     assert '_import_sibling' not in exported
 
+    contract = {
+        'parse_anchor_expr_to_dnf': ('s',),
+        'parse_anchor_expr_to_dnf_cached': ('s',),
+        'validate_anchor_expr_strict': ('expr',),
+        'next_after_expr': ('dnf', 'after_date', 'default_seed', 'seed_base', 'date_is_excluded', 'business_calendar'),
+        'next_after_factor': ('factor', 'ref_d', 'default_seed', 'seed_base', 'business_calendar'),
+        'atom_matches_on': ('atom', 'd', 'default_seed', 'seed_base', 'business_calendar'),
+        'factor_matches_on': ('factor', 'd', 'default_seed', 'seed_base', 'business_calendar'),
+        'parse_cp_duration': ('dur',),
+        'parse_cp_sequence': ('cp',),
+        'cp_sequence_interval_for_link': ('cp', 'link_no', 'chain_id'),
+        'build_local_datetime': ('d', 'hhmm'),
+        'to_local': ('dt_utc',),
+        'utc_to_local_naive': ('dt_utc',),
+        'local_naive_to_utc': ('dt_local_naive',),
+        'parse_dt_any': ('s',),
+    }
+    for name, expected_parameters in contract.items():
+        value = getattr(core, name, None)
+        assert callable(value), f'facade contract symbol is not callable: {name}'
+        parameters = tuple(inspect.signature(value).parameters)
+        assert parameters == expected_parameters, (
+            f'facade signature changed for {name}: {parameters!r} '
+            f'(expected {expected_parameters!r})'
+        )
+    assert core.parse_anchor_expr_to_dnf('w:mon') == core.parse_anchor_expr_to_dnf_cached('w:mon')
+
 
 def test_all_golden_tests_are_registered() -> None:
     """Every top-level test function must be covered by the normal runner."""

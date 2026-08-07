@@ -16899,6 +16899,59 @@ def test_included_provider_preserves_anchor_file_source_description():
     expect(occurrences[0].description == "Water the plants", f"included description was not preserved: {occurrences!r}")
 
 
+def test_included_provider_reuses_shared_anchor_file_provider():
+    """Repeated included projections should reuse one anchor-file expansion."""
+    import nautical_core.add_anchor_preview as preview
+    import nautical_core.anchor_inclusion as anchor_inclusion
+    import nautical_core.anchor_files as anchor_files
+
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "calendar.csv").write_text("date\n2026-08-03\n2026-08-04\n", encoding="utf-8")
+        provider = anchor_inclusion._build_anchor_file_provider(
+            "calendar.csv@t=09:00",
+            anchor_file_dir=td,
+            fallback_hhmm=(9, 0),
+            seed_base="shared-provider-test",
+            core=core,
+        )
+        original = anchor_files.load_anchor_file_occurrence_specs
+        calls = []
+
+        def counted(*args, **kwargs):
+            calls.append(1)
+            return original(*args, **kwargs)
+
+        anchor_files.load_anchor_file_occurrence_specs = counted
+        try:
+            kwargs = dict(
+                dnf=None,
+                anchor_file_str="calendar.csv@t=09:00",
+                fallback_hhmm=(9, 0),
+                default_seed_date=date(2026, 8, 2),
+                seed_base="shared-provider-test",
+                omit_dnf=None,
+                core=core,
+                next_occurrence_after_local_dt=lambda *args, **kwargs: None,
+                anchor_file_dir=td,
+                anchor_file_provider=provider,
+            )
+            preview._collect_included_with_provider(
+                after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0))),
+                inclusive=False,
+                limit=1,
+                **kwargs,
+            )
+            preview._collect_included_with_provider(
+                after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 3), (9, 0))),
+                inclusive=False,
+                limit=1,
+                **kwargs,
+            )
+        finally:
+            anchor_files.load_anchor_file_occurrence_specs = original
+    expect(len(calls) == 1, f"shared anchor-file provider expanded specs {len(calls)} times")
+
+
 def test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup():
     """Ordinary anchor projections share the typed provider contract."""
     from datetime import datetime
@@ -27905,6 +27958,7 @@ TESTS = [
     test_merged_anchor_file_provider_carries_context_and_reuses_specs,
     test_event_provider_preserves_anchor_file_source_description,
     test_included_provider_preserves_anchor_file_source_description,
+    test_included_provider_reuses_shared_anchor_file_provider,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_occurrence_provider_adapters_preserve_stream_metadata,
     test_occurrence_provider_rejects_dst_fallback_backward_progress,

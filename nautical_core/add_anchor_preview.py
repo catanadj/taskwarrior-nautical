@@ -456,23 +456,25 @@ def _collect_included_with_provider(
     anchor_file_dir: str = "",
     max_iterations: int = 512,
     return_occurrences: bool = False,
+    anchor_file_provider: Any | None = None,
 ) -> list[datetime] | list[Occurrence]:
     """Collect included occurrences through the typed provider boundary."""
     from .anchor_inclusion import next_included_occurrence
     from . import anchor_inclusion
     from .occurrence_provider import AnchorOccurrenceProvider, Occurrence, collect_after
 
-    anchor_file_provider = (
-        anchor_inclusion._build_anchor_file_provider(
-            anchor_file_str,
-            anchor_file_dir=anchor_file_dir,
-            fallback_hhmm=fallback_hhmm,
-            seed_base=seed_base,
-            core=core,
+    if anchor_file_provider is None:
+        anchor_file_provider = (
+            anchor_inclusion._build_anchor_file_provider(
+                anchor_file_str,
+                anchor_file_dir=anchor_file_dir,
+                fallback_hhmm=fallback_hhmm,
+                seed_base=seed_base,
+                core=core,
+            )
+            if anchor_file_str
+            else None
         )
-        if anchor_file_str
-        else None
-    )
     provider = AnchorOccurrenceProvider(
         lambda value: next_included_occurrence(
             dnf=dnf,
@@ -521,22 +523,24 @@ def _collect_events_with_provider(
     anchor_file_dir: str = "",
     max_iterations: int = 512,
     return_occurrences: bool = False,
+    anchor_file_provider: Any | None = None,
 ) -> list[Occurrence] | list[tuple[datetime, bool]]:
     from .anchor_inclusion import next_occurrence_event_local
     from . import anchor_inclusion
     from .occurrence_provider import AnchorEventOccurrenceProvider, collect_after
 
-    anchor_file_provider = (
-        anchor_inclusion._build_anchor_file_provider(
-            anchor_file_str,
-            anchor_file_dir=anchor_file_dir,
-            fallback_hhmm=fallback_hhmm,
-            seed_base=seed_base,
-            core=core,
+    if anchor_file_provider is None:
+        anchor_file_provider = (
+            anchor_inclusion._build_anchor_file_provider(
+                anchor_file_str,
+                anchor_file_dir=anchor_file_dir,
+                fallback_hhmm=fallback_hhmm,
+                seed_base=seed_base,
+                core=core,
+            )
+            if anchor_file_str
+            else None
         )
-        if anchor_file_str
-        else None
-    )
     provider = AnchorEventOccurrenceProvider(
         lambda value: next_occurrence_event_local(
             dnf=dnf,
@@ -846,6 +850,17 @@ def handle_anchor_preview_on_add(
 
     merged = bool(dnf and anchor_file_str)
     fallback_hhmm = due_hhmm if user_provided_due else (9, 0)
+    shared_anchor_file_provider = None
+    if anchor_file_str:
+        from . import anchor_inclusion as _anchor_inclusion
+
+        shared_anchor_file_provider = _anchor_inclusion._build_anchor_file_provider(
+            anchor_file_str,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+        )
 
     if not dnf:
         occurrences = _collect_included_with_provider(
@@ -862,6 +877,7 @@ def handle_anchor_preview_on_add(
             next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
             pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            anchor_file_provider=shared_anchor_file_provider,
         )
         if not occurrences:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
@@ -922,6 +938,7 @@ def handle_anchor_preview_on_add(
             next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
             pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            anchor_file_provider=shared_anchor_file_provider,
         )
         if not occurrences:
             error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])
@@ -1040,6 +1057,7 @@ def handle_anchor_preview_on_add(
             next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
             pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            anchor_file_provider=shared_anchor_file_provider,
         )
         if until_dt:
             until_local = core.to_local(until_dt)
@@ -1066,6 +1084,7 @@ def handle_anchor_preview_on_add(
             pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             return_occurrences=True,
+            anchor_file_provider=shared_anchor_file_provider,
         )
         if until_dt:
             until_local = core.to_local(until_dt)
@@ -1109,6 +1128,7 @@ def handle_anchor_preview_on_add(
             next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
             pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            anchor_file_provider=shared_anchor_file_provider,
         )
         if len(future_for_max) == future_needed:
             final_max_dt = future_for_max[-1].astimezone(timezone.utc)

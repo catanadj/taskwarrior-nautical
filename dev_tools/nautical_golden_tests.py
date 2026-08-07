@@ -17361,6 +17361,19 @@ def test_random_time_window_flows_through_anchor_parser_and_resolver():
     expect(resolved == resolve_time_slots_with_offsets(mods, date(2026, 8, 3), seed_base="chain-a"), "random resolver was not deterministic")
     expect(len(resolved) == 3, f"random resolver returned the wrong slot count: {resolved!r}")
     expect(resolved == sorted(resolved), f"random resolver slots were not ordered: {resolved!r}")
+    from nautical_core.recurrence_context import RecurrenceContext
+
+    contextual = resolve_time_slots_with_offsets(
+        mods,
+        date(2026, 8, 3),
+        context=RecurrenceContext(chain_id="chain-a"),
+    )
+    expect(contextual == resolved, "recurrence context drifted from the compatibility seed path")
+    try:
+        RecurrenceContext.from_task({"uuid": "missing-chain-id"})
+        expect(False, "recurrence context accepted a task without chainID")
+    except ValueError as exc:
+        expect("chain ID" in str(exc), f"unexpected missing-chain-id error: {exc}")
 
 
 def test_random_time_window_composition_and_anchor_file_guidance():

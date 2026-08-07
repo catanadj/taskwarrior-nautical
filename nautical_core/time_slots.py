@@ -7,6 +7,7 @@ from datetime import date
 from typing import Any, Callable
 
 from . import astronomy
+from .recurrence_context import RecurrenceContext
 from .time_windows import parse_time_window_spec
 from .time_windows import parse_random_time_window_spec
 
@@ -86,6 +87,7 @@ def resolve_time_slots_with_offsets(
     config: dict[str, Any] | None = None,
     to_local: Callable[[Any], Any] | None = None,
     seed_base: str = "",
+    context: RecurrenceContext | None = None,
 ) -> list[tuple[int, int, int]]:
     """Resolve slots as ``(day_offset, hour, minute)`` values.
 
@@ -114,9 +116,10 @@ def resolve_time_slots_with_offsets(
             random_window = parse_random_time_window_spec(random_spec)
             if random_window is None:
                 return []
-            if not seed_base:
+            effective_seed = seed_base or (context.seed_base if context is not None else "")
+            if not effective_seed:
                 raise ValueError("Random time windows require a stable chain seed.")
-            return list(random_window.slots_with_offsets(f"{seed_base}/{target_date.isoformat()}"))
+            return list(random_window.slots_with_offsets(f"{effective_seed}/{target_date.isoformat()}"))
     ordinary = resolve_time_slots(raw, target_date, config=config, to_local=to_local)
     if offset_minutes:
         ordinary = resolve_time_slots({"t": ordinary, "time_offset_minutes": offset_minutes}, target_date, config=config, to_local=to_local)

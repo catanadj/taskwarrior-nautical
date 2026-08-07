@@ -17469,6 +17469,12 @@ def test_modify_timeline_uses_explicit_recurrence_identity():
     expect(_timeline_seed_base({}) == "preview", "timeline fallback identity changed")
 
 
+def test_modify_hook_uses_explicit_recurrence_identity():
+    """Modify hook cap paths should share the chainID-first identity policy."""
+    expect(_hook._recurrence_seed_base({"chainID": "chain-a", "uuid": "uuid-a"}) == "chain-a", "modify hook preferred UUID over chainID")
+    expect(_hook._recurrence_seed_base({}) == "preview", "modify hook fallback identity changed")
+
+
 def test_random_time_window_composition_and_anchor_file_guidance():
     """Unsupported random-time compositions fail with actionable guidance."""
     try:
@@ -27303,6 +27309,7 @@ TESTS.extend([
     test_random_time_window_flows_through_anchor_parser_and_resolver,
     test_recurrence_spec_normalizes_task_fields_and_context,
     test_modify_timeline_uses_explicit_recurrence_identity,
+    test_modify_hook_uses_explicit_recurrence_identity,
     test_random_time_window_composition_and_anchor_file_guidance,
     test_random_time_window_is_stable_across_processes,
     test_random_time_window_dst_projection_is_deterministic,

@@ -3084,6 +3084,14 @@ def _merge_spawned_child_into_chain(chain: list[dict], parent_task: dict, child_
 # Multi-time occurrence helpers (hook-level)
 # ------------------------------------------------------------------------------
 
+def _recurrence_seed_base(task: dict) -> str:
+    """Resolve the task recurrence identity once for preview-like paths."""
+    context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
+        task,
+        fallback_chain_id="preview",
+    )
+    return context.seed_base
+
 def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
     """Normalize various core representations of @t into a sorted list of (hh, mm)."""
     if v is None:
@@ -4049,7 +4057,7 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
     if cur_no >= cpmax:
         return None
 
-    seed_base = (task.get("chainID") or "").strip() or "preview"
+    seed_base = _recurrence_seed_base(task)
     nxt_local = _to_local_cached(next_due_utc)
 
     # Use a stable default seed (prefer the original due date).
@@ -5165,7 +5173,7 @@ def _timeline_lines(
         modify_timeline = _module("modify_timeline")
         _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
         anchor_omit = _module("anchor_omit") if omit_dnf else None
-        seed_base = (task.get("chainID") or "").strip() or "preview"
+        seed_base = _recurrence_seed_base(task)
         child_local = _to_local_cached(child_due_utc)
         fallback_hhmm = (child_local.hour, child_local.minute)
         default_seed = child_local.date()
@@ -5350,7 +5358,7 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
         return (None, None)
 
     cur_no = core.coerce_int(task.get("link"), 1)
-    seed_base = (task.get("chainID") or "").strip() or "preview"
+    seed_base = _recurrence_seed_base(task)
 
     nxt_local = _to_local_cached(next_due_utc)
     until_local = _to_local_cached(until_utc)

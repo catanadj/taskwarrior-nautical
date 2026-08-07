@@ -17466,6 +17466,11 @@ def test_recurrence_spec_normalizes_task_fields_and_context():
     expect(spec.anchor_mode == "all" and spec.kind == "anchor" and spec.enabled, f"spec kind was incorrect: {spec!r}")
     supplied = RecurrenceContext(chain_id="supplied")
     expect(RecurrenceSpec.from_task({"anchor": "w:fri"}, context=supplied).context is supplied, "supplied context was replaced")
+    try:
+        RecurrenceSpec.from_task({"chainID": "task-chain", "anchor": "w:fri"}, context=supplied)
+        expect(False, "recurrence spec accepted a conflicting context identity")
+    except ValueError as exc:
+        expect("Conflicting recurrence identities" in str(exc), f"unexpected spec identity error: {exc}")
 
 
 def test_modify_timeline_uses_explicit_recurrence_identity():

@@ -29,6 +29,11 @@ class RecurrenceSpec:
         *,
         context: RecurrenceContext | None = None,
     ) -> "RecurrenceSpec":
+        task_chain_id = str(task.get("chainID") or "").strip()
+        if context is not None and task_chain_id and context.chain_id != task_chain_id:
+            raise ValueError(
+                "Conflicting recurrence identities: context.chain_id does not match task.chainID."
+            )
         recurrence_context = context or RecurrenceContext.from_task(task)
         chain_max = task.get("chainMax")
         if chain_max in (None, ""):

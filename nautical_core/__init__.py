@@ -994,7 +994,7 @@ def _quarantine_cache(key: str, path: str) -> bool:
         return False
 
 
-def cache_load(key: str) -> dict | None:
+def _cache_load_impl(key: str) -> dict | None:
     return _cache_payload.cache_load(
         key,
         enable_anchor_cache=ENABLE_ANCHOR_CACHE,
@@ -1015,7 +1015,7 @@ def cache_load(key: str) -> dict | None:
         base64_mod=base64,
     )
 
-def cache_save(key: str, obj: dict) -> bool:
+def _cache_save_impl(key: str, obj: dict) -> bool:
     return _cache_payload.cache_save(
         key,
         obj,
@@ -1034,7 +1034,7 @@ def cache_save(key: str, obj: dict) -> bool:
     )
 
 
-def cache_gc(
+def _cache_gc_impl(
     *,
     max_entries: int = 512,
     stale_tmp_age: float = 86400.0,
@@ -1073,7 +1073,7 @@ def _cache_key_for_task_cached(
     )
 
 
-def cache_key_for_task(
+def _cache_key_for_task_impl(
     anchor_expr: str,
     anchor_mode: str,
     calendar_fingerprint: str | None = None,
@@ -3892,6 +3892,12 @@ next_after_expr = _scheduler_api.next_after_expr
 _natural_language_api = _import_sibling("natural_language_api").for_core(sys.modules[__name__])
 describe_anchor_expr = _natural_language_api.describe_anchor_expr
 describe_anchor_dnf = _natural_language_api.describe_anchor_dnf
+
+_cache_api = _import_sibling("cache_api").for_core(sys.modules[__name__])
+cache_load = _cache_api.cache_load
+cache_save = _cache_api.cache_save
+cache_gc = _cache_api.cache_gc
+cache_key_for_task = _cache_api.cache_key_for_task
 
 
 _compat_api = _import_sibling("compat_api")

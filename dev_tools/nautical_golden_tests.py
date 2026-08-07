@@ -16815,6 +16815,30 @@ def test_anchor_inclusion_scheduler_dispatch_preserves_legacy_and_internal_error
     expect(len(calls) == 1, f"scheduler was retried after an internal error: {calls!r}")
 
 
+def test_modify_inclusion_collection_uses_shared_progress_guard():
+    """Modify-side inclusion collection must fail instead of returning a partial stream."""
+    original = _hook._next_occurrence_after_local_dt
+    _hook._next_occurrence_after_local_dt = lambda *args, **kwargs: args[1]
+    try:
+        try:
+            _hook._anchor_included_occurrences(
+                {},
+                after_local_dt=datetime(2026, 8, 3, 9, 0),
+                inclusive=False,
+                limit=1,
+                fallback_hhmm=(9, 0),
+                omit_dnf=None,
+                seed_base="provider-guard-test",
+                default_seed_date=date(2026, 8, 3),
+                dnf=[[{"kind": "w", "value": "mon", "mods": {}}]],
+            )
+            expect(False, "modify inclusion collection silently accepted a stalled stream")
+        except ValueError as exc:
+            expect("non-advancing" in str(exc), f"unexpected modify collection error: {exc}")
+    finally:
+        _hook._next_occurrence_after_local_dt = original
+
+
 def test_anchor_file_provider_rejects_incomparable_datetimes():
     """Anchor-file lookup should explain mixed naive and aware datetime inputs."""
     import nautical_core.anchor_files as anchor_files
@@ -27415,6 +27439,7 @@ TESTS = [
     test_occurrence_collection_enforces_cursor_progress_and_timezone_consistency,
     test_occurrence_event_provider_requires_boolean_omitted_flag,
     test_anchor_inclusion_scheduler_dispatch_preserves_legacy_and_internal_errors,
+    test_modify_inclusion_collection_uses_shared_progress_guard,
     test_anchor_file_provider_rejects_incomparable_datetimes,
     test_anchor_file_omit_evaluation_failures_propagate,
     test_add_preview_event_collection_counts_only_included_occurrences,

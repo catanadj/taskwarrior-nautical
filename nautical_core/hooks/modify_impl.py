@@ -3684,15 +3684,26 @@ def _anchor_included_occurrences(
     default_seed_date,
     dnf,
 ) -> list[datetime]:
+    anchor_inclusion = core._import_sibling("anchor_inclusion")
+    occurrence_provider = core._import_sibling("occurrence_provider")
     anchor_file = (parent.get("anchor_file") or "").strip()
-    if anchor_file and dnf:
-        anchor_inclusion = core._import_sibling("anchor_inclusion")
-        return anchor_inclusion.collect_included_occurrences_local(
+    anchor_file_provider = (
+        anchor_inclusion._build_anchor_file_provider(
+            anchor_file,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+        )
+        if anchor_file
+        else None
+    )
+    provider = occurrence_provider.AnchorOccurrenceProvider(
+        lambda value: anchor_inclusion.next_included_occurrence_local(
             dnf=dnf,
             anchor_file_str=anchor_file,
-            after_local_dt=after_local_dt,
-            inclusive=inclusive,
-            limit=limit,
+            after_local_dt=value,
+            inclusive=False,
             fallback_hhmm=fallback_hhmm,
             default_seed_date=default_seed_date,
             seed_base=seed_base,
@@ -3700,35 +3711,21 @@ def _anchor_included_occurrences(
             core=core,
             next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            anchor_file_provider=anchor_file_provider,
+        ),
+    )
+    return [
+        occurrence.local_datetime
+        for occurrence in occurrence_provider.collect_after(
+            provider,
+            after_local_dt,
+            limit=limit,
+            inclusive=inclusive,
+            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+            to_local=lambda value: value,
         )
-    if anchor_file:
-        future = _anchor_file_future_occurrences(
-            parent,
-            fallback_hhmm=fallback_hhmm,
-            omit_dnf=omit_dnf,
-            seed_base=seed_base,
-        )
-        if inclusive:
-            return [item for item in future if item >= after_local_dt][:limit]
-        return [item for item in future if item > after_local_dt][:limit]
-    out: list[datetime] = []
-    cursor = after_local_dt
-    want_inclusive = inclusive
-    while len(out) < limit:
-        nxt = _next_occurrence_after_local_dt(
-            dnf,
-            cursor - timedelta(microseconds=1) if want_inclusive else cursor,
-            default_seed_date=default_seed_date,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            fallback_hhmm=fallback_hhmm,
-        )
-        if not nxt or (out and nxt <= out[-1]):
-            break
-        out.append(nxt)
-        cursor = nxt
-        want_inclusive = False
-    return out
+        if occurrence.local_datetime is not None
+    ]
 
 
 def _anchor_file_due_for_mode(

@@ -5217,7 +5217,7 @@ def _timeline_lines(
         projection_warning = None
         try:
             events = [
-                (occurrence.local_datetime, occurrence.omitted)
+                occurrence
                 for occurrence in collect_after(
                     event_provider,
                     child_local,
@@ -5256,7 +5256,11 @@ def _timeline_lines(
             items.append(projection_warning)
         fut_no = nxt_no
         actual_future = 0
-        for item_local, is_omitted in events:
+        for occurrence in events:
+            item_local = occurrence.local_datetime
+            is_omitted = occurrence.omitted
+            if item_local is None:
+                continue
             item_utc = item_local.astimezone(timezone.utc)
             if item_utc <= child_due_utc:
                 continue

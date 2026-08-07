@@ -459,6 +459,7 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
             if not nxt:
                 break
             time_slots = core._import_sibling("time_slots")
+            recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(chain_id="preview")
             slots = []
             for term in dnf:
                 if not all(core.atom_matches_on(atom, nxt, seed, seed_base="preview") for atom in term):
@@ -471,7 +472,7 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
                             nxt,
                             config=getattr(core, "ASTRONOMY_CONFIG", {}),
                             to_local=core.to_local,
-                            seed_base="preview",
+                            context=recurrence_context,
                         )
                     elif mods.get("t"):
                         slots = time_slots.resolve_time_slots(
@@ -2188,6 +2189,9 @@ class TaskAnalyzer:
         def resolve_hhmms(dnf, target_date, seed_date):
             """Resolve every wall-clock slot belonging to the matching term."""
             time_slots = core._import_sibling("time_slots")
+            recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
+                chain_id=task.get("uuid") or "analyzer"
+            )
             for term in dnf:
                 if not all(
                     core.atom_matches_on(
@@ -2208,7 +2212,7 @@ class TaskAnalyzer:
                             target_date,
                             config=getattr(core, "ASTRONOMY_CONFIG", {}),
                             to_local=core.to_local,
-                            seed_base=task.get("uuid") or "analyzer",
+                            context=recurrence_context,
                         )
                     elif mods.get("t"):
                         window = mods.get("time_window")

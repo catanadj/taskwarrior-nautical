@@ -3099,6 +3099,10 @@ def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
 def _extract_time_slots_from_dnf(dnf, target_date=None, seed_base: str = "") -> list[tuple[int, int]]:
     """Extract a unique, sorted list of time slots from a parsed anchor DNF."""
     out: set[tuple[int, int]] = set()
+    recurrence_context = (
+        core._import_sibling("recurrence_context").RecurrenceContext(chain_id=seed_base)
+        if seed_base else None
+    )
     try:
         for term in dnf:
             for atom in term:
@@ -3106,7 +3110,7 @@ def _extract_time_slots_from_dnf(dnf, target_date=None, seed_base: str = "") -> 
                 if mods.get("time_random"):
                     out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(
                         mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                        to_local=core.to_local, seed_base=seed_base,
+                        to_local=core.to_local, context=recurrence_context,
                     ))
                     continue
                 window = mods.get("time_window")
@@ -3131,6 +3135,7 @@ def _extract_time_slots_for_date(
 ) -> list[tuple[int, int]]:
     """Extract time slots for terms that match target_date."""
     out: set[tuple[int, int]] = set()
+    recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(chain_id=seed_base)
     matched = False
     try:
         for term in dnf:
@@ -3144,7 +3149,7 @@ def _extract_time_slots_for_date(
                     if mods.get("time_random"):
                         out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(
                             mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                            to_local=core.to_local, seed_base=seed_base,
+                            to_local=core.to_local, context=recurrence_context,
                         ))
                         continue
                     window = mods.get("time_window")

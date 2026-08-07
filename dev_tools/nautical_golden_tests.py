@@ -16491,6 +16491,26 @@ def test_anchor_file_occurrences_expand_random_time_window_with_context():
     expect(occurrences == expected, f"unexpected random anchor_file occurrences: {occurrences!r}")
 
 
+def test_anchor_file_occurrence_provider_exposes_typed_values():
+    """The provider adapter should expose the existing file expansion as typed occurrences."""
+    import nautical_core.anchor_files as anchor_files
+    from nautical_core.occurrence_provider import Occurrence
+
+    with tempfile.TemporaryDirectory() as td:
+        sample = Path(td) / "calendar.csv"
+        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
+        values = anchor_files.AnchorFileOccurrenceProvider(
+            "calendar.csv@t=06,12:30",
+            td,
+            (8, 0),
+        ).occurrences()
+    expect(all(isinstance(value, Occurrence) for value in values), f"provider returned untyped values: {values!r}")
+    expect([(value.day, value.hhmm, value.source) for value in values] == [
+        (date(2026, 8, 3), (6, 0), "anchor_file"),
+        (date(2026, 8, 3), (12, 30), "anchor_file"),
+    ], f"provider occurrence values were incorrect: {values!r}")
+
+
 def test_anchor_file_occurrences_expand_overnight_time_window():
     """File dates own overnight slots even when generated times land next day."""
     import nautical_core.anchor_files as anchor_files
@@ -26910,6 +26930,7 @@ TESTS = [
     test_anchor_file_spec_parses_bounded_time_window,
     test_anchor_file_occurrences_expand_bounded_time_window,
     test_anchor_file_occurrences_expand_random_time_window_with_context,
+    test_anchor_file_occurrence_provider_exposes_typed_values,
     test_anchor_file_occurrences_expand_overnight_time_window,
     test_anchor_file_occurrences_expand_composable_time_schedule,
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,

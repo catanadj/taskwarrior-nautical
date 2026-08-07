@@ -22,6 +22,7 @@ from .file_source_expr import (
 )
 from .schedule_utils import apply_day_offset, roll_apply
 from .recurrence_context import RecurrenceContext
+from .occurrence_provider import Occurrence
 from .time_windows import parse_clock_value, parse_random_time_window_spec, parse_time_schedule_spec, parse_time_window_spec
 
 
@@ -398,6 +399,37 @@ def load_anchor_file_occurrence_specs(
                 out.append(occurrence)
     out.sort()
     return out
+
+
+class AnchorFileOccurrenceProvider:
+    """Typed adapter over the legacy tuple-based anchor-file expansion API."""
+
+    def __init__(
+        self,
+        name: str | None,
+        anchor_file_dir: str | None,
+        fallback_hhmm: tuple[int, int],
+        *,
+        business_calendar: BusinessCalendar | None = None,
+        context: RecurrenceContext | None = None,
+    ) -> None:
+        self.name = name
+        self.anchor_file_dir = anchor_file_dir
+        self.fallback_hhmm = fallback_hhmm
+        self.business_calendar = business_calendar
+        self.context = context
+
+    def occurrences(self) -> list[Occurrence]:
+        return [
+            Occurrence(day=d0, hour=hhmm[0], minute=hhmm[1], source="anchor_file")
+            for d0, hhmm in load_anchor_file_occurrence_specs(
+                self.name,
+                self.anchor_file_dir,
+                self.fallback_hhmm,
+                business_calendar=self.business_calendar,
+                context=self.context,
+            )
+        ]
 
 
 def next_anchor_file_occurrence_after(

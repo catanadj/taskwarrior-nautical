@@ -3107,7 +3107,7 @@ def _validate_anchor_expr_strict_impl(expr) -> AnchorDNF:
 
 # -------- Cached Expansion Functions ----------
 @_ttl_lru_cache(maxsize=128)
-def expand_weekly_cached(spec: str):
+def _expand_weekly_cached_impl(spec: str):
     return _cached_expansion.expand_weekly(
         spec,
         weekly_spec_to_wset=_weekly_spec_to_wset,
@@ -3115,16 +3115,16 @@ def expand_weekly_cached(spec: str):
 
 
 @_ttl_lru_cache(maxsize=128)
-def expand_weekly_cached_mods(spec: str, bd_only: bool):
+def _expand_weekly_cached_mods_impl(spec: str, bd_only: bool):
     return _cached_expansion.expand_weekly_mods(
         spec,
         bd_only,
-        expand_weekly_cached=expand_weekly_cached,
+        expand_weekly_cached=_expand_weekly_cached_impl,
     )
 
 
 @_ttl_lru_cache(maxsize=128)
-def expand_yearly_cached(spec: str, y: int):
+def _expand_yearly_cached_impl(spec: str, y: int):
     return _cached_expansion.expand_yearly(
         spec,
         y,
@@ -3138,7 +3138,7 @@ def expand_yearly_cached(spec: str, y: int):
 
 
 @_ttl_lru_cache(maxsize=128)
-def expand_monthly_cached(
+def _expand_monthly_cached_impl(
     spec: str,
     y: int,
     m: int,
@@ -3160,23 +3160,23 @@ def expand_monthly_cached(
     )
 
 
-def expand_monthly_for_month(spec: str, y: int, m: int):
+def _expand_monthly_for_month_impl(spec: str, y: int, m: int):
     """Wrapper for cached monthly expansion."""
-    return expand_monthly_cached(spec, y, m)
+    return _expand_monthly_cached_impl(spec, y, m)
 
 
-def expand_weekly(spec: str):
+def _expand_weekly_impl(spec: str):
     """Wrapper for cached weekly expansion."""
-    return expand_weekly_cached(spec)
+    return _expand_weekly_cached_impl(spec)
 
 
-def expand_yearly_for_year_strict(spec: str, y: int):
+def _expand_yearly_for_year_strict_impl(spec: str, y: int):
     """Wrapper for cached yearly expansion."""
-    return expand_yearly_cached(spec, y)
+    return _expand_yearly_cached_impl(spec, y)
 
 
 # -------- Rolls / atoms ----------
-def roll_apply(
+def _roll_apply_impl(
     dt: date,
     mods: dict,
     business_calendar=None,
@@ -3192,7 +3192,7 @@ def roll_apply(
 def _weeks_between(d1: date, d2: date) -> int:
     return _schedule_utils.weeks_between(d1, d2)
 
-def apply_day_offset(
+def _apply_day_offset_impl(
     d: date,
     mods: dict,
     business_calendar=None,
@@ -3417,7 +3417,7 @@ def _accept_roll_candidate(ref_d: date, base: date, cand: date, roll_kind: str |
     return _scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
 
 
-def next_after_atom_with_mods(
+def _next_after_atom_with_mods_impl(
     atom,
     ref_d: date,
     default_seed: date,
@@ -3456,7 +3456,7 @@ def next_after_atom_with_mods(
 
 
 
-def atom_matches_on(
+def _atom_matches_on_impl(
     atom,
     d: date,
     default_seed: date,
@@ -3485,7 +3485,7 @@ def _apply_selection_date_modifiers(base: date, mods: dict, business_calendar=No
     return apply_day_offset(rolled, mods, business_calendar=business_calendar)
 
 
-def next_after_factor(
+def _next_after_factor_impl(
     factor,
     ref_d: date,
     default_seed: date | None,
@@ -3515,7 +3515,7 @@ def next_after_factor(
     )
 
 
-def factor_matches_on(
+def _factor_matches_on_impl(
     factor,
     d: date,
     default_seed: date | None,
@@ -3523,7 +3523,7 @@ def factor_matches_on(
     business_calendar=None,
 ) -> bool:
     if not _position_selection.is_selection_node(factor):
-        matches = _with_business_calendar(atom_matches_on, business_calendar)
+        matches = _with_business_calendar(_atom_matches_on_impl, business_calendar)
         return matches(
             factor,
             d,
@@ -3550,7 +3550,7 @@ def factor_matches_on(
     return selected == d
 
 
-def next_after_term(
+def _next_after_term_impl(
     term,
     ref_d: date,
     default_seed: date,
@@ -3570,7 +3570,7 @@ def next_after_term(
     )
 
 
-def next_after_expr(
+def _next_after_expr_impl(
     dnf,
     after_date,
     default_seed=None,
@@ -3869,6 +3869,25 @@ resolve_anchor_presets = _parser_api.resolve_anchor_presets
 parse_anchor_expr_to_dnf = _parser_api.parse_anchor_expr_to_dnf
 parse_anchor_expr_to_dnf_cached = _parser_api.parse_anchor_expr_to_dnf_cached
 validate_anchor_expr_strict = _parser_api.validate_anchor_expr_strict
+
+# Scheduler entry points are bound to this exact core instance for isolated
+# hook/test loaders while preserving the long-standing facade names.
+_scheduler_api = _import_sibling("scheduler_api").for_core(sys.modules[__name__])
+expand_weekly_cached = _scheduler_api.expand_weekly_cached
+expand_weekly_cached_mods = _scheduler_api.expand_weekly_cached_mods
+expand_yearly_cached = _scheduler_api.expand_yearly_cached
+expand_monthly_cached = _scheduler_api.expand_monthly_cached
+expand_monthly_for_month = _scheduler_api.expand_monthly_for_month
+expand_weekly = _scheduler_api.expand_weekly
+expand_yearly_for_year_strict = _scheduler_api.expand_yearly_for_year_strict
+roll_apply = _scheduler_api.roll_apply
+apply_day_offset = _scheduler_api.apply_day_offset
+next_after_atom_with_mods = _scheduler_api.next_after_atom_with_mods
+atom_matches_on = _scheduler_api.atom_matches_on
+next_after_factor = _scheduler_api.next_after_factor
+factor_matches_on = _scheduler_api.factor_matches_on
+next_after_term = _scheduler_api.next_after_term
+next_after_expr = _scheduler_api.next_after_expr
 
 
 # Explicit package facade for tools/tests. Direct attribute access outside this set

@@ -23,7 +23,7 @@ import sys
 import tempfile
 import time
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 
@@ -176,6 +176,30 @@ def _bench_queue_schema_hot(rounds: int) -> float:
             for _ in range(rounds):
                 queue_store.init_queue_db(conn)
             return time.perf_counter() - t0
+
+
+def _bench_anchor_file_provider(rounds: int) -> float:
+    """Exercise cached anchor-file expansion and successor lookup."""
+    anchor_files = importlib.import_module("nautical_core.anchor_files")
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-anchor-file-") as td:
+        path = Path(td) / "calendar.csv"
+        rows = ["date,description"]
+        for index in range(365):
+            item_date = date(2026, 1, 1) + timedelta(days=index)
+            rows.append(f"{item_date.isoformat()},{index}")
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        provider = anchor_files.AnchorFileOccurrenceProvider(
+            "calendar.csv@t=09:00",
+            td,
+            (9, 0),
+        )
+        build = lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm)
+        started = time.perf_counter()
+        for index in range(max(1, rounds)):
+            after = datetime(2026, 1, 1, 8, 0) + timedelta(days=index % 364)
+            if provider.next_after(after, build_local_datetime=build, to_local=lambda value: value) is None:
+                raise RuntimeError("anchor-file provider benchmark unexpectedly exhausted")
+        return time.perf_counter() - started
 
 
 def _measure(name: str, fn, repeats: int) -> dict:
@@ -496,6 +520,7 @@ def main() -> int:
     cache_save_rounds = int(workload.get("cache_save_rounds", 120))
     cache_load_rounds = int(workload.get("cache_load_rounds", 300))
     queue_schema_hot_rounds = int(workload.get("queue_schema_hot_rounds", 1000))
+    anchor_file_rounds = int(workload.get("anchor_file_rounds", 300))
 
     checks = [
         ("parse_validate", lambda: _bench_parse_validate(exprs, parse_rounds), repeats),
@@ -506,6 +531,7 @@ def main() -> int:
         ("cache_save", lambda: _bench_cache_save(exprs, cache_save_rounds), repeats),
         ("cache_load_hot", lambda: _bench_cache_load_hot(exprs, cache_load_rounds), repeats),
         ("queue_schema_hot", lambda: _bench_queue_schema_hot(queue_schema_hot_rounds), repeats),
+        ("anchor_file_provider", lambda: _bench_anchor_file_provider(anchor_file_rounds), repeats),
     ]
 
     seasonal = cfg.get("seasonal_workload")

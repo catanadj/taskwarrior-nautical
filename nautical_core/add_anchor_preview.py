@@ -207,31 +207,31 @@ def anchor_preview_first_due(
 
     fallback_hhmm = due_hhmm if user_provided_due else (9, 0)
     t_first = time.perf_counter()
-    if user_provided_due:
-        due_local_dt = to_local_cached(due_dt)
-        first_due_local_dt = anchor_pick_occurrence_local(
+    from .occurrence_provider import AnchorOccurrenceProvider
+
+    inclusive = not user_provided_due
+    reference_local = to_local_cached(due_dt) if user_provided_due else now_local
+    provider = AnchorOccurrenceProvider(
+        lambda: [],
+        lambda value: anchor_pick_occurrence_local(
             dnf,
-            due_local_dt,
-            inclusive=False,
+            value,
+            inclusive=inclusive,
             fallback_hhmm=fallback_hhmm,
             interval_seed=interval_seed,
             seed_base=seed_base,
             omit_dnf=omit_dnf,
-        )
-        if not first_due_local_dt:
-            error_and_exit([("anchor pattern", "No matching anchor occurrences found after the provided due.")])
-    else:
-        first_due_local_dt = anchor_pick_occurrence_local(
-            dnf,
-            now_local,
-            inclusive=True,
-            fallback_hhmm=fallback_hhmm,
-            interval_seed=interval_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-        )
-        if not first_due_local_dt:
-            error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])
+        ),
+    )
+    occurrence = provider.next_after(
+        reference_local,
+        build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+        to_local=lambda value: value,
+    )
+    first_due_local_dt = occurrence.local_datetime if occurrence is not None else None
+    if not first_due_local_dt:
+        error_and_exit([("anchor pattern", "No matching anchor occurrences found after the provided due." if user_provided_due else "No matching anchor occurrences found.")])
+
     prof.add_ms("anchor:first_occurrence", (time.perf_counter() - t_first) * 1000.0)
 
     first_hhmm = (first_due_local_dt.hour, first_due_local_dt.minute)

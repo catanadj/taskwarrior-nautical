@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Protocol
 
+from .timeutil import compare_datetimes
+
 
 @dataclass(frozen=True, slots=True)
 class Occurrence:
@@ -64,17 +66,13 @@ def _datetime_is_aware(value: datetime) -> bool:
 
 
 def _compare_datetimes(left: datetime, right: datetime) -> int:
-    """Compare datetimes by instant when aware, otherwise by wall time."""
-    if not isinstance(left, datetime) or not isinstance(right, datetime):
-        raise TypeError("Occurrence provider must compare datetime values.")
-    left_aware = _datetime_is_aware(left)
-    right_aware = _datetime_is_aware(right)
-    if left_aware != right_aware:
-        raise ValueError("Occurrence provider returned an incomparable datetime.")
-    if left_aware:
-        left = left.astimezone(timezone.utc)
-        right = right.astimezone(timezone.utc)
-    return (left > right) - (left < right)
+    """Compatibility wrapper for the shared datetime comparator."""
+    try:
+        return compare_datetimes(left, right)
+    except TypeError as exc:
+        raise TypeError("Occurrence provider must compare datetime values.") from exc
+    except ValueError as exc:
+        raise ValueError("Occurrence provider returned an incomparable datetime.") from exc
 
 
 def _sort_datetimes(values: list[datetime]) -> list[datetime]:

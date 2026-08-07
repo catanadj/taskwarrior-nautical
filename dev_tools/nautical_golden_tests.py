@@ -17051,6 +17051,25 @@ def test_native_until_exact_carry_orders_dst_fold_by_instant():
         raise AssertionError("malformed native-until converter did not fail closed")
 
 
+def test_public_datetime_comparator_preserves_dst_fold_and_provider_alias():
+    """The neutral comparator and provider compatibility alias must agree."""
+    from zoneinfo import ZoneInfo
+    from nautical_core.occurrence_provider import _compare_datetimes
+    from nautical_core.timeutil import compare_datetimes
+
+    zone = ZoneInfo("Europe/Bucharest")
+    first = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=0)
+    second = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)
+    expect(compare_datetimes(first, second) < 0, "public comparator lost DST fold ordering")
+    expect(_compare_datetimes(first, second) < 0, "provider alias disagrees with public comparator")
+    try:
+        compare_datetimes(first.replace(tzinfo=None), second)
+    except ValueError as exc:
+        expect("naive and aware" in str(exc), f"public comparator error is not neutral: {exc}")
+    else:
+        raise AssertionError("public comparator accepted mixed naive and aware values")
+
+
 def test_modify_until_past_guard_orders_dst_fold_by_instant():
     """The modify hook must not treat the first repeated-hour instant as future."""
     from zoneinfo import ZoneInfo
@@ -28557,6 +28576,7 @@ TESTS = [
     test_modify_anchor_file_mode_orders_dst_fold_by_instant,
     test_native_until_validation_orders_dst_fold_by_instant,
     test_native_until_exact_carry_orders_dst_fold_by_instant,
+    test_public_datetime_comparator_preserves_dst_fold_and_provider_alias,
     test_modify_until_past_guard_orders_dst_fold_by_instant,
     test_merged_anchor_file_provider_carries_context_and_reuses_specs,
     test_event_provider_preserves_anchor_file_source_description,

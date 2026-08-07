@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
-from nautical_core.occurrence_provider import _compare_datetimes  # noqa: E402
+from nautical_core.timeutil import compare_datetimes  # noqa: E402
 import nautical_core.runtime as runtime  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
@@ -925,7 +925,7 @@ def _check_reconcile_plans(
                         not until_err
                         and until_dt is not None
                         and callable(now_utc)
-                        and _compare_datetimes(until_dt, now_utc()) <= 0
+                        and compare_datetimes(until_dt, now_utc()) <= 0
                     )
                 except Exception:
                     planned_until_elapsed = False

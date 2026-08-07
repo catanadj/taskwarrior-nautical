@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta, timezone
 from typing import Any, Callable
 
-from .occurrence_provider import _compare_datetimes
+from .timeutil import compare_datetimes
 
 
 def anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, *, core: Any):
@@ -228,7 +228,7 @@ def anchor_pick_occurrence_local(
                 norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
             ) or [fallback_hhmm]
             for cand_local in _unique_local_candidates(d0, tlist, core=core):
-                comparison = _compare_datetimes(cand_local, ref_dt_local)
+                comparison = compare_datetimes(cand_local, ref_dt_local)
                 matches = comparison >= 0 if inclusive else comparison > 0
                 if matches:
                     return cand_local
@@ -310,7 +310,7 @@ def anchor_next_occurrence_after_local_dt(
                 norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
             ) or [fallback_hhmm]
             for cand_local in _unique_local_candidates(d0, tlist, core=core):
-                if _compare_datetimes(cand_local, after_dt_local) > 0:
+                if compare_datetimes(cand_local, after_dt_local) > 0:
                     return cand_local
         except LookupError as exc:
             unavailable = exc
@@ -333,7 +333,7 @@ def anchor_next_occurrence_after_local_dt(
             core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
         )
         for cand_local in _unique_local_candidates(previous_date, previous_slots, core=core):
-            if _compare_datetimes(cand_local, after_dt_local) > 0:
+            if compare_datetimes(cand_local, after_dt_local) > 0:
                 return cand_local
 
     candidate = d0
@@ -456,7 +456,7 @@ def anchor_build_preview(
         if not nxt_dt:
             break
         dt_utc = nxt_dt.astimezone(timezone.utc)
-        if until_dt and _compare_datetimes(dt_utc, until_dt) > 0:
+        if until_dt and compare_datetimes(dt_utc, until_dt) > 0:
             break
         color = colors[min(i, len(colors) - 1)]
         preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")

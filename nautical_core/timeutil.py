@@ -3,6 +3,20 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 
+def compare_datetimes(left: datetime, right: datetime) -> int:
+    """Compare datetimes by instant when aware, otherwise by wall time."""
+    if not isinstance(left, datetime) or not isinstance(right, datetime):
+        raise TypeError("Datetime comparison requires datetime values.")
+    left_aware = left.tzinfo is not None and left.utcoffset() is not None
+    right_aware = right.tzinfo is not None and right.utcoffset() is not None
+    if left_aware != right_aware:
+        raise ValueError("Cannot compare naive and aware datetime values.")
+    if left_aware:
+        left = left.astimezone(timezone.utc)
+        right = right.astimezone(timezone.utc)
+    return (left > right) - (left < right)
+
+
 def ensure_utc(dt_utc: datetime) -> datetime:
     """Return a timezone-aware UTC datetime."""
     if dt_utc.tzinfo is None:

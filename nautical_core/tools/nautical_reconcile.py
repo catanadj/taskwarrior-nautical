@@ -32,7 +32,7 @@ if str(BASE_DIR) not in sys.path:
 os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
 from nautical_core import queue_store, reconcile, safe_lock, task_command  # noqa: E402
-from nautical_core.occurrence_provider import _compare_datetimes  # noqa: E402
+from nautical_core.timeutil import compare_datetimes  # noqa: E402
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -1012,9 +1012,9 @@ def _terminal_recovery_error(child: dict[str, Any], hook: Any, recovery_at: Any)
     if target_err or target_dt is None:
         return f"live recovery child has no reliable {target_field}: {target_err or f'missing {target_field}'}"
     try:
-        if _compare_datetimes(until_dt, target_dt) <= 0:
+        if compare_datetimes(until_dt, target_dt) <= 0:
             return f"live recovery child native until is not later than its {target_field}"
-        if _compare_datetimes(until_dt, recovery_at) <= 0:
+        if compare_datetimes(until_dt, recovery_at) <= 0:
             return "live recovery child native until has already elapsed"
     except Exception:
         return "live recovery child timing could not be compared"
@@ -1061,7 +1061,7 @@ def _virtual_expired_child(
     if until_err or until_dt is None:
         return None, f"planned child has no reliable native until: {until_err or 'missing until'}"
     try:
-        if _compare_datetimes(until_dt, recovery_at) > 0:
+        if compare_datetimes(until_dt, recovery_at) > 0:
             return None, ""
     except Exception:
         return None, "planned child expiration could not be compared with recovery time"

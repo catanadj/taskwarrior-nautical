@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from nautical_core.modify_models import CompletionComputeResult
-from nautical_core.occurrence_provider import _compare_datetimes
+from nautical_core.timeutil import compare_datetimes
 
 
 def completion_compute_child_due(
@@ -80,7 +80,7 @@ def completion_until_guard_or_stop(
     end_chain_summary,
     print_task,
 ) -> bool:
-    if until_dt and _compare_datetimes(child_due, until_dt) > 0:
+    if until_dt and compare_datetimes(child_due, until_dt) > 0:
         end_chain_summary(new, "Reached 'until' limit", now_utc)
         new["chain"] = "off"
         print_task(new)

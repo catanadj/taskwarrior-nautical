@@ -6,7 +6,8 @@ from typing import Any, Callable
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from . import calendar_feedback, panel_diagnostics
-from .occurrence_provider import Occurrence, _compare_datetimes, _sort_datetimes
+from .occurrence_provider import Occurrence, _sort_datetimes
+from .timeutil import compare_datetimes
 
 
 def _preview_seed_base(task: dict[str, Any], fallback_chain_id: str) -> str:
@@ -355,7 +356,7 @@ def _anchor_file_occurrences_local(
     ordered = _sort_datetimes(out)
     deduplicated: list[datetime] = []
     for item in ordered:
-        if not deduplicated or _compare_datetimes(item, deduplicated[-1]) != 0:
+        if not deduplicated or compare_datetimes(item, deduplicated[-1]) != 0:
             deduplicated.append(item)
     return deduplicated
 
@@ -394,8 +395,8 @@ def _preview_occurrence_lines(
             item_local, is_omitted = event
         if item_local is None:
             continue
-        if _compare_datetimes(item_local, first_due_local_dt) <= 0:
-            if not is_omitted and _compare_datetimes(item_local, first_due_local_dt) == 0:
+        if compare_datetimes(item_local, first_due_local_dt) <= 0:
+            if not is_omitted and compare_datetimes(item_local, first_due_local_dt) == 0:
                 included_idx = 1
             continue
         if is_omitted:
@@ -658,11 +659,11 @@ def handle_anchor_file_preview_on_add(
 
     due_local_dt = core.to_local(due_dt)
     if user_provided_due:
-        first_due_local_dt = next((dt for dt in all_occurrences if _compare_datetimes(dt, due_local_dt) > 0), None)
+        first_due_local_dt = next((dt for dt in all_occurrences if compare_datetimes(dt, due_local_dt) > 0), None)
         if not first_due_local_dt:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found after the provided due.")])
     else:
-        first_due_local_dt = next((dt for dt in all_occurrences if _compare_datetimes(dt, now_local) >= 0), None)
+        first_due_local_dt = next((dt for dt in all_occurrences if compare_datetimes(dt, now_local) >= 0), None)
         if not first_due_local_dt:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
 
@@ -703,7 +704,7 @@ def handle_anchor_file_preview_on_add(
         )
 
     if until_dt:
-        if _compare_datetimes(until_dt, first_due_utc) < 0:
+        if compare_datetimes(until_dt, first_due_utc) < 0:
             error_and_exit(
                 [
                     ("Invalid chainUntil", "Chain end point is earlier than the first matching anchor occurrence."),
@@ -721,7 +722,7 @@ def handle_anchor_file_preview_on_add(
     final_until_dt = None
     if until_dt:
         until_local = core.to_local(until_dt)
-        limited = [dt for dt in all_occurrences if _compare_datetimes(dt, until_local) <= 0]
+        limited = [dt for dt in all_occurrences if compare_datetimes(dt, until_local) <= 0]
         exact_until_count = max(0, len(limited) - 1)
         if limited:
             final_until_dt = limited[-1].astimezone(timezone.utc)
@@ -749,7 +750,7 @@ def handle_anchor_file_preview_on_add(
         events = [
             event
             for event in events
-            if _compare_datetimes(
+            if compare_datetimes(
                 event.local_datetime if isinstance(event, Occurrence) else event[0],
                 until_local,
             ) <= 0
@@ -1029,7 +1030,7 @@ def handle_anchor_preview_on_add(
         )
 
     if until_dt:
-        if _compare_datetimes(until_dt, first_due_utc) < 0:
+        if compare_datetimes(until_dt, first_due_utc) < 0:
             error_and_exit(
                 [
                     ("Invalid chainUntil", "Chain end point is earlier than the first matching anchor occurrence."),
@@ -1096,7 +1097,7 @@ def handle_anchor_preview_on_add(
         )
         if until_dt:
             until_local = core.to_local(until_dt)
-            limited = [dt for dt in all_occurrences if _compare_datetimes(dt, until_local) <= 0]
+            limited = [dt for dt in all_occurrences if compare_datetimes(dt, until_local) <= 0]
             exact_until_count = max(0, len(limited) - 1)
             if limited:
                 final_until_dt = limited[-1].astimezone(timezone.utc)
@@ -1126,7 +1127,7 @@ def handle_anchor_preview_on_add(
             events = [
                 event
                 for event in events
-                if _compare_datetimes(
+                if compare_datetimes(
                     event.local_datetime if isinstance(event, Occurrence) else event[0],
                     until_local,
                 ) <= 0

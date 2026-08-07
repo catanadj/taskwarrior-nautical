@@ -964,7 +964,7 @@ def _compare_datetimes(left: datetime, right: datetime) -> int:
     """Compare aware datetimes by instant, preserving DST fold ordering."""
     global _DATETIME_COMPARATOR
     if _DATETIME_COMPARATOR is None:
-        _DATETIME_COMPARATOR = core._import_sibling("occurrence_provider")._compare_datetimes
+        _DATETIME_COMPARATOR = core._import_sibling("timeutil").compare_datetimes
     return _DATETIME_COMPARATOR(left, right)
 
 
@@ -3694,7 +3694,7 @@ def _anchor_file_occurrences_local(
     ordered = occurrence_provider._sort_datetimes(out)
     deduplicated: list[datetime] = []
     for item in ordered:
-        if not deduplicated or occurrence_provider._compare_datetimes(item, deduplicated[-1]) != 0:
+        if not deduplicated or _compare_datetimes(item, deduplicated[-1]) != 0:
             deduplicated.append(item)
     return deduplicated
 

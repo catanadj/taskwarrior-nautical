@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from nautical_core.occurrence_provider import _compare_datetimes
+from nautical_core.timeutil import compare_datetimes
 
 
 CARRY_CONFLICT = "calendar_target_conflict"
@@ -89,7 +89,7 @@ def validate_after_target(
         return (True, None)
     label = "scheduled" if str(target_field or "").strip().lower() == "scheduled" else "due"
     try:
-        if _compare_datetimes(until_dt, target_dt) <= 0:
+        if compare_datetimes(until_dt, target_dt) <= 0:
             return (False, f"until must be later than {label}")
     except Exception:
         return (False, f"until and {label} could not be compared")
@@ -161,7 +161,7 @@ def carry(
                 parent_until_local.time(),
             )
             child_until = local_naive_to_utc(child_until_local)
-            if str(kind or "").strip().lower() == "cp" and _compare_datetimes(child_until, child_target) <= 0:
+            if str(kind or "").strip().lower() == "cp" and compare_datetimes(child_until, child_target) <= 0:
                 child_until = local_naive_to_utc(child_until_local + timedelta(days=1))
     except NativeUntilCarryError:
         raise
@@ -169,7 +169,7 @@ def carry(
         raise NativeUntilCarryError(CARRY_FAILED, "native until carry could not be calculated") from exc
 
     try:
-        invalid_order = _compare_datetimes(child_until, child_target) <= 0
+        invalid_order = compare_datetimes(child_until, child_target) <= 0
     except Exception as exc:
         raise NativeUntilCarryError(CARRY_FAILED, "native until carry produced incomparable timestamps") from exc
     if invalid_order:

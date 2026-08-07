@@ -22,7 +22,8 @@ from .file_source_expr import (
 )
 from .schedule_utils import apply_day_offset, roll_apply
 from .recurrence_context import RecurrenceContext
-from .occurrence_provider import Occurrence, _compare_datetimes, _sort_datetimes
+from .occurrence_provider import Occurrence, _sort_datetimes
+from .timeutil import compare_datetimes
 from .time_windows import parse_clock_value, parse_random_time_window_spec, parse_time_schedule_spec, parse_time_window_spec
 
 
@@ -535,7 +536,7 @@ class AnchorFileOccurrenceProvider:
             ordered_descriptions: list[str] = []
             for candidate in ordered:
                 for index, (original, description) in enumerate(remaining):
-                    if _compare_datetimes(original, candidate) == 0:
+                    if compare_datetimes(original, candidate) == 0:
                         ordered_descriptions.append(description)
                         remaining.pop(index)
                         break
@@ -544,7 +545,7 @@ class AnchorFileOccurrenceProvider:
             self._candidate_cache = []
             self._candidate_descriptions = []
             for candidate, description in zip(ordered, ordered_descriptions):
-                if not self._candidate_cache or _compare_datetimes(candidate, self._candidate_cache[-1]) != 0:
+                if not self._candidate_cache or compare_datetimes(candidate, self._candidate_cache[-1]) != 0:
                     self._candidate_cache.append(candidate)
                     self._candidate_descriptions.append(description)
                 elif not self._candidate_descriptions[-1] and description:
@@ -555,11 +556,11 @@ class AnchorFileOccurrenceProvider:
             start = 0
         else:
             try:
-                if _compare_datetimes(after_local, self._last_after) <= 0:
+                if compare_datetimes(after_local, self._last_after) <= 0:
                     start = 0
                 elif self._last_candidate is not None and self._last_candidate_index is not None:
                     start = self._last_candidate_index + (
-                        1 if _compare_datetimes(after_local, self._last_candidate) >= 0 else 0
+                        1 if compare_datetimes(after_local, self._last_candidate) >= 0 else 0
                     )
             except (TypeError, ValueError):
                 start = 0
@@ -568,7 +569,7 @@ class AnchorFileOccurrenceProvider:
         for index in range(start, len(candidates)):
             candidate = candidates[index]
             try:
-                is_after = _compare_datetimes(candidate, after_local) > 0
+                is_after = compare_datetimes(candidate, after_local) > 0
             except (TypeError, ValueError) as exc:
                 raise ValueError("Anchor-file provider returned an incomparable datetime.") from exc
             if is_after:

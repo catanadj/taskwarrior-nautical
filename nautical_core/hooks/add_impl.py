@@ -1420,7 +1420,7 @@ def _compare_datetimes(left: datetime, right: datetime) -> int:
     """Compare aware datetimes by instant, resolving the provider once per hook run."""
     global _DATETIME_COMPARATOR
     if _DATETIME_COMPARATOR is None:
-        _DATETIME_COMPARATOR = core._import_sibling("occurrence_provider")._compare_datetimes
+        _DATETIME_COMPARATOR = core._import_sibling("timeutil").compare_datetimes
     return _DATETIME_COMPARATOR(left, right)
 
 

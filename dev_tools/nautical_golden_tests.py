@@ -19261,6 +19261,18 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         == datetime(2025, 1, 2, tzinfo=timezone.utc),
         "CP due-date projection changed",
     )
+    try:
+        cp_evaluator.cp_interval_for_link(0)
+    except ValueError as exc:
+        expect("positive link" in str(exc), f"invalid CP link error was not actionable: {exc}")
+    else:
+        raise AssertionError("invalid CP link number was silently accepted")
+    try:
+        cp_evaluator.project_cp(datetime(2025, 1, 1), 1)
+    except ValueError as exc:
+        expect("timezone-aware" in str(exc), f"naive CP projection error was not actionable: {exc}")
+    else:
+        raise AssertionError("naive CP projection was silently accepted")
     expect(parsed.limits_allow(datetime(2025, 12, 31, 22, 0), 4), "valid chain limit was rejected")
     expect(not parsed.limits_allow(datetime(2026, 1, 1, 0, 0), 4), "chainUntil limit was ignored")
     expect(not parsed.limits_allow(datetime(2025, 12, 31, 22, 0), 5), "chainMax limit was ignored")
@@ -19278,6 +19290,17 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         == [datetime(2025, 1, 2), datetime(2025, 1, 3)],
         "evaluator did not expose a merged typed occurrence stream",
     )
+    try:
+        parsed.collect_after(
+            datetime(2025, 1, 1),
+            limit=1,
+            fallback_hhmm=(24, 0),
+            next_occurrence_after_local_dt=next_day,
+        )
+    except ValueError as exc:
+        expect("Fallback occurrence time" in str(exc), f"invalid fallback time error was not actionable: {exc}")
+    else:
+        raise AssertionError("invalid fallback occurrence time was silently accepted")
 
     invalid_mode = RecurrenceEvaluator.from_task({"chainID": "invalid-mode", "anchor": "w:mon", "anchor_mode": "bad"})
     try:

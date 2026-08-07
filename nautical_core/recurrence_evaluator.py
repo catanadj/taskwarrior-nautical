@@ -182,6 +182,8 @@ class RecurrenceEvaluator:
         """Resolve one CP interval using this evaluator's stable chain identity."""
         if self.kind != "cp":
             raise ValueError("CP interval lookup requires a CP recurrence.")
+        if isinstance(link_no, bool) or not isinstance(link_no, int) or link_no <= 0:
+            raise ValueError("CP interval lookup requires a positive link number.")
         from . import cp_sequence_interval_for_link
 
         return cp_sequence_interval_for_link(self.spec.cp, link_no, chain_id=self.chain_id)
@@ -190,10 +192,12 @@ class RecurrenceEvaluator:
         """Project a CP link from an existing UTC due instant."""
         if not isinstance(base_utc, datetime):
             raise TypeError("CP projection requires a datetime base.")
+        if base_utc.tzinfo is None or base_utc.utcoffset() is None:
+            raise ValueError("CP projection requires a timezone-aware UTC datetime.")
         interval = self.cp_interval_for_link(link_no)
         if interval is None:
             raise ValueError(f"Unable to resolve CP interval for link {link_no}.")
-        return base_utc + interval
+        return base_utc.astimezone(timezone.utc) + interval
 
     def limits_allow(self, candidate: datetime, link_no: int) -> bool:
         """Check chain limits for a local or UTC candidate occurrence."""
@@ -226,6 +230,9 @@ class RecurrenceEvaluator:
             raise ValueError("Occurrence lookup requires an anchor recurrence.")
         if not isinstance(after_local, datetime):
             raise TypeError("Occurrence lookup requires a datetime cursor.")
+        self._validate_hhmm(fallback_hhmm)
+        if isinstance(max_file_skips, bool) or not isinstance(max_file_skips, int) or max_file_skips <= 0:
+            raise ValueError("Anchor-file omission scan limit must be a positive integer.")
         from . import anchor_inclusion
 
         return anchor_inclusion.next_included_occurrence(
@@ -260,6 +267,7 @@ class RecurrenceEvaluator:
         max_file_skips: int = 512,
     ) -> list[Occurrence]:
         """Collect a bounded, merged stream of included occurrences."""
+        self._validate_hhmm(fallback_hhmm)
         from .occurrence_provider import AnchorOccurrenceProvider, collect_after
 
         provider = AnchorOccurrenceProvider(
@@ -287,6 +295,17 @@ class RecurrenceEvaluator:
         from . import _PKG_PROXY
 
         return _PKG_PROXY
+
+    @staticmethod
+    def _validate_hhmm(value: tuple[int, int]) -> None:
+        if (
+            not isinstance(value, tuple)
+            or len(value) != 2
+            or any(isinstance(item, bool) or not isinstance(item, int) for item in value)
+            or not 0 <= value[0] <= 23
+            or not 0 <= value[1] <= 59
+        ):
+            raise ValueError("Fallback occurrence time must be an (hour, minute) tuple.")
 
     @property
     def timezone(self) -> Any | None:

@@ -16972,6 +16972,37 @@ def test_included_provider_reuses_shared_anchor_file_provider():
     expect(len(calls) == 1, f"shared anchor-file provider expanded specs {len(calls)} times")
 
 
+def test_anchor_file_provider_retries_after_failed_load():
+    """A failed provider load must not publish an empty cache."""
+    import nautical_core.anchor_files as anchor_files
+
+    provider = anchor_files.AnchorFileOccurrenceProvider("calendar.csv", ".", (9, 0))
+    original = anchor_files.load_anchor_file_occurrence_specs
+    calls = []
+
+    def flaky(*_args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("transient calendar read failure")
+        sink = kwargs.get("_records_sink")
+        if sink is not None:
+            sink.append((date(2026, 8, 8), (9, 0), "recovered"))
+        return [(date(2026, 8, 8), (9, 0))]
+
+    anchor_files.load_anchor_file_occurrence_specs = flaky
+    try:
+        try:
+            provider.occurrences()
+            expect(False, "failed provider load did not propagate")
+        except ValueError as exc:
+            expect("transient calendar read failure" in str(exc), f"unexpected first load error: {exc}")
+        occurrences = provider.occurrences()
+    finally:
+        anchor_files.load_anchor_file_occurrence_specs = original
+    expect(len(calls) == 2, f"provider did not retry after failed load: {len(calls)} calls")
+    expect(occurrences and occurrences[0].description == "recovered", f"retry did not publish recovered records: {occurrences!r}")
+
+
 def test_included_provider_rebuilds_shared_provider_when_fallback_changes():
     """A changed effective fallback time must not reuse a stale file provider."""
     import nautical_core.add_anchor_preview as preview
@@ -17526,6 +17557,28 @@ def test_anchor_file_omit_evaluation_failures_propagate():
             expect("Unable to evaluate omit rule" in str(exc), f"unexpected omit error: {exc}")
     finally:
         anchor_omit.omit_expr_fires_on_date = original
+
+
+def test_omit_scheduler_failures_do_not_fail_open():
+    """Unexpected omit scheduler errors must not turn into allowed dates."""
+    import nautical_core.anchor_omit as anchor_omit
+
+    original = core.next_after_expr
+    core.next_after_expr = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("scheduler unavailable"))
+    try:
+        try:
+            anchor_omit.omit_expr_fires_on_date(
+                [[{"kind": "w", "value": "mon", "mods": {}}]],
+                date(2026, 8, 3),
+                date(2026, 8, 1),
+                "omit-fail-closed",
+                core=core,
+            )
+            expect(False, "omit scheduler failure was treated as an allowed date")
+        except ValueError as exc:
+            expect("Unable to evaluate omit rule" in str(exc), f"unexpected omit failure: {exc}")
+    finally:
+        core.next_after_expr = original
 
 
 def test_add_preview_event_collection_counts_only_included_occurrences():
@@ -28124,6 +28177,7 @@ TESTS = [
     test_included_provider_preserves_anchor_file_source_description,
     test_anchor_file_provider_keeps_description_for_overnight_slots,
     test_included_provider_reuses_shared_anchor_file_provider,
+    test_anchor_file_provider_retries_after_failed_load,
     test_included_provider_rebuilds_shared_provider_when_fallback_changes,
     test_included_provider_bounds_anchor_file_omission_scan,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
@@ -28143,6 +28197,7 @@ TESTS = [
     test_modify_until_projection_fails_closed_at_iteration_limit,
     test_anchor_file_provider_rejects_incomparable_datetimes,
     test_anchor_file_omit_evaluation_failures_propagate,
+    test_omit_scheduler_failures_do_not_fail_open,
     test_add_preview_event_collection_counts_only_included_occurrences,
     test_anchor_file_occurrences_expand_overnight_time_window,
     test_anchor_file_occurrences_expand_composable_time_schedule,

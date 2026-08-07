@@ -119,8 +119,10 @@ def omit_expr_fires_on_date(
             if nxt == d:
                 return True
         return False
-    except Exception:
-        return False
+    except Exception as exc:
+        raise ValueError(
+            f"Unable to evaluate omit rule for {d.isoformat()}: {exc}"
+        ) from exc
 
 
 def _omit_expr_match_lookback_days(omit_expr_dnf) -> int:

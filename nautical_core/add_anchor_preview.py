@@ -419,8 +419,10 @@ def _anchor_file_is_omitted(omit_dnf, item_local: datetime, *, core: Any, seed_b
                 core=core,
             )
         )
-    except Exception:
-        return False
+    except Exception as exc:
+        raise ValueError(
+            f"Unable to evaluate omit rule for {item_local.date().isoformat()}: {exc}"
+        ) from exc
 
 
 def _anchor_file_preview_occurrences(

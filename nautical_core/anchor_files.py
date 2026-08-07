@@ -459,17 +459,16 @@ class AnchorFileOccurrenceProvider:
             if self._spec_cache is not None:
                 self._record_cache = [(item_date, hhmm, "") for item_date, hhmm in self._spec_cache]
                 return self._record_cache
-            self._record_cache = []
+            records: list[tuple[date, tuple[int, int], str]] = []
             specs = load_anchor_file_occurrence_specs(
                 self.name,
                 self.anchor_file_dir,
                 self.fallback_hhmm,
                 business_calendar=self.business_calendar,
                 context=self.context,
-                _records_sink=self._record_cache,
+                _records_sink=records,
             )
-            if not self._record_cache:
-                self._record_cache = [(item_date, hhmm, "") for item_date, hhmm in specs]
+            self._record_cache = records or [(item_date, hhmm, "") for item_date, hhmm in specs]
         return self._record_cache
 
     def _specs(self) -> list[tuple[date, tuple[int, int]]]:

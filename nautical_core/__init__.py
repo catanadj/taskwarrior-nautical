@@ -2430,6 +2430,17 @@ def cp_sequence_interval_for_link(
     )
 
 
+# CP parsing is implemented in a focused module; these aliases preserve the
+# long-standing ``nautical_core`` facade used by hooks and third-party callers.
+_cp_parser = _import_sibling("cp_parser")
+parse_cp_duration = _cp_parser.parse_cp_duration
+parse_cp_sequence_tokens = _cp_parser.parse_cp_sequence_tokens
+parse_cp_sequence = _cp_parser.parse_cp_sequence
+cp_sequence_parse_error = _cp_parser.cp_sequence_parse_error
+cp_sequence_interval_for_token = _cp_parser.cp_sequence_interval_for_token
+cp_sequence_interval_for_link = _cp_parser.cp_sequence_interval_for_link
+
+
 # -------- Anchor parser (DNF with mods) ----------
 class ParseError(Exception):
     pass

@@ -4034,9 +4034,17 @@ def _estimate_cp_final_by_max(task: dict, next_due_utc):
 
     fut_dt = next_due_utc
     fut_no = cur_no + 1
+    iterations = 0
 
     # Step forward from next due until we reach cap_no
     while fut_no < cpmax:
+        iterations += 1
+        if iterations > _MAX_ITERATIONS:
+            _diag(
+                f"chainMax forecast stopped after {_MAX_ITERATIONS} occurrences; "
+                "final date is unavailable"
+            )
+            return None
         td = _cp_sequence_period_for_link(
             tokens,
             cp_str,
@@ -4083,7 +4091,15 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
         )
     fut_no = cur_no + 1
     fut_local = nxt_local
+    iterations = 0
     while fut_no < cpmax:
+        iterations += 1
+        if iterations > _MAX_ITERATIONS:
+            _diag(
+                f"chainMax forecast stopped after {_MAX_ITERATIONS} occurrences; "
+                "final date is unavailable"
+            )
+            return None
         if anchor_file:
             future = _anchor_included_occurrences(
                 task,

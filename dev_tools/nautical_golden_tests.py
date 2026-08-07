@@ -16058,6 +16058,43 @@ def test_on_modify_cp_sequence_estimates_chainmax_final_date():
     expect((final_local.hour, final_local.minute) == (9, 0), f"whole-day sequence cap should preserve wall clock: {final_local}")
 
 
+def test_on_modify_anchor_chainmax_forecast_is_bounded():
+    """Large anchor chainMax values must not make final-date forecasting unbounded."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_anchor_chainmax_bound_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    original_next = mod._next_occurrence_after_local_dt
+    original_diag = mod._diag
+    diagnostics = []
+    calls = []
+
+    def next_daily(_dnf, value, **_kwargs):
+        calls.append(value)
+        return value + timedelta(days=1)
+
+    mod._next_occurrence_after_local_dt = next_daily
+    mod._diag = diagnostics.append
+    try:
+        final_due = mod._estimate_anchor_final_by_max(
+            {"anchor": "w:mon", "link": 1, "chainMax": 5000, "chainID": "bound-test"},
+            datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc),
+            None,
+        )
+    finally:
+        mod._next_occurrence_after_local_dt = original_next
+        mod._diag = original_diag
+    expect(final_due is None, "unbounded anchor forecast returned a fabricated final date")
+    expect(len(calls) == mod._MAX_ITERATIONS, f"anchor forecast exceeded its iteration budget: {len(calls)}")
+    expect(diagnostics and "final date is unavailable" in diagnostics[0], f"forecast bound was not diagnosed: {diagnostics!r}")
+    cp_final = mod._estimate_cp_final_by_max(
+        {"cp": "1d", "link": 1, "chainMax": 5000},
+        datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc),
+    )
+    expect(cp_final is None, "unbounded CP forecast returned a fabricated final date")
+
+
 def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
     """scheduled-only anchor chains should compute missed occurrences from scheduled, not completion time."""
     hook = _find_hook_file("on-modify.nautical")
@@ -27851,6 +27888,7 @@ TESTS = [
     test_on_modify_compute_cp_sequence_selects_interval_by_link,
     test_on_modify_compute_cp_random_selects_deterministic_interval,
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
+    test_on_modify_anchor_chainmax_forecast_is_bounded,
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_time_window_preview_emits_bounded_slots,
     test_hook_on_add_overnight_window_keeps_json_and_next_day_preview,

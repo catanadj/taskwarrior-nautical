@@ -153,6 +153,33 @@ def _require_forward_progress(after_local: datetime, value: datetime) -> None:
         raise ValueError("Occurrence provider returned a non-advancing occurrence.")
 
 
+def _occurrence_from_datetime(
+    value: datetime,
+    after_local: datetime,
+    *,
+    to_local: Callable[[datetime], datetime],
+    source: str,
+    description: str,
+    omitted: bool = False,
+) -> Occurrence:
+    """Normalize a legacy datetime callback result into a typed occurrence."""
+    if not isinstance(value, datetime):
+        raise TypeError("Occurrence provider returned a non-datetime value.")
+    local = to_local(value)
+    if not isinstance(local, datetime):
+        raise TypeError("Occurrence provider returned a non-datetime local value.")
+    _require_forward_progress(after_local, local)
+    return Occurrence(
+        day=local.date(),
+        hour=local.hour,
+        minute=local.minute,
+        source=source,
+        description=description,
+        local_datetime=local,
+        omitted=omitted,
+    )
+
+
 class AnchorOccurrenceProvider:
     """Typed adapter for ordinary anchor occurrence projection.
 
@@ -187,19 +214,12 @@ class AnchorOccurrenceProvider:
                 raise ValueError("Occurrence provider returned an event without local datetime.")
             _require_forward_progress(after_local, value.local_datetime)
             return value
-        if not isinstance(value, datetime):
-            raise TypeError("Occurrence provider returned a non-datetime value.")
-        local = to_local(value)
-        if not isinstance(local, datetime):
-            raise TypeError("Occurrence provider returned a non-datetime local value.")
-        _require_forward_progress(after_local, local)
-        return Occurrence(
-            day=local.date(),
-            hour=local.hour,
-            minute=local.minute,
+        return _occurrence_from_datetime(
+            value,
+            after_local,
+            to_local=to_local,
             source=self._source,
             description=self._description,
-            local_datetime=local,
         )
 
 
@@ -236,21 +256,14 @@ class AnchorEventOccurrenceProvider:
         if not isinstance(event, tuple) or len(event) != 2:
             raise TypeError("Occurrence event provider must return a (datetime, omitted) tuple.")
         value, omitted = event
-        if not isinstance(value, datetime):
-            raise TypeError("Occurrence event provider returned a non-datetime value.")
-        local = to_local(value)
-        if not isinstance(local, datetime):
-            raise TypeError("Occurrence event provider returned a non-datetime local value.")
         if not isinstance(omitted, bool):
             raise TypeError("Occurrence event provider returned a non-boolean omitted flag.")
-        _require_forward_progress(after_local, local)
-        return Occurrence(
-            day=local.date(),
-            hour=local.hour,
-            minute=local.minute,
+        return _occurrence_from_datetime(
+            value,
+            after_local,
+            to_local=to_local,
             source=self._source,
             description=self._description,
-            local_datetime=local,
             omitted=omitted,
         )
 

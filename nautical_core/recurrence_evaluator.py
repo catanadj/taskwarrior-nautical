@@ -1,7 +1,7 @@
 """Immutable recurrence evaluation boundary.
 
-This first slice owns only normalized recurrence identity and local-time
-conversion. Occurrence lookup and limit projection are added in later slices.
+The evaluator owns normalized recurrence identity, parsing, occurrence lookup,
+limits, and local-time conversion while callers migrate incrementally.
 """
 
 from __future__ import annotations
@@ -9,10 +9,11 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
+from .occurrence_provider import Occurrence
 from .timeutil import build_local_datetime as _build_local_datetime
 from .timeutil import local_naive_to_utc as _local_naive_to_utc
 from .timeutil import to_local as _to_local
@@ -161,6 +162,88 @@ class RecurrenceEvaluator:
         if self.spec.chain_max is not None and self.spec.chain_max <= 0:
             raise ValueError("chainMax must be greater than zero.")
         return RecurrenceLimits(chain_max=self.spec.chain_max, chain_until=chain_until)
+
+    def next_after(
+        self,
+        after_local: datetime,
+        *,
+        next_occurrence_after_local_dt: Callable[..., Any],
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        inclusive: bool = False,
+        pick_occurrence_local: Callable[..., Any] | None = None,
+        max_file_skips: int = 512,
+    ) -> Occurrence | None:
+        """Return the next included expression/file occurrence.
+
+        The scheduler callback remains injectable during migration; all source
+        merging, omit handling, identity, and timezone conversion live here.
+        """
+        if self.kind != "anchor":
+            raise ValueError("Occurrence lookup requires an anchor recurrence.")
+        if not isinstance(after_local, datetime):
+            raise TypeError("Occurrence lookup requires a datetime cursor.")
+        from . import anchor_inclusion
+
+        return anchor_inclusion.next_included_occurrence(
+            dnf=self.anchor_dnf,
+            anchor_file_str=self.spec.anchor_file,
+            after_local_dt=after_local,
+            inclusive=inclusive,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date or after_local.date(),
+            seed_base=self.seed_base,
+            omit_dnf=self.omit_dnf,
+            core=self._core_module(),
+            next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_dir=self.context.anchor_file_dir,
+            recurrence_context=self.context,
+            business_calendar=self.context.business_calendar,
+            max_file_skips=max_file_skips,
+        )
+
+    def collect_after(
+        self,
+        after_local: datetime,
+        *,
+        limit: int,
+        next_occurrence_after_local_dt: Callable[..., Any],
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        inclusive: bool = False,
+        pick_occurrence_local: Callable[..., Any] | None = None,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
+    ) -> list[Occurrence]:
+        """Collect a bounded, merged stream of included occurrences."""
+        from .occurrence_provider import AnchorOccurrenceProvider, collect_after
+
+        provider = AnchorOccurrenceProvider(
+            lambda cursor: self.next_after(
+                cursor,
+                next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+                fallback_hhmm=fallback_hhmm,
+                default_seed_date=default_seed_date,
+                pick_occurrence_local=pick_occurrence_local,
+                max_file_skips=max_file_skips,
+            )
+        )
+        return collect_after(
+            provider,
+            after_local,
+            limit=limit,
+            inclusive=inclusive,
+            max_iterations=max_iterations,
+            build_local_datetime=self.build_local_datetime,
+            to_local=self.to_local,
+        )
+
+    @staticmethod
+    def _core_module():
+        from . import _PKG_PROXY
+
+        return _PKG_PROXY
 
     @property
     def timezone(self) -> Any | None:

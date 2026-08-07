@@ -19247,6 +19247,21 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         {"chainID": "cp-chain", "cp": "1d,rand(2d..3d)"}
     )
     expect(len(cp_evaluator.cp_tokens or []) == 2, "CP token parsing was not owned by evaluator")
+
+    def next_day(_dnf, after_local, **_kwargs):
+        return after_local + timedelta(days=1)
+
+    stream = parsed.collect_after(
+        datetime(2025, 1, 1),
+        limit=2,
+        next_occurrence_after_local_dt=next_day,
+    )
+    expect(
+        [item.local_datetime for item in stream]
+        == [datetime(2025, 1, 2), datetime(2025, 1, 3)],
+        "evaluator did not expose a merged typed occurrence stream",
+    )
+
     invalid_mode = RecurrenceEvaluator.from_task({"chainID": "invalid-mode", "anchor": "w:mon", "anchor_mode": "bad"})
     try:
         _ = invalid_mode.anchor_mode

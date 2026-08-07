@@ -2319,21 +2319,23 @@ class TaskAnalyzer:
                 else:
                     next_day = start_from_date + datetime.timedelta(days=1)
                     cur_after = core.to_local(core.build_local_datetime(next_day, (0, 0))) - datetime.timedelta(microseconds=1)
-                while len(anchor_out) < limit:
-                    occurrence = provider.next_after(
+                anchor_out = [
+                    occurrence.local_datetime
+                    for occurrence in occurrence_provider.collect_after(
+                        provider,
                         cur_after,
+                        limit=limit,
+                        max_iterations=max(512, limit),
                         build_local_datetime=core.build_local_datetime,
                         to_local=core.to_local,
                     )
-                    if occurrence is None:
-                        break
-                    nxt = occurrence.local_datetime or core.to_local(core.build_local_datetime(occurrence.day, occurrence.hhmm))
-                    anchor_out.append(nxt)
-                    cur_after = nxt
+                    if occurrence.local_datetime is not None
+                ]
 
 
         if anchor_file:
             try:
+                occurrence_provider = core._import_sibling("occurrence_provider")
                 anchor_files = core._import_sibling("anchor_files")
                 recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
                     task, fallback_chain_id=task.get("uuid") or "analyzer"
@@ -2345,18 +2347,18 @@ class TaskAnalyzer:
                     business_calendar=business_calendar,
                     context=recurrence_context,
                 )
-                cur_after = after_dt_local
-                while len(file_out) < limit:
-                    occurrence = provider.next_after(
-                        cur_after,
+                file_out = [
+                    occurrence.local_datetime
+                    for occurrence in occurrence_provider.collect_after(
+                        provider,
+                        after_dt_local,
+                        limit=limit,
+                        max_iterations=max(512, limit),
                         build_local_datetime=core.build_local_datetime,
                         to_local=core.to_local,
                     )
-                    if occurrence is None:
-                        break
-                    nxt = occurrence.local_datetime or core.to_local(core.build_local_datetime(occurrence.day, occurrence.hhmm))
-                    file_out.append(nxt)
-                    cur_after = nxt
+                    if occurrence.local_datetime is not None
+                ]
             except Exception as exc:
                 self._record_projection_warning(f"Anchor file: {_format_runtime_error(exc)}")
 

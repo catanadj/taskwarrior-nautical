@@ -6879,6 +6879,21 @@ def test_hook_datetime_comparator_resolves_once():
             mod.core._import_sibling = original_import
         expect(len(calls) == 1, f"{hook_name} resolved comparator {len(calls)} times")
 
+
+def test_local_datetime_full_day_gap_shifts_to_next_valid_wall_time():
+    """The resolver must handle timezone date-line skips, not only DST gaps."""
+    from zoneinfo import ZoneInfo
+    from nautical_core.timeutil import build_local_datetime
+
+    zone = ZoneInfo("Pacific/Apia")
+    resolved = build_local_datetime(date(2011, 12, 30), (12, 0), zone)
+    local = resolved.astimezone(zone)
+    expect(
+        local.date() == date(2011, 12, 31) and (local.hour, local.minute) == (12, 0),
+        f"full-day timezone gap should advance to the next valid date: {local}",
+    )
+
+
 def test_on_modify_chain_export_cache_key_includes_params():
     """Chain export cache should include since/extra in its key."""
     hook = _find_hook_file("on-modify.nautical")
@@ -28523,6 +28538,7 @@ TESTS = [
     test_build_local_datetime_dst_gap_and_ambiguous,
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
     test_hook_datetime_comparator_resolves_once,
+    test_local_datetime_full_day_gap_shifts_to_next_valid_wall_time,
     test_on_modify_chain_export_cache_key_includes_params,
     test_on_modify_chain_export_skips_when_locked,
     test_on_modify_collect_prev_two_prefers_live_statuses,

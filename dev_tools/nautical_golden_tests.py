@@ -16712,6 +16712,43 @@ def test_occurrence_collection_fails_closed_on_invalid_values_and_exhaustion():
         expect("iteration limit" in str(exc), f"unexpected cap error: {exc}")
 
 
+def test_occurrence_collection_enforces_cursor_progress_and_timezone_consistency():
+    """The shared collector rejects duplicate timestamps and naive/aware drift."""
+    from datetime import datetime, timezone
+    from nautical_core.occurrence_provider import Occurrence, collect_after
+
+    after = datetime(2026, 8, 3, 9, 0)
+
+    class Duplicate:
+        def next_after(self, *args, **kwargs):
+            return Occurrence(date(2026, 8, 3), 9, 0, local_datetime=after)
+
+    try:
+        collect_after(
+            Duplicate(), after_local=after, limit=1,
+            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+            to_local=lambda value: value,
+        )
+        expect(False, "collector accepted a duplicate occurrence timestamp")
+    except ValueError as exc:
+        expect("non-advancing" in str(exc), f"unexpected duplicate timestamp error: {exc}")
+
+    class Aware:
+        def next_after(self, *args, **kwargs):
+            value = after.replace(tzinfo=timezone.utc)
+            return Occurrence(value.date(), value.hour, value.minute, local_datetime=value)
+
+    try:
+        collect_after(
+            Aware(), after_local=after, limit=1,
+            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+            to_local=lambda value: value,
+        )
+        expect(False, "collector accepted mixed naive and aware cursors")
+    except ValueError as exc:
+        expect("incomparable" in str(exc), f"unexpected timezone consistency error: {exc}")
+
+
 def test_occurrence_event_provider_requires_boolean_omitted_flag():
     """Event adapters must preserve the typed omission contract."""
     from datetime import datetime, timedelta
@@ -27328,6 +27365,7 @@ TESTS = [
     test_occurrence_providers_reject_non_advancing_values,
     test_occurrence_values_reject_inconsistent_fields,
     test_occurrence_collection_fails_closed_on_invalid_values_and_exhaustion,
+    test_occurrence_collection_enforces_cursor_progress_and_timezone_consistency,
     test_occurrence_event_provider_requires_boolean_omitted_flag,
     test_anchor_file_provider_rejects_incomparable_datetimes,
     test_anchor_file_omit_evaluation_failures_propagate,

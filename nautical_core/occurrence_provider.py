@@ -66,6 +66,8 @@ def collect_after(
     to_local: Callable[[datetime], datetime],
 ) -> list[Occurrence]:
     """Collect a bounded stream while counting only non-omitted occurrences."""
+    if not isinstance(after_local, datetime):
+        raise TypeError("Occurrence collection requires a datetime cursor.")
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
         raise ValueError("Occurrence collection limit must be a non-negative integer.")
     if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations <= 0:
@@ -89,6 +91,7 @@ def collect_after(
             raise TypeError("Occurrence provider returned an invalid value.")
         if occurrence.local_datetime is None:
             raise ValueError("Lazy occurrence provider returned no local datetime.")
+        _require_forward_progress(cursor, occurrence.local_datetime)
         cursor = occurrence.local_datetime
         out.append(occurrence)
         if not occurrence.omitted:

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 import inspect
 from typing import Any, Callable
 
-from .occurrence_provider import _compare_datetimes
+from .occurrence_provider import Occurrence, _compare_datetimes, _cursor_before
 
 
 def _norm_t_mod(v):
@@ -79,7 +80,7 @@ def _call_next_occurrence(
     )
 
 
-def _next_anchor_file_occurrence_local(
+def _next_anchor_file_occurrence(
     anchor_file_str: str,
     *,
     anchor_file_dir: str,
@@ -90,11 +91,11 @@ def _next_anchor_file_occurrence_local(
     anchor_file_provider: Any | None = None,
     recurrence_context: Any | None = None,
     business_calendar: Any | None = None,
-) -> datetime | None:
+) -> Occurrence | None:
     if not str(anchor_file_str or "").strip():
         return None
     if inclusive:
-        after_local_dt = after_local_dt - timedelta(microseconds=1)
+        after_local_dt = _cursor_before(after_local_dt)
     provider = anchor_file_provider
     if provider is None:
         anchor_files = core._import_sibling("anchor_files")
@@ -109,6 +110,32 @@ def _next_anchor_file_occurrence_local(
         after_local_dt,
         build_local_datetime=core.build_local_datetime,
         to_local=core.to_local,
+    )
+    return occurrence
+
+
+def _next_anchor_file_occurrence_local(
+    anchor_file_str: str,
+    *,
+    anchor_file_dir: str,
+    after_local_dt: datetime,
+    inclusive: bool,
+    fallback_hhmm: tuple[int, int],
+    core: Any,
+    anchor_file_provider: Any | None = None,
+    recurrence_context: Any | None = None,
+    business_calendar: Any | None = None,
+) -> datetime | None:
+    occurrence = _next_anchor_file_occurrence(
+        anchor_file_str,
+        anchor_file_dir=anchor_file_dir,
+        after_local_dt=after_local_dt,
+        inclusive=inclusive,
+        fallback_hhmm=fallback_hhmm,
+        core=core,
+        anchor_file_provider=anchor_file_provider,
+        recurrence_context=recurrence_context,
+        business_calendar=business_calendar,
     )
     return occurrence.local_datetime if occurrence is not None else None
 
@@ -200,7 +227,7 @@ def next_included_occurrence_local(
                 omit_dnf=omit_dnf,
             )
         else:
-            expr_after = after_local_dt - timedelta(microseconds=1) if inclusive else after_local_dt
+            expr_after = _cursor_before(after_local_dt) if inclusive else after_local_dt
             expr_local = _call_next_occurrence(
                 next_occurrence_after_local_dt,
                 dnf,
@@ -266,7 +293,7 @@ def next_occurrence_event_local(
     anchor_file_provider: Any | None = None,
     recurrence_context: Any | None = None,
     business_calendar: Any | None = None,
-) -> tuple[datetime, bool] | None:
+) -> Occurrence | None:
     expr_local = None
     expr_omit_dnf = omit_dnf if dnf and core.dnf_has_counted_random(dnf) else None
     if dnf:
@@ -281,7 +308,7 @@ def next_occurrence_event_local(
                 omit_dnf=expr_omit_dnf,
             )
         else:
-            expr_after = after_local_dt - timedelta(microseconds=1) if inclusive else after_local_dt
+            expr_after = _cursor_before(after_local_dt) if inclusive else after_local_dt
             expr_local = _call_next_occurrence(
                 next_occurrence_after_local_dt,
                 dnf,
@@ -292,7 +319,7 @@ def next_occurrence_event_local(
                 fallback_hhmm=fallback_hhmm,
                 core=core,
             )
-    file_local = _next_anchor_file_occurrence_local(
+    file_occurrence = _next_anchor_file_occurrence(
         anchor_file_str,
         anchor_file_dir=anchor_file_dir,
         after_local_dt=after_local_dt,
@@ -303,17 +330,27 @@ def next_occurrence_event_local(
         recurrence_context=recurrence_context,
         business_calendar=business_calendar,
     )
-    nxt = None
-    if expr_local and file_local:
-        nxt = expr_local if _compare_datetimes(expr_local, file_local) <= 0 else file_local
-    else:
-        nxt = expr_local or file_local
-    if not nxt:
+    expr_occurrence = None
+    if expr_local is not None:
+        expr_occurrence = Occurrence(
+            day=expr_local.date(),
+            hour=expr_local.hour,
+            minute=expr_local.minute,
+            source="anchor",
+            local_datetime=expr_local,
+        )
+    selected = expr_occurrence
+    if selected is None:
+        selected = file_occurrence
+    elif file_occurrence is not None and file_occurrence.local_datetime is not None:
+        if _compare_datetimes(expr_local, file_occurrence.local_datetime) > 0:
+            selected = file_occurrence
+    if selected is None or selected.local_datetime is None:
         return None
-    return (
-        nxt,
-        _anchor_file_occurrence_is_omitted(
-            nxt,
+    return replace(
+        selected,
+        omitted=_anchor_file_occurrence_is_omitted(
+            selected.local_datetime,
             omit_dnf=omit_dnf,
             default_seed_date=default_seed_date,
             seed_base=seed_base,

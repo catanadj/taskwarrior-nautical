@@ -427,6 +427,7 @@ class AnchorFileOccurrenceProvider:
         self._last_candidate_index: int | None = None
         self._conversion_key: tuple[object, ...] | None = None
         self._candidate_cache: list[datetime] | None = None
+        self._description_cache: dict[date, str] | None = None
 
     def _specs(self) -> list[tuple[date, tuple[int, int]]]:
         if self._spec_cache is None:
@@ -439,10 +440,30 @@ class AnchorFileOccurrenceProvider:
             )
         return self._spec_cache
 
+    def _description_for_date(self, target: date) -> str:
+        if self._description_cache is None:
+            try:
+                self._description_cache = load_anchor_file_descriptions(
+                    self.name,
+                    self.anchor_file_dir,
+                    business_calendar=self.business_calendar,
+                )
+            except Exception:
+                self._description_cache = {}
+        return str(self._description_cache.get(target) or "").strip()
+
     def occurrences(self) -> list[Occurrence]:
         values: list[Occurrence] = []
         for d0, hhmm in self._specs():
-            values.append(Occurrence(day=d0, hour=hhmm[0], minute=hhmm[1], source="anchor_file"))
+            values.append(
+                Occurrence(
+                    day=d0,
+                    hour=hhmm[0],
+                    minute=hhmm[1],
+                    source="anchor_file",
+                    description=self._description_for_date(d0),
+                )
+            )
         return values
 
     def next_after(
@@ -530,6 +551,7 @@ class AnchorFileOccurrenceProvider:
             hour=local.hour,
             minute=local.minute,
             source="anchor_file",
+            description=self._description_for_date(local.date()),
             local_datetime=local,
         )
 

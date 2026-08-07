@@ -203,7 +203,7 @@ class AnchorEventOccurrenceProvider:
 
     def __init__(
         self,
-        next_event_after: Callable[[datetime], tuple[datetime, bool] | None],
+        next_event_after: Callable[[datetime], Occurrence | tuple[datetime, bool] | None],
         *,
         source: str = "anchor",
         description: str = "",
@@ -223,6 +223,11 @@ class AnchorEventOccurrenceProvider:
         event = self._next_event_after(after_local)
         if event is None:
             return None
+        if isinstance(event, Occurrence):
+            if event.local_datetime is None:
+                raise ValueError("Occurrence event provider returned an event without local datetime.")
+            _require_forward_progress(after_local, event.local_datetime)
+            return event
         if not isinstance(event, tuple) or len(event) != 2:
             raise TypeError("Occurrence event provider must return a (datetime, omitted) tuple.")
         value, omitted = event

@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from . import calendar_feedback, panel_diagnostics
-from .occurrence_provider import _compare_datetimes, _sort_datetimes
+from .occurrence_provider import Occurrence, _compare_datetimes, _sort_datetimes
 
 
 def _preview_seed_base(task: dict[str, Any], fallback_chain_id: str) -> str:
@@ -371,7 +371,7 @@ def _preview_omit_label(task: dict[str, Any], item_local: datetime, *, core: Any
 
 
 def _preview_occurrence_lines(
-    events: list[tuple[datetime, bool]],
+    events: list[Any],
     *,
     first_due_local_dt: datetime,
     preview_limit: int,
@@ -381,7 +381,14 @@ def _preview_occurrence_lines(
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
     out: list[str] = []
     included_idx = 1
-    for item_local, is_omitted in events:
+    for event in events:
+        if isinstance(event, Occurrence):
+            item_local = event.local_datetime
+            is_omitted = event.omitted
+        else:
+            item_local, is_omitted = event
+        if item_local is None:
+            continue
         if _compare_datetimes(item_local, first_due_local_dt) <= 0:
             if not is_omitted and _compare_datetimes(item_local, first_due_local_dt) == 0:
                 included_idx = 1
@@ -513,7 +520,8 @@ def _collect_events_with_provider(
     pick_occurrence_local: Callable[..., Any] | None = None,
     anchor_file_dir: str = "",
     max_iterations: int = 512,
-) -> list[tuple[datetime, bool]]:
+    return_occurrences: bool = False,
+) -> list[Occurrence] | list[tuple[datetime, bool]]:
     from .anchor_inclusion import next_occurrence_event_local
     from . import anchor_inclusion
     from .occurrence_provider import AnchorEventOccurrenceProvider, collect_after
@@ -547,17 +555,20 @@ def _collect_events_with_provider(
         ),
         source="anchor+anchor_file" if anchor_file_str and dnf else ("anchor_file" if anchor_file_str else "anchor"),
     )
+    collected = collect_after(
+        provider,
+        after_local_dt,
+        limit=limit_included,
+        inclusive=inclusive,
+        max_iterations=max_iterations,
+        build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+        to_local=lambda value: value,
+    )
+    if return_occurrences:
+        return collected
     return [
         (occurrence.local_datetime, occurrence.omitted)
-        for occurrence in collect_after(
-            provider,
-            after_local_dt,
-            limit=limit_included,
-            inclusive=inclusive,
-            max_iterations=max_iterations,
-            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-            to_local=lambda value: value,
-        )
+        for occurrence in collected
         if occurrence.local_datetime is not None
     ]
 
@@ -701,10 +712,18 @@ def handle_anchor_file_preview_on_add(
         core=core,
         next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        return_occurrences=True,
     )
     if until_dt:
         until_local = core.to_local(until_dt)
-        events = [(dt, is_omitted) for dt, is_omitted in events if _compare_datetimes(dt, until_local) <= 0]
+        events = [
+            event
+            for event in events
+            if _compare_datetimes(
+                event.local_datetime if isinstance(event, Occurrence) else event[0],
+                until_local,
+            ) <= 0
+        ]
     preview_rows = _preview_occurrence_lines(
         events,
         first_due_local_dt=first_due_local_dt,
@@ -1046,10 +1065,18 @@ def handle_anchor_preview_on_add(
             next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
             pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            return_occurrences=True,
         )
         if until_dt:
             until_local = core.to_local(until_dt)
-            events = [(dt, is_omitted) for dt, is_omitted in events if _compare_datetimes(dt, until_local) <= 0]
+            events = [
+                event
+                for event in events
+                if _compare_datetimes(
+                    event.local_datetime if isinstance(event, Occurrence) else event[0],
+                    until_local,
+                ) <= 0
+            ]
         preview = _preview_occurrence_lines(
             events,
             first_due_local_dt=first_due_local_dt,

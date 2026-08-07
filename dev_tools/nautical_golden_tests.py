@@ -939,6 +939,57 @@ def test_hook_protocol_modify_validation_limits_and_emission():
     expect(json.loads(output)["description"] == "Cafe ăîșț ✅", f"protocol emission was not strict JSON: {output!r}")
 
 
+def test_hook_io_contract_preserves_unknown_task_fields_and_unicode():
+    """The boundary must preserve arbitrary UDAs and Unicode task content."""
+    from nautical_core import hook_protocol
+
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000901",
+        "description": "Répéter 🌊",
+        "custom_uda": {"nested": ["значение", 3]},
+        "link": 1.0,
+    }
+    result = hook_protocol.probe_on_add(json.dumps(task, ensure_ascii=False))
+    expect(result.valid, f"valid Taskwarrior task was rejected: {result.error}")
+    expect(result.task == task, f"boundary changed task payload: {result.task!r}")
+    expect(result.task.get("custom_uda") == task["custom_uda"], "unknown UDA was dropped")
+
+
+def test_hook_io_contract_modify_accepts_array_and_preserves_both_tasks():
+    """The supported Taskwarrior modify array form preserves old and new rows."""
+    from nautical_core import hook_protocol
+
+    old = {"uuid": "00000000-0000-0000-0000-000000000902", "description": "old", "custom": "keep"}
+    new = dict(old, description="new", custom_extra="also-keep")
+    result = hook_protocol.probe_on_modify(json.dumps([old, new], ensure_ascii=False))
+    expect(result.valid, f"modify array was rejected: {result.error}")
+    expect(result.old == old and result.new == new, "modify boundary changed old/new payloads")
+
+
+def test_hook_io_contract_rejects_trailing_json_without_partial_success():
+    """Trailing bytes must be a protocol error, never silently ignored."""
+    from nautical_core import hook_protocol
+
+    task = {"uuid": "00000000-0000-0000-0000-000000000903", "description": "strict"}
+    result = hook_protocol.probe_on_add(json.dumps(task) + " trailing")
+    expect(not result.valid, "trailing on-add content was accepted")
+    expect(result.error_kind == "invalid_input", f"unexpected error kind: {result.error_kind!r}")
+
+
+def test_hook_io_contract_response_is_single_unescaped_json_object():
+    """Response serialization must remain one JSON object with readable Unicode."""
+    from nautical_core import hook_results
+
+    task = {"uuid": "00000000-0000-0000-0000-000000000904", "description": "Répéter 🌊"}
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        hook_results.emit_task_json(task)
+    text = output.getvalue()
+    expect(text.count("{") == 1 and text.count("}") == 1, "response emitted extra JSON content")
+    expect("Répéter 🌊" in text, "response escaped Unicode unexpectedly")
+    expect(json.loads(text) == task, "response JSON changed the task payload")
+
+
 def test_hook_protocol_classifies_safe_nautical_ordinary_edits():
     """Only changes unrelated to Nautical behavior should qualify for thin modify handling."""
     protocol = _load_hook_protocol_module("_nautical_hook_protocol_ordinary_edit_test")
@@ -28713,6 +28764,10 @@ TESTS = [
     test_hook_protocol_on_modify_accepts_supported_input_forms,
     test_hook_protocol_on_modify_matches_nautical_route_rules,
     test_hook_protocol_modify_validation_limits_and_emission,
+    test_hook_io_contract_preserves_unknown_task_fields_and_unicode,
+    test_hook_io_contract_modify_accepts_array_and_preserves_both_tasks,
+    test_hook_io_contract_rejects_trailing_json_without_partial_success,
+    test_hook_io_contract_response_is_single_unescaped_json_object,
     test_hook_protocol_classifies_safe_nautical_ordinary_edits,
     test_exit_probe_is_conservative_across_queue_states,
     test_light_taskdata_resolution_matches_hook_precedence,

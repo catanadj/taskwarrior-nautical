@@ -17245,6 +17245,19 @@ def test_navigator_projects_all_slots_in_a_time_window():
             [item.strftime("%H:%M") for item in dates] == ["04:30", "08:00", "11:30", "15:00", "18:30"],
             f"Navigator collapsed same-day time-window slots: {dates!r}",
         )
+        same_day_task = {
+            "anchor": "w:mon@t=06:00,12:00,18:00",
+            "uuid": "navigator-same-day-test",
+            "due": "20260803T080000Z",
+        }
+        same_day = analyzer._project_anchor_dates(same_day_task, limit=2, start_from_date=date(2026, 8, 3))
+        expect(
+            [item.strftime("%H:%M") for item in same_day] == ["12:00", "18:00"],
+            f"Navigator skipped later same-day slots: {same_day!r}",
+        )
+        repeated_a = analyzer._project_anchor_dates(same_day_task, limit=2, start_from_date=date(2026, 8, 3))
+        repeated_b = analyzer._project_anchor_dates(same_day_task, limit=2, start_from_date=date(2026, 8, 3))
+        expect(repeated_a == repeated_b, "Navigator projection changed across identical queries")
         partitioned = analyzer._project_anchor_dates(
             {"anchor": "w:mon..sun@t=04:30..19:30/3", "uuid": "navigator-partition-test"},
             limit=3,

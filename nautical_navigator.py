@@ -2256,30 +2256,21 @@ class TaskAnalyzer:
                 self._record_projection_warning(f"Anchor expression: {_format_runtime_error(exc)}")
                 dnf = None
             if dnf:
-                first_projection = True
-                projection_seed_date: date | None = None
+                def step(prev_date: date):
+                    nxt_date, _ = _next_after_expr_pair(
+                        dnf,
+                        prev_date,
+                        default_seed=prev_date,
+                        seed_base=recurrence_context.seed_base,
+                        business_calendar=business_calendar,
+                    )
+                    return nxt_date
+
+                projection_seed_date = step(start_from_date)
 
                 def next_anchor_after(after_local: datetime.datetime) -> datetime.datetime | None:
                     """Resolve the next ordinary-anchor slot after a local datetime."""
-                    nonlocal first_projection, projection_seed_date
-
-                    def step(prev_date: date):
-                        nxt_date, _ = _next_after_expr_pair(
-                            dnf,
-                            prev_date,
-                            default_seed=prev_date,
-                            seed_base=recurrence_context.seed_base,
-                            business_calendar=business_calendar,
-                        )
-                        return nxt_date
-
-                    if first_projection:
-                        first_projection = False
-                        first_date = step(after_local.date())
-                        projection_seed_date = first_date
-                        candidate_dates = [first_date] if first_date else []
-                    else:
-                        candidate_dates = [after_local.date() - datetime.timedelta(days=1), after_local.date()]
+                    candidate_dates = [after_local.date() - datetime.timedelta(days=1), after_local.date()]
 
                     for cur_date in candidate_dates:
                         if not cur_date:
@@ -2323,7 +2314,11 @@ class TaskAnalyzer:
                 provider = occurrence_provider.AnchorOccurrenceProvider(
                     next_anchor_after,
                 )
-                cur_after = after_dt_local
+                if due_local_dt is not None and due_local_dt.date() == start_from_date:
+                    cur_after = due_local_dt
+                else:
+                    next_day = start_from_date + datetime.timedelta(days=1)
+                    cur_after = core.to_local(core.build_local_datetime(next_day, (0, 0))) - datetime.timedelta(microseconds=1)
                 while len(anchor_out) < limit:
                     occurrence = provider.next_after(
                         cur_after,

@@ -59,7 +59,7 @@ _IMPORT_MS = None
 _MAX_JSON_BYTES = 10 * 1024 * 1024
 HOOK_IMPL_API = 1
 NAUTICAL_HOOK_VERSION = "updateG-20260328"
-NAUTICAL_RECONCILE_PROTOCOL = 1
+NAUTICAL_RECONCILE_PROTOCOL = 2
 
 TW_DIR = _TW_DIR_BOOT
 
@@ -3326,7 +3326,7 @@ def _next_occurrence_after_local_dt(
             slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
         for slot in slots:
             cand = _anchor_slot_local_dt(adate, slot)
-            if cand > after_local_dt:
+            if _compare_datetimes(cand, after_local_dt) > 0:
                 return cand
 
     # An overnight window belongs to the previous anchor date. Continue its
@@ -3347,7 +3347,7 @@ def _next_occurrence_after_local_dt(
         for slot in previous_slots:
             if isinstance(slot, tuple) and len(slot) == 3 and int(slot[0]) > 0:
                 cand = _anchor_slot_local_dt(previous_date, slot)
-                if cand > after_local_dt:
+                if _compare_datetimes(cand, after_local_dt) > 0:
                     return cand
 
     # otherwise, find the next matching date strictly after adate
@@ -4324,24 +4324,15 @@ def _utc_to_local_naive(dt_utc: datetime) -> datetime:
     """UTC -> local naive (wall-clock)."""
     if not isinstance(dt_utc, datetime):
         raise TypeError("dt_utc must be datetime")
-    # Prefer core.to_local to honor any future core logic.
-    try:
-        dloc = core.to_local(dt_utc)
-    except Exception:
-        tz = _nautical_local_tz()
-        if dt_utc.tzinfo is None:
-            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-        dloc = dt_utc.astimezone(tz) if tz else dt_utc
-    return dloc.replace(tzinfo=None)
+    return core.utc_to_local_naive(dt_utc)
 
 
 def _local_naive_to_utc(dt_local_naive: datetime) -> datetime:
-    """Local naive (wall-clock) -> UTC, best-effort DST aware."""
+    """Local naive (wall-clock) -> UTC using the shared DST policy."""
     if not isinstance(dt_local_naive, datetime):
         raise TypeError("dt_local_naive must be datetime")
-    tz = _nautical_local_tz()
     naive = dt_local_naive.replace(microsecond=0)
-    return core._import_sibling("timeutil").local_naive_to_utc(naive, tz)
+    return core.local_naive_to_utc(naive)
 
 
 def _recurrence_anchor_field(task: dict | None) -> str:

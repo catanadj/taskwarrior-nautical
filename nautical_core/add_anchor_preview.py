@@ -784,6 +784,50 @@ def _timezone_fallback_warning_needed(core: Any, anchor_str: str, anchor_file_st
     return bool(panel_diagnostics.recurrence_timezone_warning(core, task))
 
 
+def _append_dst_adjustment_row(
+    rows: list[tuple[str, str]],
+    dnf,
+    occurrence_local: datetime,
+    *,
+    core: Any,
+) -> None:
+    """Describe a fixed wall-clock slot shifted by a timezone transition."""
+    if not dnf or not isinstance(occurrence_local, datetime):
+        return
+    for term in dnf:
+        for atom in term:
+            mods = atom.get("mods") or {}
+            values = mods.get("time_window_offsets") or mods.get("t")
+            if isinstance(values, tuple) and len(values) == 2:
+                values = [(0, values[0], values[1])]
+            elif isinstance(values, list):
+                values = [
+                    ((0, value[0], value[1]) if len(value) == 2 else value)
+                    for value in values
+                    if isinstance(value, tuple) and len(value) in (2, 3)
+                ]
+            else:
+                continue
+            for day_offset, hour, minute in values:
+                requested_day = occurrence_local.date() - timedelta(days=int(day_offset))
+                try:
+                    resolved_local = core.to_local(
+                        core.build_local_datetime(requested_day, (int(hour), int(minute)))
+                    )
+                except Exception:
+                    continue
+                if compare_datetimes(resolved_local, occurrence_local) != 0:
+                    continue
+                requested = (requested_day, int(hour), int(minute))
+                actual = (resolved_local.date(), resolved_local.hour, resolved_local.minute)
+                if requested == actual:
+                    return
+                requested_label = f"{int(hour):02d}:{int(minute):02d}"
+                actual_label = f"{resolved_local.hour:02d}:{resolved_local.minute:02d}"
+                rows.append(("DST adjusted", f"[yellow]{requested_label} -> {actual_label}[/]"))
+                return
+
+
 def handle_anchor_preview_on_add(
     *,
     task: dict[str, Any],
@@ -982,6 +1026,8 @@ def handle_anchor_preview_on_add(
             rows.append(("First due", f"[bold bright_green]{core.fmt_dt_local(first_due_utc)}[/]"))
             task["due"] = fmt_local_for_task(first_due_utc)
             rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
+
+    _append_dst_adjustment_row(rows, dnf, first_due_local_dt, core=core)
 
     if anchor_file_str and first_hhmm != fallback_hhmm:
         shared_anchor_file_provider = _anchor_inclusion._build_anchor_file_provider(

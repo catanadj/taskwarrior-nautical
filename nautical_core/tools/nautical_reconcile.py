@@ -41,7 +41,7 @@ _PARENT_LOCK_STALE_SECONDS = 300.0
 _RECONCILE_LOCK_STALE_SECONDS = 300.0
 _DEFAULT_EXPIRATION_HOPS = 32
 _MAX_EXPIRATION_HOPS = 1000
-_RECONCILE_PROTOCOL = 1
+_RECONCILE_PROTOCOL = 2
 _JSON_SCHEMA = "nautical.reconcile"
 _JSON_SCHEMA_VERSION = 1
 _EXPORT_STATS = {"calls": 0, "rows": 0, "seconds": 0.0, "slowest_seconds": 0.0, "snapshot_hits": 0}
@@ -220,7 +220,14 @@ def _validate_hook_protocol(hook: Any) -> None:
         "_build_child_from_parent",
         "_spawn_child",
     )
-    required_core = ("coerce_int", "to_local", "build_local_datetime", "fmt_isoz")
+    required_core = (
+        "coerce_int",
+        "to_local",
+        "utc_to_local_naive",
+        "local_naive_to_utc",
+        "build_local_datetime",
+        "fmt_isoz",
+    )
     missing = [name for name in required_hook if not callable(getattr(hook, name, None))]
     core = getattr(hook, "core", None)
     missing.extend(f"core.{name}" for name in required_core if not callable(getattr(core, name, None)))
@@ -439,16 +446,16 @@ def _native_until_repairs(
                     kind=kind,
                     safe_parse_datetime=hook._safe_parse_datetime,
                     fmt_isoz=hook.core.fmt_isoz,
-                    utc_to_local_naive=getattr(hook, "_utc_to_local_naive"),
-                    local_naive_to_utc=getattr(hook, "_local_naive_to_utc"),
+                    utc_to_local_naive=hook.core.utc_to_local_naive,
+                    local_naive_to_utc=hook.core.local_naive_to_utc,
                 )
         if repair_error or not repaired:
             fallback, fallback_error = reconcile.fallback_native_until_at_day_end(
                 row,
                 safe_parse_datetime=hook._safe_parse_datetime,
                 fmt_isoz=hook.core.fmt_isoz,
-                utc_to_local_naive=getattr(hook, "_utc_to_local_naive"),
-                local_naive_to_utc=getattr(hook, "_local_naive_to_utc"),
+                utc_to_local_naive=hook.core.utc_to_local_naive,
+                local_naive_to_utc=hook.core.local_naive_to_utc,
             )
             if fallback_error or not fallback:
                 item["action"] = "manual_review"

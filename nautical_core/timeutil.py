@@ -35,6 +35,13 @@ def to_local(dt_utc: datetime, local_tz) -> datetime:
     return dt_utc.astimezone(local_tz) if local_tz else dt_utc
 
 
+def utc_to_local_naive(dt_utc: datetime, local_tz) -> datetime:
+    """Convert a UTC timestamp to a naive local wall-clock datetime."""
+    if not isinstance(dt_utc, datetime):
+        raise TypeError("UTC datetime must be a datetime.")
+    return to_local(dt_utc, local_tz).replace(tzinfo=None)
+
+
 def fmt_dt_local(dt_utc: datetime, local_tz) -> str:
     """Format UTC datetime as local time string."""
     d = to_local(dt_utc, local_tz)

@@ -373,6 +373,14 @@ def to_local(dt_utc: datetime) -> datetime:
     return _timeutil.to_local(dt_utc, _LOCAL_TZ)
 
 
+def utc_to_local_naive(dt_utc: datetime) -> datetime:
+    return _timeutil.utc_to_local_naive(dt_utc, _LOCAL_TZ)
+
+
+def local_naive_to_utc(dt_local_naive: datetime) -> datetime:
+    return _timeutil.local_naive_to_utc(dt_local_naive, _LOCAL_TZ)
+
+
 def fmt_dt_local(dt_utc: datetime) -> str:
     return _timeutil.fmt_dt_local(dt_utc, _LOCAL_TZ)
 
@@ -3984,6 +3992,8 @@ __all__ = (
     'term_width_stderr',
     'time',
     'to_local',
+    'utc_to_local_naive',
+    'local_naive_to_utc',
     'use_business_calendar',
     'use_task_business_calendar',
     'validate_anchor_expr_strict',

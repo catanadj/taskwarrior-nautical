@@ -6894,6 +6894,179 @@ def test_local_datetime_full_day_gap_shifts_to_next_valid_wall_time():
     )
 
 
+def test_modify_completion_advances_past_second_dst_fold():
+    """A completion in the second repeated hour must not select a first-fold slot."""
+    from zoneinfo import ZoneInfo
+
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_modify_second_fold_completion_test")
+    zone = ZoneInfo("Europe/Bucharest")
+    old_name = mod.core.LOCAL_TZ_NAME
+    old_tz = mod.core._LOCAL_TZ
+    try:
+        mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
+        mod.core._LOCAL_TZ = zone
+        due = datetime(2026, 10, 25, 3, 0, tzinfo=zone, fold=0)
+        completed = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
+        child_due, _meta, _dnf = mod._compute_anchor_child_due({
+            "anchor": "w:sun@t=03:20",
+            "anchor_mode": "skip",
+            "chainID": "dst-second-fold",
+            "link": 1,
+            "due": mod.core.fmt_isoz(due),
+            "end": mod.core.fmt_isoz(completed),
+        })
+    finally:
+        mod.core.LOCAL_TZ_NAME = old_name
+        mod.core._LOCAL_TZ = old_tz
+    child_local = child_due.astimezone(zone)
+    expect(
+        child_local.date() == date(2026, 11, 1)
+        and (child_local.hour, child_local.minute) == (3, 20),
+        f"second-fold completion selected a backward occurrence: {child_local}",
+    )
+
+
+def test_modify_overnight_window_advances_past_second_dst_fold():
+    """An overnight window must reject its first-fold slot after a second-fold cursor."""
+    from zoneinfo import ZoneInfo
+
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_modify_overnight_second_fold_test")
+    zone = ZoneInfo("Europe/Bucharest")
+    old_name = mod.core.LOCAL_TZ_NAME
+    old_tz = mod.core._LOCAL_TZ
+    try:
+        mod.core.LOCAL_TZ_NAME = "Europe/Bucharest"
+        mod.core._LOCAL_TZ = zone
+        dnf = mod.core.validate_anchor_expr_strict("w:sat@t=22:20..03:20/6")
+        cursor = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
+        result = mod._next_occurrence_after_local_dt(
+            dnf,
+            cursor,
+            default_seed_date=date(2026, 10, 24),
+            seed_base="dst-overnight-second-fold",
+            fallback_hhmm=(22, 20),
+        )
+    finally:
+        mod.core.LOCAL_TZ_NAME = old_name
+        mod.core._LOCAL_TZ = old_tz
+    expect(
+        result.date() == date(2026, 10, 31)
+        and (result.hour, result.minute) == (22, 20),
+        f"overnight second-fold cursor selected a backward occurrence: {result}",
+    )
+
+
+def test_reconcile_protocol_requires_public_datetime_converters():
+    """Reconcile must reject a runtime missing the shared timezone boundary."""
+    import types
+
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_datetime_protocol_test")
+    hook = types.ModuleType("_nautical_incomplete_datetime_hook")
+    hook.NAUTICAL_RECONCILE_PROTOCOL = tool._RECONCILE_PROTOCOL
+    for name in (
+        "_task_cmd_prefix",
+        "_safe_parse_datetime",
+        "_compute_anchor_child_due",
+        "_compute_cp_child_due",
+        "_build_child_from_parent",
+        "_spawn_child",
+    ):
+        setattr(hook, name, lambda *_args, **_kwargs: None)
+    hook.core = SimpleNamespace(
+        coerce_int=lambda value, default=0: default,
+        to_local=lambda value: value,
+        utc_to_local_naive=lambda value: value.replace(tzinfo=None),
+        build_local_datetime=lambda day, hhmm: datetime.combine(day, datetime.min.time()),
+        fmt_isoz=lambda value: str(value),
+    )
+    try:
+        tool._validate_hook_protocol(hook)
+    except RuntimeError as exc:
+        expect(
+            "core.local_naive_to_utc" in str(exc),
+            f"protocol failure omitted the missing converter: {exc}",
+        )
+    else:
+        raise AssertionError("reconcile accepted a runtime without local_naive_to_utc")
+
+
+def test_non_hour_dst_carry_and_reconcile_share_core_policy():
+    """Wait, until, and reconcile repair must share 30-minute gap handling."""
+    from zoneinfo import ZoneInfo
+    import nautical_core.reconcile as reconcile
+
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_non_hour_dst_carry_test")
+    zone = ZoneInfo("Australia/Lord_Howe")
+    old_name = mod.core.LOCAL_TZ_NAME
+    old_tz = mod.core._LOCAL_TZ
+    try:
+        mod.core.LOCAL_TZ_NAME = "Australia/Lord_Howe"
+        mod.core._LOCAL_TZ = zone
+        parent_due = mod.core.build_local_datetime(date(2026, 9, 27), (1, 45))
+        parent_limit = mod.core.build_local_datetime(date(2026, 9, 27), (2, 15))
+        child_due = mod.core.build_local_datetime(date(2026, 10, 4), (1, 45))
+        parent = {
+            "due": mod.core.fmt_isoz(parent_due),
+            "wait": mod.core.fmt_isoz(parent_limit),
+            "until": mod.core.fmt_isoz(parent_limit),
+        }
+        child = {"due": mod.core.fmt_isoz(child_due)}
+        mod._carry_relative_datetime(parent, child, child_due, "wait")
+        mod._carry_native_until(parent, child, child_due, "anchor")
+        repaired, repair_error = reconcile.repair_native_until_from_previous(
+            parent,
+            {"due": mod.core.fmt_isoz(child_due)},
+            kind="anchor",
+            safe_parse_datetime=mod._safe_parse_datetime,
+            fmt_isoz=mod.core.fmt_isoz,
+            utc_to_local_naive=mod.core.utc_to_local_naive,
+            local_naive_to_utc=mod.core.local_naive_to_utc,
+        )
+    finally:
+        mod.core.LOCAL_TZ_NAME = old_name
+        mod.core._LOCAL_TZ = old_tz
+
+    expect(repair_error is None and repaired, f"non-hour reconcile repair failed: {repair_error!r}")
+    values = (child.get("wait"), child.get("until"), repaired)
+    for field, value in zip(("wait", "until", "repaired until"), values):
+        local = mod.core.parse_dt_any(value).astimezone(zone)
+        expect(
+            local.date() == date(2026, 10, 4)
+            and (local.hour, local.minute) == (2, 45),
+            f"{field} did not shift through the 30-minute gap: {local}",
+        )
+
+
+def test_anchor_preview_explains_nonexistent_wall_time_adjustment():
+    """The add panel should identify a fixed anchor time shifted by DST."""
+    hook = _find_hook_file("on-add.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text('tz = "Australia/Lord_Howe"\n', encoding="utf-8")
+        task = {
+            "uuid": "00000000-0000-0000-0000-000000000141",
+            "description": "non-hour DST preview",
+            "status": "pending",
+            "entry": "20260801T000000Z",
+            "due": "20261003T143000Z",
+            "anchor": "y:10-04@t=02:15,02:45",
+            "anchor_mode": "skip",
+        }
+        proc = _run_hook_script(
+            hook,
+            task,
+            env_extra={"NAUTICAL_CONFIG": str(config), "NO_COLOR": "1"},
+        )
+    expect(proc.returncode == 0, f"non-hour DST preview failed: {proc.stderr!r}")
+    panel = _strip_markup(proc.stderr)
+    expect("DST adjusted" in panel, f"DST adjustment row is missing: {panel!r}")
+    expect("02:15 -> 02:45" in panel, f"DST adjustment clocks are missing: {panel!r}")
+
+
 def test_on_modify_chain_export_cache_key_includes_params():
     """Chain export cache should include since/extra in its key."""
     hook = _find_hook_file("on-modify.nautical")
@@ -28539,6 +28712,11 @@ TESTS = [
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
     test_hook_datetime_comparator_resolves_once,
     test_local_datetime_full_day_gap_shifts_to_next_valid_wall_time,
+    test_modify_completion_advances_past_second_dst_fold,
+    test_modify_overnight_window_advances_past_second_dst_fold,
+    test_reconcile_protocol_requires_public_datetime_converters,
+    test_non_hour_dst_carry_and_reconcile_share_core_policy,
+    test_anchor_preview_explains_nonexistent_wall_time_adjustment,
     test_on_modify_chain_export_cache_key_includes_params,
     test_on_modify_chain_export_skips_when_locked,
     test_on_modify_collect_prev_two_prefers_live_statuses,

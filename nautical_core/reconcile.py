@@ -142,7 +142,9 @@ def invalid_relative_carry_reason(
     hook: Any,
 ) -> str | None:
     """Verify that scheduled/wait retain their local offset from the recurrence target."""
-    if not callable(getattr(getattr(hook, "core", None), "parse_dt_any", None)) or not callable(getattr(hook, "_utc_to_local_naive", None)):
+    core = getattr(hook, "core", None)
+    utc_to_local_naive = getattr(core, "utc_to_local_naive", None)
+    if not callable(getattr(core, "parse_dt_any", None)) or not callable(utc_to_local_naive):
         return None
     parent_field = native_until_target_field(parent)
     fields = ["wait"]
@@ -160,8 +162,8 @@ def invalid_relative_carry_reason(
             child_value = hook.core.parse_dt_any(child.get(field))
             if not all((parent_target, parent_value, child_target, child_value)):
                 return f"{field} carry contains an unparseable timestamp"
-            parent_delta = hook._utc_to_local_naive(parent_value) - hook._utc_to_local_naive(parent_target)
-            child_delta = hook._utc_to_local_naive(child_value) - hook._utc_to_local_naive(child_target)
+            parent_delta = utc_to_local_naive(parent_value) - utc_to_local_naive(parent_target)
+            child_delta = utc_to_local_naive(child_value) - utc_to_local_naive(child_target)
         except Exception as exc:
             return f"{field} carry could not be verified: {exc}"
         if child_delta != parent_delta:

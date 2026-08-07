@@ -463,6 +463,15 @@ def _collect_included_with_provider(
     from . import anchor_inclusion
     from .occurrence_provider import AnchorOccurrenceProvider, Occurrence, collect_after
 
+    if (
+        anchor_file_provider is not None
+        and (
+            getattr(anchor_file_provider, "name", None) != anchor_file_str
+            or getattr(anchor_file_provider, "anchor_file_dir", None) != anchor_file_dir
+            or getattr(anchor_file_provider, "fallback_hhmm", None) != fallback_hhmm
+        )
+    ):
+        anchor_file_provider = None
     if anchor_file_provider is None:
         anchor_file_provider = (
             anchor_inclusion._build_anchor_file_provider(
@@ -529,6 +538,15 @@ def _collect_events_with_provider(
     from . import anchor_inclusion
     from .occurrence_provider import AnchorEventOccurrenceProvider, collect_after
 
+    if (
+        anchor_file_provider is not None
+        and (
+            getattr(anchor_file_provider, "name", None) != anchor_file_str
+            or getattr(anchor_file_provider, "anchor_file_dir", None) != anchor_file_dir
+            or getattr(anchor_file_provider, "fallback_hhmm", None) != fallback_hhmm
+        )
+    ):
+        anchor_file_provider = None
     if anchor_file_provider is None:
         anchor_file_provider = (
             anchor_inclusion._build_anchor_file_provider(
@@ -955,6 +973,15 @@ def handle_anchor_preview_on_add(
             rows.append(("First due", f"[bold bright_green]{core.fmt_dt_local(first_due_utc)}[/]"))
             task["due"] = fmt_local_for_task(first_due_utc)
             rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
+
+    if anchor_file_str and first_hhmm != fallback_hhmm:
+        shared_anchor_file_provider = _anchor_inclusion._build_anchor_file_provider(
+            anchor_file_str,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            fallback_hhmm=first_hhmm,
+            seed_base=seed_base,
+            core=core,
+        )
 
     validate_native_until_after_target(task, display_first_due_utc, recurrence_field)
     validate_native_until_anchor_slots(

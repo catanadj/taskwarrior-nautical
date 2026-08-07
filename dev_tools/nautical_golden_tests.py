@@ -16952,6 +16952,49 @@ def test_included_provider_reuses_shared_anchor_file_provider():
     expect(len(calls) == 1, f"shared anchor-file provider expanded specs {len(calls)} times")
 
 
+def test_included_provider_rebuilds_shared_provider_when_fallback_changes():
+    """A changed effective fallback time must not reuse a stale file provider."""
+    import nautical_core.add_anchor_preview as preview
+    import nautical_core.anchor_inclusion as anchor_inclusion
+
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "calendar.csv").write_text("date\n2026-08-03\n2026-08-04\n", encoding="utf-8")
+        provider = anchor_inclusion._build_anchor_file_provider(
+            "calendar.csv",
+            anchor_file_dir=td,
+            fallback_hhmm=(9, 0),
+            seed_base="fallback-provider-test",
+            core=core,
+        )
+        kwargs = dict(
+            dnf=None,
+            anchor_file_str="calendar.csv",
+            default_seed_date=date(2026, 8, 2),
+            seed_base="fallback-provider-test",
+            omit_dnf=None,
+            core=core,
+            next_occurrence_after_local_dt=lambda *args, **kwargs: None,
+            anchor_file_dir=td,
+            anchor_file_provider=provider,
+        )
+        first = preview._collect_included_with_provider(
+            after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0))),
+            inclusive=False,
+            limit=1,
+            fallback_hhmm=(9, 0),
+            **kwargs,
+        )
+        second = preview._collect_included_with_provider(
+            after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (6, 0))),
+            inclusive=False,
+            limit=1,
+            fallback_hhmm=(6, 0),
+            **kwargs,
+        )
+    expect(first and first[0].strftime("%Y-%m-%d %H:%M") == "2026-08-03 09:00", f"unexpected initial fallback: {first!r}")
+    expect(second and second[0].strftime("%Y-%m-%d %H:%M") == "2026-08-03 06:00", f"stale fallback provider was reused: {second!r}")
+
+
 def test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup():
     """Ordinary anchor projections share the typed provider contract."""
     from datetime import datetime
@@ -27959,6 +28002,7 @@ TESTS = [
     test_event_provider_preserves_anchor_file_source_description,
     test_included_provider_preserves_anchor_file_source_description,
     test_included_provider_reuses_shared_anchor_file_provider,
+    test_included_provider_rebuilds_shared_provider_when_fallback_changes,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_occurrence_provider_adapters_preserve_stream_metadata,
     test_occurrence_provider_rejects_dst_fallback_backward_progress,

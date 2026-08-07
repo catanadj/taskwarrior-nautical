@@ -25,6 +25,21 @@ def uses_exact_carry(until_local: Any) -> bool:
         return False
 
 
+def _is_aware(value: datetime) -> bool:
+    return value.tzinfo is not None and value.utcoffset() is not None
+
+
+def _elapsed_delta(later: datetime, earlier: datetime) -> timedelta:
+    """Return elapsed duration without letting DST folds collapse to wall time."""
+    later_aware = _is_aware(later)
+    earlier_aware = _is_aware(earlier)
+    if later_aware != earlier_aware:
+        raise ValueError("native until timestamps use incomparable zones")
+    if later_aware:
+        return later.astimezone(timezone.utc) - earlier.astimezone(timezone.utc)
+    return later - earlier
+
+
 def describe_carry(
     until_dt: Any,
     target_dt: Any,
@@ -38,7 +53,7 @@ def describe_carry(
         until_local = to_local(until_dt)
         target_local = to_local(target_dt)
         if uses_exact_carry(until_local):
-            seconds = max(0, int((until_dt - target_dt).total_seconds()))
+            seconds = max(0, int(_elapsed_delta(until_dt, target_dt).total_seconds()))
             days, seconds = divmod(seconds, 86400)
             hours, seconds = divmod(seconds, 3600)
             minutes, seconds = divmod(seconds, 60)
@@ -124,17 +139,14 @@ def carry(
     """Carry native expiration to a recurrence target using the configured policy."""
     if not all(isinstance(value, datetime) for value in (parent_target, parent_until, child_target)):
         raise NativeUntilCarryError(CARRY_INVALID, "native until carry requires valid recurrence timestamps")
+    aware_values = [_is_aware(value) for value in (parent_target, parent_until, child_target)]
+    if any(aware_values) and not all(aware_values):
+        raise NativeUntilCarryError(CARRY_INVALID, "native until carry requires comparable timestamp zones")
     try:
         parent_until_local = utc_to_local_naive(parent_until)
         if uses_exact_carry(parent_until_local):
-            aware_values = [value.tzinfo is not None and value.utcoffset() is not None for value in (parent_target, parent_until, child_target)]
-            if any(aware_values) and not all(aware_values):
-                raise NativeUntilCarryError(CARRY_INVALID, "native until carry requires comparable timestamp zones")
             if all(aware_values):
-                elapsed = (
-                    parent_until.astimezone(timezone.utc)
-                    - parent_target.astimezone(timezone.utc)
-                )
+                elapsed = _elapsed_delta(parent_until, parent_target)
                 child_until = (
                     child_target.astimezone(timezone.utc) + elapsed
                 ).astimezone(child_target.tzinfo)
@@ -156,11 +168,12 @@ def carry(
     except Exception as exc:
         raise NativeUntilCarryError(CARRY_FAILED, "native until carry could not be calculated") from exc
 
-    if _compare_datetimes(child_until, child_target) <= 0:
-        raise NativeUntilCarryError(
-            CARRY_CONFLICT,
-            "native until must be later than the child recurrence target",
-        )
+    try:
+        invalid_order = _compare_datetimes(child_until, child_target) <= 0
+    except Exception as exc:
+        raise NativeUntilCarryError(CARRY_FAILED, "native until carry produced incomparable timestamps") from exc
+    if invalid_order:
+        raise NativeUntilCarryError(CARRY_CONFLICT, "native until must be later than the child recurrence target")
     return child_until
 
 

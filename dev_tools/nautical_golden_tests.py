@@ -17030,6 +17030,25 @@ def test_native_until_exact_carry_orders_dst_fold_by_instant():
         result.astimezone(timezone.utc) == expected.astimezone(timezone.utc),
         f"exact carry lost the DST fold elapsed duration: {result!r} != {expected!r}",
     )
+    expect(
+        native_until.describe_carry(parent_until, parent_target, to_local=lambda value: value)
+        == "Exact · 01h 00m 01s after occurrence",
+        "exact carry description did not preserve the DST fold duration",
+    )
+    try:
+        malformed_until = datetime(2026, 10, 25, 23, 0, tzinfo=zone)
+        native_until.carry(
+            parent_target,
+            malformed_until,
+            child_target,
+            "cp",
+            utc_to_local_naive=lambda value: value.astimezone(zone).replace(tzinfo=None),
+            local_naive_to_utc=lambda value: value.replace(tzinfo=None),
+        )
+    except native_until.NativeUntilCarryError as exc:
+        expect(exc.code == native_until.CARRY_FAILED, f"unexpected malformed carry code: {exc.code!r}")
+    else:
+        raise AssertionError("malformed native-until converter did not fail closed")
 
 
 def test_modify_until_past_guard_orders_dst_fold_by_instant():

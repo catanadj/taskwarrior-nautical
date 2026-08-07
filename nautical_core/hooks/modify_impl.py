@@ -3610,11 +3610,12 @@ def _anchor_parent_local_times(parent: dict):
 
 
 def _anchor_file_occurrences_local(parent: dict, fallback_hhmm: tuple[int, int]) -> list[datetime]:
-    anchor_file = (parent.get("anchor_file") or "").strip()
+    recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(parent)
+    anchor_file = recurrence_spec.anchor_file
     if not anchor_file:
         return []
     anchor_files = core._import_sibling("anchor_files")
-    context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(parent)
+    context = recurrence_spec.context
     occurrence_specs = anchor_files.load_anchor_file_occurrence_specs(
         anchor_file,
         getattr(core, "ANCHOR_FILE_DIR", ""),

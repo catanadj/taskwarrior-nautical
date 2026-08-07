@@ -2137,8 +2137,15 @@ class TaskAnalyzer:
     # ── Anchor / CP analysis helpers ─────────────────────────────────────────
     def _anchor_summary(self, task: Dict) -> Optional[Tuple[str, str]]:
         """Return a concise summary for anchor / anchor_file sources."""
-        anchor_expr = (task.get("anchor") or "").strip()
-        anchor_file = (task.get("anchor_file") or "").strip()
+        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
+            chain_id=task.get("chainID") or task.get("uuid") or "analyzer"
+        )
+        recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
+            task,
+            context=recurrence_context,
+        )
+        anchor_expr = recurrence_spec.anchor
+        anchor_file = recurrence_spec.anchor_file
         if not anchor_expr and not anchor_file:
             return None
         if anchor_expr and anchor_file:
@@ -2166,8 +2173,15 @@ class TaskAnalyzer:
         Project the next anchor and anchor_file datetimes in LOCAL TZ, strictly after
         `start_from_date` (exclusive). If start_from_date is None, we fall back to *today*.
         """
-        anchor_expr = (task.get("anchor") or "").strip()
-        anchor_file = (task.get("anchor_file") or "").strip()
+        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
+            chain_id=task.get("chainID") or task.get("uuid") or "analyzer"
+        )
+        recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
+            task,
+            context=recurrence_context,
+        )
+        anchor_expr = recurrence_spec.anchor
+        anchor_file = recurrence_spec.anchor_file
         if not core or (not anchor_expr and not anchor_file):
             return []
         try:
@@ -2189,9 +2203,7 @@ class TaskAnalyzer:
         def resolve_hhmms(dnf, target_date, seed_date):
             """Resolve every wall-clock slot belonging to the matching term."""
             time_slots = core._import_sibling("time_slots")
-            recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
-                chain_id=task.get("uuid") or "analyzer"
-            )
+            recurrence_context = recurrence_spec.context
             for term in dnf:
                 if not all(
                     core.atom_matches_on(

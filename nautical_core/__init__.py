@@ -1781,7 +1781,7 @@ def _describe_anchor_expr_from_dnf(dnf: list, default_due_dt=None) -> str:
     )
 
 
-def describe_anchor_expr(anchor_expr: str, default_due_dt=None) -> str:
+def _describe_anchor_expr_impl(anchor_expr: str, default_due_dt=None) -> str:
     return _natural_language.describe_anchor_expr(
         anchor_expr,
         default_due_dt=default_due_dt,
@@ -1815,7 +1815,7 @@ def _compress_or_terms_by_clause(terms: list[str], delim: str) -> str | None:
     return _natural_language.compress_or_terms_by_clause(terms, delim)
 
 
-def describe_anchor_dnf(dnf: list, task: dict) -> str:
+def _describe_anchor_dnf_impl(dnf: list, task: dict) -> str:
     return _natural_language.describe_anchor_dnf(
         dnf,
         task,
@@ -3888,6 +3888,10 @@ next_after_factor = _scheduler_api.next_after_factor
 factor_matches_on = _scheduler_api.factor_matches_on
 next_after_term = _scheduler_api.next_after_term
 next_after_expr = _scheduler_api.next_after_expr
+
+_natural_language_api = _import_sibling("natural_language_api").for_core(sys.modules[__name__])
+describe_anchor_expr = _natural_language_api.describe_anchor_expr
+describe_anchor_dnf = _natural_language_api.describe_anchor_dnf
 
 
 _compat_api = _import_sibling("compat_api")

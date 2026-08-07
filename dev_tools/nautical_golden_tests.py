@@ -17238,6 +17238,44 @@ def test_anchor_file_next_occurrence_after_uses_task_level_time():
         expect(nxt is not None and nxt.date() == date(2026, 4, 25) and nxt.hour == 12 and nxt.minute == 0, f'unexpected anchor_file next occurrence: {nxt!r}')
 
 
+def test_anchor_file_next_occurrence_after_uses_shared_dst_ordering():
+    """The legacy helper should inherit provider ordering across a DST gap."""
+    import nautical_core.anchor_files as anchor_files
+    from nautical_core.timeutil import build_local_datetime
+    from zoneinfo import ZoneInfo
+
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "calendar.csv").write_text(
+            "date\n2026-03-29\n2026-03-29\n",
+            encoding="utf-8",
+        )
+        zone = ZoneInfo("Europe/Bucharest")
+        # Duplicate the date with explicit times by patching the loader-shaped cache
+        # through a provider is covered separately; this helper regression verifies
+        # that its implementation is the shared provider boundary.
+        original = anchor_files.load_anchor_file_occurrence_specs
+        anchor_files.load_anchor_file_occurrence_specs = lambda *args, **kwargs: [
+            (date(2026, 3, 29), (3, 30)),
+            (date(2026, 3, 29), (4, 0)),
+        ]
+        try:
+            after = datetime(2026, 3, 29, 2, 0, tzinfo=zone)
+            nxt = anchor_files.next_anchor_file_occurrence_after(
+                "calendar.csv",
+                td,
+                after,
+                (9, 0),
+                build_local_datetime=lambda day, hhmm: build_local_datetime(day, hhmm, zone),
+                to_local=lambda value: value.astimezone(zone),
+            )
+        finally:
+            anchor_files.load_anchor_file_occurrence_specs = original
+        expect(
+            nxt is not None and (nxt.hour, nxt.minute) == (4, 0),
+            f"legacy helper did not use normalized provider ordering: {nxt!r}",
+        )
+
+
 def test_file_source_expression_flattens_groups_and_rejects_unsafe_patterns():
     """file-source expressions should retain inner-to-outer modifier layers and reject unsupported paths/globs."""
     from nautical_core.file_source_expr import parse_file_source_expression
@@ -27668,6 +27706,7 @@ TESTS = [
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,
     test_anchor_file_composable_schedule_rejects_empty_members,
     test_anchor_file_next_occurrence_after_uses_task_level_time,
+    test_anchor_file_next_occurrence_after_uses_shared_dst_ordering,
     test_file_source_expression_flattens_groups_and_rejects_unsafe_patterns,
     test_anchor_file_expression_merges_sources_and_applies_group_modifiers,
     test_file_source_wildcards_are_deterministic_and_star_dot_star_means_all,

@@ -540,14 +540,16 @@ def next_anchor_file_occurrence_after(
     business_calendar: BusinessCalendar | None = None,
     context: RecurrenceContext | None = None,
 ) -> datetime | None:
-    for d0, hhmm in load_anchor_file_occurrence_specs(
+    provider = AnchorFileOccurrenceProvider(
         name,
         anchor_file_dir,
         fallback_hhmm,
         business_calendar=business_calendar,
         context=context,
-    ):
-        cand_local = to_local(build_local_datetime(d0, hhmm))
-        if cand_local > after_dt_local:
-            return cand_local
-    return None
+    )
+    occurrence = provider.next_after(
+        after_dt_local,
+        build_local_datetime=build_local_datetime,
+        to_local=to_local,
+    )
+    return occurrence.local_datetime if occurrence is not None else None

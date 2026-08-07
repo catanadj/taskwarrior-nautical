@@ -16768,6 +16768,53 @@ def test_occurrence_event_provider_requires_boolean_omitted_flag():
         expect("non-boolean" in str(exc), f"unexpected omitted-flag error: {exc}")
 
 
+def test_anchor_inclusion_scheduler_dispatch_preserves_legacy_and_internal_errors():
+    """Scheduler compatibility is selected by signature, not by retrying failures."""
+    import nautical_core.anchor_inclusion as inclusion
+
+    after = datetime(2026, 8, 3, 9, 0)
+    legacy_calls = []
+
+    def legacy(dnf, value, fallback_hhmm, interval_seed, seed_base, omit_dnf=None, *, core, norm_t_mod):
+        legacy_calls.append((fallback_hhmm, interval_seed, seed_base, omit_dnf, core, norm_t_mod))
+        return value + timedelta(hours=1)
+
+    result = inclusion._call_next_occurrence(
+        legacy,
+        [],
+        after,
+        default_seed_date=date(2026, 8, 3),
+        seed_base="dispatch-test",
+        omit_dnf=None,
+        fallback_hhmm=(9, 0),
+        core=core,
+    )
+    expect(result == after + timedelta(hours=1), f"legacy scheduler dispatch changed result: {result!r}")
+    expect(legacy_calls and legacy_calls[0][0] == (9, 0), "legacy scheduler was not called with positional fallback time")
+
+    calls = []
+
+    def modern(dnf, value, *, default_seed_date, seed_base, omit_dnf, fallback_hhmm):
+        calls.append(value)
+        raise TypeError("internal scheduler defect")
+
+    try:
+        inclusion._call_next_occurrence(
+            modern,
+            [],
+            after,
+            default_seed_date=date(2026, 8, 3),
+            seed_base="dispatch-test",
+            omit_dnf=None,
+            fallback_hhmm=(9, 0),
+            core=core,
+        )
+        expect(False, "internal scheduler TypeError was swallowed")
+    except TypeError as exc:
+        expect(str(exc) == "internal scheduler defect", f"unexpected scheduler error: {exc}")
+    expect(len(calls) == 1, f"scheduler was retried after an internal error: {calls!r}")
+
+
 def test_anchor_file_provider_rejects_incomparable_datetimes():
     """Anchor-file lookup should explain mixed naive and aware datetime inputs."""
     import nautical_core.anchor_files as anchor_files
@@ -27367,6 +27414,7 @@ TESTS = [
     test_occurrence_collection_fails_closed_on_invalid_values_and_exhaustion,
     test_occurrence_collection_enforces_cursor_progress_and_timezone_consistency,
     test_occurrence_event_provider_requires_boolean_omitted_flag,
+    test_anchor_inclusion_scheduler_dispatch_preserves_legacy_and_internal_errors,
     test_anchor_file_provider_rejects_incomparable_datetimes,
     test_anchor_file_omit_evaluation_failures_propagate,
     test_add_preview_event_collection_counts_only_included_occurrences,

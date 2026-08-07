@@ -294,7 +294,8 @@ def next_included_occurrence(
     if selected is None:
         selected = file_occurrence
     elif file_occurrence is not None and file_occurrence.local_datetime is not None:
-        if _compare_datetimes(expr_local, file_occurrence.local_datetime) > 0:
+        comparison = _compare_datetimes(expr_local, file_occurrence.local_datetime)
+        if comparison > 0 or (comparison == 0 and file_occurrence.description):
             selected = file_occurrence
     return selected
 
@@ -372,7 +373,8 @@ def next_occurrence_event_local(
     if selected is None:
         selected = file_occurrence
     elif file_occurrence is not None and file_occurrence.local_datetime is not None:
-        if _compare_datetimes(expr_local, file_occurrence.local_datetime) > 0:
+        comparison = _compare_datetimes(expr_local, file_occurrence.local_datetime)
+        if comparison > 0 or (comparison == 0 and file_occurrence.description):
             selected = file_occurrence
     if selected is None or selected.local_datetime is None:
         return None

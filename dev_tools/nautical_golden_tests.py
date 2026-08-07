@@ -16138,6 +16138,36 @@ def test_on_modify_anchor_file_child_projection_reuses_provider():
     expect(mod.core.to_local(child_due).strftime("%H:%M") == "09:30", f"unexpected projected child due: {child_due!r}")
 
 
+def test_anchor_and_file_tie_preserves_file_description():
+    """A same-instant merged occurrence keeps the anchor-file metadata."""
+    inclusion = importlib.import_module("nautical_core.anchor_inclusion")
+    occurrence_provider = importlib.import_module("nautical_core.occurrence_provider")
+    target = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
+
+    class Provider:
+        def next_after(self, *_args, **_kwargs):
+            return occurrence_provider.Occurrence(
+                target.date(), 9, 0, source="anchor_file", description="watering",
+                local_datetime=target,
+            )
+
+    result = inclusion.next_included_occurrence(
+        dnf=object(),
+        anchor_file_str="calendar.csv@t=09:00",
+        after_local_dt=target - timedelta(minutes=1),
+        inclusive=False,
+        fallback_hhmm=(9, 0),
+        default_seed_date=target.date(),
+        seed_base="tie-test",
+        omit_dnf=None,
+        core=core,
+        next_occurrence_after_local_dt=lambda *_args, **_kwargs: target,
+        anchor_file_provider=Provider(),
+    )
+    expect(result is not None and result.source == "anchor_file", "same-instant file source was lost")
+    expect(result is not None and result.description == "watering", "same-instant file description was lost")
+
+
 def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
     """scheduled-only anchor chains should compute missed occurrences from scheduled, not completion time."""
     hook = _find_hook_file("on-modify.nautical")
@@ -27972,6 +28002,7 @@ TESTS = [
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_on_modify_anchor_chainmax_forecast_is_bounded,
     test_on_modify_anchor_file_child_projection_reuses_provider,
+    test_anchor_and_file_tie_preserves_file_description,
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_time_window_preview_emits_bounded_slots,
     test_hook_on_add_overnight_window_keeps_json_and_next_day_preview,

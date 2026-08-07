@@ -194,10 +194,11 @@ def _bench_anchor_file_provider(rounds: int) -> float:
             (9, 0),
         )
         build = lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm)
+        identity = lambda value: value
         started = time.perf_counter()
         for index in range(max(1, rounds)):
             after = datetime(2026, 1, 1, 8, 0) + timedelta(days=index % 364)
-            if provider.next_after(after, build_local_datetime=build, to_local=lambda value: value) is None:
+            if provider.next_after(after, build_local_datetime=build, to_local=identity) is None:
                 raise RuntimeError("anchor-file provider benchmark unexpectedly exhausted")
         return time.perf_counter() - started
 

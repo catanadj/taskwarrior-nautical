@@ -248,6 +248,41 @@ def _reset_modify_runtime_state() -> None:
     _MODIFY_RUNTIME_STATE = modify_runtime.new_runtime_state()
 
 
+def _anchor_file_provider_for(
+    anchor_file: str,
+    *,
+    fallback_hhmm: tuple[int, int],
+    seed_base: str,
+):
+    """Return one anchor-file provider for this hook's projection session."""
+    if not anchor_file:
+        return None
+    state = _modify_runtime_state()
+    anchor_file_dir = getattr(core, "ANCHOR_FILE_DIR", "")
+    key = (anchor_file, anchor_file_dir, fallback_hhmm, seed_base)
+    provider = state.anchor_file_providers.get(key)
+    if provider is None:
+        provider = core._import_sibling("anchor_inclusion")._build_anchor_file_provider(
+            anchor_file,
+            anchor_file_dir=anchor_file_dir,
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+        )
+        state.anchor_file_providers[key] = provider
+    return provider
+
+
+def _anchor_file_fallback_hhmm(task: dict, default_local: datetime) -> tuple[int, int]:
+    """Keep provider fallback time stable across completion projection stages."""
+    for field in ("due", "scheduled"):
+        parsed, error = _safe_parse_datetime(task.get(field))
+        if not error and parsed is not None:
+            local = _to_local_cached(parsed)
+            return local.hour, local.minute
+    return default_local.hour, default_local.minute
+
+
 def _modify_chain_state():
     return _modify_runtime_state()
 
@@ -3639,7 +3674,13 @@ def _anchor_file_occurrences_local(parent: dict, fallback_hhmm: tuple[int, int])
         _tolocal(core.build_local_datetime(value.day, value.hhmm))
         for value in provider.occurrences()
     ]
-    return core._import_sibling("occurrence_provider")._sort_datetimes(out)
+    occurrence_provider = core._import_sibling("occurrence_provider")
+    ordered = occurrence_provider._sort_datetimes(out)
+    deduplicated: list[datetime] = []
+    for item in ordered:
+        if not deduplicated or occurrence_provider._compare_datetimes(item, deduplicated[-1]) != 0:
+            deduplicated.append(item)
+    return deduplicated
 
 
 def _anchor_file_is_omitted(omit_dnf, item_local: datetime, *, seed_base: str) -> bool:
@@ -3946,15 +3987,13 @@ def _compute_anchor_child_due(parent: dict):
     seed_base = (parent.get("chainID") or "").strip() or "preview"
     fallback_hhmm = (due_local.hour, due_local.minute)
     target_field = "scheduled" if not due_dt_utc and parent.get("scheduled") else "due"
-    anchor_file_provider = None
-    if anchor_file_str and dnf:
-        anchor_file_provider = core._import_sibling("anchor_inclusion")._build_anchor_file_provider(
-            anchor_file_str,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            fallback_hhmm=fallback_hhmm,
-            seed_base=seed_base,
-            core=core,
+    anchor_file_provider = (
+        _anchor_file_provider_for(
+            anchor_file_str, fallback_hhmm=fallback_hhmm, seed_base=seed_base
         )
+        if anchor_file_str and dnf
+        else None
+    )
     if anchor_file_str and not dnf:
         nxt_local, info = _anchor_file_due_for_mode(
             mode,
@@ -4088,17 +4127,13 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
     due0, _ = _safe_parse_datetime(task.get("due"))
     default_seed = _to_local_cached(due0 or next_due_utc).date()
 
-    fallback_hhmm = (nxt_local.hour, nxt_local.minute)
+    fallback_hhmm = _anchor_file_fallback_hhmm(task, nxt_local)
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
     anchor_file = (task.get("anchor_file") or "").strip()
     anchor_file_provider = None
     if anchor_file:
-        anchor_file_provider = core._import_sibling("anchor_inclusion")._build_anchor_file_provider(
-            anchor_file,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            fallback_hhmm=fallback_hhmm,
-            seed_base=seed_base,
-            core=core,
+        anchor_file_provider = _anchor_file_provider_for(
+            anchor_file, fallback_hhmm=fallback_hhmm, seed_base=seed_base
         )
     fut_no = cur_no + 1
     fut_local = nxt_local
@@ -5216,7 +5251,7 @@ def _timeline_lines(
         anchor_omit = _module("anchor_omit") if omit_dnf else None
         seed_base = _recurrence_seed_base(task)
         child_local = _to_local_cached(child_due_utc)
-        fallback_hhmm = (child_local.hour, child_local.minute)
+        fallback_hhmm = _anchor_file_fallback_hhmm(task, child_local)
         default_seed = child_local.date()
         dnf_for_merge = dnf if kind == "anchor" else None
         anchor_inclusion = core._import_sibling("anchor_inclusion")
@@ -5224,12 +5259,8 @@ def _timeline_lines(
         collect_after = core._import_sibling("occurrence_provider").collect_after
         anchor_file_str = (task.get("anchor_file") or "").strip()
         anchor_file_provider = (
-            anchor_inclusion._build_anchor_file_provider(
-                anchor_file_str,
-                anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-                fallback_hhmm=fallback_hhmm,
-                seed_base=seed_base,
-                core=core,
+            _anchor_file_provider_for(
+                anchor_file_str, fallback_hhmm=fallback_hhmm, seed_base=seed_base
             )
             if anchor_file_str
             else None
@@ -5446,19 +5477,15 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
 
     nxt_local = _to_local_cached(next_due_utc)
     until_local = _to_local_cached(until_utc)
-    fallback_hhmm = (nxt_local.hour, nxt_local.minute)
     due0, _ = _safe_parse_datetime(task.get("due"))
     default_seed = _to_local_cached(due0 or next_due_utc).date()
+    fallback_hhmm = _anchor_file_fallback_hhmm(task, nxt_local)
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
     anchor_file = (task.get("anchor_file") or "").strip()
     anchor_file_provider = None
     if anchor_file:
-        anchor_file_provider = core._import_sibling("anchor_inclusion")._build_anchor_file_provider(
-            anchor_file,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            fallback_hhmm=fallback_hhmm,
-            seed_base=seed_base,
-            core=core,
+        anchor_file_provider = _anchor_file_provider_for(
+            anchor_file, fallback_hhmm=fallback_hhmm, seed_base=seed_base
         )
 
     count = 0

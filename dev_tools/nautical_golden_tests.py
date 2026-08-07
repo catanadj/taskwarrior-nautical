@@ -17003,9 +17003,33 @@ def test_native_until_validation_orders_dst_fold_by_instant():
 
     zone = ZoneInfo("Europe/Bucharest")
     target = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)
-    earlier = datetime(2026, 10, 25, 3, 18, tzinfo=zone, fold=0)
+    earlier = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=0)
     valid, message = native_until.validate_after_target(earlier, target, "due")
     expect(not valid and message == "until must be later than due", f"DST fold validation accepted an earlier instant: {message!r}")
+
+
+def test_native_until_exact_carry_orders_dst_fold_by_instant():
+    """Exact carry must preserve elapsed seconds between identical fold labels."""
+    from zoneinfo import ZoneInfo
+    import nautical_core.native_until as native_until
+
+    zone = ZoneInfo("Europe/Bucharest")
+    parent_target = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=0)
+    parent_until = datetime(2026, 10, 25, 3, 20, 1, tzinfo=zone, fold=1)
+    child_target = datetime(2026, 10, 26, 3, 20, tzinfo=zone)
+    result = native_until.carry(
+        parent_target,
+        parent_until,
+        child_target,
+        "cp",
+        utc_to_local_naive=lambda value: value.astimezone(zone).replace(tzinfo=None),
+        local_naive_to_utc=lambda value: value.replace(tzinfo=zone).astimezone(timezone.utc),
+    )
+    expected = (child_target.astimezone(timezone.utc) + timedelta(seconds=3601)).astimezone(zone)
+    expect(
+        result.astimezone(timezone.utc) == expected.astimezone(timezone.utc),
+        f"exact carry lost the DST fold elapsed duration: {result!r} != {expected!r}",
+    )
 
 
 def test_modify_until_past_guard_orders_dst_fold_by_instant():
@@ -28513,6 +28537,7 @@ TESTS = [
     test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates,
     test_modify_anchor_file_mode_orders_dst_fold_by_instant,
     test_native_until_validation_orders_dst_fold_by_instant,
+    test_native_until_exact_carry_orders_dst_fold_by_instant,
     test_modify_until_past_guard_orders_dst_fold_by_instant,
     test_merged_anchor_file_provider_carries_context_and_reuses_specs,
     test_event_provider_preserves_anchor_file_source_description,

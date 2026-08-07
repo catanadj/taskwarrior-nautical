@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from nautical_core.occurrence_provider import _compare_datetimes
@@ -127,7 +127,19 @@ def carry(
     try:
         parent_until_local = utc_to_local_naive(parent_until)
         if uses_exact_carry(parent_until_local):
-            child_until = child_target + (parent_until - parent_target)
+            aware_values = [value.tzinfo is not None and value.utcoffset() is not None for value in (parent_target, parent_until, child_target)]
+            if any(aware_values) and not all(aware_values):
+                raise NativeUntilCarryError(CARRY_INVALID, "native until carry requires comparable timestamp zones")
+            if all(aware_values):
+                elapsed = (
+                    parent_until.astimezone(timezone.utc)
+                    - parent_target.astimezone(timezone.utc)
+                )
+                child_until = (
+                    child_target.astimezone(timezone.utc) + elapsed
+                ).astimezone(child_target.tzinfo)
+            else:
+                child_until = child_target + (parent_until - parent_target)
         else:
             parent_target_local = utc_to_local_naive(parent_target)
             child_target_local = utc_to_local_naive(child_target)
@@ -137,14 +149,14 @@ def carry(
                 parent_until_local.time(),
             )
             child_until = local_naive_to_utc(child_until_local)
-            if str(kind or "").strip().lower() == "cp" and child_until <= child_target:
+            if str(kind or "").strip().lower() == "cp" and _compare_datetimes(child_until, child_target) <= 0:
                 child_until = local_naive_to_utc(child_until_local + timedelta(days=1))
     except NativeUntilCarryError:
         raise
     except Exception as exc:
         raise NativeUntilCarryError(CARRY_FAILED, "native until carry could not be calculated") from exc
 
-    if child_until <= child_target:
+    if _compare_datetimes(child_until, child_target) <= 0:
         raise NativeUntilCarryError(
             CARRY_CONFLICT,
             "native until must be later than the child recurrence target",

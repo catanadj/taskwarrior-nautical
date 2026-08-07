@@ -171,6 +171,19 @@ def _timeline_future_anchor_items(
     due0, _ = safe_parse_datetime(task.get("due"))
     sched0, _ = safe_parse_datetime(task.get("scheduled"))
     default_seed = to_local_cached(due0 or sched0 or child_due_utc).date()
+    from .occurrence_provider import AnchorOccurrenceProvider
+
+    provider = AnchorOccurrenceProvider(
+        lambda: [],
+        lambda value: next_occurrence_after_local_dt(
+            dnf,
+            value,
+            default_seed_date=default_seed,
+            seed_base=seed_base,
+            omit_dnf=None,
+            fallback_hhmm=fallback_hhmm,
+        ),
+    )
     after_local = nxt_local
     iterations = 0
     actual_future = 0
@@ -179,14 +192,12 @@ def _timeline_future_anchor_items(
             break
         iterations += 1
         try:
-            next_local = next_occurrence_after_local_dt(
-                dnf,
+            occurrence = provider.next_after(
                 after_local,
-                default_seed_date=default_seed,
-                seed_base=seed_base,
-                omit_dnf=None,
-                fallback_hhmm=fallback_hhmm,
+                build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+                to_local=lambda value: value,
             )
+            next_local = occurrence.local_datetime if occurrence is not None else None
         except Exception:
             break
         if not next_local:
@@ -255,18 +266,29 @@ def _timeline_omitted_before_next_anchor_items(
     due0, _ = safe_parse_datetime(task.get("due"))
     sched0, _ = safe_parse_datetime(task.get("scheduled"))
     default_seed = to_local_cached(due0 or sched0 or child_due_utc).date()
+    from .occurrence_provider import AnchorOccurrenceProvider
+
+    provider = AnchorOccurrenceProvider(
+        lambda: [],
+        lambda value: next_occurrence_after_local_dt(
+            dnf,
+            value,
+            default_seed_date=default_seed,
+            seed_base=seed_base,
+            omit_dnf=None,
+            fallback_hhmm=fallback_hhmm,
+        ),
+    )
     iterations = 0
     while iterations < max_iterations:
         iterations += 1
         try:
-            next_local = next_occurrence_after_local_dt(
-                dnf,
+            occurrence = provider.next_after(
                 after_local,
-                default_seed_date=default_seed,
-                seed_base=seed_base,
-                omit_dnf=None,
-                fallback_hhmm=fallback_hhmm,
+                build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+                to_local=lambda value: value,
             )
+            next_local = occurrence.local_datetime if occurrence is not None else None
         except Exception:
             break
         if not next_local or next_local >= child_local:

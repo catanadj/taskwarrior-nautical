@@ -6,7 +6,7 @@ from typing import Any
 
 from nautical_core import astronomy, native_until
 from nautical_core.timeutil import compare_datetimes
-from nautical_core.recurrence_spec import RecurrenceSpec
+from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
@@ -314,7 +314,7 @@ def resolve_existing_child(
 
 def recurrence_kind(task: dict[str, Any]) -> str:
     try:
-        spec = RecurrenceSpec.from_task(task)
+        evaluator = RecurrenceEvaluator.from_task(task)
     except ValueError:
         # Preserve useful classification for incomplete legacy rows; the
         # reconciler reports their missing identity separately.
@@ -323,7 +323,7 @@ def recurrence_kind(task: dict[str, Any]) -> str:
         if str(task.get("anchor_file") or "").strip():
             return "anchor_file"
         return "cp"
-    return spec.kind or "cp"
+    return evaluator.kind or "cp"
 
 
 def describe_plan(plan: ReconcilePlan, *, fmt_dt_local: Any = None) -> dict[str, Any]:
@@ -426,12 +426,23 @@ def _build_reconcile_plan_unscoped(
     if child_short:
         return ReconcilePlan("backfill_nextlink", parent, next_link, "next link already exists", child_short=child_short)
 
-    kind = recurrence_kind(parent)
-    until_dt, until_err = hook._safe_parse_datetime(parent.get("chainUntil"))
+    try:
+        evaluator = RecurrenceEvaluator.from_task(parent)
+        kind = evaluator.kind or "cp"
+        limits = evaluator.limits
+        until_dt = limits.chain_until
+        until_err = None
+        cpmax = limits.chain_max or 0
+    except ValueError:
+        # Keep incomplete legacy rows classifiable; normal validation below
+        # still reports malformed chain limits through the hook boundary.
+        evaluator = None
+        kind = recurrence_kind(parent)
+        until_dt, until_err = hook._safe_parse_datetime(parent.get("chainUntil"))
+        cpmax = hook.core.coerce_int(parent.get("chainMax"), 0)
     if until_err:
         return ReconcilePlan("error", parent, next_link, f"invalid chainUntil: {until_err}")
 
-    cpmax = hook.core.coerce_int(parent.get("chainMax"), 0)
     if cpmax and next_link > cpmax:
         return ReconcilePlan("legitimate_final", parent, next_link, "reached chainMax")
 

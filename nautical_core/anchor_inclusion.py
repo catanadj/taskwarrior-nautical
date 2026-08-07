@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import inspect
 from typing import Any, Callable
 
+from .occurrence_provider import _compare_datetimes
+
 
 def _norm_t_mod(v):
     if v is None:
@@ -243,7 +245,7 @@ def next_included_occurrence_local(
             business_calendar=business_calendar,
         )
     if expr_local and file_local:
-        return expr_local if expr_local <= file_local else file_local
+        return expr_local if _compare_datetimes(expr_local, file_local) <= 0 else file_local
     return expr_local or file_local
 
 
@@ -303,7 +305,7 @@ def next_occurrence_event_local(
     )
     nxt = None
     if expr_local and file_local:
-        nxt = expr_local if expr_local <= file_local else file_local
+        nxt = expr_local if _compare_datetimes(expr_local, file_local) <= 0 else file_local
     else:
         nxt = expr_local or file_local
     if not nxt:

@@ -22,7 +22,7 @@ from .file_source_expr import (
 )
 from .schedule_utils import apply_day_offset, roll_apply
 from .recurrence_context import RecurrenceContext
-from .occurrence_provider import Occurrence
+from .occurrence_provider import Occurrence, _compare_datetimes, _sort_datetimes
 from .time_windows import parse_clock_value, parse_random_time_window_spec, parse_time_schedule_spec, parse_time_window_spec
 
 
@@ -473,12 +473,12 @@ class AnchorFileOccurrenceProvider:
                     raise TypeError("Anchor-file provider returned a non-datetime local value.")
                 candidates.append(candidate)
             try:
-                candidates.sort()
-            except TypeError as exc:
+                candidates = _sort_datetimes(candidates)
+            except (TypeError, ValueError) as exc:
                 raise ValueError("Anchor-file provider returned incomparable local datetimes.") from exc
             self._candidate_cache = []
             for candidate in candidates:
-                if not self._candidate_cache or candidate != self._candidate_cache[-1]:
+                if not self._candidate_cache or _compare_datetimes(candidate, self._candidate_cache[-1]) != 0:
                     self._candidate_cache.append(candidate)
         candidates = self._candidate_cache
         start = self._next_index
@@ -486,19 +486,21 @@ class AnchorFileOccurrenceProvider:
             start = 0
         else:
             try:
-                if after_local <= self._last_after:
+                if _compare_datetimes(after_local, self._last_after) <= 0:
                     start = 0
                 elif self._last_candidate is not None and self._last_candidate_index is not None:
-                    start = self._last_candidate_index + (1 if after_local >= self._last_candidate else 0)
-            except TypeError:
+                    start = self._last_candidate_index + (
+                        1 if _compare_datetimes(after_local, self._last_candidate) >= 0 else 0
+                    )
+            except (TypeError, ValueError):
                 start = 0
         value = None
         selected_index = None
         for index in range(start, len(candidates)):
             candidate = candidates[index]
             try:
-                is_after = candidate > after_local
-            except TypeError as exc:
+                is_after = _compare_datetimes(candidate, after_local) > 0
+            except (TypeError, ValueError) as exc:
                 raise ValueError("Anchor-file provider returned an incomparable datetime.") from exc
             if is_after:
                 value = candidate

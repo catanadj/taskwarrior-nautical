@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from .occurrence_provider import _compare_datetimes
+
 
 def _timeline_seed_base(task: dict[str, Any]) -> str:
     """Return the stable recurrence identity used by timeline projections."""
@@ -304,7 +306,7 @@ def _timeline_omitted_before_next_anchor_items(
         except Exception as exc:
             items.append(_timeline_warning(f"Projection unavailable: {type(exc).__name__}: {exc}"))
             break
-        if not next_local or next_local >= child_local:
+        if not next_local or _compare_datetimes(next_local, child_local) >= 0:
             break
         after_local = next_local
         try:

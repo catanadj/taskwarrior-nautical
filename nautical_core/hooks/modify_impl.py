@@ -3639,8 +3639,7 @@ def _anchor_file_occurrences_local(parent: dict, fallback_hhmm: tuple[int, int])
         _tolocal(core.build_local_datetime(value.day, value.hhmm))
         for value in provider.occurrences()
     ]
-    out.sort()
-    return out
+    return core._import_sibling("occurrence_provider")._sort_datetimes(out)
 
 
 def _anchor_file_is_omitted(omit_dnf, item_local: datetime, *, seed_base: str) -> bool:

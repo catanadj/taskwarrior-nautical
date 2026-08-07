@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from . import calendar_feedback, panel_diagnostics
+from .occurrence_provider import _compare_datetimes, _sort_datetimes
 
 
 def _preview_seed_base(task: dict[str, Any], fallback_chain_id: str) -> str:
@@ -351,8 +352,7 @@ def _anchor_file_occurrences_local(
             context=context,
         ).occurrences()
     ]
-    out.sort()
-    return out
+    return _sort_datetimes(out)
 
 
 def _preview_omit_label(task: dict[str, Any], item_local: datetime, *, core: Any) -> str:
@@ -382,8 +382,8 @@ def _preview_occurrence_lines(
     out: list[str] = []
     included_idx = 1
     for item_local, is_omitted in events:
-        if item_local <= first_due_local_dt:
-            if not is_omitted and item_local == first_due_local_dt:
+        if _compare_datetimes(item_local, first_due_local_dt) <= 0:
+            if not is_omitted and _compare_datetimes(item_local, first_due_local_dt) == 0:
                 included_idx = 1
             continue
         if is_omitted:
@@ -617,11 +617,11 @@ def handle_anchor_file_preview_on_add(
 
     due_local_dt = core.to_local(due_dt)
     if user_provided_due:
-        first_due_local_dt = next((dt for dt in all_occurrences if dt > due_local_dt), None)
+        first_due_local_dt = next((dt for dt in all_occurrences if _compare_datetimes(dt, due_local_dt) > 0), None)
         if not first_due_local_dt:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found after the provided due.")])
     else:
-        first_due_local_dt = next((dt for dt in all_occurrences if dt >= now_local), None)
+        first_due_local_dt = next((dt for dt in all_occurrences if _compare_datetimes(dt, now_local) >= 0), None)
         if not first_due_local_dt:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
 
@@ -662,7 +662,7 @@ def handle_anchor_file_preview_on_add(
         )
 
     if until_dt:
-        if until_dt < first_due_utc:
+        if _compare_datetimes(until_dt, first_due_utc) < 0:
             error_and_exit(
                 [
                     ("Invalid chainUntil", "Chain end point is earlier than the first matching anchor occurrence."),
@@ -679,7 +679,8 @@ def handle_anchor_file_preview_on_add(
     exact_until_count = None
     final_until_dt = None
     if until_dt:
-        limited = [dt for dt in all_occurrences if dt <= core.to_local(until_dt)]
+        until_local = core.to_local(until_dt)
+        limited = [dt for dt in all_occurrences if _compare_datetimes(dt, until_local) <= 0]
         exact_until_count = max(0, len(limited) - 1)
         if limited:
             final_until_dt = limited[-1].astimezone(timezone.utc)
@@ -703,7 +704,7 @@ def handle_anchor_file_preview_on_add(
     )
     if until_dt:
         until_local = core.to_local(until_dt)
-        events = [(dt, is_omitted) for dt, is_omitted in events if dt <= until_local]
+        events = [(dt, is_omitted) for dt, is_omitted in events if _compare_datetimes(dt, until_local) <= 0]
     preview_rows = _preview_occurrence_lines(
         events,
         first_due_local_dt=first_due_local_dt,
@@ -957,7 +958,7 @@ def handle_anchor_preview_on_add(
         )
 
     if until_dt:
-        if until_dt < first_due_utc:
+        if _compare_datetimes(until_dt, first_due_utc) < 0:
             error_and_exit(
                 [
                     ("Invalid chainUntil", "Chain end point is earlier than the first matching anchor occurrence."),
@@ -1023,7 +1024,7 @@ def handle_anchor_preview_on_add(
         )
         if until_dt:
             until_local = core.to_local(until_dt)
-            limited = [dt for dt in all_occurrences if dt <= until_local]
+            limited = [dt for dt in all_occurrences if _compare_datetimes(dt, until_local) <= 0]
             exact_until_count = max(0, len(limited) - 1)
             if limited:
                 final_until_dt = limited[-1].astimezone(timezone.utc)
@@ -1048,7 +1049,7 @@ def handle_anchor_preview_on_add(
         )
         if until_dt:
             until_local = core.to_local(until_dt)
-            events = [(dt, is_omitted) for dt, is_omitted in events if dt <= until_local]
+            events = [(dt, is_omitted) for dt, is_omitted in events if _compare_datetimes(dt, until_local) <= 0]
         preview = _preview_occurrence_lines(
             events,
             first_due_local_dt=first_due_local_dt,

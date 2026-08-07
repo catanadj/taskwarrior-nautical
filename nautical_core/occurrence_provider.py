@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Protocol
 
 
@@ -55,6 +55,43 @@ class OccurrenceProvider(LazyOccurrenceProvider, Protocol):
         """Return sorted, deduplicated local occurrences."""
 
 
+def _datetime_is_aware(value: datetime) -> bool:
+    return value.tzinfo is not None and value.utcoffset() is not None
+
+
+def _compare_datetimes(left: datetime, right: datetime) -> int:
+    """Compare datetimes by instant when aware, otherwise by wall time."""
+    if not isinstance(left, datetime) or not isinstance(right, datetime):
+        raise TypeError("Occurrence provider must compare datetime values.")
+    left_aware = _datetime_is_aware(left)
+    right_aware = _datetime_is_aware(right)
+    if left_aware != right_aware:
+        raise ValueError("Occurrence provider returned an incomparable datetime.")
+    if left_aware:
+        left = left.astimezone(timezone.utc)
+        right = right.astimezone(timezone.utc)
+    return (left > right) - (left < right)
+
+
+def _sort_datetimes(values: list[datetime]) -> list[datetime]:
+    """Sort a homogeneous datetime list without losing DST fold ordering."""
+    if not values:
+        return []
+    aware = _datetime_is_aware(values[0])
+    if any(_datetime_is_aware(value) != aware for value in values):
+        raise ValueError("Occurrence provider returned incomparable datetime values.")
+    if aware:
+        return sorted(values, key=lambda value: value.astimezone(timezone.utc))
+    return sorted(values)
+
+
+def _cursor_before(value: datetime) -> datetime:
+    """Return the instant immediately before an inclusive cursor."""
+    if _datetime_is_aware(value):
+        return (value.astimezone(timezone.utc) - timedelta(microseconds=1)).astimezone(value.tzinfo)
+    return value - timedelta(microseconds=1)
+
+
 def collect_after(
     provider: LazyOccurrenceProvider,
     after_local: datetime,
@@ -74,7 +111,7 @@ def collect_after(
         raise ValueError("Occurrence collection iteration limit must be a positive integer.")
     if limit == 0:
         return []
-    cursor = after_local - timedelta(microseconds=1) if inclusive else after_local
+    cursor = _cursor_before(after_local) if inclusive else after_local
     out: list[Occurrence] = []
     included_count = 0
     iterations = 0
@@ -105,8 +142,8 @@ def _require_forward_progress(after_local: datetime, value: datetime) -> None:
     if not isinstance(after_local, datetime) or not isinstance(value, datetime):
         raise TypeError("Occurrence provider must return datetime values.")
     try:
-        advanced = value > after_local
-    except TypeError as exc:
+        advanced = _compare_datetimes(value, after_local) > 0
+    except (TypeError, ValueError) as exc:
         raise ValueError("Occurrence provider returned an incomparable datetime.") from exc
     if not advanced:
         raise ValueError("Occurrence provider returned a non-advancing occurrence.")

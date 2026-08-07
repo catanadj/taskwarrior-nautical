@@ -16883,6 +16883,83 @@ def test_occurrence_provider_adapters_preserve_stream_metadata():
         expect(occurrence.description == expected_description, f"description metadata was lost: {occurrence!r}")
 
 
+def test_occurrence_provider_rejects_dst_fallback_backward_progress():
+    """A repeated-hour candidate must advance by instant, not wall-clock label."""
+    from zoneinfo import ZoneInfo
+    from nautical_core.occurrence_provider import AnchorOccurrenceProvider
+
+    zone = ZoneInfo("Europe/Bucharest")
+    after = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
+    backward = datetime(2026, 10, 25, 3, 30, tzinfo=zone, fold=0)
+    provider = AnchorOccurrenceProvider(lambda _value: backward)
+    try:
+        provider.next_after(
+            after,
+            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+            to_local=lambda value: value,
+        )
+        expect(False, "provider accepted a DST-fold occurrence that was earlier in UTC")
+    except ValueError as exc:
+        expect("non-advancing" in str(exc), f"unexpected DST-fold progress error: {exc}")
+
+
+def test_anchor_file_provider_orders_dst_fallback_by_instant():
+    """Anchor-file successors should skip wall-clock values earlier in the repeated hour."""
+    import nautical_core.anchor_files as anchor_files
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("Europe/Bucharest")
+    provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
+    provider._spec_cache = [
+        (date(2026, 10, 25), (3, 30)),
+        (date(2026, 10, 25), (3, 45)),
+    ]
+
+    def build(day, hhmm):
+        fold = 1 if hhmm == (3, 45) else 0
+        return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=zone, fold=fold)
+
+    after = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
+    occurrence = provider.next_after(after, build_local_datetime=build, to_local=lambda value: value)
+    expect(
+        occurrence is not None
+        and occurrence.local_datetime is not None
+        and occurrence.local_datetime.hour == 3
+        and occurrence.local_datetime.minute == 45
+        and occurrence.local_datetime.fold == 1,
+        f"anchor-file provider did not order DST-fold candidates by instant: {occurrence!r}",
+    )
+
+
+def test_occurrence_collection_inclusive_cursor_steps_back_by_instant():
+    """Inclusive collection must subtract epsilon in UTC across a repeated hour."""
+    from zoneinfo import ZoneInfo
+    from nautical_core.occurrence_provider import Occurrence, collect_after
+
+    zone = ZoneInfo("Europe/Bucharest")
+    after = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
+    seen = []
+
+    class Echo:
+        def next_after(self, cursor, **_kwargs):
+            seen.append(cursor)
+            return Occurrence(after.date(), after.hour, after.minute, local_datetime=after)
+
+    collect_after(
+        Echo(),
+        after,
+        limit=1,
+        inclusive=True,
+        build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+        to_local=lambda value: value,
+    )
+    expect(seen, "inclusive collector did not invoke provider")
+    expect(
+        seen[0].astimezone(timezone.utc) == after.astimezone(timezone.utc) - timedelta(microseconds=1),
+        f"inclusive cursor moved by wall time instead of instant: {seen[0]!r}",
+    )
+
+
 def test_occurrence_providers_reject_non_advancing_values():
     """Provider adapters fail closed instead of allowing duplicate occurrence loops."""
     from datetime import datetime
@@ -27723,6 +27800,9 @@ TESTS = [
     test_merged_anchor_file_provider_carries_context_and_reuses_specs,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_occurrence_provider_adapters_preserve_stream_metadata,
+    test_occurrence_provider_rejects_dst_fallback_backward_progress,
+    test_anchor_file_provider_orders_dst_fallback_by_instant,
+    test_occurrence_collection_inclusive_cursor_steps_back_by_instant,
     test_occurrence_providers_reject_non_advancing_values,
     test_occurrence_values_reject_inconsistent_fields,
     test_occurrence_collection_fails_closed_on_invalid_values_and_exhaustion,

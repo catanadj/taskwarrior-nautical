@@ -197,6 +197,8 @@ def _timeline_future_anchor_items(
                 to_local=lambda value: value,
             )
             next_local = occurrence.local_datetime if occurrence is not None else None
+        except ValueError:
+            raise
         except Exception:
             break
         if not next_local:
@@ -287,6 +289,8 @@ def _timeline_omitted_before_next_anchor_items(
                 to_local=lambda value: value,
             )
             next_local = occurrence.local_datetime if occurrence is not None else None
+        except ValueError:
+            raise
         except Exception:
             break
         if not next_local or next_local >= child_local:

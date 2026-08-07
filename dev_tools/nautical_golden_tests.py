@@ -16562,6 +16562,23 @@ def test_occurrence_providers_reject_non_advancing_values():
             expect("non-advancing" in str(exc), f"unexpected progress guard error: {exc}")
 
 
+def test_occurrence_values_reject_inconsistent_fields():
+    """Typed occurrences reject invalid clocks and mismatched local datetimes."""
+    from datetime import datetime
+    from nautical_core.occurrence_provider import Occurrence
+
+    for factory in (
+        lambda: Occurrence(date(2026, 8, 3), 24, 0),
+        lambda: Occurrence(date(2026, 8, 3), 9, 60),
+        lambda: Occurrence(date(2026, 8, 3), 9, 0, local_datetime=datetime(2026, 8, 3, 10, 0)),
+    ):
+        try:
+            factory()
+            expect(False, "invalid occurrence fields were accepted")
+        except (TypeError, ValueError):
+            pass
+
+
 def test_add_preview_event_collection_counts_only_included_occurrences():
     """Omitted events may fill the stream but must not consume the included limit."""
     from datetime import datetime, timedelta, timezone
@@ -27077,6 +27094,7 @@ TESTS = [
     test_anchor_file_occurrence_provider_supports_lazy_next_after,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_occurrence_providers_reject_non_advancing_values,
+    test_occurrence_values_reject_inconsistent_fields,
     test_add_preview_event_collection_counts_only_included_occurrences,
     test_anchor_file_occurrences_expand_overnight_time_window,
     test_anchor_file_occurrences_expand_composable_time_schedule,

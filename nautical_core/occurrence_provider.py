@@ -19,6 +19,21 @@ class Occurrence:
     local_datetime: datetime | None = field(default=None, compare=False, repr=False)
     omitted: bool = field(default=False, compare=False)
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.day, date) or isinstance(self.day, datetime):
+            raise TypeError("Occurrence day must be a calendar date.")
+        if isinstance(self.hour, bool) or not isinstance(self.hour, int) or not 0 <= self.hour <= 23:
+            raise ValueError("Occurrence hour must be between 0 and 23.")
+        if isinstance(self.minute, bool) or not isinstance(self.minute, int) or not 0 <= self.minute <= 59:
+            raise ValueError("Occurrence minute must be between 0 and 59.")
+        if self.local_datetime is not None:
+            if not isinstance(self.local_datetime, datetime):
+                raise TypeError("Occurrence local_datetime must be a datetime.")
+            if (self.local_datetime.date(), self.local_datetime.hour, self.local_datetime.minute) != (self.day, self.hour, self.minute):
+                raise ValueError("Occurrence local_datetime does not match its date and clock fields.")
+        if not isinstance(self.omitted, bool):
+            raise TypeError("Occurrence omitted flag must be boolean.")
+
     @property
     def hhmm(self) -> tuple[int, int]:
         return self.hour, self.minute

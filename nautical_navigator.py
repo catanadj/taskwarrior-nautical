@@ -2302,21 +2302,23 @@ class TaskAnalyzer:
                 recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
                     chain_id=task.get("chainID") or task.get("uuid") or "analyzer"
                 )
-                fallback = default_hhmm
+                provider = anchor_files.AnchorFileOccurrenceProvider(
+                    anchor_file,
+                    getattr(core, "ANCHOR_FILE_DIR", ""),
+                    default_hhmm,
+                    business_calendar=business_calendar,
+                    context=recurrence_context,
+                )
                 cur_after = after_dt_local
                 while len(file_out) < limit:
-                    nxt = anchor_files.next_anchor_file_occurrence_after(
-                        anchor_file,
-                        getattr(core, "ANCHOR_FILE_DIR", ""),
+                    occurrence = provider.next_after(
                         cur_after,
-                        fallback,
                         build_local_datetime=core.build_local_datetime,
                         to_local=core.to_local,
-                        business_calendar=business_calendar,
-                        context=recurrence_context,
                     )
-                    if not nxt:
+                    if occurrence is None:
                         break
+                    nxt = core.to_local(core.build_local_datetime(occurrence.day, occurrence.hhmm))
                     file_out.append(nxt)
                     cur_after = nxt
             except Exception as exc:

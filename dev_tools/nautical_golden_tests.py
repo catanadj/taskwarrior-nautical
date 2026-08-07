@@ -16511,6 +16511,23 @@ def test_anchor_file_occurrence_provider_exposes_typed_values():
     ], f"provider occurrence values were incorrect: {values!r}")
 
 
+def test_anchor_file_occurrence_provider_supports_lazy_next_after():
+    """The provider can project one bounded successor without exporting all values."""
+    import nautical_core.anchor_files as anchor_files
+    from datetime import datetime
+
+    with tempfile.TemporaryDirectory() as td:
+        sample = Path(td) / "calendar.csv"
+        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
+        provider = anchor_files.AnchorFileOccurrenceProvider("calendar.csv@t=06,12:30", td, (8, 0))
+        occurrence = provider.next_after(
+            datetime(2026, 8, 3, 6, 0),
+            build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
+            to_local=lambda value: value,
+        )
+    expect(occurrence is not None and occurrence.hhmm == (12, 30), f"unexpected lazy occurrence: {occurrence!r}")
+
+
 def test_anchor_file_occurrences_expand_overnight_time_window():
     """File dates own overnight slots even when generated times land next day."""
     import nautical_core.anchor_files as anchor_files
@@ -26931,6 +26948,7 @@ TESTS = [
     test_anchor_file_occurrences_expand_bounded_time_window,
     test_anchor_file_occurrences_expand_random_time_window_with_context,
     test_anchor_file_occurrence_provider_exposes_typed_values,
+    test_anchor_file_occurrence_provider_supports_lazy_next_after,
     test_anchor_file_occurrences_expand_overnight_time_window,
     test_anchor_file_occurrences_expand_composable_time_schedule,
     test_anchor_file_loader_transforms_dates_and_carries_descriptions,

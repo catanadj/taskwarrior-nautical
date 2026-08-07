@@ -431,6 +431,33 @@ class AnchorFileOccurrenceProvider:
             )
         ]
 
+    def next_after(
+        self,
+        after_local: datetime,
+        *,
+        build_local_datetime: Callable[[date, tuple[int, int]], datetime],
+        to_local: Callable[[datetime], datetime],
+    ) -> Occurrence | None:
+        value = next_anchor_file_occurrence_after(
+            self.name,
+            self.anchor_file_dir,
+            after_local,
+            self.fallback_hhmm,
+            build_local_datetime=build_local_datetime,
+            to_local=to_local,
+            business_calendar=self.business_calendar,
+            context=self.context,
+        )
+        if value is None:
+            return None
+        local = to_local(value)
+        return Occurrence(
+            day=local.date(),
+            hour=local.hour,
+            minute=local.minute,
+            source="anchor_file",
+        )
+
 
 def next_anchor_file_occurrence_after(
     name: str | None,

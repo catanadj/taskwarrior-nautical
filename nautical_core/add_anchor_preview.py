@@ -544,7 +544,8 @@ def _collect_events_with_provider(
             pick_occurrence_local=pick_occurrence_local,
             anchor_file_dir=anchor_file_dir,
             anchor_file_provider=anchor_file_provider,
-        )
+        ),
+        source="anchor+anchor_file" if anchor_file_str and dnf else ("anchor_file" if anchor_file_str else "anchor"),
     )
     return [
         (occurrence.local_datetime, occurrence.omitted)

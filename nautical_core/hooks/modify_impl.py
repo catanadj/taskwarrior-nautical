@@ -5212,7 +5212,8 @@ def _timeline_lines(
                 next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
                 anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
                 anchor_file_provider=anchor_file_provider,
-            )
+            ),
+            source="anchor+anchor_file" if anchor_file_str and dnf else ("anchor_file" if anchor_file_str else "anchor"),
         )
         projection_warning = None
         try:

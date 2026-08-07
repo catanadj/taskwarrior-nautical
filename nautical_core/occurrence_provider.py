@@ -122,8 +122,13 @@ class AnchorOccurrenceProvider:
     def __init__(
         self,
         next_occurrence_after: Callable[[datetime], datetime | None],
+        *,
+        source: str = "anchor",
+        description: str = "",
     ) -> None:
         self._next_occurrence_after = next_occurrence_after
+        self._source = source
+        self._description = description
 
     def next_after(
         self,
@@ -140,14 +145,29 @@ class AnchorOccurrenceProvider:
         if not isinstance(local, datetime):
             raise TypeError("Occurrence provider returned a non-datetime local value.")
         _require_forward_progress(after_local, local)
-        return Occurrence(day=local.date(), hour=local.hour, minute=local.minute, local_datetime=local)
+        return Occurrence(
+            day=local.date(),
+            hour=local.hour,
+            minute=local.minute,
+            source=self._source,
+            description=self._description,
+            local_datetime=local,
+        )
 
 
 class AnchorEventOccurrenceProvider:
     """Typed adapter for anchor streams that retain omitted-event markers."""
 
-    def __init__(self, next_event_after: Callable[[datetime], tuple[datetime, bool] | None]) -> None:
+    def __init__(
+        self,
+        next_event_after: Callable[[datetime], tuple[datetime, bool] | None],
+        *,
+        source: str = "anchor",
+        description: str = "",
+    ) -> None:
         self._next_event_after = next_event_after
+        self._source = source
+        self._description = description
 
     def next_after(
         self,
@@ -171,6 +191,8 @@ class AnchorEventOccurrenceProvider:
             day=local.date(),
             hour=local.hour,
             minute=local.minute,
+            source=self._source,
+            description=self._description,
             local_datetime=local,
             omitted=omitted,
         )

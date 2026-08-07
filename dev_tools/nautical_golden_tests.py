@@ -16852,6 +16852,37 @@ def test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup():
     expect(next_value == Occurrence(date(2026, 8, 4), 9, 0), f"unexpected ordinary provider value: {next_value!r}")
 
 
+def test_occurrence_provider_adapters_preserve_stream_metadata():
+    """Provider adapters should retain source and description metadata."""
+    from datetime import datetime, timedelta
+    from nautical_core.occurrence_provider import AnchorEventOccurrenceProvider, AnchorOccurrenceProvider
+
+    after = datetime(2026, 8, 3, 9, 0)
+    identity = lambda value: value
+    ordinary = AnchorOccurrenceProvider(
+        lambda value: value + timedelta(hours=1),
+        source="anchor+anchor_file",
+        description="merged source",
+    )
+    event = AnchorEventOccurrenceProvider(
+        lambda value: (value + timedelta(hours=1), False),
+        source="anchor_file",
+        description="calendar entry",
+    )
+    for provider, expected_source, expected_description in (
+        (ordinary, "anchor+anchor_file", "merged source"),
+        (event, "anchor_file", "calendar entry"),
+    ):
+        occurrence = provider.next_after(
+            after,
+            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+            to_local=identity,
+        )
+        expect(occurrence is not None, "metadata provider returned no occurrence")
+        expect(occurrence.source == expected_source, f"source metadata was lost: {occurrence!r}")
+        expect(occurrence.description == expected_description, f"description metadata was lost: {occurrence!r}")
+
+
 def test_occurrence_providers_reject_non_advancing_values():
     """Provider adapters fail closed instead of allowing duplicate occurrence loops."""
     from datetime import datetime
@@ -27691,6 +27722,7 @@ TESTS = [
     test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates,
     test_merged_anchor_file_provider_carries_context_and_reuses_specs,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
+    test_occurrence_provider_adapters_preserve_stream_metadata,
     test_occurrence_providers_reject_non_advancing_values,
     test_occurrence_values_reject_inconsistent_fields,
     test_occurrence_collection_fails_closed_on_invalid_values_and_exhaustion,

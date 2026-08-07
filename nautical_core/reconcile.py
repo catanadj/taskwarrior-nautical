@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from nautical_core import astronomy, native_until
+from nautical_core.recurrence_spec import RecurrenceSpec
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
@@ -309,11 +310,17 @@ def resolve_existing_child(
 
 
 def recurrence_kind(task: dict[str, Any]) -> str:
-    if str(task.get("anchor") or "").strip():
-        return "anchor"
-    if str(task.get("anchor_file") or "").strip():
-        return "anchor_file"
-    return "cp"
+    try:
+        spec = RecurrenceSpec.from_task(task)
+    except ValueError:
+        # Preserve useful classification for incomplete legacy rows; the
+        # reconciler reports their missing identity separately.
+        if str(task.get("anchor") or "").strip():
+            return "anchor"
+        if str(task.get("anchor_file") or "").strip():
+            return "anchor_file"
+        return "cp"
+    return spec.kind or "cp"
 
 
 def describe_plan(plan: ReconcilePlan, *, fmt_dt_local: Any = None) -> dict[str, Any]:

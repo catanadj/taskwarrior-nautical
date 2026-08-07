@@ -3624,15 +3624,20 @@ def _anchor_file_occurrences_local(parent: dict, fallback_hhmm: tuple[int, int])
         return []
     anchor_files = core._import_sibling("anchor_files")
     context = recurrence_spec.context
-    occurrence_specs = anchor_files.load_anchor_file_occurrence_specs(
+    try:
+        business_calendar = core.business_calendar_for_task(parent)
+    except Exception:
+        business_calendar = None
+    provider = anchor_files.AnchorFileOccurrenceProvider(
         anchor_file,
         getattr(core, "ANCHOR_FILE_DIR", ""),
         fallback_hhmm,
+        business_calendar=business_calendar,
         context=context,
     )
     out = [
-        _tolocal(core.build_local_datetime(d0, hhmm))
-        for d0, hhmm in occurrence_specs
+        _tolocal(core.build_local_datetime(value.day, value.hhmm))
+        for value in provider.occurrences()
     ]
     out.sort()
     return out

@@ -18373,6 +18373,43 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
             mod.core.ANCHOR_FILE_DIR = old_dir
 
 
+def test_on_modify_compute_anchor_child_due_from_random_anchor_file():
+    """Operational anchor-file completion should preserve chain-scoped random slots."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_random_anchor_file_due_test")
+
+    with tempfile.TemporaryDirectory() as td:
+        anchor_dir = Path(td)
+        (anchor_dir / "calendar.csv").write_text("date\n2026-04-27\n", encoding="utf-8")
+        old_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+        mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        try:
+            chain_id = "random-file-chain"
+            target = date(2026, 4, 27)
+            slots = mod.core._import_sibling("time_slots").resolve_time_slots_with_offsets(
+                {"time_random": "rand(06:00..18:00/3)", "t": []},
+                target,
+                seed_base=chain_id,
+            )
+            first = mod.core.build_local_datetime(target, (slots[0][1], slots[0][2]))
+            second = mod.core.build_local_datetime(target, (slots[1][1], slots[1][2]))
+            parent = {
+                "description": "random anchor file chain",
+                "anchor_file": "calendar.csv@t=rand(06..18/3)",
+                "anchor_mode": "skip",
+                "link": 1,
+                "chainID": chain_id,
+                "due": mod.core.fmt_isoz(first.astimezone(timezone.utc)),
+                "end": mod.core.fmt_isoz((first + timedelta(minutes=10)).astimezone(timezone.utc)),
+            }
+            child_due, meta, dnf = mod._compute_anchor_child_due(parent)
+            expect(not dnf, f"random anchor_file should not produce an anchor DNF: {dnf!r}")
+            expect(child_due == second.astimezone(timezone.utc), f"random anchor_file slot was not preserved: {child_due!r} != {second!r}")
+            expect(meta.get("target_field") == "due", f"unexpected random anchor_file metadata: {meta!r}")
+        finally:
+            mod.core.ANCHOR_FILE_DIR = old_dir
+
+
 def test_on_modify_compute_anchor_child_due_from_multiple_file_times():
     """completion should retain independent times and select a later same-day occurrence from another file."""
     hook = _find_hook_file("on-modify.nautical")
@@ -27209,6 +27246,7 @@ TESTS = [
     test_hook_on_add_anchor_file_preview_auto_assigns_first_match,
     test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match,
     test_on_modify_compute_anchor_child_due_from_anchor_file,
+    test_on_modify_compute_anchor_child_due_from_random_anchor_file,
     test_on_modify_compute_anchor_child_due_from_multiple_file_times,
     test_on_modify_compute_anchor_child_due_from_combined_anchor_sources,
     test_on_modify_compute_combined_overnight_sources_in_time_order,

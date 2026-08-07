@@ -17475,6 +17475,14 @@ def test_modify_hook_uses_explicit_recurrence_identity():
     expect(_hook._recurrence_seed_base({}) == "preview", "modify hook fallback identity changed")
 
 
+def test_add_preview_uses_explicit_recurrence_identity():
+    """Add-preview seed selection should share the chainID-first policy."""
+    from nautical_core.add_anchor_preview import _preview_seed_base
+
+    expect(_preview_seed_base({"chainID": "chain-a", "uuid": "uuid-a"}, "preview") == "chain-a", "add preview preferred UUID over chainID")
+    expect(_preview_seed_base({}, "root-uuid") == "root-uuid", "add preview root fallback identity changed")
+
+
 def test_random_time_window_composition_and_anchor_file_guidance():
     """Unsupported random-time compositions fail with actionable guidance."""
     try:
@@ -27310,6 +27318,7 @@ TESTS.extend([
     test_recurrence_spec_normalizes_task_fields_and_context,
     test_modify_timeline_uses_explicit_recurrence_identity,
     test_modify_hook_uses_explicit_recurrence_identity,
+    test_add_preview_uses_explicit_recurrence_identity,
     test_random_time_window_composition_and_anchor_file_guidance,
     test_random_time_window_is_stable_across_processes,
     test_random_time_window_dst_projection_is_deterministic,

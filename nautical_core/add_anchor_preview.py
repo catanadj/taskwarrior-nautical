@@ -9,6 +9,16 @@ from .anchor_inclusion import collect_included_occurrences_local, collect_occurr
 from . import calendar_feedback, panel_diagnostics
 
 
+def _preview_seed_base(task: dict[str, Any], fallback_chain_id: str) -> str:
+    """Resolve the stable preview identity through the shared context model."""
+    from .recurrence_context import RecurrenceContext
+
+    return RecurrenceContext.from_task(
+        task,
+        fallback_chain_id=fallback_chain_id,
+    ).seed_base
+
+
 def _anchor_file_natural_text(expr: str) -> str:
     file_name = str(expr or '').split('@', 1)[0].strip()
     return f"Dates from {file_name}" if file_name else ""
@@ -167,7 +177,7 @@ def anchor_preview_seed_context(
     root_uuid_from: Callable[[dict[str, Any]], str | None],
 ) -> tuple[Any, Any, str]:
     base_local_date = due_day if user_provided_due else now_local.date()
-    seed_base = (task.get("chainID") or "").strip() or root_uuid_from(task) or "preview"
+    seed_base = _preview_seed_base(task, root_uuid_from(task) or "preview")
     interval_seed = base_local_date
     return base_local_date, interval_seed, seed_base
 
@@ -466,7 +476,7 @@ def handle_anchor_file_preview_on_add(
         error_and_exit=error_and_exit,
     )
     t_occ = time.perf_counter()
-    seed_base = (task.get("chainID") or "").strip() or "preview"
+    seed_base = _preview_seed_base(task, "preview")
     all_occurrences = _anchor_file_preview_occurrences(
         anchor_file_str,
         core=core,

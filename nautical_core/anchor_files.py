@@ -468,7 +468,10 @@ class AnchorFileOccurrenceProvider:
         if self._candidate_cache is None:
             candidates: list[datetime] = []
             for d0, hhmm in specs:
-                candidate = to_local(build_local_datetime(d0, hhmm))
+                raw_candidate = build_local_datetime(d0, hhmm)
+                if not isinstance(raw_candidate, datetime):
+                    raise TypeError("Anchor-file provider returned a non-datetime candidate.")
+                candidate = to_local(raw_candidate)
                 if not isinstance(candidate, datetime):
                     raise TypeError("Anchor-file provider returned a non-datetime local value.")
                 candidates.append(candidate)

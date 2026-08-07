@@ -26,6 +26,10 @@ class Occurrence:
             raise ValueError("Occurrence hour must be between 0 and 23.")
         if isinstance(self.minute, bool) or not isinstance(self.minute, int) or not 0 <= self.minute <= 59:
             raise ValueError("Occurrence minute must be between 0 and 59.")
+        if not isinstance(self.source, str):
+            raise TypeError("Occurrence source must be text.")
+        if not isinstance(self.description, str):
+            raise TypeError("Occurrence description must be text.")
         if self.local_datetime is not None:
             if not isinstance(self.local_datetime, datetime):
                 raise TypeError("Occurrence local_datetime must be a datetime.")
@@ -178,6 +182,8 @@ class AnchorOccurrenceProvider:
         value = self._next_occurrence_after(after_local)
         if value is None:
             return None
+        if not isinstance(value, datetime):
+            raise TypeError("Occurrence provider returned a non-datetime value.")
         local = to_local(value)
         if not isinstance(local, datetime):
             raise TypeError("Occurrence provider returned a non-datetime local value.")
@@ -217,7 +223,11 @@ class AnchorEventOccurrenceProvider:
         event = self._next_event_after(after_local)
         if event is None:
             return None
+        if not isinstance(event, tuple) or len(event) != 2:
+            raise TypeError("Occurrence event provider must return a (datetime, omitted) tuple.")
         value, omitted = event
+        if not isinstance(value, datetime):
+            raise TypeError("Occurrence event provider returned a non-datetime value.")
         local = to_local(value)
         if not isinstance(local, datetime):
             raise TypeError("Occurrence event provider returned a non-datetime local value.")

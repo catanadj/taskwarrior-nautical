@@ -16960,6 +16960,35 @@ def test_occurrence_collection_inclusive_cursor_steps_back_by_instant():
     )
 
 
+def test_occurrence_provider_rejects_malformed_callback_payloads():
+    """Provider adapters should explain malformed callback values instead of leaking unpack errors."""
+    from nautical_core.occurrence_provider import AnchorEventOccurrenceProvider, AnchorOccurrenceProvider
+
+    after = datetime(2026, 8, 3, 9, 0)
+    call_kwargs = {
+        "build_local_datetime": lambda day, hhmm: datetime.combine(day, hhmm),
+        "to_local": lambda value: value,
+    }
+    for payload, expected in (
+        ((after, False, "extra"), "tuple"),
+        ([after, False], "tuple"),
+        (("not-a-datetime", False), "non-datetime value"),
+    ):
+        provider = AnchorEventOccurrenceProvider(lambda _value, payload=payload: payload)
+        try:
+            provider.next_after(after, **call_kwargs)
+            expect(False, f"malformed event payload was accepted: {payload!r}")
+        except TypeError as exc:
+            expect(expected in str(exc), f"event payload error was not actionable: {exc}")
+
+    provider = AnchorOccurrenceProvider(lambda _value: "not-a-datetime")
+    try:
+        provider.next_after(after, **call_kwargs)
+        expect(False, "ordinary provider accepted a non-datetime callback value")
+    except TypeError as exc:
+        expect("non-datetime value" in str(exc), f"ordinary payload error was not actionable: {exc}")
+
+
 def test_occurrence_providers_reject_non_advancing_values():
     """Provider adapters fail closed instead of allowing duplicate occurrence loops."""
     from datetime import datetime
@@ -16987,6 +17016,8 @@ def test_occurrence_values_reject_inconsistent_fields():
         lambda: Occurrence(date(2026, 8, 3), 24, 0),
         lambda: Occurrence(date(2026, 8, 3), 9, 60),
         lambda: Occurrence(date(2026, 8, 3), 9, 0, local_datetime=datetime(2026, 8, 3, 10, 0)),
+        lambda: Occurrence(date(2026, 8, 3), 9, 0, source=object()),
+        lambda: Occurrence(date(2026, 8, 3), 9, 0, description=object()),
     ):
         try:
             factory()
@@ -27803,6 +27834,7 @@ TESTS = [
     test_occurrence_provider_rejects_dst_fallback_backward_progress,
     test_anchor_file_provider_orders_dst_fallback_by_instant,
     test_occurrence_collection_inclusive_cursor_steps_back_by_instant,
+    test_occurrence_provider_rejects_malformed_callback_payloads,
     test_occurrence_providers_reject_non_advancing_values,
     test_occurrence_values_reject_inconsistent_fields,
     test_occurrence_collection_fails_closed_on_invalid_values_and_exhaustion,

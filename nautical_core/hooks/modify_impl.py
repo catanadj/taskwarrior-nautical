@@ -3652,24 +3652,30 @@ def _anchor_parent_local_times(parent: dict):
     return end_local, due_local, due_dt_utc
 
 
-def _anchor_file_occurrences_local(parent: dict, fallback_hhmm: tuple[int, int]) -> list[datetime]:
+def _anchor_file_occurrences_local(
+    parent: dict,
+    fallback_hhmm: tuple[int, int],
+    *,
+    anchor_file_provider: Any | None = None,
+) -> list[datetime]:
     recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(parent)
     anchor_file = recurrence_spec.anchor_file
     if not anchor_file:
         return []
-    anchor_files = core._import_sibling("anchor_files")
-    context = recurrence_spec.context
-    business_calendar = core.business_calendar_for_task(parent)
-    provider = anchor_files.AnchorFileOccurrenceProvider(
-        anchor_file,
-        getattr(core, "ANCHOR_FILE_DIR", ""),
-        fallback_hhmm,
-        business_calendar=business_calendar,
-        context=context,
-    )
+    if anchor_file_provider is None:
+        anchor_files = core._import_sibling("anchor_files")
+        context = recurrence_spec.context
+        business_calendar = core.business_calendar_for_task(parent)
+        anchor_file_provider = anchor_files.AnchorFileOccurrenceProvider(
+            anchor_file,
+            getattr(core, "ANCHOR_FILE_DIR", ""),
+            fallback_hhmm,
+            business_calendar=business_calendar,
+            context=context,
+        )
     out = [
         _tolocal(core.build_local_datetime(value.day, value.hhmm))
-        for value in provider.occurrences()
+        for value in anchor_file_provider.occurrences()
     ]
     occurrence_provider = core._import_sibling("occurrence_provider")
     ordered = occurrence_provider._sort_datetimes(out)
@@ -3700,9 +3706,20 @@ def _anchor_file_is_omitted(omit_dnf, item_local: datetime, *, seed_base: str) -
         ) from exc
 
 
-def _anchor_file_future_occurrences(parent: dict, *, fallback_hhmm: tuple[int, int], omit_dnf, seed_base: str) -> list[datetime]:
+def _anchor_file_future_occurrences(
+    parent: dict,
+    *,
+    fallback_hhmm: tuple[int, int],
+    omit_dnf,
+    seed_base: str,
+    anchor_file_provider: Any | None = None,
+) -> list[datetime]:
     out: list[datetime] = []
-    for item_local in _anchor_file_occurrences_local(parent, fallback_hhmm):
+    for item_local in _anchor_file_occurrences_local(
+        parent,
+        fallback_hhmm,
+        anchor_file_provider=anchor_file_provider,
+    ):
         if _anchor_file_is_omitted(omit_dnf, item_local, seed_base=seed_base):
             continue
         out.append(item_local)
@@ -3777,6 +3794,7 @@ def _anchor_file_due_for_mode(
     due_dt_utc,
     fallback_hhmm,
     seed_base: str,
+    anchor_file_provider=None,
 ) -> tuple[object, dict]:
     info: dict[str, object] = {"mode": mode, "basis": None, "missed_count": 0, "missed_preview": []}
     occurrences = _anchor_file_future_occurrences(
@@ -3784,6 +3802,7 @@ def _anchor_file_due_for_mode(
         fallback_hhmm=fallback_hhmm,
         omit_dnf=omit_dnf,
         seed_base=seed_base,
+        anchor_file_provider=anchor_file_provider,
     )
     if not occurrences:
         return None, info
@@ -3988,7 +4007,7 @@ def _compute_anchor_child_due(parent: dict):
         _anchor_file_provider_for(
             anchor_file_str, fallback_hhmm=fallback_hhmm, seed_base=seed_base
         )
-        if anchor_file_str and dnf
+        if anchor_file_str
         else None
     )
     if anchor_file_str and not dnf:
@@ -4001,6 +4020,7 @@ def _compute_anchor_child_due(parent: dict):
             due_dt_utc=due_dt_utc,
             fallback_hhmm=fallback_hhmm,
             seed_base=seed_base,
+            anchor_file_provider=anchor_file_provider,
         )
     elif dnf and not anchor_file_str:
         nxt_local, info = _anchor_due_for_mode(

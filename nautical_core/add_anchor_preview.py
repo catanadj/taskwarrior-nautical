@@ -352,7 +352,12 @@ def _anchor_file_occurrences_local(
             context=context,
         ).occurrences()
     ]
-    return _sort_datetimes(out)
+    ordered = _sort_datetimes(out)
+    deduplicated: list[datetime] = []
+    for item in ordered:
+        if not deduplicated or _compare_datetimes(item, deduplicated[-1]) != 0:
+            deduplicated.append(item)
+    return deduplicated
 
 
 def _preview_omit_label(task: dict[str, Any], item_local: datetime, *, core: Any) -> str:

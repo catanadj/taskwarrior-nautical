@@ -16138,6 +16138,74 @@ def test_on_modify_anchor_file_child_projection_reuses_provider():
     expect(mod.core.to_local(child_due).strftime("%H:%M") == "09:30", f"unexpected projected child due: {child_due!r}")
 
 
+def test_on_modify_pure_anchor_file_projection_reuses_provider():
+    """File-only child projection should use the shared provider session."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_pure_anchor_file_session_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+    anchor_inclusion = mod.core._import_sibling("anchor_inclusion")
+    occurrence_provider = mod.core._import_sibling("occurrence_provider")
+    original_builder = anchor_inclusion._build_anchor_file_provider
+    builders = []
+
+    def build_provider(*_args, **_kwargs):
+        provider = type("Provider", (), {})()
+        provider.occurrences = lambda: [
+            occurrence_provider.Occurrence(date(2026, 8, 4), 9, 0, source="anchor_file")
+        ]
+        builders.append(provider)
+        return provider
+
+    anchor_inclusion._build_anchor_file_provider = build_provider
+    try:
+        due = mod.core.build_local_datetime(date(2026, 8, 3), (9, 0))
+        child_due, _meta, _dnf = mod._compute_anchor_child_due(
+            {
+                "anchor_file": "calendar.csv@t=09:00",
+                "anchor_mode": "skip",
+                "chainID": "pure-anchor-file-session",
+                "due": mod.core.fmt_isoz(due),
+                "end": mod.core.fmt_isoz(due + timedelta(hours=1)),
+            }
+        )
+    finally:
+        anchor_inclusion._build_anchor_file_provider = original_builder
+    expect(len(builders) == 1, f"pure anchor-file projection rebuilt provider {len(builders)} times")
+    expect(mod.core.to_local(child_due).date() == date(2026, 8, 4), f"unexpected pure anchor-file child due: {child_due!r}")
+
+
+def test_add_anchor_file_local_projection_deduplicates_dst_gap():
+    """Add-side file projections should deduplicate slots shifted onto one instant."""
+    import nautical_core.add_anchor_preview as preview
+    from nautical_core.timeutil import build_local_datetime
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("Europe/Bucharest")
+    original_build = core.build_local_datetime
+    original_local = core.to_local
+    core.build_local_datetime = lambda day, hhmm: build_local_datetime(day, hhmm, zone)
+    core.to_local = lambda value: value.astimezone(zone)
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            Path(td, "calendar.csv").write_text("date\n2026-03-29\n", encoding="utf-8")
+            original_dir = core.ANCHOR_FILE_DIR
+            core.ANCHOR_FILE_DIR = td
+            try:
+                values = preview._anchor_file_occurrences_local(
+                    "calendar.csv@t=03:30,04:30",
+                    core=core,
+                    fallback_hhmm=(9, 0),
+                    seed_base="dst-add-test",
+                )
+            finally:
+                core.ANCHOR_FILE_DIR = original_dir
+    finally:
+        core.build_local_datetime = original_build
+        core.to_local = original_local
+    expect(len(values) == 1 and values[0].hour == 4 and values[0].minute == 30, f"DST-shifted file slots were not deduplicated: {values!r}")
+
+
 def test_anchor_and_file_tie_preserves_file_description():
     """A same-instant merged occurrence keeps the anchor-file metadata."""
     inclusion = importlib.import_module("nautical_core.anchor_inclusion")
@@ -28067,6 +28135,8 @@ TESTS = [
     test_on_modify_cp_sequence_estimates_chainmax_final_date,
     test_on_modify_anchor_chainmax_forecast_is_bounded,
     test_on_modify_anchor_file_child_projection_reuses_provider,
+    test_on_modify_pure_anchor_file_projection_reuses_provider,
+    test_add_anchor_file_local_projection_deduplicates_dst_gap,
     test_anchor_and_file_tie_preserves_file_description,
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_time_window_preview_emits_bounded_slots,

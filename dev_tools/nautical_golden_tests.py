@@ -19191,6 +19191,78 @@ def test_recurrence_spec_normalizes_task_fields_and_context():
         expect("Conflicting recurrence identities" in str(exc), f"unexpected spec identity error: {exc}")
 
 
+def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
+    """The evaluator should normalize recurrence state without performing I/O."""
+    from zoneinfo import ZoneInfo
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+    task = {
+        "chainID": "evaluator-chain",
+        "anchor": "w:mon@t=02:30",
+        "anchor_mode": "SKIP",
+        "chainMax": "4",
+    }
+    context = RecurrenceContext(
+        chain_id="evaluator-chain",
+        timezone=ZoneInfo("America/New_York"),
+        anchor_file_dir="/tmp/evaluator-anchor-files",
+    )
+    evaluator = RecurrenceEvaluator.from_task(task, context=context)
+    expect(evaluator.chain_id == "evaluator-chain", "evaluator lost chain identity")
+    expect(evaluator.seed_base == "evaluator-chain", "evaluator seed identity changed")
+    expect(evaluator.kind == "anchor" and evaluator.enabled, "evaluator kind was not normalized")
+    expect(evaluator.spec.anchor_mode == "skip" and evaluator.spec.chain_max == 4, "evaluator spec was not normalized")
+
+    shifted = evaluator.build_local_datetime(date(2025, 3, 9), (2, 30))
+    shifted_local = evaluator.to_local(shifted)
+    expect(
+        (shifted_local.hour, shifted_local.minute) == (3, 30),
+        f"evaluator bypassed the shared DST policy: {shifted_local}",
+    )
+    expect(
+        evaluator.utc_to_local_naive(shifted) == datetime(2025, 3, 9, 3, 30),
+        "evaluator local-naive conversion disagreed with its timezone",
+    )
+
+    parsed = RecurrenceEvaluator.from_task(
+        {
+            "chainID": "parsed-chain",
+            "anchor": "w:mon@t=02:30",
+            "omit": "w:sun",
+            "anchor_mode": "ALL",
+            "chainMax": "4",
+            "chainUntil": "2025-12-31T23:00:00Z",
+        }
+    )
+    expect(parsed.anchor_mode == "all", "evaluator did not normalize anchor mode")
+    expect(len(parsed.anchor_dnf) == 1 and len(parsed.anchor_dnf[0]) == 1, "anchor parsing was not owned by evaluator")
+    expect(len(parsed.omit_dnf) == 1, "omit parsing was not owned by evaluator")
+    expect(parsed.limits.chain_max == 4, "chainMax limit was not normalized")
+    expect(
+        parsed.limits.chain_until == datetime(2025, 12, 31, 23, 0, tzinfo=timezone.utc),
+        "chainUntil limit was not parsed as UTC",
+    )
+    cp_evaluator = RecurrenceEvaluator.from_task(
+        {"chainID": "cp-chain", "cp": "1d,rand(2d..3d)"}
+    )
+    expect(len(cp_evaluator.cp_tokens or []) == 2, "CP token parsing was not owned by evaluator")
+    invalid_mode = RecurrenceEvaluator.from_task({"chainID": "invalid-mode", "anchor": "w:mon", "anchor_mode": "bad"})
+    try:
+        _ = invalid_mode.anchor_mode
+    except ValueError as exc:
+        expect("anchor_mode" in str(exc), f"invalid mode error was not actionable: {exc}")
+    else:
+        raise AssertionError("invalid anchor mode was silently accepted")
+
+    try:
+        RecurrenceEvaluator.from_task({"anchor": "w:mon"})
+    except ValueError as exc:
+        expect("chain ID" in str(exc), f"missing-chain failure was not actionable: {exc}")
+    else:
+        raise AssertionError("evaluator silently invented a chain identity")
+
+
 def test_modify_timeline_uses_explicit_recurrence_identity():
     """Timeline seed selection should honor chainID and require fallback opt-in."""
     from nautical_core.modify_timeline import _timeline_seed_base
@@ -29207,6 +29279,7 @@ TESTS.extend([
     test_random_time_window_parser_selects_deterministic_bucketed_slots,
     test_random_time_window_flows_through_anchor_parser_and_resolver,
     test_recurrence_spec_normalizes_task_fields_and_context,
+    test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_modify_timeline_uses_explicit_recurrence_identity,
     test_modify_hook_uses_explicit_recurrence_identity,
     test_add_preview_uses_explicit_recurrence_identity,

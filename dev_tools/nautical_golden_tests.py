@@ -17396,6 +17396,29 @@ def test_random_time_window_flows_through_anchor_parser_and_resolver():
         expect("chain ID" in str(exc), f"unexpected missing-chain-id error: {exc}")
 
 
+def test_recurrence_spec_normalizes_task_fields_and_context():
+    """The typed recurrence view should normalize fields without changing semantics."""
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.recurrence_spec import RecurrenceSpec
+
+    spec = RecurrenceSpec.from_task({
+        "chainID": "spec-chain",
+        "anchor": " w:mon ",
+        "anchor_file": " events.csv ",
+        "omit": " y:12-25 ",
+        "cp": "",
+        "anchor_mode": "ALL",
+        "chainMax": "4",
+        "chainUntil": " 20261231T230000Z ",
+    })
+    expect(spec.context.chain_id == "spec-chain", f"spec context lost chain identity: {spec!r}")
+    expect(spec.anchor == "w:mon" and spec.anchor_file == "events.csv", f"spec fields were not normalized: {spec!r}")
+    expect(spec.omit == "y:12-25" and spec.chain_max == 4, f"spec limits were not normalized: {spec!r}")
+    expect(spec.anchor_mode == "all" and spec.kind == "anchor" and spec.enabled, f"spec kind was incorrect: {spec!r}")
+    supplied = RecurrenceContext(chain_id="supplied")
+    expect(RecurrenceSpec.from_task({"anchor": "w:fri"}, context=supplied).context is supplied, "supplied context was replaced")
+
+
 def test_random_time_window_composition_and_anchor_file_guidance():
     """Unsupported random-time compositions fail with actionable guidance."""
     try:
@@ -27226,6 +27249,7 @@ TESTS.extend([
     test_time_window_parser_accepts_even_partition_counts,
     test_random_time_window_parser_selects_deterministic_bucketed_slots,
     test_random_time_window_flows_through_anchor_parser_and_resolver,
+    test_recurrence_spec_normalizes_task_fields_and_context,
     test_random_time_window_composition_and_anchor_file_guidance,
     test_random_time_window_is_stable_across_processes,
     test_random_time_window_dst_projection_is_deterministic,

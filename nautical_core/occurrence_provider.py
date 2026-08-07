@@ -38,6 +38,15 @@ class OccurrenceProvider(Protocol):
         """Return the first occurrence strictly after a local datetime."""
 
 
+def _require_forward_progress(after_local: datetime, value: datetime) -> None:
+    try:
+        advanced = value > after_local
+    except TypeError as exc:
+        raise ValueError("Occurrence provider returned an incomparable datetime.") from exc
+    if not advanced:
+        raise ValueError("Occurrence provider returned a non-advancing occurrence.")
+
+
 class AnchorOccurrenceProvider:
     """Typed adapter for ordinary anchor occurrence projection.
 
@@ -68,6 +77,7 @@ class AnchorOccurrenceProvider:
         if value is None:
             return None
         local = to_local(value)
+        _require_forward_progress(after_local, local)
         return Occurrence(day=local.date(), hour=local.hour, minute=local.minute, local_datetime=local)
 
 
@@ -90,6 +100,7 @@ class AnchorEventOccurrenceProvider:
             return None
         value, omitted = event
         local = to_local(value)
+        _require_forward_progress(after_local, local)
         return Occurrence(
             day=local.date(),
             hour=local.hour,

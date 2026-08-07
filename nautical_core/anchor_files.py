@@ -451,6 +451,9 @@ class AnchorFileOccurrenceProvider:
         if value is None:
             return None
         local = to_local(value)
+        from .occurrence_provider import _require_forward_progress
+
+        _require_forward_progress(after_local, local)
         return Occurrence(
             day=local.date(),
             hour=local.hour,

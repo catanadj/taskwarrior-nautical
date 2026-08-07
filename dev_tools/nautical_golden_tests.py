@@ -17404,6 +17404,44 @@ def test_modify_inclusion_collection_uses_shared_progress_guard():
         _hook._next_occurrence_after_local_dt = original
 
 
+def test_modify_until_projection_reuses_anchor_file_provider():
+    """Until-cap projection should expand an anchor file once per reconciliation."""
+    import nautical_core.anchor_inclusion as anchor_inclusion
+
+    builders = []
+    providers = []
+    original_builder = anchor_inclusion._build_anchor_file_provider
+    original_included = _hook._anchor_included_occurrences
+
+    def build_provider(*_args, **_kwargs):
+        provider = object()
+        builders.append(provider)
+        return provider
+
+    def included(_task, *, after_local_dt, anchor_file_provider=None, **_kwargs):
+        providers.append(anchor_file_provider)
+        return [after_local_dt + timedelta(days=1)]
+
+    anchor_inclusion._build_anchor_file_provider = build_provider
+    _hook._anchor_included_occurrences = included
+    try:
+        task = {
+            "chainID": "provider-reuse",
+            "link": 1,
+            "due": "20260801T090000Z",
+            "chainUntil": "20260805T090000Z",
+            "anchor_file": "calendar.csv",
+        }
+        final_no, final_dt = _hook._cap_from_until_anchor(task, datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc), None)
+        expect(final_no == 6, f"unexpected capped link number: {final_no!r}")
+        expect(final_dt is not None, "until projection did not produce a final occurrence")
+        expect(len(builders) == 1, f"anchor file provider was rebuilt {len(builders)} times")
+        expect(providers and all(value is builders[0] for value in providers), "projection did not reuse the provider")
+    finally:
+        anchor_inclusion._build_anchor_file_provider = original_builder
+        _hook._anchor_included_occurrences = original_included
+
+
 def test_anchor_file_provider_rejects_incomparable_datetimes():
     """Anchor-file lookup should explain mixed naive and aware datetime inputs."""
     import nautical_core.anchor_files as anchor_files
@@ -28055,6 +28093,7 @@ TESTS = [
     test_occurrence_event_provider_requires_boolean_omitted_flag,
     test_anchor_inclusion_scheduler_dispatch_preserves_legacy_and_internal_errors,
     test_modify_inclusion_collection_uses_shared_progress_guard,
+    test_modify_until_projection_reuses_anchor_file_provider,
     test_anchor_file_provider_rejects_incomparable_datetimes,
     test_anchor_file_omit_evaluation_failures_propagate,
     test_add_preview_event_collection_counts_only_included_occurrences,

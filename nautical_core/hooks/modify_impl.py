@@ -3682,21 +3682,23 @@ def _anchor_included_occurrences(
     seed_base: str,
     default_seed_date,
     dnf,
+    anchor_file_provider: Any | None = None,
 ) -> list[datetime]:
     anchor_inclusion = core._import_sibling("anchor_inclusion")
     occurrence_provider = core._import_sibling("occurrence_provider")
     anchor_file = (parent.get("anchor_file") or "").strip()
-    anchor_file_provider = (
-        anchor_inclusion._build_anchor_file_provider(
-            anchor_file,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            fallback_hhmm=fallback_hhmm,
-            seed_base=seed_base,
-            core=core,
+    if anchor_file_provider is None:
+        anchor_file_provider = (
+            anchor_inclusion._build_anchor_file_provider(
+                anchor_file,
+                anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+                fallback_hhmm=fallback_hhmm,
+                seed_base=seed_base,
+                core=core,
+            )
+            if anchor_file
+            else None
         )
-        if anchor_file
-        else None
-    )
     provider = occurrence_provider.AnchorOccurrenceProvider(
         lambda value: anchor_inclusion.next_included_occurrence_local(
             dnf=dnf,
@@ -4070,7 +4072,15 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
     fallback_hhmm = (nxt_local.hour, nxt_local.minute)
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
     anchor_file = (task.get("anchor_file") or "").strip()
-
+    anchor_file_provider = None
+    if anchor_file:
+        anchor_file_provider = core._import_sibling("anchor_inclusion")._build_anchor_file_provider(
+            anchor_file,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+        )
     fut_no = cur_no + 1
     fut_local = nxt_local
     while fut_no < cpmax:
@@ -4085,6 +4095,7 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
                 seed_base=seed_base,
                 default_seed_date=default_seed,
                 dnf=dnf,
+                anchor_file_provider=anchor_file_provider,
             )
             fut_local = future[0] if future else None
         else:
@@ -5413,6 +5424,15 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
     default_seed = _to_local_cached(due0 or next_due_utc).date()
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
     anchor_file = (task.get("anchor_file") or "").strip()
+    anchor_file_provider = None
+    if anchor_file:
+        anchor_file_provider = core._import_sibling("anchor_inclusion")._build_anchor_file_provider(
+            anchor_file,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+        )
 
     count = 0
     last_hit = None
@@ -5435,6 +5455,7 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
                 seed_base=seed_base,
                 default_seed_date=default_seed,
                 dnf=dnf,
+                anchor_file_provider=anchor_file_provider,
             )
             cursor = future[0] if future else None
         else:

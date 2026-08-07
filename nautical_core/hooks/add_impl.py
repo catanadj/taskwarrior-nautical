@@ -1426,7 +1426,7 @@ def _cp_until_summary(due_dt: datetime, until_dt: datetime | None, add_period) -
         if iterations >= _MAX_ITERATIONS:
             break
         iterations += 1
-        if probe > until_dt:
+        if core._import_sibling("occurrence_provider")._compare_datetimes(probe, until_dt) > 0:
             break
         last = probe
         count += 1
@@ -1445,7 +1445,7 @@ def _cp_preview_lines(due_dt: datetime, until_dt: datetime | None, limit: int, a
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
     for i in range(limit):
         nxt = add_period(nxt)
-        if until_dt and nxt > until_dt:
+        if until_dt and core._import_sibling("occurrence_provider")._compare_datetimes(nxt, until_dt) > 0:
             break
         color = colors[min(i, len(colors) - 1)]
         preview.append(f"[{color}]{_fmt(nxt)}[/{color}]")
@@ -1468,7 +1468,7 @@ def _cp_sequence_until_summary(
     last = None
     link_no = start_link_no
     for _ in range(_MAX_PREVIEW_ITERATIONS):
-        if probe > until_dt:
+        if core._import_sibling("occurrence_provider")._compare_datetimes(probe, until_dt) > 0:
             break
         last = probe
         count += 1
@@ -1503,7 +1503,7 @@ def _cp_sequence_preview_lines(
         td = _cp_sequence_period_for_link(tokens, cp_str, link_no, chain_id)
         nxt = _cp_add_td(nxt, td)
         link_no += 1
-        if until_dt and nxt > until_dt:
+        if until_dt and core._import_sibling("occurrence_provider")._compare_datetimes(nxt, until_dt) > 0:
             break
         color = colors[min(i, len(colors) - 1)]
         suffix = ""

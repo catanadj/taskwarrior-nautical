@@ -16996,6 +16996,18 @@ def test_modify_anchor_file_mode_orders_dst_fold_by_instant():
     expect(info.get("missed_count") == 1, f"DST fold counted wall-clock duplicate: {info!r}")
 
 
+def test_native_until_validation_orders_dst_fold_by_instant():
+    """Native until validation must reject an expiration before the repeated-hour target."""
+    from zoneinfo import ZoneInfo
+    import nautical_core.native_until as native_until
+
+    zone = ZoneInfo("Europe/Bucharest")
+    target = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)
+    earlier = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=0)
+    valid, message = native_until.validate_after_target(earlier, target, "due")
+    expect(not valid and message == "until must be later than due", f"DST fold validation accepted an earlier instant: {message!r}")
+
+
 def test_merged_anchor_file_provider_carries_context_and_reuses_specs():
     """Merged preview streams should carry chain context and expand files once."""
     import nautical_core.add_anchor_preview as preview
@@ -28489,6 +28501,7 @@ TESTS = [
     test_anchor_file_occurrence_provider_advances_cached_lookup_cursor,
     test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates,
     test_modify_anchor_file_mode_orders_dst_fold_by_instant,
+    test_native_until_validation_orders_dst_fold_by_instant,
     test_merged_anchor_file_provider_carries_context_and_reuses_specs,
     test_event_provider_preserves_anchor_file_source_description,
     test_included_provider_preserves_anchor_file_source_description,

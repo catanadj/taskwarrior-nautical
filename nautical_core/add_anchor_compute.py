@@ -456,7 +456,7 @@ def anchor_build_preview(
         if not nxt_dt:
             break
         dt_utc = nxt_dt.astimezone(timezone.utc)
-        if until_dt and dt_utc > until_dt:
+        if until_dt and _compare_datetimes(dt_utc, until_dt) > 0:
             break
         color = colors[min(i, len(colors) - 1)]
         preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")

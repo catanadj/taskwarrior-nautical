@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
+from nautical_core.occurrence_provider import _compare_datetimes
+
 
 CARRY_CONFLICT = "calendar_target_conflict"
 CARRY_INVALID = "invalid_carry_input"
@@ -72,7 +74,7 @@ def validate_after_target(
         return (True, None)
     label = "scheduled" if str(target_field or "").strip().lower() == "scheduled" else "due"
     try:
-        if until_dt <= target_dt:
+        if _compare_datetimes(until_dt, target_dt) <= 0:
             return (False, f"until must be later than {label}")
     except Exception:
         return (False, f"until and {label} could not be compared")

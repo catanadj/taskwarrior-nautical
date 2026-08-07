@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from nautical_core import astronomy, native_until
+from nautical_core.occurrence_provider import _compare_datetimes
 from nautical_core.recurrence_context import RecurrenceContext
 
 
@@ -13,7 +14,7 @@ def validate_until_not_past(until_dt: Any, now_utc: datetime, *, core: Any) -> t
     if not until_dt:
         return (True, None)
     grace = timedelta(minutes=1)
-    if until_dt < (now_utc - grace):
+    if _compare_datetimes(until_dt, now_utc - grace) < 0:
         past_s = core.humanize_delta(until_dt, now_utc, use_months_days=False)
         return (False, f"chainUntil is in the past (was {past_s} ago)")
     return (True, None)
@@ -23,7 +24,7 @@ def check_due_in_past(due_dt: Any, now_utc: datetime, *, core: Any) -> tuple[boo
     if not due_dt:
         return (False, None)
     grace = timedelta(minutes=1)
-    if due_dt < (now_utc - grace):
+    if _compare_datetimes(due_dt, now_utc - grace) < 0:
         ago_s = core.humanize_delta(due_dt, now_utc, use_months_days=False)
         return (True, f"Due date is in the past ({ago_s} ago).")
     return (False, None)

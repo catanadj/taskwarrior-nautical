@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
+from nautical_core.occurrence_provider import _compare_datetimes
+
 
 @dataclass(slots=True)
 class ExpirationServices:
@@ -28,7 +30,7 @@ def has_expiration_evidence(task: dict, *, safe_parse_datetime) -> bool:
             and not end_err
             and until_dt is not None
             and end_dt is not None
-            and until_dt <= end_dt
+            and _compare_datetimes(until_dt, end_dt) <= 0
         )
     except Exception:
         return False

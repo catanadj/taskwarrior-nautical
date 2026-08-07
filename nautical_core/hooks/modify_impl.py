@@ -536,6 +536,7 @@ def _append_next_wait_sched_rows(
         ))
 
 core = None
+_DATETIME_COMPARATOR = None
 _CORE_READY = False
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
@@ -961,7 +962,10 @@ def _tolocal(dt):
 
 def _compare_datetimes(left: datetime, right: datetime) -> int:
     """Compare aware datetimes by instant, preserving DST fold ordering."""
-    return core._import_sibling("occurrence_provider")._compare_datetimes(left, right)
+    global _DATETIME_COMPARATOR
+    if _DATETIME_COMPARATOR is None:
+        _DATETIME_COMPARATOR = core._import_sibling("occurrence_provider")._compare_datetimes
+    return _DATETIME_COMPARATOR(left, right)
 
 
 def _later_datetime(left: datetime, right: datetime) -> datetime:

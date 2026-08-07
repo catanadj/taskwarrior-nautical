@@ -130,6 +130,7 @@ from functools import lru_cache
 from typing import Any
 
 core = None
+_DATETIME_COMPARATOR = None
 _CORE_READY = False
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
@@ -1415,6 +1416,14 @@ def _cp_sequence_period_for_link(
     return td or timedelta()
 
 
+def _compare_datetimes(left: datetime, right: datetime) -> int:
+    """Compare aware datetimes by instant, resolving the provider once per hook run."""
+    global _DATETIME_COMPARATOR
+    if _DATETIME_COMPARATOR is None:
+        _DATETIME_COMPARATOR = core._import_sibling("occurrence_provider")._compare_datetimes
+    return _DATETIME_COMPARATOR(left, right)
+
+
 def _cp_until_summary(due_dt: datetime, until_dt: datetime | None, add_period) -> tuple[int | None, datetime | None]:
     if not until_dt:
         return None, None
@@ -1426,7 +1435,7 @@ def _cp_until_summary(due_dt: datetime, until_dt: datetime | None, add_period) -
         if iterations >= _MAX_ITERATIONS:
             break
         iterations += 1
-        if core._import_sibling("occurrence_provider")._compare_datetimes(probe, until_dt) > 0:
+        if _compare_datetimes(probe, until_dt) > 0:
             break
         last = probe
         count += 1
@@ -1445,7 +1454,7 @@ def _cp_preview_lines(due_dt: datetime, until_dt: datetime | None, limit: int, a
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
     for i in range(limit):
         nxt = add_period(nxt)
-        if until_dt and core._import_sibling("occurrence_provider")._compare_datetimes(nxt, until_dt) > 0:
+        if until_dt and _compare_datetimes(nxt, until_dt) > 0:
             break
         color = colors[min(i, len(colors) - 1)]
         preview.append(f"[{color}]{_fmt(nxt)}[/{color}]")
@@ -1468,7 +1477,7 @@ def _cp_sequence_until_summary(
     last = None
     link_no = start_link_no
     for _ in range(_MAX_PREVIEW_ITERATIONS):
-        if core._import_sibling("occurrence_provider")._compare_datetimes(probe, until_dt) > 0:
+        if _compare_datetimes(probe, until_dt) > 0:
             break
         last = probe
         count += 1
@@ -1503,7 +1512,7 @@ def _cp_sequence_preview_lines(
         td = _cp_sequence_period_for_link(tokens, cp_str, link_no, chain_id)
         nxt = _cp_add_td(nxt, td)
         link_no += 1
-        if until_dt and core._import_sibling("occurrence_provider")._compare_datetimes(nxt, until_dt) > 0:
+        if until_dt and _compare_datetimes(nxt, until_dt) > 0:
             break
         color = colors[min(i, len(colors) - 1)]
         suffix = ""

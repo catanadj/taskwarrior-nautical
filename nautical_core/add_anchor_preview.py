@@ -457,7 +457,7 @@ def _collect_included_with_provider(
     max_iterations: int = 512,
 ) -> list[datetime]:
     """Collect included occurrences through the typed provider boundary."""
-    from .anchor_inclusion import next_included_occurrence_local
+    from .anchor_inclusion import next_included_occurrence
     from . import anchor_inclusion
     from .occurrence_provider import AnchorOccurrenceProvider, collect_after
 
@@ -473,7 +473,7 @@ def _collect_included_with_provider(
         else None
     )
     provider = AnchorOccurrenceProvider(
-        lambda value: next_included_occurrence_local(
+        lambda value: next_included_occurrence(
             dnf=dnf,
             anchor_file_str=anchor_file_str,
             after_local_dt=value,

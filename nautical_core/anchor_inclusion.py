@@ -196,7 +196,7 @@ def _anchor_file_occurrence_is_omitted(
         ) from exc
 
 
-def next_included_occurrence_local(
+def next_included_occurrence(
     *,
     dnf,
     anchor_file_str: str,
@@ -213,7 +213,7 @@ def next_included_occurrence_local(
     anchor_file_provider: Any | None = None,
     recurrence_context: Any | None = None,
     business_calendar: Any | None = None,
-) -> datetime | None:
+) -> Occurrence | None:
     expr_local = None
     if dnf:
         if inclusive and pick_occurrence_local is not None:
@@ -238,7 +238,7 @@ def next_included_occurrence_local(
                 fallback_hhmm=fallback_hhmm,
                 core=core,
             )
-    file_local = _next_anchor_file_occurrence_local(
+    file_occurrence = _next_anchor_file_occurrence(
         anchor_file_str,
         anchor_file_dir=anchor_file_dir,
         after_local_dt=after_local_dt,
@@ -251,16 +251,16 @@ def next_included_occurrence_local(
     )
     file_cursor = after_local_dt
     file_inclusive = inclusive
-    while _anchor_file_occurrence_is_omitted(
-        file_local,
+    while file_occurrence is not None and _anchor_file_occurrence_is_omitted(
+        file_occurrence.local_datetime,
         omit_dnf=omit_dnf,
         default_seed_date=default_seed_date,
         seed_base=seed_base,
         core=core,
     ):
-        file_cursor = file_local
+        file_cursor = file_occurrence.local_datetime
         file_inclusive = False
-        file_local = _next_anchor_file_occurrence_local(
+        file_occurrence = _next_anchor_file_occurrence(
             anchor_file_str,
             anchor_file_dir=anchor_file_dir,
             after_local_dt=file_cursor,
@@ -271,9 +271,28 @@ def next_included_occurrence_local(
             recurrence_context=recurrence_context,
             business_calendar=business_calendar,
         )
-    if expr_local and file_local:
-        return expr_local if _compare_datetimes(expr_local, file_local) <= 0 else file_local
-    return expr_local or file_local
+    expr_occurrence = None
+    if expr_local is not None:
+        expr_occurrence = Occurrence(
+            day=expr_local.date(),
+            hour=expr_local.hour,
+            minute=expr_local.minute,
+            source="anchor",
+            local_datetime=expr_local,
+        )
+    selected = expr_occurrence
+    if selected is None:
+        selected = file_occurrence
+    elif file_occurrence is not None and file_occurrence.local_datetime is not None:
+        if _compare_datetimes(expr_local, file_occurrence.local_datetime) > 0:
+            selected = file_occurrence
+    return selected
+
+
+def next_included_occurrence_local(**kwargs) -> datetime | None:
+    """Compatibility wrapper returning only the selected local datetime."""
+    occurrence = next_included_occurrence(**kwargs)
+    return occurrence.local_datetime if occurrence is not None else None
 
 
 def next_occurrence_event_local(

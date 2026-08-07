@@ -5181,11 +5181,23 @@ def _timeline_lines(
         anchor_inclusion = core._import_sibling("anchor_inclusion")
         AnchorEventOccurrenceProvider = core._import_sibling("occurrence_provider").AnchorEventOccurrenceProvider
         collect_after = core._import_sibling("occurrence_provider").collect_after
+        anchor_file_str = (task.get("anchor_file") or "").strip()
+        anchor_file_provider = (
+            anchor_inclusion._build_anchor_file_provider(
+                anchor_file_str,
+                anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+                fallback_hhmm=fallback_hhmm,
+                seed_base=seed_base,
+                core=core,
+            )
+            if anchor_file_str
+            else None
+        )
 
         event_provider = AnchorEventOccurrenceProvider(
             lambda value: anchor_inclusion.next_occurrence_event_local(
                 dnf=dnf_for_merge,
-                anchor_file_str=(task.get("anchor_file") or "").strip(),
+                anchor_file_str=anchor_file_str,
                 after_local_dt=value,
                 inclusive=False,
                 fallback_hhmm=fallback_hhmm,
@@ -5195,6 +5207,7 @@ def _timeline_lines(
                 core=core,
                 next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
                 anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+                anchor_file_provider=anchor_file_provider,
             )
         )
         events = [

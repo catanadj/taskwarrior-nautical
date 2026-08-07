@@ -34,19 +34,58 @@ def _next_anchor_file_occurrence_local(
     inclusive: bool,
     fallback_hhmm: tuple[int, int],
     core: Any,
+    anchor_file_provider: Any | None = None,
+    recurrence_context: Any | None = None,
+    business_calendar: Any | None = None,
 ) -> datetime | None:
     if not str(anchor_file_str or "").strip():
         return None
-    anchor_files = core._import_sibling("anchor_files")
     if inclusive:
         after_local_dt = after_local_dt - timedelta(microseconds=1)
-    return anchor_files.next_anchor_file_occurrence_after(
-        anchor_file_str,
-        anchor_file_dir,
+    provider = anchor_file_provider
+    if provider is None:
+        anchor_files = core._import_sibling("anchor_files")
+        provider = anchor_files.AnchorFileOccurrenceProvider(
+            anchor_file_str,
+            anchor_file_dir,
+            fallback_hhmm,
+            business_calendar=business_calendar,
+            context=recurrence_context,
+        )
+    occurrence = provider.next_after(
         after_local_dt,
-        fallback_hhmm,
         build_local_datetime=core.build_local_datetime,
         to_local=core.to_local,
+    )
+    return occurrence.local_datetime if occurrence is not None else None
+
+
+def _build_anchor_file_provider(
+    anchor_file_str: str,
+    *,
+    anchor_file_dir: str,
+    fallback_hhmm: tuple[int, int],
+    seed_base: str,
+    core: Any,
+    recurrence_context: Any | None = None,
+    business_calendar: Any | None = None,
+) -> Any:
+    """Build one context-bound file provider for a merged occurrence stream."""
+    anchor_files = core._import_sibling("anchor_files")
+    if business_calendar is None:
+        business_calendar = core._import_sibling("business_calendar").active_business_calendar()
+    if recurrence_context is None:
+        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
+            chain_id=seed_base or "provider",
+            business_calendar=business_calendar,
+            anchor_file_dir=anchor_file_dir,
+        )
+    return anchor_files.AnchorFileOccurrenceProvider(
+        anchor_file_str,
+        anchor_file_dir,
+        fallback_hhmm,
+        business_calendar=business_calendar,
+        context=recurrence_context,
     )
 
 
@@ -89,6 +128,9 @@ def next_included_occurrence_local(
     next_occurrence_after_local_dt: Callable[..., Any],
     pick_occurrence_local: Callable[..., Any] | None = None,
     anchor_file_dir: str = "",
+    anchor_file_provider: Any | None = None,
+    recurrence_context: Any | None = None,
+    business_calendar: Any | None = None,
 ) -> datetime | None:
     expr_local = None
     if dnf:
@@ -131,6 +173,9 @@ def next_included_occurrence_local(
         inclusive=inclusive,
         fallback_hhmm=fallback_hhmm,
         core=core,
+        anchor_file_provider=anchor_file_provider,
+        recurrence_context=recurrence_context,
+        business_calendar=business_calendar,
     )
     file_cursor = after_local_dt
     file_inclusive = inclusive
@@ -150,6 +195,9 @@ def next_included_occurrence_local(
             inclusive=file_inclusive,
             fallback_hhmm=fallback_hhmm,
             core=core,
+            anchor_file_provider=anchor_file_provider,
+            recurrence_context=recurrence_context,
+            business_calendar=business_calendar,
         )
     if expr_local and file_local:
         return expr_local if expr_local <= file_local else file_local
@@ -170,6 +218,9 @@ def next_occurrence_event_local(
     next_occurrence_after_local_dt: Callable[..., Any],
     pick_occurrence_local: Callable[..., Any] | None = None,
     anchor_file_dir: str = "",
+    anchor_file_provider: Any | None = None,
+    recurrence_context: Any | None = None,
+    business_calendar: Any | None = None,
 ) -> tuple[datetime, bool] | None:
     expr_local = None
     expr_omit_dnf = omit_dnf if dnf and core.dnf_has_counted_random(dnf) else None
@@ -213,6 +264,9 @@ def next_occurrence_event_local(
         inclusive=inclusive,
         fallback_hhmm=fallback_hhmm,
         core=core,
+        anchor_file_provider=anchor_file_provider,
+        recurrence_context=recurrence_context,
+        business_calendar=business_calendar,
     )
     nxt = None
     if expr_local and file_local:
@@ -248,8 +302,21 @@ def collect_included_occurrences_local(
     next_occurrence_after_local_dt: Callable[..., Any],
     pick_occurrence_local: Callable[..., Any] | None = None,
     anchor_file_dir: str = "",
+    anchor_file_provider: Any | None = None,
+    recurrence_context: Any | None = None,
+    business_calendar: Any | None = None,
 ) -> list[datetime]:
     out: list[datetime] = []
+    if anchor_file_str and anchor_file_provider is None:
+        anchor_file_provider = _build_anchor_file_provider(
+            anchor_file_str,
+            anchor_file_dir=anchor_file_dir,
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+            recurrence_context=recurrence_context,
+            business_calendar=business_calendar,
+        )
     cursor = after_local_dt
     want_inclusive = inclusive
     while len(out) < limit:
@@ -266,6 +333,9 @@ def collect_included_occurrences_local(
             next_occurrence_after_local_dt=next_occurrence_after_local_dt,
             pick_occurrence_local=pick_occurrence_local,
             anchor_file_dir=anchor_file_dir,
+            anchor_file_provider=anchor_file_provider,
+            recurrence_context=recurrence_context,
+            business_calendar=business_calendar,
         )
         if not nxt:
             break
@@ -293,8 +363,21 @@ def collect_occurrence_events_local(
     pick_occurrence_local: Callable[..., Any] | None = None,
     anchor_file_dir: str = "",
     max_iterations: int = 512,
+    anchor_file_provider: Any | None = None,
+    recurrence_context: Any | None = None,
+    business_calendar: Any | None = None,
 ) -> list[tuple[datetime, bool]]:
     out: list[tuple[datetime, bool]] = []
+    if anchor_file_str and anchor_file_provider is None:
+        anchor_file_provider = _build_anchor_file_provider(
+            anchor_file_str,
+            anchor_file_dir=anchor_file_dir,
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+            recurrence_context=recurrence_context,
+            business_calendar=business_calendar,
+        )
     cursor = after_local_dt
     want_inclusive = inclusive
     included_count = 0
@@ -314,6 +397,9 @@ def collect_occurrence_events_local(
             next_occurrence_after_local_dt=next_occurrence_after_local_dt,
             pick_occurrence_local=pick_occurrence_local,
             anchor_file_dir=anchor_file_dir,
+            anchor_file_provider=anchor_file_provider,
+            recurrence_context=recurrence_context,
+            business_calendar=business_calendar,
         )
         if not nxt:
             break

@@ -451,8 +451,20 @@ def _collect_included_with_provider(
 ) -> list[datetime]:
     """Collect included occurrences through the typed provider boundary."""
     from .anchor_inclusion import next_included_occurrence_local
+    from . import anchor_inclusion
     from .occurrence_provider import AnchorOccurrenceProvider, collect_after
 
+    anchor_file_provider = (
+        anchor_inclusion._build_anchor_file_provider(
+            anchor_file_str,
+            anchor_file_dir=anchor_file_dir,
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+        )
+        if anchor_file_str
+        else None
+    )
     provider = AnchorOccurrenceProvider(
         lambda value: next_included_occurrence_local(
             dnf=dnf,
@@ -467,6 +479,7 @@ def _collect_included_with_provider(
             next_occurrence_after_local_dt=next_occurrence_after_local_dt,
             pick_occurrence_local=pick_occurrence_local,
             anchor_file_dir=anchor_file_dir,
+            anchor_file_provider=anchor_file_provider,
         ),
     )
     return [
@@ -502,8 +515,20 @@ def _collect_events_with_provider(
     max_iterations: int = 512,
 ) -> list[tuple[datetime, bool]]:
     from .anchor_inclusion import next_occurrence_event_local
+    from . import anchor_inclusion
     from .occurrence_provider import AnchorEventOccurrenceProvider, collect_after
 
+    anchor_file_provider = (
+        anchor_inclusion._build_anchor_file_provider(
+            anchor_file_str,
+            anchor_file_dir=anchor_file_dir,
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+        )
+        if anchor_file_str
+        else None
+    )
     provider = AnchorEventOccurrenceProvider(
         lambda value: next_occurrence_event_local(
             dnf=dnf,
@@ -518,6 +543,7 @@ def _collect_events_with_provider(
             next_occurrence_after_local_dt=next_occurrence_after_local_dt,
             pick_occurrence_local=pick_occurrence_local,
             anchor_file_dir=anchor_file_dir,
+            anchor_file_provider=anchor_file_provider,
         )
     )
     return [

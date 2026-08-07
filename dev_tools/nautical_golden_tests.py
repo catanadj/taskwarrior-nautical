@@ -16571,6 +16571,53 @@ def test_anchor_file_occurrence_provider_caches_expanded_specs():
     expect(len(calls) == 1, f"anchor file specs were expanded {len(calls)} times")
 
 
+def test_merged_anchor_file_provider_carries_context_and_reuses_specs():
+    """Merged preview streams should carry chain context and expand files once."""
+    import nautical_core.add_anchor_preview as preview
+    import nautical_core.anchor_files as anchor_files
+    from datetime import datetime
+
+    original = anchor_files.load_anchor_file_occurrence_specs
+    calls = []
+    contexts = []
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        contexts.append(kwargs.get("context"))
+        return original(*args, **kwargs)
+
+    with tempfile.TemporaryDirectory() as td:
+        sample = Path(td) / "calendar.csv"
+        sample.write_text("date\n2026-08-03\n2026-08-04\n", encoding="utf-8")
+        anchor_files.load_anchor_file_occurrence_specs = counted
+        try:
+            values = preview._collect_included_with_provider(
+                dnf=None,
+                anchor_file_str="calendar.csv@t=rand(06..18)",
+                after_local_dt=core.build_local_datetime(date(2026, 8, 2), (9, 0)),
+                inclusive=False,
+                limit=2,
+                fallback_hhmm=(9, 0),
+                default_seed_date=date(2026, 8, 2),
+                seed_base="merged-provider-test",
+                omit_dnf=None,
+                core=core,
+                next_occurrence_after_local_dt=lambda *args, **kwargs: None,
+                anchor_file_dir=td,
+            )
+        finally:
+            anchor_files.load_anchor_file_occurrence_specs = original
+    expect(len(values) == 2, f"merged provider returned the wrong occurrences: {values!r}")
+    expect(len(calls) == 1, f"merged provider expanded the file {len(calls)} times")
+    expect(
+        contexts
+        and contexts[0] is not None
+        and contexts[0].chain_id == "merged-provider-test"
+        and contexts[0].business_calendar is not None,
+        f"chain or business-calendar context was lost: {contexts!r}",
+    )
+
+
 def test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup():
     """Ordinary anchor projections share the typed provider contract."""
     from datetime import datetime
@@ -27136,6 +27183,7 @@ TESTS = [
     test_anchor_file_occurrence_provider_exposes_typed_values,
     test_anchor_file_occurrence_provider_supports_lazy_next_after,
     test_anchor_file_occurrence_provider_caches_expanded_specs,
+    test_merged_anchor_file_provider_carries_context_and_reuses_specs,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_occurrence_providers_reject_non_advancing_values,
     test_occurrence_values_reject_inconsistent_fields,

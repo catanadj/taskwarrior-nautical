@@ -2256,24 +2256,37 @@ class TaskAnalyzer:
                 self._record_projection_warning(f"Anchor expression: {_format_runtime_error(exc)}")
                 dnf = None
             if dnf:
-                def step(prev_date: date):
-                    nxt_date, _ = _next_after_expr_pair(
-                        dnf,
-                        prev_date,
-                        default_seed=prev_date,
-                        seed_base=recurrence_context.seed_base,
-                        business_calendar=business_calendar,
-                    )
-                    return nxt_date
+                first_projection = True
+                projection_seed_date: date | None = None
 
-                # First date strictly AFTER start_from_date
-                first_date = step(start_from_date)
-                if first_date:
-                    cur_date = first_date
-                    for _ in range(limit):
-                        for cur_slot in resolve_hhmms(dnf, cur_date, first_date):
-                            if len(anchor_out) >= limit:
-                                break
+                def next_anchor_after(after_local: datetime.datetime) -> datetime.datetime | None:
+                    """Resolve the next ordinary-anchor slot after a local datetime."""
+                    nonlocal first_projection, projection_seed_date
+
+                    def step(prev_date: date):
+                        nxt_date, _ = _next_after_expr_pair(
+                            dnf,
+                            prev_date,
+                            default_seed=prev_date,
+                            seed_base=recurrence_context.seed_base,
+                            business_calendar=business_calendar,
+                        )
+                        return nxt_date
+
+                    if first_projection:
+                        first_projection = False
+                        first_date = step(after_local.date())
+                        projection_seed_date = first_date
+                        candidate_dates = [first_date] if first_date else []
+                    else:
+                        candidate_dates = [after_local.date() - datetime.timedelta(days=1), after_local.date()]
+
+                    for cur_date in candidate_dates:
+                        if not cur_date:
+                            continue
+                        for cur_slot in resolve_hhmms(dnf, cur_date, projection_seed_date or cur_date):
+                            if cur_date < after_local.date() and not (isinstance(cur_slot, tuple) and len(cur_slot) == 3 and int(cur_slot[0]) > 0):
+                                continue
                             if isinstance(cur_slot, tuple) and len(cur_slot) == 3:
                                 day_offset, hour, minute = cur_slot
                                 slot_date = cur_date + datetime.timedelta(days=int(day_offset))
@@ -2281,20 +2294,49 @@ class TaskAnalyzer:
                             else:
                                 slot_date = cur_date
                                 cur_hhmm = cur_slot
-                            dt_utc = core.build_local_datetime(slot_date, cur_hhmm)
-                            projected_local = core.to_local(dt_utc)
-                            if (projected_local.date(), projected_local.hour, projected_local.minute) != (slot_date, cur_hhmm[0], cur_hhmm[1]):
-                                self._record_projection_warning(
-                                    f"DST normalized {slot_date.isoformat()} {cur_hhmm[0]:02d}:{cur_hhmm[1]:02d} to {projected_local.strftime('%Y-%m-%d %H:%M %Z')}"
-                                )
-                            anchor_out.append(projected_local)
-                        if len(anchor_out) >= limit:
-                            break
+                            projected_local = core.to_local(core.build_local_datetime(slot_date, cur_hhmm))
+                            if projected_local > after_local:
+                                if (projected_local.date(), projected_local.hour, projected_local.minute) != (slot_date, cur_hhmm[0], cur_hhmm[1]):
+                                    self._record_projection_warning(
+                                        f"DST normalized {slot_date.isoformat()} {cur_hhmm[0]:02d}:{cur_hhmm[1]:02d} to {projected_local.strftime('%Y-%m-%d %H:%M %Z')}"
+                                    )
+                                return projected_local
+                    cur_date = step(after_local.date())
+                    for _ in range(limit):
+                        if not cur_date:
+                            return None
+                        for cur_slot in resolve_hhmms(dnf, cur_date, projection_seed_date or cur_date):
+                            if isinstance(cur_slot, tuple) and len(cur_slot) == 3:
+                                day_offset, hour, minute = cur_slot
+                                slot_date = cur_date + datetime.timedelta(days=int(day_offset))
+                                cur_hhmm = (int(hour), int(minute))
+                            else:
+                                slot_date = cur_date
+                                cur_hhmm = cur_slot
+                            projected_local = core.to_local(core.build_local_datetime(slot_date, cur_hhmm))
+                            if projected_local > after_local:
+                                return projected_local
+                        cur_date = step(cur_date)
+                    return None
 
-                        nxt_date = step(cur_date)
-                        if not nxt_date:
-                            break
-                        cur_date = nxt_date
+                occurrence_provider = core._import_sibling("occurrence_provider")
+                provider = occurrence_provider.AnchorOccurrenceProvider(
+                    lambda: [],
+                    next_anchor_after,
+                )
+                cur_after = after_dt_local
+                while len(anchor_out) < limit:
+                    occurrence = provider.next_after(
+                        cur_after,
+                        build_local_datetime=core.build_local_datetime,
+                        to_local=core.to_local,
+                    )
+                    if occurrence is None:
+                        break
+                    nxt = core.to_local(core.build_local_datetime(occurrence.day, occurrence.hhmm))
+                    anchor_out.append(nxt)
+                    cur_after = nxt
+
 
         if anchor_file:
             try:

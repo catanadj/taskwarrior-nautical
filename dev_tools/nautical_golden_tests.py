@@ -12710,6 +12710,56 @@ def test_modify_timeline_marks_omit_evaluation_failures():
     expect("omit backend unavailable" in items[-1][2]["message"], f"omit warning lost failure detail: {items!r}")
 
 
+def test_hook_on_modify_merged_timeline_marks_projection_failures():
+    """Merged anchor/anchor-file timelines should expose provider failures as warning rows."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_merged_timeline_warning_test")
+    previous_next = mod._next_occurrence_after_local_dt
+    previous_prev = getattr(mod, "_collect_prev_two", None)
+
+    def broken(*args, **kwargs):
+        raise ValueError("merged provider contract broken")
+
+    previous_anchor_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
+    try:
+        mod._next_occurrence_after_local_dt = broken
+        if previous_prev is not None:
+            mod._collect_prev_two = lambda _task: []
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "2026.csv").write_text("date\n2026-08-10\n", encoding="utf-8")
+            mod.core.ANCHOR_FILE_DIR = td
+            task = {
+                "uuid": "00000000-0000-0000-0000-000000000558",
+                "description": "merged timeline warning",
+                "anchor": "w:mon",
+                "anchor_file": "2026.csv",
+                "due": "20260803T090000Z",
+                "end": "20260803T090000Z",
+                "link": 1,
+                "chainID": "timeline-merged-warning",
+            }
+            lines = _call_with_supported_kwargs(
+                mod._timeline_lines,
+                kind="anchor",
+                task=task,
+                child_due_utc=datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc),
+                child_short="f17ca92b",
+                dnf=core.validate_anchor_expr_strict("w:mon"),
+                next_count=2,
+                cap_no=None,
+                cur_no=1,
+            )
+    finally:
+        mod._next_occurrence_after_local_dt = previous_next
+        if previous_prev is not None:
+            mod._collect_prev_two = previous_prev
+        mod.core.ANCHOR_FILE_DIR = previous_anchor_dir
+
+    text = _strip_markup("\n".join(lines))
+    expect("Projection unavailable" in text, f"merged projection failure was hidden: {text!r}")
+    expect("merged provider contract broken" in text, f"merged warning lost failure detail: {text!r}")
+
+
 def test_hook_on_modify_timeline_uses_omit_file_description_label():
     """anchor timelines should use omit_file description text for omitted markers when available."""
     hook = _find_hook_file("on-modify.nautical")
@@ -27655,6 +27705,7 @@ TESTS = [
     test_hook_on_modify_timeline_marks_omitted_anchor_slots,
     test_modify_timeline_marks_projection_failures_instead_of_silent_truncation,
     test_modify_timeline_marks_omit_evaluation_failures,
+    test_hook_on_modify_merged_timeline_marks_projection_failures,
     test_hook_on_modify_timeline_uses_omit_file_description_label,
     test_on_modify_compute_anchor_child_due_skips_omit_date,
     test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due,

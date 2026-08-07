@@ -5214,19 +5214,26 @@ def _timeline_lines(
                 anchor_file_provider=anchor_file_provider,
             )
         )
-        events = [
-            (occurrence.local_datetime, occurrence.omitted)
-            for occurrence in collect_after(
-                event_provider,
-                child_local,
-                limit=max(8, next_count + 6),
-                inclusive=True,
-                max_iterations=_MAX_ITERATIONS,
-                build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-                to_local=lambda value: value,
+        projection_warning = None
+        try:
+            events = [
+                (occurrence.local_datetime, occurrence.omitted)
+                for occurrence in collect_after(
+                    event_provider,
+                    child_local,
+                    limit=max(8, next_count + 6),
+                    inclusive=True,
+                    max_iterations=_MAX_ITERATIONS,
+                    build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+                    to_local=lambda value: value,
+                )
+                if occurrence.local_datetime is not None
+            ]
+        except Exception as exc:
+            events = []
+            projection_warning = modify_timeline._timeline_warning(
+                f"Projection unavailable: {type(exc).__name__}: {exc}"
             )
-            if occurrence.local_datetime is not None
-        ]
         cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
         nxt_no = cur_no + 1
         allowed_future = next_count if cap_no is None else max(0, min(next_count, cap_no - nxt_no))
@@ -5245,6 +5252,8 @@ def _timeline_lines(
             collect_prev_two=_collect_prev_two,
             dtparse=_dtparse,
         )
+        if projection_warning is not None:
+            items.append(projection_warning)
         fut_no = nxt_no
         actual_future = 0
         for item_local, is_omitted in events:

@@ -990,6 +990,41 @@ def test_hook_io_contract_response_is_single_unescaped_json_object():
     expect(json.loads(text) == task, "response JSON changed the task payload")
 
 
+def test_taskwarrior_document_is_lossless_with_typed_scalar_accessors():
+    """The shared task model must retain UDAs while normalizing common scalars."""
+    from nautical_core.taskwarrior_io import TaskDocument
+
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000905",
+        "description": "routine",
+        "link": 7.0,
+        "chain": "on",
+        "custom_uda": {"nested": ["keep", 2]},
+    }
+    document = TaskDocument.from_object(task)
+    expect(document is not None, "valid task object was not accepted")
+    assert document is not None
+    expect(document.as_dict() is task, "task wrapper copied away the live payload")
+    expect(document.text("description") == "routine", "text accessor changed value")
+    expect(document.integer("link") == 7, "numeric Taskwarrior value was not normalized")
+    expect(document.boolean("chain") is True, "boolean text value was not normalized")
+    expect(document.get("custom_uda") == task["custom_uda"], "unknown UDA was lost")
+    task["description"] = "changed"
+    expect(document.text("description") == "changed", "wrapper stopped reflecting task mutations")
+
+
+def test_taskwarrior_document_rejects_non_objects_and_handles_bad_scalars():
+    """Malformed decoded values fail closed without raising from accessors."""
+    from nautical_core.taskwarrior_io import TaskDocument
+
+    expect(TaskDocument.from_object([{"uuid": "bad"}]) is None, "array became a task document")
+    document = TaskDocument.from_object({"link": "not-a-number", "chain": "maybe"})
+    expect(document is not None, "object with unknown scalar values was rejected")
+    assert document is not None
+    expect(document.integer("link", 4) == 4, "invalid number did not use its default")
+    expect(document.boolean("chain", False) is False, "invalid boolean did not use its default")
+
+
 def test_hook_protocol_classifies_safe_nautical_ordinary_edits():
     """Only changes unrelated to Nautical behavior should qualify for thin modify handling."""
     protocol = _load_hook_protocol_module("_nautical_hook_protocol_ordinary_edit_test")
@@ -28768,6 +28803,8 @@ TESTS = [
     test_hook_io_contract_modify_accepts_array_and_preserves_both_tasks,
     test_hook_io_contract_rejects_trailing_json_without_partial_success,
     test_hook_io_contract_response_is_single_unescaped_json_object,
+    test_taskwarrior_document_is_lossless_with_typed_scalar_accessors,
+    test_taskwarrior_document_rejects_non_objects_and_handles_bad_scalars,
     test_hook_protocol_classifies_safe_nautical_ordinary_edits,
     test_exit_probe_is_conservative_across_queue_states,
     test_light_taskdata_resolution_matches_hook_precedence,

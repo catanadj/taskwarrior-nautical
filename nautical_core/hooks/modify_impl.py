@@ -7050,7 +7050,7 @@ def main():
     with calendar_context, displacement_context:
         result = hook_engine.handle_on_modify(
             request,
-            json_result_cls=hook_results.HookJsonResult,
+            json_result_cls=hook_results.TaskHookResponse,
             task_has_nautical_fields=_task_has_nautical_fields,
             load_core=_load_core,
             diag=_diag,

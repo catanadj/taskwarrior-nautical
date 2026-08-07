@@ -2216,7 +2216,7 @@ def main():
     with calendar_context, displacement_context:
         result = hook_engine.handle_on_add(
             request,
-            json_result_cls=hook_results.HookJsonResult,
+            json_result_cls=hook_results.TaskHookResponse,
             core_ref=lambda: core,
             task_has_nautical_fields=_task_has_nautical_fields,
             load_core=_load_core,

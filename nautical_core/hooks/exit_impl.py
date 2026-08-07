@@ -2473,7 +2473,7 @@ def main() -> int:
     }
     result = hook_engine.handle_on_exit(
         request,
-        exit_result_cls=hook_results.HookExitResult,
+        exit_result_cls=hook_results.ExitHookResponse,
         redirect_stdout_to_devnull=_redirect_stdout_to_devnull,
         drain_queue=_drain_queue,
         strict_exit_result=_strict_exit_feedback_message,

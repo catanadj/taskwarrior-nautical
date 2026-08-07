@@ -30,6 +30,10 @@ def _timeline_omit_label(
     return text[:14] + "..."
 
 
+def _timeline_warning(message: str) -> tuple[object, None, dict[str, Any], str]:
+    return ("!", None, {"message": message}, "warning")
+
+
 def _timeline_styles(
     task: dict[str, Any],
     kind: str,
@@ -162,8 +166,8 @@ def _timeline_future_anchor_items(
     omit_expr_fires_on_date: Callable[..., bool] | None,
     omit_description_for_date: Callable[[Any, Any], str | None] | None,
     max_iterations: int,
-) -> list[tuple[object, datetime, dict[str, Any], str]]:
-    items: list[tuple[object, datetime, dict[str, Any], str]] = []
+) -> list[tuple[object, Any, dict[str, Any], str]]:
+    items: list[tuple[object, Any, dict[str, Any], str]] = []
     fut_no = start_no
     seed_base = _timeline_seed_base(task)
     nxt_local = to_local_cached(child_due_utc)
@@ -186,8 +190,10 @@ def _timeline_future_anchor_items(
     after_local = nxt_local
     iterations = 0
     actual_future = 0
+    iteration_limit_reached = False
     while actual_future < allowed_future:
         if iterations >= max_iterations:
+            iteration_limit_reached = True
             break
         iterations += 1
         try:
@@ -197,9 +203,8 @@ def _timeline_future_anchor_items(
                 to_local=lambda value: value,
             )
             next_local = occurrence.local_datetime if occurrence is not None else None
-        except ValueError:
-            raise
-        except Exception:
+        except Exception as exc:
+            items.append(_timeline_warning(f"Projection unavailable: {type(exc).__name__}: {exc}"))
             break
         if not next_local:
             break
@@ -229,13 +234,16 @@ def _timeline_future_anchor_items(
                         )
                     )
                     continue
-            except Exception:
-                pass
+            except Exception as exc:
+                items.append(_timeline_warning(f"Omit evaluation unavailable: {type(exc).__name__}: {exc}"))
+                break
         fut_no += 1
         if cap_no is not None and fut_no > cap_no:
             break
         items.append((fut_no, fut_dt, {"is_future": True}, "future"))
         actual_future += 1
+    if iteration_limit_reached:
+        items.append(_timeline_warning("Projection incomplete: iteration limit reached."))
     return items
 
 
@@ -252,14 +260,14 @@ def _timeline_omitted_before_next_anchor_items(
     omit_expr_fires_on_date: Callable[..., bool] | None,
     omit_description_for_date: Callable[[Any, Any], str | None] | None,
     max_iterations: int,
-) -> list[tuple[object, datetime, dict[str, Any], str]]:
+) -> list[tuple[object, Any, dict[str, Any], str]]:
     if not omit_dnf or omit_expr_fires_on_date is None:
         return []
     cur_end = dtparse(task.get("end"))
     if not cur_end:
         return []
 
-    items: list[tuple[object, datetime, dict[str, Any], str]] = []
+    items: list[tuple[object, Any, dict[str, Any], str]] = []
     seed_base = _timeline_seed_base(task)
     child_local = to_local_cached(child_due_utc)
     after_local = to_local_cached(cur_end)
@@ -280,7 +288,11 @@ def _timeline_omitted_before_next_anchor_items(
         ),
     )
     iterations = 0
-    while iterations < max_iterations:
+    iteration_limit_reached = False
+    while True:
+        if iterations >= max_iterations:
+            iteration_limit_reached = True
+            break
         iterations += 1
         try:
             occurrence = provider.next_after(
@@ -289,9 +301,8 @@ def _timeline_omitted_before_next_anchor_items(
                 to_local=lambda value: value,
             )
             next_local = occurrence.local_datetime if occurrence is not None else None
-        except ValueError:
-            raise
-        except Exception:
+        except Exception as exc:
+            items.append(_timeline_warning(f"Projection unavailable: {type(exc).__name__}: {exc}"))
             break
         if not next_local or next_local >= child_local:
             break
@@ -318,8 +329,11 @@ def _timeline_omitted_before_next_anchor_items(
                         "omitted",
                     )
                 )
-        except Exception:
-            continue
+        except Exception as exc:
+            items.append(_timeline_warning(f"Omit evaluation unavailable: {type(exc).__name__}: {exc}"))
+            break
+    if iteration_limit_reached and (not items or items[-1][3] != "warning"):
+        items.append(_timeline_warning("Projection incomplete: iteration limit reached."))
     return items
 
 
@@ -375,6 +389,11 @@ def _timeline_base_line(
         else:
             omit_label = "omitted"
         return f"[dim red]{no_text} {'×':<2}{core.fmt_dt_local(dt)} [italic]({omit_label})[/][/]"
+
+    if item_type == "warning":
+        message = str(obj.get("message") or "Timeline projection unavailable")
+        message = message.replace("[", "(").replace("]", ")")
+        return f"[bright_yellow]{no_text} {'⚠':<2}{message}[/]"
 
     is_last = cap_no is not None and no == cap_no
     future_text = f"{no_text} {'»':<2}{core.fmt_dt_local(dt)}"

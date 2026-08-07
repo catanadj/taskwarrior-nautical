@@ -12633,6 +12633,83 @@ def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
     )
 
 
+def test_modify_timeline_marks_projection_failures_instead_of_silent_truncation():
+    """Timeline provider failures should become visible warning rows."""
+    import nautical_core.modify_timeline as timeline
+
+    child_due = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
+
+    def broken(*args, **kwargs):
+        raise ValueError("provider contract broken")
+
+    items = timeline._timeline_future_anchor_items(
+        {"chainID": "timeline-warning-test", "due": "20260803T090000Z"},
+        [[{"kind": "w", "value": "mon", "mods": {}}]],
+        child_due,
+        start_no=2,
+        allowed_future=1,
+        cap_no=None,
+        to_local_cached=lambda value: value,
+        safe_parse_datetime=lambda value: (child_due, None),
+        next_occurrence_after_local_dt=broken,
+        omit_dnf=None,
+        omit_expr_fires_on_date=None,
+        omit_description_for_date=None,
+        max_iterations=4,
+    )
+    expect(items and items[-1][3] == "warning", f"projection failure was silently truncated: {items!r}")
+    expect("provider contract broken" in items[-1][2]["message"], f"warning lost failure detail: {items!r}")
+    line = timeline._timeline_base_line(
+        items[-1][0],
+        items[-1][1],
+        items[-1][2],
+        items[-1][3],
+        task={},
+        cap_no=None,
+        prev_style="",
+        cur_style="",
+        next_style="",
+        future_style="",
+        core=type("Core", (), {})(),
+        dtparse=lambda value: value,
+        fmt_on_time_delta=lambda left, right: "",
+        fmtlocal=lambda value: "",
+        short=lambda value: "",
+    )
+    expect("provider contract broken" in line, f"warning row did not render: {line!r}")
+
+
+def test_modify_timeline_marks_omit_evaluation_failures():
+    """Timeline omission failures should not render the slot as an ordinary future link."""
+    import nautical_core.modify_timeline as timeline
+
+    child_due = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
+
+    def next_value(*args, **kwargs):
+        return child_due + timedelta(hours=1)
+
+    def broken_omit(*args, **kwargs):
+        raise RuntimeError("omit backend unavailable")
+
+    items = timeline._timeline_future_anchor_items(
+        {"chainID": "timeline-omit-warning-test", "due": "20260803T090000Z"},
+        [[{"kind": "w", "value": "mon", "mods": {}}]],
+        child_due,
+        start_no=2,
+        allowed_future=1,
+        cap_no=None,
+        to_local_cached=lambda value: value,
+        safe_parse_datetime=lambda value: (child_due, None),
+        next_occurrence_after_local_dt=next_value,
+        omit_dnf=[[{"kind": "w", "value": "mon", "mods": {}}]],
+        omit_expr_fires_on_date=broken_omit,
+        omit_description_for_date=None,
+        max_iterations=4,
+    )
+    expect(items and items[-1][3] == "warning", f"omit failure was rendered as a normal occurrence: {items!r}")
+    expect("omit backend unavailable" in items[-1][2]["message"], f"omit warning lost failure detail: {items!r}")
+
+
 def test_hook_on_modify_timeline_uses_omit_file_description_label():
     """anchor timelines should use omit_file description text for omitted markers when available."""
     hook = _find_hook_file("on-modify.nautical")
@@ -27532,6 +27609,8 @@ TESTS = [
     test_anchor_omit_business_day_roll_matches_rolled_date,
     test_anchor_omit_positive_day_offset_matches_shifted_date,
     test_hook_on_modify_timeline_marks_omitted_anchor_slots,
+    test_modify_timeline_marks_projection_failures_instead_of_silent_truncation,
+    test_modify_timeline_marks_omit_evaluation_failures,
     test_hook_on_modify_timeline_uses_omit_file_description_label,
     test_on_modify_compute_anchor_child_due_skips_omit_date,
     test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due,

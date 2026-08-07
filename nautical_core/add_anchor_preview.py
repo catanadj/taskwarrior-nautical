@@ -455,11 +455,12 @@ def _collect_included_with_provider(
     pick_occurrence_local: Callable[..., Any] | None = None,
     anchor_file_dir: str = "",
     max_iterations: int = 512,
-) -> list[datetime]:
+    return_occurrences: bool = False,
+) -> list[datetime] | list[Occurrence]:
     """Collect included occurrences through the typed provider boundary."""
     from .anchor_inclusion import next_included_occurrence
     from . import anchor_inclusion
-    from .occurrence_provider import AnchorOccurrenceProvider, collect_after
+    from .occurrence_provider import AnchorOccurrenceProvider, Occurrence, collect_after
 
     anchor_file_provider = (
         anchor_inclusion._build_anchor_file_provider(
@@ -489,19 +490,18 @@ def _collect_included_with_provider(
             anchor_file_provider=anchor_file_provider,
         ),
     )
-    return [
-        occurrence.local_datetime
-        for occurrence in collect_after(
-            provider,
-            after_local_dt,
-            limit=limit,
-            inclusive=inclusive,
-            max_iterations=max_iterations,
-            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-            to_local=lambda value: value,
-        )
-        if occurrence.local_datetime is not None
-    ]
+    collected = collect_after(
+        provider,
+        after_local_dt,
+        limit=limit,
+        inclusive=inclusive,
+        max_iterations=max_iterations,
+        build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+        to_local=lambda value: value,
+    )
+    if return_occurrences:
+        return collected
+    return [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None]
 
 
 def _collect_events_with_provider(

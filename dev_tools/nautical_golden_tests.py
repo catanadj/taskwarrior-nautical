@@ -14559,26 +14559,32 @@ def test_on_modify_carry_wall_clock_across_dst():
     except Exception:
         return
 
-    mod.core.LOCAL_TZ_NAME = "America/New_York"
-    mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+    previous_tz_name = mod.core.LOCAL_TZ_NAME
+    previous_tz = mod.core._LOCAL_TZ
+    try:
+        mod.core.LOCAL_TZ_NAME = "America/New_York"
+        mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
 
-    due_local = date(2025, 3, 9)
-    due_utc = mod.core.build_local_datetime(due_local, (1, 30))
-    wait_utc = mod.core.build_local_datetime(due_local, (3, 30))
+        due_local = date(2025, 3, 9)
+        due_utc = mod.core.build_local_datetime(due_local, (1, 30))
+        wait_utc = mod.core.build_local_datetime(due_local, (3, 30))
 
-    child_due_utc = mod.core.build_local_datetime(date(2025, 3, 10), (1, 30))
+        child_due_utc = mod.core.build_local_datetime(date(2025, 3, 10), (1, 30))
 
-    parent = {
-        "due": mod.core.fmt_isoz(due_utc),
-        "wait": mod.core.fmt_isoz(wait_utc),
-    }
-    child = {"due": mod.core.fmt_isoz(child_due_utc)}
+        parent = {
+            "due": mod.core.fmt_isoz(due_utc),
+            "wait": mod.core.fmt_isoz(wait_utc),
+        }
+        child = {"due": mod.core.fmt_isoz(child_due_utc)}
 
-    mod._carry_relative_datetime(parent, child, child_due_utc, "wait")
-    wait_child = mod.core.parse_dt_any(child.get("wait"))
-    wait_local = mod.core.to_local(wait_child)
+        mod._carry_relative_datetime(parent, child, child_due_utc, "wait")
+        wait_child = mod.core.parse_dt_any(child.get("wait"))
+        wait_local = mod.core.to_local(wait_child)
 
-    expect(wait_local.hour == 3 and wait_local.minute == 30, f"unexpected local wait: {wait_local}")
+        expect(wait_local.hour == 3 and wait_local.minute == 30, f"unexpected local wait: {wait_local}")
+    finally:
+        mod.core.LOCAL_TZ_NAME = previous_tz_name
+        mod.core._LOCAL_TZ = previous_tz
 
 
 def test_on_modify_build_child_carries_until_across_dst():
@@ -15234,6 +15240,8 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
         return
 
     prev_cfg = getattr(mod, "_RECURRENCE_UPDATE_UDAS", ())
+    prev_tz_name = getattr(mod.core, "LOCAL_TZ_NAME", None)
+    prev_local_tz = getattr(mod.core, "_LOCAL_TZ", None)
     try:
         mod._RECURRENCE_UPDATE_UDAS = ("rappel",)
         mod.core.LOCAL_TZ_NAME = "America/New_York"
@@ -15270,6 +15278,8 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
         )
     finally:
         mod._RECURRENCE_UPDATE_UDAS = prev_cfg
+        mod.core.LOCAL_TZ_NAME = prev_tz_name
+        mod.core._LOCAL_TZ = prev_local_tz
 
 
 def test_on_modify_stable_child_uuid_is_slot_deterministic():

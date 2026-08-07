@@ -374,8 +374,10 @@ def load_anchor_file_occurrence_specs(
             if context is None:
                 raise ValueError("anchor_file random time windows require recurrence context with chain ID.")
             times = None
-        elif source_time and all(isinstance(item, tuple) and len(item) == 3 for item in source_time):
-            times = list(source_time)
+        elif isinstance(source_time, (list, tuple)) and source_time and all(
+            isinstance(item, tuple) and len(item) == 3 for item in source_time
+        ):
+            times = [item for item in source_time if isinstance(item, tuple) and len(item) == 3]
         else:
             times = _norm_t_list(source_time) or [fallback_hhmm]
         for item_date in sorted(dates):

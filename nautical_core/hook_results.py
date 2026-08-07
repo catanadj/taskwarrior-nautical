@@ -9,17 +9,23 @@ from dataclasses import dataclass
 
 
 @dataclass(slots=True)
-class HookJsonResult:
+class TaskHookResponse:
     task: dict[str, Any]
     sanitize: bool = False
     prof: Any | None = None
 
 
 @dataclass(slots=True)
-class HookExitResult:
+class ExitHookResponse:
     exit_code: int = 0
     feedback_message: str | None = None
     stats: dict[str, Any] | None = None
+
+
+# Compatibility names retained for existing hook loaders and integrations.
+HookJsonResult = TaskHookResponse
+HookExitResult = ExitHookResponse
+HookResponse = TaskHookResponse | ExitHookResponse
 
 
 def emit_passthrough_json(task: Any) -> None:
@@ -119,11 +125,11 @@ def panic_passthrough(
             pass
 
 
-def emit_json_result(result: HookJsonResult, *, core=None) -> None:
+def emit_json_result(result: TaskHookResponse, *, core=None) -> None:
     emit_task_json(result.task, sanitize=result.sanitize, core=core, prof=result.prof)
 
 
-def emit_exit_result(result: HookExitResult, *, emit_exit_feedback, emit_stats_diag) -> int:
+def emit_exit_result(result: ExitHookResponse, *, emit_exit_feedback, emit_stats_diag) -> int:
     stats = result.stats if isinstance(result.stats, dict) else {}
     emit_stats_diag(stats)
     if result.feedback_message:

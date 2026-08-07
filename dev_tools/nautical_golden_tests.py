@@ -993,6 +993,18 @@ def test_hook_io_contract_response_is_single_unescaped_json_object():
     expect(json.loads(text) == task, "response JSON changed the task payload")
 
 
+def test_hook_response_models_keep_legacy_names_and_typed_roles():
+    """Typed response names must coexist with the established hook aliases."""
+    from nautical_core import hook_results
+
+    task = {"uuid": "00000000-0000-0000-0000-000000000906"}
+    task_result = hook_results.TaskHookResponse(task)
+    exit_result = hook_results.ExitHookResponse(exit_code=3, stats={"errors": 1})
+    expect(isinstance(task_result, hook_results.HookJsonResult), "legacy task result alias changed")
+    expect(isinstance(exit_result, hook_results.HookExitResult), "legacy exit result alias changed")
+    expect(task_result.task is task and exit_result.exit_code == 3, "typed response fields changed")
+
+
 def test_taskwarrior_document_is_lossless_with_typed_scalar_accessors():
     """The shared task model must retain UDAs while normalizing common scalars."""
     from nautical_core.taskwarrior_io import TaskDocument
@@ -28806,6 +28818,7 @@ TESTS = [
     test_hook_io_contract_modify_accepts_array_and_preserves_both_tasks,
     test_hook_io_contract_rejects_trailing_json_without_partial_success,
     test_hook_io_contract_response_is_single_unescaped_json_object,
+    test_hook_response_models_keep_legacy_names_and_typed_roles,
     test_taskwarrior_document_is_lossless_with_typed_scalar_accessors,
     test_taskwarrior_document_rejects_non_objects_and_handles_bad_scalars,
     test_hook_protocol_classifies_safe_nautical_ordinary_edits,

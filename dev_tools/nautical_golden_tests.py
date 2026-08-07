@@ -1005,6 +1005,43 @@ def test_hook_response_models_keep_legacy_names_and_typed_roles():
     expect(task_result.task is task and exit_result.exit_code == 3, "typed response fields changed")
 
 
+def test_diagnostic_event_renders_to_stderr_and_has_stable_record():
+    """Structured diagnostics must keep stdout clean and expose stable fields."""
+    from nautical_core import diagnostic_models, runtime
+
+    event = diagnostic_models.DiagnosticEvent(
+        "chain.export_failed",
+        "Taskwarrior lock active",
+        hook="on-modify",
+        level="warning",
+        context={"chain_id": "abcd1234"},
+    )
+    record = event.to_log_record()
+    expect(record["code"] == "chain.export_failed", "diagnostic code changed")
+    expect(record["level"] == "warning" and record["hook"] == "on-modify", "diagnostic metadata changed")
+    expect(record["context"] == {"chain_id": "abcd1234"}, "diagnostic context changed")
+
+    old_diag = os.environ.get("NAUTICAL_DIAG")
+    old_log = os.environ.get("NAUTICAL_DIAG_LOG")
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        os.environ["NAUTICAL_DIAG"] = "1"
+        os.environ.pop("NAUTICAL_DIAG_LOG", None)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            runtime.diag(event, "on-modify", "/tmp/nautical-diagnostic-contract")
+    finally:
+        if old_diag is None:
+            os.environ.pop("NAUTICAL_DIAG", None)
+        else:
+            os.environ["NAUTICAL_DIAG"] = old_diag
+        if old_log is None:
+            os.environ.pop("NAUTICAL_DIAG_LOG", None)
+        else:
+            os.environ["NAUTICAL_DIAG_LOG"] = old_log
+    expect(out.getvalue() == "", "diagnostic event wrote to stdout")
+    expect("Taskwarrior lock active" in err.getvalue(), "diagnostic event missed stderr")
+
+
 def test_taskwarrior_document_is_lossless_with_typed_scalar_accessors():
     """The shared task model must retain UDAs while normalizing common scalars."""
     from nautical_core.taskwarrior_io import TaskDocument
@@ -28819,6 +28856,7 @@ TESTS = [
     test_hook_io_contract_rejects_trailing_json_without_partial_success,
     test_hook_io_contract_response_is_single_unescaped_json_object,
     test_hook_response_models_keep_legacy_names_and_typed_roles,
+    test_diagnostic_event_renders_to_stderr_and_has_stable_record,
     test_taskwarrior_document_is_lossless_with_typed_scalar_accessors,
     test_taskwarrior_document_rejects_non_objects_and_handles_bad_scalars,
     test_hook_protocol_classifies_safe_nautical_ordinary_edits,

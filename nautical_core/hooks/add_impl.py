@@ -726,7 +726,9 @@ def _diag(msg: str) -> None:
     except Exception:
         pass
     if core is not None:
-        core.diag(safe_msg, "on-add", str(TW_DATA_DIR))
+        event_factory = getattr(core, "DiagnosticEvent", None)
+        event = event_factory.from_message(safe_msg, hook="on-add") if event_factory is not None else safe_msg
+        core.diag(event, "on-add", str(TW_DATA_DIR))
     elif os.environ.get("NAUTICAL_DIAG") == "1":
         try:
             sys.stderr.write(f"[nautical] {safe_msg}\n")

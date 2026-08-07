@@ -981,7 +981,9 @@ def _diag_redact_msg(msg: object) -> str:
 def _diag(msg: str) -> None:
     safe_msg = _diag_redact_msg(msg)
     if core is not None:
-        core.diag(safe_msg, "on-exit", str(TW_DATA_DIR))
+        event_factory = getattr(core, "DiagnosticEvent", None)
+        event = event_factory.from_message(safe_msg, hook="on-exit") if event_factory is not None else safe_msg
+        core.diag(event, "on-exit", str(TW_DATA_DIR))
     elif os.environ.get("NAUTICAL_DIAG") == "1":
         try:
             sys.stderr.write(f"[nautical] {safe_msg}\n")

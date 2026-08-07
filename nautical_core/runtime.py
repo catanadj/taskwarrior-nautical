@@ -176,12 +176,21 @@ def diag_log(msg: str, hook_name: str, data_dir: str | None = None) -> None:
 
 def diag(msg, hook_name: str = "nautical", data_dir: str | None = None) -> None:
     """Write diagnostics to stderr when NAUTICAL_DIAG=1 and append to diag log when NAUTICAL_DIAG_LOG=1."""
+    render = getattr(msg, "render", None)
+    rendered = render() if callable(render) else str(msg)
+    to_log_record = getattr(msg, "to_log_record", None)
+    log_value = to_log_record() if callable(to_log_record) else msg
+    if isinstance(log_value, dict):
+        # Preserve structured fields while applying the existing redaction
+        # policy to legacy JSON messages carried in the event text.
+        log_value = dict(log_value)
+        log_value["message"] = diag_log_redact(rendered)
     if os.environ.get("NAUTICAL_DIAG") == "1":
         try:
-            sys.stderr.write(f"[nautical] {msg}\n")
+            sys.stderr.write(f"[nautical] {rendered}\n")
         except Exception:
             pass
-    diag_log(msg, hook_name, data_dir)
+    diag_log(log_value, hook_name, data_dir)
 
 
 def _run_task_should_retry(attempt: int, retries: int) -> bool:

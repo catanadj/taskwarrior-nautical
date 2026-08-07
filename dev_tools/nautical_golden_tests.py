@@ -16686,7 +16686,7 @@ def test_anchor_file_occurrence_provider_advances_cached_lookup_cursor():
         occurrence = provider.next_after(cursor, build_local_datetime=build, to_local=identity)
         expect(occurrence is not None, "cached provider unexpectedly exhausted during sequential lookup")
         cursor = occurrence.local_datetime
-    expect(len(calls) == 100, f"sequential lookup rescanned cached specs: {len(calls)} builds")
+    expect(len(calls) == 1000, f"cached candidates were rebuilt during sequential lookup: {len(calls)} builds")
 
     reset = provider.next_after(
         datetime(2026, 1, 1, 9, 0),
@@ -16694,6 +16694,49 @@ def test_anchor_file_occurrence_provider_advances_cached_lookup_cursor():
         to_local=identity,
     )
     expect(reset is not None and reset.day == date(2026, 1, 2), "backward lookup did not reset the cached cursor")
+
+
+def test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates():
+    """Successors should follow localized time after a DST gap shifts a wall time."""
+    import nautical_core.anchor_files as anchor_files
+    from nautical_core.timeutil import build_local_datetime
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("Europe/Bucharest")
+    provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
+    provider._spec_cache = [
+        (date(2026, 3, 29), (3, 30)),
+        (date(2026, 3, 29), (4, 0)),
+    ]
+
+    def build(day, hhmm):
+        return build_local_datetime(day, hhmm, zone)
+
+    def to_local(value):
+        return value.astimezone(zone)
+
+    first = provider.next_after(
+        datetime(2026, 3, 29, 2, 0, tzinfo=zone),
+        build_local_datetime=build,
+        to_local=to_local,
+    )
+    expect(first is not None, "DST-normalized anchor file produced no first successor")
+    expect(
+        first.local_datetime is not None
+        and (first.local_datetime.hour, first.local_datetime.minute) == (4, 0),
+        f"DST-normalized candidates were not sorted by local time: {first!r}",
+    )
+    second = provider.next_after(
+        first.local_datetime,
+        build_local_datetime=build,
+        to_local=to_local,
+    )
+    expect(second is not None, "DST-normalized anchor file produced no second successor")
+    expect(
+        second.local_datetime is not None
+        and (second.local_datetime.hour, second.local_datetime.minute) == (4, 30),
+        f"DST-shifted successor was not retained: {second!r}",
+    )
 
 
 def test_merged_anchor_file_provider_carries_context_and_reuses_specs():
@@ -27557,6 +27600,7 @@ TESTS = [
     test_anchor_file_occurrence_provider_supports_lazy_next_after,
     test_anchor_file_occurrence_provider_caches_expanded_specs,
     test_anchor_file_occurrence_provider_advances_cached_lookup_cursor,
+    test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates,
     test_merged_anchor_file_provider_carries_context_and_reuses_specs,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_occurrence_providers_reject_non_advancing_values,

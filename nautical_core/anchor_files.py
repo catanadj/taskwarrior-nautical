@@ -426,6 +426,7 @@ class AnchorFileOccurrenceProvider:
         self._last_candidate: datetime | None = None
         self._last_candidate_index: int | None = None
         self._conversion_key: tuple[object, ...] | None = None
+        self._candidate_cache: list[datetime] | None = None
 
     def _specs(self) -> list[tuple[date, tuple[int, int]]]:
         if self._spec_cache is None:
@@ -458,8 +459,30 @@ class AnchorFileOccurrenceProvider:
             getattr(to_local, "__self__", None),
             getattr(to_local, "__func__", to_local),
         )
+        if self._conversion_key != conversion_key:
+            self._candidate_cache = None
+            self._next_index = 0
+            self._last_after = None
+            self._last_candidate = None
+            self._last_candidate_index = None
+        if self._candidate_cache is None:
+            candidates: list[datetime] = []
+            for d0, hhmm in specs:
+                candidate = to_local(build_local_datetime(d0, hhmm))
+                if not isinstance(candidate, datetime):
+                    raise TypeError("Anchor-file provider returned a non-datetime local value.")
+                candidates.append(candidate)
+            try:
+                candidates.sort()
+            except TypeError as exc:
+                raise ValueError("Anchor-file provider returned incomparable local datetimes.") from exc
+            self._candidate_cache = []
+            for candidate in candidates:
+                if not self._candidate_cache or candidate != self._candidate_cache[-1]:
+                    self._candidate_cache.append(candidate)
+        candidates = self._candidate_cache
         start = self._next_index
-        if self._conversion_key != conversion_key or self._last_after is None:
+        if self._last_after is None:
             start = 0
         else:
             try:
@@ -471,9 +494,8 @@ class AnchorFileOccurrenceProvider:
                 start = 0
         value = None
         selected_index = None
-        for index in range(start, len(specs)):
-            d0, hhmm = specs[index]
-            candidate = to_local(build_local_datetime(d0, hhmm))
+        for index in range(start, len(candidates)):
+            candidate = candidates[index]
             try:
                 is_after = candidate > after_local
             except TypeError as exc:
@@ -483,17 +505,17 @@ class AnchorFileOccurrenceProvider:
                 selected_index = index
                 break
         if value is None:
-            self._next_index = len(specs)
+            self._next_index = len(candidates)
             self._last_after = after_local
             self._last_candidate = None
             self._last_candidate_index = None
             self._conversion_key = conversion_key
             return None
-        local = to_local(value)
+        local = value
         from .occurrence_provider import _require_forward_progress
 
         _require_forward_progress(after_local, local)
-        self._next_index = selected_index + 1 if selected_index is not None else len(specs)
+        self._next_index = selected_index + 1 if selected_index is not None else len(candidates)
         self._last_after = after_local
         self._last_candidate = local
         self._last_candidate_index = selected_index

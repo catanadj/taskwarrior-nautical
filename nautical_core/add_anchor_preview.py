@@ -344,15 +344,14 @@ def _anchor_file_occurrences_local(
 ) -> list[datetime]:
     anchor_files = core._import_sibling("anchor_files")
     context = core._import_sibling("recurrence_context").RecurrenceContext(chain_id=seed_base) if seed_base else None
-    occurrence_specs = anchor_files.load_anchor_file_occurrence_specs(
-        anchor_file_str,
-        getattr(core, "ANCHOR_FILE_DIR", ""),
-        fallback_hhmm,
-        context=context,
-    )
     out = [
-        core.to_local(core.build_local_datetime(d0, hhmm))
-        for d0, hhmm in occurrence_specs
+        core.to_local(core.build_local_datetime(value.day, value.hhmm))
+        for value in anchor_files.AnchorFileOccurrenceProvider(
+            anchor_file_str,
+            getattr(core, "ANCHOR_FILE_DIR", ""),
+            fallback_hhmm,
+            context=context,
+        ).occurrences()
     ]
     out.sort()
     return out

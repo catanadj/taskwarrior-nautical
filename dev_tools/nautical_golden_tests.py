@@ -16533,12 +16533,9 @@ def test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup():
     from datetime import datetime
     from nautical_core.occurrence_provider import AnchorOccurrenceProvider, Occurrence
 
-    values = [Occurrence(date(2026, 8, 3), 9, 0)]
     provider = AnchorOccurrenceProvider(
-        lambda: values,
         lambda after: datetime(2026, 8, 4, 9, 0) if after < datetime(2026, 8, 4, 9, 0) else None,
     )
-    expect(provider.occurrences() == values, "ordinary provider changed typed occurrences")
     next_value = provider.next_after(
         datetime(2026, 8, 3, 9, 0),
         build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
@@ -16555,7 +16552,7 @@ def test_occurrence_providers_reject_non_advancing_values():
     after = datetime(2026, 8, 3, 9, 0)
     identity = lambda value: value
     for provider in (
-        AnchorOccurrenceProvider(lambda: [], lambda value: value),
+        AnchorOccurrenceProvider(lambda value: value),
         AnchorEventOccurrenceProvider(lambda value: (value, False)),
     ):
         try:

@@ -174,7 +174,6 @@ def _timeline_future_anchor_items(
     from .occurrence_provider import AnchorOccurrenceProvider
 
     provider = AnchorOccurrenceProvider(
-        lambda: [],
         lambda value: next_occurrence_after_local_dt(
             dnf,
             value,
@@ -269,7 +268,6 @@ def _timeline_omitted_before_next_anchor_items(
     from .occurrence_provider import AnchorOccurrenceProvider
 
     provider = AnchorOccurrenceProvider(
-        lambda: [],
         lambda value: next_occurrence_after_local_dt(
             dnf,
             value,

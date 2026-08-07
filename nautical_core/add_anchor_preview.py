@@ -211,7 +211,6 @@ def anchor_preview_first_due(
     inclusive = not user_provided_due
     reference_local = to_local_cached(due_dt) if user_provided_due else now_local
     provider = AnchorOccurrenceProvider(
-        lambda: [],
         lambda value: anchor_pick_occurrence_local(
             dnf,
             value,
@@ -454,7 +453,6 @@ def _collect_included_with_provider(
     from .occurrence_provider import AnchorOccurrenceProvider
 
     provider = AnchorOccurrenceProvider(
-        lambda: [],
         lambda value: next_included_occurrence_local(
             dnf=dnf,
             anchor_file_str=anchor_file_str,

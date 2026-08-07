@@ -2321,7 +2321,6 @@ class TaskAnalyzer:
 
                 occurrence_provider = core._import_sibling("occurrence_provider")
                 provider = occurrence_provider.AnchorOccurrenceProvider(
-                    lambda: [],
                     next_anchor_after,
                 )
                 cur_after = after_dt_local

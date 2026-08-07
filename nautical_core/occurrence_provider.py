@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Callable, Protocol, Sequence
+from typing import Callable, Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,10 +24,7 @@ class Occurrence:
         return self.hour, self.minute
 
 
-class OccurrenceProvider(Protocol):
-    def occurrences(self) -> list[Occurrence]:
-        """Return sorted, deduplicated local occurrences."""
-
+class LazyOccurrenceProvider(Protocol):
     def next_after(
         self,
         after_local: datetime,
@@ -36,6 +33,11 @@ class OccurrenceProvider(Protocol):
         to_local: Callable[[datetime], datetime],
     ) -> Occurrence | None:
         """Return the first occurrence strictly after a local datetime."""
+
+
+class OccurrenceProvider(LazyOccurrenceProvider, Protocol):
+    def occurrences(self) -> list[Occurrence]:
+        """Return sorted, deduplicated local occurrences."""
 
 
 def _require_forward_progress(after_local: datetime, value: datetime) -> None:
@@ -56,14 +58,9 @@ class AnchorOccurrenceProvider:
 
     def __init__(
         self,
-        load_occurrences: Callable[[], Sequence[Occurrence]],
         next_occurrence_after: Callable[[datetime], datetime | None],
     ) -> None:
-        self._load_occurrences = load_occurrences
         self._next_occurrence_after = next_occurrence_after
-
-    def occurrences(self) -> list[Occurrence]:
-        return list(self._load_occurrences())
 
     def next_after(
         self,
@@ -110,4 +107,4 @@ class AnchorEventOccurrenceProvider:
         )
 
 
-__all__ = ("AnchorEventOccurrenceProvider", "AnchorOccurrenceProvider", "Occurrence", "OccurrenceProvider")
+__all__ = ("AnchorEventOccurrenceProvider", "AnchorOccurrenceProvider", "LazyOccurrenceProvider", "Occurrence", "OccurrenceProvider")

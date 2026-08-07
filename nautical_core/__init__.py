@@ -653,7 +653,7 @@ def _acf_unpack(packed: str) -> dict:
         json_mod=json,
     )
 
-def build_acf(expr: str) -> str:
+def _build_acf_impl(expr: str) -> str:
     return _acf_support.build_acf(
         expr,
         parse_anchor_expr_to_dnf_cached=parse_anchor_expr_to_dnf_cached,
@@ -2534,7 +2534,7 @@ def _resolve_preset_refs(
     return _anchor_preset_ref_re.sub(repl, raw)
 
 
-def resolve_anchor_presets(expr: str, *, _seen: tuple[str, ...] | frozenset[str] | None = None) -> str:
+def _resolve_anchor_presets_impl(expr: str, *, _seen: tuple[str, ...] | frozenset[str] | None = None) -> str:
     return _resolve_preset_refs(
         expr,
         presets=ANCHOR_PRESETS,
@@ -2667,7 +2667,7 @@ def _parse_anchor_atom_at(s: str, i: int, n: int):
     )
 
 
-def parse_anchor_expr_to_dnf(s: str) -> AnchorDNF:
+def _parse_anchor_expr_to_dnf_impl(s: str) -> AnchorDNF:
     s = resolve_anchor_presets(s)
     return _parser_dnf.parse_anchor_expr_to_dnf(
         s,
@@ -2691,7 +2691,7 @@ def _parse_anchor_expr_to_dnf_cached_obj(s: str, fmt: str) -> AnchorDNF:
     return parse_anchor_expr_to_dnf(s)
 
 
-def parse_anchor_expr_to_dnf_cached(s: str) -> AnchorDNF:
+def _parse_anchor_expr_to_dnf_cached_impl(s: str) -> AnchorDNF:
     """Cached parse returning a fresh object (avoid shared mutable structures)."""
     if not s:
         return []
@@ -3096,7 +3096,7 @@ def _validate_anchor_dnf_atoms_strict(dnf: AnchorDNF) -> None:
     )
 
 
-def validate_anchor_expr_strict(expr) -> AnchorDNF:
+def _validate_anchor_expr_strict_impl(expr) -> AnchorDNF:
     return _strict_validation.validate_anchor_expr_strict(
         expr,
         normalize_anchor_input_to_dnf=_normalize_anchor_input_to_dnf,
@@ -3859,6 +3859,16 @@ def _rewrite_weekly_multi_time_atoms(s: str) -> str:
         split_csv_tokens=_split_csv_tokens,
         re_mod=re,
     )
+
+
+# Parser entry points live in ``parser_api``; retain these aliases for the
+# established ``nautical_core`` import contract.
+_parser_api = _import_sibling("parser_api").for_core(sys.modules[__name__])
+build_acf = _parser_api.build_acf
+resolve_anchor_presets = _parser_api.resolve_anchor_presets
+parse_anchor_expr_to_dnf = _parser_api.parse_anchor_expr_to_dnf
+parse_anchor_expr_to_dnf_cached = _parser_api.parse_anchor_expr_to_dnf_cached
+validate_anchor_expr_strict = _parser_api.validate_anchor_expr_strict
 
 
 # Explicit package facade for tools/tests. Direct attribute access outside this set

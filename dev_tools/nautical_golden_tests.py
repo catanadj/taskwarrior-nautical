@@ -16995,6 +16995,44 @@ def test_included_provider_rebuilds_shared_provider_when_fallback_changes():
     expect(second and second[0].strftime("%Y-%m-%d %H:%M") == "2026-08-03 06:00", f"stale fallback provider was reused: {second!r}")
 
 
+def test_included_provider_bounds_anchor_file_omission_scan():
+    """An omission rule cannot make anchor-file lookup spin forever."""
+    import nautical_core.anchor_inclusion as anchor_inclusion
+    from nautical_core.occurrence_provider import Occurrence
+
+    after_local = core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0)))
+
+    class _DailyProvider:
+        def next_after(self, cursor, **_kwargs):
+            value = cursor + timedelta(days=1)
+            return Occurrence(value.date(), value.hour, value.minute, local_datetime=value)
+
+    original = anchor_inclusion._anchor_file_occurrence_is_omitted
+    anchor_inclusion._anchor_file_occurrence_is_omitted = lambda *_args, **_kwargs: True
+    try:
+        try:
+            anchor_inclusion.next_included_occurrence(
+                dnf=None,
+                anchor_file_str="calendar.csv",
+                after_local_dt=after_local,
+                inclusive=False,
+                fallback_hhmm=(9, 0),
+                default_seed_date=after_local.date(),
+                seed_base="omission-limit-test",
+                omit_dnf=None,
+                core=core,
+                next_occurrence_after_local_dt=lambda *_args, **_kwargs: None,
+                anchor_file_provider=_DailyProvider(),
+                max_file_skips=2,
+            )
+        except ValueError as exc:
+            expect("omission scan exceeded 2 occurrences" in str(exc), "omission limit error was not actionable")
+        else:
+            expect(False, "unbounded anchor-file omission scan did not fail closed")
+    finally:
+        anchor_inclusion._anchor_file_occurrence_is_omitted = original
+
+
 def test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup():
     """Ordinary anchor projections share the typed provider contract."""
     from datetime import datetime
@@ -28003,6 +28041,7 @@ TESTS = [
     test_included_provider_preserves_anchor_file_source_description,
     test_included_provider_reuses_shared_anchor_file_provider,
     test_included_provider_rebuilds_shared_provider_when_fallback_changes,
+    test_included_provider_bounds_anchor_file_omission_scan,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_occurrence_provider_adapters_preserve_stream_metadata,
     test_occurrence_provider_rejects_dst_fallback_backward_progress,

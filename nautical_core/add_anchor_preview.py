@@ -499,6 +499,7 @@ def _collect_included_with_provider(
             pick_occurrence_local=pick_occurrence_local,
             anchor_file_dir=anchor_file_dir,
             anchor_file_provider=anchor_file_provider,
+            max_file_skips=max_iterations,
         ),
     )
     collected = collect_after(

@@ -213,7 +213,10 @@ def next_included_occurrence(
     anchor_file_provider: Any | None = None,
     recurrence_context: Any | None = None,
     business_calendar: Any | None = None,
+    max_file_skips: int = 512,
 ) -> Occurrence | None:
+    if isinstance(max_file_skips, bool) or not isinstance(max_file_skips, int) or max_file_skips <= 0:
+        raise ValueError("Anchor-file omission scan limit must be a positive integer.")
     expr_local = None
     if dnf:
         if inclusive and pick_occurrence_local is not None:
@@ -251,6 +254,7 @@ def next_included_occurrence(
     )
     file_cursor = after_local_dt
     file_inclusive = inclusive
+    skipped_file_occurrences = 0
     while file_occurrence is not None and _anchor_file_occurrence_is_omitted(
         file_occurrence.local_datetime,
         omit_dnf=omit_dnf,
@@ -258,6 +262,12 @@ def next_included_occurrence(
         seed_base=seed_base,
         core=core,
     ):
+        skipped_file_occurrences += 1
+        if skipped_file_occurrences > max_file_skips:
+            raise ValueError(
+                f"Anchor-file omission scan exceeded {max_file_skips} occurrences; "
+                "narrow the anchor_file or omit rule."
+            )
         file_cursor = file_occurrence.local_datetime
         file_inclusive = False
         file_occurrence = _next_anchor_file_occurrence(

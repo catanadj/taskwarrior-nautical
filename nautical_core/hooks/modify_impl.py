@@ -78,6 +78,7 @@ def _core_target_from_base(base: Path) -> Path | None:
 
 _CORE_BASE = _trusted_core_base(TW_DIR)
 _EARLY_PROTOCOL_RESULT = None
+_PROTOCOL = None
 
 if __name__ == "__main__":
     _protocol, _protocol_path, _protocol_error = hook_bootstrap.load_core_helper_module(
@@ -85,6 +86,7 @@ if __name__ == "__main__":
         "hook_protocol.py",
         "_nautical_hook_protocol_modify",
     )
+    _PROTOCOL = _protocol
     if _protocol is not None:
         try:
             _EARLY_PROTOCOL_RESULT = _protocol.read_on_modify(max_bytes=_MAX_JSON_BYTES)
@@ -1063,8 +1065,9 @@ def _read_two():
             if _EARLY_PROTOCOL_RESULT.error_kind == "protocol":
                 _fail_protocol_error(_EARLY_PROTOCOL_RESULT.error)
             _fail_invalid_input(_EARLY_PROTOCOL_RESULT.error)
-        old = _EARLY_PROTOCOL_RESULT.old
-        new = _EARLY_PROTOCOL_RESULT.new
+        request = getattr(_EARLY_PROTOCOL_RESULT, "request", None)
+        old = getattr(request, "old", None) or _EARLY_PROTOCOL_RESULT.old
+        new = getattr(request, "new", None) or _EARLY_PROTOCOL_RESULT.new
         if isinstance(old, dict) and isinstance(new, dict):
             return old, new
         _fail_invalid_input("on-modify must receive two JSON tasks")
@@ -1075,6 +1078,20 @@ def _read_two():
         _fail_invalid_input(f"on-modify input exceeds {_MAX_JSON_BYTES} bytes")
     _RAW_INPUT_TEXT = raw
     if not raw or not raw.strip():
+        _fail_invalid_input("on-modify must receive two JSON tasks")
+
+    if _PROTOCOL is not None:
+        result = _PROTOCOL.probe_on_modify(raw_bytes, max_bytes=_MAX_JSON_BYTES)
+        if not result.valid:
+            if result.error_kind == "protocol":
+                _fail_protocol_error(result.error)
+            _fail_invalid_input(result.error)
+        request = getattr(result, "request", None)
+        old = getattr(request, "old", None) or result.old
+        new = getattr(request, "new", None) or result.new
+        if isinstance(old, dict) and isinstance(new, dict):
+            _PARSED_NEW = new
+            return old, new
         _fail_invalid_input("on-modify must receive two JSON tasks")
 
     objs, idx = _decode_leading_json_objects(raw, max_objects=2)
@@ -7055,7 +7072,7 @@ def run_hook(
     core_base: str,
 ) -> int:
     """Run the extracted implementation with context captured by the wrapper."""
-    global HOOK_DIR, TW_DIR, _CORE_BASE, _EARLY_PROTOCOL_RESULT
+    global HOOK_DIR, TW_DIR, _CORE_BASE, _EARLY_PROTOCOL_RESULT, _PROTOCOL
     global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
     global _SPAWN_QUEUE_LOCK, _SPAWN_QUEUE_DB_PATH, _DEAD_LETTER_PATH, _DEAD_LETTER_LOCK
 
@@ -7082,6 +7099,7 @@ def run_hook(
         if protocol_error is not None:
             raise RuntimeError(f"could not load on-modify protocol: {protocol_error}") from protocol_error
         raise RuntimeError("could not load on-modify protocol")
+    _PROTOCOL = protocol
     _EARLY_PROTOCOL_RESULT = protocol.probe_on_modify(raw_input, max_bytes=_MAX_JSON_BYTES)
     main()
     return 0

@@ -94,6 +94,7 @@ _CORE_BASE = _trusted_core_base(TW_DIR)
 _PROFILE_LEVEL = hook_bootstrap.env_int("NAUTICAL_PROFILE", 0, min_value=0, max_value=2)
 _IMPORT_T0 = time.perf_counter()
 _EARLY_PROTOCOL_RESULT = None
+_PROTOCOL = None
 
 if __name__ == "__main__":
     _protocol, _protocol_path, _protocol_error = hook_bootstrap.load_core_helper_module(
@@ -101,6 +102,7 @@ if __name__ == "__main__":
         "hook_protocol.py",
         "_nautical_hook_protocol_add",
     )
+    _PROTOCOL = _protocol
     if _protocol is not None:
         try:
             _EARLY_PROTOCOL_RESULT = _protocol.read_on_add(max_bytes=_MAX_JSON_BYTES)
@@ -1958,7 +1960,8 @@ def _read_on_add_task(prof) -> dict:
         _RAW_INPUT_TEXT = _EARLY_PROTOCOL_RESULT.raw_text
         if not _EARLY_PROTOCOL_RESULT.valid:
             _fail_and_exit("Invalid input", _EARLY_PROTOCOL_RESULT.error)
-        task = _EARLY_PROTOCOL_RESULT.task
+        request = getattr(_EARLY_PROTOCOL_RESULT, "request", None)
+        task = getattr(request, "task", None) or _EARLY_PROTOCOL_RESULT.task
         if not isinstance(task, dict):
             _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
         _PARSED_TASK = task
@@ -1973,14 +1976,24 @@ def _read_on_add_task(prof) -> dict:
         raw = raw_text.strip()
     if not raw:
         _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
-    try:
+    protocol = _PROTOCOL
+    if protocol is not None:
         with prof.section("parse:json"):
-            task = json.loads(raw)
-            _PARSED_TASK = task
-            return task
-    except Exception:
+            result = protocol.probe_on_add(raw_bytes, max_bytes=_MAX_JSON_BYTES)
+        if not result.valid:
+            _fail_and_exit("Invalid input", result.error)
+        request = getattr(result, "request", None)
+        task = getattr(request, "task", None) or result.task
+    else:
+        try:
+            with prof.section("parse:json"):
+                task = json.loads(raw)
+        except Exception:
+            _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
+    if not isinstance(task, dict):
         _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
-    return {}
+    _PARSED_TASK = task
+    return task
 
 
 def _emit_task_json(task: dict, *, sanitize: bool = False, prof=None) -> None:
@@ -2227,7 +2240,7 @@ def run_hook(
 ) -> int:
     """Run the extracted implementation with context captured by the wrapper."""
     global HOOK_DIR, TW_DIR, _CORE_BASE
-    global _EARLY_PROTOCOL_RESULT, _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
+    global _EARLY_PROTOCOL_RESULT, _PROTOCOL, _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
     global _DNF_DISK_CACHE_PATH, _DNF_DISK_CACHE_LOCK
 
     HOOK_DIR = Path(hook_dir)
@@ -2249,6 +2262,7 @@ def run_hook(
         if protocol_error is not None:
             raise RuntimeError(f"could not load on-add protocol: {protocol_error}") from protocol_error
         raise RuntimeError("could not load on-add protocol")
+    _PROTOCOL = protocol
     _EARLY_PROTOCOL_RESULT = protocol.probe_on_add(raw_input, max_bytes=_MAX_JSON_BYTES)
     main()
     return 0

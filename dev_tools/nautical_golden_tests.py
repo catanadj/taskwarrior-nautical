@@ -953,6 +953,7 @@ def test_hook_io_contract_preserves_unknown_task_fields_and_unicode():
     expect(result.valid, f"valid Taskwarrior task was rejected: {result.error}")
     expect(result.task == task, f"boundary changed task payload: {result.task!r}")
     expect(result.task.get("custom_uda") == task["custom_uda"], "unknown UDA was dropped")
+    expect(isinstance(result.request, hook_protocol.OnAddInput), "add request was not typed")
 
 
 def test_hook_io_contract_modify_accepts_array_and_preserves_both_tasks():
@@ -964,6 +965,7 @@ def test_hook_io_contract_modify_accepts_array_and_preserves_both_tasks():
     result = hook_protocol.probe_on_modify(json.dumps([old, new], ensure_ascii=False))
     expect(result.valid, f"modify array was rejected: {result.error}")
     expect(result.old == old and result.new == new, "modify boundary changed old/new payloads")
+    expect(isinstance(result.request, hook_protocol.OnModifyInput), "modify request was not typed")
 
 
 def test_hook_io_contract_rejects_trailing_json_without_partial_success():
@@ -974,6 +976,7 @@ def test_hook_io_contract_rejects_trailing_json_without_partial_success():
     result = hook_protocol.probe_on_add(json.dumps(task) + " trailing")
     expect(not result.valid, "trailing on-add content was accepted")
     expect(result.error_kind == "invalid_input", f"unexpected error kind: {result.error_kind!r}")
+    expect(isinstance(result.failure, hook_protocol.ProtocolFailure), "failure was not typed")
 
 
 def test_hook_io_contract_response_is_single_unescaped_json_object():

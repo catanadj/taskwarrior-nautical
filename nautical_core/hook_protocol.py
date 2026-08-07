@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from typing import TypeAlias
 
 
 MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -40,9 +41,41 @@ _MODIFY_SAFE_ORDINARY_FIELDS = frozenset(
 )
 _MISSING = object()
 
+TaskPayload: TypeAlias = dict[str, object]
+
+
+class OnAddInput:
+    __slots__ = ("task",)
+
+    def __init__(self, task: TaskPayload) -> None:
+        self.task = task
+
+
+class OnModifyInput:
+    __slots__ = ("old", "new")
+
+    def __init__(self, old: TaskPayload, new: TaskPayload) -> None:
+        self.old = old
+        self.new = new
+
+
+HookRequest: TypeAlias = OnAddInput | OnModifyInput
+
+
+class ProtocolFailure:
+    __slots__ = ("code", "message", "passthrough")
+
+    def __init__(self, code: str, message: str, passthrough: TaskPayload | None = None) -> None:
+        self.code = code
+        self.message = message
+        self.passthrough = passthrough
+
 
 class HookProtocolResult:
-    __slots__ = ("event", "raw_bytes", "raw_text", "old", "new", "is_nautical", "error", "error_kind")
+    __slots__ = (
+        "event", "raw_bytes", "raw_text", "old", "new", "is_nautical",
+        "error", "error_kind", "request", "failure",
+    )
 
     def __init__(
         self,
@@ -55,6 +88,8 @@ class HookProtocolResult:
         is_nautical: bool = False,
         error: str = "",
         error_kind: str = "",
+        request: HookRequest | None = None,
+        failure: ProtocolFailure | None = None,
     ) -> None:
         self.event = event
         self.raw_bytes = raw_bytes
@@ -64,10 +99,20 @@ class HookProtocolResult:
         self.is_nautical = bool(is_nautical)
         self.error = str(error or "")
         self.error_kind = str(error_kind or "")
+        self.request = request
+        self.failure = failure or (
+            ProtocolFailure(self.error_kind or "invalid_input", self.error, new)
+            if self.error else None
+        )
+        if self.request is None and not self.error:
+            if event == "on-add" and isinstance(new, dict):
+                self.request = OnAddInput(new)
+            elif event == "on-modify" and isinstance(old, dict) and isinstance(new, dict):
+                self.request = OnModifyInput(old, new)
 
     @property
     def valid(self) -> bool:
-        return not self.error and isinstance(self.new, dict)
+        return self.failure is None and self.request is not None
 
     @property
     def task(self) -> dict | None:
@@ -276,8 +321,13 @@ def emit_passthrough_json(task: dict | None, *, stream=None) -> None:
 
 
 __all__ = (
+    "HookRequest",
     "HookProtocolResult",
     "MAX_JSON_BYTES",
+    "OnAddInput",
+    "OnModifyInput",
+    "ProtocolFailure",
+    "TaskPayload",
     "emit_passthrough_json",
     "is_safe_nautical_ordinary_modify",
     "probe_on_add",

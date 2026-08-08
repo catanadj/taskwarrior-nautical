@@ -265,16 +265,16 @@ def anchor_preview_misaligned_due_warning(
     seed_base: str,
     omit_dnf,
     to_local_cached: Callable[[datetime], datetime],
-    anchor_step_once: Callable[..., Any],
+    evaluator: Any,
 ) -> None:
     due_local_date = to_local_cached(due_dt).date()
-    first_after_due_date = anchor_step_once(
-        dnf,
-        due_local_date - timedelta(days=1),
-        interval_seed,
-        seed_base,
-        omit_dnf=omit_dnf,
+    first_event = evaluator.next_event_after(
+        evaluator.build_local_datetime(due_local_date, (0, 0)),
+        fallback_hhmm=(0, 0),
+        default_seed_date=interval_seed,
+        inclusive=True,
     )
+    first_after_due_date = first_event.local_datetime.date() if first_event and first_event.local_datetime else None
     if first_after_due_date != due_local_date:
         anchor_name = "scheduled" if recurrence_field == "scheduled" else "due"
         rows.append(
@@ -911,8 +911,6 @@ def handle_anchor_preview_on_add(
     validate_anchor_mode: Callable[[Any], tuple[str, str | None]],
     validate_chain_duration_reasonable: Callable[[Any, datetime, Any, str], tuple[bool, str | None]],
     append_wait_sched_rows: Callable[..., None],
-    anchor_step_once: Callable[..., Any],
-    anchor_pick_occurrence_local: Callable[..., Any],
     anchor_until_summary: Callable[..., tuple[int | None, datetime | None]],
     anchor_build_preview: Callable[..., list[str]],
     to_local_cached: Callable[[datetime], datetime],
@@ -1028,7 +1026,6 @@ def handle_anchor_preview_on_add(
             omit_dnf=omit_dnf,
             core=core,
             next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
-            pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
@@ -1087,7 +1084,6 @@ def handle_anchor_preview_on_add(
             omit_dnf=omit_dnf,
             core=core,
             next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
-            pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
@@ -1153,7 +1149,7 @@ def handle_anchor_preview_on_add(
             seed_base=seed_base,
             omit_dnf=omit_dnf,
             to_local_cached=to_local_cached,
-            anchor_step_once=anchor_step_once,
+            evaluator=recurrence_evaluator,
         )
 
     if until_dt:
@@ -1220,7 +1216,6 @@ def handle_anchor_preview_on_add(
             omit_dnf=omit_dnf,
             core=core,
             next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
-            pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
@@ -1247,7 +1242,6 @@ def handle_anchor_preview_on_add(
             omit_dnf=omit_dnf,
             core=core,
             next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
-            pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             return_occurrences=True,
             anchor_file_provider=shared_anchor_file_provider,
@@ -1293,7 +1287,6 @@ def handle_anchor_preview_on_add(
             omit_dnf=omit_dnf,
             core=core,
             next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
-            pick_occurrence_local=anchor_pick_occurrence_local,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,

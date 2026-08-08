@@ -1935,8 +1935,6 @@ def _handle_anchor_preview_on_add(
             validate_anchor_mode=_validate_anchor_mode,
             validate_chain_duration_reasonable=_validate_chain_duration_reasonable,
             append_wait_sched_rows=_append_wait_sched_rows,
-            anchor_step_once=_anchor_step_once,
-            anchor_pick_occurrence_local=_anchor_pick_occurrence_local,
             anchor_until_summary=_anchor_until_summary,
             anchor_build_preview=_anchor_build_preview,
             to_local_cached=_to_local_cached,

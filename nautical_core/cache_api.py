@@ -106,6 +106,61 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             cache_load_mem=core["_CACHE_LOAD_MEM"],
         )
 
+    def cache_gc_impl(
+        *,
+        max_entries: int = 512,
+        stale_tmp_age: float = 86400.0,
+        stale_lock_age: float = 86400.0,
+    ) -> dict:
+        """Prune expired and orphaned anchor cache files outside hook hot paths."""
+        return core["_cache_payload"].cache_gc(
+            cache_dir(),
+            ttl=core["ANCHOR_CACHE_TTL"],
+            max_entries=max_entries,
+            stale_tmp_age=stale_tmp_age,
+            stale_lock_age=stale_lock_age,
+            cache_lock=core["_cache_lock"],
+            stale_lock_check=lambda path, age: core["_safe_lock_stale_pid"](path, age)
+            and (core["_safe_lock_age"](path) or 0.0) >= float(age),
+            time_mod=core["time"],
+            os_mod=core["os"],
+        )
+
+    ttl_lru_cache = core["_ttl_lru_cache"]
+
+    @ttl_lru_cache(maxsize=1024)
+    def cache_key_for_task_cached(
+        anchor_expr: str,
+        anchor_mode: str,
+        fmt: str,
+        business_calendar_fingerprint: str = "",
+        config_fingerprint: str = "",
+    ) -> str:
+        _ = config_fingerprint
+        return core["_cache_payload"].cache_key_for_task_cached(
+            anchor_expr,
+            anchor_mode,
+            fmt,
+            business_calendar_fingerprint,
+            build_acf=core["build_acf"],
+            cache_key=cache_key,
+        )
+
+    def cache_key_for_task_impl(
+        anchor_expr: str,
+        anchor_mode: str,
+        calendar_fingerprint: str | None = None,
+    ) -> str:
+        if calendar_fingerprint is None:
+            calendar_fingerprint = core["business_calendar_fingerprint"]()
+        return cache_key_for_task_cached(
+            anchor_expr or "",
+            anchor_mode or "",
+            core["_yearfmt"](),
+            calendar_fingerprint,
+            core["effective_config_fingerprint"](),
+        )
+
     return SimpleNamespace(
         _cache_dir=cache_dir,
         _cache_key=cache_key,
@@ -114,10 +169,13 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         _quarantine_cache=quarantine_cache,
         _cache_load_impl=cache_load_impl,
         _cache_save_impl=cache_save_impl,
+        _cache_gc_impl=cache_gc_impl,
+        _cache_key_for_task_cached=cache_key_for_task_cached,
+        _cache_key_for_task_impl=cache_key_for_task_impl,
         cache_load=cache_load_impl,
         cache_save=cache_save_impl,
-        cache_gc=module._cache_gc_impl,
-        cache_key_for_task=module._cache_key_for_task_impl,
+        cache_gc=cache_gc_impl,
+        cache_key_for_task=cache_key_for_task_impl,
     )
 
 

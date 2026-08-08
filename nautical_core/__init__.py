@@ -942,61 +942,6 @@ def _cache_atomic_replace(src: str, dst: str) -> None:
     _cache_payload.cache_atomic_replace(src, dst, os_mod=os)
 
 
-def _cache_gc_impl(
-    *,
-    max_entries: int = 512,
-    stale_tmp_age: float = 86400.0,
-    stale_lock_age: float = 86400.0,
-) -> dict:
-    """Prune expired and orphaned anchor cache files outside hook hot paths."""
-    return _cache_payload.cache_gc(
-        _cache_dir(),
-        ttl=ANCHOR_CACHE_TTL,
-        max_entries=max_entries,
-        stale_tmp_age=stale_tmp_age,
-        stale_lock_age=stale_lock_age,
-        cache_lock=_cache_lock,
-        stale_lock_check=lambda path, age: _safe_lock_stale_pid(path, age)
-        and (_safe_lock_age(path) or 0.0) >= float(age),
-        time_mod=time,
-        os_mod=os,
-    )
-
-@_ttl_lru_cache(maxsize=1024)
-def _cache_key_for_task_cached(
-    anchor_expr: str,
-    anchor_mode: str,
-    fmt: str,
-    business_calendar_fingerprint: str = "",
-    config_fingerprint: str = "",
-) -> str:
-    _ = config_fingerprint
-    return _cache_payload.cache_key_for_task_cached(
-        anchor_expr,
-        anchor_mode,
-        fmt,
-        business_calendar_fingerprint,
-        build_acf=build_acf,
-        cache_key=_cache_key,
-    )
-
-
-def _cache_key_for_task_impl(
-    anchor_expr: str,
-    anchor_mode: str,
-    calendar_fingerprint: str | None = None,
-) -> str:
-    if calendar_fingerprint is None:
-        calendar_fingerprint = business_calendar_fingerprint()
-    return _cache_key_for_task_cached(
-        anchor_expr or "",
-        anchor_mode or "",
-        _yearfmt(),
-        calendar_fingerprint,
-        effective_config_fingerprint(),
-    )
-
-
 # ---- Core iterator over DNF ---------------------------------------------------
 _NTH_RE  = re.compile(r"^(?:(\d)(?:st|nd|rd|th)|last)-(" + "|".join(_WD_ABBR) + r")$")
 
@@ -3240,6 +3185,9 @@ _cache_lock_path = _cache_api._cache_lock_path
 _quarantine_cache = _cache_api._quarantine_cache
 _cache_load_impl = _cache_api._cache_load_impl
 _cache_save_impl = _cache_api._cache_save_impl
+_cache_gc_impl = _cache_api._cache_gc_impl
+_cache_key_for_task_cached = _cache_api._cache_key_for_task_cached
+_cache_key_for_task_impl = _cache_api._cache_key_for_task_impl
 cache_load = _cache_api.cache_load
 cache_save = _cache_api.cache_save
 cache_gc = _cache_api.cache_gc

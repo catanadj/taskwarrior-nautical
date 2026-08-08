@@ -1823,92 +1823,6 @@ def build_local_datetime(d: date, hhmm=(DEFAULT_DUE_HOUR, 0)) -> datetime:
 
 
 
-# ------------------------------------------------------------------------------
-# Yearly token helpers
-# ------------------------------------------------------------------------------
-def _iter_y_segments(s: str):
-    yield from _linting.iter_y_segments(s, re_mod=re)
-
-
-def _lint_expand_year_month_aliases(s: str) -> str:
-    return _linting.lint_expand_year_month_aliases(
-        s,
-        month_from_alias=_month_from_alias,
-        year_full_month_range_token=_year_full_month_range_token,
-        re_mod=re,
-    )
-
-
-def _lint_check_weekly_delimiter_contract(s: str) -> str | None:
-    return _linting.lint_check_weekly_delimiter_contract(s, re_mod=re)
-
-
-def _lint_check_yearly_segments(s: str) -> str | None:
-    return _linting.lint_check_yearly_segments(
-        s,
-        yearfmt=_yearfmt,
-        iter_y_segments=_iter_y_segments,
-        split_csv_tokens=_split_csv_tokens,
-        re_mod=re,
-    )
-
-
-def _lint_check_global_md_dm_confusion(s: str) -> str | None:
-    return _linting.lint_check_global_md_dm_confusion(
-        s,
-        yearfmt=_yearfmt,
-        re_mod=re,
-    )
-
-
-def _lint_check_invalid_weekday_names(s: str) -> str | None:
-    return _linting.lint_check_invalid_weekday_names(
-        s,
-        wd_abbr=_WD_ABBR,
-        re_mod=re,
-        difflib_mod=difflib,
-    )
-
-
-def _lint_check_nth_weekday_suffixes(s: str) -> str | None:
-    return _linting.lint_check_nth_weekday_suffixes(s, re_mod=re)
-
-
-def _lint_check_unsat_pure_weekly_and(s: str) -> str | None:
-    return _linting.lint_check_unsat_pure_weekly_and(
-        s,
-        wd_abbr=_WD_ABBR,
-        split_csv_tokens=_split_csv_tokens,
-        re_mod=re,
-    )
-
-
-def _lint_check_backward_quarter_ranges(s: str) -> str | None:
-    return _linting.lint_check_backward_quarter_ranges(s, re_mod=re)
-
-
-def _lint_collect_warnings(s: str) -> list[str]:
-    return _linting.lint_collect_warnings(s, re_mod=re)
-
-
-def lint_anchor_expr(expr: str) -> tuple[str | None, list[str]]:
-    return _linting.lint_anchor_expr(
-        expr,
-        unwrap_quotes=_unwrap_quotes,
-        lint_expand_year_month_aliases=_lint_expand_year_month_aliases,
-        lint_check_weekly_delimiter_contract=_lint_check_weekly_delimiter_contract,
-        lint_check_yearly_segments=_lint_check_yearly_segments,
-        lint_check_global_md_dm_confusion=_lint_check_global_md_dm_confusion,
-        lint_check_invalid_weekday_names=_lint_check_invalid_weekday_names,
-        lint_check_nth_weekday_suffixes=_lint_check_nth_weekday_suffixes,
-        lint_check_unsat_pure_weekly_and=_lint_check_unsat_pure_weekly_and,
-        lint_check_backward_quarter_ranges=_lint_check_backward_quarter_ranges,
-        lint_collect_warnings=_lint_collect_warnings,
-        re_mod=re,
-    )
-
-
-
 def _rewrite_weekly_multi_time_atoms(s: str) -> str:
     return _parser_frontend.rewrite_weekly_multi_time_atoms(
         s,
@@ -1977,6 +1891,22 @@ normalize_task_business_calendar = _business_calendar_api.normalize_task_busines
 business_calendar_fingerprint = _business_calendar_api.business_calendar_fingerprint
 use_business_calendar = _business_calendar_api.use_business_calendar
 use_task_business_calendar = _business_calendar_api.use_task_business_calendar
+
+_linting_api = _import_sibling("linting_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+_iter_y_segments = _linting_api._iter_y_segments
+_lint_expand_year_month_aliases = _linting_api._lint_expand_year_month_aliases
+_lint_check_weekly_delimiter_contract = _linting_api._lint_check_weekly_delimiter_contract
+_lint_check_yearly_segments = _linting_api._lint_check_yearly_segments
+_lint_check_global_md_dm_confusion = _linting_api._lint_check_global_md_dm_confusion
+_lint_check_invalid_weekday_names = _linting_api._lint_check_invalid_weekday_names
+_lint_check_nth_weekday_suffixes = _linting_api._lint_check_nth_weekday_suffixes
+_lint_check_unsat_pure_weekly_and = _linting_api._lint_check_unsat_pure_weekly_and
+_lint_check_backward_quarter_ranges = _linting_api._lint_check_backward_quarter_ranges
+_lint_collect_warnings = _linting_api._lint_collect_warnings
+lint_anchor_expr = _linting_api.lint_anchor_expr
 
 # Scheduler entry points are bound to this exact core instance for isolated
 # hook/test loaders while preserving the long-standing facade names.

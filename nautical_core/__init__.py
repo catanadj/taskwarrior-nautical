@@ -743,61 +743,6 @@ def _intersect_monthly_atoms_allowed(
     )
 
 
-# ---- Public precompute --------------------------------------------------------
-
-def precompute_hints(dnf: list[list[dict]],
-                     start_dt: datetime | None = None,
-                     anchor_mode: str = "ALL",
-                     rand_seed: str | None = None,
-                     k_next: int = 24,
-                     sample_days_for_year: int = 366,
-                     business_calendar=None) -> dict:
-    _ = anchor_mode
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    return _precompute.precompute_hints(
-        dnf,
-        start_dt=start_dt,
-        rand_seed=rand_seed,
-        k_next=k_next,
-        sample_days_for_year=sample_days_for_year,
-        now_local=datetime.now,
-        next_after_expr=_with_business_calendar(next_after_expr, business_calendar),
-        next_for_or=_with_business_calendar(_next_for_or, business_calendar),
-    )
-
-
-# ───────────────── Cache writer ───────────────── 
-
-def build_and_cache_hints(anchor_expr: str,
-                          anchor_mode: str = "ALL",
-                          default_due_dt=None,
-                          business_calendar=None) -> AnchorHintsPayload:
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    calendar_fingerprint = business_calendar_fingerprint(business_calendar)
-    return cast(
-        AnchorHintsPayload,
-        _precompute.build_and_cache_hints(
-            anchor_expr,
-            anchor_mode=anchor_mode,
-            default_due_dt=default_due_dt,
-            cache_key_for_task=cache_key_for_task,
-            cache_load=cache_load,
-            validate_anchor_expr_strict=validate_anchor_expr_strict,
-            describe_anchor_expr_from_dnf=_describe_anchor_expr_from_dnf,
-            precompute_hints=partial(
-                precompute_hints,
-                business_calendar=business_calendar,
-            ),
-            cache_save=cache_save,
-            anchor_year_fmt=ANCHOR_YEAR_FMT,
-            wrand_salt=WRAND_SALT,
-            local_tz_name=LOCAL_TZ_NAME,
-            holiday_region=HOLIDAY_REGION,
-            business_calendar_fingerprint=calendar_fingerprint,
-        ),
-    )
-
-
 # ───────────────── Quarter helpers ─────────────────
 # Recognize full-month tokens like '01-03..31-03'
 _FULL_MONTH_RE = re.compile(r"^01-(\d{2})\.\.(\d{2})-(\d{2})$")
@@ -1671,6 +1616,13 @@ cache_load = _cache_api.cache_load
 cache_save = _cache_api.cache_save
 cache_gc = _cache_api.cache_gc
 cache_key_for_task = _cache_api.cache_key_for_task
+
+_precompute_api = _import_sibling("precompute_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+precompute_hints = _precompute_api.precompute_hints
+build_and_cache_hints = _precompute_api.build_and_cache_hints
 
 RecurrenceModeResult = _import_sibling("recurrence_evaluator").RecurrenceModeResult
 

@@ -694,10 +694,13 @@ def handle_anchor_file_preview_on_add(
     error_and_exit: Callable[[list[tuple[str, str]]], None],
 ) -> None:
     rows: list[tuple[str, str]] = []
+    panel_mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
+    compact_presentation = panel_mode in {"quiet", "minimal", "line", "text"}
     if _timezone_fallback_warning_needed(core, "", anchor_file_str):
         rows.append(("Warning", "[yellow]Timezone data unavailable; using UTC fallback. Run nautical doctor.[/]"))
     rows.append(("Anchor file", f"[white]{anchor_file_str}[/]  [bold bright_cyan]SKIP[/]"))
-    rows.append(("Natural", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))
+    if not compact_presentation:
+        rows.append(("Natural", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))
     omit_dnf = anchor_preview_prepare_omit_dnf(
         task,
         rows,
@@ -781,17 +784,20 @@ def handle_anchor_file_preview_on_add(
     cpmax = core.coerce_int(task.get("chainMax"), 0)
     exact_until_count = None
     final_until_dt = None
-    if until_dt:
+    if not compact_presentation and until_dt:
         until_local = core.to_local(until_dt)
         limited = [dt for dt in all_occurrences if compare_datetimes(dt, until_local) <= 0]
         exact_until_count = max(0, len(limited) - 1)
         if limited:
             final_until_dt = limited[-1].astimezone(timezone.utc)
-    allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
-    allow_by_until = exact_until_count if exact_until_count is not None else 10**9
-    preview_limit = max(0, min(upcoming_preview, allow_by_max, allow_by_until, preview_hard_cap))
-    event_limit = max(1, preview_limit + 1)
-    events = _collect_events_with_provider(
+    if compact_presentation:
+        preview_rows = []
+    else:
+        allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
+        allow_by_until = exact_until_count if exact_until_count is not None else 10**9
+        preview_limit = max(0, min(upcoming_preview, allow_by_max, allow_by_until, preview_hard_cap))
+        event_limit = max(1, preview_limit + 1)
+        events = _collect_events_with_provider(
         dnf=None,
         anchor_file_str=anchor_file_str,
         after_local_dt=first_due_local_dt,
@@ -805,36 +811,36 @@ def handle_anchor_file_preview_on_add(
         next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         return_occurrences=True,
-    )
-    if until_dt:
-        until_local = core.to_local(until_dt)
-        events = [
-            event
-            for event in events
-            if compare_datetimes(
-                event.local_datetime if isinstance(event, Occurrence) else event[0],
-                until_local,
-            ) <= 0
-        ]
-    preview_rows = _preview_occurrence_lines(
-        events,
-        first_due_local_dt=first_due_local_dt,
-        preview_limit=preview_limit,
-        core=core,
-        task=task,
-    )
-    rows.append(("Upcoming", "\n".join(preview_rows) if preview_rows else "[dim]–[/]"))
-    rows.append(("Delta", f"[bright_yellow]{human_delta(now_utc, display_first_due_utc, False)}[/]"))
-    anchor_preview_limit_rows(
-        rows,
-        cpmax=cpmax,
-        until_dt=until_dt,
-        exact_until_count=exact_until_count,
-        final_until_dt=final_until_dt,
-        now_utc=now_utc,
-        core=core,
-        human_delta=human_delta,
-    )
+        )
+        if until_dt:
+            until_local = core.to_local(until_dt)
+            events = [
+                event
+                for event in events
+                if compare_datetimes(
+                    event.local_datetime if isinstance(event, Occurrence) else event[0],
+                    until_local,
+                ) <= 0
+            ]
+        preview_rows = _preview_occurrence_lines(
+            events,
+            first_due_local_dt=first_due_local_dt,
+            preview_limit=preview_limit,
+            core=core,
+            task=task,
+        )
+        rows.append(("Upcoming", "\n".join(preview_rows) if preview_rows else "[dim]–[/]"))
+        rows.append(("Delta", f"[bright_yellow]{human_delta(now_utc, display_first_due_utc, False)}[/]"))
+        anchor_preview_limit_rows(
+            rows,
+            cpmax=cpmax,
+            until_dt=until_dt,
+            exact_until_count=exact_until_count,
+            final_until_dt=final_until_dt,
+            now_utc=now_utc,
+            core=core,
+            human_delta=human_delta,
+        )
     rows.append(("Chain", "[bold green]enabled[/]" if ch == "on" else "[bold red]disabled[/]"))
     panel("⚓︎ Anchor Preview", format_anchor_rows(rows), kind="preview_anchor", task=task)
     emit_task_json(task, sanitize=True, prof=prof)

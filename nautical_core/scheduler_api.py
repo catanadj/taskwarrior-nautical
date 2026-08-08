@@ -6,6 +6,92 @@ from types import SimpleNamespace
 from typing import Any
 
 
+def _next_after_atom_with_mods_impl(module: Any, atom, ref_d, default_seed, seed_base=None, business_calendar=None):
+    business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
+    base_next = module._with_business_calendar(module.base_next_after_atom, business_calendar)
+    monthly_align = module._with_business_calendar(module._monthly_align_base_for_interval, business_calendar)
+    roll = module._with_business_calendar(module.roll_apply, business_calendar)
+    day_offset = module._with_business_calendar(module.apply_day_offset, business_calendar)
+    return module._scheduler_atom.next_after_atom_with_mods(
+        atom,
+        ref_d,
+        default_seed,
+        seed_base=seed_base,
+        active_mod_keys=module._active_mod_keys,
+        base_next_after_atom=base_next,
+        interval_allowed_for_atom=module._interval_allowed_for_atom,
+        advance_probe_for_interval_bucket=module._advance_probe_for_interval_bucket,
+        monthly_align_base_for_interval=monthly_align,
+        roll_apply=roll,
+        apply_day_offset=day_offset,
+        accept_roll_candidate=module._accept_roll_candidate,
+        is_business_day=business_calendar.is_business_day,
+        max_anchor_iter=module.MAX_ANCHOR_ITER,
+        warn_once_per_day=module._warn_once_per_day,
+        os_mod=module.os,
+        resolve_moon_phase_date=module._resolve_moon_phase_date,
+        moon_phase_matches_date=module._moon_phase_matches_date,
+    )
+
+
+def _atom_matches_on_impl(module: Any, atom, day, default_seed, seed_base=None, business_calendar=None):
+    next_atom = module._with_business_calendar(
+        module.next_after_atom_with_mods,
+        business_calendar,
+    )
+    return module._scheduler_atom.atom_matches_on(
+        atom,
+        day,
+        default_seed,
+        seed_base=seed_base,
+        next_after_atom_with_mods=next_atom,
+        moon_phase_matches_date=module._moon_phase_matches_date,
+    )
+
+
+def _next_after_factor_impl(module: Any, factor, ref_d, default_seed, seed_base=None, business_calendar=None):
+    if not module._position_selection.is_selection_node(factor):
+        next_atom = module._with_business_calendar(
+            module.next_after_atom_with_mods,
+            business_calendar,
+        )
+        return next_atom(factor, ref_d, default_seed or ref_d, seed_base=seed_base)
+    business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
+    return module._position_selection.next_selected_date_with_modifiers(
+        factor,
+        ref_d,
+        matches_on=module._selection_inner_matcher(business_calendar),
+        apply_modifiers=module.partial(module._apply_selection_date_modifiers, business_calendar=business_calendar),
+        default_seed=default_seed or ref_d,
+        seed_base=seed_base,
+        calendar_fingerprint=module.business_calendar_fingerprint(business_calendar),
+    )
+
+
+def _factor_matches_on_impl(module: Any, factor, day, default_seed, seed_base=None, business_calendar=None):
+    if not module._position_selection.is_selection_node(factor):
+        matches = module._with_business_calendar(
+            module.atom_matches_on,
+            business_calendar,
+        )
+        return matches(factor, day, default_seed or day, seed_base=seed_base)
+    business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
+    try:
+        previous = day - module.timedelta(days=1)
+    except (OverflowError, ValueError):
+        return False
+    selected = module._position_selection.next_selected_date_with_modifiers(
+        factor,
+        previous,
+        matches_on=module._selection_inner_matcher(business_calendar),
+        apply_modifiers=module.partial(module._apply_selection_date_modifiers, business_calendar=business_calendar),
+        default_seed=default_seed or day,
+        seed_base=seed_base,
+        calendar_fingerprint=module.business_calendar_fingerprint(business_calendar),
+    )
+    return selected == day
+
+
 def _next_after_term_impl(
     module: Any,
     term,
@@ -77,6 +163,46 @@ def _next_after_expr_impl(
 
 def for_core(module: Any):
     """Create scheduler APIs without sharing state between core loaders."""
+    def next_after_atom_with_mods(atom, ref_d, default_seed, seed_base=None, business_calendar=None):
+        return _next_after_atom_with_mods_impl(
+            module,
+            atom,
+            ref_d,
+            default_seed,
+            seed_base=seed_base,
+            business_calendar=business_calendar,
+        )
+
+    def atom_matches_on(atom, d, default_seed, seed_base=None, business_calendar=None):
+        return _atom_matches_on_impl(
+            module,
+            atom,
+            d,
+            default_seed,
+            seed_base=seed_base,
+            business_calendar=business_calendar,
+        )
+
+    def next_after_factor(factor, ref_d, default_seed, seed_base=None, business_calendar=None):
+        return _next_after_factor_impl(
+            module,
+            factor,
+            ref_d,
+            default_seed,
+            seed_base=seed_base,
+            business_calendar=business_calendar,
+        )
+
+    def factor_matches_on(factor, d, default_seed, seed_base=None, business_calendar=None):
+        return _factor_matches_on_impl(
+            module,
+            factor,
+            d,
+            default_seed,
+            seed_base=seed_base,
+            business_calendar=business_calendar,
+        )
+
     def next_after_term(term, ref_d, default_seed, seed_base=None, business_calendar=None):
         return _next_after_term_impl(
             module,
@@ -115,10 +241,10 @@ def for_core(module: Any):
         expand_yearly_for_year_strict=module._expand_yearly_for_year_strict_impl,
         roll_apply=module._roll_apply_impl,
         apply_day_offset=module._apply_day_offset_impl,
-        next_after_atom_with_mods=module._next_after_atom_with_mods_impl,
-        atom_matches_on=module._atom_matches_on_impl,
-        next_after_factor=module._next_after_factor_impl,
-        factor_matches_on=module._factor_matches_on_impl,
+        next_after_atom_with_mods=next_after_atom_with_mods,
+        atom_matches_on=atom_matches_on,
+        next_after_factor=next_after_factor,
+        factor_matches_on=factor_matches_on,
         next_after_term=next_after_term,
         next_after_expr=next_after_expr,
     )

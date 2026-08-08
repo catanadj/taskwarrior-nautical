@@ -3371,63 +3371,6 @@ def _accept_roll_candidate(ref_d: date, base: date, cand: date, roll_kind: str |
     return _scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
 
 
-def _next_after_atom_with_mods_impl(
-    atom,
-    ref_d: date,
-    default_seed: date,
-    seed_base=None,
-    business_calendar=None,
-) -> date:
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    base_next = _with_business_calendar(base_next_after_atom, business_calendar)
-    monthly_align = _with_business_calendar(
-        _monthly_align_base_for_interval,
-        business_calendar,
-    )
-    roll = _with_business_calendar(roll_apply, business_calendar)
-    day_offset = _with_business_calendar(apply_day_offset, business_calendar)
-    return _scheduler_atom.next_after_atom_with_mods(
-        atom,
-        ref_d,
-        default_seed,
-        seed_base=seed_base,
-        active_mod_keys=_active_mod_keys,
-        base_next_after_atom=base_next,
-        interval_allowed_for_atom=_interval_allowed_for_atom,
-        advance_probe_for_interval_bucket=_advance_probe_for_interval_bucket,
-        monthly_align_base_for_interval=monthly_align,
-        roll_apply=roll,
-        apply_day_offset=day_offset,
-        accept_roll_candidate=_accept_roll_candidate,
-        is_business_day=business_calendar.is_business_day,
-        max_anchor_iter=MAX_ANCHOR_ITER,
-        warn_once_per_day=_warn_once_per_day,
-        os_mod=os,
-        resolve_moon_phase_date=_resolve_moon_phase_date,
-        moon_phase_matches_date=_moon_phase_matches_date,
-    )
-
-
-
-
-def _atom_matches_on_impl(
-    atom,
-    d: date,
-    default_seed: date,
-    seed_base=None,
-    business_calendar=None,
-) -> bool:
-    next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
-    return _scheduler_atom.atom_matches_on(
-        atom,
-        d,
-        default_seed,
-        seed_base=seed_base,
-        next_after_atom_with_mods=next_atom,
-        moon_phase_matches_date=_moon_phase_matches_date,
-    )
-
-
 @lru_cache(maxsize=32)
 def _selection_inner_matcher(business_calendar):
     return partial(atom_matches_on, business_calendar=business_calendar)
@@ -3437,71 +3380,6 @@ def _apply_selection_date_modifiers(base: date, mods: dict, business_calendar=No
     business_calendar = _business_calendar.effective_business_calendar(business_calendar)
     rolled = roll_apply(base, mods, business_calendar=business_calendar)
     return apply_day_offset(rolled, mods, business_calendar=business_calendar)
-
-
-def _next_after_factor_impl(
-    factor,
-    ref_d: date,
-    default_seed: date | None,
-    seed_base=None,
-    business_calendar=None,
-) -> date | None:
-    if not _position_selection.is_selection_node(factor):
-        next_atom = _with_business_calendar(next_after_atom_with_mods, business_calendar)
-        return next_atom(
-            factor,
-            ref_d,
-            default_seed or ref_d,
-            seed_base=seed_base,
-        )
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    return _position_selection.next_selected_date_with_modifiers(
-        factor,
-        ref_d,
-        matches_on=_selection_inner_matcher(business_calendar),
-        apply_modifiers=partial(
-            _apply_selection_date_modifiers,
-            business_calendar=business_calendar,
-        ),
-        default_seed=default_seed or ref_d,
-        seed_base=seed_base,
-        calendar_fingerprint=business_calendar_fingerprint(business_calendar),
-    )
-
-
-def _factor_matches_on_impl(
-    factor,
-    d: date,
-    default_seed: date | None,
-    seed_base=None,
-    business_calendar=None,
-) -> bool:
-    if not _position_selection.is_selection_node(factor):
-        matches = _with_business_calendar(_atom_matches_on_impl, business_calendar)
-        return matches(
-            factor,
-            d,
-            default_seed or d,
-            seed_base=seed_base,
-        )
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    try:
-        previous = d - timedelta(days=1)
-    except (OverflowError, ValueError):
-        return False
-    selected = _position_selection.next_selected_date_with_modifiers(
-        factor,
-        previous,
-        matches_on=_selection_inner_matcher(business_calendar),
-        apply_modifiers=partial(
-            _apply_selection_date_modifiers,
-            business_calendar=business_calendar,
-        ),
-        default_seed=default_seed or d,
-        seed_base=seed_base,
-        calendar_fingerprint=business_calendar_fingerprint(business_calendar),
-    )
-    return selected == d
 
 
 def business_calendar_definitions():
@@ -3787,6 +3665,10 @@ next_after_atom_with_mods = _scheduler_api.next_after_atom_with_mods
 atom_matches_on = _scheduler_api.atom_matches_on
 next_after_factor = _scheduler_api.next_after_factor
 factor_matches_on = _scheduler_api.factor_matches_on
+_next_after_atom_with_mods_impl = _scheduler_api.next_after_atom_with_mods
+_atom_matches_on_impl = _scheduler_api.atom_matches_on
+_next_after_factor_impl = _scheduler_api.next_after_factor
+_factor_matches_on_impl = _scheduler_api.factor_matches_on
 next_after_term = _scheduler_api.next_after_term
 next_after_expr = _scheduler_api.next_after_expr
 _next_after_term_impl = _scheduler_api.next_after_term

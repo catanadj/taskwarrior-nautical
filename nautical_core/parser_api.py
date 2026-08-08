@@ -218,6 +218,154 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             parse_error_cls=core["ParseError"],
         )
 
+    def yearly_pair_from_fmt(a: int, b: int, fmt: str) -> tuple[int, int]:
+        return core["_yearly_validation"].yearly_pair_from_fmt(a, b, fmt)
+
+    def yearly_mmdd_error(mm: int, dd: int) -> str | None:
+        return core["_yearly_validation"].yearly_mmdd_error(mm, dd)
+
+    def validate_yearly_token_allowlist(token: str, fmt: str) -> None:
+        core["_yearly_validation"].validate_yearly_token_allowlist(
+            token,
+            fmt,
+            year_token_format_error_cls=core["YearTokenFormatError"],
+        )
+
+    def validate_yearly_token_detailed(token: str, fmt: str) -> tuple[str, str] | None:
+        return core["_yearly_validation"].validate_yearly_token_detailed(
+            token,
+            fmt,
+            year_token_format_error_cls=core["YearTokenFormatError"],
+        )
+
+    def validate_yearly_token_format(spec: str):
+        return core["_yearly_validation"].validate_yearly_token_format(
+            spec,
+            yearfmt=core["_yearfmt"],
+            split_csv_lower=core["_split_csv_lower"],
+            year_token_format_error_cls=core["YearTokenFormatError"],
+        )
+
+    def validate_year_tokens_in_dnf(dnf):
+        return core["_yearly_validation"].validate_year_tokens_in_dnf(
+            dnf,
+            validate_yearly_token_format=validate_yearly_token_format,
+        )
+
+    def validate_yearly_token(token: str):
+        return core["_yearly_validation"].validate_yearly_token(
+            token,
+            quarters=core["_QUARTERS"],
+            parse_y_token=core["_parse_y_token"],
+            parse_error_cls=core["ParseError"],
+        )
+
+    def yearly_last_day(month: int) -> int:
+        return core["_yearly_validation"].yearly_last_day(month)
+
+    def yearly_check_day_month(day: int, month: int, label: str, token: str) -> None:
+        core["_yearly_validation"].yearly_check_day_month(
+            day,
+            month,
+            label,
+            token,
+            parse_error_cls=core["ParseError"],
+            month_full=core["_natural_language"]._MONTH_FULL,
+        )
+
+    def validate_yearly_spec_token(token: str) -> None:
+        core["_yearly_validation"].validate_yearly_spec_token(
+            token,
+            parse_error_cls=core["ParseError"],
+            month_full=core["_natural_language"]._MONTH_FULL,
+        )
+
+    def validate_yearly_spec(spec: str):
+        return core["_yearly_validation"].validate_yearly_spec(
+            spec,
+            split_csv_lower=core["_split_csv_lower"],
+            validate_yearly_spec_token=validate_yearly_spec_token,
+            parse_error_cls=core["ParseError"],
+        )
+
+    leap_year_for_checks = 2028
+
+    def weekday_set_from_weekly_atom(atom) -> set[int]:
+        return core["_satisfiability"].weekday_set_from_weekly_atom(
+            atom,
+            weekly_spec_to_wset=core["_weekly_spec_to_wset"],
+        )
+
+    def md_pairs_from_yearly_spec(spec: str) -> set[tuple[int, int]]:
+        return core["_satisfiability"].md_pairs_from_yearly_spec(
+            spec,
+            expand_yearly_cached=core["expand_yearly_cached"],
+            leap_year_for_checks=leap_year_for_checks,
+        )
+
+    def quick_weekly_and_check(term: list[dict]) -> None:
+        core["_satisfiability"].quick_weekly_and_check(
+            term,
+            weekday_set_from_weekly_atom=weekday_set_from_weekly_atom,
+            and_term_unsatisfiable_cls=core["AndTermUnsatisfiable"],
+        )
+
+    def quick_yearly_and_check(term: list[dict]) -> None:
+        core["_satisfiability"].quick_yearly_and_check(
+            term,
+            md_pairs_from_yearly_spec=md_pairs_from_yearly_spec,
+            and_term_unsatisfiable_cls=core["AndTermUnsatisfiable"],
+        )
+
+    def quick_moon_and_check(term: list[dict]) -> None:
+        core["_satisfiability"].quick_moon_and_check(
+            term,
+            and_term_unsatisfiable_cls=core["AndTermUnsatisfiable"],
+        )
+
+    def term_has_any_match_within(term: list[dict], start, seed, years: int = 8) -> bool:
+        return core["_satisfiability"].term_has_any_match_within(
+            term,
+            start,
+            seed,
+            atom_matches_on=core["atom_matches_on"],
+            years=years,
+        )
+
+    def validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d):
+        for term in dnf:
+            for factor in term:
+                if core["_position_selection"].is_selection_node(factor):
+                    validate_and_terms_satisfiable(factor.get("expr") or [], ref_d)
+                    if not core["_position_selection"].seasonal_candidate_has_match(
+                        factor,
+                        matches_on=core["atom_matches_on"],
+                        default_seed=ref_d,
+                    ):
+                        scope = str(factor.get("scope") or "season")
+                        boundary = core["_season_support"].fixed_season_boundary_description(scope)
+                        raise core["AndTermUnsatisfiable"](
+                            f"@in-{scope} candidate expression has no dates within its fixed "
+                            f"{boundary} window."
+                        )
+        plain_dnf = [
+            term for term in dnf
+            if not any(core["_position_selection"].is_selection_node(factor) for factor in term)
+        ]
+        if not plain_dnf:
+            return
+        return core["_satisfiability"].validate_and_terms_satisfiable(
+            plain_dnf,
+            ref_d,
+            quick_weekly_and_check=quick_weekly_and_check,
+            quick_yearly_and_check=quick_yearly_and_check,
+            quick_moon_and_check=quick_moon_and_check,
+            term_has_any_match_within=term_has_any_match_within,
+            normalize_spec_for_acf=core["_normalize_spec_for_acf"],
+            month_from_alias=core["_month_from_alias"],
+            and_term_unsatisfiable_cls=core["AndTermUnsatisfiable"],
+        )
+
     return SimpleNamespace(
         build_acf=lambda expr: module._build_acf_impl(expr),
         _resolve_preset_refs=resolve_preset_refs,
@@ -229,6 +377,24 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         _normalize_monthly_ordinal_spec=normalize_monthly_ordinal_spec,
         _build_anchor_atom_dnf=build_anchor_atom_dnf,
         _parse_anchor_atom_at=parse_anchor_atom_at,
+        _yearly_pair_from_fmt=yearly_pair_from_fmt,
+        _yearly_mmdd_error=yearly_mmdd_error,
+        _validate_yearly_token_allowlist=validate_yearly_token_allowlist,
+        _validate_yearly_token_detailed=validate_yearly_token_detailed,
+        _validate_yearly_token_format=validate_yearly_token_format,
+        _validate_year_tokens_in_dnf=validate_year_tokens_in_dnf,
+        _validate_yearly_token=validate_yearly_token,
+        _yearly_last_day=yearly_last_day,
+        _yearly_check_day_month=yearly_check_day_month,
+        _validate_yearly_spec_token=validate_yearly_spec_token,
+        _validate_yearly_spec=validate_yearly_spec,
+        _weekday_set_from_weekly_atom=weekday_set_from_weekly_atom,
+        _md_pairs_from_yearly_spec=md_pairs_from_yearly_spec,
+        _quick_weekly_and_check=quick_weekly_and_check,
+        _quick_yearly_and_check=quick_yearly_and_check,
+        _quick_moon_and_check=quick_moon_and_check,
+        _term_has_any_match_within=term_has_any_match_within,
+        _validate_and_terms_satisfiable=validate_and_terms_satisfiable,
         resolve_anchor_presets=resolve_anchor_presets_impl,
         parse_anchor_expr_to_dnf=lambda s: _parse_anchor_expr_to_dnf_impl(module, s),
         parse_anchor_expr_to_dnf_cached=lambda s: module._parse_anchor_expr_to_dnf_cached_impl(s),

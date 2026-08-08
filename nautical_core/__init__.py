@@ -1839,140 +1839,6 @@ def _parse_anchor_expr_to_dnf_cached_impl(s: str) -> AnchorDNF:
 # ------------------------------------------------------------------------------
 # Anchor validators
 # ------------------------------------------------------------------------------
-def _yearly_pair_from_fmt(a: int, b: int, fmt: str) -> tuple[int, int]:
-    return _yearly_validation.yearly_pair_from_fmt(a, b, fmt)
-
-
-def _yearly_mmdd_error(mm: int, dd: int) -> str | None:
-    return _yearly_validation.yearly_mmdd_error(mm, dd)
-
-
-def _validate_yearly_token_allowlist(tok: str, fmt: str) -> None:
-    _yearly_validation.validate_yearly_token_allowlist(
-        tok,
-        fmt,
-        year_token_format_error_cls=YearTokenFormatError,
-    )
-
-
-def _validate_yearly_token_detailed(tok: str, fmt: str) -> tuple[str, str] | None:
-    return _yearly_validation.validate_yearly_token_detailed(
-        tok,
-        fmt,
-        year_token_format_error_cls=YearTokenFormatError,
-    )
-
-
-def _validate_yearly_token_format(spec: str):
-    _yearly_validation.validate_yearly_token_format(
-        spec,
-        yearfmt=_yearfmt,
-        split_csv_lower=_split_csv_lower,
-        year_token_format_error_cls=YearTokenFormatError,
-    )
-
-
-def _validate_year_tokens_in_dnf(dnf):
-    _yearly_validation.validate_year_tokens_in_dnf(
-        dnf,
-        validate_yearly_token_format=_validate_yearly_token_format,
-    )
-
-
-# ---- AND-term satisfiability guard -----------------------------------------
-_LEAP_YEAR_FOR_CHECKS = 2028
-
-
-def _weekday_set_from_weekly_atom(a) -> set[int]:
-    return _satisfiability.weekday_set_from_weekly_atom(
-        a,
-        weekly_spec_to_wset=_weekly_spec_to_wset,
-    )
-
-
-def _md_pairs_from_yearly_spec(spec: str) -> set[tuple[int, int]]:
-    return _satisfiability.md_pairs_from_yearly_spec(
-        spec,
-        expand_yearly_cached=expand_yearly_cached,
-        leap_year_for_checks=_LEAP_YEAR_FOR_CHECKS,
-    )
-
-
-def _quick_weekly_and_check(term: list[dict]) -> None:
-    _satisfiability.quick_weekly_and_check(
-        term,
-        weekday_set_from_weekly_atom=_weekday_set_from_weekly_atom,
-        and_term_unsatisfiable_cls=AndTermUnsatisfiable,
-    )
-
-
-def _quick_yearly_and_check(term: list[dict]) -> None:
-    _satisfiability.quick_yearly_and_check(
-        term,
-        md_pairs_from_yearly_spec=_md_pairs_from_yearly_spec,
-        and_term_unsatisfiable_cls=AndTermUnsatisfiable,
-    )
-
-
-def _quick_moon_and_check(term: list[dict]) -> None:
-    _satisfiability.quick_moon_and_check(
-        term,
-        and_term_unsatisfiable_cls=AndTermUnsatisfiable,
-    )
-
-
-def _term_has_any_match_within(
-    term: list[dict], start: date, seed: date, years: int = 8
-) -> bool:
-    return _satisfiability.term_has_any_match_within(
-        term,
-        start,
-        seed,
-        atom_matches_on=atom_matches_on,
-        years=years,
-    )
-
-
-# ------------------------------------------------------------------------------
-# Anchor satisfiability checks
-# ------------------------------------------------------------------------------
-def _validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d: date):
-    for term in dnf:
-        for factor in term:
-            if _position_selection.is_selection_node(factor):
-                _validate_and_terms_satisfiable(factor.get("expr") or [], ref_d)
-                if not _position_selection.seasonal_candidate_has_match(
-                    factor,
-                    matches_on=atom_matches_on,
-                    default_seed=ref_d,
-                ):
-                    scope = str(factor.get("scope") or "season")
-                    boundary = _season_support.fixed_season_boundary_description(scope)
-                    raise AndTermUnsatisfiable(
-                        f"@in-{scope} candidate expression has no dates within its fixed "
-                        f"{boundary} window."
-                    )
-
-    plain_dnf = [
-        term
-        for term in dnf
-        if not any(_position_selection.is_selection_node(factor) for factor in term)
-    ]
-    if not plain_dnf:
-        return
-    _satisfiability.validate_and_terms_satisfiable(
-        plain_dnf,
-        ref_d,
-        quick_weekly_and_check=_quick_weekly_and_check,
-        quick_yearly_and_check=_quick_yearly_and_check,
-        quick_moon_and_check=_quick_moon_and_check,
-        term_has_any_match_within=_term_has_any_match_within,
-        normalize_spec_for_acf=_normalize_spec_for_acf,
-        month_from_alias=_month_from_alias,
-        and_term_unsatisfiable_cls=AndTermUnsatisfiable,
-    )
-
-
 # ===== Strict validators (raise ParseError) ==================================
 
 
@@ -2138,47 +2004,6 @@ def _validate_monthly_spec(spec: str):
             f"Unknown monthly token '{tok}'. Examples: "
             f"'15', '-1', '1..7', '-3..-1', '2nd-mon', 'last-fri', '5bd'."
         )
-
-
-def _validate_yearly_token(tok: str):
-    _yearly_validation.validate_yearly_token(
-        tok,
-        quarters=_QUARTERS,
-        parse_y_token=_parse_y_token,
-        parse_error_cls=ParseError,
-    )
-
-
-def _yearly_last_day(mm: int) -> int:
-    return _yearly_validation.yearly_last_day(mm)
-
-
-def _yearly_check_day_month(dd: int, mm: int, label: str, tok: str) -> None:
-    _yearly_validation.yearly_check_day_month(
-        dd,
-        mm,
-        label,
-        tok,
-        parse_error_cls=ParseError,
-        month_full=_natural_language._MONTH_FULL,
-    )
-
-
-def _validate_yearly_spec_token(tok: str) -> None:
-    _yearly_validation.validate_yearly_spec_token(
-        tok,
-        parse_error_cls=ParseError,
-        month_full=_natural_language._MONTH_FULL,
-    )
-
-
-def _validate_yearly_spec(spec: str):
-    _yearly_validation.validate_yearly_spec(
-        spec,
-        split_csv_lower=_split_csv_lower,
-        validate_yearly_spec_token=_validate_yearly_spec_token,
-        parse_error_cls=ParseError,
-    )
 
 
 # -------- Cached Expansion Functions ----------
@@ -2694,6 +2519,24 @@ _normalize_anchor_expr_input = _parser_api._normalize_anchor_expr_input
 _normalize_monthly_ordinal_spec = _parser_api._normalize_monthly_ordinal_spec
 _build_anchor_atom_dnf = _parser_api._build_anchor_atom_dnf
 _parse_anchor_atom_at = _parser_api._parse_anchor_atom_at
+_yearly_pair_from_fmt = _parser_api._yearly_pair_from_fmt
+_yearly_mmdd_error = _parser_api._yearly_mmdd_error
+_validate_yearly_token_allowlist = _parser_api._validate_yearly_token_allowlist
+_validate_yearly_token_detailed = _parser_api._validate_yearly_token_detailed
+_validate_yearly_token_format = _parser_api._validate_yearly_token_format
+_validate_year_tokens_in_dnf = _parser_api._validate_year_tokens_in_dnf
+_validate_yearly_token = _parser_api._validate_yearly_token
+_yearly_last_day = _parser_api._yearly_last_day
+_yearly_check_day_month = _parser_api._yearly_check_day_month
+_validate_yearly_spec_token = _parser_api._validate_yearly_spec_token
+_validate_yearly_spec = _parser_api._validate_yearly_spec
+_weekday_set_from_weekly_atom = _parser_api._weekday_set_from_weekly_atom
+_md_pairs_from_yearly_spec = _parser_api._md_pairs_from_yearly_spec
+_quick_weekly_and_check = _parser_api._quick_weekly_and_check
+_quick_yearly_and_check = _parser_api._quick_yearly_and_check
+_quick_moon_and_check = _parser_api._quick_moon_and_check
+_term_has_any_match_within = _parser_api._term_has_any_match_within
+_validate_and_terms_satisfiable = _parser_api._validate_and_terms_satisfiable
 parse_anchor_expr_to_dnf = _parser_api.parse_anchor_expr_to_dnf
 parse_anchor_expr_to_dnf_cached = _parser_api.parse_anchor_expr_to_dnf_cached
 validate_anchor_expr_strict = _parser_api.validate_anchor_expr_strict

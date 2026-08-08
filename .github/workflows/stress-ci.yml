@@ -51,7 +51,8 @@ jobs:
 
       - name: Run CI stress profile
         run: |
-          python3 dev_tools/nautical_stress_campaign.py --profile ci --json | tee stress-ci-report.json
+          set -o pipefail
+          python3 dev_tools/nautical_stress_campaign.py --profile ci --json --enforce | tee stress-ci-report.json
 
       - name: Append stress summary
         run: |

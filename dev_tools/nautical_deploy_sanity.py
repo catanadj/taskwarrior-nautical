@@ -9,6 +9,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -124,6 +125,49 @@ def _check_package_layout(root: Path, env: dict[str, str]) -> list[dict]:
     return out
 
 
+def _check_performance_workflow(root: Path) -> list[dict]:
+    """Ensure the performance job provisions the tools its benchmark invokes."""
+    workflow = root / ".github" / "workflows" / "perf-budget.yml"
+    if not workflow.is_file():
+        return [{"kind": "workflow", "name": "perf-budget", "ok": False, "message": "workflow missing"}]
+    text = workflow.read_text(encoding="utf-8")
+    requirements_ok = "python3 -m pip install -r requirements.txt" in text
+    task_ok = "sudo apt-get install -y taskwarrior" in text
+    checks = [
+        ("requirements", requirements_ok, "requirements.txt installation"),
+        ("taskwarrior", task_ok, "Taskwarrior installation"),
+    ]
+    return [
+        {
+            "kind": "workflow",
+            "name": f"perf-budget:{name}",
+            "ok": bool(ok),
+            "message": "ok" if ok else f"missing {description}",
+        }
+        for name, ok, description in checks
+    ]
+
+
+def _check_workflow_script_references(root: Path) -> list[dict]:
+    """Catch CI workflows that invoke a dev tool missing from the checkout."""
+    workflows_dir = root / ".github" / "workflows"
+    if not workflows_dir.is_dir():
+        return [{"kind": "workflow", "name": "script-references", "ok": False, "message": "workflows directory missing"}]
+    results: list[dict] = []
+    pattern = re.compile(r"python3\s+(dev_tools/[A-Za-z0-9_.-]+\.py)")
+    for workflow in sorted((*workflows_dir.glob("*.yml"), *workflows_dir.glob("*.yaml"))):
+        text = workflow.read_text(encoding="utf-8")
+        for rel in sorted(set(pattern.findall(text))):
+            exists = (root / rel).is_file()
+            results.append(
+                {
+                    "kind": "workflow",
+                    "name": f"{workflow.name}:{rel}",
+                    "ok": bool(exists),
+                    "message": "ok" if exists else "referenced script missing",
+                }
+            )
+    return results or [{"kind": "workflow", "name": "script-references", "ok": True, "message": "none"}]
 def _check_hook_contracts(root: Path, taskdata: Path) -> list[dict]:
     env = os.environ.copy()
     env["NAUTICAL_CORE_PATH"] = str(root)
@@ -208,6 +252,8 @@ def main() -> int:
         layout_env.pop("NAUTICAL_DIAG", None)
         layout_env.pop("NAUTICAL_DIAG_LOG", None)
         results.extend(_check_package_layout(root, layout_env))
+        results.extend(_check_performance_workflow(root))
+        results.extend(_check_workflow_script_references(root))
         results.extend(_check_hook_contracts(root, taskdata))
         ok = all(bool(r.get("ok")) for r in results)
 

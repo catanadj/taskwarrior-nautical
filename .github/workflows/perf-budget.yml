@@ -18,6 +18,24 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install benchmark dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y taskwarrior
+          python3 -m pip install -r requirements.txt
+
+      - name: Verify benchmark runtime
+        run: |
+          task --version
+          python3 - <<'PY'
+          from importlib.metadata import version
+
+          for package in ("astral", "python-dateutil", "rich"):
+              print(f"{package} {version(package)}")
+          PY
 
       - name: Show Python version
         run: python3 --version

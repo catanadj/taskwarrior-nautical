@@ -154,6 +154,20 @@ def _load_omit_file_data(
     return frozenset(out_dates), out_descriptions
 
 
+def load_omit_file_data(
+    name: str | None,
+    omit_file_dir: str | None,
+    *,
+    business_calendar: BusinessCalendar | None = None,
+) -> tuple[frozenset[date], dict[date, str]]:
+    """Load resolved omission dates and descriptions in one file pass."""
+    return _load_omit_file_data(
+        name,
+        omit_file_dir,
+        business_calendar=business_calendar,
+    )
+
+
 def _apply_omit_file_mods(
     dates: frozenset[date],
     descriptions: dict[date, str],
@@ -213,7 +227,7 @@ def load_omit_file_dates(
     *,
     business_calendar: BusinessCalendar | None = None,
 ) -> frozenset[date]:
-    dates, _descriptions = _load_omit_file_data(
+    dates, _descriptions = load_omit_file_data(
         name,
         omit_file_dir,
         business_calendar=business_calendar,
@@ -227,7 +241,7 @@ def load_omit_file_descriptions(
     *,
     business_calendar: BusinessCalendar | None = None,
 ) -> dict[date, str]:
-    _dates, descriptions = _load_omit_file_data(
+    _dates, descriptions = load_omit_file_data(
         name,
         omit_file_dir,
         business_calendar=business_calendar,

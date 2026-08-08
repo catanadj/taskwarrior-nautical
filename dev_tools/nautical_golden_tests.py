@@ -20107,6 +20107,47 @@ def test_recurrence_evaluator_loads_omit_file_without_text_rule():
             proxy.OMIT_FILE_DIR = previous_proxy_dir
 
 
+def test_recurrence_evaluator_loads_omit_file_dates_and_descriptions_once():
+    """Evaluator omission parsing should use one combined file-backed load."""
+    from nautical_core import omit_files
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+    with tempfile.TemporaryDirectory() as td:
+        omit_path = Path(td) / "holidays.csv"
+        omit_path.write_text("date,description\n2025-01-06,Holiday\n", encoding="utf-8")
+        previous_dir = getattr(core, "OMIT_FILE_DIR", "")
+        proxy = getattr(core, "_PKG_PROXY", core)
+        previous_proxy_dir = getattr(proxy, "OMIT_FILE_DIR", "")
+        original_core_module = RecurrenceEvaluator._core_module
+        original_loader = omit_files.load_omit_file_data
+        calls = []
+
+        def counted_loader(*args, **kwargs):
+            calls.append(1)
+            return original_loader(*args, **kwargs)
+
+        core.OMIT_FILE_DIR = td
+        proxy.OMIT_FILE_DIR = td
+        RecurrenceEvaluator._core_module = staticmethod(lambda: core)
+        omit_files.load_omit_file_data = counted_loader
+        try:
+            evaluator = RecurrenceEvaluator.from_task(
+                {
+                    "chainID": "omit-file-combined",
+                    "anchor": "w:mon",
+                    "omit_file": "holidays.csv",
+                }
+            )
+            evaluator.omit_dnf
+            evaluator.omit_dnf
+            expect(len(calls) == 1, f"omit file was loaded {len(calls)} times")
+        finally:
+            RecurrenceEvaluator._core_module = staticmethod(original_core_module)
+            omit_files.load_omit_file_data = original_loader
+            core.OMIT_FILE_DIR = previous_dir
+            proxy.OMIT_FILE_DIR = previous_proxy_dir
+
+
 def test_modify_timeline_uses_explicit_recurrence_identity():
     """Timeline seed selection should honor chainID and require fallback opt-in."""
     from nautical_core.modify_timeline import _timeline_seed_base
@@ -30474,6 +30515,7 @@ TESTS.extend([
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,
     test_recurrence_evaluator_loads_omit_file_without_text_rule,
+    test_recurrence_evaluator_loads_omit_file_dates_and_descriptions_once,
     test_recurrence_evaluator_shadow_parity_time_matrix,
     test_recurrence_evaluator_shadow_parity_dst_and_business_calendar,
     test_modify_timeline_uses_explicit_recurrence_identity,

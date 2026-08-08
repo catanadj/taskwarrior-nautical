@@ -219,12 +219,7 @@ class RecurrenceEvaluator:
         if self.spec.omit_file:
             core = self._core_module()
             omit_files = core._import_sibling("omit_files")
-            omit_dates = omit_files.load_omit_file_dates(
-                self.spec.omit_file,
-                getattr(core, "OMIT_FILE_DIR", ""),
-                business_calendar=self.context.business_calendar,
-            )
-            omit_descriptions = omit_files.load_omit_file_descriptions(
+            omit_dates, omit_descriptions = omit_files.load_omit_file_data(
                 self.spec.omit_file,
                 getattr(core, "OMIT_FILE_DIR", ""),
                 business_calendar=self.context.business_calendar,

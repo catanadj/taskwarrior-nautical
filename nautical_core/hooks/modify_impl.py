@@ -6719,6 +6719,12 @@ def main():
     read_t0 = _ptime.perf_counter()
     old, new = _read_two()
     _apply_description_uda_aliases(old, new)
+    config_error = str(getattr(core, "scheduling_configuration_error", lambda: "")() or "")
+    if config_error and _task_has_nautical_fields(old, new):
+        _fail_and_exit(
+            "Invalid Nautical configuration",
+            f"{config_error}. Fix Nautical configuration before modifying a recurring task.",
+        )
     state.diag_stats["startup_read_input_ms"] = round((_ptime.perf_counter() - read_t0) * 1000.0, 3)
     try:
         calendar_context = core.use_task_business_calendar(new)

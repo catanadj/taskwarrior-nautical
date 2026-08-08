@@ -38,6 +38,8 @@ _DEFAULTS = {
 }
 
 _CONF_CACHE = None
+_CONFIG_ERROR = ""
+_CONFIG_ERROR_PATH = ""
 _CACHE_LOAD_MEM_MAX = 128
 _CACHE_LOAD_MEM_TTL = 300
 _CACHE_LOAD_MEM: OrderedDict[str, tuple[int, int, dict, float]] = OrderedDict()
@@ -109,11 +111,18 @@ def _warn_toml_parse_error(config_path: str, err: Exception) -> None:
 
 
 def _read_toml(path: str) -> dict:
+    def _record_error(message: str) -> None:
+        global _CONFIG_ERROR, _CONFIG_ERROR_PATH
+        if not _CONFIG_ERROR:
+            _CONFIG_ERROR = str(message or "configuration unavailable")
+            _CONFIG_ERROR_PATH = str(path or "")
+
     return config_support.read_toml(
         path,
         tomllib_mod=tomllib,
         warn_missing_toml_parser=_warn_missing_toml_parser,
         warn_toml_parse_error=_warn_toml_parse_error,
+        error_sink=_record_error,
     )
 
 
@@ -132,6 +141,20 @@ def _load_config() -> dict:
         read_toml=_read_toml,
         normalize_keys=_normalize_keys,
     )
+
+
+def configuration_error() -> str:
+    if not _CONFIG_ERROR:
+        return ""
+    configured = str(os.environ.get("NAUTICAL_CONFIG") or "").strip()
+    if configured:
+        active_path = os.path.abspath(os.path.expanduser(configured))
+        return _CONFIG_ERROR if active_path == os.path.abspath(_CONFIG_ERROR_PATH) else ""
+    try:
+        active_paths = {os.path.abspath(path) for path in _config_paths()}
+    except Exception:
+        active_paths = set()
+    return _CONFIG_ERROR if os.path.abspath(_CONFIG_ERROR_PATH) in active_paths else ""
 
 
 def nautical_cache_dir() -> str:

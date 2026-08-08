@@ -125,6 +125,7 @@ def read_toml(
     tomllib_mod,
     warn_missing_toml_parser,
     warn_toml_parse_error,
+    error_sink=None,
 ):
     try:
         if not path or not os.path.exists(path):
@@ -156,6 +157,8 @@ def read_toml(
             return {}
 
     if tomllib_mod is None:
+        if callable(error_sink):
+            error_sink(f"TOML parser unavailable for {path}")
         if is_env_path:
             raise RuntimeError(
                 f"NAUTICAL_CONFIG is set but TOML parser is unavailable for {path}. "
@@ -168,6 +171,8 @@ def read_toml(
         with open(path, "rb") as fh:
             return tomllib_mod.load(fh) or {}
     except Exception as exc:
+        if callable(error_sink):
+            error_sink(f"config parse failed for {path}: {exc}")
         if is_env_path:
             raise RuntimeError(f"NAUTICAL_CONFIG parse failed for {path}: {exc}")
         if os.environ.get("NAUTICAL_DIAG") == "1":

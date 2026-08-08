@@ -2223,6 +2223,12 @@ def main():
     prof = _build_profiler()
     task = _read_on_add_task(prof)
     _apply_description_uda_aliases(task)
+    config_error = str(getattr(core, "scheduling_configuration_error", lambda: "")() or "")
+    if config_error and _task_has_nautical_fields(task):
+        _fail_and_exit(
+            "Invalid Nautical configuration",
+            f"{config_error}. Fix Nautical configuration before adding a recurring task.",
+        )
     try:
         calendar_context = core.use_task_business_calendar(task)
     except Exception as exc:

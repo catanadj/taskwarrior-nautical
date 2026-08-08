@@ -258,6 +258,7 @@ def render_panel(*args, **kwargs):
 ANCHOR_YEAR_FMT = _core_config.ANCHOR_YEAR_FMT
 WRAND_SALT = _core_config.WRAND_SALT
 LOCAL_TZ_NAME = _core_config.LOCAL_TZ_NAME
+CONFIG_ERROR = _core_config.configuration_error()
 SEASON_HEMISPHERE = _core_config.SEASON_HEMISPHERE
 HOLIDAY_REGION = _core_config.HOLIDAY_REGION
 ANCHOR_FILE_DIR = _core_config.ANCHOR_FILE_DIR
@@ -353,6 +354,7 @@ except Exception:
     _zoneinfo = None
 
 if _zoneinfo is None:
+    _TIMEZONE_CONFIG_ERROR = "timezone support unavailable (zoneinfo import failed)"
     _LOCAL_TZ = None
     _warn_once_per_day(
         "timezone_zoneinfo_unavailable",
@@ -361,7 +363,9 @@ if _zoneinfo is None:
 else:
     try:
         _LOCAL_TZ = _zoneinfo.ZoneInfo(LOCAL_TZ_NAME)
+        _TIMEZONE_CONFIG_ERROR = ""
     except Exception:
+        _TIMEZONE_CONFIG_ERROR = f"configured timezone '{LOCAL_TZ_NAME}' is invalid or unavailable"
         _LOCAL_TZ = None
         _warn_once_per_day(
             "timezone_local_invalid",
@@ -369,6 +373,13 @@ else:
         )
 
 _timeutil = _import_sibling("timeutil")
+
+
+def scheduling_configuration_error() -> str:
+    """Return a blocking configuration error for Nautical scheduling paths."""
+    if CONFIG_ERROR:
+        return CONFIG_ERROR
+    return _TIMEZONE_CONFIG_ERROR
 
 
 # --- Date/time config ---

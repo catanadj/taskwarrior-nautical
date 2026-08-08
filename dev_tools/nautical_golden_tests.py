@@ -6456,6 +6456,10 @@ def test_core_invalid_timezone_warns_and_falls_back_to_utc():
             with contextlib.redirect_stderr(buf):
                 mod = _load_core_module(core_path, "_nautical_core_bad_tz_fallback_test", cfg)
             expect(getattr(mod, "_LOCAL_TZ", None) is None, "invalid timezone should use UTC fallback")
+            expect(
+                "invalid or unavailable" in mod.scheduling_configuration_error(),
+                "invalid timezone should block Nautical scheduling",
+            )
             stderr_text = buf.getvalue().lower()
             expect("utc fallback" in stderr_text, f"expected timezone fallback warning in stderr, got: {stderr_text!r}")
         finally:
@@ -6467,6 +6471,26 @@ def test_core_invalid_timezone_warns_and_falls_back_to_utc():
                 os.environ.pop("XDG_CACHE_HOME", None)
             else:
                 os.environ["XDG_CACHE_HOME"] = prev_xdg
+
+
+def test_config_support_reports_automatically_discovered_toml_parse_errors():
+    """Automatic config discovery must retain parse failures for scheduling guards."""
+    import nautical_core.config_support as config_support
+
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "nautical.toml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("tz = [\n")
+        errors = []
+        data = config_support.read_toml(
+            path,
+            tomllib_mod=__import__("tomllib"),
+            warn_missing_toml_parser=lambda _path: None,
+            warn_toml_parse_error=lambda _path, _err: None,
+            error_sink=errors.append,
+        )
+        expect(data == {}, f"malformed automatic config should not produce values: {data!r}")
+        expect(errors and path in errors[0], f"automatic config parse error was lost: {errors!r}")
 
 
 def test_core_recurrence_update_udas_config_aliases():
@@ -9666,6 +9690,28 @@ def test_hook_on_add_rejects_unknown_business_calendar_cleanly():
         )
 
 
+def test_hook_on_add_rejects_invalid_timezone_for_nautical_task():
+    """A bad timezone must block recurrence scheduling instead of using UTC silently."""
+    hook = _find_hook_file("on-add.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "config-nautical.toml"
+        config_path.write_text('tz = "Invalid/Timezone"\n', encoding="utf-8")
+        proc = _run_hook_script(
+            hook,
+            {
+                "uuid": "00000000-0000-0000-0000-000000000127",
+                "description": "invalid timezone recurrence",
+                "status": "pending",
+                "anchor": "w:mon",
+            },
+            env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config_path)},
+        )
+    expect(proc.returncode != 0, "invalid timezone should block Nautical on-add")
+    stderr_text = _strip_markup(proc.stderr)
+    expect("Invalid Nautical configuration" in stderr_text, f"missing config error title: {stderr_text[:800]!r}")
+    expect("timezone" in stderr_text.lower(), f"timezone cause missing: {stderr_text[:800]!r}")
+
+
 def test_hook_on_modify_rejects_unknown_business_calendar_cleanly():
     """changing bc to an unknown name should fail before recurrence is evaluated."""
     hook = _find_hook_file('on-modify.nautical')
@@ -9697,6 +9743,30 @@ def test_hook_on_modify_rejects_unknown_business_calendar_cleanly():
             'configured calendars:' in stderr_text and 'work.' in stderr_text,
             f'missing available-calendar hint: {stderr_text[:500]!r}',
         )
+
+
+def test_hook_on_modify_rejects_invalid_timezone_for_nautical_task():
+    """A bad timezone must block recurrence mutation instead of using UTC silently."""
+    hook = _find_hook_file("on-modify.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "config-nautical.toml"
+        config_path.write_text('tz = "Invalid/Timezone"\n', encoding="utf-8")
+        old = {
+            "uuid": "00000000-0000-0000-0000-000000000128",
+            "description": "invalid timezone modify",
+            "status": "pending",
+            "anchor": "w:mon",
+        }
+        new = dict(old, status="completed", end="20260808T120000Z", modified="20260808T120000Z")
+        proc = _run_hook_script_raw(
+            hook,
+            json.dumps(old) + "\n" + json.dumps(new) + "\n",
+            env_extra={"NO_COLOR": "1", "NAUTICAL_CONFIG": str(config_path)},
+        )
+    expect(proc.returncode != 0, "invalid timezone should block Nautical on-modify")
+    stderr_text = _strip_markup(proc.stderr)
+    expect("Invalid Nautical configuration" in stderr_text, f"missing config error title: {stderr_text[:800]!r}")
+    expect("timezone" in stderr_text.lower(), f"timezone cause missing: {stderr_text[:800]!r}")
 
 
 def test_on_modify_spawned_child_preserves_business_calendar():
@@ -29500,7 +29570,9 @@ TESTS = [
     test_hook_on_add_uses_and_normalizes_business_calendar,
     test_hook_on_add_reports_business_calendar_displacement_only_when_shifted,
     test_hook_on_add_rejects_unknown_business_calendar_cleanly,
+    test_hook_on_add_rejects_invalid_timezone_for_nautical_task,
     test_hook_on_modify_rejects_unknown_business_calendar_cleanly,
+    test_hook_on_modify_rejects_invalid_timezone_for_nautical_task,
     test_on_modify_spawned_child_preserves_business_calendar,
     test_next_after_atom_with_mods_characterization,
     test_modifier_boundary_paths_agree_and_advance_strictly,
@@ -30147,6 +30219,7 @@ TESTS = [
     test_chain_health_advice_clinical_drift_and_style_normalization,
     test_dst_round_trip_noon_preserves_local_date,
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
+    test_config_support_reports_automatically_discovered_toml_parse_errors,
     test_core_recurrence_update_udas_config_aliases,
     test_core_live_panel_duration_config_defaults_and_clamps,
     test_core_live_panel_footer_config_defaults_and_customizes,

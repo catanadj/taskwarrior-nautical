@@ -165,30 +165,31 @@ class RecurrenceEvaluator:
         """Lazily parse the anchor expression through Nautical's cached parser."""
         if not self.spec.anchor:
             return []
-        return copy.deepcopy(self._get_cached("anchor_dnf", self._parse_anchor))
+        return self._get_cached("anchor_dnf", self._parse_anchor, clone=True)
 
     @property
     def omit_dnf(self) -> list:
         """Lazily parse the omit expression with omit-specific validation."""
         if not self.spec.omit and not self.spec.omit_file:
             return []
-        return copy.deepcopy(self._get_cached("omit_dnf", self._parse_omit))
+        return self._get_cached("omit_dnf", self._parse_omit, clone=True)
 
     @property
     def cp_tokens(self) -> list | None:
         """Lazily parse CP into fixed/random tokens without resolving randomness."""
         if not self.spec.cp:
             return None
-        return copy.deepcopy(self._get_cached("cp_tokens", self._parse_cp_tokens))
+        return self._get_cached("cp_tokens", self._parse_cp_tokens, clone=True)
 
     @property
     def limits(self) -> RecurrenceLimits:
         """Return parsed chain limits, keeping native task ``until`` separate."""
         return self._get_cached("limits", self._parse_limits)
 
-    def _get_cached(self, key: str, loader):
+    def _get_cached(self, key: str, loader, *, clone: bool = False):
         if key not in self._cache:
-            self._cache[key] = loader()
+            value = loader()
+            self._cache[key] = copy.deepcopy(value) if clone else value
         return self._cache[key]
 
     def _parse_anchor(self) -> list:

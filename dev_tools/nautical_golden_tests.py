@@ -19455,8 +19455,12 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         }
     )
     expect(parsed.anchor_mode == "all", "evaluator did not normalize anchor mode")
-    expect(len(parsed.anchor_dnf) == 1 and len(parsed.anchor_dnf[0]) == 1, "anchor parsing was not owned by evaluator")
-    expect(len(parsed.omit_dnf) == 1, "omit parsing was not owned by evaluator")
+    parsed_anchor = parsed.anchor_dnf
+    parsed_omit = parsed.omit_dnf
+    expect(len(parsed_anchor) == 1 and len(parsed_anchor[0]) == 1, "anchor parsing was not owned by evaluator")
+    expect(len(parsed_omit) == 1, "omit parsing was not owned by evaluator")
+    expect(parsed.anchor_dnf is parsed_anchor, "anchor DNF was copied again after evaluation")
+    expect(parsed.omit_dnf is parsed_omit, "omit DNF was copied again after evaluation")
     expect(parsed.limits.chain_max == 4, "chainMax limit was not normalized")
     expect(
         parsed.limits.chain_until == datetime(2025, 12, 31, 23, 0, tzinfo=timezone.utc),

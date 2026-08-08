@@ -611,7 +611,9 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
         }
         completion_cases = {
             "workflow_cp_completion": cp_old,
+            "workflow_cp_completion_nonfinal": dict(cp_old, chainMax=2),
             "workflow_anchor_completion": anchor_old,
+            "workflow_anchor_completion_nonfinal": dict(anchor_old, chainMax=2),
         }
         results: dict[str, dict] = {}
         for name, old in completion_cases.items():
@@ -637,10 +639,34 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             with sqlite3.connect(str(queue_data / ".nautical-state" / ".nautical_queue.db")) as conn:
                 now = time.time()
                 for index in range(8):
+                    parent_uuid = f"44444444-4444-4444-4444-{index:012d}"
+                    child_uuid = f"55555555-5555-5555-5555-{index:012d}"
+                    payload = {
+                        "parent_uuid": parent_uuid,
+                        "parent_nextlink": str(index + 1),
+                        "child_short": child_uuid[:8],
+                        "child": {
+                            "uuid": child_uuid,
+                            "status": "pending",
+                            "description": "Queue drain benchmark child",
+                            "chain": "on",
+                            "chainID": "queue-perf-chain",
+                            "link": index + 1,
+                            "prevLink": parent_uuid[:8],
+                            "due": "20260101T090000Z",
+                        },
+                        "spawn_intent_id": f"perf-intent-{index}",
+                        "parent_guard": {
+                            "status": "completed",
+                            "chain": "on",
+                            "chainID": "queue-perf-chain",
+                            "link": str(index),
+                        },
+                    }
                     conn.execute(
                         "INSERT INTO queue_entries (spawn_intent_id, payload, created_at, updated_at) "
                         "VALUES (?, ?, ?, ?)",
-                        (f"perf-intent-{index}", "{}", now, now),
+                        (f"perf-intent-{index}", json.dumps(payload, ensure_ascii=False), now, now),
                     )
                 conn.commit()
             queue_env = dict(base_env, TASKDATA=str(queue_data))
@@ -655,6 +681,26 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
         reconcile_data = root / "reconcile"
         reconcile_data.mkdir()
         reconcile_env = dict(base_env, TASKDATA=str(reconcile_data))
+        reconcile_task = {
+            "uuid": "66666666-6666-6666-6666-666666666666",
+            "status": "completed",
+            "description": "Reconcile performance benchmark",
+            "cp": "P1D",
+            "chain": "on",
+            "chainID": "reconcile-perf-chain",
+            "link": 1,
+            "due": "20260101T090000Z",
+        }
+        import_proc = subprocess.run(
+            ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input=json.dumps(reconcile_task, ensure_ascii=False) + "\n",
+            text=True,
+            capture_output=True,
+            env=reconcile_env,
+            timeout=30.0,
+        )
+        if import_proc.returncode != 0:
+            raise RuntimeError(f"reconcile fixture import failed: {(import_proc.stderr or import_proc.stdout or '').strip()}")
         reconcile_cmd = [sys.executable, str(ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"), "--json"]
         reconcile_samples = []
         for _ in range(repeats):
@@ -675,6 +721,11 @@ def main() -> int:
     ap.add_argument("--budget-file", default=str(HERE / "perf_budget.json"))
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON summary")
     ap.add_argument("--enforce", action="store_true", help="fail non-zero if any budget is exceeded")
+    ap.add_argument(
+        "--workflows-only",
+        action="store_true",
+        help="run only expensive completion, queue, and reconcile workflows",
+    )
     args = ap.parse_args()
 
     cfg = _load_budget_config(Path(args.budget_file))
@@ -708,9 +759,11 @@ def main() -> int:
         ("queue_schema_cold", lambda: _bench_queue_schema_cold(queue_schema_cold_rounds), repeats),
         ("anchor_file_provider", lambda: _bench_anchor_file_provider(anchor_file_rounds), repeats),
     ]
+    if args.workflows_only:
+        checks = []
 
     seasonal = cfg.get("seasonal_workload")
-    if isinstance(seasonal, dict):
+    if not args.workflows_only and isinstance(seasonal, dict):
         seasonal_exprs = [
             str(value)
             for value in seasonal.get("expressions", [])
@@ -761,7 +814,7 @@ def main() -> int:
         if args.enforce and not r["pass"]:
             failures.append(name)
 
-    hook_results = _bench_hook_fast_paths(cfg)
+    hook_results = {} if args.workflows_only else _bench_hook_fast_paths(cfg)
     for name, result in hook_results.items():
         results[name] = result
         if args.enforce and not result["pass"]:

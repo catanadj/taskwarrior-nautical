@@ -19542,6 +19542,54 @@ def test_modify_timeline_uses_explicit_recurrence_identity():
     expect(_timeline_seed_base({}) == "preview", "timeline fallback identity changed")
 
 
+def test_recurrence_evaluator_shadow_parity_time_matrix():
+    """Evaluator and hook mode selection agree across daily time forms."""
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_evaluator_shadow_time_matrix_test")
+    due_local = mod.core.build_local_datetime(date(2026, 8, 3), (9, 0))
+    end_local = mod.core.build_local_datetime(date(2026, 8, 3), (10, 0))
+    cases = (
+        "w:mon@t=09:00",
+        "w:mon@t=09:00,13:00",
+        "w:mon@t=06..18/3",
+        "w:mon@t=rand(06..18/3)",
+        "w:mon@t=22:30..06:30/7",
+    )
+    for index, expression in enumerate(cases):
+        chain_id = f"shadow-time-{index}"
+        parent = {
+            "anchor": expression,
+            "anchor_mode": "skip",
+            "chainID": chain_id,
+            "due": mod.core.fmt_isoz(due_local.astimezone(timezone.utc)),
+            "end": mod.core.fmt_isoz(end_local.astimezone(timezone.utc)),
+        }
+        hook_due, hook_meta, _dnf = mod._compute_anchor_child_due(parent)
+        evaluator = RecurrenceEvaluator.from_task(
+            parent,
+            timezone=mod.core._LOCAL_TZ,
+        )
+        result = evaluator.select_mode(
+            "skip",
+            due_local=due_local,
+            end_local=end_local,
+            next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
+            fallback_hhmm=(9, 0),
+        )
+        expect(
+            result.selected_occurrence is not None
+            and result.selected_occurrence.astimezone(timezone.utc) == hook_due,
+            f"time-form shadow parity drifted for {expression}: {result!r} vs {hook_due!r}",
+        )
+        expect(
+            result.basis == hook_meta.get("basis")
+            and result.source == hook_meta.get("source"),
+            f"time-form shadow evidence drifted for {expression}: {result!r} vs {hook_meta!r}",
+        )
+
+
 def test_modify_hook_uses_explicit_recurrence_identity():
     """Modify hook cap paths should share the chainID-first identity policy."""
     expect(_hook._recurrence_seed_base({"chainID": "chain-a", "uuid": "uuid-a"}) == "chain-a", "modify hook preferred UUID over chainID")
@@ -29655,6 +29703,7 @@ TESTS.extend([
     test_random_time_window_flows_through_anchor_parser_and_resolver,
     test_recurrence_spec_normalizes_task_fields_and_context,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
+    test_recurrence_evaluator_shadow_parity_time_matrix,
     test_modify_timeline_uses_explicit_recurrence_identity,
     test_modify_hook_uses_explicit_recurrence_identity,
     test_add_preview_uses_explicit_recurrence_identity,

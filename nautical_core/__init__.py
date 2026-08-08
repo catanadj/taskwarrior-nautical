@@ -1890,33 +1890,12 @@ def use_task_business_calendar(task: dict):
     return use_business_calendar(normalize_task_business_calendar(task))
 
 
-def anchors_between_expr(dnf, start_excl, end_excl, default_seed, seed_base=None):
-    return _precompute.anchors_between_expr(
-        dnf,
-        start_excl,
-        end_excl,
-        default_seed,
-        seed_base=seed_base,
-        until_count_cap=UNTIL_COUNT_CAP,
-        next_after_expr=next_after_expr,
-        anchors_between_large_range=_anchors_between_large_range,
-        warn_once_per_day=_warn_once_per_day,
-        os_mod=os,
-    )
-
-
-def _anchors_between_large_range(
-    dnf, start_excl, end_excl, default_seed, seed_base=None
-):
-    return _precompute.anchors_between_large_range(
-        dnf,
-        start_excl,
-        end_excl,
-        default_seed,
-        seed_base=seed_base,
-        until_count_cap=UNTIL_COUNT_CAP,
-        next_after_expr=next_after_expr,
-    )
+_recurrence_candidates = _import_sibling("recurrence_candidates").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+_anchors_between_large_range = _recurrence_candidates.anchors_between_large_range
+anchors_between_expr = _recurrence_candidates.anchors_between_expr
 
 
 def expr_has_m_or_y(dnf) -> bool:

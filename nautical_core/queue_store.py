@@ -34,6 +34,7 @@ _QUEUE_INDEXES = {
     "idx_queue_entries_state_id": (("state", "id"), 0, 0),
     "idx_queue_entries_claimed_at": (("claimed_at",), 0, 0),
 }
+_WAL_INITIALIZED_PATHS: set[str] = set()
 
 
 class QueueSchemaError(RuntimeError):
@@ -234,6 +235,7 @@ def quarantine_sqlite_db(
     *,
     diag: Callable[[str], None] | None = None,
 ) -> bool:
+    _WAL_INITIALIZED_PATHS.discard(os.path.abspath(os.fspath(db_path)))
     moved = False
     ts = int(time.time())
     for candidate in (db_path, Path(str(db_path) + "-wal"), Path(str(db_path) + "-shm")):
@@ -445,7 +447,10 @@ def connect_queue_db_result(
             conn = sqlite3.connect(str(db_path), timeout=connect_timeout)
             if row_factory is not None:
                 conn.row_factory = row_factory
-            conn.execute("PRAGMA journal_mode=WAL")
+            db_key = os.path.abspath(os.fspath(db_path))
+            if db_key not in _WAL_INITIALIZED_PATHS:
+                conn.execute("PRAGMA journal_mode=WAL")
+                _WAL_INITIALIZED_PATHS.add(db_key)
             conn.execute(f"PRAGMA synchronous={'FULL' if durable else 'NORMAL'}")
             conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
             try:

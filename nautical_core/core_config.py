@@ -261,9 +261,16 @@ _SCHEDULER_CONFIG_KEYS = (
     "astronomy",
 )
 
+_SCHEDULER_FINGERPRINT_CACHE_KEY: str | None = None
+_SCHEDULER_FINGERPRINT_CACHE: str | None = None
+
 
 def scheduler_config_fingerprint() -> str:
     """Fingerprint only settings that can change recurrence projection results."""
+    global _SCHEDULER_FINGERPRINT_CACHE_KEY, _SCHEDULER_FINGERPRINT_CACHE
+    config_fingerprint = effective_config_fingerprint()
+    if config_fingerprint == _SCHEDULER_FINGERPRINT_CACHE_KEY and _SCHEDULER_FINGERPRINT_CACHE is not None:
+        return _SCHEDULER_FINGERPRINT_CACHE
     values = effective_config_snapshot().get("values")
     if not isinstance(values, dict):
         values = {}
@@ -271,9 +278,11 @@ def scheduler_config_fingerprint() -> str:
         "version": 1,
         "values": {key: values.get(key) for key in _SCHEDULER_CONFIG_KEYS},
     }
-    return hashlib.sha256(
+    _SCHEDULER_FINGERPRINT_CACHE = hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")
     ).hexdigest()[:24]
+    _SCHEDULER_FINGERPRINT_CACHE_KEY = config_fingerprint
+    return _SCHEDULER_FINGERPRINT_CACHE
 
 
 _LOADED_CONFIG_FINGERPRINT = effective_config_fingerprint()

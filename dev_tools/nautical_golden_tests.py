@@ -16627,18 +16627,33 @@ def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    child_due, meta, _dnf = mod._compute_anchor_child_due(
-        {
+    parent = {
             "anchor": "w:mon..sun@t=09:00",
             "anchor_mode": "all",
             "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (9, 0))),
             "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 8), (10, 0))),
             "chainID": "abcd1234",
         }
-    )
+    child_due, meta, _dnf = mod._compute_anchor_child_due(parent)
     expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 7), (9, 0)))
     expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next scheduled anchor: {mod.core.fmt_isoz(child_due)}")
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+    evaluator = RecurrenceEvaluator.from_task(parent, timezone=mod.core._LOCAL_TZ)
+    result = evaluator.select_mode(
+        "all",
+        due_local=mod.core.to_local(mod.core.parse_dt_any(parent["scheduled"])),
+        end_local=mod.core.to_local(mod.core.parse_dt_any(parent["end"])),
+        due_explicit=False,
+        next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
+        fallback_hhmm=(9, 0),
+    )
+    expect(
+        result.selected_occurrence is not None
+        and result.selected_occurrence.astimezone(timezone.utc) == child_due,
+        f"scheduled-only evaluator drifted from hook: {result!r} vs {child_due!r}",
+    )
 
 
 def test_on_modify_compute_anchor_child_due_builds_timed_slots_in_configured_timezone():
@@ -20820,8 +20835,7 @@ def test_on_modify_compute_anchor_child_due_skips_omit_date():
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    child_due, meta, _dnf = mod._compute_anchor_child_due(
-        {
+    parent = {
             "anchor": "w:mon,wed,fri@t=09:00",
             "omit": "w:wed",
             "anchor_mode": "skip",
@@ -20829,10 +20843,25 @@ def test_on_modify_compute_anchor_child_due_skips_omit_date():
             "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (10, 0))),
             "chainID": "omit1234",
         }
-    )
+    child_due, meta, _dnf = mod._compute_anchor_child_due(parent)
     expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 10), (9, 0)))
     expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next due with omit: {mod.core.fmt_isoz(child_due)}")
     expect(meta.get("target_field") == "due", f"expected due target field: {meta}")
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+    evaluator = RecurrenceEvaluator.from_task(parent, timezone=mod.core._LOCAL_TZ)
+    result = evaluator.select_mode(
+        "skip",
+        due_local=mod.core.to_local(mod.core.parse_dt_any(parent["due"])),
+        end_local=mod.core.to_local(mod.core.parse_dt_any(parent["end"])),
+        next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
+        fallback_hhmm=(9, 0),
+    )
+    expect(
+        result.selected_occurrence is not None
+        and result.selected_occurrence.astimezone(timezone.utc) == child_due,
+        f"omit evaluator drifted from hook: {result!r} vs {child_due!r}",
+    )
 
 
 def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due():

@@ -3504,63 +3504,6 @@ def _factor_matches_on_impl(
     return selected == d
 
 
-def _next_after_term_impl(
-    term,
-    ref_d: date,
-    default_seed: date,
-    seed_base=None,
-    business_calendar=None,
-):
-    next_atom = _with_business_calendar(next_after_factor, business_calendar)
-    matches = _with_business_calendar(factor_matches_on, business_calendar)
-    return _scheduler_expr.next_after_term(
-        term,
-        ref_d,
-        default_seed,
-        seed_base=seed_base,
-        next_after_atom_with_mods=next_atom,
-        atom_matches_on=matches,
-        intersection_guard_steps=INTERSECTION_GUARD_STEPS,
-    )
-
-
-def _next_after_expr_impl(
-    dnf,
-    after_date,
-    default_seed=None,
-    seed_base=None,
-    date_is_excluded=None,
-    business_calendar=None,
-):
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    next_for_and_fn = _with_business_calendar(_next_for_and, business_calendar)
-    term_candidates = _with_business_calendar(
-        _term_candidates_in_month,
-        business_calendar,
-    )
-    matches = _with_business_calendar(factor_matches_on, business_calendar)
-    next_term = _with_business_calendar(next_after_term, business_calendar)
-    return _scheduler_expr.next_after_expr(
-        dnf,
-        after_date,
-        default_seed=default_seed,
-        seed_base=seed_base,
-        active_mod_keys=_active_mod_keys,
-        expand_weekly_cached=expand_weekly_cached,
-        term_rand_info=_term_rand_info,
-        atype=_atype,
-        next_for_and=next_for_and_fn,
-        months_since=_months_since,
-        term_candidates_in_month=term_candidates,
-        random_identity=_random_identity,
-        random_pick_indices=_random_pick_indices,
-        atom_matches_on=matches,
-        next_after_term=next_term,
-        date_is_excluded=date_is_excluded,
-        is_business_day=business_calendar.is_business_day,
-    )
-
-
 def business_calendar_definitions():
     return _business_calendar_config.parse_business_calendar_definitions(
         BUSINESS_CALENDAR_CONFIG
@@ -3846,6 +3789,8 @@ next_after_factor = _scheduler_api.next_after_factor
 factor_matches_on = _scheduler_api.factor_matches_on
 next_after_term = _scheduler_api.next_after_term
 next_after_expr = _scheduler_api.next_after_expr
+_next_after_term_impl = _scheduler_api.next_after_term
+_next_after_expr_impl = _scheduler_api.next_after_expr
 
 _natural_language_api = _import_sibling("natural_language_api").for_core(sys.modules[__name__])
 describe_anchor_expr = _natural_language_api.describe_anchor_expr

@@ -370,33 +370,6 @@ else:
 
 _timeutil = _import_sibling("timeutil")
 
-def now_utc():
-    return _timeutil.now_utc()
-
-
-def to_local(dt_utc: datetime) -> datetime:
-    return _timeutil.to_local(dt_utc, _LOCAL_TZ)
-
-
-def utc_to_local_naive(dt_utc: datetime) -> datetime:
-    return _timeutil.utc_to_local_naive(dt_utc, _LOCAL_TZ)
-
-
-def local_naive_to_utc(dt_local_naive: datetime) -> datetime:
-    return _timeutil.local_naive_to_utc(dt_local_naive, _LOCAL_TZ)
-
-
-def fmt_dt_local(dt_utc: datetime) -> str:
-    return _timeutil.fmt_dt_local(dt_utc, _LOCAL_TZ)
-
-
-def fmt_isoz(dt_utc: datetime) -> str:
-    return _timeutil.fmt_isoz(dt_utc)
-
-
-def _ensure_utc(dt_utc: datetime) -> datetime:
-    return _timeutil.ensure_utc(dt_utc)
-
 
 # --- Date/time config ---
 DATE_FORMATS = ("%Y%m%dT%H%M%SZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d")
@@ -887,33 +860,7 @@ def _parse_group_with_inline_mods(typ: str, ival: int, spec: str, outer_mods_str
     return or_terms
 
 
-# ------------------------------------------------------------------------------
-# Date/time parsing & humanization
-# ------------------------------------------------------------------------------
-def coerce_int(v, default=None):
-    return _common.coerce_int(v, default=default)
-
-
-def parse_dt_any(s: str):
-    return _timeutil.parse_dt_any(s, DATE_FORMATS)
-
 _dates = _import_sibling("dates")
-
-
-def month_len(y, m):
-    return _dates.month_len(y, m)
-
-
-def add_months(d: date, months: int) -> date:
-    return _dates.add_months(d, months)
-
-
-def months_days_between(d1: date, d2: date):
-    return _dates.months_days_between(d1, d2)
-
-
-def humanize_delta(from_dt: datetime, to_dt: datetime, use_months_days: bool):
-    return _dates.humanize_delta(from_dt, to_dt, use_months_days)
 
 
 _recurrence_metadata = _import_sibling("recurrence_metadata")
@@ -1084,34 +1031,6 @@ _recurrence_candidates = _import_sibling("recurrence_candidates").for_core(
 )
 _anchors_between_large_range = _recurrence_candidates.anchors_between_large_range
 anchors_between_expr = _recurrence_candidates.anchors_between_expr
-
-
-def expr_has_m_or_y(dnf) -> bool:
-    return _schedule_utils.expr_has_m_or_y(dnf)
-
-
-def pick_hhmm_from_dnf_for_date(
-    dnf,
-    target: date,
-    default_seed: date,
-    seed_base=None,
-    business_calendar=None,
-):
-    return _schedule_utils.pick_hhmm_from_dnf_for_date(
-        dnf,
-        target,
-        default_seed,
-        seed_base=seed_base,
-        atom_matches_on=_with_business_calendar(factor_matches_on, business_calendar),
-    )
-
-
-# ------------------------------------------------------------------------------
-# Datetime construction (local wall-clock -> UTC)
-# ------------------------------------------------------------------------------
-def build_local_datetime(d: date, hhmm=(DEFAULT_DUE_HOUR, 0)) -> datetime:
-    return _timeutil.build_local_datetime(d, hhmm, _LOCAL_TZ)
-
 
 
 def _rewrite_weekly_multi_time_atoms(s: str) -> str:
@@ -1332,6 +1251,29 @@ next_after_factor = _scheduler_api.next_after_factor
 factor_matches_on = _scheduler_api.factor_matches_on
 next_after_term = _scheduler_api.next_after_term
 next_after_expr = _scheduler_api.next_after_expr
+
+# Date/time adapters are bound after scheduler construction so date-specific
+# slot selection can reuse the facade's business-calendar callback.
+_time_api = _import_sibling("time_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+now_utc = _time_api.now_utc
+to_local = _time_api.to_local
+utc_to_local_naive = _time_api.utc_to_local_naive
+local_naive_to_utc = _time_api.local_naive_to_utc
+fmt_dt_local = _time_api.fmt_dt_local
+fmt_isoz = _time_api.fmt_isoz
+_ensure_utc = _time_api._ensure_utc
+coerce_int = _time_api.coerce_int
+parse_dt_any = _time_api.parse_dt_any
+month_len = _time_api.month_len
+add_months = _time_api.add_months
+months_days_between = _time_api.months_days_between
+humanize_delta = _time_api.humanize_delta
+expr_has_m_or_y = _time_api.expr_has_m_or_y
+pick_hhmm_from_dnf_for_date = _time_api.pick_hhmm_from_dnf_for_date
+build_local_datetime = _time_api.build_local_datetime
 
 _natural_language_api = _import_sibling("natural_language_api").for_core(
     sys.modules[__name__],

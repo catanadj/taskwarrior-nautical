@@ -61,27 +61,6 @@ def collect_prev_two(
     return prevs
 
 
-def existing_next_task(
-    parent_task: dict,
-    next_no: int,
-    *,
-    export_uuid_short_cached,
-    get_chain_export,
-    snapshot_rows: list[dict] | None = None,
-    snapshot_loaded: bool = False,
-) -> dict | None:
-    """Compatibility wrapper returning only a found task."""
-    result = existing_next_lookup(
-        parent_task,
-        next_no,
-        export_uuid_short_cached=export_uuid_short_cached,
-        get_chain_export=get_chain_export,
-        snapshot_rows=snapshot_rows,
-        snapshot_loaded=snapshot_loaded,
-    )
-    return result.task if result.is_found else None
-
-
 def existing_next_lookup(
     parent_task: dict,
     next_no: int,

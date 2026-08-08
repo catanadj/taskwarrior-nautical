@@ -290,27 +290,6 @@ def export_uuid_short_result(
         return LookupResult.unavailable(f"UUID export returned invalid JSON: {exc}")
 
 
-def task_exists_by_uuid_uncached(
-    *,
-    run_task,
-    task_cmd_prefix,
-    uuid_str: str,
-    env=None,
-    timeout: float = 2.5,
-    retries: int = 2,
-    diag=None,
-) -> bool:
-    return task_lookup_by_uuid_uncached(
-        run_task=run_task,
-        task_cmd_prefix=task_cmd_prefix,
-        uuid_str=uuid_str,
-        env=env,
-        timeout=timeout,
-        retries=retries,
-        diag=diag,
-    ).is_found
-
-
 def task_lookup_by_uuid_uncached(
     *,
     run_task,

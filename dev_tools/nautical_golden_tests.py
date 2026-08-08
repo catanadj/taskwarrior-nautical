@@ -2354,7 +2354,8 @@ def test_on_modify_no_explicit_taskdata_skips_rc_data_location():
         return True, json.dumps({"uuid": "deadbeef"}), ""
 
     mod._run_task = _fake_run_task
-    _ = mod._task_exists_by_uuid_uncached("deadbeef", env={})
+    lookup = mod._task_lookup_by_uuid("deadbeef", env={})
+    expect(lookup.is_found, f"typed UUID lookup rejected task: {lookup}")
     expect(calls, "expected _run_task to be called")
     expect(
         all(not str(part).startswith("rc.data.location=") for part in calls[0]),
@@ -3161,7 +3162,7 @@ def test_chainid_legacy_reads_do_not_drive_chain_identity():
     )
     expect(with_legacy == without_legacy, "legacy chainid should not change stable child UUIDs")
     expect(
-        modify_chain_reads.existing_next_task({"chainid": "legacy-1", "link": 2}, 3, export_uuid_short_cached=lambda _ref: None, get_chain_export=lambda *_args, **_kwargs: [] ) is None,
+        modify_chain_reads.existing_next_lookup({"chainid": "legacy-1", "link": 2}, 3, export_uuid_short_cached=lambda _ref: None, get_chain_export=lambda *_args, **_kwargs: [] ).is_absent,
         "legacy chainid should not drive existing next task lookup",
     )
     expect(
@@ -16086,7 +16087,6 @@ def test_on_modify_completion_preflight_context_happy_path():
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    mod._existing_next_task = lambda _task, _next_no, _snapshot=None: None
     models = core._import_sibling("modify_models")
     mod._completion_chain_snapshot = lambda *_a, **_k: models.CompletionChainSnapshot(
         mode="recent", rows=[], loaded=True
@@ -16510,7 +16510,7 @@ def test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export():
     )
     expect(rows == [] and calls == [], f"empty snapshot triggered a full export: calls={calls}, rows={rows}")
 
-    existing = reads.existing_next_task(
+    existing = reads.existing_next_lookup(
         {"chainID": "cid", "link": 5},
         6,
         export_uuid_short_cached=lambda *_a: (_ for _ in ()).throw(AssertionError("UUID export should not run")),
@@ -16518,7 +16518,7 @@ def test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export():
         snapshot_rows=[{"uuid": "next-uuid", "link": 6, "status": "pending"}],
         snapshot_loaded=True,
     )
-    expect(existing and existing.get("uuid") == "next-uuid", f"duplicate guard ignored snapshot: {existing}")
+    expect(existing.is_found and existing.task.get("uuid") == "next-uuid", f"duplicate guard ignored snapshot: {existing}")
 
 
 def test_on_modify_completion_defers_chain_export_until_after_preflight():
@@ -26951,7 +26951,7 @@ def test_on_modify_read_query_broker_deduplicates_and_invalidates_exports():
 
         uuid_task = mod._export_uuid_short("aaaaaaaa")
         expect(uuid_task and uuid_task.get("uuid"), "UUID export did not return a task")
-        expect(mod._task_exists_by_uuid_uncached("aaaaaaaa", None), "UUID existence lookup rejected cached task")
+        expect(mod._task_lookup_by_uuid("aaaaaaaa", None).is_found, "UUID lookup rejected cached task")
         expect(calls["count"] == 2, f"UUID export and existence lookup were not shared: {calls}")
 
         mod._invalidate_read_query_cache()
@@ -27309,7 +27309,7 @@ def test_completion_preflight_stops_on_unavailable_next_lookup():
     ok = preflight.completion_existing_next_or_fail(
         {"uuid": "parent", "link": 1},
         2,
-        existing_next_task=lambda *_a: support.LookupResult.unavailable("lock busy"),
+        existing_next_lookup=lambda *_a: support.LookupResult.unavailable("lock busy"),
         short=lambda value: str(value)[:8],
         panel=lambda *args, **kwargs: panels.append((args, kwargs)),
         print_task=lambda task: printed.append(task),

@@ -435,7 +435,6 @@ def _invalidate_read_query_cache() -> None:
         pass
     for name in (
         "_export_uuid_short_cached",
-        "_task_exists_by_uuid_cached",
         "_tw_export_chain_cached_key",
     ):
         try:
@@ -1921,12 +1920,6 @@ def _export_uuid_short(u_short: str, env=None):
         return None
 
 
-def _task_exists_by_uuid(u: str, env: dict | None) -> bool:
-    if env is None:
-        return _task_exists_by_uuid_cached(u)
-    return _task_exists_by_uuid_uncached(u, env=env)
-
-
 def _task_lookup_by_uuid(u: str, env: dict | None):
     """Return a tri-state child verification result for mutation decisions."""
     hook_support = _module("hook_support", required=False)
@@ -1949,40 +1942,6 @@ def _task_lookup_by_uuid(u: str, env: dict | None):
         diag=_diag,
     )
 
-
-@lru_cache(maxsize=512)
-def _task_exists_by_uuid_cached(u: str) -> bool:
-    return _task_exists_by_uuid_uncached(u, env=None)
-
-
-def _task_exists_by_uuid_uncached(u: str, env: dict | None) -> bool:
-    if env is None:
-        cached_read = _read_query_get("uuid", str(u or "").lower())
-        if cached_read is not _READ_QUERY_MISSING:
-            return isinstance(cached_read, dict) and bool(cached_read.get("uuid"))
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.task_exists_by_uuid_uncached(
-            run_task=_run_task,
-            task_cmd_prefix=_task_cmd_prefix(),
-            uuid_str=u,
-            env=env,
-            timeout=2.5,
-            retries=2,
-            diag=_diag,
-        )
-    q = _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{u}", "export"]
-    ok, out, err = _run_task(q, env=env, timeout=2.5, retries=2)
-    if not ok:
-        _diag(f"task exists check failed (uuid={u[:8]}): {err.strip()}")
-        return False
-    try:
-        data = json.loads(out.strip() or "{}")
-    except Exception:
-        data = {}
-    if env is None:
-        _read_query_set("uuid", str(u or "").lower(), data if isinstance(data, dict) else {})
-    return bool(data.get("uuid"))
 
 def _reserve_child_uuid(env: dict) -> str:
     candidate = str(uuid.uuid4())
@@ -3130,18 +3089,6 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
         _diag(f"chain read unavailable (chainID={chain_id}): {exc}")
         return None
     return list(cached)
-
-
-def _existing_next_task(parent_task: dict, next_no: int, chain_snapshot=None) -> dict | None:
-    modify_chain_reads = _module("modify_chain_reads")
-    return modify_chain_reads.existing_next_task(
-        parent_task,
-        next_no,
-        export_uuid_short_cached=_export_uuid_short_cached,
-        get_chain_export=_get_chain_export,
-        snapshot_rows=getattr(chain_snapshot, "rows", None),
-        snapshot_loaded=bool(getattr(chain_snapshot, "loaded", False)),
-    )
 
 
 def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
@@ -6321,7 +6268,7 @@ def _completion_existing_next_or_fail(new: dict, next_no: int, chain_snapshot=No
     return modify_completion_preflight.completion_existing_next_or_fail(
         new,
         next_no,
-        existing_next_task=lambda task, link: _existing_next_lookup(task, link, chain_snapshot),
+        existing_next_lookup=lambda task, link: _existing_next_lookup(task, link, chain_snapshot),
         short=_short,
         panel=_panel,
         print_task=_print_task,

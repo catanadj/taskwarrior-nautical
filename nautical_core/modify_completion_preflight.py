@@ -85,12 +85,12 @@ def completion_existing_next_or_fail(
     new: dict,
     next_no: int,
     *,
-    existing_next_task,
+    existing_next_lookup,
     short,
     panel,
     print_task,
 ) -> bool:
-    existing_next = existing_next_task(new, next_no)
+    existing_next = existing_next_lookup(new, next_no)
     if getattr(existing_next, "is_unavailable", False):
         panel(
             "⚠ Chain lookup unavailable",

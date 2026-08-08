@@ -9,6 +9,8 @@ from . import calendar_feedback, panel_diagnostics
 from .occurrence_provider import Occurrence, _sort_datetimes
 from .timeutil import compare_datetimes
 
+_COMPACT_ANCHOR_FILE_MAX_PROBES = 512
+
 
 def _preview_seed_base(task: dict[str, Any], fallback_chain_id: str) -> str:
     """Resolve the stable preview identity through the shared context model."""
@@ -467,7 +469,7 @@ def _anchor_file_preview_occurrences(
         )
         probe = after_local_dt
         probe_inclusive = inclusive
-        for _ in range(512):
+        for _ in range(_COMPACT_ANCHOR_FILE_MAX_PROBES):
             selected = provider.first_after(
                 probe,
                 build_local_datetime=core.build_local_datetime,

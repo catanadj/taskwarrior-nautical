@@ -505,16 +505,15 @@ class AnchorFileOccurrenceProvider:
     ) -> Occurrence | None:
         """Find one file occurrence without building the sorted candidate cache."""
         selected: Occurrence | None = None
+        selected_datetime: datetime | None = None
         for item_date, hhmm, description in self._records():
             raw_candidate = build_local_datetime(item_date, hhmm)
             candidate = to_local(raw_candidate)
             comparison = compare_datetimes(candidate, after_local)
             if comparison < 0 or (comparison == 0 and not inclusive):
                 continue
-            if selected is None or (
-                selected.local_datetime is not None
-                and compare_datetimes(candidate, selected.local_datetime) < 0
-            ):
+            if selected_datetime is None or compare_datetimes(candidate, selected_datetime) < 0:
+                selected_datetime = candidate
                 selected = Occurrence(
                     day=item_date,
                     hour=hhmm[0],

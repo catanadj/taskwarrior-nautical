@@ -4108,7 +4108,7 @@ def _compute_anchor_child_due(parent: dict):
         anchor_inclusion = core._import_sibling("anchor_inclusion")
         builder = getattr(anchor_inclusion, "_build_anchor_file_provider", None)
         evaluator_provider_compatible = str(getattr(builder, "__module__", "")).endswith("anchor_inclusion")
-    if not str(parent.get("omit_file") or "").strip() and evaluator_provider_compatible:
+    if evaluator_provider_compatible:
         try:
             return _compute_anchor_child_due_evaluator(parent)
         except NotImplementedError:

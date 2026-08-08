@@ -196,14 +196,40 @@ class RecurrenceEvaluator:
 
         return parse_anchor_expr_to_dnf_cached(self.spec.anchor)
 
-    def _parse_omit(self) -> list:
+    def _parse_omit(self) -> Any:
         from . import parse_anchor_expr_to_dnf_cached, resolve_omit_presets
         from .anchor_omit import validate_omit_expr_strict
 
-        return validate_omit_expr_strict(
-            self.spec.omit,
-            validate_anchor_expr_cached=parse_anchor_expr_to_dnf_cached,
-            resolve_omit_presets=resolve_omit_presets,
+        omit_dnf = None
+        if self.spec.omit:
+            omit_dnf = validate_omit_expr_strict(
+                self.spec.omit,
+                validate_anchor_expr_cached=parse_anchor_expr_to_dnf_cached,
+                resolve_omit_presets=resolve_omit_presets,
+            )
+        omit_dates: frozenset[date] = frozenset()
+        omit_descriptions: dict[date, str] = {}
+        if self.spec.omit_file:
+            core = self._core_module()
+            omit_files = core._import_sibling("omit_files")
+            omit_dates = omit_files.load_omit_file_dates(
+                self.spec.omit_file,
+                getattr(core, "OMIT_FILE_DIR", ""),
+                business_calendar=self.context.business_calendar,
+            )
+            omit_descriptions = omit_files.load_omit_file_descriptions(
+                self.spec.omit_file,
+                getattr(core, "OMIT_FILE_DIR", ""),
+                business_calendar=self.context.business_calendar,
+            )
+        if not omit_dnf and not omit_dates and not omit_descriptions:
+            return []
+        from .anchor_omit import combine_omit_state
+
+        return combine_omit_state(
+            omit_dnf=omit_dnf,
+            omit_dates=omit_dates,
+            omit_descriptions=omit_descriptions,
         )
 
     def _parse_cp_tokens(self) -> list | None:

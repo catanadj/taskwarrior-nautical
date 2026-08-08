@@ -3625,7 +3625,6 @@ def _compute_anchor_child_due_evaluator(parent: dict):
         due_local=due_local,
         end_local=end_local,
         due_explicit=due_dt_utc is not None,
-        next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
         fallback_hhmm=(due_local.hour, due_local.minute),
         default_seed_date=due_local.date(),
     )

@@ -316,7 +316,7 @@ class RecurrenceEvaluator:
         self,
         after_local: datetime,
         *,
-        next_occurrence_after_local_dt: Callable[..., Any],
+        next_occurrence_after_local_dt: Callable[..., Any] | None = None,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = False,
@@ -326,8 +326,9 @@ class RecurrenceEvaluator:
     ) -> Occurrence | None:
         """Return the next included expression/file occurrence.
 
-        The scheduler callback remains injectable during migration; all source
-        merging, omit handling, identity, and timezone conversion live here.
+        The shared scheduler is used by default.  A callback remains accepted
+        for deterministic tests and specialized integrations while callers
+        migrate to this evaluator-owned lookup.
         """
         if self.kind != "anchor":
             raise ValueError("Occurrence lookup requires an anchor recurrence.")
@@ -337,6 +338,9 @@ class RecurrenceEvaluator:
         if isinstance(max_file_skips, bool) or not isinstance(max_file_skips, int) or max_file_skips <= 0:
             raise ValueError("Anchor-file omission scan limit must be a positive integer.")
         from . import anchor_inclusion
+        next_occurrence_after_local_dt = (
+            next_occurrence_after_local_dt or self._default_next_occurrence_after_local_dt
+        )
         anchor_file_provider = anchor_file_provider or self._anchor_file_provider_for(fallback_hhmm)
 
         return anchor_inclusion.next_included_occurrence(
@@ -362,7 +366,7 @@ class RecurrenceEvaluator:
         self,
         after_local: datetime,
         *,
-        next_occurrence_after_local_dt: Callable[..., Any],
+        next_occurrence_after_local_dt: Callable[..., Any] | None = None,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = False,
@@ -386,6 +390,9 @@ class RecurrenceEvaluator:
             raise ValueError("Anchor-file omission scan limit must be a positive integer.")
         from . import anchor_inclusion
         from .occurrence_provider import _require_forward_progress
+        next_occurrence_after_local_dt = (
+            next_occurrence_after_local_dt or self._default_next_occurrence_after_local_dt
+        )
         anchor_file_provider = anchor_file_provider or self._anchor_file_provider_for(fallback_hhmm)
 
         cursor = after_local
@@ -426,7 +433,7 @@ class RecurrenceEvaluator:
         end_local: datetime,
         *,
         limit: int,
-        next_occurrence_after_local_dt: Callable[..., Any],
+        next_occurrence_after_local_dt: Callable[..., Any] | None = None,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = True,
@@ -492,7 +499,7 @@ class RecurrenceEvaluator:
         *,
         due_local: datetime,
         end_local: datetime,
-        next_occurrence_after_local_dt: Callable[..., Any],
+        next_occurrence_after_local_dt: Callable[..., Any] | None = None,
         due_explicit: bool = True,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
@@ -590,7 +597,7 @@ class RecurrenceEvaluator:
         after_local: datetime,
         *,
         limit: int,
-        next_occurrence_after_local_dt: Callable[..., Any],
+        next_occurrence_after_local_dt: Callable[..., Any] | None = None,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = False,
@@ -629,6 +636,30 @@ class RecurrenceEvaluator:
         from . import _PKG_PROXY
 
         return _PKG_PROXY
+
+    def _default_next_occurrence_after_local_dt(
+        self,
+        dnf,
+        after_local_dt: datetime,
+        *,
+        default_seed_date: date | None,
+        seed_base: str,
+        omit_dnf=None,
+        fallback_hhmm: tuple[int, int] | None = None,
+    ):
+        """Resolve the shared date/time scheduler for evaluator consumers."""
+        from .add_anchor_compute import anchor_next_occurrence_after_local_dt
+
+        return anchor_next_occurrence_after_local_dt(
+            dnf,
+            after_local_dt,
+            fallback_hhmm=fallback_hhmm or (9, 0),
+            interval_seed=default_seed_date,
+            seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            default_seed_date=default_seed_date,
+            core=self._core_module(),
+        )
 
     @staticmethod
     def _validate_hhmm(value: tuple[int, int]) -> None:

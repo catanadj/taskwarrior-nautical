@@ -19696,7 +19696,6 @@ def test_recurrence_evaluator_shadow_parity_time_matrix():
             "skip",
             due_local=due_local,
             end_local=end_local,
-            next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
             fallback_hhmm=(9, 0),
         )
         expect(
@@ -19736,7 +19735,6 @@ def test_recurrence_evaluator_shadow_parity_dst_and_business_calendar():
             "skip",
             due_local=due_local,
             end_local=end_local,
-            next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
             fallback_hhmm=(9, 0),
         )
         expect(

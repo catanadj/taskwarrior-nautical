@@ -3260,47 +3260,6 @@ def _anchor_slot_local_dt(target_date, hhmm) -> datetime:
         hhmm = (int(hour), int(minute))
     return core.to_local(core.build_local_datetime(target_date, hhmm))
 
-def _skip_reference_dt_local(
-    dnf,
-    end_local: "datetime",
-    due_local: Optional["datetime"],
-    default_seed_date,
-    seed_base: str,
-) -> "datetime":
-    """Choose the reference datetime for SKIP mode.
-
-    For multi-time anchors, completing *between* scheduled slots should advance to the *next* slot
-    (e.g. 09→12) rather than skipping it (09→18) due to a future due timestamp.
-
-    Rules:
-      - If there is no due: advance from completion time.
-      - If completion is on/after due: advance from completion time.
-      - If completion is before due:
-          * Single-slot anchors: treat completion as fulfilling the due slot (advance from due)
-            to avoid respawning the same slot.
-          * Multi-slot anchors (same day): if completion time is after an earlier slot on that day,
-            treat completion as fulfilling the latest earlier slot; otherwise, treat as fulfilling
-            the due slot.
-    """
-    if due_local is None:
-        return end_local
-
-    if _compare_datetimes(end_local, due_local) >= 0:
-        return end_local
-
-    slots = _extract_time_slots_for_date(dnf, due_local.date(), default_seed_date, seed_base)
-    if len(slots) <= 1:
-        return due_local
-
-    if end_local.date() != due_local.date():
-        return due_local
-
-    prev_slots = [s for s in slots if _compare_datetimes(_anchor_slot_local_dt(due_local.date(), s), end_local) <= 0]
-    if not prev_slots:
-        return due_local
-
-    return _anchor_slot_local_dt(due_local.date(), prev_slots[-1])
-
 def _as_local_dt(d: datetime | None) -> datetime | None:
     if d is None:
         return None
@@ -3393,65 +3352,6 @@ def _next_occurrence_after_local_dt(
         slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
     return _anchor_slot_local_dt(nxt_date, slots[0])
 
-
-def _missed_occurrences_between_local(
-    dnf,
-    due_local_dt: datetime,
-    end_local_dt: datetime,
-    default_seed_date,
-    seed_base: str,
-    omit_dnf=None,
-    fallback_hhmm: tuple[int, int] | None = None,
-    guard: int = 512,
-):
-    """Return occurrences strictly after due and <= end."""
-    if _compare_datetimes(end_local_dt, due_local_dt) <= 0:
-        return []
-    missed: list[datetime] = []
-    probe = due_local_dt
-    for _ in range(guard):
-        nxt = _next_occurrence_after_local_dt(
-            dnf,
-            probe,
-            default_seed_date,
-            seed_base,
-            omit_dnf=omit_dnf,
-            fallback_hhmm=fallback_hhmm,
-        )
-        if nxt is None or _compare_datetimes(nxt, end_local_dt) > 0:
-            break
-        missed.append(nxt)
-        probe = nxt
-    return missed
-
-
-def _collect_missed_occurrences(
-    dnf,
-    after_local_dt: datetime,
-    until_local_dt: datetime,
-    default_seed_date,
-    seed_base: str,
-    omit_dnf=None,
-    fallback_hhmm: tuple[int, int] | None = None,
-    limit: int = 25,
-) -> list[datetime]:
-    """Collect missed *datetime* occurrences in (after_local_dt, until_local_dt].
-
-    This is a hook-level helper: core recurrence operates on dates, while Nautical
-    multi-time anchors (@t=...) need occurrence-level stepping.
-    """
-    if limit is None or limit <= 0:
-        limit = 25
-    return _missed_occurrences_between_local(
-        dnf,
-        due_local_dt=after_local_dt,
-        end_local_dt=until_local_dt,
-        default_seed_date=default_seed_date,
-        seed_base=seed_base,
-        omit_dnf=omit_dnf,
-        fallback_hhmm=fallback_hhmm,
-        guard=int(limit),
-    )
 
 def _human_delta(a, b, prefer_months=True):
     try:
@@ -3891,183 +3791,12 @@ def _anchor_file_due_for_mode(
     )
 
 
-def _anchor_due_mode_all(
-    *,
-    dnf,
-    omit_dnf,
-    due_local,
-    end_local,
-    due_dt_utc,
-    default_seed_date,
-    seed_base,
-    fallback_hhmm,
-) -> tuple[object, Any]:
-    mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
-    missed_dts = _collect_missed_occurrences(
-        dnf,
-        after_local_dt=due_local,
-        until_local_dt=end_local,
-        default_seed_date=default_seed_date,
-        seed_base=seed_base,
-        omit_dnf=omit_dnf,
-        fallback_hhmm=fallback_hhmm,
-        limit=25,
-    )
-    if missed_dts:
-        result = mode_result_type(
-            selected_occurrence=missed_dts[0],
-            mode="all",
-            basis="missed",
-            source="anchor",
-            missed_count=len(missed_dts),
-            missed_preview=tuple(missed_dts[:5]),
-        )
-        return missed_dts[0], result
-    ref_local = _skip_reference_dt_local(
-        dnf,
-        end_local=end_local,
-        due_local=(due_local if due_dt_utc else None),
-        default_seed_date=default_seed_date,
-        seed_base=seed_base,
-    )
-    nxt_local = _next_occurrence_after_local_dt(
-        dnf,
-        after_local_dt=ref_local,
-        default_seed_date=default_seed_date,
-        seed_base=seed_base,
-        omit_dnf=omit_dnf,
-        fallback_hhmm=fallback_hhmm,
-    )
-    return nxt_local, mode_result_type(
-        selected_occurrence=nxt_local,
-        mode="all",
-        basis="after_due",
-        source="anchor",
-    )
-
-
-def _anchor_due_mode_flex(
-    *,
-    dnf,
-    omit_dnf,
-    due_local,
-    end_local,
-    due_dt_utc,
-    default_seed_date,
-    seed_base,
-    fallback_hhmm,
-) -> tuple[object, Any]:
-    mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
-    missed_dts = []
-    if due_dt_utc and _compare_datetimes(end_local, due_local) > 0:
-        missed_dts = _collect_missed_occurrences(
-            dnf,
-            after_local_dt=due_local,
-            until_local_dt=end_local,
-            default_seed_date=default_seed_date,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            fallback_hhmm=fallback_hhmm,
-            limit=25,
-        )
-    nxt_local = _next_occurrence_after_local_dt(
-        dnf,
-        after_local_dt=end_local,
-        default_seed_date=default_seed_date,
-        seed_base=seed_base,
-        omit_dnf=omit_dnf,
-        fallback_hhmm=fallback_hhmm,
-    )
-    return nxt_local, mode_result_type(
-        selected_occurrence=nxt_local,
-        mode="flex",
-        basis="flex",
-        source="anchor",
-        missed_count=len(missed_dts),
-        missed_preview=tuple(missed_dts[:5]),
-    )
-
-
-def _anchor_due_mode_skip(
-    *,
-    dnf,
-    omit_dnf,
-    due_local,
-    end_local,
-    default_seed_date,
-    seed_base,
-    fallback_hhmm,
-) -> tuple[object, Any]:
-    mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
-    nxt_local = _next_occurrence_after_local_dt(
-        dnf,
-        after_local_dt=(_later_datetime(end_local, due_local) if due_local else end_local),
-        default_seed_date=default_seed_date,
-        seed_base=seed_base,
-        omit_dnf=omit_dnf,
-        fallback_hhmm=fallback_hhmm,
-    )
-    return nxt_local, mode_result_type(
-        selected_occurrence=nxt_local,
-        mode="skip",
-        basis="after_end",
-        source="anchor",
-    )
-
-
-def _anchor_due_for_mode(
-    mode: str,
-    *,
-    dnf,
-    omit_dnf,
-    due_local,
-    end_local,
-    due_dt_utc,
-    default_seed_date,
-    seed_base,
-    fallback_hhmm,
-) -> tuple[object, Any]:
-    if mode == "all":
-        return _anchor_due_mode_all(
-            dnf=dnf,
-            omit_dnf=omit_dnf,
-            due_local=due_local,
-            end_local=end_local,
-            due_dt_utc=due_dt_utc,
-            default_seed_date=default_seed_date,
-            seed_base=seed_base,
-            fallback_hhmm=fallback_hhmm,
-        )
-    if mode == "flex":
-        return _anchor_due_mode_flex(
-            dnf=dnf,
-            omit_dnf=omit_dnf,
-            due_local=due_local,
-            end_local=end_local,
-            due_dt_utc=due_dt_utc,
-            default_seed_date=default_seed_date,
-            seed_base=seed_base,
-            fallback_hhmm=fallback_hhmm,
-        )
-    return _anchor_due_mode_skip(
-        dnf=dnf,
-        omit_dnf=omit_dnf,
-        due_local=due_local,
-        end_local=end_local,
-        default_seed_date=default_seed_date,
-        seed_base=seed_base,
-        fallback_hhmm=fallback_hhmm,
-    )
-
-
 def _compute_anchor_child_due_evaluator(parent: dict):
     """Compute an anchor child through the shared evaluator mode policy."""
     expr_str = str(parent.get("anchor") or "").strip()
     anchor_file_str = str(parent.get("anchor_file") or "").strip()
     if not ((expr_str and _validate_anchor_expr_cached(expr_str)) or anchor_file_str):
         return (None, None, None)
-    if str(parent.get("omit_file") or "").strip():
-        raise NotImplementedError("evaluator mode selection does not yet own omit_file sources")
 
     evaluator_module = _module("recurrence_evaluator")
     evaluator = evaluator_module.RecurrenceEvaluator.from_task(
@@ -4119,10 +3848,12 @@ def _compute_anchor_child_due(parent: dict):
             if not str(parent.get("anchor_file") or "").strip():
                 raise
         except ValueError as exc:
-            # An unsatisfiable omit rule has a more specific legacy guard;
-            # keep that diagnostic while the evaluator limit is harmonized.
-            if "omission scan exceeded" not in str(exc):
-                raise
+            # Keep the established user-facing diagnostic for an omit rule
+            # that removes every future occurrence, while preserving all
+            # other evaluator failures unchanged.
+            if "omission scan exceeded" in str(exc):
+                raise ValueError("No valid anchor occurrences found after applying omit rules.") from exc
+            raise
 
     expr_str, dnf = _anchor_dnf_from_parent(parent)
     anchor_file_str = (parent.get("anchor_file") or "").strip()
@@ -4158,18 +3889,6 @@ def _compute_anchor_child_due(parent: dict):
             fallback_hhmm=fallback_hhmm,
             seed_base=seed_base,
             anchor_file_provider=anchor_file_provider,
-        )
-    elif dnf and not anchor_file_str:
-        nxt_local, info = _anchor_due_for_mode(
-            mode,
-            dnf=dnf,
-            omit_dnf=omit_dnf,
-            due_local=due_local,
-            end_local=end_local,
-            due_dt_utc=due_dt_utc,
-            default_seed_date=default_seed,
-            seed_base=seed_base,
-            fallback_hhmm=fallback_hhmm,
         )
     else:
         occurrences = _anchor_included_occurrences(

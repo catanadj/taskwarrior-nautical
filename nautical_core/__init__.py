@@ -610,15 +610,9 @@ def _mon_to_int(tok: str) -> int | None:
 def _rewrite_year_month_aliases_in_context(dnf: list[list[dict]]) -> list[list[dict]]:
     return _year_tokens.rewrite_year_month_aliases_in_context(dnf, tok_range=_tok_range)
 
-# --- Anchor Canonical Form (ACF) ----------------------------------------------
-
-
-# Constants - no runtime config dependency
-ACF_COMPRESSED = True  # Always compress for best storage
-ACF_CHECKSUM_LEN = 8   # 8 chars = 32 bits of entropy
-
-
-# Weekday normalize, with rand / rand*
+_ACF_COMPRESSED = True
+ACF_COMPRESSED = _ACF_COMPRESSED
+ACF_CHECKSUM_LEN = 8
 _WD_ABBR = _tokenutil.WD_ABBR
 _WEEKLY_ALIAS = _tokenutil.WEEKLY_ALIAS
 _MONTHLY_ALIAS = _tokenutil.MONTHLY_ALIAS
@@ -626,120 +620,11 @@ _MONTHLY_ALIAS = _tokenutil.MONTHLY_ALIAS
 def _expand_weekly_aliases(spec: str) -> str:
     return _tokenutil.expand_weekly_aliases(spec)
 
-
-# ==============================================================================
-# SECTION: Anchor parsing (DNF/ACF helpers)
-# ==============================================================================
-# --- Token normalization ---
 def _expand_monthly_aliases(spec: str) -> str:
     return _tokenutil.expand_monthly_aliases(spec)
+
 def _normalize_weekday(s: str) -> str | None:
     return _tokenutil.normalize_weekday(s)
-
-# ------------------------------------------------------------------------------
-# ACF (Anchor Canonical Form) helpers
-# ------------------------------------------------------------------------------
-def _atom_sort_key(x: dict) -> tuple:
-    return _acf_support.atom_sort_key(x, json_mod=json)
-
-# Unpack function your validators call
-def _acf_unpack(packed: str) -> dict:
-    return _acf_support.acf_unpack(
-        packed,
-        base64_mod=base64,
-        zlib_mod=zlib,
-        json_mod=json,
-    )
-
-def _build_acf_impl(expr: str) -> str:
-    return _acf_support.build_acf(
-        expr,
-        parse_anchor_expr_to_dnf_cached=parse_anchor_expr_to_dnf_cached,
-        coerce_int=coerce_int,
-        normalize_spec_for_acf=_normalize_spec_for_acf,
-        mods_to_acf=_mods_to_acf,
-        atom_sort_key=_atom_sort_key,
-        json_mod=json,
-        zlib_mod=zlib,
-        base64_mod=base64,
-        hashlib_mod=hashlib,
-        acf_checksum_len=ACF_CHECKSUM_LEN,
-    )
-
-def _normalize_spec_for_acf_uncached(typ: str, spec: str):
-    return _acf_support.normalize_spec_for_acf_uncached(
-        typ,
-        spec,
-        expand_weekly_aliases=_expand_weekly_aliases,
-        split_csv_tokens=_split_csv_tokens,
-        normalize_weekday=_normalize_weekday,
-        expand_monthly_aliases=_expand_monthly_aliases,
-        re_mod=re,
-        year_pair=_year_pair,
-    )
-
-
-@_ttl_lru_cache(maxsize=512)
-def _normalize_spec_for_acf_cached(typ: str, spec: str, fmt: str):
-    typ = (typ or "").strip().lower()
-    if typ not in ("w", "m", "y"):
-        return None
-    spec = (spec or "").strip().lower()[:256]
-    fmt = "DM" if (fmt or "").upper() == "DM" else "MD"
-    return _normalize_spec_for_acf_uncached(typ, spec)
-
-
-def _normalize_spec_for_acf(typ: str, spec: str):
-    return _acf_support.normalize_spec_for_acf(
-        typ,
-        spec,
-        normalize_spec_for_acf_cached=lambda t, s: _normalize_spec_for_acf_cached(t, s, _yearfmt()),
-        clone_mod_value=_clone_mod_value,
-    )
-
-def is_valid_acf(acf_str: str) -> bool:
-    return _acf_support.is_valid_acf(
-        acf_str,
-        hashlib_mod=hashlib,
-        acf_checksum_len=ACF_CHECKSUM_LEN,
-        acf_unpack=_acf_unpack,
-    )
-
-
-
-def acf_to_original_format(acf_str: str) -> str:
-    return _acf_support.acf_to_original_format(
-        acf_str,
-        is_valid_acf=is_valid_acf,
-        acf_unpack=_acf_unpack,
-        acf_spec_to_string=_acf_spec_to_string,
-        acf_mods_to_string=_acf_mods_to_string,
-        format_selection_positions=_position_selection.format_positions,
-    )
-
-
-@_ttl_lru_cache(maxsize=512)
-def _year_pair_cached(a: int, b: int, fmt: str) -> tuple[int, int]:
-    """Interpret (a,b) according to ANCHOR_YEAR_FMT; return (day, month)."""
-    return (b, a) if fmt == "MD" else (a, b)
-
-
-def _year_pair(a: int, b: int) -> tuple[int, int]:
-    return _year_pair_cached(a, b, _yearfmt())
-
-def _mods_to_acf(mods: dict) -> dict:
-    return _acf_support.mods_to_acf(mods, hhmm_re=_hhmm_re)
-
-def _acf_mods_to_string(m: dict) -> str:
-    return _acf_support.acf_mods_to_string(m, wd_abbr=_WD_ABBR)
-
-def _acf_spec_to_string(typ: str, spec) -> str:
-    return _acf_support.acf_spec_to_string(
-        typ,
-        spec,
-        tok=_tok,
-        tok_range=_tok_range,
-    )
 
 
 # ==============================================================================
@@ -1664,6 +1549,26 @@ def _rewrite_weekly_multi_time_atoms(s: str) -> str:
         re_mod=re,
     )
 
+
+# ACF entry points are bound before parser construction because parser
+# validation and canonical-form generation share these compatibility names.
+_acf_api = _import_sibling("acf_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+_atom_sort_key = _acf_api._atom_sort_key
+_acf_unpack = _acf_api._acf_unpack
+_year_pair_cached = _acf_api._year_pair_cached
+_year_pair = _acf_api._year_pair
+_normalize_spec_for_acf_uncached = _acf_api._normalize_spec_for_acf_uncached
+_normalize_spec_for_acf_cached = _acf_api._normalize_spec_for_acf_cached
+_normalize_spec_for_acf = _acf_api._normalize_spec_for_acf
+_mods_to_acf = _acf_api._mods_to_acf
+_acf_mods_to_string = _acf_api._acf_mods_to_string
+_acf_spec_to_string = _acf_api._acf_spec_to_string
+_build_acf_impl = _acf_api._build_acf_impl
+is_valid_acf = _acf_api.is_valid_acf
+acf_to_original_format = _acf_api.acf_to_original_format
 
 # Parser entry points live in ``parser_api``; retain these aliases for the
 # established ``nautical_core`` import contract.

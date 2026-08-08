@@ -45,6 +45,12 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def parse_y_token(tok: str):
         return parse_y_token_cached(tok, core["_yearfmt"]())
 
+    def rewrite_year_month_aliases_in_context(dnf):
+        return core["_year_tokens"].rewrite_year_month_aliases_in_context(
+            dnf,
+            tok_range=core["_tok_range"],
+        )
+
     def fatal_bad_colon_in_year_tail(tail: str):
         return core["_parser_frontend"].fatal_bad_colon_in_year_tail(
             tail,
@@ -301,6 +307,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         _parse_atom_mods=parse_atom_mods,
         _parse_y_token_cached=parse_y_token_cached,
         _parse_y_token=parse_y_token,
+        _rewrite_year_month_aliases_in_context=rewrite_year_month_aliases_in_context,
         _fatal_bad_colon_in_year_tail=fatal_bad_colon_in_year_tail,
         _raise_on_bad_colon_year_tokens=raise_on_bad_colon_year_tokens,
         _skip_ws_pos=skip_ws_pos,

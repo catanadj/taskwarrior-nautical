@@ -40,6 +40,16 @@ _PKG_PROXY.__file__ = __file__
 _PKG_PROXY.__package__ = _PKG_IMPORT_ROOT
 _PKG_PROXY.__path__ = [_PKG_DIR]
 
+_parser_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.parser_models")
+AnchorMods = _parser_models.AnchorMods
+AnchorAtom = _parser_models.AnchorAtom
+AnchorTerm = _parser_models.AnchorTerm
+AnchorDNF = _parser_models.AnchorDNF
+AnchorValidationResult = _parser_models.AnchorValidationResult
+ParseError = _parser_models.ParseError
+YearTokenFormatError = _parser_models.YearTokenFormatError
+AndTermUnsatisfiable = _parser_models.AndTermUnsatisfiable
+
 
 def _import_sibling(module_name: str):
     _PKG_PROXY.__dict__.update(globals())
@@ -64,30 +74,7 @@ class _LazySibling:
         return getattr(self._resolve(), name)
 
 
-class AnchorMods(TypedDict, total=False):
-    t: str
-    bd: bool
-    wd: bool
-    pbd: int
-    nbd: int
-    nw: bool
-    day_offset: int
-    business_day_offset: int
-
-
-class AnchorAtom(TypedDict, total=False):
-    typ: str
-    type: str
-    spec: str
-    value: str
-    interval: int
-    mods: AnchorMods
-
-
-AnchorTerm: TypeAlias = list[AnchorAtom]
-AnchorDNF: TypeAlias = list[AnchorTerm]
 TaskDict: TypeAlias = dict[str, Any]
-AnchorValidationResult: TypeAlias = tuple[AnchorDNF | None, str | None]
 
 
 class HintMetaCfg(TypedDict, total=False):
@@ -1759,10 +1746,6 @@ cp_sequence_interval_for_link = _cp_parser.cp_sequence_interval_for_link
 
 
 # -------- Anchor parser (DNF with mods) ----------
-class ParseError(Exception):
-    pass
-
-
 def _parse_hhmm(s: str):
     return _parser_atoms.parse_hhmm(s, hhmm_re=_hhmm_re)
 
@@ -1801,130 +1784,8 @@ def _parse_y_token(tok: str):
     return _parse_y_token_cached(tok, _yearfmt())
 
 
-_anchor_preset_ref_re = re.compile(r"@([A-Za-z][A-Za-z0-9_-]*)")
-
-
-def _resolve_preset_refs(
-    expr: str,
-    *,
-    presets: dict,
-    table_name: str,
-    label: str,
-    _seen: tuple[str, ...] | frozenset[str] | None = None,
-) -> str:
-    raw = _unwrap_quotes(expr or "").strip()
-    if not raw:
-        return raw
-    presets = dict(presets or {})
-    seen_chain = tuple(sorted(_seen)) if isinstance(_seen, frozenset) else tuple(_seen or ())
-    seen = set(seen_chain)
-
-    def repl(match):
-        start = match.start()
-        if start > 0 and raw[start - 1] not in " \t\r\n(|+,":
-            return match.group(0)
-        end = match.end()
-        if end < len(raw) and raw[end] == "=":
-            return match.group(0)
-        name = match.group(1).strip().lower()
-        if name not in presets:
-            if presets:
-                available = ", ".join(f"@{item}" for item in sorted(presets))
-                hint = f" Available {label} presets: {available}."
-            else:
-                hint = f" No {label} presets are configured."
-            raise ParseError(
-                f"Unknown {label} preset '@{name}'.{hint} Define it under [{table_name}] in config-nautical.toml."
-            )
-        if name in seen:
-            chain = " -> ".join([*(f"@{x}" for x in seen_chain), f"@{name}"])
-            raise ParseError(f"Recursive {label} preset reference detected: {chain}")
-        resolved = _resolve_preset_refs(
-            presets[name],
-            presets=presets,
-            table_name=table_name,
-            label=label,
-            _seen=(*seen_chain, name),
-        )
-        return f"({resolved})"
-
-    return _anchor_preset_ref_re.sub(repl, raw)
-
-
-def _resolve_anchor_presets_impl(expr: str, *, _seen: tuple[str, ...] | frozenset[str] | None = None) -> str:
-    return _resolve_preset_refs(
-        expr,
-        presets=ANCHOR_PRESETS,
-        table_name="anchor_presets",
-        label="anchor",
-        _seen=_seen,
-    )
-
-
-def resolve_omit_presets(expr: str, *, _seen: tuple[str, ...] | frozenset[str] | None = None) -> str:
-    return _resolve_preset_refs(
-        expr,
-        presets=OMIT_PRESETS,
-        table_name="omit_presets",
-        label="omit",
-        _seen=_seen,
-    )
-
-
-def _preset_display_value(name: str, presets: dict, *, table_name: str, label: str) -> str:
-    raw = str(presets[name] or "").strip()
-    try:
-        resolved = _resolve_preset_refs(
-            raw,
-            presets=presets,
-            table_name=table_name,
-            label=label,
-            _seen=(name,),
-        ).strip()
-    except ParseError:
-        return raw
-    if resolved.startswith("(") and resolved.endswith(")"):
-        return resolved[1:-1].strip()
-    return resolved
-
-
-def anchor_preset_display(expr: str) -> tuple[str, str] | None:
-    raw = _unwrap_quotes(expr or "").strip()
-    m = re.match(r"^@([A-Za-z][A-Za-z0-9_-]*)$", raw)
-    if not m:
-        return None
-    name = m.group(1).strip().lower()
-    presets = dict(ANCHOR_PRESETS or {})
-    if name not in presets:
-        return None
-    return "Preset", f"@{name} → {_preset_display_value(name, presets, table_name='anchor_presets', label='anchor')}"
-
-
-def omit_preset_display(expr: str) -> tuple[str, str] | None:
-    raw = _unwrap_quotes(expr or "").strip()
-    m = re.match(r"^@([A-Za-z][A-Za-z0-9_-]*)$", raw)
-    if not m:
-        return None
-    name = m.group(1).strip().lower()
-    presets = dict(OMIT_PRESETS or {})
-    if name not in presets:
-        return None
-    return "Omit preset", f"@{name} → {_preset_display_value(name, presets, table_name='omit_presets', label='omit')}"
-
-
-# ------------------------------------------------------------------------------
 # Anchor DNF parser
 # ------------------------------------------------------------------------------
-def _normalize_anchor_expr_input(s: str) -> str:
-    return _parser_frontend.normalize_anchor_expr_input(
-        s,
-        unwrap_quotes=_unwrap_quotes,
-        rewrite_weekly_multi_time_atoms=_rewrite_weekly_multi_time_atoms,
-        re_mod=re,
-        parse_error_cls=ParseError,
-    )
-
-
 def _fatal_bad_colon_in_year_tail(tail: str) -> str | None:
     return _parser_frontend.fatal_bad_colon_in_year_tail(
         tail,
@@ -1955,35 +1816,6 @@ def _raise_if_comma_joined_anchors(full_tail: str) -> None:
     )
 
 
-def _normalize_monthly_ordinal_spec(spec: str) -> str:
-    return _parser_atoms.normalize_monthly_ordinal_spec(spec, re_mod=re)
-
-
-def _build_anchor_atom_dnf(head: str, full_tail: str):
-    return _parser_atoms.build_anchor_atom_dnf(
-        head,
-        full_tail,
-        parse_atom_head=_parse_atom_head,
-        parse_group_with_inline_mods=_parse_group_with_inline_mods,
-        normalize_monthly_ordinal_spec=_normalize_monthly_ordinal_spec,
-        split_csv_lower=_split_csv_lower,
-        parse_atom_mods=_parse_atom_mods,
-        parse_error_cls=ParseError,
-    )
-
-
-def _parse_anchor_atom_at(s: str, i: int, n: int):
-    return _parser_atoms.parse_anchor_atom_at(
-        s,
-        i,
-        n,
-        skip_ws_pos=_skip_ws_pos,
-        raise_if_comma_joined_anchors=_raise_if_comma_joined_anchors,
-        build_anchor_atom_dnf=_build_anchor_atom_dnf,
-        parse_error_cls=ParseError,
-    )
-
-
 @_ttl_lru_cache(maxsize=256)
 def _parse_anchor_expr_to_dnf_cached_obj(s: str, fmt: str) -> AnchorDNF:
     return parse_anchor_expr_to_dnf(s)
@@ -2007,10 +1839,6 @@ def _parse_anchor_expr_to_dnf_cached_impl(s: str) -> AnchorDNF:
 # ------------------------------------------------------------------------------
 # Anchor validators
 # ------------------------------------------------------------------------------
-class YearTokenFormatError(ParseError):
-    pass
-
-
 def _yearly_pair_from_fmt(a: int, b: int, fmt: str) -> tuple[int, int]:
     return _yearly_validation.yearly_pair_from_fmt(a, b, fmt)
 
@@ -2052,10 +1880,6 @@ def _validate_year_tokens_in_dnf(dnf):
 
 
 # ---- AND-term satisfiability guard -----------------------------------------
-class AndTermUnsatisfiable(ParseError):
-    pass
-
-
 _LEAP_YEAR_FOR_CHECKS = 2028
 
 
@@ -2855,9 +2679,21 @@ def _rewrite_weekly_multi_time_atoms(s: str) -> str:
 
 # Parser entry points live in ``parser_api``; retain these aliases for the
 # established ``nautical_core`` import contract.
-_parser_api = _import_sibling("parser_api").for_core(sys.modules[__name__])
+_parser_api = _import_sibling("parser_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
 build_acf = _parser_api.build_acf
 resolve_anchor_presets = _parser_api.resolve_anchor_presets
+resolve_omit_presets = _parser_api.resolve_omit_presets
+anchor_preset_display = _parser_api.anchor_preset_display
+omit_preset_display = _parser_api.omit_preset_display
+_resolve_preset_refs = _parser_api._resolve_preset_refs
+_resolve_anchor_presets_impl = _parser_api._resolve_anchor_presets_impl
+_normalize_anchor_expr_input = _parser_api._normalize_anchor_expr_input
+_normalize_monthly_ordinal_spec = _parser_api._normalize_monthly_ordinal_spec
+_build_anchor_atom_dnf = _parser_api._build_anchor_atom_dnf
+_parse_anchor_atom_at = _parser_api._parse_anchor_atom_at
 parse_anchor_expr_to_dnf = _parser_api.parse_anchor_expr_to_dnf
 parse_anchor_expr_to_dnf_cached = _parser_api.parse_anchor_expr_to_dnf_cached
 validate_anchor_expr_strict = _parser_api.validate_anchor_expr_strict

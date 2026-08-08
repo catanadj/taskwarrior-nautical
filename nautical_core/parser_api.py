@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 import sys
 from types import SimpleNamespace
 from typing import Any
@@ -80,13 +81,155 @@ def _validate_anchor_dnf_atoms_strict(module: Any, dnf) -> None:
     )
 
 
-def for_core(module: Any):
+def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     """Create parser entry points bound to one core module instance."""
+    core = namespace if namespace is not None else vars(module)
+    preset_ref_re = re.compile(r"@([A-Za-z][A-Za-z0-9_-]*)")
+
+    def resolve_preset_refs(
+        expr: str,
+        *,
+        presets: dict,
+        table_name: str,
+        label: str,
+        _seen: tuple[str, ...] | frozenset[str] | None = None,
+    ) -> str:
+        raw = core["_unwrap_quotes"](expr or "").strip()
+        if not raw:
+            return raw
+        presets = dict(presets or {})
+        seen_chain = tuple(sorted(_seen)) if isinstance(_seen, frozenset) else tuple(_seen or ())
+        seen = set(seen_chain)
+
+        def repl(match):
+            start = match.start()
+            if start > 0 and raw[start - 1] not in " \t\r\n(|+,":
+                return match.group(0)
+            end = match.end()
+            if end < len(raw) and raw[end] == "=":
+                return match.group(0)
+            name = match.group(1).strip().lower()
+            if name not in presets:
+                available = ", ".join(f"@{item}" for item in sorted(presets))
+                hint = f" Available {label} presets: {available}." if presets else f" No {label} presets are configured."
+                raise core["ParseError"](
+                    f"Unknown {label} preset '@{name}'.{hint} Define it under [{table_name}] in config-nautical.toml."
+                )
+            if name in seen:
+                chain = " -> ".join([*(f"@{x}" for x in seen_chain), f"@{name}"])
+                raise core["ParseError"](f"Recursive {label} preset reference detected: {chain}")
+            resolved = resolve_preset_refs(
+                presets[name],
+                presets=presets,
+                table_name=table_name,
+                label=label,
+                _seen=(*seen_chain, name),
+            )
+            return f"({resolved})"
+
+        return preset_ref_re.sub(repl, raw)
+
+    def resolve_anchor_presets_impl(expr: str, *, _seen=None) -> str:
+        return resolve_preset_refs(
+            expr,
+            presets=core["ANCHOR_PRESETS"],
+            table_name="anchor_presets",
+            label="anchor",
+            _seen=_seen,
+        )
+
+    def resolve_omit_presets(expr: str, *, _seen=None) -> str:
+        return resolve_preset_refs(
+            expr,
+            presets=core["OMIT_PRESETS"],
+            table_name="omit_presets",
+            label="omit",
+            _seen=_seen,
+        )
+
+    def preset_display_value(name: str, presets: dict, *, table_name: str, label: str) -> str:
+        raw = str(presets[name] or "").strip()
+        try:
+            resolved = resolve_preset_refs(
+                raw,
+                presets=presets,
+                table_name=table_name,
+                label=label,
+                _seen=(name,),
+            ).strip()
+        except core["ParseError"]:
+            return raw
+        return resolved[1:-1].strip() if resolved.startswith("(") and resolved.endswith(")") else resolved
+
+    def anchor_preset_display(expr: str) -> tuple[str, str] | None:
+        raw = core["_unwrap_quotes"](expr or "").strip()
+        match = re.match(r"^@([A-Za-z][A-Za-z0-9_-]*)$", raw)
+        if not match:
+            return None
+        name = match.group(1).strip().lower()
+        presets = dict(core["ANCHOR_PRESETS"] or {})
+        if name not in presets:
+            return None
+        return "Preset", f"@{name} → {preset_display_value(name, presets, table_name='anchor_presets', label='anchor')}"
+
+    def omit_preset_display(expr: str) -> tuple[str, str] | None:
+        raw = core["_unwrap_quotes"](expr or "").strip()
+        match = re.match(r"^@([A-Za-z][A-Za-z0-9_-]*)$", raw)
+        if not match:
+            return None
+        name = match.group(1).strip().lower()
+        presets = dict(core["OMIT_PRESETS"] or {})
+        if name not in presets:
+            return None
+        return "Omit preset", f"@{name} → {preset_display_value(name, presets, table_name='omit_presets', label='omit')}"
+
+    def normalize_anchor_expr_input(value: str) -> str:
+        return core["_parser_frontend"].normalize_anchor_expr_input(
+            value,
+            unwrap_quotes=core["_unwrap_quotes"],
+            rewrite_weekly_multi_time_atoms=core["_rewrite_weekly_multi_time_atoms"],
+            re_mod=core["re"],
+            parse_error_cls=core["ParseError"],
+        )
+
+    def normalize_monthly_ordinal_spec(spec: str) -> str:
+        return core["_parser_atoms"].normalize_monthly_ordinal_spec(spec, re_mod=core["re"])
+
+    def build_anchor_atom_dnf(head: str, full_tail: str):
+        return core["_parser_atoms"].build_anchor_atom_dnf(
+            head,
+            full_tail,
+            parse_atom_head=core["_parse_atom_head"],
+            parse_group_with_inline_mods=core["_parse_group_with_inline_mods"],
+            normalize_monthly_ordinal_spec=normalize_monthly_ordinal_spec,
+            split_csv_lower=core["_split_csv_lower"],
+            parse_atom_mods=core["_parse_atom_mods"],
+            parse_error_cls=core["ParseError"],
+        )
+
+    def parse_anchor_atom_at(value: str, index: int, length: int):
+        return core["_parser_atoms"].parse_anchor_atom_at(
+            value,
+            index,
+            length,
+            skip_ws_pos=core["_skip_ws_pos"],
+            raise_if_comma_joined_anchors=core["_raise_if_comma_joined_anchors"],
+            build_anchor_atom_dnf=build_anchor_atom_dnf,
+            parse_error_cls=core["ParseError"],
+        )
+
     return SimpleNamespace(
         build_acf=lambda expr: module._build_acf_impl(expr),
-        resolve_anchor_presets=lambda expr, *, _seen=None: module._resolve_anchor_presets_impl(
-            expr, _seen=_seen
-        ),
+        _resolve_preset_refs=resolve_preset_refs,
+        _resolve_anchor_presets_impl=resolve_anchor_presets_impl,
+        resolve_omit_presets=resolve_omit_presets,
+        anchor_preset_display=anchor_preset_display,
+        omit_preset_display=omit_preset_display,
+        _normalize_anchor_expr_input=normalize_anchor_expr_input,
+        _normalize_monthly_ordinal_spec=normalize_monthly_ordinal_spec,
+        _build_anchor_atom_dnf=build_anchor_atom_dnf,
+        _parse_anchor_atom_at=parse_anchor_atom_at,
+        resolve_anchor_presets=resolve_anchor_presets_impl,
         parse_anchor_expr_to_dnf=lambda s: _parse_anchor_expr_to_dnf_impl(module, s),
         parse_anchor_expr_to_dnf_cached=lambda s: module._parse_anchor_expr_to_dnf_cached_impl(s),
         validate_anchor_expr_strict=lambda expr: _validate_anchor_expr_strict_impl(module, expr),

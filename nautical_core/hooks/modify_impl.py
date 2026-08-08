@@ -972,7 +972,7 @@ def _export_uuid_short_cached(u_short: str):
 def _export_uuid_short_lookup(u_short: str):
     """Return a tri-state UUID lookup without collapsing failures to None."""
     cached = _export_uuid_short_cached(u_short)
-    if isinstance(cached, dict):
+    if isinstance(cached, dict) and cached.get("uuid"):
         hook_support = _module("hook_support", required=False)
         if hook_support is not None:
             return hook_support.LookupResult.found(cached)
@@ -1935,9 +1935,10 @@ def _task_lookup_by_uuid(u: str, env: dict | None):
     if env is None:
         cached_read = _read_query_get("uuid", str(u or "").lower())
         if cached_read is not _READ_QUERY_MISSING:
+            # Empty legacy cache entries can represent an earlier parse or
+            # command failure; only a task-bearing entry is authoritative.
             if isinstance(cached_read, dict) and cached_read.get("uuid"):
                 return hook_support.LookupResult.found(cached_read)
-            return hook_support.LookupResult.absent("Taskwarrior returned no matching task")
     return hook_support.task_lookup_by_uuid_uncached(
         run_task=_run_task,
         task_cmd_prefix=_task_cmd_prefix(),

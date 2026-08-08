@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from nautical_core.modify_models import CompletionSpawnResult
+from nautical_core.modify_models import CompletionSpawnResult, CompletionSpawnServices
 
 
 def completion_build_and_spawn_child(
@@ -15,7 +15,7 @@ def completion_build_and_spawn_child(
     kind: str,
     cpmax: int,
     until_dt: Any,
-    services: Any,
+    services: CompletionSpawnServices,
 ) -> CompletionSpawnResult | None:
     build_child_from_parent = services.build_child_from_parent
     spawn_child_atomic = services.spawn_child_atomic

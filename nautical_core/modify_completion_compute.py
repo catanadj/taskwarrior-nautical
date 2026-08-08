@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from nautical_core.modify_models import CompletionComputeResult
+from nautical_core.modify_models import (
+    CompletionComputeResult,
+    CompletionComputeServices,
+    ServiceCallback,
+)
 from nautical_core.timeutil import compare_datetimes
 
 
@@ -10,11 +14,11 @@ def completion_compute_child_due(
     new: dict[str, Any],
     kind: str,
     *,
-    compute_anchor_child_due: Any,
-    compute_cp_child_due: Any,
-    panel: Any,
-    print_task: Any,
-    diag: Any = None,
+    compute_anchor_child_due: ServiceCallback,
+    compute_cp_child_due: ServiceCallback,
+    panel: ServiceCallback,
+    print_task: ServiceCallback,
+    diag: ServiceCallback | None = None,
 ):
     try:
         if kind in {"anchor", "anchor_file"}:
@@ -49,10 +53,10 @@ def completion_until_or_fail(
     new: dict[str, Any],
     now_utc: Any,
     *,
-    safe_parse_datetime: Any,
-    validate_until_not_past: Any,
-    panel: Any,
-    print_task: Any,
+    safe_parse_datetime: ServiceCallback,
+    validate_until_not_past: ServiceCallback,
+    panel: ServiceCallback,
+    print_task: ServiceCallback,
 ):
     until_dt, err = safe_parse_datetime(new.get("chainUntil"))
     if err:
@@ -79,8 +83,8 @@ def completion_until_guard_or_stop(
     until_dt: Any,
     now_utc: Any,
     *,
-    end_chain_summary: Any,
-    print_task: Any,
+    end_chain_summary: ServiceCallback,
+    print_task: ServiceCallback,
 ) -> bool:
     if until_dt and compare_datetimes(child_due, until_dt) > 0:
         end_chain_summary(new, "Reached 'until' limit", now_utc)
@@ -91,7 +95,11 @@ def completion_until_guard_or_stop(
 
 
 def completion_require_child_due_or_fail(
-    new: dict[str, Any], child_due: Any, *, panel: Any, print_task: Any
+    new: dict[str, Any],
+    child_due: Any,
+    *,
+    panel: ServiceCallback,
+    print_task: ServiceCallback,
 ) -> bool:
     if child_due:
         return True
@@ -110,8 +118,8 @@ def completion_warn_unreasonable_duration(
     until_dt: Any,
     now_utc: Any,
     *,
-    validate_chain_duration_reasonable: Any,
-    panel: Any,
+    validate_chain_duration_reasonable: ServiceCallback,
+    panel: ServiceCallback,
 ) -> None:
     if not until_dt:
         return
@@ -126,12 +134,12 @@ def completion_caps(
     child_due: Any,
     dnf: Any,
     *,
-    coerce_int: Any,
-    dtparse: Any,
-    estimate_cp_final_by_max: Any,
-    estimate_anchor_final_by_max: Any,
-    cap_from_until_cp: Any,
-    cap_from_until_anchor: Any,
+    coerce_int: ServiceCallback,
+    dtparse: ServiceCallback,
+    estimate_cp_final_by_max: ServiceCallback,
+    estimate_anchor_final_by_max: ServiceCallback,
+    cap_from_until_cp: ServiceCallback,
+    cap_from_until_anchor: ServiceCallback,
 ):
     cpmax = coerce_int(new.get("chainMax"), 0)
     until_dt = dtparse(new.get("chainUntil"))
@@ -173,8 +181,8 @@ def completion_cap_guard_or_stop(
     cap_no: int | None,
     now_utc: Any,
     *,
-    end_chain_summary: Any,
-    print_task: Any,
+    end_chain_summary: ServiceCallback,
+    print_task: ServiceCallback,
 ) -> bool:
     if cap_no and next_no > cap_no:
         end_chain_summary(new, f"Reached cap #{cap_no}", now_utc, current_task=new)
@@ -190,7 +198,7 @@ def completion_compute_next_and_limits(
     next_no: int,
     now_utc: Any,
     *,
-    services: Any,
+    services: CompletionComputeServices,
 ) -> CompletionComputeResult | None:
     completion_compute_child_due = services.completion_compute_child_due
     completion_until_or_fail = services.completion_until_or_fail

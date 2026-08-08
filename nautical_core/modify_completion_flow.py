@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from nautical_core.modify_models import CompletionFinalizeServices
+from nautical_core.modify_models import (
+    CompletionComputeResult,
+    CompletionFinalizeServices,
+    CompletionPreflightContext,
+)
 
 
 def finalize_completion_modify(
     *,
     new: dict[str, Any],
-    ctx: Any,
-    computed: Any,
+    ctx: CompletionPreflightContext,
+    computed: CompletionComputeResult,
     now_utc: Any,
     need_chain: bool,
     chain_snapshot_loaded: bool,

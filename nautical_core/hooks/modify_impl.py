@@ -3878,7 +3878,10 @@ def _compute_anchor_child_due(parent: dict):
         else None
     )
     mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
-    if anchor_file_str and not dnf:
+    # Keep the old file-only mode helper solely for injected legacy providers
+    # used during compatibility tests. Installed providers use the shared
+    # occurrence stream below even when evaluator loading is unavailable.
+    if anchor_file_str and not dnf and not evaluator_provider_compatible:
         nxt_local, info = _anchor_file_due_for_mode(
             mode,
             parent=parent,

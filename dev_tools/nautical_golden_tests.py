@@ -16556,6 +16556,23 @@ def test_on_modify_completion_chain_snapshot_modes_and_query():
         mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY, mod._run_task = saved
 
 
+def test_on_modify_completion_snapshot_malformed_json_is_unavailable():
+    """Malformed completion exports must not become loaded empty snapshots."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_completion_snapshot_malformed_test")
+    saved = (mod._run_task, mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY)
+    try:
+        mod._run_task = lambda *_args, **_kwargs: (True, "[not-json", "")
+        mod.core.PANEL_MODE = "line"
+        mod._SHOW_ANALYTICS = False
+        mod._CHECK_CHAIN_INTEGRITY = False
+        snapshot = mod._completion_chain_snapshot("malformed01", 1, 2)
+        expect(snapshot.is_unavailable, f"malformed snapshot was accepted: {snapshot!r}")
+        expect(not snapshot.loaded and snapshot.rows == [], f"malformed snapshot changed lookup state: {snapshot!r}")
+    finally:
+        mod._run_task, mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
+
+
 def test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export():
     """an intentionally empty snapshot should not fall back to a full chain export."""
     reads = core._import_sibling("modify_chain_reads")
@@ -23876,17 +23893,44 @@ def test_on_exit_requeue_failure_leaves_sqlite_entry_processing():
         expect(state is not None and state[0] == "processing", f"sqlite entry should remain processing on requeue failure: {state}")
 
 
-def test_on_exit_export_uuid_noisy_stdout():
-    """on-exit export should tolerate noisy stdout when UUID present."""
+def test_on_exit_export_uuid_malformed_stdout_is_unavailable():
+    """Malformed on-exit export output must be unavailable, never present."""
     hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_export_uuid_noisy_test")
+    calls = []
 
     def _run_task_noisy(*_a, **_k):
+        calls.append(True)
         return True, "WARN something\n00000000-0000-0000-0000-000000000111\n", ""
 
     mod._run_task = _run_task_noisy
-    obj = mod._export_uuid("00000000-0000-0000-0000-000000000111")
-    expect(obj and obj.exists, "noisy stdout should still be treated as exists")
+    uuid_str = "00000000-0000-0000-0000-000000000111"
+    obj = mod._export_uuid(uuid_str)
+    again = mod._export_uuid(uuid_str)
+    expect(obj and obj.state == "unavailable", f"malformed stdout should be unavailable: {obj!r}")
+    expect(again and again.state == "unavailable" and len(calls) == 2, "unavailable result was negatively cached")
+
+
+def test_on_exit_equivalent_child_malformed_stdout_is_retryable():
+    """Malformed equivalent-child output must requeue instead of spawning."""
+    hook = _find_hook_file("on-exit.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_exit_equivalent_malformed_test")
+    exit_queries = mod._module("exit_queries")
+
+    def _run_task_malformed(*_a, **_k):
+        return True, "warning\n[not-json", ""
+
+    result = exit_queries.existing_equivalent_child(
+        {"chainID": "chain-a", "link": 2},
+        task_cmd_prefix=["task"],
+        run_task=_run_task_malformed,
+        timeout=0.1,
+        retries=0,
+        retry_delay=0.0,
+        is_lock_error=lambda _err: False,
+        short_uuid_fn=lambda value: value[:8],
+    )
+    expect(result.state == "unavailable", f"malformed equivalent lookup was not retryable: {result!r}")
 
 
 def test_on_exit_emit_exit_feedback_reaches_stdout_contract():
@@ -27101,6 +27145,10 @@ def test_on_modify_cp_completion_spawns_next_link():
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
     mod._export_uuid_short_cached = lambda _short: {}
+    modify_models = mod._module("modify_models")
+    mod._completion_chain_snapshot = lambda chain_id, _base, _next: modify_models.CompletionChainSnapshot(
+        mode="next", rows=[], loaded=True, chain_id=str(chain_id)
+    )
     # A confirmed empty chain is distinct from an unavailable Taskwarrior
     # export; keep this spawn-path test deterministic and network-free.
     mod._get_chain_export = lambda *_a, **_k: []
@@ -29831,6 +29879,7 @@ TESTS = [
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
     test_on_modify_completion_finalize_skips_analytics_when_hidden,
     test_on_modify_completion_chain_snapshot_modes_and_query,
+    test_on_modify_completion_snapshot_malformed_json_is_unavailable,
     test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export,
     test_on_modify_completion_defers_chain_export_until_after_preflight,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
@@ -29999,7 +30048,8 @@ TESTS = [
     test_on_exit_dead_letter_rotation,
     test_on_exit_dead_letter_carries_spawn_intent_id,
     test_on_exit_requeue_failure_leaves_sqlite_entry_processing,
-    test_on_exit_export_uuid_noisy_stdout,
+    test_on_exit_export_uuid_malformed_stdout_is_unavailable,
+    test_on_exit_equivalent_child_malformed_stdout_is_retryable,
     test_on_exit_emit_exit_feedback_reaches_stdout_contract,
     test_on_exit_drain_failure_panel_is_actionable_and_retry_quiet,
     test_on_exit_parent_nextlink_lock_uses_dedicated_dir,

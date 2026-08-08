@@ -54,6 +54,10 @@ class ExitExportResult:
     err: str
     obj: dict[str, Any] | None
 
+    @property
+    def state(self) -> str:
+        return "found" if self.exists else ("unavailable" if self.retryable else "absent")
+
 
 @dataclass(slots=True)
 class ExitEquivalentChildResult:
@@ -61,6 +65,10 @@ class ExitEquivalentChildResult:
     retryable: bool
     err: str
     obj: dict[str, Any] | None
+
+    @property
+    def state(self) -> str:
+        return "found" if self.exists else ("unavailable" if self.retryable else "absent")
 
 
 @dataclass(slots=True)

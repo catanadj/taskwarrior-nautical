@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 
 def export_completion_chain_snapshot(
     chain_id: str,
@@ -37,12 +39,20 @@ def export_completion_chain_snapshot(
             diag("completion chain snapshot returned malformed JSON")
         return False, []
     try:
+        # Validate the wire payload before invoking the compatibility parser.
+        # The older parser intentionally returns [] on errors, which must not
+        # be allowed to turn an unavailable snapshot into confirmed absence.
+        payload = json.loads((out or "").strip())
+        if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
+            raise ValueError("expected an array of task objects")
         rows = parse_export_array(out, diag=diag)
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise ValueError("snapshot parser returned an invalid row payload")
     except Exception as exc:
         if callable(diag):
             diag(f"completion chain snapshot parse failed: {exc}")
         return False, []
-    return True, [row for row in rows if isinstance(row, dict)]
+    return True, rows
 
 
 def task_text(args, *, run_task, task_cmd_prefix, env=None, timeout: float = 3.0, retries: int = 2, diag=None) -> str:

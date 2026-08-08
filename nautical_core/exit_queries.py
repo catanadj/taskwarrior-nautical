@@ -72,9 +72,7 @@ def export_uuid(
             return ExitExportResult(True, False, "", obj)
         return ExitExportResult(False, False, "not found", None)
     except Exception:
-        if uuid_str in out:
-            return ExitExportResult(True, False, "", {"uuid": uuid_str})
-        return ExitExportResult(False, False, "parse error", None)
+        return ExitExportResult(False, True, "parse error", None)
 
 
 def existing_equivalent_child(
@@ -129,11 +127,11 @@ def existing_equivalent_child(
     try:
         rows = json.loads(out.strip() or "[]")
     except Exception:
-        return ExitEquivalentChildResult(False, False, "parse error", None)
+        return ExitEquivalentChildResult(False, True, "parse error", None)
     if isinstance(rows, dict):
         rows = [rows]
     if not isinstance(rows, list):
-        return ExitEquivalentChildResult(False, False, "parse error", None)
+        return ExitEquivalentChildResult(False, True, "parse error", None)
 
     for wanted in ("pending", "waiting", "completed"):
         for row in rows:

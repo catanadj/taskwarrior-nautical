@@ -356,9 +356,10 @@ def export_uuid_status(
             return {"exists": True, "retryable": False, "err": "", "obj": obj}
         return {"exists": False, "retryable": False, "err": "not found", "obj": None}
     except Exception:
-        if tolerate_noisy_stdout and uuid_str in (result.stdout or ""):
-            return {"exists": True, "retryable": False, "err": "", "obj": {"uuid": uuid_str}}
-        return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
+        # A successful process exit does not make malformed output safe to
+        # interpret. Treat it as temporarily unavailable so mutation callers
+        # requeue instead of importing a duplicate child.
+        return {"exists": False, "retryable": True, "err": "parse error", "obj": None}
 
 
 def parse_extra_tokens(extra: str | None) -> list[str] | None:

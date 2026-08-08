@@ -3094,6 +3094,11 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
 
 
 def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
+    hook_support = _module("hook_support", required=False)
+    if getattr(chain_snapshot, "is_unavailable", False) and hook_support is not None:
+        return hook_support.LookupResult.unavailable(
+            getattr(chain_snapshot, "error", "completion chain snapshot unavailable")
+        )
     modify_chain_reads = _module("modify_chain_reads")
     return modify_chain_reads.existing_next_lookup(
         parent_task,
@@ -6325,7 +6330,15 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
     cached_snapshot = _read_query_get("chain_snapshot", snapshot_key)
     if cached_snapshot is not _READ_QUERY_MISSING:
         _record_chain_snapshot_stat("chain_snapshot_hits")
-        rows = cached_snapshot if isinstance(cached_snapshot, list) else []
+        if not isinstance(cached_snapshot, list) or any(not isinstance(row, dict) for row in cached_snapshot):
+            return modify_models.CompletionChainSnapshot(
+                mode=mode,
+                rows=[],
+                loaded=False,
+                chain_id=str(chain_id),
+                error="cached completion snapshot has invalid shape",
+            )
+        rows = cached_snapshot
         return modify_models.CompletionChainSnapshot(
             mode=mode,
             rows=rows,
@@ -6357,6 +6370,7 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
         rows=rows,
         loaded=loaded,
         chain_id=str(chain_id),
+        error="completion chain snapshot unavailable" if not loaded else "",
     )
 
 

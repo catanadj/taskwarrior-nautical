@@ -13127,7 +13127,9 @@ def test_hook_on_modify_merged_timeline_marks_projection_failures():
     """Merged anchor/anchor-file timelines should expose provider failures as warning rows."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_merged_timeline_warning_test")
-    previous_next = mod._next_occurrence_after_local_dt
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+    previous_next = RecurrenceEvaluator._default_next_occurrence_after_local_dt
     previous_prev = getattr(mod, "_collect_prev_two", None)
 
     def broken(*args, **kwargs):
@@ -13135,7 +13137,7 @@ def test_hook_on_modify_merged_timeline_marks_projection_failures():
 
     previous_anchor_dir = getattr(mod.core, "ANCHOR_FILE_DIR", "")
     try:
-        mod._next_occurrence_after_local_dt = broken
+        RecurrenceEvaluator._default_next_occurrence_after_local_dt = broken
         if previous_prev is not None:
             mod._collect_prev_two = lambda _task: []
         with tempfile.TemporaryDirectory() as td:
@@ -13163,7 +13165,7 @@ def test_hook_on_modify_merged_timeline_marks_projection_failures():
                 cur_no=1,
             )
     finally:
-        mod._next_occurrence_after_local_dt = previous_next
+        RecurrenceEvaluator._default_next_occurrence_after_local_dt = previous_next
         if previous_prev is not None:
             mod._collect_prev_two = previous_prev
         mod.core.ANCHOR_FILE_DIR = previous_anchor_dir
@@ -18201,12 +18203,16 @@ def test_anchor_inclusion_scheduler_propagates_internal_errors():
 
 def test_modify_inclusion_collection_uses_shared_progress_guard():
     """Modify-side inclusion collection must fail instead of returning a partial stream."""
-    original = _hook._next_occurrence_after_local_dt
-    _hook._next_occurrence_after_local_dt = lambda *args, **kwargs: args[1]
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+    original = RecurrenceEvaluator._default_next_occurrence_after_local_dt
+    RecurrenceEvaluator._default_next_occurrence_after_local_dt = (
+        lambda _self, _dnf, value, **_kwargs: value
+    )
     try:
         try:
             _hook._anchor_included_occurrences(
-                {},
+                {"anchor": "w:mon", "chainID": "provider-guard-test"},
                 after_local_dt=datetime(2026, 8, 3, 9, 0),
                 inclusive=False,
                 limit=1,
@@ -18220,7 +18226,7 @@ def test_modify_inclusion_collection_uses_shared_progress_guard():
         except ValueError as exc:
             expect("non-advancing" in str(exc), f"unexpected modify collection error: {exc}")
     finally:
-        _hook._next_occurrence_after_local_dt = original
+        RecurrenceEvaluator._default_next_occurrence_after_local_dt = original
 
 
 def test_modify_until_projection_reuses_anchor_file_provider():

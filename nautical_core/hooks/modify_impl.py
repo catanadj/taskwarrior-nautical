@@ -3544,6 +3544,18 @@ def _anchor_parent_local_times(parent: dict):
     return end_local, due_local, due_dt_utc
 
 
+def _recurrence_evaluator_for_task(task: dict):
+    """Build the task-scoped evaluator used by completion projections."""
+    evaluator_module = _module("recurrence_evaluator")
+    return evaluator_module.RecurrenceEvaluator.from_task(
+        task,
+        timezone=core._LOCAL_TZ,
+        business_calendar=core.business_calendar_for_task(task),
+        astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+    )
+
+
 def _anchor_included_occurrences(
     parent: dict,
     *,
@@ -3559,6 +3571,8 @@ def _anchor_included_occurrences(
 ) -> list[datetime]:
     anchor_inclusion = core._import_sibling("anchor_inclusion")
     occurrence_provider = core._import_sibling("occurrence_provider")
+    evaluator = _recurrence_evaluator_for_task(parent)
+    scheduler = evaluator._default_next_occurrence_after_local_dt
     anchor_file = (parent.get("anchor_file") or "").strip()
     if anchor_file_provider is None:
         anchor_file_provider = (
@@ -3583,7 +3597,7 @@ def _anchor_included_occurrences(
             seed_base=seed_base,
             omit_dnf=omit_dnf,
             core=core,
-            next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
+            next_occurrence_after_local_dt=scheduler,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=anchor_file_provider,
         ),
@@ -3609,14 +3623,7 @@ def _compute_anchor_child_due_evaluator(parent: dict):
     if not ((expr_str and _validate_anchor_expr_cached(expr_str)) or anchor_file_str):
         return (None, None, None)
 
-    evaluator_module = _module("recurrence_evaluator")
-    evaluator = evaluator_module.RecurrenceEvaluator.from_task(
-        parent,
-        timezone=core._LOCAL_TZ,
-        business_calendar=core.business_calendar_for_task(parent),
-        astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-    )
+    evaluator = _recurrence_evaluator_for_task(parent)
     end_local, due_local, due_dt_utc = _anchor_parent_local_times(parent)
     if not end_local:
         return (None, None, None)
@@ -4806,6 +4813,8 @@ def _timeline_lines(
         default_seed = child_local.date()
         dnf_for_merge = dnf if kind == "anchor" else None
         anchor_inclusion = core._import_sibling("anchor_inclusion")
+        evaluator = _recurrence_evaluator_for_task(task)
+        scheduler = evaluator._default_next_occurrence_after_local_dt
         AnchorEventOccurrenceProvider = core._import_sibling("occurrence_provider").AnchorEventOccurrenceProvider
         collect_after = core._import_sibling("occurrence_provider").collect_after
         anchor_file_str = (task.get("anchor_file") or "").strip()
@@ -4828,7 +4837,7 @@ def _timeline_lines(
                 seed_base=seed_base,
                 omit_dnf=omit_dnf,
                 core=core,
-                next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
+                next_occurrence_after_local_dt=scheduler,
                 anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
                 anchor_file_provider=anchor_file_provider,
             ),

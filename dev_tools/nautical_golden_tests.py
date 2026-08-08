@@ -7228,6 +7228,24 @@ def test_on_modify_chain_export_cache_key_includes_params():
     _ = mod._get_chain_export("abc", since=since, extra="status:completed")
     expect(len(calls) == 2, f"cache key ignored params, calls={calls}")
 
+
+def test_on_modify_chain_export_malformed_json_fails_closed_without_caching():
+    """Malformed chain exports must remain unavailable and retryable, never an empty cache hit."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_malformed_chain_export_test")
+    calls = []
+
+    def _fake_run_task(*_args, **_kwargs):
+        calls.append(True)
+        return True, "{not-json", ""
+
+    mod._run_task = _fake_run_task
+    mod._tw_export_chain_cached_key.cache_clear()
+    first = mod._get_chain_export("abc")
+    second = mod._get_chain_export("abc")
+    expect(first is None and second is None, f"malformed export should fail closed: {first!r}, {second!r}")
+    expect(len(calls) == 2, f"malformed export was cached as empty: calls={calls}")
+
 def test_on_modify_chain_export_skips_when_locked():
     """tw_export_chain should treat lock errors as non-fatal and return empty."""
     hook = _find_hook_file("on-modify.nautical")
@@ -29415,6 +29433,7 @@ TESTS = [
     test_non_hour_dst_carry_and_reconcile_share_core_policy,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
     test_on_modify_chain_export_cache_key_includes_params,
+    test_on_modify_chain_export_malformed_json_fails_closed_without_caching,
     test_on_modify_chain_export_skips_when_locked,
     test_on_modify_collect_prev_two_prefers_live_statuses,
     test_coerce_int_bounds,

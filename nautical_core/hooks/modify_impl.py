@@ -179,6 +179,7 @@ _LAST_WAIT_SCHED_DEBUG: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _MAX_WAIT_SCHED_DEBUG = 32
 _WARNED_SPAWN_QUEUE_GROWTH = False
 _WARNED_CHAIN_EXPORT: set[str] = set()
+_LAST_CHAIN_EXPORT_STATUS: tuple[bool, str] = (True, "")
 
 
 def _diag(msg: str) -> None:
@@ -2426,8 +2427,14 @@ def tw_export_chain_required(seed_task, env=None):
             "Run dev_tools/nautical_backfill_chainid.py, then retry."
         )
     if env is None:
-        return _get_chain_export(chain_id)
-    return tw_export_chain(chain_id, env=env, limit=_MAX_CHAIN_WALK)
+        rows = _get_chain_export(chain_id)
+        if rows is None:
+            raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
+        return rows
+    ok, rows, error = _tw_export_chain_checked(chain_id, env=env, limit=_MAX_CHAIN_WALK)
+    if not ok:
+        raise RuntimeError(error or f"Chain export unavailable for chainID {chain_id}")
+    return rows
 def _tw_get_cached(ref: str) -> str:
     """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
     try:
@@ -2955,7 +2962,13 @@ def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str, l
     with state.chain_cache_lock:
         if state.chain_cache_chain_id and chain_id == state.chain_cache_chain_id and not since and not extra:
             return tuple(state.chain_cache or [])
-    return tuple(tw_export_chain(chain_id, since=since, extra=extra, env=None, limit=limit) or [])
+    global _LAST_CHAIN_EXPORT_STATUS
+    _LAST_CHAIN_EXPORT_STATUS = (True, "")
+    rows = tw_export_chain(chain_id, since=since, extra=extra, env=None, limit=limit)
+    ok, error = _LAST_CHAIN_EXPORT_STATUS
+    if not ok:
+        raise RuntimeError(error or "chain export unavailable")
+    return tuple(rows)
 
 
 def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None, limit: int) -> tuple[dict, ...]:
@@ -3025,17 +3038,27 @@ def _filter_full_snapshot_rows(chain: list[dict], *, extra: str | None, limit: i
     return _filter_cached_chain_rows(chain, extra=extra, limit=limit)
 
 
-def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict]:
+def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict] | None:
     """Return a safe list copy of a chain export (cached when env is None)."""
     if not chain_id:
         return []
     if env is not None:
-        return tw_export_chain(chain_id, since=since, extra=extra, env=env, limit=_MAX_CHAIN_WALK)
+        ok, rows, _error = _tw_export_chain_checked(
+            chain_id,
+            since=since,
+            extra=extra,
+            env=env,
+            limit=_MAX_CHAIN_WALK,
+        )
+        return rows if ok else None
     if not since:
         full_snapshot = _read_query_get("chain", _chain_read_key(chain_id, None, None, 0))
         if full_snapshot is not _READ_QUERY_MISSING:
+            if not isinstance(full_snapshot, list):
+                _diag(f"cached chain read has invalid shape (chainID={chain_id})")
+                return None
             filtered = _filter_full_snapshot_rows(
-                full_snapshot if isinstance(full_snapshot, list) else [],
+                full_snapshot,
                 extra=extra,
                 limit=_MAX_CHAIN_WALK,
             )
@@ -3052,7 +3075,11 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
         if filtered is not None:
             _diag_count("chain_cache_filter_hits")
             return filtered
-    cached = _tw_export_chain_cached(chain_id, since, extra, _MAX_CHAIN_WALK)
+    try:
+        cached = _tw_export_chain_cached(chain_id, since, extra, _MAX_CHAIN_WALK)
+    except RuntimeError as exc:
+        _diag(f"chain read unavailable (chainID={chain_id}): {exc}")
+        return None
     return list(cached)
 
 
@@ -4739,7 +4766,13 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
         )
         return
 
-    chain = _end_summary_sorted_chain(chain_id, actual_current)
+    chain_read_error = ""
+    try:
+        chain = _end_summary_sorted_chain(chain_id, actual_current)
+    except Exception as exc:
+        chain = []
+        chain_read_error = str(exc) or "chain export unavailable"
+        _diag(f"chain summary export unavailable (chainID={chain_id}): {chain_read_error}")
 
     L = core.coerce_int(current.get("link"), len(chain))
     root = _short(_root_uuid_from(current))
@@ -4762,6 +4795,8 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
     else:
         chain_display += ")"
     rows.append(("Chain", chain_display))
+    if chain_read_error:
+        rows.append(("Chain read", f"Unavailable: {chain_read_error}"))
 
     _end_summary_kind_rows(rows, kind, current)
 
@@ -5270,41 +5305,88 @@ def _tw_export_chain_parse(out: str) -> list[dict]:
         return []
 
 
-def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None, limit: int | None = None) -> list[dict]:
+def _tw_export_chain_checked(
+    chain_id: str,
+    since: datetime | None = None,
+    extra: str | None = None,
+    env=None,
+    limit: int | None = None,
+) -> tuple[bool, list[dict], str]:
     if not chain_id:
-        return []
+        return True, [], ""
     args = _tw_export_chain_args(chain_id, since=since, extra=extra, limit=limit)
     if args is None:
-        return []
+        return False, [], "invalid chain export filters"
     read_key = _chain_read_key(chain_id, since, extra, limit or 0)
     if env is None:
         cached_read = _read_query_get("chain", read_key)
         if cached_read is not _READ_QUERY_MISSING:
-            return cached_read if isinstance(cached_read, list) else []
+            if isinstance(cached_read, list) and all(isinstance(row, dict) for row in cached_read):
+                return True, cached_read, ""
+            return False, [], "cached chain export has invalid shape"
         if not since and not extra and int(limit or 0) > 0:
             full_read = _read_query_get("chain", _chain_read_key(chain_id, None, None, 0))
             if full_read is not _READ_QUERY_MISSING:
-                rows = full_read if isinstance(full_read, list) else []
-                return rows[: int(limit)]
+                if not isinstance(full_read, list) or not all(isinstance(row, dict) for row in full_read):
+                    return False, [], "cached chain export has invalid shape"
+                return True, full_read[: int(limit)], ""
 
     start = _time.perf_counter()
     timeout = _chain_export_timeout(chain_id)
-    ok, out, err = _run_task(
-        args,
+    hook_support = _module("hook_support", required=False)
+    if hook_support is not None:
+        result = hook_support.run_task_result(
+            run_task=_run_task,
+            cmd=args,
+            env=env,
+            timeout=timeout,
+            retries=1,
+            use_tempfiles=True,
+        )
+        ok, rows, error = hook_support.parse_export_array_result(result, diag=_diag)
+        elapsed = _time.perf_counter() - start
+        if not ok:
+            _tw_export_chain_failure(chain_id, error, timeout)
+            return False, [], error
+    else:
+        ok, out, err = _run_task(
+            args,
+            env=env,
+            timeout=timeout,
+            retries=1,
+            use_tempfiles=True,
+        )
+        elapsed = _time.perf_counter() - start
+        if not ok:
+            _tw_export_chain_failure(chain_id, err, timeout)
+            return False, [], err or "task export failed"
+        try:
+            parsed = json.loads((out or "").strip())
+            if not isinstance(parsed, list) or any(not isinstance(row, dict) for row in parsed):
+                raise ValueError("expected an array of task objects")
+            rows = parsed
+        except Exception as exc:
+            error = f"Taskwarrior export returned invalid JSON: {exc}"
+            _tw_export_chain_failure(chain_id, error, timeout)
+            return False, [], error
+    _tw_export_chain_success(elapsed)
+    if env is None:
+        _read_query_set("chain", read_key, rows)
+    return True, rows, ""
+
+
+def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None, limit: int | None = None) -> list[dict]:
+    """Return rows for compatibility; internal mutation reads use checked results."""
+    global _LAST_CHAIN_EXPORT_STATUS
+    _ok, rows, _error = _tw_export_chain_checked(
+        chain_id,
+        since=since,
+        extra=extra,
         env=env,
-        timeout=timeout,
-        retries=1,
-        use_tempfiles=True,
+        limit=limit,
     )
-    elapsed = _time.perf_counter() - start
-    if ok:
-        _tw_export_chain_success(elapsed)
-        rows = _tw_export_chain_parse(out)
-        if env is None:
-            _read_query_set("chain", read_key, rows)
-        return rows
-    _tw_export_chain_failure(chain_id, err, timeout)
-    return []
+    _LAST_CHAIN_EXPORT_STATUS = (_ok, _error)
+    return rows
 
 
 def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:

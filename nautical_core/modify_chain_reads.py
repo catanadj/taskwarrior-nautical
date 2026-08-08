@@ -40,6 +40,8 @@ def collect_prev_two(
             chain = get_chain_export(chain_id)
         except Exception:
             return []
+        if not isinstance(chain, list):
+            return []
         chain_index = {}
         for task in chain:
             link_no = coerce_int(task.get("link"), None)

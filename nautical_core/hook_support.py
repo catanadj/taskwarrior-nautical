@@ -7,6 +7,8 @@ import time
 import json
 import re
 
+from .task_command import TaskCommandResult, failure_message
+
 
 def build_task_cmd_prefix(*, use_rc_data_location: bool, tw_data_dir) -> list[str]:
     cmd = ["task"]
@@ -117,6 +119,73 @@ def run_task(
         jitter = random.uniform(0.0, delay)
         time.sleep(delay * (2 ** (attempt - 1)) + jitter)
     return False, last_out, last_err
+
+
+def run_task_result(
+    *,
+    run_task,
+    cmd: list[str],
+    env=None,
+    input_text: str | None = None,
+    timeout: float = 6.0,
+    retries: int = 1,
+    retry_delay: float = 0.0,
+    use_tempfiles: bool = False,
+) -> TaskCommandResult:
+    """Adapt the hook runner to the typed command-result boundary."""
+    ok, stdout, stderr = run_task(
+        cmd,
+        env=env,
+        input_text=input_text,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+        use_tempfiles=use_tempfiles,
+    )
+    text = (stderr or stdout or "").lower()
+    if ok:
+        kind = "ok"
+        returncode = 0
+    elif "timeout" in text:
+        kind = "timeout"
+        returncode = 124
+    elif "lock" in text:
+        kind = "lock_busy"
+        returncode = 1
+    else:
+        kind = "nonzero"
+        returncode = 1
+    return TaskCommandResult(
+        tuple(str(part) for part in cmd),
+        returncode,
+        stdout or "",
+        stderr or "",
+        kind,
+        max(1, int(retries or 1)),
+        float(timeout),
+    )
+
+
+def parse_export_array_result(result: TaskCommandResult, *, diag=None) -> tuple[bool, list[dict], str]:
+    """Strictly parse a successful array export; never turn failures into empty data."""
+    if not result.ok:
+        return False, [], failure_message(result, "Taskwarrior export")
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return False, [], "Taskwarrior export returned empty output"
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        message = f"Taskwarrior export returned invalid JSON: {exc}"
+        if callable(diag):
+            diag(message)
+        return False, [], message
+    if not isinstance(data, list) or any(not isinstance(row, dict) for row in data):
+        message = "Taskwarrior export returned a non-array or invalid row payload"
+        if callable(diag):
+            diag(message)
+        return False, [], message
+    return True, data, ""
 
 
 def export_uuid_short(

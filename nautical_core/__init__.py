@@ -943,154 +943,7 @@ cp_sequence_interval_for_token = _cp_parser.cp_sequence_interval_for_token
 cp_sequence_interval_for_link = _cp_parser.cp_sequence_interval_for_link
 
 
-# -------- Anchor parser (DNF with mods) ----------
-def _parse_hhmm(s: str):
-    return _parser_atoms.parse_hhmm(s, hhmm_re=_hhmm_re)
-
-
-def _parse_atom_head(head: str) -> tuple[str, int]:
-    return _parser_atoms.parse_atom_head(head, re_mod=re, parse_error_cls=ParseError)
-
-
-
-
-def _parse_atom_mods(mods_str: str):
-    return _parser_atoms.parse_atom_mods(
-        mods_str,
-        split_csv_tokens=_split_csv_tokens,
-        parse_hhmm=_parse_hhmm,
-        next_prev_wd_re=_next_prev_wd_re,
-        weekdays=_WEEKDAYS,
-        day_offset_re=_day_offset_re,
-        parse_error_cls=ParseError,
-    )
-
-
-@_ttl_lru_cache(maxsize=512)
-def _parse_y_token_cached(tok: str, fmt: str):
-    return _yearly_parse.parse_y_token(
-        tok,
-        fmt,
-        quarters=_QUARTERS,
-        months=_MONTHS,
-        y_token_re=_y_token_re,
-        re_mod=re,
-    )
-
-
-def _parse_y_token(tok: str):
-    return _parse_y_token_cached(tok, _yearfmt())
-
-
-# Anchor DNF parser
-# ------------------------------------------------------------------------------
-def _fatal_bad_colon_in_year_tail(tail: str) -> str | None:
-    return _parser_frontend.fatal_bad_colon_in_year_tail(
-        tail,
-        split_csv_tokens=_split_csv_tokens,
-        re_mod=re,
-        yearfmt=_yearfmt,
-    )
-
-
-def _raise_on_bad_colon_year_tokens(s: str) -> None:
-    _parser_frontend.raise_on_bad_colon_year_tokens(
-        s,
-        re_mod=re,
-        fatal_bad_colon_in_year_tail=_fatal_bad_colon_in_year_tail,
-        parse_error_cls=ParseError,
-    )
-
-
-def _skip_ws_pos(s: str, i: int, n: int) -> int:
-    return _parser_frontend.skip_ws_pos(s, i, n)
-
-
-def _raise_if_comma_joined_anchors(full_tail: str) -> None:
-    _parser_frontend.raise_if_comma_joined_anchors(
-        full_tail,
-        re_mod=re,
-        parse_error_cls=ParseError,
-    )
-
-
-@_ttl_lru_cache(maxsize=256)
-def _parse_anchor_expr_to_dnf_cached_obj(s: str, fmt: str) -> AnchorDNF:
-    return parse_anchor_expr_to_dnf(s)
-
-
-def _parse_anchor_expr_to_dnf_cached_impl(s: str) -> AnchorDNF:
-    """Cached parse returning a fresh object (avoid shared mutable structures)."""
-    if not s:
-        return []
-    key = _unwrap_quotes(s or "").strip()
-    if not key:
-        return []
-    res = _clone_dnf(_parse_anchor_expr_to_dnf_cached_obj(key, _yearfmt()))
-    _emit_cache_metrics()
-    if os.environ.get("NAUTICAL_CLEAR_CACHES") == "1":
-        _clear_all_caches()
-    return res
-
-
-
-# ------------------------------------------------------------------------------
-# Anchor validators
-# ------------------------------------------------------------------------------
-# ===== Strict validators (raise ParseError) ==================================
-
-
-def _validate_weekly_spec(spec: str):
-    """Validate weekly specification tokens.
-
-    Canonical (V2) range syntax uses '..' (e.g., w:mon..fri).
-    """
-    spec = _expand_weekly_aliases(spec)
-    toks = _split_csv_lower(spec)
-    if not toks:
-        raise ParseError(
-            f"Weekly spec is empty. Examples: '{_CANON_WEEKLY_RANGE_EX}', '{_CANON_WEEKLY_LIST_EX}'."
-        )
-
-    random_tokens = [t for t in toks if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", t)]
-    if random_tokens:
-        if len(toks) > 1:
-            raise ParseError(
-                "A weekly random selector cannot be combined with explicit weekdays in the same list. "
-                "Use '+' to constrain its candidate pool or '|' for a separate branch."
-            )
-        count = _cached_expansion.random_count_from_spec(random_tokens[0]) or 1
-        if count > 7:
-            raise ParseError("Weekly random count cannot exceed 7 days.")
-        return  # valid
-
-    for tok in toks:
-        if re.fullmatch(r"w-?\d+", tok):
-            canonical_week = int(tok[1:])
-            raise ParseError(
-                f"ISO week numbers belong to yearly anchors. "
-                f"Use 'y:w{canonical_week}' instead of 'w:{tok}'."
-            )
-        if "-" in tok or ":" in tok:
-            raise ParseError(
-                f"Invalid weekly range '{tok}'. Use '..' (e.g., '{_CANON_WEEKLY_RANGE_EX}')."
-            )
-        if ".." in tok:
-            a, b = tok.split("..", 1)
-            if a not in _WEEKDAYS or b not in _WEEKDAYS:
-                raise ParseError(
-                    f"Unknown weekday in range '{tok}'. "
-                    f"Preferred range form is '..' (e.g., '{_CANON_WEEKLY_RANGE_EX}')."
-                )
-        else:
-            if tok not in _WEEKDAYS:
-                raise ParseError(
-                    f"Unknown weekday token '{tok}'. "
-                    f"Use mon..sun (e.g., '{_CANON_WEEKLY_RANGE_EX}' or '{_CANON_WEEKLY_LIST_EX}')."
-                )
-
-
-def _validate_monthly_spec(spec: str):
+def _validate_monthly_spec_legacy_removed(spec: str):
     """
     Valid monthly tokens (comma-separated):
       - Day of month:           '1'..'31' or negative '-1'..'-31'  (-1 = last day)
@@ -1326,6 +1179,24 @@ _y_ranges_from_spec = _expansion_api._y_ranges_from_spec
 _doms_allowed_by_year = _expansion_api._doms_allowed_by_year
 _month_allowed_doms_for_monthly_atom = _expansion_api._month_allowed_doms_for_monthly_atom
 _intersect_monthly_atoms_allowed = _expansion_api._intersect_monthly_atoms_allowed
+
+_parser_support_api = _import_sibling("parser_support_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+_parse_hhmm = _parser_support_api._parse_hhmm
+_parse_atom_head = _parser_support_api._parse_atom_head
+_parse_atom_mods = _parser_support_api._parse_atom_mods
+_parse_y_token_cached = _parser_support_api._parse_y_token_cached
+_parse_y_token = _parser_support_api._parse_y_token
+_fatal_bad_colon_in_year_tail = _parser_support_api._fatal_bad_colon_in_year_tail
+_raise_on_bad_colon_year_tokens = _parser_support_api._raise_on_bad_colon_year_tokens
+_skip_ws_pos = _parser_support_api._skip_ws_pos
+_raise_if_comma_joined_anchors = _parser_support_api._raise_if_comma_joined_anchors
+_parse_anchor_expr_to_dnf_cached_obj = _parser_support_api._parse_anchor_expr_to_dnf_cached_obj
+_parse_anchor_expr_to_dnf_cached_impl = _parser_support_api._parse_anchor_expr_to_dnf_cached_impl
+_validate_weekly_spec = _parser_support_api._validate_weekly_spec
+_validate_monthly_spec = _parser_support_api._validate_monthly_spec
 
 # Parser entry points live in ``parser_api``; retain these aliases for the
 # established ``nautical_core`` import contract.

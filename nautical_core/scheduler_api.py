@@ -6,6 +6,66 @@ from types import SimpleNamespace
 from typing import Any
 
 
+def _apply_day_offset_impl(module: Any, day, mods, business_calendar=None):
+    business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
+    return module._schedule_utils.apply_day_offset(
+        day,
+        mods,
+        business_calendar=business_calendar,
+    )
+
+
+def _base_next_after_atom_impl(module: Any, atom, ref_d, seed_base=None, business_calendar=None):
+    return module._scheduler_atom.base_next_after_atom(
+        atom,
+        ref_d,
+        seed_base=seed_base,
+        expand_weekly_cached_mods=module.expand_weekly_cached_mods,
+        split_csv_tokens=module._split_csv_tokens,
+        expand_monthly_cached=module._with_business_calendar(
+            module.expand_monthly_cached,
+            business_calendar,
+        ),
+        expand_yearly_cached=module.expand_yearly_cached,
+        weekly_rand_pick=module._with_business_calendar(
+            module._weekly_rand_pick,
+            business_calendar,
+        ),
+        week_monday=module._week_monday,
+        date_cls=module.date,
+        resolve_moon_phase_date=module._resolve_moon_phase_date,
+    )
+
+
+def _interval_allowed_for_atom(module: Any, typ, ival, seed, cand, spec=""):
+    return module._scheduler_atom.interval_allowed_for_atom(
+        typ,
+        ival,
+        seed,
+        cand,
+        weeks_between=module._weeks_between,
+        year_index=module._year_index,
+        spec=spec,
+    )
+
+
+def _advance_probe_for_interval_bucket(module: Any, typ, ival, seed, cand, spec=""):
+    return module._scheduler_atom.advance_probe_for_interval_bucket(
+        typ,
+        ival,
+        seed,
+        cand,
+        weeks_between=module._weeks_between,
+        year_index=module._year_index,
+        date_cls=module.date,
+        spec=spec,
+    )
+
+
+def _accept_roll_candidate(module: Any, ref_d, base, cand, roll_kind):
+    return module._scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
+
+
 def _next_after_atom_with_mods_impl(module: Any, atom, ref_d, default_seed, seed_base=None, business_calendar=None):
     business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
     base_next = module._with_business_calendar(module.base_next_after_atom, business_calendar)
@@ -19,12 +79,12 @@ def _next_after_atom_with_mods_impl(module: Any, atom, ref_d, default_seed, seed
         seed_base=seed_base,
         active_mod_keys=module._active_mod_keys,
         base_next_after_atom=base_next,
-        interval_allowed_for_atom=module._interval_allowed_for_atom,
-        advance_probe_for_interval_bucket=module._advance_probe_for_interval_bucket,
+        interval_allowed_for_atom=lambda *args, **kwargs: _interval_allowed_for_atom(module, *args, **kwargs),
+        advance_probe_for_interval_bucket=lambda *args, **kwargs: _advance_probe_for_interval_bucket(module, *args, **kwargs),
         monthly_align_base_for_interval=monthly_align,
         roll_apply=roll,
         apply_day_offset=day_offset,
-        accept_roll_candidate=module._accept_roll_candidate,
+        accept_roll_candidate=lambda *args, **kwargs: _accept_roll_candidate(module, *args, **kwargs),
         is_business_day=business_calendar.is_business_day,
         max_anchor_iter=module.MAX_ANCHOR_ITER,
         warn_once_per_day=module._warn_once_per_day,
@@ -173,6 +233,27 @@ def for_core(module: Any):
             business_calendar=business_calendar,
         )
 
+    def base_next_after_atom(atom, ref_d, seed_base=None, business_calendar=None):
+        return _base_next_after_atom_impl(
+            module,
+            atom,
+            ref_d,
+            seed_base=seed_base,
+            business_calendar=business_calendar,
+        )
+
+    def apply_day_offset(day, mods, business_calendar=None):
+        return _apply_day_offset_impl(module, day, mods, business_calendar=business_calendar)
+
+    def interval_allowed_for_atom(typ, ival, seed, cand, spec=""):
+        return _interval_allowed_for_atom(module, typ, ival, seed, cand, spec=spec)
+
+    def advance_probe_for_interval_bucket(typ, ival, seed, cand, spec=""):
+        return _advance_probe_for_interval_bucket(module, typ, ival, seed, cand, spec=spec)
+
+    def accept_roll_candidate(ref_d, base, cand, roll_kind):
+        return _accept_roll_candidate(module, ref_d, base, cand, roll_kind)
+
     def atom_matches_on(atom, d, default_seed, seed_base=None, business_calendar=None):
         return _atom_matches_on_impl(
             module,
@@ -240,7 +321,11 @@ def for_core(module: Any):
         expand_weekly=module._expand_weekly_impl,
         expand_yearly_for_year_strict=module._expand_yearly_for_year_strict_impl,
         roll_apply=module._roll_apply_impl,
-        apply_day_offset=module._apply_day_offset_impl,
+        apply_day_offset=apply_day_offset,
+        base_next_after_atom=base_next_after_atom,
+        interval_allowed_for_atom=interval_allowed_for_atom,
+        advance_probe_for_interval_bucket=advance_probe_for_interval_bucket,
+        accept_roll_candidate=accept_roll_candidate,
         next_after_atom_with_mods=next_after_atom_with_mods,
         atom_matches_on=atom_matches_on,
         next_after_factor=next_after_factor,

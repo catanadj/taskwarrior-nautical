@@ -3146,46 +3146,6 @@ def _roll_apply_impl(
 def _weeks_between(d1: date, d2: date) -> int:
     return _schedule_utils.weeks_between(d1, d2)
 
-def _apply_day_offset_impl(
-    d: date,
-    mods: dict,
-    business_calendar=None,
-) -> date:
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    return _schedule_utils.apply_day_offset(
-        d,
-        mods,
-        business_calendar=business_calendar,
-    )
-
-
-def base_next_after_atom(
-    atom,
-    ref_d: date,
-    seed_base=None,
-    business_calendar=None,
-) -> date:
-    return _scheduler_atom.base_next_after_atom(
-        atom,
-        ref_d,
-        seed_base=seed_base,
-        expand_weekly_cached_mods=expand_weekly_cached_mods,
-        split_csv_tokens=_split_csv_tokens,
-        expand_monthly_cached=_with_business_calendar(
-            expand_monthly_cached,
-            business_calendar,
-        ),
-        expand_yearly_cached=expand_yearly_cached,
-        weekly_rand_pick=_with_business_calendar(
-            _weekly_rand_pick,
-            business_calendar,
-        ),
-        week_monday=_week_monday,
-        date_cls=date,
-        resolve_moon_phase_date=_resolve_moon_phase_date,
-    )
-
-
 def _resolve_moon_phase_date(phase: str, reference_day: date) -> date:
     astronomy = _import_sibling("astronomy")
     return astronomy.resolve_phase_date(
@@ -3207,43 +3167,6 @@ def _moon_phase_matches_date(phase: str, day: date) -> bool:
 # ------------------------------------------------------------------------------
 # Anchor scheduling & iteration helpers
 # ------------------------------------------------------------------------------
-def _interval_allowed_for_atom(
-    typ: str,
-    ival: int,
-    seed: date,
-    cand: date,
-    spec: str = "",
-) -> bool:
-    return _scheduler_atom.interval_allowed_for_atom(
-        typ,
-        ival,
-        seed,
-        cand,
-        weeks_between=_weeks_between,
-        year_index=_year_index,
-        spec=spec,
-    )
-
-
-def _advance_probe_for_interval_bucket(
-    typ: str,
-    ival: int,
-    seed: date,
-    cand: date,
-    spec: str = "",
-) -> date:
-    return _scheduler_atom.advance_probe_for_interval_bucket(
-        typ,
-        ival,
-        seed,
-        cand,
-        weeks_between=_weeks_between,
-        year_index=_year_index,
-        date_cls=date,
-        spec=spec,
-    )
-
-
 def _month_doms_safe(
     spec: str,
     y: int,
@@ -3365,10 +3288,6 @@ def _monthly_align_base_for_interval(
             business_calendar,
         ),
     )
-
-
-def _accept_roll_candidate(ref_d: date, base: date, cand: date, roll_kind: str | None) -> bool:
-    return _scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
 
 
 @lru_cache(maxsize=32)
@@ -3661,6 +3580,11 @@ expand_weekly = _scheduler_api.expand_weekly
 expand_yearly_for_year_strict = _scheduler_api.expand_yearly_for_year_strict
 roll_apply = _scheduler_api.roll_apply
 apply_day_offset = _scheduler_api.apply_day_offset
+base_next_after_atom = _scheduler_api.base_next_after_atom
+_apply_day_offset_impl = _scheduler_api.apply_day_offset
+_interval_allowed_for_atom = _scheduler_api.interval_allowed_for_atom
+_advance_probe_for_interval_bucket = _scheduler_api.advance_probe_for_interval_bucket
+_accept_roll_candidate = _scheduler_api.accept_roll_candidate
 next_after_atom_with_mods = _scheduler_api.next_after_atom_with_mods
 atom_matches_on = _scheduler_api.atom_matches_on
 next_after_factor = _scheduler_api.next_after_factor

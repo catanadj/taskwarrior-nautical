@@ -46,6 +46,24 @@ def _import_sibling(module_name: str):
     return importlib.import_module(f"{_PKG_IMPORT_ROOT}.{module_name}")
 
 
+class _LazySibling:
+    """Resolve a focused sibling module only when one of its APIs is used."""
+
+    __slots__ = ("_name", "_module")
+
+    def __init__(self, module_name: str):
+        self._name = module_name
+        self._module = None
+
+    def _resolve(self):
+        if self._module is None:
+            self._module = _import_sibling(self._name)
+        return self._module
+
+    def __getattr__(self, name: str):
+        return getattr(self._resolve(), name)
+
+
 class AnchorMods(TypedDict, total=False):
     t: str
     bd: bool
@@ -307,9 +325,9 @@ _monthly_support = _import_sibling("monthly_support")
 _natural_language = _import_sibling("natural_language")
 _astronomy = _import_sibling("astronomy")
 _linting = _import_sibling("linting")
-_parser_atoms = _import_sibling("parser_atoms")
-_parser_dnf = _import_sibling("parser_dnf")
-_parser_frontend = _import_sibling("parser_frontend")
+_parser_atoms = _LazySibling("parser_atoms")
+_parser_dnf = _LazySibling("parser_dnf")
+_parser_frontend = _LazySibling("parser_frontend")
 _position_selection = _import_sibling("position_selection")
 _season_support = _import_sibling("season_support")
 _season_support.configure_hemisphere(SEASON_HEMISPHERE)
@@ -318,10 +336,10 @@ _quarter_helpers = _import_sibling("quarter_helpers")
 _quarter_rewrite = _import_sibling("quarter_rewrite")
 _quarter_selector = _import_sibling("quarter_selector")
 _satisfiability = _import_sibling("satisfiability")
-_schedule_utils = _import_sibling("schedule_utils")
-_scheduler_atom = _import_sibling("scheduler_atom")
-_scheduler_expr = _import_sibling("scheduler_expr")
-_strict_validation = _import_sibling("strict_validation")
+_schedule_utils = _LazySibling("schedule_utils")
+_scheduler_atom = _LazySibling("scheduler_atom")
+_scheduler_expr = _LazySibling("scheduler_expr")
+_strict_validation = _LazySibling("strict_validation")
 _tokenutil = _import_sibling("tokenutil")
 _yearly_parse = _import_sibling("yearly_parse")
 _yearly_validation = _import_sibling("yearly_validation")

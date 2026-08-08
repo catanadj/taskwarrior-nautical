@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, TypeAlias
 
 
@@ -10,6 +11,39 @@ from typing import Any, TypeAlias
 # task data and result values.  ``Any`` remains the payload type because hook
 # modules support Taskwarrior's heterogeneous JSON fields.
 ServiceCallback: TypeAlias = Callable[..., Any]
+TaskRow: TypeAlias = dict[str, Any]
+
+
+CompletionLinkNumbersCallback: TypeAlias = Callable[
+    [TaskRow], tuple[int, int] | None
+]
+CompletionKindCallback: TypeAlias = Callable[[TaskRow, datetime], str | None]
+CompletionChainIdCallback: TypeAlias = Callable[[TaskRow], str | None]
+CompletionSnapshotCallback: TypeAlias = Callable[
+    [str, int, int], "CompletionChainSnapshot"
+]
+CompletionExistingNextCallback: TypeAlias = Callable[[TaskRow, int], bool]
+CompletionChildDueCallback: TypeAlias = Callable[
+    [TaskRow, str], tuple[Any, Any, Any] | None
+]
+CompletionUntilCallback: TypeAlias = Callable[
+    [TaskRow, datetime], datetime | None | bool
+]
+CompletionUntilGuardCallback: TypeAlias = Callable[[TaskRow, Any, Any, datetime], bool]
+CompletionChildRequiredCallback: TypeAlias = Callable[[TaskRow, Any], bool]
+CompletionDurationWarningCallback: TypeAlias = Callable[[TaskRow, Any, Any, datetime], None]
+CompletionCapsCallback: TypeAlias = Callable[
+    [str, TaskRow, Any, Any], tuple[Any, Any, Any, Any, Any]
+]
+CompletionCapGuardCallback: TypeAlias = Callable[
+    [TaskRow, int, int | None, datetime], bool
+]
+BuildChildCallback: TypeAlias = Callable[
+    [TaskRow, Any, str, int, str, str, int, Any], TaskRow
+]
+SpawnChildCallback: TypeAlias = Callable[
+    [TaskRow, TaskRow], tuple[str, Any, bool, bool, str | None, str | None]
+]
 
 
 @dataclass(slots=True)
@@ -64,22 +98,22 @@ class CompletionComputeResult:
 @dataclass(slots=True)
 class CompletionPreflightServices:
     short: ServiceCallback
-    completion_link_numbers_or_fail: ServiceCallback
-    completion_kind_or_stop: ServiceCallback
-    completion_chain_id_or_fail: ServiceCallback
-    completion_chain_snapshot: ServiceCallback
-    completion_existing_next_or_fail: ServiceCallback
+    completion_link_numbers_or_fail: CompletionLinkNumbersCallback
+    completion_kind_or_stop: CompletionKindCallback
+    completion_chain_id_or_fail: CompletionChainIdCallback
+    completion_chain_snapshot: CompletionSnapshotCallback
+    completion_existing_next_or_fail: CompletionExistingNextCallback
 
 
 @dataclass(slots=True)
 class CompletionComputeServices:
-    completion_compute_child_due: ServiceCallback
-    completion_until_or_fail: ServiceCallback
-    completion_until_guard_or_stop: ServiceCallback
-    completion_require_child_due_or_fail: ServiceCallback
-    completion_warn_unreasonable_duration: ServiceCallback
-    completion_caps: ServiceCallback
-    completion_cap_guard_or_stop: ServiceCallback
+    completion_compute_child_due: CompletionChildDueCallback
+    completion_until_or_fail: CompletionUntilCallback
+    completion_until_guard_or_stop: CompletionUntilGuardCallback
+    completion_require_child_due_or_fail: CompletionChildRequiredCallback
+    completion_warn_unreasonable_duration: CompletionDurationWarningCallback
+    completion_caps: CompletionCapsCallback
+    completion_cap_guard_or_stop: CompletionCapGuardCallback
 
 
 @dataclass(slots=True)
@@ -142,8 +176,8 @@ class CompletionSpawnResult:
 
 @dataclass(slots=True)
 class CompletionSpawnServices:
-    build_child_from_parent: ServiceCallback
-    spawn_child_atomic: ServiceCallback
+    build_child_from_parent: BuildChildCallback
+    spawn_child_atomic: SpawnChildCallback
     panel: ServiceCallback
     print_task: ServiceCallback
     diag: ServiceCallback

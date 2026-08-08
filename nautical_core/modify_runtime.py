@@ -12,6 +12,20 @@ from nautical_core.modify_models import (
     CompletionPreflightServices,
     CompletionSpawnServices,
     CpFeedbackServices,
+    BuildChildCallback,
+    CompletionCapGuardCallback,
+    CompletionCapsCallback,
+    CompletionChainIdCallback,
+    CompletionChildDueCallback,
+    CompletionChildRequiredCallback,
+    CompletionDurationWarningCallback,
+    CompletionExistingNextCallback,
+    CompletionKindCallback,
+    CompletionLinkNumbersCallback,
+    CompletionSnapshotCallback,
+    CompletionUntilCallback,
+    CompletionUntilGuardCallback,
+    SpawnChildCallback,
     ServiceCallback,
 )
 
@@ -193,11 +207,11 @@ def build_cp_feedback_services(runtime: ModifyRuntimeServices) -> CpFeedbackServ
 def build_preflight_services(
     *,
     short: ServiceCallback,
-    completion_link_numbers_or_fail: ServiceCallback,
-    completion_kind_or_stop: ServiceCallback,
-    completion_chain_id_or_fail: ServiceCallback,
-    completion_chain_snapshot: ServiceCallback,
-    completion_existing_next_or_fail: ServiceCallback,
+    completion_link_numbers_or_fail: CompletionLinkNumbersCallback,
+    completion_kind_or_stop: CompletionKindCallback,
+    completion_chain_id_or_fail: CompletionChainIdCallback,
+    completion_chain_snapshot: CompletionSnapshotCallback,
+    completion_existing_next_or_fail: CompletionExistingNextCallback,
 ) -> CompletionPreflightServices:
     return CompletionPreflightServices(
         short=short,
@@ -211,13 +225,13 @@ def build_preflight_services(
 
 def build_compute_services(
     *,
-    completion_compute_child_due: ServiceCallback,
-    completion_until_or_fail: ServiceCallback,
-    completion_until_guard_or_stop: ServiceCallback,
-    completion_require_child_due_or_fail: ServiceCallback,
-    completion_warn_unreasonable_duration: ServiceCallback,
-    completion_caps: ServiceCallback,
-    completion_cap_guard_or_stop: ServiceCallback,
+    completion_compute_child_due: CompletionChildDueCallback,
+    completion_until_or_fail: CompletionUntilCallback,
+    completion_until_guard_or_stop: CompletionUntilGuardCallback,
+    completion_require_child_due_or_fail: CompletionChildRequiredCallback,
+    completion_warn_unreasonable_duration: CompletionDurationWarningCallback,
+    completion_caps: CompletionCapsCallback,
+    completion_cap_guard_or_stop: CompletionCapGuardCallback,
 ) -> CompletionComputeServices:
     return CompletionComputeServices(
         completion_compute_child_due=completion_compute_child_due,
@@ -232,8 +246,8 @@ def build_compute_services(
 
 def build_spawn_services(
     *,
-    build_child_from_parent: ServiceCallback,
-    spawn_child_atomic: ServiceCallback,
+    build_child_from_parent: BuildChildCallback,
+    spawn_child_atomic: SpawnChildCallback,
     panel: ServiceCallback,
     print_task: ServiceCallback,
     diag: ServiceCallback,

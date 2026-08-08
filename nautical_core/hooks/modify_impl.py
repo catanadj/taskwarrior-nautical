@@ -574,6 +574,8 @@ _RECONCILE = None
 _RECONCILE_LOAD_FAILED = False
 _HOOK_RUNTIME = None
 _HOOK_MODULE_ACCESS = None
+_RECURRENCE_EVALUATOR = None
+_RECURRENCE_EVALUATOR_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -700,6 +702,12 @@ _MODULE_SPECS = {
         "_HOOK_RESULTS_LOAD_FAILED",
         "hook_results.py",
         "nautical_core.hook_results",
+    ),
+    "recurrence_evaluator": (
+        "_RECURRENCE_EVALUATOR",
+        "_RECURRENCE_EVALUATOR_LOAD_FAILED",
+        "recurrence_evaluator.py",
+        "nautical_core.recurrence_evaluator",
     ),
 }
 core, _CORE_IMPORT_TARGET, _CORE_IMPORT_ERROR = hook_bootstrap.import_core_package(_CORE_BASE)
@@ -4052,12 +4060,70 @@ def _anchor_due_for_mode(
     )
 
 
+def _compute_anchor_child_due_evaluator(parent: dict):
+    """Compute an anchor child through the shared evaluator mode policy."""
+    expr_str = str(parent.get("anchor") or "").strip()
+    anchor_file_str = str(parent.get("anchor_file") or "").strip()
+    if not ((expr_str and _validate_anchor_expr_cached(expr_str)) or anchor_file_str):
+        return (None, None, None)
+    if str(parent.get("omit_file") or "").strip():
+        raise NotImplementedError("evaluator mode selection does not yet own omit_file sources")
+
+    evaluator_module = _module("recurrence_evaluator")
+    evaluator = evaluator_module.RecurrenceEvaluator.from_task(
+        parent,
+        timezone=core._LOCAL_TZ,
+        business_calendar=core.business_calendar_for_task(parent),
+        astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+    )
+    end_local, due_local, due_dt_utc = _anchor_parent_local_times(parent)
+    if not end_local:
+        return (None, None, None)
+    result = evaluator.select_mode(
+        _anchor_mode_from_parent(parent),
+        due_local=due_local,
+        end_local=end_local,
+        due_explicit=due_dt_utc is not None,
+        next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
+        fallback_hhmm=(due_local.hour, due_local.minute),
+        default_seed_date=due_local.date(),
+    )
+    if result.selected_occurrence is None:
+        raise ValueError("Could not compute next anchor occurrence")
+    target_field = "scheduled" if not due_dt_utc and parent.get("scheduled") else "due"
+    dnf = evaluator.anchor_dnf or None
+    return result.selected_occurrence.astimezone(timezone.utc), result.metadata(target_field=target_field), dnf
+
+
 def _compute_anchor_child_due(parent: dict):
     """Return (next_due_utc, meta, dnf).
 
     The core recurrence engine computes *dates*; the hook expands into *datetimes* to
     respect multi-time lists: @t=HH:MM[,HH:MM...].
     """
+    anchor_file_value = str(parent.get("anchor_file") or "").strip()
+    evaluator_provider_compatible = True
+    if anchor_file_value:
+        anchor_inclusion = core._import_sibling("anchor_inclusion")
+        builder = getattr(anchor_inclusion, "_build_anchor_file_provider", None)
+        evaluator_provider_compatible = str(getattr(builder, "__module__", "")).endswith("anchor_inclusion")
+    if not str(parent.get("omit_file") or "").strip() and evaluator_provider_compatible:
+        try:
+            return _compute_anchor_child_due_evaluator(parent)
+        except NotImplementedError:
+            pass
+        except AttributeError:
+            # Preserve test/integration providers that are owned by the
+            # legacy hook path until the provider seam is fully cut over.
+            if not str(parent.get("anchor_file") or "").strip():
+                raise
+        except ValueError as exc:
+            # An unsatisfiable omit rule has a more specific legacy guard;
+            # keep that diagnostic while the evaluator limit is harmonized.
+            if "omission scan exceeded" not in str(exc):
+                raise
+
     expr_str, dnf = _anchor_dnf_from_parent(parent)
     anchor_file_str = (parent.get("anchor_file") or "").strip()
     if not ((expr_str and dnf) or anchor_file_str):

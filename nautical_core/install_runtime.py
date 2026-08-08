@@ -34,7 +34,7 @@ LEGACY_HOOK_FILES = {
 }
 HOOK_RUNTIME_FILES = {
     "on-add": ("hooks/add_impl.py", "hook_bootstrap.py", "hook_protocol.py"),
-    "on-modify": ("hooks/modify_impl.py", "hook_bootstrap.py", "hook_protocol.py"),
+    "on-modify": ("hooks/modify_impl.py", "hook_bootstrap.py", "hook_protocol.py", "recurrence_evaluator.py"),
     "on-exit": ("hooks/exit_impl.py", "hook_bootstrap.py", "config_support.py", "exit_probe.py"),
 }
 MANAGED_ROOT_FILES = ("nautical", "nautical_navigator.py")

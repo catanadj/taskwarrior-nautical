@@ -234,26 +234,57 @@ def _clear_all_caches() -> None:
 
 
 # -------- UI helpers ----------------------------------------------------------
-_ui = _import_sibling("ui")
+_ui = _LazySibling("ui")
 
-strip_rich_markup = _ui.strip_rich_markup
-term_width_stderr = _ui.term_width_stderr
-fast_color_enabled = _ui.fast_color_enabled
-ansi = _ui.ansi
-emit_wrapped = _ui.emit_wrapped
-emit_line = _ui.emit_line
-text_line = _ui.text_line
-panel_line_from_rows = _ui.panel_line_from_rows
-panel_line = _ui.panel_line
-panel_themes = _ui.panel_themes
+
+def strip_rich_markup(*args, **kwargs):
+    return _ui.strip_rich_markup(*args, **kwargs)
+
+
+def term_width_stderr(*args, **kwargs):
+    return _ui.term_width_stderr(*args, **kwargs)
+
+
+def fast_color_enabled(*args, **kwargs):
+    return _ui.fast_color_enabled(*args, **kwargs)
+
+
+def ansi(*args, **kwargs):
+    return _ui.ansi(*args, **kwargs)
+
+
+def emit_wrapped(*args, **kwargs):
+    return _ui.emit_wrapped(*args, **kwargs)
+
+
+def emit_line(*args, **kwargs):
+    return _ui.emit_line(*args, **kwargs)
+
+
+def text_line(*args, **kwargs):
+    return _ui.text_line(*args, **kwargs)
+
+
+def panel_line_from_rows(*args, **kwargs):
+    return _ui.panel_line_from_rows(*args, **kwargs)
+
+
+def panel_line(*args, **kwargs):
+    return _ui.panel_line(*args, **kwargs)
+
+
+def panel_themes(*args, **kwargs):
+    return _ui.panel_themes(*args, **kwargs)
+
 chain_colour_root = _import_sibling("panel_colours").chain_colour_root
 DiagnosticEvent = _import_sibling("diagnostic_models").DiagnosticEvent
 
 
 def render_panel(*args, **kwargs):
-    _ui.panel_line = panel_line
-    _ui.text_line = text_line
-    return _ui.render_panel(*args, **kwargs)
+    ui = _ui._resolve()
+    ui.panel_line = panel_line
+    ui.text_line = text_line
+    return ui.render_panel(*args, **kwargs)
 
 ANCHOR_YEAR_FMT = _core_config.ANCHOR_YEAR_FMT
 WRAND_SALT = _core_config.WRAND_SALT
@@ -309,16 +340,16 @@ _cached_expansion = _import_sibling("cached_expansion")
 _nth_monthly = _import_sibling("nth_monthly")
 _expansion_support = _import_sibling("expansion_support")
 _monthly_support = _import_sibling("monthly_support")
-_natural_language = _import_sibling("natural_language")
-_astronomy = _import_sibling("astronomy")
-_linting = _import_sibling("linting")
+_natural_language = _LazySibling("natural_language")
+_astronomy = _LazySibling("astronomy")
+_linting = _LazySibling("linting")
 _parser_atoms = _LazySibling("parser_atoms")
 _parser_dnf = _LazySibling("parser_dnf")
 _parser_frontend = _LazySibling("parser_frontend")
-_position_selection = _import_sibling("position_selection")
+_position_selection = _LazySibling("position_selection")
 _season_support = _import_sibling("season_support")
 _season_support.configure_hemisphere(SEASON_HEMISPHERE)
-_precompute = _import_sibling("precompute")
+_precompute = _LazySibling("precompute")
 _quarter_helpers = _import_sibling("quarter_helpers")
 _quarter_rewrite = _import_sibling("quarter_rewrite")
 _quarter_selector = _import_sibling("quarter_selector")

@@ -13910,6 +13910,28 @@ def test_core_import_deterministic():
 
     expect(True, "core import should ignore TASKDATA when NAUTICAL_DEV is not set")
 
+
+def test_core_import_defers_optional_stacks():
+    """Importing the facade should not load UI and recurrence presentation stacks."""
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys, nautical_core; "
+                "names=('rich','nautical_core.ui','nautical_core.astronomy',"
+                "'nautical_core.natural_language','nautical_core.linting'); "
+                "assert not any(name in sys.modules for name in names), "
+                "sorted(name for name in names if name in sys.modules)"
+            ),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=12.0,
+    )
+    expect(probe.returncode == 0, f"optional stacks were imported eagerly: {probe.stderr or probe.stdout}")
+
 def test_on_modify_spawn_intent_id_in_entry():
     """on-modify spawn intent entries should include a correlation id."""
     hook = _find_hook_file("on-modify.nautical")
@@ -30136,6 +30158,7 @@ TESTS = [
     test_on_exit_normalize_queue_entry_strips_fields,
     test_hooks_require_package_core_layout,
     test_core_import_deterministic,
+    test_core_import_defers_optional_stacks,
     test_on_modify_spawn_intent_id_in_entry,
     test_on_modify_spawn_intent_entry_rejects_missing_child_uuid,
     test_on_modify_spawn_intent_records_parent_guard,

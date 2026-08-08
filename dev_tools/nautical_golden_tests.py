@@ -16535,9 +16535,16 @@ def test_on_modify_pure_anchor_file_projection_reuses_provider():
 
     def build_provider(*_args, **_kwargs):
         provider = type("Provider", (), {})()
-        provider.occurrences = lambda: [
-            occurrence_provider.Occurrence(date(2026, 8, 4), 9, 0, source="anchor_file")
-        ]
+        occurrence = occurrence_provider.Occurrence(
+            date(2026, 8, 4), 9, 0, source="anchor_file",
+            local_datetime=mod.core.to_local(mod.core.build_local_datetime(date(2026, 8, 4), (9, 0))),
+        )
+        provider.occurrences = lambda: [occurrence]
+        provider.next_after = lambda after_local, **_kwargs: (
+            occurrence
+            if occurrence.local_datetime is not None and occurrence.local_datetime > after_local
+            else None
+        )
         builders.append(provider)
         return provider
 
@@ -17369,6 +17376,8 @@ def test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates():
 def test_modify_anchor_file_mode_orders_dst_fold_by_instant():
     """A repeated local hour must be filtered by instant, not wall-clock labels."""
     from zoneinfo import ZoneInfo
+    from nautical_core.occurrence_provider import Occurrence
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
     zone = ZoneInfo("Europe/Bucharest")
     due = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
@@ -17376,21 +17385,35 @@ def test_modify_anchor_file_mode_orders_dst_fold_by_instant():
     first_fold = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=0)
     second_fold = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)
     after_end = datetime(2026, 10, 25, 3, 45, tzinfo=zone, fold=1)
-    original = _hook._anchor_file_future_occurrences
-    _hook._anchor_file_future_occurrences = lambda *args, **kwargs: [first_fold, second_fold, after_end]
-    try:
-        next_local, info = _hook._anchor_file_due_for_mode(
-            "all",
-            parent={"anchor_file": "fold.csv"},
-            omit_dnf=None,
-            due_local=due,
-            end_local=end,
-            due_dt_utc=due.astimezone(timezone.utc),
-            fallback_hhmm=(3, 15),
-            seed_base="dst-fold",
-        )
-    finally:
-        _hook._anchor_file_future_occurrences = original
+    class FoldProvider:
+        def next_after(self, after_local, *, build_local_datetime, to_local):
+            for value in (first_fold, second_fold, after_end):
+                if value.astimezone(timezone.utc) > after_local.astimezone(timezone.utc):
+                    return Occurrence(
+                        day=value.date(),
+                        hour=value.hour,
+                        minute=value.minute,
+                        source="anchor_file",
+                        local_datetime=value,
+                    )
+            return None
+
+    evaluator = RecurrenceEvaluator.from_task(
+        {"anchor_file": "fold.csv", "anchor_mode": "all", "chainID": "dst-fold"},
+        timezone=zone,
+    )
+    result = evaluator.select_mode(
+        "all",
+        due_local=due,
+        end_local=end,
+        due_explicit=True,
+        next_occurrence_after_local_dt=lambda *_args, **_kwargs: None,
+        fallback_hhmm=(3, 15),
+        default_seed_date=due.date(),
+        anchor_file_provider=FoldProvider(),
+    )
+    next_local = result.selected_occurrence
+    info = result
     expect(next_local is second_fold, f"DST fold selected the wrong occurrence: {next_local!r}")
     expect(info.source == "anchor_file", f"anchor-file mode source was not typed: {info!r}")
     expect(info.selected_occurrence is second_fold, f"typed result lost selected occurrence: {info!r}")
@@ -18116,30 +18139,11 @@ def test_occurrence_event_provider_requires_boolean_omitted_flag():
         expect("non-boolean" in str(exc), f"unexpected omitted-flag error: {exc}")
 
 
-def test_anchor_inclusion_scheduler_dispatch_preserves_legacy_and_internal_errors():
-    """Scheduler compatibility is selected by signature, not by retrying failures."""
+def test_anchor_inclusion_scheduler_propagates_internal_errors():
+    """The typed scheduler callback is invoked once without retrying failures."""
     import nautical_core.anchor_inclusion as inclusion
 
     after = datetime(2026, 8, 3, 9, 0)
-    legacy_calls = []
-
-    def legacy(dnf, value, fallback_hhmm, interval_seed, seed_base, omit_dnf=None, *, core, norm_t_mod):
-        legacy_calls.append((fallback_hhmm, interval_seed, seed_base, omit_dnf, core, norm_t_mod))
-        return value + timedelta(hours=1)
-
-    result = inclusion._call_next_occurrence(
-        legacy,
-        [],
-        after,
-        default_seed_date=date(2026, 8, 3),
-        seed_base="dispatch-test",
-        omit_dnf=None,
-        fallback_hhmm=(9, 0),
-        core=core,
-    )
-    expect(result == after + timedelta(hours=1), f"legacy scheduler dispatch changed result: {result!r}")
-    expect(legacy_calls and legacy_calls[0][0] == (9, 0), "legacy scheduler was not called with positional fallback time")
-
     calls = []
 
     def modern(dnf, value, *, default_seed_date, seed_base, omit_dnf, fallback_hhmm):
@@ -18147,15 +18151,17 @@ def test_anchor_inclusion_scheduler_dispatch_preserves_legacy_and_internal_error
         raise TypeError("internal scheduler defect")
 
     try:
-        inclusion._call_next_occurrence(
-            modern,
-            [],
-            after,
+        inclusion.next_included_occurrence(
+            dnf=[[]],
+            anchor_file_str="",
+            after_local_dt=after,
+            inclusive=False,
+            fallback_hhmm=(9, 0),
             default_seed_date=date(2026, 8, 3),
             seed_base="dispatch-test",
             omit_dnf=None,
-            fallback_hhmm=(9, 0),
             core=core,
+            next_occurrence_after_local_dt=modern,
         )
         expect(False, "internal scheduler TypeError was swallowed")
     except TypeError as exc:
@@ -29476,7 +29482,7 @@ TESTS = [
     test_occurrence_collection_fails_closed_on_invalid_values_and_exhaustion,
     test_occurrence_collection_enforces_cursor_progress_and_timezone_consistency,
     test_occurrence_event_provider_requires_boolean_omitted_flag,
-    test_anchor_inclusion_scheduler_dispatch_preserves_legacy_and_internal_errors,
+    test_anchor_inclusion_scheduler_propagates_internal_errors,
     test_modify_inclusion_collection_uses_shared_progress_guard,
     test_modify_until_projection_reuses_anchor_file_provider,
     test_modify_until_projection_fails_closed_at_iteration_limit,

@@ -3592,80 +3592,6 @@ def _anchor_parent_local_times(parent: dict):
     return end_local, due_local, due_dt_utc
 
 
-def _anchor_file_occurrences_local(
-    parent: dict,
-    fallback_hhmm: tuple[int, int],
-    *,
-    anchor_file_provider: Any | None = None,
-) -> list[datetime]:
-    recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(parent)
-    anchor_file = recurrence_spec.anchor_file
-    if not anchor_file:
-        return []
-    if anchor_file_provider is None:
-        anchor_files = core._import_sibling("anchor_files")
-        context = recurrence_spec.context
-        business_calendar = core.business_calendar_for_task(parent)
-        anchor_file_provider = anchor_files.AnchorFileOccurrenceProvider(
-            anchor_file,
-            getattr(core, "ANCHOR_FILE_DIR", ""),
-            fallback_hhmm,
-            business_calendar=business_calendar,
-            context=context,
-        )
-    out = [
-        _tolocal(core.build_local_datetime(value.day, value.hhmm))
-        for value in anchor_file_provider.occurrences()
-    ]
-    occurrence_provider = core._import_sibling("occurrence_provider")
-    ordered = occurrence_provider._sort_datetimes(out)
-    deduplicated: list[datetime] = []
-    for item in ordered:
-        if not deduplicated or _compare_datetimes(item, deduplicated[-1]) != 0:
-            deduplicated.append(item)
-    return deduplicated
-
-
-def _anchor_file_is_omitted(omit_dnf, item_local: datetime, *, seed_base: str) -> bool:
-    if not omit_dnf:
-        return False
-    try:
-        anchor_omit = _module("anchor_omit")
-        return bool(
-            anchor_omit.omit_expr_fires_on_date(
-                omit_dnf,
-                item_local.date(),
-                item_local.date(),
-                seed_base,
-                core=core,
-            )
-        )
-    except Exception as exc:
-        raise ValueError(
-            f"Unable to evaluate omit rule for {item_local.date().isoformat()}: {exc}"
-        ) from exc
-
-
-def _anchor_file_future_occurrences(
-    parent: dict,
-    *,
-    fallback_hhmm: tuple[int, int],
-    omit_dnf,
-    seed_base: str,
-    anchor_file_provider: Any | None = None,
-) -> list[datetime]:
-    out: list[datetime] = []
-    for item_local in _anchor_file_occurrences_local(
-        parent,
-        fallback_hhmm,
-        anchor_file_provider=anchor_file_provider,
-    ):
-        if _anchor_file_is_omitted(omit_dnf, item_local, seed_base=seed_base):
-            continue
-        out.append(item_local)
-    return out
-
-
 def _anchor_included_occurrences(
     parent: dict,
     *,
@@ -3722,73 +3648,6 @@ def _anchor_included_occurrences(
         )
         if occurrence.local_datetime is not None
     ]
-
-
-def _anchor_file_due_for_mode(
-    mode: str,
-    *,
-    parent: dict,
-    omit_dnf,
-    due_local,
-    end_local,
-    due_dt_utc,
-    fallback_hhmm,
-    seed_base: str,
-    anchor_file_provider=None,
-) -> tuple[object, Any]:
-    mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
-    occurrences = _anchor_file_future_occurrences(
-        parent,
-        fallback_hhmm=fallback_hhmm,
-        omit_dnf=omit_dnf,
-        seed_base=seed_base,
-        anchor_file_provider=anchor_file_provider,
-    )
-    if not occurrences:
-        return None, mode_result_type(
-            selected_occurrence=None,
-            mode=mode,
-            basis=None,
-            source="anchor_file",
-        )
-    after_due = [dt for dt in occurrences if _compare_datetimes(dt, due_local) > 0]
-    after_end = [dt for dt in occurrences if _compare_datetimes(dt, end_local) > 0]
-    if mode == "all":
-        missed = [dt for dt in occurrences if _compare_datetimes(dt, due_local) > 0 and _compare_datetimes(dt, end_local) <= 0]
-        if missed:
-            return missed[0], mode_result_type(
-                selected_occurrence=missed[0],
-                mode="all",
-                basis="missed",
-                source="anchor_file",
-                missed_count=len(missed),
-                missed_preview=tuple(missed[:5]),
-            )
-        selected = after_due[0] if after_due else None
-        return selected, mode_result_type(
-            selected_occurrence=selected,
-            mode="all",
-            basis="after_due",
-            source="anchor_file",
-        )
-    if mode == "flex":
-        missed = [dt for dt in occurrences if due_dt_utc and _compare_datetimes(dt, due_local) > 0 and _compare_datetimes(dt, end_local) <= 0]
-        selected = after_end[0] if after_end else None
-        return selected, mode_result_type(
-            selected_occurrence=selected,
-            mode="flex",
-            basis="flex",
-            source="anchor_file",
-            missed_count=len(missed),
-            missed_preview=tuple(missed[:5]),
-        )
-    selected = after_end[0] if after_end else None
-    return selected, mode_result_type(
-        selected_occurrence=selected,
-        mode="skip",
-        basis="after_end",
-        source="anchor_file",
-    )
 
 
 def _compute_anchor_child_due_evaluator(parent: dict):
@@ -3878,81 +3737,65 @@ def _compute_anchor_child_due(parent: dict):
         else None
     )
     mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
-    # Keep the old file-only mode helper solely for injected legacy providers
-    # used during compatibility tests. Installed providers use the shared
-    # occurrence stream below even when evaluator loading is unavailable.
-    if anchor_file_str and not dnf and not evaluator_provider_compatible:
-        nxt_local, info = _anchor_file_due_for_mode(
-            mode,
-            parent=parent,
-            omit_dnf=omit_dnf,
-            due_local=due_local,
-            end_local=end_local,
-            due_dt_utc=due_dt_utc,
-            fallback_hhmm=fallback_hhmm,
-            seed_base=seed_base,
-            anchor_file_provider=anchor_file_provider,
-        )
-    else:
-        occurrences = _anchor_included_occurrences(
+    occurrences = _anchor_included_occurrences(
+        parent,
+        after_local_dt=(due_local if mode == "all" else (end_local if mode == "flex" else _later_datetime(end_local, due_local))),
+        inclusive=False,
+        limit=32,
+        fallback_hhmm=fallback_hhmm,
+        omit_dnf=omit_dnf,
+        seed_base=seed_base,
+        default_seed_date=default_seed,
+        dnf=dnf,
+        anchor_file_provider=anchor_file_provider,
+    )
+    if mode == "all":
+        missed = [dt for dt in _anchor_included_occurrences(
             parent,
-            after_local_dt=(due_local if mode == "all" else (end_local if mode == "flex" else _later_datetime(end_local, due_local))),
+            after_local_dt=due_local,
             inclusive=False,
-            limit=32,
+            limit=25,
             fallback_hhmm=fallback_hhmm,
             omit_dnf=omit_dnf,
             seed_base=seed_base,
             default_seed_date=default_seed,
             dnf=dnf,
             anchor_file_provider=anchor_file_provider,
-        )
-        if mode == "all":
-            missed = [dt for dt in _anchor_included_occurrences(
-                parent,
-                after_local_dt=due_local,
-                inclusive=False,
-                limit=25,
-                fallback_hhmm=fallback_hhmm,
-                omit_dnf=omit_dnf,
-                seed_base=seed_base,
-                default_seed_date=default_seed,
-                dnf=dnf,
-                anchor_file_provider=anchor_file_provider,
-            ) if _compare_datetimes(dt, end_local) <= 0]
-            if missed:
-                nxt_local = missed[0]
-                info = mode_result_type(
-                    selected_occurrence=nxt_local,
-                    mode="all",
-                    basis="missed",
-                    source="anchor+anchor_file",
-                    missed_count=len(missed),
-                    missed_preview=tuple(missed[:5]),
-                )
-            else:
-                nxt_local = occurrences[0] if occurrences else None
-                info = mode_result_type(
-                    selected_occurrence=nxt_local,
-                    mode="all",
-                    basis="after_due",
-                    source="anchor+anchor_file",
-                )
-        elif mode == "flex":
-            nxt_local = occurrences[0] if occurrences else None
+        ) if _compare_datetimes(dt, end_local) <= 0]
+        if missed:
+            nxt_local = missed[0]
             info = mode_result_type(
                 selected_occurrence=nxt_local,
-                mode="flex",
-                basis="flex",
+                mode="all",
+                basis="missed",
                 source="anchor+anchor_file",
+                missed_count=len(missed),
+                missed_preview=tuple(missed[:5]),
             )
         else:
             nxt_local = occurrences[0] if occurrences else None
             info = mode_result_type(
                 selected_occurrence=nxt_local,
-                mode="skip",
-                basis="after_end",
+                mode="all",
+                basis="after_due",
                 source="anchor+anchor_file",
             )
+    elif mode == "flex":
+        nxt_local = occurrences[0] if occurrences else None
+        info = mode_result_type(
+            selected_occurrence=nxt_local,
+            mode="flex",
+            basis="flex",
+            source="anchor+anchor_file",
+        )
+    else:
+        nxt_local = occurrences[0] if occurrences else None
+        info = mode_result_type(
+            selected_occurrence=nxt_local,
+            mode="skip",
+            basis="after_end",
+            source="anchor+anchor_file",
+        )
 
     if not nxt_local:
         raise ValueError("Could not compute next anchor occurrence")

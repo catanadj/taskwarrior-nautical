@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta
-import inspect
 from typing import Any, Callable
 
 from .occurrence_provider import Occurrence, _cursor_before
@@ -29,56 +28,6 @@ def _norm_t_mod(v):
                 out.append((int(part[:2]), int(part[3:])))
         return out
     return []
-
-
-def _call_next_occurrence(
-    callback: Callable[..., Any],
-    dnf,
-    after_local_dt: datetime,
-    *,
-    default_seed_date,
-    seed_base: str,
-    omit_dnf,
-    fallback_hhmm: tuple[int, int],
-    core: Any,
-) -> datetime | None:
-    """Invoke modern or legacy schedulers without masking callback failures."""
-    try:
-        parameters = inspect.signature(callback).parameters.values()
-    except (TypeError, ValueError):
-        parameters = None
-
-    if parameters is None or any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters):
-        return callback(
-            dnf,
-            after_local_dt,
-            default_seed_date=default_seed_date,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            fallback_hhmm=fallback_hhmm,
-        )
-
-    names = {parameter.name for parameter in parameters}
-    if "default_seed_date" in names:
-        return callback(
-            dnf,
-            after_local_dt,
-            default_seed_date=default_seed_date,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            fallback_hhmm=fallback_hhmm,
-        )
-
-    return callback(
-        dnf,
-        after_local_dt,
-        fallback_hhmm,
-        default_seed_date,
-        seed_base,
-        omit_dnf=omit_dnf,
-        core=core,
-        norm_t_mod=_norm_t_mod,
-    )
 
 
 def _next_anchor_file_occurrence(
@@ -232,15 +181,13 @@ def next_included_occurrence(
             )
         else:
             expr_after = _cursor_before(after_local_dt) if inclusive else after_local_dt
-            expr_local = _call_next_occurrence(
-                next_occurrence_after_local_dt,
+            expr_local = next_occurrence_after_local_dt(
                 dnf,
                 expr_after,
                 default_seed_date=default_seed_date,
                 seed_base=seed_base,
                 omit_dnf=omit_dnf,
                 fallback_hhmm=fallback_hhmm,
-                core=core,
             )
     file_occurrence = _next_anchor_file_occurrence(
         anchor_file_str,
@@ -340,15 +287,13 @@ def next_occurrence_event_local(
             )
         else:
             expr_after = _cursor_before(after_local_dt) if inclusive else after_local_dt
-            expr_local = _call_next_occurrence(
-                next_occurrence_after_local_dt,
+            expr_local = next_occurrence_after_local_dt(
                 dnf,
                 expr_after,
                 default_seed_date=default_seed_date,
                 seed_base=seed_base,
                 omit_dnf=expr_omit_dnf,
                 fallback_hhmm=fallback_hhmm,
-                core=core,
             )
     file_occurrence = _next_anchor_file_occurrence(
         anchor_file_str,

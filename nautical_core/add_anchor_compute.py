@@ -285,15 +285,24 @@ def anchor_pick_occurrence_local(
 def anchor_next_occurrence_after_local_dt(
     dnf,
     after_dt_local,
-    fallback_hhmm,
-    interval_seed,
-    seed_base,
+    fallback_hhmm=(9, 0),
+    interval_seed=None,
+    seed_base="",
     omit_dnf=None,
     *,
-    core: Any,
-    norm_t_mod: Callable[[Any], list[tuple[int, int]]],
+    default_seed_date=None,
+    core: Any | None = None,
+    norm_t_mod: Callable[[Any], list[tuple[int, int]]] | None = None,
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
 ):
+    if default_seed_date is not None:
+        interval_seed = default_seed_date
+    if core is None:
+        from . import _PKG_PROXY
+        core = _PKG_PROXY
+    if norm_t_mod is None:
+        from .anchor_inclusion import _norm_t_mod
+        norm_t_mod = _norm_t_mod
     d0 = after_dt_local.date()
     unavailable = None
     if anchor_expr_fires_on_date_with_omit(

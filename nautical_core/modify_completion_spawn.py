@@ -1,20 +1,22 @@
 from __future__ import annotations
 
+from typing import Any
+
 from nautical_core.modify_models import CompletionSpawnResult
 
 
 def completion_build_and_spawn_child(
-    new: dict,
+    new: dict[str, Any],
     *,
-    child_due,
+    child_due: Any,
     child_field: str = "due",
     next_no: int,
     parent_short: str,
     kind: str,
     cpmax: int,
-    until_dt,
-    services,
-):
+    until_dt: Any,
+    services: Any,
+) -> CompletionSpawnResult | None:
     build_child_from_parent = services.build_child_from_parent
     spawn_child_atomic = services.spawn_child_atomic
     panel = services.panel

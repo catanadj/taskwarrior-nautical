@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+from typing import Any
+
 from nautical_core.modify_models import CompletionComputeResult
 from nautical_core.timeutil import compare_datetimes
 
 
 def completion_compute_child_due(
-    new: dict,
+    new: dict[str, Any],
     kind: str,
     *,
-    compute_anchor_child_due,
-    compute_cp_child_due,
-    panel,
-    print_task,
-    diag=None,
+    compute_anchor_child_due: Any,
+    compute_cp_child_due: Any,
+    panel: Any,
+    print_task: Any,
+    diag: Any = None,
 ):
     try:
         if kind in {"anchor", "anchor_file"}:
@@ -44,13 +46,13 @@ def completion_compute_child_due(
 
 
 def completion_until_or_fail(
-    new: dict,
-    now_utc,
+    new: dict[str, Any],
+    now_utc: Any,
     *,
-    safe_parse_datetime,
-    validate_until_not_past,
-    panel,
-    print_task,
+    safe_parse_datetime: Any,
+    validate_until_not_past: Any,
+    panel: Any,
+    print_task: Any,
 ):
     until_dt, err = safe_parse_datetime(new.get("chainUntil"))
     if err:
@@ -72,13 +74,13 @@ def completion_until_or_fail(
 
 
 def completion_until_guard_or_stop(
-    new: dict,
-    child_due,
-    until_dt,
-    now_utc,
+    new: dict[str, Any],
+    child_due: Any,
+    until_dt: Any,
+    now_utc: Any,
     *,
-    end_chain_summary,
-    print_task,
+    end_chain_summary: Any,
+    print_task: Any,
 ) -> bool:
     if until_dt and compare_datetimes(child_due, until_dt) > 0:
         end_chain_summary(new, "Reached 'until' limit", now_utc)
@@ -88,7 +90,9 @@ def completion_until_guard_or_stop(
     return True
 
 
-def completion_require_child_due_or_fail(new: dict, child_due, *, panel, print_task) -> bool:
+def completion_require_child_due_or_fail(
+    new: dict[str, Any], child_due: Any, *, panel: Any, print_task: Any
+) -> bool:
     if child_due:
         return True
     panel(
@@ -101,13 +105,13 @@ def completion_require_child_due_or_fail(new: dict, child_due, *, panel, print_t
 
 
 def completion_warn_unreasonable_duration(
-    new: dict,
-    child_due,
-    until_dt,
-    now_utc,
+    new: dict[str, Any],
+    child_due: Any,
+    until_dt: Any,
+    now_utc: Any,
     *,
-    validate_chain_duration_reasonable,
-    panel,
+    validate_chain_duration_reasonable: Any,
+    panel: Any,
 ) -> None:
     if not until_dt:
         return
@@ -118,16 +122,16 @@ def completion_warn_unreasonable_duration(
 
 def completion_caps(
     kind: str,
-    new: dict,
-    child_due,
-    dnf,
+    new: dict[str, Any],
+    child_due: Any,
+    dnf: Any,
     *,
-    coerce_int,
-    dtparse,
-    estimate_cp_final_by_max,
-    estimate_anchor_final_by_max,
-    cap_from_until_cp,
-    cap_from_until_anchor,
+    coerce_int: Any,
+    dtparse: Any,
+    estimate_cp_final_by_max: Any,
+    estimate_anchor_final_by_max: Any,
+    cap_from_until_cp: Any,
+    cap_from_until_anchor: Any,
 ):
     cpmax = coerce_int(new.get("chainMax"), 0)
     until_dt = dtparse(new.get("chainUntil"))
@@ -164,13 +168,13 @@ def completion_caps(
 
 
 def completion_cap_guard_or_stop(
-    new: dict,
+    new: dict[str, Any],
     next_no: int,
     cap_no: int | None,
-    now_utc,
+    now_utc: Any,
     *,
-    end_chain_summary,
-    print_task,
+    end_chain_summary: Any,
+    print_task: Any,
 ) -> bool:
     if cap_no and next_no > cap_no:
         end_chain_summary(new, f"Reached cap #{cap_no}", now_utc, current_task=new)
@@ -181,13 +185,13 @@ def completion_cap_guard_or_stop(
 
 
 def completion_compute_next_and_limits(
-    new: dict,
+    new: dict[str, Any],
     kind: str,
     next_no: int,
-    now_utc,
+    now_utc: Any,
     *,
-    services,
-):
+    services: Any,
+) -> CompletionComputeResult | None:
     completion_compute_child_due = services.completion_compute_child_due
     completion_until_or_fail = services.completion_until_or_fail
     completion_until_guard_or_stop = services.completion_until_guard_or_stop

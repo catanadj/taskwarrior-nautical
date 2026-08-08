@@ -44,6 +44,16 @@ BuildChildCallback: TypeAlias = Callable[
 SpawnChildCallback: TypeAlias = Callable[
     [TaskRow, TaskRow], tuple[str, Any, bool, bool, str | None, str | None]
 ]
+BuildAndSpawnCallback: TypeAlias = Callable[..., "CompletionSpawnResult | None"]
+SeedLookupCallback: TypeAlias = Callable[[TaskRow, TaskRow], None]
+ChainExportCallback: TypeAlias = Callable[[str], list[TaskRow]]
+ChainIndexesCallback: TypeAlias = Callable[
+    [list[TaskRow]], tuple[dict[int, TaskRow], dict[str, TaskRow]]
+]
+SetChainCacheCallback: TypeAlias = Callable[[str, list[TaskRow]], None]
+MergeChainCallback: TypeAlias = Callable[[list[TaskRow], TaskRow, TaskRow, str], list[TaskRow]]
+ChainHealthCallback: TypeAlias = Callable[..., str | None]
+ChainIntegrityCallback: TypeAlias = Callable[..., list[str] | None]
 
 
 @dataclass(slots=True)
@@ -181,6 +191,27 @@ class CompletionSpawnServices:
     panel: ServiceCallback
     print_task: ServiceCallback
     diag: ServiceCallback
+
+
+@dataclass(slots=True)
+class CompletionFinalizeServices:
+    build_and_spawn_child: BuildAndSpawnCallback
+    seed_runtime_lookup_tasks: SeedLookupCallback
+    modify_chain_state: ServiceCallback
+    get_chain_export: ChainExportCallback
+    build_chain_indexes: ChainIndexesCallback
+    set_chain_cache: SetChainCacheCallback
+    export_uuid_short_cached: Any
+    merge_spawned_child_into_chain: MergeChainCallback
+    chain_health_advice: ChainHealthCallback
+    chain_integrity_warnings: ChainIntegrityCallback
+    render_anchor_completion_feedback: ServiceCallback
+    render_cp_completion_feedback: ServiceCallback
+    print_task: ServiceCallback
+    diag_summary: ServiceCallback
+    show_analytics: bool
+    check_integrity: bool
+    analytics_style: str
 
 
 @dataclass(slots=True)

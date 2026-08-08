@@ -1,41 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
-
-@dataclass(slots=True)
-class CompletionFinalizeServices:
-    build_and_spawn_child: Any
-    seed_runtime_lookup_tasks: Any
-    modify_chain_state: Any
-    get_chain_export: Any
-    build_chain_indexes: Any
-    set_chain_cache: Any
-    export_uuid_short_cached: Any
-    merge_spawned_child_into_chain: Any
-    chain_health_advice: Any
-    chain_integrity_warnings: Any
-    render_anchor_completion_feedback: Any
-    render_cp_completion_feedback: Any
-    print_task: Any
-    diag_summary: Any
-    show_analytics: bool
-    check_integrity: bool
-    analytics_style: str
+from nautical_core.modify_models import CompletionFinalizeServices
 
 
 def finalize_completion_modify(
     *,
-    new: dict,
-    ctx,
-    computed,
-    now_utc,
+    new: dict[str, Any],
+    ctx: Any,
+    computed: Any,
+    now_utc: Any,
     need_chain: bool,
     chain_snapshot_loaded: bool,
-    preloaded_chain: list[dict],
-    preloaded_chain_by_link,
-    preloaded_chain_by_short,
+    preloaded_chain: list[dict[str, Any]],
+    preloaded_chain_by_link: dict[int, dict[str, Any]],
+    preloaded_chain_by_short: dict[str, dict[str, Any]],
     chain_id: str,
     services: CompletionFinalizeServices,
 ) -> None:

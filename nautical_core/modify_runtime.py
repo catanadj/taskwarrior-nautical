@@ -12,6 +12,7 @@ from nautical_core.modify_models import (
     CompletionPreflightServices,
     CompletionSpawnServices,
     CpFeedbackServices,
+    ServiceCallback,
 )
 
 
@@ -102,26 +103,26 @@ class ModifyRuntimeServices:
     state: ModifyRuntimeState
     core: Any
     debug_wait_sched: bool
-    last_wait_sched_debug: Any
+    last_wait_sched_debug: dict[str, Any]
     diag_enabled: bool
-    format_root_and_age: Any
-    append_next_wait_sched_rows: Any
-    timeline_lines: Any
+    format_root_and_age: ServiceCallback
+    append_next_wait_sched_rows: ServiceCallback
+    timeline_lines: ServiceCallback
     show_timeline_gaps: bool
-    root_uuid_from: Any
-    short: Any
-    format_next_anchor_rows: Any
-    format_next_cp_rows: Any
-    format_line_preview: Any
-    panel_line: Any
-    text_line: Any
-    panel: Any
-    print_task: Any
-    diag: Any
+    root_uuid_from: ServiceCallback
+    short: ServiceCallback
+    format_next_anchor_rows: ServiceCallback
+    format_next_cp_rows: ServiceCallback
+    format_line_preview: ServiceCallback
+    panel_line: ServiceCallback
+    text_line: ServiceCallback
+    panel: ServiceCallback
+    print_task: ServiceCallback
+    diag: ServiceCallback
     chain_color_per_chain: bool
-    chain_colour_for_task: Any
-    strip_quotes: Any
-    human_delta: Any
+    chain_colour_for_task: ServiceCallback
+    strip_quotes: ServiceCallback
+    human_delta: ServiceCallback
 
 
 def build_anchor_feedback_services(runtime: ModifyRuntimeServices) -> AnchorFeedbackServices:
@@ -191,12 +192,12 @@ def build_cp_feedback_services(runtime: ModifyRuntimeServices) -> CpFeedbackServ
 
 def build_preflight_services(
     *,
-    short,
-    completion_link_numbers_or_fail,
-    completion_kind_or_stop,
-    completion_chain_id_or_fail,
-    completion_chain_snapshot,
-    completion_existing_next_or_fail,
+    short: ServiceCallback,
+    completion_link_numbers_or_fail: ServiceCallback,
+    completion_kind_or_stop: ServiceCallback,
+    completion_chain_id_or_fail: ServiceCallback,
+    completion_chain_snapshot: ServiceCallback,
+    completion_existing_next_or_fail: ServiceCallback,
 ) -> CompletionPreflightServices:
     return CompletionPreflightServices(
         short=short,
@@ -210,13 +211,13 @@ def build_preflight_services(
 
 def build_compute_services(
     *,
-    completion_compute_child_due,
-    completion_until_or_fail,
-    completion_until_guard_or_stop,
-    completion_require_child_due_or_fail,
-    completion_warn_unreasonable_duration,
-    completion_caps,
-    completion_cap_guard_or_stop,
+    completion_compute_child_due: ServiceCallback,
+    completion_until_or_fail: ServiceCallback,
+    completion_until_guard_or_stop: ServiceCallback,
+    completion_require_child_due_or_fail: ServiceCallback,
+    completion_warn_unreasonable_duration: ServiceCallback,
+    completion_caps: ServiceCallback,
+    completion_cap_guard_or_stop: ServiceCallback,
 ) -> CompletionComputeServices:
     return CompletionComputeServices(
         completion_compute_child_due=completion_compute_child_due,
@@ -231,11 +232,11 @@ def build_compute_services(
 
 def build_spawn_services(
     *,
-    build_child_from_parent,
-    spawn_child_atomic,
-    panel,
-    print_task,
-    diag,
+    build_child_from_parent: ServiceCallback,
+    spawn_child_atomic: ServiceCallback,
+    panel: ServiceCallback,
+    print_task: ServiceCallback,
+    diag: ServiceCallback,
 ) -> CompletionSpawnServices:
     return CompletionSpawnServices(
         build_child_from_parent=build_child_from_parent,

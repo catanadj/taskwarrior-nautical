@@ -42,6 +42,9 @@ jobs:
           nautical_core/task_command.py
           nautical_core/runtime.py
           nautical_core/hook_support.py
+          nautical_core/modify_runtime.py
+          nautical_core/modify_models.py
+          nautical_core/recurrence_evaluator.py
 
       - name: Run deployment sanity checks
         run: python3 dev_tools/nautical_deploy_sanity.py --json

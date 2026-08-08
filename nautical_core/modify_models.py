@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeAlias
+
+
+# Hook implementations are intentionally assembled at runtime, but the
+# orchestration boundary still needs to distinguish injected callables from
+# task data and result values.  ``Any`` remains the payload type because hook
+# modules support Taskwarrior's heterogeneous JSON fields.
+ServiceCallback: TypeAlias = Callable[..., Any]
 
 
 @dataclass(slots=True)
@@ -55,23 +63,23 @@ class CompletionComputeResult:
 
 @dataclass(slots=True)
 class CompletionPreflightServices:
-    short: Any
-    completion_link_numbers_or_fail: Any
-    completion_kind_or_stop: Any
-    completion_chain_id_or_fail: Any
-    completion_chain_snapshot: Any
-    completion_existing_next_or_fail: Any
+    short: ServiceCallback
+    completion_link_numbers_or_fail: ServiceCallback
+    completion_kind_or_stop: ServiceCallback
+    completion_chain_id_or_fail: ServiceCallback
+    completion_chain_snapshot: ServiceCallback
+    completion_existing_next_or_fail: ServiceCallback
 
 
 @dataclass(slots=True)
 class CompletionComputeServices:
-    completion_compute_child_due: Any
-    completion_until_or_fail: Any
-    completion_until_guard_or_stop: Any
-    completion_require_child_due_or_fail: Any
-    completion_warn_unreasonable_duration: Any
-    completion_caps: Any
-    completion_cap_guard_or_stop: Any
+    completion_compute_child_due: ServiceCallback
+    completion_until_or_fail: ServiceCallback
+    completion_until_guard_or_stop: ServiceCallback
+    completion_require_child_due_or_fail: ServiceCallback
+    completion_warn_unreasonable_duration: ServiceCallback
+    completion_caps: ServiceCallback
+    completion_cap_guard_or_stop: ServiceCallback
 
 
 @dataclass(slots=True)
@@ -134,11 +142,11 @@ class CompletionSpawnResult:
 
 @dataclass(slots=True)
 class CompletionSpawnServices:
-    build_child_from_parent: Any
-    spawn_child_atomic: Any
-    panel: Any
-    print_task: Any
-    diag: Any
+    build_child_from_parent: ServiceCallback
+    spawn_child_atomic: ServiceCallback
+    panel: ServiceCallback
+    print_task: ServiceCallback
+    diag: ServiceCallback
 
 
 @dataclass(slots=True)
@@ -147,36 +155,36 @@ class AnchorFeedbackServices:
     debug_wait_sched: bool
     last_wait_sched_debug: Any
     diag_enabled: bool
-    format_root_and_age: Any
-    append_next_wait_sched_rows: Any
-    timeline_lines: Any
+    format_root_and_age: ServiceCallback
+    append_next_wait_sched_rows: ServiceCallback
+    timeline_lines: ServiceCallback
     show_timeline_gaps: bool
-    root_uuid_from: Any
-    short: Any
-    format_next_anchor_rows: Any
-    format_line_preview: Any
-    panel_line: Any
-    text_line: Any
-    panel: Any
+    root_uuid_from: ServiceCallback
+    short: ServiceCallback
+    format_next_anchor_rows: ServiceCallback
+    format_line_preview: ServiceCallback
+    panel_line: ServiceCallback
+    text_line: ServiceCallback
+    panel: ServiceCallback
     chain_color_per_chain: bool
-    chain_colour_for_task: Any
-    strip_quotes: Any
-    human_delta: Any
+    chain_colour_for_task: ServiceCallback
+    strip_quotes: ServiceCallback
+    human_delta: ServiceCallback
 
 
 @dataclass(slots=True)
 class CpFeedbackServices:
     core: Any
     diag_enabled: bool
-    format_root_and_age: Any
-    append_next_wait_sched_rows: Any
-    timeline_lines: Any
+    format_root_and_age: ServiceCallback
+    append_next_wait_sched_rows: ServiceCallback
+    timeline_lines: ServiceCallback
     show_timeline_gaps: bool
-    format_next_cp_rows: Any
-    format_line_preview: Any
-    panel_line: Any
-    text_line: Any
-    panel: Any
+    format_next_cp_rows: ServiceCallback
+    format_line_preview: ServiceCallback
+    panel_line: ServiceCallback
+    text_line: ServiceCallback
+    panel: ServiceCallback
     chain_color_per_chain: bool
-    chain_colour_for_task: Any
-    human_delta: Any
+    chain_colour_for_task: ServiceCallback
+    human_delta: ServiceCallback

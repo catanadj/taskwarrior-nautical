@@ -186,18 +186,24 @@ class RecurrenceEvaluator:
         """Return parsed chain limits, keeping native task ``until`` separate."""
         return self._get_cached("limits", self._parse_limits)
 
-    def _get_cached(self, key: str, loader, *, clone: bool = False):
+    def _get_cached(
+        self,
+        key: str,
+        loader: Callable[[], Any],
+        *,
+        clone: bool = False,
+    ) -> Any:
         if key not in self._cache:
             value = loader()
             self._cache[key] = copy.deepcopy(value) if clone else value
         return self._cache[key]
 
-    def _parse_anchor(self) -> list:
+    def _parse_anchor(self) -> list[Any]:
         from . import parse_anchor_expr_to_dnf_cached
 
         return parse_anchor_expr_to_dnf_cached(self.spec.anchor)
 
-    def _parse_omit(self) -> Any:
+    def _parse_omit(self) -> list[Any]:
         from . import parse_anchor_expr_to_dnf_cached, resolve_omit_presets
         from .anchor_omit import validate_omit_expr_strict
 
@@ -623,7 +629,7 @@ class RecurrenceEvaluator:
         )
 
     @staticmethod
-    def _core_module():
+    def _core_module() -> Any:
         from . import _PKG_PROXY
 
         return _PKG_PROXY
@@ -649,7 +655,7 @@ class RecurrenceEvaluator:
             fallback_hhmm=fallback_hhmm,
         )
 
-    def _build_scheduler_binding(self):
+    def _build_scheduler_binding(self) -> Callable[..., Any]:
         """Build the evaluator-bound scheduler once per evaluator session."""
         from .add_anchor_compute import anchor_next_occurrence_after_local_dt
         from .anchor_inclusion import _norm_t_mod
@@ -660,16 +666,24 @@ class RecurrenceEvaluator:
         class SchedulerCoreProxy:
             """Expose core helpers while binding all wall-clock conversion to this evaluator."""
 
-            def __getattr__(self, name):
+            def __getattr__(self, name: str) -> Any:
                 return getattr(core, name)
 
-            def to_local(self, value):
+            def to_local(self, value: Any) -> Any:
                 return self_evaluator.to_local(value)
 
-            def build_local_datetime(self, day, hhmm):
+            def build_local_datetime(self, day: Any, hhmm: tuple[int, int]) -> Any:
                 return self_evaluator.build_local_datetime(day, hhmm)
 
-            def factor_matches_on(self, factor, day, default_seed, *, seed_base=None, business_calendar=None):
+            def factor_matches_on(
+                self,
+                factor: Any,
+                day: Any,
+                default_seed: Any,
+                *,
+                seed_base: Any = None,
+                business_calendar: Any = None,
+            ) -> Any:
                 return core.factor_matches_on(
                     factor,
                     day,
@@ -682,7 +696,16 @@ class RecurrenceEvaluator:
                     ),
                 )
 
-            def next_after_expr(self, expression, ref_date, *, default_seed=None, seed_base=None, date_is_excluded=None, business_calendar=None):
+            def next_after_expr(
+                self,
+                expression: Any,
+                ref_date: Any,
+                *,
+                default_seed: Any = None,
+                seed_base: Any = None,
+                date_is_excluded: Any = None,
+                business_calendar: Any = None,
+            ) -> Any:
                 return core.next_after_expr(
                     expression,
                     ref_date,
@@ -699,7 +722,7 @@ class RecurrenceEvaluator:
         self_evaluator = self
         scheduler_core = SchedulerCoreProxy()
 
-        def resolve_slots(value, target_date):
+        def resolve_slots(value: Any, target_date: Any) -> Any:
             """Resolve slots with the evaluator's astronomy and timezone context."""
             config = self.context.astronomy_config
             if config is None:
@@ -712,14 +735,14 @@ class RecurrenceEvaluator:
             )
 
         def scheduler(
-            dnf,
+            dnf: Any,
             after_local_dt: datetime,
             *,
             default_seed_date: date | None,
             seed_base: str,
-            omit_dnf=None,
+            omit_dnf: Any = None,
             fallback_hhmm: tuple[int, int] | None = None,
-        ):
+        ) -> Any:
             return anchor_next_occurrence_after_local_dt(
                 dnf,
                 after_local_dt,

@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 try:
     import fcntl
@@ -97,7 +97,7 @@ def state_migration_lock(
     timeout: float = 10.0,
     poll_interval: float = 0.05,
     stale_after: float = 3600.0,
-):
+) -> Iterator[None]:
     """Serialize legacy state moves across independent hook processes."""
     lock_path = state_migration_lock_path(tw_data_dir)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,8 +122,13 @@ def state_migration_lock(
             # process does not permanently strand future migrations.
             while True:
                 try:
-                    marker_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                    os.write(marker_fd, f"pid={os.getpid()}\ncreated={time.time():.6f}\n".encode())
+                    marker_fd = os.open(
+                        str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+                    )
+                    os.write(
+                        marker_fd,
+                        f"pid={os.getpid()}\ncreated={time.time():.6f}\n".encode(),
+                    )
                     break
                 except FileExistsError:
                     try:
@@ -219,15 +224,17 @@ def migrate_nautical_state(
     extra_file_pairs: Sequence[tuple[Path, Path]] = (),
     lock_timeout: float = 10.0,
 ) -> list[StateMigrationIssue]:
+    current_queue_db = queue_db_path(tw_data_dir)
+    legacy_queue_db = legacy_state_path(tw_data_dir, ".nautical_queue.db")
     file_pairs = [
-        (queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),
+        (current_queue_db, legacy_queue_db),
         (dead_letter_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_dead_letter.jsonl")),
     ]
     file_pairs.extend(extra_file_pairs)
     return migrate_legacy_state(
         tw_data_dir=tw_data_dir,
         file_pairs=file_pairs,
-        db_sidecars=((queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),),
+        db_sidecars=((current_queue_db, legacy_queue_db),),
         lock_timeout=lock_timeout,
     )
 

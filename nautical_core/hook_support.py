@@ -6,8 +6,47 @@ import subprocess
 import time
 import json
 import re
+from dataclasses import dataclass
 
 from .task_command import TaskCommandResult, failure_message
+
+
+@dataclass(frozen=True, slots=True)
+class LookupResult:
+    """Outcome of a mutation-sensitive Taskwarrior read.
+
+    ``absent`` is a confirmed empty result.  ``unavailable`` means the
+    command or its output could not be trusted and must not be used to make
+    a spawn decision.
+    """
+
+    state: str
+    task: dict | None = None
+    reason: str = ""
+
+    @classmethod
+    def found(cls, task: dict) -> "LookupResult":
+        return cls("found", task=task)
+
+    @classmethod
+    def absent(cls, reason: str = "") -> "LookupResult":
+        return cls("absent", reason=reason)
+
+    @classmethod
+    def unavailable(cls, reason: str) -> "LookupResult":
+        return cls("unavailable", reason=reason or "lookup unavailable")
+
+    @property
+    def is_found(self) -> bool:
+        return self.state == "found" and isinstance(self.task, dict)
+
+    @property
+    def is_absent(self) -> bool:
+        return self.state == "absent"
+
+    @property
+    def is_unavailable(self) -> bool:
+        return self.state == "unavailable"
 
 
 def build_task_cmd_prefix(*, use_rc_data_location: bool, tw_data_dir) -> list[str]:
@@ -199,6 +238,28 @@ def export_uuid_short(
     retries: int = 2,
     diag=None,
 ):
+    lookup = export_uuid_short_result(
+        run_task=run_task,
+        task_cmd_prefix=task_cmd_prefix,
+        uuid_short=uuid_short,
+        env=env,
+        timeout=timeout,
+        retries=retries,
+        diag=diag,
+    )
+    return lookup.task if lookup.is_found else None
+
+
+def export_uuid_short_result(
+    *,
+    run_task,
+    task_cmd_prefix,
+    uuid_short: str,
+    env=None,
+    timeout: float = 2.5,
+    retries: int = 2,
+    diag=None,
+) -> LookupResult:
     result = run_task_result(
         run_task=run_task,
         cmd=list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=off", f"uuid:{uuid_short}", "export"],
@@ -207,22 +268,26 @@ def export_uuid_short(
         retries=retries,
     )
     if not result.ok:
+        reason = f"{failure_message(result, 'UUID export')}"
         if callable(diag):
-            diag(f"export uuid:{uuid_short} failed: {failure_message(result, 'UUID export')}")
-        return None
+            diag(f"export uuid:{uuid_short} failed: {reason}")
+        return LookupResult.unavailable(reason)
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return LookupResult.absent("Taskwarrior returned no matching task")
     try:
-        obj = json.loads((result.stdout or "").strip())
+        obj = json.loads(raw)
         if not isinstance(obj, dict):
-            return None
+            return LookupResult.unavailable("UUID export returned a non-object payload")
         if not obj.get("uuid"):
-            return None
+            return LookupResult.absent("Taskwarrior returned no matching task")
         if not str(obj.get("uuid") or "").lower().startswith((uuid_short or "").lower()):
             if callable(diag):
                 diag(f"uuid prefix mismatch for {uuid_short}")
-            return None
-        return obj
-    except Exception:
-        return None
+            return LookupResult.unavailable(f"UUID export returned a different task for {uuid_short}")
+        return LookupResult.found(obj)
+    except Exception as exc:
+        return LookupResult.unavailable(f"UUID export returned invalid JSON: {exc}")
 
 
 def task_exists_by_uuid_uncached(
@@ -235,6 +300,27 @@ def task_exists_by_uuid_uncached(
     retries: int = 2,
     diag=None,
 ) -> bool:
+    return task_lookup_by_uuid_uncached(
+        run_task=run_task,
+        task_cmd_prefix=task_cmd_prefix,
+        uuid_str=uuid_str,
+        env=env,
+        timeout=timeout,
+        retries=retries,
+        diag=diag,
+    ).is_found
+
+
+def task_lookup_by_uuid_uncached(
+    *,
+    run_task,
+    task_cmd_prefix,
+    uuid_str: str,
+    env=None,
+    timeout: float = 2.5,
+    retries: int = 2,
+    diag=None,
+) -> LookupResult:
     result = run_task_result(
         run_task=run_task,
         cmd=list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=off", f"uuid:{uuid_str}", "export"],
@@ -245,14 +331,21 @@ def task_exists_by_uuid_uncached(
     if not result.ok:
         if callable(diag):
             diag(f"task exists check failed (uuid={uuid_str[:8]}): {failure_message(result, 'UUID existence check')}")
-        return False
+        return LookupResult.unavailable(failure_message(result, "UUID existence check"))
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return LookupResult.absent("Taskwarrior returned no matching task")
     try:
-        data = json.loads((result.stdout or "").strip())
+        data = json.loads(raw)
         if not isinstance(data, dict):
-            return False
-    except Exception:
-        return False
-    return bool(data.get("uuid"))
+            return LookupResult.unavailable("UUID existence check returned a non-object payload")
+    except Exception as exc:
+        return LookupResult.unavailable(f"UUID existence check returned invalid JSON: {exc}")
+    if not data.get("uuid"):
+        return LookupResult.absent("Taskwarrior returned no matching task")
+    if not str(data.get("uuid") or "").lower().startswith((uuid_str or "").lower()):
+        return LookupResult.unavailable(f"UUID existence check returned a different task for {uuid_str}")
+    return LookupResult.found(data)
 
 
 def export_uuid_full(

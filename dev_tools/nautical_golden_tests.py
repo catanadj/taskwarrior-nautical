@@ -26981,6 +26981,9 @@ def test_on_modify_cp_completion_spawns_next_link():
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
     mod._export_uuid_short_cached = lambda _short: {}
+    # A confirmed empty chain is distinct from an unavailable Taskwarrior
+    # export; keep this spawn-path test deterministic and network-free.
+    mod._get_chain_export = lambda *_a, **_k: []
 
     old = {
         "uuid": "00000000-0000-0000-0000-000000000111",
@@ -27231,6 +27234,54 @@ def test_on_modify_export_uuid_short_prefix_mismatch():
         mod._run_task = orig
 
     expect(obj is None, "Prefix mismatch should yield None from _export_uuid_short")
+
+
+def test_hook_lookup_result_distinguishes_absent_and_unavailable():
+    """Mutation-sensitive UUID reads must preserve empty versus failed results."""
+    support = core._import_sibling("hook_support")
+
+    def lookup(stdout, ok=True, stderr=""):
+        return support.export_uuid_short_result(
+            run_task=lambda *_a, **_k: (ok, stdout, stderr),
+            task_cmd_prefix=["task"],
+            uuid_short="deadbeef",
+        )
+
+    expect(lookup("").is_absent, "empty UUID export should be confirmed absent")
+    expect(lookup('{"uuid":"deadbeef-0000"}').is_found, "valid UUID export should be found")
+    expect(lookup("not-json").is_unavailable, "malformed UUID export should be unavailable")
+    expect(lookup("", ok=False, stderr="lock busy").is_unavailable, "failed UUID export should be unavailable")
+
+
+def test_existing_next_lookup_fails_closed_on_chain_export_failure():
+    """A failed chain read must not become a spawn-allowed empty result."""
+    reads = core._import_sibling("modify_chain_reads")
+    result = reads.existing_next_lookup(
+        {"chainID": "abcd1234", "link": 1},
+        2,
+        export_uuid_short_cached=lambda _ref: core._import_sibling("hook_support").LookupResult.absent(),
+        get_chain_export=lambda *_a, **_k: None,
+    )
+    expect(result.is_unavailable, f"failed chain export was not preserved: {result}")
+
+
+def test_completion_preflight_stops_on_unavailable_next_lookup():
+    """Completion must stop before spawn when the next-link lookup is unavailable."""
+    preflight = core._import_sibling("modify_completion_preflight")
+    panels = []
+    printed = []
+    support = core._import_sibling("hook_support")
+    ok = preflight.completion_existing_next_or_fail(
+        {"uuid": "parent", "link": 1},
+        2,
+        existing_next_task=lambda *_a: support.LookupResult.unavailable("lock busy"),
+        short=lambda value: str(value)[:8],
+        panel=lambda *args, **kwargs: panels.append((args, kwargs)),
+        print_task=lambda task: printed.append(task),
+    )
+    expect(not ok, "unavailable lookup should stop completion")
+    expect(panels and "unavailable" in str(panels[0]).lower(), f"missing unavailable panel: {panels}")
+    expect(printed, "stopped completion should print the unchanged task")
 
 
 def test_on_modify_export_uuid_full_cached():
@@ -29903,6 +29954,9 @@ TESTS = [
     test_on_modify_export_uuid_short_seeds_runtime_lookup_cache,
     test_on_modify_export_uuid_short_invalid_json,
     test_on_modify_export_uuid_short_prefix_mismatch,
+    test_hook_lookup_result_distinguishes_absent_and_unavailable,
+    test_existing_next_lookup_fails_closed_on_chain_export_failure,
+    test_completion_preflight_stops_on_unavailable_next_lookup,
     test_on_modify_export_uuid_full_cached,
     test_on_modify_state_files_use_dedicated_dir,
     test_on_modify_stable_child_uuid_is_slot_deterministic,

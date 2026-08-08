@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .hook_support import LookupResult
+
 
 def collect_prev_two(
     current_task: dict,
@@ -68,9 +70,30 @@ def existing_next_task(
     snapshot_rows: list[dict] | None = None,
     snapshot_loaded: bool = False,
 ) -> dict | None:
-    """Return an existing next-link task for idempotent re-completion handling."""
+    """Compatibility wrapper returning only a found task."""
+    result = existing_next_lookup(
+        parent_task,
+        next_no,
+        export_uuid_short_cached=export_uuid_short_cached,
+        get_chain_export=get_chain_export,
+        snapshot_rows=snapshot_rows,
+        snapshot_loaded=snapshot_loaded,
+    )
+    return result.task if result.is_found else None
+
+
+def existing_next_lookup(
+    parent_task: dict,
+    next_no: int,
+    *,
+    export_uuid_short_cached,
+    get_chain_export,
+    snapshot_rows: list[dict] | None = None,
+    snapshot_loaded: bool = False,
+) -> LookupResult:
+    """Return a tri-state result for the idempotent next-link lookup."""
     if not isinstance(parent_task, dict):
-        return None
+        return LookupResult.unavailable("parent task is not an object")
 
     rows = [
         row for row in (snapshot_rows or [])
@@ -79,25 +102,35 @@ def existing_next_task(
         and (row.get("status") or "").strip().lower() != "deleted"
     ]
     if rows:
-        return _pick_existing_next(rows)
+        obj = _pick_existing_next(rows)
+        return LookupResult.found(obj) if obj else LookupResult.absent()
 
     next_ref = (parent_task.get("nextLink") or "").strip()
     if next_ref:
         obj = export_uuid_short_cached(next_ref)
+        if isinstance(obj, LookupResult):
+            if obj.is_found:
+                return obj
+            if obj.is_unavailable:
+                return obj
+            obj = None
         if isinstance(obj, dict) and (obj.get("status") or "").strip().lower() != "deleted":
-            return obj
+            return LookupResult.found(obj)
 
     chain_id = (parent_task.get("chainID") or "").strip()
     if not chain_id or snapshot_loaded:
-        return None
+        return LookupResult.absent()
     try:
         rows = get_chain_export(chain_id, extra=f"link:{int(next_no)} status.not:deleted")
-    except Exception:
-        rows = []
+    except Exception as exc:
+        return LookupResult.unavailable(f"chain export failed: {exc}")
+    if rows is None:
+        return LookupResult.unavailable("chain export was unavailable")
     if not rows:
-        return None
+        return LookupResult.absent()
 
-    return _pick_existing_next(rows)
+    obj = _pick_existing_next(rows)
+    return LookupResult.found(obj) if obj else LookupResult.absent()
 
 
 def _pick_existing_next(rows: list[dict]) -> dict | None:

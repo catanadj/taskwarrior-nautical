@@ -969,6 +969,27 @@ def _export_uuid_short_cached(u_short: str):
     return _export_uuid_short(u_short, env=None)
 
 
+def _export_uuid_short_lookup(u_short: str):
+    """Return a tri-state UUID lookup without collapsing failures to None."""
+    cached = _export_uuid_short_cached(u_short)
+    if isinstance(cached, dict):
+        hook_support = _module("hook_support", required=False)
+        if hook_support is not None:
+            return hook_support.LookupResult.found(cached)
+    hook_support = _module("hook_support", required=False)
+    if hook_support is None:
+        return None
+    return hook_support.export_uuid_short_result(
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        uuid_short=u_short,
+        env=os.environ.copy(),
+        timeout=2.5,
+        retries=2,
+        diag=_diag,
+    )
+
+
 def _dtparse(s):
     return _parse_dt_any_cached(s)
 
@@ -3089,6 +3110,18 @@ def _existing_next_task(parent_task: dict, next_no: int, chain_snapshot=None) ->
         parent_task,
         next_no,
         export_uuid_short_cached=_export_uuid_short_cached,
+        get_chain_export=_get_chain_export,
+        snapshot_rows=getattr(chain_snapshot, "rows", None),
+        snapshot_loaded=bool(getattr(chain_snapshot, "loaded", False)),
+    )
+
+
+def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
+    modify_chain_reads = _module("modify_chain_reads")
+    return modify_chain_reads.existing_next_lookup(
+        parent_task,
+        next_no,
+        export_uuid_short_cached=_export_uuid_short_lookup,
         get_chain_export=_get_chain_export,
         snapshot_rows=getattr(chain_snapshot, "rows", None),
         snapshot_loaded=bool(getattr(chain_snapshot, "loaded", False)),
@@ -6260,7 +6293,7 @@ def _completion_existing_next_or_fail(new: dict, next_no: int, chain_snapshot=No
     return modify_completion_preflight.completion_existing_next_or_fail(
         new,
         next_no,
-        existing_next_task=lambda task, link: _existing_next_task(task, link, chain_snapshot),
+        existing_next_task=lambda task, link: _existing_next_lookup(task, link, chain_snapshot),
         short=_short,
         panel=_panel,
         print_task=_print_task,

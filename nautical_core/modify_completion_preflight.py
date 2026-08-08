@@ -91,6 +91,21 @@ def completion_existing_next_or_fail(
     print_task,
 ) -> bool:
     existing_next = existing_next_task(new, next_no)
+    if getattr(existing_next, "is_unavailable", False):
+        panel(
+            "⚠ Chain lookup unavailable",
+            [
+                ("Reason", getattr(existing_next, "reason", "Unable to verify the next link.")),
+                ("Action", "Retry completion or run nautical reconcile before spawning."),
+            ],
+            kind="warning",
+        )
+        print_task(new)
+        return False
+    if getattr(existing_next, "is_absent", False):
+        return True
+    if getattr(existing_next, "is_found", False):
+        existing_next = existing_next.task
     if not existing_next:
         return True
     ex_uuid = (existing_next.get("uuid") or "").strip()

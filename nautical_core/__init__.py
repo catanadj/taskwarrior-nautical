@@ -1478,28 +1478,12 @@ def humanize_delta(from_dt: datetime, to_dt: datetime, use_months_days: bool):
     return _dates.humanize_delta(from_dt, to_dt, use_months_days)
 
 
-def _active_mod_keys(mods: dict) -> set:
-    return _cached_expansion.active_mod_keys(mods)
-
-
-# --- Atom helpers (robust field access) ---
-def _atype(atom):
-    return (atom.get("typ") or atom.get("type") or "").lower()
-
-
-def _aspec(atom):
-    return str(atom.get("spec") or atom.get("value") or "").lower()
-
-
-def _amods(atom):
-    return atom.get("mods") or {}
-
-
-def _ainterval(atom):  # monthly /N (accept both ival and intv)
-    try:
-        return int(atom.get("ival") or atom.get("intv") or 1)
-    except Exception:
-        return 1
+_recurrence_metadata = _import_sibling("recurrence_metadata")
+_active_mod_keys = _recurrence_metadata.active_mod_keys
+_atype = _recurrence_metadata.atom_type
+_aspec = _recurrence_metadata.atom_spec
+_amods = _recurrence_metadata.atom_mods
+_ainterval = _recurrence_metadata.atom_interval
 
 
 # Shared weekday indices remain part of the facade namespace for scheduler
@@ -1507,9 +1491,7 @@ def _ainterval(atom):  # monthly /N (accept both ival and intv)
 _WD = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
-def _months_since(seed_local: _date, y: int, m: int) -> int:
-    """Calculate months between seed date and given year/month."""
-    return (y - seed_local.year) * 12 + (m - seed_local.month)
+_months_since = _recurrence_metadata.months_since
 
 
 # CP parsing is implemented in a focused module; these aliases preserve the

@@ -194,6 +194,107 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
                 "'15', '-1', '1..7', '-3..-1', '2nd-mon', 'last-fri', '5bd'."
             )
 
+    def split_inline_items_respecting_t_lists(s: str) -> list[str]:
+        """Split comma-list items while preserving commas in ``@t=`` lists."""
+        if not s:
+            return []
+        out: list[str] = []
+        buf: list[str] = []
+        in_t_value = False
+        i, n = 0, len(s)
+
+        def flush() -> None:
+            token = "".join(buf).strip()
+            if token:
+                out.append(token)
+            buf.clear()
+
+        while i < n:
+            ch = s[i]
+            if ch == "@":
+                in_t_value = s[i:i + 3].lower() == "@t="
+                buf.append(ch)
+                i += 1
+                continue
+            if ch == ",":
+                if in_t_value:
+                    j = i + 1
+                    while j < n and s[j].isspace():
+                        j += 1
+                    if j < n and s[j] == ",":
+                        buf.append(ch)
+                        i += 1
+                        continue
+                    k = j
+                    while k < n and s[k] != ",":
+                        k += 1
+                    nxt = s[j:k].strip()
+                    if nxt and "@" not in nxt and (
+                        core["_astronomy"].is_event_name(nxt)
+                        or ((not nxt[0].isalpha()) and nxt[0] not in "-(|&")
+                    ):
+                        buf.append(ch)
+                        i += 1
+                        continue
+                    flush()
+                    in_t_value = False
+                    i += 1
+                    continue
+                flush()
+                i += 1
+                continue
+            buf.append(ch)
+            i += 1
+        flush()
+        return out
+
+    def parse_group_with_inline_mods(typ: str, ival: int, spec: str, outer_mods_str: str):
+        tokens = [
+            token.strip()
+            for token in split_inline_items_respecting_t_lists(str(spec or ""))
+            if token.strip()
+        ]
+        if len(tokens) < 2 or not any("@" in token for token in tokens):
+            return None
+        if outer_mods_str.strip():
+            raise core["ParseError"](
+                "Cannot mix group-level modifiers (after ':') with per-item modifiers in the same list. "
+                "Choose one style: either 'w:mon@t=09:00,fri@t=15:00' (per-item) "
+                "or 'w:mon,fri@t=09:00,15:00' (group)."
+            )
+        at_idxs = [i for i, token in enumerate(tokens) if "@" in token]
+        if len(at_idxs) == 1 and at_idxs[0] == len(tokens) - 1:
+            return None
+        or_terms = []
+        for token in tokens:
+            if "@" in token:
+                item_spec, item_mods_str = token.split("@", 1)
+            else:
+                item_spec, item_mods_str = token, ""
+            item_spec = item_spec.strip().lower()
+            item_mods = core["_parse_atom_mods"](item_mods_str.strip())
+            if item_mods_str.strip() and (
+                item_mods.get("roll")
+                or item_mods.get("wd") is not None
+                or item_mods.get("bd")
+                or (item_mods.get("day_offset") or 0) != 0
+                or (item_mods.get("business_day_offset") or 0) != 0
+            ):
+                raise core["ParseError"](
+                    "Inline per-item modifiers in comma-lists only support '@t=HH:MM[,HH:MM...]'. "
+                    "For other modifiers (e.g. '@bd'), use group style like 'w:mon,tue@bd@t=09:00,12:00' "
+                    "or explicit OR terms with '|', e.g. '(w:mon@t=09:00) | (w:tue@bd@t=12:00)'."
+                )
+            or_terms.append([{"typ": typ, "spec": item_spec, "ival": ival, "mods": item_mods}])
+        return or_terms
+
+    def rewrite_weekly_multi_time_atoms(s: str) -> str:
+        return core["_parser_frontend"].rewrite_weekly_multi_time_atoms(
+            s,
+            split_csv_tokens=core["_split_csv_tokens"],
+            re_mod=core["re"],
+        )
+
     return SimpleNamespace(
         _parse_hhmm=parse_hhmm,
         _parse_atom_head=parse_atom_head,
@@ -208,6 +309,9 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         _parse_anchor_expr_to_dnf_cached_impl=parse_anchor_expr_to_dnf_cached_impl,
         _validate_weekly_spec=validate_weekly_spec,
         _validate_monthly_spec=validate_monthly_spec,
+        _split_inline_items_respecting_t_lists=split_inline_items_respecting_t_lists,
+        _parse_group_with_inline_mods=parse_group_with_inline_mods,
+        _rewrite_weekly_multi_time_atoms=rewrite_weekly_multi_time_atoms,
     )
 
 

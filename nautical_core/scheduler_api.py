@@ -15,6 +15,26 @@ def _apply_day_offset_impl(module: Any, day, mods, business_calendar=None):
     )
 
 
+def _weeks_between(module: Any, d1, d2) -> int:
+    return module._schedule_utils.weeks_between(d1, d2)
+
+
+def _resolve_moon_phase_date(module: Any, phase: str, reference_day):
+    return module._astronomy.resolve_phase_date(
+        phase,
+        reference_day,
+        config=module.ASTRONOMY_CONFIG,
+    )
+
+
+def _moon_phase_matches_date(module: Any, phase: str, day) -> bool:
+    return module._astronomy.phase_matches_date(
+        phase,
+        day,
+        config=module.ASTRONOMY_CONFIG,
+    )
+
+
 def _base_next_after_atom_impl(module: Any, atom, ref_d, seed_base=None, business_calendar=None):
     return module._scheduler_atom.base_next_after_atom(
         atom,
@@ -637,6 +657,15 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             business_calendar=business_calendar,
         )
 
+    def weeks_between(d1, d2) -> int:
+        return _weeks_between(module, d1, d2)
+
+    def resolve_moon_phase_date(phase: str, reference_day):
+        return _resolve_moon_phase_date(module, phase, reference_day)
+
+    def moon_phase_matches_date(phase: str, day) -> bool:
+        return _moon_phase_matches_date(module, phase, day)
+
     return SimpleNamespace(
         _expand_weekly_cached_impl=expand_weekly_cached_impl,
         _expand_weekly_cached_mods_impl=expand_weekly_cached_mods_impl,
@@ -689,6 +718,9 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         factor_matches_on=factor_matches_on,
         next_after_term=next_after_term,
         next_after_expr=next_after_expr,
+        _weeks_between=weeks_between,
+        _resolve_moon_phase_date=resolve_moon_phase_date,
+        _moon_phase_matches_date=moon_phase_matches_date,
     )
 
 

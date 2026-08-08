@@ -935,41 +935,12 @@ def _validate_monthly_spec_legacy_removed(spec: str):
         )
 
 
-def _weeks_between(d1: date, d2: date) -> int:
-    return _schedule_utils.weeks_between(d1, d2)
-
-def _resolve_moon_phase_date(phase: str, reference_day: date) -> date:
-    astronomy = _import_sibling("astronomy")
-    return astronomy.resolve_phase_date(
-        phase,
-        reference_day,
-        config=ASTRONOMY_CONFIG,
-    )
-
-
-def _moon_phase_matches_date(phase: str, day: date) -> bool:
-    astronomy = _import_sibling("astronomy")
-    return astronomy.phase_matches_date(
-        phase,
-        day,
-        config=ASTRONOMY_CONFIG,
-    )
-
-
 _recurrence_candidates = _import_sibling("recurrence_candidates").for_core(
     sys.modules[__name__],
     namespace=globals(),
 )
 _anchors_between_large_range = _recurrence_candidates.anchors_between_large_range
 anchors_between_expr = _recurrence_candidates.anchors_between_expr
-
-
-def _rewrite_weekly_multi_time_atoms(s: str) -> str:
-    return _parser_frontend.rewrite_weekly_multi_time_atoms(
-        s,
-        split_csv_tokens=_split_csv_tokens,
-        re_mod=re,
-    )
 
 
 # Quarter rewrite entry points are bound before parser construction because
@@ -1047,6 +1018,9 @@ _parse_anchor_expr_to_dnf_cached_obj = _parser_support_api._parse_anchor_expr_to
 _parse_anchor_expr_to_dnf_cached_impl = _parser_support_api._parse_anchor_expr_to_dnf_cached_impl
 _validate_weekly_spec = _parser_support_api._validate_weekly_spec
 _validate_monthly_spec = _parser_support_api._validate_monthly_spec
+_split_inline_items_respecting_t_lists = _parser_support_api._split_inline_items_respecting_t_lists
+_parse_group_with_inline_mods = _parser_support_api._parse_group_with_inline_mods
+_rewrite_weekly_multi_time_atoms = _parser_support_api._rewrite_weekly_multi_time_atoms
 
 # Parser entry points live in ``parser_api``; retain these aliases for the
 # established ``nautical_core`` import contract.
@@ -1182,6 +1156,9 @@ next_after_factor = _scheduler_api.next_after_factor
 factor_matches_on = _scheduler_api.factor_matches_on
 next_after_term = _scheduler_api.next_after_term
 next_after_expr = _scheduler_api.next_after_expr
+_weeks_between = _scheduler_api._weeks_between
+_resolve_moon_phase_date = _scheduler_api._resolve_moon_phase_date
+_moon_phase_matches_date = _scheduler_api._moon_phase_matches_date
 
 # Date/time adapters are bound after scheduler construction so date-specific
 # slot selection can reuse the facade's business-calendar callback.

@@ -3549,6 +3549,7 @@ def _recurrence_evaluator_for_task(task: dict):
     evaluator_module = _module("recurrence_evaluator")
     return evaluator_module.RecurrenceEvaluator.from_task(
         task,
+        fallback_chain_id=_recurrence_seed_base(task),
         timezone=core._LOCAL_TZ,
         business_calendar=core.business_calendar_for_task(task),
         astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
@@ -4956,6 +4957,11 @@ def _timeline_lines(
     modify_timeline = _module("modify_timeline")
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
     anchor_omit = _module("anchor_omit") if kind == "anchor" else None
+    timeline_scheduler = _next_occurrence_after_local_dt
+    if kind == "anchor":
+        timeline_scheduler = _recurrence_evaluator_for_task(
+            task
+        )._default_next_occurrence_after_local_dt
     return modify_timeline.timeline_lines(
         kind,
         task,
@@ -4976,7 +4982,7 @@ def _timeline_lines(
         fmtlocal=_fmtlocal,
         short=_short,
         tolocal=_tolocal,
-        next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
+        next_occurrence_after_local_dt=timeline_scheduler,
         to_local_cached=_to_local_cached,
         safe_parse_datetime=_safe_parse_datetime,
         format_gap=_format_gap,

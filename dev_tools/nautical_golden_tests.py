@@ -5727,7 +5727,10 @@ def test_queue_state_migration_returns_typed_failure_details():
         original_replace = queue_store.os.replace
         try:
             queue_store.os.replace = lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("read-only"))
-            issues = queue_store.migrate_legacy_state(file_pairs=((current, legacy),))
+            issues = queue_store.migrate_legacy_state(
+                tw_data_dir=Path(td),
+                file_pairs=((current, legacy),),
+            )
         finally:
             queue_store.os.replace = original_replace
         expect(len(issues) == 1, f"migration failure was not retained: {issues}")
@@ -5757,6 +5760,35 @@ def test_queue_state_migration_moves_database_sidecars_under_one_lock():
                 pass
         except Exception as exc:
             raise AssertionError(f"migration lock was not released: {exc}") from exc
+
+
+def test_queue_state_migration_rejects_cross_process_lock_contention():
+    """A second process must defer rather than move a partially-owned state set."""
+    from nautical_core import queue_store
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        ready = root / "ready"
+        script = (
+            "import sys, time; "
+            "from pathlib import Path; "
+            "from nautical_core.queue_store import state_migration_lock; "
+            "root=Path(sys.argv[1]); ready=Path(sys.argv[2]); "
+            "lock=state_migration_lock(root, timeout=2); lock.__enter__(); "
+            "ready.write_text('ready'); time.sleep(5); lock.__exit__(None, None, None)"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", script, str(root), str(ready)], cwd=ROOT)
+        try:
+            deadline = time.time() + 2.0
+            while not ready.exists() and time.time() < deadline:
+                time.sleep(0.01)
+            expect(ready.exists(), "migration lock holder did not start")
+            issues = queue_store.migrate_nautical_state(tw_data_dir=root, lock_timeout=0.1)
+            expect(len(issues) == 1, f"lock contention was not reported: {issues}")
+            expect("TimeoutError" in issues[0].error, f"lock failure lost its cause: {issues}")
+        finally:
+            proc.terminate()
+            proc.wait(timeout=3)
 
 
 def test_load_benchmark_installs_complete_hook_runtime():
@@ -29872,6 +29904,7 @@ TESTS = [
     test_hook_runtime_retains_module_import_failure_details,
     test_queue_state_migration_returns_typed_failure_details,
     test_queue_state_migration_moves_database_sidecars_under_one_lock,
+    test_queue_state_migration_rejects_cross_process_lock_contention,
     test_deploy_sanity_script_reports_ok,
     test_hook_replay_harness_reports_ok,
     test_mixed_recurrence_loop_harness_reports_ok,

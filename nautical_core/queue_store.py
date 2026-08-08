@@ -96,6 +96,7 @@ def state_migration_lock(
     *,
     timeout: float = 10.0,
     poll_interval: float = 0.05,
+    stale_after: float = 3600.0,
 ):
     """Serialize legacy state moves across independent hook processes."""
     lock_path = state_migration_lock_path(tw_data_dir)
@@ -117,12 +118,20 @@ def state_migration_lock(
             yield
         else:
             # Atomic creation is the portable fallback when advisory locking
-            # is unavailable. The marker is removed only by its owner.
+            # is unavailable. Include ownership metadata so an interrupted
+            # process does not permanently strand future migrations.
             while True:
                 try:
                     marker_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    os.write(marker_fd, f"pid={os.getpid()}\ncreated={time.time():.6f}\n".encode())
                     break
                 except FileExistsError:
+                    try:
+                        if stale_after > 0 and time.time() - lock_path.stat().st_mtime > stale_after:
+                            lock_path.unlink()
+                            continue
+                    except FileNotFoundError:
+                        continue
                     if time.monotonic() >= deadline:
                         raise TimeoutError(f"state migration lock busy: {lock_path}")
                     time.sleep(max(0.001, poll_interval))
@@ -165,7 +174,7 @@ def maybe_migrate_state_sidecars(current: Path, legacy: Path) -> list[StateMigra
     return issues
 
 
-def migrate_legacy_state(
+def _migrate_legacy_state_unlocked(
     *,
     file_pairs: Sequence[tuple[Path, Path]],
     db_sidecars: Sequence[tuple[Path, Path]] = (),
@@ -180,21 +189,19 @@ def migrate_legacy_state(
     return issues
 
 
-def migrate_nautical_state(
+def migrate_legacy_state(
     *,
     tw_data_dir: Path,
-    extra_file_pairs: Sequence[tuple[Path, Path]] = (),
+    file_pairs: Sequence[tuple[Path, Path]],
+    db_sidecars: Sequence[tuple[Path, Path]] = (),
+    lock_timeout: float = 10.0,
 ) -> list[StateMigrationIssue]:
-    file_pairs = [
-        (queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),
-        (dead_letter_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_dead_letter.jsonl")),
-    ]
-    file_pairs.extend(extra_file_pairs)
+    """Move legacy state only while holding the shared migration lock."""
     try:
-        with state_migration_lock(tw_data_dir):
-            return migrate_legacy_state(
+        with state_migration_lock(tw_data_dir, timeout=lock_timeout):
+            return _migrate_legacy_state_unlocked(
                 file_pairs=file_pairs,
-                db_sidecars=((queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),),
+                db_sidecars=db_sidecars,
             )
     except Exception as exc:
         return [
@@ -204,6 +211,25 @@ def migrate_nautical_state(
                 f"{type(exc).__name__}: {exc}",
             )
         ]
+
+
+def migrate_nautical_state(
+    *,
+    tw_data_dir: Path,
+    extra_file_pairs: Sequence[tuple[Path, Path]] = (),
+    lock_timeout: float = 10.0,
+) -> list[StateMigrationIssue]:
+    file_pairs = [
+        (queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),
+        (dead_letter_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_dead_letter.jsonl")),
+    ]
+    file_pairs.extend(extra_file_pairs)
+    return migrate_legacy_state(
+        tw_data_dir=tw_data_dir,
+        file_pairs=file_pairs,
+        db_sidecars=((queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),),
+        lock_timeout=lock_timeout,
+    )
 
 
 def fsync_dir(path: Path) -> None:

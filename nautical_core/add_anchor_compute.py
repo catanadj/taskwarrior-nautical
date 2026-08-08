@@ -389,9 +389,31 @@ def anchor_until_summary(
     max_preview_iterations: int,
     max_iterations: int,
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
+    evaluator: Any | None = None,
 ):
     if not until_dt:
         return None, None
+    if evaluator is not None:
+        start_local = core.build_local_datetime(first_date_local, first_hhmm)
+        end_local = to_local_cached(until_dt)
+        events = evaluator.events_between(
+            start_local,
+            end_local,
+            limit=max_iterations,
+            fallback_hhmm=first_hhmm,
+            default_seed_date=interval_seed,
+            inclusive=True,
+            max_iterations=max_iterations,
+            include_omitted=False,
+        )
+        count = len(events)
+        if count <= 0:
+            return 0, None
+        last = events[-1].local_datetime
+        if last is None:
+            return max(0, count - 1), None
+        return max(0, count - 1), last.astimezone(timezone.utc)
+
     end_day = to_local_cached(until_dt).date()
     count = 0
     prev = first_date_local - timedelta(days=1)
@@ -446,7 +468,28 @@ def anchor_build_preview(
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
+    evaluator: Any | None = None,
 ):
+    if evaluator is not None:
+        events = evaluator.collect_after(
+            first_due_local_dt,
+            limit=preview_limit,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=interval_seed,
+            inclusive=False,
+        )
+        preview = []
+        colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
+        for i, event in enumerate(events):
+            if event.local_datetime is None:
+                continue
+            dt_utc = event.local_datetime.astimezone(timezone.utc)
+            if until_dt and compare_datetimes(dt_utc, until_dt) > 0:
+                break
+            color = colors[min(i, len(colors) - 1)]
+            preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
+        return preview
+
     preview = []
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
     cur_dt = first_due_local_dt

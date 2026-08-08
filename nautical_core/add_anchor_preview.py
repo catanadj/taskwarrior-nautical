@@ -199,7 +199,7 @@ def anchor_preview_first_due(
     prof: Any,
     core: Any,
     to_local_cached: Callable[[datetime], datetime],
-    anchor_pick_occurrence_local: Callable[..., Any],
+    evaluator: Any,
     error_and_exit: Callable[[list[tuple[str, str]]], None],
     fmt_local_for_task: Callable[[datetime], str],
 ) -> tuple[Any, datetime, datetime, Any, tuple[int, int]]:
@@ -213,14 +213,11 @@ def anchor_preview_first_due(
     inclusive = not user_provided_due
     reference_local = to_local_cached(due_dt) if user_provided_due else now_local
     provider = AnchorOccurrenceProvider(
-        lambda value: anchor_pick_occurrence_local(
-            dnf,
+        lambda value: evaluator.next_after(
             value,
-            inclusive=inclusive,
             fallback_hhmm=fallback_hhmm,
-            interval_seed=interval_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
+            default_seed_date=interval_seed,
+            inclusive=inclusive,
         ),
     )
     occurrence = provider.next_after(
@@ -230,7 +227,15 @@ def anchor_preview_first_due(
     )
     first_due_local_dt = occurrence.local_datetime if occurrence is not None else None
     if not first_due_local_dt:
-        error_and_exit([("anchor pattern", "No matching anchor occurrences found after the provided due." if user_provided_due else "No matching anchor occurrences found.")])
+        if omit_dnf:
+            message = "No matching anchor dates found. Omit rules removed every future occurrence."
+        else:
+            message = (
+                "No matching anchor occurrences found after the provided due."
+                if user_provided_due
+                else "No matching anchor occurrences found."
+            )
+        error_and_exit([("anchor pattern", message)])
 
     prof.add_ms("anchor:first_occurrence", (time.perf_counter() - t_first) * 1000.0)
 
@@ -559,7 +564,40 @@ def _collect_events_with_provider(
     max_iterations: int = 512,
     return_occurrences: bool = False,
     anchor_file_provider: Any | None = None,
+    evaluator: Any | None = None,
 ) -> list[Occurrence] | list[tuple[datetime, bool]]:
+    from .occurrence_provider import AnchorEventOccurrenceProvider, collect_after
+
+    if evaluator is not None:
+        provider = AnchorEventOccurrenceProvider(
+            lambda value: evaluator.next_event_after(
+                value,
+                fallback_hhmm=fallback_hhmm,
+                default_seed_date=default_seed_date,
+                inclusive=False,
+                anchor_file_provider=anchor_file_provider,
+                include_omitted=True,
+                max_file_skips=max_iterations,
+            ),
+            source="anchor+anchor_file" if anchor_file_str and dnf else "anchor",
+        )
+        collected = collect_after(
+            provider,
+            after_local_dt,
+            limit=limit_included,
+            inclusive=inclusive,
+            max_iterations=max_iterations,
+            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+            to_local=lambda value: value,
+        )
+        if return_occurrences:
+            return collected
+        return [
+            (occurrence.local_datetime, occurrence.omitted)
+            for occurrence in collected
+            if occurrence.local_datetime is not None
+        ]
+
     from .anchor_inclusion import next_occurrence_event_local
     from . import anchor_inclusion
     from .occurrence_provider import AnchorEventOccurrenceProvider, collect_after
@@ -950,7 +988,6 @@ def handle_anchor_preview_on_add(
             core=core,
         )
 
-    recurrence_evaluator = None
     try:
         from .recurrence_evaluator import RecurrenceEvaluator
 
@@ -962,9 +999,21 @@ def handle_anchor_preview_on_add(
             astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         )
-    except Exception:
-        # Keep the existing injected path available for incomplete legacy rows.
-        recurrence_evaluator = None
+    except Exception as exc:
+        error_and_exit(
+            [
+                (
+                    "Recurrence evaluator",
+                    "Could not initialize the shared recurrence evaluator: "
+                    f"{type(exc).__name__}: {exc}",
+                ),
+                (
+                    "Fix",
+                    "Check the anchor, timezone, astronomy, and business-calendar configuration.",
+                ),
+            ]
+        )
+        raise RuntimeError("recurrence evaluator initialization failed") from exc
 
     if not dnf:
         occurrences = _collect_included_with_provider(
@@ -1000,9 +1049,6 @@ def handle_anchor_preview_on_add(
             task["due"] = fmt_local_for_task(first_due_utc)
             rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
     elif not merged:
-        first_date_local = anchor_step_once(dnf, base_local_date - timedelta(days=1), interval_seed, seed_base, omit_dnf=omit_dnf)
-        if not first_date_local:
-            error_and_exit([("anchor pattern", "No matching anchor dates found. Pattern may be invalid, non-advancing, or too restrictive.")])
         (
             first_due_local_dt,
             first_due_utc,
@@ -1024,7 +1070,7 @@ def handle_anchor_preview_on_add(
             prof=prof,
             core=core,
             to_local_cached=to_local_cached,
-            anchor_pick_occurrence_local=anchor_pick_occurrence_local,
+            evaluator=recurrence_evaluator,
             error_and_exit=error_and_exit,
             fmt_local_for_task=fmt_local_for_task,
         )
@@ -1142,6 +1188,7 @@ def handle_anchor_preview_on_add(
             interval_seed,
             seed_base,
             omit_dnf=omit_dnf,
+            evaluator=recurrence_evaluator,
         )
         allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
         allow_by_until = exact_until_count if exact_until_count is not None else 10**9
@@ -1157,6 +1204,7 @@ def handle_anchor_preview_on_add(
             interval_seed,
             seed_base,
             omit_dnf=omit_dnf,
+            evaluator=recurrence_evaluator,
         )
         prof.add_ms("anchor:preview_occurrences", (time.perf_counter() - _t_prev) * 1000.0)
     else:
@@ -1203,6 +1251,7 @@ def handle_anchor_preview_on_add(
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             return_occurrences=True,
             anchor_file_provider=shared_anchor_file_provider,
+            evaluator=recurrence_evaluator,
         )
         if until_dt:
             until_local = core.to_local(until_dt)

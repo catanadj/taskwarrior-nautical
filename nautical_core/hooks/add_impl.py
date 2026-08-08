@@ -1351,7 +1351,16 @@ def _anchor_next_occurrence_after_local_dt(dnf, after_dt_local, fallback_hhmm, i
     )
 
 
-def _anchor_until_summary(dnf, until_dt, first_date_local, first_hhmm, interval_seed, seed_base, omit_dnf=None):
+def _anchor_until_summary(
+    dnf,
+    until_dt,
+    first_date_local,
+    first_hhmm,
+    interval_seed,
+    seed_base,
+    omit_dnf=None,
+    evaluator=None,
+):
     add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_until_summary(
         dnf,
@@ -1366,6 +1375,7 @@ def _anchor_until_summary(dnf, until_dt, first_date_local, first_hhmm, interval_
         max_preview_iterations=_MAX_PREVIEW_ITERATIONS,
         max_iterations=_MAX_ITERATIONS,
         resolve_time_slots=_resolve_time_slots,
+        evaluator=evaluator,
     )
 
 
@@ -1378,6 +1388,7 @@ def _anchor_build_preview(
     interval_seed,
     seed_base,
     omit_dnf=None,
+    evaluator=None,
 ):
     add_anchor_compute = _module("add_anchor_compute")
     return add_anchor_compute.anchor_build_preview(
@@ -1392,6 +1403,7 @@ def _anchor_build_preview(
         core=core,
         norm_t_mod=_norm_t_mod,
         resolve_time_slots=_resolve_time_slots,
+        evaluator=evaluator,
     )
 
 
@@ -1798,6 +1810,7 @@ def _anchor_preview_first_due(
     seed_base: str,
     rows: list[tuple[str, str]],
     prof,
+    evaluator,
 ):
     add_anchor_preview = _module("add_anchor_preview")
     return add_anchor_preview.anchor_preview_first_due(
@@ -1815,7 +1828,7 @@ def _anchor_preview_first_due(
         prof=prof,
         core=core,
         to_local_cached=_to_local_cached,
-        anchor_pick_occurrence_local=_anchor_pick_occurrence_local,
+        evaluator=evaluator,
         error_and_exit=_error_and_exit,
         fmt_local_for_task=_fmt_local_for_task,
     )

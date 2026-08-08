@@ -12006,6 +12006,106 @@ def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
         expect("Final (until)" not in panel, f"ambiguous legacy label remains: {panel!r}")
 
 
+def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
+    """A shared evaluator failure must never fall back to legacy scheduling callbacks."""
+    hook = _find_hook_file("on-add.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_add_evaluator_failure_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000143",
+        "description": "evaluator initialization failure",
+        "status": "pending",
+        "entry": mod.core.fmt_isoz(now_utc),
+        "anchor": "w:mon",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "00000000",
+    }
+    ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
+    panels = []
+    evaluator_cls = importlib.import_module("nautical_core.recurrence_evaluator").RecurrenceEvaluator
+    original_from_task = evaluator_cls.__dict__["from_task"]
+    original_next = mod._anchor_next_occurrence_after_local_dt
+
+    def fail_from_task(cls, *args, **kwargs):
+        raise RuntimeError("astronomy profile is unavailable")
+
+    try:
+        evaluator_cls.from_task = classmethod(fail_from_task)
+        mod._anchor_next_occurrence_after_local_dt = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy scheduler fallback was called")
+        )
+        mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
+        mod._emit_task_json = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("failed preview must not emit task JSON")
+        )
+        try:
+            mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
+        except SystemExit as exc:
+            expect(exc.code == 1, f"unexpected evaluator failure exit code: {exc.code!r}")
+        else:
+            raise AssertionError("evaluator initialization failure was accepted")
+    finally:
+        evaluator_cls.from_task = original_from_task
+        mod._anchor_next_occurrence_after_local_dt = original_next
+
+    expect(panels and panels[-1][0] == "❌ Invalid Chain", f"missing evaluator error panel: {panels!r}")
+    rows = panels[-1][1]
+    expect(any(label == "Recurrence evaluator" for label, _value in rows), f"missing evaluator error detail: {rows!r}")
+    expect(any(label == "Fix" for label, _value in rows), f"missing evaluator remediation: {rows!r}")
+
+
+def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
+    """Normal anchor previews must not invoke the legacy occurrence callbacks."""
+    hook = _find_hook_file("on-add.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_add_evaluator_scheduler_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000144",
+        "description": "evaluator scheduler preview",
+        "status": "pending",
+        "entry": mod.core.fmt_isoz(now_utc),
+        "anchor": "w:mon",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "00000000",
+    }
+    ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
+    captured = {}
+    original = (
+        mod._anchor_pick_occurrence_local,
+        mod._anchor_next_occurrence_after_local_dt,
+        mod._panel,
+        mod._emit_task_json,
+    )
+
+    def fail_legacy(*_args, **_kwargs):
+        raise AssertionError("legacy occurrence callback was called")
+
+    try:
+        mod._anchor_pick_occurrence_local = fail_legacy
+        mod._anchor_next_occurrence_after_local_dt = fail_legacy
+        mod._panel = lambda title, rows, **kwargs: captured.update({"title": title, "rows": list(rows)})
+        mod._emit_task_json = lambda value, **_kwargs: captured.update({"task": dict(value)})
+        mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
+    finally:
+        (
+            mod._anchor_pick_occurrence_local,
+            mod._anchor_next_occurrence_after_local_dt,
+            mod._panel,
+            mod._emit_task_json,
+        ) = original
+
+    expect(captured.get("task", {}).get("due"), f"evaluator preview did not assign due: {captured!r}")
+    expect(captured.get("title") == "⚓︎ Anchor Preview", f"evaluator preview did not render: {captured!r}")
+
+
 def test_on_add_native_until_checks_generated_anchor_due():
     """The expiration guard should run after an anchor resolves its automatic first due."""
     hook = _find_hook_file("on-add.nautical")
@@ -29277,6 +29377,8 @@ TESTS = [
     test_on_add_native_until_checks_generated_cp_due,
     test_native_until_carry_descriptions,
     test_on_add_preview_distinguishes_expiration_from_chain_end_point,
+    test_on_add_preview_fails_closed_when_evaluator_initialization_fails,
+    test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows,
     test_on_add_native_until_checks_generated_anchor_due,
     test_on_add_native_until_guard_ignores_ordinary_tasks,
     test_on_add_chain_until_rejects_before_first_anchor_occurrence,

@@ -1927,6 +1927,28 @@ def _task_exists_by_uuid(u: str, env: dict | None) -> bool:
     return _task_exists_by_uuid_uncached(u, env=env)
 
 
+def _task_lookup_by_uuid(u: str, env: dict | None):
+    """Return a tri-state child verification result for mutation decisions."""
+    hook_support = _module("hook_support", required=False)
+    if hook_support is None:
+        return None
+    if env is None:
+        cached_read = _read_query_get("uuid", str(u or "").lower())
+        if cached_read is not _READ_QUERY_MISSING:
+            if isinstance(cached_read, dict) and cached_read.get("uuid"):
+                return hook_support.LookupResult.found(cached_read)
+            return hook_support.LookupResult.absent("Taskwarrior returned no matching task")
+    return hook_support.task_lookup_by_uuid_uncached(
+        run_task=_run_task,
+        task_cmd_prefix=_task_cmd_prefix(),
+        uuid_str=u,
+        env=env,
+        timeout=2.5,
+        retries=2,
+        diag=_diag,
+    )
+
+
 @lru_cache(maxsize=512)
 def _task_exists_by_uuid_cached(u: str) -> bool:
     return _task_exists_by_uuid_uncached(u, env=None)
@@ -2150,8 +2172,13 @@ def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str
         if ok:
             _invalidate_read_query_cache()
             # Always verify existence to avoid reporting success on partial import failures.
-            if _task_exists_by_uuid(child_uuid, env):
+            verification = _task_lookup_by_uuid(child_uuid, env)
+            if getattr(verification, "is_found", False):
                 return child_uuid[:8], stripped_accum
+            if getattr(verification, "is_unavailable", False):
+                last_stderr = f"child verification unavailable: {verification.reason}"
+                last_category = "taskwarrior"
+                break
             last_stderr = "task import reported success but child task was not found by UUID"
             category, is_retryable = ("taskwarrior", True)
         else:

@@ -13457,7 +13457,7 @@ def test_spawn_child_always_verifies_import():
 
     saved_reserve = mod._reserve_child_uuid
     saved_run_task = mod._run_task
-    saved_exists = mod._task_exists_by_uuid
+    saved_lookup = mod._task_lookup_by_uuid
     try:
         mod._reserve_child_uuid = lambda _env: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         calls = {"import": 0, "exists": 0}
@@ -13469,12 +13469,14 @@ def test_spawn_child_always_verifies_import():
                 return True, "", ""
             return False, "", "unexpected"
 
+        support = mod._module("hook_support")
+
         def _exists_stub(_uuid, _env):
             calls["exists"] += 1
-            return calls["exists"] >= 2
+            return support.LookupResult.found({"uuid": _uuid}) if calls["exists"] >= 2 else support.LookupResult.absent()
 
         mod._run_task = _run_task_stub
-        mod._task_exists_by_uuid = _exists_stub
+        mod._task_lookup_by_uuid = _exists_stub
 
         short, _stripped = mod._spawn_child({"description": "verify-enforced"})
         expect(short == "aaaaaaaa", f"unexpected child short uuid: {short}")
@@ -13483,7 +13485,40 @@ def test_spawn_child_always_verifies_import():
     finally:
         mod._reserve_child_uuid = saved_reserve
         mod._run_task = saved_run_task
-        mod._task_exists_by_uuid = saved_exists
+        mod._task_lookup_by_uuid = saved_lookup
+
+
+def test_spawn_child_does_not_reimport_when_verification_unavailable():
+    """An unavailable post-import read must stop instead of issuing a duplicate import."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_spawn_verify_unavailable_test")
+    saved_reserve = mod._reserve_child_uuid
+    saved_run_task = mod._run_task
+    saved_lookup = mod._task_lookup_by_uuid
+    try:
+        mod._reserve_child_uuid = lambda _env: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        support = mod._module("hook_support")
+        calls = {"import": 0}
+
+        def _run_task_stub(cmd, **_kwargs):
+            if isinstance(cmd, list) and "import" in cmd:
+                calls["import"] += 1
+                return True, "", ""
+            return False, "", "unexpected"
+
+        mod._run_task = _run_task_stub
+        mod._task_lookup_by_uuid = lambda *_a, **_k: support.LookupResult.unavailable("lock busy")
+        try:
+            mod._spawn_child({"description": "verify unavailable"})
+        except RuntimeError as exc:
+            expect("Taskwarrior import failed" in str(exc), f"unexpected verification failure: {exc}")
+        else:
+            raise AssertionError("unavailable verification should fail the spawn")
+        expect(calls["import"] == 1, f"unavailable verification caused duplicate imports: {calls}")
+    finally:
+        mod._reserve_child_uuid = saved_reserve
+        mod._run_task = saved_run_task
+        mod._task_lookup_by_uuid = saved_lookup
 
 
 def test_core_run_task_tempfiles_accepts_text_input():
@@ -29889,6 +29924,7 @@ TESTS = [
     test_on_modify_spawn_intent_id_in_entry,
     test_on_modify_spawn_intent_entry_rejects_missing_child_uuid,
     test_on_modify_spawn_intent_records_parent_guard,
+    test_spawn_child_does_not_reimport_when_verification_unavailable,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,

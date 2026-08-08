@@ -19590,6 +19590,91 @@ def test_recurrence_evaluator_shadow_parity_time_matrix():
         )
 
 
+def test_recurrence_evaluator_shadow_parity_dst_and_business_calendar():
+    """Evaluator and hook mode selection preserve DST and business-calendar policy."""
+    from zoneinfo import ZoneInfo
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_evaluator_shadow_dst_business_test")
+    old_tz = mod.core._LOCAL_TZ
+    mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
+    try:
+        due_local = mod.core.build_local_datetime(date(2025, 3, 9), (1, 30))
+        end_local = mod.core.build_local_datetime(date(2025, 3, 9), (2, 0))
+        parent = {
+            "anchor": "w:sun@t=02:30",
+            "anchor_mode": "skip",
+            "chainID": "shadow-dst",
+            "due": mod.core.fmt_isoz(due_local.astimezone(timezone.utc)),
+            "end": mod.core.fmt_isoz(end_local.astimezone(timezone.utc)),
+        }
+        hook_due, _meta, _dnf = mod._compute_anchor_child_due(parent)
+        evaluator = RecurrenceEvaluator.from_task(parent, timezone=mod.core._LOCAL_TZ)
+        result = evaluator.select_mode(
+            "skip",
+            due_local=due_local,
+            end_local=end_local,
+            next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
+            fallback_hhmm=(9, 0),
+        )
+        expect(
+            result.selected_occurrence is not None
+            and result.selected_occurrence.astimezone(timezone.utc) == hook_due,
+            f"DST shadow parity drifted: {result!r} vs {hook_due!r}",
+        )
+    finally:
+        mod.core._LOCAL_TZ = old_tz
+
+    class SetCalendar:
+        name = "shadow-business"
+        fingerprint = "shadow-business-v1"
+
+        def is_business_day(self, value):
+            return value in {date(2026, 1, 2), date(2026, 1, 7)}
+
+    policy = SetCalendar()
+    due_local = mod.core.build_local_datetime(date(2026, 1, 1), (9, 0))
+    end_local = mod.core.build_local_datetime(date(2026, 1, 1), (10, 0))
+    parent = {
+        "anchor": "m:1bd",
+        "anchor_mode": "skip",
+        "chainID": "shadow-business",
+        "due": mod.core.fmt_isoz(due_local.astimezone(timezone.utc)),
+        "end": mod.core.fmt_isoz(end_local.astimezone(timezone.utc)),
+    }
+
+    def calendar_next(dnf, after_local, *, default_seed_date, seed_base, omit_dnf, fallback_hhmm):
+        next_date, _ = mod.core.next_after_expr(
+            dnf,
+            after_local.date(),
+            default_seed=default_seed_date,
+            seed_base=seed_base,
+            business_calendar=policy,
+        )
+        return mod.core.build_local_datetime(next_date, fallback_hhmm)
+
+    with mod.core.use_business_calendar(policy):
+        hook_due, _meta, _dnf = mod._compute_anchor_child_due(parent)
+    evaluator = RecurrenceEvaluator.from_task(
+        parent,
+        timezone=mod.core._LOCAL_TZ,
+        business_calendar=policy,
+    )
+    result = evaluator.select_mode(
+        "skip",
+        due_local=due_local,
+        end_local=end_local,
+        next_occurrence_after_local_dt=calendar_next,
+        fallback_hhmm=(9, 0),
+    )
+    expect(
+        result.selected_occurrence is not None
+        and result.selected_occurrence.astimezone(timezone.utc) == hook_due,
+        f"business-calendar shadow parity drifted: {result!r} vs {hook_due!r}",
+    )
+
+
 def test_modify_hook_uses_explicit_recurrence_identity():
     """Modify hook cap paths should share the chainID-first identity policy."""
     expect(_hook._recurrence_seed_base({"chainID": "chain-a", "uuid": "uuid-a"}) == "chain-a", "modify hook preferred UUID over chainID")
@@ -29704,6 +29789,7 @@ TESTS.extend([
     test_recurrence_spec_normalizes_task_fields_and_context,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_recurrence_evaluator_shadow_parity_time_matrix,
+    test_recurrence_evaluator_shadow_parity_dst_and_business_calendar,
     test_modify_timeline_uses_explicit_recurrence_identity,
     test_modify_hook_uses_explicit_recurrence_identity,
     test_add_preview_uses_explicit_recurrence_identity,

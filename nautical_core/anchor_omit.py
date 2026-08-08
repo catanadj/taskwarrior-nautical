@@ -9,6 +9,16 @@ from typing import Any, Callable, Mapping
 _OMIT_TIMED_ERROR = "omit does not support time modifiers (@t). Omit rules are date-based only."
 
 
+def _freeze_omit_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze_omit_value(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_omit_value(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_omit_value(item) for item in value)
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class OmitState:
     """Evaluator-owned omission data with stable, read-only outer state."""
@@ -29,7 +39,7 @@ def freeze_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None)
     descriptions = MappingProxyType(dict(omit_descriptions or {}))
     if not omit_dnf and not dates and not descriptions:
         return None
-    return OmitState(omit_dnf, dates, descriptions)
+    return OmitState(_freeze_omit_value(omit_dnf), dates, descriptions)
 
 
 def combine_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None):

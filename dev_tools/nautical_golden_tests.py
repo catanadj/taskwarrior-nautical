@@ -20135,6 +20135,7 @@ def test_recurrence_evaluator_loads_omit_file_dates_and_descriptions_once():
                 {
                     "chainID": "omit-file-combined",
                     "anchor": "w:mon",
+                    "omit": "w:sun",
                     "omit_file": "holidays.csv",
                 }
             )
@@ -20142,6 +20143,12 @@ def test_recurrence_evaluator_loads_omit_file_dates_and_descriptions_once():
             evaluator.omit_dnf
             expect(len(calls) == 1, f"omit file was loaded {len(calls)} times")
             expect(evaluator.omit_dnf is evaluator.omit_dnf, "omit state was rebuilt or copied")
+            try:
+                evaluator.omit_dnf.dnf[0] = ()
+            except TypeError:
+                pass
+            else:
+                raise AssertionError("evaluator omission DNF remained mutable")
         finally:
             RecurrenceEvaluator._core_module = staticmethod(original_core_module)
             omit_files.load_omit_file_data = original_loader

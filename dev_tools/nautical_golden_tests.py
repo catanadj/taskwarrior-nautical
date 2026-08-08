@@ -16486,22 +16486,25 @@ def test_on_modify_anchor_file_child_projection_reuses_provider():
     if hasattr(mod, "_load_core"):
         mod._load_core()
     anchor_inclusion = mod.core._import_sibling("anchor_inclusion")
+    occurrence_provider = mod.core._import_sibling("occurrence_provider")
     original_builder = anchor_inclusion._build_anchor_file_provider
-    original_included = mod._anchor_included_occurrences
     builders = []
-    providers = []
 
     def build_provider(*_args, **_kwargs):
-        provider = object()
+        provider = type("Provider", (), {})()
+        occurrence = occurrence_provider.Occurrence(
+            date(2026, 8, 4), 9, 0, source="anchor_file",
+            local_datetime=mod.core.to_local(mod.core.build_local_datetime(date(2026, 8, 4), (9, 0))),
+        )
+        provider.next_after = lambda after_local, **_kwargs: (
+            occurrence
+            if occurrence.local_datetime is not None and occurrence.local_datetime > after_local
+            else None
+        )
         builders.append(provider)
         return provider
 
-    def included(_parent, *, after_local_dt, anchor_file_provider=None, **_kwargs):
-        providers.append(anchor_file_provider)
-        return [after_local_dt + timedelta(minutes=30)]
-
     anchor_inclusion._build_anchor_file_provider = build_provider
-    mod._anchor_included_occurrences = included
     try:
         due = mod.core.build_local_datetime(date(2026, 8, 3), (9, 0))
         child_due, _meta, _dnf = mod._compute_anchor_child_due(
@@ -16516,10 +16519,8 @@ def test_on_modify_anchor_file_child_projection_reuses_provider():
         )
     finally:
         anchor_inclusion._build_anchor_file_provider = original_builder
-        mod._anchor_included_occurrences = original_included
     expect(len(builders) == 1, f"child projection rebuilt anchor-file provider {len(builders)} times")
-    expect(providers and all(value is builders[0] for value in providers), "child projection did not reuse its provider")
-    expect(mod.core.to_local(child_due).strftime("%H:%M") == "09:30", f"unexpected projected child due: {child_due!r}")
+    expect(mod.core.to_local(child_due).strftime("%H:%M") == "09:00", f"unexpected projected child due: {child_due!r}")
 
 
 def test_on_modify_pure_anchor_file_projection_reuses_provider():

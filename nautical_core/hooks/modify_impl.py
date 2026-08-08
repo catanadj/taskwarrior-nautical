@@ -3685,124 +3685,13 @@ def _compute_anchor_child_due_evaluator(parent: dict):
 
 
 def _compute_anchor_child_due(parent: dict):
-    """Return (next_due_utc, meta, dnf).
-
-    The core recurrence engine computes *dates*; the hook expands into *datetimes* to
-    respect multi-time lists: @t=HH:MM[,HH:MM...].
-    """
-    anchor_file_value = str(parent.get("anchor_file") or "").strip()
-    evaluator_provider_compatible = True
-    if anchor_file_value:
-        anchor_inclusion = core._import_sibling("anchor_inclusion")
-        builder = getattr(anchor_inclusion, "_build_anchor_file_provider", None)
-        evaluator_provider_compatible = str(getattr(builder, "__module__", "")).endswith("anchor_inclusion")
-    if evaluator_provider_compatible:
-        try:
-            return _compute_anchor_child_due_evaluator(parent)
-        except NotImplementedError:
-            pass
-        except AttributeError:
-            # Preserve test/integration providers that are owned by the
-            # legacy hook path until the provider seam is fully cut over.
-            if not str(parent.get("anchor_file") or "").strip():
-                raise
-        except ValueError as exc:
-            # Keep the established user-facing diagnostic for an omit rule
-            # that removes every future occurrence, while preserving all
-            # other evaluator failures unchanged.
-            if "omission scan exceeded" in str(exc):
-                raise ValueError("No valid anchor occurrences found after applying omit rules.") from exc
-            raise
-
-    expr_str, dnf = _anchor_dnf_from_parent(parent)
-    anchor_file_str = (parent.get("anchor_file") or "").strip()
-    if not ((expr_str and dnf) or anchor_file_str):
-        return (None, None, None)
-    _omit_expr, omit_dnf = _omit_dnf_from_parent(parent)
-
-    mode = _anchor_mode_from_parent(parent)
-    end_local, due_local, due_dt_utc = _anchor_parent_local_times(parent)
-    if not end_local:
-        return (None, None, None)
-
-    default_seed = due_local.date()
-    seed_base = (parent.get("chainID") or "").strip() or "preview"
-    fallback_hhmm = (due_local.hour, due_local.minute)
-    target_field = "scheduled" if not due_dt_utc and parent.get("scheduled") else "due"
-    anchor_file_provider = (
-        _anchor_file_provider_for(
-            anchor_file_str, fallback_hhmm=fallback_hhmm, seed_base=seed_base
-        )
-        if anchor_file_str
-        else None
-    )
-    mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
-    occurrences = _anchor_included_occurrences(
-        parent,
-        after_local_dt=(due_local if mode == "all" else (end_local if mode == "flex" else _later_datetime(end_local, due_local))),
-        inclusive=False,
-        limit=32,
-        fallback_hhmm=fallback_hhmm,
-        omit_dnf=omit_dnf,
-        seed_base=seed_base,
-        default_seed_date=default_seed,
-        dnf=dnf,
-        anchor_file_provider=anchor_file_provider,
-    )
-    if mode == "all":
-        missed = [dt for dt in _anchor_included_occurrences(
-            parent,
-            after_local_dt=due_local,
-            inclusive=False,
-            limit=25,
-            fallback_hhmm=fallback_hhmm,
-            omit_dnf=omit_dnf,
-            seed_base=seed_base,
-            default_seed_date=default_seed,
-            dnf=dnf,
-            anchor_file_provider=anchor_file_provider,
-        ) if _compare_datetimes(dt, end_local) <= 0]
-        if missed:
-            nxt_local = missed[0]
-            info = mode_result_type(
-                selected_occurrence=nxt_local,
-                mode="all",
-                basis="missed",
-                source="anchor+anchor_file",
-                missed_count=len(missed),
-                missed_preview=tuple(missed[:5]),
-            )
-        else:
-            nxt_local = occurrences[0] if occurrences else None
-            info = mode_result_type(
-                selected_occurrence=nxt_local,
-                mode="all",
-                basis="after_due",
-                source="anchor+anchor_file",
-            )
-    elif mode == "flex":
-        nxt_local = occurrences[0] if occurrences else None
-        info = mode_result_type(
-            selected_occurrence=nxt_local,
-            mode="flex",
-            basis="flex",
-            source="anchor+anchor_file",
-        )
-    else:
-        nxt_local = occurrences[0] if occurrences else None
-        info = mode_result_type(
-            selected_occurrence=nxt_local,
-            mode="skip",
-            basis="after_end",
-            source="anchor+anchor_file",
-        )
-
-    if not nxt_local:
-        raise ValueError("Could not compute next anchor occurrence")
-
-    if not isinstance(info, mode_result_type):
-        raise TypeError("Anchor mode selection returned an invalid typed result.")
-    return nxt_local.astimezone(timezone.utc), info.metadata(target_field=target_field), dnf
+    """Return the next anchor child through the shared evaluator only."""
+    try:
+        return _compute_anchor_child_due_evaluator(parent)
+    except ValueError as exc:
+        if "omission scan exceeded" in str(exc):
+            raise ValueError("No valid anchor occurrences found after applying omit rules.") from exc
+        raise
 
 
 def _estimate_cp_final_by_max(task: dict, next_due_utc):

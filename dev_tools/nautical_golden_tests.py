@@ -19519,6 +19519,47 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         f"flex mode policy lost missed evidence: {flex_result!r}",
     )
     try:
+        event_evaluator.events_between(
+            datetime(2025, 1, 5),
+            datetime(2025, 1, 10),
+            limit=2,
+            next_occurrence_after_local_dt=next_day,
+            max_iterations=1,
+        )
+    except ValueError as exc:
+        expect("range iteration limit" in str(exc), f"unexpected range guard error: {exc}")
+    else:
+        raise AssertionError("evaluator silently truncated an iteration-bounded range")
+
+    limited = RecurrenceEvaluator.from_task(
+        {
+            "chainID": "limited-chain",
+            "anchor": "w:mon",
+            "chainMax": "2",
+            "chainUntil": "2025-01-10T00:00:00Z",
+        }
+    )
+    expect(limited.limits_allow(datetime(2025, 1, 9), 2), "valid evaluator chain limit was rejected")
+    expect(not limited.limits_allow(datetime(2025, 1, 11), 2), "chainUntil limit was ignored by evaluator")
+    expect(not limited.limits_allow(datetime(2025, 1, 9), 3), "chainMax limit was ignored by evaluator")
+
+    astronomy_evaluator = RecurrenceEvaluator.from_task(
+        {"chainID": "astronomy-chain", "anchor": "moon:full"}
+    )
+
+    def unavailable(*_args, **_kwargs):
+        raise LookupError("astronomical event unavailable")
+
+    try:
+        astronomy_evaluator.next_event_after(
+            datetime(2025, 1, 1),
+            next_occurrence_after_local_dt=unavailable,
+        )
+    except LookupError as exc:
+        expect("astronomical event unavailable" in str(exc), f"unexpected astronomy failure: {exc}")
+    else:
+        raise AssertionError("evaluator failed open when astronomy resolution was unavailable")
+    try:
         parsed.collect_after(
             datetime(2025, 1, 1),
             limit=1,

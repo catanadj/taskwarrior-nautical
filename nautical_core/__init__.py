@@ -651,98 +651,6 @@ is_lock_error = _runtime.is_lock_error
 # ---- Core iterator over DNF ---------------------------------------------------
 _NTH_RE  = re.compile(r"^(?:(\d)(?:st|nd|rd|th)|last)-(" + "|".join(_WD_ABBR) + r")$")
 
-def _days_in_month(y:int, m:int) -> int:
-    return _expansion_support.days_in_month(y, m, monthrange=monthrange)
-
-def _wd_idx(s: str) -> int | None:
-    return _expansion_support.wd_idx(s, wd_abbr=_WD_ABBR)
-
-
-@_ttl_lru_cache(maxsize=128)
-def _wday_idx_any(s: str) -> int | None:
-    return _expansion_support.wday_idx_any(s, weekdays=_WEEKDAYS, wd_idx=_wd_idx)
-
-
-def _weekly_spec_to_wset(spec: str, mods: dict | None = None) -> set[int]:
-    return _expansion_support.weekly_spec_to_wset(
-        spec,
-        mods=mods,
-        expand_weekly_aliases=_expand_weekly_aliases,
-        split_csv_lower=_split_csv_lower,
-        wday_idx_any=_wday_idx_any,
-    )
-
-def _doms_for_weekly_spec(spec:str, y:int, m:int) -> set[int]:
-    return _expansion_support.doms_for_weekly_spec(
-        spec,
-        y,
-        m,
-        expand_weekly_aliases=_expand_weekly_aliases,
-        split_csv_tokens=_split_csv_tokens,
-        wd_idx=_wd_idx,
-        days_in_month=_days_in_month,
-    )
-
-def _doms_for_monthly_token(tok: str, y:int, m:int) -> set[int]:
-    return _monthly_support.doms_for_monthly_token(
-        tok,
-        y,
-        m,
-        monthly_alias=_MONTHLY_ALIAS,
-        days_in_month=_days_in_month,
-        re_mod=re,
-        nth_re=_NTH_RE,
-        wd_idx=_wd_idx,
-    )
-
-def _y_ranges_from_spec(spec: str) -> list[tuple[int,int,int,int]]:
-    return _expansion_support.y_ranges_from_spec(
-        spec,
-        split_csv_lower=_split_csv_lower,
-        re_mod=re,
-        year_pair=_year_pair,
-    )
-
-
-def _doms_allowed_by_year(y:int, m:int, y_specs: list[str]) -> set[int]:
-    return _expansion_support.doms_allowed_by_year(
-        y,
-        m,
-        y_specs,
-        y_ranges_from_spec=_y_ranges_from_spec,
-        days_in_month=_days_in_month,
-        expand_yearly=expand_yearly_cached,
-    )
-
-def _month_allowed_doms_for_monthly_atom(atom: dict, y: int, m: int, dim: int) -> set[int]:
-    return _monthly_support.month_allowed_doms_for_monthly_atom(
-        atom,
-        y,
-        m,
-        dim,
-        split_csv_lower=_split_csv_lower,
-        doms_for_monthly_token=_doms_for_monthly_token,
-    )
-
-
-def _intersect_monthly_atoms_allowed(
-    term: list[dict],
-    *,
-    y: int,
-    m: int,
-    dim: int,
-    allowed: set[int],
-) -> set[int]:
-    return _monthly_support.intersect_monthly_atoms_allowed(
-        term,
-        y=y,
-        m=m,
-        dim=dim,
-        allowed=allowed,
-        month_allowed_doms_for_monthly_atom=_month_allowed_doms_for_monthly_atom,
-    )
-
-
 # ───────────────── Quarter helpers ─────────────────
 # Recognize full-month tokens like '01-03..31-03'
 _FULL_MONTH_RE = re.compile(r"^01-(\d{2})\.\.(\d{2})-(\d{2})$")
@@ -1403,6 +1311,21 @@ _acf_spec_to_string = _acf_api._acf_spec_to_string
 _build_acf_impl = _acf_api._build_acf_impl
 is_valid_acf = _acf_api.is_valid_acf
 acf_to_original_format = _acf_api.acf_to_original_format
+
+_expansion_api = _import_sibling("expansion_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+_days_in_month = _expansion_api._days_in_month
+_wd_idx = _expansion_api._wd_idx
+_wday_idx_any = _expansion_api._wday_idx_any
+_weekly_spec_to_wset = _expansion_api._weekly_spec_to_wset
+_doms_for_weekly_spec = _expansion_api._doms_for_weekly_spec
+_doms_for_monthly_token = _expansion_api._doms_for_monthly_token
+_y_ranges_from_spec = _expansion_api._y_ranges_from_spec
+_doms_allowed_by_year = _expansion_api._doms_allowed_by_year
+_month_allowed_doms_for_monthly_atom = _expansion_api._month_allowed_doms_for_monthly_atom
+_intersect_monthly_atoms_allowed = _expansion_api._intersect_monthly_atoms_allowed
 
 # Parser entry points live in ``parser_api``; retain these aliases for the
 # established ``nautical_core`` import contract.

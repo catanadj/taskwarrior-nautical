@@ -2006,90 +2006,6 @@ def _validate_monthly_spec(spec: str):
         )
 
 
-# -------- Cached Expansion Functions ----------
-@_ttl_lru_cache(maxsize=128)
-def _expand_weekly_cached_impl(spec: str):
-    return _cached_expansion.expand_weekly(
-        spec,
-        weekly_spec_to_wset=_weekly_spec_to_wset,
-    )
-
-
-@_ttl_lru_cache(maxsize=128)
-def _expand_weekly_cached_mods_impl(spec: str, bd_only: bool):
-    return _cached_expansion.expand_weekly_mods(
-        spec,
-        bd_only,
-        expand_weekly_cached=_expand_weekly_cached_impl,
-    )
-
-
-@_ttl_lru_cache(maxsize=128)
-def _expand_yearly_cached_impl(spec: str, y: int):
-    return _cached_expansion.expand_yearly(
-        spec,
-        y,
-        rewrite_month_names_to_ranges=_rewrite_month_names_to_ranges,
-        split_csv_lower=_split_csv_lower,
-        re_mod=re,
-        month_len=month_len,
-        yearfmt=_yearfmt,
-    )
-
-
-
-@_ttl_lru_cache(maxsize=128)
-def _expand_monthly_cached_impl(
-    spec: str,
-    y: int,
-    m: int,
-    business_calendar=None,
-):
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    return _cached_expansion.expand_monthly(
-        spec,
-        y,
-        m,
-        month_len=month_len,
-        expand_monthly_aliases=_expand_monthly_aliases,
-        split_csv_lower=_split_csv_lower,
-        nth_weekday_re=_nth_weekday_re,
-        bd_re=_bd_re,
-        weekday_map=_WEEKDAYS,
-        re_mod=re,
-        business_calendar=business_calendar,
-    )
-
-
-def _expand_monthly_for_month_impl(spec: str, y: int, m: int):
-    """Wrapper for cached monthly expansion."""
-    return _expand_monthly_cached_impl(spec, y, m)
-
-
-def _expand_weekly_impl(spec: str):
-    """Wrapper for cached weekly expansion."""
-    return _expand_weekly_cached_impl(spec)
-
-
-def _expand_yearly_for_year_strict_impl(spec: str, y: int):
-    """Wrapper for cached yearly expansion."""
-    return _expand_yearly_cached_impl(spec, y)
-
-
-# -------- Rolls / atoms ----------
-def _roll_apply_impl(
-    dt: date,
-    mods: dict,
-    business_calendar=None,
-) -> date:
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    return _schedule_utils.roll_apply(
-        dt,
-        mods,
-        parse_error_cls=ParseError,
-        business_calendar=business_calendar,
-    )
-
 def _weeks_between(d1: date, d2: date) -> int:
     return _schedule_utils.weeks_between(d1, d2)
 
@@ -2109,143 +2025,6 @@ def _moon_phase_matches_date(phase: str, day: date) -> bool:
         day,
         config=ASTRONOMY_CONFIG,
     )
-
-
-# ------------------------------------------------------------------------------
-# Anchor scheduling & iteration helpers
-# ------------------------------------------------------------------------------
-def _month_doms_safe(
-    spec: str,
-    y: int,
-    m: int,
-    business_calendar=None,
-) -> list[int]:
-    return _monthly_support.month_doms_safe(
-        spec,
-        y,
-        m,
-        expand_monthly_cached=_with_business_calendar(
-            expand_monthly_cached,
-            business_calendar,
-        ),
-    )
-
-
-def _month_has_hit(
-    spec: str,
-    y: int,
-    m: int,
-    business_calendar=None,
-) -> bool:
-    return _monthly_support.month_has_hit(
-        spec,
-        y,
-        m,
-        month_doms_safe=_with_business_calendar(
-            _month_doms_safe,
-            business_calendar,
-        ),
-    )
-
-
-def _first_hit_after_probe_in_month(
-    spec: str,
-    y: int,
-    m: int,
-    probe: date,
-    business_calendar=None,
-) -> date | None:
-    return _monthly_support.first_hit_after_probe_in_month(
-        spec,
-        y,
-        m,
-        probe,
-        month_doms_safe=_with_business_calendar(
-            _month_doms_safe,
-            business_calendar,
-        ),
-    )
-
-
-def _next_valid_month_on_or_after(
-    spec: str,
-    y: int,
-    m: int,
-    business_calendar=None,
-) -> tuple[int, int]:
-    return _monthly_support.next_valid_month_on_or_after(
-        spec,
-        y,
-        m,
-        month_has_hit=_with_business_calendar(
-            _month_has_hit,
-            business_calendar,
-        ),
-    )
-
-
-def _advance_k_valid_months(
-    spec: str,
-    start_y: int,
-    start_m: int,
-    k: int,
-    business_calendar=None,
-) -> tuple[int, int]:
-    return _monthly_support.advance_k_valid_months(
-        spec,
-        start_y,
-        start_m,
-        k,
-        next_valid_month_on_or_after=_with_business_calendar(
-            _next_valid_month_on_or_after,
-            business_calendar,
-        ),
-    )
-
-
-def _monthly_align_base_for_interval(
-    spec: str,
-    base: date,
-    probe: date,
-    seed: date,
-    ival: int,
-    business_calendar=None,
-) -> date:
-    return _monthly_support.monthly_align_base_for_interval(
-        spec,
-        base,
-        probe,
-        seed,
-        ival,
-        month_has_hit=_with_business_calendar(_month_has_hit, business_calendar),
-        next_valid_month_on_or_after=_with_business_calendar(
-            _next_valid_month_on_or_after,
-            business_calendar,
-        ),
-        first_hit_after_probe_in_month=_with_business_calendar(
-            _first_hit_after_probe_in_month,
-            business_calendar,
-        ),
-        advance_k_valid_months=_with_business_calendar(
-            _advance_k_valid_months,
-            business_calendar,
-        ),
-        month_doms_safe=_with_business_calendar(
-            _month_doms_safe,
-            business_calendar,
-        ),
-    )
-
-
-@lru_cache(maxsize=32)
-def _selection_inner_matcher(business_calendar):
-    return partial(atom_matches_on, business_calendar=business_calendar)
-
-
-def _apply_selection_date_modifiers(base: date, mods: dict, business_calendar=None) -> date:
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    rolled = roll_apply(base, mods, business_calendar=business_calendar)
-    return apply_day_offset(rolled, mods, business_calendar=business_calendar)
 
 
 def business_calendar_definitions():
@@ -2547,7 +2326,26 @@ _validate_anchor_dnf_atoms_strict = _parser_api.validate_anchor_dnf_atoms_strict
 
 # Scheduler entry points are bound to this exact core instance for isolated
 # hook/test loaders while preserving the long-standing facade names.
-_scheduler_api = _import_sibling("scheduler_api").for_core(sys.modules[__name__])
+_scheduler_api = _import_sibling("scheduler_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+_expand_weekly_cached_impl = _scheduler_api._expand_weekly_cached_impl
+_expand_weekly_cached_mods_impl = _scheduler_api._expand_weekly_cached_mods_impl
+_expand_yearly_cached_impl = _scheduler_api._expand_yearly_cached_impl
+_expand_monthly_cached_impl = _scheduler_api._expand_monthly_cached_impl
+_expand_monthly_for_month_impl = _scheduler_api._expand_monthly_for_month_impl
+_expand_weekly_impl = _scheduler_api._expand_weekly_impl
+_expand_yearly_for_year_strict_impl = _scheduler_api._expand_yearly_for_year_strict_impl
+_roll_apply_impl = _scheduler_api._roll_apply_impl
+_month_doms_safe = _scheduler_api._month_doms_safe
+_month_has_hit = _scheduler_api._month_has_hit
+_first_hit_after_probe_in_month = _scheduler_api._first_hit_after_probe_in_month
+_next_valid_month_on_or_after = _scheduler_api._next_valid_month_on_or_after
+_advance_k_valid_months = _scheduler_api._advance_k_valid_months
+_monthly_align_base_for_interval = _scheduler_api._monthly_align_base_for_interval
+_selection_inner_matcher = _scheduler_api._selection_inner_matcher
+_apply_selection_date_modifiers = _scheduler_api._apply_selection_date_modifiers
 expand_weekly_cached = _scheduler_api.expand_weekly_cached
 expand_weekly_cached_mods = _scheduler_api.expand_weekly_cached_mods
 expand_yearly_cached = _scheduler_api.expand_yearly_cached

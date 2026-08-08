@@ -221,8 +221,153 @@ def _next_after_expr_impl(
     )
 
 
-def for_core(module: Any):
+def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     """Create scheduler APIs without sharing state between core loaders."""
+    core = namespace if namespace is not None else vars(module)
+    ttl_lru_cache = core["_ttl_lru_cache"]
+
+    @ttl_lru_cache(maxsize=128)
+    def expand_weekly_cached_impl(spec: str):
+        return core["_cached_expansion"].expand_weekly(
+            spec,
+            weekly_spec_to_wset=core["_weekly_spec_to_wset"],
+        )
+
+    @ttl_lru_cache(maxsize=128)
+    def expand_weekly_cached_mods_impl(spec: str, bd_only: bool):
+        return core["_cached_expansion"].expand_weekly_mods(
+            spec,
+            bd_only,
+            expand_weekly_cached=expand_weekly_cached_impl,
+        )
+
+    @ttl_lru_cache(maxsize=128)
+    def expand_yearly_cached_impl(spec: str, year: int):
+        return core["_cached_expansion"].expand_yearly(
+            spec,
+            year,
+            rewrite_month_names_to_ranges=core["_rewrite_month_names_to_ranges"],
+            split_csv_lower=core["_split_csv_lower"],
+            re_mod=core["re"],
+            month_len=core["month_len"],
+            yearfmt=core["_yearfmt"],
+        )
+
+    @ttl_lru_cache(maxsize=128)
+    def expand_monthly_cached_impl(spec: str, year: int, month: int, business_calendar=None):
+        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
+        return core["_cached_expansion"].expand_monthly(
+            spec,
+            year,
+            month,
+            month_len=core["month_len"],
+            expand_monthly_aliases=core["_expand_monthly_aliases"],
+            split_csv_lower=core["_split_csv_lower"],
+            nth_weekday_re=core["_nth_weekday_re"],
+            bd_re=core["_bd_re"],
+            weekday_map=core["_WEEKDAYS"],
+            re_mod=core["re"],
+            business_calendar=business_calendar,
+        )
+
+    def expand_monthly_for_month_impl(spec: str, year: int, month: int):
+        return expand_monthly_cached_impl(spec, year, month)
+
+    def expand_weekly_impl(spec: str):
+        return expand_weekly_cached_impl(spec)
+
+    def expand_yearly_for_year_strict_impl(spec: str, year: int):
+        return expand_yearly_cached_impl(spec, year)
+
+    def roll_apply_impl(dt, mods, business_calendar=None):
+        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
+        return core["_schedule_utils"].roll_apply(
+            dt,
+            mods,
+            parse_error_cls=core["ParseError"],
+            business_calendar=business_calendar,
+        )
+
+    def month_doms_safe(spec, year, month, business_calendar=None):
+        return core["_monthly_support"].month_doms_safe(
+            spec,
+            year,
+            month,
+            expand_monthly_cached=core["_with_business_calendar"](
+                expand_monthly_cached_impl,
+                business_calendar,
+            ),
+        )
+
+    def month_has_hit(spec, year, month, business_calendar=None):
+        return core["_monthly_support"].month_has_hit(
+            spec,
+            year,
+            month,
+            month_doms_safe=core["_with_business_calendar"](month_doms_safe, business_calendar),
+        )
+
+    def first_hit_after_probe_in_month(spec, year, month, probe, business_calendar=None):
+        return core["_monthly_support"].first_hit_after_probe_in_month(
+            spec,
+            year,
+            month,
+            probe,
+            month_doms_safe=core["_with_business_calendar"](month_doms_safe, business_calendar),
+        )
+
+    def next_valid_month_on_or_after(spec, year, month, business_calendar=None):
+        return core["_monthly_support"].next_valid_month_on_or_after(
+            spec,
+            year,
+            month,
+            month_has_hit=core["_with_business_calendar"](month_has_hit, business_calendar),
+        )
+
+    def advance_k_valid_months(spec, start_y, start_m, k, business_calendar=None):
+        return core["_monthly_support"].advance_k_valid_months(
+            spec,
+            start_y,
+            start_m,
+            k,
+            next_valid_month_on_or_after=core["_with_business_calendar"](
+                next_valid_month_on_or_after,
+                business_calendar,
+            ),
+        )
+
+    def monthly_align_base_for_interval(spec, base, probe, seed, ival, business_calendar=None):
+        return core["_monthly_support"].monthly_align_base_for_interval(
+            spec,
+            base,
+            probe,
+            seed,
+            ival,
+            month_has_hit=core["_with_business_calendar"](month_has_hit, business_calendar),
+            next_valid_month_on_or_after=core["_with_business_calendar"](
+                next_valid_month_on_or_after,
+                business_calendar,
+            ),
+            first_hit_after_probe_in_month=core["_with_business_calendar"](
+                first_hit_after_probe_in_month,
+                business_calendar,
+            ),
+            advance_k_valid_months=core["_with_business_calendar"](
+                advance_k_valid_months,
+                business_calendar,
+            ),
+            month_doms_safe=core["_with_business_calendar"](month_doms_safe, business_calendar),
+        )
+
+    @core["lru_cache"](maxsize=32)
+    def selection_inner_matcher(business_calendar):
+        return core["partial"](core["atom_matches_on"], business_calendar=business_calendar)
+
+    def apply_selection_date_modifiers(base, mods, business_calendar=None):
+        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
+        rolled = core["roll_apply"](base, mods, business_calendar=business_calendar)
+        return core["apply_day_offset"](rolled, mods, business_calendar=business_calendar)
+
     def next_after_atom_with_mods(atom, ref_d, default_seed, seed_base=None, business_calendar=None):
         return _next_after_atom_with_mods_impl(
             module,
@@ -313,14 +458,30 @@ def for_core(module: Any):
         )
 
     return SimpleNamespace(
-        expand_weekly_cached=module._expand_weekly_cached_impl,
-        expand_weekly_cached_mods=module._expand_weekly_cached_mods_impl,
-        expand_yearly_cached=module._expand_yearly_cached_impl,
-        expand_monthly_cached=module._expand_monthly_cached_impl,
-        expand_monthly_for_month=module._expand_monthly_for_month_impl,
-        expand_weekly=module._expand_weekly_impl,
-        expand_yearly_for_year_strict=module._expand_yearly_for_year_strict_impl,
-        roll_apply=module._roll_apply_impl,
+        _expand_weekly_cached_impl=expand_weekly_cached_impl,
+        _expand_weekly_cached_mods_impl=expand_weekly_cached_mods_impl,
+        _expand_yearly_cached_impl=expand_yearly_cached_impl,
+        _expand_monthly_cached_impl=expand_monthly_cached_impl,
+        _expand_monthly_for_month_impl=expand_monthly_for_month_impl,
+        _expand_weekly_impl=expand_weekly_impl,
+        _expand_yearly_for_year_strict_impl=expand_yearly_for_year_strict_impl,
+        _roll_apply_impl=roll_apply_impl,
+        _month_doms_safe=month_doms_safe,
+        _month_has_hit=month_has_hit,
+        _first_hit_after_probe_in_month=first_hit_after_probe_in_month,
+        _next_valid_month_on_or_after=next_valid_month_on_or_after,
+        _advance_k_valid_months=advance_k_valid_months,
+        _monthly_align_base_for_interval=monthly_align_base_for_interval,
+        _selection_inner_matcher=selection_inner_matcher,
+        _apply_selection_date_modifiers=apply_selection_date_modifiers,
+        expand_weekly_cached=expand_weekly_cached_impl,
+        expand_weekly_cached_mods=expand_weekly_cached_mods_impl,
+        expand_yearly_cached=expand_yearly_cached_impl,
+        expand_monthly_cached=expand_monthly_cached_impl,
+        expand_monthly_for_month=expand_monthly_for_month_impl,
+        expand_weekly=expand_weekly_impl,
+        expand_yearly_for_year_strict=expand_yearly_for_year_strict_impl,
+        roll_apply=roll_apply_impl,
         apply_day_offset=apply_day_offset,
         base_next_after_atom=base_next_after_atom,
         interval_allowed_for_atom=interval_allowed_for_atom,

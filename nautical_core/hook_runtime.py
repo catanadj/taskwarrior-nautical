@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -9,6 +9,7 @@ from typing import Any
 class HookModuleAccess:
     namespace: dict[str, Any]
     module_specs: dict[str, tuple[str, str, str, str]]
+    errors: dict[str, str] = field(default_factory=dict)
 
     def load_named_module(self, name: str):
         cache_attr, failed_attr, _rel_name, import_name = self.module_specs[name]
@@ -21,13 +22,15 @@ class HookModuleAccess:
             module = importlib.import_module(import_name)
             self.namespace[cache_attr] = module
             return module
-        except Exception:
+        except Exception as exc:
+            self.errors[name] = f"{type(exc).__name__}: {exc}"
             self.namespace[failed_attr] = True
             return None
 
-    def require_loaded_module(self, module, rel_name: str):
+    def require_loaded_module(self, module, rel_name: str, error: str = ""):
         if module is None:
-            raise RuntimeError(f"nautical_core/{rel_name} is required")
+            detail = f" ({error})" if error else ""
+            raise RuntimeError(f"nautical_core/{rel_name} is required{detail}")
         return module
 
     def module(self, name: str, *, required: bool = True):
@@ -35,7 +38,7 @@ class HookModuleAccess:
         if not required:
             return module
         rel_name = self.module_specs[name][2]
-        return self.require_loaded_module(module, rel_name)
+        return self.require_loaded_module(module, rel_name, self.errors.get(name, ""))
 
 
 def build_hook_runtime_context(

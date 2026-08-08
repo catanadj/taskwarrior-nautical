@@ -5682,6 +5682,43 @@ def test_perf_hook_fast_path_ratio_enforcement():
     )
 
 
+def test_hook_runtime_retains_module_import_failure_details():
+    """Required module failures should identify the underlying import error."""
+    from nautical_core.hook_runtime import HookModuleAccess
+
+    access = HookModuleAccess(
+        {},
+        {"broken": ("_broken", "_broken_failed", "broken.py", "nautical_core.no_such_module_for_test")},
+    )
+    expect(access.module("broken", required=False) is None, "broken module unexpectedly loaded")
+    expect("ModuleNotFoundError" in access.errors.get("broken", ""), f"missing import detail: {access.errors}")
+    try:
+        access.module("broken")
+    except RuntimeError as exc:
+        expect("ModuleNotFoundError" in str(exc), f"required module error hid import detail: {exc}")
+    else:
+        raise AssertionError("required broken module did not fail")
+
+
+def test_queue_state_migration_returns_typed_failure_details():
+    """State migration failures should be returned instead of silently discarded."""
+    from nautical_core import queue_store
+
+    with tempfile.TemporaryDirectory() as td:
+        current = Path(td) / "new" / "queue.db"
+        legacy = Path(td) / "queue.db"
+        legacy.write_text("legacy", encoding="utf-8")
+        original_replace = queue_store.os.replace
+        try:
+            queue_store.os.replace = lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("read-only"))
+            issues = queue_store.migrate_legacy_state(file_pairs=((current, legacy),))
+        finally:
+            queue_store.os.replace = original_replace
+        expect(len(issues) == 1, f"migration failure was not retained: {issues}")
+        expect(issues[0].current == str(current), f"migration issue lost current path: {issues}")
+        expect("PermissionError" in issues[0].error, f"migration issue lost exception type: {issues}")
+
+
 def test_load_benchmark_installs_complete_hook_runtime():
     """The end-to-end benchmark must install on-exit and the Nautical UDAs."""
     load_test = _load_hook_module(
@@ -29644,6 +29681,8 @@ TESTS = [
     test_perf_hook_fast_path_ratio_enforcement,
     test_load_benchmark_installs_complete_hook_runtime,
     test_load_benchmark_queue_and_lineage_verification,
+    test_hook_runtime_retains_module_import_failure_details,
+    test_queue_state_migration_returns_typed_failure_details,
     test_deploy_sanity_script_reports_ok,
     test_hook_replay_harness_reports_ok,
     test_mixed_recurrence_loop_harness_reports_ok,

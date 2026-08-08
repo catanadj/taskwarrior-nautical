@@ -321,10 +321,12 @@ _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in
 def _migrate_legacy_nautical_state() -> None:
     queue_store = _module("queue_store", required=False)
     if queue_store is not None:
-        queue_store.migrate_nautical_state(
+        issues = queue_store.migrate_nautical_state(
             tw_data_dir=TW_DATA_DIR,
             extra_file_pairs=((_intent_log_path(), TW_DATA_DIR / ".nautical_spawn_intents.jsonl"),),
         )
+        for issue in issues:
+            _diag(f"queue state migration failed: {issue.current} from {issue.legacy}: {issue.error}")
         globals()["_QUEUE_DB_PATH"] = queue_store.queue_db_path(TW_DATA_DIR)
         globals()["_DEAD_LETTER_PATH"] = queue_store.dead_letter_path(TW_DATA_DIR)
         globals()["_DEAD_LETTER_LOCK"] = queue_store.dead_letter_lock_path(TW_DATA_DIR)

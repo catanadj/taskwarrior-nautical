@@ -5,6 +5,7 @@ import os
 import sqlite3
 import time
 from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -15,6 +16,13 @@ from nautical_core.queue_models import (
     QueueStoredRow,
     QueueWriteResult,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class StateMigrationIssue:
+    current: str
+    legacy: str
+    error: str
 
 
 QUEUE_DB_SCHEMA_VERSION = 1
@@ -73,43 +81,52 @@ def dead_letter_lock_path(tw_data_dir: Path) -> Path:
     return nautical_lock_dir_path(tw_data_dir) / ".nautical_dead_letter.lock"
 
 
-def maybe_migrate_state_file(current: Path, legacy: Path) -> None:
+def maybe_migrate_state_file(current: Path, legacy: Path) -> StateMigrationIssue | None:
     try:
         if current.exists() or not legacy.exists():
-            return
+            return None
         current.parent.mkdir(parents=True, exist_ok=True)
         os.replace(legacy, current)
-    except Exception:
-        pass
+        return None
+    except Exception as exc:
+        return StateMigrationIssue(str(current), str(legacy), f"{type(exc).__name__}: {exc}")
 
 
-def maybe_migrate_state_sidecars(current: Path, legacy: Path) -> None:
+def maybe_migrate_state_sidecars(current: Path, legacy: Path) -> list[StateMigrationIssue]:
+    issues: list[StateMigrationIssue] = []
     for suffix in ("-wal", "-shm"):
-        maybe_migrate_state_file(Path(str(current) + suffix), Path(str(legacy) + suffix))
+        issue = maybe_migrate_state_file(Path(str(current) + suffix), Path(str(legacy) + suffix))
+        if issue is not None:
+            issues.append(issue)
+    return issues
 
 
 def migrate_legacy_state(
     *,
     file_pairs: Sequence[tuple[Path, Path]],
     db_sidecars: Sequence[tuple[Path, Path]] = (),
-) -> None:
+) -> list[StateMigrationIssue]:
+    issues: list[StateMigrationIssue] = []
     for current, legacy in file_pairs:
-        maybe_migrate_state_file(current, legacy)
+        issue = maybe_migrate_state_file(current, legacy)
+        if issue is not None:
+            issues.append(issue)
     for current, legacy in db_sidecars:
-        maybe_migrate_state_sidecars(current, legacy)
+        issues.extend(maybe_migrate_state_sidecars(current, legacy))
+    return issues
 
 
 def migrate_nautical_state(
     *,
     tw_data_dir: Path,
     extra_file_pairs: Sequence[tuple[Path, Path]] = (),
-) -> None:
+) -> list[StateMigrationIssue]:
     file_pairs = [
         (queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),
         (dead_letter_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_dead_letter.jsonl")),
     ]
     file_pairs.extend(extra_file_pairs)
-    migrate_legacy_state(
+    return migrate_legacy_state(
         file_pairs=file_pairs,
         db_sidecars=((queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),),
     )

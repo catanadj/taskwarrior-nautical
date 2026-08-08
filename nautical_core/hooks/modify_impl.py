@@ -810,7 +810,9 @@ _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 def _migrate_legacy_nautical_state() -> None:
     queue_store = _module("queue_store", required=False)
     if queue_store is not None:
-        queue_store.migrate_nautical_state(tw_data_dir=TW_DATA_DIR)
+        issues = queue_store.migrate_nautical_state(tw_data_dir=TW_DATA_DIR)
+        for issue in issues:
+            _diag(f"queue state migration failed: {issue.current} from {issue.legacy}: {issue.error}")
         globals()["_SPAWN_QUEUE_DB_PATH"] = queue_store.queue_db_path(TW_DATA_DIR)
         globals()["_DEAD_LETTER_PATH"] = queue_store.dead_letter_path(TW_DATA_DIR)
         globals()["_DEAD_LETTER_LOCK"] = queue_store.dead_letter_lock_path(TW_DATA_DIR)

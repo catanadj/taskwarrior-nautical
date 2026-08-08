@@ -133,15 +133,16 @@ def run_task_result(
     use_tempfiles: bool = False,
 ) -> TaskCommandResult:
     """Adapt the hook runner to the typed command-result boundary."""
-    ok, stdout, stderr = run_task(
-        cmd,
-        env=env,
-        input_text=input_text,
-        timeout=timeout,
-        retries=retries,
-        retry_delay=retry_delay,
-        use_tempfiles=use_tempfiles,
-    )
+    runner_kwargs = {
+        "env": env,
+        "input_text": input_text,
+        "timeout": timeout,
+        "retries": retries,
+        "retry_delay": retry_delay,
+    }
+    if use_tempfiles:
+        runner_kwargs["use_tempfiles"] = True
+    ok, stdout, stderr = run_task(cmd, **runner_kwargs)
     text = (stderr or stdout or "").lower()
     if ok:
         kind = "ok"
@@ -198,18 +199,21 @@ def export_uuid_short(
     retries: int = 2,
     diag=None,
 ):
-    ok, out, err = run_task(
-        list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=off", f"uuid:{uuid_short}", "export"],
+    result = run_task_result(
+        run_task=run_task,
+        cmd=list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=off", f"uuid:{uuid_short}", "export"],
         env=env,
         timeout=timeout,
         retries=retries,
     )
-    if not ok:
+    if not result.ok:
         if callable(diag):
-            diag(f"export uuid:{uuid_short} failed: {(err or '').strip()}")
+            diag(f"export uuid:{uuid_short} failed: {failure_message(result, 'UUID export')}")
         return None
     try:
-        obj = json.loads((out or "").strip() or "{}")
+        obj = json.loads((result.stdout or "").strip())
+        if not isinstance(obj, dict):
+            return None
         if not obj.get("uuid"):
             return None
         if not str(obj.get("uuid") or "").lower().startswith((uuid_short or "").lower()):
@@ -231,20 +235,23 @@ def task_exists_by_uuid_uncached(
     retries: int = 2,
     diag=None,
 ) -> bool:
-    ok, out, err = run_task(
-        list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=off", f"uuid:{uuid_str}", "export"],
+    result = run_task_result(
+        run_task=run_task,
+        cmd=list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=off", f"uuid:{uuid_str}", "export"],
         env=env,
         timeout=timeout,
         retries=retries,
     )
-    if not ok:
+    if not result.ok:
         if callable(diag):
-            diag(f"task exists check failed (uuid={uuid_str[:8]}): {(err or '').strip()}")
+            diag(f"task exists check failed (uuid={uuid_str[:8]}): {failure_message(result, 'UUID existence check')}")
         return False
     try:
-        data = json.loads((out or "").strip() or "{}")
+        data = json.loads((result.stdout or "").strip())
+        if not isinstance(data, dict):
+            return False
     except Exception:
-        data = {}
+        return False
     return bool(data.get("uuid"))
 
 
@@ -258,21 +265,21 @@ def export_uuid_full(
     retries: int = 2,
     diag=None,
 ):
-    ok, out, err = run_task(
-        list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=1", f"export uuid:{uuid_str}"],
+    result = run_task_result(
+        run_task=run_task,
+        cmd=list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=1", f"export uuid:{uuid_str}"],
         env=env,
         timeout=timeout,
         retries=retries,
     )
-    if not ok:
+    if not result.ok:
         if callable(diag):
-            diag(f"task export uuid:{uuid_str} failed: {(err or '').strip()}")
+            diag(f"task export uuid:{uuid_str} failed: {failure_message(result, 'UUID export')}")
         return None
-    try:
-        arr = json.loads(out) if out and out.strip().startswith("[") else []
-        return arr[0] if arr else None
-    except Exception:
+    parsed, rows, error = parse_export_array_result(result, diag=diag)
+    if not parsed:
         return None
+    return rows[0] if rows else None
 
 
 def export_uuid_status(
@@ -297,23 +304,24 @@ def export_uuid_status(
         f"uuid:{uuid_str}",
         "export",
     ]
-    ok, out, err = run_task(
-        cmd,
+    result = run_task_result(
+        run_task=run_task,
+        cmd=cmd,
         env=env,
         timeout=timeout,
         retries=retries,
         retry_delay=retry_delay,
     )
-    if not ok:
-        retryable = bool(is_lock_error(err)) if callable(is_lock_error) else False
-        return {"exists": False, "retryable": retryable, "err": err or "", "obj": None}
+    if not result.ok:
+        retryable = bool(is_lock_error(result.stderr)) if callable(is_lock_error) else result.kind == "lock_busy"
+        return {"exists": False, "retryable": retryable, "err": failure_message(result, "UUID status lookup"), "obj": None}
     try:
-        obj = json.loads((out or "").strip() or "{}")
-        if obj.get("uuid"):
+        obj = json.loads((result.stdout or "").strip())
+        if isinstance(obj, dict) and obj.get("uuid"):
             return {"exists": True, "retryable": False, "err": "", "obj": obj}
         return {"exists": False, "retryable": False, "err": "not found", "obj": None}
     except Exception:
-        if tolerate_noisy_stdout and uuid_str in (out or ""):
+        if tolerate_noisy_stdout and uuid_str in (result.stdout or ""):
             return {"exists": True, "retryable": False, "err": "", "obj": {"uuid": uuid_str}}
         return {"exists": False, "retryable": False, "err": "parse error", "obj": None}
 

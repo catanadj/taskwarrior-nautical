@@ -636,29 +636,40 @@ def _preload_export_uuids(entries: list[dict]) -> None:
                 cmd.append("or")
             cmd.extend(clause)
         cmd.append("export")
-        ok, out, err = _run_task(
-            cmd,
-            timeout=_TASK_TIMEOUT_EXPORT,
-            retries=_TASK_RETRIES_EXPORT,
-            retry_delay=_TASK_RETRY_DELAY,
-        )
-        if not ok:
-            if _is_lock_error(err):
-                continue
-            continue
         rows: list[dict[str, Any]] = []
         parsed_ok = False
-        allow_negative_cache = (out or "").lstrip().startswith("[")
-        parser = getattr(hook_support, "parse_export_array", None) if hook_support is not None else None
-        if callable(parser):
-            try:
-                parsed_rows = parser(out, diag=_diag) or []
-                if isinstance(parsed_rows, list):
-                    rows = [row for row in parsed_rows if isinstance(row, dict)]
-                    parsed_ok = True
-            except Exception:
-                rows = []
-        if not parsed_ok:
+        allow_negative_cache = False
+        if hook_support is not None:
+            result = hook_support.run_task_result(
+                run_task=_run_task,
+                cmd=cmd,
+                timeout=_TASK_TIMEOUT_EXPORT,
+                retries=_TASK_RETRIES_EXPORT,
+                retry_delay=_TASK_RETRY_DELAY,
+            )
+            parsed_ok, rows, _error = hook_support.parse_export_array_result(result, diag=_diag)
+            allow_negative_cache = parsed_ok
+            if not parsed_ok and result.ok:
+                # Keep compatibility with Taskwarrior builds that ignore
+                # rc.json.array=1 for a single-object export. This is valid
+                # JSON, but never enables negative caching.
+                try:
+                    single = json.loads((result.stdout or "").strip())
+                    if isinstance(single, dict) and single.get("uuid"):
+                        rows = [single]
+                        parsed_ok = True
+                except Exception:
+                    pass
+        else:
+            ok, out, err = _run_task(
+                cmd,
+                timeout=_TASK_TIMEOUT_EXPORT,
+                retries=_TASK_RETRIES_EXPORT,
+                retry_delay=_TASK_RETRY_DELAY,
+            )
+            if not ok:
+                continue
+            allow_negative_cache = (out or "").lstrip().startswith("[")
             try:
                 parsed = json.loads((out or "").strip() or "[]")
                 if isinstance(parsed, list):

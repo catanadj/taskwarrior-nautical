@@ -1217,6 +1217,18 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
         args.append("export")
     if args is None:
         return []
+    if hook_support is not None:
+        result = hook_support.run_task_result(
+            run_task=_run_task,
+            cmd=args,
+            timeout=3.0,
+            retries=2,
+        )
+        parsed_ok, rows, error = hook_support.parse_export_array_result(result, diag=_diag)
+        if not parsed_ok:
+            _diag(f"tw_export_chain failed (chainID={chain_id}): {error}")
+            return []
+        return rows
     ok, out, err = _run_task(args, timeout=3.0, retries=2)
     if not ok:
         _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")

@@ -170,7 +170,7 @@ class RecurrenceEvaluator:
     @property
     def omit_dnf(self) -> list:
         """Lazily parse the omit expression with omit-specific validation."""
-        if not self.spec.omit:
+        if not self.spec.omit and not self.spec.omit_file:
             return []
         return copy.deepcopy(self._get_cached("omit_dnf", self._parse_omit))
 

@@ -19594,6 +19594,35 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         raise AssertionError("evaluator silently invented a chain identity")
 
 
+def test_recurrence_evaluator_loads_omit_file_without_text_rule():
+    """Evaluator omission state must include an omit_file-only recurrence."""
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+    with tempfile.TemporaryDirectory() as td:
+        omit_path = Path(td) / "holidays.csv"
+        omit_path.write_text("date,description\n2025-01-06,Holiday\n", encoding="utf-8")
+        previous_dir = getattr(core, "OMIT_FILE_DIR", "")
+        proxy = getattr(core, "_PKG_PROXY", core)
+        previous_proxy_dir = getattr(proxy, "OMIT_FILE_DIR", "")
+        original_core_module = RecurrenceEvaluator._core_module
+        core.OMIT_FILE_DIR = td
+        proxy.OMIT_FILE_DIR = td
+        RecurrenceEvaluator._core_module = staticmethod(lambda: core)
+        try:
+            evaluator = RecurrenceEvaluator.from_task(
+                {
+                    "chainID": "omit-file-only",
+                    "anchor": "w:mon",
+                    "omit_file": "holidays.csv",
+                }
+            )
+            expect(evaluator.omit_dnf, "omit_file-only evaluator produced no omission state")
+        finally:
+            RecurrenceEvaluator._core_module = staticmethod(original_core_module)
+            core.OMIT_FILE_DIR = previous_dir
+            proxy.OMIT_FILE_DIR = previous_proxy_dir
+
+
 def test_modify_timeline_uses_explicit_recurrence_identity():
     """Timeline seed selection should honor chainID and require fallback opt-in."""
     from nautical_core.modify_timeline import _timeline_seed_base
@@ -29865,6 +29894,7 @@ TESTS.extend([
     test_random_time_window_flows_through_anchor_parser_and_resolver,
     test_recurrence_spec_normalizes_task_fields_and_context,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
+    test_recurrence_evaluator_loads_omit_file_without_text_rule,
     test_recurrence_evaluator_shadow_parity_time_matrix,
     test_recurrence_evaluator_shadow_parity_dst_and_business_calendar,
     test_modify_timeline_uses_explicit_recurrence_identity,

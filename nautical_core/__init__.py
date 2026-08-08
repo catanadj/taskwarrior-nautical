@@ -822,141 +822,7 @@ _Q_START_DAY_REV = {v: k for k, v in _Q_START_DAY.items()}
 _Q_END_DAY_REV = {v: k for k, v in _Q_END_DAY.items()}
 
 
-def _yearly_tokens(term):
-    return _quarter_helpers.yearly_tokens(term, split_csv_tokens=_split_csv_tokens)
-
-
-def _monthly_tokens(term):
-    return _quarter_helpers.monthly_tokens(term, split_csv_tokens=_split_csv_tokens)
-
-
-# def _extract_single_nth_weekday(term):
-#     """Return (k, wd_str) if exactly one monthly nth-weekday token is present; else None."""
-#     from itertools import chain
-
-#     toks = _monthly_tokens(term)
-#     if len(toks) != 1:
-#         return None
-#     m = _nth_weekday_re.match(toks[0]) 
-#     if not m:
-#         return None
-#     n_raw, wd = m.group(1), m.group(2)
-#     if n_raw == "last":
-#         k = -1
-#     else:
-#         k = int(re.sub(r"(st|nd|rd|th)$", "", n_raw))
-#         if k == 0 or abs(k) > 5:
-#             return None
-#     return k, wd  # wd is 'mon'..'sun'
-
-
-def _quarters_from_first_month_tokens(y_toks):
-    return _quarter_helpers.quarters_from_tokens(y_toks, token_rev=_Q_FIRST_MONTH_TOKEN_REV)
-
-
-def _quarters_from_start_day_tokens(y_toks):
-    return _quarter_helpers.quarters_from_tokens(y_toks, token_rev=_Q_START_DAY_REV)
-
-
-def _quarters_from_end_day_tokens(y_toks):
-    return _quarter_helpers.quarters_from_tokens(y_toks, token_rev=_Q_END_DAY_REV)
-
-
-def _format_quarter_set(qs):
-    return _quarter_helpers.format_quarter_set(qs)
-
-
-def _rewrite_quarter_spec_mode(spec: str, mode: str, meta_out: dict | None = None) -> str:
-    return _quarter_rewrite.rewrite_quarter_spec_mode(
-        spec,
-        mode,
-        meta_out=meta_out,
-        split_csv_lower=_split_csv_lower,
-        tok_range=_tok_range,
-        static_month_last_day=_static_month_last_day,
-        quarter_pos_month=_QUARTER_POS_MONTH,
-        re_mod=re,
-    )
-
-
-
 _MONTH_SELECTOR_MAX_LEN = _quarter_selector.MONTH_SELECTOR_MAX_LEN
-
-
-def _quarter_atom_spec(atom: dict) -> str:
-    return _quarter_selector.quarter_atom_spec(atom)
-
-
-def _has_quarter_tokens(spec: str) -> bool:
-    return _quarter_selector.has_quarter_tokens(spec, split_csv_lower=_split_csv_lower, re_mod=re)
-
-
-def _has_plain_quarter_tokens(spec: str) -> bool:
-    return _quarter_selector.has_plain_quarter_tokens(spec, split_csv_lower=_split_csv_lower, re_mod=re)
-
-
-def _is_negative_ascii_int(tok: str) -> bool:
-    return _quarter_selector.is_negative_ascii_int(tok)
-
-
-def _is_start_month_selector(tok: str) -> bool:
-    return _quarter_selector.is_start_month_selector(
-        tok,
-        parse_error_cls=ParseError,
-        safe_match=_safe_match,
-        nth_weekday_re=_nth_weekday_re,
-    )
-
-
-def _is_end_month_selector(tok: str) -> bool:
-    return _quarter_selector.is_end_month_selector(
-        tok,
-        parse_error_cls=ParseError,
-        safe_match=_safe_match,
-        nth_weekday_re=_nth_weekday_re,
-        bd_re=_bd_re,
-    )
-
-
-def _quarter_month_selector_mode(m_atoms: list[dict]) -> str:
-    return _quarter_selector.quarter_month_selector_mode(
-        m_atoms,
-        parse_error_cls=ParseError,
-        expand_monthly_aliases=_expand_monthly_aliases,
-        split_csv_tokens=_split_csv_tokens,
-        is_start_month_selector=_is_start_month_selector,
-        is_end_month_selector=_is_end_month_selector,
-    )
-
-
-def _term_quarter_rewrite_mode(y_atoms: list[dict], m_atoms: list[dict]) -> str:
-    return _quarter_selector.term_quarter_rewrite_mode(
-        y_atoms,
-        m_atoms,
-        quarter_atom_spec=_quarter_atom_spec,
-        has_plain_quarter_tokens=_has_plain_quarter_tokens,
-        quarter_month_selector_mode=_quarter_month_selector_mode,
-    )
-
-
-def _rewrite_quarter_year_atoms(y_atoms: list[dict], mode: str) -> None:
-    _quarter_rewrite.rewrite_quarter_year_atoms(
-        y_atoms,
-        mode,
-        quarter_atom_spec=_quarter_atom_spec,
-        has_quarter_tokens=_has_quarter_tokens,
-        rewrite_quarter_spec_mode=_rewrite_quarter_spec_mode,
-    )
-
-
-def _rewrite_quarters_in_context(dnf):
-    return _quarter_rewrite.rewrite_quarters_in_context(
-        dnf,
-        has_quarter_tokens=_has_quarter_tokens,
-        quarter_atom_spec=_quarter_atom_spec,
-        term_quarter_rewrite_mode=_term_quarter_rewrite_mode,
-        rewrite_quarter_year_atoms=_rewrite_quarter_year_atoms,
-    )
 
 
 def _rewrite_year_month_aliases_in_dnf(dnf: list[list[dict]]) -> list[list[dict]]:
@@ -1549,6 +1415,29 @@ def _rewrite_weekly_multi_time_atoms(s: str) -> str:
         re_mod=re,
     )
 
+
+# Quarter rewrite entry points are bound before parser construction because
+# the parser's DNF pipeline applies quarter normalization.
+_quarter_api = _import_sibling("quarter_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+_yearly_tokens = _quarter_api._yearly_tokens
+_monthly_tokens = _quarter_api._monthly_tokens
+_quarters_from_first_month_tokens = _quarter_api._quarters_from_first_month_tokens
+_quarters_from_start_day_tokens = _quarter_api._quarters_from_start_day_tokens
+_quarters_from_end_day_tokens = _quarter_api._quarters_from_end_day_tokens
+_format_quarter_set = _quarter_api._format_quarter_set
+_rewrite_quarter_spec_mode = _quarter_api._rewrite_quarter_spec_mode
+_quarter_atom_spec = _quarter_api._quarter_atom_spec
+_has_quarter_tokens = _quarter_api._has_quarter_tokens
+_has_plain_quarter_tokens = _quarter_api._has_plain_quarter_tokens
+_is_start_month_selector = _quarter_api._is_start_month_selector
+_is_end_month_selector = _quarter_api._is_end_month_selector
+_quarter_month_selector_mode = _quarter_api._quarter_month_selector_mode
+_term_quarter_rewrite_mode = _quarter_api._term_quarter_rewrite_mode
+_rewrite_quarter_year_atoms = _quarter_api._rewrite_quarter_year_atoms
+_rewrite_quarters_in_context = _quarter_api._rewrite_quarters_in_context
 
 # ACF entry points are bound before parser construction because parser
 # validation and canonical-form generation share these compatibility names.

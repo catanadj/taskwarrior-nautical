@@ -942,60 +942,6 @@ def _cache_atomic_replace(src: str, dst: str) -> None:
     _cache_payload.cache_atomic_replace(src, dst, os_mod=os)
 
 
-def _quarantine_cache(key: str, path: str) -> bool:
-    """Move a broken cache entry aside so future reads become clean misses."""
-    try:
-        with _cache_lock(key) as locked:
-            if not locked or not os.path.exists(path):
-                return False
-            target = f"{path}.bad.{os.getpid()}.{time.time_ns()}"
-            os.replace(path, target)
-            _CACHE_LOAD_MEM.pop(key, None)
-            return True
-    except Exception:
-        return False
-
-
-def _cache_load_impl(key: str) -> dict | None:
-    return _cache_payload.cache_load(
-        key,
-        enable_anchor_cache=ENABLE_ANCHOR_CACHE,
-        cache_path=_cache_path,
-        anchor_cache_ttl=ANCHOR_CACHE_TTL,
-        time_mod=time,
-        cache_load_mem=_CACHE_LOAD_MEM,
-        cache_load_mem_ttl=_CACHE_LOAD_MEM_TTL,
-        clone_cache_payload=_clone_cache_payload,
-        normalize_dnf_cached=_normalize_dnf_cached,
-        cache_payload_shape_ok=_cache_payload_shape_ok,
-        cache_load_mem_max=_CACHE_LOAD_MEM_MAX,
-        diag=diag,
-        quarantine_cache=_quarantine_cache,
-        os_mod=os,
-        json_mod=json,
-        zlib_mod=zlib,
-        base64_mod=base64,
-    )
-
-def _cache_save_impl(key: str, obj: dict) -> bool:
-    return _cache_payload.cache_save(
-        key,
-        obj,
-        enable_anchor_cache=ENABLE_ANCHOR_CACHE,
-        json_mod=json,
-        zlib_mod=zlib,
-        base64_mod=base64,
-        cache_path=_cache_path,
-        cache_dir=_cache_dir,
-        cache_lock=_cache_lock,
-        diag=diag,
-        os_mod=os,
-        tempfile_mod=tempfile,
-        cache_atomic_replace=_cache_atomic_replace,
-        cache_load_mem=_CACHE_LOAD_MEM,
-    )
-
-
 def _cache_gc_impl(
     *,
     max_entries: int = 512,
@@ -3291,6 +3237,9 @@ _cache_dir = _cache_api._cache_dir
 _cache_key = _cache_api._cache_key
 _cache_path = _cache_api._cache_path
 _cache_lock_path = _cache_api._cache_lock_path
+_quarantine_cache = _cache_api._quarantine_cache
+_cache_load_impl = _cache_api._cache_load_impl
+_cache_save_impl = _cache_api._cache_save_impl
 cache_load = _cache_api.cache_load
 cache_save = _cache_api.cache_save
 cache_gc = _cache_api.cache_gc

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+from .modify_models import CompletionSnapshotResult
+
 
 def export_completion_chain_snapshot(
     chain_id: str,
@@ -12,9 +14,9 @@ def export_completion_chain_snapshot(
     parse_export_array,
     diag=None,
     timeout: float = 3.0,
-) -> tuple[bool, list[dict]]:
+) -> CompletionSnapshotResult:
     if not chain_id:
-        return False, []
+        return CompletionSnapshotResult(False, [], "missing chain ID")
     clauses = [[f"chainID:{chain_id}", f"link:{link}"] for link in (links or [])]
     if not clauses:
         clauses = [[f"chainID:{chain_id}"]]
@@ -33,11 +35,11 @@ def export_completion_chain_snapshot(
     if not ok:
         if callable(diag):
             diag(f"completion chain snapshot failed: {(err or '').strip()}")
-        return False, []
+        return CompletionSnapshotResult(False, [], (err or "completion chain snapshot failed").strip())
     if not (out or "").lstrip().startswith("["):
         if callable(diag):
             diag("completion chain snapshot returned malformed JSON")
-        return False, []
+        return CompletionSnapshotResult(False, [], "completion chain snapshot returned malformed JSON")
     try:
         # Validate the wire payload before invoking the compatibility parser.
         # The older parser intentionally returns [] on errors, which must not
@@ -51,8 +53,8 @@ def export_completion_chain_snapshot(
     except Exception as exc:
         if callable(diag):
             diag(f"completion chain snapshot parse failed: {exc}")
-        return False, []
-    return True, rows
+        return CompletionSnapshotResult(False, [], str(exc))
+    return CompletionSnapshotResult(True, rows)
 
 
 def task_text(args, *, run_task, task_cmd_prefix, env=None, timeout: float = 3.0, retries: int = 2, diag=None) -> str:

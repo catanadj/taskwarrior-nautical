@@ -16569,6 +16569,11 @@ def test_on_modify_completion_snapshot_malformed_json_is_unavailable():
         snapshot = mod._completion_chain_snapshot("malformed01", 1, 2)
         expect(snapshot.is_unavailable, f"malformed snapshot was accepted: {snapshot!r}")
         expect(not snapshot.loaded and snapshot.rows == [], f"malformed snapshot changed lookup state: {snapshot!r}")
+        panels = []
+        mod._panel = lambda title, rows, **_kwargs: panels.append((title, rows))
+        mod._print_task = lambda _task: None
+        allowed = mod._completion_existing_next_or_fail({}, 2, snapshot)
+        expect(not allowed and panels and "unavailable" in panels[0][0].lower(), "unavailable snapshot did not stop spawn")
     finally:
         mod._run_task, mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
 
@@ -27098,6 +27103,7 @@ def test_on_modify_completion_snapshot_reuses_full_chain_read():
     mod._reset_modify_runtime_state()
     saved_analytics = mod._SHOW_ANALYTICS
     mod._SHOW_ANALYTICS = True
+    modify_models = mod._module("modify_models")
     calls = {"count": 0}
     original_export_snapshot = mod._module("modify_queries").export_completion_chain_snapshot
     original_run_task = mod._run_task
@@ -27106,7 +27112,7 @@ def test_on_modify_completion_snapshot_reuses_full_chain_read():
 
         def fake_snapshot(*_args, **_kwargs):
             calls["count"] += 1
-            return True, list(rows)
+            return modify_models.CompletionSnapshotResult(True, list(rows))
 
         def unexpected_run_task(*_args, **_kwargs):
             raise AssertionError("full chain reuse should not launch another Taskwarrior command")

@@ -23,6 +23,13 @@ class CompletionChainSnapshot:
 
 
 @dataclass(slots=True)
+class CompletionSnapshotResult:
+    loaded: bool
+    rows: list[dict[str, Any]]
+    error: str = ""
+
+
+@dataclass(slots=True)
 class CompletionPreflightContext:
     parent_short: str
     base_no: int

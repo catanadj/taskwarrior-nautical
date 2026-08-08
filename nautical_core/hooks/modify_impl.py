@@ -420,6 +420,17 @@ def _read_query_set(kind: str, key, value) -> None:
         pass
 
 
+def _read_query_delete(kind: str, key) -> None:
+    try:
+        state = _modify_runtime_state()
+        bucket = state.query_ctx.get("read_query")
+        if isinstance(bucket, dict):
+            bucket.pop((str(kind), key), None)
+            state.diag_stats["read_query_cache_entries"] = len(bucket)
+    except Exception:
+        pass
+
+
 def _invalidate_read_query_cache() -> None:
     """Invalidate all request-scoped reads after a Taskwarrior mutation."""
     try:
@@ -6331,6 +6342,7 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
     if cached_snapshot is not _READ_QUERY_MISSING:
         _record_chain_snapshot_stat("chain_snapshot_hits")
         if not isinstance(cached_snapshot, list) or any(not isinstance(row, dict) for row in cached_snapshot):
+            _read_query_delete("chain_snapshot", snapshot_key)
             return modify_models.CompletionChainSnapshot(
                 mode=mode,
                 rows=[],
@@ -6346,7 +6358,7 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
             chain_id=str(chain_id),
         )
     _record_chain_snapshot_stat("chain_snapshot_misses")
-    loaded, rows = modify_queries.export_completion_chain_snapshot(
+    snapshot_result = modify_queries.export_completion_chain_snapshot(
         chain_id,
         links,
         run_task=_run_task,
@@ -6355,6 +6367,8 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
         diag=_diag,
         timeout=_chain_export_timeout(chain_id),
     )
+    loaded = snapshot_result.loaded
+    rows = snapshot_result.rows
     if loaded:
         _read_query_set("chain_snapshot", snapshot_key, rows)
         if links is None:
@@ -6370,7 +6384,7 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
         rows=rows,
         loaded=loaded,
         chain_id=str(chain_id),
-        error="completion chain snapshot unavailable" if not loaded else "",
+        error=snapshot_result.error if not loaded else "",
     )
 
 

@@ -5735,6 +5735,30 @@ def test_queue_state_migration_returns_typed_failure_details():
         expect("PermissionError" in issues[0].error, f"migration issue lost exception type: {issues}")
 
 
+def test_queue_state_migration_moves_database_sidecars_under_one_lock():
+    """Legacy queue files should converge as one serialized migration unit."""
+    from nautical_core import queue_store
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        legacy = root / ".nautical_queue.db"
+        legacy.write_text("db", encoding="utf-8")
+        Path(str(legacy) + "-wal").write_text("wal", encoding="utf-8")
+        Path(str(legacy) + "-shm").write_text("shm", encoding="utf-8")
+
+        issues = queue_store.migrate_nautical_state(tw_data_dir=root)
+        current = queue_store.queue_db_path(root)
+        expect(not issues, f"unexpected migration issues: {issues}")
+        expect(current.read_text(encoding="utf-8") == "db", "database was not migrated")
+        expect(Path(str(current) + "-wal").read_text(encoding="utf-8") == "wal", "WAL was not migrated")
+        expect(Path(str(current) + "-shm").read_text(encoding="utf-8") == "shm", "SHM was not migrated")
+        try:
+            with queue_store.state_migration_lock(root, timeout=0.1):
+                pass
+        except Exception as exc:
+            raise AssertionError(f"migration lock was not released: {exc}") from exc
+
+
 def test_load_benchmark_installs_complete_hook_runtime():
     """The end-to-end benchmark must install on-exit and the Nautical UDAs."""
     load_test = _load_hook_module(
@@ -29847,6 +29871,7 @@ TESTS = [
     test_load_benchmark_queue_and_lineage_verification,
     test_hook_runtime_retains_module_import_failure_details,
     test_queue_state_migration_returns_typed_failure_details,
+    test_queue_state_migration_moves_database_sidecars_under_one_lock,
     test_deploy_sanity_script_reports_ok,
     test_hook_replay_harness_reports_ok,
     test_mixed_recurrence_loop_harness_reports_ok,

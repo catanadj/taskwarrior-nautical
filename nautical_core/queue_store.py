@@ -4,10 +4,15 @@ import json
 import os
 import sqlite3
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows does not provide POSIX flock.
+    fcntl = None
 
 from nautical_core.queue_models import (
     QueueEntriesBatch,
@@ -81,6 +86,65 @@ def dead_letter_lock_path(tw_data_dir: Path) -> Path:
     return nautical_lock_dir_path(tw_data_dir) / ".nautical_dead_letter.lock"
 
 
+def state_migration_lock_path(tw_data_dir: Path) -> Path:
+    return nautical_lock_dir_path(tw_data_dir) / ".nautical_state_migration.lock"
+
+
+@contextmanager
+def state_migration_lock(
+    tw_data_dir: Path,
+    *,
+    timeout: float = 10.0,
+    poll_interval: float = 0.05,
+):
+    """Serialize legacy state moves across independent hook processes."""
+    lock_path = state_migration_lock_path(tw_data_dir)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    handle = None
+    marker_fd = None
+    try:
+        if fcntl is not None:
+            handle = lock_path.open("a+", encoding="utf-8")
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"state migration lock busy: {lock_path}")
+                    time.sleep(max(0.001, poll_interval))
+            yield
+        else:
+            # Atomic creation is the portable fallback when advisory locking
+            # is unavailable. The marker is removed only by its owner.
+            while True:
+                try:
+                    marker_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    break
+                except FileExistsError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"state migration lock busy: {lock_path}")
+                    time.sleep(max(0.001, poll_interval))
+            yield
+    finally:
+        if handle is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            handle.close()
+        if marker_fd is not None:
+            try:
+                os.close(marker_fd)
+            except Exception:
+                pass
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def maybe_migrate_state_file(current: Path, legacy: Path) -> StateMigrationIssue | None:
     try:
         if current.exists() or not legacy.exists():
@@ -126,10 +190,20 @@ def migrate_nautical_state(
         (dead_letter_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_dead_letter.jsonl")),
     ]
     file_pairs.extend(extra_file_pairs)
-    return migrate_legacy_state(
-        file_pairs=file_pairs,
-        db_sidecars=((queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),),
-    )
+    try:
+        with state_migration_lock(tw_data_dir):
+            return migrate_legacy_state(
+                file_pairs=file_pairs,
+                db_sidecars=((queue_db_path(tw_data_dir), legacy_state_path(tw_data_dir, ".nautical_queue.db")),),
+            )
+    except Exception as exc:
+        return [
+            StateMigrationIssue(
+                str(nautical_state_dir_path(tw_data_dir)),
+                str(tw_data_dir),
+                f"{type(exc).__name__}: {exc}",
+            )
+        ]
 
 
 def fsync_dir(path: Path) -> None:

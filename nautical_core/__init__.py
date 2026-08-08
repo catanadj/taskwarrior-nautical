@@ -1787,109 +1787,6 @@ def _moon_phase_matches_date(phase: str, day: date) -> bool:
     )
 
 
-def business_calendar_definitions():
-    return _business_calendar_config.parse_business_calendar_definitions(
-        BUSINESS_CALENDAR_CONFIG
-    )
-
-
-def _validate_business_calendar_omit_expr(expr: str):
-    anchor_omit = _import_sibling("anchor_omit")
-    return anchor_omit.validate_omit_expr_strict(
-        expr,
-        validate_anchor_expr_cached=validate_anchor_expr_strict,
-        resolve_omit_presets=resolve_omit_presets,
-    )
-
-
-def _business_calendar_expression_matches_date(dnf, value: date, name: str) -> bool:
-    seed_base = f"business-calendar:{name}"
-    return any(
-        all(
-            atom_matches_on(
-                atom,
-                value,
-                value,
-                seed_base=seed_base,
-                business_calendar=DEFAULT_BUSINESS_CALENDAR,
-            )
-            for atom in term
-        )
-        for term in dnf
-    )
-
-
-def resolve_business_calendar_config(
-    raw_config,
-    *,
-    anchor_file_dir: str | None = None,
-    omit_file_dir: str | None = None,
-):
-    anchor_files = _import_sibling("anchor_files")
-    omit_files = _import_sibling("omit_files")
-    return _business_calendar_config.resolve_business_calendars(
-        raw_config,
-        anchor_file_dir=ANCHOR_FILE_DIR if anchor_file_dir is None else anchor_file_dir,
-        omit_file_dir=OMIT_FILE_DIR if omit_file_dir is None else omit_file_dir,
-        validate_anchor_expr=validate_anchor_expr_strict,
-        validate_omit_expr=_validate_business_calendar_omit_expr,
-        expression_matches_date=_business_calendar_expression_matches_date,
-        validate_anchor_file_expr=anchor_files.validate_business_calendar_anchor_file,
-        validate_omit_file_expr=omit_files.validate_business_calendar_omit_file,
-        unmatched_anchor_file_patterns=anchor_files.unmatched_anchor_file_patterns,
-        unmatched_omit_file_patterns=omit_files.unmatched_omit_file_patterns,
-        load_anchor_file_dates=anchor_files.load_anchor_file_dates,
-        load_omit_file_dates=omit_files.load_omit_file_dates,
-    )
-
-
-@lru_cache(maxsize=1)
-def configured_business_calendars():
-    return resolve_business_calendar_config(BUSINESS_CALENDAR_CONFIG)
-
-
-def get_configured_business_calendar(name: str):
-    normalized = str(name or "").strip().lower()
-    calendars = configured_business_calendars()
-    try:
-        return calendars[normalized]
-    except KeyError:
-        available = ", ".join(sorted(calendars)) or "none"
-        raise _business_calendar_config.BusinessCalendarConfigError(
-            f"Unknown business calendar {name!r}; configured calendars: {available}."
-        ) from None
-
-
-def business_calendar_for_task(task: dict | None):
-    raw_name = str((task or {}).get("bc") or "").strip()
-    if not raw_name:
-        return DEFAULT_BUSINESS_CALENDAR
-    return get_configured_business_calendar(_unwrap_quotes(raw_name))
-
-
-def normalize_task_business_calendar(task: dict):
-    business_calendar = business_calendar_for_task(task)
-    if str(task.get("bc") or "").strip():
-        task["bc"] = business_calendar.name
-    return business_calendar
-
-
-def business_calendar_fingerprint(business_calendar=None) -> str:
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    return str(
-        getattr(business_calendar, "fingerprint", "")
-        or f"{business_calendar.name}-v1"
-    )
-
-
-def use_business_calendar(business_calendar):
-    return _business_calendar.use_business_calendar(business_calendar)
-
-
-def use_task_business_calendar(task: dict):
-    return use_business_calendar(normalize_task_business_calendar(task))
-
-
 _recurrence_candidates = _import_sibling("recurrence_candidates").for_core(
     sys.modules[__name__],
     namespace=globals(),
@@ -2062,6 +1959,24 @@ _normalize_anchor_input_to_dnf = _parser_api.normalize_anchor_input_to_dnf
 _assert_dnf_structure_strict = _parser_api.assert_dnf_structure_strict
 _validate_anchor_atom_strict = _parser_api.validate_anchor_atom_strict
 _validate_anchor_dnf_atoms_strict = _parser_api.validate_anchor_dnf_atoms_strict
+
+# Business-calendar configuration is bound after parser APIs are available so
+# calendar rules can reuse the same strict anchor/omit validators.
+_business_calendar_api = _import_sibling("business_calendar_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+business_calendar_definitions = _business_calendar_api.business_calendar_definitions
+_validate_business_calendar_omit_expr = _business_calendar_api._validate_business_calendar_omit_expr
+_business_calendar_expression_matches_date = _business_calendar_api._business_calendar_expression_matches_date
+resolve_business_calendar_config = _business_calendar_api.resolve_business_calendar_config
+configured_business_calendars = _business_calendar_api.configured_business_calendars
+get_configured_business_calendar = _business_calendar_api.get_configured_business_calendar
+business_calendar_for_task = _business_calendar_api.business_calendar_for_task
+normalize_task_business_calendar = _business_calendar_api.normalize_task_business_calendar
+business_calendar_fingerprint = _business_calendar_api.business_calendar_fingerprint
+use_business_calendar = _business_calendar_api.use_business_calendar
+use_task_business_calendar = _business_calendar_api.use_task_business_calendar
 
 # Scheduler entry points are bound to this exact core instance for isolated
 # hook/test loaders while preserving the long-standing facade names.

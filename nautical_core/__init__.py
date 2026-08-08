@@ -2686,25 +2686,6 @@ def _parse_anchor_atom_at(s: str, i: int, n: int):
     )
 
 
-def _parse_anchor_expr_to_dnf_impl(s: str) -> AnchorDNF:
-    s = resolve_anchor_presets(s)
-    return _parser_dnf.parse_anchor_expr_to_dnf(
-        s,
-        normalize_anchor_expr_input=_normalize_anchor_expr_input,
-        raise_on_bad_colon_year_tokens=_raise_on_bad_colon_year_tokens,
-        parse_anchor_atom_at=_parse_anchor_atom_at,
-        parse_atom_mods=_parse_atom_mods,
-        skip_ws_pos=_skip_ws_pos,
-        rewrite_quarters_in_context=_rewrite_quarters_in_context,
-        rewrite_year_month_aliases_in_context=_rewrite_year_month_aliases_in_context,
-        validate_year_tokens_in_dnf=_validate_year_tokens_in_dnf,
-        validate_and_terms_satisfiable=_validate_and_terms_satisfiable,
-        max_anchor_dnf_terms=MAX_ANCHOR_DNF_TERMS,
-        parse_error_cls=ParseError,
-        today=date.today,
-    )
-
-
 @_ttl_lru_cache(maxsize=256)
 def _parse_anchor_expr_to_dnf_cached_obj(s: str, fmt: str) -> AnchorDNF:
     return parse_anchor_expr_to_dnf(s)
@@ -3112,15 +3093,6 @@ def _validate_anchor_dnf_atoms_strict(dnf: AnchorDNF) -> None:
         is_selection_node=_position_selection.is_selection_node,
         validate_selection_node=_position_selection.validate_public_selection_node,
         parse_error_cls=ParseError,
-    )
-
-
-def _validate_anchor_expr_strict_impl(expr) -> AnchorDNF:
-    return _strict_validation.validate_anchor_expr_strict(
-        expr,
-        normalize_anchor_input_to_dnf=_normalize_anchor_input_to_dnf,
-        assert_dnf_structure_strict=_assert_dnf_structure_strict,
-        validate_anchor_dnf_atoms_strict=_validate_anchor_dnf_atoms_strict,
     )
 
 

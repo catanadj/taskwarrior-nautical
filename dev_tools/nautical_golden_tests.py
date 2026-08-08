@@ -19639,6 +19639,33 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     else:
         raise AssertionError("invalid fallback occurrence time was silently accepted")
 
+    astronomy = core._import_sibling("astronomy")
+    original_resolve_event = astronomy.resolve_event
+    astronomy.resolve_event = lambda _event, day, config=None: datetime(
+        day.year, day.month, day.day, 6, 30, tzinfo=timezone.utc
+    )
+    try:
+        astronomical_time = RecurrenceEvaluator.from_task(
+            {
+                "chainID": "evaluator-astronomy-time",
+                "anchor": "w:mon@t=sunrise",
+            },
+            timezone=timezone.utc,
+            astronomy_config={"default_location": "test"},
+        )
+        next_event = astronomical_time.next_after(
+            datetime(2025, 1, 6, 7, 0, tzinfo=timezone.utc)
+        )
+        expect(
+            next_event is not None
+            and next_event.local_datetime is not None
+            and next_event.local_datetime.date() == date(2025, 1, 13)
+            and (next_event.local_datetime.hour, next_event.local_datetime.minute) == (6, 30),
+            f"evaluator scheduler did not preserve astronomical time context: {next_event!r}",
+        )
+    finally:
+        astronomy.resolve_event = original_resolve_event
+
     invalid_mode = RecurrenceEvaluator.from_task({"chainID": "invalid-mode", "anchor": "w:mon", "anchor_mode": "bad"})
     try:
         _ = invalid_mode.anchor_mode

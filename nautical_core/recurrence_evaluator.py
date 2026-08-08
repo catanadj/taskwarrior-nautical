@@ -650,6 +650,22 @@ class RecurrenceEvaluator:
     ):
         """Resolve the shared date/time scheduler for evaluator consumers."""
         from .add_anchor_compute import anchor_next_occurrence_after_local_dt
+        from .anchor_inclusion import _norm_t_mod
+        from .time_slots import resolve_time_slots
+
+        core = self._core_module()
+
+        def resolve_slots(value, target_date):
+            """Resolve slots with the evaluator's astronomy and timezone context."""
+            config = self.context.astronomy_config
+            if config is None:
+                config = getattr(core, "ASTRONOMY_CONFIG", {})
+            return resolve_time_slots(
+                value,
+                target_date,
+                config=config,
+                to_local=self.to_local,
+            )
 
         return anchor_next_occurrence_after_local_dt(
             dnf,
@@ -659,7 +675,9 @@ class RecurrenceEvaluator:
             seed_base=seed_base,
             omit_dnf=omit_dnf,
             default_seed_date=default_seed_date,
-            core=self._core_module(),
+            core=core,
+            norm_t_mod=_norm_t_mod,
+            resolve_time_slots=resolve_slots,
         )
 
     @staticmethod

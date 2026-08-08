@@ -16480,16 +16480,18 @@ def test_on_modify_anchor_chainmax_forecast_is_bounded():
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    original_next = mod._next_occurrence_after_local_dt
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+    original_next = RecurrenceEvaluator._default_next_occurrence_after_local_dt
     original_diag = mod._diag
     diagnostics = []
     calls = []
 
-    def next_daily(_dnf, value, **_kwargs):
+    def next_daily(_self, _dnf, value, **_kwargs):
         calls.append(value)
         return value + timedelta(days=1)
 
-    mod._next_occurrence_after_local_dt = next_daily
+    RecurrenceEvaluator._default_next_occurrence_after_local_dt = next_daily
     mod._diag = diagnostics.append
     try:
         final_due = mod._estimate_anchor_final_by_max(
@@ -16498,7 +16500,7 @@ def test_on_modify_anchor_chainmax_forecast_is_bounded():
             None,
         )
     finally:
-        mod._next_occurrence_after_local_dt = original_next
+        RecurrenceEvaluator._default_next_occurrence_after_local_dt = original_next
         mod._diag = original_diag
     expect(final_due is None, "unbounded anchor forecast returned a fabricated final date")
     expect(len(calls) == mod._MAX_ITERATIONS, f"anchor forecast exceeded its iteration budget: {len(calls)}")
@@ -18269,12 +18271,14 @@ def test_modify_until_projection_reuses_anchor_file_provider():
 
 def test_modify_until_projection_fails_closed_at_iteration_limit():
     """A long until horizon must not return a silently truncated cap."""
-    original_next = _hook._next_occurrence_after_local_dt
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
-    def next_daily(_dnf, value, **_kwargs):
+    original_next = RecurrenceEvaluator._default_next_occurrence_after_local_dt
+
+    def next_daily(_self, _dnf, value, **_kwargs):
         return value + timedelta(days=1)
 
-    _hook._next_occurrence_after_local_dt = next_daily
+    RecurrenceEvaluator._default_next_occurrence_after_local_dt = next_daily
     try:
         task = {
             "chainID": "projection-limit",
@@ -18289,7 +18293,7 @@ def test_modify_until_projection_fails_closed_at_iteration_limit():
         else:
             expect(False, "until projection silently truncated at its iteration limit")
     finally:
-        _hook._next_occurrence_after_local_dt = original_next
+        RecurrenceEvaluator._default_next_occurrence_after_local_dt = original_next
 
 
 def test_anchor_file_provider_rejects_incomparable_datetimes():

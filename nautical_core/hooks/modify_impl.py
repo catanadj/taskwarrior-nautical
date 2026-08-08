@@ -3718,6 +3718,7 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
 
     fallback_hhmm = _anchor_file_fallback_hhmm(task, nxt_local)
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
+    scheduler = _recurrence_evaluator_for_task(task)._default_next_occurrence_after_local_dt
     anchor_file = (task.get("anchor_file") or "").strip()
     anchor_file_provider = None
     if anchor_file:
@@ -3750,7 +3751,7 @@ def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
             )
             fut_local = future[0] if future else None
         else:
-            fut_local = _next_occurrence_after_local_dt(
+            fut_local = scheduler(
                 dnf,
                 fut_local,
                 default_seed_date=default_seed,
@@ -5047,6 +5048,7 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
     default_seed = _to_local_cached(due0 or next_due_utc).date()
     fallback_hhmm = _anchor_file_fallback_hhmm(task, nxt_local)
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
+    scheduler = _recurrence_evaluator_for_task(task)._default_next_occurrence_after_local_dt
     anchor_file = (task.get("anchor_file") or "").strip()
     anchor_file_provider = None
     if anchor_file:
@@ -5079,7 +5081,7 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
             )
             cursor = future[0] if future else None
         else:
-            cursor = _next_occurrence_after_local_dt(
+            cursor = scheduler(
                 dnf,
                 cursor,
                 default_seed_date=default_seed,

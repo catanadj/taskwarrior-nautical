@@ -19840,8 +19840,8 @@ def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
     mod._reset_modify_runtime_state()
     try:
         first = mod._recurrence_evaluator_for_task(task)
-        second = mod._recurrence_evaluator_for_task(task)
-        expect(first is second, "task-scoped evaluator was rebuilt within one hook session")
+        second = mod._recurrence_evaluator_for_task(dict(task))
+        expect(first is second, "equivalent task copies rebuilt the evaluator within one hook session")
         binding_a = first._get_cached("scheduler_binding", first._build_scheduler_binding)
         binding_b = first._get_cached("scheduler_binding", first._build_scheduler_binding)
         expect(binding_a is binding_b, "scheduler binding was rebuilt within one evaluator session")

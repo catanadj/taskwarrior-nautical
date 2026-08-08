@@ -3582,9 +3582,26 @@ def _anchor_parent_local_times(parent: dict):
 def _recurrence_evaluator_for_task(task: dict):
     """Build the task-scoped evaluator used by completion projections."""
     state = _modify_runtime_state()
-    cache_key = id(task)
+    identity = str(task.get("uuid") or task.get("chainID") or "").strip()
+    if identity:
+        cache_key = (
+            "task",
+            identity,
+            str(task.get("modified") or ""),
+            str(task.get("anchor") or ""),
+            str(task.get("anchor_file") or ""),
+            str(task.get("omit") or ""),
+            str(task.get("omit_file") or ""),
+            str(task.get("cp") or ""),
+            str(task.get("anchor_mode") or ""),
+            str(task.get("chainMax") or ""),
+            str(task.get("chainUntil") or ""),
+            str(task.get("bc") or ""),
+        )
+    else:
+        cache_key = ("object", id(task))
     cached = state.evaluator_sessions.get(cache_key)
-    if cached is not None and cached[0] is task:
+    if cached is not None:
         _diag_count("evaluator_session_hits")
         return cached[1]
     _diag_count("evaluator_session_misses")

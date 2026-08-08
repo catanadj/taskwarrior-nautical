@@ -743,133 +743,6 @@ def _acf_spec_to_string(typ: str, spec) -> str:
 
 
 # ==============================================================================
-# SECTION: Anchor cache & locking
-# ==============================================================================
-# --- Cache directory discovery & IO ---
-_CACHE_DIR = None
-
-@contextmanager
-def _safe_lock_sleep_once(sleep_base: float, jitter: float) -> None:
-    _cache_locking.safe_lock_sleep_once(
-        sleep_base,
-        jitter,
-        time_mod=time,
-        random_mod=random,
-    )
-
-
-def _safe_lock_ensure_parent(path_str: str, mkdir: bool) -> None:
-    _cache_locking.safe_lock_ensure_parent(path_str, mkdir, os_mod=os)
-
-
-def _safe_lock_age(path_str: str) -> float | None:
-    return _cache_locking.safe_lock_age(path_str, time_mod=time, os_mod=os)
-
-
-def _safe_lock_stale_pid(path_str: str, stale_after: float | None) -> bool:
-    return _cache_locking.safe_lock_stale_pid(
-        path_str,
-        stale_after,
-        time_mod=time,
-        os_mod=os,
-    )
-
-
-@contextmanager
-def _safe_lock_fcntl_context(
-    path_str: str,
-    *,
-    tries: int,
-    sleep_base: float,
-    jitter: float,
-    mode: int,
-    mkdir: bool,
-):
-    with _cache_locking.safe_lock_fcntl_context(
-        path_str,
-        tries=tries,
-        sleep_base=sleep_base,
-        jitter=jitter,
-        mode=mode,
-        mkdir=mkdir,
-        safe_lock_ensure_parent=_safe_lock_ensure_parent,
-        safe_lock_sleep_once=_safe_lock_sleep_once,
-        fcntl_mod=fcntl,
-        os_mod=os,
-    ) as acquired:
-        yield acquired
-
-
-@contextmanager
-def _safe_lock_excl_context(
-    path_str: str,
-    *,
-    tries: int,
-    sleep_base: float,
-    jitter: float,
-    mode: int,
-    mkdir: bool,
-    stale_after: float | None,
-):
-    with _cache_locking.safe_lock_excl_context(
-        path_str,
-        tries=tries,
-        sleep_base=sleep_base,
-        jitter=jitter,
-        mode=mode,
-        mkdir=mkdir,
-        stale_after=stale_after,
-        safe_lock_ensure_parent=_safe_lock_ensure_parent,
-        safe_lock_stale_pid=_safe_lock_stale_pid,
-        safe_lock_age=_safe_lock_age,
-        safe_lock_sleep_once=_safe_lock_sleep_once,
-        os_mod=os,
-        time_mod=time,
-    ) as acquired:
-        yield acquired
-
-
-@contextmanager
-def safe_lock(
-    path: str | os.PathLike,
-    *,
-    retries: int = 6,
-    sleep_base: float = 0.05,
-    jitter: float = 0.0,
-    mode: int = 0o600,
-    mkdir: bool = True,
-    stale_after: float | None = 60.0,
-):
-    with _cache_locking.safe_lock(
-        path,
-        retries=retries,
-        sleep_base=sleep_base,
-        jitter=jitter,
-        mode=mode,
-        mkdir=mkdir,
-        stale_after=stale_after,
-        fcntl_mod=fcntl,
-        os_mod=os,
-        time_mod=time,
-        random_mod=random,
-    ) as acquired:
-        yield acquired
-
-@contextmanager
-def _cache_lock(key: str):
-    with _cache_locking.cache_lock(
-        key,
-        cache_lock_path=_cache_lock_path,
-        safe_lock=safe_lock,
-        cache_lock_retries=_CACHE_LOCK_RETRIES,
-        cache_lock_sleep_base=_CACHE_LOCK_SLEEP_BASE,
-        cache_lock_jitter=_CACHE_LOCK_JITTER,
-        cache_lock_stale_after=_CACHE_LOCK_STALE_AFTER,
-    ) as acquired:
-        yield acquired
-
-
-# ==============================================================================
 # SECTION: Hook utilities (diag, run_task)
 # ==============================================================================
 _runtime = _import_sibling("runtime")
@@ -2011,6 +1884,14 @@ _cache_api = _import_sibling("cache_api").for_core(
     sys.modules[__name__],
     namespace=globals(),
 )
+_safe_lock_sleep_once = _cache_api._safe_lock_sleep_once
+_safe_lock_ensure_parent = _cache_api._safe_lock_ensure_parent
+_safe_lock_age = _cache_api._safe_lock_age
+_safe_lock_stale_pid = _cache_api._safe_lock_stale_pid
+_safe_lock_fcntl_context = _cache_api._safe_lock_fcntl_context
+_safe_lock_excl_context = _cache_api._safe_lock_excl_context
+safe_lock = _cache_api.safe_lock
+_cache_lock = _cache_api._cache_lock
 _cache_dir = _cache_api._cache_dir
 _cache_key = _cache_api._cache_key
 _cache_path = _cache_api._cache_path

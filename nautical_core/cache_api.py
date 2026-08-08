@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -13,6 +14,123 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     import_sibling = core.get("_import_sibling", module._import_sibling)
     cache_support = import_sibling("cache_support")
     cache_locking = import_sibling("cache_locking")
+
+    def safe_lock_sleep_once(sleep_base: float, jitter: float) -> None:
+        cache_locking.safe_lock_sleep_once(
+            sleep_base,
+            jitter,
+            time_mod=core["time"],
+            random_mod=core["random"],
+        )
+
+    def safe_lock_ensure_parent(path_str: str, mkdir: bool) -> None:
+        cache_locking.safe_lock_ensure_parent(path_str, mkdir, os_mod=core["os"])
+
+    def safe_lock_age(path_str: str) -> float | None:
+        return cache_locking.safe_lock_age(
+            path_str,
+            time_mod=core["time"],
+            os_mod=core["os"],
+        )
+
+    def safe_lock_stale_pid(path_str: str, stale_after: float | None) -> bool:
+        return cache_locking.safe_lock_stale_pid(
+            path_str,
+            stale_after,
+            time_mod=core["time"],
+            os_mod=core["os"],
+        )
+
+    @contextmanager
+    def safe_lock_fcntl_context(
+        path_str: str,
+        *,
+        tries: int,
+        sleep_base: float,
+        jitter: float,
+        mode: int,
+        mkdir: bool,
+    ):
+        with cache_locking.safe_lock_fcntl_context(
+            path_str,
+            tries=tries,
+            sleep_base=sleep_base,
+            jitter=jitter,
+            mode=mode,
+            mkdir=mkdir,
+            safe_lock_ensure_parent=safe_lock_ensure_parent,
+            safe_lock_sleep_once=safe_lock_sleep_once,
+            fcntl_mod=core["fcntl"],
+            os_mod=core["os"],
+        ) as acquired:
+            yield acquired
+
+    @contextmanager
+    def safe_lock_excl_context(
+        path_str: str,
+        *,
+        tries: int,
+        sleep_base: float,
+        jitter: float,
+        mode: int,
+        mkdir: bool,
+        stale_after: float | None,
+    ):
+        with cache_locking.safe_lock_excl_context(
+            path_str,
+            tries=tries,
+            sleep_base=sleep_base,
+            jitter=jitter,
+            mode=mode,
+            mkdir=mkdir,
+            stale_after=stale_after,
+            safe_lock_ensure_parent=safe_lock_ensure_parent,
+            safe_lock_stale_pid=safe_lock_stale_pid,
+            safe_lock_age=safe_lock_age,
+            safe_lock_sleep_once=safe_lock_sleep_once,
+            os_mod=core["os"],
+            time_mod=core["time"],
+        ) as acquired:
+            yield acquired
+
+    @contextmanager
+    def safe_lock(
+        path: str,
+        *,
+        retries: int = 6,
+        sleep_base: float = 0.05,
+        jitter: float = 0.0,
+        mode: int = 0o600,
+        mkdir: bool = True,
+        stale_after: float | None = 60.0,
+    ):
+        with cache_locking.safe_lock(
+            path,
+            retries=retries,
+            sleep_base=sleep_base,
+            jitter=jitter,
+            mode=mode,
+            mkdir=mkdir,
+            stale_after=stale_after,
+            fcntl_mod=core["fcntl"],
+            os_mod=core["os"],
+            time_mod=core["time"],
+            random_mod=core["random"],
+        ) as acquired:
+            yield acquired
+
+    @contextmanager
+    def cache_lock(key: str):
+        with cache_locking.cache_lock(
+            key,
+            cache_lock_path=cache_lock_path,
+            safe_lock=safe_lock,
+            cache_lock_retries=core["_CACHE_LOCK_RETRIES"],
+            cache_lock_sleep_base=core["_CACHE_LOCK_SLEEP_BASE"],
+            cache_lock_jitter=core["_CACHE_LOCK_JITTER"],
+            cache_lock_stale_after=core["_CACHE_LOCK_STALE_AFTER"],
+        ) as acquired:
+            yield acquired
 
     def cache_dir() -> str:
         current = core.get("_CACHE_DIR", cache_dir_state[0])
@@ -57,7 +175,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def quarantine_cache(key: str, path: str) -> bool:
         """Move a broken cache entry aside so future reads become clean misses."""
         try:
-            with core["_cache_lock"](key) as locked:
+            with core.get("_cache_lock", cache_lock)(key) as locked:
                 if not locked or not core["os"].path.exists(path):
                     return False
                 target = f"{path}.bad.{core['os'].getpid()}.{core['time'].time_ns()}"
@@ -98,7 +216,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             base64_mod=core["base64"],
             cache_path=cache_path,
             cache_dir=cache_dir,
-            cache_lock=core["_cache_lock"],
+            cache_lock=core.get("_cache_lock", cache_lock),
             diag=core["diag"],
             os_mod=core["os"],
             tempfile_mod=core["tempfile"],
@@ -119,9 +237,9 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             max_entries=max_entries,
             stale_tmp_age=stale_tmp_age,
             stale_lock_age=stale_lock_age,
-            cache_lock=core["_cache_lock"],
-            stale_lock_check=lambda path, age: core["_safe_lock_stale_pid"](path, age)
-            and (core["_safe_lock_age"](path) or 0.0) >= float(age),
+            cache_lock=core.get("_cache_lock", cache_lock),
+            stale_lock_check=lambda path, age: safe_lock_stale_pid(path, age)
+            and (safe_lock_age(path) or 0.0) >= float(age),
             time_mod=core["time"],
             os_mod=core["os"],
         )
@@ -162,6 +280,14 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         )
 
     return SimpleNamespace(
+        _safe_lock_sleep_once=safe_lock_sleep_once,
+        _safe_lock_ensure_parent=safe_lock_ensure_parent,
+        _safe_lock_age=safe_lock_age,
+        _safe_lock_stale_pid=safe_lock_stale_pid,
+        _safe_lock_fcntl_context=safe_lock_fcntl_context,
+        _safe_lock_excl_context=safe_lock_excl_context,
+        safe_lock=safe_lock,
+        _cache_lock=cache_lock,
         _cache_dir=cache_dir,
         _cache_key=cache_key,
         _cache_path=cache_path,

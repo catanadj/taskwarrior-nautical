@@ -451,25 +451,6 @@ _QUARTER_POS_MONTH = {
 }
 
 
-# Input/Output preference: "DM" (default) or "MD"
-def _yearfmt():
-    fmt = (globals().get("ANCHOR_YEAR_FMT") or "MD").upper()
-    return "DM" if fmt == "DM" else "MD"
-
-
-
-def _tok(d: int, m: int) -> str:
-    return f"{d:02d}-{m:02d}" if _yearfmt() == "DM" else f"{m:02d}-{d:02d}"
-
-
-def _tok_range(d1: int, m1: int, d2: int, m2: int) -> str:
-    if _yearfmt() == "DM":
-        # V2 delimiter contract: '..' denotes ranges.
-        return f"{d1:02d}-{m1:02d}..{d2:02d}-{m2:02d}"
-    else:
-        return f"{m1:02d}-{d1:02d}..{m2:02d}-{d2:02d}"
-
-
 # -------- Pre-compiled Regex Patterns ----------
 _int_floatish_re = _common._INT_FLOATISH_RE
 _hhmm_re = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -492,61 +473,31 @@ _year_range_colon_re = re.compile(r"^(\d{2})-(\d{2})\.\.(\d{2})-(\d{2})$")
 _int_range_re = re.compile(r"^-?\d+\s*\.\.\s*-?\d+$")
 _CONTROL_CHARS_RE = _common._CONTROL_CHARS_RE
 
-def _safe_match(pattern: re.Pattern, text: str, max_len: int = 256):
-    """Defensive regex match to avoid pathological backtracking."""
-    if text is None:
-        return None
-    if len(text) > max_len:
-        raise ParseError("Expression too complex")
-    return pattern.match(text)
-
-
-def sanitize_text(v: str, max_len: int = 1024) -> str:
-    return _common.sanitize_text(v, max_len=max_len)
-
-
-def sanitize_task_strings(task: dict, max_len: int = 1024) -> None:
-    _common.sanitize_task_strings(task, max_len=max_len)
-
-
-def _split_csv_tokens(spec: str) -> list[str]:
-    return _common.split_csv_tokens(spec)
-
-
-def _split_csv_lower(spec: str) -> list[str]:
-    return _common.split_csv_lower(spec)
-
-
-# --- Interval bucket ---
-def _iso_week_index(d: date) -> int:
-    iso = d.isocalendar()
-    return iso.year * 53 + iso.week  # monotonic-ish across years
-
-
-def _month_index(d: date) -> int:
-    return d.year * 12 + d.month
-
-
-def _year_index(d: date) -> int:
-    return d.year
-
-
-# --- full-month helpers ---
-def _static_month_last_day(mm: int) -> int:
-    return _tokenutil.static_month_last_day(mm)
-
-
-def _month_from_alias(tok: str) -> int | None:
-    return _tokenutil.month_from_alias(tok)
-
-
-def _year_full_months_span_token(m1: int, m2: int) -> str:
-    return _year_tokens.year_full_months_span_token(m1, m2, tok_range=_tok_range)
-
-
-def _rewrite_month_names_to_ranges(spec: str) -> str:
-    return _year_tokens.rewrite_month_names_to_ranges(spec, tok_range=_tok_range)
-
+_token_api = _import_sibling("token_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+_yearfmt = _token_api._yearfmt
+_tok = _token_api._tok
+_tok_range = _token_api._tok_range
+_safe_match = _token_api._safe_match
+sanitize_text = _token_api.sanitize_text
+sanitize_task_strings = _token_api.sanitize_task_strings
+_split_csv_tokens = _token_api._split_csv_tokens
+_split_csv_lower = _token_api._split_csv_lower
+_iso_week_index = _token_api._iso_week_index
+_month_index = _token_api._month_index
+_year_index = _token_api._year_index
+_static_month_last_day = _token_api._static_month_last_day
+_month_from_alias = _token_api._month_from_alias
+_year_full_months_span_token = _token_api._year_full_months_span_token
+_rewrite_month_names_to_ranges = _token_api._rewrite_month_names_to_ranges
+_unwrap_quotes = _token_api._unwrap_quotes
+_year_full_month_range_token = _token_api._year_full_month_range_token
+_mon_to_int = _token_api._mon_to_int
+_expand_weekly_aliases = _token_api._expand_weekly_aliases
+_expand_monthly_aliases = _token_api._expand_monthly_aliases
+_normalize_weekday = _token_api._normalize_weekday
 
 # --- helpers for nth-weekday monthly /N gating ---
 def _parse_nth_wd_tokens(spec: str):
@@ -570,16 +521,6 @@ def _advance_to_next_allowed_month(y: int, m: int, pairs) -> tuple[int, int]:
         month_has_any_nth=_month_has_any_nth,
     )
 
-def _unwrap_quotes(s: str) -> str:
-    return _tokenutil.unwrap_quotes(s)
-
-def _year_full_month_range_token(mm: int) -> str:
-    return _year_tokens.year_full_month_range_token(mm, tok_range=_tok_range)
-
-def _mon_to_int(tok: str) -> int | None:
-    return _tokenutil.mon_to_int(tok)
-
-
 def _rewrite_year_month_aliases_in_context(dnf: list[list[dict]]) -> list[list[dict]]:
     return _year_tokens.rewrite_year_month_aliases_in_context(dnf, tok_range=_tok_range)
 
@@ -589,16 +530,6 @@ ACF_CHECKSUM_LEN = 8
 _WD_ABBR = _tokenutil.WD_ABBR
 _WEEKLY_ALIAS = _tokenutil.WEEKLY_ALIAS
 _MONTHLY_ALIAS = _tokenutil.MONTHLY_ALIAS
-
-def _expand_weekly_aliases(spec: str) -> str:
-    return _tokenutil.expand_weekly_aliases(spec)
-
-def _expand_monthly_aliases(spec: str) -> str:
-    return _tokenutil.expand_monthly_aliases(spec)
-
-def _normalize_weekday(s: str) -> str | None:
-    return _tokenutil.normalize_weekday(s)
-
 
 # ==============================================================================
 # SECTION: Hook utilities (diag, run_task)

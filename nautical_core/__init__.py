@@ -237,44 +237,24 @@ def _clear_all_caches() -> None:
 _ui = _LazySibling("ui")
 
 
-def strip_rich_markup(*args, **kwargs):
-    return _ui.strip_rich_markup(*args, **kwargs)
+def _lazy_ui_call(name: str):
+    def call(*args, **kwargs):
+        return getattr(_ui, name)(*args, **kwargs)
+
+    call.__name__ = name
+    return call
 
 
-def term_width_stderr(*args, **kwargs):
-    return _ui.term_width_stderr(*args, **kwargs)
-
-
-def fast_color_enabled(*args, **kwargs):
-    return _ui.fast_color_enabled(*args, **kwargs)
-
-
-def ansi(*args, **kwargs):
-    return _ui.ansi(*args, **kwargs)
-
-
-def emit_wrapped(*args, **kwargs):
-    return _ui.emit_wrapped(*args, **kwargs)
-
-
-def emit_line(*args, **kwargs):
-    return _ui.emit_line(*args, **kwargs)
-
-
-def text_line(*args, **kwargs):
-    return _ui.text_line(*args, **kwargs)
-
-
-def panel_line_from_rows(*args, **kwargs):
-    return _ui.panel_line_from_rows(*args, **kwargs)
-
-
-def panel_line(*args, **kwargs):
-    return _ui.panel_line(*args, **kwargs)
-
-
-def panel_themes(*args, **kwargs):
-    return _ui.panel_themes(*args, **kwargs)
+strip_rich_markup = _lazy_ui_call("strip_rich_markup")
+term_width_stderr = _lazy_ui_call("term_width_stderr")
+fast_color_enabled = _lazy_ui_call("fast_color_enabled")
+ansi = _lazy_ui_call("ansi")
+emit_wrapped = _lazy_ui_call("emit_wrapped")
+emit_line = _lazy_ui_call("emit_line")
+text_line = _lazy_ui_call("text_line")
+panel_line_from_rows = _lazy_ui_call("panel_line_from_rows")
+panel_line = _lazy_ui_call("panel_line")
+panel_themes = _lazy_ui_call("panel_themes")
 
 chain_colour_root = _import_sibling("panel_colours").chain_colour_root
 DiagnosticEvent = _import_sibling("diagnostic_models").DiagnosticEvent

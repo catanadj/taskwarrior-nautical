@@ -761,55 +761,6 @@ def _acf_spec_to_string(typ: str, spec) -> str:
 # --- Cache directory discovery & IO ---
 _CACHE_DIR = None
 
-def _cache_dir() -> str:
-    global _CACHE_DIR
-    _cache_support = _import_sibling("cache_support")
-
-    chosen = _cache_locking.cache_dir(
-        _CACHE_DIR,
-        anchor_cache_dir_override=ANCHOR_CACHE_DIR_OVERRIDE,
-        nautical_cache_dir_path=_nautical_cache_dir(),
-        validated_user_dir=_validated_user_dir,
-        select_cache_dir=_cache_support.select_cache_dir,
-    )
-    _CACHE_DIR = chosen
-    return chosen
-
-def _cache_key(
-    acf: str,
-    anchor_mode: str,
-    *,
-    business_calendar_fingerprint: str = "",
-) -> str:
-    _cache_support = _import_sibling("cache_support")
-
-    # Include the serialized parser shape so cache entries from older
-    # releases cannot be compared with the current DNF representation.
-    config_fingerprint = scheduler_config_fingerprint()
-    profile_fingerprint = (
-        f"{business_calendar_fingerprint}|season:{SEASON_HEMISPHERE}"
-        f"|config:{config_fingerprint}|parser:2|cache:2"
-    )
-    return _cache_support.cache_key(
-        acf,
-        anchor_mode,
-        business_calendar_fingerprint=profile_fingerprint,
-        anchor_year_fmt=ANCHOR_YEAR_FMT,
-        wrand_salt=WRAND_SALT,
-        local_tz_name=LOCAL_TZ_NAME,
-        holiday_region=HOLIDAY_REGION,
-    )
-
-def _cache_path(key: str) -> str:
-    _cache_support = _import_sibling("cache_support")
-
-    return _cache_support.cache_path(_cache_dir(), key)
-
-def _cache_lock_path(key: str) -> str:
-    _cache_support = _import_sibling("cache_support")
-
-    return _cache_support.cache_lock_path(_cache_dir(), key)
-
 @contextmanager
 def _safe_lock_sleep_once(sleep_base: float, jitter: float) -> None:
     _cache_locking.safe_lock_sleep_once(
@@ -3332,7 +3283,14 @@ _natural_language_api = _import_sibling("natural_language_api").for_core(sys.mod
 describe_anchor_expr = _natural_language_api.describe_anchor_expr
 describe_anchor_dnf = _natural_language_api.describe_anchor_dnf
 
-_cache_api = _import_sibling("cache_api").for_core(sys.modules[__name__])
+_cache_api = _import_sibling("cache_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+_cache_dir = _cache_api._cache_dir
+_cache_key = _cache_api._cache_key
+_cache_path = _cache_api._cache_path
+_cache_lock_path = _cache_api._cache_lock_path
 cache_load = _cache_api.cache_load
 cache_save = _cache_api.cache_save
 cache_gc = _cache_api.cache_gc

@@ -5622,6 +5622,20 @@ def test_perf_budget_config_covers_cache_io_checks():
         {"hook_plain_add", "hook_plain_modify", "hook_nautical_ordinary_modify", "hook_empty_exit"} <= set(ratios),
         f"hook ratio budgets are incomplete: {ratios}",
     )
+    workflow_perf = obj.get("workflow_perf") if isinstance(obj, dict) else None
+    expect(isinstance(workflow_perf, dict), "workflow_perf config must be present")
+    workflow_budgets = workflow_perf.get("budgets_seconds") if isinstance(workflow_perf, dict) else None
+    expect(isinstance(workflow_budgets, dict), "workflow_perf budgets_seconds must be present")
+    expect(
+        {
+            "workflow_cp_completion",
+            "workflow_anchor_completion",
+            "workflow_queue_drain",
+            "workflow_reconcile",
+        }
+        <= set(workflow_budgets or {}),
+        f"expensive workflow budgets are incomplete: {workflow_budgets}",
+    )
 
 
 def test_perf_hook_fast_path_ratio_enforcement():

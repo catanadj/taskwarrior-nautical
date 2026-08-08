@@ -527,6 +527,149 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
         return results
 
 
+def _run_workflow_hook(hook_path: Path, *, input_text: str, env: dict[str, str], expect_output: bool) -> float:
+    started = time.perf_counter()
+    proc = subprocess.run(
+        [sys.executable, str(hook_path)],
+        input=input_text,
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    elapsed = time.perf_counter() - started
+    if proc.returncode != 0:
+        raise RuntimeError(f"{hook_path.name} workflow failed: {(proc.stderr or proc.stdout or '').strip()}")
+    if expect_output:
+        _strict_json_object(proc.stdout or "")
+    elif (proc.stdout or "").strip():
+        raise RuntimeError(f"{hook_path.name} workflow wrote unexpected stdout")
+    return elapsed
+
+
+def _measure_workflow(name: str, samples: list[float], budget: float) -> dict:
+    ordered = sorted(float(value) for value in samples)
+    median = float(statistics.median(ordered))
+    return {
+        "name": name,
+        "samples_s": ordered,
+        "min_s": ordered[0],
+        "median_s": median,
+        "max_s": ordered[-1],
+        "budget_s": float(budget),
+        "pass": float(budget) <= 0.0 or median <= float(budget),
+    }
+
+
+def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
+    """Exercise completion, queue-drain, and reconcile paths in isolation."""
+    workflow_cfg = cfg.get("workflow_perf")
+    if not isinstance(workflow_cfg, dict) or not workflow_cfg.get("enabled", True):
+        return {}
+    repeats = max(1, int(workflow_cfg.get("repeats", 3)))
+    budgets = workflow_cfg.get("budgets_seconds") if isinstance(workflow_cfg.get("budgets_seconds"), dict) else {}
+    with tempfile.TemporaryDirectory(prefix="nautical-workflow-perf-") as td:
+        root = Path(td)
+        config_path = root / "config-nautical.toml"
+        config_path.write_text('tz = "UTC"\npanel_mode = "minimal"\n', encoding="utf-8")
+        base_env = os.environ.copy()
+        base_env.update(
+            {
+                "NAUTICAL_CONFIG": str(config_path),
+                "NAUTICAL_CORE_PATH": str(ROOT),
+                "NAUTICAL_TRUST_CONFIG_PATH": "1",
+                "NAUTICAL_TRUST_CORE_PATH": "1",
+                "TASKRC": "/dev/null",
+                "TZ": "UTC",
+            }
+        )
+        for key in ("NAUTICAL_DIAG", "NAUTICAL_DIAG_LOG", "NAUTICAL_PROFILE"):
+            base_env.pop(key, None)
+
+        cp_old = {
+            "uuid": "22222222-2222-2222-2222-222222222222",
+            "status": "pending",
+            "description": "CP completion benchmark",
+            "cp": "P1D",
+            "chain": "on",
+            "chainID": "cp-perf-chain",
+            "link": 1,
+            "chainMax": 1,
+            "due": "20260101T090000Z",
+        }
+        anchor_old = {
+            "uuid": "33333333-3333-3333-3333-333333333333",
+            "status": "pending",
+            "description": "Anchor completion benchmark",
+            "anchor": "w:mon@t=09:00",
+            "anchor_mode": "skip",
+            "chain": "on",
+            "chainID": "anchor-perf-chain",
+            "link": 1,
+            "chainMax": 1,
+            "due": "20260105T090000Z",
+        }
+        completion_cases = {
+            "workflow_cp_completion": cp_old,
+            "workflow_anchor_completion": anchor_old,
+        }
+        results: dict[str, dict] = {}
+        for name, old in completion_cases.items():
+            new = dict(old, status="completed", end="20260101T100000Z" if name.endswith("cp_completion") else "20260105T100000Z")
+            taskdata = root / name
+            taskdata.mkdir()
+            env = dict(base_env, TASKDATA=str(taskdata))
+            samples = [
+                _run_workflow_hook(
+                    ROOT / "on-modify.nautical",
+                    input_text=json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False),
+                    env=env,
+                    expect_output=True,
+                )
+                for _ in range(repeats)
+            ]
+            results[name] = _measure_workflow(name, samples, float(budgets.get(name, 2.0)))
+
+        queue_samples = []
+        for sample_index in range(repeats):
+            queue_data = root / f"populated-queue-{sample_index}"
+            _init_empty_queue_db(queue_data)
+            with sqlite3.connect(str(queue_data / ".nautical-state" / ".nautical_queue.db")) as conn:
+                now = time.time()
+                for index in range(8):
+                    conn.execute(
+                        "INSERT INTO queue_entries (spawn_intent_id, payload, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?)",
+                        (f"perf-intent-{index}", "{}", now, now),
+                    )
+                conn.commit()
+            queue_env = dict(base_env, TASKDATA=str(queue_data))
+            queue_samples.append(
+                _run_workflow_hook(ROOT / "on-exit.nautical", input_text="", env=queue_env, expect_output=False)
+            )
+        results["workflow_queue_drain"] = _measure_workflow(
+            "workflow_queue_drain", queue_samples,
+            float(budgets.get("workflow_queue_drain", 3.0)),
+        )
+
+        reconcile_data = root / "reconcile"
+        reconcile_data.mkdir()
+        reconcile_env = dict(base_env, TASKDATA=str(reconcile_data))
+        reconcile_cmd = [sys.executable, str(ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"), "--json"]
+        reconcile_samples = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=reconcile_env, timeout=30.0)
+            if proc.returncode != 0:
+                raise RuntimeError(f"reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}")
+            json.loads(proc.stdout or "{}")
+            reconcile_samples.append(time.perf_counter() - started)
+        results["workflow_reconcile"] = _measure_workflow(
+            "workflow_reconcile", reconcile_samples, float(budgets.get("workflow_reconcile", 3.0))
+        )
+        return results
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--budget-file", default=str(HERE / "perf_budget.json"))
@@ -620,6 +763,12 @@ def main() -> int:
 
     hook_results = _bench_hook_fast_paths(cfg)
     for name, result in hook_results.items():
+        results[name] = result
+        if args.enforce and not result["pass"]:
+            failures.append(name)
+
+    workflow_results = _bench_expensive_workflows(cfg)
+    for name, result in workflow_results.items():
         results[name] = result
         if args.enforce and not result["pass"]:
             failures.append(name)

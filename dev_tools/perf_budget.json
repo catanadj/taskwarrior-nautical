@@ -58,5 +58,15 @@
       "hook_empty_exit": 0.8
     },
     "managed_layout_max_ratio": 1.5
+  },
+  "workflow_perf": {
+    "enabled": true,
+    "repeats": 3,
+    "budgets_seconds": {
+      "workflow_cp_completion": 2.0,
+      "workflow_anchor_completion": 2.0,
+      "workflow_queue_drain": 3.0,
+      "workflow_reconcile": 3.0
+    }
   }
 }

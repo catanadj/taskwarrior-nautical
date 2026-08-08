@@ -178,6 +178,35 @@ def _bench_queue_schema_hot(rounds: int) -> float:
             return time.perf_counter() - t0
 
 
+def _bench_queue_schema_cold(rounds: int) -> float:
+    """Measure queue initialization across fresh Python processes."""
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-queue-cold-") as td:
+        db_path = Path(td) / "queue.db"
+        script = (
+            "import sqlite3, sys; "
+            "from nautical_core import queue_store; "
+            "conn = sqlite3.connect(sys.argv[1]); "
+            "queue_store.init_queue_db(conn); conn.close()"
+        )
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join(
+            part for part in (str(ROOT), env.get("PYTHONPATH", "")) if part
+        )
+        started = time.perf_counter()
+        for _ in range(max(1, rounds)):
+            proc = subprocess.run(
+                [sys.executable, "-c", script, str(db_path)],
+                cwd=str(ROOT),
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=30.0,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(f"cold queue initialization failed: {proc.stderr.strip()}")
+        return time.perf_counter() - started
+
+
 def _bench_anchor_file_provider(rounds: int) -> float:
     """Exercise cached anchor-file expansion and successor lookup."""
     anchor_files = importlib.import_module("nautical_core.anchor_files")
@@ -521,6 +550,7 @@ def main() -> int:
     cache_save_rounds = int(workload.get("cache_save_rounds", 120))
     cache_load_rounds = int(workload.get("cache_load_rounds", 300))
     queue_schema_hot_rounds = int(workload.get("queue_schema_hot_rounds", 1000))
+    queue_schema_cold_rounds = int(workload.get("queue_schema_cold_rounds", 3))
     anchor_file_rounds = int(workload.get("anchor_file_rounds", 300))
 
     checks = [
@@ -532,6 +562,7 @@ def main() -> int:
         ("cache_save", lambda: _bench_cache_save(exprs, cache_save_rounds), repeats),
         ("cache_load_hot", lambda: _bench_cache_load_hot(exprs, cache_load_rounds), repeats),
         ("queue_schema_hot", lambda: _bench_queue_schema_hot(queue_schema_hot_rounds), repeats),
+        ("queue_schema_cold", lambda: _bench_queue_schema_cold(queue_schema_cold_rounds), repeats),
         ("anchor_file_provider", lambda: _bench_anchor_file_provider(anchor_file_rounds), repeats),
     ]
 

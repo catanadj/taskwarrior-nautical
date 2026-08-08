@@ -3865,6 +3865,10 @@ def test_queue_schema_initializes_and_adopts_legacy_rows():
                 conn.execute("PRAGMA user_version").fetchone()[0] == queue_store.QUEUE_DB_SCHEMA_VERSION,
                 "schema adoption did not record its version",
             )
+            expect(
+                str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal",
+                "schema adoption did not persist WAL mode",
+            )
             expect(queue_store.queue_schema_status(conn).get("status") == "ok", "adopted schema is not healthy")
             queue_store.init_queue_db(conn)
 
@@ -5578,9 +5582,11 @@ def test_perf_budget_config_covers_cache_io_checks():
     expect("cache_save" in budgets, "cache_save budget missing")
     expect("cache_load_hot" in budgets, "cache_load_hot budget missing")
     expect("queue_schema_hot" in budgets, "queue_schema_hot budget missing")
+    expect("queue_schema_cold" in budgets, "queue_schema_cold budget missing")
     expect("cache_save_rounds" in workload, "cache_save_rounds missing from workload")
     expect("cache_load_rounds" in workload, "cache_load_rounds missing from workload")
     expect("queue_schema_hot_rounds" in workload, "queue_schema_hot_rounds missing from workload")
+    expect("queue_schema_cold_rounds" in workload, "queue_schema_cold_rounds missing from workload")
     expressions = set(workload.get("expressions") or [])
     expect("y:d60,d-1" in expressions, "year-day latency workload missing")
     expect("y:w20 + w:mon" in expressions, "ISO-week latency workload missing")

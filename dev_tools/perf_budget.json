@@ -19,6 +19,7 @@
     "cache_save_rounds": 120,
     "cache_load_rounds": 300,
     "queue_schema_hot_rounds": 1000,
+    "queue_schema_cold_rounds": 3,
     "anchor_file_rounds": 300
   },
   "seasonal_workload": {
@@ -41,6 +42,7 @@
     "cache_save": 0.9,
     "cache_load_hot": 0.35,
     "queue_schema_hot": 0.2,
+    "queue_schema_cold": 3.0,
     "anchor_file_provider": 0.2,
     "seasonal_parse_validate": 0.08,
     "seasonal_next_after": 0.15,

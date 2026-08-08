@@ -168,11 +168,11 @@ class RecurrenceEvaluator:
         return self._get_cached("anchor_dnf", self._parse_anchor, clone=True)
 
     @property
-    def omit_dnf(self) -> list:
+    def omit_dnf(self) -> Any:
         """Lazily parse the omit expression with omit-specific validation."""
         if not self.spec.omit and not self.spec.omit_file:
             return []
-        return self._get_cached("omit_dnf", self._parse_omit, clone=True)
+        return self._get_cached("omit_dnf", self._parse_omit)
 
     @property
     def cp_tokens(self) -> list | None:
@@ -226,9 +226,9 @@ class RecurrenceEvaluator:
             )
         if not omit_dnf and not omit_dates and not omit_descriptions:
             return []
-        from .anchor_omit import combine_omit_state
+        from .anchor_omit import freeze_omit_state
 
-        return combine_omit_state(
+        return freeze_omit_state(
             omit_dnf=omit_dnf,
             omit_dates=omit_dates,
             omit_descriptions=omit_descriptions,

@@ -1,10 +1,35 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any, Callable
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, Callable, Mapping
 
 
 _OMIT_TIMED_ERROR = "omit does not support time modifiers (@t). Omit rules are date-based only."
+
+
+@dataclass(frozen=True, slots=True)
+class OmitState:
+    """Evaluator-owned omission data with stable, read-only outer state."""
+
+    dnf: Any
+    dates: frozenset
+    descriptions: Mapping
+
+    def __len__(self) -> int:
+        """Retain the legacy DNF length behavior for expression-only state."""
+        if self.dnf is not None:
+            return len(self.dnf)
+        return len(self.dates)
+
+
+def freeze_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None) -> OmitState | None:
+    dates = frozenset(omit_dates or [])
+    descriptions = MappingProxyType(dict(omit_descriptions or {}))
+    if not omit_dnf and not dates and not descriptions:
+        return None
+    return OmitState(omit_dnf, dates, descriptions)
 
 
 def combine_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None):
@@ -20,6 +45,8 @@ def combine_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None
 def _split_omit_state(omit_state):
     if not omit_state:
         return None, frozenset(), {}
+    if isinstance(omit_state, OmitState):
+        return omit_state.dnf, omit_state.dates, omit_state.descriptions
     if isinstance(omit_state, dict):
         return (
             omit_state.get("dnf"),

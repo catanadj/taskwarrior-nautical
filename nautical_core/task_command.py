@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 import subprocess
@@ -49,6 +49,51 @@ def _is_lock_error(value: str) -> bool:
     return any(marker in lowered for marker in _LOCK_MARKERS)
 
 
+def run_command_once(
+    argv: Sequence[str],
+    *,
+    input_text: str | None = None,
+    env: dict[str, str] | None = None,
+    timeout: float = 60.0,
+) -> TaskCommandResult:
+    """Run one command attempt using the shared subprocess contract."""
+    normalized_argv = tuple(str(arg) for arg in argv)
+    try:
+        proc = subprocess.run(
+            list(normalized_argv),
+            input=input_text,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            env=dict(env) if env is not None else os.environ.copy(),
+            timeout=timeout,
+        )
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        if proc.returncode == 0:
+            kind = "ok"
+        elif _is_lock_error(stderr or stdout):
+            kind = "lock_busy"
+        else:
+            kind = "nonzero"
+        return TaskCommandResult(normalized_argv, proc.returncode, stdout, stderr, kind, 1, timeout)
+    except subprocess.TimeoutExpired as exc:
+        return TaskCommandResult(
+            normalized_argv,
+            124,
+            _text(exc.stdout),
+            _text(exc.stderr),
+            "timeout",
+            1,
+            timeout,
+        )
+    except FileNotFoundError:
+        return TaskCommandResult(normalized_argv, 127, "", "", "missing_binary", 1, timeout)
+    except OSError as exc:
+        return TaskCommandResult(normalized_argv, 126, "", str(exc), "exec_error", 1, timeout)
+
+
 def run_task_command(
     task_bin: str,
     args: Sequence[str],
@@ -65,40 +110,10 @@ def run_task_command(
     result: TaskCommandResult | None = None
 
     for attempt in range(1, max_attempts + 1):
-        try:
-            proc = subprocess.run(
-                list(argv),
-                input=input_text,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                capture_output=True,
-                env=dict(env) if env is not None else os.environ.copy(),
-                timeout=timeout,
-            )
-            stdout = proc.stdout or ""
-            stderr = proc.stderr or ""
-            if proc.returncode == 0:
-                kind = "ok"
-            elif _is_lock_error(stderr or stdout):
-                kind = "lock_busy"
-            else:
-                kind = "nonzero"
-            result = TaskCommandResult(argv, proc.returncode, stdout, stderr, kind, attempt, timeout)
-        except subprocess.TimeoutExpired as exc:
-            result = TaskCommandResult(
-                argv,
-                124,
-                _text(exc.stdout),
-                _text(exc.stderr),
-                "timeout",
-                attempt,
-                timeout,
-            )
-        except FileNotFoundError:
-            result = TaskCommandResult(argv, 127, "", "", "missing_binary", attempt, timeout)
-        except OSError as exc:
-            result = TaskCommandResult(argv, 126, "", str(exc), "exec_error", attempt, timeout)
+        result = replace(
+            run_command_once(argv, input_text=input_text, env=env, timeout=timeout),
+            attempts=attempt,
+        )
 
         if result.kind != "lock_busy" or attempt >= max_attempts:
             return result

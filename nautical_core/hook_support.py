@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import os
 import random
-import subprocess
 import time
 import json
 import re
 from dataclasses import dataclass
 
-from .task_command import TaskCommandResult, failure_message
+from .task_command import TaskCommandResult, failure_message, run_command_once
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,45 +63,9 @@ def run_subprocess_once(
     timeout: float,
 ) -> tuple[bool, str, str]:
     """Run one bounded Taskwarrior subprocess with consistent cleanup semantics."""
-    proc = None
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            close_fds=True,
-            env=env,
-        )
-        out, err = proc.communicate(input=input_text, timeout=timeout)
-        return proc.returncode == 0, out or "", err or ""
-    except subprocess.TimeoutExpired:
-        if proc is not None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            try:
-                out, err = proc.communicate(timeout=1.0)
-            except Exception:
-                out, err = "", ""
-        else:
-            out, err = "", ""
-        return False, out or "", "timeout"
-    except Exception as exc:
-        if proc is not None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            try:
-                proc.wait(timeout=1.0)
-            except Exception:
-                pass
-        return False, "", str(exc)
+    result = run_command_once(cmd, env=env, input_text=input_text, timeout=timeout)
+    stderr = result.stderr or ("timeout" if result.kind == "timeout" else "")
+    return result.ok, result.stdout, stderr
 
 
 def _run_task_attempt(

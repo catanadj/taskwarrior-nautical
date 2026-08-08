@@ -8332,6 +8332,25 @@ def test_precompute_hints_bounds_year_stats_by_days():
         f"annual hint statistics exceeded the day horizon: {hints['per_year']}",
     )
 
+    calls = {"n": 0}
+
+    def sparse_next(_dnf, after, _default_seed):
+        calls["n"] += 1
+        return after + timedelta(days=365 * 100)
+
+    sparse = precompute.precompute_hints(
+        [[]],
+        start_dt=start,
+        rand_seed=None,
+        k_next=0,
+        sample_days_for_year=366,
+        now_local=lambda: start,
+        next_after_expr=weekly_next_expr,
+        next_for_or=sparse_next,
+    )
+    expect(sparse["per_year"]["est"] == 0, f"sparse annual estimate crossed its window: {sparse}")
+    expect(calls["n"] == 1, f"sparse annual scan performed repeated out-of-window work: {calls}")
+
 
 def test_parser_validation():
     """Test parser validation and error messages"""

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 
 def _has_rand_atoms(dnf: list[list[dict]]) -> bool:
@@ -44,13 +44,33 @@ def precompute_hints(
     default_seed = ref
     seed_base = rand_seed or "preview"
 
+    # A single hint build asks the scheduler for overlapping cursors twice:
+    # once for the upcoming preview and once for annual statistics.  Keep the
+    # result local to this build so expensive astronomical/seasonal lookups
+    # are not repeated, without sharing mutable state across tasks or runs.
+    next_cache: dict[date, object] = {}
+
+    def next_candidate(cursor):
+        cached = next_cache.get(cursor)
+        if cached is not None:
+            return cached
+        if use_expr_scheduler:
+            candidate = next_after_expr(
+                dnf,
+                cursor,
+                default_seed=default_seed,
+                seed_base=seed_base,
+            )
+        else:
+            candidate = next_for_or(dnf, cursor, default_seed)
+        next_cache[cursor] = candidate
+        return candidate
+
     safety_limit = 366 * 5
     steps = 0
     while len(out_next) < k_next and steps < safety_limit:
-        if use_expr_scheduler:
-            nxt, _ = next_after_expr(dnf, ref, default_seed=default_seed, seed_base=seed_base)
-        else:
-            nxt = next_for_or(dnf, ref, default_seed)
+        candidate = next_candidate(ref)
+        nxt = candidate[0] if use_expr_scheduler else candidate
 
         if not nxt or nxt <= ref:
             break
@@ -70,10 +90,8 @@ def precompute_hints(
     # Annual statistics are bounded by calendar coverage, not occurrence count.
     # Sparse rules must not force hundreds of years of scheduling work.
     while steps < sample_horizon and ref < sample_end:
-        if use_expr_scheduler:
-            nxt, _ = next_after_expr(dnf, ref, default_seed=default_seed, seed_base=seed_base)
-        else:
-            nxt = next_for_or(dnf, ref, default_seed)
+        candidate = next_candidate(ref)
+        nxt = candidate[0] if use_expr_scheduler else candidate
 
         if not nxt or nxt <= ref or nxt >= sample_end:
             break

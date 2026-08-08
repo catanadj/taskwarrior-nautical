@@ -3059,43 +3059,6 @@ def _validate_yearly_spec(spec: str):
     )
 
 
-def _normalize_anchor_input_to_dnf(expr) -> AnchorDNF:
-    return _strict_validation.normalize_anchor_input_to_dnf(
-        expr,
-        parse_anchor_expr_to_dnf_cached=parse_anchor_expr_to_dnf_cached,
-        parse_error_cls=ParseError,
-    )
-
-
-def _assert_dnf_structure_strict(dnf):
-    _strict_validation.assert_dnf_structure_strict(
-        dnf,
-        is_atom_like=_is_atom_like,
-        parse_error_cls=ParseError,
-    )
-
-
-def _validate_anchor_atom_strict(a: dict) -> None:
-    _strict_validation.validate_anchor_atom_strict(
-        a,
-        validate_weekly_spec=_validate_weekly_spec,
-        validate_monthly_spec=_validate_monthly_spec,
-        active_mod_keys=_active_mod_keys,
-        validate_yearly_token_format=_validate_yearly_token_format,
-        parse_error_cls=ParseError,
-    )
-
-
-def _validate_anchor_dnf_atoms_strict(dnf: AnchorDNF) -> None:
-    _strict_validation.validate_anchor_dnf_atoms_strict(
-        dnf,
-        validate_anchor_atom_strict=_validate_anchor_atom_strict,
-        is_selection_node=_position_selection.is_selection_node,
-        validate_selection_node=_position_selection.validate_public_selection_node,
-        parse_error_cls=ParseError,
-    )
-
-
 # -------- Cached Expansion Functions ----------
 @_ttl_lru_cache(maxsize=128)
 def _expand_weekly_cached_impl(spec: str):
@@ -3860,6 +3823,10 @@ resolve_anchor_presets = _parser_api.resolve_anchor_presets
 parse_anchor_expr_to_dnf = _parser_api.parse_anchor_expr_to_dnf
 parse_anchor_expr_to_dnf_cached = _parser_api.parse_anchor_expr_to_dnf_cached
 validate_anchor_expr_strict = _parser_api.validate_anchor_expr_strict
+_normalize_anchor_input_to_dnf = _parser_api.normalize_anchor_input_to_dnf
+_assert_dnf_structure_strict = _parser_api.assert_dnf_structure_strict
+_validate_anchor_atom_strict = _parser_api.validate_anchor_atom_strict
+_validate_anchor_dnf_atoms_strict = _parser_api.validate_anchor_dnf_atoms_strict
 
 # Scheduler entry points are bound to this exact core instance for isolated
 # hook/test loaders while preserving the long-standing facade names.

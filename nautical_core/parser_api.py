@@ -37,9 +37,46 @@ def _validate_anchor_expr_strict_impl(module: Any, expr: Any):
     """Run strict validation against one isolated core facade."""
     return module._strict_validation.validate_anchor_expr_strict(
         expr,
-        normalize_anchor_input_to_dnf=module._normalize_anchor_input_to_dnf,
-        assert_dnf_structure_strict=module._assert_dnf_structure_strict,
-        validate_anchor_dnf_atoms_strict=module._validate_anchor_dnf_atoms_strict,
+        normalize_anchor_input_to_dnf=lambda value: _normalize_anchor_input_to_dnf(module, value),
+        assert_dnf_structure_strict=lambda value: _assert_dnf_structure_strict(module, value),
+        validate_anchor_dnf_atoms_strict=lambda value: _validate_anchor_dnf_atoms_strict(module, value),
+    )
+
+
+def _normalize_anchor_input_to_dnf(module: Any, expr):
+    return module._strict_validation.normalize_anchor_input_to_dnf(
+        expr,
+        parse_anchor_expr_to_dnf_cached=module.parse_anchor_expr_to_dnf_cached,
+        parse_error_cls=module.ParseError,
+    )
+
+
+def _assert_dnf_structure_strict(module: Any, dnf):
+    module._strict_validation.assert_dnf_structure_strict(
+        dnf,
+        is_atom_like=module._is_atom_like,
+        parse_error_cls=module.ParseError,
+    )
+
+
+def _validate_anchor_atom_strict(module: Any, atom: dict) -> None:
+    module._strict_validation.validate_anchor_atom_strict(
+        atom,
+        validate_weekly_spec=module._validate_weekly_spec,
+        validate_monthly_spec=module._validate_monthly_spec,
+        active_mod_keys=module._active_mod_keys,
+        validate_yearly_token_format=module._validate_yearly_token_format,
+        parse_error_cls=module.ParseError,
+    )
+
+
+def _validate_anchor_dnf_atoms_strict(module: Any, dnf) -> None:
+    module._strict_validation.validate_anchor_dnf_atoms_strict(
+        dnf,
+        validate_anchor_atom_strict=lambda atom: _validate_anchor_atom_strict(module, atom),
+        is_selection_node=module._position_selection.is_selection_node,
+        validate_selection_node=module._position_selection.validate_public_selection_node,
+        parse_error_cls=module.ParseError,
     )
 
 
@@ -53,6 +90,10 @@ def for_core(module: Any):
         parse_anchor_expr_to_dnf=lambda s: _parse_anchor_expr_to_dnf_impl(module, s),
         parse_anchor_expr_to_dnf_cached=lambda s: module._parse_anchor_expr_to_dnf_cached_impl(s),
         validate_anchor_expr_strict=lambda expr: _validate_anchor_expr_strict_impl(module, expr),
+        normalize_anchor_input_to_dnf=lambda expr: _normalize_anchor_input_to_dnf(module, expr),
+        assert_dnf_structure_strict=lambda dnf: _assert_dnf_structure_strict(module, dnf),
+        validate_anchor_atom_strict=lambda atom: _validate_anchor_atom_strict(module, atom),
+        validate_anchor_dnf_atoms_strict=lambda dnf: _validate_anchor_dnf_atoms_strict(module, dnf),
     )
 
 

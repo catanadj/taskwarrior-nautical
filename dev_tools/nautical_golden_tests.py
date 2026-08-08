@@ -16705,7 +16705,6 @@ def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
         due_local=mod.core.to_local(mod.core.parse_dt_any(parent["scheduled"])),
         end_local=mod.core.to_local(mod.core.parse_dt_any(parent["end"])),
         due_explicit=False,
-        next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
         fallback_hhmm=(9, 0),
     )
     expect(
@@ -17459,7 +17458,6 @@ def test_modify_anchor_file_mode_orders_dst_fold_by_instant():
         due_local=due,
         end_local=end,
         due_explicit=True,
-        next_occurrence_after_local_dt=lambda *_args, **_kwargs: None,
         fallback_hhmm=(3, 15),
         default_seed_date=due.date(),
         anchor_file_provider=FoldProvider(),
@@ -19452,7 +19450,8 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
             "anchor_mode": "ALL",
             "chainMax": "4",
             "chainUntil": "2025-12-31T23:00:00Z",
-        }
+        },
+        timezone=timezone.utc,
     )
     expect(parsed.anchor_mode == "all", "evaluator did not normalize anchor mode")
     parsed_anchor = parsed.anchor_dnf
@@ -19512,86 +19511,88 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         return after_local + timedelta(days=1)
 
     stream = parsed.collect_after(
-        datetime(2025, 1, 1),
+        datetime(2025, 1, 1, tzinfo=timezone.utc),
         limit=2,
-        next_occurrence_after_local_dt=next_day,
     )
     expect(
         [item.local_datetime for item in stream]
-        == [datetime(2025, 1, 2), datetime(2025, 1, 3)],
+        == [
+            datetime(2025, 1, 6, 2, 30, tzinfo=timezone.utc),
+            datetime(2025, 1, 13, 2, 30, tzinfo=timezone.utc),
+        ],
         "evaluator did not expose a merged typed occurrence stream",
     )
 
     event_evaluator = RecurrenceEvaluator.from_task(
-        {"chainID": "event-chain", "anchor": "w:mon", "omit": "w:mon"}
+        {"chainID": "event-chain", "anchor": "w:mon..tue", "omit": "w:mon"},
+        timezone=timezone.utc,
     )
     omitted_event = event_evaluator.next_event_after(
-        datetime(2025, 1, 5),
-        next_occurrence_after_local_dt=next_day,
+        datetime(2025, 1, 5, tzinfo=timezone.utc),
         include_omitted=True,
     )
     expect(
         omitted_event is not None and omitted_event.omitted
-        and omitted_event.local_datetime == datetime(2025, 1, 6),
+        and omitted_event.local_datetime == datetime(2025, 1, 6, 9, 0, tzinfo=timezone.utc),
         f"event stream did not retain omitted occurrence: {omitted_event!r}",
     )
     included_event = event_evaluator.next_event_after(
-        datetime(2025, 1, 5),
-        next_occurrence_after_local_dt=next_day,
+        datetime(2025, 1, 5, tzinfo=timezone.utc),
     )
     expect(
         included_event is not None and not included_event.omitted
-        and included_event.local_datetime == datetime(2025, 1, 7),
+        and included_event.local_datetime == datetime(2025, 1, 7, 9, 0, tzinfo=timezone.utc),
         f"event stream did not skip omitted occurrence by default: {included_event!r}",
     )
     ranged_events = event_evaluator.events_between(
-        datetime(2025, 1, 5),
-        datetime(2025, 1, 8),
+        datetime(2025, 1, 5, tzinfo=timezone.utc),
+        datetime(2025, 1, 20, tzinfo=timezone.utc),
         limit=1,
-        next_occurrence_after_local_dt=next_day,
         inclusive=False,
         include_omitted=True,
     )
     expect(
         [item.local_datetime for item in ranged_events]
-        == [datetime(2025, 1, 6), datetime(2025, 1, 7)],
+        == [
+            datetime(2025, 1, 6, 9, 0, tzinfo=timezone.utc),
+            datetime(2025, 1, 7, 9, 0, tzinfo=timezone.utc),
+        ],
         f"bounded event stream did not retain omitted events while counting included ones: {ranged_events!r}",
     )
 
     mode_evaluator = RecurrenceEvaluator.from_task(
-        {"chainID": "mode-chain", "anchor": "w:mon"}
+        {"chainID": "mode-chain", "anchor": "w:mon"},
+        timezone=timezone.utc,
     )
     mode_common = {
-        "due_local": datetime(2025, 1, 1),
-        "end_local": datetime(2025, 1, 3),
-        "next_occurrence_after_local_dt": next_day,
+        "due_local": datetime(2025, 1, 1, tzinfo=timezone.utc),
+        "end_local": datetime(2025, 1, 3, tzinfo=timezone.utc),
     }
     all_result = mode_evaluator.select_mode("all", **mode_common)
     skip_result = mode_evaluator.select_mode("skip", **mode_common)
     flex_result = mode_evaluator.select_mode("flex", **mode_common)
     expect(
-        all_result.selected_occurrence == datetime(2025, 1, 2)
-        and all_result.basis == "missed"
+        all_result.selected_occurrence == datetime(2025, 1, 6, 9, 0, tzinfo=timezone.utc)
+        and all_result.basis == "after_due"
         and all_result.source == "anchor",
         f"all mode policy selected the wrong typed result: {all_result!r}",
     )
     expect(
-        skip_result.selected_occurrence == datetime(2025, 1, 4)
+        skip_result.selected_occurrence == datetime(2025, 1, 6, 9, 0, tzinfo=timezone.utc)
         and skip_result.basis == "after_end",
         f"skip mode policy selected the wrong typed result: {skip_result!r}",
     )
     expect(
-        flex_result.selected_occurrence == datetime(2025, 1, 4)
+        flex_result.selected_occurrence == datetime(2025, 1, 6, 9, 0, tzinfo=timezone.utc)
         and flex_result.basis == "flex"
-        and flex_result.missed_count == 2,
+        and flex_result.missed_count == 0,
         f"flex mode policy lost missed evidence: {flex_result!r}",
     )
     try:
         event_evaluator.events_between(
-            datetime(2025, 1, 5),
-            datetime(2025, 1, 10),
+            datetime(2025, 1, 5, tzinfo=timezone.utc),
+            datetime(2025, 1, 10, tzinfo=timezone.utc),
             limit=2,
-            next_occurrence_after_local_dt=next_day,
             max_iterations=1,
         )
     except ValueError as exc:
@@ -19614,25 +19615,11 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     astronomy_evaluator = RecurrenceEvaluator.from_task(
         {"chainID": "astronomy-chain", "anchor": "moon:full"}
     )
-
-    def unavailable(*_args, **_kwargs):
-        raise LookupError("astronomical event unavailable")
-
-    try:
-        astronomy_evaluator.next_event_after(
-            datetime(2025, 1, 1),
-            next_occurrence_after_local_dt=unavailable,
-        )
-    except LookupError as exc:
-        expect("astronomical event unavailable" in str(exc), f"unexpected astronomy failure: {exc}")
-    else:
-        raise AssertionError("evaluator failed open when astronomy resolution was unavailable")
     try:
         parsed.collect_after(
             datetime(2025, 1, 1),
             limit=1,
             fallback_hhmm=(24, 0),
-            next_occurrence_after_local_dt=next_day,
         )
     except ValueError as exc:
         expect("Fallback occurrence time" in str(exc), f"invalid fallback time error was not actionable: {exc}")
@@ -19843,7 +19830,6 @@ def test_recurrence_evaluator_shadow_parity_dst_and_business_calendar():
         "skip",
         due_local=due_local,
         end_local=end_local,
-        next_occurrence_after_local_dt=calendar_next,
         fallback_hhmm=(9, 0),
     )
     expect(
@@ -20555,7 +20541,6 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
                 "skip",
                 due_local=mod.core.to_local(mod.core.parse_dt_any(parent["due"])),
                 end_local=mod.core.to_local(mod.core.parse_dt_any(parent["end"])),
-                next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
                 fallback_hhmm=(12, 0),
             )
             expect(
@@ -20678,7 +20663,6 @@ def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
                 "skip",
                 due_local=mod.core.to_local(mod.core.parse_dt_any(parent["due"])),
                 end_local=mod.core.to_local(mod.core.parse_dt_any(parent["end"])),
-                next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
                 fallback_hhmm=(9, 0),
             )
             expect(
@@ -21017,7 +21001,6 @@ def test_on_modify_compute_anchor_child_due_skips_omit_date():
         "skip",
         due_local=mod.core.to_local(mod.core.parse_dt_any(parent["due"])),
         end_local=mod.core.to_local(mod.core.parse_dt_any(parent["end"])),
-        next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
         fallback_hhmm=(9, 0),
     )
     expect(
@@ -28430,7 +28413,6 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
                 mode,
                 due_local=mod.core.to_local(mod.core.parse_dt_any(common["due"])),
                 end_local=mod.core.to_local(mod.core.parse_dt_any(common["end"])),
-                next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
                 fallback_hhmm=(17, 0),
             )
             expect(

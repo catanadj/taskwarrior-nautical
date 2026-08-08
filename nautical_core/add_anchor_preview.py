@@ -472,7 +472,6 @@ def _collect_included_with_provider(
         collected = evaluator.collect_after(
             after_local_dt,
             limit=limit,
-            next_occurrence_after_local_dt=next_occurrence_after_local_dt,
             fallback_hhmm=fallback_hhmm,
             default_seed_date=default_seed_date,
             inclusive=inclusive,

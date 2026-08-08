@@ -271,7 +271,9 @@ def next_occurrence_event_local(
     anchor_file_provider: Any | None = None,
     recurrence_context: Any | None = None,
     business_calendar: Any | None = None,
+    scheduler_omit_dnf=...,
 ) -> Occurrence | None:
+    scheduler_omit = omit_dnf if scheduler_omit_dnf is ... else scheduler_omit_dnf
     expr_local = None
     expr_omit_dnf = omit_dnf if dnf and core.dnf_has_counted_random(dnf) else None
     if dnf:
@@ -283,7 +285,7 @@ def next_occurrence_event_local(
                 fallback_hhmm=fallback_hhmm,
                 interval_seed=default_seed_date,
                 seed_base=seed_base,
-                omit_dnf=expr_omit_dnf,
+                omit_dnf=scheduler_omit,
             )
         else:
             expr_after = _cursor_before(after_local_dt) if inclusive else after_local_dt
@@ -292,7 +294,7 @@ def next_occurrence_event_local(
                 expr_after,
                 default_seed_date=default_seed_date,
                 seed_base=seed_base,
-                omit_dnf=expr_omit_dnf,
+                omit_dnf=scheduler_omit,
                 fallback_hhmm=fallback_hhmm,
             )
     file_occurrence = _next_anchor_file_occurrence(

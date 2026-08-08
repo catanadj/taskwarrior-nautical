@@ -317,7 +317,6 @@ class RecurrenceEvaluator:
         self,
         after_local: datetime,
         *,
-        next_occurrence_after_local_dt: Callable[..., Any] | None = None,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = False,
@@ -327,9 +326,8 @@ class RecurrenceEvaluator:
     ) -> Occurrence | None:
         """Return the next included expression/file occurrence.
 
-        The shared scheduler is used by default.  A callback remains accepted
-        for deterministic tests and specialized integrations while callers
-        migrate to this evaluator-owned lookup.
+        The evaluator-bound scheduler owns date, time, astronomy, and timezone
+        resolution for every caller.
         """
         if self.kind != "anchor":
             raise ValueError("Occurrence lookup requires an anchor recurrence.")
@@ -339,9 +337,7 @@ class RecurrenceEvaluator:
         if isinstance(max_file_skips, bool) or not isinstance(max_file_skips, int) or max_file_skips <= 0:
             raise ValueError("Anchor-file omission scan limit must be a positive integer.")
         from . import anchor_inclusion
-        next_occurrence_after_local_dt = (
-            next_occurrence_after_local_dt or self._default_next_occurrence_after_local_dt
-        )
+        next_occurrence_after_local_dt = self._default_next_occurrence_after_local_dt
         anchor_file_provider = anchor_file_provider or self._anchor_file_provider_for(fallback_hhmm)
 
         return anchor_inclusion.next_included_occurrence(
@@ -367,7 +363,6 @@ class RecurrenceEvaluator:
         self,
         after_local: datetime,
         *,
-        next_occurrence_after_local_dt: Callable[..., Any] | None = None,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = False,
@@ -391,9 +386,7 @@ class RecurrenceEvaluator:
             raise ValueError("Anchor-file omission scan limit must be a positive integer.")
         from . import anchor_inclusion
         from .occurrence_provider import _require_forward_progress
-        next_occurrence_after_local_dt = (
-            next_occurrence_after_local_dt or self._default_next_occurrence_after_local_dt
-        )
+        next_occurrence_after_local_dt = self._default_next_occurrence_after_local_dt
         anchor_file_provider = anchor_file_provider or self._anchor_file_provider_for(fallback_hhmm)
 
         cursor = after_local
@@ -407,7 +400,11 @@ class RecurrenceEvaluator:
                 fallback_hhmm=fallback_hhmm,
                 default_seed_date=default_seed_date or after_local.date(),
                 seed_base=self.seed_base,
+                # The event stream must see omitted anchor dates so it can
+                # retain or skip them explicitly; omission is applied by the
+                # event merger rather than by the date scheduler.
                 omit_dnf=self.omit_dnf,
+                scheduler_omit_dnf=None,
                 core=self._core_module(),
                 next_occurrence_after_local_dt=next_occurrence_after_local_dt,
                 pick_occurrence_local=pick_occurrence_local,
@@ -434,7 +431,6 @@ class RecurrenceEvaluator:
         end_local: datetime,
         *,
         limit: int,
-        next_occurrence_after_local_dt: Callable[..., Any] | None = None,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = True,
@@ -470,7 +466,6 @@ class RecurrenceEvaluator:
         for _ in range(max_iterations):
             event = self.next_event_after(
                 cursor,
-                next_occurrence_after_local_dt=next_occurrence_after_local_dt,
                 fallback_hhmm=fallback_hhmm,
                 default_seed_date=default_seed_date,
                 inclusive=first,
@@ -500,7 +495,6 @@ class RecurrenceEvaluator:
         *,
         due_local: datetime,
         end_local: datetime,
-        next_occurrence_after_local_dt: Callable[..., Any] | None = None,
         due_explicit: bool = True,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
@@ -536,7 +530,6 @@ class RecurrenceEvaluator:
                     due_local,
                     end_local,
                     limit=missed_limit,
-                    next_occurrence_after_local_dt=next_occurrence_after_local_dt,
                     fallback_hhmm=fallback_hhmm,
                     default_seed_date=default_seed_date,
                     inclusive=False,
@@ -573,7 +566,6 @@ class RecurrenceEvaluator:
             basis = "after_due"
         selected_event = self.next_event_after(
             cursor,
-            next_occurrence_after_local_dt=next_occurrence_after_local_dt,
             fallback_hhmm=fallback_hhmm,
             default_seed_date=default_seed_date,
             inclusive=False,
@@ -598,7 +590,6 @@ class RecurrenceEvaluator:
         after_local: datetime,
         *,
         limit: int,
-        next_occurrence_after_local_dt: Callable[..., Any] | None = None,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = False,
@@ -614,7 +605,6 @@ class RecurrenceEvaluator:
         provider = AnchorOccurrenceProvider(
             lambda cursor: self.next_after(
                 cursor,
-                next_occurrence_after_local_dt=next_occurrence_after_local_dt,
                 fallback_hhmm=fallback_hhmm,
                 default_seed_date=default_seed_date,
                 pick_occurrence_local=pick_occurrence_local,
@@ -655,6 +645,48 @@ class RecurrenceEvaluator:
 
         core = self._core_module()
 
+        class SchedulerCoreProxy:
+            """Expose core helpers while binding all wall-clock conversion to this evaluator."""
+
+            def __getattr__(self, name):
+                return getattr(core, name)
+
+            def to_local(self, value):
+                return self_evaluator.to_local(value)
+
+            def build_local_datetime(self, day, hhmm):
+                return self_evaluator.build_local_datetime(day, hhmm)
+
+            def factor_matches_on(self, factor, day, default_seed, *, seed_base=None, business_calendar=None):
+                return core.factor_matches_on(
+                    factor,
+                    day,
+                    default_seed,
+                    seed_base=seed_base,
+                    business_calendar=(
+                        business_calendar
+                        if business_calendar is not None
+                        else self_evaluator.context.business_calendar
+                    ),
+                )
+
+            def next_after_expr(self, expression, ref_date, *, default_seed=None, seed_base=None, date_is_excluded=None, business_calendar=None):
+                return core.next_after_expr(
+                    expression,
+                    ref_date,
+                    default_seed=default_seed,
+                    seed_base=seed_base,
+                    date_is_excluded=date_is_excluded,
+                    business_calendar=(
+                        business_calendar
+                        if business_calendar is not None
+                        else self_evaluator.context.business_calendar
+                    ),
+                )
+
+        self_evaluator = self
+        scheduler_core = SchedulerCoreProxy()
+
         def resolve_slots(value, target_date):
             """Resolve slots with the evaluator's astronomy and timezone context."""
             config = self.context.astronomy_config
@@ -675,7 +707,7 @@ class RecurrenceEvaluator:
             seed_base=seed_base,
             omit_dnf=omit_dnf,
             default_seed_date=default_seed_date,
-            core=core,
+            core=scheduler_core,
             norm_t_mod=_norm_t_mod,
             resolve_time_slots=resolve_slots,
         )

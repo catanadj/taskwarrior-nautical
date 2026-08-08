@@ -3600,7 +3600,6 @@ def _anchor_included_occurrences(
     anchor_inclusion = core._import_sibling("anchor_inclusion")
     occurrence_provider = core._import_sibling("occurrence_provider")
     evaluator = _recurrence_evaluator_for_task(parent)
-    scheduler = evaluator._default_next_occurrence_after_local_dt
     anchor_file = (parent.get("anchor_file") or "").strip()
     if anchor_file_provider is None:
         anchor_file_provider = (
@@ -3625,7 +3624,7 @@ def _anchor_included_occurrences(
             seed_base=seed_base,
             omit_dnf=omit_dnf,
             core=core,
-            next_occurrence_after_local_dt=scheduler,
+            next_occurrence_after_local_dt=evaluator._default_next_occurrence_after_local_dt,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=anchor_file_provider,
         ),
@@ -4851,7 +4850,6 @@ def _timeline_lines(
         dnf_for_merge = dnf if kind == "anchor" else None
         anchor_inclusion = core._import_sibling("anchor_inclusion")
         evaluator = _recurrence_evaluator_for_task(task)
-        scheduler = evaluator._default_next_occurrence_after_local_dt
         AnchorEventOccurrenceProvider = core._import_sibling("occurrence_provider").AnchorEventOccurrenceProvider
         collect_after = core._import_sibling("occurrence_provider").collect_after
         anchor_file_str = (task.get("anchor_file") or "").strip()
@@ -4874,7 +4872,8 @@ def _timeline_lines(
                 seed_base=seed_base,
                 omit_dnf=omit_dnf,
                 core=core,
-                next_occurrence_after_local_dt=scheduler,
+                next_occurrence_after_local_dt=evaluator._default_next_occurrence_after_local_dt,
+                scheduler_omit_dnf=None,
                 anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
                 anchor_file_provider=anchor_file_provider,
             ),
@@ -4995,9 +4994,7 @@ def _timeline_lines(
     anchor_omit = _module("anchor_omit") if kind == "anchor" else None
     timeline_scheduler = _next_occurrence_after_local_dt
     if kind == "anchor":
-        timeline_scheduler = _recurrence_evaluator_for_task(
-            task
-        )._default_next_occurrence_after_local_dt
+        timeline_scheduler = _recurrence_evaluator_for_task(task)._default_next_occurrence_after_local_dt
     return modify_timeline.timeline_lines(
         kind,
         task,

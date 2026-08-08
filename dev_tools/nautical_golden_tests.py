@@ -8286,6 +8286,35 @@ def test_build_and_cache_hints_parses_once_per_miss():
         core.cache_load = saved_load
         core.cache_save = saved_save
 
+
+def test_precompute_hints_bounds_year_stats_by_days():
+    """Annual hint statistics should not count occurrences beyond the sample horizon."""
+    import nautical_core.precompute as precompute
+
+    start = datetime(2026, 1, 1)
+
+    def weekly_next(_dnf, after, _default_seed):
+        return after + timedelta(days=7)
+
+    def weekly_next_expr(_dnf, after, **_kwargs):
+        return after + timedelta(days=7), None
+
+    hints = precompute.precompute_hints(
+        [[]],
+        start_dt=start,
+        rand_seed=None,
+        k_next=3,
+        sample_days_for_year=8,
+        now_local=lambda: start,
+        next_after_expr=weekly_next_expr,
+        next_for_or=weekly_next,
+    )
+    expect(
+        hints["per_year"]["est"] == 1,
+        f"annual hint statistics exceeded the day horizon: {hints['per_year']}",
+    )
+
+
 def test_parser_validation():
     """Test parser validation and error messages"""
     # Valid expressions that should parse
@@ -29116,6 +29145,7 @@ TESTS = [
     test_build_and_cache_hints_returns_isolated_cached_payload,
     test_cache_key_for_task_caches_build_acf_results,
     test_build_and_cache_hints_parses_once_per_miss,
+    test_precompute_hints_bounds_year_stats_by_days,
     test_yearly_rand_natural_and_bounds,
     test_yearly_rand_respects_sibling_month_filter,
     test_yearly_rand_natural_compacts_sibling_filter,

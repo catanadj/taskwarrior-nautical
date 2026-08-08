@@ -64,14 +64,18 @@ def precompute_hints(
     ref = today
     steps = 0
     seen = set()
+    sample_horizon = max(1, int(sample_days_for_year or 1))
+    sample_end = today + timedelta(days=sample_horizon)
 
-    while steps < sample_days_for_year:
+    # Annual statistics are bounded by calendar coverage, not occurrence count.
+    # Sparse rules must not force hundreds of years of scheduling work.
+    while steps < sample_horizon and ref < sample_end:
         if use_expr_scheduler:
             nxt, _ = next_after_expr(dnf, ref, default_seed=default_seed, seed_base=seed_base)
         else:
             nxt = next_for_or(dnf, ref, default_seed)
 
-        if not nxt or nxt <= ref:
+        if not nxt or nxt <= ref or nxt >= sample_end:
             break
 
         iso_s = nxt.isoformat() + "T00:00"

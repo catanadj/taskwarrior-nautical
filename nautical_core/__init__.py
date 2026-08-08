@@ -1428,287 +1428,6 @@ def _bd_shift_suffix(kind: str) -> str:
     )
 
 
-def _ordinal(n: int) -> str:
-    return _natural_language.ordinal(n)
-
-
-def _term_collect_mods(term: list) -> dict:
-    return _natural_language.term_collect_mods(term)
-
-
-def _fmt_hhmm_for_term(term: list, default_due_dt):
-    return _natural_language.fmt_hhmm_for_term(term, default_due_dt)
-
-
-def _fmt_weekdays_list(spec: str) -> str:
-    return _natural_language.fmt_weekdays_list(
-        spec,
-        expand_weekly_aliases=_expand_weekly_aliases,
-        split_csv_lower=_split_csv_lower,
-        wday_idx_any=_wday_idx_any,
-    )
-
-
-def _fmt_monthly_atom(spec: str) -> str:
-    return _natural_language.fmt_monthly_atom(
-        spec,
-        monthly_alias=_MONTHLY_ALIAS,
-        safe_match=_safe_match,
-        nth_wd_re=_nth_wd_re,
-        bd_re=_bd_re,
-    )
-
-
-def _fmt_md(d: int, m: int) -> str:
-    fmt = (globals().get("ANCHOR_YEAR_FMT") or "DM").upper()
-    name = _natural_language._MONTH_ABBR[m - 1]
-    return f"{d} {name}" if fmt == "DM" else f"{name} {d}"
-
-
-def _is_full_month(d1, m1, d2, m2) -> int | None:
-    """Return month number if token covers the whole month, else None.
-    Accepts 28..31 as 'end of month' (Feb handled leniently)."""
-    if m1 != m2 or d1 != 1:
-        return None
-    return m1 if 28 <= d2 <= 31 else None
-
-
-def _fmt_yearly_atom(tok: str) -> str:
-    return _natural_language.fmt_yearly_atom(
-        tok,
-        rand_mm_re=_rand_mm_re,
-        md_range_re=_md_range_re,
-        yearfmt=_yearfmt,
-    )
-
-
-
-
-def _describe_monthly_tokens(spec: str):
-    return _natural_language.describe_monthly_tokens(spec, split_csv_lower=_split_csv_lower)
-
-
-def _describe_is_pure_nth_weekday_spec(spec: str):
-    return _natural_language.describe_is_pure_nth_weekday_spec(
-        spec,
-        split_csv_lower=_split_csv_lower,
-        safe_match=_safe_match,
-        nth_wd_re=_nth_wd_re,
-    )
-
-
-def _describe_is_pure_dom_spec(spec: str):
-    return _natural_language.describe_is_pure_dom_spec(spec, split_csv_lower=_split_csv_lower)
-
-
-def _describe_single_full_month_from_yearly_spec(spec: str):
-    return _natural_language.describe_single_full_month_from_yearly_spec(
-        spec,
-        year_range_colon_re=_year_range_colon_re,
-    )
-
-
-def _describe_term_roll_shift(term) -> str | None:
-    return _natural_language.describe_term_roll_shift(term)
-
-
-def _describe_term_bd_filter(term) -> bool:
-    return _natural_language.describe_term_bd_filter(term)
-
-
-def _describe_roll_suffix(roll: str) -> str:
-    return _natural_language.describe_roll_suffix(roll)
-
-
-def _describe_inject_schedule_suffixes(txt: str, term) -> str:
-    return _natural_language.describe_inject_schedule_suffixes(txt, term)
-
-
-def _describe_anchor_term_collect(term):
-    return _natural_language.describe_anchor_term_collect(
-        term,
-        fmt_weekdays_list=_fmt_weekdays_list,
-        split_csv_tokens=_split_csv_tokens,
-        fmt_monthly_atom=_fmt_monthly_atom,
-        fmt_yearly_atom=_fmt_yearly_atom,
-    )
-
-
-def _describe_anchor_term_fused_month_year(
-    term,
-    default_due_dt,
-    monthly_specs,
-    yearly_specs,
-    yr_ival: int,
-    bd_filter: bool,
-    m_parts: list[str],
-) -> str | None:
-    return _natural_language.describe_anchor_term_fused_month_year(
-        term,
-        default_due_dt,
-        monthly_specs,
-        yearly_specs,
-        yr_ival,
-        bd_filter,
-        m_parts,
-        describe_is_pure_nth_weekday_spec=_describe_is_pure_nth_weekday_spec,
-        describe_single_full_month_from_yearly_spec=_describe_single_full_month_from_yearly_spec,
-        fmt_hhmm_for_term=_fmt_hhmm_for_term,
-    )
-
-
-def _describe_anchor_term_interval_prefix(wk_ival, mo_ival, yr_ival, monthly_specs):
-    return _natural_language.describe_anchor_term_interval_prefix(
-        wk_ival,
-        mo_ival,
-        yr_ival,
-        monthly_specs,
-        describe_is_pure_nth_weekday_spec=_describe_is_pure_nth_weekday_spec,
-        describe_is_pure_dom_spec=_describe_is_pure_dom_spec,
-    )
-
-
-def _describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter: bool) -> list[str]:
-    return _natural_language.describe_anchor_term_parts(w_phrase, m_parts, y_parts, bd_filter)
-
-
-def describe_anchor_term(term: list, default_due_dt=None) -> str:
-    selections = [factor for factor in term if _position_selection.is_selection_node(factor)]
-    if selections:
-        selection = selections[0]
-        inner = _describe_anchor_expr_from_dnf(
-            selection.get("expr") or [],
-            default_due_dt=default_due_dt,
-        )
-        text = _position_selection.describe_selection(selection, inner)
-        hhmm = _fmt_hhmm_for_term([selection], default_due_dt)
-        if hhmm:
-            text += f" at {hhmm}"
-        text = _describe_inject_schedule_suffixes(text, [selection])
-        mods = selection.get("mods") or {}
-        roll = mods.get("roll")
-        weekday = mods.get("wd")
-        if roll in ("next-wd", "prev-wd") and isinstance(weekday, int) and 0 <= weekday < 7:
-            direction = "next" if roll == "next-wd" else "previous"
-            suffix = f", shifted to the {direction} {_natural_language._WDNAME[weekday]}"
-            if " at " in text:
-                head, separator, tail = text.partition(" at ")
-                text = f"{head}{suffix}{separator}{tail}"
-            else:
-                text += suffix
-        plain_factors = [factor for factor in term if not _position_selection.is_selection_node(factor)]
-        if plain_factors:
-            constraint = _natural_language.describe_anchor_term(
-                plain_factors,
-                default_due_dt=default_due_dt,
-                fmt_weekdays_list=_fmt_weekdays_list,
-                split_csv_tokens=_split_csv_tokens,
-                fmt_monthly_atom=_fmt_monthly_atom,
-                fmt_yearly_atom=_fmt_yearly_atom,
-                describe_is_pure_nth_weekday_spec=_describe_is_pure_nth_weekday_spec,
-                describe_single_full_month_from_yearly_spec=_describe_single_full_month_from_yearly_spec,
-                fmt_hhmm_for_term=_fmt_hhmm_for_term,
-                describe_is_pure_dom_spec=_describe_is_pure_dom_spec,
-            )
-            if constraint:
-                text += f" that also matches {constraint}"
-        return text
-    return _natural_language.describe_anchor_term(
-        term,
-        default_due_dt=default_due_dt,
-        fmt_weekdays_list=_fmt_weekdays_list,
-        split_csv_tokens=_split_csv_tokens,
-        fmt_monthly_atom=_fmt_monthly_atom,
-        fmt_yearly_atom=_fmt_yearly_atom,
-        describe_is_pure_nth_weekday_spec=_describe_is_pure_nth_weekday_spec,
-        describe_single_full_month_from_yearly_spec=_describe_single_full_month_from_yearly_spec,
-        fmt_hhmm_for_term=_fmt_hhmm_for_term,
-        describe_is_pure_dom_spec=_describe_is_pure_dom_spec,
-    )
-
-def _describe_anchor_expr_from_dnf(dnf: list, default_due_dt=None) -> str:
-    return _natural_language.describe_anchor_expr_from_dnf(
-        dnf,
-        default_due_dt=default_due_dt,
-        describe_anchor_term=describe_anchor_term,
-    )
-
-
-def _describe_anchor_expr_impl(anchor_expr: str, default_due_dt=None) -> str:
-    return _natural_language.describe_anchor_expr(
-        anchor_expr,
-        default_due_dt=default_due_dt,
-        parse_anchor_expr_to_dnf_cached=parse_anchor_expr_to_dnf_cached,
-        describe_anchor_expr_from_dnf=_describe_anchor_expr_from_dnf,
-    )
-
-
-
-def _term_prevnext_wd(term):
-    return _natural_language.term_prevnext_wd(term, wdname=_natural_language._WDNAME)
-
-
-def _inject_prevnext_phrase(txt: str, term) -> str:
-    return _natural_language.inject_prevnext_phrase(
-        txt,
-        term,
-        wdname=_natural_language._WDNAME,
-    )
-
-
-def _join_natural_or_terms(terms: list[str]) -> str:
-    return _natural_language.join_natural_or_terms(terms)
-
-
-def _longest_common_suffix(parts: list[str]) -> str:
-    return _natural_language.longest_common_suffix(parts)
-
-
-def _compress_or_terms_by_clause(terms: list[str], delim: str) -> str | None:
-    return _natural_language.compress_or_terms_by_clause(terms, delim)
-
-
-def _describe_anchor_dnf_impl(dnf: list, task: dict) -> str:
-    return _natural_language.describe_anchor_dnf(
-        dnf,
-        task,
-        try_bucket_rand_monthly=_try_bucket_rand_monthly,
-        parse_dt_any=parse_dt_any,
-        describe_anchor_term=describe_anchor_term,
-    )
-
-
-def _normalize_range_token(tok: str) -> str | None:
-    return _natural_language.normalize_range_token(
-        tok,
-        safe_match=_safe_match,
-        int_range_re=_int_range_re,
-    )
-
-
-def _rand_bucket_time_from_mods(mods: dict) -> str | None:
-    return _natural_language.rand_bucket_time_from_mods(mods)
-
-
-def _rand_bucket_merge_mods(mods: dict, time_str: str | None, bd_flag: bool) -> tuple[str | None, bool]:
-    return _natural_language.rand_bucket_merge_mods(mods, time_str, bd_flag)
-
-
-def _rand_bucket_signature(term: list[dict]) -> tuple | None:
-    return _natural_language.rand_bucket_signature(
-        term,
-        normalize_range_token=_normalize_range_token,
-    )
-
-
-def _try_bucket_rand_monthly(dnf: list[list[dict]], task: dict) -> str | None:
-    return _natural_language.try_bucket_rand_monthly(
-        dnf,
-        task,
-        rand_bucket_signature=_rand_bucket_signature,
-    )
-
-
 # -------- ----------
 
 
@@ -3170,7 +2889,44 @@ factor_matches_on = _scheduler_api.factor_matches_on
 next_after_term = _scheduler_api.next_after_term
 next_after_expr = _scheduler_api.next_after_expr
 
-_natural_language_api = _import_sibling("natural_language_api").for_core(sys.modules[__name__])
+_natural_language_api = _import_sibling("natural_language_api").for_core(
+    sys.modules[__name__],
+    namespace=globals(),
+)
+_ordinal = _natural_language_api._ordinal
+_term_collect_mods = _natural_language_api._term_collect_mods
+_fmt_hhmm_for_term = _natural_language_api._fmt_hhmm_for_term
+_fmt_weekdays_list = _natural_language_api._fmt_weekdays_list
+_fmt_monthly_atom = _natural_language_api._fmt_monthly_atom
+_fmt_md = _natural_language_api._fmt_md
+_is_full_month = _natural_language_api._is_full_month
+_fmt_yearly_atom = _natural_language_api._fmt_yearly_atom
+_describe_monthly_tokens = _natural_language_api._describe_monthly_tokens
+_describe_is_pure_nth_weekday_spec = _natural_language_api._describe_is_pure_nth_weekday_spec
+_describe_is_pure_dom_spec = _natural_language_api._describe_is_pure_dom_spec
+_describe_single_full_month_from_yearly_spec = _natural_language_api._describe_single_full_month_from_yearly_spec
+_describe_term_roll_shift = _natural_language_api._describe_term_roll_shift
+_describe_term_bd_filter = _natural_language_api._describe_term_bd_filter
+_describe_roll_suffix = _natural_language_api._describe_roll_suffix
+_describe_inject_schedule_suffixes = _natural_language_api._describe_inject_schedule_suffixes
+_describe_anchor_term_collect = _natural_language_api._describe_anchor_term_collect
+_describe_anchor_term_fused_month_year = _natural_language_api._describe_anchor_term_fused_month_year
+_describe_anchor_term_interval_prefix = _natural_language_api._describe_anchor_term_interval_prefix
+_describe_anchor_term_parts = _natural_language_api._describe_anchor_term_parts
+describe_anchor_term = _natural_language_api.describe_anchor_term
+_describe_anchor_expr_from_dnf = _natural_language_api._describe_anchor_expr_from_dnf
+_describe_anchor_expr_impl = _natural_language_api._describe_anchor_expr_impl
+_term_prevnext_wd = _natural_language_api._term_prevnext_wd
+_inject_prevnext_phrase = _natural_language_api._inject_prevnext_phrase
+_join_natural_or_terms = _natural_language_api._join_natural_or_terms
+_longest_common_suffix = _natural_language_api._longest_common_suffix
+_compress_or_terms_by_clause = _natural_language_api._compress_or_terms_by_clause
+_describe_anchor_dnf_impl = _natural_language_api._describe_anchor_dnf_impl
+_normalize_range_token = _natural_language_api._normalize_range_token
+_rand_bucket_time_from_mods = _natural_language_api._rand_bucket_time_from_mods
+_rand_bucket_merge_mods = _natural_language_api._rand_bucket_merge_mods
+_rand_bucket_signature = _natural_language_api._rand_bucket_signature
+_try_bucket_rand_monthly = _natural_language_api._try_bucket_rand_monthly
 describe_anchor_expr = _natural_language_api.describe_anchor_expr
 describe_anchor_dnf = _natural_language_api.describe_anchor_dnf
 

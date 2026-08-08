@@ -931,6 +931,8 @@ def handle_anchor_preview_on_add(
     append_first_expiration_row: Callable[[list[tuple[str, str]], dict[str, Any], datetime, str], None],
 ) -> None:
     rows: list[tuple[str, str]] = []
+    panel_mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
+    compact_presentation = panel_mode in {"quiet", "minimal", "line", "text"}
     for warning in panel_diagnostics.panel_warnings(core, task):
         rows.append(("Warning", f"[yellow]{warning}[/]"))
     dnf = None
@@ -1181,7 +1183,11 @@ def handle_anchor_preview_on_add(
     preview: list[str]
     exact_until_count = None
     final_until_dt = None
-    if dnf and not merged:
+    if compact_presentation:
+        exact_until_count = None
+        final_until_dt = None
+        preview = []
+    elif dnf and not merged:
         exact_until_count, final_until_dt = anchor_until_summary(
             dnf,
             until_dt,
@@ -1209,7 +1215,7 @@ def handle_anchor_preview_on_add(
             evaluator=recurrence_evaluator,
         )
         prof.add_ms("anchor:preview_occurrences", (time.perf_counter() - _t_prev) * 1000.0)
-    else:
+    elif not compact_presentation:
         all_occurrences = _collect_included_with_provider(
             dnf=dnf,
             anchor_file_str=anchor_file_str,
@@ -1273,14 +1279,15 @@ def handle_anchor_preview_on_add(
         if anchor_str:
             anchor_preview_lint_and_validate(anchor_str, prof, core=core, panel=panel)
 
-    rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
-    rows.append(("Delta", f"[bright_yellow]{human_delta(now_utc, display_first_due_utc, bool(dnf and core.expr_has_m_or_y(dnf)))}[/]"))
+    if not compact_presentation:
+        rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
+        rows.append(("Delta", f"[bright_yellow]{human_delta(now_utc, display_first_due_utc, bool(dnf and core.expr_has_m_or_y(dnf)))}[/]"))
 
     final_max_dt = None
     future_needed = max(0, cpmax - 1)
-    if cpmax == 1:
+    if not compact_presentation and cpmax == 1:
         final_max_dt = display_first_due_utc
-    elif future_needed and future_needed <= max_summary_links:
+    elif not compact_presentation and future_needed and future_needed <= max_summary_links:
         future_for_max = _collect_included_with_provider(
             dnf=dnf,
             anchor_file_str=anchor_file_str,
@@ -1300,17 +1307,18 @@ def handle_anchor_preview_on_add(
         if len(future_for_max) == future_needed:
             final_max_dt = future_for_max[-1].astimezone(timezone.utc)
 
-    anchor_preview_limit_rows(
-        rows,
-        cpmax=cpmax,
-        until_dt=until_dt,
-        exact_until_count=exact_until_count,
-        final_until_dt=final_until_dt,
-        now_utc=now_utc,
-        core=core,
-        human_delta=human_delta,
-        final_max_dt=final_max_dt,
-    )
+    if not compact_presentation:
+        anchor_preview_limit_rows(
+            rows,
+            cpmax=cpmax,
+            until_dt=until_dt,
+            exact_until_count=exact_until_count,
+            final_until_dt=final_until_dt,
+            now_utc=now_utc,
+            core=core,
+            human_delta=human_delta,
+            final_max_dt=final_max_dt,
+        )
 
     if anchor_str and "rand" in anchor_str.lower():
         base = short(root_uuid_from(task))

@@ -639,6 +639,18 @@ class RecurrenceEvaluator:
         fallback_hhmm: tuple[int, int] | None = None,
     ):
         """Resolve the shared date/time scheduler for evaluator consumers."""
+        scheduler = self._get_cached("scheduler_binding", self._build_scheduler_binding)
+        return scheduler(
+            dnf,
+            after_local_dt,
+            default_seed_date=default_seed_date,
+            seed_base=seed_base,
+            omit_dnf=omit_dnf,
+            fallback_hhmm=fallback_hhmm,
+        )
+
+    def _build_scheduler_binding(self):
+        """Build the evaluator-bound scheduler once per evaluator session."""
         from .add_anchor_compute import anchor_next_occurrence_after_local_dt
         from .anchor_inclusion import _norm_t_mod
         from .time_slots import resolve_time_slots
@@ -699,18 +711,29 @@ class RecurrenceEvaluator:
                 to_local=self.to_local,
             )
 
-        return anchor_next_occurrence_after_local_dt(
+        def scheduler(
             dnf,
-            after_local_dt,
-            fallback_hhmm=fallback_hhmm or (9, 0),
-            interval_seed=default_seed_date,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            default_seed_date=default_seed_date,
-            core=scheduler_core,
-            norm_t_mod=_norm_t_mod,
-            resolve_time_slots=resolve_slots,
-        )
+            after_local_dt: datetime,
+            *,
+            default_seed_date: date | None,
+            seed_base: str,
+            omit_dnf=None,
+            fallback_hhmm: tuple[int, int] | None = None,
+        ):
+            return anchor_next_occurrence_after_local_dt(
+                dnf,
+                after_local_dt,
+                fallback_hhmm=fallback_hhmm or (9, 0),
+                interval_seed=default_seed_date,
+                seed_base=seed_base,
+                omit_dnf=omit_dnf,
+                default_seed_date=default_seed_date,
+                core=scheduler_core,
+                norm_t_mod=_norm_t_mod,
+                resolve_time_slots=resolve_slots,
+            )
+
+        return scheduler
 
     @staticmethod
     def _validate_hhmm(value: tuple[int, int]) -> None:

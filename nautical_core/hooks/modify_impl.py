@@ -3581,8 +3581,15 @@ def _anchor_parent_local_times(parent: dict):
 
 def _recurrence_evaluator_for_task(task: dict):
     """Build the task-scoped evaluator used by completion projections."""
+    state = _modify_runtime_state()
+    cache_key = id(task)
+    cached = state.evaluator_sessions.get(cache_key)
+    if cached is not None and cached[0] is task:
+        _diag_count("evaluator_session_hits")
+        return cached[1]
+    _diag_count("evaluator_session_misses")
     evaluator_module = _module("recurrence_evaluator")
-    return evaluator_module.RecurrenceEvaluator.from_task(
+    evaluator = evaluator_module.RecurrenceEvaluator.from_task(
         task,
         fallback_chain_id=_recurrence_seed_base(task),
         timezone=core._LOCAL_TZ,
@@ -3590,6 +3597,8 @@ def _recurrence_evaluator_for_task(task: dict):
         astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
     )
+    state.evaluator_sessions[cache_key] = (task, evaluator)
+    return evaluator
 
 
 def _anchor_included_occurrences(

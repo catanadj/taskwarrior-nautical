@@ -19583,6 +19583,8 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     expect(evaluator.chain_id == "evaluator-chain", "evaluator lost chain identity")
     expect(evaluator.seed_base == "evaluator-chain", "evaluator seed identity changed")
     expect(evaluator.kind == "anchor" and evaluator.enabled, "evaluator kind was not normalized")
+
+
     expect(evaluator.spec.anchor_mode == "skip" and evaluator.spec.chain_max == 4, "evaluator spec was not normalized")
 
     shifted = evaluator.build_local_datetime(date(2025, 3, 9), (2, 30))
@@ -19821,6 +19823,30 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         expect("chain ID" in str(exc), f"missing-chain failure was not actionable: {exc}")
     else:
         raise AssertionError("evaluator silently invented a chain identity")
+
+
+def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
+    """One completion task should build its evaluator and scheduler binding once."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_evaluator_session_test")
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000111",
+        "chainID": "session-chain",
+        "anchor": "w:mon@t=09:00",
+        "anchor_mode": "skip",
+        "due": "20250106T090000Z",
+        "end": "20250106T100000Z",
+    }
+    mod._reset_modify_runtime_state()
+    try:
+        first = mod._recurrence_evaluator_for_task(task)
+        second = mod._recurrence_evaluator_for_task(task)
+        expect(first is second, "task-scoped evaluator was rebuilt within one hook session")
+        binding_a = first._get_cached("scheduler_binding", first._build_scheduler_binding)
+        binding_b = first._get_cached("scheduler_binding", first._build_scheduler_binding)
+        expect(binding_a is binding_b, "scheduler binding was rebuilt within one evaluator session")
+    finally:
+        mod._reset_modify_runtime_state()
 
 
 def test_recurrence_evaluator_loads_omit_file_without_text_rule():
@@ -30175,6 +30201,7 @@ TESTS.extend([
     test_random_time_window_flows_through_anchor_parser_and_resolver,
     test_recurrence_spec_normalizes_task_fields_and_context,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
+    test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,
     test_recurrence_evaluator_loads_omit_file_without_text_rule,
     test_recurrence_evaluator_shadow_parity_time_matrix,
     test_recurrence_evaluator_shadow_parity_dst_and_business_calendar,

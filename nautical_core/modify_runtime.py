@@ -17,6 +17,7 @@ from nautical_core.modify_models import (
 
 @dataclass(slots=True)
 class ModifyRuntimeState:
+    evaluator_sessions: dict[int, tuple[Any, Any]] = field(default_factory=dict)
     query_ctx: dict[str, dict[object, object]] = field(
         default_factory=lambda: {
             "task_text": {},
@@ -72,6 +73,8 @@ class ModifyRuntimeState:
             "chain_snapshot_filter_hits": 0,
             "chain_snapshot_truncations": 0,
             "unexpected_cache_misses": 0,
+            "evaluator_session_hits": 0,
+            "evaluator_session_misses": 0,
             "chain_cache_seeded": 0,
             "run_task_seconds": 0.0,
         }

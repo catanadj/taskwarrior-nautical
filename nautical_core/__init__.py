@@ -763,45 +763,6 @@ run_task = _runtime.run_task
 is_lock_error = _runtime.is_lock_error
 
 
-def _is_dnf_like(dnf) -> bool:
-    return _cache_payload.is_dnf_like(dnf, is_atom_like=_is_atom_like)
-
-def _is_atom_like(atom) -> bool:
-    return _cache_payload.is_factor_like(atom)
-
-
-def _clone_mod_value(v):
-    return _cache_payload.clone_mod_value(v)
-
-
-def _clone_mods(mods):
-    return _cache_payload.clone_mods(mods)
-
-
-def _clone_atom(atom):
-    return _cache_payload.clone_atom(atom)
-
-
-def _clone_dnf(dnf):
-    return _cache_payload.clone_dnf(dnf)
-
-
-def _clone_cache_payload(obj: dict) -> dict:
-    return _cache_payload.clone_cache_payload(obj)
-
-
-def _normalize_dnf_cached(dnf):
-    return _cache_payload.normalize_dnf_cached(dnf)
-
-
-def _cache_payload_shape_ok(obj: dict) -> bool:
-    return _cache_payload.cache_payload_shape_ok(obj, is_dnf_like=_is_dnf_like)
-
-
-def _cache_atomic_replace(src: str, dst: str) -> None:
-    _cache_payload.cache_atomic_replace(src, dst, os_mod=os)
-
-
 # ---- Core iterator over DNF ---------------------------------------------------
 _NTH_RE  = re.compile(r"^(?:(\d)(?:st|nd|rd|th)|last)-(" + "|".join(_WD_ABBR) + r")$")
 
@@ -1892,6 +1853,16 @@ _safe_lock_fcntl_context = _cache_api._safe_lock_fcntl_context
 _safe_lock_excl_context = _cache_api._safe_lock_excl_context
 safe_lock = _cache_api.safe_lock
 _cache_lock = _cache_api._cache_lock
+_is_atom_like = _cache_api._is_atom_like
+_is_dnf_like = _cache_api._is_dnf_like
+_clone_mod_value = _cache_api._clone_mod_value
+_clone_mods = _cache_api._clone_mods
+_clone_atom = _cache_api._clone_atom
+_clone_dnf = _cache_api._clone_dnf
+_clone_cache_payload = _cache_api._clone_cache_payload
+_normalize_dnf_cached = _cache_api._normalize_dnf_cached
+_cache_payload_shape_ok = _cache_api._cache_payload_shape_ok
+_cache_atomic_replace = _cache_api._cache_atomic_replace
 _cache_dir = _cache_api._cache_dir
 _cache_key = _cache_api._cache_key
 _cache_path = _cache_api._cache_path

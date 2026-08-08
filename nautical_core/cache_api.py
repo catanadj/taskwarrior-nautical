@@ -14,6 +14,29 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     import_sibling = core.get("_import_sibling", module._import_sibling)
     cache_support = import_sibling("cache_support")
     cache_locking = import_sibling("cache_locking")
+    cache_payload = import_sibling("cache_payload")
+
+    def is_atom_like(atom) -> bool:
+        return cache_payload.is_factor_like(atom)
+
+    def is_dnf_like(dnf) -> bool:
+        return cache_payload.is_dnf_like(dnf, is_atom_like=is_atom_like)
+
+    clone_mod_value = cache_payload.clone_mod_value
+    clone_mods = cache_payload.clone_mods
+    clone_atom = cache_payload.clone_atom
+    clone_dnf = cache_payload.clone_dnf
+    clone_cache_payload = cache_payload.clone_cache_payload
+    normalize_dnf_cached = cache_payload.normalize_dnf_cached
+
+    def cache_payload_shape_ok(obj: dict) -> bool:
+        return cache_payload.cache_payload_shape_ok(
+            obj,
+            is_dnf_like=core.get("_is_dnf_like", is_dnf_like),
+        )
+
+    def cache_atomic_replace(src: str, dst: str) -> None:
+        cache_payload.cache_atomic_replace(src, dst, os_mod=core["os"])
 
     def safe_lock_sleep_once(sleep_base: float, jitter: float) -> None:
         cache_locking.safe_lock_sleep_once(
@@ -194,9 +217,9 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             time_mod=core["time"],
             cache_load_mem=core["_CACHE_LOAD_MEM"],
             cache_load_mem_ttl=core["_CACHE_LOAD_MEM_TTL"],
-            clone_cache_payload=core["_clone_cache_payload"],
-            normalize_dnf_cached=core["_normalize_dnf_cached"],
-            cache_payload_shape_ok=core["_cache_payload_shape_ok"],
+            clone_cache_payload=core.get("_clone_cache_payload", clone_cache_payload),
+            normalize_dnf_cached=core.get("_normalize_dnf_cached", normalize_dnf_cached),
+            cache_payload_shape_ok=core.get("_cache_payload_shape_ok", cache_payload_shape_ok),
             cache_load_mem_max=core["_CACHE_LOAD_MEM_MAX"],
             diag=core["diag"],
             quarantine_cache=quarantine_cache,
@@ -220,7 +243,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             diag=core["diag"],
             os_mod=core["os"],
             tempfile_mod=core["tempfile"],
-            cache_atomic_replace=core["_cache_atomic_replace"],
+            cache_atomic_replace=core.get("_cache_atomic_replace", cache_atomic_replace),
             cache_load_mem=core["_CACHE_LOAD_MEM"],
         )
 
@@ -288,6 +311,16 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         _safe_lock_excl_context=safe_lock_excl_context,
         safe_lock=safe_lock,
         _cache_lock=cache_lock,
+        _is_atom_like=is_atom_like,
+        _is_dnf_like=is_dnf_like,
+        _clone_mod_value=clone_mod_value,
+        _clone_mods=clone_mods,
+        _clone_atom=clone_atom,
+        _clone_dnf=clone_dnf,
+        _clone_cache_payload=clone_cache_payload,
+        _normalize_dnf_cached=normalize_dnf_cached,
+        _cache_payload_shape_ok=cache_payload_shape_ok,
+        _cache_atomic_replace=cache_atomic_replace,
         _cache_dir=cache_dir,
         _cache_key=cache_key,
         _cache_path=cache_path,

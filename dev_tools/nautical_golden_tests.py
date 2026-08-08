@@ -17377,6 +17377,8 @@ def test_modify_anchor_file_mode_orders_dst_fold_by_instant():
     finally:
         _hook._anchor_file_future_occurrences = original
     expect(next_local is second_fold, f"DST fold selected the wrong occurrence: {next_local!r}")
+    expect(info.source == "anchor_file", f"anchor-file mode source was not typed: {info!r}")
+    expect(info.selected_occurrence is second_fold, f"typed result lost selected occurrence: {info!r}")
     expect(info.get("missed_count") == 1, f"DST fold counted wall-clock duplicate: {info!r}")
 
 
@@ -19399,6 +19401,14 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         == datetime(2025, 1, 2, tzinfo=timezone.utc),
         "CP due-date projection changed",
     )
+    file_evaluator = RecurrenceEvaluator.from_task(
+        {"chainID": "file-chain", "anchor_file": "events.csv"}
+    )
+    expect(
+        file_evaluator._anchor_file_provider_for((9, 0))
+        is file_evaluator._anchor_file_provider_for((9, 0)),
+        "evaluator rebuilt the anchor-file provider within one session",
+    )
     try:
         cp_evaluator.cp_interval_for_link(0)
     except ValueError as exc:
@@ -19427,6 +19437,71 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         [item.local_datetime for item in stream]
         == [datetime(2025, 1, 2), datetime(2025, 1, 3)],
         "evaluator did not expose a merged typed occurrence stream",
+    )
+
+    event_evaluator = RecurrenceEvaluator.from_task(
+        {"chainID": "event-chain", "anchor": "w:mon", "omit": "w:mon"}
+    )
+    omitted_event = event_evaluator.next_event_after(
+        datetime(2025, 1, 5),
+        next_occurrence_after_local_dt=next_day,
+        include_omitted=True,
+    )
+    expect(
+        omitted_event is not None and omitted_event.omitted
+        and omitted_event.local_datetime == datetime(2025, 1, 6),
+        f"event stream did not retain omitted occurrence: {omitted_event!r}",
+    )
+    included_event = event_evaluator.next_event_after(
+        datetime(2025, 1, 5),
+        next_occurrence_after_local_dt=next_day,
+    )
+    expect(
+        included_event is not None and not included_event.omitted
+        and included_event.local_datetime == datetime(2025, 1, 7),
+        f"event stream did not skip omitted occurrence by default: {included_event!r}",
+    )
+    ranged_events = event_evaluator.events_between(
+        datetime(2025, 1, 5),
+        datetime(2025, 1, 8),
+        limit=1,
+        next_occurrence_after_local_dt=next_day,
+        inclusive=False,
+        include_omitted=True,
+    )
+    expect(
+        [item.local_datetime for item in ranged_events]
+        == [datetime(2025, 1, 6), datetime(2025, 1, 7)],
+        f"bounded event stream did not retain omitted events while counting included ones: {ranged_events!r}",
+    )
+
+    mode_evaluator = RecurrenceEvaluator.from_task(
+        {"chainID": "mode-chain", "anchor": "w:mon"}
+    )
+    mode_common = {
+        "due_local": datetime(2025, 1, 1),
+        "end_local": datetime(2025, 1, 3),
+        "next_occurrence_after_local_dt": next_day,
+    }
+    all_result = mode_evaluator.select_mode("all", **mode_common)
+    skip_result = mode_evaluator.select_mode("skip", **mode_common)
+    flex_result = mode_evaluator.select_mode("flex", **mode_common)
+    expect(
+        all_result.selected_occurrence == datetime(2025, 1, 2)
+        and all_result.basis == "missed"
+        and all_result.source == "anchor",
+        f"all mode policy selected the wrong typed result: {all_result!r}",
+    )
+    expect(
+        skip_result.selected_occurrence == datetime(2025, 1, 4)
+        and skip_result.basis == "after_end",
+        f"skip mode policy selected the wrong typed result: {skip_result!r}",
+    )
+    expect(
+        flex_result.selected_occurrence == datetime(2025, 1, 4)
+        and flex_result.basis == "flex"
+        and flex_result.missed_count == 2,
+        f"flex mode policy lost missed evidence: {flex_result!r}",
     )
     try:
         parsed.collect_after(
@@ -20158,6 +20233,26 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
             expect(child_due == expected_due, f"unexpected anchor_file child due: {child_due!r}")
             expect(isinstance(meta, dict) and meta.get("target_field") == "due", f"unexpected anchor_file meta: {meta!r}")
 
+            from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+            evaluator = RecurrenceEvaluator.from_task(
+                parent,
+                timezone=mod.core._LOCAL_TZ,
+                anchor_file_dir=str(anchor_dir),
+            )
+            result = evaluator.select_mode(
+                "skip",
+                due_local=mod.core.to_local(mod.core.parse_dt_any(parent["due"])),
+                end_local=mod.core.to_local(mod.core.parse_dt_any(parent["end"])),
+                next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
+                fallback_hhmm=(12, 0),
+            )
+            expect(
+                result.selected_occurrence is not None
+                and result.selected_occurrence.astimezone(timezone.utc) == child_due,
+                f"evaluator/file mode drifted from hook mode: {result!r} vs {child_due!r}",
+            )
+
             child = mod._build_child_from_parent(parent, child_due, "due", 2, "deadbeef", "anchor_file", 0, None)
             expect(child.get("anchor_file") == "calendar.csv@nbd@t=12:00", f"child should preserve anchor_file: {child!r}")
             expect(not child.get("anchor"), f"child should not gain anchor expr: {child!r}")
@@ -20260,6 +20355,26 @@ def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
             expect(dnf is not None, f"combined anchor should preserve expression dnf, got {dnf!r}")
             expect(child_due == expected_due, f"unexpected combined anchor child due: {child_due!r}")
             expect(isinstance(meta, dict) and meta.get("target_field") == "due", f"unexpected combined anchor meta: {meta!r}")
+
+            from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+            evaluator = RecurrenceEvaluator.from_task(
+                parent,
+                timezone=mod.core._LOCAL_TZ,
+                anchor_file_dir=str(anchor_dir),
+            )
+            result = evaluator.select_mode(
+                "skip",
+                due_local=mod.core.to_local(mod.core.parse_dt_any(parent["due"])),
+                end_local=mod.core.to_local(mod.core.parse_dt_any(parent["end"])),
+                next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
+                fallback_hhmm=(9, 0),
+            )
+            expect(
+                result.selected_occurrence is not None
+                and result.selected_occurrence.astimezone(timezone.utc) == child_due,
+                f"evaluator/merged mode drifted from hook mode: {result!r} vs {child_due!r}",
+            )
         finally:
             mod.core.ANCHOR_FILE_DIR = old_dir
 
@@ -27963,14 +28078,46 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
             f"all mode did not backfill the missed spring slot: {all_local}",
         )
         expect(all_meta.get("basis") == "missed", f"all mode metadata drifted: {all_meta}")
+        expect(all_meta.get("source") == "anchor", f"all mode source drifted: {all_meta}")
         expect(
             skip_local.date() == date(2027, 3, 1)
             and (skip_local.hour, skip_local.minute) == (9, 0),
             f"skip mode did not advance to the next spring: {skip_local}",
         )
         expect(skip_meta.get("basis") == "after_end", f"skip metadata drifted: {skip_meta}")
+        expect(skip_meta.get("source") == "anchor", f"skip mode source drifted: {skip_meta}")
         expect(flex_local == skip_local, f"flex mode did not skip the seasonal backlog: {flex_local}")
         expect(flex_meta.get("basis") == "flex", f"flex metadata drifted: {flex_meta}")
+        expect(flex_meta.get("source") == "anchor", f"flex mode source drifted: {flex_meta}")
+
+        from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+        evaluator = RecurrenceEvaluator.from_task(
+            common,
+            timezone=mod.core._LOCAL_TZ,
+        )
+        for mode, hook_due, hook_meta in (
+            ("all", all_due, all_meta),
+            ("skip", skip_due, skip_meta),
+            ("flex", flex_due, flex_meta),
+        ):
+            evaluator_result = evaluator.select_mode(
+                mode,
+                due_local=mod.core.to_local(mod.core.parse_dt_any(common["due"])),
+                end_local=mod.core.to_local(mod.core.parse_dt_any(common["end"])),
+                next_occurrence_after_local_dt=mod._next_occurrence_after_local_dt,
+                fallback_hhmm=(17, 0),
+            )
+            expect(
+                evaluator_result.selected_occurrence is not None
+                and evaluator_result.selected_occurrence.astimezone(timezone.utc) == hook_due,
+                f"{mode} evaluator timestamp drifted from hook: {evaluator_result!r} vs {hook_due!r}",
+            )
+            expect(
+                evaluator_result.basis == hook_meta.get("basis")
+                and evaluator_result.source == hook_meta.get("source"),
+                f"{mode} evaluator evidence drifted from hook: {evaluator_result!r} vs {hook_meta!r}",
+            )
         expect(all_local.utcoffset() == timedelta(hours=3), f"summer offset drifted: {all_local}")
         expect(skip_local.utcoffset() == timedelta(hours=2), f"winter offset drifted: {skip_local}")
 

@@ -3900,6 +3900,7 @@ cache_save = _cache_api.cache_save
 cache_gc = _cache_api.cache_gc
 cache_key_for_task = _cache_api.cache_key_for_task
 
+RecurrenceModeResult = _import_sibling("recurrence_evaluator").RecurrenceModeResult
 
 _compat_api = _import_sibling("compat_api")
 __all__ = _compat_api.PUBLIC_EXPORTS

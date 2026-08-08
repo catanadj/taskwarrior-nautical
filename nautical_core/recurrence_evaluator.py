@@ -44,6 +44,54 @@ class RecurrenceLimits:
 
 
 @dataclass(frozen=True, slots=True)
+class RecurrenceModeResult:
+    """Typed result of selecting the next occurrence for an anchor mode.
+
+    The hook still consumes the historical metadata dictionary for now.  This
+    value keeps the selection and missed-occurrence evidence typed while the
+    mode engine is migrated into the evaluator.
+    """
+
+    selected_occurrence: datetime | None
+    mode: str
+    basis: str | None
+    source: str
+    missed_count: int = 0
+    missed_preview: tuple[datetime, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, str) or not self.mode:
+            raise ValueError("Recurrence mode result requires a mode.")
+        if not isinstance(self.source, str) or not self.source:
+            raise ValueError("Recurrence mode result requires a source.")
+        if isinstance(self.missed_count, bool) or not isinstance(self.missed_count, int):
+            raise TypeError("Recurrence missed count must be an integer.")
+        if self.missed_count < 0:
+            raise ValueError("Recurrence missed count cannot be negative.")
+        if not isinstance(self.missed_preview, tuple):
+            raise TypeError("Recurrence missed preview must be a tuple.")
+        if any(not isinstance(value, datetime) for value in self.missed_preview):
+            raise TypeError("Recurrence missed preview values must be datetimes.")
+
+    def metadata(self, *, target_field: str | None = None) -> dict[str, object]:
+        """Return the legacy metadata shape used by existing feedback panels."""
+        result: dict[str, object] = {
+            "mode": self.mode,
+            "basis": self.basis,
+            "source": self.source,
+            "missed_count": self.missed_count,
+            "missed_preview": [value.isoformat() for value in self.missed_preview[:5]],
+        }
+        if target_field:
+            result["target_field"] = target_field
+        return result
+
+    def get(self, key: str, default: object = None) -> object:
+        """Read legacy metadata keys during the incremental migration."""
+        return self.metadata().get(key, default)
+
+
+@dataclass(frozen=True, slots=True)
 class RecurrenceEvaluator:
     """Context-bound recurrence facade used by future lookup consumers."""
 
@@ -178,6 +226,26 @@ class RecurrenceEvaluator:
             raise ValueError("chainMax must be greater than zero.")
         return RecurrenceLimits(chain_max=self.spec.chain_max, chain_until=chain_until)
 
+    def _anchor_file_provider_for(self, fallback_hhmm: tuple[int, int]) -> Any | None:
+        """Build one context-bound anchor-file provider per evaluator session."""
+        if not self.spec.anchor_file:
+            return None
+        key = f"anchor_file_provider:{fallback_hhmm[0]:02d}:{fallback_hhmm[1]:02d}"
+        return self._get_cached(key, lambda: self._build_anchor_file_provider(fallback_hhmm))
+
+    def _build_anchor_file_provider(self, fallback_hhmm: tuple[int, int]) -> Any:
+        from . import anchor_inclusion
+
+        return anchor_inclusion._build_anchor_file_provider(
+            self.spec.anchor_file,
+            anchor_file_dir=self.context.anchor_file_dir,
+            fallback_hhmm=fallback_hhmm,
+            seed_base=self.seed_base,
+            core=self._core_module(),
+            recurrence_context=self.context,
+            business_calendar=self.context.business_calendar,
+        )
+
     def cp_interval_for_link(self, link_no: int) -> timedelta | None:
         """Resolve one CP interval using this evaluator's stable chain identity."""
         if self.kind != "cp":
@@ -243,6 +311,7 @@ class RecurrenceEvaluator:
         if isinstance(max_file_skips, bool) or not isinstance(max_file_skips, int) or max_file_skips <= 0:
             raise ValueError("Anchor-file omission scan limit must be a positive integer.")
         from . import anchor_inclusion
+        anchor_file_provider = anchor_file_provider or self._anchor_file_provider_for(fallback_hhmm)
 
         return anchor_inclusion.next_included_occurrence(
             dnf=self.anchor_dnf,
@@ -261,6 +330,233 @@ class RecurrenceEvaluator:
             recurrence_context=self.context,
             business_calendar=self.context.business_calendar,
             max_file_skips=max_file_skips,
+        )
+
+    def next_event_after(
+        self,
+        after_local: datetime,
+        *,
+        next_occurrence_after_local_dt: Callable[..., Any],
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        inclusive: bool = False,
+        pick_occurrence_local: Callable[..., Any] | None = None,
+        anchor_file_provider: Any | None = None,
+        include_omitted: bool = False,
+        max_file_skips: int = 512,
+    ) -> Occurrence | None:
+        """Return the next occurrence, optionally retaining omitted events.
+
+        The default is equivalent to :meth:`next_after`.  When
+        ``include_omitted`` is true, the returned :class:`Occurrence` keeps its
+        ``omitted`` marker so callers can inspect the complete event stream.
+        """
+        if self.kind != "anchor":
+            raise ValueError("Occurrence lookup requires an anchor recurrence.")
+        if not isinstance(after_local, datetime):
+            raise TypeError("Occurrence lookup requires a datetime cursor.")
+        self._validate_hhmm(fallback_hhmm)
+        if isinstance(max_file_skips, bool) or not isinstance(max_file_skips, int) or max_file_skips <= 0:
+            raise ValueError("Anchor-file omission scan limit must be a positive integer.")
+        from . import anchor_inclusion
+        from .occurrence_provider import _require_forward_progress
+        anchor_file_provider = anchor_file_provider or self._anchor_file_provider_for(fallback_hhmm)
+
+        cursor = after_local
+        first = inclusive
+        for _ in range(max_file_skips):
+            event = anchor_inclusion.next_occurrence_event_local(
+                dnf=self.anchor_dnf,
+                anchor_file_str=self.spec.anchor_file,
+                after_local_dt=cursor,
+                inclusive=first,
+                fallback_hhmm=fallback_hhmm,
+                default_seed_date=default_seed_date or after_local.date(),
+                seed_base=self.seed_base,
+                omit_dnf=self.omit_dnf,
+                core=self._core_module(),
+                next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+                pick_occurrence_local=pick_occurrence_local,
+                anchor_file_dir=self.context.anchor_file_dir,
+                anchor_file_provider=anchor_file_provider,
+                recurrence_context=self.context,
+                business_calendar=self.context.business_calendar,
+            )
+            if event is None or event.local_datetime is None:
+                return None
+            if include_omitted or not event.omitted:
+                return event
+            _require_forward_progress(cursor, event.local_datetime)
+            cursor = event.local_datetime
+            first = False
+        raise ValueError(
+            f"Occurrence omission scan exceeded {max_file_skips} events; "
+            "narrow the anchor or omit rule."
+        )
+
+    def events_between(
+        self,
+        start_local: datetime,
+        end_local: datetime,
+        *,
+        limit: int,
+        next_occurrence_after_local_dt: Callable[..., Any],
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        inclusive: bool = True,
+        pick_occurrence_local: Callable[..., Any] | None = None,
+        anchor_file_provider: Any | None = None,
+        include_omitted: bool = False,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
+    ) -> list[Occurrence]:
+        """Return a bounded event stream in ``[start_local, end_local]``.
+
+        ``limit`` counts included occurrences.  Omitted events are retained in
+        the returned list only when ``include_omitted`` is true, so callers can
+        inspect why a stream advanced without changing normal limits.
+        """
+        if not isinstance(start_local, datetime) or not isinstance(end_local, datetime):
+            raise TypeError("Occurrence ranges require datetime boundaries.")
+        from .timeutil import compare_datetimes
+
+        if compare_datetimes(end_local, start_local) < 0:
+            raise ValueError("Occurrence range end must not precede its start.")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("Occurrence range limit must be a non-negative integer.")
+        if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations <= 0:
+            raise ValueError("Occurrence range iteration limit must be a positive integer.")
+        if limit == 0:
+            return []
+
+        events: list[Occurrence] = []
+        cursor = start_local
+        first = inclusive
+        included_count = 0
+        for _ in range(max_iterations):
+            event = self.next_event_after(
+                cursor,
+                next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+                fallback_hhmm=fallback_hhmm,
+                default_seed_date=default_seed_date,
+                inclusive=first,
+                pick_occurrence_local=pick_occurrence_local,
+                anchor_file_provider=anchor_file_provider,
+                include_omitted=include_omitted,
+                max_file_skips=max_file_skips,
+            )
+            if event is None or event.local_datetime is None:
+                break
+            if compare_datetimes(event.local_datetime, end_local) > 0:
+                break
+            events.append(event)
+            if not event.omitted:
+                included_count += 1
+            if included_count >= limit:
+                break
+            cursor = event.local_datetime
+            first = False
+        else:
+            raise ValueError("Occurrence provider exceeded its range iteration limit.")
+        return events
+
+    def select_mode(
+        self,
+        mode: str,
+        *,
+        due_local: datetime,
+        end_local: datetime,
+        next_occurrence_after_local_dt: Callable[..., Any],
+        due_explicit: bool = True,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
+        pick_occurrence_local: Callable[..., Any] | None = None,
+        anchor_file_provider: Any | None = None,
+        missed_limit: int = 25,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
+    ) -> RecurrenceModeResult:
+        """Select the next occurrence using Nautical's three anchor modes.
+
+        This is intentionally a pure recurrence boundary: callers provide
+        local completion/due cursors, while Taskwarrior mutation remains
+        outside the evaluator.
+        """
+        if mode not in {"skip", "all", "flex"}:
+            raise ValueError("Recurrence mode must be 'skip', 'all', or 'flex'.")
+        if not isinstance(due_local, datetime) or not isinstance(end_local, datetime):
+            raise TypeError("Mode selection requires datetime due and end values.")
+        if isinstance(missed_limit, bool) or not isinstance(missed_limit, int) or missed_limit <= 0:
+            raise ValueError("Missed-occurrence limit must be a positive integer.")
+        source = "anchor+anchor_file" if self.spec.anchor and self.spec.anchor_file else (
+            "anchor_file" if self.spec.anchor_file else "anchor"
+        )
+
+        missed: list[Occurrence] = []
+        from .timeutil import compare_datetimes
+
+        if mode in {"all", "flex"} and due_explicit and compare_datetimes(end_local, due_local) > 0:
+            missed = [
+                event
+                for event in self.events_between(
+                    due_local,
+                    end_local,
+                    limit=missed_limit,
+                    next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+                    fallback_hhmm=fallback_hhmm,
+                    default_seed_date=default_seed_date,
+                    inclusive=False,
+                    pick_occurrence_local=pick_occurrence_local,
+                    anchor_file_provider=anchor_file_provider,
+                    include_omitted=True,
+                    max_iterations=max_iterations,
+                    max_file_skips=max_file_skips,
+                )
+                if not event.omitted
+            ]
+
+        if mode == "all" and missed:
+            selected = missed[0].local_datetime
+            return RecurrenceModeResult(
+                selected_occurrence=selected,
+                mode=mode,
+                basis="missed",
+                source=source,
+                missed_count=len(missed),
+                missed_preview=tuple(
+                    event.local_datetime for event in missed[:5] if event.local_datetime is not None
+                ),
+            )
+
+        if mode == "flex":
+            cursor = end_local
+            basis = "flex"
+        elif mode == "skip":
+            cursor = max(due_local, end_local, key=lambda value: value.astimezone(timezone.utc) if value.tzinfo else value)
+            basis = "after_end"
+        else:
+            cursor = due_local
+            basis = "after_due"
+        selected_event = self.next_event_after(
+            cursor,
+            next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            inclusive=False,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            max_file_skips=max_file_skips,
+        )
+        selected = selected_event.local_datetime if selected_event is not None else None
+        return RecurrenceModeResult(
+            selected_occurrence=selected,
+            mode=mode,
+            basis=basis,
+            source=source,
+            missed_count=len(missed),
+            missed_preview=tuple(
+                event.local_datetime for event in missed[:5] if event.local_datetime is not None
+            ),
         )
 
     def collect_after(
@@ -336,4 +632,4 @@ class RecurrenceEvaluator:
         return _build_local_datetime(day, hhmm, self.timezone)
 
 
-__all__ = ("RecurrenceEvaluator", "RecurrenceLimits")
+__all__ = ("RecurrenceEvaluator", "RecurrenceLimits", "RecurrenceModeResult")

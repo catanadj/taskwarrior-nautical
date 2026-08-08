@@ -3827,8 +3827,8 @@ def _anchor_file_due_for_mode(
     fallback_hhmm,
     seed_base: str,
     anchor_file_provider=None,
-) -> tuple[object, dict]:
-    info: dict[str, object] = {"mode": mode, "basis": None, "missed_count": 0, "missed_preview": []}
+) -> tuple[object, Any]:
+    mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
     occurrences = _anchor_file_future_occurrences(
         parent,
         fallback_hhmm=fallback_hhmm,
@@ -3837,26 +3837,50 @@ def _anchor_file_due_for_mode(
         anchor_file_provider=anchor_file_provider,
     )
     if not occurrences:
-        return None, info
+        return None, mode_result_type(
+            selected_occurrence=None,
+            mode=mode,
+            basis=None,
+            source="anchor_file",
+        )
     after_due = [dt for dt in occurrences if _compare_datetimes(dt, due_local) > 0]
     after_end = [dt for dt in occurrences if _compare_datetimes(dt, end_local) > 0]
     if mode == "all":
         missed = [dt for dt in occurrences if _compare_datetimes(dt, due_local) > 0 and _compare_datetimes(dt, end_local) <= 0]
-        info["missed_count"] = len(missed)
-        info["missed_preview"] = [x.isoformat() for x in missed[:5]]
         if missed:
-            info["basis"] = "missed"
-            return missed[0], info
-        info["basis"] = "after_due"
-        return (after_due[0] if after_due else None), info
+            return missed[0], mode_result_type(
+                selected_occurrence=missed[0],
+                mode="all",
+                basis="missed",
+                source="anchor_file",
+                missed_count=len(missed),
+                missed_preview=tuple(missed[:5]),
+            )
+        selected = after_due[0] if after_due else None
+        return selected, mode_result_type(
+            selected_occurrence=selected,
+            mode="all",
+            basis="after_due",
+            source="anchor_file",
+        )
     if mode == "flex":
         missed = [dt for dt in occurrences if due_dt_utc and _compare_datetimes(dt, due_local) > 0 and _compare_datetimes(dt, end_local) <= 0]
-        info["basis"] = "flex"
-        info["missed_count"] = len(missed)
-        info["missed_preview"] = [x.isoformat() for x in missed[:5]]
-        return (after_end[0] if after_end else None), info
-    info["basis"] = "after_end"
-    return (after_end[0] if after_end else None), info
+        selected = after_end[0] if after_end else None
+        return selected, mode_result_type(
+            selected_occurrence=selected,
+            mode="flex",
+            basis="flex",
+            source="anchor_file",
+            missed_count=len(missed),
+            missed_preview=tuple(missed[:5]),
+        )
+    selected = after_end[0] if after_end else None
+    return selected, mode_result_type(
+        selected_occurrence=selected,
+        mode="skip",
+        basis="after_end",
+        source="anchor_file",
+    )
 
 
 def _anchor_due_mode_all(
@@ -3869,8 +3893,8 @@ def _anchor_due_mode_all(
     default_seed_date,
     seed_base,
     fallback_hhmm,
-) -> tuple[object, dict]:
-    info: dict[str, object] = {"mode": "all", "basis": None, "missed_count": 0, "missed_preview": []}
+) -> tuple[object, Any]:
+    mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
     missed_dts = _collect_missed_occurrences(
         dnf,
         after_local_dt=due_local,
@@ -3882,12 +3906,15 @@ def _anchor_due_mode_all(
         limit=25,
     )
     if missed_dts:
-        info.update(
+        result = mode_result_type(
+            selected_occurrence=missed_dts[0],
+            mode="all",
             basis="missed",
+            source="anchor",
             missed_count=len(missed_dts),
-            missed_preview=[x.isoformat() for x in missed_dts[:5]],
+            missed_preview=tuple(missed_dts[:5]),
         )
-        return missed_dts[0], info
+        return missed_dts[0], result
     ref_local = _skip_reference_dt_local(
         dnf,
         end_local=end_local,
@@ -3903,8 +3930,12 @@ def _anchor_due_mode_all(
         omit_dnf=omit_dnf,
         fallback_hhmm=fallback_hhmm,
     )
-    info["basis"] = "after_due"
-    return nxt_local, info
+    return nxt_local, mode_result_type(
+        selected_occurrence=nxt_local,
+        mode="all",
+        basis="after_due",
+        source="anchor",
+    )
 
 
 def _anchor_due_mode_flex(
@@ -3917,7 +3948,8 @@ def _anchor_due_mode_flex(
     default_seed_date,
     seed_base,
     fallback_hhmm,
-) -> tuple[object, dict]:
+) -> tuple[object, Any]:
+    mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
     missed_dts = []
     if due_dt_utc and _compare_datetimes(end_local, due_local) > 0:
         missed_dts = _collect_missed_occurrences(
@@ -3938,13 +3970,14 @@ def _anchor_due_mode_flex(
         omit_dnf=omit_dnf,
         fallback_hhmm=fallback_hhmm,
     )
-    info = {
-        "mode": "flex",
-        "basis": "flex",
-        "missed_count": len(missed_dts),
-        "missed_preview": [x.isoformat() for x in missed_dts[:5]],
-    }
-    return nxt_local, info
+    return nxt_local, mode_result_type(
+        selected_occurrence=nxt_local,
+        mode="flex",
+        basis="flex",
+        source="anchor",
+        missed_count=len(missed_dts),
+        missed_preview=tuple(missed_dts[:5]),
+    )
 
 
 def _anchor_due_mode_skip(
@@ -3956,7 +3989,8 @@ def _anchor_due_mode_skip(
     default_seed_date,
     seed_base,
     fallback_hhmm,
-) -> tuple[object, dict]:
+) -> tuple[object, Any]:
+    mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
     nxt_local = _next_occurrence_after_local_dt(
         dnf,
         after_local_dt=(_later_datetime(end_local, due_local) if due_local else end_local),
@@ -3965,8 +3999,12 @@ def _anchor_due_mode_skip(
         omit_dnf=omit_dnf,
         fallback_hhmm=fallback_hhmm,
     )
-    info = {"mode": "skip", "basis": "after_end", "missed_count": 0, "missed_preview": []}
-    return nxt_local, info
+    return nxt_local, mode_result_type(
+        selected_occurrence=nxt_local,
+        mode="skip",
+        basis="after_end",
+        source="anchor",
+    )
 
 
 def _anchor_due_for_mode(
@@ -3980,7 +4018,7 @@ def _anchor_due_for_mode(
     default_seed_date,
     seed_base,
     fallback_hhmm,
-) -> tuple[object, dict]:
+) -> tuple[object, Any]:
     if mode == "all":
         return _anchor_due_mode_all(
             dnf=dnf,
@@ -4042,6 +4080,7 @@ def _compute_anchor_child_due(parent: dict):
         if anchor_file_str
         else None
     )
+    mode_result_type = core._import_sibling("recurrence_evaluator").RecurrenceModeResult
     if anchor_file_str and not dnf:
         nxt_local, info = _anchor_file_due_for_mode(
             mode,
@@ -4094,23 +4133,45 @@ def _compute_anchor_child_due(parent: dict):
             ) if _compare_datetimes(dt, end_local) <= 0]
             if missed:
                 nxt_local = missed[0]
-                info = {"mode": "all", "basis": "missed", "missed_count": len(missed), "missed_preview": [x.isoformat() for x in missed[:5]]}
+                info = mode_result_type(
+                    selected_occurrence=nxt_local,
+                    mode="all",
+                    basis="missed",
+                    source="anchor+anchor_file",
+                    missed_count=len(missed),
+                    missed_preview=tuple(missed[:5]),
+                )
             else:
                 nxt_local = occurrences[0] if occurrences else None
-                info = {"mode": "all", "basis": "after_due", "missed_count": 0, "missed_preview": []}
+                info = mode_result_type(
+                    selected_occurrence=nxt_local,
+                    mode="all",
+                    basis="after_due",
+                    source="anchor+anchor_file",
+                )
         elif mode == "flex":
             nxt_local = occurrences[0] if occurrences else None
-            info = {"mode": "flex", "basis": "flex", "missed_count": 0, "missed_preview": []}
+            info = mode_result_type(
+                selected_occurrence=nxt_local,
+                mode="flex",
+                basis="flex",
+                source="anchor+anchor_file",
+            )
         else:
             nxt_local = occurrences[0] if occurrences else None
-            info = {"mode": "skip", "basis": "after_end", "missed_count": 0, "missed_preview": []}
+            info = mode_result_type(
+                selected_occurrence=nxt_local,
+                mode="skip",
+                basis="after_end",
+                source="anchor+anchor_file",
+            )
 
     if not nxt_local:
         raise ValueError("Could not compute next anchor occurrence")
 
-    info = dict(info or {})
-    info["target_field"] = target_field
-    return nxt_local.astimezone(timezone.utc), info, dnf
+    if not isinstance(info, mode_result_type):
+        raise TypeError("Anchor mode selection returned an invalid typed result.")
+    return nxt_local.astimezone(timezone.utc), info.metadata(target_field=target_field), dnf
 
 
 def _estimate_cp_final_by_max(task: dict, next_due_utc):

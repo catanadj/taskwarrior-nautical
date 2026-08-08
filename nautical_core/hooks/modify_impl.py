@@ -3562,9 +3562,11 @@ def _omit_dnf_from_parent(parent: dict):
             raise ValueError(f"Invalid omit expression '{expr_str}': {str(e)}")
     if omit_file:
         try:
-            omit_dates = _load_omit_file_dates(omit_file)
             omit_files = core._import_sibling("omit_files")
-            omit_descriptions = omit_files.load_omit_file_descriptions(omit_file, getattr(core, "OMIT_FILE_DIR", ""))
+            omit_dates, omit_descriptions = omit_files.load_omit_file_data(
+                omit_file,
+                getattr(core, "OMIT_FILE_DIR", ""),
+            )
         except Exception as e:
             raise ValueError(f"Invalid omit_file '{omit_file}': {str(e)}")
     if not omit_dnf and not omit_dates and not omit_descriptions:

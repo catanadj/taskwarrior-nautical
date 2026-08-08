@@ -154,7 +154,10 @@ def anchor_preview_prepare_omit_dnf(
     if omit_file:
         try:
             omit_files = core._import_sibling("omit_files")
-            omit_dates = omit_files.load_omit_file_dates(omit_file, getattr(core, "OMIT_FILE_DIR", ""))
+            omit_dates, _omit_descriptions = omit_files.load_omit_file_data(
+                omit_file,
+                getattr(core, "OMIT_FILE_DIR", ""),
+            )
         except Exception as e:
             error_and_exit([("Invalid omit_file", str(e))])
         rows.append(("Omit file", f"[white]{omit_file}[/]"))
@@ -372,7 +375,10 @@ def _preview_omit_label(task: dict[str, Any], item_local: datetime, *, core: Any
         return "omitted"
     try:
         omit_files = core._import_sibling("omit_files")
-        descriptions = omit_files.load_omit_file_descriptions(omit_file, getattr(core, "OMIT_FILE_DIR", ""))
+        _dates, descriptions = omit_files.load_omit_file_data(
+            omit_file,
+            getattr(core, "OMIT_FILE_DIR", ""),
+        )
         text = str(descriptions.get(item_local.date()) or "").strip()
     except Exception:
         text = ""

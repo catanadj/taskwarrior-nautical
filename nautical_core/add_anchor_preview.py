@@ -449,12 +449,21 @@ def _anchor_file_preview_occurrences(
     fallback_hhmm: tuple[int, int],
     omit_dnf,
     seed_base: str,
+    after_local_dt: datetime | None = None,
+    inclusive: bool = True,
+    limit: int | None = None,
 ) -> list[datetime]:
     out: list[datetime] = []
     for item_local in _anchor_file_occurrences_local(anchor_file_str, core=core, fallback_hhmm=fallback_hhmm, seed_base=seed_base):
+        if after_local_dt is not None:
+            comparison = compare_datetimes(item_local, after_local_dt)
+            if comparison < 0 or (comparison == 0 and not inclusive):
+                continue
         if _anchor_file_is_omitted(omit_dnf, item_local, core=core, seed_base=seed_base):
             continue
         out.append(item_local)
+        if limit is not None and len(out) >= max(0, limit):
+            break
     return out
 
 
@@ -716,13 +725,20 @@ def handle_anchor_file_preview_on_add(
         fallback_hhmm=(due_hhmm if user_provided_due else (9, 0)),
         omit_dnf=omit_dnf,
         seed_base=seed_base,
+        after_local_dt=(core.to_local(due_dt) if user_provided_due else now_local)
+        if compact_presentation
+        else None,
+        inclusive=False if user_provided_due else True,
+        limit=1 if compact_presentation else None,
     )
     prof.add_ms("anchor_file:occurrences", (time.perf_counter() - t_occ) * 1000.0)
     if not all_occurrences:
         error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
 
     due_local_dt = core.to_local(due_dt)
-    if user_provided_due:
+    if compact_presentation:
+        first_due_local_dt = all_occurrences[0]
+    elif user_provided_due:
         first_due_local_dt = next((dt for dt in all_occurrences if compare_datetimes(dt, due_local_dt) > 0), None)
         if not first_due_local_dt:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found after the provided due.")])

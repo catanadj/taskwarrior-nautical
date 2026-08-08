@@ -368,6 +368,186 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         rolled = core["roll_apply"](base, mods, business_calendar=business_calendar)
         return core["apply_day_offset"](rolled, mods, business_calendar=business_calendar)
 
+    # Random candidate and boolean-expression scheduling stay bound to this
+    # core instance.  The callbacks are looked up through ``core`` at call
+    # time so facade monkeypatches continue to affect scheduling.
+    def week_monday(day):
+        return core["_cached_expansion"].week_monday(day)
+
+    def weekly_rand_pick(
+        iso_year,
+        iso_week,
+        mods,
+        *,
+        seed_base,
+        atom_identity,
+        business_calendar=None,
+    ):
+        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
+        return core["_cached_expansion"].weekly_rand_pick(
+            iso_year,
+            iso_week,
+            mods,
+            seed_base=seed_base,
+            atom_identity=atom_identity,
+            namespace=core["WRAND_SALT"],
+            business_calendar=business_calendar,
+        )
+
+    def is_bd(day, business_calendar=None):
+        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
+        return core["_cached_expansion"].is_bd(day, business_calendar)
+
+    def random_identity(value):
+        return core["_cached_expansion"].random_identity(value)
+
+    def random_pick_index(seq_len, **kwargs):
+        return core["_cached_expansion"].random_pick_index(
+            seq_len,
+            namespace=core["WRAND_SALT"],
+            **kwargs,
+        )
+
+    def random_pick_indices(seq_len, count, **kwargs):
+        return core["_cached_expansion"].random_pick_indices(
+            seq_len,
+            count,
+            namespace=core["WRAND_SALT"],
+            **kwargs,
+        )
+
+    def term_rand_info(term):
+        return core["_cached_expansion"].term_rand_info(term)
+
+    def dnf_has_counted_random(dnf):
+        return core["_cached_expansion"].dnf_has_counted_random(dnf)
+
+    def filter_by_w(dt_list, term):
+        return core["_cached_expansion"].filter_by_w(
+            dt_list,
+            term,
+            atype=core["_atype"],
+            aspec=core["_aspec"],
+            weekly_spec_to_wset=core["_weekly_spec_to_wset"],
+        )
+
+    @ttl_lru_cache(maxsize=128)
+    def month_tokens_for_atom_cached(year, month, spec, business_calendar=None):
+        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
+        return core["_cached_expansion"].month_tokens_for_atom_values(
+            year,
+            month,
+            spec,
+            expand_monthly_aliases=core["_expand_monthly_aliases"],
+            days_in_month=core["_days_in_month"],
+            bd_re=core["_bd_re"],
+            nth_weekday_re=core["_nth_weekday_re"],
+            weekday_map=core["_WD"],
+            re_mod=core["re"],
+            business_calendar=business_calendar,
+        )
+
+    def month_tokens_for_atom(atom, year, month, business_calendar=None):
+        return core["_cached_expansion"].month_tokens_for_atom(
+            atom,
+            year,
+            month,
+            month_tokens_for_atom_cached=core["_with_business_calendar"](
+                month_tokens_for_atom_cached,
+                business_calendar,
+            ),
+        )
+
+    def term_candidates_in_month(
+        term,
+        year,
+        month,
+        rand_atom_idx,
+        bd_only,
+        business_calendar=None,
+    ):
+        return core["_cached_expansion"].term_candidates_in_month(
+            term,
+            year,
+            month,
+            rand_atom_idx,
+            bd_only,
+            days_in_month=core["_days_in_month"],
+            is_bd=core["_with_business_calendar"](is_bd, business_calendar),
+            filter_by_w=filter_by_w,
+            atype=core["_atype"],
+            aspec=core["_aspec"],
+            month_tokens_for_atom=core["_with_business_calendar"](
+                month_tokens_for_atom,
+                business_calendar,
+            ),
+            doms_allowed_by_year=core["_doms_allowed_by_year"],
+        )
+
+    def next_for_and_rand_yearly(term, ref_d, y_specs, seed_base=None):
+        return core["_scheduler_expr"].next_for_and_rand_yearly(
+            term,
+            ref_d,
+            y_specs,
+            seed_base=seed_base,
+            identity=random_identity(term),
+            random_pick_index=random_pick_index,
+            days_in_month=core["_days_in_month"],
+            doms_allowed_by_year=core["_doms_allowed_by_year"],
+            intersect_monthly_atoms_allowed=core["_intersect_monthly_atoms_allowed"],
+            doms_for_weekly_spec=core["_doms_for_weekly_spec"],
+            date_cls=core["date"],
+        )
+
+    def next_for_and_fast_path(term, ref_d, seed, seed_base=None, business_calendar=None):
+        next_atom = core["_with_business_calendar"](core["next_after_factor"], business_calendar)
+        matches = core["_with_business_calendar"](core["factor_matches_on"], business_calendar)
+        return core["_scheduler_expr"].next_for_and_fast_path(
+            term,
+            ref_d,
+            seed,
+            seed_base=seed_base,
+            next_after_atom_with_mods=next_atom,
+            atom_matches_on=matches,
+            max_anchor_iter=core["MAX_ANCHOR_ITER"],
+            warn_once_per_day=core["_warn_once_per_day"],
+            parse_error_cls=core["ParseError"],
+            os_mod=core["os"],
+        )
+
+    def next_for_and(term, ref_d, seed, seed_base=None, business_calendar=None):
+        next_atom = core["_with_business_calendar"](core["next_after_factor"], business_calendar)
+        matches = core["_with_business_calendar"](core["factor_matches_on"], business_calendar)
+        return core["_scheduler_expr"].next_for_and(
+            term,
+            ref_d,
+            seed,
+            seed_base=seed_base,
+            random_identity=random_identity,
+            random_pick_index=random_pick_index,
+            days_in_month=core["_days_in_month"],
+            doms_allowed_by_year=core["_doms_allowed_by_year"],
+            intersect_monthly_atoms_allowed=core["_intersect_monthly_atoms_allowed"],
+            doms_for_weekly_spec=core["_doms_for_weekly_spec"],
+            next_after_atom_with_mods=next_atom,
+            atom_matches_on=matches,
+            max_anchor_iter=core["MAX_ANCHOR_ITER"],
+            warn_once_per_day=core["_warn_once_per_day"],
+            parse_error_cls=core["ParseError"],
+            os_mod=core["os"],
+            date_cls=core["date"],
+        )
+
+    def next_for_or(dnf, ref_d, seed, seed_base=None, business_calendar=None):
+        next_for_and_fn = core["_with_business_calendar"](next_for_and, business_calendar)
+        return core["_scheduler_expr"].next_for_or(
+            dnf,
+            ref_d,
+            seed,
+            seed_base=seed_base,
+            next_for_and=next_for_and_fn,
+        )
+
     def next_after_atom_with_mods(atom, ref_d, default_seed, seed_base=None, business_calendar=None):
         return _next_after_atom_with_mods_impl(
             module,
@@ -474,6 +654,22 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         _monthly_align_base_for_interval=monthly_align_base_for_interval,
         _selection_inner_matcher=selection_inner_matcher,
         _apply_selection_date_modifiers=apply_selection_date_modifiers,
+        _week_monday=week_monday,
+        _weekly_rand_pick=weekly_rand_pick,
+        _is_bd=is_bd,
+        _random_identity=random_identity,
+        _random_pick_index=random_pick_index,
+        _random_pick_indices=random_pick_indices,
+        _term_rand_info=term_rand_info,
+        dnf_has_counted_random=dnf_has_counted_random,
+        _filter_by_w=filter_by_w,
+        _month_tokens_for_atom_cached=month_tokens_for_atom_cached,
+        _month_tokens_for_atom=month_tokens_for_atom,
+        _term_candidates_in_month=term_candidates_in_month,
+        _next_for_and_rand_yearly=next_for_and_rand_yearly,
+        _next_for_and_fast_path=next_for_and_fast_path,
+        _next_for_and=next_for_and,
+        _next_for_or=next_for_or,
         expand_weekly_cached=expand_weekly_cached_impl,
         expand_weekly_cached_mods=expand_weekly_cached_mods_impl,
         expand_yearly_cached=expand_yearly_cached_impl,

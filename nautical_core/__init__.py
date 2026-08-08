@@ -1024,96 +1024,6 @@ def _intersect_monthly_atoms_allowed(
     )
 
 
-def _next_for_and_rand_yearly(
-    term: list[dict],
-    ref_d: date,
-    y_specs: list[str],
-    seed_base: str | None = None,
-) -> date | None:
-    return _scheduler_expr.next_for_and_rand_yearly(
-        term,
-        ref_d,
-        y_specs,
-        seed_base=seed_base,
-        identity=_random_identity(term),
-        random_pick_index=_random_pick_index,
-        days_in_month=_days_in_month,
-        doms_allowed_by_year=_doms_allowed_by_year,
-        intersect_monthly_atoms_allowed=_intersect_monthly_atoms_allowed,
-        doms_for_weekly_spec=_doms_for_weekly_spec,
-        date_cls=date,
-    )
-
-
-def _next_for_and_fast_path(
-    term: list[dict],
-    ref_d: date,
-    seed: date,
-    seed_base: str | None = None,
-    business_calendar=None,
-) -> date:
-    next_atom = _with_business_calendar(next_after_factor, business_calendar)
-    matches = _with_business_calendar(factor_matches_on, business_calendar)
-    return _scheduler_expr.next_for_and_fast_path(
-        term,
-        ref_d,
-        seed,
-        seed_base=seed_base,
-        next_after_atom_with_mods=next_atom,
-        atom_matches_on=matches,
-        max_anchor_iter=MAX_ANCHOR_ITER,
-        warn_once_per_day=_warn_once_per_day,
-        parse_error_cls=ParseError,
-        os_mod=os,
-    )
-
-
-def _next_for_and(
-    term: list[dict],
-    ref_d: date,
-    seed: date,
-    seed_base: str | None = None,
-    business_calendar=None,
-) -> date:
-    next_atom = _with_business_calendar(next_after_factor, business_calendar)
-    matches = _with_business_calendar(factor_matches_on, business_calendar)
-    return _scheduler_expr.next_for_and(
-        term,
-        ref_d,
-        seed,
-        seed_base=seed_base,
-        random_identity=_random_identity,
-        random_pick_index=_random_pick_index,
-        days_in_month=_days_in_month,
-        doms_allowed_by_year=_doms_allowed_by_year,
-        intersect_monthly_atoms_allowed=_intersect_monthly_atoms_allowed,
-        doms_for_weekly_spec=_doms_for_weekly_spec,
-        next_after_atom_with_mods=next_atom,
-        atom_matches_on=matches,
-        max_anchor_iter=MAX_ANCHOR_ITER,
-        warn_once_per_day=_warn_once_per_day,
-        parse_error_cls=ParseError,
-        os_mod=os,
-        date_cls=date,
-    )
-
-
-def _next_for_or(
-    dnf: list[list[dict]],
-    ref_d: date,
-    seed: date,
-    seed_base: str | None = None,
-    business_calendar=None,
-) -> date:
-    next_for_and_fn = _with_business_calendar(_next_for_and, business_calendar)
-    return _scheduler_expr.next_for_or(
-        dnf,
-        ref_d,
-        seed,
-        seed_base=seed_base,
-        next_for_and=next_for_and_fn,
-    )
-
 # ---- Public precompute --------------------------------------------------------
 
 def precompute_hints(dnf: list[list[dict]],
@@ -1592,141 +1502,9 @@ def _ainterval(atom):  # monthly /N (accept both ival and intv)
         return 1
 
 
-# --- Random anchors helpers ---------------------------------------------------
-
+# Shared weekday indices remain part of the facade namespace for scheduler
+# callbacks and third-party callers.
 _WD = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
-
-
-def _week_monday(d: date) -> date:
-    return _cached_expansion.week_monday(d)
-
-
-def _weekly_rand_pick(
-    iso_year: int,
-    iso_week: int,
-    mods: dict,
-    *,
-    seed_base: str | None,
-    atom_identity: str,
-    business_calendar=None,
-) -> int | None:
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    return _cached_expansion.weekly_rand_pick(
-        iso_year,
-        iso_week,
-        mods,
-        seed_base=seed_base,
-        atom_identity=atom_identity,
-        namespace=WRAND_SALT,
-        business_calendar=business_calendar,
-    )
-
-
-def _is_bd(dt: _date, business_calendar=None):
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    return _cached_expansion.is_bd(dt, business_calendar)
-
-
-def _random_identity(value) -> str:
-    return _cached_expansion.random_identity(value)
-
-
-def _random_pick_index(seq_len: int, **kwargs) -> int:
-    return _cached_expansion.random_pick_index(seq_len, namespace=WRAND_SALT, **kwargs)
-
-
-def _random_pick_indices(seq_len: int, count: int, **kwargs) -> list[int]:
-    return _cached_expansion.random_pick_indices(
-        seq_len,
-        count,
-        namespace=WRAND_SALT,
-        **kwargs,
-    )
-
-
-def _term_rand_info(term):
-    return _cached_expansion.term_rand_info(term)
-
-
-def dnf_has_counted_random(dnf) -> bool:
-    return _cached_expansion.dnf_has_counted_random(dnf)
-
-
-
-def _filter_by_w(dt_list: list[_date], term: list[dict]):
-    return _cached_expansion.filter_by_w(
-        dt_list,
-        term,
-        atype=_atype,
-        aspec=_aspec,
-        weekly_spec_to_wset=_weekly_spec_to_wset,
-    )
-
-
-@_ttl_lru_cache(maxsize=128)
-def _month_tokens_for_atom_cached(
-    y: int,
-    m: int,
-    spec: str,
-    business_calendar=None,
-) -> set[int]:
-    business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    return _cached_expansion.month_tokens_for_atom_values(
-        y,
-        m,
-        spec,
-        expand_monthly_aliases=_expand_monthly_aliases,
-        days_in_month=_days_in_month,
-        bd_re=_bd_re,
-        nth_weekday_re=_nth_weekday_re,
-        weekday_map=_WD,
-        re_mod=re,
-        business_calendar=business_calendar,
-    )
-
-
-def _month_tokens_for_atom(
-    a: dict,
-    y: int,
-    m: int,
-    business_calendar=None,
-) -> set[int]:
-    return _cached_expansion.month_tokens_for_atom(
-        a,
-        y,
-        m,
-        month_tokens_for_atom_cached=_with_business_calendar(
-            _month_tokens_for_atom_cached,
-            business_calendar,
-        ),
-    )
-
-
-def _term_candidates_in_month(
-    term: list[dict],
-    y: int,
-    m: int,
-    rand_atom_idx: int,
-    bd_only: bool,
-    business_calendar=None,
-):
-    return _cached_expansion.term_candidates_in_month(
-        term,
-        y,
-        m,
-        rand_atom_idx,
-        bd_only,
-        days_in_month=_days_in_month,
-        is_bd=_with_business_calendar(_is_bd, business_calendar),
-        filter_by_w=_filter_by_w,
-        atype=_atype,
-        aspec=_aspec,
-        month_tokens_for_atom=_with_business_calendar(
-            _month_tokens_for_atom,
-            business_calendar,
-        ),
-        doms_allowed_by_year=_doms_allowed_by_year,
-    )
 
 
 def _months_since(seed_local: _date, y: int, m: int) -> int:
@@ -2346,6 +2124,22 @@ _advance_k_valid_months = _scheduler_api._advance_k_valid_months
 _monthly_align_base_for_interval = _scheduler_api._monthly_align_base_for_interval
 _selection_inner_matcher = _scheduler_api._selection_inner_matcher
 _apply_selection_date_modifiers = _scheduler_api._apply_selection_date_modifiers
+_week_monday = _scheduler_api._week_monday
+_weekly_rand_pick = _scheduler_api._weekly_rand_pick
+_is_bd = _scheduler_api._is_bd
+_random_identity = _scheduler_api._random_identity
+_random_pick_index = _scheduler_api._random_pick_index
+_random_pick_indices = _scheduler_api._random_pick_indices
+_term_rand_info = _scheduler_api._term_rand_info
+dnf_has_counted_random = _scheduler_api.dnf_has_counted_random
+_filter_by_w = _scheduler_api._filter_by_w
+_month_tokens_for_atom_cached = _scheduler_api._month_tokens_for_atom_cached
+_month_tokens_for_atom = _scheduler_api._month_tokens_for_atom
+_term_candidates_in_month = _scheduler_api._term_candidates_in_month
+_next_for_and_rand_yearly = _scheduler_api._next_for_and_rand_yearly
+_next_for_and_fast_path = _scheduler_api._next_for_and_fast_path
+_next_for_and = _scheduler_api._next_for_and
+_next_for_or = _scheduler_api._next_for_or
 expand_weekly_cached = _scheduler_api.expand_weekly_cached
 expand_weekly_cached_mods = _scheduler_api.expand_weekly_cached_mods
 expand_yearly_cached = _scheduler_api.expand_yearly_cached

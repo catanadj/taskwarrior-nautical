@@ -453,6 +453,35 @@ def _anchor_file_preview_occurrences(
     inclusive: bool = True,
     limit: int | None = None,
 ) -> list[datetime]:
+    if limit == 1 and after_local_dt is not None:
+        anchor_files = core._import_sibling("anchor_files")
+        provider = anchor_files.AnchorFileOccurrenceProvider(
+            anchor_file_str,
+            getattr(core, "ANCHOR_FILE_DIR", ""),
+            fallback_hhmm,
+            context=(
+                core._import_sibling("recurrence_context").RecurrenceContext(chain_id=seed_base)
+                if seed_base
+                else None
+            ),
+        )
+        probe = after_local_dt
+        probe_inclusive = inclusive
+        for _ in range(512):
+            selected = provider.first_after(
+                probe,
+                build_local_datetime=core.build_local_datetime,
+                to_local=core.to_local,
+                inclusive=probe_inclusive,
+            )
+            if selected is None or selected.local_datetime is None:
+                return []
+            item_local = selected.local_datetime
+            if not _anchor_file_is_omitted(omit_dnf, item_local, core=core, seed_base=seed_base):
+                return [item_local]
+            probe = item_local
+            probe_inclusive = False
+        return []
     out: list[datetime] = []
     for item_local in _anchor_file_occurrences_local(anchor_file_str, core=core, fallback_hhmm=fallback_hhmm, seed_base=seed_base):
         if after_local_dt is not None:

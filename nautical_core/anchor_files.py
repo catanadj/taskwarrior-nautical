@@ -495,6 +495,36 @@ class AnchorFileOccurrenceProvider:
             )
         return values
 
+    def first_after(
+        self,
+        after_local: datetime,
+        *,
+        build_local_datetime: Callable[[date, tuple[int, int]], datetime],
+        to_local: Callable[[datetime], datetime],
+        inclusive: bool = False,
+    ) -> Occurrence | None:
+        """Find one file occurrence without building the sorted candidate cache."""
+        selected: Occurrence | None = None
+        for item_date, hhmm, description in self._records():
+            raw_candidate = build_local_datetime(item_date, hhmm)
+            candidate = to_local(raw_candidate)
+            comparison = compare_datetimes(candidate, after_local)
+            if comparison < 0 or (comparison == 0 and not inclusive):
+                continue
+            if selected is None or (
+                selected.local_datetime is not None
+                and compare_datetimes(candidate, selected.local_datetime) < 0
+            ):
+                selected = Occurrence(
+                    day=item_date,
+                    hour=hhmm[0],
+                    minute=hhmm[1],
+                    source="anchor_file",
+                    description=description,
+                    local_datetime=candidate,
+                )
+        return selected
+
     def next_after(
         self,
         after_local: datetime,

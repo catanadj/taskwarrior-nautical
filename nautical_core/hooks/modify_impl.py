@@ -576,6 +576,8 @@ _HOOK_RUNTIME = None
 _HOOK_MODULE_ACCESS = None
 _RECURRENCE_EVALUATOR = None
 _RECURRENCE_EVALUATOR_LOAD_FAILED = False
+_ADD_ANCHOR_COMPUTE = None
+_ADD_ANCHOR_COMPUTE_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -660,6 +662,12 @@ _MODULE_SPECS = {
         "_ANCHOR_OMIT_LOAD_FAILED",
         "anchor_omit.py",
         "nautical_core.anchor_omit",
+    ),
+    "add_anchor_compute": (
+        "_ADD_ANCHOR_COMPUTE",
+        "_ADD_ANCHOR_COMPUTE_LOAD_FAILED",
+        "add_anchor_compute.py",
+        "nautical_core.add_anchor_compute",
     ),
     "panel_diagnostics": (
         "_PANEL_DIAGNOSTICS",
@@ -3276,81 +3284,25 @@ def _next_occurrence_after_local_dt(
     omit_dnf=None,
     fallback_hhmm: tuple[int, int] | None = None,
 ):
-    """Return the next occurrence strictly after `after_local_dt`.
+    """Return the next occurrence using the shared add-side scheduler.
 
-    This is hook-level logic because core recurrence is date-based.
+    Keep this adapter while completion/evaluator callers migrate to the
+    evaluator-owned service.  The stable callback signature avoids changing
+    the completion orchestration in the same pass.
     """
     if not dnf:
         return None
-    slots = _extract_time_slots_from_dnf(dnf, after_local_dt.date(), seed_base)
-
-    # same-day: only if the expression hits on that date
-    adate = after_local_dt.date()
-    try:
-        same_day_matches = any(
-            all(
-                core.factor_matches_on(atom, adate, default_seed_date, seed_base=seed_base)
-                for atom in term
-            )
-            for term in dnf
-        )
-        if same_day_matches and omit_dnf:
-            anchor_omit = _module("anchor_omit")
-            same_day_matches = not anchor_omit.omit_expr_fires_on_date(
-                omit_dnf,
-                adate,
-                default_seed_date,
-                seed_base,
-                core=core,
-            )
-    except Exception:
-        same_day_matches = False
-
-    if same_day_matches:
-        slots = _extract_time_slots_for_date(dnf, adate, default_seed_date, seed_base)
-        if not slots:
-            slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
-        for slot in slots:
-            cand = _anchor_slot_local_dt(adate, slot)
-            if _compare_datetimes(cand, after_local_dt) > 0:
-                return cand
-
-    # An overnight window belongs to the previous anchor date. Continue its
-    # after-midnight slots before searching for the next matching anchor date.
-    previous_date = adate - timedelta(days=1)
-    try:
-        previous_matches = any(
-            all(
-                core.factor_matches_on(atom, previous_date, default_seed_date, seed_base=seed_base)
-                for atom in term
-            )
-            for term in dnf
-        )
-    except Exception:
-        previous_matches = False
-    if previous_matches:
-        previous_slots = _extract_time_slots_for_date(dnf, previous_date, default_seed_date, seed_base)
-        for slot in previous_slots:
-            if isinstance(slot, tuple) and len(slot) == 3 and int(slot[0]) > 0:
-                cand = _anchor_slot_local_dt(previous_date, slot)
-                if _compare_datetimes(cand, after_local_dt) > 0:
-                    return cand
-
-    # otherwise, find the next matching date strictly after adate
-    anchor_omit = _module("anchor_omit")
-    nxt_date, _ = anchor_omit.next_after_expr_with_omit(
+    scheduler = _module("add_anchor_compute")
+    return scheduler.anchor_next_occurrence_after_local_dt(
         dnf,
-        adate,
-        default_seed=default_seed_date,
+        after_local_dt,
+        fallback_hhmm=fallback_hhmm or (0, 0),
+        interval_seed=default_seed_date,
         seed_base=seed_base,
         omit_dnf=omit_dnf,
+        default_seed_date=default_seed_date,
         core=core,
-        max_skip_iterations=max(core.MAX_ANCHOR_ITER, 128),
     )
-    slots = _extract_time_slots_for_date(dnf, nxt_date, default_seed_date, seed_base)
-    if not slots:
-        slots = [fallback_hhmm] if fallback_hhmm else [(0, 0)]
-    return _anchor_slot_local_dt(nxt_date, slots[0])
 
 
 def _human_delta(a, b, prefer_months=True):

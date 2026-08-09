@@ -168,6 +168,9 @@ def main() -> int:
                 argv=tuple(sys.argv[1:]),
                 hook_dir=str(HOOK_DIR),
                 core_base=str(_CORE_BASE),
+                protocol=protocol,
+                probe=probe,
+                protocol_error=protocol_error,
             )
             or 0
         )

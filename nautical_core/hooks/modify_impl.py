@@ -79,6 +79,7 @@ def _core_target_from_base(base: Path) -> Path | None:
 _CORE_BASE = _trusted_core_base(TW_DIR)
 _EARLY_PROTOCOL_RESULT = None
 _PROTOCOL = None
+_PROBE_UNSET = object()
 
 if __name__ == "__main__":
     _protocol, _protocol_path, _protocol_error = hook_bootstrap.load_core_helper_module(
@@ -6503,6 +6504,9 @@ def run_hook(
     argv: tuple[str, ...],
     hook_dir: str,
     core_base: str,
+    protocol=None,
+    probe=_PROBE_UNSET,
+    protocol_error=None,
 ) -> int:
     """Run the extracted implementation with context captured by the wrapper."""
     global HOOK_DIR, TW_DIR, _CORE_BASE, _EARLY_PROTOCOL_RESULT, _PROTOCOL
@@ -6523,17 +6527,20 @@ def run_hook(
     _DEAD_LETTER_PATH = state_dir / ".nautical_dead_letter.jsonl"
     _DEAD_LETTER_LOCK = lock_dir / ".nautical_dead_letter.lock"
 
-    protocol, _protocol_path, protocol_error = hook_bootstrap.load_core_helper_module(
-        _CORE_BASE,
-        "hook_protocol.py",
-        "_nautical_hook_protocol_modify_impl",
-    )
+    if protocol is None:
+        protocol, _protocol_path, protocol_error = hook_bootstrap.load_core_helper_module(
+            _CORE_BASE,
+            "hook_protocol.py",
+            "_nautical_hook_protocol_modify_impl",
+        )
     if protocol is None:
         if protocol_error is not None:
             raise RuntimeError(f"could not load on-modify protocol: {protocol_error}") from protocol_error
         raise RuntimeError("could not load on-modify protocol")
     _PROTOCOL = protocol
-    _EARLY_PROTOCOL_RESULT = protocol.probe_on_modify(raw_input, max_bytes=_MAX_JSON_BYTES)
+    if probe is _PROBE_UNSET or (probe is None and protocol_error is not None):
+        probe = protocol.probe_on_modify(raw_input, max_bytes=_MAX_JSON_BYTES)
+    _EARLY_PROTOCOL_RESULT = probe
     main()
     return 0
 

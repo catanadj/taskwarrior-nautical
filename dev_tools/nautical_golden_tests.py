@@ -1486,6 +1486,53 @@ def test_full_hook_modules_defer_core_import():
         expect(result.stdout.strip() == "ok", f"unexpected lazy import probe output: {result.stdout!r}")
 
 
+def test_full_hooks_reuse_wrapper_protocol_probe():
+    """The full implementation must consume the wrapper's validated probe once."""
+    cases = (
+        ("on-add.nautical", "_nautical_probe_reuse_add", "probe_on_add"),
+        ("on-modify.nautical", "_nautical_probe_reuse_modify", "probe_on_modify"),
+    )
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td) / "taskdata"
+        taskdata.mkdir()
+        for hook_name, module_name, probe_name in cases:
+            mod = _load_hook_module(_find_hook_file(hook_name), module_name)
+            calls = {"main": 0, "probe": 0}
+            probe = object()
+
+            def unexpected_probe(*_args, **_kwargs):
+                calls["probe"] += 1
+                raise AssertionError("full implementation reparsed wrapper input")
+
+            protocol = SimpleNamespace(**{probe_name: unexpected_probe})
+            previous_main = mod.main
+            previous_resolve = mod._resolve_task_data_context
+            previous_early = getattr(mod, "_EARLY_PROTOCOL_RESULT", None)
+            try:
+                mod.main = lambda: calls.__setitem__("main", calls["main"] + 1)
+                mod._resolve_task_data_context = lambda: (str(taskdata), False)
+                result = mod.run_hook(
+                    raw_input=b"{\"uuid\":\"probe-reuse\"}",
+                    argv=(),
+                    hook_dir=str(taskdata / "hooks"),
+                    core_base=str(Path(ROOT) / "nautical_core"),
+                    protocol=protocol,
+                    probe=probe,
+                    protocol_error=None,
+                )
+                retained_probe = mod._EARLY_PROTOCOL_RESULT
+            finally:
+                mod.main = previous_main
+                mod._resolve_task_data_context = previous_resolve
+                mod._EARLY_PROTOCOL_RESULT = previous_early
+
+            expect(result == 0, f"{hook_name} run_hook returned {result}")
+            expect(calls["main"] == 1, f"{hook_name} implementation main was not called once")
+            expect(calls["probe"] == 0, f"{hook_name} reparsed the wrapper input")
+            expect(mod._PROTOCOL is protocol, f"{hook_name} did not retain wrapper protocol module")
+            expect(retained_probe is probe, f"{hook_name} did not retain wrapper probe result")
+
+
 def test_on_exit_active_sqlite_queue_uses_full_drain():
     """An active sqlite row must bypass the early exit guard and enter the full drain."""
     hook = _find_hook_file("on-exit.nautical")
@@ -30630,6 +30677,7 @@ TESTS = [
     test_light_taskdata_resolution_matches_hook_precedence,
     test_plain_hook_fast_paths_do_not_import_core_package,
     test_full_hook_modules_defer_core_import,
+    test_full_hooks_reuse_wrapper_protocol_probe,
     test_on_exit_active_sqlite_queue_uses_full_drain,
     test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
     test_hook_bootstrap_numeric_env_parsing_is_bounded,

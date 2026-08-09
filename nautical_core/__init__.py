@@ -367,6 +367,9 @@ try:
 except Exception:
     _zoneinfo = None
 
+_LOCAL_TZ: Any = None
+_TIMEZONE_CONFIG_ERROR = ""
+
 
 def _refresh_timezone() -> None:
     global _LOCAL_TZ, _TIMEZONE_CONFIG_ERROR

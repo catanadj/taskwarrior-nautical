@@ -17300,12 +17300,14 @@ def test_file_backed_empty_or_no_usable_dates_fail_cleanly():
 def test_file_backed_cache_detects_same_size_content_replacement():
     """anchor_file and omit_file caches should not serve stale dates after same-size file rewrites."""
     import nautical_core.anchor_files as anchor_files
+    from nautical_core import file_backed_dates
     import nautical_core.omit_files as omit_files
 
     for module_label, loader in (
         ('anchor_file', anchor_files.load_anchor_file_dates),
         ('omit_file', omit_files.load_omit_file_dates),
     ):
+        file_backed_dates._CACHE_BY_PATH.clear()
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             sample = base / 'calendar.csv'
@@ -17316,8 +17318,93 @@ def test_file_backed_cache_detects_same_size_content_replacement():
 
             sample.write_text('date\n2026-01-02\n', encoding='utf-8')
             os.utime(sample, ns=(first_stat.st_atime_ns, first_stat.st_mtime_ns))
+            second_stat = sample.stat()
+            if (
+                second_stat.st_dev == first_stat.st_dev
+                and second_stat.st_ino == first_stat.st_ino
+                and second_stat.st_size == first_stat.st_size
+                and second_stat.st_mtime_ns == first_stat.st_mtime_ns
+                and second_stat.st_ctime_ns == first_stat.st_ctime_ns
+            ):
+                # Some test filesystems expose no metadata change for a rewrite;
+                # force the cached metadata mismatch so the digest fallback is exercised.
+                cached = file_backed_dates._CACHE_BY_PATH[str(sample)]
+                file_backed_dates._CACHE_BY_PATH[str(sample)] = file_backed_dates._FileCacheEntry(
+                    (*cached.metadata[:4], cached.metadata[4] + 1),
+                    cached.digest,
+                    cached.dates,
+                    cached.descriptions,
+                )
             second = loader('calendar.csv', str(base))
             expect(second == frozenset({date(2026, 1, 2)}), f'{module_label} cache served stale same-size data: {second!r}')
+
+
+def test_file_backed_cache_uses_metadata_for_hot_reads_and_bounds_lru():
+    """Hot file reads should avoid I/O while the process cache remains bounded."""
+    from nautical_core import file_backed_dates
+
+    saved_limit = file_backed_dates._FILE_CACHE_MAX_ENTRIES
+    file_backed_dates._CACHE_BY_PATH.clear()
+    file_backed_dates._FILE_CACHE_MAX_ENTRIES = 2
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            first = base / 'first.txt'
+            second = base / 'second.txt'
+            third = base / 'third.txt'
+            first.write_text('2026-01-01\n' * 10_000, encoding='utf-8')
+            second.write_text('2026-01-02\n', encoding='utf-8')
+            third.write_text('2026-01-03\n', encoding='utf-8')
+
+            initial = file_backed_dates.load_file_date_data(str(first), label='anchor_file first.txt')
+            original_read_bytes = Path.read_bytes
+
+            def fail_read_bytes(_path):
+                raise AssertionError('metadata cache hit unexpectedly read the file')
+
+            Path.read_bytes = fail_read_bytes
+            try:
+                hot = file_backed_dates.load_file_date_data(str(first), label='anchor_file first.txt')
+            finally:
+                Path.read_bytes = original_read_bytes
+            expect(hot == initial, f'metadata cache hit changed the parsed result: {hot!r}')
+
+            file_backed_dates.load_file_date_data(str(second), label='anchor_file second.txt')
+            file_backed_dates.load_file_date_data(str(first), label='anchor_file first.txt')
+            file_backed_dates.load_file_date_data(str(third), label='anchor_file third.txt')
+            expect(len(file_backed_dates._CACHE_BY_PATH) == 2, 'file-backed cache exceeded its configured LRU bound')
+            expect(str(first) in file_backed_dates._CACHE_BY_PATH, 'recent file was evicted before the older entry')
+            expect(str(second) not in file_backed_dates._CACHE_BY_PATH, 'least-recent file was not evicted')
+    finally:
+        file_backed_dates._FILE_CACHE_MAX_ENTRIES = saved_limit
+        file_backed_dates._CACHE_BY_PATH.clear()
+
+
+def test_file_backed_cache_reuses_digest_matches_after_metadata_changes():
+    """Metadata changes with identical content should reuse parsed dates after digest verification."""
+    from nautical_core import file_backed_dates
+
+    file_backed_dates._CACHE_BY_PATH.clear()
+    with tempfile.TemporaryDirectory() as td:
+        sample = Path(td) / 'calendar.txt'
+        sample.write_text('2026-01-01\n', encoding='utf-8')
+        original_parser = file_backed_dates._parse_text_dates
+        parse_calls = []
+
+        def counted_parser(*args, **kwargs):
+            parse_calls.append(1)
+            return original_parser(*args, **kwargs)
+
+        file_backed_dates._parse_text_dates = counted_parser
+        try:
+            first = file_backed_dates.load_file_date_data(str(sample), label='anchor_file calendar.txt')
+            os.utime(sample, ns=(sample.stat().st_atime_ns, sample.stat().st_mtime_ns + 1))
+            second = file_backed_dates.load_file_date_data(str(sample), label='anchor_file calendar.txt')
+        finally:
+            file_backed_dates._parse_text_dates = original_parser
+            file_backed_dates._CACHE_BY_PATH.clear()
+    expect(first == second == (frozenset({date(2026, 1, 1)}), {}), f'digest fallback changed the parsed data: {first!r}, {second!r}')
+    expect(len(parse_calls) == 1, f'identical digest was reparsed after metadata change: {len(parse_calls)} parses')
 
 
 def test_file_backed_resource_limits_reject_oversized_inputs():
@@ -30204,6 +30291,8 @@ TESTS = [
     test_file_backed_csv_missing_date_column_reports_columns,
     test_file_backed_empty_or_no_usable_dates_fail_cleanly,
     test_file_backed_cache_detects_same_size_content_replacement,
+    test_file_backed_cache_uses_metadata_for_hot_reads_and_bounds_lru,
+    test_file_backed_cache_reuses_digest_matches_after_metadata_changes,
     test_file_backed_resource_limits_reject_oversized_inputs,
     test_file_source_resource_limits_bound_wildcard_fanout,
     test_file_date_aggregate_limits_cover_anchor_omit_and_business_calendars,

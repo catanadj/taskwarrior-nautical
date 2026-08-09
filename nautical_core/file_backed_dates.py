@@ -4,6 +4,8 @@ import csv
 import hashlib
 import io
 import os
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable
@@ -11,7 +13,38 @@ from typing import Iterable
 from . import file_resource_limits as resource_limits
 
 
-_CACHE_BY_PATH: dict[str, tuple[int, int, str, frozenset[date], dict[date, str]]] = {}
+_FILE_CACHE_MAX_ENTRIES = 32
+# Small files remain digest-verified on metadata hits; this preserves the
+# existing rewrite guarantee without making large calendar reads pay that cost.
+_FILE_CACHE_DIGEST_FALLBACK_BYTES = 64 * 1024
+
+
+@dataclass(frozen=True)
+class _FileCacheEntry:
+    metadata: tuple[int, int, int, int, int]
+    digest: str
+    dates: frozenset[date]
+    descriptions: dict[date, str]
+
+
+_CACHE_BY_PATH: OrderedDict[str, _FileCacheEntry] = OrderedDict()
+
+
+def _file_metadata(st: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        int(st.st_dev),
+        int(st.st_ino),
+        int(st.st_size),
+        int(st.st_mtime_ns),
+        int(st.st_ctime_ns),
+    )
+
+
+def _cache_put(path: str, entry: _FileCacheEntry) -> None:
+    _CACHE_BY_PATH[path] = entry
+    _CACHE_BY_PATH.move_to_end(path)
+    while len(_CACHE_BY_PATH) > _FILE_CACHE_MAX_ENTRIES:
+        _CACHE_BY_PATH.popitem(last=False)
 
 
 def _expand_date_spec(spec: str, *, label: str) -> set[date]:
@@ -125,6 +158,16 @@ def load_file_date_data(path: str, *, label: str) -> tuple[frozenset[date], dict
             f"{label} is too large ({st.st_size} bytes); "
             f"the maximum is {resource_limits.MAX_FILE_BYTES} bytes."
         )
+    metadata = _file_metadata(st)
+    cached = _CACHE_BY_PATH.get(path)
+    if (
+        cached is not None
+        and cached.metadata == metadata
+        and st.st_size > _FILE_CACHE_DIGEST_FALLBACK_BYTES
+    ):
+        _CACHE_BY_PATH.move_to_end(path)
+        return cached.dates, dict(cached.descriptions)
+
     raw = Path(path).read_bytes()
     if len(raw) > resource_limits.MAX_FILE_BYTES:
         raise ValueError(
@@ -132,9 +175,10 @@ def load_file_date_data(path: str, *, label: str) -> tuple[frozenset[date], dict
             f"the maximum is {resource_limits.MAX_FILE_BYTES} bytes."
         )
     digest = hashlib.sha256(raw).hexdigest()
-    cached = _CACHE_BY_PATH.get(path)
-    if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size and cached[2] == digest:
-        return cached[3], dict(cached[4])
+    if cached is not None and cached.digest == digest:
+        refreshed = _FileCacheEntry(metadata, digest, cached.dates, dict(cached.descriptions))
+        _cache_put(path, refreshed)
+        return refreshed.dates, dict(refreshed.descriptions)
 
     text = raw.decode("utf-8-sig")
     line_count = len(text.splitlines())
@@ -153,5 +197,5 @@ def load_file_date_data(path: str, *, label: str) -> tuple[frozenset[date], dict
         descriptions = {}
         if not dates:
             raise ValueError(f"{label} did not contain any usable dates.")
-    _CACHE_BY_PATH[path] = (st.st_mtime_ns, st.st_size, digest, dates, dict(descriptions))
+    _cache_put(path, _FileCacheEntry(metadata, digest, dates, dict(descriptions)))
     return dates, descriptions

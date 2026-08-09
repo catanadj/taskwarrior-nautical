@@ -10701,6 +10701,14 @@ def test_scheduler_date_boundary_exhaustion_is_typed():
     )
     expect(search_limited.kind == search_limited.SEARCH_LIMIT, "ordinary search exhaustion was misclassified")
 
+    huge = core.validate_anchor_expr_strict("w/1000000000:mon")
+    try:
+        core.next_after_expr(huge, date(2026, 1, 1), default_seed=date(2026, 1, 1))
+    except core.OccurrenceSearchExhausted as exc:
+        expect(exc.is_date_limit, f"extreme interval did not fail as a date-limit result: {exc.kind!r}")
+    else:
+        raise AssertionError("extreme interval should not escape as an untyped overflow")
+
 
 def test_anchor_step_preserves_scheduler_exhaustion():
     """The add-side occurrence adapter must not downgrade scheduler exhaustion to absence."""

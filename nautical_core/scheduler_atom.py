@@ -185,7 +185,15 @@ def advance_probe_for_interval_bucket(
         weeks_from_seed = weeks_between(seed, cur_monday)
         diff = weeks_from_seed % ival
         add_weeks = (ival - diff) if diff != 0 else 0
-        next_allowed_monday = cur_monday + timedelta(weeks=add_weeks or ival)
+        try:
+            next_allowed_monday = cur_monday + timedelta(weeks=add_weeks or ival)
+        except OverflowError as exc:
+            raise OccurrenceSearchExhausted(
+                "weekly interval scheduling",
+                reference=cur_monday,
+                limit=ival,
+                kind=OccurrenceSearchExhausted.DATE_LIMIT,
+            ) from exc
         return next_allowed_monday - timedelta(days=1)
     if typ == "y":
         if _is_pure_iso_week_spec(spec):
@@ -196,7 +204,15 @@ def advance_probe_for_interval_bucket(
             return date_cls.fromisocalendar(next_iso_year, 1, 1) - timedelta(days=1)
         diff = (year_index(cand) - year_index(seed)) % ival
         add_y = (ival - diff) if diff != 0 else 0
-        next_jan1 = date_cls(cand.year + (add_y or ival), 1, 1)
+        try:
+            next_jan1 = date_cls(cand.year + (add_y or ival), 1, 1)
+        except (OverflowError, ValueError) as exc:
+            raise OccurrenceSearchExhausted(
+                "yearly interval scheduling",
+                reference=cand,
+                limit=ival,
+                kind=OccurrenceSearchExhausted.DATE_LIMIT,
+            ) from exc
         return next_jan1 - timedelta(days=1)
     return cand
 

@@ -1012,13 +1012,28 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
 
 def _stamp_chain_id_on_add(task: dict) -> None:
     # [CHAINID] Stamp short root id on new recurring roots (anchor/anchor_file/cp)
+    has_recurrence = any(
+        str(task.get(field) or "").strip()
+        for field in ("anchor", "anchor_file", "cp")
+    )
+    if not has_recurrence or str(task.get("chainID") or "").strip():
+        return
     try:
-        has_recurrence = bool((task.get("anchor") or "").strip() or (task.get("anchor_file") or "").strip() or (task.get("cp") or "").strip())
-        if has_recurrence and not (task.get("chainID") or "").strip():
-            task["chainID"] = core.short_uuid(task.get("uuid"))
-    except Exception:
-        # Never block task creation on bookkeeping
-        pass
+        chain_id = str(core.short_uuid(task.get("uuid")) or "").strip()
+    except Exception as exc:
+        _fail_and_exit(
+            "Chain identity unavailable",
+            "Could not derive the required chainID for this recurring root: "
+            f"{type(exc).__name__}: {exc}",
+        )
+        return
+    if not chain_id:
+        _fail_and_exit(
+            "Chain identity unavailable",
+            "Could not derive the required chainID for this recurring root from its UUID.",
+        )
+        return
+    task["chainID"] = chain_id
 
 
 def _norm_t_mod(v):

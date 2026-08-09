@@ -2787,6 +2787,47 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
     expect(not already_new.get("chainID"), f"existing nautical task should not gain chainID here, got {already_new!r}")
 
 
+def test_modify_ordinary_transition_failure_rejects_instead_of_noop():
+    """A failed recurrence transition must not silently continue as an ordinary edit."""
+    ordinary = core._import_sibling("modify_ordinary")
+    services = ordinary.OrdinaryModifyServices(
+        field_changed=lambda old, new, field: old.get(field) != new.get(field),
+        strip_quotes=lambda value: value,
+        validate_anchor=lambda *_args: None,
+        validate_omit=lambda *_args: None,
+        reject_conflicting_types=lambda *_args: None,
+        validate_chain_limits=lambda *_args: None,
+        preserve_cp_offsets=lambda *_args: None,
+        task_has_recurrence=lambda task: bool(str(task.get("anchor") or "").strip()),
+        preserve_native_until=lambda *_args: False,
+        validate_native_until=lambda *_args: None,
+        validate_native_until_slots=lambda *_args: None,
+        render_cp_adjustment=lambda *_args: None,
+        render_timing_warning=lambda *_args: None,
+        apply_transition=lambda *_args: (_ for _ in ()).throw(ValueError("chain identity unavailable")),
+        short_uuid=lambda value: str(value or "")[:8],
+        recurrence_enabled_rows=lambda *_args: [],
+        panel=lambda *_args, **_kwargs: None,
+        render_disabled_summary=lambda *_args: None,
+        semantic_diff_value=lambda old, new: f"{old} -> {new}",
+        first_recurrence_target=lambda *_args: None,
+        fmtlocal=lambda value: str(value),
+        render_recurrence_updated=lambda *_args: None,
+        print_task=lambda *_args: None,
+    )
+    try:
+        ordinary.handle_non_completion_modify(
+            {"uuid": "plain", "status": "pending"},
+            {"uuid": "plain", "status": "pending", "anchor": "w:mon"},
+            services=services,
+            lifecycle=SimpleNamespace(recurrence_setting_changes=lambda *_args: []),
+        )
+    except ordinary.RecurrenceActivationError as exc:
+        expect("chain identity unavailable" in str(exc), f"transition detail was lost: {exc}")
+    else:
+        raise AssertionError("failed recurrence transition was treated as no transition")
+
+
 def test_on_modify_promotes_chain_emits_upgrade_panel():
     """Promotion to Nautical should show a small informative panel."""
     hook = _find_hook_file("on-modify.nautical")
@@ -21547,6 +21588,40 @@ def test_on_add_anchor_file_root_gets_chainid_stamp():
     mod._stamp_chain_id_on_add(task)
     expect(task.get("chainID") == "12345678", f"expected anchor_file root chainID stamp, got: {task!r}")
 
+
+def test_on_add_chainid_stamp_failure_rejects_recurring_root():
+    """A recurring root must not proceed when its mandatory chainID cannot be derived."""
+    hook = _find_hook_file("on-add.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_add_chainid_failure_test")
+    task = {
+        "description": "chainid failure",
+        "uuid": "12345678-1234-1234-1234-1234567890ab",
+        "anchor": "w:mon",
+    }
+    captured = {}
+    original_fail = mod._fail_and_exit
+    original_short_uuid = mod.core.short_uuid
+    try:
+        def fail(title, message):
+            captured.update(title=title, message=message)
+            raise RuntimeError("rejected")
+
+        mod._fail_and_exit = fail
+        mod.core.short_uuid = lambda _value: (_ for _ in ()).throw(ValueError("UUID unavailable"))
+        try:
+            mod._stamp_chain_id_on_add(task)
+        except RuntimeError as exc:
+            expect(str(exc) == "rejected", f"unexpected chainID failure result: {exc}")
+        else:
+            raise AssertionError("chainID derivation failure was ignored")
+    finally:
+        mod._fail_and_exit = original_fail
+        mod.core.short_uuid = original_short_uuid
+    expect(captured.get("title") == "Chain identity unavailable", f"unexpected chainID failure panel: {captured}")
+    expect("UUID unavailable" in str(captured.get("message")), f"chainID failure detail was lost: {captured}")
+    expect(not task.get("chainID"), f"incomplete recurring root was left stamped: {task!r}")
+
+
 def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
     """on-add anchor_file preview should auto-assign due from the first future file occurrence and keep task-level time."""
     hook = _find_hook_file("on-add.nautical")
@@ -30863,6 +30938,7 @@ TESTS = [
     test_on_add_ignores_unsafe_core_path_override,
     test_on_modify_ignores_unsafe_core_path_override,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
+    test_modify_ordinary_transition_failure_rejects_instead_of_noop,
     test_on_modify_promotes_chain_emits_upgrade_panel,
     test_on_modify_promotes_cp_emits_period_explanation,
     test_on_modify_disables_chain_emits_disabled_panel,
@@ -31015,6 +31091,7 @@ TESTS = [
     test_navigator_resolves_symbolic_anchor_time_offsets,
     test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_anchor_file_root_gets_chainid_stamp,
+    test_on_add_chainid_stamp_failure_rejects_recurring_root,
     test_hook_on_add_anchor_file_preview_auto_assigns_first_match,
     test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match,
     test_on_modify_compute_anchor_child_due_from_anchor_file,

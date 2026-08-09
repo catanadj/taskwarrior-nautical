@@ -5937,12 +5937,15 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
         render_recurrence_updated=_render_recurrence_updated_panel,
         print_task=_print_task,
     )
-    modify_ordinary.handle_non_completion_modify(
-        old,
-        new,
-        services=services,
-        lifecycle=modify_lifecycle,
-    )
+    try:
+        modify_ordinary.handle_non_completion_modify(
+            old,
+            new,
+            services=services,
+            lifecycle=modify_lifecycle,
+        )
+    except modify_ordinary.RecurrenceActivationError as exc:
+        _fail_and_exit("Nautical recurrence activation failed", str(exc))
 
 
 def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, str]:
@@ -5998,8 +6001,11 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, 
         modify_lifecycle = _module("modify_lifecycle")
         try:
             modify_lifecycle.apply_nautical_transition(old, new, short_uuid=core.short_uuid)
-        except Exception:
-            pass
+        except Exception as exc:
+            _fail_and_exit(
+                "Nautical recurrence activation failed",
+                f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}",
+            )
 
     return new_cp, new_anchor, new_anchor_file
 

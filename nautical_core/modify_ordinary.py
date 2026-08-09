@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
+class RecurrenceActivationError(RuntimeError):
+    """Raised when a recurrence transition cannot be applied safely."""
+
+
 @dataclass(frozen=True, slots=True)
 class OrdinaryModifyServices:
     field_changed: Callable[[dict, dict, str], bool]
@@ -96,8 +100,10 @@ def handle_non_completion_modify(
 
     try:
         transition = services.apply_transition(old, new)
-    except Exception:
-        transition = None
+    except Exception as exc:
+        raise RecurrenceActivationError(
+            f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}"
+        ) from exc
     recurrence_removed = (
         services.task_has_recurrence(old)
         and not services.task_has_recurrence(new)
@@ -156,4 +162,8 @@ def handle_non_completion_modify(
     services.print_task(new)
 
 
-__all__ = ("OrdinaryModifyServices", "handle_non_completion_modify")
+__all__ = (
+    "OrdinaryModifyServices",
+    "RecurrenceActivationError",
+    "handle_non_completion_modify",
+)

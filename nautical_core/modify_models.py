@@ -160,6 +160,73 @@ class HumanDeltaCallback(Protocol):
         ...
 
 
+class ComputeAnchorChildDueCallback(Protocol):
+    def __call__(self, task: TaskRow) -> tuple[Any, Any, Any]:
+        ...
+
+
+class ComputeCpChildDueCallback(Protocol):
+    def __call__(self, task: TaskRow) -> tuple[Any, Any]:
+        ...
+
+
+class SafeParseDatetimeCallback(Protocol):
+    def __call__(self, value: Any) -> tuple[datetime | None, str | None]:
+        ...
+
+
+class ValidateUntilCallback(Protocol):
+    def __call__(self, until_dt: datetime, now_utc: Any) -> tuple[bool, str | None]:
+        ...
+
+
+class ValidateChainDurationCallback(Protocol):
+    def __call__(self, child_due: Any, until_dt: Any, now_utc: Any) -> tuple[bool, str | None]:
+        ...
+
+
+class CoerceIntCallback(Protocol):
+    def __call__(self, value: Any, default: int = 0) -> int:
+        ...
+
+
+class DatetimeParserCallback(Protocol):
+    def __call__(self, value: Any) -> datetime | None:
+        ...
+
+
+class EstimateCpFinalCallback(Protocol):
+    def __call__(self, task: TaskRow, child_due: Any) -> Any:
+        ...
+
+
+class EstimateAnchorFinalCallback(Protocol):
+    def __call__(self, task: TaskRow, child_due: Any, dnf: Any) -> Any:
+        ...
+
+
+class CapFromUntilCpCallback(Protocol):
+    def __call__(self, task: TaskRow, child_due: Any) -> tuple[int | None, Any]:
+        ...
+
+
+class CapFromUntilAnchorCallback(Protocol):
+    def __call__(self, task: TaskRow, child_due: Any, dnf: Any) -> tuple[int | None, Any]:
+        ...
+
+
+class EndChainSummaryCallback(Protocol):
+    def __call__(
+        self,
+        current: TaskRow,
+        reason: str,
+        now_utc: Any,
+        *,
+        current_task: TaskRow | None = None,
+    ) -> None:
+        ...
+
+
 CompletionLinkNumbersCallback: TypeAlias = Callable[
     [TaskRow], tuple[int, int] | None
 ]

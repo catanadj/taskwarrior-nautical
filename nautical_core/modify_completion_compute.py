@@ -4,9 +4,23 @@ from datetime import datetime
 from typing import Any
 
 from nautical_core.modify_models import (
+    CapFromUntilAnchorCallback,
+    CapFromUntilCpCallback,
+    CoerceIntCallback,
+    ComputeAnchorChildDueCallback,
+    ComputeCpChildDueCallback,
     CompletionComputeResult,
     CompletionComputeServices,
-    ServiceCallback,
+    DatetimeParserCallback,
+    EndChainSummaryCallback,
+    EstimateAnchorFinalCallback,
+    EstimateCpFinalCallback,
+    PanelCallback,
+    PrintTaskCallback,
+    SafeParseDatetimeCallback,
+    DiagnosticCallback,
+    ValidateChainDurationCallback,
+    ValidateUntilCallback,
 )
 from nautical_core.timeutil import compare_datetimes
 
@@ -15,11 +29,11 @@ def completion_compute_child_due(
     new: dict[str, Any],
     kind: str,
     *,
-    compute_anchor_child_due: ServiceCallback,
-    compute_cp_child_due: ServiceCallback,
-    panel: ServiceCallback,
-    print_task: ServiceCallback,
-    diag: ServiceCallback | None = None,
+    compute_anchor_child_due: ComputeAnchorChildDueCallback,
+    compute_cp_child_due: ComputeCpChildDueCallback,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
+    diag: DiagnosticCallback | None = None,
 ) -> tuple[Any, Any, Any] | None:
     try:
         if kind in {"anchor", "anchor_file"}:
@@ -54,10 +68,10 @@ def completion_until_or_fail(
     new: dict[str, Any],
     now_utc: Any,
     *,
-    safe_parse_datetime: ServiceCallback,
-    validate_until_not_past: ServiceCallback,
-    panel: ServiceCallback,
-    print_task: ServiceCallback,
+    safe_parse_datetime: SafeParseDatetimeCallback,
+    validate_until_not_past: ValidateUntilCallback,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
 ) -> datetime | None | bool:
     until_dt, err = safe_parse_datetime(new.get("chainUntil"))
     if err:
@@ -84,8 +98,8 @@ def completion_until_guard_or_stop(
     until_dt: Any,
     now_utc: Any,
     *,
-    end_chain_summary: ServiceCallback,
-    print_task: ServiceCallback,
+    end_chain_summary: EndChainSummaryCallback,
+    print_task: PrintTaskCallback,
 ) -> bool:
     if until_dt and compare_datetimes(child_due, until_dt) > 0:
         end_chain_summary(new, "Reached 'until' limit", now_utc)
@@ -99,8 +113,8 @@ def completion_require_child_due_or_fail(
     new: dict[str, Any],
     child_due: Any,
     *,
-    panel: ServiceCallback,
-    print_task: ServiceCallback,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
 ) -> bool:
     if child_due:
         return True
@@ -119,8 +133,8 @@ def completion_warn_unreasonable_duration(
     until_dt: Any,
     now_utc: Any,
     *,
-    validate_chain_duration_reasonable: ServiceCallback,
-    panel: ServiceCallback,
+    validate_chain_duration_reasonable: ValidateChainDurationCallback,
+    panel: PanelCallback,
 ) -> None:
     if not until_dt:
         return
@@ -135,12 +149,12 @@ def completion_caps(
     child_due: Any,
     dnf: Any,
     *,
-    coerce_int: ServiceCallback,
-    dtparse: ServiceCallback,
-    estimate_cp_final_by_max: ServiceCallback,
-    estimate_anchor_final_by_max: ServiceCallback,
-    cap_from_until_cp: ServiceCallback,
-    cap_from_until_anchor: ServiceCallback,
+    coerce_int: CoerceIntCallback,
+    dtparse: DatetimeParserCallback,
+    estimate_cp_final_by_max: EstimateCpFinalCallback,
+    estimate_anchor_final_by_max: EstimateAnchorFinalCallback,
+    cap_from_until_cp: CapFromUntilCpCallback,
+    cap_from_until_anchor: CapFromUntilAnchorCallback,
 ) -> tuple[int, datetime | None, int | None, list[tuple[str, Any]], int | None]:
     cpmax = coerce_int(new.get("chainMax"), 0)
     until_dt = dtparse(new.get("chainUntil"))
@@ -182,8 +196,8 @@ def completion_cap_guard_or_stop(
     cap_no: int | None,
     now_utc: Any,
     *,
-    end_chain_summary: ServiceCallback,
-    print_task: ServiceCallback,
+    end_chain_summary: EndChainSummaryCallback,
+    print_task: PrintTaskCallback,
 ) -> bool:
     if cap_no and next_no > cap_no:
         end_chain_summary(new, f"Reached cap #{cap_no}", now_utc, current_task=new)

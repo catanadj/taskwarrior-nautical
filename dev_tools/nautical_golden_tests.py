@@ -8545,6 +8545,37 @@ def test_weekly_rand_N_gate():
         wk = iso_week_index(datetime.fromisoformat(d).date()) % 4
         expect(wk == mod, f"{d} must satisfy /4 gating (got {wk}, want {mod})")
 
+
+def test_monthly_and_yearly_random_intervals_scale_and_exhaust():
+    """Random /N searches must honor cadence beyond the legacy guard windows."""
+    seed = date(2026, 1, 1)
+    cases = (
+        ("m/2:rand + y:01-01..12-31", "month", 2),
+        ("m/25:rand", "month", 25),
+        ("y/11:rand", "year", 11),
+    )
+    for expr, unit, interval in cases:
+        dnf = core.validate_anchor_expr_strict(expr)
+        first, _ = core.next_after_expr(dnf, seed, default_seed=seed, seed_base="large-interval")
+        second, _ = core.next_after_expr(dnf, first, default_seed=seed, seed_base="large-interval")
+        if unit == "month":
+            offset = (second.year - seed.year) * 12 + (second.month - seed.month)
+        else:
+            offset = second.year - seed.year
+        expect(offset % interval == 0, f"{expr} ignored /{interval}: {first} -> {second}")
+
+    for expr in ("m/25:rand", "y/11:rand"):
+        try:
+            core.next_after_expr(
+                core.validate_anchor_expr_strict(expr),
+                date(9999, 12, 31),
+                default_seed=seed,
+                seed_base="large-interval-exhaustion",
+            )
+        except core.OccurrenceSearchExhausted:
+            continue
+        expect(False, f"{expr} should report typed exhaustion at the calendar limit")
+
 def test_business_day_nbd_pbd_nw_natural():
     """Test business day modifier natural language generation"""
     # Natural must reflect rolls; dates must obey
@@ -30557,6 +30588,7 @@ TESTS = [
     test_yearly_month_names,
     test_rand_with_year_window,
     test_weekly_rand_N_gate,
+    test_monthly_and_yearly_random_intervals_scale_and_exhaust,
     test_business_day_nbd_pbd_nw_natural,
     test_time_splitting_per_atom,
     test_weekly_multi_days_and_every_2weeks,

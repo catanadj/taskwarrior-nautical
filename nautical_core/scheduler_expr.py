@@ -75,6 +75,53 @@ def _intersect_weekly_atoms_allowed(
 
 
 _GREGORIAN_CYCLE_DAYS = 146097  # 400 Gregorian years; also divisible by 7.
+_GREGORIAN_CYCLE_MONTHS = 400 * 12
+_LAST_SUPPORTED_YEAR = 9999
+
+
+def _calendar_month_span(after_date) -> int:
+    """Return the number of calendar months still representable, inclusive."""
+    return max(1, (_LAST_SUPPORTED_YEAR - after_date.year) * 12 + (12 - after_date.month) + 1)
+
+
+def _calendar_year_span(after_date) -> int:
+    """Return the number of calendar years still representable, inclusive."""
+    return max(1, _LAST_SUPPORTED_YEAR - after_date.year + 1)
+
+
+def _rand_search_limit(term: list[dict], after_date, interval: int, *, unit: str) -> int:
+    """Derive a bounded random search from cadence and the supported calendar.
+
+    Calendar selectors and weekday filters can repeat only after the Gregorian
+    cycle.  The interval extends that cycle; the supported date range remains
+    the hard upper bound.  The extra iteration includes the current bucket so
+    an interval boundary immediately after ``after_date`` is not skipped.
+    """
+    interval = max(1, int(interval or 1))
+    has_calendar_filter = any(
+        (atom.get("typ") or atom.get("type") or "").lower() in {"w", "y"}
+        for atom in term
+    )
+    if unit == "month":
+        cycle = _GREGORIAN_CYCLE_MONTHS if has_calendar_filter else 1
+        period = lcm(cycle, interval)
+        return min(_calendar_month_span(after_date), period + 1)
+    cycle = 400 if has_calendar_filter else 1
+    period = lcm(cycle, interval)
+    return min(_calendar_year_span(after_date), period + 1)
+
+
+def _term_interval_lcm(term: list[dict], types: set[str]) -> int:
+    interval = 1
+    for atom in term:
+        typ = (atom.get("typ") or atom.get("type") or "").lower()
+        if typ not in types:
+            continue
+        try:
+            interval = lcm(interval, max(1, int(atom.get("ival", 1) or 1)))
+        except (TypeError, ValueError):
+            continue
+    return interval
 
 
 def _periodic_atom_period_days(atom: dict) -> int | None:
@@ -165,6 +212,7 @@ def next_for_and_rand_yearly(
     ref_d,
     y_specs: list[str],
     *,
+    default_seed=None,
     seed_base,
     identity: str,
     random_pick_index,
@@ -174,9 +222,23 @@ def next_for_and_rand_yearly(
     doms_for_weekly_spec,
     date_cls,
 ):
+    seed_loc = default_seed or ref_d
+    monthly_interval = _term_interval_lcm(term, {"m"})
+    yearly_interval = _term_interval_lcm(term, {"y"})
+
+    search_limit = _rand_search_limit(
+        term,
+        ref_d,
+        lcm(monthly_interval, yearly_interval),
+        unit="month",
+    )
     probe = ref_d + timedelta(days=1)
-    for _ in range(60):  # scan up to 5 years (60 months)
+    for _ in range(search_limit):
         y, m = probe.year, probe.month
+        month_offset = (y - seed_loc.year) * 12 + (m - seed_loc.month)
+        if month_offset % monthly_interval != 0 or (y - seed_loc.year) % yearly_interval != 0:
+            probe = _first_day_next_month(y, m, date_cls=date_cls, days_in_month=days_in_month)
+            continue
         dim = days_in_month(y, m)
         allowed = set(range(1, dim + 1))
         allowed &= doms_allowed_by_year(y, m, y_specs)
@@ -319,6 +381,7 @@ def next_for_and(
             term,
             ref_d,
             y_specs,
+            default_seed=seed,
             seed_base=seed_base,
             identity=random_identity(term),
             random_pick_index=random_pick_index,
@@ -333,7 +396,12 @@ def next_for_and(
         raise OccurrenceSearchExhausted(
             "random yearly AND-term scheduling",
             reference=ref_d,
-            limit=60,
+            limit=_rand_search_limit(
+                term,
+                ref_d,
+                lcm(_term_interval_lcm(term, {"m"}), _term_interval_lcm(term, {"y"})),
+                unit="month",
+            ),
             kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
         )
     return next_for_and_fast_path(
@@ -575,13 +643,21 @@ def _next_after_expr_monthly_rand_candidate(
     seed_key_base = seed_base if seed_base is not None else "preview"
     mods = info.get("mods") or {}
     bd_only = bool(mods.get("bd"))
-    ival = int(info.get("ival") or 1)
+    monthly_interval = _term_interval_lcm(term, {"m"})
+    yearly_interval = _term_interval_lcm(term, {"y"})
 
     seed_loc = default_seed or after_date
     y, m = after_date.year, after_date.month
 
-    for _ in range(24):
-        if ival > 1 and ((months_since(seed_loc, y, m) % ival) != 0):
+    search_limit = _rand_search_limit(
+        term,
+        after_date,
+        lcm(monthly_interval, yearly_interval),
+        unit="month",
+    )
+    for _ in range(search_limit):
+        month_offset = months_since(seed_loc, y, m)
+        if month_offset % monthly_interval != 0 or (y - seed_loc.year) % yearly_interval != 0:
             m = 1 if m == 12 else m + 1
             if m == 1:
                 y += 1
@@ -607,7 +683,12 @@ def _next_after_expr_monthly_rand_candidate(
         if m == 1:
             y += 1
 
-    return None, None
+    raise OccurrenceSearchExhausted(
+        "monthly random scheduling",
+        reference=after_date,
+        limit=search_limit,
+        kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
+    )
 
 
 def _next_after_expr_yearly_rand_candidate(
@@ -628,12 +709,13 @@ def _next_after_expr_yearly_rand_candidate(
     bd_only = bool(mods.get("bd"))
     target_m = info.get("month", None)
     count = int(info.get("count") or 1)
-    ival = int(info.get("ival") or 1)
+    yearly_interval = _term_interval_lcm(term, {"y"})
     seed_year = (default_seed or after_date).year
     y = after_date.year
 
-    for _ in range(10):
-        if ival > 1 and (y - seed_year) % ival != 0:
+    search_limit = _rand_search_limit(term, after_date, yearly_interval, unit="year")
+    for _ in range(search_limit):
+        if (y - seed_year) % yearly_interval != 0:
             y += 1
             continue
         if target_m is None:
@@ -664,7 +746,12 @@ def _next_after_expr_yearly_rand_candidate(
                     return choice, {"basis": "rand", "rand_period": period_key}
         y += 1
 
-    return None, None
+    raise OccurrenceSearchExhausted(
+        "yearly random scheduling",
+        reference=after_date,
+        limit=search_limit,
+        kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
+    )
 
 
 def _next_after_expr_term_candidate(term: list[dict], after_date, default_seed, seed_base, *, next_after_term):
@@ -704,59 +791,72 @@ def next_after_expr(
 
     best = None
     best_meta = None
+    exhausted: OccurrenceSearchExhausted | None = None
 
     for term_id, term in enumerate(dnf):
         rk, info = term_rand_info(term)
 
         if rk == "w":
-            cand, meta = _next_after_expr_weekly_rand_candidate(
-                term,
-                term_id,
-                info,
-                after_date,
-                default_seed,
-                seed_base,
-                random_identity=random_identity,
-                random_pick_indices=random_pick_indices,
-                atom_matches_on=atom_matches_on,
-                date_is_excluded=date_is_excluded,
-                is_business_day=is_business_day,
-            )
+            try:
+                cand, meta = _next_after_expr_weekly_rand_candidate(
+                    term,
+                    term_id,
+                    info,
+                    after_date,
+                    default_seed,
+                    seed_base,
+                    random_identity=random_identity,
+                    random_pick_indices=random_pick_indices,
+                    atom_matches_on=atom_matches_on,
+                    date_is_excluded=date_is_excluded,
+                    is_business_day=is_business_day,
+                )
+            except OccurrenceSearchExhausted as exc:
+                exhausted = exc
+                continue
             best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
             continue
 
         if rk == "m":
-            cand, meta = _next_after_expr_monthly_rand_candidate(
-                term,
-                term_id,
-                info,
-                after_date,
-                default_seed,
-                seed_base,
-                atype=atype,
-                next_for_and=next_for_and,
-                months_since=months_since,
-                term_candidates_in_month=term_candidates_in_month,
-                random_identity=random_identity,
-                random_pick_indices=random_pick_indices,
-                date_is_excluded=date_is_excluded,
-            )
+            try:
+                cand, meta = _next_after_expr_monthly_rand_candidate(
+                    term,
+                    term_id,
+                    info,
+                    after_date,
+                    default_seed,
+                    seed_base,
+                    atype=atype,
+                    next_for_and=next_for_and,
+                    months_since=months_since,
+                    term_candidates_in_month=term_candidates_in_month,
+                    random_identity=random_identity,
+                    random_pick_indices=random_pick_indices,
+                    date_is_excluded=date_is_excluded,
+                )
+            except OccurrenceSearchExhausted as exc:
+                exhausted = exc
+                continue
             best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
             continue
 
         if rk == "y":
-            cand, meta = _next_after_expr_yearly_rand_candidate(
-                term,
-                term_id,
-                info,
-                after_date,
-                default_seed,
-                seed_base,
-                term_candidates_in_month=term_candidates_in_month,
-                random_identity=random_identity,
-                random_pick_indices=random_pick_indices,
-                date_is_excluded=date_is_excluded,
-            )
+            try:
+                cand, meta = _next_after_expr_yearly_rand_candidate(
+                    term,
+                    term_id,
+                    info,
+                    after_date,
+                    default_seed,
+                    seed_base,
+                    term_candidates_in_month=term_candidates_in_month,
+                    random_identity=random_identity,
+                    random_pick_indices=random_pick_indices,
+                    date_is_excluded=date_is_excluded,
+                )
+            except OccurrenceSearchExhausted as exc:
+                exhausted = exc
+                continue
             best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
             continue
 
@@ -769,4 +869,6 @@ def next_after_expr(
         )
         best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
 
+    if best is None and exhausted is not None:
+        raise exhausted
     return best, best_meta

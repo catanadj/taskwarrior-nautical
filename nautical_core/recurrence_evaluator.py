@@ -208,7 +208,7 @@ class RecurrenceEvaluator:
 
         return parse_anchor_expr_to_dnf_cached(self.spec.anchor)
 
-    def _parse_omit(self) -> list[Any]:
+    def _parse_omit(self) -> Any:
         from . import parse_anchor_expr_to_dnf_cached, resolve_omit_presets
         from .anchor_omit import validate_omit_expr_strict
 
@@ -636,12 +636,12 @@ class RecurrenceEvaluator:
 
     def _default_next_occurrence_after_local_dt(
         self,
-        dnf,
+        dnf: Any,
         after_local_dt: datetime,
         *,
         default_seed_date: date | None,
         seed_base: str,
-        omit_dnf=None,
+        omit_dnf: Any = None,
         fallback_hhmm: tuple[int, int] | None = None,
     ) -> datetime | None:
         """Resolve the shared date/time scheduler for evaluator consumers."""
@@ -724,9 +724,12 @@ class RecurrenceEvaluator:
 
         def resolve_slots(value: Any, target_date: Any) -> Any:
             """Resolve slots with the evaluator's astronomy and timezone context."""
-            config = self.context.astronomy_config
-            if config is None:
-                config = getattr(core, "ASTRONOMY_CONFIG", {})
+            context_config = self.context.astronomy_config
+            if context_config is not None:
+                config: dict[str, Any] | None = dict(context_config)
+            else:
+                core_config = getattr(core, "ASTRONOMY_CONFIG", {})
+                config = core_config if isinstance(core_config, dict) else None
             return resolve_time_slots(
                 value,
                 target_date,

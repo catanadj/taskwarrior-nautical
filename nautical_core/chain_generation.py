@@ -230,6 +230,7 @@ class ChainGenerationService:
             raise ValueError(f"scheduled field: {error}")
         target_field = "scheduled" if due_dt is None and scheduled_dt is not None else "due"
         candidate = (end_dt + interval).replace(microsecond=0)
+        meta: dict[str, Any]
         if int(interval.total_seconds()) % 86400:
             meta = {"period": duration, "basis": "end+cp (exact)", "target_field": target_field}
         else:

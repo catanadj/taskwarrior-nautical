@@ -10,11 +10,14 @@ import copy
 import math
 import stat
 from collections import OrderedDict
-from typing import Any, Callable, TypeAlias, TypedDict, cast
+from typing import Any, Callable, TYPE_CHECKING, TypeAlias, TypedDict, cast
 from datetime import datetime, timedelta, timezone, date
 from functools import lru_cache, partial
 from calendar import month_name, monthrange
 from datetime import date as _date
+
+if TYPE_CHECKING:
+    from .parser_models import AnchorDNF as AnchorDNFType
 import json, zlib, base64, hashlib, tempfile, time, random, subprocess
 import difflib
 import importlib
@@ -104,7 +107,7 @@ class HintLimits(TypedDict, total=False):
 
 class AnchorHintsPayload(TypedDict, total=False):
     meta: HintMeta
-    dnf: AnchorDNF
+    dnf: AnchorDNFType
     natural: str
     next_dates: list[str]
     per_year: HintPerYear

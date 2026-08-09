@@ -28,6 +28,7 @@ from nautical_core.modify_models import (
     DiagnosticCallback,
     PanelCallback,
     PrintTaskCallback,
+    ShortUuidCallback,
     SpawnChildCallback,
     ServiceCallback,
 )
@@ -210,7 +211,7 @@ def build_cp_feedback_services(runtime: ModifyRuntimeServices) -> CpFeedbackServ
 
 def build_preflight_services(
     *,
-    short: ServiceCallback,
+    short: ShortUuidCallback,
     completion_link_numbers_or_fail: CompletionLinkNumbersCallback,
     completion_kind_or_stop: CompletionKindCallback,
     completion_chain_id_or_fail: CompletionChainIdCallback,

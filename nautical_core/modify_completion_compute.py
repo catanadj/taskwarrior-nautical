@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from nautical_core.modify_models import (
@@ -19,7 +20,7 @@ def completion_compute_child_due(
     panel: ServiceCallback,
     print_task: ServiceCallback,
     diag: ServiceCallback | None = None,
-):
+) -> tuple[Any, Any, Any] | None:
     try:
         if kind in {"anchor", "anchor_file"}:
             child_due, meta, dnf = compute_anchor_child_due(new)
@@ -57,7 +58,7 @@ def completion_until_or_fail(
     validate_until_not_past: ServiceCallback,
     panel: ServiceCallback,
     print_task: ServiceCallback,
-):
+) -> datetime | None | bool:
     until_dt, err = safe_parse_datetime(new.get("chainUntil"))
     if err:
         panel("⛔ Chain error", [("Reason", f"Invalid chainUntil: {err}")], kind="error")
@@ -140,7 +141,7 @@ def completion_caps(
     estimate_anchor_final_by_max: ServiceCallback,
     cap_from_until_cp: ServiceCallback,
     cap_from_until_anchor: ServiceCallback,
-):
+) -> tuple[int, datetime | None, int | None, list[tuple[str, Any]], int | None]:
     cpmax = coerce_int(new.get("chainMax"), 0)
     until_dt = dtparse(new.get("chainUntil"))
     cap_no = cpmax if cpmax else None

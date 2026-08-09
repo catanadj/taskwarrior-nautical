@@ -12,6 +12,7 @@ from typing import Any, Protocol, TypeAlias
 # modules support Taskwarrior's heterogeneous JSON fields.
 ServiceCallback: TypeAlias = Callable[..., Any]
 TaskRow: TypeAlias = dict[str, Any]
+ShortUuidCallback: TypeAlias = Callable[[Any], str]
 
 
 class PanelCallback(Protocol):
@@ -50,7 +51,9 @@ CompletionChainIdCallback: TypeAlias = Callable[[TaskRow], str | None]
 CompletionSnapshotCallback: TypeAlias = Callable[
     [str, int, int], "CompletionChainSnapshot"
 ]
-CompletionExistingNextCallback: TypeAlias = Callable[[TaskRow, int], bool]
+CompletionExistingNextCallback: TypeAlias = Callable[
+    [TaskRow, int, "CompletionChainSnapshot | None"], bool
+]
 CompletionChildDueCallback: TypeAlias = Callable[
     [TaskRow, str], tuple[Any, Any, Any] | None
 ]
@@ -135,7 +138,7 @@ class CompletionComputeResult:
 
 @dataclass(slots=True)
 class CompletionPreflightServices:
-    short: ServiceCallback
+    short: ShortUuidCallback
     completion_link_numbers_or_fail: CompletionLinkNumbersCallback
     completion_kind_or_stop: CompletionKindCallback
     completion_chain_id_or_fail: CompletionChainIdCallback

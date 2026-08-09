@@ -563,6 +563,8 @@ _MODIFY_CHAIN_READS = None
 _MODIFY_CHAIN_READS_LOAD_FAILED = False
 _CHAIN_GENERATION = None
 _CHAIN_GENERATION_LOAD_FAILED = False
+_MODIFY_GENERATION_COMPAT = None
+_MODIFY_GENERATION_COMPAT_LOAD_FAILED = False
 _MODIFY_SPAWN_PREP = None
 _MODIFY_SPAWN_PREP_LOAD_FAILED = False
 _MODIFY_COMPLETION_PREFLIGHT = None
@@ -621,6 +623,12 @@ _MODULE_SPECS = {
         "_CHAIN_GENERATION_LOAD_FAILED",
         "chain_generation.py",
         "nautical_core.chain_generation",
+    ),
+    "modify_generation_compat": (
+        "_MODIFY_GENERATION_COMPAT",
+        "_MODIFY_GENERATION_COMPAT_LOAD_FAILED",
+        "modify_generation_compat.py",
+        "nautical_core.modify_generation_compat",
     ),
     "modify_completion_preflight": (
         "_MODIFY_COMPLETION_PREFLIGHT",
@@ -3440,8 +3448,88 @@ def _chain_generation_service():
     return service
 
 
-def _compute_cp_child_due(parent: dict):
-    return _chain_generation_service().compute_cp_child_due(parent)
+_GENERATION_COMPAT = None
+
+
+def _generation_compat_bindings():
+    global _GENERATION_COMPAT
+    if _GENERATION_COMPAT is None:
+        compat = _module("modify_generation_compat")
+        _GENERATION_COMPAT = compat.bind_generation_compat(
+            lambda: _chain_generation_service()
+        )
+    return _GENERATION_COMPAT
+
+
+# Keep the historical helper names as thin, lazy delegates while callers move
+# to ChainGenerationService.  The module itself remains safe to import without
+# loading the full nautical_core facade.
+def _compute_cp_child_due(parent):
+    return _generation_compat_bindings().compute_cp_child_due(parent)
+
+
+def _compute_anchor_child_due(parent):
+    return _generation_compat_bindings().compute_anchor_child_due(parent)
+
+
+def _carry_relative_datetime(
+    parent,
+    child,
+    child_due_utc,
+    field,
+    *,
+    parent_anchor_field="due",
+    child_anchor_field="due",
+):
+    return _generation_compat_bindings().carry_relative_datetime(
+        parent,
+        child,
+        child_due_utc,
+        field,
+        parent_anchor_field=parent_anchor_field,
+        child_anchor_field=child_anchor_field,
+    )
+
+
+def _carry_native_until(
+    parent,
+    child,
+    child_due_utc,
+    kind,
+    *,
+    parent_anchor_field="due",
+    child_anchor_field="due",
+):
+    return _generation_compat_bindings().carry_native_until(
+        parent,
+        child,
+        child_due_utc,
+        kind,
+        parent_anchor_field=parent_anchor_field,
+        child_anchor_field=child_anchor_field,
+    )
+
+
+def _build_child_from_parent(
+    parent,
+    child_due_utc,
+    child_field,
+    next_link_no,
+    parent_short,
+    kind,
+    cpmax,
+    until_dt,
+):
+    return _generation_compat_bindings().build_child_from_parent(
+        parent,
+        child_due_utc,
+        child_field,
+        next_link_no,
+        parent_short,
+        kind,
+        cpmax,
+        until_dt,
+    )
 
 
 def _safe_parse_datetime(dt_str: str) -> tuple[datetime | None, str | None]:
@@ -3659,16 +3747,6 @@ def _anchor_included_occurrences(
     ]
 
 
-def _compute_anchor_child_due(parent: dict):
-    """Return the next anchor child through the shared evaluator only."""
-    try:
-        return _chain_generation_service().compute_anchor_child_due(parent)
-    except ValueError as exc:
-        if "omission scan exceeded" in str(exc):
-            raise ValueError("No valid anchor occurrences found after applying omit rules.") from exc
-        raise
-
-
 def _estimate_cp_final_by_max(task: dict, next_due_utc):
     """
     Estimate the final due date when chainMax cap is reached.
@@ -3847,38 +3925,6 @@ _RESERVED_DROP = {
 }
 
 _RESERVED_OVERRIDE = {"due", "entry", "status", "chain", "prevLink", "link"}
-_UDA_CARRY_SKIP_LOWER = {
-    "id",
-    "uuid",
-    "urgency",
-    "status",
-    "modified",
-    "start",
-    "end",
-    "mask",
-    "imask",
-    "parent",
-    "recur",
-    "rc",
-    "nextlink",
-    "prevlink",
-    "link",
-    "chain",
-    "chainmax",
-    "chainuntil",
-    "chainid",
-    "cp",
-    "anchor",
-    "anchor_mode",
-    "bc",
-    "due",
-    "entry",
-    "wait",
-    "scheduled",
-    "until",
-}
-
-
 
 
 # ------------------------------------------------------------------------------
@@ -3919,94 +3965,6 @@ def _recurrence_anchor_field(task: dict | None) -> str:
             return "scheduled"
     return "due"
 
-
-def _carry_relative_datetime(
-    parent: dict,
-    child: dict,
-    child_due_utc: datetime,
-    field: str,
-    *,
-    parent_anchor_field: str = "due",
-    child_anchor_field: str = "due",
-) -> None:
-    """Compatibility delegate to the fail-closed shared carry service."""
-    if not isinstance(parent, dict) or not isinstance(child, dict):
-        return
-    _chain_generation_service().carry_relative_datetime(
-        parent,
-        child,
-        child_due_utc,
-        field,
-        parent_anchor_field=parent_anchor_field,
-        child_anchor_field=child_anchor_field,
-    )
-
-
-def _carry_native_until(
-    parent: dict,
-    child: dict,
-    child_due_utc: datetime,
-    kind: str,
-    *,
-    parent_anchor_field: str = "due",
-    child_anchor_field: str = "due",
-) -> None:
-    """Compatibility delegate to the shared native-until carry service."""
-    if not isinstance(parent, dict) or not isinstance(child, dict):
-        return
-    _chain_generation_service().carry_native_until(
-        parent,
-        child,
-        child_due_utc,
-        kind,
-        parent_anchor_field=parent_anchor_field,
-        child_anchor_field=child_anchor_field,
-    )
-
-
-def _configured_recurrence_uda_fields(parent: dict) -> tuple[str, ...]:
-    if not isinstance(parent, dict):
-        return ()
-    cfg = _RECURRENCE_UPDATE_UDAS if isinstance(_RECURRENCE_UPDATE_UDAS, (tuple, list)) else ()
-    if not cfg:
-        return ()
-    parent_keys: dict[str, str] = {}
-    for k in parent.keys():
-        if isinstance(k, str) and k:
-            parent_keys.setdefault(k.lower(), k)
-    out: list[str] = []
-    seen: set[str] = set()
-    for name in cfg:
-        lk = str(name or "").strip().lower()
-        if not lk or lk in seen or lk in _UDA_CARRY_SKIP_LOWER:
-            continue
-        seen.add(lk)
-        actual = parent_keys.get(lk)
-        if actual:
-            out.append(actual)
-    return tuple(out)
-
-
-def _build_child_from_parent(
-    parent: dict,
-    child_due_utc,
-    child_field: str,
-    next_link_no: int,
-    parent_short: str,
-    kind: str,
-    cpmax: int,
-    until_dt,
-):
-    return _chain_generation_service().build_child_from_parent(
-        parent,
-        child_due_utc,
-        child_field,
-        next_link_no,
-        parent_short,
-        kind,
-        cpmax,
-        until_dt,
-    )
 
 # ------------------------------------------------------------------------------
 # End-of-chain summary + stats

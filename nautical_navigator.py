@@ -384,44 +384,16 @@ def _self_check() -> int:
         _emit_check("FAIL", "hooks", "could not locate hook directory")
 
     dnf_cache_enabled = (os.environ.get("NAUTICAL_DNF_DISK_CACHE") or "1").strip().lower() in ("1", "true", "yes", "on")
-    if hook_dir:
-        cache_path = hook_dir / ".nautical_cache" / "dnf_cache.jsonl"
-        if dnf_cache_enabled:
-            if cache_path.exists():
-                try:
-                    size = cache_path.stat().st_size
-                except Exception:
-                    size = 0
-                valid = 0
-                total = 0
-                try:
-                    with open(cache_path, "r", encoding="utf-8") as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            total += 1
-                            try:
-                                obj = json.loads(line)
-                            except Exception:
-                                continue
-                            if isinstance(obj, dict) and "version" in obj:
-                                continue
-                            if isinstance(obj, dict) and ("key" in obj or "k" in obj):
-                                valid += 1
-                except Exception as e:
-                    _emit_check("WARN", "dnf cache", f"read error: {e}")
-                if total == 0:
-                    _emit_check("WARN", "dnf cache", f"empty or unreadable ({cache_path})")
-                elif valid == 0:
-                    _emit_check("WARN", "dnf cache", f"no valid records ({cache_path})")
-                else:
-                    _emit_check("OK", "dnf cache", f"{valid} entries, {size} bytes")
-            else:
-                _emit_check("WARN", "dnf cache", f"enabled but missing: {cache_path}")
-        else:
-            _emit_check("OK", "dnf cache", "disabled")
-
+    if dnf_cache_enabled and getattr(core, "ENABLE_ANCHOR_CACHE", False):
+        try:
+            fingerprint = core._dnf_cache_fingerprint()
+            _emit_check("OK", "dnf cache", f"central cache API active ({fingerprint})")
+        except Exception as e:
+            _emit_check("WARN", "dnf cache", f"central cache API unavailable: {e}")
+    elif dnf_cache_enabled:
+        _emit_check("WARN", "dnf cache", "central cache disabled by configuration")
+    else:
+        _emit_check("OK", "dnf cache", "disabled")
     if getattr(core, "ENABLE_ANCHOR_CACHE", False):
         _emit_check("OK", "core anchor cache", "enabled (config)")
     else:

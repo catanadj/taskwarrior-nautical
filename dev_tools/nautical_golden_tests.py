@@ -22,7 +22,6 @@ import sqlite3
 import tempfile
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
-from collections import OrderedDict
 from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))

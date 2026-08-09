@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Callable
 import threading
 from typing import Any
 import time as _time
@@ -25,12 +26,22 @@ from nautical_core.modify_models import (
     CompletionSnapshotCallback,
     CompletionUntilCallback,
     CompletionUntilGuardCallback,
+    ChainColourCallback,
     DiagnosticCallback,
+    FeedbackPanelCallback,
+    FeedbackRowsFormatter,
+    HumanDeltaCallback,
+    PanelLineCallback,
     PanelCallback,
+    PreviewLineFormatter,
     PrintTaskCallback,
+    RootAgeFormatter,
     ShortUuidCallback,
     SpawnChildCallback,
-    ServiceCallback,
+    StripQuotesCallback,
+    TextLineCallback,
+    TimelineLinesCallback,
+    WaitScheduleRowsCallback,
 )
 
 
@@ -124,24 +135,58 @@ class ModifyRuntimeServices:
     debug_wait_sched: bool
     last_wait_sched_debug: dict[str, Any]
     diag_enabled: bool
-    format_root_and_age: ServiceCallback
-    append_next_wait_sched_rows: ServiceCallback
-    timeline_lines: ServiceCallback
+    format_root_and_age: RootAgeFormatter
+    append_next_wait_sched_rows: WaitScheduleRowsCallback
+    timeline_lines: TimelineLinesCallback
     show_timeline_gaps: bool
-    root_uuid_from: ServiceCallback
-    short: ServiceCallback
-    format_next_anchor_rows: ServiceCallback
-    format_next_cp_rows: ServiceCallback
-    format_line_preview: ServiceCallback
-    panel_line: ServiceCallback
-    text_line: ServiceCallback
-    panel: ServiceCallback
-    print_task: ServiceCallback
-    diag: ServiceCallback
+    root_uuid_from: Callable[[dict[str, Any]], str]
+    short: ShortUuidCallback
+    format_next_anchor_rows: FeedbackRowsFormatter
+    format_next_cp_rows: FeedbackRowsFormatter
+    format_line_preview: PreviewLineFormatter
+    panel_line: PanelLineCallback
+    text_line: TextLineCallback
+    panel: FeedbackPanelCallback
+    print_task: PrintTaskCallback
+    diag: DiagnosticCallback
     chain_color_per_chain: bool
-    chain_colour_for_task: ServiceCallback
-    strip_quotes: ServiceCallback
-    human_delta: ServiceCallback
+    chain_colour_for_task: ChainColourCallback
+    strip_quotes: StripQuotesCallback
+    human_delta: HumanDeltaCallback
+
+
+def _timeline_lines_adapter(
+    runtime: ModifyRuntimeServices,
+    *,
+    round_anchor_gaps: bool,
+) -> TimelineLinesCallback:
+    def timeline_lines(
+        kind: str,
+        task: dict[str, Any],
+        child_due: Any,
+        child_short: str,
+        dnf: Any,
+        *,
+        next_count: int = 3,
+        cap_no: int | None = None,
+        cur_no: int | None = None,
+        show_gaps: bool = True,
+        round_anchor_gaps: bool = round_anchor_gaps,
+    ) -> list[str]:
+        return runtime.timeline_lines(
+            kind,
+            task,
+            child_due,
+            child_short,
+            dnf,
+            next_count=next_count,
+            cap_no=cap_no,
+            cur_no=cur_no,
+            show_gaps=show_gaps,
+            round_anchor_gaps=round_anchor_gaps,
+        )
+
+    return timeline_lines
 
 
 def build_anchor_feedback_services(runtime: ModifyRuntimeServices) -> AnchorFeedbackServices:
@@ -152,18 +197,7 @@ def build_anchor_feedback_services(runtime: ModifyRuntimeServices) -> AnchorFeed
         diag_enabled=runtime.diag_enabled,
         format_root_and_age=runtime.format_root_and_age,
         append_next_wait_sched_rows=runtime.append_next_wait_sched_rows,
-        timeline_lines=lambda kind, task, child_due, child_short, dnf, *, next_count, cap_no, cur_no, show_gaps: runtime.timeline_lines(
-            kind,
-            task,
-            child_due,
-            child_short,
-            dnf,
-            next_count=next_count,
-            cap_no=cap_no,
-            cur_no=cur_no,
-            show_gaps=show_gaps,
-            round_anchor_gaps=True,
-        ),
+        timeline_lines=_timeline_lines_adapter(runtime, round_anchor_gaps=True),
         show_timeline_gaps=runtime.show_timeline_gaps,
         root_uuid_from=runtime.root_uuid_from,
         short=runtime.short,
@@ -185,18 +219,7 @@ def build_cp_feedback_services(runtime: ModifyRuntimeServices) -> CpFeedbackServ
         diag_enabled=runtime.diag_enabled,
         format_root_and_age=runtime.format_root_and_age,
         append_next_wait_sched_rows=runtime.append_next_wait_sched_rows,
-        timeline_lines=lambda kind, task, child_due, child_short, dnf, *, next_count, cap_no, cur_no, show_gaps: runtime.timeline_lines(
-            kind,
-            task,
-            child_due,
-            child_short,
-            dnf,
-            next_count=next_count,
-            cap_no=cap_no,
-            cur_no=cur_no,
-            show_gaps=show_gaps,
-            round_anchor_gaps=False,
-        ),
+        timeline_lines=_timeline_lines_adapter(runtime, round_anchor_gaps=False),
         show_timeline_gaps=runtime.show_timeline_gaps,
         format_next_cp_rows=runtime.format_next_cp_rows,
         format_line_preview=runtime.format_line_preview,

@@ -73,6 +73,7 @@ class TimelineLinesCallback(Protocol):
         cap_no: int | None = None,
         cur_no: int | None = None,
         show_gaps: bool = True,
+        round_anchor_gaps: bool = True,
     ) -> list[str]:
         ...
 

@@ -43,6 +43,122 @@ class DiagnosticCallback(Protocol):
         ...
 
 
+class RootAgeFormatter(Protocol):
+    def __call__(self, task: TaskRow, now_utc: datetime) -> str:
+        ...
+
+
+class WaitScheduleRowsCallback(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, Any]],
+        task: TaskRow,
+        anchor_due: Any,
+        *,
+        anchor_field: str = "due",
+    ) -> None:
+        ...
+
+
+class TimelineLinesCallback(Protocol):
+    def __call__(
+        self,
+        kind: str,
+        task: TaskRow,
+        child_due: Any,
+        child_short: str,
+        dnf: Any,
+        *,
+        next_count: int = 3,
+        cap_no: int | None = None,
+        cur_no: int | None = None,
+        show_gaps: bool = True,
+    ) -> list[str]:
+        ...
+
+
+class FeedbackRowsFormatter(Protocol):
+    def __call__(
+        self,
+        rows: list[tuple[str, Any]],
+    ) -> list[tuple[str | None, Any]]:
+        ...
+
+
+class PreviewLineFormatter(Protocol):
+    def __call__(
+        self,
+        link_no: int,
+        task: TaskRow,
+        child_due: Any,
+        child_short: str,
+        now_utc: Any,
+        *,
+        child_field: str = "due",
+        cap_no: int | None = None,
+        until_dt: Any = None,
+        until_no: int | None = None,
+        child_until_dt: Any = None,
+        kind: str = "cp",
+        minimal: bool = False,
+    ) -> str:
+        ...
+
+
+class PanelLineCallback(Protocol):
+    def __call__(
+        self,
+        title: str,
+        line: str,
+        *,
+        kind: str = "info",
+        border_style: str | None = None,
+        title_style: str | None = None,
+        markup_body: bool = False,
+    ) -> None:
+        ...
+
+
+class TextLineCallback(Protocol):
+    def __call__(
+        self,
+        line: str,
+        *,
+        kind: str = "info",
+        markup_body: bool = False,
+    ) -> None:
+        ...
+
+
+class FeedbackPanelCallback(Protocol):
+    def __call__(
+        self,
+        title: str,
+        rows: list[tuple[str | None, Any]],
+        *,
+        kind: str = "info",
+        border_style: str | None = None,
+        title_style: str | None = None,
+        label_style: str | None = None,
+    ) -> None:
+        ...
+
+
+class ChainColourCallback(Protocol):
+    def __call__(self, task: TaskRow, kind: str) -> str:
+        ...
+
+
+class StripQuotesCallback(Protocol):
+    def __call__(self, value: str) -> str:
+        ...
+
+
+class HumanDeltaCallback(Protocol):
+    def __call__(self, start: Any, end: Any, prefer_months: bool = True) -> str:
+        ...
+
+
 CompletionLinkNumbersCallback: TypeAlias = Callable[
     [TaskRow], tuple[int, int] | None
 ]
@@ -351,36 +467,36 @@ class AnchorFeedbackServices:
     debug_wait_sched: bool
     last_wait_sched_debug: Any
     diag_enabled: bool
-    format_root_and_age: ServiceCallback
-    append_next_wait_sched_rows: ServiceCallback
-    timeline_lines: ServiceCallback
+    format_root_and_age: RootAgeFormatter
+    append_next_wait_sched_rows: WaitScheduleRowsCallback
+    timeline_lines: TimelineLinesCallback
     show_timeline_gaps: bool
-    root_uuid_from: ServiceCallback
-    short: ServiceCallback
-    format_next_anchor_rows: ServiceCallback
-    format_line_preview: ServiceCallback
-    panel_line: ServiceCallback
-    text_line: ServiceCallback
-    panel: ServiceCallback
+    root_uuid_from: Callable[[TaskRow], str]
+    short: ShortUuidCallback
+    format_next_anchor_rows: FeedbackRowsFormatter
+    format_line_preview: PreviewLineFormatter
+    panel_line: PanelLineCallback
+    text_line: TextLineCallback
+    panel: FeedbackPanelCallback
     chain_color_per_chain: bool
-    chain_colour_for_task: ServiceCallback
-    strip_quotes: ServiceCallback
-    human_delta: ServiceCallback
+    chain_colour_for_task: ChainColourCallback
+    strip_quotes: StripQuotesCallback
+    human_delta: HumanDeltaCallback
 
 
 @dataclass(slots=True)
 class CpFeedbackServices:
     core: Any
     diag_enabled: bool
-    format_root_and_age: ServiceCallback
-    append_next_wait_sched_rows: ServiceCallback
-    timeline_lines: ServiceCallback
+    format_root_and_age: RootAgeFormatter
+    append_next_wait_sched_rows: WaitScheduleRowsCallback
+    timeline_lines: TimelineLinesCallback
     show_timeline_gaps: bool
-    format_next_cp_rows: ServiceCallback
-    format_line_preview: ServiceCallback
-    panel_line: ServiceCallback
-    text_line: ServiceCallback
-    panel: ServiceCallback
+    format_next_cp_rows: FeedbackRowsFormatter
+    format_line_preview: PreviewLineFormatter
+    panel_line: PanelLineCallback
+    text_line: TextLineCallback
+    panel: FeedbackPanelCallback
     chain_color_per_chain: bool
-    chain_colour_for_task: ServiceCallback
-    human_delta: ServiceCallback
+    chain_colour_for_task: ChainColourCallback
+    human_delta: HumanDeltaCallback

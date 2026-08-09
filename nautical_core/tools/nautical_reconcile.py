@@ -340,18 +340,42 @@ def _candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
 
 
 class _ReconcileSnapshot:
-    """Immutable read-phase chain export shared by candidate and audit scans."""
+    """Immutable read-phase views for active links and recovery candidates.
+
+    Completed/deleted history is intentionally kept out of the active snapshot.
+    Native-until repair reads a predecessor by chain/link only when an active
+    row actually needs repair.
+    """
 
     def __init__(self, task_bin: str):
         self.task_bin = task_bin
-        self._chain_rows: list[dict[str, Any]] | None = None
+        self._active_rows: list[dict[str, Any]] | None = None
+        self._candidate_rows: list[dict[str, Any]] | None = None
 
-    def chain_rows(self) -> list[dict[str, Any]]:
-        if self._chain_rows is None:
-            self._chain_rows = _export(self.task_bin, ["chain:on", "chainID.not:"])
+    def active_rows(self) -> list[dict[str, Any]]:
+        if self._active_rows is None:
+            self._active_rows = _export(
+                self.task_bin,
+                ["chain:on", "chainID.not:", "status.not:completed", "status.not:deleted"],
+            )
         else:
             _EXPORT_STATS["snapshot_hits"] += 1
-        return self._chain_rows
+        return self._active_rows
+
+    def candidate_rows(self) -> list[dict[str, Any]]:
+        if self._candidate_rows is None:
+            completed = _export(
+                self.task_bin,
+                ["status:completed", "chain:on", "chainID.not:", "nextLink:"],
+            )
+            deleted = _export(
+                self.task_bin,
+                ["status:deleted", "chain:on", "chainID.not:", "nextLink:"],
+            )
+            self._candidate_rows = completed + deleted
+        else:
+            _EXPORT_STATS["snapshot_hits"] += 1
+        return self._candidate_rows
 
 
 _READ_SNAPSHOT: _ReconcileSnapshot | None = None
@@ -365,7 +389,7 @@ def _candidate_rows(
 ) -> list[dict[str, Any]]:
     snapshot = snapshot or _READ_SNAPSHOT
     if snapshot is not None:
-        rows = snapshot.chain_rows()
+        rows = snapshot.candidate_rows()
         candidates = [
             row
             for row in rows
@@ -412,13 +436,16 @@ def _active_chain_rows(
     snapshot: _ReconcileSnapshot | None = None,
 ) -> list[dict[str, Any]]:
     """Export live Nautical links for integrity checks, independently of recovery candidates."""
-    rows = snapshot.chain_rows() if snapshot is not None else _export(task_bin, ["chain:on", "chainID.not:"])
+    rows = (
+        snapshot.active_rows()
+        if snapshot is not None
+        else _export(task_bin, ["chain:on", "chainID.not:", "status.not:completed", "status.not:deleted"])
+    )
     return sorted(
         (
             row
             for row in rows
-            if include_inactive
-            or str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
+            if str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
         ),
         key=_candidate_sort_key,
     )
@@ -469,22 +496,18 @@ def _native_until_repairs(
     lease_held: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Find invalid native windows and repair only those with a reliable predecessor."""
-    all_rows = _active_chain_rows(
+    active_rows = _active_chain_rows(
         task_bin,
-        include_inactive=True,
+        include_inactive=False,
         snapshot=snapshot or _READ_SNAPSHOT,
     )
-    rows = [
-        row
-        for row in all_rows
-        if str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
-    ]
+    rows = active_rows
     by_chain_link = {
         (
             str(row.get("chainID") or "").strip(),
             reconcile.int_or_default(row.get("link"), 0),
         ): row
-        for row in all_rows
+        for row in active_rows
     }
     repairs: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -495,6 +518,10 @@ def _native_until_repairs(
         chain_id = str(row.get("chainID") or "").strip()
         link = reconcile.int_or_default(row.get("link"), 0)
         previous = by_chain_link.get((chain_id, link - 1))
+        if previous is None:
+            # Historical predecessors are deliberately outside the active
+            # snapshot; fetch only the predecessor needed by this invalid row.
+            previous = _fresh_native_until_previous(task_bin, row)
         item = {
             "task": reconcile.short_uuid(row.get("uuid")),
             "chainID": chain_id,

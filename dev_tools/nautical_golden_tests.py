@@ -26062,7 +26062,7 @@ def test_reconcile_candidate_discovery_is_narrow_and_deterministic():
 
 
 def test_reconcile_snapshot_reuses_initial_chain_export():
-    """Candidate and native audit scans should share one immutable chain export."""
+    """Active and candidate scans use bounded snapshot views instead of history."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     tool = _load_hook_module(str(path), "_nautical_reconcile_snapshot_reuse_test")
     rows = [
@@ -26085,18 +26085,37 @@ def test_reconcile_snapshot_reuses_initial_chain_export():
     calls = []
     original = tool._export
     try:
-        tool._export = lambda _task_bin, filters, **_kwargs: calls.append(list(filters)) or rows
+        def fake_export(_task_bin, filters, **_kwargs):
+            filters = list(filters)
+            calls.append(filters)
+            if "status:completed" in filters:
+                return [rows[0]]
+            if "status:deleted" in filters:
+                return []
+            return [rows[1]]
+
+        tool._export = fake_export
         snapshot = tool._ReconcileSnapshot("task")
-        tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+        candidates = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+        tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
         tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
     finally:
         tool._export = original
-    expect(len(calls) == 1, f"initial chain export was not reused: {calls!r}")
+    expect(candidates == [rows[0]], f"candidate view included non-candidates: {candidates!r}")
+    expect(len(calls) == 3, f"snapshot views did not use bounded exports: {calls!r}")
+    expect(
+        any("status.not:completed" in filters and "status.not:deleted" in filters for filters in calls),
+        f"active snapshot was not status-filtered: {calls!r}",
+    )
+    expect(
+        all("nextLink:" in filters for filters in calls if "status:completed" in filters or "status:deleted" in filters),
+        f"candidate exports were not narrow: {calls!r}",
+    )
     expect(tool._EXPORT_STATS["snapshot_hits"] == 1, f"snapshot hit was not recorded: {tool._EXPORT_STATS!r}")
 
 
 def test_reconcile_empty_snapshot_is_authoritative():
-    """A successful empty broad export must not trigger legacy status exports."""
+    """Successful empty active and candidate views remain authoritative."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     tool = _load_hook_module(str(path), "_nautical_reconcile_empty_snapshot_test")
     calls = []
@@ -26109,7 +26128,7 @@ def test_reconcile_empty_snapshot_is_authoritative():
     finally:
         tool._export = original
     expect(candidates == [] and active == [], f"empty snapshot produced unexpected rows: {candidates!r}, {active!r}")
-    expect(len(calls) == 1, f"empty snapshot triggered compatibility exports: {calls!r}")
+    expect(len(calls) == 3, f"empty snapshot triggered unexpected exports: {calls!r}")
 
 
 def test_reconcile_export_diagnostics_include_elapsed_time():
@@ -30286,13 +30305,26 @@ def test_reconcile_native_until_uses_completed_predecessor_snapshot():
         "until": stamp(date(2026, 7, 21), (23, 0)),
     }
     original_export = tool._export
-    tool._export = lambda _task_bin, _filters, **_kwargs: [previous, current]
+    filters_seen = []
+
+    def fake_export(_task_bin, filters, **_kwargs):
+        filters = list(filters)
+        filters_seen.append(filters)
+        if f"link:{int(current['link']) - 1}" in filters:
+            return [previous]
+        return [current]
+
+    tool._export = fake_export
     try:
         repairs, errors = tool._native_until_repairs("task", hook, apply=False)
     finally:
         tool._export = original_export
     expect(not errors, f"completed predecessor caused an unexpected repair error: {errors!r}")
     expect(repairs and repairs[0].get("new_until") == stamp(date(2026, 7, 22), (23, 0)), f"repair missed predecessor: {repairs!r}")
+    expect(
+        any(f"chainID:{previous['chainID']}" in filters and f"link:{previous['link']}" in filters for filters in filters_seen),
+        f"predecessor lookup was not narrow: {filters_seen!r}",
+    )
 
 
 def test_reconcile_native_until_manual_review_is_not_a_hard_error():

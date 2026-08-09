@@ -982,19 +982,27 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
         reconcile_data = root / "reconcile"
         reconcile_data.mkdir()
         reconcile_env = dict(base_env, TASKDATA=str(reconcile_data))
-        reconcile_task = {
-            "uuid": "66666666-6666-6666-6666-666666666666",
-            "status": "completed",
-            "description": "Reconcile performance benchmark",
-            "cp": "P1D",
-            "chain": "on",
-            "chainID": "reconcile-perf-chain",
-            "link": 1,
-            "due": "20260101T090000Z",
-        }
+        history_rows = max(1, int(workflow_cfg.get("reconcile_history_rows", 256)))
+        reconcile_tasks = []
+        for link in range(1, history_rows + 1):
+            task = {
+                "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile/{link}")),
+                "status": "completed",
+                "description": f"Reconcile performance benchmark {link}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": "reconcile-perf-chain",
+                "link": link,
+                "due": f"202601{min(link, 28):02d}T090000Z",
+            }
+            if link > 1:
+                task["prevLink"] = reconcile_tasks[-1]["uuid"][:8]
+            if link < history_rows:
+                task["nextLink"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile/{link + 1}"))[:8]
+            reconcile_tasks.append(task)
         import_proc = subprocess.run(
             ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
-            input=json.dumps(reconcile_task, ensure_ascii=False) + "\n",
+            input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in reconcile_tasks),
             text=True,
             capture_output=True,
             env=reconcile_env,

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import hashlib
+import os
 from types import SimpleNamespace
 from typing import Any
 
@@ -302,6 +304,64 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             core["effective_config_fingerprint"](),
         )
 
+    def _source_signature(path: Any) -> str:
+        try:
+            stat = os.stat(path)
+            return f"{getattr(stat, 'st_mtime_ns', 0)}:{stat.st_size}"
+        except Exception:
+            return "unknown"
+
+    def dnf_cache_fingerprint() -> str:
+        """Identify parser, cache schema, and installed release inputs."""
+        parser_parts = []
+        for module_name in ("parser_dnf", "parser_api", "parser_support_api", "parser_models", "strict_validation"):
+            try:
+                sibling = import_sibling(module_name)
+                parser_parts.append(f"{module_name}:{_source_signature(getattr(sibling, '__file__', ''))}")
+            except Exception:
+                parser_parts.append(f"{module_name}:unavailable")
+        release = _source_signature(getattr(module, "__file__", ""))
+        schema = getattr(cache_payload, "CACHE_SCHEMA_VERSION", "unknown")
+        return f"parser={'|'.join(parser_parts)}|schema:{schema}|release:{release}"
+
+    def dnf_cache_key(expr: str) -> str:
+        payload = "|".join(
+            (
+                "nautical-dnf",
+                str(expr or ""),
+                dnf_cache_fingerprint(),
+                str(core["effective_config_fingerprint"]()),
+            )
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+    def _dnf_cache_enabled() -> bool:
+        raw = str(core["os"].environ.get("NAUTICAL_DNF_DISK_CACHE") or "1").strip().lower()
+        return bool(core.get("ENABLE_ANCHOR_CACHE", True)) and raw in {"1", "true", "yes", "on"}
+
+    def dnf_cache_load(expr: str):
+        if not _dnf_cache_enabled():
+            return None
+        key = dnf_cache_key(expr)
+        payload = cache_load_impl(key)
+        if not isinstance(payload, dict) or payload.get("kind") != "anchor-dnf":
+            if payload is not None:
+                quarantine_cache(key, cache_path(key))
+            return None
+        dnf = payload.get("dnf")
+        if not is_dnf_like(dnf):
+            quarantine_cache(key, cache_path(key))
+            return None
+        return normalize_dnf_cached(dnf)
+
+    def dnf_cache_save(expr: str, dnf: Any) -> bool:
+        if not _dnf_cache_enabled() or not is_dnf_like(dnf):
+            return False
+        return cache_save_impl(
+            dnf_cache_key(expr),
+            {"kind": "anchor-dnf", "dnf": clone_dnf(dnf)},
+        )
+
     return SimpleNamespace(
         _safe_lock_sleep_once=safe_lock_sleep_once,
         _safe_lock_ensure_parent=safe_lock_ensure_parent,
@@ -335,6 +395,10 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         cache_save=cache_save_impl,
         cache_gc=cache_gc_impl,
         cache_key_for_task=cache_key_for_task_impl,
+        _dnf_cache_fingerprint=dnf_cache_fingerprint,
+        _dnf_cache_key=dnf_cache_key,
+        _dnf_cache_load=dnf_cache_load,
+        _dnf_cache_save=dnf_cache_save,
     )
 
 

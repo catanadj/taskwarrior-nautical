@@ -13777,158 +13777,48 @@ def test_core_run_task_tempfiles_fallback_handles_bytes_input():
         core.tempfile.NamedTemporaryFile = orig_ntf
 
 
-def test_on_add_dnf_cache_versioned_payload():
-    """on-add DNF cache uses versioned payload and can round-trip."""
+def test_on_add_dnf_cache_uses_central_api_and_fingerprints_parser():
+    """on-add DNF caching uses the central cache format and parser fingerprints."""
     hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_cache_test")
-    if not hasattr(mod, "_save_dnf_disk_cache") or not hasattr(mod, "_load_dnf_disk_cache"):
-        raise AssertionError("on-add hook does not expose DNF cache helpers")
-
-    import tempfile
-
+    mod = _load_hook_module(hook, "_nautical_on_add_central_cache_test")
     with tempfile.TemporaryDirectory() as td:
-        cache_path = os.path.join(td, "dnf_cache.jsonl")
-        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
-        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
-        mod._DNF_DISK_CACHE_ENABLED = True
-        mod._DNF_DISK_CACHE = OrderedDict([("k1", {"v": 1})])
-        mod._DNF_DISK_CACHE_DIRTY = True
-
-        mod._save_dnf_disk_cache()
-
-        mod._DNF_DISK_CACHE = None
-        loaded = mod._load_dnf_disk_cache()
-        expect(isinstance(loaded, OrderedDict), "DNF cache load should return OrderedDict")
-        expect("k1" in loaded, "DNF cache did not round-trip expected key")
-
-
-def test_on_add_dnf_cache_corrupt_payload_recovers():
-    """on-add DNF cache load should quarantine and continue on invalid JSONL."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_cache_corrupt_test")
-    if not hasattr(mod, "_load_dnf_disk_cache"):
-        raise AssertionError("on-add hook does not expose DNF cache helpers")
-
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        cache_path = os.path.join(td, "dnf_cache.jsonl")
-        with open(cache_path, "wb") as f:
-            f.write(b"{bad-json}\n")
-
-        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
-        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
-        mod._DNF_DISK_CACHE_ENABLED = True
-        mod._DNF_DISK_CACHE = None
-
-        loaded = mod._load_dnf_disk_cache()
-        expect(isinstance(loaded, OrderedDict), "DNF cache load should return OrderedDict")
-
-
-def test_on_add_dnf_cache_quarantines_invalid_jsonl():
-    """on-add DNF cache quarantines JSONL files with no valid JSON objects."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_cache_quarantine_test")
-    if not hasattr(mod, "_load_dnf_disk_cache"):
-        raise AssertionError("on-add hook does not expose DNF cache helpers")
-
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        cache_path = os.path.join(td, "dnf_cache.jsonl")
-        with open(cache_path, "w", encoding="utf-8") as f:
-            f.write("nope\nstill nope\n")
-
-        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
-        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
-        mod._DNF_DISK_CACHE_ENABLED = True
-        mod._DNF_DISK_CACHE = None
-
+        old_dir = getattr(mod.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")
+        old_cache = getattr(mod.core, "_CACHE_DIR", None)
+        mod.core.ANCHOR_CACHE_DIR_OVERRIDE = td
+        mod.core._CACHE_DIR = None
         try:
-            _ = mod._load_dnf_disk_cache()
-        except Exception:
-            pass
-        quarantined = [p for p in os.listdir(td) if p.startswith("dnf_cache.corrupt.") and p.endswith(".jsonl")]
-        expect(quarantined, "DNF cache should quarantine invalid JSONL")
-
-
-def test_on_add_dnf_cache_checksum_mismatch_salvages():
-    """on-add DNF cache should salvage entries on checksum mismatch."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_cache_checksum_test")
-    if not hasattr(mod, "_load_dnf_disk_cache"):
-        raise AssertionError("on-add hook does not expose DNF cache helpers")
-
-    with tempfile.TemporaryDirectory() as td:
-        cache_path = os.path.join(td, "dnf_cache.jsonl")
-        bad_header = json.dumps({"version": 1, "checksum": "deadbeefdeadbeef"})
-        with open(cache_path, "w", encoding="utf-8") as f:
-            f.write(bad_header + "\n")
-            f.write(json.dumps({"key": "k1", "value": {"v": 1}}) + "\n")
-
-        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
-        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
-        mod._DNF_DISK_CACHE_ENABLED = True
-        mod._DNF_DISK_CACHE = None
-        cache = mod._load_dnf_disk_cache()
-        expect(cache.get("k1") == {"v": 1}, "DNF cache should salvage entries on checksum mismatch")
-        quarantined = [p for p in os.listdir(td) if p.startswith("dnf_cache.corrupt.") and p.endswith(".jsonl")]
-        expect(not quarantined, "DNF cache should not quarantine checksum mismatch when salvageable")
-
-
-def test_on_add_dnf_cache_size_guard_skips_load():
-    """on-add DNF cache skips load when file is too large."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_cache_size_guard_test")
-    if not hasattr(mod, "_load_dnf_disk_cache"):
-        raise AssertionError("on-add hook does not expose DNF cache helpers")
-
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        cache_path = os.path.join(td, "dnf_cache.jsonl")
-        # 300 KB of garbage (over the 256 KB limit).
-        with open(cache_path, "wb") as f:
-            f.write(b"x" * (300 * 1024))
-
-        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
-        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
-        mod._DNF_DISK_CACHE_ENABLED = True
-        mod._DNF_DISK_CACHE = None
-
-        loaded = mod._load_dnf_disk_cache()
-        expect(isinstance(loaded, OrderedDict), "DNF cache size-guard load should return OrderedDict")
-        expect(len(loaded) == 0, "DNF cache size-guard load should return empty cache")
-
-
-def test_on_add_dnf_cache_skips_non_jsonable_values():
-    """on-add DNF cache should skip non-JSON-serializable values."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_cache_non_jsonable_test")
-    if not hasattr(mod, "_validate_anchor_expr_cached"):
-        raise AssertionError("on-add hook does not expose DNF cache helpers")
-
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        cache_path = os.path.join(td, "dnf_cache.jsonl")
-        mod._DNF_DISK_CACHE_PATH = Path(cache_path)
-        mod._DNF_DISK_CACHE_LOCK = Path(cache_path).with_suffix(".lock")
-        mod._DNF_DISK_CACHE_ENABLED = True
-        mod._DNF_DISK_CACHE = OrderedDict()
-        mod._DNF_DISK_CACHE_DIRTY = False
-        mod._validate_anchor_expr_cached.cache_clear()
-
-        orig = mod.core.validate_anchor_expr_strict
-        try:
-            mod.core.validate_anchor_expr_strict = lambda _expr: {"bad": set([1, 2])}
-            dnf = mod._validate_anchor_expr_cached("w:mon")
+            dnf = mod.core.validate_anchor_expr_strict("w:mon")
+            expect(mod.core._dnf_cache_save("w:mon", dnf), "central DNF cache save failed")
+            expect(mod.core._dnf_cache_load("w:mon") == dnf, "central DNF cache did not round-trip")
+            fingerprint = mod.core._dnf_cache_fingerprint()
+            expect("parser=" in fingerprint, f"parser fingerprint missing: {fingerprint}")
+            expect("schema:" in fingerprint, f"cache schema fingerprint missing: {fingerprint}")
+            expect("release:" in fingerprint, f"release fingerprint missing: {fingerprint}")
+            cache_path = Path(mod.core._cache_path(mod.core._dnf_cache_key("w:mon")))
+            expect(cache_path.suffix == ".jsonz" and cache_path.exists(), f"central cache path missing: {cache_path}")
         finally:
-            mod.core.validate_anchor_expr_strict = orig
+            mod.core.ANCHOR_CACHE_DIR_OVERRIDE = old_dir
+            mod.core._CACHE_DIR = old_cache
 
-        expect(isinstance(dnf, dict), "DNF should be returned even when not cacheable")
-        expect(not mod._DNF_DISK_CACHE_DIRTY, "DNF cache should not be marked dirty on non-serializable values")
-        expect(len(mod._DNF_DISK_CACHE) == 0, "DNF cache should not store non-serializable values")
+
+def test_on_add_dnf_cache_quarantines_central_corruption():
+    """Central cache corruption is quarantined and treated as a miss."""
+    hook = _find_hook_file("on-add.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_add_central_cache_corrupt_test")
+    with tempfile.TemporaryDirectory() as td:
+        old_dir = getattr(mod.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")
+        old_cache = getattr(mod.core, "_CACHE_DIR", None)
+        mod.core.ANCHOR_CACHE_DIR_OVERRIDE = td
+        mod.core._CACHE_DIR = None
+        try:
+            cache_path = Path(mod.core._cache_path(mod.core._dnf_cache_key("w:mon")))
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(b"not a cache")
+            expect(mod.core._dnf_cache_load("w:mon") is None, "corrupt central DNF cache should be a miss")
+            expect(list(cache_path.parent.glob(cache_path.name + ".bad.*")), "corrupt central DNF cache was not quarantined")
+        finally:
+            mod.core.ANCHOR_CACHE_DIR_OVERRIDE = old_dir
+            mod.core._CACHE_DIR = old_cache
 
 
 def test_hooks_require_package_core_layout():
@@ -30081,12 +29971,8 @@ TESTS = [
     test_on_add_lowercase_chainid_does_not_mark_nautical,
     test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,
-    test_on_add_dnf_cache_versioned_payload,
-    test_on_add_dnf_cache_corrupt_payload_recovers,
-    test_on_add_dnf_cache_quarantines_invalid_jsonl,
-    test_on_add_dnf_cache_checksum_mismatch_salvages,
-    test_on_add_dnf_cache_size_guard_skips_load,
-    test_on_add_dnf_cache_skips_non_jsonable_values,
+    test_on_add_dnf_cache_uses_central_api_and_fingerprints_parser,
+    test_on_add_dnf_cache_quarantines_central_corruption,
     test_on_exit_spawn_intents_drain,
     test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links,
     test_cross_device_spawn_intents_converge_in_either_merge_order,

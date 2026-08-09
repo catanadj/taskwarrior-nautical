@@ -120,12 +120,9 @@ if __name__ == "__main__":
 
 
 import atexit
-import hashlib
 import random
 import re
 import subprocess
-import tempfile
-from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -293,11 +290,6 @@ def _load_core() -> None:
         _MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", _MAX_JSON_BYTES))
     except Exception:
         pass
-    try:
-        global _CORE_SIG
-        _CORE_SIG = _core_sig()
-    except Exception:
-        pass
     _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
     _CORE_READY = True
 
@@ -361,226 +353,6 @@ def _to_local_cached(dt):
     return core.to_local(dt)
 
 
-# ---- Optional cross-invocation disk cache for expensive anchor parsing (Termux-friendly) ----
-# Default on; set NAUTICAL_DNF_DISK_CACHE=0 to disable.
-_DNF_DISK_CACHE_ENABLED = (os.getenv("NAUTICAL_DNF_DISK_CACHE") or "1").strip().lower() in ("1", "true", "yes", "on")
-_DNF_DISK_CACHE_PATH = HOOK_DIR / ".nautical_cache" / "dnf_cache.jsonl"
-_DNF_DISK_CACHE: OrderedDict[str, Any] | None = None
-_DNF_DISK_CACHE_DIRTY = False
-_DNF_DISK_CACHE_MAX = 256
-_DNF_DISK_CACHE_LOCK = _DNF_DISK_CACHE_PATH.with_suffix(".lock")
-# Bump when the serialized DNF shape changes so stale entries cannot be
-# compared with the current parser output.
-_DNF_DISK_CACHE_VERSION = 2
-_DNF_DISK_CACHE_MAX_BYTES = 256 * 1024
-_DNF_LOCK_RETRIES = 6
-_DNF_LOCK_SLEEP_BASE = 0.03
-
-def _core_sig() -> str:
-    try:
-        _load_core()
-        st = Path(core.__file__).stat()
-        return f"{st.st_mtime_ns}:{st.st_size}"
-    except Exception:
-        return "unknown"
-
-_CORE_SIG = _core_sig()
-
-def _dnf_cache_key(expr: str) -> str:
-    # tie cache entries to the current core build
-    return f"{_CORE_SIG}|{expr}"
-
-@contextmanager
-def _dnf_cache_lock():
-    """Best-effort lock for disk cache access. Yields True if acquired."""
-    try:
-        _load_core()
-    except Exception:
-        yield False
-        return
-    with core.safe_lock(
-        _DNF_DISK_CACHE_LOCK,
-        retries=_DNF_LOCK_RETRIES,
-        sleep_base=_DNF_LOCK_SLEEP_BASE,
-        jitter=_DNF_LOCK_SLEEP_BASE,
-        mkdir=True,
-        stale_after=30.0,
-    ) as acquired:
-        yield acquired
-
-def _dnf_cache_remove_oversized_file() -> tuple[bool, int | None]:
-    try:
-        st = _DNF_DISK_CACHE_PATH.stat()
-        file_size = st.st_size
-    except Exception:
-        return False, None
-    if file_size <= _DNF_DISK_CACHE_MAX_BYTES:
-        return False, file_size
-    _diag(f"DNF cache too large; resetting: {_DNF_DISK_CACHE_PATH}")
-    try:
-        _DNF_DISK_CACHE_PATH.unlink()
-    except Exception:
-        pass
-    return True, file_size
-
-
-def _dnf_cache_read_nonempty_lines() -> list[str]:
-    with open(_DNF_DISK_CACHE_PATH, "r", encoding="utf-8") as f:
-        return [ln.strip() for ln in f if ln.strip()]
-
-
-def _dnf_cache_split_header(lines: list[str]) -> tuple[list[str], bool]:
-    soft_error = False
-    data_lines = lines
-    try:
-        first_obj = json.loads(lines[0])
-    except Exception:
-        first_obj = None
-    if isinstance(first_obj, dict) and "version" in first_obj:
-        if int(first_obj.get("version") or 0) != _DNF_DISK_CACHE_VERSION:
-            soft_error = True
-        checksum = (first_obj.get("checksum") or "").strip()
-        data_lines = lines[1:]
-        if checksum:
-            payload = "\n".join(data_lines)
-            calc = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-            if checksum != calc:
-                soft_error = True
-    return data_lines, soft_error
-
-
-def _dnf_cache_extract_kv(obj: object) -> tuple[str | None, object]:
-    key = None
-    val = None
-    if isinstance(obj, dict):
-        if "key" in obj and "value" in obj:
-            key = obj.get("key")
-            val = obj.get("value")
-        elif "k" in obj and "v" in obj:
-            key = obj.get("k")
-            val = obj.get("v")
-    if key is None:
-        return None, None
-    return str(key), val
-
-
-def _dnf_cache_ingest_lines(data_lines: list[str], cache: OrderedDict) -> tuple[bool, bool]:
-    parsed_any = False
-    soft_error = False
-    for line in data_lines:
-        try:
-            obj = json.loads(line)
-        except Exception:
-            soft_error = True
-            continue
-        key, val = _dnf_cache_extract_kv(obj)
-        if key is None:
-            continue
-        cache[key] = val
-        parsed_any = True
-    return parsed_any, soft_error
-
-
-def _dnf_cache_quarantine_current() -> None:
-    try:
-        ts = int(time.time())
-        bad = _DNF_DISK_CACHE_PATH.with_suffix(f".corrupt.{ts}.jsonl")
-        os.replace(_DNF_DISK_CACHE_PATH, bad)
-        _diag(f"DNF cache quarantined: {bad}")
-    except Exception:
-        pass
-
-
-def _load_dnf_disk_cache() -> OrderedDict:
-    global _DNF_DISK_CACHE, _DNF_DISK_CACHE_DIRTY
-    if _DNF_DISK_CACHE is not None:
-        return _DNF_DISK_CACHE
-    _DNF_DISK_CACHE = OrderedDict()
-    if not _DNF_DISK_CACHE_ENABLED:
-        return _DNF_DISK_CACHE
-    try:
-        with _dnf_cache_lock() as locked:
-            if not locked:
-                return _DNF_DISK_CACHE
-            _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            if _DNF_DISK_CACHE_PATH.exists():
-                was_oversized, file_size = _dnf_cache_remove_oversized_file()
-                if was_oversized:
-                    return _DNF_DISK_CACHE
-                lines = _dnf_cache_read_nonempty_lines()
-                if not lines:
-                    return _DNF_DISK_CACHE
-                data_lines, soft_error = _dnf_cache_split_header(lines)
-                parsed_any, ingest_soft_error = _dnf_cache_ingest_lines(data_lines, _DNF_DISK_CACHE)
-                if ingest_soft_error:
-                    soft_error = True
-                if soft_error and parsed_any:
-                    _DNF_DISK_CACHE_DIRTY = True
-                if not parsed_any and (file_size or 0) > 0:
-                    _dnf_cache_quarantine_current()
-                    _DNF_DISK_CACHE = OrderedDict()
-                    return _DNF_DISK_CACHE
-    except Exception as e:
-        _DNF_DISK_CACHE = OrderedDict()
-    return _DNF_DISK_CACHE
-
-def _save_dnf_disk_cache() -> None:
-    global _DNF_DISK_CACHE_DIRTY
-    if not (_DNF_DISK_CACHE_ENABLED and _DNF_DISK_CACHE_DIRTY and isinstance(_DNF_DISK_CACHE, OrderedDict)):
-        return
-    tmp = None
-    try:
-        with _dnf_cache_lock() as locked:
-            if not locked:
-                return
-            _DNF_DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            # trim oldest
-            while len(_DNF_DISK_CACHE) > _DNF_DISK_CACHE_MAX:
-                _DNF_DISK_CACHE.popitem(last=False)
-            fd, tmp = tempfile.mkstemp(
-                dir=str(_DNF_DISK_CACHE_PATH.parent),
-                prefix=".dnf_cache.",
-                suffix=".tmp",
-            )
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            records = []
-            for k, v in _DNF_DISK_CACHE.items():
-                rec = {"key": k, "value": v}
-                records.append(json.dumps(rec, ensure_ascii=False, separators=(",", ":")))
-            payload = "\n".join(records)
-            checksum = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                header = {"version": _DNF_DISK_CACHE_VERSION, "checksum": checksum}
-                f.write(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n")
-                if payload:
-                    f.write(payload + "\n")
-            os.replace(tmp, _DNF_DISK_CACHE_PATH)
-            _DNF_DISK_CACHE_DIRTY = False
-    except Exception:
-        # cache write failures must never affect hook correctness
-        pass
-    finally:
-        if tmp and os.path.exists(tmp):
-            try:
-                os.unlink(tmp)
-            except Exception:
-                pass
-
-def _save_dnf_disk_cache_signal_safe() -> None:
-    """Best-effort cache save for atexit; avoid heavy work if shutting down."""
-    try:
-        if not _DNF_DISK_CACHE_DIRTY:
-            return
-        _save_dnf_disk_cache()
-    except Exception:
-        pass
-
-if _DNF_DISK_CACHE_ENABLED:
-    atexit.register(_save_dnf_disk_cache_signal_safe)
-
 @lru_cache(maxsize=256)
 def _validate_anchor_expr_cached(expr: str) -> list[list[dict]]:
     """
@@ -590,29 +362,12 @@ def _validate_anchor_expr_cached(expr: str) -> list[list[dict]]:
     when NAUTICAL_DNF_DISK_CACHE=1.
     """
     _load_core()
-    global _DNF_DISK_CACHE_DIRTY
-    if _DNF_DISK_CACHE_ENABLED:
-        cache = _load_dnf_disk_cache()
-        k = _dnf_cache_key(expr)
-        if k in cache:
-            cache.move_to_end(k)
-            cache[k] = core._normalize_dnf_cached(cache[k])
-            return cache[k]
+    cached = core._dnf_cache_load(expr)
+    if cached is not None:
+        return cached
 
     dnf = core.validate_anchor_expr_strict(expr)
-
-    if _DNF_DISK_CACHE_ENABLED:
-        cache = _load_dnf_disk_cache()
-        k = _dnf_cache_key(expr)
-        try:
-            json.dumps(dnf, ensure_ascii=False, separators=(",", ":"))
-        except Exception:
-            _diag("DNF cache skip: value not JSON-serializable")
-            return dnf
-        cache[k] = dnf
-        cache.move_to_end(k)
-        _DNF_DISK_CACHE_DIRTY = True
-
+    core._dnf_cache_save(expr, dnf)
     return dnf
 
 
@@ -2272,7 +2027,6 @@ def run_hook(
     """Run the extracted implementation with context captured by the wrapper."""
     global HOOK_DIR, TW_DIR, _CORE_BASE
     global _EARLY_PROTOCOL_RESULT, _PROTOCOL, _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
-    global _DNF_DISK_CACHE_PATH, _DNF_DISK_CACHE_LOCK
 
     HOOK_DIR = Path(hook_dir)
     TW_DIR = HOOK_DIR.parent
@@ -2281,9 +2035,6 @@ def run_hook(
 
     _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
     TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
-    _DNF_DISK_CACHE_PATH = HOOK_DIR / ".nautical_cache" / "dnf_cache.jsonl"
-    _DNF_DISK_CACHE_LOCK = _DNF_DISK_CACHE_PATH.with_suffix(".lock")
-
     protocol, _protocol_path, protocol_error = hook_bootstrap.load_core_helper_module(
         _CORE_BASE,
         "hook_protocol.py",

@@ -935,6 +935,10 @@ cache_load = _cache_api.cache_load
 cache_save = _cache_api.cache_save
 cache_gc = _cache_api.cache_gc
 cache_key_for_task = _cache_api.cache_key_for_task
+_dnf_cache_fingerprint = _cache_api._dnf_cache_fingerprint
+_dnf_cache_key = _cache_api._dnf_cache_key
+_dnf_cache_load = _cache_api._dnf_cache_load
+_dnf_cache_save = _cache_api._dnf_cache_save
 
 _precompute_api = _import_sibling("precompute_api").for_core(
     sys.modules[__name__],

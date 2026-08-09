@@ -93,6 +93,8 @@ class ChainGenerationService:
         default_factory=dict,
         repr=False,
     )
+    # Compatibility callbacks are accepted only for incomplete test/tool
+    # adapters. A configured Nautical core never populates these fields.
     _legacy_anchor: Callable[..., Any] | None = field(default=None, repr=False)
     _legacy_cp: Callable[..., Any] | None = field(default=None, repr=False)
     _legacy_builder: Callable[..., Any] | None = field(default=None, repr=False)
@@ -118,10 +120,11 @@ class ChainGenerationService:
 
     @classmethod
     def from_hook(cls, hook: Any) -> "ChainGenerationService":
-        """Adapt a legacy hook object during the migration period.
+        """Adapt a hook object using its configured core only.
 
-        Existing embedding code can still pass a hook object, but new callers
-        should construct the service from the configured core directly.
+        Generation decisions must stay owned by this service.  In particular,
+        do not capture private callbacks from ``modify_impl`` here: operator
+        tools and reconcile must not route back through the heavy hook module.
         """
         core = getattr(hook, "core", None)
         if core is None:
@@ -132,12 +135,14 @@ class ChainGenerationService:
             debug_wait_sched=bool(getattr(hook, "_DEBUG_WAIT_SCHED", False)),
             wait_sched_debug=getattr(hook, "_LAST_WAIT_SCHED_DEBUG", None),
         )
-        # Preserve custom test/tool adapters without making them part of the
-        # production service contract.
-        service._legacy_anchor = getattr(hook, "_compute_anchor_child_due", None)
-        service._legacy_cp = getattr(hook, "_compute_cp_child_due", None)
-        service._legacy_builder = getattr(hook, "_build_child_from_parent", None)
-        service._legacy_parser = getattr(hook, "_safe_parse_datetime", None)
+        # Incomplete fake/embedding cores may still provide their own narrow
+        # callbacks. Keep this compatibility path isolated from production:
+        # the configured Nautical core exposes parse_cp_sequence_tokens.
+        if not callable(getattr(core, "parse_cp_sequence_tokens", None)):
+            service._legacy_anchor = getattr(hook, "_compute_anchor_child_due", None)
+            service._legacy_cp = getattr(hook, "_compute_cp_child_due", None)
+            service._legacy_builder = getattr(hook, "_build_child_from_parent", None)
+            service._legacy_parser = getattr(hook, "_safe_parse_datetime", None)
         return service
 
     def safe_parse_datetime(self, value: Any) -> tuple[datetime | None, str | None]:

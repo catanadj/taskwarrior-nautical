@@ -10383,23 +10383,16 @@ def test_moon_phase_operational_errors_are_actionable():
 
     import nautical_core.reconcile as reconcile
 
-    class FakeCore:
-        @staticmethod
-        def coerce_int(value, default=0):
-            try:
-                return int(value)
-            except Exception:
-                return default
-
-    class FakeHook:
-        core = FakeCore()
+    class FailingGeneration:
+        core = core
 
         @staticmethod
-        def _safe_parse_datetime(_value):
-            return None, None
+        def safe_parse_datetime(value):
+            parsed = core.parse_dt_any(value)
+            return parsed, None
 
         @staticmethod
-        def _compute_anchor_child_due(_parent):
+        def compute_anchor_child_due(_parent):
             raise astronomy.AstronomyUnavailableError("moon phase anchors require astral")
 
     parent = {
@@ -10410,7 +10403,12 @@ def test_moon_phase_operational_errors_are_actionable():
         "link": 1,
         "anchor": "moon:full",
     }
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=FakeHook())
+    plan = reconcile.build_reconcile_plan(
+        parent,
+        existing_children=[],
+        hook=type("Hook", (), {"core": core})(),
+        generation=FailingGeneration(),
+    )
     expect(plan.action == "error", f"moon resolver failure should fail closed: {plan}")
     expect("Astronomy provider unavailable" in plan.reason, plan.reason)
 
@@ -15719,18 +15717,19 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         "until": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 20), (9, 10))),
         "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 20), (9, 10))),
     }
-    original_build_child = mod._build_child_from_parent
-    try:
-        mod._build_child_from_parent = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ValueError("native until must be later than the child recurrence target")
-        )
-        untyped_plan = reconcile.build_reconcile_plan(
-            early_until_parent,
-            existing_children=[],
-            hook=mod,
-        )
-    finally:
-        mod._build_child_from_parent = original_build_child
+    from nautical_core.chain_generation import ChainGenerationService
+
+    class FailingBuildGeneration(ChainGenerationService):
+        def build_child_from_parent(self, *_args, **_kwargs):
+            raise ValueError("native until must be later than the child recurrence target")
+
+    failing_generation = FailingBuildGeneration.from_core(mod.core)
+    untyped_plan = reconcile.build_reconcile_plan(
+        early_until_parent,
+        existing_children=[],
+        hook=mod,
+        generation=failing_generation,
+    )
     expect(
         untyped_plan.action == "error",
         f"reconcile treated an untyped exception message as a carry conflict: {untyped_plan}",
@@ -20259,6 +20258,29 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         expect("chain ID" in str(exc), f"missing-chain failure was not actionable: {exc}")
     else:
         raise AssertionError("evaluator silently invented a chain identity")
+
+
+def test_chain_generation_hook_adapter_does_not_capture_modify_helpers():
+    """Hook adaptation must keep generation decisions inside the shared service."""
+    from nautical_core.chain_generation import ChainGenerationService
+
+    class Hook:
+        core = core
+        _compute_cp_child_due = staticmethod(
+            lambda _parent: (_ for _ in ()).throw(AssertionError("modify helper was captured"))
+        )
+
+    service = ChainGenerationService.from_hook(Hook())
+    parent = {
+        "chainID": "shared-generation",
+        "cp": "1d",
+        "link": 1,
+        "due": "20250101T090000Z",
+        "end": "20250101T100000Z",
+    }
+    child_due, metadata = service.compute_cp_child_due(parent)
+    expect(child_due == datetime(2025, 1, 2, 9, 0, tzinfo=timezone.utc), f"shared CP service drifted: {child_due!r}")
+    expect(metadata and metadata.get("basis") == "end+cp (preserve clock)", f"shared CP metadata drifted: {metadata!r}")
 
 
 def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
@@ -30823,6 +30845,7 @@ TESTS.extend([
     test_random_time_window_flows_through_anchor_parser_and_resolver,
     test_recurrence_spec_normalizes_task_fields_and_context,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
+    test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,
     test_recurrence_evaluator_loads_omit_file_without_text_rule,
     test_recurrence_evaluator_loads_omit_file_dates_and_descriptions_once,

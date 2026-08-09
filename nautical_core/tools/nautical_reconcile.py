@@ -1400,6 +1400,7 @@ def _print_recovery_group(
 def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
     reason = str(exc).strip() or type(exc).__name__
     if args.json:
+        configuration_status = "unavailable" if stage == "taskdata_config" else "valid"
         payload: dict[str, Any] = {
             "schema": _JSON_SCHEMA,
             "schema_version": _JSON_SCHEMA_VERSION,
@@ -1407,6 +1408,9 @@ def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
             "status": "error",
             "stage": stage,
             "error": reason,
+            "configuration_status": configuration_status,
+            "configuration_drifted": 0,
+            "configuration_drift": reason if configuration_status == "unavailable" else "",
             "candidates": 0,
             "expiration_hops": 0,
             "recovered_chains": 0,

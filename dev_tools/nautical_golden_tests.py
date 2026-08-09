@@ -27361,6 +27361,20 @@ def test_reconcile_configuration_verification_fails_closed():
     expect(status == "unavailable" and reason == check.reason, f"state adapter changed failure: {status!r}, {reason!r}")
 
 
+def test_reconcile_startup_config_failure_is_structured():
+    """Taskdata configuration startup failures expose unavailable status in JSON."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_configuration_startup_test")
+    args = SimpleNamespace(json=True, apply=True)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        result = mod._startup_failure(args, "taskdata_config", RuntimeError("invalid timezone"))
+    payload = json.loads(output.getvalue())
+    expect(result == 1, f"configuration startup failure returned {result}")
+    expect(payload.get("configuration_status") == "unavailable", f"missing unavailable status: {payload!r}")
+    expect(payload.get("configuration_drift") == "invalid timezone", f"configuration detail was lost: {payload!r}")
+
+
 def test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs():
     """Human reconcile output should keep outcomes concise and display repaired until locally."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -31055,6 +31069,7 @@ TESTS = [
     test_reconcile_partial_recovery_exit_and_verbose_output,
     test_reconcile_degraded_audit_status_is_structured,
     test_reconcile_configuration_verification_fails_closed,
+    test_reconcile_startup_config_failure_is_structured,
     test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs,
     test_reconcile_tool_apply_disables_legitimate_final_chain,
     test_reconcile_disable_verification_fails_closed,

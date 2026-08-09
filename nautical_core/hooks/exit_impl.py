@@ -218,11 +218,13 @@ _MODULE_SPECS = {
         "nautical_core.hook_results",
     ),
 }
-core, _CORE_IMPORT_TARGET, _CORE_IMPORT_ERROR = hook_bootstrap.import_core_package(_CORE_BASE)
+core = None
+_CORE_IMPORT_TARGET = None
+_CORE_IMPORT_ERROR = None
 
 
 def _resolve_task_data_context() -> tuple[str, bool]:
-    return hook_bootstrap.resolve_task_data_context(
+    return hook_bootstrap.resolve_task_data_context_lazy(
         core=core,
         core_import_error=_CORE_IMPORT_ERROR,
         core_import_target=_CORE_IMPORT_TARGET,
@@ -235,6 +237,37 @@ def _resolve_task_data_context() -> tuple[str, bool]:
 _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
 TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
 _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
+
+
+def _load_core() -> None:
+    """Load the configured core only when the exit lifecycle is entered."""
+    global core, _CORE_IMPORT_TARGET, _CORE_IMPORT_ERROR, _IMPORT_MS
+    if core is not None:
+        return
+    module, target, import_error = hook_bootstrap.import_core_package(_CORE_BASE)
+    if target is not None:
+        _CORE_IMPORT_TARGET = target
+    if import_error is not None:
+        _CORE_IMPORT_ERROR = import_error
+    if module is None:
+        target_text = str(target or (_CORE_BASE / "nautical_core" / "__init__.py"))
+        if import_error is not None:
+            raise RuntimeError(
+                f"Failed to import nautical_core from {target_text}: "
+                f"{type(import_error).__name__}: {import_error}"
+            ) from import_error
+        raise ModuleNotFoundError(
+            "nautical_core package not found. Expected nautical_core/__init__.py "
+            f"in ~/.task or NAUTICAL_CORE_PATH (resolved base: {_CORE_BASE})"
+        )
+    core = module
+    _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
+    globals()["_QUEUE_MAX_LINES"] = _env_int(
+        "NAUTICAL_SPAWN_QUEUE_MAX_LINES",
+        int(getattr(core, "SPAWN_QUEUE_DRAIN_MAX_ITEMS", 200)),
+        min_value=1,
+        max_value=100000,
+    )
 
 
 def _tw_data_dir_path() -> Path:
@@ -307,13 +340,15 @@ def _nautical_lock_dir_path() -> Path:
         return queue_store.nautical_lock_dir_path(tw_data_dir)
     return tw_data_dir / ".nautical-locks"
 
-_QUEUE_DB_PATH = _nautical_state_dir_path() / ".nautical_queue.db"
-_DEAD_LETTER_PATH = _nautical_state_dir_path() / ".nautical_dead_letter.jsonl"
-_DEAD_LETTER_LOCK = _nautical_lock_dir_path() / ".nautical_dead_letter.lock"
+# Do not import queue_store merely to construct defaults.  run_hook refreshes
+# these paths after the lightweight TASKDATA resolver has run.
+_QUEUE_DB_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_queue.db"
+_DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_dead_letter.jsonl"
+_DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_dead_letter.lock"
 HOOK_IMPL_API = 1
 NAUTICAL_HOOK_VERSION = "updateG-20260328"
-_QUEUE_LOCK_FAIL_MARKER = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock_failed"
-_QUEUE_LOCK_FAIL_COUNT = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock_failed.count"
+_QUEUE_LOCK_FAIL_MARKER = TW_DATA_DIR / ".nautical-locks" / ".nautical_spawn_queue.lock_failed"
+_QUEUE_LOCK_FAIL_COUNT = TW_DATA_DIR / ".nautical-locks" / ".nautical_spawn_queue.lock_failed.count"
 _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 # When set, exit 1 if any spawns were dead-lettered or errored (for scripting/monitoring).
 _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in ("1", "true", "yes", "on")
@@ -365,7 +400,7 @@ def _env_int(
 _DEAD_LETTER_RETENTION_DAYS = _env_int("NAUTICAL_DEAD_LETTER_RETENTION_DAYS", 30, min_value=0, max_value=3650)
 _QUEUE_MAX_LINES = _env_int(
     "NAUTICAL_SPAWN_QUEUE_MAX_LINES",
-    int(getattr(core, "SPAWN_QUEUE_DRAIN_MAX_ITEMS", 200)),
+    200,
     min_value=1,
     max_value=100000,
 )
@@ -2469,6 +2504,9 @@ def _render_exit_drain_failure_panel(stats: dict) -> None:
 
 
 def main() -> int:
+    # Queue draining and diagnostics use the configured core/UI services;
+    # defer that package import until the lifecycle is actually entered.
+    _load_core()
     _migrate_legacy_nautical_state()
     _reset_exit_runtime_state()
     startup_t0 = time.perf_counter()

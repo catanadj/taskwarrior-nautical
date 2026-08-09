@@ -213,11 +213,13 @@ _MODULE_SPECS = {
         "nautical_core.hook_engine",
     ),
 }
-core, _CORE_IMPORT_TARGET, _CORE_IMPORT_ERROR = hook_bootstrap.import_core_package(_CORE_BASE)
+core = None
+_CORE_IMPORT_TARGET = None
+_CORE_IMPORT_ERROR = None
 
 
 def _resolve_task_data_context() -> tuple[str, bool]:
-    return hook_bootstrap.resolve_task_data_context(
+    return hook_bootstrap.resolve_task_data_context_lazy(
         core=core,
         core_import_error=_CORE_IMPORT_ERROR,
         core_import_target=_CORE_IMPORT_TARGET,
@@ -1977,6 +1979,9 @@ def _due_context_on_add(task: dict, now_utc: datetime) -> tuple[bool, str, datet
 def main():
     prof = _build_profiler()
     task = _read_on_add_task(prof)
+    # The implementation module is now import-lazy; load the core only once
+    # the request has reached the full lifecycle path.
+    _load_core()
     _apply_description_uda_aliases(task)
     config_error = str(getattr(core, "scheduling_configuration_error", lambda: "")() or "")
     if config_error and _task_has_nautical_fields(task):

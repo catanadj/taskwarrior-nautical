@@ -737,11 +737,13 @@ _MODULE_SPECS = {
         "nautical_core.recurrence_evaluator",
     ),
 }
-core, _CORE_IMPORT_TARGET, _CORE_IMPORT_ERROR = hook_bootstrap.import_core_package(_CORE_BASE)
+core = None
+_CORE_IMPORT_TARGET = None
+_CORE_IMPORT_ERROR = None
 
 
 def _resolve_task_data_context() -> tuple[str, bool]:
-    return hook_bootstrap.resolve_task_data_context(
+    return hook_bootstrap.resolve_task_data_context_lazy(
         core=core,
         core_import_error=_CORE_IMPORT_ERROR,
         core_import_target=_CORE_IMPORT_TARGET,
@@ -814,10 +816,13 @@ def _nautical_lock_dir_path() -> Path:
         return queue_store.nautical_lock_dir_path(TW_DATA_DIR)
     return TW_DATA_DIR / ".nautical-locks"
 
-_SPAWN_QUEUE_LOCK = _nautical_lock_dir_path() / ".nautical_spawn_queue.lock"
-_SPAWN_QUEUE_DB_PATH = _nautical_state_dir_path() / ".nautical_queue.db"
-_DEAD_LETTER_PATH = _nautical_state_dir_path() / ".nautical_dead_letter.jsonl"
-_DEAD_LETTER_LOCK = _nautical_lock_dir_path() / ".nautical_dead_letter.lock"
+# Keep import-time state path setup dependency-free.  The queue adapter is
+# loaded by the lifecycle that actually needs it and run_hook refreshes these
+# paths after resolving TASKDATA/rc.data.location.
+_SPAWN_QUEUE_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_spawn_queue.lock"
+_SPAWN_QUEUE_DB_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_queue.db"
+_DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_dead_letter.jsonl"
+_DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_dead_letter.lock"
 _SPAWN_LOCK_RETRIES = 6
 _SPAWN_LOCK_SLEEP_BASE = 0.03
 _SPAWN_LOCK_STALE_AFTER = 30.0
@@ -6665,6 +6670,9 @@ def _emit_modify_passthrough(task: dict) -> None:
 
 
 def main():
+    # Keep module import cheap while preserving the existing full-hook
+    # contract: all mutation decisions run with the validated core loaded.
+    _load_core()
     _migrate_legacy_nautical_state()
     _reset_modify_runtime_state()
     state = _modify_runtime_state()

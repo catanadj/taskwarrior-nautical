@@ -316,6 +316,12 @@ def _load_hook_module(path: str, module_name: str):
     if HERE not in sys.path:
         sys.path.insert(0, HERE)
     loader.exec_module(mod)
+    # Heavy hook modules intentionally leave core unloaded at import time.
+    # Private helper tests exercise lifecycle code directly, so initialize the
+    # same state that the executable entrypoint initializes first.
+    load_core = getattr(mod, "_load_core", None)
+    if callable(load_core) and os.path.basename(path) in {"add_impl.py", "modify_impl.py", "exit_impl.py"}:
+        load_core()
     return mod
 
 def _load_core_module(path: str, module_name: str, config_path: str):
@@ -1431,6 +1437,50 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
             timeout=5.0,
         )
         expect("API mismatch" in exit_mismatch_diag.stderr, "on-exit API mismatch diagnostic was not actionable")
+
+
+def test_full_hook_modules_defer_core_import():
+    """Loading lifecycle implementations must not parse the full core package."""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        core_dir = root / "nautical_core"
+        hooks_dir = core_dir / "hooks"
+        hooks_dir.mkdir(parents=True)
+        shutil.copy2(Path(ROOT) / "nautical_core" / "hook_bootstrap.py", core_dir / "hook_bootstrap.py")
+        shutil.copy2(Path(ROOT) / "nautical_core" / "config_support.py", core_dir / "config_support.py")
+        (core_dir / "__init__.py").write_text(
+            "raise AssertionError('full core must not load while importing hook implementations')\n",
+            encoding="utf-8",
+        )
+        for name in ("add_impl.py", "modify_impl.py", "exit_impl.py"):
+            shutil.copy2(Path(ROOT) / "nautical_core" / "hooks" / name, hooks_dir / name)
+
+        probe = root / "probe.py"
+        probe.write_text(
+            "import importlib.util, sys\n"
+            "from pathlib import Path\n"
+            "root = Path(__file__).parent\n"
+            "for index, name in enumerate(('add_impl.py', 'modify_impl.py', 'exit_impl.py')):\n"
+            "    spec = importlib.util.spec_from_file_location(f'probe_hook_{index}', root / 'nautical_core' / 'hooks' / name)\n"
+            "    module = importlib.util.module_from_spec(spec)\n"
+            "    spec.loader.exec_module(module)\n"
+            "    assert module.core is None, f'{name} imported core eagerly'\n"
+            "assert 'nautical_core' not in sys.modules, 'hook import populated the full package'\n"
+            "print('ok')\n",
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env.pop("NAUTICAL_CORE_PATH", None)
+        env.pop("NAUTICAL_TRUST_CORE_PATH", None)
+        result = subprocess.run(
+            [sys.executable, str(probe)],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=5.0,
+        )
+        expect(result.returncode == 0, f"full hook import was not lazy: {result.stderr!r}")
+        expect(result.stdout.strip() == "ok", f"unexpected lazy import probe output: {result.stdout!r}")
 
 
 def test_on_exit_active_sqlite_queue_uses_full_drain():
@@ -6779,6 +6829,7 @@ def test_spawn_queue_drain_limit_config_and_env_override():
             "import json\n"
             "from nautical_core import SPAWN_QUEUE_DRAIN_MAX_ITEMS\n"
             "from nautical_core.hooks import exit_impl\n"
+            "exit_impl._load_core()\n"
             "print(json.dumps([SPAWN_QUEUE_DRAIN_MAX_ITEMS, exit_impl._QUEUE_MAX_LINES]))\n"
         )
         env = os.environ.copy()
@@ -30002,6 +30053,7 @@ TESTS = [
     test_exit_probe_is_conservative_across_queue_states,
     test_light_taskdata_resolution_matches_hook_precedence,
     test_plain_hook_fast_paths_do_not_import_core_package,
+    test_full_hook_modules_defer_core_import,
     test_on_exit_active_sqlite_queue_uses_full_drain,
     test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
     test_hook_bootstrap_numeric_env_parsing_is_bounded,

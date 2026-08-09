@@ -217,6 +217,7 @@ def resolve_task_data_context(*, core: Any, core_import_error: Exception | None,
                 f"{type(core_import_error).__name__}: {core_import_error}"
             ) from core_import_error
         raise ModuleNotFoundError(
+            "nautical_core.resolve_task_data_context is unavailable: "
             f"nautical_core package not found. Expected nautical_core/__init__.py in ~/.task or NAUTICAL_CORE_PATH. "
             f"(resolved base: {core_base})"
         )
@@ -226,3 +227,57 @@ def resolve_task_data_context(*, core: Any, core_import_error: Exception | None,
         tw_dir=tw_dir,
     )
     return str(data_dir), bool(use_rc)
+
+
+def resolve_task_data_context_lazy(
+    *,
+    core: Any,
+    core_import_error: Exception | None,
+    core_import_target: Path | None,
+    core_base: Path,
+    tw_dir: str,
+    argv: list[str],
+    env: dict[str, str],
+) -> tuple[str, bool]:
+    """Resolve Taskwarrior's data directory without importing the full core.
+
+    Heavy hook implementations need the data directory before deciding which
+    lifecycle services to load.  The path-only resolver preserves the normal
+    precedence and safety checks while keeping the recurrence package lazy.
+    The full resolver remains the fallback when the path helper is unavailable.
+    """
+    if core is not None:
+        return resolve_task_data_context(
+            core=core,
+            core_import_error=core_import_error,
+            core_import_target=core_import_target,
+            core_base=core_base,
+            tw_dir=tw_dir,
+            argv=argv,
+            env=env,
+        )
+
+    path_support, _path, _error = load_core_helper_module(
+        core_base,
+        "config_support.py",
+        "_nautical_hook_path_support",
+    )
+    if path_support is not None:
+        resolved = resolve_task_data_context_light(
+            path_support=path_support,
+            argv=argv,
+            env=env,
+            tw_dir=tw_dir,
+        )
+        if resolved is not None:
+            return str(resolved[0]), bool(resolved[1])
+
+    return resolve_task_data_context(
+        core=None,
+        core_import_error=core_import_error,
+        core_import_target=core_import_target,
+        core_base=core_base,
+        tw_dir=tw_dir,
+        argv=argv,
+        env=env,
+    )

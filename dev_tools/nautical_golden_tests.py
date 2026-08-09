@@ -5679,8 +5679,10 @@ def test_perf_budget_config_covers_cache_io_checks():
         {
             "workflow_cp_completion",
             "workflow_cp_completion_nonfinal",
+            "workflow_cp_completion_nonfinal_idempotent",
             "workflow_anchor_completion",
             "workflow_anchor_completion_nonfinal",
+            "workflow_anchor_completion_nonfinal_idempotent",
             "workflow_queue_drain",
             "workflow_reconcile",
         }

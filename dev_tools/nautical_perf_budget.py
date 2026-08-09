@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -528,6 +529,22 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
 
 
 def _run_workflow_hook(hook_path: Path, *, input_text: str, env: dict[str, str], expect_output: bool) -> float:
+    elapsed, _result, _stderr = _run_workflow_hook_result(
+        hook_path,
+        input_text=input_text,
+        env=env,
+        expect_output=expect_output,
+    )
+    return elapsed
+
+
+def _run_workflow_hook_result(
+    hook_path: Path,
+    *,
+    input_text: str,
+    env: dict[str, str],
+    expect_output: bool,
+) -> tuple[float, dict | None, str]:
     started = time.perf_counter()
     proc = subprocess.run(
         [sys.executable, str(hook_path)],
@@ -540,11 +557,12 @@ def _run_workflow_hook(hook_path: Path, *, input_text: str, env: dict[str, str],
     elapsed = time.perf_counter() - started
     if proc.returncode != 0:
         raise RuntimeError(f"{hook_path.name} workflow failed: {(proc.stderr or proc.stdout or '').strip()}")
+    result = None
     if expect_output:
-        _strict_json_object(proc.stdout or "")
+        result = _strict_json_object(proc.stdout or "")
     elif (proc.stdout or "").strip():
         raise RuntimeError(f"{hook_path.name} workflow wrote unexpected stdout")
-    return elapsed
+    return elapsed, result, proc.stderr or ""
 
 
 def _measure_workflow(name: str, samples: list[float], budget: float) -> dict:
@@ -561,6 +579,89 @@ def _measure_workflow(name: str, samples: list[float], budget: float) -> dict:
     }
 
 
+def _workflow_queue_rows(taskdata: Path) -> list[dict]:
+    """Read queued child intents for benchmark mutation assertions."""
+    db_path = taskdata / ".nautical-state" / ".nautical_queue.db"
+    if not db_path.is_file():
+        return []
+    with sqlite3.connect(str(db_path)) as conn:
+        rows = conn.execute("SELECT payload FROM queue_entries ORDER BY id").fetchall()
+    result = []
+    for (payload,) in rows:
+        try:
+            item = json.loads(str(payload))
+        except Exception as exc:
+            raise RuntimeError(f"workflow queue payload is invalid: {exc}") from exc
+        if not isinstance(item, dict):
+            raise RuntimeError("workflow queue payload is not an object")
+        result.append(item)
+    return result
+
+
+def _completion_fixture(kind: str, sample_index: int, *, nonfinal: bool, mode: str) -> dict:
+    """Build independent, deterministic identities for one completion sample."""
+    key = f"nautical-perf/{kind}/{mode}/{sample_index}"
+    parent_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, key + "/parent"))
+    chain_id = f"{kind}-perf-{mode}-{sample_index:04d}"
+    limit = 2 if nonfinal else 1
+    if kind == "cp":
+        return {
+            "uuid": parent_uuid,
+            "status": "pending",
+            "description": f"CP completion benchmark {mode} {sample_index}",
+            "cp": "P1D",
+            "chain": "on",
+            "chainID": chain_id,
+            "link": 1,
+            "chainMax": limit,
+            "due": "20260101T090000Z",
+        }
+    return {
+        "uuid": parent_uuid,
+        "status": "pending",
+        "description": f"Anchor completion benchmark {mode} {sample_index}",
+        "anchor": "w:mon@t=09:00",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": chain_id,
+        "link": 1,
+        "chainMax": limit,
+        "due": "20260105T090000Z",
+    }
+
+
+def _import_existing_completion_child(parent: dict, *, env: dict[str, str]) -> None:
+    """Seed an existing next link for the idempotent completion benchmark."""
+    child_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, str(parent["uuid"]) + "/child"))
+    child = {
+        "uuid": child_uuid,
+        "status": "pending",
+        "description": parent["description"],
+        "chain": "on",
+        "chainID": parent["chainID"],
+        # Keep link textual so Taskwarrior's JSON export compares exactly with
+        # the completion lookup's requested link number.
+        "link": "2",
+        "prevLink": str(parent["uuid"])[:8],
+        "due": "20260102T090000Z" if parent.get("cp") else "20260112T090000Z",
+    }
+    if parent.get("cp"):
+        child["cp"] = parent["cp"]
+    else:
+        child["anchor"] = parent["anchor"]
+        child["anchor_mode"] = parent["anchor_mode"]
+    proc = subprocess.run(
+        ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+        input=json.dumps(child, ensure_ascii=False) + "\n",
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"idempotent completion fixture import failed: {(proc.stderr or proc.stdout or '').strip()}")
+
+
 def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
     """Exercise completion, queue-drain, and reconcile paths in isolation."""
     workflow_cfg = cfg.get("workflow_perf")
@@ -572,6 +673,17 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
         root = Path(td)
         config_path = root / "config-nautical.toml"
         config_path.write_text('tz = "UTC"\npanel_mode = "minimal"\n', encoding="utf-8")
+        taskrc_path = root / "taskrc"
+        taskrc_path.write_text(
+            "uda.chainID.type=string\n"
+            "uda.chain.type=string\n"
+            "uda.link.type=string\n"
+            "uda.prevLink.type=string\n"
+            "uda.cp.type=string\n"
+            "uda.anchor.type=string\n"
+            "uda.anchor_mode.type=string\n",
+            encoding="utf-8",
+        )
         base_env = os.environ.copy()
         base_env.update(
             {
@@ -579,58 +691,76 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 "NAUTICAL_CORE_PATH": str(ROOT),
                 "NAUTICAL_TRUST_CONFIG_PATH": "1",
                 "NAUTICAL_TRUST_CORE_PATH": "1",
-                "TASKRC": "/dev/null",
+                "TASKRC": str(taskrc_path),
                 "TZ": "UTC",
             }
         )
         for key in ("NAUTICAL_DIAG", "NAUTICAL_DIAG_LOG", "NAUTICAL_PROFILE"):
             base_env.pop(key, None)
 
-        cp_old = {
-            "uuid": "22222222-2222-2222-2222-222222222222",
-            "status": "pending",
-            "description": "CP completion benchmark",
-            "cp": "P1D",
-            "chain": "on",
-            "chainID": "cp-perf-chain",
-            "link": 1,
-            "chainMax": 1,
-            "due": "20260101T090000Z",
-        }
-        anchor_old = {
-            "uuid": "33333333-3333-3333-3333-333333333333",
-            "status": "pending",
-            "description": "Anchor completion benchmark",
-            "anchor": "w:mon@t=09:00",
-            "anchor_mode": "skip",
-            "chain": "on",
-            "chainID": "anchor-perf-chain",
-            "link": 1,
-            "chainMax": 1,
-            "due": "20260105T090000Z",
-        }
-        completion_cases = {
-            "workflow_cp_completion": cp_old,
-            "workflow_cp_completion_nonfinal": dict(cp_old, chainMax=2),
-            "workflow_anchor_completion": anchor_old,
-            "workflow_anchor_completion_nonfinal": dict(anchor_old, chainMax=2),
-        }
+        completion_cases = (
+            ("workflow_cp_completion", "cp", False),
+            ("workflow_cp_completion_nonfinal", "cp", True),
+            ("workflow_anchor_completion", "anchor", False),
+            ("workflow_anchor_completion_nonfinal", "anchor", True),
+        )
         results: dict[str, dict] = {}
-        for name, old in completion_cases.items():
-            new = dict(old, status="completed", end="20260101T100000Z" if name.endswith("cp_completion") else "20260105T100000Z")
-            taskdata = root / name
-            taskdata.mkdir()
-            env = dict(base_env, TASKDATA=str(taskdata))
-            samples = [
-                _run_workflow_hook(
+        for name, kind, nonfinal in completion_cases:
+            fresh_samples = []
+            for sample_index in range(repeats):
+                old = _completion_fixture(kind, sample_index, nonfinal=nonfinal, mode="fresh")
+                new = dict(old, status="completed", end="20260101T100000Z" if kind == "cp" else "20260105T100000Z")
+                taskdata = root / f"{name}-fresh-{sample_index}"
+                taskdata.mkdir()
+                env = dict(base_env, TASKDATA=str(taskdata))
+                elapsed, result, _stderr = _run_workflow_hook_result(
                     ROOT / "on-modify.nautical",
                     input_text=json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False),
                     env=env,
                     expect_output=True,
                 )
-                for _ in range(repeats)
-            ]
-            results[name] = _measure_workflow(name, samples, float(budgets.get(name, 2.0)))
+                if not isinstance(result, dict):
+                    raise RuntimeError(f"{name} fresh sample returned no task object")
+                queued = _workflow_queue_rows(taskdata)
+                if nonfinal:
+                    if result.get("chain") != "on" or len(queued) != 1:
+                        raise RuntimeError(f"{name} fresh sample did not queue exactly one child")
+                    child = queued[0].get("child") if isinstance(queued[0], dict) else None
+                    if not isinstance(child, dict) or int(child.get("link") or 0) != 2:
+                        raise RuntimeError(f"{name} fresh sample queued an invalid next link")
+                elif result.get("chain") != "off" or queued:
+                    raise RuntimeError(f"{name} final sample did not complete without a successor")
+                fresh_samples.append(elapsed)
+            results[name] = _measure_workflow(name, fresh_samples, float(budgets.get(name, 2.0)))
+
+            if nonfinal:
+                idem_name = f"{name}_idempotent"
+                idem_samples = []
+                for sample_index in range(repeats):
+                    old = _completion_fixture(kind, sample_index, nonfinal=True, mode="idempotent")
+                    new = dict(old, status="completed", end="20260101T100000Z" if kind == "cp" else "20260105T100000Z")
+                    taskdata = root / f"{idem_name}-{sample_index}"
+                    taskdata.mkdir()
+                    env = dict(base_env, TASKDATA=str(taskdata))
+                    _import_existing_completion_child(old, env=env)
+                    elapsed, result, stderr = _run_workflow_hook_result(
+                        ROOT / "on-modify.nautical",
+                        input_text=json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False),
+                        env=env,
+                        expect_output=True,
+                    )
+                    if not isinstance(result, dict) or result.get("chain") != "on":
+                        raise RuntimeError(f"{idem_name} sample changed the completed parent unexpectedly")
+                    if _workflow_queue_rows(taskdata):
+                        raise RuntimeError(f"{idem_name} sample queued a duplicate child")
+                    if "Spawn skipped" not in stderr:
+                        raise RuntimeError(f"{idem_name} sample did not report the existing next link")
+                    idem_samples.append(elapsed)
+                results[idem_name] = _measure_workflow(
+                    idem_name,
+                    idem_samples,
+                    float(budgets.get(idem_name, 2.0)),
+                )
 
         queue_samples = []
         for sample_index in range(repeats):

@@ -1605,7 +1605,14 @@ def main(
                 "",
             )
             if configuration_drift_reason:
-                configuration_status = "drifted"
+                configuration_status = (
+                    "unavailable"
+                    if (
+                        "configuration verification unavailable" in configuration_drift_reason
+                        or "configuration verifier is unavailable" in configuration_drift_reason
+                    )
+                    else "drifted"
+                )
         rendered: list[tuple[reconcile.ReconcilePlan, dict[str, Any], str]] = []
         for plan, applied_short in outcomes:
             processed_slots.add(

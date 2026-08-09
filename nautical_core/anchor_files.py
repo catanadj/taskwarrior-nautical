@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import re
+from bisect import bisect_right
 from datetime import date, datetime, timedelta
+from datetime import timezone
 from typing import Callable
 
 from .business_calendar import (
@@ -22,7 +24,7 @@ from .file_source_expr import (
 )
 from .schedule_utils import apply_day_offset, roll_apply
 from .recurrence_context import RecurrenceContext
-from .occurrence_provider import Occurrence, _cursor_before, _sort_datetimes
+from .occurrence_provider import Occurrence, _cursor_before
 from .timeutil import compare_datetimes
 from .time_windows import parse_clock_value, parse_random_time_window_spec, parse_time_schedule_spec, parse_time_window_spec
 
@@ -468,8 +470,8 @@ class AnchorFileOccurrenceProvider:
         self._last_candidate: datetime | None = None
         self._last_candidate_index: int | None = None
         self._conversion_key: tuple[object, ...] | None = None
-        self._candidate_cache: list[datetime] | None = None
-        self._candidate_descriptions: list[str] = []
+        self._candidate_records: list[tuple[datetime, str]] | None = None
+        self._candidate_keys: list[datetime] = []
 
     def _records(self) -> list[tuple[date, tuple[int, int], str]]:
         if self._record_cache is None:
@@ -535,7 +537,6 @@ class AnchorFileOccurrenceProvider:
         # the shared strict-progress guard remains valid.
         cursor_after = _cursor_before(after_local) if inclusive else after_local
         records = self._records()
-        specs = [(item_date, hhmm) for item_date, hhmm, _description in records]
         conversion_key = (
             getattr(build_local_datetime, "__self__", None),
             getattr(build_local_datetime, "__func__", build_local_datetime),
@@ -543,15 +544,16 @@ class AnchorFileOccurrenceProvider:
             getattr(to_local, "__func__", to_local),
         )
         if self._conversion_key != conversion_key:
-            self._candidate_cache = None
+            self._candidate_records = None
+            self._candidate_keys = []
             self._next_index = 0
             self._last_after = None
             self._last_candidate = None
             self._last_candidate_index = None
-        if self._candidate_cache is None:
+        if self._candidate_records is None:
             candidates: list[datetime] = []
             descriptions: list[str] = []
-            for (d0, hhmm), (_record_date, _record_hhmm, description) in zip(specs, records):
+            for d0, hhmm, description in records:
                 raw_candidate = build_local_datetime(d0, hhmm)
                 if not isinstance(raw_candidate, datetime):
                     raise TypeError("Anchor-file provider returned a non-datetime candidate.")
@@ -561,60 +563,54 @@ class AnchorFileOccurrenceProvider:
                 candidates.append(candidate)
                 descriptions.append(description)
             try:
-                ordered = _sort_datetimes(candidates)
+                aware = [
+                    value.tzinfo is not None and value.utcoffset() is not None
+                    for value in candidates
+                ]
+                if any(flag != aware[0] for flag in aware[1:]):
+                    raise ValueError("mixed aware and naive datetimes")
+                order_keys = [
+                    value.astimezone(timezone.utc) if aware and aware[0] else value
+                    for value in candidates
+                ]
+                ordered_pairs = sorted(
+                    zip(order_keys, candidates, descriptions),
+                    key=lambda item: item[0],
+                )
             except (TypeError, ValueError) as exc:
                 raise ValueError("Anchor-file provider returned incomparable local datetimes.") from exc
-            remaining = list(zip(candidates, descriptions))
-            ordered_descriptions: list[str] = []
-            for candidate in ordered:
-                for index, (original, description) in enumerate(remaining):
-                    if compare_datetimes(original, candidate) == 0:
-                        ordered_descriptions.append(description)
-                        remaining.pop(index)
-                        break
-                else:
-                    ordered_descriptions.append("")
-            self._candidate_cache = []
-            self._candidate_descriptions = []
-            for candidate, description in zip(ordered, ordered_descriptions):
-                if not self._candidate_cache or compare_datetimes(candidate, self._candidate_cache[-1]) != 0:
-                    self._candidate_cache.append(candidate)
-                    self._candidate_descriptions.append(description)
-                elif not self._candidate_descriptions[-1] and description:
-                    self._candidate_descriptions[-1] = description
-        candidates = self._candidate_cache
-        start = self._next_index
-        if self._last_after is None:
-            start = 0
-        else:
-            try:
-                if compare_datetimes(after_local, self._last_after) <= 0:
-                    start = 0
-                elif self._last_candidate is not None and self._last_candidate_index is not None:
-                    start = self._last_candidate_index + (
-                        1 if compare_datetimes(after_local, self._last_candidate) >= 0 else 0
-                    )
-            except (TypeError, ValueError):
-                start = 0
-        value = None
-        selected_index = None
-        for index in range(start, len(candidates)):
-            candidate = candidates[index]
-            try:
-                comparison = compare_datetimes(candidate, cursor_after)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("Anchor-file provider returned an incomparable datetime.") from exc
-            if comparison > 0:
-                value = candidate
-                selected_index = index
-                break
-        if value is None:
-            self._next_index = len(candidates)
+            self._candidate_records = []
+            self._candidate_keys = []
+            for order_key, candidate, description in ordered_pairs:
+                if not self._candidate_records or compare_datetimes(candidate, self._candidate_records[-1][0]) != 0:
+                    self._candidate_records.append((candidate, description))
+                    self._candidate_keys.append(order_key)
+                elif not self._candidate_records[-1][1] and description:
+                    self._candidate_records[-1] = (self._candidate_records[-1][0], description)
+        records = self._candidate_records
+        try:
+            cursor_aware = cursor_after.tzinfo is not None and cursor_after.utcoffset() is not None
+            if self._candidate_keys and cursor_aware != (
+                self._candidate_keys[0].tzinfo is not None
+                and self._candidate_keys[0].utcoffset() is not None
+            ):
+                raise ValueError("mixed aware and naive datetimes")
+            cursor_key = (
+                cursor_after.astimezone(timezone.utc)
+                if cursor_aware
+                else cursor_after
+            )
+            selected_index = bisect_right(self._candidate_keys, cursor_key)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Anchor-file provider returned an incomparable datetime.") from exc
+        if selected_index >= len(records):
+            self._next_index = len(records)
             self._last_after = after_local
             self._last_candidate = None
             self._last_candidate_index = None
             self._conversion_key = conversion_key
             return None
+        value, description = records[selected_index]
         local = value
         from .occurrence_provider import _require_forward_progress
 
@@ -629,7 +625,7 @@ class AnchorFileOccurrenceProvider:
             hour=local.hour,
             minute=local.minute,
             source="anchor_file",
-            description=self._candidate_descriptions[selected_index] if selected_index is not None else "",
+            description=description,
             local_datetime=local,
         )
 

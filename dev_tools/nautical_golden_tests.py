@@ -18439,6 +18439,42 @@ def test_anchor_file_occurrence_provider_advances_cached_lookup_cursor():
     expect(reset is not None and reset.day == date(2026, 1, 2), "backward lookup did not reset the cached cursor")
 
 
+def test_anchor_file_provider_uses_binary_search_for_nonmonotonic_cursor():
+    """A cached anchor-file projection should handle backward cursors without rescanning records."""
+    import nautical_core.anchor_files as anchor_files
+
+    provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
+    provider._record_cache = [
+        (date(2026, 1, 1) + timedelta(days=index), (9, 0), f"slot-{index}")
+        for index in range(10_000)
+    ]
+    identity = lambda value: value
+    build = lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm)
+    first = provider.next_after(
+        datetime(2026, 1, 1, 9, 0),
+        build_local_datetime=build,
+        to_local=identity,
+    )
+    expect(first is not None and first.description == "slot-1", f"unexpected first cached result: {first!r}")
+
+    original_compare = anchor_files.compare_datetimes
+    anchor_files.compare_datetimes = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("non-monotonic lookup rescanned cached candidates")
+    )
+    try:
+        backward = provider.next_after(
+            datetime(2026, 1, 1, 9, 0),
+            build_local_datetime=build,
+            to_local=identity,
+        )
+    finally:
+        anchor_files.compare_datetimes = original_compare
+    expect(
+        backward is not None and backward.description == "slot-1",
+        f"binary-search lookup returned the wrong backward successor: {backward!r}",
+    )
+
+
 def test_compact_anchor_file_lookup_scans_past_legacy_probe_limit():
     """Compact previews must find a valid date after more than 512 omissions."""
     import nautical_core.add_anchor_preview as preview
@@ -31159,6 +31195,7 @@ TESTS = [
     test_anchor_file_occurrence_provider_supports_lazy_next_after,
     test_anchor_file_occurrence_provider_caches_expanded_specs,
     test_anchor_file_occurrence_provider_advances_cached_lookup_cursor,
+    test_anchor_file_provider_uses_binary_search_for_nonmonotonic_cursor,
     test_compact_anchor_file_lookup_scans_past_legacy_probe_limit,
     test_compact_anchor_file_lookup_reports_cursor_exhaustion,
     test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates,

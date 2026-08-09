@@ -14476,17 +14476,22 @@ def test_core_import_deterministic():
 
 
 def test_core_import_defers_optional_stacks():
-    """Importing the facade should not load UI and recurrence presentation stacks."""
+    """Importing the facade should defer optional and parser API stacks."""
     probe = subprocess.run(
         [
             sys.executable,
             "-c",
             (
-                "import sys, nautical_core; "
+                "import json, sys, nautical_core; "
                 "names=('rich','nautical_core.ui','nautical_core.astronomy',"
-                "'nautical_core.natural_language','nautical_core.linting'); "
-                "assert not any(name in sys.modules for name in names), "
-                "sorted(name for name in names if name in sys.modules)"
+                "'nautical_core.natural_language','nautical_core.linting',"
+                "'nautical_core.parser_api','nautical_core.parser_support_api',"
+                "'nautical_core.acf_api','nautical_core.expansion_api',"
+                "'nautical_core.quarter_api'); "
+                "loaded=sorted(name for name in names if name in sys.modules); "
+                "count=sum(name.startswith('nautical_core') for name in sys.modules); "
+                "assert not loaded, loaded; assert count <= 50, count; "
+                "print(json.dumps({'count': count, 'loaded': loaded}))"
             ),
         ],
         cwd=ROOT,

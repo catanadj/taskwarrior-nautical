@@ -79,6 +79,48 @@ class _LazySibling:
         return getattr(self._resolve(), name)
 
 
+class _LazyApiBundle:
+    """Resolve one core-bound API bundle on its first facade call.
+
+    API modules are intentionally imported only when their public aliases are
+    used.  The aliases remain ordinary callables after resolution, preserving
+    the existing facade namespace and monkeypatch points.
+    """
+
+    __slots__ = ("_module_name", "_module", "_core", "_namespace", "_aliases", "_bindings")
+
+    def __init__(self, module_name: str, aliases: tuple[str, ...], *, core: Any, namespace: dict[str, Any]):
+        self._module_name = module_name
+        self._module = None
+        self._core = core
+        self._namespace = namespace
+        self._aliases = aliases
+        self._bindings = None
+
+    def _resolve(self):
+        if self._bindings is None:
+            module = _import_sibling(self._module_name)
+            self._module = module
+            self._bindings = module.for_core(self._core, namespace=self._namespace)
+            for spec in self._aliases:
+                alias, source = spec if isinstance(spec, tuple) else (spec, spec)
+                self._namespace[alias] = getattr(self._bindings, source)
+        return self._bindings
+
+    def alias(self, name: str, source_name: str | None = None):
+        source_name = source_name or name
+
+        def call(*args, **kwargs):
+            return getattr(self._resolve(), source_name)(*args, **kwargs)
+
+        call.__name__ = name
+        call.__qualname__ = name
+        return call
+
+    def __getattr__(self, name: str):
+        return getattr(self._resolve(), name)
+
+
 TaskDict: TypeAlias = dict[str, Any]
 
 
@@ -335,18 +377,18 @@ _position_selection = _LazySibling("position_selection")
 _season_support = _import_sibling("season_support")
 _season_support.configure_hemisphere(SEASON_HEMISPHERE)
 _precompute = _LazySibling("precompute")
-_quarter_helpers = _import_sibling("quarter_helpers")
-_quarter_rewrite = _import_sibling("quarter_rewrite")
-_quarter_selector = _import_sibling("quarter_selector")
-_satisfiability = _import_sibling("satisfiability")
+_quarter_helpers = _LazySibling("quarter_helpers")
+_quarter_rewrite = _LazySibling("quarter_rewrite")
+_quarter_selector = _LazySibling("quarter_selector")
+_satisfiability = _LazySibling("satisfiability")
 _schedule_utils = _LazySibling("schedule_utils")
 _scheduler_atom = _LazySibling("scheduler_atom")
 _scheduler_expr = _LazySibling("scheduler_expr")
 _strict_validation = _LazySibling("strict_validation")
 _tokenutil = _import_sibling("tokenutil")
-_yearly_parse = _import_sibling("yearly_parse")
-_yearly_validation = _import_sibling("yearly_validation")
-_year_tokens = _import_sibling("year_tokens")
+_yearly_parse = _LazySibling("yearly_parse")
+_yearly_validation = _LazySibling("yearly_validation")
+_year_tokens = _LazySibling("year_tokens")
 
 short_uuid = _common.short_uuid
 DEFAULT_BUSINESS_CALENDAR = _business_calendar.DEFAULT_BUSINESS_CALENDAR
@@ -650,7 +692,8 @@ _Q_START_DAY_REV = {v: k for k, v in _Q_START_DAY.items()}
 _Q_END_DAY_REV = {v: k for k, v in _Q_END_DAY.items()}
 
 
-_MONTH_SELECTOR_MAX_LEN = _quarter_selector.MONTH_SELECTOR_MAX_LEN
+# Keep this parser guard local so the quarter selector module remains lazy.
+_MONTH_SELECTOR_MAX_LEN = 64
 
 
 _dates = _import_sibling("dates")
@@ -693,126 +736,152 @@ anchors_between_expr = _recurrence_candidates.anchors_between_expr
 
 # Quarter rewrite entry points are bound before parser construction because
 # the parser's DNF pipeline applies quarter normalization.
-_quarter_api = _import_sibling("quarter_api").for_core(
-    sys.modules[__name__],
+_quarter_api = _LazyApiBundle(
+    "quarter_api",
+    (
+        "_yearly_tokens",
+        "_monthly_tokens",
+        "_quarters_from_first_month_tokens",
+        "_quarters_from_start_day_tokens",
+        "_quarters_from_end_day_tokens",
+        "_format_quarter_set",
+        "_rewrite_quarter_spec_mode",
+        "_quarter_atom_spec",
+        "_has_quarter_tokens",
+        "_has_plain_quarter_tokens",
+        "_is_start_month_selector",
+        "_is_end_month_selector",
+        "_quarter_month_selector_mode",
+        "_term_quarter_rewrite_mode",
+        "_rewrite_quarter_year_atoms",
+        "_rewrite_quarters_in_context",
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-_yearly_tokens = _quarter_api._yearly_tokens
-_monthly_tokens = _quarter_api._monthly_tokens
-_quarters_from_first_month_tokens = _quarter_api._quarters_from_first_month_tokens
-_quarters_from_start_day_tokens = _quarter_api._quarters_from_start_day_tokens
-_quarters_from_end_day_tokens = _quarter_api._quarters_from_end_day_tokens
-_format_quarter_set = _quarter_api._format_quarter_set
-_rewrite_quarter_spec_mode = _quarter_api._rewrite_quarter_spec_mode
-_quarter_atom_spec = _quarter_api._quarter_atom_spec
-_has_quarter_tokens = _quarter_api._has_quarter_tokens
-_has_plain_quarter_tokens = _quarter_api._has_plain_quarter_tokens
-_is_start_month_selector = _quarter_api._is_start_month_selector
-_is_end_month_selector = _quarter_api._is_end_month_selector
-_quarter_month_selector_mode = _quarter_api._quarter_month_selector_mode
-_term_quarter_rewrite_mode = _quarter_api._term_quarter_rewrite_mode
-_rewrite_quarter_year_atoms = _quarter_api._rewrite_quarter_year_atoms
-_rewrite_quarters_in_context = _quarter_api._rewrite_quarters_in_context
+for _name in _quarter_api._aliases:
+    globals()[_name] = _quarter_api.alias(_name)
 
 # ACF entry points are bound before parser construction because parser
 # validation and canonical-form generation share these compatibility names.
-_acf_api = _import_sibling("acf_api").for_core(
-    sys.modules[__name__],
+_acf_api = _LazyApiBundle(
+    "acf_api",
+    (
+        "_atom_sort_key",
+        "_acf_unpack",
+        "_year_pair_cached",
+        "_year_pair",
+        "_normalize_spec_for_acf_uncached",
+        "_normalize_spec_for_acf_cached",
+        "_normalize_spec_for_acf",
+        "_mods_to_acf",
+        "_acf_mods_to_string",
+        "_acf_spec_to_string",
+        "_build_acf_impl",
+        "is_valid_acf",
+        "acf_to_original_format",
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-_atom_sort_key = _acf_api._atom_sort_key
-_acf_unpack = _acf_api._acf_unpack
-_year_pair_cached = _acf_api._year_pair_cached
-_year_pair = _acf_api._year_pair
-_normalize_spec_for_acf_uncached = _acf_api._normalize_spec_for_acf_uncached
-_normalize_spec_for_acf_cached = _acf_api._normalize_spec_for_acf_cached
-_normalize_spec_for_acf = _acf_api._normalize_spec_for_acf
-_mods_to_acf = _acf_api._mods_to_acf
-_acf_mods_to_string = _acf_api._acf_mods_to_string
-_acf_spec_to_string = _acf_api._acf_spec_to_string
-_build_acf_impl = _acf_api._build_acf_impl
-is_valid_acf = _acf_api.is_valid_acf
-acf_to_original_format = _acf_api.acf_to_original_format
+for _name in _acf_api._aliases:
+    globals()[_name] = _acf_api.alias(_name)
 
-_expansion_api = _import_sibling("expansion_api").for_core(
-    sys.modules[__name__],
+_expansion_api = _LazyApiBundle(
+    "expansion_api",
+    (
+        "_days_in_month",
+        "_wd_idx",
+        "_wday_idx_any",
+        "_weekly_spec_to_wset",
+        "_doms_for_weekly_spec",
+        "_doms_for_monthly_token",
+        "_y_ranges_from_spec",
+        "_doms_allowed_by_year",
+        "_month_allowed_doms_for_monthly_atom",
+        "_intersect_monthly_atoms_allowed",
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-_days_in_month = _expansion_api._days_in_month
-_wd_idx = _expansion_api._wd_idx
-_wday_idx_any = _expansion_api._wday_idx_any
-_weekly_spec_to_wset = _expansion_api._weekly_spec_to_wset
-_doms_for_weekly_spec = _expansion_api._doms_for_weekly_spec
-_doms_for_monthly_token = _expansion_api._doms_for_monthly_token
-_y_ranges_from_spec = _expansion_api._y_ranges_from_spec
-_doms_allowed_by_year = _expansion_api._doms_allowed_by_year
-_month_allowed_doms_for_monthly_atom = _expansion_api._month_allowed_doms_for_monthly_atom
-_intersect_monthly_atoms_allowed = _expansion_api._intersect_monthly_atoms_allowed
+for _name in _expansion_api._aliases:
+    globals()[_name] = _expansion_api.alias(_name)
 
-_parser_support_api = _import_sibling("parser_support_api").for_core(
-    sys.modules[__name__],
+_parser_support_api = _LazyApiBundle(
+    "parser_support_api",
+    (
+        "_parse_hhmm",
+        "_parse_atom_head",
+        "_parse_atom_mods",
+        "_parse_y_token_cached",
+        "_parse_y_token",
+        "_rewrite_year_month_aliases_in_context",
+        "_fatal_bad_colon_in_year_tail",
+        "_raise_on_bad_colon_year_tokens",
+        "_skip_ws_pos",
+        "_raise_if_comma_joined_anchors",
+        "_parse_anchor_expr_to_dnf_cached_obj",
+        "_parse_anchor_expr_to_dnf_cached_impl",
+        "_validate_weekly_spec",
+        "_validate_monthly_spec",
+        "_split_inline_items_respecting_t_lists",
+        "_parse_group_with_inline_mods",
+        "_rewrite_weekly_multi_time_atoms",
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-_parse_hhmm = _parser_support_api._parse_hhmm
-_parse_atom_head = _parser_support_api._parse_atom_head
-_parse_atom_mods = _parser_support_api._parse_atom_mods
-_parse_y_token_cached = _parser_support_api._parse_y_token_cached
-_parse_y_token = _parser_support_api._parse_y_token
-_rewrite_year_month_aliases_in_context = _parser_support_api._rewrite_year_month_aliases_in_context
-_fatal_bad_colon_in_year_tail = _parser_support_api._fatal_bad_colon_in_year_tail
-_raise_on_bad_colon_year_tokens = _parser_support_api._raise_on_bad_colon_year_tokens
-_skip_ws_pos = _parser_support_api._skip_ws_pos
-_raise_if_comma_joined_anchors = _parser_support_api._raise_if_comma_joined_anchors
-_parse_anchor_expr_to_dnf_cached_obj = _parser_support_api._parse_anchor_expr_to_dnf_cached_obj
-_parse_anchor_expr_to_dnf_cached_impl = _parser_support_api._parse_anchor_expr_to_dnf_cached_impl
-_validate_weekly_spec = _parser_support_api._validate_weekly_spec
-_validate_monthly_spec = _parser_support_api._validate_monthly_spec
-_split_inline_items_respecting_t_lists = _parser_support_api._split_inline_items_respecting_t_lists
-_parse_group_with_inline_mods = _parser_support_api._parse_group_with_inline_mods
-_rewrite_weekly_multi_time_atoms = _parser_support_api._rewrite_weekly_multi_time_atoms
+for _name in _parser_support_api._aliases:
+    globals()[_name] = _parser_support_api.alias(_name)
 
 # Parser entry points live in ``parser_api``; retain these aliases for the
 # established ``nautical_core`` import contract.
-_parser_api = _import_sibling("parser_api").for_core(
-    sys.modules[__name__],
+_parser_api = _LazyApiBundle(
+    "parser_api",
+    (
+        "build_acf",
+        "resolve_anchor_presets",
+        "resolve_omit_presets",
+        "anchor_preset_display",
+        "omit_preset_display",
+        "_resolve_preset_refs",
+        "_resolve_anchor_presets_impl",
+        "_normalize_anchor_expr_input",
+        "_normalize_monthly_ordinal_spec",
+        "_build_anchor_atom_dnf",
+        "_parse_anchor_atom_at",
+        "_yearly_pair_from_fmt",
+        "_yearly_mmdd_error",
+        "_validate_yearly_token_allowlist",
+        "_validate_yearly_token_detailed",
+        "_validate_yearly_token_format",
+        "_validate_year_tokens_in_dnf",
+        "_validate_yearly_token",
+        "_yearly_last_day",
+        "_yearly_check_day_month",
+        "_validate_yearly_spec_token",
+        "_validate_yearly_spec",
+        "_weekday_set_from_weekly_atom",
+        "_md_pairs_from_yearly_spec",
+        "_quick_weekly_and_check",
+        "_quick_yearly_and_check",
+        "_quick_moon_and_check",
+        "_term_has_any_match_within",
+        "_validate_and_terms_satisfiable",
+        "parse_anchor_expr_to_dnf",
+        "parse_anchor_expr_to_dnf_cached",
+        "validate_anchor_expr_strict",
+        ("_normalize_anchor_input_to_dnf", "normalize_anchor_input_to_dnf"),
+        ("_assert_dnf_structure_strict", "assert_dnf_structure_strict"),
+        ("_validate_anchor_atom_strict", "validate_anchor_atom_strict"),
+        ("_validate_anchor_dnf_atoms_strict", "validate_anchor_dnf_atoms_strict"),
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-build_acf = _parser_api.build_acf
-resolve_anchor_presets = _parser_api.resolve_anchor_presets
-resolve_omit_presets = _parser_api.resolve_omit_presets
-anchor_preset_display = _parser_api.anchor_preset_display
-omit_preset_display = _parser_api.omit_preset_display
-_resolve_preset_refs = _parser_api._resolve_preset_refs
-_resolve_anchor_presets_impl = _parser_api._resolve_anchor_presets_impl
-_normalize_anchor_expr_input = _parser_api._normalize_anchor_expr_input
-_normalize_monthly_ordinal_spec = _parser_api._normalize_monthly_ordinal_spec
-_build_anchor_atom_dnf = _parser_api._build_anchor_atom_dnf
-_parse_anchor_atom_at = _parser_api._parse_anchor_atom_at
-_yearly_pair_from_fmt = _parser_api._yearly_pair_from_fmt
-_yearly_mmdd_error = _parser_api._yearly_mmdd_error
-_validate_yearly_token_allowlist = _parser_api._validate_yearly_token_allowlist
-_validate_yearly_token_detailed = _parser_api._validate_yearly_token_detailed
-_validate_yearly_token_format = _parser_api._validate_yearly_token_format
-_validate_year_tokens_in_dnf = _parser_api._validate_year_tokens_in_dnf
-_validate_yearly_token = _parser_api._validate_yearly_token
-_yearly_last_day = _parser_api._yearly_last_day
-_yearly_check_day_month = _parser_api._yearly_check_day_month
-_validate_yearly_spec_token = _parser_api._validate_yearly_spec_token
-_validate_yearly_spec = _parser_api._validate_yearly_spec
-_weekday_set_from_weekly_atom = _parser_api._weekday_set_from_weekly_atom
-_md_pairs_from_yearly_spec = _parser_api._md_pairs_from_yearly_spec
-_quick_weekly_and_check = _parser_api._quick_weekly_and_check
-_quick_yearly_and_check = _parser_api._quick_yearly_and_check
-_quick_moon_and_check = _parser_api._quick_moon_and_check
-_term_has_any_match_within = _parser_api._term_has_any_match_within
-_validate_and_terms_satisfiable = _parser_api._validate_and_terms_satisfiable
-parse_anchor_expr_to_dnf = _parser_api.parse_anchor_expr_to_dnf
-parse_anchor_expr_to_dnf_cached = _parser_api.parse_anchor_expr_to_dnf_cached
-validate_anchor_expr_strict = _parser_api.validate_anchor_expr_strict
-_normalize_anchor_input_to_dnf = _parser_api.normalize_anchor_input_to_dnf
-_assert_dnf_structure_strict = _parser_api.assert_dnf_structure_strict
-_validate_anchor_atom_strict = _parser_api.validate_anchor_atom_strict
-_validate_anchor_dnf_atoms_strict = _parser_api.validate_anchor_dnf_atoms_strict
+for _name in _parser_api._aliases:
+    _alias_name, _source_name = _name if isinstance(_name, tuple) else (_name, _name)
+    globals()[_alias_name] = _parser_api.alias(_alias_name, _source_name)
 
 # Business-calendar configuration is bound after parser APIs are available so
 # calendar rules can reuse the same strict anchor/omit validators.

@@ -45,6 +45,27 @@ _LOCK_STATS = {"reconcile_busy": 0, "parent_busy": 0}
 class _ConfigurationDrift(RuntimeError):
     """Signal that this run must stop before applying under a new configuration."""
 
+
+class _ConfigurationVerification:
+    """Validated configuration state used to gate reconcile mutations."""
+
+    __slots__ = ("status", "reason")
+
+    def __init__(self, status: str, reason: str = "") -> None:
+        self.status = status
+        self.reason = reason
+
+
+class _ConfigurationReason(str):
+    """String-compatible reason retaining the tri-state verification result."""
+
+    status: str
+
+    def __new__(cls, reason: str, status: str):
+        value = str.__new__(cls, reason)
+        value.status = status
+        return value
+
 _ANSI = {
     "dim": "\033[2m",
     "cyan": "\033[36m",
@@ -261,14 +282,52 @@ def _validate_hook_protocol(hook: Any) -> None:
 
 
 def _configuration_drift_reason(hook: Any) -> str:
+    """Compatibility string for callers; failures are never treated as valid."""
+    check = _configuration_verification(hook)
+    if check.status == "valid":
+        return ""
+    return _ConfigurationReason(check.reason, check.status)
+
+
+def _configuration_verification(hook: Any) -> _ConfigurationVerification:
+    """Return valid, drifted, or unavailable configuration state."""
+    core = getattr(hook, "core", None)
+    checker = getattr(core, "configuration_drift", None)
+    if not callable(checker):
+        # Lightweight operator-test doubles predate the facade verifier. A
+        # real imported Nautical module must never silently bypass this gate.
+        if not isinstance(core, ModuleType):
+            return _ConfigurationVerification("valid")
+        return _ConfigurationVerification(
+            "unavailable",
+            "configuration verifier is unavailable; restart and rerun",
+        )
     try:
-        drift = hook.core.configuration_drift()
-    except Exception:
-        return ""
-    if not isinstance(drift, dict) or not drift.get("changed"):
-        return ""
+        drift = checker()
+    except Exception as exc:
+        reason = str(exc).strip() or type(exc).__name__
+        return _ConfigurationVerification(
+            "unavailable",
+            f"configuration verification unavailable: {reason}; restart and rerun",
+        )
+    if not isinstance(drift, dict):
+        return _ConfigurationVerification(
+            "unavailable",
+            "configuration verification returned an invalid result; restart and rerun",
+        )
+    if not drift.get("changed"):
+        return _ConfigurationVerification("valid")
     source = str(drift.get("source") or "unknown")
-    return f"configuration changed during reconcile (source: {source}); restart and rerun"
+    return _ConfigurationVerification(
+        "drifted",
+        f"configuration changed during reconcile (source: {source}); restart and rerun",
+    )
+
+
+def _configuration_state(hook: Any) -> tuple[str, str]:
+    """Resolve the compatibility reason while retaining its tri-state status."""
+    reason = _configuration_drift_reason(hook)
+    return str(getattr(reason, "status", "drifted" if reason else "valid")), str(reason)
 
 
 def _candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
@@ -516,11 +575,12 @@ def _native_until_repairs(
                                 item["action"] = "repair_error"
                                 item["repair_error"] = guard_error
                             else:
-                                drift_reason = _configuration_drift_reason(hook)
-                                if drift_reason:
+                                configuration_status, drift_reason = _configuration_state(hook)
+                                if configuration_status != "valid":
                                     item["action"] = "manual_review"
                                     item["repair_error"] = drift_reason
                                     item["configuration_drift"] = True
+                                    item["configuration_status"] = configuration_status
                                     repairs.append(item)
                                     return repairs, errors
                                 try:
@@ -943,8 +1003,8 @@ def _apply_parent_atomic(
             if not acquired:
                 _LOCK_STATS["parent_busy"] += 1
                 raise RuntimeError(f"parent reconcile lock busy: {reconcile.short_uuid(parent_uuid)}")
-            drift_reason = _configuration_drift_reason(hook)
-            if drift_reason:
+            configuration_status, drift_reason = _configuration_state(hook)
+            if configuration_status != "valid":
                 raise _ConfigurationDrift(drift_reason)
             if generation is None:
                 plan = _refresh_plan(task_bin, hook, original_parent)
@@ -1441,14 +1501,17 @@ def main(
                     runtime_taskdata = _task_data_dir(args.task_bin)
         except Exception as exc:
             return _startup_failure(args, "taskdata_config", exc)
-    _synchronize_taskdata_config(hook, runtime_taskdata)
+    try:
+        _synchronize_taskdata_config(hook, runtime_taskdata)
+    except Exception as exc:
+        return _startup_failure(args, "taskdata_config", exc)
     try:
         generation = _chain_generation_for_hook(hook)
     except Exception as exc:
         return _startup_failure(args, "chain_generation", exc)
-    configuration_drift_reason = _configuration_drift_reason(hook)
+    configuration_status, configuration_drift_reason = _configuration_state(hook)
     native_until_audit_warning = ""
-    if configuration_drift_reason:
+    if configuration_status != "valid":
         native_until_repairs: list[dict[str, Any]] = []
         native_until_errors: list[str] = []
     else:
@@ -1474,15 +1537,14 @@ def main(
                     ),
                     file=sys.stderr,
                 )
-    if not configuration_drift_reason:
-        configuration_drift_reason = next(
-            (
-                str(item.get("repair_error") or "")
-                for item in native_until_repairs
-                if item.get("configuration_drift")
-            ),
-            "",
+    if configuration_status == "valid":
+        blocked_item = next(
+            (item for item in native_until_repairs if item.get("configuration_drift")),
+            None,
         )
+        if blocked_item is not None:
+            configuration_drift_reason = str(blocked_item.get("repair_error") or "")
+            configuration_status = str(blocked_item.get("configuration_status") or "drifted")
     if not args.json:
         for item in native_until_repairs:
             action = item.get("action") or "native_until"
@@ -1504,9 +1566,9 @@ def main(
     ambiguous_slots = _ambiguous_candidate_slots(candidates)
 
     for parent in candidates:
-        if not configuration_drift_reason:
-            configuration_drift_reason = _configuration_drift_reason(hook)
-        if configuration_drift_reason:
+        if configuration_status == "valid":
+            configuration_status, configuration_drift_reason = _configuration_state(hook)
+        if configuration_status != "valid":
             break
         parent_slot = (
             str(parent.get("chainID") or "").strip(),
@@ -1533,15 +1595,17 @@ def main(
                 reason = str(exc).strip() or type(exc).__name__
                 outcomes = [(_recovery_error(parent, reason), "")]
         outcome_groups.append(outcomes)
-        if not configuration_drift_reason:
+        if configuration_status == "valid":
             configuration_drift_reason = next(
                 (
                     plan.reason
                     for plan, _applied in outcomes
-                    if plan.action == "partial" and "configuration changed during reconcile" in plan.reason
+                    if plan.action == "partial" and str(plan.reason).startswith("configuration ")
                 ),
                 "",
             )
+            if configuration_drift_reason:
+                configuration_status = "drifted"
         rendered: list[tuple[reconcile.ReconcilePlan, dict[str, Any], str]] = []
         for plan, applied_short in outcomes:
             processed_slots.add(
@@ -1608,7 +1672,8 @@ def main(
         "schema": _JSON_SCHEMA,
         "schema_version": _JSON_SCHEMA_VERSION,
         "status": "error" if has_errors else "degraded" if degraded else "ok",
-        "configuration_drifted": int(bool(configuration_drift_reason)),
+        "configuration_status": configuration_status,
+        "configuration_drifted": int(configuration_status == "drifted"),
         "configuration_drift": configuration_drift_reason,
         "mode": "apply" if args.apply else "dry-run",
         "candidates": len(candidates),
@@ -1661,7 +1726,7 @@ def main(
             f" native_until={len(summary['native_until_repairs'])}"
             f" manual_review={summary['native_until_manual_review']}"
             f" audit_skipped={summary['native_until_audit_skipped']}"
-            f" config_drift={summary['configuration_drifted']}"
+            f" config={summary['configuration_status']}"
         )
         summary_color = "red" if has_errors else "yellow" if degraded else "green"
         print(_style(summary_line, summary_color))

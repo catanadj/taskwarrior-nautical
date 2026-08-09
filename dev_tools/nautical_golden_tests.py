@@ -27344,6 +27344,23 @@ def test_reconcile_degraded_audit_status_is_structured():
         mod._candidate_rows, mod._native_until_repairs, mod._configuration_drift_reason = original
 
 
+def test_reconcile_configuration_verification_fails_closed():
+    """Configuration exceptions must become unavailable, never a clean reconcile state."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_configuration_state_test")
+    import types
+    core_module = types.ModuleType("nautical_core_test_module")
+    core_module.configuration_drift = lambda: (_ for _ in ()).throw(RuntimeError("malformed TOML"))
+    hook = SimpleNamespace(
+        core=core_module,
+    )
+    check = mod._configuration_verification(hook)
+    expect(check.status == "unavailable", f"configuration exception was not unavailable: {check.status!r}")
+    expect("malformed TOML" in check.reason, f"configuration failure detail was lost: {check.reason!r}")
+    status, reason = mod._configuration_state(hook)
+    expect(status == "unavailable" and reason == check.reason, f"state adapter changed failure: {status!r}, {reason!r}")
+
+
 def test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs():
     """Human reconcile output should keep outcomes concise and display repaired until locally."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -27353,6 +27370,7 @@ def test_reconcile_human_output_separates_diagnostics_and_localizes_until_repair
         core=SimpleNamespace(
             fmt_dt_local=lambda value: f"Mon 2026-08-03 23:00 EEST ({value.tzname()})",
             now_utc=lambda: until_utc,
+            configuration_drift=lambda: {"changed": False, "status": "ok"},
         ),
         _safe_parse_datetime=lambda _value: (until_utc, None),
         _task_cmd_prefix=lambda: ["task"],
@@ -31036,6 +31054,7 @@ TESTS = [
     test_reconcile_tool_print_plan_includes_evidence,
     test_reconcile_partial_recovery_exit_and_verbose_output,
     test_reconcile_degraded_audit_status_is_structured,
+    test_reconcile_configuration_verification_fails_closed,
     test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs,
     test_reconcile_tool_apply_disables_legitimate_final_chain,
     test_reconcile_disable_verification_fails_closed,

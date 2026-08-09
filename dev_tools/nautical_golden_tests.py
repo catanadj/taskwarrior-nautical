@@ -1465,6 +1465,9 @@ def test_full_hook_modules_defer_core_import():
             "    module = importlib.util.module_from_spec(spec)\n"
             "    spec.loader.exec_module(module)\n"
             "    assert module.core is None, f'{name} imported core eagerly'\n"
+            "    if name == 'modify_impl.py':\n"
+            "        for attr in ('_MODIFY_ORDINARY', '_MODIFY_EXPIRATION', '_MODIFY_GENERATION_COMPAT', '_CHAIN_GENERATION', '_QUEUE_STORE'):\n"
+            "            assert getattr(module, attr, None) is None, f'{attr} loaded during modify import'\n"
             "assert 'nautical_core' not in sys.modules, 'hook import populated the full package'\n"
             "print('ok')\n",
             encoding="utf-8",

@@ -10565,19 +10565,18 @@ def test_moon_phase_intersection_fails_closed_without_synthetic_date():
 
 
 def test_scheduler_exhaustion_never_fabricates_sparse_and_date():
-    """Sparse AND rules must fail closed instead of returning a non-matching date."""
+    """Sparse AND rules must find their real distant match, not a fallback date."""
     dnf = core.validate_anchor_expr_strict("w/100:mon + y:01-01")
-    try:
-        core.next_after_expr(
-            dnf,
-            date(2026, 1, 1),
-            default_seed=date(2026, 1, 1),
-        )
-    except core.OccurrenceSearchExhausted as exc:
-        expect(exc.scope == "AND-term scheduling", f"unexpected exhaustion scope: {exc.scope}")
-        expect(exc.limit == core.INTERSECTION_GUARD_STEPS, f"guard limit was not reported: {exc.limit}")
-    else:
-        raise AssertionError("sparse AND rule should not receive a fabricated occurrence")
+    result, _meta = core.next_after_expr(
+        dnf,
+        date(2026, 1, 1),
+        default_seed=date(2026, 1, 1),
+    )
+    expect(result == date(3151, 1, 1), f"sparse AND match was not projected correctly: {result!r}")
+    expect(
+        all(core.factor_matches_on(atom, result, date(2026, 1, 1)) for atom in dnf[0]),
+        f"projected date does not satisfy every atom: {result!r}",
+    )
 
 
 def test_scheduler_or_skips_exhausted_branch_for_valid_alternative():
@@ -10599,6 +10598,17 @@ def test_scheduler_or_skips_exhausted_branch_for_valid_alternative():
         next_for_and=next_for_and,
     )
     expect(result == date(2026, 1, 5), f"valid OR branch was hidden by exhaustion: {result!r}")
+
+
+def test_scheduler_periodic_cycle_finds_distant_valid_intersection():
+    """Periodic sparse intersections should use the Gregorian cycle driver."""
+    dnf = core.validate_anchor_expr_strict("w/20:mon + m:1")
+    result, _meta = core.next_after_expr(
+        dnf,
+        date(2026, 1, 1),
+        default_seed=date(2026, 1, 1),
+    )
+    expect(result == date(2134, 2, 1), f"distant periodic match was not found: {result!r}")
 
 
 def test_anchor_date_calculations():
@@ -30152,6 +30162,7 @@ TESTS = [
     test_moon_phase_intersection_fails_closed_without_synthetic_date,
     test_scheduler_exhaustion_never_fabricates_sparse_and_date,
     test_scheduler_or_skips_exhausted_branch_for_valid_alternative,
+    test_scheduler_periodic_cycle_finds_distant_valid_intersection,
     test_anchor_date_calculations,
     test_interval_patterns,
     test_complex_dnf_expressions,

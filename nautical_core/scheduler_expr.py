@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from math import gcd, lcm
 
 from .business_calendar import is_business_day as default_is_business_day
 from .scheduler_models import OccurrenceSearchExhausted
@@ -71,6 +72,89 @@ def _intersect_weekly_atoms_allowed(
         if not out:
             return set()
     return out
+
+
+_GREGORIAN_CYCLE_DAYS = 146097  # 400 Gregorian years; also divisible by 7.
+
+
+def _periodic_atom_period_days(atom: dict) -> int | None:
+    """Return a conservative period estimate for plain calendar atoms.
+
+    This deliberately excludes dynamic modifiers.  Those atoms retain the
+    ordinary guard because their provider may not repeat on the Gregorian
+    cycle (astronomy, random selection, business calendars, or rolls).
+    """
+    typ = str(atom.get("typ") or atom.get("type") or "").lower()
+    if typ not in {"w", "m", "y"} or atom.get("kind") == "select":
+        return None
+    spec = str(atom.get("spec") or "").lower()
+    if "rand" in spec:
+        return None
+    mods = atom.get("mods") or {}
+    if any(value not in (None, False, 0, "") for value in mods.values()):
+        return None
+    try:
+        interval = max(1, int(atom.get("ival", 1) or 1))
+    except (TypeError, ValueError):
+        return None
+    base_days = {"w": 7, "m": 31, "y": 366}[typ]
+    return base_days * interval
+
+
+def _next_for_and_periodic_cycle(
+    term: list[dict],
+    ref_d,
+    seed,
+    seed_base,
+    *,
+    next_after_atom_with_mods,
+    atom_matches_on,
+):
+    """Search a finite Gregorian cycle using the sparsest plain atom.
+
+    A leapfrog search can spend thousands of iterations on a valid but rare
+    intersection.  Plain weekly/monthly/yearly rules repeat on a Gregorian
+    cycle; interval phases extend that cycle by a calculable multiplier.
+    Driving from the least frequent atom gives a bounded search without
+    inventing a date or widening the normal guard.
+    """
+    scored = [
+        (period, atom)
+        for atom in term
+        if (period := _periodic_atom_period_days(atom)) is not None
+    ]
+    if not scored:
+        return None
+    _period, driver = max(scored, key=lambda item: item[0])
+    cycle_multiplier = 1
+    for atom in term:
+        typ = str(atom.get("typ") or atom.get("type") or "").lower()
+        try:
+            interval = max(1, int(atom.get("ival", 1) or 1))
+        except (TypeError, ValueError):
+            return None
+        base_period = {"w": 20871, "m": 4800, "y": 400}.get(typ)
+        if base_period is None:
+            continue
+        cycle_multiplier = lcm(cycle_multiplier, interval // gcd(base_period, interval))
+    cycle_days = _GREGORIAN_CYCLE_DAYS * cycle_multiplier
+    try:
+        driver_interval = max(1, int(driver.get("ival", 1) or 1))
+    except (TypeError, ValueError):
+        return None
+    # Each interval bucket can contain at most one candidate per calendar day.
+    max_candidates = (cycle_days // driver_interval) + 2
+    cursor = ref_d
+    for _ in range(max_candidates):
+        candidate = next_after_atom_with_mods(driver, cursor, seed, seed_base=seed_base)
+        if candidate is None:
+            return None
+        if candidate <= cursor:
+            return None
+        if all(atom_matches_on(atom, candidate, seed, seed_base=seed_base) for atom in term):
+            return candidate
+        cursor = candidate
+    return None
 
 
 def next_for_and_rand_yearly(
@@ -173,6 +257,16 @@ def next_for_and_fast_path(
             "next_for_and_fallback",
             f"[nautical] _next_for_and fallback after {max_anchor_iter} iterations.",
         )
+    periodic = _next_for_and_periodic_cycle(
+        term,
+        ref_d,
+        seed,
+        seed_base,
+        next_after_atom_with_mods=next_after_atom_with_mods,
+        atom_matches_on=atom_matches_on,
+    )
+    if periodic is not None:
+        return periodic
     raise OccurrenceSearchExhausted(
         "AND-term scheduling",
         reference=ref_d,
@@ -301,6 +395,16 @@ def next_after_term(
 
         cur = nxt
 
+    periodic = _next_for_and_periodic_cycle(
+        term,
+        ref_d,
+        default_seed,
+        seed_base,
+        next_after_atom_with_mods=next_after_atom_with_mods,
+        atom_matches_on=atom_matches_on,
+    )
+    if periodic is not None:
+        return periodic, None
     raise OccurrenceSearchExhausted(
         "AND-term scheduling",
         reference=ref_d,

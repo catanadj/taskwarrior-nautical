@@ -5828,9 +5828,10 @@ def _preserve_cp_relative_offsets_on_due_change(
         old_due = core.parse_dt_any(old.get("due"))
         new_due = core.parse_dt_any(new.get("due"))
         if not (old_due and new_due):
-            return None
-    except Exception:
-        return None
+            raise ValueError("due timestamp is missing or invalid")
+    except Exception as exc:
+        carry_error = _module("chain_generation").CarryFieldError
+        raise carry_error("due", str(exc) or "timestamp conversion failed") from exc
 
     adjustments: list[tuple[str, datetime, datetime, timedelta]] = []
     for field in ("scheduled", "wait"):
@@ -5839,15 +5840,46 @@ def _preserve_cp_relative_offsets_on_due_change(
         try:
             old_value = core.parse_dt_any(old.get(field))
             if not old_value:
-                continue
+                raise ValueError("timestamp is missing or invalid")
             local_offset = _utc_to_local_naive(old_value) - _utc_to_local_naive(old_due)
             new_value_local = _utc_to_local_naive(new_due) + local_offset
             new_value = _local_naive_to_utc(new_value_local)
             new[field] = core.fmt_isoz(new_value)
             adjustments.append((field, old_value, new_value, local_offset))
-        except Exception:
-            continue
+        except Exception as exc:
+            carry_error = _module("chain_generation").CarryFieldError
+            raise carry_error(field, str(exc) or "timezone conversion failed") from exc
     return (old_due, new_due, adjustments) if adjustments else None
+
+
+def _reject_native_until_carry(
+    old: dict,
+    new: dict,
+    new_target: datetime | None,
+    old_target_field: str,
+    exc: Exception,
+) -> None:
+    """Reject a target edit when its native expiration cannot be carried."""
+    carry = None
+    try:
+        add_validation = core._import_sibling("add_validation")
+        carry = add_validation.describe_native_until_carry(
+            core.parse_dt_any(old.get("until")),
+            core.parse_dt_any(old.get(old_target_field)),
+            to_local=core.to_local,
+        )
+    except Exception:
+        pass
+    target_label = (
+        core.fmt_dt_local(new_target)
+        if isinstance(new_target, datetime)
+        else str(new.get(_recurrence_anchor_field(new)) or "–")
+    )
+    rows = [("Target", target_label), ("Required", str(exc))]
+    if carry:
+        rows.insert(1, ("Carry", carry))
+    _panel("❌ Invalid expiration window", rows, kind="error")
+    sys.exit(1)
 
 
 def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> bool:
@@ -5863,10 +5895,14 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
     if not target_changed:
         return False
     native_until = core._import_sibling("native_until")
+    new_target: datetime | None = None
     try:
         new_target = core.parse_dt_any(new.get(new_target_field))
         if not new_target:
-            return False
+            raise native_until.NativeUntilCarryError(
+                native_until.CARRY_INVALID,
+                f"{new_target_field} timestamp is missing or invalid",
+            )
         candidate = dict(new)
         _chain_generation_service().carry_native_until(
             old,
@@ -5878,31 +5914,21 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
         )
         carried = candidate.get("until")
         if not carried:
-            return False
+            raise native_until.NativeUntilCarryError(
+                native_until.CARRY_FAILED,
+                "native until carry produced no expiration value",
+            )
         new["until"] = carried
         return True
     except native_until.NativeUntilCarryError as exc:
-        carry = None
-        try:
-            add_validation = core._import_sibling("add_validation")
-            carry = add_validation.describe_native_until_carry(
-                core.parse_dt_any(old.get("until")),
-                core.parse_dt_any(old.get(old_target_field)),
-                to_local=core.to_local,
-            )
-        except Exception:
-            pass
-        rows = [
-            ("Target", core.fmt_dt_local(new_target)),
-            ("Required", str(exc)),
-        ]
-        if carry:
-            rows.insert(1, ("Carry", carry))
-        _panel("❌ Invalid expiration window", rows, kind="error")
-        sys.exit(1)
+        _reject_native_until_carry(old, new, new_target, old_target_field, exc)
     except Exception as exc:
         _diag(f"native until target carry failed: {exc}")
-        return False
+        typed_error = native_until.NativeUntilCarryError(
+            native_until.CARRY_FAILED,
+            f"native until target carry failed: {type(exc).__name__}: {exc}",
+        )
+        _reject_native_until_carry(old, new, new_target, old_target_field, typed_error)
 
 
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
@@ -5944,6 +5970,8 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
             services=services,
             lifecycle=modify_lifecycle,
         )
+    except _module("chain_generation").CarryFieldError as exc:
+        _fail_and_exit("Nautical carry failed", str(exc))
     except modify_ordinary.RecurrenceActivationError as exc:
         _fail_and_exit("Nautical recurrence activation failed", str(exc))
 

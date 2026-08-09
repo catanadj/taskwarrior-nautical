@@ -16556,6 +16556,10 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
         "wait": "20260715T063000Z",
     }
     malformed = {**old, "due": "not-a-date"}
+    malformed_scheduled_old = {**old, "scheduled": "not-a-date"}
+    malformed_scheduled = {**malformed_scheduled_old, "due": "20260715T080000Z"}
+    malformed_wait_old = {**old, "wait": "not-a-date"}
+    malformed_wait = {**malformed_wait_old, "due": "20260715T080000Z"}
     completed = {
         **old,
         "status": "completed",
@@ -16574,7 +16578,17 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
         mod._handle_non_completion_modify(old, explicit_scheduled)
         mod._handle_non_completion_modify(old, explicit_wait)
         mod._handle_non_completion_modify(old, explicit_both)
-        mod._handle_non_completion_modify(old, malformed)
+        for invalid_old, invalid in (
+            (old, malformed),
+            (malformed_scheduled_old, malformed_scheduled),
+            (malformed_wait_old, malformed_wait),
+        ):
+            try:
+                mod._handle_non_completion_modify(invalid_old, invalid)
+            except SystemExit as exc:
+                expect(exc.code == 1, f"carry failure exited with unexpected status: {exc.code!r}")
+            else:
+                raise AssertionError(f"malformed carry was accepted: {invalid!r}")
         mod._completion_preflight_context = lambda *_args, **_kwargs: None
         mod._handle_completion_modify(old, completed)
     finally:
@@ -16609,8 +16623,10 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
     )
     expect(
         malformed.get("scheduled") == old["scheduled"] and malformed.get("wait") == old["wait"],
-        f"malformed due should leave relative fields unchanged: {malformed!r}",
+        f"rejected malformed due should leave relative fields unchanged: {malformed!r}",
     )
+    carry_error_panels = [panel for panel in panels if panel[0] == "❌ Nautical carry failed"]
+    expect(len(carry_error_panels) == 3, f"each malformed carry should be rejected: {panels!r}")
     expect(
         completed.get("scheduled") == "2026-07-15T07:50:00Z",
         f"combined due and completion edit should retain the offset: {completed!r}",

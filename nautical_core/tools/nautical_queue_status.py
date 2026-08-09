@@ -94,6 +94,7 @@ def _safe_sqlite_summary(path: Path, stale_after: float, limit: int) -> tuple[di
         "exists": False,
         "queued": 0,
         "processing": 0,
+        "quarantined": 0,
         "stale_processing": 0,
         "max_attempts": 0,
         "oldest_claimed_age_s": 0,
@@ -146,6 +147,7 @@ def _safe_sqlite_summary(path: Path, stale_after: float, limit: int) -> tuple[di
             SELECT
                 COALESCE(SUM(CASE WHEN state='queued' THEN 1 ELSE 0 END), 0) AS queued_rows,
                 COALESCE(SUM(CASE WHEN state='processing' THEN 1 ELSE 0 END), 0) AS processing_rows,
+                COALESCE(SUM(CASE WHEN state='quarantined' THEN 1 ELSE 0 END), 0) AS quarantined_rows,
                 COALESCE(SUM(CASE WHEN state='processing' AND claimed_at IS NOT NULL AND claimed_at < ? THEN 1 ELSE 0 END), 0) AS stale_processing_rows,
                 COALESCE(MAX(attempts), 0) AS max_attempts,
                 MIN(CASE WHEN state='processing' AND claimed_at IS NOT NULL THEN claimed_at END) AS min_claimed_at
@@ -156,13 +158,15 @@ def _safe_sqlite_summary(path: Path, stale_after: float, limit: int) -> tuple[di
         if row:
             queued = int(row[0] or 0)
             processing = int(row[1] or 0)
-            stale_processing = int(row[2] or 0)
-            max_attempts = int(row[3] or 0)
-            min_claimed_at = float(row[4] or 0.0)
+            quarantined = int(row[2] or 0)
+            stale_processing = int(row[3] or 0)
+            max_attempts = int(row[4] or 0)
+            min_claimed_at = float(row[5] or 0.0)
             summary.update(
                 {
                     "queued": queued,
                     "processing": processing,
+                    "quarantined": quarantined,
                     "stale_processing": stale_processing,
                     "max_attempts": max_attempts,
                     "oldest_claimed_age_s": max(0, int(now - min_claimed_at)) if min_claimed_at > 0 else 0,
@@ -172,13 +176,15 @@ def _safe_sqlite_summary(path: Path, stale_after: float, limit: int) -> tuple[di
                 issues.append(f"{queued} queued sqlite entries")
             if processing > 0:
                 issues.append(f"{processing} processing sqlite entries")
+            if quarantined > 0:
+                issues.append(f"{quarantined} quarantined malformed sqlite entries")
             if stale_processing > 0:
                 issues.append(f"{stale_processing} stale sqlite processing entries")
 
         sample = []
         for r in conn.execute(
             """
-            SELECT id, spawn_intent_id, state, attempts, claimed_at
+            SELECT id, spawn_intent_id, state, attempts, claimed_at, payload
             FROM queue_entries
             ORDER BY attempts DESC, updated_at ASC, id ASC
             LIMIT ?
@@ -186,15 +192,21 @@ def _safe_sqlite_summary(path: Path, stale_after: float, limit: int) -> tuple[di
             (max(0, int(limit)),),
         ):
             claimed_at = float(r[4] or 0.0)
-            sample.append(
-                {
-                    "id": int(r[0]),
-                    "spawn_intent_id": str(r[1] or ""),
-                    "state": str(r[2] or ""),
-                    "attempts": int(r[3] or 0),
-                    "claimed_age_s": max(0, int(now - claimed_at)) if claimed_at > 0 else 0,
-                }
-            )
+            item = {
+                "id": int(r[0]),
+                "spawn_intent_id": str(r[1] or ""),
+                "state": str(r[2] or ""),
+                "attempts": int(r[3] or 0),
+                "claimed_age_s": max(0, int(now - claimed_at)) if claimed_at > 0 else 0,
+            }
+            if item["state"] == "quarantined":
+                try:
+                    poison = json.loads(str(r[5] or ""))
+                except Exception:
+                    poison = {}
+                if isinstance(poison, dict) and poison.get("reason"):
+                    item["reason"] = str(poison["reason"])
+            sample.append(item)
         summary["sample"] = sample
         return summary, issues
     except sqlite3.OperationalError as e:
@@ -314,6 +326,7 @@ def main() -> int:
             "queue:"
             f" queued={queue.get('queued', 0)}"
             f" processing={queue.get('processing', 0)}"
+            f" quarantined={queue.get('quarantined', 0)}"
             f" stale_processing={queue.get('stale_processing', 0)}"
             f" max_attempts={queue.get('max_attempts', 0)}"
         )
@@ -347,12 +360,15 @@ def main() -> int:
         if sample:
             print("sample:")
             for row in sample:
-                print(
+                line = (
                     "  - "
                     f"id={row.get('id')} sid={row.get('spawn_intent_id') or '-'} "
                     f"state={row.get('state')} attempts={row.get('attempts')} "
                     f"claimed_age_s={row.get('claimed_age_s')}"
                 )
+                if row.get("reason"):
+                    line += f" reason={row.get('reason')}"
+                print(line)
 
     if payload["status"] == "error":
         return 2

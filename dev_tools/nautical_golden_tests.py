@@ -14877,6 +14877,67 @@ def test_queue_claim_owner_blocks_stale_ack_and_requeue():
 
 
 
+def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
+    """Malformed SQLite rows must leave the queue atomically and remain visible to diagnostics."""
+    from nautical_core import queue_store
+    from nautical_core.tools import nautical_doctor
+    from nautical_core.tools import nautical_queue_status
+
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / ".nautical_queue.db"
+        with sqlite3.connect(str(db_path)) as conn:
+            queue_store.init_queue_db(conn)
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+                "VALUES (?, ?, ?, 'queued', ?, ?)",
+                (
+                    "si_valid_after_poison",
+                    json.dumps({"spawn_intent_id": "si_valid_after_poison", "child": {"uuid": "valid"}}),
+                    0,
+                    1.0,
+                    1.0,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+                "VALUES (?, ?, ?, 'queued', ?, ?)",
+                ("si_poison", "{\"child\": {\"uuid\": \"poison\"}}", "broken", 1.0, 1.0),
+            )
+            conn.commit()
+
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            claim = queue_store.claim_rows_sqlite_result(
+                conn,
+                token="claim-poison",
+                now=10.0,
+                processing_stale_after=30.0,
+                max_lines=10,
+            )
+            expect(len(claim.rows) == 1, f"valid queue row was not claimed: {claim}")
+            expect(claim.quarantined == 1, f"poison row was not quarantined: {claim}")
+            expect("invalid attempts" in " ".join(claim.poison_reasons), f"poison reason missing: {claim}")
+            states = conn.execute("SELECT state, payload FROM queue_entries ORDER BY id").fetchall()
+            expect(states[0][0] == "processing", f"valid row was not claimed: {states!r}")
+            expect(states[1][0] == "quarantined", f"poison row remained queued: {states!r}")
+            poison = json.loads(states[1][1])
+            expect(
+                poison.get("reason", "").endswith("invalid attempts"),
+                f"poison envelope missing reason: {poison!r}",
+            )
+
+        summary, issues = nautical_queue_status._safe_sqlite_summary(db_path, 300.0, 5)
+        expect(summary.get("quarantined") == 1, f"queue status missed quarantined row: {summary!r}")
+        expect(
+            any("quarantined malformed" in issue for issue in issues),
+            f"queue status missed poison issue: {issues!r}",
+        )
+        findings = []
+        nautical_doctor._check_queue(findings, Path(td), 300.0)
+        poison_finding = next((item for item in findings if item.get("id") == "queue.poison_rows"), None)
+        expect(poison_finding and poison_finding.get("severity") == "error", f"doctor missed poison row: {findings!r}")
+
+
 def test_on_exit_dead_letter_on_missing_fields():
     """on-exit should dead-letter entries missing required fields."""
     hook = _find_hook_file("on-exit.nautical")
@@ -29917,6 +29978,7 @@ TESTS = [
     test_queue_schema_rejects_incompatible_databases_without_quarantine,
     test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,
     test_queue_status_and_doctor_report_schema_health,
+    test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,
     test_queue_status_json_ok_empty_taskdata,
     test_doctor_json_has_stable_schema_marker,
     test_operator_queue_status_json_ok_empty_taskdata,

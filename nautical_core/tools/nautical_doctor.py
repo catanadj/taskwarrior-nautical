@@ -781,6 +781,16 @@ def _check_queue(findings: list[dict[str, Any]], taskdata: Path, stale_after: fl
         )
         return {}
     queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
+    quarantined = int(queue.get("quarantined") or 0)
+    if quarantined:
+        _finding(
+            findings,
+            "queue.poison_rows",
+            "error",
+            f"{quarantined} malformed SQLite queue row{'s' if quarantined != 1 else ''} quarantined.",
+            fix="Inspect nautical queue-status and repair or remove the quarantined queue entries.",
+            details={"count": quarantined, "sample": queue.get("sample") or []},
+        )
     schema = queue.get("schema") if isinstance(queue.get("schema"), dict) else {}
     schema_status = str(schema.get("status") or "absent")
     if schema_status == "error":

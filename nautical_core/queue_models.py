@@ -143,6 +143,8 @@ class QueueRowClaimResult:
     rows: list[QueueStoredRow]
     lock_busy: bool = False
     err: str = ""
+    quarantined: int = 0
+    poison_reasons: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)

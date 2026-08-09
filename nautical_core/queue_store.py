@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - Windows does not provide POSIX flock.
     fcntl = None
 
 from nautical_core.queue_models import (
+    QueueEntryError,
     QueueEntriesBatch,
     QueueOpenResult,
     QueueRowClaimResult,
@@ -668,13 +669,73 @@ def select_queued_rows(conn: sqlite3.Connection, *, max_lines: int) -> list[sqli
 
 
 def queue_rows_from_sqlite(rows: list[sqlite3.Row]) -> list[QueueStoredRow]:
+    return queue_rows_from_sqlite_result(rows).valid
+
+
+@dataclass(frozen=True, slots=True)
+class QueuePoisonRow:
+    id: int
+    raw: dict[str, Any]
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class QueueRowsDecodeResult:
+    valid: list[QueueStoredRow]
+    poison: list[QueuePoisonRow]
+
+
+def _sqlite_row_mapping(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        return {str(key): row[key] for key in row.keys()}
+    except Exception:
+        return {
+            "id": row[0] if len(row) > 0 else None,
+            "spawn_intent_id": row[1] if len(row) > 1 else None,
+            "payload": row[2] if len(row) > 2 else None,
+            "attempts": row[3] if len(row) > 3 else None,
+        }
+
+
+def queue_rows_from_sqlite_result(rows: list[sqlite3.Row]) -> QueueRowsDecodeResult:
     stored_rows: list[QueueStoredRow] = []
+    poison_rows: list[QueuePoisonRow] = []
     for row in rows:
+        raw = _sqlite_row_mapping(row)
         try:
-            stored_rows.append(QueueStoredRow.from_mapping(row))
-        except Exception:
-            continue
-    return stored_rows
+            stored = QueueStoredRow.from_mapping(raw)
+            if stored.id <= 0:
+                raise ValueError("invalid queue row id")
+            if not stored.payload:
+                raise ValueError("empty queue payload")
+            stored_rows.append(stored)
+        except Exception as exc:
+            try:
+                row_id = int(raw.get("id") or 0)
+            except Exception:
+                row_id = 0
+            poison_rows.append(
+                QueuePoisonRow(
+                    id=row_id,
+                    raw=raw,
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+            )
+    return QueueRowsDecodeResult(valid=stored_rows, poison=poison_rows)
+
+
+def _poison_payload(row: QueuePoisonRow, *, now: float) -> str:
+    return json.dumps(
+        {
+            "__nautical_queue_poison__": 1,
+            "quarantined_at": now,
+            "reason": row.reason,
+            "raw": row.raw,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def row_ids(rows: Sequence[QueueStoredRow | sqlite3.Row]) -> list[int]:
@@ -700,6 +761,8 @@ def claim_rows_sqlite_result(
     on_lock_busy: Callable[[], None] | None = None,
 ) -> QueueRowClaimResult:
     rows: list[QueueStoredRow] = []
+    quarantined = 0
+    poison_reasons: list[str] = []
     try:
         if processing_stale_after > 0:
             cutoff = now - processing_stale_after
@@ -711,7 +774,20 @@ def claim_rows_sqlite_result(
             conn.commit()
 
         conn.execute("BEGIN IMMEDIATE")
-        rows = queue_rows_from_sqlite(select_queued_rows(conn, max_lines=max_lines))
+        decoded = queue_rows_from_sqlite_result(select_queued_rows(conn, max_lines=max_lines))
+        rows = decoded.valid
+        for poison in decoded.poison:
+            if poison.id <= 0:
+                raise QueueEntryError("poison queue row has no usable id")
+            cur = conn.execute(
+                "UPDATE queue_entries SET state='quarantined', claim_token=NULL, claimed_at=NULL, attempts=0, payload=?, updated_at=? "
+                "WHERE id=? AND state='queued'",
+                (_poison_payload(poison, now=now), now, poison.id),
+            )
+            changed = max(0, int(getattr(cur, "rowcount", 0) or 0))
+            if changed:
+                quarantined += changed
+                poison_reasons.append(f"id={poison.id}: {poison.reason}")
         ids = row_ids(rows)
         if ids:
             conn.executemany(
@@ -730,7 +806,13 @@ def claim_rows_sqlite_result(
                 for row in rows
             ]
         conn.commit()
-        return QueueRowClaimResult(rows=rows)
+        if quarantined and callable(diag):
+            diag(f"queue db quarantined {quarantined} malformed row{'s' if quarantined != 1 else ''}")
+        return QueueRowClaimResult(
+            rows=rows,
+            quarantined=quarantined,
+            poison_reasons=tuple(poison_reasons),
+        )
     except sqlite3.OperationalError as exc:
         try:
             conn.rollback()

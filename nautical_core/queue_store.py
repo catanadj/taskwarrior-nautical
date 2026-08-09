@@ -32,6 +32,9 @@ class StateMigrationIssue:
 
 
 QUEUE_DB_SCHEMA_VERSION = 1
+_SCHEMA_INIT_RETRIES = 8
+_SCHEMA_INIT_BACKOFF_BASE = 0.02
+_SCHEMA_INIT_BACKOFF_MAX = 0.25
 _QUEUE_COLUMNS = (
     ("id", "INTEGER", 0, None, 1),
     ("spawn_intent_id", "TEXT", 0, None, 0),
@@ -351,6 +354,12 @@ def sqlite_error_looks_corrupt(exc: Exception) -> bool:
     )
 
 
+def sqlite_error_looks_busy(value: Exception | str) -> bool:
+    """Return whether SQLite rejected an operation because another writer owns it."""
+    message = str(value or "").lower()
+    return "locked" in message or "busy" in message
+
+
 def quarantine_sqlite_db(
     db_path: Path,
     reason: Exception | str,
@@ -516,31 +525,43 @@ def _create_queue_schema(conn: sqlite3.Connection) -> None:
 
 
 def init_queue_db(conn: sqlite3.Connection) -> None:
-    status = queue_schema_status(conn)
-    if status["status"] == "ok":
-        return
-    if status["status"] == "error":
-        raise QueueSchemaError(str(status["error"]))
-
-    try:
-        # journal_mode cannot change inside BEGIN IMMEDIATE.
-        if status["status"] == "legacy":
-            conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("BEGIN IMMEDIATE")
+    for attempt in range(_SCHEMA_INIT_RETRIES):
         status = queue_schema_status(conn)
+        if status["status"] == "ok":
+            return
         if status["status"] == "error":
-            raise QueueSchemaError(str(status["error"]))
-        if status["status"] == "legacy":
-            _create_queue_schema(conn)
-            _validate_queue_table(conn, require_indexes=True)
-            conn.execute(f"PRAGMA user_version = {QUEUE_DB_SCHEMA_VERSION}")
-        conn.commit()
-    except Exception:
+            error = str(status["error"])
+            if not sqlite_error_looks_busy(error) or attempt + 1 >= _SCHEMA_INIT_RETRIES:
+                raise QueueSchemaError(error)
+            time.sleep(min(_SCHEMA_INIT_BACKOFF_MAX, _SCHEMA_INIT_BACKOFF_BASE * (2**attempt)))
+            continue
+
         try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise
+            # journal_mode cannot change inside BEGIN IMMEDIATE. If another
+            # opener is adopting WAL at the same time, retry the whole read /
+            # WAL / migration sequence and let the completed opener win.
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("BEGIN IMMEDIATE")
+            status = queue_schema_status(conn)
+            if status["status"] == "error":
+                error = str(status["error"])
+                if sqlite_error_looks_busy(error):
+                    raise sqlite3.OperationalError(error)
+                raise QueueSchemaError(error)
+            if status["status"] == "legacy":
+                _create_queue_schema(conn)
+                _validate_queue_table(conn, require_indexes=True)
+                conn.execute(f"PRAGMA user_version = {QUEUE_DB_SCHEMA_VERSION}")
+            conn.commit()
+            return
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if not sqlite_error_looks_busy(exc) or attempt + 1 >= _SCHEMA_INIT_RETRIES:
+                raise
+            time.sleep(min(_SCHEMA_INIT_BACKOFF_MAX, _SCHEMA_INIT_BACKOFF_BASE * (2**attempt)))
 
 
 def connect_queue_db_result(

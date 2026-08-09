@@ -24749,19 +24749,19 @@ def test_reconcile_candidate_and_plan_paths():
             except Exception:
                 return default
 
-    class FakeHook:
-        core = FakeCore()
+    from nautical_core.chain_generation import ChainGenerationService
 
-        @staticmethod
-        def _safe_parse_datetime(_value):
+    class FakeGeneration(ChainGenerationService):
+        def __init__(self):
+            super().__init__(FakeCore())
+
+        def safe_parse_datetime(self, _value):
             return None, None
 
-        @staticmethod
-        def _compute_cp_child_due(_parent):
+        def compute_cp_child_due(self, _parent):
             return "20260102T090000Z", {"target_field": "due"}
 
-        @staticmethod
-        def _build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+        def build_child_from_parent(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
             return {
                 "description": parent.get("description"),
                 child_field: child_due,
@@ -24773,7 +24773,8 @@ def test_reconcile_candidate_and_plan_paths():
                 "chainUntil": until_dt,
             }
 
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=FakeHook())
+    generation = FakeGeneration()
+    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "spawn", f"expected spawn plan, got: {plan}")
     expect(plan.child and plan.child.get("link") == 3 and plan.child.get("prevLink") == "11111111", f"bad child plan: {plan}")
     evidence = reconcile.describe_plan(plan)
@@ -24782,7 +24783,7 @@ def test_reconcile_candidate_and_plan_paths():
     expect(evidence.get("child_field") == "due", f"expected child field evidence, got: {evidence!r}")
 
     capped = dict(parent, chainMax=2)
-    plan = reconcile.build_reconcile_plan(capped, existing_children=[], hook=FakeHook())
+    plan = reconcile.build_reconcile_plan(capped, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "legitimate_final" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
 
 
@@ -24815,20 +24816,20 @@ def test_reconcile_plan_uses_task_business_calendar_context():
                     cls.active = False
             return active_context()
 
-    class FakeHook:
-        core = FakeCore
+    from nautical_core.chain_generation import ChainGenerationService
 
-        @staticmethod
-        def _safe_parse_datetime(_value):
+    class FakeGeneration(ChainGenerationService):
+        def __init__(self):
+            super().__init__(FakeCore)
+
+        def safe_parse_datetime(self, _value):
             return None, None
 
-        @staticmethod
-        def _compute_cp_child_due(_parent):
+        def compute_cp_child_due(self, _parent):
             expect(FakeCore.active, "reconcile computed a child outside the task calendar context")
             return "20260102T090000Z", {"target_field": "due"}
 
-        @staticmethod
-        def _build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+        def build_child_from_parent(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
             expect(FakeCore.active, "reconcile built a child outside the task calendar context")
             return {child_field: child_due, "link": next_link, "prevLink": parent_short, "chainID": parent.get("chainID")}
 
@@ -24841,12 +24842,13 @@ def test_reconcile_plan_uses_task_business_calendar_context():
         "cp": "1d",
         "bc": "work",
     }
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=FakeHook())
+    generation = FakeGeneration()
+    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "spawn", f"calendar-scoped reconcile did not spawn: {plan}")
     expect(FakeCore.entered == ["work"], f"unexpected calendar context entries: {FakeCore.entered!r}")
     expect(not FakeCore.active, "task business-calendar context leaked after planning")
 
-    invalid = reconcile.build_reconcile_plan(dict(parent, bc="missing"), existing_children=[], hook=FakeHook())
+    invalid = reconcile.build_reconcile_plan(dict(parent, bc="missing"), existing_children=[], hook=None, generation=generation)
     expect(invalid.action == "error", f"invalid calendar was not rejected: {invalid}")
     expect("invalid business calendar" in invalid.reason and "missing" in invalid.reason, invalid.reason)
 
@@ -25649,6 +25651,7 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         "until": "20260802T235900Z",
     }
     exported_filters = []
+    from nautical_core.chain_generation import ChainGenerationService
 
     class FakeCore:
         fmt_dt_local = None
@@ -25664,15 +25667,11 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
             except Exception:
                 return default
 
-    class FakeHook:
-        core = FakeCore()
+    class FakeGeneration(ChainGenerationService):
+        def __init__(self):
+            super().__init__(FakeCore())
 
-        @staticmethod
-        def _task_cmd_prefix():
-            return ["task"]
-
-        @staticmethod
-        def _safe_parse_datetime(value):
+        def safe_parse_datetime(self, value):
             mapping = {
                 "20260720T090000Z": due,
                 "20260726T235900Z": datetime(2026, 7, 26, 23, 59, tzinfo=timezone.utc),
@@ -25682,13 +25681,11 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
             }
             return mapping.get(value), None
 
-        @staticmethod
-        def _compute_cp_child_due(calculation_parent):
+        def compute_cp_child_due(self, calculation_parent):
             expect(calculation_parent.get("end") == parent["due"], f"expiry calculation used deletion end: {calculation_parent}")
             return due + timedelta(days=7), {"target_field": "due"}
 
-        @staticmethod
-        def _build_child_from_parent(parent_task, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+        def build_child_from_parent(self, parent_task, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
             return {
                 "description": parent_task.get("description"),
                 child_field: child_due,
@@ -25696,6 +25693,18 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
                 "prevLink": parent_short,
                 "chainID": parent_task.get("chainID"),
             }
+
+    class FakeHook:
+        core = FakeCore()
+        chain_generation_service = FakeGeneration()
+
+        @staticmethod
+        def _safe_parse_datetime(value):
+            return FakeHook.chain_generation_service.safe_parse_datetime(value)
+
+        @staticmethod
+        def _task_cmd_prefix():
+            return ["task"]
 
         @staticmethod
         def _spawn_child(_child, _parent):
@@ -25833,19 +25842,19 @@ def test_reconcile_apply_refreshes_parent_under_lock():
             except Exception:
                 return default
 
-    class FakeHook:
-        core = FakeCore()
+    from nautical_core.chain_generation import ChainGenerationService
 
-        @staticmethod
-        def _safe_parse_datetime(_value):
+    class FakeGeneration(ChainGenerationService):
+        def __init__(self):
+            super().__init__(FakeCore())
+
+        def safe_parse_datetime(self, _value):
             return None, None
 
-        @staticmethod
-        def _compute_cp_child_due(_parent):
+        def compute_cp_child_due(self, _parent):
             return "20260727T090000Z", {"target_field": "due"}
 
-        @staticmethod
-        def _build_child_from_parent(parent_task, child_due, child_field, next_link, parent_short, _kind, _cpmax, _until_dt):
+        def build_child_from_parent(self, parent_task, child_due, child_field, next_link, parent_short, _kind, _cpmax, _until_dt):
             return {
                 "description": parent_task.get("description"),
                 child_field: child_due,
@@ -25853,6 +25862,14 @@ def test_reconcile_apply_refreshes_parent_under_lock():
                 "link": next_link,
                 "prevLink": parent_short,
             }
+
+    class FakeHook:
+        core = FakeCore()
+        chain_generation_service = FakeGeneration()
+
+        @staticmethod
+        def _safe_parse_datetime(_value):
+            return None, None
 
         @staticmethod
         def _spawn_child(child, _parent):
@@ -25938,19 +25955,19 @@ def test_reconcile_apply_resumes_after_parent_update_failure():
             except Exception:
                 return default
 
-    class FakeHook:
-        core = FakeCore()
+    from nautical_core.chain_generation import ChainGenerationService
 
-        @staticmethod
-        def _safe_parse_datetime(_value):
+    class FakeGeneration(ChainGenerationService):
+        def __init__(self):
+            super().__init__(FakeCore())
+
+        def safe_parse_datetime(self, _value):
             return None, None
 
-        @staticmethod
-        def _compute_cp_child_due(_parent):
+        def compute_cp_child_due(self, _parent):
             return "20260721T090000Z", {"target_field": "due"}
 
-        @staticmethod
-        def _build_child_from_parent(parent_task, child_due, child_field, next_link, parent_short, _kind, _cpmax, _until_dt):
+        def build_child_from_parent(self, parent_task, child_due, child_field, next_link, parent_short, _kind, _cpmax, _until_dt):
             return {
                 "description": parent_task.get("description"),
                 child_field: child_due,
@@ -25959,6 +25976,14 @@ def test_reconcile_apply_resumes_after_parent_update_failure():
                 "link": next_link,
                 "prevLink": parent_short,
             }
+
+    class FakeHook:
+        core = FakeCore()
+        chain_generation_service = FakeGeneration()
+
+        @staticmethod
+        def _safe_parse_datetime(_value):
+            return None, None
 
         @staticmethod
         def _spawn_child(child, _parent):
@@ -26648,19 +26673,19 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
             except Exception:
                 return default
 
-    class FakeHook:
-        core = FakeCore()
+    from nautical_core.chain_generation import ChainGenerationService
 
-        @staticmethod
-        def _safe_parse_datetime(_value):
+    class FakeGeneration(ChainGenerationService):
+        def __init__(self):
+            super().__init__(FakeCore())
+
+        def safe_parse_datetime(self, _value):
             return None, None
 
-        @staticmethod
-        def _compute_anchor_child_due(_parent):
+        def compute_anchor_child_due(self, _parent):
             return "20260706T140000Z", {"target_field": "due"}, []
 
-        @staticmethod
-        def _build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+        def build_child_from_parent(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
             return {
                 "description": parent.get("description"),
                 "due": child_due,
@@ -26670,7 +26695,12 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
                 "chainID": parent.get("chainID"),
             }
 
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=FakeHook())
+    plan = reconcile.build_reconcile_plan(
+        parent,
+        existing_children=[],
+        hook=None,
+        generation=FakeGeneration(),
+    )
     evidence = reconcile.describe_plan(plan)
     expect(evidence.get("child_field") == "due", f"expected due target evidence, got: {evidence!r}")
     expect(evidence.get("child_target") == "20260706T140000Z", f"expected due target, got: {evidence!r}")

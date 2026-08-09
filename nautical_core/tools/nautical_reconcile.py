@@ -875,6 +875,9 @@ def _stale_plan(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
 
 def _chain_generation_for_hook(hook: Any) -> ChainGenerationService:
     """Build the shared generator from configured core state only."""
+    provided = getattr(hook, "chain_generation_service", None)
+    if isinstance(provided, ChainGenerationService):
+        return provided
     core = getattr(hook, "core", None)
     if core is None:
         raise RuntimeError("configured Nautical core is unavailable")

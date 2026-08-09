@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, MutableMapping
+from typing import Any, Mapping, MutableMapping
 
 from .recurrence_evaluator import RecurrenceEvaluator
 
@@ -93,12 +93,6 @@ class ChainGenerationService:
         default_factory=dict,
         repr=False,
     )
-    # Compatibility callbacks are accepted only for incomplete test/tool
-    # adapters. A configured Nautical core never populates these fields.
-    _legacy_anchor: Callable[..., Any] | None = field(default=None, repr=False)
-    _legacy_cp: Callable[..., Any] | None = field(default=None, repr=False)
-    _legacy_builder: Callable[..., Any] | None = field(default=None, repr=False)
-    _legacy_parser: Callable[..., Any] | None = field(default=None, repr=False)
 
     @classmethod
     def from_core(
@@ -135,20 +129,9 @@ class ChainGenerationService:
             debug_wait_sched=bool(getattr(hook, "_DEBUG_WAIT_SCHED", False)),
             wait_sched_debug=getattr(hook, "_LAST_WAIT_SCHED_DEBUG", None),
         )
-        # Incomplete fake/embedding cores may still provide their own narrow
-        # callbacks. Keep this compatibility path isolated from production:
-        # the configured Nautical core exposes parse_cp_sequence_tokens.
-        if not callable(getattr(core, "parse_cp_sequence_tokens", None)):
-            service._legacy_anchor = getattr(hook, "_compute_anchor_child_due", None)
-            service._legacy_cp = getattr(hook, "_compute_cp_child_due", None)
-            service._legacy_builder = getattr(hook, "_build_child_from_parent", None)
-            service._legacy_parser = getattr(hook, "_safe_parse_datetime", None)
         return service
 
     def safe_parse_datetime(self, value: Any) -> tuple[datetime | None, str | None]:
-        parser = getattr(self, "_legacy_parser", None)
-        if callable(parser):
-            return parser(value)
         if not (value or ""):
             return None, None
         try:
@@ -209,9 +192,6 @@ class ChainGenerationService:
         return end_local, due_local, due_dt
 
     def compute_cp_child_due(self, parent: dict[str, Any]):
-        legacy = getattr(self, "_legacy_cp", None)
-        if callable(legacy):
-            return legacy(parent)
         duration = str(parent.get("cp") or "").strip()
         if not duration:
             return None, None
@@ -268,9 +248,6 @@ class ChainGenerationService:
         return candidate, meta
 
     def compute_anchor_child_due(self, parent: dict[str, Any]):
-        legacy = getattr(self, "_legacy_anchor", None)
-        if callable(legacy):
-            return legacy(parent)
         expression = str(parent.get("anchor") or "").strip()
         anchor_file = str(parent.get("anchor_file") or "").strip()
         if not expression and not anchor_file:
@@ -414,18 +391,6 @@ class ChainGenerationService:
         cpmax: int,
         until_dt: Any,
     ) -> dict[str, Any]:
-        legacy = getattr(self, "_legacy_builder", None)
-        if callable(legacy):
-            return legacy(
-                parent,
-                child_due_utc,
-                child_field,
-                next_link_no,
-                parent_short,
-                kind,
-                cpmax,
-                until_dt,
-            )
         if self.debug_wait_sched and self.wait_sched_debug is not None:
             try:
                 self.wait_sched_debug.clear()

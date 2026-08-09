@@ -43,14 +43,12 @@ class ReconcilePlan:
     child: dict[str, Any] | None = None
     child_short: str = ""
     child_due: Any = None
+    terminal_kind: str | None = None
 
 
 def is_terminal_plan(plan: ReconcilePlan) -> bool:
     """Return whether a final plan ended at the representable date boundary."""
-    return (
-        plan.action == "legitimate_final"
-        and "representable through 9999-12-31" in str(plan.reason)
-    )
+    return plan.action == "legitimate_final" and plan.terminal_kind == "date_limit"
 
 
 def short_uuid(value: object) -> str:
@@ -375,6 +373,7 @@ def describe_plan(plan: ReconcilePlan, *, fmt_dt_local: Any = None) -> dict[str,
     }
     if is_terminal_plan(plan):
         evidence["terminal"] = True
+        evidence["terminal_kind"] = plan.terminal_kind
     if plan.child_due is not None:
         evidence["child_due"] = str(plan.child_due)
         if callable(fmt_dt_local):
@@ -496,6 +495,7 @@ def _build_reconcile_plan_unscoped(
                 parent,
                 next_link,
                 occurrence_exhaustion_message(exc),
+                terminal_kind=exc.kind,
             )
         return ReconcilePlan("error", parent, next_link, scheduling_error_message(exc))
 

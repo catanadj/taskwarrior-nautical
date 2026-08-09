@@ -25137,9 +25137,11 @@ def test_reconcile_candidate_and_plan_paths():
         terminal.action == "legitimate_final" and "9999-12-31" in terminal.reason,
         f"date-limit exhaustion should be a terminal reconcile plan: {terminal}",
     )
+    expect(terminal.terminal_kind == "date_limit", f"terminal kind was not retained: {terminal}")
     expect(reconcile.is_terminal_plan(terminal), "terminal reconcile plan was not classified explicitly")
     expect(
-        reconcile.describe_plan(terminal).get("terminal") is True,
+        reconcile.describe_plan(terminal).get("terminal") is True
+        and reconcile.describe_plan(terminal).get("terminal_kind") == "date_limit",
         "terminal reconcile evidence was not exposed",
     )
 

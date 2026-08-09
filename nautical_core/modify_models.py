@@ -129,6 +129,64 @@ class ChainIntegrityCallback(Protocol):
         ...
 
 
+class AnchorCompletionRenderCallback(Protocol):
+    """Render anchor completion feedback with its explicit orchestration payload."""
+
+    def __call__(
+        self,
+        *,
+        new: TaskRow,
+        child: TaskRow,
+        child_due: Any,
+        child_short: str,
+        next_no: int,
+        parent_short: str,
+        cap_no: int | None,
+        finals: list[tuple[str, Any]],
+        now_utc: Any,
+        until_dt: Any,
+        until_cap_no: int | None,
+        dnf: Any,
+        meta: dict[str, Any],
+        stripped_attrs: list[str],
+        deferred_spawn: bool,
+        spawn_intent_id: str | None,
+        chain_by_short: dict[str, Any] | None,
+        analytics_advice: str | None,
+        integrity_warnings: list[str] | None,
+        base_no: int,
+    ) -> None:
+        ...
+
+
+class CpCompletionRenderCallback(Protocol):
+    """Render CP completion feedback with its explicit orchestration payload."""
+
+    def __call__(
+        self,
+        *,
+        new: TaskRow,
+        child: TaskRow,
+        child_due: Any,
+        child_short: str,
+        next_no: int,
+        parent_short: str,
+        cap_no: int | None,
+        finals: list[tuple[str, Any]],
+        now_utc: Any,
+        until_dt: Any,
+        until_cap_no: int | None,
+        meta: dict[str, Any],
+        deferred_spawn: bool,
+        spawn_intent_id: str | None,
+        chain_by_short: dict[str, Any] | None,
+        analytics_advice: str | None,
+        integrity_warnings: list[str] | None,
+        base_no: int,
+    ) -> None:
+        ...
+
+
 @dataclass(slots=True)
 class CompletionChainSnapshot:
     mode: str
@@ -278,8 +336,8 @@ class CompletionFinalizeServices:
     merge_spawned_child_into_chain: MergeChainCallback
     chain_health_advice: ChainHealthCallback
     chain_integrity_warnings: ChainIntegrityCallback
-    render_anchor_completion_feedback: ServiceCallback
-    render_cp_completion_feedback: ServiceCallback
+    render_anchor_completion_feedback: AnchorCompletionRenderCallback
+    render_cp_completion_feedback: CpCompletionRenderCallback
     print_task: PrintTaskCallback
     diag_summary: DiagnosticSummaryCallback
     show_analytics: bool

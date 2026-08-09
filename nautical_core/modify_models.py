@@ -10,7 +10,6 @@ from typing import Any, Protocol, TypeAlias
 # orchestration boundary still needs to distinguish injected callables from
 # task data and result values.  ``Any`` remains the payload type because hook
 # modules support Taskwarrior's heterogeneous JSON fields.
-ServiceCallback: TypeAlias = Callable[..., Any]
 TaskRow: TypeAlias = dict[str, Any]
 ShortUuidCallback: TypeAlias = Callable[[Any], str]
 

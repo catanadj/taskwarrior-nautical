@@ -358,9 +358,9 @@ _CACHE_LOAD_MEM_TTL = _core_config.CACHE_LOAD_MEM_TTL
 # SECTION: Taskwarrior helpers
 # ==============================================================================
 _common = _import_sibling("common")
-_cache_payload = _import_sibling("cache_payload")
-_cache_locking = _import_sibling("cache_locking")
-_acf_support = _import_sibling("acf_support")
+_cache_payload = _LazySibling("cache_payload")
+_cache_locking = _LazySibling("cache_locking")
+_acf_support = _LazySibling("acf_support")
 _business_calendar = _import_sibling("business_calendar")
 _business_calendar_config = _import_sibling("business_calendar_config")
 _cached_expansion = _LazySibling("cached_expansion")
@@ -901,21 +901,26 @@ business_calendar_fingerprint = _business_calendar_api.business_calendar_fingerp
 use_business_calendar = _business_calendar_api.use_business_calendar
 use_task_business_calendar = _business_calendar_api.use_task_business_calendar
 
-_linting_api = _import_sibling("linting_api").for_core(
-    sys.modules[__name__],
+_linting_api = _LazyApiBundle(
+    "linting_api",
+    (
+        "_iter_y_segments",
+        "_lint_expand_year_month_aliases",
+        "_lint_check_weekly_delimiter_contract",
+        "_lint_check_yearly_segments",
+        "_lint_check_global_md_dm_confusion",
+        "_lint_check_invalid_weekday_names",
+        "_lint_check_nth_weekday_suffixes",
+        "_lint_check_unsat_pure_weekly_and",
+        "_lint_check_backward_quarter_ranges",
+        "_lint_collect_warnings",
+        "lint_anchor_expr",
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-_iter_y_segments = _linting_api._iter_y_segments
-_lint_expand_year_month_aliases = _linting_api._lint_expand_year_month_aliases
-_lint_check_weekly_delimiter_contract = _linting_api._lint_check_weekly_delimiter_contract
-_lint_check_yearly_segments = _linting_api._lint_check_yearly_segments
-_lint_check_global_md_dm_confusion = _linting_api._lint_check_global_md_dm_confusion
-_lint_check_invalid_weekday_names = _linting_api._lint_check_invalid_weekday_names
-_lint_check_nth_weekday_suffixes = _linting_api._lint_check_nth_weekday_suffixes
-_lint_check_unsat_pure_weekly_and = _linting_api._lint_check_unsat_pure_weekly_and
-_lint_check_backward_quarter_ranges = _linting_api._lint_check_backward_quarter_ranges
-_lint_collect_warnings = _linting_api._lint_collect_warnings
-lint_anchor_expr = _linting_api.lint_anchor_expr
+for _name in _linting_api._aliases:
+    globals()[_name] = _linting_api.alias(_name)
 
 # Scheduler entry points are bound to this exact core instance for isolated
 # hook/test loaders while preserving the long-standing facade names.
@@ -1007,94 +1012,106 @@ expr_has_m_or_y = _time_api.expr_has_m_or_y
 pick_hhmm_from_dnf_for_date = _time_api.pick_hhmm_from_dnf_for_date
 build_local_datetime = _time_api.build_local_datetime
 
-_natural_language_api = _import_sibling("natural_language_api").for_core(
-    sys.modules[__name__],
+_natural_language_api = _LazyApiBundle(
+    "natural_language_api",
+    (
+        "_ordinal",
+        "_term_collect_mods",
+        "_fmt_hhmm_for_term",
+        "_fmt_weekdays_list",
+        "_fmt_monthly_atom",
+        "_fmt_md",
+        "_is_full_month",
+        "_fmt_yearly_atom",
+        "_describe_monthly_tokens",
+        "_describe_is_pure_nth_weekday_spec",
+        "_describe_is_pure_dom_spec",
+        "_describe_single_full_month_from_yearly_spec",
+        "_describe_term_roll_shift",
+        "_describe_term_bd_filter",
+        "_describe_roll_suffix",
+        "_describe_inject_schedule_suffixes",
+        "_describe_anchor_term_collect",
+        "_describe_anchor_term_fused_month_year",
+        "_describe_anchor_term_interval_prefix",
+        "_describe_anchor_term_parts",
+        "describe_anchor_term",
+        "_describe_anchor_expr_from_dnf",
+        "_describe_anchor_expr_impl",
+        "_term_prevnext_wd",
+        "_inject_prevnext_phrase",
+        "_join_natural_or_terms",
+        "_longest_common_suffix",
+        "_compress_or_terms_by_clause",
+        "_describe_anchor_dnf_impl",
+        "_normalize_range_token",
+        "_rand_bucket_time_from_mods",
+        "_rand_bucket_merge_mods",
+        "_rand_bucket_signature",
+        "_try_bucket_rand_monthly",
+        "describe_anchor_expr",
+        "describe_anchor_dnf",
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-_ordinal = _natural_language_api._ordinal
-_term_collect_mods = _natural_language_api._term_collect_mods
-_fmt_hhmm_for_term = _natural_language_api._fmt_hhmm_for_term
-_fmt_weekdays_list = _natural_language_api._fmt_weekdays_list
-_fmt_monthly_atom = _natural_language_api._fmt_monthly_atom
-_fmt_md = _natural_language_api._fmt_md
-_is_full_month = _natural_language_api._is_full_month
-_fmt_yearly_atom = _natural_language_api._fmt_yearly_atom
-_describe_monthly_tokens = _natural_language_api._describe_monthly_tokens
-_describe_is_pure_nth_weekday_spec = _natural_language_api._describe_is_pure_nth_weekday_spec
-_describe_is_pure_dom_spec = _natural_language_api._describe_is_pure_dom_spec
-_describe_single_full_month_from_yearly_spec = _natural_language_api._describe_single_full_month_from_yearly_spec
-_describe_term_roll_shift = _natural_language_api._describe_term_roll_shift
-_describe_term_bd_filter = _natural_language_api._describe_term_bd_filter
-_describe_roll_suffix = _natural_language_api._describe_roll_suffix
-_describe_inject_schedule_suffixes = _natural_language_api._describe_inject_schedule_suffixes
-_describe_anchor_term_collect = _natural_language_api._describe_anchor_term_collect
-_describe_anchor_term_fused_month_year = _natural_language_api._describe_anchor_term_fused_month_year
-_describe_anchor_term_interval_prefix = _natural_language_api._describe_anchor_term_interval_prefix
-_describe_anchor_term_parts = _natural_language_api._describe_anchor_term_parts
-describe_anchor_term = _natural_language_api.describe_anchor_term
-_describe_anchor_expr_from_dnf = _natural_language_api._describe_anchor_expr_from_dnf
-_describe_anchor_expr_impl = _natural_language_api._describe_anchor_expr_impl
-_term_prevnext_wd = _natural_language_api._term_prevnext_wd
-_inject_prevnext_phrase = _natural_language_api._inject_prevnext_phrase
-_join_natural_or_terms = _natural_language_api._join_natural_or_terms
-_longest_common_suffix = _natural_language_api._longest_common_suffix
-_compress_or_terms_by_clause = _natural_language_api._compress_or_terms_by_clause
-_describe_anchor_dnf_impl = _natural_language_api._describe_anchor_dnf_impl
-_normalize_range_token = _natural_language_api._normalize_range_token
-_rand_bucket_time_from_mods = _natural_language_api._rand_bucket_time_from_mods
-_rand_bucket_merge_mods = _natural_language_api._rand_bucket_merge_mods
-_rand_bucket_signature = _natural_language_api._rand_bucket_signature
-_try_bucket_rand_monthly = _natural_language_api._try_bucket_rand_monthly
-describe_anchor_expr = _natural_language_api.describe_anchor_expr
-describe_anchor_dnf = _natural_language_api.describe_anchor_dnf
+for _name in _natural_language_api._aliases:
+    globals()[_name] = _natural_language_api.alias(_name)
 
-_cache_api = _import_sibling("cache_api").for_core(
-    sys.modules[__name__],
+_cache_api = _LazyApiBundle(
+    "cache_api",
+    (
+        "_safe_lock_sleep_once",
+        "_safe_lock_ensure_parent",
+        "_safe_lock_age",
+        "_safe_lock_stale_pid",
+        "_safe_lock_fcntl_context",
+        "_safe_lock_excl_context",
+        "safe_lock",
+        "_cache_lock",
+        "_is_atom_like",
+        "_is_dnf_like",
+        "_clone_mod_value",
+        "_clone_mods",
+        "_clone_atom",
+        "_clone_dnf",
+        "_clone_cache_payload",
+        "_normalize_dnf_cached",
+        "_cache_payload_shape_ok",
+        "_cache_atomic_replace",
+        "_cache_dir",
+        "_cache_key",
+        "_cache_path",
+        "_cache_lock_path",
+        "_quarantine_cache",
+        "_cache_load_impl",
+        "_cache_save_impl",
+        "_cache_gc_impl",
+        "_cache_key_for_task_cached",
+        "_cache_key_for_task_impl",
+        "cache_load",
+        "cache_save",
+        "cache_gc",
+        "cache_key_for_task",
+        "_dnf_cache_fingerprint",
+        "_dnf_cache_key",
+        "_dnf_cache_load",
+        "_dnf_cache_save",
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-_safe_lock_sleep_once = _cache_api._safe_lock_sleep_once
-_safe_lock_ensure_parent = _cache_api._safe_lock_ensure_parent
-_safe_lock_age = _cache_api._safe_lock_age
-_safe_lock_stale_pid = _cache_api._safe_lock_stale_pid
-_safe_lock_fcntl_context = _cache_api._safe_lock_fcntl_context
-_safe_lock_excl_context = _cache_api._safe_lock_excl_context
-safe_lock = _cache_api.safe_lock
-_cache_lock = _cache_api._cache_lock
-_is_atom_like = _cache_api._is_atom_like
-_is_dnf_like = _cache_api._is_dnf_like
-_clone_mod_value = _cache_api._clone_mod_value
-_clone_mods = _cache_api._clone_mods
-_clone_atom = _cache_api._clone_atom
-_clone_dnf = _cache_api._clone_dnf
-_clone_cache_payload = _cache_api._clone_cache_payload
-_normalize_dnf_cached = _cache_api._normalize_dnf_cached
-_cache_payload_shape_ok = _cache_api._cache_payload_shape_ok
-_cache_atomic_replace = _cache_api._cache_atomic_replace
-_cache_dir = _cache_api._cache_dir
-_cache_key = _cache_api._cache_key
-_cache_path = _cache_api._cache_path
-_cache_lock_path = _cache_api._cache_lock_path
-_quarantine_cache = _cache_api._quarantine_cache
-_cache_load_impl = _cache_api._cache_load_impl
-_cache_save_impl = _cache_api._cache_save_impl
-_cache_gc_impl = _cache_api._cache_gc_impl
-_cache_key_for_task_cached = _cache_api._cache_key_for_task_cached
-_cache_key_for_task_impl = _cache_api._cache_key_for_task_impl
-cache_load = _cache_api.cache_load
-cache_save = _cache_api.cache_save
-cache_gc = _cache_api.cache_gc
-cache_key_for_task = _cache_api.cache_key_for_task
-_dnf_cache_fingerprint = _cache_api._dnf_cache_fingerprint
-_dnf_cache_key = _cache_api._dnf_cache_key
-_dnf_cache_load = _cache_api._dnf_cache_load
-_dnf_cache_save = _cache_api._dnf_cache_save
+for _name in _cache_api._aliases:
+    globals()[_name] = _cache_api.alias(_name)
 
-_precompute_api = _import_sibling("precompute_api").for_core(
-    sys.modules[__name__],
+_precompute_api = _LazyApiBundle(
+    "precompute_api",
+    ("precompute_hints", "build_and_cache_hints"),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-precompute_hints = _precompute_api.precompute_hints
-build_and_cache_hints = _precompute_api.build_and_cache_hints
+for _name in _precompute_api._aliases:
+    globals()[_name] = _precompute_api.alias(_name)
 
 RecurrenceModeResult = _import_sibling("recurrence_evaluator").RecurrenceModeResult
 

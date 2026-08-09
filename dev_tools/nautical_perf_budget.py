@@ -208,6 +208,40 @@ def _bench_queue_schema_cold(rounds: int) -> float:
         return time.perf_counter() - started
 
 
+def _bench_cold_import(kind: str, rounds: int) -> float:
+    """Measure a fresh-process import without reusing this benchmark process."""
+    if kind == "core":
+        script = "import nautical_core"
+    elif kind == "modify_impl":
+        script = (
+            "import importlib.util, sys; "
+            "spec = importlib.util.spec_from_file_location('perf_modify_impl', sys.argv[1]); "
+            "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)"
+        )
+    else:
+        raise ValueError(f"unknown cold import benchmark kind: {kind}")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(ROOT), env.get("PYTHONPATH", "")) if part
+    )
+    command = [sys.executable, "-c", script]
+    if kind == "modify_impl":
+        command.append(str(ROOT / "nautical_core" / "hooks" / "modify_impl.py"))
+    started = time.perf_counter()
+    for _ in range(max(1, rounds)):
+        proc = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=30.0,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"cold {kind} import failed: {proc.stderr.strip()}")
+    return time.perf_counter() - started
+
+
 def _bench_anchor_file_provider(rounds: int) -> float:
     """Exercise cached anchor-file expansion and successor lookup."""
     anchor_files = importlib.import_module("nautical_core.anchor_files")
@@ -705,6 +739,64 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             ("workflow_anchor_completion_nonfinal", "anchor", True),
         )
         results: dict[str, dict] = {}
+
+        ordinary_samples = []
+        for sample_index in range(repeats):
+            old = _completion_fixture("cp", sample_index, nonfinal=True, mode="ordinary")
+            new = dict(old, description=f"Ordinary Nautical edit {sample_index}")
+            taskdata = root / f"ordinary-modify-{sample_index}"
+            taskdata.mkdir()
+            env = dict(base_env, TASKDATA=str(taskdata), NAUTICAL_BENCH_FORCE_FULL="1")
+            elapsed, result, _stderr = _run_workflow_hook_result(
+                ROOT / "on-modify.nautical",
+                input_text=json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False),
+                env=env,
+                expect_output=True,
+            )
+            if result != new or _workflow_queue_rows(taskdata):
+                raise RuntimeError("workflow_ordinary_modify changed the task or queued work")
+            ordinary_samples.append(elapsed)
+        results["workflow_ordinary_modify"] = _measure_workflow(
+            "workflow_ordinary_modify",
+            ordinary_samples,
+            float(budgets.get("workflow_ordinary_modify", 2.0)),
+        )
+
+        expiration_samples = []
+        for sample_index in range(repeats):
+            key = f"nautical-perf/expiration/{sample_index}"
+            parent_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, key + "/parent"))
+            old = {
+                "uuid": parent_uuid,
+                "status": "pending",
+                "description": f"Expiration recovery benchmark {sample_index}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": f"expiration-perf-{sample_index:04d}",
+                "link": 1,
+                "due": "20260101T090000Z",
+                "until": "20260101T200000Z",
+            }
+            new = dict(old, status="deleted", end="20260102T090000Z")
+            taskdata = root / f"expiration-recovery-{sample_index}"
+            taskdata.mkdir()
+            env = dict(base_env, TASKDATA=str(taskdata), NAUTICAL_BENCH_FORCE_FULL="1")
+            elapsed, result, _stderr = _run_workflow_hook_result(
+                ROOT / "on-modify.nautical",
+                input_text=json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False),
+                env=env,
+                expect_output=True,
+            )
+            queued = _workflow_queue_rows(taskdata)
+            if not isinstance(result, dict) or result.get("chain") != "on" or len(queued) != 1:
+                raise RuntimeError("workflow_expiration_recovery did not queue exactly one successor")
+            expiration_samples.append(elapsed)
+        results["workflow_expiration_recovery"] = _measure_workflow(
+            "workflow_expiration_recovery",
+            expiration_samples,
+            float(budgets.get("workflow_expiration_recovery", 2.0)),
+        )
+
         for name, kind, nonfinal in completion_cases:
             fresh_samples = []
             for sample_index in range(repeats):
@@ -876,8 +968,15 @@ def main() -> int:
     queue_schema_hot_rounds = int(workload.get("queue_schema_hot_rounds", 1000))
     queue_schema_cold_rounds = int(workload.get("queue_schema_cold_rounds", 3))
     anchor_file_rounds = int(workload.get("anchor_file_rounds", 300))
+    cold_import_rounds = int(workload.get("cold_import_rounds", 3))
 
     checks = [
+        ("cold_core_import", lambda: _bench_cold_import("core", cold_import_rounds), repeats),
+        (
+            "cold_modify_impl_import",
+            lambda: _bench_cold_import("modify_impl", cold_import_rounds),
+            repeats,
+        ),
         ("parse_validate", lambda: _bench_parse_validate(exprs, parse_rounds), repeats),
         ("describe_expr", lambda: _bench_describe_expr(exprs, describe_rounds), repeats),
         ("next_after", lambda: _bench_next_after(exprs, next_after_rounds), repeats),

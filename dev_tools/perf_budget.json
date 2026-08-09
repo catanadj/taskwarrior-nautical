@@ -20,7 +20,8 @@
     "cache_load_rounds": 300,
     "queue_schema_hot_rounds": 1000,
     "queue_schema_cold_rounds": 3,
-    "anchor_file_rounds": 300
+    "anchor_file_rounds": 300,
+    "cold_import_rounds": 3
   },
   "seasonal_workload": {
     "expressions": [
@@ -34,6 +35,8 @@
     "build_hints_rounds": 1
   },
   "budgets_seconds": {
+    "cold_core_import": 0.25,
+    "cold_modify_impl_import": 0.2,
     "parse_validate": 0.2,
     "describe_expr": 0.25,
     "next_after": 0.35,
@@ -69,6 +72,8 @@
       "workflow_anchor_completion": 2.0,
       "workflow_anchor_completion_nonfinal": 2.0,
       "workflow_anchor_completion_nonfinal_idempotent": 2.0,
+      "workflow_ordinary_modify": 2.0,
+      "workflow_expiration_recovery": 2.0,
       "workflow_queue_drain": 3.0,
       "workflow_reconcile": 3.0
     }

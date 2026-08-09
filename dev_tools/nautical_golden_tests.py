@@ -21796,19 +21796,28 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
         "link": 1,
     }
     child = {"uuid": "00000000-0000-0000-0000-000000000222", "link": 2}
-    mod._build_child_from_parent = lambda *_a, **_k: dict(child)
-    mod._spawn_child_atomic = lambda _child, _parent: ("deadbeef", set(), True, False, None, "si_test")
+    from nautical_core.chain_generation import ChainGenerationService
 
-    out = mod._completion_build_and_spawn_child(
-        new,
-        child_due=mod.core.now_utc(),
-        child_field="due",
-        next_no=2,
-        parent_short="00000000",
-        kind="cp",
-        cpmax=0,
-        until_dt=None,
-    )
+    class StubGeneration(ChainGenerationService):
+        def build_child_from_parent(self, *_args, **_kwargs):
+            return dict(child)
+
+    original_generation = mod._chain_generation_service
+    mod._chain_generation_service = lambda: StubGeneration.from_core(mod.core)
+    mod._spawn_child_atomic = lambda _child, _parent: ("deadbeef", set(), True, False, None, "si_test")
+    try:
+        out = mod._completion_build_and_spawn_child(
+            new,
+            child_due=mod.core.now_utc(),
+            child_field="due",
+            next_no=2,
+            parent_short="00000000",
+            kind="cp",
+            cpmax=0,
+            until_dt=None,
+        )
+    finally:
+        mod._chain_generation_service = original_generation
     expect(bool(out), f"expected spawn result, got {out}")
     expect(out.child == child, f"unexpected child payload: {out}")
     expect(out.child_short == "deadbeef", f"unexpected child short: {out}")

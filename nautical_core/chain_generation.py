@@ -334,6 +334,26 @@ class ChainGenerationService:
                 raise
             raise CarryFieldError(field, str(exc) or "timezone conversion failed") from exc
 
+    def carry_relative_datetime(
+        self,
+        parent: dict[str, Any],
+        child: dict[str, Any],
+        child_due_utc: datetime,
+        field: str,
+        *,
+        parent_anchor_field: str,
+        child_anchor_field: str,
+    ) -> None:
+        """Public service boundary for carrying a relative task field."""
+        self._carry_relative_datetime(
+            parent,
+            child,
+            child_due_utc,
+            field,
+            parent_anchor_field=parent_anchor_field,
+            child_anchor_field=child_anchor_field,
+        )
+
     def _record_carry_debug(self, field: str, payload: dict[str, Any]) -> None:
         if not self.debug_wait_sched or self.wait_sched_debug is None:
             return
@@ -378,6 +398,26 @@ class ChainGenerationService:
                 utc_to_local_naive=self.core.utc_to_local_naive,
                 local_naive_to_utc=self.core.local_naive_to_utc,
             )
+        )
+
+    def carry_native_until(
+        self,
+        parent: dict[str, Any],
+        child: dict[str, Any],
+        child_due_utc: datetime,
+        kind: str,
+        *,
+        parent_anchor_field: str,
+        child_anchor_field: str,
+    ) -> None:
+        """Public service boundary for carrying native expiration."""
+        self._carry_native_until(
+            parent,
+            child,
+            child_due_utc,
+            kind,
+            parent_anchor_field=parent_anchor_field,
+            child_anchor_field=child_anchor_field,
         )
 
     def build_child_from_parent(

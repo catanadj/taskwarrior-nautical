@@ -3932,7 +3932,7 @@ def _carry_relative_datetime(
     """Compatibility delegate to the fail-closed shared carry service."""
     if not isinstance(parent, dict) or not isinstance(child, dict):
         return
-    _chain_generation_service()._carry_relative_datetime(
+    _chain_generation_service().carry_relative_datetime(
         parent,
         child,
         child_due_utc,
@@ -3954,7 +3954,7 @@ def _carry_native_until(
     """Compatibility delegate to the shared native-until carry service."""
     if not isinstance(parent, dict) or not isinstance(child, dict):
         return
-    _chain_generation_service()._carry_native_until(
+    _chain_generation_service().carry_native_until(
         parent,
         child,
         child_due_utc,
@@ -5675,10 +5675,11 @@ def _first_recurrence_target(new: dict, source: str):
     parent = dict(new)
     parent["end"] = core.fmt_isoz(target)
     try:
+        generation = _chain_generation_service()
         if source in {"anchor", "anchor_file"}:
-            result = _compute_anchor_child_due(parent)
+            result = generation.compute_anchor_child_due(parent)
             return result[0] if result else None
-        result = _compute_cp_child_due(parent)
+        result = generation.compute_cp_child_due(parent)
         return result[0] if result else None
     except Exception:
         return None
@@ -5900,7 +5901,7 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
         if not new_target:
             return False
         candidate = dict(new)
-        _carry_native_until(
+        _chain_generation_service().carry_native_until(
             old,
             candidate,
             new_target,
@@ -6237,11 +6238,12 @@ def _completion_preflight_context(new: dict, now_utc: datetime):
 
 def _completion_compute_child_due(new: dict, kind: str):
     modify_completion_compute = _module("modify_completion_compute")
+    generation = _chain_generation_service()
     return modify_completion_compute.completion_compute_child_due(
         new,
         kind,
-        compute_anchor_child_due=_compute_anchor_child_due,
-        compute_cp_child_due=_compute_cp_child_due,
+        compute_anchor_child_due=generation.compute_anchor_child_due,
+        compute_cp_child_due=generation.compute_cp_child_due,
         panel=_panel,
         print_task=_print_task,
         diag=_diag,
@@ -6356,8 +6358,9 @@ def _completion_build_and_spawn_child(
 ):
     modify_completion_spawn = _module("modify_completion_spawn")
     modify_runtime = _module("modify_runtime")
+    generation = _chain_generation_service()
     services = modify_runtime.build_spawn_services(
-        build_child_from_parent=_build_child_from_parent,
+        build_child_from_parent=generation.build_child_from_parent,
         spawn_child_atomic=_spawn_child_atomic,
         panel=_panel,
         print_task=_print_task,
@@ -6440,13 +6443,14 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
 
 def _expiration_services():
     modify_expiration = _module("modify_expiration")
+    generation = _chain_generation_service()
     return modify_expiration.ExpirationServices(
         core=core,
         reconcile=_module("reconcile"),
         safe_parse_datetime=_safe_parse_datetime,
-        compute_anchor_child_due=_compute_anchor_child_due,
-        compute_cp_child_due=_compute_cp_child_due,
-        build_child_from_parent=_build_child_from_parent,
+        compute_anchor_child_due=generation.compute_anchor_child_due,
+        compute_cp_child_due=generation.compute_cp_child_due,
+        build_child_from_parent=generation.build_child_from_parent,
         spawn_child_atomic=_spawn_child_atomic,
         panel=_panel,
         short=_short,

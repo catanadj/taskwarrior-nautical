@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from math import gcd, lcm
 
 from .business_calendar import is_business_day as default_is_business_day
@@ -76,6 +76,7 @@ def _intersect_weekly_atoms_allowed(
 
 _GREGORIAN_CYCLE_DAYS = 146097  # 400 Gregorian years; also divisible by 7.
 _GREGORIAN_CYCLE_MONTHS = 400 * 12
+_GREGORIAN_CYCLE_WEEKS = 20871
 _LAST_SUPPORTED_YEAR = 9999
 
 
@@ -87,6 +88,11 @@ def _calendar_month_span(after_date) -> int:
 def _calendar_year_span(after_date) -> int:
     """Return the number of calendar years still representable, inclusive."""
     return max(1, _LAST_SUPPORTED_YEAR - after_date.year + 1)
+
+
+def _calendar_week_span(after_date) -> int:
+    """Return the number of calendar weeks still representable, inclusive."""
+    return max(1, (date(_LAST_SUPPORTED_YEAR, 12, 31) - after_date).days // 7 + 1)
 
 
 def _rand_search_limit(term: list[dict], after_date, interval: int, *, unit: str) -> int:
@@ -106,6 +112,10 @@ def _rand_search_limit(term: list[dict], after_date, interval: int, *, unit: str
         cycle = _GREGORIAN_CYCLE_MONTHS if has_calendar_filter else 1
         period = lcm(cycle, interval)
         return min(_calendar_month_span(after_date), period + 1)
+    if unit == "week":
+        cycle = _GREGORIAN_CYCLE_WEEKS if has_calendar_filter else 1
+        period = lcm(cycle, interval)
+        return min(_calendar_week_span(after_date), period + 1)
     cycle = 400 if has_calendar_filter else 1
     period = lcm(cycle, interval)
     return min(_calendar_year_span(after_date), period + 1)
@@ -578,16 +588,25 @@ def _next_after_expr_weekly_rand_candidate(
     count = int(info.get("count") or 1)
     mods = info.get("mods") or {}
     bd_only = bool(mods.get("bd") or mods.get("wd") is True)
-    ival = int(info.get("ival") or 1)
+    weekly_interval = _term_interval_lcm(term, {"w"})
     rand_idx = int(info["atom_idx"])
     seed = default_seed or after_date
     monday = after_date - timedelta(days=after_date.weekday())
     seed_monday = seed - timedelta(days=seed.weekday())
 
-    for _ in range(520):
+    search_limit = _rand_search_limit(term, after_date, weekly_interval, unit="week")
+    for _ in range(search_limit):
         week_delta = (monday - seed_monday).days // 7
-        if ival <= 1 or week_delta % ival == 0:
-            candidates = [monday + timedelta(days=offset) for offset in range(7)]
+        if week_delta % weekly_interval == 0:
+            try:
+                candidates = [monday + timedelta(days=offset) for offset in range(7)]
+            except OverflowError as exc:
+                raise OccurrenceSearchExhausted(
+                    "weekly random scheduling",
+                    reference=after_date,
+                    limit=search_limit,
+                    kind=OccurrenceSearchExhausted.DATE_LIMIT,
+                ) from exc
             if bd_only:
                 candidates = [cand for cand in candidates if is_business_day(cand)]
             filtered = []
@@ -613,8 +632,21 @@ def _next_after_expr_weekly_rand_candidate(
             for choice in selected:
                 if choice > after_date:
                     return choice, {"basis": "rand", "rand_period": period_key}
-        monday += timedelta(days=7)
-    return None, None
+        try:
+            monday += timedelta(days=7)
+        except OverflowError as exc:
+            raise OccurrenceSearchExhausted(
+                "weekly random scheduling",
+                reference=after_date,
+                limit=search_limit,
+                kind=OccurrenceSearchExhausted.DATE_LIMIT,
+            ) from exc
+    raise OccurrenceSearchExhausted(
+        "weekly random scheduling",
+        reference=after_date,
+        limit=search_limit,
+        kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
+    )
 
 
 def _next_after_expr_monthly_rand_candidate(

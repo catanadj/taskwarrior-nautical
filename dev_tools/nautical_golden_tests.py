@@ -8576,6 +8576,29 @@ def test_monthly_and_yearly_random_intervals_scale_and_exhaust():
             continue
         expect(False, f"{expr} should report typed exhaustion at the calendar limit")
 
+
+def test_weekly_random_intervals_scale_and_exhaust():
+    """Weekly random /N searches must derive their bound from cadence and date range."""
+    seed = date(2026, 1, 1)
+    dnf = core.validate_anchor_expr_strict("w/100:2rand")
+    first, _ = core.next_after_expr(dnf, seed, default_seed=seed, seed_base="weekly-large-interval")
+    second, _ = core.next_after_expr(dnf, first, default_seed=seed, seed_base="weekly-large-interval")
+    seed_monday = seed - timedelta(days=seed.weekday())
+    second_monday = second - timedelta(days=second.weekday())
+    week_offset = (second_monday - seed_monday).days // 7
+    expect(week_offset % 100 == 0, f"w/100:2rand ignored its interval: {first} -> {second}")
+
+    try:
+        core.next_after_expr(
+            dnf,
+            date(9999, 12, 31),
+            default_seed=seed,
+            seed_base="weekly-large-interval-exhaustion",
+        )
+    except core.OccurrenceSearchExhausted:
+        return
+    expect(False, "w/100:2rand should report typed exhaustion at the calendar limit")
+
 def test_business_day_nbd_pbd_nw_natural():
     """Test business day modifier natural language generation"""
     # Natural must reflect rolls; dates must obey
@@ -30589,6 +30612,7 @@ TESTS = [
     test_rand_with_year_window,
     test_weekly_rand_N_gate,
     test_monthly_and_yearly_random_intervals_scale_and_exhaust,
+    test_weekly_random_intervals_scale_and_exhaust,
     test_business_day_nbd_pbd_nw_natural,
     test_time_splitting_per_atom,
     test_weekly_multi_days_and_every_2weeks,

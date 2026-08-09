@@ -25205,6 +25205,23 @@ def test_reconcile_snapshot_reuses_initial_chain_export():
     expect(tool._EXPORT_STATS["snapshot_hits"] == 1, f"snapshot hit was not recorded: {tool._EXPORT_STATS!r}")
 
 
+def test_reconcile_empty_snapshot_is_authoritative():
+    """A successful empty broad export must not trigger legacy status exports."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_empty_snapshot_test")
+    calls = []
+    original = tool._export
+    try:
+        tool._export = lambda _task_bin, filters, **_kwargs: calls.append(list(filters)) or []
+        snapshot = tool._ReconcileSnapshot("task")
+        candidates = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+        active = tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
+    finally:
+        tool._export = original
+    expect(candidates == [] and active == [], f"empty snapshot produced unexpected rows: {candidates!r}, {active!r}")
+    expect(len(calls) == 1, f"empty snapshot triggered compatibility exports: {calls!r}")
+
+
 def test_reconcile_export_diagnostics_include_elapsed_time():
     """Export diagnostics should report total and slowest elapsed time."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -25522,6 +25539,8 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
             if "link:2" in filters and parent.get("nextLink"):
                 return [child]
             if any(str(value).startswith("uuid:") for value in filters):
+                return [parent]
+            if "chain:on" in filters and "chainID.not:" in filters:
                 return [parent]
             if "status:deleted" in filters and "chain:on" in filters:
                 return [parent]
@@ -30406,6 +30425,7 @@ TESTS = [
     test_reconcile_reuses_verified_live_recovery_child,
     test_reconcile_candidate_discovery_is_narrow_and_deterministic,
     test_reconcile_snapshot_reuses_initial_chain_export,
+    test_reconcile_empty_snapshot_is_authoritative,
     test_reconcile_export_diagnostics_include_elapsed_time,
     test_reconcile_json_startup_failures_are_structured,
     test_reconcile_expiration_cp_advances_from_recurrence_target,

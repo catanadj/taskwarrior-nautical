@@ -315,14 +315,6 @@ def _candidate_rows(
     snapshot = snapshot or _READ_SNAPSHOT
     if snapshot is not None:
         rows = snapshot.chain_rows()
-        if not rows:
-            # Preserve compatibility with Taskwarrior wrappers that only honor
-            # the older status-scoped export filters.
-            completed = _export(task_bin, ["status:completed", "chain:on", "chainID.not:", "nextLink:"])
-            deleted = _export(task_bin, ["status:deleted", "chain:on", "chainID.not:", "nextLink:"])
-            candidates = [row for row in completed if reconcile.is_orphan_completion_candidate(row)]
-            candidates.extend(row for row in deleted if reconcile.is_orphan_deleted_chain_candidate(row))
-            return sorted(candidates, key=_candidate_sort_key)
         candidates = [
             row
             for row in rows

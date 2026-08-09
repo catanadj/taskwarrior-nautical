@@ -75,7 +75,7 @@ BuildChildCallback: TypeAlias = Callable[
 SpawnChildCallback: TypeAlias = Callable[
     [TaskRow, TaskRow], tuple[str, Any, bool, bool, str | None, str | None]
 ]
-BuildAndSpawnCallback: TypeAlias = Callable[..., "CompletionSpawnResult | None"]
+ModifyChainStateCallback: TypeAlias = Callable[[], Any]
 SeedLookupCallback: TypeAlias = Callable[[TaskRow, TaskRow], None]
 ChainExportCallback: TypeAlias = Callable[[str], list[TaskRow]]
 ChainIndexesCallback: TypeAlias = Callable[
@@ -83,8 +83,50 @@ ChainIndexesCallback: TypeAlias = Callable[
 ]
 SetChainCacheCallback: TypeAlias = Callable[[str, list[TaskRow]], None]
 MergeChainCallback: TypeAlias = Callable[[list[TaskRow], TaskRow, TaskRow, str], list[TaskRow]]
-ChainHealthCallback: TypeAlias = Callable[..., str | None]
-ChainIntegrityCallback: TypeAlias = Callable[..., list[str] | None]
+DiagnosticSummaryCallback: TypeAlias = Callable[[], Any]
+
+
+class BuildAndSpawnCallback(Protocol):
+    """Build and queue one successor without exposing hook internals."""
+
+    def __call__(
+        self,
+        new: TaskRow,
+        *,
+        child_due: Any,
+        child_field: str,
+        next_no: int,
+        parent_short: str,
+        kind: str,
+        cpmax: int,
+        until_dt: Any,
+    ) -> "CompletionSpawnResult | None":
+        ...
+
+
+class ChainHealthCallback(Protocol):
+    """Calculate optional chain health advice for completion feedback."""
+
+    def __call__(
+        self,
+        chain: list[TaskRow],
+        kind: str,
+        task: TaskRow,
+        tol_secs: int = 3600,
+        style: str = "compact",
+    ) -> str | None:
+        ...
+
+
+class ChainIntegrityCallback(Protocol):
+    """Validate chain metadata while retaining the expected-ID keyword."""
+
+    def __call__(
+        self,
+        chain: list[TaskRow],
+        expected_chain_id: str | None = None,
+    ) -> list[str]:
+        ...
 
 
 @dataclass(slots=True)
@@ -228,7 +270,7 @@ class CompletionSpawnServices:
 class CompletionFinalizeServices:
     build_and_spawn_child: BuildAndSpawnCallback
     seed_runtime_lookup_tasks: SeedLookupCallback
-    modify_chain_state: ServiceCallback
+    modify_chain_state: ModifyChainStateCallback
     get_chain_export: ChainExportCallback
     build_chain_indexes: ChainIndexesCallback
     set_chain_cache: SetChainCacheCallback
@@ -238,8 +280,8 @@ class CompletionFinalizeServices:
     chain_integrity_warnings: ChainIntegrityCallback
     render_anchor_completion_feedback: ServiceCallback
     render_cp_completion_feedback: ServiceCallback
-    print_task: ServiceCallback
-    diag_summary: ServiceCallback
+    print_task: PrintTaskCallback
+    diag_summary: DiagnosticSummaryCallback
     show_analytics: bool
     check_integrity: bool
     analytics_style: str

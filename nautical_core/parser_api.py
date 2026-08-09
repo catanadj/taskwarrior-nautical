@@ -229,6 +229,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             token,
             fmt,
             year_token_format_error_cls=core["YearTokenFormatError"],
+            month_from_alias=core["_month_from_alias"],
         )
 
     def validate_yearly_token_detailed(token: str, fmt: str) -> tuple[str, str] | None:
@@ -244,6 +245,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             yearfmt=core["_yearfmt"],
             split_csv_lower=core["_split_csv_lower"],
             year_token_format_error_cls=core["YearTokenFormatError"],
+            month_from_alias=core["_month_from_alias"],
         )
 
     def validate_year_tokens_in_dnf(dnf):

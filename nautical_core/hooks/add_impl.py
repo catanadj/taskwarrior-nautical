@@ -1717,10 +1717,18 @@ def _handle_anchor_preview_on_add(
     except Exception as exc:
         exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
         if exhausted_type is not None and isinstance(exc, exhausted_type):
+            reference = getattr(exc, "reference", None)
+            if getattr(reference, "year", 0) >= 9999:
+                scheduler_message = (
+                    "No matching occurrence can be represented within Nautical's supported date range "
+                    "(through 9999-12-31)."
+                )
+            else:
+                scheduler_message = str(exc)
             _error_and_exit(
                 [
-                    ("Scheduler", str(exc)),
-                    ("Fix", "Use a less sparse rule or adjust its interval and constraints."),
+                    ("Scheduler", scheduler_message),
+                    ("Fix", "Use a less sparse rule, relax a constraint, or set a due before the date limit."),
                 ]
             )
         astronomy = core._import_sibling("astronomy")

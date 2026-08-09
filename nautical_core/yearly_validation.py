@@ -106,7 +106,13 @@ def yearly_mmdd_error(mm: int, dd: int) -> str | None:
     return None
 
 
-def validate_yearly_token_allowlist(tok: str, fmt: str, *, year_token_format_error_cls) -> None:
+def validate_yearly_token_allowlist(
+    tok: str,
+    fmt: str,
+    *,
+    year_token_format_error_cls,
+    month_from_alias=None,
+) -> None:
     s = tok
 
     if re.fullmatch(r"(?:rand|[1-9]\d{0,2}rand)", s) or re.fullmatch(r"rand-\d{2}", s):
@@ -129,10 +135,19 @@ def validate_yearly_token_allowlist(tok: str, fmt: str, *, year_token_format_err
     if re.fullmatch(r"\d{2}-\d{2}(?:\.\.\d{2}-\d{2})?", s):
         return
 
-    if re.fullmatch(r"(?:[a-z]{3}|\d{2})\.\.(?:[a-z]{3}|\d{2})", s):
-        return
+    month_range = re.fullmatch(r"([a-z]{3})\.\.([a-z]{3})", s)
+    if month_range:
+        if month_from_alias is None or all(month_from_alias(value) is not None for value in month_range.groups()):
+            return
+        raise year_token_format_error_cls(
+            f"Unknown yearly month alias in '{tok}'. Use month names (e.g., 'jan..mar'), not weekdays."
+        )
     if re.fullmatch(r"[a-z]{3}", s):
-        return
+        if month_from_alias is None or month_from_alias(s) is not None:
+            return
+        raise year_token_format_error_cls(
+            f"Unknown yearly month alias '{tok}'. Use a month name such as 'jan'; weekday selectors belong in 'w:'."
+        )
     if re.fullmatch(r"q[1-4](?:\.\.q[1-4])?", s):
         return
 
@@ -229,6 +244,7 @@ def validate_yearly_token_format(
     yearfmt,
     split_csv_lower,
     year_token_format_error_cls,
+    month_from_alias=None,
 ) -> None:
     fmt = yearfmt()
     if not spec:
@@ -236,7 +252,12 @@ def validate_yearly_token_format(
 
     tokens = split_csv_lower(spec)
     for tok in tokens:
-        validate_yearly_token_allowlist(tok, fmt, year_token_format_error_cls=year_token_format_error_cls)
+        validate_yearly_token_allowlist(
+            tok,
+            fmt,
+            year_token_format_error_cls=year_token_format_error_cls,
+            month_from_alias=month_from_alias,
+        )
 
     bad = None
     for tok in tokens:

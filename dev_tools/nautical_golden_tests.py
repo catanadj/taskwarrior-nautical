@@ -8699,6 +8699,33 @@ def test_large_weekly_interval_is_scheduled_without_clamping():
     accepted = core.validate_anchor_expr_strict("w/200:mon + y:01-01")
     expect(accepted[0][0]["ival"] == 200, "long-period satisfiability probe rejected a valid interval")
 
+    try:
+        core.validate_anchor_expr_strict("y/500:mon + y:01-01")
+    except core.ParseError as exc:
+        expect("weekday selectors belong in 'w:'" in str(exc), f"unclear yearly atom error: {exc}")
+    else:
+        raise AssertionError("weekday token was accepted as a yearly anchor")
+
+    finite_proc = _run_hook_script(
+        _find_hook_file("on-add.nautical"),
+        {
+            "uuid": "00000000-0000-0000-0000-000000000901",
+            "description": "finite large interval",
+            "anchor": "w/500:mon + y:01-01",
+            "anchor_mode": "skip",
+            "chain": "on",
+            "chainID": "00000901",
+            "status": "pending",
+            "entry": "20260809T090000Z",
+        },
+        timeout_s=20.0,
+    )
+    expect(finite_proc.returncode == 0, f"finite large interval was rejected: {finite_proc.stderr!r}")
+    expect(
+        "No further matching occurrences are representable" in finite_proc.stderr,
+        "finite large interval did not explain its date horizon",
+    )
+
     hook = _find_hook_file("on-add.nautical")
     proc = _run_hook_script(
         hook,
@@ -8759,8 +8786,12 @@ def test_yearly_token_format_characterization():
             msg = str(e)
             expect(msg.startswith(expected), f"{expr}: expected prefix {expected!r}, got {msg!r}")
 
-    # Existing permissive behavior for three-letter aliases/quarters should remain.
-    _must_parse("y:foo")
+    try:
+        core.validate_anchor_expr_strict("y:foo")
+    except core.ParseError as exc:
+        expect("Unknown yearly month alias" in str(exc), f"unclear unknown month error: {exc}")
+    else:
+        raise AssertionError("unknown yearly month alias should be rejected")
     _must_parse("y:q1..q2")
 
 

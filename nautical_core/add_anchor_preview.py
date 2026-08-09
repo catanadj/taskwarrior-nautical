@@ -7,6 +7,7 @@ from typing import Any, Callable
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from . import calendar_feedback, panel_diagnostics
 from .occurrence_provider import Occurrence, _cursor_before, _sort_datetimes
+from .scheduler_models import OccurrenceSearchExhausted
 from .timeutil import compare_datetimes
 
 def _preview_seed_base(task: dict[str, Any], fallback_chain_id: str) -> str:
@@ -1258,17 +1259,31 @@ def handle_anchor_preview_on_add(
         anchor_preview_lint_and_validate(anchor_str, prof, core=core, panel=panel)
         preview_limit = max(0, min(upcoming_preview, allow_by_max, allow_by_until, preview_hard_cap))
         _t_prev = time.perf_counter()
-        preview = anchor_build_preview(
-            dnf,
-            first_due_local_dt,
-            preview_limit,
-            until_dt,
-            first_hhmm,
-            interval_seed,
-            seed_base,
-            omit_dnf=omit_dnf,
-            evaluator=recurrence_evaluator,
-        )
+        try:
+            preview = anchor_build_preview(
+                dnf,
+                first_due_local_dt,
+                preview_limit,
+                until_dt,
+                first_hhmm,
+                interval_seed,
+                seed_base,
+                omit_dnf=omit_dnf,
+                evaluator=recurrence_evaluator,
+            )
+        except OccurrenceSearchExhausted as exc:
+            preview = []
+            reference = getattr(exc, "reference", None)
+            if getattr(reference, "year", 0) >= 9999:
+                rows.append(
+                    (
+                        "Note",
+                        "[yellow]No further matching occurrences are representable through 9999-12-31; "
+                        "the first occurrence remains valid.[/]",
+                    )
+                )
+            else:
+                raise
         prof.add_ms("anchor:preview_occurrences", (time.perf_counter() - _t_prev) * 1000.0)
     elif not compact_presentation:
         all_occurrences = _collect_included_with_provider(

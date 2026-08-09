@@ -713,6 +713,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             "uda.chain.type=string\n"
             "uda.link.type=string\n"
             "uda.prevLink.type=string\n"
+            "uda.nextLink.type=string\n"
             "uda.cp.type=string\n"
             "uda.anchor.type=string\n"
             "uda.anchor_mode.type=string\n",
@@ -858,14 +859,29 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
         for sample_index in range(repeats):
             queue_data = root / f"populated-queue-{sample_index}"
             _init_empty_queue_db(queue_data)
+            queue_env = dict(base_env, TASKDATA=str(queue_data))
+            parents = []
             with sqlite3.connect(str(queue_data / ".nautical-state" / ".nautical_queue.db")) as conn:
                 now = time.time()
                 for index in range(8):
                     parent_uuid = f"44444444-4444-4444-4444-{index:012d}"
                     child_uuid = f"55555555-5555-5555-5555-{index:012d}"
+                    parents.append(
+                        {
+                            "uuid": parent_uuid,
+                            "status": "completed",
+                            "description": "Queue drain benchmark parent",
+                            "chain": "on",
+                            "chainID": "queue-perf-chain",
+                            "link": str(index),
+                            "due": "20260101T090000Z",
+                        }
+                    )
                     payload = {
                         "parent_uuid": parent_uuid,
-                        "parent_nextlink": str(index + 1),
+                        # The imported parents start without nextLink; the
+                        # drain must successfully write each child short UUID.
+                        "parent_nextlink": "",
                         "child_short": child_uuid[:8],
                         "child": {
                             "uuid": child_uuid,
@@ -891,10 +907,73 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                         (f"perf-intent-{index}", json.dumps(payload, ensure_ascii=False), now, now),
                     )
                 conn.commit()
-            queue_env = dict(base_env, TASKDATA=str(queue_data))
+
+            import_proc = subprocess.run(
+                ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+                input="".join(json.dumps(parent, ensure_ascii=False) + "\n" for parent in parents),
+                text=True,
+                capture_output=True,
+                env=queue_env,
+                timeout=30.0,
+            )
+            if import_proc.returncode != 0:
+                raise RuntimeError(
+                    "queue drain parent fixture import failed: "
+                    f"{(import_proc.stderr or import_proc.stdout or '').strip()}"
+                )
+
             queue_samples.append(
                 _run_workflow_hook(ROOT / "on-exit.nautical", input_text="", env=queue_env, expect_output=False)
             )
+
+            if _workflow_queue_rows(queue_data):
+                raise RuntimeError("queue drain benchmark left intents queued after successful processing")
+            dead_letter = queue_data / ".nautical-state" / ".nautical_dead_letter.jsonl"
+            if dead_letter.is_file() and dead_letter.read_text(encoding="utf-8").strip():
+                raise RuntimeError("queue drain benchmark dead-lettered a populated parent/child intent")
+            export_proc = subprocess.run(
+                [
+                    "task",
+                    "rc.hooks=off",
+                    "rc.json.array=1",
+                    "rc.verbose=nothing",
+                    "rc.color=off",
+                    "chainID:queue-perf-chain",
+                    "export",
+                ],
+                text=True,
+                capture_output=True,
+                env=queue_env,
+                timeout=30.0,
+            )
+            if export_proc.returncode != 0:
+                raise RuntimeError(
+                    "queue drain benchmark export failed: "
+                    f"{(export_proc.stderr or export_proc.stdout or '').strip()}"
+                )
+            try:
+                exported = json.loads(export_proc.stdout or "[]")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("queue drain benchmark export was not valid JSON") from exc
+            if not isinstance(exported, list) or len(exported) != 16:
+                raise RuntimeError(
+                    "queue drain benchmark did not retain 8 parents and import 8 children: "
+                    f"{len(exported) if isinstance(exported, list) else type(exported).__name__} tasks"
+                )
+            children = [
+                row
+                for row in exported
+                if isinstance(row, dict) and str(row.get("uuid") or "").startswith("55555555-")
+            ]
+            if len(children) != 8 or any(not str(row.get("prevLink") or "").strip() for row in children):
+                raise RuntimeError("queue drain benchmark did not import/link all child tasks")
+            parents_after = [
+                row
+                for row in exported
+                if isinstance(row, dict) and str(row.get("uuid") or "").startswith("44444444-")
+            ]
+            if len(parents_after) != 8 or any(not str(row.get("nextLink") or "").strip() for row in parents_after):
+                raise RuntimeError("queue drain benchmark did not update all parent nextLink values")
         results["workflow_queue_drain"] = _measure_workflow(
             "workflow_queue_drain", queue_samples,
             float(budgets.get("workflow_queue_drain", 3.0)),

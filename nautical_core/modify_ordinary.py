@@ -1,0 +1,159 @@
+"""Ordinary (non-completion) on-modify orchestration.
+
+The hook facade owns Taskwarrior process state and compatibility names.  This
+module owns the ordinary lifecycle decision flow and receives its policy and
+UI callbacks explicitly so it can be loaded only when that lifecycle runs.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Callable
+
+
+@dataclass(frozen=True, slots=True)
+class OrdinaryModifyServices:
+    field_changed: Callable[[dict, dict, str], bool]
+    strip_quotes: Callable[[str], str]
+    validate_anchor: Callable[[dict, dict, str], None]
+    validate_omit: Callable[[str, str, str, str], None]
+    reject_conflicting_types: Callable[[str, str, str], None]
+    validate_chain_limits: Callable[[dict], None]
+    preserve_cp_offsets: Callable[[dict, dict, str], Any]
+    task_has_recurrence: Callable[[dict], bool]
+    preserve_native_until: Callable[[dict, dict, str], bool]
+    validate_native_until: Callable[[dict], None]
+    validate_native_until_slots: Callable[[dict], None]
+    render_cp_adjustment: Callable[[Any], None]
+    render_timing_warning: Callable[[dict, tuple[str, ...]], None]
+    apply_transition: Callable[[dict, dict], Any]
+    short_uuid: Callable[[Any], str]
+    recurrence_enabled_rows: Callable[[dict, str], list[tuple[str, str]]]
+    panel: Callable[..., None]
+    render_disabled_summary: Callable[[dict, dict, str], None]
+    semantic_diff_value: Callable[[str, str], str]
+    first_recurrence_target: Callable[[dict, str], Any]
+    fmtlocal: Callable[[Any], str]
+    render_recurrence_updated: Callable[[Any, dict], None]
+    print_task: Callable[[dict], None]
+
+
+def handle_non_completion_modify(
+    old: dict,
+    new: dict,
+    *,
+    services: OrdinaryModifyServices,
+    lifecycle: Any,
+) -> None:
+    """Apply ordinary edit validation, carry-forward, and feedback policy."""
+    explicit_timing_changes = tuple(
+        field
+        for field in ("due", "scheduled", "wait")
+        if services.field_changed(old, new, field)
+    )
+    new_anchor = services.strip_quotes(str(new.get("anchor") or "").strip())
+    new_anchor_file = services.strip_quotes(str(new.get("anchor_file") or "").strip())
+    if new_anchor_file:
+        new["anchor_file"] = new_anchor_file
+    new_omit = services.strip_quotes(str(new.get("omit") or "").strip())
+    if new_omit:
+        new["omit"] = new_omit
+    new_omit_file = services.strip_quotes(str(new.get("omit_file") or "").strip())
+    if new_omit_file:
+        new["omit_file"] = new_omit_file
+
+    if new_anchor:
+        services.validate_anchor(old, new, new_anchor)
+    services.validate_omit(new_anchor, new_anchor_file, new_omit, new_omit_file)
+
+    new_cp = services.strip_quotes(str(new.get("cp") or "").strip())
+    services.reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
+    recurrence_or_cap_changed = any(
+        services.field_changed(old, new, field)
+        for field in ("cp", "anchor", "anchor_file", "chainMax", "chainUntil")
+    )
+    if recurrence_or_cap_changed and (new_cp or new_anchor or new_anchor_file):
+        services.validate_chain_limits(new)
+
+    schedule_adjustment = services.preserve_cp_offsets(old, new, new_cp)
+    new_has_recurrence = services.task_has_recurrence(new)
+    recurrence_enabled = (
+        new_has_recurrence and not services.task_has_recurrence(old)
+    )
+    if new_has_recurrence and not recurrence_enabled:
+        recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
+        services.preserve_native_until(old, new, recurrence_kind)
+    native_window_changed = any(
+        services.field_changed(old, new, field)
+        for field in ("due", "scheduled", "until", "anchor", "anchor_file", "anchor_mode")
+    )
+    if new_has_recurrence and (native_window_changed or recurrence_enabled):
+        services.validate_native_until(new)
+        services.validate_native_until_slots(new)
+    if schedule_adjustment:
+        services.render_cp_adjustment(schedule_adjustment)
+    services.render_timing_warning(new, explicit_timing_changes)
+
+    try:
+        transition = services.apply_transition(old, new)
+    except Exception:
+        transition = None
+    recurrence_removed = (
+        services.task_has_recurrence(old)
+        and not services.task_has_recurrence(new)
+    )
+    chain_was_disabled = (
+        str(old.get("chain") or "").strip().lower() == "on"
+        and str(new.get("chain") or "").strip().lower() == "off"
+    )
+    if transition and transition.state == "enabled":
+        rows = [
+            (
+                "Reason",
+                transition.reason
+                or "This task just gained Nautical recurrence and was promoted to chain:on.",
+            ),
+            ("Source", transition.source),
+        ]
+        rows.extend(services.recurrence_enabled_rows(new, transition.source))
+        services.panel("⚓ Nautical enabled", rows, kind="note")
+    elif transition and transition.state == "disabled":
+        rows = [
+            (
+                "Reason",
+                transition.reason or "This task's Nautical recurrence is disabled.",
+            )
+        ]
+        if transition.source:
+            rows.append(("Source", transition.source))
+        rows.append(("Chain", "off"))
+        services.panel("⚓ Nautical disabled", rows, kind="disabled")
+        if recurrence_removed or chain_was_disabled:
+            reason = (
+                "Nautical recurrence removed."
+                if recurrence_removed
+                else "Chain manually disabled."
+            )
+            services.render_disabled_summary(old, new, reason)
+    elif transition and transition.state == "resumed":
+        rows = [
+            ("Reason", transition.reason or "This task's Nautical recurrence was resumed.")
+        ]
+        if transition.source:
+            rows.append(("Source", transition.source))
+        rows.append(("Chain", services.semantic_diff_value("off", "on")))
+        source = "anchor" if new.get("anchor") else "anchor_file" if new.get("anchor_file") else "cp"
+        first = services.first_recurrence_target(new, source)
+        if first:
+            rows.append(("Next", services.fmtlocal(first)))
+        services.panel("⚓ Nautical resumed", rows, kind="note")
+    else:
+        try:
+            changes = lifecycle.recurrence_setting_changes(old, new)
+        except Exception:
+            changes = []
+        services.render_recurrence_updated(changes, new)
+    services.print_task(new)
+
+
+__all__ = ("OrdinaryModifyServices", "handle_non_completion_modify")

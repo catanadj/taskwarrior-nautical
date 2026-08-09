@@ -565,6 +565,8 @@ _CHAIN_GENERATION = None
 _CHAIN_GENERATION_LOAD_FAILED = False
 _MODIFY_GENERATION_COMPAT = None
 _MODIFY_GENERATION_COMPAT_LOAD_FAILED = False
+_MODIFY_ORDINARY = None
+_MODIFY_ORDINARY_LOAD_FAILED = False
 _MODIFY_SPAWN_PREP = None
 _MODIFY_SPAWN_PREP_LOAD_FAILED = False
 _MODIFY_COMPLETION_PREFLIGHT = None
@@ -629,6 +631,12 @@ _MODULE_SPECS = {
         "_MODIFY_GENERATION_COMPAT_LOAD_FAILED",
         "modify_generation_compat.py",
         "nautical_core.modify_generation_compat",
+    ),
+    "modify_ordinary": (
+        "_MODIFY_ORDINARY",
+        "_MODIFY_ORDINARY_LOAD_FAILED",
+        "modify_ordinary.py",
+        "nautical_core.modify_ordinary",
     ),
     "modify_completion_preflight": (
         "_MODIFY_COMPLETION_PREFLIGHT",
@@ -5897,112 +5905,43 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
 
 
 def _handle_non_completion_modify(old: dict, new: dict) -> None:
-    explicit_timing_changes = tuple(
-        field for field in ("due", "scheduled", "wait") if _field_changed(old, new, field)
-    )
-    anchor_raw = (new.get("anchor") or "").strip()
-    new_anchor = _strip_quotes(anchor_raw)
-    anchor_file_raw = (new.get("anchor_file") or "").strip()
-    new_anchor_file = _strip_quotes(anchor_file_raw)
-    if new_anchor_file:
-        new["anchor_file"] = new_anchor_file
-    omit_raw = (new.get("omit") or "").strip()
-    new_omit = _strip_quotes(omit_raw)
-    if new_omit:
-        new["omit"] = new_omit
-    omit_file_raw = (new.get("omit_file") or "").strip()
-    new_omit_file = _strip_quotes(omit_file_raw)
-    if new_omit_file:
-        new["omit_file"] = new_omit_file
-
-    if new_anchor:
-        _non_completion_validate_anchor(old, new, new_anchor)
-    _validate_omit_for_anchor_or_fail(new_anchor, new_anchor_file, new_omit, new_omit_file)
-
-    cp_raw = (new.get("cp") or "").strip()
-    new_cp = _strip_quotes(cp_raw)
-    _non_completion_reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
-    recurrence_or_cap_changed = any(
-        _field_changed(old, new, field)
-        for field in ("cp", "anchor", "anchor_file", "chainMax", "chainUntil")
-    )
-    if recurrence_or_cap_changed and (new_cp or new_anchor or new_anchor_file):
-        _validate_chain_limits_on_modify(new)
-
-    schedule_adjustment = _preserve_cp_relative_offsets_on_due_change(old, new, new_cp)
+    modify_ordinary = _module("modify_ordinary")
     modify_lifecycle = _module("modify_lifecycle")
-    new_has_recurrence = modify_lifecycle.task_has_nautical_recurrence_fields(new)
-    recurrence_enabled = (
-        new_has_recurrence
-        and not modify_lifecycle.task_has_nautical_recurrence_fields(old)
+    services = modify_ordinary.OrdinaryModifyServices(
+        field_changed=_field_changed,
+        strip_quotes=_strip_quotes,
+        validate_anchor=_non_completion_validate_anchor,
+        validate_omit=_validate_omit_for_anchor_or_fail,
+        reject_conflicting_types=_non_completion_reject_conflicting_types,
+        validate_chain_limits=_validate_chain_limits_on_modify,
+        preserve_cp_offsets=_preserve_cp_relative_offsets_on_due_change,
+        task_has_recurrence=modify_lifecycle.task_has_nautical_recurrence_fields,
+        preserve_native_until=_preserve_native_until_on_target_change,
+        validate_native_until=_validate_native_until_after_target_or_fail,
+        validate_native_until_slots=_validate_native_until_anchor_slots_or_fail,
+        render_cp_adjustment=_render_cp_schedule_adjusted_panel,
+        render_timing_warning=_render_explicit_timing_order_warning,
+        apply_transition=lambda old_task, new_task: modify_lifecycle.apply_nautical_transition(
+            old_task,
+            new_task,
+            short_uuid=core.short_uuid,
+        ),
+        short_uuid=core.short_uuid,
+        recurrence_enabled_rows=_recurrence_enabled_rows,
+        panel=_panel,
+        render_disabled_summary=_render_disabled_chain_summary,
+        semantic_diff_value=_semantic_diff_value,
+        first_recurrence_target=_first_recurrence_target,
+        fmtlocal=_fmtlocal,
+        render_recurrence_updated=_render_recurrence_updated_panel,
+        print_task=_print_task,
     )
-    if new_has_recurrence and not recurrence_enabled:
-        recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
-        _preserve_native_until_on_target_change(old, new, recurrence_kind)
-    native_window_changed = any(
-        _field_changed(old, new, field)
-        for field in ("due", "scheduled", "until", "anchor", "anchor_file", "anchor_mode")
+    modify_ordinary.handle_non_completion_modify(
+        old,
+        new,
+        services=services,
+        lifecycle=modify_lifecycle,
     )
-    if new_has_recurrence and (native_window_changed or recurrence_enabled):
-        _validate_native_until_after_target_or_fail(new)
-        _validate_native_until_anchor_slots_or_fail(new)
-    if schedule_adjustment:
-        _render_cp_schedule_adjusted_panel(schedule_adjustment)
-    _render_explicit_timing_order_warning(new, explicit_timing_changes)
-
-    try:
-        transition = modify_lifecycle.apply_nautical_transition(old, new, short_uuid=core.short_uuid)
-    except Exception:
-        transition = None
-    recurrence_removed = (
-        modify_lifecycle.task_has_nautical_recurrence_fields(old)
-        and not modify_lifecycle.task_has_nautical_recurrence_fields(new)
-    )
-    chain_was_disabled = (
-        str(old.get("chain") or "").strip().lower() == "on"
-        and str(new.get("chain") or "").strip().lower() == "off"
-    )
-    if transition and transition.state == "enabled":
-        rows = [
-            ("Reason", transition.reason or "This task just gained Nautical recurrence and was promoted to chain:on."),
-            ("Source", transition.source),
-        ]
-        rows.extend(_recurrence_enabled_rows(new, transition.source))
-        _panel(
-            "⚓ Nautical enabled",
-            rows,
-            kind="note",
-        )
-    elif transition and transition.state == "disabled":
-        rows = [("Reason", transition.reason or "This task's Nautical recurrence is disabled.")]
-        if transition.source:
-            rows.append(("Source", transition.source))
-        rows.append(("Chain", "off"))
-        _panel("⚓ Nautical disabled", rows, kind="disabled")
-        if recurrence_removed or chain_was_disabled:
-            reason = "Nautical recurrence removed." if recurrence_removed else "Chain manually disabled."
-            _render_disabled_chain_summary(old, new, reason)
-    elif transition and transition.state == "resumed":
-        rows = [("Reason", transition.reason or "This task's Nautical recurrence was resumed.")]
-        if transition.source:
-            rows.append(("Source", transition.source))
-        rows.extend(
-            [
-                ("Chain", _semantic_diff_value("off", "on")),
-            ]
-        )
-        source = "anchor" if new.get("anchor") else "anchor_file" if new.get("anchor_file") else "cp"
-        first = _first_recurrence_target(new, source)
-        if first:
-            rows.append(("Next", _fmtlocal(first)))
-        _panel("⚓ Nautical resumed", rows, kind="note")
-    else:
-        try:
-            changes = modify_lifecycle.recurrence_setting_changes(old, new)
-        except Exception:
-            changes = []
-        _render_recurrence_updated_panel(changes, new)
-    _print_task(new)
 
 
 def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, str]:

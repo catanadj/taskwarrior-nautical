@@ -363,10 +363,10 @@ _cache_locking = _import_sibling("cache_locking")
 _acf_support = _import_sibling("acf_support")
 _business_calendar = _import_sibling("business_calendar")
 _business_calendar_config = _import_sibling("business_calendar_config")
-_cached_expansion = _import_sibling("cached_expansion")
-_nth_monthly = _import_sibling("nth_monthly")
-_expansion_support = _import_sibling("expansion_support")
-_monthly_support = _import_sibling("monthly_support")
+_cached_expansion = _LazySibling("cached_expansion")
+_nth_monthly = _LazySibling("nth_monthly")
+_expansion_support = _LazySibling("expansion_support")
+_monthly_support = _LazySibling("monthly_support")
 _natural_language = _LazySibling("natural_language")
 _astronomy = _LazySibling("astronomy")
 _linting = _LazySibling("linting")
@@ -919,64 +919,70 @@ lint_anchor_expr = _linting_api.lint_anchor_expr
 
 # Scheduler entry points are bound to this exact core instance for isolated
 # hook/test loaders while preserving the long-standing facade names.
-_scheduler_api = _import_sibling("scheduler_api").for_core(
-    sys.modules[__name__],
+_scheduler_api = _LazyApiBundle(
+    "scheduler_api",
+    (
+        "_expand_weekly_cached_impl",
+        "_expand_weekly_cached_mods_impl",
+        "_expand_yearly_cached_impl",
+        "_expand_monthly_cached_impl",
+        "_expand_monthly_for_month_impl",
+        "_expand_weekly_impl",
+        "_expand_yearly_for_year_strict_impl",
+        "_roll_apply_impl",
+        "_month_doms_safe",
+        "_month_has_hit",
+        "_first_hit_after_probe_in_month",
+        "_next_valid_month_on_or_after",
+        "_advance_k_valid_months",
+        "_monthly_align_base_for_interval",
+        "_selection_inner_matcher",
+        "_apply_selection_date_modifiers",
+        "_week_monday",
+        "_weekly_rand_pick",
+        "_is_bd",
+        "_random_identity",
+        "_random_pick_index",
+        "_random_pick_indices",
+        "_term_rand_info",
+        "dnf_has_counted_random",
+        "_filter_by_w",
+        "_month_tokens_for_atom_cached",
+        "_month_tokens_for_atom",
+        "_term_candidates_in_month",
+        "_next_for_and_rand_yearly",
+        "_next_for_and_fast_path",
+        "_next_for_and",
+        "_next_for_or",
+        "expand_weekly_cached",
+        "expand_weekly_cached_mods",
+        "expand_yearly_cached",
+        "expand_monthly_cached",
+        "expand_monthly_for_month",
+        "expand_weekly",
+        "expand_yearly_for_year_strict",
+        "roll_apply",
+        "apply_day_offset",
+        "base_next_after_atom",
+        ("_interval_allowed_for_atom", "interval_allowed_for_atom"),
+        ("_advance_probe_for_interval_bucket", "advance_probe_for_interval_bucket"),
+        ("_accept_roll_candidate", "accept_roll_candidate"),
+        "next_after_atom_with_mods",
+        "atom_matches_on",
+        "next_after_factor",
+        "factor_matches_on",
+        "next_after_term",
+        "next_after_expr",
+        "_weeks_between",
+        "_resolve_moon_phase_date",
+        "_moon_phase_matches_date",
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-_expand_weekly_cached_impl = _scheduler_api._expand_weekly_cached_impl
-_expand_weekly_cached_mods_impl = _scheduler_api._expand_weekly_cached_mods_impl
-_expand_yearly_cached_impl = _scheduler_api._expand_yearly_cached_impl
-_expand_monthly_cached_impl = _scheduler_api._expand_monthly_cached_impl
-_expand_monthly_for_month_impl = _scheduler_api._expand_monthly_for_month_impl
-_expand_weekly_impl = _scheduler_api._expand_weekly_impl
-_expand_yearly_for_year_strict_impl = _scheduler_api._expand_yearly_for_year_strict_impl
-_roll_apply_impl = _scheduler_api._roll_apply_impl
-_month_doms_safe = _scheduler_api._month_doms_safe
-_month_has_hit = _scheduler_api._month_has_hit
-_first_hit_after_probe_in_month = _scheduler_api._first_hit_after_probe_in_month
-_next_valid_month_on_or_after = _scheduler_api._next_valid_month_on_or_after
-_advance_k_valid_months = _scheduler_api._advance_k_valid_months
-_monthly_align_base_for_interval = _scheduler_api._monthly_align_base_for_interval
-_selection_inner_matcher = _scheduler_api._selection_inner_matcher
-_apply_selection_date_modifiers = _scheduler_api._apply_selection_date_modifiers
-_week_monday = _scheduler_api._week_monday
-_weekly_rand_pick = _scheduler_api._weekly_rand_pick
-_is_bd = _scheduler_api._is_bd
-_random_identity = _scheduler_api._random_identity
-_random_pick_index = _scheduler_api._random_pick_index
-_random_pick_indices = _scheduler_api._random_pick_indices
-_term_rand_info = _scheduler_api._term_rand_info
-dnf_has_counted_random = _scheduler_api.dnf_has_counted_random
-_filter_by_w = _scheduler_api._filter_by_w
-_month_tokens_for_atom_cached = _scheduler_api._month_tokens_for_atom_cached
-_month_tokens_for_atom = _scheduler_api._month_tokens_for_atom
-_term_candidates_in_month = _scheduler_api._term_candidates_in_month
-_next_for_and_rand_yearly = _scheduler_api._next_for_and_rand_yearly
-_next_for_and_fast_path = _scheduler_api._next_for_and_fast_path
-_next_for_and = _scheduler_api._next_for_and
-_next_for_or = _scheduler_api._next_for_or
-expand_weekly_cached = _scheduler_api.expand_weekly_cached
-expand_weekly_cached_mods = _scheduler_api.expand_weekly_cached_mods
-expand_yearly_cached = _scheduler_api.expand_yearly_cached
-expand_monthly_cached = _scheduler_api.expand_monthly_cached
-expand_monthly_for_month = _scheduler_api.expand_monthly_for_month
-expand_weekly = _scheduler_api.expand_weekly
-expand_yearly_for_year_strict = _scheduler_api.expand_yearly_for_year_strict
-roll_apply = _scheduler_api.roll_apply
-apply_day_offset = _scheduler_api.apply_day_offset
-base_next_after_atom = _scheduler_api.base_next_after_atom
-_interval_allowed_for_atom = _scheduler_api.interval_allowed_for_atom
-_advance_probe_for_interval_bucket = _scheduler_api.advance_probe_for_interval_bucket
-_accept_roll_candidate = _scheduler_api.accept_roll_candidate
-next_after_atom_with_mods = _scheduler_api.next_after_atom_with_mods
-atom_matches_on = _scheduler_api.atom_matches_on
-next_after_factor = _scheduler_api.next_after_factor
-factor_matches_on = _scheduler_api.factor_matches_on
-next_after_term = _scheduler_api.next_after_term
-next_after_expr = _scheduler_api.next_after_expr
-_weeks_between = _scheduler_api._weeks_between
-_resolve_moon_phase_date = _scheduler_api._resolve_moon_phase_date
-_moon_phase_matches_date = _scheduler_api._moon_phase_matches_date
+for _name in _scheduler_api._aliases:
+    _alias_name, _source_name = _name if isinstance(_name, tuple) else (_name, _name)
+    globals()[_alias_name] = _scheduler_api.alias(_alias_name, _source_name)
 
 # Date/time adapters are bound after scheduler construction so date-specific
 # slot selection can reuse the facade's business-calendar callback.

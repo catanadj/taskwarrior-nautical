@@ -26,7 +26,7 @@ def _time_padding_hint(tok: str) -> str | None:
 
 def parse_atom_head(head: str, *, re_mod, parse_error_cls) -> tuple[str, int]:
     h = (head or "").strip().lower()
-    match = re_mod.fullmatch(r"(w|m|y)(?:/(\d{1,3}))?$", h)
+    match = re_mod.fullmatch(r"(w|m|y)(?:/(\d+))?$", h)
     if not match and h == "moon":
         return "moon", 1
     if not match:
@@ -38,8 +38,6 @@ def parse_atom_head(head: str, *, re_mod, parse_error_cls) -> tuple[str, int]:
     ival = int(match.group(2) or 1)
     if ival < 1:
         ival = 1
-    if ival > 100:
-        ival = 100
     return typ, ival
 
 

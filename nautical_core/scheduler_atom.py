@@ -242,8 +242,6 @@ def next_after_atom_with_mods(
     moon_phase_matches_date=None,
 ) -> object:
     ival = int(atom.get("ival", 1) or 1)
-    if ival > 100:
-        ival = 100
 
     seed = default_seed or ref_d
     typ = atom["typ"]

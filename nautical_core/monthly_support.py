@@ -179,7 +179,7 @@ def monthly_align_base_for_interval(
 
     cnt = 0
     ty, tm = sy, sm
-    while (ty, tm) != (base.year, base.month) and cnt < 480:
+    while (ty, tm) != (base.year, base.month):
         ty, tm = advance_k_valid_months(spec, ty, tm, 0)
         cnt += 1
 

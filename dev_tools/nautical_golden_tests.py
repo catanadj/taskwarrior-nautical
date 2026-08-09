@@ -8660,6 +8660,7 @@ def test_parser_validation():
 def test_parser_atom_helpers_characterization():
     """Direct atom helper behavior should stay stable for common heads, mods, and single atoms."""
     expect(core._parse_atom_head("w/2") == ("w", 2), f"Unexpected head parse: {core._parse_atom_head('w/2')!r}")
+    expect(core._parse_atom_head("w/1000") == ("w", 1000), "large recurrence intervals must not be clamped")
     mods = core._parse_atom_mods("t=09:00,12:00@+1d")
     expect(mods["t"] == [(9, 0), (12, 0)], f"Unexpected time mods: {mods!r}")
     expect(mods["day_offset"] == 1, f"Unexpected day offset: {mods!r}")
@@ -8674,6 +8675,26 @@ def test_parser_atom_helpers_characterization():
     expect(next_i > 0, "Parser should advance index for single atom")
     business_expr = "m:-1@pbd@-2bd"
     expect(core.acf_to_original_format(core.build_acf(business_expr)) == business_expr, "ACF round-trip lost business-day offset")
+
+
+def test_large_weekly_interval_is_scheduled_without_clamping():
+    """Large /N intervals should retain their cadence instead of becoming /100."""
+    dnf = core.validate_anchor_expr_strict("w/1000:mon")
+    expect(dnf[0][0]["ival"] == 1000, f"large interval was rewritten: {dnf!r}")
+    result, _meta = core.next_after_expr(
+        dnf,
+        date(2026, 1, 5),
+        default_seed=date(2026, 1, 1),
+    )
+    expect(result == date(2045, 2, 27), f"large weekly interval was not honored: {result!r}")
+
+    monthly = core.validate_anchor_expr_strict("m/500:1")
+    monthly_result, _meta = core.next_after_expr(
+        monthly,
+        date(2026, 2, 1),
+        default_seed=date(2026, 1, 1),
+    )
+    expect(monthly_result == date(2067, 9, 1), f"large monthly interval was not honored: {monthly_result!r}")
 
 
 def test_yearly_spec_token_helper_accepts_known_valid_tokens():
@@ -30288,6 +30309,7 @@ TESTS = [
     test_rand_bucket_signature_characterization,
     test_parser_validation,
     test_parser_atom_helpers_characterization,
+    test_large_weekly_interval_is_scheduled_without_clamping,
     test_yearly_spec_token_helper_accepts_known_valid_tokens,
     test_yearly_spec_token_helper_rejects_bad_ranges,
     test_yearly_token_format_characterization,

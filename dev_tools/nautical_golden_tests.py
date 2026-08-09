@@ -6750,6 +6750,58 @@ def test_config_support_reports_automatically_discovered_toml_parse_errors():
         expect(errors and path in errors[0], f"automatic config parse error was lost: {errors!r}")
 
 
+def test_config_support_rejects_unsafe_toml_and_reports_reason():
+    """Unsafe configuration files must be rejected with a path-safety diagnostic."""
+    import nautical_core.config_support as config_support
+
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "nautical.toml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('tz = "Pacific/Auckland"\n')
+        try:
+            os.chmod(path, 0o666)
+        except OSError:
+            return
+        errors = []
+        data = config_support.read_toml(
+            path,
+            tomllib_mod=__import__("tomllib"),
+            warn_missing_toml_parser=lambda _path: None,
+            warn_toml_parse_error=lambda _path, _err: None,
+            error_sink=errors.append,
+        )
+        expect(data == {}, f"unsafe config should not produce values: {data!r}")
+        expect(errors and path in errors[0], f"unsafe config path was lost: {errors!r}")
+        expect("world-writable" in errors[0], f"unsafe config reason was lost: {errors!r}")
+
+
+def test_explicit_unsafe_config_blocks_scheduling_with_actionable_error():
+    """An explicit world-writable config must not silently fall back to UTC."""
+    script = (
+        "import nautical_core\n"
+        "print(nautical_core.scheduling_configuration_error())\n"
+    )
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "nautical.toml"
+        path.write_text('tz = "Pacific/Auckland"\n', encoding="utf-8")
+        try:
+            path.chmod(0o666)
+        except OSError:
+            return
+        env = os.environ.copy()
+        env.update({"NAUTICAL_CONFIG": str(path), "PYTHONPATH": str(ROOT)})
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(ROOT),
+        )
+        expect(proc.returncode == 0, f"unsafe config verification process failed: {proc.stderr[:500]!r}")
+        expect(str(path) in proc.stdout, f"rejected config path missing: {proc.stdout!r}")
+        expect("world-writable" in proc.stdout, f"rejected config reason missing: {proc.stdout!r}")
+
+
 def test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone():
     """The shared Taskdata reload must reject malformed files and invalid timezones."""
     script = (
@@ -31346,6 +31398,8 @@ TESTS = [
     test_dst_round_trip_noon_preserves_local_date,
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_config_support_reports_automatically_discovered_toml_parse_errors,
+    test_config_support_rejects_unsafe_toml_and_reports_reason,
+    test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
     test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,
     test_core_recurrence_update_udas_config_aliases,
     test_core_live_panel_duration_config_defaults_and_clamps,

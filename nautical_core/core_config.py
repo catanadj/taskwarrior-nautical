@@ -111,19 +111,20 @@ def _warn_toml_parse_error(config_path: str, err: Exception) -> None:
     )
 
 
-def _read_toml(path: str) -> dict:
-    def _record_error(message: str) -> None:
-        global _CONFIG_ERROR, _CONFIG_ERROR_PATH
-        if not _CONFIG_ERROR:
-            _CONFIG_ERROR = str(message or "configuration unavailable")
-            _CONFIG_ERROR_PATH = str(path or "")
+def _record_config_error(message: str, path: str = "") -> None:
+    global _CONFIG_ERROR, _CONFIG_ERROR_PATH
+    if not _CONFIG_ERROR:
+        _CONFIG_ERROR = str(message or "configuration unavailable")
+        _CONFIG_ERROR_PATH = str(path or "")
 
+
+def _read_toml(path: str) -> dict:
     return config_support.read_toml(
         path,
         tomllib_mod=tomllib,
         warn_missing_toml_parser=_warn_missing_toml_parser,
         warn_toml_parse_error=_warn_toml_parse_error,
-        error_sink=_record_error,
+        error_sink=lambda message: _record_config_error(message, path),
     )
 
 
@@ -132,6 +133,10 @@ def _config_paths(taskdata: str | None = None) -> list[str]:
     return config_support.config_paths(
         warn_env_config_missing=_warn_env_config_missing,
         taskdata=selected_taskdata or None,
+        error_sink=lambda message: _record_config_error(
+            message,
+            str(os.environ.get("NAUTICAL_CONFIG") or "").strip(),
+        ),
     )
 
 

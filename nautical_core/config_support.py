@@ -141,17 +141,23 @@ def read_toml(
     if not trust_config_path:
         in_err = path_input_error(path)
         if in_err:
+            message = f"unsafe config path rejected for {path}: {in_err}"
+            if callable(error_sink):
+                error_sink(message)
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 try:
-                    sys.stderr.write(f"[nautical] Ignoring unsafe config path '{path}': {in_err}\n")
+                    sys.stderr.write(f"[nautical] Rejected unsafe config path '{path}': {in_err}\n")
                 except Exception:
                     pass
             return {}
         safety_err = path_safety_error(path, expect_dir=False)
         if safety_err:
+            message = f"unsafe config path rejected for {path}: {safety_err}"
+            if callable(error_sink):
+                error_sink(message)
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 try:
-                    sys.stderr.write(f"[nautical] Ignoring unsafe config path '{path}': {safety_err}\n")
+                    sys.stderr.write(f"[nautical] Rejected unsafe config path '{path}': {safety_err}\n")
                 except Exception:
                     pass
             return {}
@@ -222,15 +228,18 @@ def normalize_anchor_presets(value) -> dict[str, str]:
     return normalize_preset_table(value)
 
 
-def config_paths(*, warn_env_config_missing, taskdata: str | None = None) -> list[str]:
+def config_paths(*, warn_env_config_missing, taskdata: str | None = None, error_sink=None) -> list[str]:
     env_path = os.environ.get("NAUTICAL_CONFIG")
     if env_path:
         raw_env = str(env_path).strip()
         in_err = path_input_error(raw_env)
         if in_err and not env_flag_true("NAUTICAL_TRUST_CONFIG_PATH"):
+            message = f"unsafe config path rejected for {raw_env}: {in_err}"
+            if callable(error_sink):
+                error_sink(message)
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 try:
-                    sys.stderr.write(f"[nautical] Ignoring unsafe NAUTICAL_CONFIG '{raw_env}': {in_err}\n")
+                    sys.stderr.write(f"[nautical] Rejected unsafe NAUTICAL_CONFIG '{raw_env}': {in_err}\n")
                 except Exception:
                     pass
             return []

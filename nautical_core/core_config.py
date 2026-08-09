@@ -235,44 +235,37 @@ def effective_config_snapshot() -> dict:
 
 
 _CONFIG_FINGERPRINT_CACHE: str | None = None
-_CONFIG_FINGERPRINT_CACHE_KEY: tuple[str, int | None, int | None] | None = None
+_CONFIG_FINGERPRINT_CACHE_KEY: str | None = None
 _CONFIG_SOURCE_PATH_CACHE: str | None = None
 
 
-def _config_source_signature() -> tuple[str, int | None, int | None]:
-    """Return a cheap change marker for the config source."""
+def _config_source_hint() -> str:
+    """Return the source identity without touching the filesystem."""
     try:
         configured = str(os.environ.get("NAUTICAL_CONFIG") or "").strip()
         if configured:
-            source = os.path.abspath(os.path.expanduser(configured))
-        else:
-            # Reuse the source found during the initial snapshot. If there
-            # was no file, avoid rescanning all candidate locations here.
-            source = _CONFIG_SOURCE_PATH_CACHE
-            if not source or source in {"defaults", "auto"}:
-                return "auto", None, None
-        if source in {"defaults", "auto"}:
-            return source, None, None
-        stat_result = os.stat(source)
-        return (
-            source,
-            int(getattr(stat_result, "st_mtime_ns", int(stat_result.st_mtime * 1_000_000_000))),
-            int(stat_result.st_size),
-        )
+            return os.path.abspath(os.path.expanduser(configured))
+        # Once the initial snapshot has selected a source, retain that source
+        # identity. File edits are checked by configuration_drift(), not by
+        # every hot cache-key call.
+        return _CONFIG_SOURCE_PATH_CACHE or "auto"
     except Exception:
-        return "auto", None, None
+        return "auto"
 
 
 def effective_config_fingerprint() -> str:
-    """Return the config fingerprint, avoiding work until its source changes."""
+    """Return the cached config fingerprint for the current source identity.
+
+    This is intentionally a hot-path lookup. Filesystem freshness belongs to
+    ``configuration_drift()`` and explicit configuration reloads.
+    """
     global _CONFIG_FINGERPRINT_CACHE, _CONFIG_FINGERPRINT_CACHE_KEY, _CONFIG_SOURCE_PATH_CACHE
-    signature = _config_source_signature()
-    if _CONFIG_FINGERPRINT_CACHE is None or signature != _CONFIG_FINGERPRINT_CACHE_KEY:
+    source_hint = _config_source_hint()
+    if _CONFIG_FINGERPRINT_CACHE is None or source_hint != _CONFIG_FINGERPRINT_CACHE_KEY:
         snapshot = effective_config_snapshot()
         _CONFIG_FINGERPRINT_CACHE = str(snapshot.get("fingerprint") or "")
         _CONFIG_SOURCE_PATH_CACHE = str(snapshot.get("source") or "auto")
-        signature = _config_source_signature()
-        _CONFIG_FINGERPRINT_CACHE_KEY = signature
+        _CONFIG_FINGERPRINT_CACHE_KEY = _CONFIG_SOURCE_PATH_CACHE
     return _CONFIG_FINGERPRINT_CACHE
 
 

@@ -5042,6 +5042,24 @@ def test_config_fingerprint_invalidates_persistent_cache_keys():
             os.environ["NAUTICAL_CONFIG"] = previous
 
 
+def test_hot_config_fingerprint_avoids_filesystem_stat():
+    """Repeated cache-key fingerprints should not perform metadata syscalls."""
+    import nautical_core.core_config as config
+
+    first = config.effective_config_fingerprint()
+    original_stat = config.os.stat
+    try:
+        config.os.stat = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("hot fingerprint touched the filesystem")
+        )
+        expect(
+            config.effective_config_fingerprint() == first,
+            "hot fingerprint changed without a source identity change",
+        )
+    finally:
+        config.os.stat = original_stat
+
+
 def test_configuration_drift_detects_edit_and_removal():
     """A long-lived core process should report config edits and removal without reloading partially."""
     with tempfile.TemporaryDirectory() as td:
@@ -31324,6 +31342,7 @@ TESTS.extend([
     test_doctor_reports_matching_config_drift,
     test_effective_config_snapshot_isolated_and_provenanced,
     test_config_fingerprint_invalidates_persistent_cache_keys,
+    test_hot_config_fingerprint_avoids_filesystem_stat,
     test_configuration_drift_detects_edit_and_removal,
     test_doctor_reports_missing_navigator_dependencies,
     test_installer_initializes_explicit_timezone_config,

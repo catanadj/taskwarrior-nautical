@@ -5,6 +5,7 @@ import re
 from datetime import timedelta
 
 from .business_calendar import is_business_day as default_is_business_day
+from .scheduler_models import OccurrenceSearchExhausted
 
 
 def base_next_after_atom(
@@ -61,26 +62,38 @@ def base_next_after_atom(
             if dt > ref_d:
                 return dt
             p = mon + timedelta(days=7, seconds=1)
-        return ref_d + timedelta(days=7)
+        raise OccurrenceSearchExhausted(
+            "weekly random atom scheduling",
+            reference=ref_d,
+            limit=366,
+        )
 
     if typ == "w":
         days = expand_weekly_cached_mods(spec, False)
         if not days:
-            return ref_d + timedelta(days=365)
+            return None
         for i in range(1, 15):
             cand = ref_d + timedelta(days=i)
             if cand.weekday() in days:
                 return cand
-        return ref_d + timedelta(days=7)
+        raise OccurrenceSearchExhausted(
+            "weekly atom scheduling",
+            reference=ref_d,
+            limit=14,
+        )
 
     if typ == "m":
         y, m = ref_d.year, ref_d.month
         tokens = split_csv_tokens(spec)
+        had_expandable_token = False
         for _ in range(24):
             doms_union = set()
             for tok in tokens:
                 try:
-                    for d0 in expand_monthly_cached(tok, y, m):
+                    expanded = expand_monthly_cached(tok, y, m)
+                    if expanded:
+                        had_expandable_token = True
+                    for d0 in expanded:
                         doms_union.add(d0)
                 except Exception:
                     pass
@@ -91,19 +104,37 @@ def base_next_after_atom(
             m = 1 if m == 12 else (m + 1)
             if m == 1:
                 y += 1
-        return ref_d + timedelta(days=365)
+        if not had_expandable_token:
+            return None
+        raise OccurrenceSearchExhausted(
+            "monthly atom scheduling",
+            reference=ref_d,
+            limit=24,
+        )
 
     if typ == "y":
         y = ref_d.year
+        had_expandable_token = False
         for _ in range(12):
-            days = expand_yearly_cached(spec, y)
+            try:
+                days = expand_yearly_cached(spec, y)
+                if days:
+                    had_expandable_token = True
+            except Exception:
+                days = []
             for cand in days:
                 if cand > ref_d:
                     return cand
             y += 1
-        return ref_d + timedelta(days=366)
+        if not had_expandable_token:
+            return None
+        raise OccurrenceSearchExhausted(
+            "yearly atom scheduling",
+            reference=ref_d,
+            limit=12,
+        )
 
-    return ref_d + timedelta(days=365)
+    return None
 
 
 def _is_pure_iso_week_spec(spec: str) -> bool:
@@ -223,11 +254,15 @@ def next_after_atom_with_mods(
 
     if ival == 1 and not active_mod_keys(mods):
         candidate = base_next_after_atom(atom, ref_d, seed_base=seed_base)
+        if candidate is None:
+            return None
         if candidate > ref_d:
             return candidate
 
     for _ in range(max_anchor_iter):
         base = base_next_after_atom(atom, probe, seed_base=seed_base)
+        if base is None:
+            return None
         if (mods.get("bd") or mods.get("wd") is True) and not is_business_day(base):
             probe = base + timedelta(days=1)
             continue
@@ -261,7 +296,11 @@ def next_after_atom_with_mods(
             "next_after_atom_fallback",
             f"[nautical] next_after_atom_with_mods fallback after {max_anchor_iter} iterations.",
         )
-    return ref_d + timedelta(days=365)
+    raise OccurrenceSearchExhausted(
+        "modified atom scheduling",
+        reference=ref_d,
+        limit=max_anchor_iter,
+    )
 
 
 def atom_matches_on(

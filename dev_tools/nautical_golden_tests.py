@@ -10549,15 +10549,56 @@ def test_moon_phase_intersection_fails_closed_without_synthetic_date():
 
     ref = date(2026, 7, 1)
     term = [{"typ": "moon", "spec": "full"}, {"typ": "w", "spec": "fri"}]
-    result = scheduler_expr.next_after_term(
-        term,
+    try:
+        scheduler_expr.next_after_term(
+            term,
+            ref,
+            ref,
+            next_after_atom_with_mods=lambda _atom, current, _seed, seed_base=None: current + timedelta(days=1),
+            atom_matches_on=lambda *_args, **_kwargs: False,
+            intersection_guard_steps=2,
+        )
+    except core.OccurrenceSearchExhausted as exc:
+        expect(exc.scope == "AND-term scheduling", f"unexpected exhaustion scope: {exc.scope}")
+    else:
+        raise AssertionError("moon intersection should raise typed scheduler exhaustion")
+
+
+def test_scheduler_exhaustion_never_fabricates_sparse_and_date():
+    """Sparse AND rules must fail closed instead of returning a non-matching date."""
+    dnf = core.validate_anchor_expr_strict("w/100:mon + y:01-01")
+    try:
+        core.next_after_expr(
+            dnf,
+            date(2026, 1, 1),
+            default_seed=date(2026, 1, 1),
+        )
+    except core.OccurrenceSearchExhausted as exc:
+        expect(exc.scope == "AND-term scheduling", f"unexpected exhaustion scope: {exc.scope}")
+        expect(exc.limit == core.INTERSECTION_GUARD_STEPS, f"guard limit was not reported: {exc.limit}")
+    else:
+        raise AssertionError("sparse AND rule should not receive a fabricated occurrence")
+
+
+def test_scheduler_or_skips_exhausted_branch_for_valid_alternative():
+    """An exhausted OR branch must not hide a valid alternative branch."""
+    from nautical_core import scheduler_expr
+
+    ref = date(2026, 1, 1)
+    exhausted = core.OccurrenceSearchExhausted("test branch", reference=ref, limit=2)
+
+    def next_for_and(term, _ref, _seed, seed_base=None):
+        if term[0].get("spec") == "exhausted":
+            raise exhausted
+        return date(2026, 1, 5)
+
+    result = scheduler_expr.next_for_or(
+        [[{"typ": "w", "spec": "exhausted"}], [{"typ": "w", "spec": "valid"}]],
         ref,
         ref,
-        next_after_atom_with_mods=lambda _atom, current, _seed, seed_base=None: current + timedelta(days=1),
-        atom_matches_on=lambda *_args, **_kwargs: False,
-        intersection_guard_steps=2,
+        next_for_and=next_for_and,
     )
-    expect(result == (None, None), f"moon intersection fabricated a fallback date: {result}")
+    expect(result == date(2026, 1, 5), f"valid OR branch was hidden by exhaustion: {result!r}")
 
 
 def test_anchor_date_calculations():
@@ -30109,6 +30150,8 @@ TESTS = [
     test_moon_phase_natural_language_is_explicit,
     test_moon_phase_contradictions_are_rejected,
     test_moon_phase_intersection_fails_closed_without_synthetic_date,
+    test_scheduler_exhaustion_never_fabricates_sparse_and_date,
+    test_scheduler_or_skips_exhausted_branch_for_valid_alternative,
     test_anchor_date_calculations,
     test_interval_patterns,
     test_complex_dnf_expressions,

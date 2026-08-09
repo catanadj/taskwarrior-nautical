@@ -4,7 +4,7 @@ PUBLIC_EXPORTS = (
     'AnchorMods', 'AnchorAtom', 'AnchorTerm', 'AnchorDNF', 'TaskDict',
     'AnchorValidationResult', 'chain_colour_root', 'HintMetaCfg', 'HintMeta',
     'HintPerYear', 'HintLimits', 'AnchorHintsPayload', 'ParseError',
-    'YearTokenFormatError', 'AndTermUnsatisfiable', 'BusinessCalendarConfigError',
+    'YearTokenFormatError', 'AndTermUnsatisfiable', 'OccurrenceSearchExhausted', 'BusinessCalendarConfigError',
     'ANCHOR_CACHE_DIR_OVERRIDE', 'BUSINESS_CALENDAR_CONFIG', 'ASTRONOMY_CONFIG',
     'effective_config_snapshot', 'effective_config_fingerprint', 'reload_taskdata_config',
     'scheduler_config_fingerprint', 'configuration_drift', 'DEFAULT_BUSINESS_CALENDAR',

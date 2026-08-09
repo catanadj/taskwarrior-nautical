@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from .business_calendar import is_business_day as default_is_business_day
+from .scheduler_models import OccurrenceSearchExhausted
 
 
 def _choose_rand_dom(
@@ -167,16 +168,16 @@ def next_for_and_fast_path(
         if all(atom_matches_on(atom, target, seed, seed_base=seed_base) for atom in term):
             return target
         probe = target
-    if _term_has_moon(term):
-        raise parse_error_cls(
-            "Moon anchor intersection found no occurrence within the scheduler guard; refusing to invent a date."
-        )
     if os_mod.environ.get("NAUTICAL_DIAG") == "1":
         warn_once_per_day(
             "next_for_and_fallback",
             f"[nautical] _next_for_and fallback after {max_anchor_iter} iterations.",
         )
-    return ref_d + timedelta(days=365)
+    raise OccurrenceSearchExhausted(
+        "AND-term scheduling",
+        reference=ref_d,
+        limit=max_anchor_iter,
+    )
 
 
 def next_for_and(
@@ -223,7 +224,11 @@ def next_for_and(
         )
         if rand_yearly is not None:
             return rand_yearly
-        return ref_d + timedelta(days=365)
+        raise OccurrenceSearchExhausted(
+            "random yearly AND-term scheduling",
+            reference=ref_d,
+            limit=60,
+        )
     return next_for_and_fast_path(
         term,
         ref_d,
@@ -240,11 +245,20 @@ def next_for_and(
 
 def next_for_or(dnf: list[list[dict]], ref_d, seed, seed_base=None, *, next_for_and):
     best = None
+    exhausted: OccurrenceSearchExhausted | None = None
     for term in dnf:
-        cand = next_for_and(term, ref_d, seed, seed_base=seed_base)
+        try:
+            cand = next_for_and(term, ref_d, seed, seed_base=seed_base)
+        except OccurrenceSearchExhausted as exc:
+            exhausted = exc
+            continue
         if cand and cand > ref_d and (best is None or cand < best):
             best = cand
-    return best or (ref_d + timedelta(days=365))
+    if best is not None:
+        return best
+    if exhausted is not None:
+        raise exhausted
+    return None
 
 
 def next_after_term(
@@ -287,9 +301,11 @@ def next_after_term(
 
         cur = nxt
 
-    if _term_has_moon(term):
-        return None, None
-    return ref_d + timedelta(days=365), None
+    raise OccurrenceSearchExhausted(
+        "AND-term scheduling",
+        reference=ref_d,
+        limit=intersection_guard_steps,
+    )
 
 
 def _is_simple_weekly(dnf, *, active_mod_keys) -> bool:

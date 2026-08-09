@@ -44,6 +44,7 @@ _PKG_PROXY.__package__ = _PKG_IMPORT_ROOT
 _PKG_PROXY.__path__ = [_PKG_DIR]
 
 _parser_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.parser_models")
+_scheduler_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.scheduler_models")
 AnchorMods = _parser_models.AnchorMods
 AnchorAtom = _parser_models.AnchorAtom
 AnchorTerm = _parser_models.AnchorTerm
@@ -52,6 +53,7 @@ AnchorValidationResult = _parser_models.AnchorValidationResult
 ParseError = _parser_models.ParseError
 YearTokenFormatError = _parser_models.YearTokenFormatError
 AndTermUnsatisfiable = _parser_models.AndTermUnsatisfiable
+OccurrenceSearchExhausted = _scheduler_models.OccurrenceSearchExhausted
 
 
 def _import_sibling(module_name: str):

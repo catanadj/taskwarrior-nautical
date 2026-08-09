@@ -3975,46 +3975,17 @@ def _carry_relative_datetime(
     parent_anchor_field: str = "due",
     child_anchor_field: str = "due",
 ) -> None:
-    """Carry a datetime field forward relative to the recurrence anchor, preserving local wall-clock offset."""
+    """Compatibility delegate to the fail-closed shared carry service."""
     if not isinstance(parent, dict) or not isinstance(child, dict):
         return
-    if not _require_core():
-        return
-    child.pop(field, None)
-    if not (parent.get(field) and parent.get(parent_anchor_field)):
-        return
-
-    p_due = core.parse_dt_any(parent.get(parent_anchor_field))
-    p_val = core.parse_dt_any(parent.get(field))
-    if not (p_due and p_val and isinstance(child_due_utc, datetime)):
-        if _DEBUG_WAIT_SCHED:
-            _set_wait_sched_debug(field, {
-                "ok": False,
-                "reason": "parse-failed",
-                "parent_anchor": parent.get(parent_anchor_field),
-                "parent_val": parent.get(field),
-                "child_anchor": child.get(child_anchor_field) or (core.fmt_isoz(child_due_utc) if isinstance(child_due_utc, datetime) else None),
-            })
-        return
-
-    try:
-        delta = _utc_to_local_naive(p_val) - _utc_to_local_naive(p_due)
-        c_due_local = _utc_to_local_naive(child_due_utc)
-        c_val_local = c_due_local + delta
-        c_val_utc = _local_naive_to_utc(c_val_local)
-        child[field] = core.fmt_isoz(c_val_utc)
-        if _DEBUG_WAIT_SCHED:
-            _set_wait_sched_debug(field, {
-                "ok": True,
-                "parent_anchor": parent.get(parent_anchor_field),
-                "parent_val": parent.get(field),
-                "delta": _fmt_td_dd_hhmm(delta),
-                "child_anchor": child.get(child_anchor_field),
-                "child_val": child.get(field),
-            })
-    except Exception:
-        # If anything goes wrong, leave the field cleared rather than keep a stale absolute timestamp.
-        return
+    _chain_generation_service()._carry_relative_datetime(
+        parent,
+        child,
+        child_due_utc,
+        field,
+        parent_anchor_field=parent_anchor_field,
+        child_anchor_field=child_anchor_field,
+    )
 
 
 def _carry_native_until(
@@ -4026,37 +3997,17 @@ def _carry_native_until(
     parent_anchor_field: str = "due",
     child_anchor_field: str = "due",
 ) -> None:
-    """Carry native expiration by calendar placement, or exact elapsed time with the +1s marker."""
-    if not isinstance(parent, dict) or not isinstance(child, dict) or not _require_core():
+    """Compatibility delegate to the shared native-until carry service."""
+    if not isinstance(parent, dict) or not isinstance(child, dict):
         return
-    child.pop("until", None)
-    if not (parent.get("until") and parent.get(parent_anchor_field)):
-        return
-
-    native_until = core._import_sibling("native_until")
-    try:
-        parent_target = core.parse_dt_any(parent.get(parent_anchor_field))
-        parent_until = core.parse_dt_any(parent.get("until"))
-    except Exception as exc:
-        raise native_until.NativeUntilCarryError(
-            native_until.CARRY_INVALID,
-            "native until carry requires valid recurrence timestamps",
-        ) from exc
-    if not (parent_target and parent_until and isinstance(child_due_utc, datetime)):
-        raise native_until.NativeUntilCarryError(
-            native_until.CARRY_INVALID,
-            "native until carry requires valid recurrence timestamps",
-        )
-
-    child_until_utc = native_until.carry(
-        parent_target,
-        parent_until,
+    _chain_generation_service()._carry_native_until(
+        parent,
+        child,
         child_due_utc,
         kind,
-        utc_to_local_naive=_utc_to_local_naive,
-        local_naive_to_utc=_local_naive_to_utc,
+        parent_anchor_field=parent_anchor_field,
+        child_anchor_field=child_anchor_field,
     )
-    child["until"] = core.fmt_isoz(child_until_utc)
 
 
 def _configured_recurrence_uda_fields(parent: dict) -> tuple[str, ...]:
@@ -4102,54 +4053,6 @@ def _build_child_from_parent(
         cpmax,
         until_dt,
     )
-
-def _carry_rel_dt_utc(parent: dict, child: dict, child_due_utc: datetime, field: str) -> None:
-    """Carry a datetime field forward relative to due using a UTC timedelta.
-
-    offset := parent[field] - parent[due]
-    child[field] := child_due + offset
-
-    Notes:
-      - This is intentionally UTC-timedelta based (seconds-accurate).
-      - We always remove any inherited absolute value first to avoid 'sticky' wait/scheduled.
-      - When debug_wait_sched=true, we stash a short debug payload for the feedback panel.
-    """
-    if not isinstance(parent, dict) or not isinstance(child, dict):
-        return
-    if not (parent.get("due") and parent.get(field)):
-        return
-
-    # Never carry absolute timestamps forward.
-    child.pop(field, None)
-
-    p_due = _dtparse(parent.get("due"))
-    p_val = _dtparse(parent.get(field))
-    if not (isinstance(p_due, datetime) and isinstance(p_val, datetime) and isinstance(child_due_utc, datetime)):
-        if _DEBUG_WAIT_SCHED:
-            _set_wait_sched_debug(field, {
-                "ok": False,
-                "reason": "parse-failed",
-                "parent_due": parent.get("due"),
-                "parent_val": parent.get(field),
-                "child_due": child.get("due") or (core.fmt_isoz(child_due_utc) if isinstance(child_due_utc, datetime) else None),
-            })
-        return
-
-    delta = (p_val - p_due)
-    c_val = (child_due_utc + delta).replace(microsecond=0)
-    child[field] = core.fmt_isoz(c_val)
-
-    if _DEBUG_WAIT_SCHED:
-        delta_s = _fmt_td_dd_hhmm(delta)
-
-        _set_wait_sched_debug(field, {
-            "ok": True,
-            "parent_due": parent.get("due"),
-            "parent_val": parent.get(field),
-            "delta": delta_s,
-            "child_due": child.get("due"),
-            "child_val": child.get(field),
-        })
 
 # ------------------------------------------------------------------------------
 # End-of-chain summary + stats

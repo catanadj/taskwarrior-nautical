@@ -3561,26 +3561,6 @@ def _omit_dnf_from_parent(parent: dict):
     )
 
 
-def _anchor_parent_local_times(parent: dict):
-    end_dt_utc, err = _safe_parse_datetime(parent.get("end"))
-    if err:
-        raise ValueError(f"end field: {err}")
-    if not end_dt_utc:
-        return None, None, None
-
-    due_dt_utc, err = _safe_parse_datetime(parent.get("due"))
-    if err:
-        raise ValueError(f"due field: {err}")
-    sched_dt_utc, err = _safe_parse_datetime(parent.get("scheduled"))
-    if err:
-        raise ValueError(f"scheduled field: {err}")
-
-    end_local = _tolocal(end_dt_utc)
-    anchor_dt_utc = due_dt_utc or sched_dt_utc
-    due_local = _tolocal(anchor_dt_utc) if anchor_dt_utc else end_local
-    return end_local, due_local, due_dt_utc
-
-
 def _recurrence_evaluator_for_task(task: dict):
     """Build the task-scoped evaluator used by completion projections."""
     state = _modify_runtime_state()
@@ -3677,32 +3657,6 @@ def _anchor_included_occurrences(
         )
         if occurrence.local_datetime is not None
     ]
-
-
-def _compute_anchor_child_due_evaluator(parent: dict):
-    """Compute an anchor child through the shared evaluator mode policy."""
-    expr_str = str(parent.get("anchor") or "").strip()
-    anchor_file_str = str(parent.get("anchor_file") or "").strip()
-    if not ((expr_str and _validate_anchor_expr_cached(expr_str)) or anchor_file_str):
-        return (None, None, None)
-
-    evaluator = _recurrence_evaluator_for_task(parent)
-    end_local, due_local, due_dt_utc = _anchor_parent_local_times(parent)
-    if not end_local:
-        return (None, None, None)
-    result = evaluator.select_mode(
-        _anchor_mode_from_parent(parent),
-        due_local=due_local,
-        end_local=end_local,
-        due_explicit=due_dt_utc is not None,
-        fallback_hhmm=(due_local.hour, due_local.minute),
-        default_seed_date=due_local.date(),
-    )
-    if result.selected_occurrence is None:
-        raise ValueError("Could not compute next anchor occurrence")
-    target_field = "scheduled" if not due_dt_utc and parent.get("scheduled") else "due"
-    dnf = evaluator.anchor_dnf or None
-    return result.selected_occurrence.astimezone(timezone.utc), result.metadata(target_field=target_field), dnf
 
 
 def _compute_anchor_child_due(parent: dict):

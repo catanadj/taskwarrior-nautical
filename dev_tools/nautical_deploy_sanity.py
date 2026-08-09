@@ -25,6 +25,7 @@ REQUIRED_RUNTIME_FILES = (
     "on-modify.nautical",
     "on-exit.nautical",
     "nautical_core/install_runtime.py",
+    "nautical_core/runtime_manifest.py",
     "nautical_core/task_command.py",
     "nautical_core/hooks/__init__.py",
     "nautical_core/hooks/add_impl.py",
@@ -34,6 +35,23 @@ REQUIRED_RUNTIME_FILES = (
     "nautical_core/modify_expiration.py",
     "nautical_core/tools/nautical_install.py",
 )
+
+
+def _load_runtime_manifest(root: Path):
+    """Load the manifest from the candidate tree, not from the host checkout."""
+    path = root / "nautical_core" / "runtime_manifest.py"
+    if not path.is_file():
+        return None, f"manifest missing: {path}"
+    try:
+        loader = importlib.machinery.SourceFileLoader("_nautical_runtime_manifest_check", str(path))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("spec_from_file_location failed")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)  # type: ignore[union-attr]
+        return module, ""
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
 
 
 def _strict_json_object(stdout_text: str) -> tuple[bool, str]:
@@ -74,7 +92,25 @@ def _check_required_files(root: Path, require_exec: bool) -> list[dict]:
             "message": "ok" if core_pkg.exists() and core_pkg.is_file() else "missing",
         }
     )
-    for rel in REQUIRED_RUNTIME_FILES:
+    manifest, manifest_error = _load_runtime_manifest(root)
+    required_files = list(REQUIRED_RUNTIME_FILES)
+    if manifest is not None:
+        runtime_files = getattr(manifest, "HOOK_RUNTIME_FILES", {})
+        if isinstance(runtime_files, dict):
+            for files in runtime_files.values():
+                if isinstance(files, (tuple, list)):
+                    required_files.extend(
+                        str(Path("nautical_core") / str(path))
+                        for path in files
+                    )
+    else:
+        out.append({
+            "kind": "manifest",
+            "path": "nautical_core/runtime_manifest.py",
+            "ok": False,
+            "message": manifest_error,
+        })
+    for rel in dict.fromkeys(required_files):
         p = root / rel
         ok = p.exists() and p.is_file()
         msg = "ok"
@@ -85,6 +121,76 @@ def _check_required_files(root: Path, require_exec: bool) -> list[dict]:
             msg = "not executable"
         out.append({"kind": "file", "path": rel, "ok": bool(ok), "message": msg})
     return out
+
+
+def _check_lazy_lifecycle_modules(root: Path, env: dict[str, str]) -> list[dict]:
+    """Import every lifecycle module declared by the candidate's own manifest."""
+    manifest, manifest_error = _load_runtime_manifest(root)
+    if manifest is None:
+        return [{"kind": "lazy-modules", "name": "manifest", "ok": False, "message": manifest_error}]
+    lazy_modules = getattr(manifest, "HOOK_LAZY_MODULES", {})
+    runtime_files = getattr(manifest, "HOOK_RUNTIME_FILES", {})
+    if not isinstance(lazy_modules, dict) or not isinstance(runtime_files, dict):
+        return [{"kind": "lazy-modules", "name": "manifest", "ok": False, "message": "invalid module manifest"}]
+
+    smoke_script = r'''
+import importlib, importlib.util, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+impl_path = Path(sys.argv[2])
+event = sys.argv[3]
+names = sys.argv[4:]
+sys.path.insert(0, str(root))
+spec = importlib.util.spec_from_file_location(f"_nautical_lazy_{event}", impl_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError("implementation spec could not be created")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+load_core = getattr(module, "_load_core", None)
+if not callable(load_core):
+    raise RuntimeError("implementation does not expose _load_core")
+load_core()
+for name in names:
+    if name in {"calendar_feedback", "modify_completion_flow"}:
+        importlib.import_module(f"nautical_core.{name}")
+    else:
+        module._module(name)
+'''
+    results: list[dict] = []
+    for event, names in lazy_modules.items():
+        files = runtime_files.get(event)
+        impl_rel = files[0] if isinstance(files, (tuple, list)) and files else ""
+        if not impl_rel:
+            results.append({"kind": "lazy-modules", "name": event, "ok": False, "message": "implementation missing from manifest"})
+            continue
+        smoke_env = dict(env)
+        smoke_env["NAUTICAL_CORE_PATH"] = str(root)
+        smoke_env["NAUTICAL_TRUST_CORE_PATH"] = "1"
+        try:
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    smoke_script,
+                    str(root),
+                    str(root / "nautical_core" / impl_rel),
+                    event,
+                    *[str(name) for name in names],
+                ],
+                cwd=str(root),
+                env=smoke_env,
+                text=True,
+                capture_output=True,
+                timeout=20.0,
+            )
+            ok = proc.returncode == 0
+            message = "ok" if ok else (proc.stderr or proc.stdout or f"exit={proc.returncode}").strip()
+        except Exception as exc:
+            ok = False
+            message = f"{type(exc).__name__}: {exc}"
+        results.append({"kind": "lazy-modules", "name": event, "ok": bool(ok), "message": message})
+    return results
 
 
 def _check_package_layout(root: Path, env: dict[str, str]) -> list[dict]:
@@ -252,6 +358,7 @@ def main() -> int:
         layout_env.pop("NAUTICAL_DIAG", None)
         layout_env.pop("NAUTICAL_DIAG_LOG", None)
         results.extend(_check_package_layout(root, layout_env))
+        results.extend(_check_lazy_lifecycle_modules(root, layout_env))
         results.extend(_check_performance_workflow(root))
         results.extend(_check_workflow_script_references(root))
         results.extend(_check_hook_contracts(root, taskdata))

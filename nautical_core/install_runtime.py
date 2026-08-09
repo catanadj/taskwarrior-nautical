@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from nautical_core import hook_bootstrap
+from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES
 
 try:
     import fcntl
@@ -31,17 +32,6 @@ LEGACY_HOOK_FILES = {
     "on-add": "on-add-nautical.py",
     "on-modify": "on-modify-nautical.py",
     "on-exit": "on-exit-nautical.py",
-}
-HOOK_RUNTIME_FILES = {
-    "on-add": ("hooks/add_impl.py", "hook_bootstrap.py", "hook_protocol.py"),
-    "on-modify": (
-        "hooks/modify_impl.py",
-        "hook_bootstrap.py",
-        "hook_protocol.py",
-        "recurrence_evaluator.py",
-        "chain_generation.py",
-    ),
-    "on-exit": ("hooks/exit_impl.py", "hook_bootstrap.py", "config_support.py", "exit_probe.py"),
 }
 MANAGED_ROOT_FILES = ("nautical", "nautical_navigator.py")
 _COPY_IGNORE = ("__pycache__", "*.pyc", "*.pyo", ".nautical-cache", ".nautical_cache")

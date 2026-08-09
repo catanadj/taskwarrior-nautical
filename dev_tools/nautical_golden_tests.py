@@ -6000,6 +6000,47 @@ def test_deploy_sanity_script_reports_ok():
     expect(all(bool(r.get("ok")) for r in results if isinstance(r, dict)), f"failing sanity result: {results}")
 
 
+def test_deploy_sanity_rejects_missing_lazy_lifecycle_module():
+    """Deployment sanity must fail when a declared lazy module is absent."""
+    path = os.path.join(DEV_TOOLS, "nautical_deploy_sanity.py")
+    with tempfile.TemporaryDirectory() as td:
+        candidate = Path(td) / "candidate"
+        shutil.copytree(
+            ROOT,
+            candidate,
+            ignore=shutil.ignore_patterns(".git", "__pycache__", ".nautical-cache", ".nautical_cache"),
+        )
+        missing = candidate / "nautical_core" / "modify_completion_compute.py"
+        missing.unlink()
+        proc = subprocess.run(
+            [sys.executable, path, "--root", str(candidate), "--no-require-exec", "--json"],
+            text=True,
+            capture_output=True,
+            timeout=20.0,
+        )
+        expect(proc.returncode != 0, "deploy sanity accepted a release missing a lazy module")
+        payload = json.loads((proc.stdout or "{}").strip() or "{}")
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        expect(
+            any(
+                item.get("path") == "nautical_core/modify_completion_compute.py" and not item.get("ok")
+                for item in results
+                if isinstance(item, dict)
+            ),
+            f"missing lazy module was not reported by required-file checks: {results}",
+        )
+        expect(
+            any(
+                item.get("kind") == "lazy-modules"
+                and item.get("name") == "on-modify"
+                and not item.get("ok")
+                for item in results
+                if isinstance(item, dict)
+            ),
+            f"modify lazy import smoke did not fail: {results}",
+        )
+
+
 def test_hook_replay_harness_reports_ok():
     """Replay harness should pass the seeded hook corpus."""
     path = os.path.join(DEV_TOOLS, "nautical_hook_replay.py")
@@ -30771,6 +30812,7 @@ TESTS = [
     test_queue_state_migration_moves_database_sidecars_under_one_lock,
     test_queue_state_migration_rejects_cross_process_lock_contention,
     test_deploy_sanity_script_reports_ok,
+    test_deploy_sanity_rejects_missing_lazy_lifecycle_module,
     test_hook_replay_harness_reports_ok,
     test_mixed_recurrence_loop_harness_reports_ok,
     test_soak_runner_reports_ok,

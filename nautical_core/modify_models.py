@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, TypeAlias
+from typing import Any, Protocol, TypeAlias
 
 
 # Hook implementations are intentionally assembled at runtime, but the
@@ -12,6 +12,34 @@ from typing import Any, TypeAlias
 # modules support Taskwarrior's heterogeneous JSON fields.
 ServiceCallback: TypeAlias = Callable[..., Any]
 TaskRow: TypeAlias = dict[str, Any]
+
+
+class PanelCallback(Protocol):
+    """Render one structured panel without exposing hook implementation details."""
+
+    def __call__(
+        self,
+        title: str,
+        rows: list[tuple[str, Any]],
+        *,
+        kind: str = "info",
+        task: TaskRow | None = None,
+    ) -> Any:
+        ...
+
+
+class PrintTaskCallback(Protocol):
+    """Emit the current Taskwarrior task through the hook response boundary."""
+
+    def __call__(self, task: TaskRow) -> Any:
+        ...
+
+
+class DiagnosticCallback(Protocol):
+    """Record an opt-in diagnostic without affecting hook stdout."""
+
+    def __call__(self, message: str) -> Any:
+        ...
 
 
 CompletionLinkNumbersCallback: TypeAlias = Callable[
@@ -188,9 +216,9 @@ class CompletionSpawnResult:
 class CompletionSpawnServices:
     build_child_from_parent: BuildChildCallback
     spawn_child_atomic: SpawnChildCallback
-    panel: ServiceCallback
-    print_task: ServiceCallback
-    diag: ServiceCallback
+    panel: PanelCallback
+    print_task: PrintTaskCallback
+    diag: DiagnosticCallback
 
 
 @dataclass(slots=True)

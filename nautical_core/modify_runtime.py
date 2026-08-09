@@ -25,6 +25,9 @@ from nautical_core.modify_models import (
     CompletionSnapshotCallback,
     CompletionUntilCallback,
     CompletionUntilGuardCallback,
+    DiagnosticCallback,
+    PanelCallback,
+    PrintTaskCallback,
     SpawnChildCallback,
     ServiceCallback,
 )
@@ -249,9 +252,9 @@ def build_spawn_services(
     *,
     build_child_from_parent: BuildChildCallback,
     spawn_child_atomic: SpawnChildCallback,
-    panel: ServiceCallback,
-    print_task: ServiceCallback,
-    diag: ServiceCallback,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
+    diag: DiagnosticCallback,
 ) -> CompletionSpawnServices:
     return CompletionSpawnServices(
         build_child_from_parent=build_child_from_parent,

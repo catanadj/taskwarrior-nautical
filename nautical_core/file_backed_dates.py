@@ -47,6 +47,13 @@ def _cache_put(path: str, entry: _FileCacheEntry) -> None:
         _CACHE_BY_PATH.popitem(last=False)
 
 
+def _cache_get(path: str) -> _FileCacheEntry | None:
+    entry = _CACHE_BY_PATH.get(path)
+    if entry is not None:
+        _CACHE_BY_PATH.move_to_end(path)
+    return entry
+
+
 def _expand_date_spec(spec: str, *, label: str) -> set[date]:
     text = str(spec or "").strip()
     if not text:
@@ -159,13 +166,12 @@ def load_file_date_data(path: str, *, label: str) -> tuple[frozenset[date], dict
             f"the maximum is {resource_limits.MAX_FILE_BYTES} bytes."
         )
     metadata = _file_metadata(st)
-    cached = _CACHE_BY_PATH.get(path)
+    cached = _cache_get(path)
     if (
         cached is not None
         and cached.metadata == metadata
         and st.st_size > _FILE_CACHE_DIGEST_FALLBACK_BYTES
     ):
-        _CACHE_BY_PATH.move_to_end(path)
         return cached.dates, dict(cached.descriptions)
 
     raw = Path(path).read_bytes()

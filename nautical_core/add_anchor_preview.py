@@ -1273,8 +1273,7 @@ def handle_anchor_preview_on_add(
             )
         except OccurrenceSearchExhausted as exc:
             preview = []
-            reference = getattr(exc, "reference", None)
-            if getattr(reference, "year", 0) >= 9999:
+            if exc.is_date_limit:
                 rows.append(
                     (
                         "Note",

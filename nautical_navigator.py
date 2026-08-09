@@ -203,6 +203,11 @@ def _emit_check(status: str, label: str, detail: str) -> None:
 
 def _format_runtime_error(exc: BaseException) -> str:
     """Add actionable interpreter context to optional-runtime failures."""
+    exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
+    if exhausted_type is not None and isinstance(exc, exhausted_type):
+        if exc.is_date_limit:
+            return "No further matching occurrences are representable through 9999-12-31."
+        return str(exc).strip() or type(exc).__name__
     try:
         astronomy = core._import_sibling("astronomy")
         if astronomy.is_astronomy_error(exc):
@@ -404,9 +409,10 @@ def _self_check() -> int:
 
     return 0 if ok else 1
 
-def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
+def _anchor_preview_details(expr: str, count: int = 5) -> tuple[str, list[str], str | None]:
     natural = ""
     next_dates: list[str] = []
+    terminal_note: str | None = None
     dnf = None
     default_seed = None
     try:
@@ -425,9 +431,16 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
         after_date = core.to_local(core.now_utc()).date()
         seed = after_date
         for _ in range(count):
-            nxt, _meta = _next_after_expr_pair(
-                dnf, after_date, default_seed=seed, seed_base="preview"
-            )
+            try:
+                nxt, _meta = _next_after_expr_pair(
+                    dnf, after_date, default_seed=seed, seed_base="preview"
+                )
+            except Exception as exc:
+                exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
+                if exhausted_type is not None and isinstance(exc, exhausted_type) and exc.is_date_limit:
+                    terminal_note = "No further matching occurrences are representable through 9999-12-31."
+                    break
+                raise
             if not nxt:
                 break
             time_slots = core._import_sibling("time_slots")
@@ -466,7 +479,13 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
                 next_dates.append(str(nxt))
             after_date = nxt
 
-    return natural, next_dates[:count]
+    return natural, next_dates[:count], terminal_note
+
+
+def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
+    """Compatibility wrapper returning the historical two-value result."""
+    natural, next_dates, _terminal_note = _anchor_preview_details(expr, count)
+    return natural, next_dates
 
 
 def _next_after_expr_pair(dnf, after_date, **kwargs):
@@ -490,7 +509,7 @@ def _anchor_explain(expr: str) -> int:
         return 1
 
     try:
-        natural, next_dates = _anchor_preview(expr, count=5)
+        natural, next_dates, terminal_note = _anchor_preview_details(expr, count=5)
     except Exception as exc:
         console.print(f"[{COLORS['error']}]Unable to project anchor:[/] {_format_runtime_error(exc)}")
         return 1
@@ -500,6 +519,8 @@ def _anchor_explain(expr: str) -> int:
     if next_dates:
         nxt = "\n".join([f"{i}. {d}" for i, d in enumerate(next_dates, 1)])
         table.add_row("Next", nxt)
+    if terminal_note:
+        table.add_row("Chain", terminal_note)
     console.print(Panel(table, title="Anchor explain", border_style=COLORS["secondary"], expand=False))
     return 0
 
@@ -2222,6 +2243,7 @@ class TaskAnalyzer:
 
         anchor_out: List[datetime.datetime] = []
         file_out: List[datetime.datetime] = []
+        projection_terminal_note: str | None = None
 
         if anchor_expr:
             try:
@@ -2231,14 +2253,24 @@ class TaskAnalyzer:
                 dnf = None
             if dnf:
                 def step(prev_date: date):
-                    nxt_date, _ = _next_after_expr_pair(
-                        dnf,
-                        prev_date,
-                        default_seed=prev_date,
-                        seed_base=recurrence_context.seed_base,
-                        business_calendar=business_calendar,
-                    )
-                    return nxt_date
+                    nonlocal projection_terminal_note
+                    try:
+                        nxt_date, _ = _next_after_expr_pair(
+                            dnf,
+                            prev_date,
+                            default_seed=prev_date,
+                            seed_base=recurrence_context.seed_base,
+                            business_calendar=business_calendar,
+                        )
+                        return nxt_date
+                    except Exception as exc:
+                        exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
+                        if exhausted_type is not None and isinstance(exc, exhausted_type) and exc.is_date_limit:
+                            projection_terminal_note = (
+                                "No further matching occurrences are representable through 9999-12-31."
+                            )
+                            return None
+                        raise
 
                 projection_seed_date = step(start_from_date)
 
@@ -2305,6 +2337,8 @@ class TaskAnalyzer:
                     )
                     if occurrence.local_datetime is not None
                 ]
+                if projection_terminal_note:
+                    self._record_projection_warning(projection_terminal_note)
 
 
         if anchor_file:

@@ -8,6 +8,7 @@ from nautical_core import astronomy, native_until
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+from nautical_core.scheduler_models import OccurrenceSearchExhausted
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
@@ -479,6 +480,13 @@ def _build_reconcile_plan_unscoped(
         else:
             child_due, meta = generation.compute_cp_child_due(parent)
     except Exception as exc:
+        if isinstance(exc, OccurrenceSearchExhausted) and exc.is_date_limit:
+            return ReconcilePlan(
+                "legitimate_final",
+                parent,
+                next_link,
+                "no further matching occurrence is representable through 9999-12-31",
+            )
         return ReconcilePlan("error", parent, next_link, scheduling_error_message(exc))
 
     if not child_due:

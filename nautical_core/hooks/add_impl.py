@@ -1717,8 +1717,7 @@ def _handle_anchor_preview_on_add(
     except Exception as exc:
         exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
         if exhausted_type is not None and isinstance(exc, exhausted_type):
-            reference = getattr(exc, "reference", None)
-            if getattr(reference, "year", 0) >= 9999:
+            if exc.is_date_limit:
                 scheduler_message = (
                     "No matching occurrence can be represented within Nautical's supported date range "
                     "(through 9999-12-31)."

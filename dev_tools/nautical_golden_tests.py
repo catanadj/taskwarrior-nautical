@@ -10692,8 +10692,14 @@ def test_scheduler_date_boundary_exhaustion_is_typed():
         core.next_after_expr(dnf, date.max, default_seed=date.max)
     except core.OccurrenceSearchExhausted as exc:
         expect(exc.scope == "simple weekly scheduling", f"unexpected boundary scope: {exc.scope}")
+        expect(exc.kind == exc.DATE_LIMIT and exc.is_date_limit, f"boundary reason was not typed: {exc.kind!r}")
     else:
         raise AssertionError("date overflow should not escape as an untyped error")
+
+    search_limited = core.OccurrenceSearchExhausted(
+        "bounded test", reference=date(2026, 1, 1), limit=1
+    )
+    expect(search_limited.kind == search_limited.SEARCH_LIMIT, "ordinary search exhaustion was misclassified")
 
 
 def test_anchor_step_preserves_scheduler_exhaustion():
@@ -25078,6 +25084,23 @@ def test_reconcile_candidate_and_plan_paths():
     capped = dict(parent, chainMax=2)
     plan = reconcile.build_reconcile_plan(capped, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "legitimate_final" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
+
+    class ExhaustingGeneration(FakeGeneration):
+        def compute_cp_child_due(self, _parent):
+            raise core.OccurrenceSearchExhausted(
+                "cp scheduling", reference=date(9999, 1, 1), limit=1
+            )
+
+    terminal = reconcile.build_reconcile_plan(
+        parent,
+        existing_children=[],
+        hook=None,
+        generation=ExhaustingGeneration(),
+    )
+    expect(
+        terminal.action == "legitimate_final" and "9999-12-31" in terminal.reason,
+        f"date-limit exhaustion should be a terminal reconcile plan: {terminal}",
+    )
 
 
 def test_reconcile_plan_uses_task_business_calendar_context():

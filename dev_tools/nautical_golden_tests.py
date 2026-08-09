@@ -16839,6 +16839,7 @@ def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
     child_due, meta = mod._compute_cp_child_due(
         {
             "cp": "P1D",
+            "chainID": "scheduled-only-chain",
             "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (9, 0))),
             "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (17, 0))),
         }
@@ -16858,6 +16859,7 @@ def test_on_modify_compute_cp_sequence_selects_interval_by_link():
     child_due, meta = mod._compute_cp_child_due(
         {
             "cp": "3d,20d,7d",
+            "chainID": "sequence-chain",
             "link": 2,
             "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (9, 0))),
             "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 1, 1), (10, 0))),
@@ -20284,6 +20286,49 @@ def test_chain_generation_hook_adapter_does_not_capture_modify_helpers():
     child_due, metadata = service.compute_cp_child_due(parent)
     expect(child_due == datetime(2025, 1, 2, 9, 0, tzinfo=timezone.utc), f"shared CP service drifted: {child_due!r}")
     expect(metadata and metadata.get("basis") == "end+cp (preserve clock)", f"shared CP metadata drifted: {metadata!r}")
+
+
+def test_chain_generation_rejects_missing_chain_id():
+    """Shared generation must reject pre-v2 UUID-derived chain identities."""
+    from nautical_core.chain_generation import ChainGenerationService, ChainIdentityError
+
+    service = ChainGenerationService.from_core(core)
+    base = {
+        "uuid": "00000000-0000-0000-0000-000000000777",
+        "link": 1,
+        "due": "20250106T090000Z",
+        "end": "20250106T100000Z",
+    }
+    cases = (
+        dict(base, cp="1d"),
+        dict(base, anchor="w:mon@t=09:00", anchor_mode="skip"),
+    )
+    for parent in cases:
+        try:
+            if parent.get("cp"):
+                service.compute_cp_child_due(parent)
+            else:
+                service.compute_anchor_child_due(parent)
+        except ChainIdentityError as exc:
+            expect("chainID is required" in str(exc), f"missing chainID error was not actionable: {exc}")
+        else:
+            raise AssertionError("generation accepted a missing chainID")
+
+    try:
+        service.build_child_from_parent(
+            base,
+            datetime(2025, 1, 7, 9, 0, tzinfo=timezone.utc),
+            "due",
+            2,
+            "deadbeef",
+            "cp",
+            0,
+            None,
+        )
+    except ChainIdentityError as exc:
+        expect("UUID-derived legacy identities" in str(exc), f"child-build error was not actionable: {exc}")
+    else:
+        raise AssertionError("child generation accepted a missing chainID")
 
 
 def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
@@ -30888,6 +30933,7 @@ TESTS.extend([
     test_recurrence_spec_normalizes_task_fields_and_context,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
+    test_chain_generation_rejects_missing_chain_id,
     test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,
     test_recurrence_evaluator_loads_omit_file_without_text_rule,
     test_recurrence_evaluator_loads_omit_file_dates_and_descriptions_once,

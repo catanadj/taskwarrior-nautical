@@ -76,6 +76,15 @@ class CarryFieldError(RuntimeError):
         super().__init__(f"{self.field} carry failed: {self.reason}")
 
 
+class ChainIdentityError(ValueError):
+    """Raised when generation is requested without Nautical chain identity."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "chainID is required for chain generation; UUID-derived legacy identities are unsupported"
+        )
+
+
 @dataclass(slots=True)
 class ChainGenerationService:
     """Context-bound recurrence and child-payload generator.
@@ -142,8 +151,15 @@ class ChainGenerationService:
             return None, f"Unrecognized datetime format '{value}'"
         return parsed, None
 
+    @staticmethod
+    def _require_chain_id(task: Mapping[str, Any]) -> str:
+        chain_id = str(task.get("chainID") or "").strip()
+        if not chain_id:
+            raise ChainIdentityError()
+        return chain_id
+
     def _task_evaluator(self, task: Mapping[str, Any]) -> RecurrenceEvaluator:
-        identity = str(task.get("uuid") or task.get("chainID") or "preview").strip()
+        identity = self._require_chain_id(task)
         key = (
             identity,
             str(task.get("modified") or ""),
@@ -195,6 +211,7 @@ class ChainGenerationService:
         duration = str(parent.get("cp") or "").strip()
         if not duration:
             return None, None
+        chain_id = self._require_chain_id(parent)
         tokens = self.core.parse_cp_sequence_tokens(duration)
         if not tokens:
             reason = self.core.cp_sequence_parse_error(duration) or (
@@ -208,7 +225,7 @@ class ChainGenerationService:
             cp=duration,
             link_no=link_no,
             token_index=seq_idx,
-            chain_id=str(parent.get("chainID") or "").strip(),
+            chain_id=chain_id,
         )
         if not interval:
             return None, None
@@ -252,6 +269,7 @@ class ChainGenerationService:
         anchor_file = str(parent.get("anchor_file") or "").strip()
         if not expression and not anchor_file:
             return None, None, None
+        self._require_chain_id(parent)
         evaluator = self._task_evaluator(parent)
         end_local, due_local, due_dt = self._anchor_parent_local_times(parent)
         if end_local is None or due_local is None:
@@ -431,6 +449,7 @@ class ChainGenerationService:
         cpmax: int,
         until_dt: Any,
     ) -> dict[str, Any]:
+        parent_chain = self._require_chain_id(parent)
         if self.debug_wait_sched and self.wait_sched_debug is not None:
             try:
                 self.wait_sched_debug.clear()
@@ -505,10 +524,8 @@ class ChainGenerationService:
             child["chainMax"] = int(cpmax)
         if until_dt:
             child["chainUntil"] = self.core.fmt_isoz(until_dt)
-        parent_chain = str(parent.get("chainID") or "").strip() or str(parent.get("uuid") or "")[:8]
-        if parent_chain:
-            child["chainID"] = parent_chain
+        child["chainID"] = parent_chain
         return child
 
 
-__all__ = ("CarryFieldError", "ChainGenerationService")
+__all__ = ("CarryFieldError", "ChainIdentityError", "ChainGenerationService")

@@ -17790,6 +17790,7 @@ def test_compact_anchor_file_lookup_reports_cursor_exhaustion():
                 )
             except anchor_files.AnchorFileOccurrenceExhausted as exc:
                 expect("exhausted after skipping 3 omitted occurrences" in str(exc), f"unexpected exhaustion message: {exc}")
+                expect(exc.anchor_file == "calendar.csv" and exc.skipped == 3, f"exhaustion metadata was lost: {exc!r}")
             else:
                 expect(False, "compact anchor-file lookup hid cursor exhaustion")
         finally:

@@ -474,10 +474,7 @@ def _anchor_file_preview_occurrences(
             )
             if selected is None or selected.local_datetime is None:
                 if skipped:
-                    raise anchor_files.AnchorFileOccurrenceExhausted(
-                        f"anchor_file '{anchor_file_str}' exhausted after skipping "
-                        f"{skipped} omitted occurrences."
-                    )
+                    raise anchor_files.AnchorFileOccurrenceExhausted(anchor_file_str, skipped)
                 return []
             item_local = selected.local_datetime
             if not _anchor_file_is_omitted(omit_dnf, item_local, core=core, seed_base=seed_base):

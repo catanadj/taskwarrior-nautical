@@ -30,6 +30,14 @@ from .time_windows import parse_clock_value, parse_random_time_window_spec, pars
 class AnchorFileOccurrenceExhausted(LookupError):
     """Raised when a cursor has no further anchor-file occurrence."""
 
+    def __init__(self, anchor_file: str, skipped: int) -> None:
+        self.anchor_file = str(anchor_file)
+        self.skipped = int(skipped)
+        super().__init__(
+            f"anchor_file '{self.anchor_file}' exhausted after skipping "
+            f"{self.skipped} omitted occurrences."
+        )
+
 
 _WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 _NEXT_PREV_WD_RE = re.compile(r"^(next|prev)-(mon|tue|wed|thu|fri|sat|sun)$")
@@ -523,6 +531,8 @@ class AnchorFileOccurrenceProvider:
         to_local: Callable[[datetime], datetime],
         inclusive: bool = False,
     ) -> Occurrence | None:
+        # Inclusive lookups use an instant just before the requested value so
+        # the shared strict-progress guard remains valid.
         cursor_after = _cursor_before(after_local) if inclusive else after_local
         records = self._records()
         specs = [(item_date, hhmm) for item_date, hhmm, _description in records]

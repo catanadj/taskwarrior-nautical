@@ -6598,6 +6598,40 @@ def test_config_support_reports_automatically_discovered_toml_parse_errors():
         expect(errors and path in errors[0], f"automatic config parse error was lost: {errors!r}")
 
 
+def test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone():
+    """The shared Taskdata reload must reject malformed files and invalid timezones."""
+    script = (
+        "import sys\n"
+        "import nautical_core\n"
+        "from types import SimpleNamespace\n"
+        "from pathlib import Path\n"
+        "from nautical_core.tools import nautical_reconcile\n"
+        "try:\n"
+        "    nautical_reconcile._synchronize_taskdata_config(SimpleNamespace(core=nautical_core), Path(sys.argv[1]))\n"
+        "except Exception as exc:\n"
+        "    print(type(exc).__name__ + ': ' + str(exc))\n"
+        "else:\n"
+        "    raise SystemExit('reload unexpectedly succeeded')\n"
+    )
+    env = os.environ.copy()
+    env.pop("NAUTICAL_CONFIG", None)
+    env.pop("TASKDATA", None)
+    env["PYTHONPATH"] = str(ROOT)
+    cases = (("tz = [\n", "config parse failed"), ("tz = \"Invalid/Timezone\"\n", "invalid or unavailable"))
+    for contents, expected in cases:
+        with tempfile.TemporaryDirectory() as td:
+            Path(td, "config-nautical.toml").write_text(contents, encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, "-c", script, td],
+                capture_output=True,
+                text=True,
+                env=env,
+                cwd=str(ROOT),
+            )
+            expect(proc.returncode == 0, f"Taskdata config reload process failed: {proc.stderr[:500]!r}")
+            expect(expected in proc.stdout, f"reload error was not actionable: {proc.stdout!r}")
+
+
 def test_core_recurrence_update_udas_config_aliases():
     """recurrence UDA carry config should accept top-level and [recurrence] alias forms."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
@@ -21759,6 +21793,63 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
     expect(new.get("nextLink") == "deadbeef", f"verified spawn should stamp nextLink: {new}")
 
 
+def test_carry_field_failure_defers_completion_and_reconcile_mutation():
+    """Malformed carry timestamps must block both child spawn paths."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_carry_failure_boundary_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    parent = {
+        "uuid": "00000000-0000-0000-0000-000000000555",
+        "status": "completed",
+        "due": "20260101T090000Z",
+        "end": "20260101T091000Z",
+        "wait": "not-a-date",
+        "cp": "1d",
+        "chain": "on",
+        "chainID": "carry555",
+        "link": 1,
+    }
+    child_due = mod.core.parse_dt_any("20260102T090000Z")
+    panels = []
+    spawned = []
+    original_panel = mod._panel
+    original_print = mod._print_task
+    original_spawn = mod._spawn_child_atomic
+    try:
+        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
+        mod._print_task = lambda _task: None
+        mod._spawn_child_atomic = lambda *_args, **_kwargs: spawned.append(True)
+        result = mod._completion_build_and_spawn_child(
+            dict(parent),
+            child_due=child_due,
+            child_field="due",
+            next_no=2,
+            parent_short="00000000",
+            kind="cp",
+            cpmax=0,
+            until_dt=None,
+        )
+    finally:
+        mod._panel = original_panel
+        mod._print_task = original_print
+        mod._spawn_child_atomic = original_spawn
+
+    expect(result is None, f"completion should defer malformed carry, got {result!r}")
+    expect(not spawned, "completion attempted a child spawn after carry failure")
+    expect(
+        any("wait carry failed" in str(value) for _title, rows, _kind in panels for _label, value in rows),
+        f"carry failure was not actionable in completion panel: {panels!r}",
+    )
+
+    import nautical_core.reconcile as reconcile
+
+    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    expect(plan.action == "error", f"reconcile should defer malformed carry, got {plan!r}")
+    expect("wait carry failed" in plan.reason, f"reconcile carry failure was not actionable: {plan.reason!r}")
+
+
 def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait():
     """scheduled-only child spawn should carry relative dates from scheduled."""
     hook = _find_hook_file("on-modify.nautical")
@@ -30382,6 +30473,7 @@ TESTS = [
     test_on_modify_compute_counted_random_advances_within_period,
     test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails,
     test_on_modify_completion_build_and_spawn_child_happy_path,
+    test_carry_field_failure_defers_completion_and_reconcile_mutation,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
     test_on_modify_render_anchor_completion_feedback_wrapper,
     test_on_modify_render_anchor_file_completion_feedback_wrapper,
@@ -30543,6 +30635,7 @@ TESTS = [
     test_dst_round_trip_noon_preserves_local_date,
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_config_support_reports_automatically_discovered_toml_parse_errors,
+    test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,
     test_core_recurrence_update_udas_config_aliases,
     test_core_live_panel_duration_config_defaults_and_clamps,
     test_core_live_panel_footer_config_defaults_and_customizes,

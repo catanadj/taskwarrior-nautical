@@ -40,6 +40,7 @@ _DEFAULTS = {
 _CONF_CACHE = None
 _CONFIG_ERROR = ""
 _CONFIG_ERROR_PATH = ""
+_CONFIG_TASKDATA_OVERRIDE = ""
 _CACHE_LOAD_MEM_MAX = 128
 _CACHE_LOAD_MEM_TTL = 300
 _CACHE_LOAD_MEM: OrderedDict[str, tuple[int, int, dict, float]] = OrderedDict()
@@ -126,18 +127,22 @@ def _read_toml(path: str) -> dict:
     )
 
 
-def _config_paths() -> list[str]:
-    return config_support.config_paths(warn_env_config_missing=_warn_env_config_missing)
+def _config_paths(taskdata: str | None = None) -> list[str]:
+    selected_taskdata = taskdata if taskdata is not None else _CONFIG_TASKDATA_OVERRIDE
+    return config_support.config_paths(
+        warn_env_config_missing=_warn_env_config_missing,
+        taskdata=selected_taskdata or None,
+    )
 
 
 def _normalize_keys(d: dict) -> dict:
     return config_support.normalize_keys(d)
 
 
-def _load_config() -> dict:
+def _load_config(taskdata: str | None = None) -> dict:
     return config_support.load_config(
         defaults=_DEFAULTS,
-        config_paths=_config_paths,
+        config_paths=lambda: _config_paths(taskdata),
         read_toml=_read_toml,
         normalize_keys=_normalize_keys,
     )
@@ -459,6 +464,114 @@ RECURRENCE_UPDATE_UDAS = tuple(conf_uda_field_list("recurrence_update_udas"))
 CACHE_TTL_SECS = conf_schema_int("cache_ttl_secs")
 CACHE_LOAD_MEM_MAX = conf_schema_int("cache_load_mem_max")
 CACHE_LOAD_MEM_TTL = conf_schema_int("cache_load_mem_ttl")
+
+
+def _refresh_config_exports() -> None:
+    """Refresh module-level settings after loading a later Taskdata config."""
+    globals().update(
+        {
+            "WRAND_SALT": _CONF["wrand_salt"],
+            "LOCAL_TZ_NAME": _CONF["tz"],
+            "SEASON_HEMISPHERE": config_schema.normalized_choice("season_hemisphere", _CONF["season_hemisphere"]),
+            "HOLIDAY_REGION": _CONF["holiday_region"],
+            "ANCHOR_FILE_DIR": _CONF["anchor_file_dir"],
+            "OMIT_FILE_DIR": _CONF["omit_file_dir"],
+            "ANCHOR_PRESETS": _CONF["anchor_presets"],
+            "OMIT_PRESETS": _CONF["omit_presets"],
+            "BUSINESS_CALENDAR_CONFIG": _CONF["business_calendar"],
+            "ASTRONOMY_CONFIG": _CONF["astronomy"],
+            "ENABLE_ANCHOR_CACHE": conf_schema_bool("enable_anchor_cache"),
+            "ENABLE_UDA_ALIASES": conf_schema_bool("enable_uda_aliases"),
+            "ANCHOR_CACHE_DIR_OVERRIDE": conf_schema_str("anchor_cache_dir"),
+            "ANCHOR_CACHE_TTL": conf_schema_int("anchor_cache_ttl"),
+            "CHAIN_COLOR_PER_CHAIN": conf_schema_bool(
+                "chain_color_per_chain",
+                true_values={"chain", "per-chain", "per"},
+            ),
+            "SHOW_TIMELINE_GAPS": conf_schema_bool(
+                "show_timeline_gaps",
+                false_values={"0", "no", "false", "off", "none"},
+            ),
+            "SHOW_ANALYTICS": conf_schema_bool(
+                "show_analytics",
+                false_values={"0", "no", "false", "off", "none"},
+            ),
+            "ANALYTICS_STYLE": config_schema.normalized_choice("analytics_style", conf_schema_str("analytics_style").lower()),
+            "ANALYTICS_ONTIME_TOL_SECS": conf_schema_int("analytics_ontime_tol_secs"),
+            "DEBUG_WAIT_SCHED": conf_schema_bool(
+                "debug_wait_sched",
+                true_values={"1", "yes", "true", "on"},
+            ),
+            "CHECK_CHAIN_INTEGRITY": conf_schema_bool(
+                "check_chain_integrity",
+                true_values={"1", "yes", "true", "on"},
+            ),
+            "PANEL_MODE": config_schema.normalized_choice("panel_mode", conf_schema_str("panel_mode")),
+            "LIVE_PANEL_DURATION_MS": conf_schema_int("live_panel_duration_ms"),
+            "LIVE_PANEL_FOOTER": conf_schema_str("live_panel_footer"),
+            "FAST_COLOR": conf_schema_bool("fast_color"),
+            "EXIT_PROGRESS": conf_schema_bool("exit_progress"),
+            "SPAWN_QUEUE_MAX_BYTES": conf_schema_int("spawn_queue_max_bytes"),
+            "SPAWN_QUEUE_DRAIN_MAX_ITEMS": conf_schema_int("spawn_queue_drain_max_items"),
+            "MAX_CHAIN_WALK": conf_schema_int("max_chain_walk"),
+            "MAX_ANCHOR_ITER": conf_schema_int("max_anchor_iterations"),
+            "MAX_LINK_NUMBER": conf_schema_int("max_link_number"),
+            "SANITIZE_UDA": conf_schema_bool("sanitize_uda", true_values={"1", "yes", "true", "on"}),
+            "SANITIZE_UDA_MAX_LEN": conf_schema_int("sanitize_uda_max_len"),
+            "MAX_JSON_BYTES": conf_schema_int("max_json_bytes"),
+            "RECURRENCE_UPDATE_UDAS": tuple(conf_uda_field_list("recurrence_update_udas")),
+            "CACHE_TTL_SECS": conf_schema_int("cache_ttl_secs"),
+            "CACHE_LOAD_MEM_MAX": conf_schema_int("cache_load_mem_max"),
+            "CACHE_LOAD_MEM_TTL": conf_schema_int("cache_load_mem_ttl"),
+        }
+    )
+
+
+def reload_for_taskdata(taskdata: str | os.PathLike[str]) -> dict[str, str | bool]:
+    """Reload the selected config after resolving a Taskwarrior data directory.
+
+    The normal import can happen before Taskwarrior exposes ``TASKDATA``. This
+    refresh uses the same parser, precedence, and parse-error tracking as the
+    normal loader, while allowing reconcile and doctor to supply the resolved
+    directory without mutating the process environment.
+    """
+    global _CONF, _CONF_CACHE, _CONFIG_ERROR, _CONFIG_ERROR_PATH
+    global _CONFIG_TASKDATA_OVERRIDE, _CONFIG_FINGERPRINT_CACHE
+    global _CONFIG_FINGERPRINT_CACHE_KEY, _CONFIG_SOURCE_PATH_CACHE
+    global _SCHEDULER_FINGERPRINT_CACHE_KEY, _SCHEDULER_FINGERPRINT_CACHE
+    global _LOADED_CONFIG_FINGERPRINT
+
+    explicit_config = bool(str(os.environ.get("NAUTICAL_CONFIG") or "").strip())
+    resolved = ""
+    if not explicit_config:
+        resolved = os.path.abspath(os.path.expanduser(str(taskdata or "").strip()))
+        if not resolved:
+            return {"ok": False, "error": "Taskwarrior data directory is empty", "source": ""}
+        _CONFIG_TASKDATA_OVERRIDE = resolved
+    else:
+        _CONFIG_TASKDATA_OVERRIDE = ""
+    _CONFIG_ERROR = ""
+    _CONFIG_ERROR_PATH = ""
+    loaded = _load_config(taskdata=resolved or None)
+    error = configuration_error()
+    if error:
+        return {"ok": False, "error": error, "source": resolved or "explicit"}
+
+    _CONF_CACHE = copy.deepcopy(loaded)
+    _CONF = MappingProxyType(copy.deepcopy(loaded))
+    _refresh_config_exports()
+    _CONFIG_FINGERPRINT_CACHE = None
+    _CONFIG_FINGERPRINT_CACHE_KEY = None
+    _CONFIG_SOURCE_PATH_CACHE = None
+    _SCHEDULER_FINGERPRINT_CACHE_KEY = None
+    _SCHEDULER_FINGERPRINT_CACHE = None
+    _LOADED_CONFIG_FINGERPRINT = effective_config_fingerprint()
+    snapshot = effective_config_snapshot()
+    return {
+        "ok": True,
+        "error": "",
+        "source": str(snapshot.get("source") or resolved or "explicit"),
+    }
 
 
 def ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):

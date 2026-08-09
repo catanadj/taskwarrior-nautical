@@ -66,6 +66,16 @@ _UDA_CARRY_SKIP_LOWER = frozenset(
     }
 )
 
+
+class CarryFieldError(RuntimeError):
+    """Raised when a child carry field cannot be reconstructed safely."""
+
+    def __init__(self, field: str, reason: str):
+        self.field = str(field or "carry")
+        self.reason = str(reason or "unknown carry failure")
+        super().__init__(f"{self.field} carry failed: {self.reason}")
+
+
 @dataclass(slots=True)
 class ChainGenerationService:
     """Context-bound recurrence and child-payload generator.
@@ -309,14 +319,17 @@ class ChainGenerationService:
         child_anchor_field: str,
     ) -> None:
         child.pop(field, None)
-        if not parent.get(field) or not parent.get(parent_anchor_field):
+        if not parent.get(field):
             return
-        parent_anchor = self.core.parse_dt_any(parent.get(parent_anchor_field))
-        parent_value = self.core.parse_dt_any(parent.get(field))
-        if not (parent_anchor and parent_value and isinstance(child_due_utc, datetime)):
-            self._record_carry_debug(field, {"ok": False, "reason": "parse-failed"})
-            return
+        if not parent.get(parent_anchor_field):
+            reason = f"parent {parent_anchor_field} is missing"
+            self._record_carry_debug(field, {"ok": False, "reason": reason})
+            raise CarryFieldError(field, reason)
         try:
+            parent_anchor = self.core.parse_dt_any(parent.get(parent_anchor_field))
+            parent_value = self.core.parse_dt_any(parent.get(field))
+            if not (parent_anchor and parent_value and isinstance(child_due_utc, datetime)):
+                raise ValueError("parent or child recurrence timestamp is not parseable")
             parent_delta = self.core.utc_to_local_naive(parent_value) - self.core.utc_to_local_naive(
                 parent_anchor
             )
@@ -333,9 +346,11 @@ class ChainGenerationService:
                     "delta": str(parent_delta),
                 },
             )
-        except Exception:
+        except Exception as exc:
             self._record_carry_debug(field, {"ok": False, "reason": "conversion-failed"})
-            return
+            if isinstance(exc, CarryFieldError):
+                raise
+            raise CarryFieldError(field, str(exc) or "timezone conversion failed") from exc
 
     def _record_carry_debug(self, field: str, payload: dict[str, Any]) -> None:
         if not self.debug_wait_sched or self.wait_sched_debug is None:
@@ -486,4 +501,4 @@ class ChainGenerationService:
         return child
 
 
-__all__ = ("ChainGenerationService",)
+__all__ = ("CarryFieldError", "ChainGenerationService")

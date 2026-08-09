@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from nautical_core.chain_generation import CarryFieldError
 from nautical_core.modify_models import CompletionSpawnResult, CompletionSpawnServices
 
 
@@ -27,9 +28,10 @@ def completion_build_and_spawn_child(
     except Exception as exc:
         if callable(diag):
             diag(f"build child failed: {exc}")
+        reason = str(exc) if isinstance(exc, CarryFieldError) else "Failed to build next link"
         panel(
             "⛓ Chain error",
-            [("Reason", "Failed to build next link")],
+            [("Reason", reason)],
             kind="error",
         )
         print_task(new)

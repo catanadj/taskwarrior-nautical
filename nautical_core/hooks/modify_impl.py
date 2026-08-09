@@ -860,6 +860,15 @@ def _load_core() -> None:
             f"(resolved base: {_CORE_BASE})"
         )
         raise ModuleNotFoundError(msg)
+    reload_config = getattr(core, "reload_taskdata_config", None)
+    if callable(reload_config):
+        if _USE_RC_DATA_LOCATION:
+            try:
+                reload_config(TW_DATA_DIR)
+            except Exception as exc:
+                _diag(f"configuration reload blocked scheduling: {type(exc).__name__}: {exc}")
+    elif getattr(core, "__file__", None):
+        raise RuntimeError("nautical_core does not provide validated configuration reload")
     try:
         core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
     except Exception:

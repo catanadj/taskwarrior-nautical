@@ -222,7 +222,7 @@ def normalize_anchor_presets(value) -> dict[str, str]:
     return normalize_preset_table(value)
 
 
-def config_paths(*, warn_env_config_missing) -> list[str]:
+def config_paths(*, warn_env_config_missing, taskdata: str | None = None) -> list[str]:
     env_path = os.environ.get("NAUTICAL_CONFIG")
     if env_path:
         raw_env = str(env_path).strip()
@@ -272,9 +272,9 @@ def config_paths(*, warn_env_config_missing) -> list[str]:
     # The installer stores the user-editable config beside Taskwarrior's data.
     # Keep this after TASKRC candidates so an explicit Taskwarrior config still
     # wins, but before package and global fallbacks.
-    taskdata = os.environ.get("TASKDATA")
-    if taskdata:
-        paths.extend(_candidates_in_dir(taskdata))
+    taskdata_dir = str(taskdata or os.environ.get("TASKDATA") or "").strip()
+    if taskdata_dir:
+        paths.extend(_candidates_in_dir(taskdata_dir))
 
     moddir = os.path.dirname(os.path.abspath(__file__))
     paths.extend(_candidates_in_dir(moddir))

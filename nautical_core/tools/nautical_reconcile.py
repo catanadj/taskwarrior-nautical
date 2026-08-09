@@ -12,14 +12,6 @@ import json
 import os
 import sys
 import time
-try:
-    tomllib = importlib.import_module("tomllib")
-except ModuleNotFoundError:  # Python 3.10 and earlier
-    try:
-        tomllib = importlib.import_module("tomli")
-    except ModuleNotFoundError:
-        tomllib = None
-import zoneinfo
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -639,51 +631,20 @@ def _task_data_dir(task_bin: str) -> Path:
 
 
 def _synchronize_taskdata_config(hook: Any, taskdata: Path | None) -> None:
-    """Load installer-managed config when core imported too early.
-
-    Reconcile imports the hook/core before it can ask Taskwarrior for its data
-    directory. For custom TASKDATA installations that leaves the static core
-    timezone and astronomy snapshots at their defaults even though the
-    installed config is valid. Do not override an explicit NAUTICAL_CONFIG; it
-    has already been selected (or deliberately rejected) by the normal loader.
-    """
-    if taskdata is None or tomllib is None or str(os.environ.get("NAUTICAL_CONFIG") or "").strip():
+    """Apply the validated config selected for the resolved Taskwarrior data directory."""
+    if taskdata is None:
         return
     core = getattr(hook, "core", None)
     if core is None:
+        raise RuntimeError("Nautical core is unavailable for configuration reload")
+    reload_config = getattr(core, "reload_taskdata_config", None)
+    if not callable(reload_config):
+        # Lightweight fake cores used by operator-level unit tests do not
+        # carry the facade API. A real imported Nautical module must provide it.
+        if isinstance(core, ModuleType):
+            raise RuntimeError("Nautical core does not provide validated configuration reload")
         return
-    candidates = (
-        taskdata / "config-nautical.toml",
-        taskdata / "nautical.toml",
-        taskdata / "nautical_core" / "config-nautical.toml",
-        taskdata / "nautical_core" / "nautical.toml",
-    )
-    for path in candidates:
-        try:
-            if not path.is_file():
-                continue
-            data = tomllib.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        astronomy = data.get("astronomy") if isinstance(data, dict) else None
-        if isinstance(data, dict) and "astronomy" in data and isinstance(astronomy, dict):
-            core.ASTRONOMY_CONFIG = astronomy
-        timezone_name = str(data.get("tz") or "").strip() if isinstance(data, dict) else ""
-        if timezone_name:
-            try:
-                local_tz = zoneinfo.ZoneInfo(timezone_name)
-            except Exception:
-                local_tz = None
-            if local_tz is not None:
-                core.LOCAL_TZ_NAME = timezone_name
-                core._LOCAL_TZ = local_tz
-        core_config = getattr(core, "_core_config", None)
-        if core_config is not None:
-            if isinstance(data, dict) and "astronomy" in data and isinstance(astronomy, dict):
-                core_config.ASTRONOMY_CONFIG = astronomy
-            if timezone_name:
-                core_config.LOCAL_TZ_NAME = timezone_name
-        return
+    reload_config(taskdata)
 
 
 @contextmanager
@@ -1470,10 +1431,10 @@ def main(
                 env_taskdata = str(os.environ.get("TASKDATA") or "").strip()
                 if env_taskdata:
                     runtime_taskdata = Path(env_taskdata).expanduser().resolve()
-                elif not getattr(hook.core, "ASTRONOMY_CONFIG", {}):
+                elif candidates and callable(getattr(getattr(hook, "core", None), "reload_taskdata_config", None)):
                     runtime_taskdata = _task_data_dir(args.task_bin)
-        except Exception:
-            runtime_taskdata = None
+        except Exception as exc:
+            return _startup_failure(args, "taskdata_config", exc)
     _synchronize_taskdata_config(hook, runtime_taskdata)
     try:
         generation = _chain_generation_for_hook(hook)

@@ -1365,6 +1365,19 @@ def main() -> int:
         env=env,
     )
     _check_managed_runtime(findings, hooks_dir, hook_runtimes)
+    try:
+        import nautical_core as core
+
+        core.reload_taskdata_config(taskdata)
+    except Exception as exc:
+        _finding(
+            findings,
+            "config.reload",
+            "error",
+            "The runtime could not apply the Taskdata Nautical configuration.",
+            fix="Correct the reported TOML or timezone error before running reconcile or scheduling recurrence.",
+            details={"error": str(exc)},
+        )
     _check_config(findings, taskdata)
     if args.clean_cache:
         gc_result = run_cache_gc()

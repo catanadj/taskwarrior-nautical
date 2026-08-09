@@ -367,14 +367,17 @@ try:
 except Exception:
     _zoneinfo = None
 
-if _zoneinfo is None:
-    _TIMEZONE_CONFIG_ERROR = "timezone support unavailable (zoneinfo import failed)"
-    _LOCAL_TZ = None
-    _warn_once_per_day(
-        "timezone_zoneinfo_unavailable",
-        "[nautical] timezone support unavailable (zoneinfo import failed); using UTC fallback.",
-    )
-else:
+
+def _refresh_timezone() -> None:
+    global _LOCAL_TZ, _TIMEZONE_CONFIG_ERROR
+    if _zoneinfo is None:
+        _TIMEZONE_CONFIG_ERROR = "timezone support unavailable (zoneinfo import failed)"
+        _LOCAL_TZ = None
+        _warn_once_per_day(
+            "timezone_zoneinfo_unavailable",
+            "[nautical] timezone support unavailable (zoneinfo import failed); using UTC fallback.",
+        )
+        return
     try:
         _LOCAL_TZ = _zoneinfo.ZoneInfo(LOCAL_TZ_NAME)
         _TIMEZONE_CONFIG_ERROR = ""
@@ -386,6 +389,9 @@ else:
             f"[nautical] timezone '{LOCAL_TZ_NAME}' is invalid/unavailable; using UTC fallback.",
         )
 
+
+_refresh_timezone()
+
 _timeutil = _import_sibling("timeutil")
 
 
@@ -394,6 +400,66 @@ def scheduling_configuration_error() -> str:
     if CONFIG_ERROR:
         return CONFIG_ERROR
     return _TIMEZONE_CONFIG_ERROR
+
+
+def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> dict[str, str | bool]:
+    """Apply the validated configuration selected for a Taskwarrior data directory."""
+    global CONFIG_ERROR
+    result = _core_config.reload_for_taskdata(taskdata)
+    if not result.get("ok"):
+        error = str(result.get("error") or "configuration unavailable")
+        CONFIG_ERROR = f"Nautical configuration reload failed: {error}"
+        raise RuntimeError(f"Nautical configuration reload failed: {error}")
+
+    for name in (
+        "WRAND_SALT",
+        "LOCAL_TZ_NAME",
+        "SEASON_HEMISPHERE",
+        "HOLIDAY_REGION",
+        "ANCHOR_FILE_DIR",
+        "OMIT_FILE_DIR",
+        "ANCHOR_PRESETS",
+        "OMIT_PRESETS",
+        "BUSINESS_CALENDAR_CONFIG",
+        "ASTRONOMY_CONFIG",
+        "ENABLE_ANCHOR_CACHE",
+        "ENABLE_UDA_ALIASES",
+        "ANCHOR_CACHE_DIR_OVERRIDE",
+        "ANCHOR_CACHE_TTL",
+        "CHAIN_COLOR_PER_CHAIN",
+        "SHOW_TIMELINE_GAPS",
+        "SHOW_ANALYTICS",
+        "ANALYTICS_STYLE",
+        "ANALYTICS_ONTIME_TOL_SECS",
+        "DEBUG_WAIT_SCHED",
+        "CHECK_CHAIN_INTEGRITY",
+        "PANEL_MODE",
+        "LIVE_PANEL_DURATION_MS",
+        "LIVE_PANEL_FOOTER",
+        "FAST_COLOR",
+        "EXIT_PROGRESS",
+        "SPAWN_QUEUE_MAX_BYTES",
+        "SPAWN_QUEUE_DRAIN_MAX_ITEMS",
+        "MAX_CHAIN_WALK",
+        "MAX_ANCHOR_ITER",
+        "MAX_LINK_NUMBER",
+        "SANITIZE_UDA",
+        "SANITIZE_UDA_MAX_LEN",
+        "MAX_JSON_BYTES",
+        "RECURRENCE_UPDATE_UDAS",
+        "_CACHE_TTL_SECS",
+        "_CACHE_LOAD_MEM_MAX",
+        "_CACHE_LOAD_MEM_TTL",
+    ):
+        globals()[name] = getattr(_core_config, name if not name.startswith("_") else name[1:])
+    globals()["_CONF"] = _core_config._CONF
+    CONFIG_ERROR = _core_config.configuration_error()
+    _refresh_timezone()
+    _season_support.configure_hemisphere(SEASON_HEMISPHERE)
+    error = scheduling_configuration_error()
+    if error:
+        raise RuntimeError(f"Invalid Nautical configuration: {error}")
+    return result
 
 
 # --- Date/time config ---

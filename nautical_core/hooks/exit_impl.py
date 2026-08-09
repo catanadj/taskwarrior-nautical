@@ -261,6 +261,15 @@ def _load_core() -> None:
             f"in ~/.task or NAUTICAL_CORE_PATH (resolved base: {_CORE_BASE})"
         )
     core = module
+    reload_config = getattr(core, "reload_taskdata_config", None)
+    if callable(reload_config):
+        if _USE_RC_DATA_LOCATION:
+            try:
+                reload_config(TW_DATA_DIR)
+            except Exception as exc:
+                _diag(f"configuration reload unavailable for exit processing: {type(exc).__name__}: {exc}")
+    elif getattr(core, "__file__", None):
+        raise RuntimeError("nautical_core does not provide validated configuration reload")
     _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
     globals()["_QUEUE_MAX_LINES"] = _env_int(
         "NAUTICAL_SPAWN_QUEUE_MAX_LINES",

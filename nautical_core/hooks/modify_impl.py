@@ -561,6 +561,8 @@ _MODIFY_QUERIES = None
 _MODIFY_QUERIES_LOAD_FAILED = False
 _MODIFY_CHAIN_READS = None
 _MODIFY_CHAIN_READS_LOAD_FAILED = False
+_CHAIN_GENERATION = None
+_CHAIN_GENERATION_LOAD_FAILED = False
 _MODIFY_SPAWN_PREP = None
 _MODIFY_SPAWN_PREP_LOAD_FAILED = False
 _MODIFY_COMPLETION_PREFLIGHT = None
@@ -613,6 +615,12 @@ _MODULE_SPECS = {
         "_MODIFY_SPAWN_PREP_LOAD_FAILED",
         "modify_spawn_prep.py",
         "nautical_core.modify_spawn_prep",
+    ),
+    "chain_generation": (
+        "_CHAIN_GENERATION",
+        "_CHAIN_GENERATION_LOAD_FAILED",
+        "chain_generation.py",
+        "nautical_core.chain_generation",
     ),
     "modify_completion_preflight": (
         "_MODIFY_COMPLETION_PREFLIGHT",
@@ -3397,69 +3405,29 @@ def _cp_sequence_period_for_link(
 # ------------------------------------------------------------------------------
 
 
+def _chain_generation_service():
+    """Return the task-scoped shared chain-generation service."""
+    state = _modify_runtime_state()
+    generation_module = _module("chain_generation")
+    configured = tuple(_RECURRENCE_UPDATE_UDAS or ())
+    service = state.chain_generation_service
+    if (
+        service is None
+        or getattr(service, "core", None) is not core
+        or tuple(getattr(service, "recurrence_update_udas", ())) != configured
+    ):
+        service = generation_module.ChainGenerationService.from_core(
+            core,
+            recurrence_update_udas=configured,
+            debug_wait_sched=_DEBUG_WAIT_SCHED,
+            wait_sched_debug=_LAST_WAIT_SCHED_DEBUG,
+        )
+        state.chain_generation_service = service
+    return service
+
+
 def _compute_cp_child_due(parent: dict):
-    dur = (parent.get("cp") or "").strip()
-    if not dur:
-        return (None, None)
-
-    tokens = core.parse_cp_sequence_tokens(dur)
-    if not tokens:
-        reason = core.cp_sequence_parse_error(dur) or f"invalid duration format '{dur}'"
-        raise ValueError(f"cp field: {reason} (expected: 3d, 2w, 1h, etc.)")
-    link_no = core.coerce_int(parent.get("link"), 1)
-    seq_idx = (max(1, link_no) - 1) % len(tokens)
-    td = _cp_sequence_period_for_link(
-        tokens,
-        dur,
-        link_no,
-        str(parent.get("chainID") or "").strip(),
-    )
-    if not td:
-        return (None, None)
-
-    end_dt, err = _safe_parse_datetime(parent.get("end"))
-    if err:
-        raise ValueError(f"end field: {err}")
-    if not end_dt:
-        return (None, None)
-
-    due_dt0, err = _safe_parse_datetime(parent.get("due"))
-    if err:
-        raise ValueError(f"due field: {err}")
-    sched_dt0, err = _safe_parse_datetime(parent.get("scheduled"))
-    if err:
-        raise ValueError(f"scheduled field: {err}")
-
-    td_secs = int(td.total_seconds())
-    rem = td_secs % 86400
-    target_field = "scheduled" if not due_dt0 and sched_dt0 else "due"
-    anchor_dt0 = due_dt0 or sched_dt0
-
-    cand = (end_dt + td).replace(microsecond=0)
-    show_step = len(tokens) > 1 or tokens[seq_idx].get("kind") == "rand"
-    if rem != 0:
-        meta = {"period": dur, "basis": "end+cp (exact)", "target_field": target_field}
-        if show_step:
-            meta.update({"cp_sequence_len": len(tokens), "cp_sequence_step": seq_idx + 1})
-        return cand, meta
-
-    # preserve wall clock
-    if anchor_dt0:
-        dl = _tolocal(anchor_dt0)
-        hh, mm = dl.hour, dl.minute
-    else:
-        el = _tolocal(end_dt)
-        hh, mm = el.hour, el.minute
-    cand_local = _tolocal(cand)
-    due_local = cand_local.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    meta = {
-        "period": dur,
-        "basis": "end+cp (preserve clock)",
-        "target_field": target_field,
-    }
-    if show_step:
-        meta.update({"cp_sequence_len": len(tokens), "cp_sequence_step": seq_idx + 1})
-    return due_local.astimezone(timezone.utc), meta
+    return _chain_generation_service().compute_cp_child_due(parent)
 
 
 def _safe_parse_datetime(dt_str: str) -> tuple[datetime | None, str | None]:
@@ -3726,7 +3694,7 @@ def _compute_anchor_child_due_evaluator(parent: dict):
 def _compute_anchor_child_due(parent: dict):
     """Return the next anchor child through the shared evaluator only."""
     try:
-        return _compute_anchor_child_due_evaluator(parent)
+        return _chain_generation_service().compute_anchor_child_due(parent)
     except ValueError as exc:
         if "omission scan exceeded" in str(exc):
             raise ValueError("No valid anchor occurrences found after applying omit rules.") from exc
@@ -4110,8 +4078,7 @@ def _build_child_from_parent(
     cpmax: int,
     until_dt,
 ):
-    modify_spawn_prep = _module("modify_spawn_prep")
-    return modify_spawn_prep.build_child_from_parent(
+    return _chain_generation_service().build_child_from_parent(
         parent,
         child_due_utc,
         child_field,
@@ -4120,17 +4087,6 @@ def _build_child_from_parent(
         kind,
         cpmax,
         until_dt,
-        reserved_drop=_RESERVED_DROP,
-        reserved_override=_RESERVED_OVERRIDE,
-        debug_wait_sched=_DEBUG_WAIT_SCHED,
-        clear_wait_sched_debug=_LAST_WAIT_SCHED_DEBUG.clear,
-        fmt_isoz=core.fmt_isoz,
-        now_utc=core.now_utc,
-        carry_relative_datetime=_carry_relative_datetime,
-        carry_native_until=_carry_native_until,
-        recurrence_anchor_field=_recurrence_anchor_field,
-        configured_recurrence_uda_fields=_configured_recurrence_uda_fields,
-        short_uuid=core.short_uuid,
     )
 
 def _carry_rel_dt_utc(parent: dict, child: dict, child_due_utc: datetime, field: str) -> None:

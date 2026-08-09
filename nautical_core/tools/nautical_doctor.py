@@ -26,6 +26,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
+from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
+from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 import nautical_core.runtime as runtime  # noqa: E402
 
@@ -864,6 +866,13 @@ def _existing_reconcile_children(rows: list[dict[str, Any]], parent: dict[str, A
     ]
 
 
+def _safe_parse_datetime(runtime: Any, value: Any):
+    parser = getattr(runtime, "safe_parse_datetime", None) or getattr(runtime, "_safe_parse_datetime", None)
+    if not callable(parser):
+        return None, "datetime parser unavailable"
+    return parser(value)
+
+
 def _load_on_modify_hook_for_reconcile(implementation: Path | None):
     if implementation is None:
         raise RuntimeError("No validated Nautical on-modify implementation is available.")
@@ -890,25 +899,31 @@ def _check_reconcile_plans(
         return
 
     hook = None
+    generation = None
     plans: list[reconcile.ReconcilePlan] = []
     delayed_expiration_candidates: list[dict[str, Any]] = []
     unavailable = ""
-    if deleted_candidates:
-        try:
-            hook = _load_on_modify_hook_for_reconcile(on_modify_impl)
-        except Exception as exc:
-            unavailable = str(exc)
+    try:
+        import nautical_core as core
+
+        hook = TaskwarriorMutationGateway(core)
+        generation = ChainGenerationService.from_core(
+            core,
+            recurrence_update_udas=tuple(getattr(core, "RECURRENCE_UPDATE_UDAS", ()) or ()),
+            debug_wait_sched=bool(getattr(core, "DEBUG_WAIT_SCHED", False)),
+        )
+    except Exception as exc:
+        unavailable = str(exc)
     candidates = [*completion_candidates, *deleted_candidates]
     if not unavailable:
         for parent in candidates:
             existing_children = _existing_reconcile_children(rows, parent)
-            if not existing_children and hook is None:
-                try:
-                    hook = _load_on_modify_hook_for_reconcile(on_modify_impl)
-                except Exception as exc:
-                    unavailable = str(exc)
-                    break
-            plan = reconcile.build_reconcile_plan(parent, existing_children=existing_children, hook=hook)
+            plan = reconcile.build_reconcile_plan(
+                parent,
+                existing_children=existing_children,
+                hook=hook,
+                generation=generation,
+            )
             plans.append(plan)
             if str(parent.get("status") or "").strip().lower() != "deleted":
                 continue
@@ -919,7 +934,7 @@ def _check_reconcile_plans(
             planned_until_elapsed = False
             if plan.action == "spawn" and isinstance(plan.child, dict) and hook is not None:
                 try:
-                    until_dt, until_err = hook._safe_parse_datetime(plan.child.get("until"))
+                    until_dt, until_err = _safe_parse_datetime(hook, plan.child.get("until"))
                     now_utc = getattr(getattr(hook, "core", None), "now_utc", None)
                     planned_until_elapsed = (
                         not until_err

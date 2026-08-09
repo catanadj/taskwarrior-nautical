@@ -33,6 +33,7 @@ from nautical_core.modify_models import (
 @dataclass(slots=True)
 class ModifyRuntimeState:
     evaluator_sessions: dict[Any, tuple[Any, Any]] = field(default_factory=dict)
+    chain_generation_service: Any = None
     query_ctx: dict[str, dict[object, object]] = field(
         default_factory=lambda: {
             "task_text": {},

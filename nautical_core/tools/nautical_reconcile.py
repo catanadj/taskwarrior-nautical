@@ -32,6 +32,8 @@ if str(BASE_DIR) not in sys.path:
 os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
 from nautical_core import queue_store, reconcile, safe_lock, task_command  # noqa: E402
+from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
+from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 
 
@@ -89,7 +91,7 @@ def _format_local_until(hook: Any, value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
         return raw
-    parser = getattr(hook, "_safe_parse_datetime", None)
+    parser = getattr(hook, "safe_parse_datetime", None) or getattr(hook, "_safe_parse_datetime", None)
     formatter = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
     if not callable(parser) or not callable(formatter):
         return raw
@@ -100,6 +102,25 @@ def _format_local_until(hook: Any, value: Any) -> str:
     except Exception:
         pass
     return raw
+
+
+def _safe_parse_datetime(hook: Any, value: Any):
+    parser = getattr(hook, "safe_parse_datetime", None) or getattr(hook, "_safe_parse_datetime", None)
+    if not callable(parser):
+        return None, "datetime parser unavailable"
+    return parser(value)
+
+
+def _stable_child_uuid(hook: Any, parent: dict[str, Any], child: dict[str, Any]) -> str:
+    resolver = getattr(hook, "stable_child_uuid", None) or getattr(hook, "_stable_child_uuid", None)
+    return str(resolver(parent, child) or "") if callable(resolver) else ""
+
+
+def _spawn_child(hook: Any, child: dict[str, Any], parent: dict[str, Any]) -> tuple[str, set[str]]:
+    spawn = getattr(hook, "spawn_child", None) or getattr(hook, "_spawn_child", None)
+    if not callable(spawn):
+        raise RuntimeError("Taskwarrior mutation gateway does not provide child spawning")
+    return spawn(child, parent)
 
 
 def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
@@ -189,6 +210,18 @@ def _load_on_modify(hook_path: str | None = None):
     if hasattr(module, "_load_core"):
         module._load_core()
     return module
+
+
+_DEFAULT_LOAD_ON_MODIFY = _load_on_modify
+
+
+def _load_reconcile_runtime(task_bin: str, hook_path: str | None = None):
+    """Load the lightweight operator runtime; legacy hooks remain opt-in."""
+    if hook_path is not None or _load_on_modify is not _DEFAULT_LOAD_ON_MODIFY:
+        return _load_on_modify(hook_path), True
+    import nautical_core as core
+
+    return TaskwarriorMutationGateway(core, task_bin=task_bin), False
 
 
 def _bind_hook_task_bin(hook: Any, task_bin: str) -> None:
@@ -413,7 +446,7 @@ def _native_until_repairs(
     repairs: list[dict[str, Any]] = []
     errors: list[str] = []
     for row in rows:
-        reason = reconcile.invalid_native_until_reason(row, safe_parse_datetime=hook._safe_parse_datetime)
+        reason = reconcile.invalid_native_until_reason(row, safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value))
         if not reason:
             continue
         chain_id = str(row.get("chainID") or "").strip()
@@ -434,7 +467,7 @@ def _native_until_repairs(
         else:
             previous_reason = reconcile.invalid_native_until_reason(
                 previous,
-                safe_parse_datetime=hook._safe_parse_datetime,
+                safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
             )
             if previous_reason:
                 repair_error = f"previous link is invalid: {previous_reason}"
@@ -444,7 +477,7 @@ def _native_until_repairs(
                     previous,
                     row,
                     kind=kind,
-                    safe_parse_datetime=hook._safe_parse_datetime,
+                    safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
                     fmt_isoz=hook.core.fmt_isoz,
                     utc_to_local_naive=hook.core.utc_to_local_naive,
                     local_naive_to_utc=hook.core.local_naive_to_utc,
@@ -452,7 +485,7 @@ def _native_until_repairs(
         if repair_error or not repaired:
             fallback, fallback_error = reconcile.fallback_native_until_at_day_end(
                 row,
-                safe_parse_datetime=hook._safe_parse_datetime,
+                    safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
                 fmt_isoz=hook.core.fmt_isoz,
                 utc_to_local_naive=hook.core.utc_to_local_naive,
                 local_naive_to_utc=hook.core.local_naive_to_utc,
@@ -558,8 +591,8 @@ def _native_until_matches(fresh: dict[str, Any], expected: str, hook: Any) -> bo
     if actual == str(expected or "").strip():
         return True
     try:
-        actual_dt, actual_err = hook._safe_parse_datetime(actual)
-        expected_dt, expected_err = hook._safe_parse_datetime(expected)
+        actual_dt, actual_err = _safe_parse_datetime(hook, actual)
+        expected_dt, expected_err = _safe_parse_datetime(hook, expected)
         return not actual_err and not expected_err and actual_dt is not None and actual_dt == expected_dt
     except Exception:
         return False
@@ -577,7 +610,7 @@ def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any
     if str(parent.get("status") or "").strip() == "deleted":
         disposition, _reason = reconcile.deleted_chain_disposition(
             parent,
-            safe_parse_datetime=hook._safe_parse_datetime,
+            safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
         )
         if disposition != "expiration":
             return []
@@ -865,8 +898,10 @@ def _verify_applied_child(
     )
     if matched is None:
         raise RuntimeError("post-apply child verification could not identify the resolved child")
-    if callable(getattr(hook, "_stable_child_uuid", None)):
-        expected_uuid = str(hook._stable_child_uuid(fresh_parent, matched) or "").strip().lower()
+    if callable(getattr(hook, "stable_child_uuid", None)) or callable(
+        getattr(hook, "_stable_child_uuid", None)
+    ):
+        expected_uuid = _stable_child_uuid(hook, fresh_parent, matched).strip().lower()
         actual_uuid = str(matched.get("uuid") or "").strip().lower()
         if strict_uuid and expected_uuid and actual_uuid != expected_uuid:
             raise RuntimeError(
@@ -885,7 +920,27 @@ def _stale_plan(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
     )
 
 
-def _refresh_plan(task_bin: str, hook: Any, original_parent: dict[str, Any]) -> reconcile.ReconcilePlan:
+def _chain_generation_for_hook(hook: Any) -> ChainGenerationService:
+    """Build the shared generator from configured core state only."""
+    core = getattr(hook, "core", None)
+    if core is None:
+        raise RuntimeError("configured Nautical core is unavailable")
+    if not callable(getattr(core, "parse_cp_sequence_tokens", None)):
+        return ChainGenerationService.from_hook(hook)
+    return ChainGenerationService.from_core(
+        core,
+        recurrence_update_udas=tuple(getattr(core, "RECURRENCE_UPDATE_UDAS", ()) or ()),
+        debug_wait_sched=bool(getattr(core, "DEBUG_WAIT_SCHED", False)),
+    )
+
+
+def _refresh_plan(
+    task_bin: str,
+    hook: Any,
+    original_parent: dict[str, Any],
+    *,
+    generation: ChainGenerationService | None = None,
+) -> reconcile.ReconcilePlan:
     parent = _fresh_parent(task_bin, original_parent)
     if parent is None:
         return _stale_plan(original_parent, "parent no longer exists")
@@ -907,6 +962,7 @@ def _refresh_plan(task_bin: str, hook: Any, original_parent: dict[str, Any]) -> 
         parent,
         existing_children=_existing_children_for_plan(task_bin, parent, hook),
         hook=hook,
+        generation=generation or _chain_generation_for_hook(hook),
     )
 
 
@@ -918,6 +974,7 @@ def _apply_parent_atomic(
     taskdata: Path,
     lease_held: bool = False,
     verified_children: dict[str, dict[str, Any]] | None = None,
+    generation: ChainGenerationService | None = None,
 ) -> tuple[reconcile.ReconcilePlan, str]:
     parent_uuid = str(original_parent.get("uuid") or "").strip()
     if not parent_uuid:
@@ -933,11 +990,19 @@ def _apply_parent_atomic(
             drift_reason = _configuration_drift_reason(hook)
             if drift_reason:
                 raise _ConfigurationDrift(drift_reason)
-            plan = _refresh_plan(task_bin, hook, original_parent)
+            if generation is None:
+                plan = _refresh_plan(task_bin, hook, original_parent)
+            else:
+                plan = _refresh_plan(
+                    task_bin,
+                    hook,
+                    original_parent,
+                    generation=generation,
+                )
             if plan.action == "spawn":
                 if not plan.child:
                     raise RuntimeError("spawn plan has no child payload")
-                child_short, _stripped = hook._spawn_child(plan.child, plan.parent)
+                child_short, _stripped = _spawn_child(hook, plan.child, plan.parent)
                 _modify_parent_nextlink(task_bin, plan.parent, child_short)
                 verified = _verify_applied_child(
                     task_bin,
@@ -1004,7 +1069,7 @@ def _terminal_recovery_error(child: dict[str, Any], hook: Any, recovery_at: Any)
         return ""
     until_raw = child.get("until")
     try:
-        until_dt, until_err = hook._safe_parse_datetime(until_raw)
+        until_dt, until_err = _safe_parse_datetime(hook, until_raw)
     except Exception:
         return "live recovery child native until could not be parsed"
     if until_err or until_dt is None:
@@ -1013,7 +1078,7 @@ def _terminal_recovery_error(child: dict[str, Any], hook: Any, recovery_at: Any)
     target_field = "due" if child.get("due") else "scheduled"
     target_raw = child.get(target_field)
     try:
-        target_dt, target_err = hook._safe_parse_datetime(target_raw)
+        target_dt, target_err = _safe_parse_datetime(hook, target_raw)
     except Exception:
         return f"live recovery child {target_field} could not be parsed"
     if target_err or target_dt is None:
@@ -1062,7 +1127,7 @@ def _virtual_expired_child(
     child = dict(plan.child or {})
     until_raw = child.get("until")
     try:
-        until_dt, until_err = hook._safe_parse_datetime(until_raw)
+        until_dt, until_err = _safe_parse_datetime(hook, until_raw)
     except Exception:
         return None, "planned child expiration could not be parsed"
     if until_err or until_dt is None:
@@ -1096,6 +1161,7 @@ def _reconcile_candidate(
     max_expiration_hops: int,
     recovery_at: Any,
     lease_held: bool = False,
+    generation: ChainGenerationService | None = None,
 ) -> list[tuple[reconcile.ReconcilePlan, str]]:
     outcomes: list[tuple[reconcile.ReconcilePlan, str]] = []
     current = parent
@@ -1151,6 +1217,7 @@ def _reconcile_candidate(
                 current,
                 existing_children=_existing_children_for_plan(task_bin, current, hook),
                 hook=hook,
+                generation=generation or _chain_generation_for_hook(hook),
             )
             applied_short = ""
         outcomes.append((plan, applied_short))
@@ -1232,7 +1299,7 @@ def _describe_plan(plan: reconcile.ReconcilePlan, *, hook: Any, fmt_dt_local=Non
     if not child_until:
         return evidence
     try:
-        until_dt, until_err = hook._safe_parse_datetime(child_until)
+        until_dt, until_err = _safe_parse_datetime(hook, child_until)
     except Exception:
         return evidence
     if until_err or until_dt is None:
@@ -1379,17 +1446,18 @@ def main(
             return main(argv, _apply_lease_held=True, _locked_taskdata=taskdata)
 
     try:
-        hook = _load_on_modify(args.hook_path)
+        hook, legacy_hook = _load_reconcile_runtime(args.task_bin, args.hook_path)
     except Exception as exc:
         return _startup_failure(args, "hook_load", exc)
     try:
-        _validate_hook_protocol(hook)
-        _bind_hook_task_bin(hook, args.task_bin)
+        if legacy_hook:
+            _validate_hook_protocol(hook)
+            _bind_hook_task_bin(hook, args.task_bin)
         fmt_dt_local = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
         now_utc = getattr(getattr(hook, "core", None), "now_utc", None)
         recovery_at = now_utc() if callable(now_utc) else datetime.now(timezone.utc)
     except Exception as exc:
-        return _startup_failure(args, "hook_protocol", exc)
+        return _startup_failure(args, "hook_protocol" if legacy_hook else "runtime", exc)
     global _READ_SNAPSHOT
     snapshot = _ReconcileSnapshot(args.task_bin)
     _READ_SNAPSHOT = snapshot
@@ -1415,6 +1483,10 @@ def main(
         except Exception:
             runtime_taskdata = None
     _synchronize_taskdata_config(hook, runtime_taskdata)
+    try:
+        generation = _chain_generation_for_hook(hook)
+    except Exception as exc:
+        return _startup_failure(args, "chain_generation", exc)
     configuration_drift_reason = _configuration_drift_reason(hook)
     native_until_audit_warning = ""
     if configuration_drift_reason:
@@ -1496,6 +1568,7 @@ def main(
                     max_expiration_hops=args.max_expiration_hops,
                     recovery_at=recovery_at,
                     lease_held=_apply_lease_held,
+                    generation=generation,
                 )
             except Exception as exc:
                 reason = str(exc).strip() or type(exc).__name__

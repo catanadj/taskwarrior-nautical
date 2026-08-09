@@ -5,11 +5,27 @@ from dataclasses import dataclass
 from typing import Any
 
 from nautical_core import astronomy, native_until
+from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
+
+
+def _generation_service(hook: Any = None) -> ChainGenerationService:
+    """Resolve the shared generator without requiring an on-modify module."""
+    if isinstance(hook, ChainGenerationService):
+        return hook
+    if hook is not None:
+        return ChainGenerationService.from_hook(hook)
+    import nautical_core as core
+
+    return ChainGenerationService.from_core(
+        core,
+        recurrence_update_udas=tuple(getattr(core, "RECURRENCE_UPDATE_UDAS", ()) or ()),
+        debug_wait_sched=bool(getattr(core, "DEBUG_WAIT_SCHED", False)),
+    )
 
 
 def scheduling_error_message(exc: BaseException) -> str:
@@ -114,14 +130,17 @@ def expiration_recurrence_parent(parent: dict[str, Any]) -> dict[str, Any]:
     return calculation_parent
 
 
-def compute_expiration_child_due(parent: dict[str, Any], *, hook: Any) -> tuple[Any, dict[str, Any]]:
+def compute_expiration_child_due(
+    parent: dict[str, Any], *, hook: Any = None, generation: ChainGenerationService | None = None
+) -> tuple[Any, dict[str, Any]]:
     """Compute the next recurrence target after an expired link without mutating it."""
+    generation = generation or _generation_service(hook)
     calculation_parent = expiration_recurrence_parent(parent)
     kind = recurrence_kind(parent)
     if kind in {"anchor", "anchor_file"}:
-        child_due, meta, _dnf = hook._compute_anchor_child_due(calculation_parent)
+        child_due, meta, _dnf = generation.compute_anchor_child_due(calculation_parent)
     else:
-        child_due, meta = hook._compute_cp_child_due(calculation_parent)
+        child_due, meta = generation.compute_cp_child_due(calculation_parent)
     target_field = "scheduled" if not parent.get("due") and parent.get("scheduled") else "due"
     result_meta = dict(meta or {})
     result_meta["basis"] = f"{target_field} recurrence target (expired)"
@@ -139,10 +158,12 @@ def invalid_relative_carry_reason(
     child: dict[str, Any],
     *,
     child_field: str,
-    hook: Any,
+    hook: Any = None,
+    generation: ChainGenerationService | None = None,
 ) -> str | None:
     """Verify that scheduled/wait retain their local offset from the recurrence target."""
-    core = getattr(hook, "core", None)
+    generation = generation or _generation_service(hook)
+    core = generation.core
     utc_to_local_naive = getattr(core, "utc_to_local_naive", None)
     if not callable(getattr(core, "parse_dt_any", None)) or not callable(utc_to_local_naive):
         return None
@@ -156,10 +177,10 @@ def invalid_relative_carry_reason(
         if not child.get(field):
             return f"{field} carry is missing from the reconciled child"
         try:
-            parent_target = hook.core.parse_dt_any(parent.get(parent_field))
-            parent_value = hook.core.parse_dt_any(parent.get(field))
-            child_target = hook.core.parse_dt_any(child.get(child_field))
-            child_value = hook.core.parse_dt_any(child.get(field))
+            parent_target = core.parse_dt_any(parent.get(parent_field))
+            parent_value = core.parse_dt_any(parent.get(field))
+            child_target = core.parse_dt_any(child.get(child_field))
+            child_value = core.parse_dt_any(child.get(field))
             if not all((parent_target, parent_value, child_target, child_value)):
                 return f"{field} carry contains an unparseable timestamp"
             parent_delta = utc_to_local_naive(parent_value) - utc_to_local_naive(parent_target)
@@ -371,16 +392,18 @@ def _build_expiration_child_with_day_end(
     cpmax: int,
     until_dt: Any,
     hook: Any,
+    generation: ChainGenerationService | None = None,
 ) -> dict[str, Any]:
+    generation = generation or _generation_service(hook)
     target_raw = parent.get("due") or parent.get("scheduled")
-    target_dt, target_err = hook._safe_parse_datetime(target_raw)
+    target_dt, target_err = generation.safe_parse_datetime(target_raw)
     if target_err or target_dt is None:
         raise ValueError(target_err or "expired recurrence has no due or scheduled timestamp")
-    target_local = hook.core.to_local(target_dt)
-    fallback_until = hook.core.build_local_datetime(target_local.date(), (23, 59)) + timedelta(seconds=59)
+    target_local = generation.core.to_local(target_dt)
+    fallback_until = generation.core.build_local_datetime(target_local.date(), (23, 59)) + timedelta(seconds=59)
     fallback_parent = dict(parent)
-    fallback_parent["until"] = hook.core.fmt_isoz(fallback_until)
-    return hook._build_child_from_parent(
+    fallback_parent["until"] = generation.core.fmt_isoz(fallback_until)
+    return generation.build_child_from_parent(
         fallback_parent,
         child_due,
         child_field,
@@ -397,14 +420,16 @@ def _build_reconcile_plan_unscoped(
     *,
     existing_children: list[dict[str, Any]],
     hook: Any,
+    generation: ChainGenerationService | None = None,
 ) -> ReconcilePlan:
+    generation = generation or _generation_service(hook)
     link = int_or_default(parent.get("link"), 1)
     next_link = link + 1
     is_expiration = str(parent.get("status") or "").strip() == "deleted"
     if is_expiration:
         disposition, reason = deleted_chain_disposition(
             parent,
-            safe_parse_datetime=hook._safe_parse_datetime,
+            safe_parse_datetime=generation.safe_parse_datetime,
         )
         if disposition == "manual":
             return ReconcilePlan("manual_stop", parent, next_link, reason)
@@ -438,8 +463,8 @@ def _build_reconcile_plan_unscoped(
         # still reports malformed chain limits through the hook boundary.
         evaluator = None
         kind = recurrence_kind(parent)
-        until_dt, until_err = hook._safe_parse_datetime(parent.get("chainUntil"))
-        cpmax = hook.core.coerce_int(parent.get("chainMax"), 0)
+        until_dt, until_err = generation.safe_parse_datetime(parent.get("chainUntil"))
+        cpmax = generation.core.coerce_int(parent.get("chainMax"), 0)
     if until_err:
         return ReconcilePlan("error", parent, next_link, f"invalid chainUntil: {until_err}")
 
@@ -448,11 +473,11 @@ def _build_reconcile_plan_unscoped(
 
     try:
         if is_expiration:
-            child_due, meta = compute_expiration_child_due(parent, hook=hook)
+            child_due, meta = compute_expiration_child_due(parent, hook=hook, generation=generation)
         elif kind in {"anchor", "anchor_file"}:
-            child_due, meta, _dnf = hook._compute_anchor_child_due(parent)
+            child_due, meta, _dnf = generation.compute_anchor_child_due(parent)
         else:
-            child_due, meta = hook._compute_cp_child_due(parent)
+            child_due, meta = generation.compute_cp_child_due(parent)
     except Exception as exc:
         return ReconcilePlan("error", parent, next_link, scheduling_error_message(exc))
 
@@ -464,7 +489,7 @@ def _build_reconcile_plan_unscoped(
     child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"
     parent_short = short_uuid(parent.get("uuid"))
     try:
-        child = hook._build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt)
+        child = generation.build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt)
     except Exception as exc:
         carry_conflict = (
             isinstance(exc, native_until.NativeUntilCarryError)
@@ -482,12 +507,19 @@ def _build_reconcile_plan_unscoped(
                     cpmax=cpmax,
                     until_dt=until_dt,
                     hook=hook,
+                    generation=generation,
                 )
             except Exception as fallback_exc:
                 return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
         else:
             return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
-    carry_reason = invalid_relative_carry_reason(parent, child, child_field=child_field, hook=hook)
+    carry_reason = invalid_relative_carry_reason(
+        parent,
+        child,
+        child_field=child_field,
+        hook=hook,
+        generation=generation,
+    )
     if carry_reason:
         return ReconcilePlan("error", parent, next_link, carry_reason, child_due=child_due)
     reason = "expired link missing next link" if is_expiration else "missing next link"
@@ -499,15 +531,18 @@ def build_reconcile_plan(
     *,
     existing_children: list[dict[str, Any]],
     hook: Any,
+    generation: ChainGenerationService | None = None,
 ) -> ReconcilePlan:
     """Build one plan inside the parent task's business-calendar context."""
-    core = getattr(hook, "core", None)
+    generation = generation or _generation_service(hook)
+    core = generation.core
     use_task_calendar = getattr(core, "use_task_business_calendar", None)
     if not callable(use_task_calendar):
         return _build_reconcile_plan_unscoped(
             parent,
             existing_children=existing_children,
             hook=hook,
+            generation=generation,
         )
 
     next_link = int_or_default(parent.get("link"), 1) + 1
@@ -525,4 +560,5 @@ def build_reconcile_plan(
             parent,
             existing_children=existing_children,
             hook=hook,
+            generation=generation,
         )

@@ -1304,7 +1304,8 @@ def _print_plan(
         _print_evidence(evidence, ("reason", "next_link", "existing_child"))
     elif plan.action == "legitimate_final":
         suffix = " -> set chain:off" if applied_short else ""
-        print(_style(f"final: {parent} ({plan.reason}){suffix}", _action_style(plan.action)))
+        label = "terminal" if reconcile.is_terminal_plan(plan) else "final"
+        print(_style(f"{label}: {parent} ({plan.reason}){suffix}", _action_style(plan.action)))
         _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
     elif plan.action == "manual_stop":
         suffix = " -> set chain:off" if applied_short else ""
@@ -1328,7 +1329,8 @@ def _print_recovery_group(
     noun = "occurrence" if hops == 1 else "occurrences"
     print(_style(f"recover: {_fmt_parent(first.parent)} -> advanced {hops} {noun}", "cyan"))
     if last.action in {"error", "partial", "legitimate_final", "manual_stop", "stale"}:
-        print(_style(f"  result: {last.action.replace('_', ' ')} ({last.reason})", _action_style(last.action)))
+        result = "terminal" if reconcile.is_terminal_plan(last) else last.action.replace("_", " ")
+        print(_style(f"  result: {result} ({last.reason})", _action_style(last.action)))
         return
     if applied_short:
         print(f"  child: {applied_short}")
@@ -1351,6 +1353,7 @@ def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
             "spawn": 0,
             "backfill_nextlink": 0,
             "legitimate_final": 0,
+            "terminal": 0,
             "manual_stop": 0,
             "stale": 0,
             "partial": 0,
@@ -1614,6 +1617,7 @@ def main(
         "spawn": sum(1 for p in plans if p.action == "spawn"),
         "backfill_nextlink": sum(1 for p in plans if p.action == "backfill_nextlink"),
         "legitimate_final": sum(1 for p in plans if p.action == "legitimate_final"),
+        "terminal": sum(1 for p in plans if reconcile.is_terminal_plan(p)),
         "manual_stop": sum(1 for p in plans if p.action == "manual_stop"),
         "stale": sum(1 for p in plans if p.action == "stale"),
         "partial": sum(1 for p in plans if p.action == "partial"),
@@ -1650,6 +1654,7 @@ def main(
             f"spawn={summary['spawn']} backfill={summary['backfill_nextlink']} "
             f"expiration_hops={summary['expiration_hops']} recovered={summary['recovered_chains']} "
             f"final={summary['legitimate_final']} manual={summary['manual_stop']} "
+            f"terminal={summary['terminal']} "
             f"stale={summary['stale']} partial={summary['partial']} errors={summary['errors']}"
             f" plan_errors={summary['plan_errors']}"
             f" native_until_errors={summary['native_until_error_count']}"

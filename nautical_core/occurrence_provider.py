@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Protocol
 
+from .scheduler_models import OccurrenceSearchExhausted
 from .timeutil import compare_datetimes
 
 
@@ -119,11 +120,19 @@ def collect_after(
     iterations = 0
     while included_count < limit and iterations < max_iterations:
         iterations += 1
-        occurrence = provider.next_after(
-            cursor,
-            build_local_datetime=build_local_datetime,
-            to_local=to_local,
-        )
+        try:
+            occurrence = provider.next_after(
+                cursor,
+                build_local_datetime=build_local_datetime,
+                to_local=to_local,
+            )
+        except OccurrenceSearchExhausted as exc:
+            # A finite recurrence may end after already yielding valid events.
+            # Preserve that useful prefix; an empty result remains an error so
+            # first-occurrence failures stay actionable at the caller boundary.
+            if exc.is_date_limit and out:
+                return out
+            raise
         if occurrence is None:
             break
         if not isinstance(occurrence, Occurrence):

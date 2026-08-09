@@ -66,6 +66,7 @@ def base_next_after_atom(
             "weekly random atom scheduling",
             reference=ref_d,
             limit=366,
+            kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
         )
 
     if typ == "w":
@@ -80,6 +81,7 @@ def base_next_after_atom(
             "weekly atom scheduling",
             reference=ref_d,
             limit=14,
+            kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
         )
 
     if typ == "m":
@@ -110,6 +112,7 @@ def base_next_after_atom(
             "monthly atom scheduling",
             reference=ref_d,
             limit=24,
+            kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
         )
 
     if typ == "y":
@@ -132,6 +135,7 @@ def base_next_after_atom(
             "yearly atom scheduling",
             reference=ref_d,
             limit=12,
+            kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
         )
 
     return None
@@ -314,6 +318,7 @@ def next_after_atom_with_mods(
         "modified atom scheduling",
         reference=ref_d,
         limit=max_anchor_iter,
+        kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
     )
 
 

@@ -7,7 +7,7 @@ from typing import Any, Callable
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from . import calendar_feedback, panel_diagnostics
 from .occurrence_provider import Occurrence, _cursor_before, _sort_datetimes
-from .scheduler_models import OccurrenceSearchExhausted
+from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 
 def _preview_seed_base(task: dict[str, Any], fallback_chain_id: str) -> str:
@@ -1277,7 +1277,7 @@ def handle_anchor_preview_on_add(
                 rows.append(
                     (
                         "Note",
-                        "[yellow]No further matching occurrences are representable through 9999-12-31; "
+                        f"[yellow]{occurrence_exhaustion_message(exc)}; "
                         "the first occurrence remains valid.[/]",
                     )
                 )

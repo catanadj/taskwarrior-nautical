@@ -8,7 +8,7 @@ from nautical_core import astronomy, native_until
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-from nautical_core.scheduler_models import OccurrenceSearchExhausted
+from nautical_core.scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
@@ -43,6 +43,14 @@ class ReconcilePlan:
     child: dict[str, Any] | None = None
     child_short: str = ""
     child_due: Any = None
+
+
+def is_terminal_plan(plan: ReconcilePlan) -> bool:
+    """Return whether a final plan ended at the representable date boundary."""
+    return (
+        plan.action == "legitimate_final"
+        and "representable through 9999-12-31" in str(plan.reason)
+    )
 
 
 def short_uuid(value: object) -> str:
@@ -365,6 +373,8 @@ def describe_plan(plan: ReconcilePlan, *, fmt_dt_local: Any = None) -> dict[str,
         "trigger": trigger,
         "reason": plan.reason,
     }
+    if is_terminal_plan(plan):
+        evidence["terminal"] = True
     if plan.child_due is not None:
         evidence["child_due"] = str(plan.child_due)
         if callable(fmt_dt_local):
@@ -485,7 +495,7 @@ def _build_reconcile_plan_unscoped(
                 "legitimate_final",
                 parent,
                 next_link,
-                "no further matching occurrence is representable through 9999-12-31",
+                occurrence_exhaustion_message(exc),
             )
         return ReconcilePlan("error", parent, next_link, scheduling_error_message(exc))
 

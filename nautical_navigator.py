@@ -205,9 +205,11 @@ def _format_runtime_error(exc: BaseException) -> str:
     """Add actionable interpreter context to optional-runtime failures."""
     exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
     if exhausted_type is not None and isinstance(exc, exhausted_type):
-        if exc.is_date_limit:
-            return "No further matching occurrences are representable through 9999-12-31."
-        return str(exc).strip() or type(exc).__name__
+        try:
+            formatter = core._import_sibling("scheduler_models").occurrence_exhaustion_message
+            return formatter(exc)
+        except Exception:
+            return str(exc).strip() or type(exc).__name__
     try:
         astronomy = core._import_sibling("astronomy")
         if astronomy.is_astronomy_error(exc):
@@ -438,7 +440,7 @@ def _anchor_preview_details(expr: str, count: int = 5) -> tuple[str, list[str], 
             except Exception as exc:
                 exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
                 if exhausted_type is not None and isinstance(exc, exhausted_type) and exc.is_date_limit:
-                    terminal_note = "No further matching occurrences are representable through 9999-12-31."
+                    terminal_note = _format_runtime_error(exc)
                     break
                 raise
             if not nxt:
@@ -2266,9 +2268,7 @@ class TaskAnalyzer:
                     except Exception as exc:
                         exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
                         if exhausted_type is not None and isinstance(exc, exhausted_type) and exc.is_date_limit:
-                            projection_terminal_note = (
-                                "No further matching occurrences are representable through 9999-12-31."
-                            )
+                            projection_terminal_note = _format_runtime_error(exc)
                             return None
                         raise
 

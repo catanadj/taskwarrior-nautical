@@ -250,6 +250,7 @@ def next_for_and_fast_path(
                         "AND-term scheduling",
                         reference=probe,
                         limit=max_anchor_iter,
+                        kind=OccurrenceSearchExhausted.DATE_LIMIT,
                     ) from exc
                 continue
             if os_mod.environ.get("NAUTICAL_DIAG") == "1":
@@ -281,6 +282,7 @@ def next_for_and_fast_path(
         "AND-term scheduling",
         reference=ref_d,
         limit=max_anchor_iter,
+        kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
     )
 
 
@@ -332,6 +334,7 @@ def next_for_and(
             "random yearly AND-term scheduling",
             reference=ref_d,
             limit=60,
+            kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
         )
     return next_for_and_fast_path(
         term,
@@ -419,6 +422,7 @@ def next_after_term(
         "AND-term scheduling",
         reference=ref_d,
         limit=intersection_guard_steps,
+        kind=OccurrenceSearchExhausted.SEARCH_LIMIT,
     )
 
 
@@ -443,6 +447,7 @@ def _simple_weekly_next(after_date, weekdays: list) -> object:
                 "simple weekly scheduling",
                 reference=after_date,
                 limit=7,
+                kind=OccurrenceSearchExhausted.DATE_LIMIT,
             ) from exc
         if cand.weekday() in weekdays:
             return cand
@@ -453,6 +458,7 @@ def _simple_weekly_next(after_date, weekdays: list) -> object:
             "simple weekly scheduling",
             reference=after_date,
             limit=7,
+            kind=OccurrenceSearchExhausted.DATE_LIMIT,
         ) from exc
 
 

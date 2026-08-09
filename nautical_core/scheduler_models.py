@@ -25,11 +25,12 @@ class OccurrenceSearchExhausted(RuntimeError):
         # Keep legacy constructors source-compatible while making the terminal
         # reason machine-readable for preview, navigator, and reconcile.
         reference_year = getattr(reference, "year", 0)
-        self.kind = kind or (
-            self.DATE_LIMIT if reference_year >= 9999 else self.SEARCH_LIMIT
-        )
-        if self.kind not in {self.DATE_LIMIT, self.SEARCH_LIMIT}:
-            raise ValueError(f"unsupported occurrence exhaustion kind: {self.kind}")
+        requested_kind = kind or self.SEARCH_LIMIT
+        # A bounded search can still be the final search when its reference is
+        # already at the supported upper date boundary.
+        self.kind = self.DATE_LIMIT if reference_year >= 9999 else requested_kind
+        if requested_kind not in {self.DATE_LIMIT, self.SEARCH_LIMIT}:
+            raise ValueError(f"unsupported occurrence exhaustion kind: {requested_kind}")
         detail = f" for {reference!s}" if reference is not None else ""
         bound = f" after {limit} iterations" if limit is not None else ""
         super().__init__(
@@ -42,4 +43,11 @@ class OccurrenceSearchExhausted(RuntimeError):
         return self.kind == self.DATE_LIMIT
 
 
-__all__ = ("OccurrenceSearchExhausted",)
+def occurrence_exhaustion_message(exc: OccurrenceSearchExhausted) -> str:
+    """Return stable, user-facing wording for a terminal scheduler outcome."""
+    if exc.is_date_limit:
+        return "No further matching occurrences are representable through 9999-12-31."
+    return str(exc).strip() or type(exc).__name__
+
+
+__all__ = ("OccurrenceSearchExhausted", "occurrence_exhaustion_message")

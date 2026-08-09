@@ -10710,6 +10710,34 @@ def test_scheduler_date_boundary_exhaustion_is_typed():
         raise AssertionError("extreme interval should not escape as an untyped overflow")
 
 
+def test_occurrence_collection_preserves_prefix_before_date_terminal():
+    """Finite recurrence previews retain valid events before date-boundary exhaustion."""
+    from nautical_core.occurrence_provider import Occurrence, AnchorOccurrenceProvider, collect_after
+
+    first = datetime(2026, 1, 5, 9, 0)
+    terminal = core.OccurrenceSearchExhausted(
+        "test stream", reference=date(9999, 1, 1), limit=1
+    )
+    calls = 0
+
+    def next_after(_cursor):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return Occurrence(first.date(), 9, 0, local_datetime=first)
+        raise terminal
+
+    provider = AnchorOccurrenceProvider(next_after)
+    collected = collect_after(
+        provider,
+        datetime(2026, 1, 1, 9, 0),
+        limit=3,
+        build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+        to_local=lambda value: value,
+    )
+    expect(len(collected) == 1 and collected[0].local_datetime == first, f"valid prefix was lost: {collected!r}")
+
+
 def test_anchor_step_preserves_scheduler_exhaustion():
     """The add-side occurrence adapter must not downgrade scheduler exhaustion to absence."""
     import nautical_core.add_anchor_compute as compute
@@ -25109,6 +25137,11 @@ def test_reconcile_candidate_and_plan_paths():
         terminal.action == "legitimate_final" and "9999-12-31" in terminal.reason,
         f"date-limit exhaustion should be a terminal reconcile plan: {terminal}",
     )
+    expect(reconcile.is_terminal_plan(terminal), "terminal reconcile plan was not classified explicitly")
+    expect(
+        reconcile.describe_plan(terminal).get("terminal") is True,
+        "terminal reconcile evidence was not exposed",
+    )
 
 
 def test_reconcile_plan_uses_task_business_calendar_context():
@@ -30357,6 +30390,7 @@ TESTS = [
     test_scheduler_or_skips_exhausted_branch_for_valid_alternative,
     test_scheduler_periodic_cycle_finds_distant_valid_intersection,
     test_scheduler_date_boundary_exhaustion_is_typed,
+    test_occurrence_collection_preserves_prefix_before_date_terminal,
     test_anchor_step_preserves_scheduler_exhaustion,
     test_anchor_date_calculations,
     test_interval_patterns,

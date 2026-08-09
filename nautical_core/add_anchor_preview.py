@@ -939,6 +939,11 @@ def _append_dst_adjustment_row(
                 return
 
 
+def _initial_occurrence_limit(preview_hard_cap: int, compact_presentation: bool) -> int:
+    """Only the first match is needed to assign a compact preview's initial due."""
+    return 1 if compact_presentation else preview_hard_cap + 16
+
+
 def handle_anchor_preview_on_add(
     *,
     task: dict[str, Any],
@@ -1077,7 +1082,7 @@ def handle_anchor_preview_on_add(
             anchor_file_str=anchor_file_str,
             after_local_dt=(to_local_cached(due_dt) if user_provided_due else now_local),
             inclusive=not user_provided_due,
-            limit=preview_hard_cap + 16,
+            limit=_initial_occurrence_limit(preview_hard_cap, compact_presentation),
             fallback_hhmm=fallback_hhmm,
             default_seed_date=interval_seed,
             seed_base=seed_base,
@@ -1135,7 +1140,7 @@ def handle_anchor_preview_on_add(
             anchor_file_str=anchor_file_str,
             after_local_dt=(to_local_cached(due_dt) if user_provided_due else now_local),
             inclusive=not user_provided_due,
-            limit=preview_hard_cap + 16,
+            limit=_initial_occurrence_limit(preview_hard_cap, compact_presentation),
             fallback_hhmm=fallback_hhmm,
             default_seed_date=interval_seed,
             seed_base=seed_base,

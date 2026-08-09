@@ -22486,6 +22486,19 @@ def test_on_add_preview_hard_cap():
     expect(len(preview) == 3, "preview hard cap should limit preview length")
 
 
+def test_on_add_compact_anchor_preview_requests_one_occurrence():
+    """Compact anchor previews need only the first file-backed occurrence."""
+    preview = importlib.import_module("nautical_core.add_anchor_preview")
+    expect(
+        preview._initial_occurrence_limit(200, True) == 1,
+        "compact previews should request one occurrence",
+    )
+    expect(
+        preview._initial_occurrence_limit(3, False) == 19,
+        "full previews should retain their collection headroom",
+    )
+
+
 def test_on_add_flushes_stdout():
     """on-add should flush stdout after emitting JSON."""
     hook = _find_hook_file("on-add.nautical")
@@ -30485,6 +30498,7 @@ TESTS = [
     test_on_modify_render_cp_completion_feedback_jitter_selected_interval,
     test_on_modify_render_cp_completion_feedback_text_mode,
     test_on_add_preview_hard_cap,
+    test_on_add_compact_anchor_preview_requests_one_occurrence,
     test_on_add_flushes_stdout,
     test_on_add_profiler_lazy_init,
     test_on_add_format_anchor_rows_numbers_upcoming_from_three_with_next_anchor,

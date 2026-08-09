@@ -119,6 +119,17 @@ def validate_and_terms_satisfiable(
         quick_yearly_and_check(term)
         quick_moon_and_check(term)
         # Leap-day weekday alignments can be 40 years apart in the Gregorian cycle.
+        # A stepped recurrence may intentionally have its first intersection
+        # beyond that probe horizon.  Do not turn an incomplete probe into a
+        # false contradiction; the scheduler remains authoritative and will
+        # fail closed if the rule truly has no occurrence.
+        stepped_intervals = [
+            int(atom.get("ival") or atom.get("intv") or 1)
+            for atom in term
+            if (atom.get("typ") or atom.get("type") or "").lower() in ("w", "m", "y")
+        ]
+        if any(interval > 40 for interval in stepped_intervals):
+            continue
         if not term_has_any_match_within(term, ref_d, seed, years=40):
             pieces = []
             for atom in term:

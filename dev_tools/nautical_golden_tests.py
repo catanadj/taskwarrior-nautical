@@ -8696,6 +8696,28 @@ def test_large_weekly_interval_is_scheduled_without_clamping():
     )
     expect(monthly_result == date(2067, 9, 1), f"large monthly interval was not honored: {monthly_result!r}")
 
+    accepted = core.validate_anchor_expr_strict("w/200:mon + y:01-01")
+    expect(accepted[0][0]["ival"] == 200, "long-period satisfiability probe rejected a valid interval")
+
+    hook = _find_hook_file("on-add.nautical")
+    proc = _run_hook_script(
+        hook,
+        {
+            "uuid": "00000000-0000-0000-0000-000000000900",
+            "description": "large interval hook regression",
+            "anchor": "w/200:mon + y:01-01",
+            "anchor_mode": "skip",
+            "chain": "on",
+            "chainID": "00000900",
+            "status": "pending",
+            "entry": "20260809T090000Z",
+        },
+        timeout_s=20.0,
+    )
+    expect(proc.returncode == 0, f"large interval on-add was rejected: {proc.stderr!r}")
+    payload = _assert_stdout_json_only(proc.stdout)
+    expect(payload.get("due"), "large interval on-add did not assign a first due")
+
 
 def test_yearly_spec_token_helper_accepts_known_valid_tokens():
     """Yearly token helper should accept canonical quarter/date forms."""

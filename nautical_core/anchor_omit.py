@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
+from .scheduler_models import OccurrenceSearchExhausted
+
 
 _OMIT_TIMED_ERROR = "omit does not support time modifiers (@t). Omit rules are date-based only."
 
@@ -156,6 +158,8 @@ def omit_expr_fires_on_date(
             if nxt == d:
                 return True
         return False
+    except OccurrenceSearchExhausted:
+        raise
     except Exception as exc:
         raise ValueError(
             f"Unable to evaluate omit rule for {d.isoformat()}: {exc}"

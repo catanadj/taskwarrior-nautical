@@ -4,6 +4,7 @@ from datetime import date, timedelta, timezone
 from typing import Any, Callable
 
 from .timeutil import compare_datetimes
+from .scheduler_models import OccurrenceSearchExhausted
 
 
 def anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, *, core: Any):
@@ -32,6 +33,8 @@ def anchor_step_once_with_omit(dnf, prev_local_date, interval_seed, seed_base, *
         if nxt_date is None or nxt_date <= prev_local_date:
             return None
         return nxt_date
+    except OccurrenceSearchExhausted:
+        raise
     except Exception:
         return None
 
@@ -39,6 +42,8 @@ def anchor_step_once_with_omit(dnf, prev_local_date, interval_seed, seed_base, *
 def anchor_term_fires_on_date(term, d, interval_seed, seed_base, *, core: Any):
     try:
         return all(core.factor_matches_on(atom, d, interval_seed, seed_base=seed_base) for atom in term)
+    except OccurrenceSearchExhausted:
+        raise
     except Exception:
         return False
 
@@ -83,6 +88,8 @@ def anchor_expr_fires_on_date_with_omit(dnf, d, interval_seed, seed_base, *, omi
                 date_is_excluded=date_is_excluded,
             )[0] == d
         return any(anchor_term_fires_on_date(term, d, interval_seed, seed_base, core=core) for term in dnf)
+    except OccurrenceSearchExhausted:
+        raise
     except Exception:
         return False
 
@@ -120,6 +127,8 @@ def anchor_times_for_date(
                     seed_base=seed_base,
                     date_is_excluded=date_is_excluded,
                 )[0] == d
+            except OccurrenceSearchExhausted:
+                raise
             except Exception:
                 term_matches = False
         if term_matches:
@@ -273,6 +282,8 @@ def anchor_pick_occurrence_local(
                     return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
                 continue
             return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
+    except OccurrenceSearchExhausted:
+        raise
     except Exception:
         if unavailable is not None:
             raise unavailable

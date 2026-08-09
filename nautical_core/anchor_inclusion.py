@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from .occurrence_provider import Occurrence, _cursor_before
 from .timeutil import compare_datetimes
+from .scheduler_models import OccurrenceSearchExhausted
 
 
 def _norm_t_mod(v):
@@ -140,6 +141,8 @@ def _anchor_file_occurrence_is_omitted(
                 core=core,
             )
         )
+    except OccurrenceSearchExhausted:
+        raise
     except Exception as exc:
         raise ValueError(
             f"Unable to evaluate omit rule for {item_local.date().isoformat()}: {exc}"

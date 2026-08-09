@@ -1715,6 +1715,14 @@ def _handle_anchor_preview_on_add(
             append_first_expiration_row=_append_first_expiration_row,
         )
     except Exception as exc:
+        exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
+        if exhausted_type is not None and isinstance(exc, exhausted_type):
+            _error_and_exit(
+                [
+                    ("Scheduler", str(exc)),
+                    ("Fix", "Use a less sparse rule or adjust its interval and constraints."),
+                ]
+            )
         astronomy = core._import_sibling("astronomy")
         if astronomy.is_astronomy_error(exc):
             _error_and_exit([("Astronomy", astronomy.scheduling_error_message(exc))])

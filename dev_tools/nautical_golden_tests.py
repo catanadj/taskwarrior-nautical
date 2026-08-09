@@ -10611,6 +10611,50 @@ def test_scheduler_periodic_cycle_finds_distant_valid_intersection():
     expect(result == date(2134, 2, 1), f"distant periodic match was not found: {result!r}")
 
 
+def test_scheduler_date_boundary_exhaustion_is_typed():
+    """Date arithmetic at the upper boundary must fail closed with context."""
+    dnf = core.validate_anchor_expr_strict("w:mon")
+    try:
+        core.next_after_expr(dnf, date.max, default_seed=date.max)
+    except core.OccurrenceSearchExhausted as exc:
+        expect(exc.scope == "simple weekly scheduling", f"unexpected boundary scope: {exc.scope}")
+    else:
+        raise AssertionError("date overflow should not escape as an untyped error")
+
+
+def test_anchor_step_preserves_scheduler_exhaustion():
+    """The add-side occurrence adapter must not downgrade scheduler exhaustion to absence."""
+    import nautical_core.add_anchor_compute as compute
+
+    expected = core.OccurrenceSearchExhausted("test adapter", reference=date(2026, 1, 1), limit=1)
+
+    class FakeOmit:
+        @staticmethod
+        def next_after_expr_with_omit(*_args, **_kwargs):
+            raise expected
+
+    class FakeCore:
+        MAX_ANCHOR_ITER = 1
+
+        @staticmethod
+        def _import_sibling(_name):
+            return FakeOmit
+
+    try:
+        compute.anchor_step_once_with_omit(
+            [],
+            date(2026, 1, 1),
+            date(2026, 1, 1),
+            "test",
+            omit_dnf=None,
+            core=FakeCore(),
+        )
+    except core.OccurrenceSearchExhausted as exc:
+        expect(exc is expected, "scheduler exhaustion was replaced instead of preserved")
+    else:
+        raise AssertionError("add-side scheduler exhaustion should not become an absent occurrence")
+
+
 def test_anchor_date_calculations():
     """Test specific date calculations for various anchor patterns"""
     test_cases = [
@@ -12403,6 +12447,50 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
     rows = panels[-1][1]
     expect(any(label == "Recurrence evaluator" for label, _value in rows), f"missing evaluator error detail: {rows!r}")
     expect(any(label == "Fix" for label, _value in rows), f"missing evaluator remediation: {rows!r}")
+
+
+def test_on_add_preview_reports_scheduler_exhaustion_actionably():
+    """Scheduler exhaustion should become a clear panel, not a generic hook crash."""
+    hook = _find_hook_file("on-add.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_add_scheduler_exhaustion_test")
+    now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000144",
+        "description": "scheduler exhaustion",
+        "status": "pending",
+        "entry": mod.core.fmt_isoz(now_utc),
+        "anchor": "w:mon",
+        "anchor_mode": "skip",
+        "chain": "on",
+        "chainID": "00000000",
+    }
+    ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
+    panels = []
+    preview = mod._module("add_anchor_preview")
+    original_preview = preview.handle_anchor_preview_on_add
+    expected = mod.core.OccurrenceSearchExhausted(
+        "test preview", reference=date(2026, 4, 12), limit=1
+    )
+
+    def fail_preview(**_kwargs):
+        raise expected
+
+    try:
+        preview.handle_anchor_preview_on_add = fail_preview
+        mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
+        try:
+            mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
+        except SystemExit as exc:
+            expect(exc.code == 1, f"unexpected scheduler exhaustion exit code: {exc.code!r}")
+        else:
+            raise AssertionError("scheduler exhaustion was accepted")
+    finally:
+        preview.handle_anchor_preview_on_add = original_preview
+
+    expect(panels and panels[-1][0] == "❌ Invalid Chain", f"missing scheduler error panel: {panels!r}")
+    rows = panels[-1][1]
+    expect(any(label == "Scheduler" and "test preview" in value for label, value in rows), rows)
+    expect(any(label == "Fix" and "less sparse" in value for label, value in rows), rows)
 
 
 def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
@@ -30163,6 +30251,8 @@ TESTS = [
     test_scheduler_exhaustion_never_fabricates_sparse_and_date,
     test_scheduler_or_skips_exhausted_branch_for_valid_alternative,
     test_scheduler_periodic_cycle_finds_distant_valid_intersection,
+    test_scheduler_date_boundary_exhaustion_is_typed,
+    test_anchor_step_preserves_scheduler_exhaustion,
     test_anchor_date_calculations,
     test_interval_patterns,
     test_complex_dnf_expressions,
@@ -30285,6 +30375,7 @@ TESTS = [
     test_native_until_carry_descriptions,
     test_on_add_preview_distinguishes_expiration_from_chain_end_point,
     test_on_add_preview_fails_closed_when_evaluator_initialization_fails,
+    test_on_add_preview_reports_scheduler_exhaustion_actionably,
     test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows,
     test_on_add_native_until_checks_generated_anchor_due,
     test_on_add_native_until_guard_ignores_ordinary_tasks,

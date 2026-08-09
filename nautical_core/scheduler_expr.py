@@ -146,7 +146,10 @@ def _next_for_and_periodic_cycle(
     max_candidates = (cycle_days // driver_interval) + 2
     cursor = ref_d
     for _ in range(max_candidates):
-        candidate = next_after_atom_with_mods(driver, cursor, seed, seed_base=seed_base)
+        try:
+            candidate = next_after_atom_with_mods(driver, cursor, seed, seed_base=seed_base)
+        except OverflowError:
+            return None
         if candidate is None:
             return None
         if candidate <= cursor:
@@ -240,7 +243,14 @@ def next_for_and_fast_path(
         if target <= probe:
             stalled += 1
             if stalled < 3:
-                probe = probe + timedelta(days=1)
+                try:
+                    probe = probe + timedelta(days=1)
+                except OverflowError as exc:
+                    raise OccurrenceSearchExhausted(
+                        "AND-term scheduling",
+                        reference=probe,
+                        limit=max_anchor_iter,
+                    ) from exc
                 continue
             if os_mod.environ.get("NAUTICAL_DIAG") == "1":
                 warn_once_per_day(
@@ -426,10 +436,24 @@ def _is_simple_weekly(dnf, *, active_mod_keys) -> bool:
 
 def _simple_weekly_next(after_date, weekdays: list) -> object:
     for offset in range(1, 8):
-        cand = after_date + timedelta(days=offset)
+        try:
+            cand = after_date + timedelta(days=offset)
+        except OverflowError as exc:
+            raise OccurrenceSearchExhausted(
+                "simple weekly scheduling",
+                reference=after_date,
+                limit=7,
+            ) from exc
         if cand.weekday() in weekdays:
             return cand
-    return after_date + timedelta(days=7)
+    try:
+        return after_date + timedelta(days=7)
+    except OverflowError as exc:
+        raise OccurrenceSearchExhausted(
+            "simple weekly scheduling",
+            reference=after_date,
+            limit=7,
+        ) from exc
 
 
 def _pick_earlier_candidate(best, best_meta, cand, meta):

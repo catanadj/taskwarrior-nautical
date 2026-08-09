@@ -177,7 +177,6 @@ def anchors_between_large_range(
 ):
     acc: list = []
     cur = start_excl
-    batch_size = min(100, until_count_cap)
 
     while len(acc) < until_count_cap and cur < end_excl:
         nxt, _ = next_after_expr(dnf, cur, default_seed, seed_base=seed_base)
@@ -187,9 +186,6 @@ def anchors_between_large_range(
             break
         acc.append(nxt)
         cur = nxt
-
-        if len(acc) >= batch_size:
-            break
 
     return acc
 

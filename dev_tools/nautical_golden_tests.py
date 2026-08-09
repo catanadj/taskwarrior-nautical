@@ -8295,6 +8295,29 @@ def test_anchors_between_expr_stops_on_no_progress():
         core.next_after_expr = saved_next
 
 
+def test_anchors_between_large_range_honors_count_cap():
+    """Large-range expansion must continue past the historical 100-result prefix."""
+    from nautical_core.precompute import anchors_between_large_range
+
+    start = date(2026, 1, 1)
+    end = start + timedelta(days=400)
+
+    def next_day(_dnf, current, _default_seed, seed_base=None):
+        _ = seed_base
+        return current + timedelta(days=1), {}
+
+    result = anchors_between_large_range(
+        [],
+        start,
+        end,
+        start,
+        until_count_cap=250,
+        next_after_expr=next_day,
+    )
+    expect(len(result) == 250, f"large-range expansion truncated at {len(result)} results")
+    expect(result[-1] == start + timedelta(days=250), f"large-range expansion stopped at {result[-1]!r}")
+
+
 def test_anchors_between_expr_matches_iterative_scheduler():
     """Bulk expansion should return the same dates as repeated next-after scheduling."""
     import nautical_core as core
@@ -30056,6 +30079,7 @@ TESTS = [
     test_next_weekday_roll_cross_year_date_still_matches_expression,
     test_weekly_multi_days_every_2weeks_spacing_and_days,
     test_anchors_between_expr_stops_on_no_progress,
+    test_anchors_between_large_range_honors_count_cap,
     test_anchors_between_expr_matches_iterative_scheduler,
     test_inline_time_mods_split_ok,
     test_weekly_trailing_time_modifier_applies_to_whole_list,

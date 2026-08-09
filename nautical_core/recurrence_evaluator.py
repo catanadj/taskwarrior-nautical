@@ -9,11 +9,16 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
 from .occurrence_provider import Occurrence
+from .recurrence_protocols import (
+    NextOccurrenceCallback,
+    PickOccurrenceCallback,
+    RecurrenceCacheLoader,
+)
 from .timeutil import build_local_datetime as _build_local_datetime
 from .timeutil import local_naive_to_utc as _local_naive_to_utc
 from .timeutil import to_local as _to_local
@@ -189,7 +194,7 @@ class RecurrenceEvaluator:
     def _get_cached(
         self,
         key: str,
-        loader: Callable[[], Any],
+        loader: RecurrenceCacheLoader,
         *,
         clone: bool = False,
     ) -> Any:
@@ -321,7 +326,7 @@ class RecurrenceEvaluator:
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = False,
-        pick_occurrence_local: Callable[..., Any] | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
         anchor_file_provider: Any | None = None,
         max_file_skips: int = 512,
     ) -> Occurrence | None:
@@ -367,7 +372,7 @@ class RecurrenceEvaluator:
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = False,
-        pick_occurrence_local: Callable[..., Any] | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
         anchor_file_provider: Any | None = None,
         include_omitted: bool = False,
         max_file_skips: int = 512,
@@ -435,7 +440,7 @@ class RecurrenceEvaluator:
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = True,
-        pick_occurrence_local: Callable[..., Any] | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
         anchor_file_provider: Any | None = None,
         include_omitted: bool = False,
         max_iterations: int = 512,
@@ -499,7 +504,7 @@ class RecurrenceEvaluator:
         due_explicit: bool = True,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
-        pick_occurrence_local: Callable[..., Any] | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
         anchor_file_provider: Any | None = None,
         missed_limit: int = 25,
         max_iterations: int = 512,
@@ -594,7 +599,7 @@ class RecurrenceEvaluator:
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
         inclusive: bool = False,
-        pick_occurrence_local: Callable[..., Any] | None = None,
+        pick_occurrence_local: PickOccurrenceCallback | None = None,
         anchor_file_provider: Any | None = None,
         max_iterations: int = 512,
         max_file_skips: int = 512,
@@ -638,7 +643,7 @@ class RecurrenceEvaluator:
         seed_base: str,
         omit_dnf=None,
         fallback_hhmm: tuple[int, int] | None = None,
-    ):
+    ) -> datetime | None:
         """Resolve the shared date/time scheduler for evaluator consumers."""
         scheduler = self._get_cached("scheduler_binding", self._build_scheduler_binding)
         return scheduler(
@@ -650,7 +655,7 @@ class RecurrenceEvaluator:
             fallback_hhmm=fallback_hhmm,
         )
 
-    def _build_scheduler_binding(self) -> Callable[..., Any]:
+    def _build_scheduler_binding(self) -> NextOccurrenceCallback:
         """Build the evaluator-bound scheduler once per evaluator session."""
         from .add_anchor_compute import anchor_next_occurrence_after_local_dt
         from .anchor_inclusion import _norm_t_mod
@@ -737,7 +742,7 @@ class RecurrenceEvaluator:
             seed_base: str,
             omit_dnf: Any = None,
             fallback_hhmm: tuple[int, int] | None = None,
-        ) -> Any:
+        ) -> datetime | None:
             return anchor_next_occurrence_after_local_dt(
                 dnf,
                 after_local_dt,

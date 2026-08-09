@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 
+_SHARED_HOOK_MODULES = ("hook_runtime",)
+
+
 HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
     "on-add": (
+        *_SHARED_HOOK_MODULES,
         "hook_support",
         "add_formatting",
         "add_validation",
@@ -17,6 +21,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "hook_engine",
     ),
     "on-modify": (
+        *_SHARED_HOOK_MODULES,
         "hook_support",
         "modify_queries",
         "modify_chain_reads",
@@ -49,6 +54,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "modify_completion_flow",
     ),
     "on-exit": (
+        *_SHARED_HOOK_MODULES,
         "hook_support",
         "exit_queries",
         "exit_side_effects",

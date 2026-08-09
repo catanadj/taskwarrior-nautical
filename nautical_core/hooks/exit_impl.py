@@ -143,8 +143,15 @@ _HOOK_ENGINE_LOAD_FAILED = False
 _HOOK_RESULTS = None
 _HOOK_RESULTS_LOAD_FAILED = False
 _HOOK_RUNTIME = None
+_HOOK_RUNTIME_LOAD_FAILED = False
 _HOOK_MODULE_ACCESS = None
 _MODULE_SPECS = {
+    "hook_runtime": (
+        "_HOOK_RUNTIME",
+        "_HOOK_RUNTIME_LOAD_FAILED",
+        "hook_runtime.py",
+        "nautical_core.hook_runtime",
+    ),
     "hook_support": (
         "_HOOK_SUPPORT",
         "_HOOK_SUPPORT_LOAD_FAILED",

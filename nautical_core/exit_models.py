@@ -1,14 +1,69 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
+
+
+class ExitDrainStateProtocol(Protocol):
+    requeue: list[dict[str, Any]]
+
+    def dead_letter(self, entry: dict[str, Any], reason: str) -> None: ...
+    def record_lock_event(self, idx: int) -> bool: ...
+
+
+class ExitExportCallback(Protocol):
+    def __call__(self, uuid_str: str, *, prefer_cache: bool = True) -> ExitExportResult: ...
+
+
+class ExitParentNextlinkStateCallback(Protocol):
+    def __call__(
+        self,
+        parent_uuid: str,
+        child_short: str,
+        expected_prev: str | None = None,
+        *,
+        prefer_cache: bool = True,
+    ) -> ExitParentNextlinkStateResult: ...
+
+
+class ExitImportCallback(Protocol):
+    def __call__(self, child: dict[str, Any]) -> ExitImportResult: ...
+
+
+class ExitParentUpdateCallback(Protocol):
+    def __call__(
+        self,
+        parent_uuid: str,
+        child_short: str,
+        expected_prev: str | None = None,
+    ) -> ExitParentUpdateResult: ...
+
+
+class ExitClearParentCallback(Protocol):
+    def __call__(self, parent_uuid: str, child_short: str) -> ExitParentUpdateResult: ...
+
+
+class ExitCleanupCallback(Protocol):
+    def __call__(self, child_uuid: str, spawn_intent_id: str = "") -> None: ...
+
+
+class ExitLockErrorCallback(Protocol):
+    def __call__(self, error: str) -> bool: ...
+
+
+class ExitDiagnosticCallback(Protocol):
+    def __call__(self, message: str) -> None: ...
+
+
+class ExitRequeueCallback(Protocol):
+    def __call__(self, entry: dict[str, Any], idx: int, state: ExitDrainStateProtocol) -> bool: ...
 
 
 @dataclass(slots=True)
 class ExitEntryContext:
     entry: dict[str, Any]
     idx: int
-    state: Any
+    state: ExitDrainStateProtocol
     parent_uuid: str
     child_short: str
     expected_parent_nextlink: str | None
@@ -20,31 +75,31 @@ class ExitEntryContext:
 
 @dataclass(slots=True)
 class ExitPrecheckServices:
-    parent_nextlink_state: Any
-    export_uuid: Any
-    clear_parent_nextlink_if_matches: Any
-    is_lock_error: Any
-    diag: Any
-    requeue_or_dead_letter_for_lock: Any
+    parent_nextlink_state: ExitParentNextlinkStateCallback
+    export_uuid: ExitExportCallback
+    clear_parent_nextlink_if_matches: ExitClearParentCallback
+    is_lock_error: ExitLockErrorCallback
+    diag: ExitDiagnosticCallback
+    requeue_or_dead_letter_for_lock: ExitRequeueCallback
 
 
 @dataclass(slots=True)
 class ExitEnsureChildServices:
-    export_uuid: Any
-    import_child: Any
-    clear_parent_nextlink_if_matches: Any
-    is_lock_error: Any
-    diag: Any
-    requeue_or_dead_letter_for_lock: Any
+    export_uuid: ExitExportCallback
+    import_child: ExitImportCallback
+    clear_parent_nextlink_if_matches: ExitClearParentCallback
+    is_lock_error: ExitLockErrorCallback
+    diag: ExitDiagnosticCallback
+    requeue_or_dead_letter_for_lock: ExitRequeueCallback
 
 
 @dataclass(slots=True)
 class ExitApplyParentUpdateServices:
-    update_parent_nextlink: Any
-    is_lock_error: Any
-    cleanup_orphan_child: Any
-    diag: Any
-    requeue_or_dead_letter_for_lock: Any
+    update_parent_nextlink: ExitParentUpdateCallback
+    is_lock_error: ExitLockErrorCallback
+    cleanup_orphan_child: ExitCleanupCallback
+    diag: ExitDiagnosticCallback
+    requeue_or_dead_letter_for_lock: ExitRequeueCallback
 
 
 @dataclass(slots=True)

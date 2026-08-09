@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.machinery
 import importlib.util
 import json
@@ -193,6 +194,56 @@ for name in names:
     return results
 
 
+def _module_spec_names(path: Path) -> set[str]:
+    """Read hook module names without importing the full implementation."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        if not any(isinstance(target, ast.Name) and target.id == "_MODULE_SPECS" for target in targets):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Dict):
+            return set()
+        return {
+            key.value
+            for key in value.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+    return set()
+
+
+def _check_manifest_alignment(root: Path) -> list[dict]:
+    """Ensure staged manifests cover every lazy module used by each hook."""
+    manifest, manifest_error = _load_runtime_manifest(root)
+    if manifest is None:
+        return [{"kind": "manifest", "name": "alignment", "ok": False, "message": manifest_error}]
+    lazy_modules = getattr(manifest, "HOOK_LAZY_MODULES", {})
+    implementations = {
+        "on-add": root / "nautical_core" / "hooks" / "add_impl.py",
+        "on-modify": root / "nautical_core" / "hooks" / "modify_impl.py",
+        "on-exit": root / "nautical_core" / "hooks" / "exit_impl.py",
+    }
+    results: list[dict] = []
+    for event, implementation in implementations.items():
+        declared = {str(name) for name in lazy_modules.get(event, ())}
+        if not implementation.is_file():
+            results.append({"kind": "manifest", "name": f"alignment:{event}", "ok": False, "message": "implementation missing"})
+            continue
+        try:
+            used = _module_spec_names(implementation)
+        except Exception as exc:
+            results.append({"kind": "manifest", "name": f"alignment:{event}", "ok": False, "message": f"{type(exc).__name__}: {exc}"})
+            continue
+        missing = sorted(used - declared)
+        results.append({
+            "kind": "manifest",
+            "name": f"alignment:{event}",
+            "ok": not missing,
+            "message": "ok" if not missing else f"missing lazy modules: {', '.join(missing)}",
+        })
+    return results
+
+
 def _check_package_layout(root: Path, env: dict[str, str]) -> list[dict]:
     out: list[dict] = []
     pkg_init = root / "nautical_core" / "__init__.py"
@@ -359,6 +410,7 @@ def main() -> int:
         layout_env.pop("NAUTICAL_DIAG_LOG", None)
         results.extend(_check_package_layout(root, layout_env))
         results.extend(_check_lazy_lifecycle_modules(root, layout_env))
+        results.extend(_check_manifest_alignment(root))
         results.extend(_check_performance_workflow(root))
         results.extend(_check_workflow_script_references(root))
         results.extend(_check_hook_contracts(root, taskdata))

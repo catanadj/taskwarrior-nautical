@@ -591,12 +591,19 @@ _QUEUE_MODELS_LOAD_FAILED = False
 _RECONCILE = None
 _RECONCILE_LOAD_FAILED = False
 _HOOK_RUNTIME = None
+_HOOK_RUNTIME_LOAD_FAILED = False
 _HOOK_MODULE_ACCESS = None
 _RECURRENCE_EVALUATOR = None
 _RECURRENCE_EVALUATOR_LOAD_FAILED = False
 _ADD_ANCHOR_COMPUTE = None
 _ADD_ANCHOR_COMPUTE_LOAD_FAILED = False
 _MODULE_SPECS = {
+    "hook_runtime": (
+        "_HOOK_RUNTIME",
+        "_HOOK_RUNTIME_LOAD_FAILED",
+        "hook_runtime.py",
+        "nautical_core.hook_runtime",
+    ),
     "hook_support": (
         "_HOOK_SUPPORT",
         "_HOOK_SUPPORT_LOAD_FAILED",

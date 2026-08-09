@@ -7,8 +7,17 @@ from typing import Any
 
 from nautical_core.exit_models import (
     ExitApplyParentUpdateServices,
+    ExitClearParentCallback,
+    ExitCleanupCallback,
+    ExitDiagnosticCallback,
     ExitEnsureChildServices,
+    ExitExportCallback,
+    ExitImportCallback,
+    ExitLockErrorCallback,
+    ExitParentNextlinkStateCallback,
+    ExitParentUpdateCallback,
     ExitPrecheckServices,
+    ExitRequeueCallback,
 )
 
 
@@ -33,15 +42,15 @@ def new_runtime_state() -> ExitRuntimeState:
 @dataclass(slots=True)
 class ExitRuntimeServices:
     state: ExitRuntimeState
-    parent_nextlink_state: Any
-    requeue_or_dead_letter_for_lock: Any
-    export_uuid: Any
-    import_child: Any
-    is_lock_error: Any
-    diag: Any
-    update_parent_nextlink: Any
-    clear_parent_nextlink_if_matches: Any
-    cleanup_orphan_child: Any
+    parent_nextlink_state: ExitParentNextlinkStateCallback
+    requeue_or_dead_letter_for_lock: ExitRequeueCallback
+    export_uuid: ExitExportCallback
+    import_child: ExitImportCallback
+    is_lock_error: ExitLockErrorCallback
+    diag: ExitDiagnosticCallback
+    update_parent_nextlink: ExitParentUpdateCallback
+    clear_parent_nextlink_if_matches: ExitClearParentCallback
+    cleanup_orphan_child: ExitCleanupCallback
 
 
 def build_precheck_services(runtime: ExitRuntimeServices) -> ExitPrecheckServices:
@@ -49,7 +58,7 @@ def build_precheck_services(runtime: ExitRuntimeServices) -> ExitPrecheckService
         parent_nextlink_state=lambda parent_uuid, child_short, expected_prev: runtime.parent_nextlink_state(
             parent_uuid, child_short, expected_prev, prefer_cache=True
         ),
-        export_uuid=lambda uuid_str: runtime.export_uuid(uuid_str, prefer_cache=True),
+        export_uuid=lambda uuid_str, *, prefer_cache=True: runtime.export_uuid(uuid_str, prefer_cache=prefer_cache),
         clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,
         is_lock_error=runtime.is_lock_error,
         diag=runtime.diag,

@@ -6,11 +6,8 @@ from typing import Any, Callable
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from . import calendar_feedback, panel_diagnostics
-from .occurrence_provider import Occurrence, _sort_datetimes
+from .occurrence_provider import Occurrence, _cursor_before, _sort_datetimes
 from .timeutil import compare_datetimes
-
-_COMPACT_ANCHOR_FILE_MAX_PROBES = 512
-
 
 def _preview_seed_base(task: dict[str, Any], fallback_chain_id: str) -> str:
     """Resolve the stable preview identity through the shared context model."""
@@ -467,23 +464,26 @@ def _anchor_file_preview_occurrences(
                 else None
             ),
         )
-        probe = after_local_dt
-        probe_inclusive = inclusive
-        for _ in range(_COMPACT_ANCHOR_FILE_MAX_PROBES):
-            selected = provider.first_after(
+        probe = _cursor_before(after_local_dt) if inclusive else after_local_dt
+        skipped = 0
+        while True:
+            selected = provider.next_after(
                 probe,
                 build_local_datetime=core.build_local_datetime,
                 to_local=core.to_local,
-                inclusive=probe_inclusive,
             )
             if selected is None or selected.local_datetime is None:
+                if skipped:
+                    raise anchor_files.AnchorFileOccurrenceExhausted(
+                        f"anchor_file '{anchor_file_str}' exhausted after skipping "
+                        f"{skipped} omitted occurrences."
+                    )
                 return []
             item_local = selected.local_datetime
             if not _anchor_file_is_omitted(omit_dnf, item_local, core=core, seed_base=seed_base):
                 return [item_local]
+            skipped += 1
             probe = item_local
-            probe_inclusive = False
-        return []
     out: list[datetime] = []
     for item_local in _anchor_file_occurrences_local(anchor_file_str, core=core, fallback_hhmm=fallback_hhmm, seed_base=seed_base):
         if after_local_dt is not None:

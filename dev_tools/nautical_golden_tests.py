@@ -17714,6 +17714,88 @@ def test_anchor_file_occurrence_provider_advances_cached_lookup_cursor():
     expect(reset is not None and reset.day == date(2026, 1, 2), "backward lookup did not reset the cached cursor")
 
 
+def test_compact_anchor_file_lookup_scans_past_legacy_probe_limit():
+    """Compact previews must find a valid date after more than 512 omissions."""
+    import nautical_core.add_anchor_preview as preview
+
+    first_date = date(2026, 1, 1)
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "calendar.csv").write_text(
+            "date\n" + "\n".join(
+                (first_date + timedelta(days=index)).isoformat()
+                for index in range(514)
+            ) + "\n",
+            encoding="utf-8",
+        )
+        fake_core = SimpleNamespace(
+            ANCHOR_FILE_DIR=td,
+            build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
+            to_local=lambda value: value,
+            _import_sibling=lambda name: importlib.import_module(f"nautical_core.{name}"),
+        )
+        original = preview._anchor_file_is_omitted
+        preview._anchor_file_is_omitted = lambda _dnf, item, **_kwargs: (item.date() - first_date).days < 513
+        try:
+            values = preview._anchor_file_preview_occurrences(
+                "calendar.csv",
+                core=fake_core,
+                fallback_hhmm=(9, 0),
+                omit_dnf=object(),
+                seed_base="compact-cursor-test",
+                after_local_dt=datetime(2025, 12, 31, 9, 0),
+                inclusive=False,
+                limit=1,
+            )
+        finally:
+            preview._anchor_file_is_omitted = original
+    expect(
+        values == [datetime(2027, 5, 29, 9, 0)],
+        f"compact anchor-file lookup stopped before the first valid date: {values!r}",
+    )
+
+
+def test_compact_anchor_file_lookup_reports_cursor_exhaustion():
+    """Exhausting an omitted anchor-file stream must remain distinguishable from an empty file."""
+    import nautical_core.add_anchor_preview as preview
+    import nautical_core.anchor_files as anchor_files
+
+    first_date = date(2026, 1, 1)
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "calendar.csv").write_text(
+            "date\n" + "\n".join(
+                (first_date + timedelta(days=index)).isoformat()
+                for index in range(3)
+            ) + "\n",
+            encoding="utf-8",
+        )
+        fake_core = SimpleNamespace(
+            ANCHOR_FILE_DIR=td,
+            build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
+            to_local=lambda value: value,
+            _import_sibling=lambda name: importlib.import_module(f"nautical_core.{name}"),
+        )
+        original = preview._anchor_file_is_omitted
+        preview._anchor_file_is_omitted = lambda *_args, **_kwargs: True
+        try:
+            try:
+                preview._anchor_file_preview_occurrences(
+                    "calendar.csv",
+                    core=fake_core,
+                    fallback_hhmm=(9, 0),
+                    omit_dnf=object(),
+                    seed_base="compact-exhaustion-test",
+                    after_local_dt=datetime(2025, 12, 31, 9, 0),
+                    inclusive=False,
+                    limit=1,
+                )
+            except anchor_files.AnchorFileOccurrenceExhausted as exc:
+                expect("exhausted after skipping 3 omitted occurrences" in str(exc), f"unexpected exhaustion message: {exc}")
+            else:
+                expect(False, "compact anchor-file lookup hid cursor exhaustion")
+        finally:
+            preview._anchor_file_is_omitted = original
+
+
 def test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates():
     """Successors should follow localized time after a DST gap shifts a wall time."""
     import nautical_core.anchor_files as anchor_files
@@ -30052,6 +30134,8 @@ TESTS = [
     test_anchor_file_occurrence_provider_supports_lazy_next_after,
     test_anchor_file_occurrence_provider_caches_expanded_specs,
     test_anchor_file_occurrence_provider_advances_cached_lookup_cursor,
+    test_compact_anchor_file_lookup_scans_past_legacy_probe_limit,
+    test_compact_anchor_file_lookup_reports_cursor_exhaustion,
     test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates,
     test_modify_anchor_file_mode_orders_dst_fold_by_instant,
     test_native_until_validation_orders_dst_fold_by_instant,

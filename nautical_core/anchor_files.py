@@ -22,9 +22,13 @@ from .file_source_expr import (
 )
 from .schedule_utils import apply_day_offset, roll_apply
 from .recurrence_context import RecurrenceContext
-from .occurrence_provider import Occurrence, _sort_datetimes
+from .occurrence_provider import Occurrence, _cursor_before, _sort_datetimes
 from .timeutil import compare_datetimes
 from .time_windows import parse_clock_value, parse_random_time_window_spec, parse_time_schedule_spec, parse_time_window_spec
+
+
+class AnchorFileOccurrenceExhausted(LookupError):
+    """Raised when a cursor has no further anchor-file occurrence."""
 
 
 _WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
@@ -503,26 +507,13 @@ class AnchorFileOccurrenceProvider:
         to_local: Callable[[datetime], datetime],
         inclusive: bool = False,
     ) -> Occurrence | None:
-        """Find one file occurrence without building the sorted candidate cache."""
-        selected: Occurrence | None = None
-        selected_datetime: datetime | None = None
-        for item_date, hhmm, description in self._records():
-            raw_candidate = build_local_datetime(item_date, hhmm)
-            candidate = to_local(raw_candidate)
-            comparison = compare_datetimes(candidate, after_local)
-            if comparison < 0 or (comparison == 0 and not inclusive):
-                continue
-            if selected_datetime is None or compare_datetimes(candidate, selected_datetime) < 0:
-                selected_datetime = candidate
-                selected = Occurrence(
-                    day=item_date,
-                    hour=hhmm[0],
-                    minute=hhmm[1],
-                    source="anchor_file",
-                    description=description,
-                    local_datetime=candidate,
-                )
-        return selected
+        """Find one file occurrence through the provider's cached cursor."""
+        return self.next_after(
+            after_local,
+            build_local_datetime=build_local_datetime,
+            to_local=to_local,
+            inclusive=inclusive,
+        )
 
     def next_after(
         self,
@@ -530,7 +521,9 @@ class AnchorFileOccurrenceProvider:
         *,
         build_local_datetime: Callable[[date, tuple[int, int]], datetime],
         to_local: Callable[[datetime], datetime],
+        inclusive: bool = False,
     ) -> Occurrence | None:
+        cursor_after = _cursor_before(after_local) if inclusive else after_local
         records = self._records()
         specs = [(item_date, hhmm) for item_date, hhmm, _description in records]
         conversion_key = (
@@ -598,10 +591,10 @@ class AnchorFileOccurrenceProvider:
         for index in range(start, len(candidates)):
             candidate = candidates[index]
             try:
-                is_after = compare_datetimes(candidate, after_local) > 0
+                comparison = compare_datetimes(candidate, cursor_after)
             except (TypeError, ValueError) as exc:
                 raise ValueError("Anchor-file provider returned an incomparable datetime.") from exc
-            if is_after:
+            if comparison > 0:
                 value = candidate
                 selected_index = index
                 break
@@ -615,7 +608,7 @@ class AnchorFileOccurrenceProvider:
         local = value
         from .occurrence_provider import _require_forward_progress
 
-        _require_forward_progress(after_local, local)
+        _require_forward_progress(cursor_after, local)
         self._next_index = selected_index + 1 if selected_index is not None else len(candidates)
         self._last_after = after_local
         self._last_candidate = local

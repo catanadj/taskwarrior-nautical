@@ -89,7 +89,14 @@ class _LazyApiBundle:
 
     __slots__ = ("_module_name", "_module", "_core", "_namespace", "_aliases", "_bindings")
 
-    def __init__(self, module_name: str, aliases: tuple[str, ...], *, core: Any, namespace: dict[str, Any]):
+    def __init__(
+        self,
+        module_name: str,
+        aliases: tuple[str | tuple[str, str], ...],
+        *,
+        core: Any,
+        namespace: dict[str, Any],
+    ):
         self._module_name = module_name
         self._module = None
         self._core = core
@@ -611,31 +618,36 @@ _year_range_colon_re = re.compile(r"^(\d{2})-(\d{2})\.\.(\d{2})-(\d{2})$")
 _int_range_re = re.compile(r"^-?\d+\s*\.\.\s*-?\d+$")
 _CONTROL_CHARS_RE = _common._CONTROL_CHARS_RE
 
-_token_api = _import_sibling("token_api").for_core(
-    sys.modules[__name__],
+_token_api = _LazyApiBundle(
+    "token_api",
+    (
+        "_yearfmt",
+        "_tok",
+        "_tok_range",
+        "_safe_match",
+        "sanitize_text",
+        "sanitize_task_strings",
+        "_split_csv_tokens",
+        "_split_csv_lower",
+        "_iso_week_index",
+        "_month_index",
+        "_year_index",
+        "_static_month_last_day",
+        "_month_from_alias",
+        "_year_full_months_span_token",
+        "_rewrite_month_names_to_ranges",
+        "_unwrap_quotes",
+        "_year_full_month_range_token",
+        "_mon_to_int",
+        "_expand_weekly_aliases",
+        "_expand_monthly_aliases",
+        "_normalize_weekday",
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-_yearfmt = _token_api._yearfmt
-_tok = _token_api._tok
-_tok_range = _token_api._tok_range
-_safe_match = _token_api._safe_match
-sanitize_text = _token_api.sanitize_text
-sanitize_task_strings = _token_api.sanitize_task_strings
-_split_csv_tokens = _token_api._split_csv_tokens
-_split_csv_lower = _token_api._split_csv_lower
-_iso_week_index = _token_api._iso_week_index
-_month_index = _token_api._month_index
-_year_index = _token_api._year_index
-_static_month_last_day = _token_api._static_month_last_day
-_month_from_alias = _token_api._month_from_alias
-_year_full_months_span_token = _token_api._year_full_months_span_token
-_rewrite_month_names_to_ranges = _token_api._rewrite_month_names_to_ranges
-_unwrap_quotes = _token_api._unwrap_quotes
-_year_full_month_range_token = _token_api._year_full_month_range_token
-_mon_to_int = _token_api._mon_to_int
-_expand_weekly_aliases = _token_api._expand_weekly_aliases
-_expand_monthly_aliases = _token_api._expand_monthly_aliases
-_normalize_weekday = _token_api._normalize_weekday
+for _name in _token_api._aliases:
+    globals()[_name] = _token_api.alias(_name)
 
 _ACF_COMPRESSED = True
 ACF_COMPRESSED = _ACF_COMPRESSED
@@ -726,12 +738,14 @@ cp_sequence_interval_for_token = _cp_parser.cp_sequence_interval_for_token
 cp_sequence_interval_for_link = _cp_parser.cp_sequence_interval_for_link
 
 
-_recurrence_candidates = _import_sibling("recurrence_candidates").for_core(
-    sys.modules[__name__],
+_recurrence_candidates = _LazyApiBundle(
+    "recurrence_candidates",
+    ("anchors_between_large_range", "anchors_between_expr"),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-_anchors_between_large_range = _recurrence_candidates.anchors_between_large_range
-anchors_between_expr = _recurrence_candidates.anchors_between_expr
+for _name in _recurrence_candidates._aliases:
+    globals()[_name] = _recurrence_candidates.alias(_name)
 
 
 # Quarter rewrite entry points are bound before parser construction because
@@ -885,21 +899,26 @@ for _name in _parser_api._aliases:
 
 # Business-calendar configuration is bound after parser APIs are available so
 # calendar rules can reuse the same strict anchor/omit validators.
-_business_calendar_api = _import_sibling("business_calendar_api").for_core(
-    sys.modules[__name__],
+_business_calendar_api = _LazyApiBundle(
+    "business_calendar_api",
+    (
+        "business_calendar_definitions",
+        "_validate_business_calendar_omit_expr",
+        "_business_calendar_expression_matches_date",
+        "resolve_business_calendar_config",
+        "configured_business_calendars",
+        "get_configured_business_calendar",
+        "business_calendar_for_task",
+        "normalize_task_business_calendar",
+        "business_calendar_fingerprint",
+        "use_business_calendar",
+        "use_task_business_calendar",
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-business_calendar_definitions = _business_calendar_api.business_calendar_definitions
-_validate_business_calendar_omit_expr = _business_calendar_api._validate_business_calendar_omit_expr
-_business_calendar_expression_matches_date = _business_calendar_api._business_calendar_expression_matches_date
-resolve_business_calendar_config = _business_calendar_api.resolve_business_calendar_config
-configured_business_calendars = _business_calendar_api.configured_business_calendars
-get_configured_business_calendar = _business_calendar_api.get_configured_business_calendar
-business_calendar_for_task = _business_calendar_api.business_calendar_for_task
-normalize_task_business_calendar = _business_calendar_api.normalize_task_business_calendar
-business_calendar_fingerprint = _business_calendar_api.business_calendar_fingerprint
-use_business_calendar = _business_calendar_api.use_business_calendar
-use_task_business_calendar = _business_calendar_api.use_task_business_calendar
+for _name in _business_calendar_api._aliases:
+    globals()[_name] = _business_calendar_api.alias(_name)
 
 _linting_api = _LazyApiBundle(
     "linting_api",
@@ -991,26 +1010,31 @@ for _name in _scheduler_api._aliases:
 
 # Date/time adapters are bound after scheduler construction so date-specific
 # slot selection can reuse the facade's business-calendar callback.
-_time_api = _import_sibling("time_api").for_core(
-    sys.modules[__name__],
+_time_api = _LazyApiBundle(
+    "time_api",
+    (
+        "now_utc",
+        "to_local",
+        "utc_to_local_naive",
+        "local_naive_to_utc",
+        "fmt_dt_local",
+        "fmt_isoz",
+        "_ensure_utc",
+        "coerce_int",
+        "parse_dt_any",
+        "month_len",
+        "add_months",
+        "months_days_between",
+        "humanize_delta",
+        "expr_has_m_or_y",
+        "pick_hhmm_from_dnf_for_date",
+        "build_local_datetime",
+    ),
+    core=sys.modules[__name__],
     namespace=globals(),
 )
-now_utc = _time_api.now_utc
-to_local = _time_api.to_local
-utc_to_local_naive = _time_api.utc_to_local_naive
-local_naive_to_utc = _time_api.local_naive_to_utc
-fmt_dt_local = _time_api.fmt_dt_local
-fmt_isoz = _time_api.fmt_isoz
-_ensure_utc = _time_api._ensure_utc
-coerce_int = _time_api.coerce_int
-parse_dt_any = _time_api.parse_dt_any
-month_len = _time_api.month_len
-add_months = _time_api.add_months
-months_days_between = _time_api.months_days_between
-humanize_delta = _time_api.humanize_delta
-expr_has_m_or_y = _time_api.expr_has_m_or_y
-pick_hhmm_from_dnf_for_date = _time_api.pick_hhmm_from_dnf_for_date
-build_local_datetime = _time_api.build_local_datetime
+for _name in _time_api._aliases:
+    globals()[_name] = _time_api.alias(_name)
 
 _natural_language_api = _LazyApiBundle(
     "natural_language_api",
@@ -1113,7 +1137,14 @@ _precompute_api = _LazyApiBundle(
 for _name in _precompute_api._aliases:
     globals()[_name] = _precompute_api.alias(_name)
 
-RecurrenceModeResult = _import_sibling("recurrence_evaluator").RecurrenceModeResult
-
 _compat_api = _import_sibling("compat_api")
 __all__ = _compat_api.PUBLIC_EXPORTS
+
+
+def __getattr__(name: str):
+    """Resolve public types whose implementation is intentionally lazy."""
+    if name == "RecurrenceModeResult":
+        value = _import_sibling("recurrence_evaluator").RecurrenceModeResult
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

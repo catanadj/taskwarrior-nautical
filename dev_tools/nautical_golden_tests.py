@@ -14488,10 +14488,15 @@ def test_core_import_defers_optional_stacks():
                 "'nautical_core.parser_api','nautical_core.parser_support_api',"
                 "'nautical_core.acf_api','nautical_core.expansion_api',"
                 "'nautical_core.quarter_api','nautical_core.scheduler_api',"
-                "'nautical_core.cached_expansion','nautical_core.monthly_support'); "
+                "'nautical_core.cached_expansion','nautical_core.monthly_support',"
+                "'nautical_core.recurrence_evaluator','nautical_core.recurrence_candidates',"
+                "'nautical_core.token_api','nautical_core.time_api',"
+                "'nautical_core.business_calendar_api','nautical_core.cache_api',"
+                "'nautical_core.precompute_api','nautical_core.natural_language_api',"
+                "'nautical_core.linting_api'); "
                 "loaded=sorted(name for name in names if name in sys.modules); "
                 "count=sum(name.startswith('nautical_core') for name in sys.modules); "
-                "assert not loaded, loaded; assert count <= 50, count; "
+                "assert not loaded, loaded; assert count <= 30, count; "
                 "print(json.dumps({'count': count, 'loaded': loaded}))"
             ),
         ],

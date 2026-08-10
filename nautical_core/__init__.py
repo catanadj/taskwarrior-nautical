@@ -77,6 +77,27 @@ class _LazySibling:
         return getattr(self._resolve(), name)
 
 
+class _LazyPublicExports:
+    """Tuple-like ``__all__`` that defers the compatibility export module."""
+
+    __slots__ = ("_source",)
+
+    def __init__(self, source: _LazySibling):
+        self._source = source
+
+    def _values(self):
+        return self._source.PUBLIC_EXPORTS
+
+    def __iter__(self):
+        return iter(self._values())
+
+    def __len__(self):
+        return len(self._values())
+
+    def __getitem__(self, index):
+        return self._values()[index]
+
+
 class _LazyApiBundle:
     """Resolve one core-bound API bundle on its first facade call.
 
@@ -1280,8 +1301,8 @@ _precompute_api = _LazyApiBundle(
 )
 _bind_lazy_api_aliases(_precompute_api)
 
-_compat_api = _import_sibling("compat_api")
-__all__ = _compat_api.PUBLIC_EXPORTS
+_compat_api = _LazySibling("compat_api")
+__all__ = _LazyPublicExports(_compat_api)
 
 
 def __getattr__(name: str):

@@ -405,8 +405,7 @@ _parser_atoms = _LazySibling("parser_atoms")
 _parser_dnf = _LazySibling("parser_dnf")
 _parser_frontend = _LazySibling("parser_frontend")
 _position_selection = _LazySibling("position_selection")
-_season_support = _import_sibling("season_support")
-_season_support.configure_hemisphere(SEASON_HEMISPHERE)
+_season_support = _LazySibling("season_support")
 _precompute = _LazySibling("precompute")
 _quarter_helpers = _LazySibling("quarter_helpers")
 _quarter_rewrite = _LazySibling("quarter_rewrite")
@@ -420,6 +419,10 @@ _tokenutil = _import_sibling("tokenutil")
 _yearly_parse = _LazySibling("yearly_parse")
 _yearly_validation = _LazySibling("yearly_validation")
 _year_tokens = _LazySibling("year_tokens")
+
+
+def _configure_season_support() -> None:
+    _season_support.configure_hemisphere(SEASON_HEMISPHERE)
 
 short_uuid = _common.short_uuid
 DEFAULT_BUSINESS_CALENDAR = _business_calendar.DEFAULT_BUSINESS_CALENDAR
@@ -533,7 +536,7 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> dict[str, str | 
     globals()["_CONF"] = _core_config._CONF
     CONFIG_ERROR = _core_config.configuration_error()
     _refresh_timezone()
-    _season_support.configure_hemisphere(SEASON_HEMISPHERE)
+    _configure_season_support()
     error = scheduling_configuration_error()
     if error:
         raise RuntimeError(f"Invalid Nautical configuration: {error}")
@@ -569,8 +572,7 @@ def _refresh_facade_config_exports() -> None:
         MAX_ANCHOR_DNF_TERMS = _conf_int("max_anchor_dnf_terms", 10_000, min_value=64, max_value=200_000)
     if "_refresh_timezone" in globals():
         _refresh_timezone()
-    if "_season_support" in globals():
-        _season_support.configure_hemisphere(SEASON_HEMISPHERE)
+    _configure_season_support()
 
 
 # --- Date/time config ---

@@ -2161,6 +2161,71 @@ def test_core_cache_dir_rejects_symlink_override():
             else:
                 os.environ["NAUTICAL_ALLOW_TMP_CACHE"] = prev_tmp
 
+
+def test_cache_location_selection_covers_install_layouts():
+    """Cache selection must cover override, checkout, managed, and XDG layouts."""
+    import nautical_core.cache_support as cache_support
+
+    source_cache = os.path.join(os.path.dirname(cache_support.__file__), ".nautical-cache")
+    with tempfile.TemporaryDirectory() as td:
+        override = os.path.join(td, "shared-cache")
+        taskdata = os.path.join(td, "taskdata")
+        default = os.path.join(td, "xdg", "nautical")
+        previous_taskdata = os.environ.get("TASKDATA")
+        previous_allow_tmp = os.environ.get("NAUTICAL_ALLOW_TMP_CACHE")
+        calls = []
+        original_ensure = cache_support.ensure_cache_dir
+        try:
+            os.environ["TASKDATA"] = taskdata
+            os.environ.pop("NAUTICAL_ALLOW_TMP_CACHE", None)
+            cache_support.ensure_cache_dir = lambda path: calls.append(path) or path in {
+                override,
+                source_cache,
+                os.path.join(taskdata, ".nautical-cache"),
+                default,
+            }
+
+            chosen = cache_support.select_cache_dir(
+                anchor_cache_dir_override=override,
+                nautical_cache_dir_path=default,
+                validated_user_dir=lambda path, **_kwargs: path,
+            )
+            expect(chosen == override, f"configured cache override was ignored: {chosen!r}")
+
+            chosen = cache_support.select_cache_dir(
+                anchor_cache_dir_override="",
+                nautical_cache_dir_path=default,
+                validated_user_dir=lambda path, **_kwargs: path,
+            )
+            expect(chosen == source_cache, f"source-checkout cache was not selected: {chosen!r}")
+
+            cache_support.ensure_cache_dir = lambda path: calls.append(path) or path == os.path.join(taskdata, ".nautical-cache")
+            chosen = cache_support.select_cache_dir(
+                anchor_cache_dir_override="",
+                nautical_cache_dir_path=default,
+                validated_user_dir=lambda path, **_kwargs: path,
+            )
+            expect(chosen == os.path.join(taskdata, ".nautical-cache"), f"managed cache was not selected: {chosen!r}")
+
+            cache_support.ensure_cache_dir = lambda path: calls.append(path) or path == default
+            chosen = cache_support.select_cache_dir(
+                anchor_cache_dir_override="",
+                nautical_cache_dir_path=default,
+                validated_user_dir=lambda path, **_kwargs: path,
+            )
+            expect(chosen == default, f"default XDG cache was not selected: {chosen!r}")
+            expect(calls, "cache selection did not probe any candidate locations")
+        finally:
+            cache_support.ensure_cache_dir = original_ensure
+            if previous_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = previous_taskdata
+            if previous_allow_tmp is None:
+                os.environ.pop("NAUTICAL_ALLOW_TMP_CACHE", None)
+            else:
+                os.environ["NAUTICAL_ALLOW_TMP_CACHE"] = previous_allow_tmp
+
 def test_on_exit_large_queue_bounded_drain():
     """Large queues should drain in bounded batches and leave remainder."""
     hook = _find_hook_file("on-exit.nautical")
@@ -31276,6 +31341,7 @@ TESTS = [
     test_core_cache_dir_and_lock_permissions,
     test_core_cache_lock_contention_matches_safe_lock,
     test_core_cache_dir_rejects_symlink_override,
+    test_cache_location_selection_covers_install_layouts,
     test_on_modify_invalid_json_passthrough,
     test_on_modify_read_two_invalid_trailing,
     test_on_modify_read_two_array_uuid_mismatch_fails,

@@ -491,7 +491,7 @@ def _refresh_timezone() -> None:
 
 _refresh_timezone()
 
-_timeutil = _import_sibling("timeutil")
+_timeutil = _LazySibling("timeutil")
 
 
 def scheduling_configuration_error() -> str:
@@ -825,7 +825,7 @@ _Q_END_DAY_REV = {v: k for k, v in _Q_END_DAY.items()}
 _MONTH_SELECTOR_MAX_LEN = 64
 
 
-_dates = _import_sibling("dates")
+_dates = _LazySibling("dates")
 
 
 _recurrence_metadata = _import_sibling("recurrence_metadata")

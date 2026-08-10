@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -29,7 +30,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             rand_seed=rand_seed,
             k_next=k_next,
             sample_days_for_year=sample_days_for_year,
-            now_local=core["datetime"].now,
+            now_local=datetime.now,
             next_after_expr=core["_with_business_calendar"](
                 core["next_after_expr"], business_calendar
             ),

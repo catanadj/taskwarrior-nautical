@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,14 +14,14 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     ttl_lru_cache = core["_ttl_lru_cache"]
 
     def atom_sort_key(value: dict) -> tuple:
-        return acf.atom_sort_key(value, json_mod=core["json"])
+        return acf.atom_sort_key(value, json_mod=json)
 
     def acf_unpack(packed: str) -> dict:
         return acf.acf_unpack(
             packed,
             base64_mod=core["base64"],
             zlib_mod=core["zlib"],
-            json_mod=core["json"],
+            json_mod=json,
         )
 
     @ttl_lru_cache(maxsize=512)
@@ -84,17 +86,17 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             ),
             mods_to_acf=mods_to_acf,
             atom_sort_key=atom_sort_key,
-            json_mod=core["json"],
+            json_mod=json,
             zlib_mod=core["zlib"],
             base64_mod=core["base64"],
-            hashlib_mod=core["hashlib"],
+            hashlib_mod=hashlib,
             acf_checksum_len=core["ACF_CHECKSUM_LEN"],
         )
 
     def is_valid_acf(value: str) -> bool:
         return acf.is_valid_acf(
             value,
-            hashlib_mod=core["hashlib"],
+            hashlib_mod=hashlib,
             acf_checksum_len=core["ACF_CHECKSUM_LEN"],
             acf_unpack=acf_unpack,
         )

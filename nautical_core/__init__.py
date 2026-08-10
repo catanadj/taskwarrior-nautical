@@ -6,11 +6,8 @@ Shared core for Taskwarrior Nautical hooks.
 """
 from __future__ import annotations
 import os, re, sys
-import copy
-import math
-import stat
 from collections import OrderedDict
-from typing import Any, Callable, TYPE_CHECKING, TypeAlias, TypedDict, cast
+from typing import Any, Callable, TYPE_CHECKING, TypeAlias, TypedDict
 from datetime import datetime, timedelta, timezone, date
 from functools import partial
 from datetime import date as _date
@@ -21,7 +18,6 @@ import importlib
 import types
 import random
 import time
-from contextlib import contextmanager
 try:
     import fcntl  # POSIX advisory lock
 except Exception:

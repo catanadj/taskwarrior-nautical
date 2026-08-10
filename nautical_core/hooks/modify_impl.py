@@ -1024,17 +1024,24 @@ def _load_anchor_file_descriptions(name: str):
 
 @lru_cache(maxsize=512)
 def _export_uuid_short_cached(u_short: str):
-    return _export_uuid_short(u_short, env=None)
+    obj = _export_uuid_short(u_short, env=None)
+    if isinstance(obj, dict) and obj.get("uuid"):
+        return obj
+    hook_support = _module("hook_support", required=False)
+    if hook_support is not None:
+        return hook_support.LookupResult.unavailable("short UUID lookup unavailable")
+    return None
 
 
 def _export_uuid_short_lookup(u_short: str):
     """Return a tri-state UUID lookup without collapsing failures to None."""
     cached = _export_uuid_short_cached(u_short)
+    hook_support = _module("hook_support", required=False)
+    if hook_support is not None and isinstance(cached, hook_support.LookupResult):
+        return cached
     if isinstance(cached, dict) and cached.get("uuid"):
-        hook_support = _module("hook_support", required=False)
         if hook_support is not None:
             return hook_support.LookupResult.found(cached)
-    hook_support = _module("hook_support", required=False)
     if hook_support is None:
         return None
     return hook_support.export_uuid_short_result(

@@ -25792,6 +25792,27 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
     expect(out_task.get("nextLink") == "deadbeef", "existing nextLink should be preserved")
 
 
+def test_on_modify_uuid_lookup_does_not_repeat_unavailable_export():
+    """An unavailable cached UUID export must not trigger a second subprocess read."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_uuid_lookup_once_test")
+    calls = {"n": 0}
+    saved_export = mod._export_uuid_short
+    try:
+        def unavailable(_short, env=None):
+            calls["n"] += 1
+            return None
+
+        mod._export_uuid_short = unavailable
+        mod._export_uuid_short_cached.cache_clear()
+        result = mod._export_uuid_short_lookup("deadbeef")
+        expect(getattr(result, "is_unavailable", False), f"lookup did not retain unavailable state: {result!r}")
+        expect(calls["n"] == 1, f"unavailable UUID export was repeated: {calls}")
+    finally:
+        mod._export_uuid_short = saved_export
+        mod._export_uuid_short_cached.cache_clear()
+
+
 def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
     """Re-completing should not spawn when link #N+1 already exists in chain even if nextLink is empty."""
     hook = _find_hook_file("on-modify.nautical")
@@ -31915,6 +31936,7 @@ TESTS = [
     test_on_modify_spawn_intent_records_parent_guard,
     test_spawn_child_does_not_reimport_when_verification_unavailable,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
+    test_on_modify_uuid_lookup_does_not_repeat_unavailable_export,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_plan_uses_task_business_calendar_context,

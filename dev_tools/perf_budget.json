@@ -57,6 +57,12 @@
     "seasonal_build_hints_cold": 30.0,
     "seasonal_build_hints_warm": 0.5
   },
+  "slow_device_budgets_seconds": {
+    "build_hints_cold": 30.0,
+    "build_hints_warm": 8.0,
+    "seasonal_build_hints_cold": 90.0,
+    "seasonal_build_hints_warm": 30.0
+  },
   "hook_fast_path": {
     "enabled": true,
     "repeats": 7,

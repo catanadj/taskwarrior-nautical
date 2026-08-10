@@ -5914,6 +5914,18 @@ def test_perf_budget_config_covers_cache_io_checks():
         <= set(budgets),
         "seasonal performance budgets are incomplete",
     )
+    slow_budgets = obj.get("slow_device_budgets_seconds") if isinstance(obj, dict) else None
+    expect(isinstance(slow_budgets, dict), "slow-device budgets must be present")
+    expect(
+        {
+            "build_hints_cold",
+            "build_hints_warm",
+            "seasonal_build_hints_cold",
+            "seasonal_build_hints_warm",
+        }
+        <= set(slow_budgets or {}),
+        "slow-device hint budgets are incomplete",
+    )
     hook_fast_path = obj.get("hook_fast_path") if isinstance(obj, dict) else None
     expect(isinstance(hook_fast_path, dict), "hook_fast_path config must be present")
     expect(int(hook_fast_path.get("repeats") or 0) >= 3, "hook fast-path benchmark needs repeated samples")

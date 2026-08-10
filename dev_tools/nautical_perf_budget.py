@@ -1343,7 +1343,7 @@ def main() -> int:
     ap.add_argument(
         "--slow-device",
         action="store_true",
-        help="use the slower-device budgets for --extended benchmarks",
+        help="use the slower-device budgets for hint and extended benchmarks",
     )
     ap.add_argument(
         "--workflows-only",
@@ -1355,6 +1355,8 @@ def main() -> int:
     cfg = _load_budget_config(Path(args.budget_file))
     workload = cfg["workload"]
     budgets = cfg["budgets_seconds"]
+    if args.slow_device and isinstance(cfg.get("slow_device_budgets_seconds"), dict):
+        budgets = {**budgets, **cfg["slow_device_budgets_seconds"]}
     exprs = [str(x) for x in workload.get("expressions", []) if str(x).strip()]
     if not exprs:
         raise RuntimeError("No expressions defined in workload.expressions")

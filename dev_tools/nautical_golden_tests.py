@@ -6837,6 +6837,94 @@ def test_config_support_rejects_unsafe_toml_and_reports_reason():
         expect("world-writable" in errors[0], f"unsafe config reason was lost: {errors!r}")
 
 
+def test_config_support_distinguishes_empty_missing_and_invalid_candidates():
+    """Empty candidates are authoritative; invalid candidates block lower fallbacks."""
+    import nautical_core.config_support as config_support
+
+    defaults = {
+        "wrand_salt": "default",
+        "tz": "UTC",
+        "holiday_region": "",
+        "anchor_file_dir": "",
+        "omit_file_dir": "",
+        "anchor_presets": {},
+        "omit_presets": {},
+        "business_calendar": {},
+    }
+    with tempfile.TemporaryDirectory() as td:
+        high = Path(td) / "high.toml"
+        low = Path(td) / "low.toml"
+        low.write_text('tz = "Pacific/Auckland"\n', encoding="utf-8")
+        previous_config = os.environ.pop("NAUTICAL_CONFIG", None)
+        try:
+            def read_result(path):
+                return config_support.read_toml_result(
+                    path,
+                    tomllib_mod=__import__("tomllib"),
+                    warn_missing_toml_parser=lambda _path: None,
+                    warn_toml_parse_error=lambda _path, _err: None,
+                )
+
+            high.write_text("", encoding="utf-8")
+            selected_empty = config_support.load_config(
+                defaults=defaults,
+                config_paths=lambda: [str(high), str(low)],
+                read_toml=lambda path: read_result(path).data,
+                read_toml_result=read_result,
+                normalize_keys=config_support.normalize_keys,
+            )
+            expect(
+                selected_empty["tz"] == "UTC",
+                f"valid empty config did not remain authoritative: {selected_empty!r}",
+            )
+
+            errors = []
+            high.write_text("tz = [\n", encoding="utf-8")
+
+            def invalid_result(path):
+                return config_support.read_toml_result(
+                    path,
+                    tomllib_mod=__import__("tomllib"),
+                    warn_missing_toml_parser=lambda _path: None,
+                    warn_toml_parse_error=lambda _path, _err: None,
+                    error_sink=errors.append,
+                )
+
+            blocked = config_support.load_config(
+                defaults=defaults,
+                config_paths=lambda: [str(high), str(low)],
+                read_toml=lambda path: invalid_result(path).data,
+                read_toml_result=invalid_result,
+                normalize_keys=config_support.normalize_keys,
+            )
+            expect(blocked["tz"] == "UTC", f"invalid config fell through to lower candidate: {blocked!r}")
+            expect(errors and str(high) in errors[0], f"invalid config reason was lost: {errors!r}")
+
+            original_exists = config_support.os.path.exists
+            try:
+                config_support.os.path.exists = lambda _path: (_ for _ in ()).throw(
+                    OSError("stat unavailable")
+                )
+                inspection_errors = []
+                inspected = config_support.read_toml_result(
+                    str(high),
+                    tomllib_mod=__import__("tomllib"),
+                    warn_missing_toml_parser=lambda _path: None,
+                    warn_toml_parse_error=lambda _path, _err: None,
+                    error_sink=inspection_errors.append,
+                )
+            finally:
+                config_support.os.path.exists = original_exists
+            expect(inspected.is_invalid, f"filesystem inspection failure was treated as absent: {inspected!r}")
+            expect(
+                inspection_errors and "inspection failed" in inspection_errors[0],
+                f"filesystem inspection reason was lost: {inspection_errors!r}",
+            )
+        finally:
+            if previous_config is not None:
+                os.environ["NAUTICAL_CONFIG"] = previous_config
+
+
 def test_explicit_unsafe_config_blocks_scheduling_with_actionable_error():
     """An explicit world-writable config must not silently fall back to UTC."""
     script = (
@@ -31589,6 +31677,7 @@ TESTS = [
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
     test_config_support_reports_automatically_discovered_toml_parse_errors,
     test_config_support_rejects_unsafe_toml_and_reports_reason,
+    test_config_support_distinguishes_empty_missing_and_invalid_candidates,
     test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
     test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,
     test_core_recurrence_update_udas_config_aliases,

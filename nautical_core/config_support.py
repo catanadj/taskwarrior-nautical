@@ -4,9 +4,41 @@ import copy
 import os
 import re
 import sys
+from typing import Literal
 
 
 _UDA_ATTR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+class ConfigReadResult:
+    """Typed outcome for one candidate configuration path."""
+
+    __slots__ = ("state", "data", "error")
+    state: Literal["present", "absent", "invalid"]
+    data: dict
+    error: str
+
+    def __init__(
+        self,
+        state: Literal["present", "absent", "invalid"],
+        data: dict,
+        error: str = "",
+    ) -> None:
+        self.state = state
+        self.data = data
+        self.error = error
+
+    @property
+    def is_present(self) -> bool:
+        return self.state == "present"
+
+    @property
+    def is_absent(self) -> bool:
+        return self.state == "absent"
+
+    @property
+    def is_invalid(self) -> bool:
+        return self.state == "invalid"
 
 
 def env_flag_true(name: str, env_map: dict | None = None) -> bool:
@@ -119,7 +151,7 @@ def validated_user_dir(
     return ap
 
 
-def read_toml(
+def read_toml_result(
     path: str,
     *,
     tomllib_mod,
@@ -129,9 +161,12 @@ def read_toml(
 ):
     try:
         if not path or not os.path.exists(path):
-            return {}
-    except Exception:
-        return {}
+            return ConfigReadResult("absent", {})
+    except Exception as exc:
+        message = f"config inspection failed for {path}: {exc}"
+        if callable(error_sink):
+            error_sink(message)
+        return ConfigReadResult("invalid", {}, message)
 
     env_path = os.environ.get("NAUTICAL_CONFIG") or ""
     env_abs = os.path.abspath(os.path.expanduser(env_path)) if env_path else ""
@@ -149,7 +184,7 @@ def read_toml(
                     sys.stderr.write(f"[nautical] Rejected unsafe config path '{path}': {in_err}\n")
                 except Exception:
                     pass
-            return {}
+            return ConfigReadResult("invalid", {}, message)
         safety_err = path_safety_error(path, expect_dir=False)
         if safety_err:
             message = f"unsafe config path rejected for {path}: {safety_err}"
@@ -160,32 +195,58 @@ def read_toml(
                     sys.stderr.write(f"[nautical] Rejected unsafe config path '{path}': {safety_err}\n")
                 except Exception:
                     pass
-            return {}
+            return ConfigReadResult("invalid", {}, message)
 
     if tomllib_mod is None:
-        if callable(error_sink):
-            error_sink(f"TOML parser unavailable for {path}")
         if is_env_path:
             raise RuntimeError(
                 f"NAUTICAL_CONFIG is set but TOML parser is unavailable for {path}. "
                 "Install tomli or upgrade to Python 3.11+."
             )
         warn_missing_toml_parser(path)
-        return {}
+        message = f"TOML parser unavailable for {path}"
+        if callable(error_sink):
+            error_sink(message)
+        return ConfigReadResult("invalid", {}, message)
 
     try:
         with open(path, "rb") as fh:
-            return tomllib_mod.load(fh) or {}
+            data = tomllib_mod.load(fh) or {}
+            if not isinstance(data, dict):
+                message = f"config root must be a TOML table for {path}"
+                if callable(error_sink):
+                    error_sink(message)
+                return ConfigReadResult("invalid", {}, message)
+            return ConfigReadResult("present", data)
     except Exception as exc:
+        message = f"config parse failed for {path}: {exc}"
         if callable(error_sink):
-            error_sink(f"config parse failed for {path}: {exc}")
+            error_sink(message)
         if is_env_path:
             raise RuntimeError(f"NAUTICAL_CONFIG parse failed for {path}: {exc}")
         if os.environ.get("NAUTICAL_DIAG") == "1":
             print(f"[nautical] Failed to parse TOML: {path}: {exc}", file=sys.stderr)
         else:
             warn_toml_parse_error(path, exc)
-        return {}
+        return ConfigReadResult("invalid", {}, message)
+
+
+def read_toml(
+    path: str,
+    *,
+    tomllib_mod,
+    warn_missing_toml_parser,
+    warn_toml_parse_error,
+    error_sink=None,
+):
+    """Compatibility wrapper returning only the parsed table."""
+    return read_toml_result(
+        path,
+        tomllib_mod=tomllib_mod,
+        warn_missing_toml_parser=warn_missing_toml_parser,
+        warn_toml_parse_error=warn_toml_parse_error,
+        error_sink=error_sink,
+    ).data
 
 
 def warn_env_config_missing(env_path: str, *, warn_once_per_day_any) -> None:
@@ -312,6 +373,7 @@ def load_config(
     defaults: dict,
     config_paths,
     read_toml,
+    read_toml_result=None,
     normalize_keys,
 ):
     cfg = dict(defaults)
@@ -319,11 +381,20 @@ def load_config(
 
     paths = config_paths()
     for path in paths:
-        data = read_toml(path)
-        if data:
-            cfg.update(normalize_keys(data))
-            chosen = path
-            break
+        if callable(read_toml_result):
+            result = read_toml_result(path)
+            if result.is_absent:
+                continue
+            if result.is_invalid:
+                break
+            data = result.data
+        else:
+            data = read_toml(path)
+            if not data:
+                continue
+        cfg.update(normalize_keys(data))
+        chosen = path
+        break
 
     if os.environ.get("NAUTICAL_DIAG") == "1":
         try:

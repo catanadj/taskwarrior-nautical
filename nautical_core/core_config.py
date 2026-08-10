@@ -119,7 +119,11 @@ def _record_config_error(message: str, path: str = "") -> None:
 
 
 def _read_toml(path: str) -> dict:
-    return config_support.read_toml(
+    return _read_toml_result(path).data
+
+
+def _read_toml_result(path: str):
+    return config_support.read_toml_result(
         path,
         tomllib_mod=tomllib,
         warn_missing_toml_parser=_warn_missing_toml_parser,
@@ -149,6 +153,7 @@ def _load_config(taskdata: str | None = None) -> dict:
         defaults=_DEFAULTS,
         config_paths=lambda: _config_paths(taskdata),
         read_toml=_read_toml,
+        read_toml_result=_read_toml_result,
         normalize_keys=_normalize_keys,
     )
 

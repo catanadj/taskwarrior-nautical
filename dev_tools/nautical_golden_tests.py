@@ -8856,6 +8856,37 @@ def test_precompute_hints_bounds_year_stats_by_days():
     expect(sparse["per_year"]["est"] == 0, f"sparse annual estimate crossed its window: {sparse}")
     expect(calls["n"] == 1, f"sparse annual scan performed repeated out-of-window work: {calls}")
 
+    terminal = core.OccurrenceSearchExhausted(
+        "bounded hint stream", reference=date(9999, 1, 1), limit=1
+    )
+    terminal_calls = {"n": 0}
+
+    def terminal_next(_dnf, after, **_kwargs):
+        terminal_calls["n"] += 1
+        if terminal_calls["n"] == 1:
+            return after + timedelta(days=7), None
+        raise terminal
+
+    terminal_hints = precompute.precompute_hints(
+        [[{"spec": "rand"}]],
+        start_dt=start,
+        rand_seed=None,
+        k_next=3,
+        sample_days_for_year=366,
+        now_local=lambda: start,
+        next_after_expr=terminal_next,
+        next_for_or=weekly_next,
+    )
+    expect(
+        terminal_hints["next_dates"] == ["2026-01-08T00:00"],
+        f"valid hint prefix was not retained: {terminal_hints}",
+    )
+    expect(
+        terminal_hints["limits"]["stop"] == terminal.DATE_LIMIT
+        and "No further matching occurrences are representable" in terminal_hints["limits"]["message"],
+        f"hint terminal state was not exposed: {terminal_hints['limits']}",
+    )
+
 
 def test_parser_validation():
     """Test parser validation and error messages"""
@@ -10989,6 +11020,7 @@ def test_occurrence_collection_preserves_prefix_before_date_terminal():
         to_local=lambda value: value,
     )
     expect(len(collected) == 1 and collected[0].local_datetime == first, f"valid prefix was lost: {collected!r}")
+    expect(collected.terminal is terminal, f"date-limit terminal state was lost: {collected.terminal!r}")
 
 
 def test_anchor_step_preserves_scheduler_exhaustion():

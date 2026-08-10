@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from . import calendar_feedback, panel_diagnostics
-from .occurrence_provider import Occurrence, _cursor_before, _sort_datetimes
+from .occurrence_provider import Occurrence, OccurrenceBatch, _cursor_before, _sort_datetimes
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 
@@ -531,7 +531,10 @@ def _collect_included_with_provider(
         )
         if return_occurrences:
             return collected
-        return [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None]
+        return OccurrenceBatch(
+            [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None],
+            terminal=getattr(collected, "terminal", None),
+        )
 
     from .anchor_inclusion import next_included_occurrence
     from . import anchor_inclusion
@@ -587,7 +590,10 @@ def _collect_included_with_provider(
     )
     if return_occurrences:
         return collected
-    return [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None]
+    return OccurrenceBatch(
+        [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None],
+        terminal=getattr(collected, "terminal", None),
+    )
 
 
 def _collect_events_with_provider(
@@ -636,11 +642,14 @@ def _collect_events_with_provider(
         )
         if return_occurrences:
             return collected
-        return [
-            (occurrence.local_datetime, occurrence.omitted)
-            for occurrence in collected
-            if occurrence.local_datetime is not None
-        ]
+        return OccurrenceBatch(
+            [
+                (occurrence.local_datetime, occurrence.omitted)
+                for occurrence in collected
+                if occurrence.local_datetime is not None
+            ],
+            terminal=getattr(collected, "terminal", None),
+        )
 
     from .anchor_inclusion import next_occurrence_event_local
     from . import anchor_inclusion
@@ -696,11 +705,14 @@ def _collect_events_with_provider(
     )
     if return_occurrences:
         return collected
-    return [
-        (occurrence.local_datetime, occurrence.omitted)
-        for occurrence in collected
-        if occurrence.local_datetime is not None
-    ]
+    return OccurrenceBatch(
+        [
+            (occurrence.local_datetime, occurrence.omitted)
+            for occurrence in collected
+            if occurrence.local_datetime is not None
+        ],
+        terminal=getattr(collected, "terminal", None),
+    )
 
 
 def handle_anchor_file_preview_on_add(
@@ -1283,6 +1295,15 @@ def handle_anchor_preview_on_add(
                 )
             else:
                 raise
+        preview_terminal = getattr(preview, "terminal", None)
+        if preview_terminal is not None and preview_terminal.is_date_limit:
+            rows.append(
+                (
+                    "Note",
+                    f"[yellow]{occurrence_exhaustion_message(preview_terminal)}; "
+                    "the occurrences shown above are the final representable matches.[/]",
+                )
+            )
         prof.add_ms("anchor:preview_occurrences", (time.perf_counter() - _t_prev) * 1000.0)
     elif not compact_presentation:
         all_occurrences = _collect_included_with_provider(

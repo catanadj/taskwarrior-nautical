@@ -4,6 +4,7 @@ from datetime import date, timedelta, timezone
 from typing import Any, Callable
 
 from .timeutil import compare_datetimes
+from .occurrence_provider import OccurrenceBatch
 from .scheduler_models import OccurrenceSearchExhausted
 
 
@@ -499,7 +500,7 @@ def anchor_build_preview(
                 break
             color = colors[min(i, len(colors) - 1)]
             preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
-        return preview
+        return OccurrenceBatch(preview, terminal=getattr(events, "terminal", None))
 
     preview = []
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
@@ -524,4 +525,4 @@ def anchor_build_preview(
         color = colors[min(i, len(colors) - 1)]
         preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
         cur_dt = nxt_dt
-    return preview
+    return OccurrenceBatch(preview)

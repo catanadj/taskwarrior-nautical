@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
-from .occurrence_provider import Occurrence
+from .occurrence_provider import Occurrence, OccurrenceBatch
 from .recurrence_protocols import (
     NextOccurrenceCallback,
     PickOccurrenceCallback,
@@ -445,7 +445,7 @@ class RecurrenceEvaluator:
         include_omitted: bool = False,
         max_iterations: int = 512,
         max_file_skips: int = 512,
-    ) -> list[Occurrence]:
+    ) -> OccurrenceBatch[Occurrence]:
         """Return a bounded event stream in ``[start_local, end_local]``.
 
         ``limit`` counts included occurrences.  Omitted events are retained in

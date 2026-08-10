@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Callable, Protocol
+from typing import Callable, Generic, Protocol, TypeVar
 
 from .scheduler_models import OccurrenceSearchExhausted
 from .timeutil import compare_datetimes
+
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +47,27 @@ class Occurrence:
     @property
     def hhmm(self) -> tuple[int, int]:
         return self.hour, self.minute
+
+
+class OccurrenceBatch(list[T], Generic[T]):
+    """List-compatible occurrence results with optional terminal evidence.
+
+    Existing scheduling callers intentionally consume occurrence results as a
+    normal list.  Keeping that behavior while attaching the terminal outcome
+    prevents a valid prefix from being mistaken for an ordinary, complete
+    result.
+    """
+
+    __slots__ = ("terminal",)
+
+    def __init__(
+        self,
+        values: list[T] | tuple[T, ...] = (),
+        *,
+        terminal: OccurrenceSearchExhausted | None = None,
+    ) -> None:
+        super().__init__(values)
+        self.terminal = terminal
 
 
 class LazyOccurrenceProvider(Protocol):
@@ -104,7 +128,7 @@ def collect_after(
     max_iterations: int = 512,
     build_local_datetime: Callable[[date, tuple[int, int]], datetime],
     to_local: Callable[[datetime], datetime],
-) -> list[Occurrence]:
+) -> OccurrenceBatch[Occurrence]:
     """Collect a bounded stream while counting only non-omitted occurrences."""
     if not isinstance(after_local, datetime):
         raise TypeError("Occurrence collection requires a datetime cursor.")
@@ -113,9 +137,10 @@ def collect_after(
     if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations <= 0:
         raise ValueError("Occurrence collection iteration limit must be a positive integer.")
     if limit == 0:
-        return []
+        return OccurrenceBatch()
     cursor = _cursor_before(after_local) if inclusive else after_local
     out: list[Occurrence] = []
+    terminal: OccurrenceSearchExhausted | None = None
     included_count = 0
     iterations = 0
     while included_count < limit and iterations < max_iterations:
@@ -131,7 +156,8 @@ def collect_after(
             # Preserve that useful prefix; an empty result remains an error so
             # first-occurrence failures stay actionable at the caller boundary.
             if exc.is_date_limit and out:
-                return out
+                terminal = exc
+                break
             raise
         if occurrence is None:
             break
@@ -146,7 +172,7 @@ def collect_after(
             included_count += 1
     if included_count < limit and iterations >= max_iterations:
         raise ValueError("Occurrence provider exceeded its collection iteration limit.")
-    return out
+    return OccurrenceBatch(out, terminal=terminal)
 
 
 def _require_forward_progress(after_local: datetime, value: datetime) -> None:
@@ -275,4 +301,12 @@ class AnchorEventOccurrenceProvider:
         )
 
 
-__all__ = ("AnchorEventOccurrenceProvider", "AnchorOccurrenceProvider", "LazyOccurrenceProvider", "Occurrence", "OccurrenceProvider", "collect_after")
+__all__ = (
+    "AnchorEventOccurrenceProvider",
+    "AnchorOccurrenceProvider",
+    "LazyOccurrenceProvider",
+    "Occurrence",
+    "OccurrenceBatch",
+    "OccurrenceProvider",
+    "collect_after",
+)

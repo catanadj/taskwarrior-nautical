@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from datetime import date, datetime, timedelta
 
+from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
+
 
 def _has_rand_atoms(dnf: list[list[dict]]) -> bool:
     return any(
@@ -49,6 +51,7 @@ def precompute_hints(
     # result local to this build so expensive astronomical/seasonal lookups
     # are not repeated, without sharing mutable state across tasks or runs.
     next_cache: dict[date, object] = {}
+    terminal: OccurrenceSearchExhausted | None = None
 
     def next_candidate(cursor):
         cached = next_cache.get(cursor)
@@ -69,7 +72,13 @@ def precompute_hints(
     safety_limit = 366 * 5
     steps = 0
     while len(out_next) < k_next and steps < safety_limit:
-        candidate = next_candidate(ref)
+        try:
+            candidate = next_candidate(ref)
+        except OccurrenceSearchExhausted as exc:
+            if not exc.is_date_limit:
+                raise
+            terminal = exc
+            break
         nxt = candidate[0] if use_expr_scheduler else candidate
 
         if not nxt or nxt <= ref:
@@ -90,7 +99,13 @@ def precompute_hints(
     # Annual statistics are bounded by calendar coverage, not occurrence count.
     # Sparse rules must not force hundreds of years of scheduling work.
     while steps < sample_horizon and ref < sample_end:
-        candidate = next_candidate(ref)
+        try:
+            candidate = next_candidate(ref)
+        except OccurrenceSearchExhausted as exc:
+            if not exc.is_date_limit:
+                raise
+            terminal = terminal or exc
+            break
         nxt = candidate[0] if use_expr_scheduler else candidate
 
         if not nxt or nxt <= ref or nxt >= sample_end:
@@ -111,7 +126,12 @@ def precompute_hints(
     return {
         "next_dates": out_next,
         "per_year": {"est": year_hits, "first": first_hit, "last": last_hit},
-        "limits": {"stop": "none", "max_left": 0, "until": ""},
+        "limits": {
+            "stop": terminal.kind if terminal is not None else "none",
+            "max_left": 0,
+            "until": "",
+            "message": occurrence_exhaustion_message(terminal) if terminal is not None else "",
+        },
         "rand_preview": out_next[:10],
     }
 

@@ -828,12 +828,27 @@ _MONTH_SELECTOR_MAX_LEN = 64
 _dates = _LazySibling("dates")
 
 
-_recurrence_metadata = _import_sibling("recurrence_metadata")
-_active_mod_keys = _recurrence_metadata.active_mod_keys
-_atype = _recurrence_metadata.atom_type
-_aspec = _recurrence_metadata.atom_spec
-_amods = _recurrence_metadata.atom_mods
-_ainterval = _recurrence_metadata.atom_interval
+_recurrence_metadata = _LazySibling("recurrence_metadata")
+
+
+def _active_mod_keys(mods: dict) -> set:
+    return _recurrence_metadata.active_mod_keys(mods)
+
+
+def _atype(atom) -> str:
+    return _recurrence_metadata.atom_type(atom)
+
+
+def _aspec(atom) -> str:
+    return _recurrence_metadata.atom_spec(atom)
+
+
+def _amods(atom) -> dict:
+    return _recurrence_metadata.atom_mods(atom)
+
+
+def _ainterval(atom) -> int:
+    return _recurrence_metadata.atom_interval(atom)
 
 
 # Shared weekday indices remain part of the facade namespace for scheduler
@@ -841,7 +856,8 @@ _ainterval = _recurrence_metadata.atom_interval
 _WD = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
-_months_since = _recurrence_metadata.months_since
+def _months_since(seed_local, year: int, month: int) -> int:
+    return _recurrence_metadata.months_since(seed_local, year, month)
 
 
 # CP parsing is implemented in a focused module; these aliases preserve the

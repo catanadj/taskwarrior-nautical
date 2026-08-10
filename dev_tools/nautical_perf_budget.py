@@ -39,6 +39,7 @@ if str(ROOT) not in sys.path:
 core = importlib.import_module("nautical_core")
 install_runtime = importlib.import_module("nautical_core.install_runtime")
 queue_store = importlib.import_module("nautical_core.queue_store")
+IMPORT_PROFILES: dict[str, int] = {}
 
 
 def _load_budget_config(path: Path) -> dict:
@@ -261,12 +262,13 @@ def _bench_queue_schema_cold(rounds: int) -> float:
 def _bench_cold_import(kind: str, rounds: int) -> float:
     """Measure a fresh-process import without reusing this benchmark process."""
     if kind == "core":
-        script = "import nautical_core"
+        script = "import nautical_core; print('__NAUTICAL_IMPORT_COUNT__=' + str(len(__import__('sys').modules)))"
     elif kind == "modify_impl":
         script = (
             "import importlib.util, sys; "
             "spec = importlib.util.spec_from_file_location('perf_modify_impl', sys.argv[1]); "
-            "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)"
+            "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "print('__NAUTICAL_IMPORT_COUNT__=' + str(len(sys.modules)))"
         )
     else:
         raise ValueError(f"unknown cold import benchmark kind: {kind}")
@@ -289,6 +291,13 @@ def _bench_cold_import(kind: str, rounds: int) -> float:
         )
         if proc.returncode != 0:
             raise RuntimeError(f"cold {kind} import failed: {proc.stderr.strip()}")
+        for line in reversed((proc.stdout or "").splitlines()):
+            if line.startswith("__NAUTICAL_IMPORT_COUNT__="):
+                try:
+                    IMPORT_PROFILES[kind] = int(line.split("=", 1)[1])
+                except ValueError:
+                    pass
+                break
     return time.perf_counter() - started
 
 
@@ -1555,6 +1564,10 @@ def main() -> int:
                 extended_budgets = candidate
         budget = float(extended_budgets.get(name, budgets.get(name, 0.0)))
         r["budget_s"] = budget
+        if name == "cold_core_import":
+            r["module_count"] = IMPORT_PROFILES.get("core", 0)
+        elif name == "cold_modify_impl_import":
+            r["module_count"] = IMPORT_PROFILES.get("modify_impl", 0)
         r["pass"] = (budget <= 0.0) or (r["median_s"] <= budget)
         results[name] = r
         if args.enforce and not r["pass"]:

@@ -6007,6 +6007,17 @@ def test_perf_hint_benchmark_isolates_persistent_cache():
         perf.core.build_and_cache_hints = original_build
 
 
+def test_perf_cold_import_records_module_profile():
+    """Cold-import benchmarks should expose loaded-module counts for profiling."""
+    perf = _load_hook_module(
+        os.path.join(DEV_TOOLS, "nautical_perf_budget.py"),
+        "_nautical_perf_import_profile_test",
+    )
+    elapsed = perf._bench_cold_import("core", 1)
+    expect(elapsed >= 0.0, "cold import benchmark returned an invalid duration")
+    expect(int(perf.IMPORT_PROFILES.get("core", 0)) > 0, "cold import module profile was not recorded")
+
+
 def test_perf_hook_fast_path_ratio_enforcement():
     """Hook latency checks should enforce the normalized fast/full median ratio."""
     perf = _load_hook_module(
@@ -31606,6 +31617,7 @@ TESTS = [
     test_doctor_reports_reconcile_backfill_plans,
     test_perf_budget_config_covers_cache_io_checks,
     test_perf_hint_benchmark_isolates_persistent_cache,
+    test_perf_cold_import_records_module_profile,
     test_perf_hook_fast_path_ratio_enforcement,
     test_load_benchmark_installs_complete_hook_runtime,
     test_load_benchmark_queue_and_lineage_verification,

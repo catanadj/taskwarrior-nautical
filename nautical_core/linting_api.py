@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 from types import SimpleNamespace
 from typing import Any
 
@@ -45,7 +46,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             value,
             wd_abbr=core["_WD_ABBR"],
             re_mod=core["re"],
-            difflib_mod=core["difflib"],
+            difflib_mod=difflib,
         )
 
     def lint_check_nth_weekday_suffixes(value: str) -> str | None:

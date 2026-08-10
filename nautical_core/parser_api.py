@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import re
 import sys
+from datetime import date
 from types import SimpleNamespace
 from typing import Any
 
@@ -30,7 +31,7 @@ def _parse_anchor_expr_to_dnf_impl(module: Any, s: str):
         validate_and_terms_satisfiable=module._validate_and_terms_satisfiable,
         max_anchor_dnf_terms=module.MAX_ANCHOR_DNF_TERMS,
         parse_error_cls=module.ParseError,
-        today=module.date.today,
+        today=date.today,
     )
 
 

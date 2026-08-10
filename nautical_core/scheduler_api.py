@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+from functools import lru_cache
 from types import SimpleNamespace
 from typing import Any
 
@@ -52,7 +54,7 @@ def _base_next_after_atom_impl(module: Any, atom, ref_d, seed_base=None, busines
             business_calendar,
         ),
         week_monday=module._week_monday,
-        date_cls=module.date,
+        date_cls=date,
         resolve_moon_phase_date=module._resolve_moon_phase_date,
     )
 
@@ -77,7 +79,7 @@ def _advance_probe_for_interval_bucket(module: Any, typ, ival, seed, cand, spec=
         cand,
         weeks_between=module._weeks_between,
         year_index=module._year_index,
-        date_cls=module.date,
+        date_cls=date,
         spec=spec,
     )
 
@@ -157,7 +159,7 @@ def _factor_matches_on_impl(module: Any, factor, day, default_seed, seed_base=No
         return matches(factor, day, default_seed or day, seed_base=seed_base)
     business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
     try:
-        previous = day - module.timedelta(days=1)
+        previous = day - timedelta(days=1)
     except (OverflowError, ValueError):
         return False
     selected = module._position_selection.next_selected_date_with_modifiers(
@@ -379,7 +381,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             month_doms_safe=core["_with_business_calendar"](month_doms_safe, business_calendar),
         )
 
-    @core["lru_cache"](maxsize=32)
+    @lru_cache(maxsize=32)
     def selection_inner_matcher(business_calendar):
         return core["partial"](core["atom_matches_on"], business_calendar=business_calendar)
 
@@ -516,7 +518,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             doms_allowed_by_year=core["_doms_allowed_by_year"],
             intersect_monthly_atoms_allowed=core["_intersect_monthly_atoms_allowed"],
             doms_for_weekly_spec=core["_doms_for_weekly_spec"],
-            date_cls=core["date"],
+            date_cls=date,
         )
 
     def next_for_and_fast_path(term, ref_d, seed, seed_base=None, business_calendar=None):
@@ -555,7 +557,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             warn_once_per_day=core["_warn_once_per_day"],
             parse_error_cls=core["ParseError"],
             os_mod=core["os"],
-            date_cls=core["date"],
+            date_cls=date,
         )
 
     def next_for_or(dnf, ref_d, seed, seed_base=None, business_calendar=None):

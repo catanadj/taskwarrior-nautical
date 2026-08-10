@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from calendar import monthrange
 from types import SimpleNamespace
 from typing import Any
 
@@ -14,7 +15,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         return core["_expansion_support"].days_in_month(
             year,
             month,
-            monthrange=core["monthrange"],
+            monthrange=monthrange,
         )
 
     def wd_idx(value: str) -> int | None:

@@ -5860,6 +5860,25 @@ def test_perf_budget_config_covers_cache_io_checks():
         <= set(workflow_budgets or {}),
         f"expensive workflow budgets are incomplete: {workflow_budgets}",
     )
+    extended = obj.get("extended_workload") if isinstance(obj, dict) else None
+    expect(isinstance(extended, dict), "extended_workload config must be present")
+    extended_budgets = extended.get("budgets_seconds") if isinstance(extended, dict) else None
+    expect(isinstance(extended_budgets, dict), "extended_workload budgets_seconds must be present")
+    expect(
+        {
+            "anchor_file_large_cold",
+            "anchor_file_large_hot",
+            "anchor_file_nonmonotonic",
+            "anchor_file_business_day_omissions",
+            "business_calendar_large_omissions",
+            "native_until_reconcile_dry_run",
+            "native_until_reconcile_apply",
+        }
+        <= set(extended_budgets or {}),
+        f"extended performance budgets are incomplete: {extended_budgets}",
+    )
+    slow_budgets = extended.get("slow_device_budgets_seconds") if isinstance(extended, dict) else None
+    expect(isinstance(slow_budgets, dict), "extended slow-device budgets must be present")
 
 
 def test_perf_hook_fast_path_ratio_enforcement():

@@ -7,6 +7,8 @@ Usage:
   python3 dev_tools/nautical_perf_budget.py
   python3 dev_tools/nautical_perf_budget.py --enforce
   python3 dev_tools/nautical_perf_budget.py --json --enforce
+  python3 dev_tools/nautical_perf_budget.py --extended --json
+  python3 dev_tools/nautical_perf_budget.py --extended --slow-device --workflows-only --json
   python3 dev_tools/nautical_perf_budget.py --budget-file dev_tools/perf_budget.json
 """
 
@@ -14,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import json
 import os
 import sqlite3
@@ -264,6 +267,261 @@ def _bench_anchor_file_provider(rounds: int) -> float:
             after = datetime(2026, 1, 1, 8, 0) + timedelta(days=index % 364)
             if provider.next_after(after, build_local_datetime=build, to_local=identity) is None:
                 raise RuntimeError("anchor-file provider benchmark unexpectedly exhausted")
+        return time.perf_counter() - started
+
+
+def _bench_large_anchor_file_provider(
+    rounds: int,
+    *,
+    row_count: int = 5000,
+    mode: str = "hot",
+    business_day_only: bool = False,
+) -> float:
+    """Exercise large file-backed calendars and their cached lookup cursors."""
+    anchor_files = importlib.import_module("nautical_core.anchor_files")
+    business_calendar = importlib.import_module("nautical_core.business_calendar")
+    row_count = max(1000, int(row_count))
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-anchor-large-") as td:
+        path = Path(td) / "calendar.csv"
+        rows = ["date,description"]
+        first_day = date(2020, 1, 1)
+        for index in range(row_count):
+            item_date = first_day + timedelta(days=index)
+            rows.append(f"{item_date.isoformat()},event-{index}")
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+        suffix = "@bd" if business_day_only else ""
+        provider_name = f"calendar.csv{suffix}"
+        calendar = business_calendar.DEFAULT_BUSINESS_CALENDAR if business_day_only else None
+        build = lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm)
+        identity = lambda value: value
+        query_indexes = list(range(0, row_count - 2, max(1, row_count // 37)))
+        if mode == "nonmonotonic":
+            query_indexes = query_indexes[::2] + list(reversed(query_indexes[1::2]))
+        started = time.perf_counter()
+        provider = None
+        if mode != "cold":
+            provider = anchor_files.AnchorFileOccurrenceProvider(
+                provider_name,
+                td,
+                (9, 0),
+                business_calendar=calendar,
+            )
+            # Exclude setup from the hot lookup measurement.
+            if provider.next_after(
+                datetime.combine(first_day - timedelta(days=1), datetime.min.time()),
+                build_local_datetime=build,
+                to_local=identity,
+            ) is None:
+                raise RuntimeError("large anchor-file provider failed to load its first occurrence")
+        for index in range(max(1, int(rounds))):
+            for query_index in query_indexes:
+                current = provider
+                if mode == "cold":
+                    current = anchor_files.AnchorFileOccurrenceProvider(
+                        provider_name,
+                        td,
+                        (9, 0),
+                        business_calendar=calendar,
+                    )
+                after = datetime.combine(
+                    first_day + timedelta(days=query_index),
+                    datetime.min.time(),
+                )
+                occurrence = current.next_after(
+                    after,
+                    build_local_datetime=build,
+                    to_local=identity,
+                )
+                if occurrence is None:
+                    raise RuntimeError(
+                        f"large anchor-file provider exhausted unexpectedly ({mode}, query={query_index})"
+                    )
+                if business_day_only and occurrence.day.weekday() >= 5:
+                    raise RuntimeError("business-day anchor-file benchmark returned a weekend")
+        return time.perf_counter() - started
+
+
+def _bench_business_calendar_omissions(rounds: int) -> float:
+    """Measure recurrence selection with a large explicit omission set."""
+    business_calendar = importlib.import_module("nautical_core.business_calendar")
+    dnf = core.validate_anchor_expr_strict("m:1..31@bd")
+    first_day = date(2026, 1, 1)
+    calendar_days = frozenset(first_day + timedelta(days=index) for index in range(366))
+    omitted = frozenset(
+        item
+        for item in calendar_days
+        if item.day not in {1, 15} or item.weekday() >= 5
+    )
+    calendar = business_calendar.ConfiguredBusinessCalendar(
+        name="perf-omissions",
+        fingerprint="perf-omissions-v1",
+        anchor_dates=calendar_days,
+        omit_dates=omitted,
+        _anchor_matches=lambda _value: False,
+        _omit_matches=lambda _value: False,
+    )
+    started = time.perf_counter()
+    for index in range(max(1, int(rounds))):
+        result, _meta = core.next_after_expr(
+            dnf,
+            first_day + timedelta(days=index % 300),
+            seed_base="perf-omissions",
+            business_calendar=calendar,
+        )
+        if result is None or result.day not in {1, 15} or result.weekday() >= 5:
+            raise RuntimeError("large omission-set benchmark selected an omitted date")
+    return time.perf_counter() - started
+
+
+def _bench_astronomy_provider(rounds: int, *, event: str) -> float | None:
+    """Measure deterministic astronomy resolution when Astral is installed."""
+    if importlib.util.find_spec("astral") is None:
+        return None
+    astronomy = importlib.import_module("nautical_core.astronomy")
+    config = {
+        "default_location": "perf",
+        "locations": {
+            "perf": {
+                "latitude": 40.7128,
+                "longitude": -74.0060,
+                "elevation": 10,
+                "timezone": "UTC",
+            }
+        },
+    }
+    started = time.perf_counter()
+    for index in range(max(1, int(rounds))):
+        reference = date(2026, 1, 1) + timedelta(days=index % 60)
+        phase_day = astronomy.resolve_phase_date(
+            "full",
+            reference,
+            config=config,
+            horizon_days=60,
+        )
+        resolved = astronomy.resolve_event(event, phase_day, config=config)
+        if resolved.tzinfo is None:
+            raise RuntimeError("astronomy benchmark returned a naive datetime")
+    return time.perf_counter() - started
+
+
+def _bench_native_until_reconcile(rounds: int, *, apply: bool) -> float:
+    """Measure native-until audit/repair on independent valid fixtures."""
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-native-until-") as td:
+        root = Path(td)
+        config_path = root / "config-nautical.toml"
+        config_path.write_text('tz = "UTC"\npanel_mode = "minimal"\n', encoding="utf-8")
+        taskrc_path = root / "taskrc"
+        taskrc_path.write_text(
+            "uda.chainID.type=string\n"
+            "uda.chain.type=string\n"
+            "uda.link.type=numeric\n"
+            "uda.prevLink.type=string\n"
+            "uda.nextLink.type=string\n"
+            "uda.cp.type=string\n"
+            "uda.anchor.type=string\n"
+            "uda.anchor_mode.type=string\n",
+            encoding="utf-8",
+        )
+        base_env = dict(os.environ)
+        base_env.update(
+            {
+                "NAUTICAL_CONFIG": str(config_path),
+                "NAUTICAL_CORE_PATH": str(ROOT),
+                "NAUTICAL_TRUST_CONFIG_PATH": "1",
+                "NAUTICAL_TRUST_CORE_PATH": "1",
+                "TASKRC": str(taskrc_path),
+                "TZ": "UTC",
+            }
+        )
+        started = time.perf_counter()
+        for sample_index in range(max(1, int(rounds))):
+            taskdata = root / f"native-until-{sample_index}"
+            taskdata.mkdir()
+            parent_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"native-until/{sample_index}/parent"))
+            child_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"native-until/{sample_index}/child"))
+            rows = [
+                {
+                    "uuid": parent_uuid,
+                    "status": "pending",
+                    "description": "Native-until benchmark predecessor",
+                    "cp": "P1D",
+                    "chain": "on",
+                    "chainID": f"native-until-{sample_index}",
+                    "link": 1,
+                    "nextLink": child_uuid[:8],
+                    "due": "20270101T090000Z",
+                    "until": "20270101T200000Z",
+                },
+                {
+                    "uuid": child_uuid,
+                    "status": "pending",
+                    "description": "Native-until benchmark invalid child",
+                    "cp": "P1D",
+                    "chain": "on",
+                    "chainID": f"native-until-{sample_index}",
+                    "link": 2,
+                    "prevLink": parent_uuid[:8],
+                    "due": "20270102T090000Z",
+                    "until": "20270101T200000Z",
+                },
+            ]
+            env = dict(base_env, TASKDATA=str(taskdata))
+            imported = subprocess.run(
+                ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+                input="".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=30.0,
+            )
+            if imported.returncode != 0:
+                raise RuntimeError(f"native-until fixture import failed: {(imported.stderr or imported.stdout).strip()}")
+            command = [sys.executable, str(ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"), "--json"]
+            if apply:
+                command.append("--apply")
+            repaired = subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=30.0,
+            )
+            if repaired.returncode != 0:
+                raise RuntimeError(f"native-until reconcile failed: {(repaired.stderr or repaired.stdout).strip()}")
+            try:
+                summary = json.loads(repaired.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("native-until reconcile returned invalid JSON") from exc
+            repairs = summary.get("native_until_repairs") if isinstance(summary, dict) else None
+            if not isinstance(repairs, list) or len(repairs) != 1:
+                raise RuntimeError("native-until benchmark did not inspect exactly one invalid child")
+            item = repairs[0]
+            if item.get("action") != "repair_until" or bool(item.get("applied")) != apply:
+                raise RuntimeError(f"native-until benchmark did not take the expected path: {item}")
+            if apply:
+                exported = subprocess.run(
+                    [
+                        "task",
+                        "rc.hooks=off",
+                        "rc.json.array=1",
+                        "rc.verbose=nothing",
+                        "rc.color=off",
+                        f"uuid:{child_uuid}",
+                        "export",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    env=env,
+                    timeout=30.0,
+                )
+                if exported.returncode != 0:
+                    raise RuntimeError("native-until verification export failed")
+                rows_after = json.loads(exported.stdout or "[]")
+                if not isinstance(rows_after, list) or len(rows_after) != 1:
+                    raise RuntimeError("native-until verification export returned an unexpected task count")
+                if str(rows_after[0].get("until") or "") != "20270102T200000Z":
+                    raise RuntimeError("native-until apply benchmark did not persist the repaired endpoint")
         return time.perf_counter() - started
 
 
@@ -1031,6 +1289,16 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON summary")
     ap.add_argument("--enforce", action="store_true", help="fail non-zero if any budget is exceeded")
     ap.add_argument(
+        "--extended",
+        action="store_true",
+        help="run large-file, astronomy, omission, and native-until benchmarks",
+    )
+    ap.add_argument(
+        "--slow-device",
+        action="store_true",
+        help="use the slower-device budgets for --extended benchmarks",
+    )
+    ap.add_argument(
         "--workflows-only",
         action="store_true",
         help="run only expensive completion, queue, and reconcile workflows",
@@ -1078,6 +1346,90 @@ def main() -> int:
     if args.workflows_only:
         checks = []
 
+    extended = cfg.get("extended_workload")
+    if args.extended and isinstance(extended, dict) and extended.get("enabled", True):
+        extended_repeats = max(1, int(extended.get("repeats", 2)))
+        extended_rows = max(1000, int(extended.get("anchor_file_rows", 5000)))
+        extended_rounds = max(1, int(extended.get("rounds", 8)))
+        extended_budgets_key = "slow_device_budgets_seconds" if args.slow_device else "budgets_seconds"
+        extended_budgets = extended.get(extended_budgets_key)
+        if not isinstance(extended_budgets, dict):
+            extended_budgets = extended.get("budgets_seconds")
+        if not isinstance(extended_budgets, dict):
+            extended_budgets = {}
+
+        checks.extend(
+            [
+                (
+                    "anchor_file_large_cold",
+                    lambda: _bench_large_anchor_file_provider(
+                        extended_rounds,
+                        row_count=extended_rows,
+                        mode="cold",
+                    ),
+                    extended_repeats,
+                ),
+                (
+                    "anchor_file_large_hot",
+                    lambda: _bench_large_anchor_file_provider(
+                        extended_rounds,
+                        row_count=extended_rows,
+                        mode="hot",
+                    ),
+                    extended_repeats,
+                ),
+                (
+                    "anchor_file_nonmonotonic",
+                    lambda: _bench_large_anchor_file_provider(
+                        extended_rounds,
+                        row_count=extended_rows,
+                        mode="nonmonotonic",
+                    ),
+                    extended_repeats,
+                ),
+                (
+                    "anchor_file_business_day_omissions",
+                    lambda: _bench_large_anchor_file_provider(
+                        extended_rounds,
+                        row_count=extended_rows,
+                        mode="hot",
+                        business_day_only=True,
+                    ),
+                    extended_repeats,
+                ),
+                (
+                    "business_calendar_large_omissions",
+                    lambda: _bench_business_calendar_omissions(extended_rounds * 40),
+                    extended_repeats,
+                ),
+                (
+                    "native_until_reconcile_dry_run",
+                    lambda: _bench_native_until_reconcile(extended_repeats, apply=False),
+                    1,
+                ),
+                (
+                    "native_until_reconcile_apply",
+                    lambda: _bench_native_until_reconcile(extended_repeats, apply=True),
+                    1,
+                ),
+            ]
+        )
+        if importlib.util.find_spec("astral") is not None:
+            checks.extend(
+                [
+                    (
+                        "astronomy_anchor_add",
+                        lambda: _bench_astronomy_provider(extended_rounds, event="sunrise") or 0.0,
+                        extended_repeats,
+                    ),
+                    (
+                        "astronomy_anchor_completion",
+                        lambda: _bench_astronomy_provider(extended_rounds, event="moonrise") or 0.0,
+                        extended_repeats,
+                    ),
+                ]
+            )
+
     seasonal = cfg.get("seasonal_workload")
     if not args.workflows_only and isinstance(seasonal, dict):
         seasonal_exprs = [
@@ -1123,7 +1475,13 @@ def main() -> int:
     failures = []
     for name, fn, check_repeats in checks:
         r = _measure(name, fn, check_repeats)
-        budget = float(budgets.get(name, 0.0))
+        extended_budgets = {}
+        if args.extended and isinstance(cfg.get("extended_workload"), dict):
+            profile_key = "slow_device_budgets_seconds" if args.slow_device else "budgets_seconds"
+            candidate = cfg["extended_workload"].get(profile_key)
+            if isinstance(candidate, dict):
+                extended_budgets = candidate
+        budget = float(extended_budgets.get(name, budgets.get(name, 0.0)))
         r["budget_s"] = budget
         r["pass"] = (budget <= 0.0) or (r["median_s"] <= budget)
         results[name] = r

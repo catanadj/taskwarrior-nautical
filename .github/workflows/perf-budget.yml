@@ -51,6 +51,17 @@ jobs:
           path: perf-budget-report-head.json
           if-no-files-found: error
 
+      - name: Enforce extended workflow budgets (head)
+        run: |
+          python3 dev_tools/nautical_perf_budget.py --extended --workflows-only --json --enforce --budget-file dev_tools/perf_budget.json | tee perf-budget-report-extended.json
+
+      - name: Upload extended performance report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-budget-report-extended
+          path: perf-budget-report-extended.json
+          if-no-files-found: error
+
       - name: Prepare base worktree (PR only)
         if: github.event_name == 'pull_request'
         run: git worktree add ../perf-base "${{ github.event.pull_request.base.sha }}"

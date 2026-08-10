@@ -6,9 +6,17 @@ from typing import Any, Protocol
 
 class ExitDrainStateProtocol(Protocol):
     requeue: list[dict[str, Any]]
+    errors: int
+    sqlite_acked_claims: dict[int, str]
 
     def dead_letter(self, entry: dict[str, Any], reason: str) -> None: ...
     def record_lock_event(self, idx: int) -> bool: ...
+    def to_stats_model(
+        self,
+        drain_t0: float,
+        requeue_ok: bool,
+        requeue_failed: int,
+    ) -> ExitDrainStats: ...
 
 
 class ExitExportCallback(Protocol):

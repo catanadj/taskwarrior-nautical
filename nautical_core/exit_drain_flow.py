@@ -1,27 +1,73 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable, Protocol
+
+from nautical_core.exit_models import (
+    ExitDrainStateProtocol,
+    ExitQueueBatch,
+    ExitQueueWriteResult,
+    ExitRequeueResult,
+    ExitDrainStats,
+)
+
+
+Entry = dict[str, Any]
+
+QueueDbHook = Callable[[], None]
+TakeQueueBatch = Callable[[], ExitQueueBatch]
+LoadFinalizedIntents = Callable[[], tuple[set[str], bool]]
+PreloadEntries = Callable[[list[Entry]], None]
+ProcessQueueEntry = Callable[[int, Entry, ExitDrainStateProtocol], bool]
+RequeueEntries = Callable[[list[Entry]], ExitRequeueResult]
+AckQueueEntries = Callable[[list[tuple[int, str]]], ExitQueueWriteResult]
+Diagnostic = Callable[[str], None]
+
+
+class ExitProgressUpdate(Protocol):
+    def __call__(
+        self,
+        *,
+        advance: int = 0,
+        phase: str | None = None,
+        state: ExitDrainStateProtocol | None = None,
+    ) -> None: ...
+
+
+class ExitProgressScope(Protocol):
+    def __call__(self, entries_total: int) -> AbstractContextManager[ExitProgressUpdate | None]: ...
+
+
+class ExitDrainStateFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        entries: list[Entry],
+        entries_total: int,
+        finalized_intents: set[str],
+        intent_log_ready: bool,
+        intent_log_load_ms: float,
+    ) -> ExitDrainStateProtocol: ...
 
 
 @dataclass(slots=True)
 class ExitDrainServices:
-    queue_db_begin_run: Any
-    queue_db_end_run: Any
-    take_queue_batch: Any
-    load_finalized_intents: Any
-    exit_progress_scope: Any
-    preload_export_uuids: Any
-    preload_equivalent_child_slots: Any
-    process_queue_entry: Any
-    requeue_entries_result: Any
-    ack_queue_entries_sqlite_result: Any
-    drain_state_factory: Any
-    exit_models: Any
-    diag: Any
+    queue_db_begin_run: QueueDbHook
+    queue_db_end_run: QueueDbHook
+    take_queue_batch: TakeQueueBatch
+    load_finalized_intents: LoadFinalizedIntents
+    exit_progress_scope: ExitProgressScope
+    preload_export_uuids: PreloadEntries
+    preload_equivalent_child_slots: PreloadEntries
+    process_queue_entry: ProcessQueueEntry
+    requeue_entries_result: RequeueEntries
+    ack_queue_entries_sqlite_result: AckQueueEntries
+    drain_state_factory: ExitDrainStateFactory
+    diag: Diagnostic
 
 
-def drain_queue_result(*, services: ExitDrainServices):
+def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
     services.queue_db_begin_run()
     try:
         import time
@@ -66,7 +112,11 @@ def drain_queue_result(*, services: ExitDrainServices):
             if progress_update is not None:
                 progress_update(phase="finalize", state=state)
 
-            requeue_result = services.requeue_entries_result(state.requeue) if state.requeue else services.exit_models.ExitRequeueResult(ok=True, failed=0)
+            requeue_result = (
+                services.requeue_entries_result(state.requeue)
+                if state.requeue
+                else ExitRequeueResult(ok=True, failed=0)
+            )
         if not requeue_result.ok:
             state.errors += requeue_result.failed
             services.diag(f"requeue failed for {requeue_result.failed} entries")

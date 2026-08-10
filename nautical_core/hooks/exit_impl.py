@@ -2365,7 +2365,6 @@ def _drain_queue_result():
             requeue_entries_result=_requeue_entries_result,
             ack_queue_entries_sqlite_result=_ack_queue_entries_sqlite_result,
             drain_state_factory=_DrainState,
-            exit_models=_module("exit_models"),
             diag=_diag,
         )
     )

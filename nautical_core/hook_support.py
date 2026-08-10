@@ -144,7 +144,10 @@ def run_task_result(
     }
     if use_tempfiles:
         runner_kwargs["use_tempfiles"] = True
-    ok, stdout, stderr = run_task(cmd, **runner_kwargs)
+    raw_result = run_task(cmd, **runner_kwargs)
+    if isinstance(raw_result, TaskCommandResult):
+        return raw_result
+    ok, stdout, stderr = raw_result
     text = (stderr or stdout or "").lower()
     if ok:
         kind = "ok"

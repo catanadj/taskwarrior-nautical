@@ -14628,6 +14628,20 @@ def test_shared_hook_subprocess_runner_preserves_output_and_status():
     expect(not failed, "shared runner should preserve a non-zero exit status")
 
 
+def test_hook_task_result_preserves_typed_runner_result():
+    """The hook boundary must preserve TaskCommandResult metadata unchanged."""
+    support = importlib.import_module("nautical_core.hook_support")
+    task_command = importlib.import_module("nautical_core.task_command")
+    expected = task_command.TaskCommandResult(
+        ("task", "export"), 0, "[]", "", "ok", 2, 3.0
+    )
+    actual = support.run_task_result(
+        run_task=lambda *_args, **_kwargs: expected,
+        cmd=["task", "export"],
+    )
+    expect(actual is expected, "typed command result metadata was reconstructed or discarded")
+
+
 def test_hook_run_task_falls_back_when_core_load_fails():
     """on-modify _run_task should fall back to subprocess if core load fails."""
     hook = _find_hook_file("on-modify.nautical")
@@ -31414,6 +31428,7 @@ TESTS = [
     test_hook_on_modify_timeline_cp_random_labels_selected_intervals,
     test_hook_task_runner_handles_nonzero,
     test_shared_hook_subprocess_runner_preserves_output_and_status,
+    test_hook_task_result_preserves_typed_runner_result,
     test_hook_run_task_falls_back_when_core_load_fails,
     test_on_add_run_task_falls_back_when_core_load_fails,
     test_spawn_child_always_verifies_import,

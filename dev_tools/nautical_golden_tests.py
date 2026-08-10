@@ -5882,6 +5882,8 @@ def test_perf_budget_config_covers_cache_io_checks():
     expect(isinstance(workload, dict), "workload must be present")
     expect("cache_save" in budgets, "cache_save budget missing")
     expect("cache_load_hot" in budgets, "cache_load_hot budget missing")
+    expect("build_hints_cold" in budgets, "build_hints_cold budget missing")
+    expect("build_hints_warm" in budgets, "build_hints_warm budget missing")
     expect("queue_schema_hot" in budgets, "queue_schema_hot budget missing")
     expect("queue_schema_cold" in budgets, "queue_schema_cold budget missing")
     expect("cache_save_rounds" in workload, "cache_save_rounds missing from workload")
@@ -5906,7 +5908,8 @@ def test_perf_budget_config_covers_cache_io_checks():
         {
             "seasonal_parse_validate",
             "seasonal_next_after",
-            "seasonal_build_hints",
+            "seasonal_build_hints_cold",
+            "seasonal_build_hints_warm",
         }
         <= set(budgets),
         "seasonal performance budgets are incomplete",

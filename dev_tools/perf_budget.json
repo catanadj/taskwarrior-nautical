@@ -15,6 +15,8 @@
     "describe_expr_rounds": 220,
     "next_after_rounds": 220,
     "build_hints_rounds": 180,
+    "build_hints_cold_rounds": 1,
+    "build_hints_warm_rounds": 180,
     "cache_key_rounds": 2500,
     "cache_save_rounds": 120,
     "cache_load_rounds": 300,
@@ -32,7 +34,9 @@
     "repeats": 3,
     "parse_validate_rounds": 100,
     "next_after_rounds": 100,
-    "build_hints_rounds": 1
+    "build_hints_rounds": 1,
+    "build_hints_cold_rounds": 1,
+    "build_hints_warm_rounds": 1
   },
   "budgets_seconds": {
     "cold_core_import": 0.25,
@@ -40,7 +44,8 @@
     "parse_validate": 0.2,
     "describe_expr": 0.25,
     "next_after": 0.35,
-    "build_hints": 0.15,
+    "build_hints_cold": 8.0,
+    "build_hints_warm": 0.15,
     "cache_key_hot": 0.08,
     "cache_save": 0.9,
     "cache_load_hot": 0.35,
@@ -49,7 +54,8 @@
     "anchor_file_provider": 0.2,
     "seasonal_parse_validate": 0.08,
     "seasonal_next_after": 0.15,
-    "seasonal_build_hints": 0.5
+    "seasonal_build_hints_cold": 30.0,
+    "seasonal_build_hints_warm": 0.5
   },
   "hook_fast_path": {
     "enabled": true,

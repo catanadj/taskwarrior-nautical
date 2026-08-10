@@ -91,13 +91,27 @@ def _bench_next_after(exprs: list[str], rounds: int) -> float:
     return time.perf_counter() - t0
 
 
-def _bench_build_hints(exprs: list[str], rounds: int) -> float:
-    # Keep hint measurements independent from user and checkout caches.  The
-    # following pass will distinguish cold misses from warm hits explicitly.
+def _bench_build_hints(exprs: list[str], rounds: int, *, mode: str = "warm") -> float:
+    """Measure hint construction with an explicit persistent-cache state."""
     with _perf_cache_context():
+        if mode == "cold":
+            root = Path(core.ANCHOR_CACHE_DIR_OVERRIDE)
+            started = time.perf_counter()
+            for sample_index in range(max(1, rounds)):
+                core.ANCHOR_CACHE_DIR_OVERRIDE = str(root / f"cold-{sample_index}")
+                core._CACHE_DIR = None
+                _clear_caches()
+                for expr in exprs:
+                    core.build_and_cache_hints(expr, "skip")
+            return time.perf_counter() - started
+        if mode != "warm":
+            raise ValueError(f"unknown hint benchmark mode: {mode}")
+        _clear_caches()
+        for expr in exprs:
+            core.build_and_cache_hints(expr, "skip")
         _clear_caches()
         t0 = time.perf_counter()
-        for _ in range(rounds):
+        for _ in range(max(1, rounds)):
             for expr in exprs:
                 core.build_and_cache_hints(expr, "skip")
         return time.perf_counter() - t0
@@ -1320,6 +1334,8 @@ def main() -> int:
     describe_rounds = int(workload.get("describe_expr_rounds", 220))
     next_after_rounds = int(workload.get("next_after_rounds", 220))
     hints_rounds = int(workload.get("build_hints_rounds", 180))
+    hints_cold_rounds = max(1, int(workload.get("build_hints_cold_rounds", 1)))
+    hints_warm_rounds = max(1, int(workload.get("build_hints_warm_rounds", hints_rounds)))
     cache_key_rounds = int(workload.get("cache_key_rounds", 2500))
     cache_save_rounds = int(workload.get("cache_save_rounds", 120))
     cache_load_rounds = int(workload.get("cache_load_rounds", 300))
@@ -1338,7 +1354,16 @@ def main() -> int:
         ("parse_validate", lambda: _bench_parse_validate(exprs, parse_rounds), repeats),
         ("describe_expr", lambda: _bench_describe_expr(exprs, describe_rounds), repeats),
         ("next_after", lambda: _bench_next_after(exprs, next_after_rounds), repeats),
-        ("build_hints", lambda: _bench_build_hints(exprs, hints_rounds), repeats),
+        (
+            "build_hints_cold",
+            lambda: _bench_build_hints(exprs, hints_cold_rounds, mode="cold"),
+            repeats,
+        ),
+        (
+            "build_hints_warm",
+            lambda: _bench_build_hints(exprs, hints_warm_rounds, mode="warm"),
+            repeats,
+        ),
         ("cache_key_hot", lambda: _bench_cache_key_hot(exprs, cache_key_rounds), repeats),
         ("cache_save", lambda: _bench_cache_save(exprs, cache_save_rounds), repeats),
         ("cache_load_hot", lambda: _bench_cache_load_hot(exprs, cache_load_rounds), repeats),
@@ -1445,6 +1470,8 @@ def main() -> int:
             seasonal_parse_rounds = max(1, int(seasonal.get("parse_validate_rounds", 100)))
             seasonal_next_rounds = max(1, int(seasonal.get("next_after_rounds", 100)))
             seasonal_hint_rounds = max(1, int(seasonal.get("build_hints_rounds", 1)))
+            seasonal_cold_rounds = max(1, int(seasonal.get("build_hints_cold_rounds", 1)))
+            seasonal_warm_rounds = max(1, int(seasonal.get("build_hints_warm_rounds", seasonal_hint_rounds)))
             checks.extend(
                 [
                     (
@@ -1464,10 +1491,20 @@ def main() -> int:
                         seasonal_repeats,
                     ),
                     (
-                        "seasonal_build_hints",
+                        "seasonal_build_hints_cold",
                         lambda: _bench_build_hints(
                             seasonal_exprs,
-                            seasonal_hint_rounds,
+                            seasonal_cold_rounds,
+                            mode="cold",
+                        ),
+                        seasonal_repeats,
+                    ),
+                    (
+                        "seasonal_build_hints_warm",
+                        lambda: _bench_build_hints(
+                            seasonal_exprs,
+                            seasonal_warm_rounds,
+                            mode="warm",
                         ),
                         seasonal_repeats,
                     ),

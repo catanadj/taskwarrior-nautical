@@ -52,11 +52,12 @@ def precompute_hints(
     # result local to this build so expensive astronomical/seasonal lookups
     # are not repeated, without sharing mutable state across tasks or runs.
     next_cache: dict[date, object] = {}
+    cache_miss = object()
     terminal: OccurrenceSearchExhausted | None = None
 
     def next_candidate(cursor):
-        cached = next_cache.get(cursor)
-        if cached is not None:
+        cached = next_cache.get(cursor, cache_miss)
+        if cached is not cache_miss:
             return cached
         if use_expr_scheduler:
             candidate = next_after_expr(

@@ -9225,6 +9225,30 @@ def test_precompute_hints_can_skip_unused_annual_stats():
     expect(calls["n"] == 2, f"annual scan was not skipped, scheduler calls: {calls['n']}")
 
 
+def test_precompute_hints_reuses_no_match_scheduler_result():
+    """A failed cursor lookup should be reused within one hint build."""
+    import nautical_core.precompute as precompute
+
+    calls = {"n": 0}
+
+    def no_match(_dnf, _after, _default_seed):
+        calls["n"] += 1
+        return None
+
+    hints = precompute.precompute_hints(
+        [[]],
+        start_dt=date(2026, 1, 1),
+        rand_seed=None,
+        k_next=1,
+        sample_days_for_year=30,
+        now_local=lambda: datetime(2026, 1, 1),
+        next_after_expr=lambda *_args, **_kwargs: (None, None),
+        next_for_or=no_match,
+    )
+    expect(hints["next_dates"] == [], f"unexpected no-match preview: {hints}")
+    expect(calls["n"] == 1, f"no-match cursor was scheduled repeatedly: {calls['n']}")
+
+
 def test_parser_validation():
     """Test parser validation and error messages"""
     # Valid expressions that should parse
@@ -31252,6 +31276,7 @@ TESTS = [
     test_build_and_cache_hints_parses_once_per_miss,
     test_precompute_hints_bounds_year_stats_by_days,
     test_precompute_hints_can_skip_unused_annual_stats,
+    test_precompute_hints_reuses_no_match_scheduler_result,
     test_yearly_rand_natural_and_bounds,
     test_yearly_rand_respects_sibling_month_filter,
     test_yearly_rand_natural_compacts_sibling_filter,

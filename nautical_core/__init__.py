@@ -104,6 +104,9 @@ class _LazyApiBundle:
 
     def _resolve(self):
         if self._bindings is None:
+            ensure_tokens = globals().get("_ensure_tokenutil_constants")
+            if callable(ensure_tokens):
+                ensure_tokens()
             _ensure_public_models()
             refresh_config = globals().get("_refresh_facade_config_exports")
             if callable(refresh_config):
@@ -415,10 +418,19 @@ _schedule_utils = _LazySibling("schedule_utils")
 _scheduler_atom = _LazySibling("scheduler_atom")
 _scheduler_expr = _LazySibling("scheduler_expr")
 _strict_validation = _LazySibling("strict_validation")
-_tokenutil = _import_sibling("tokenutil")
+_tokenutil = _LazySibling("tokenutil")
 _yearly_parse = _LazySibling("yearly_parse")
 _yearly_validation = _LazySibling("yearly_validation")
 _year_tokens = _LazySibling("year_tokens")
+
+
+def _ensure_tokenutil_constants() -> None:
+    if "_WD_ABBR" in globals():
+        return
+    globals()["_MONTH_ALIAS"] = _tokenutil.MONTH_ALIAS
+    globals()["_WD_ABBR"] = _tokenutil.WD_ABBR
+    globals()["_WEEKLY_ALIAS"] = _tokenutil.WEEKLY_ALIAS
+    globals()["_MONTHLY_ALIAS"] = _tokenutil.MONTHLY_ALIAS
 
 
 def _configure_season_support() -> None:
@@ -625,10 +637,6 @@ _MONTHS = {
     "dec": 12,
 }
 
-_MONTH_ALIAS = _tokenutil.MONTH_ALIAS
-
-
-
 # Quarter mappings
 _Q_FIRST_MONTH_RANGE = {  # full window for the quarter's first month
     1: "01-01..31-01",  # Jan
@@ -717,10 +725,6 @@ _bind_lazy_api_aliases(_token_api)
 _ACF_COMPRESSED = True
 ACF_COMPRESSED = _ACF_COMPRESSED
 ACF_CHECKSUM_LEN = 8
-_WD_ABBR = _tokenutil.WD_ABBR
-_WEEKLY_ALIAS = _tokenutil.WEEKLY_ALIAS
-_MONTHLY_ALIAS = _tokenutil.MONTHLY_ALIAS
-
 # ==============================================================================
 # SECTION: Hook utilities (diag, run_task)
 # ==============================================================================
@@ -776,7 +780,9 @@ def is_lock_error(*args, **kwargs):
 
 
 # ---- Core iterator over DNF ---------------------------------------------------
-_NTH_RE  = re.compile(r"^(?:(\d)(?:st|nd|rd|th)|last)-(" + "|".join(_WD_ABBR) + r")$")
+_NTH_RE  = re.compile(
+    r"^(?:(\d)(?:st|nd|rd|th)|last)-(mon|tue|wed|thu|fri|sat|sun)$"
+)
 
 # ───────────────── Quarter helpers ─────────────────
 # Recognize full-month tokens like '01-03..31-03'

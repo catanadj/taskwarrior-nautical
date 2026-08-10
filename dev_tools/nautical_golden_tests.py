@@ -5975,10 +5975,17 @@ def test_perf_hint_benchmark_isolates_persistent_cache():
     original_override = getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")
     seen = []
     try:
-        perf.core.build_and_cache_hints = lambda *_args, **_kwargs: seen.append(
-            str(getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", ""))
-        ) or {"dnf": []}
-        perf._bench_build_hints(["w:mon"], 1)
+        def fake_build(*_args, **_kwargs):
+            seen.append(str(getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")))
+            key = "perf-isolation"
+            payload = perf.core.cache_load(key)
+            if payload is None:
+                payload = {"dnf": []}
+                perf.core.cache_save(key, payload)
+            return payload
+
+        perf.core.build_and_cache_hints = fake_build
+        perf._bench_build_hints(["w:mon"], 1, mode="warm")
         expect(seen and "nautical-perf-cache-" in seen[0], f"benchmark used a non-isolated cache: {seen!r}")
         expect(
             getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", "") == original_override,

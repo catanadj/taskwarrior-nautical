@@ -94,27 +94,57 @@ def _bench_next_after(exprs: list[str], rounds: int) -> float:
 def _bench_build_hints(exprs: list[str], rounds: int, *, mode: str = "warm") -> float:
     """Measure hint construction with an explicit persistent-cache state."""
     with _perf_cache_context():
-        if mode == "cold":
-            root = Path(core.ANCHOR_CACHE_DIR_OVERRIDE)
-            started = time.perf_counter()
-            for sample_index in range(max(1, rounds)):
-                core.ANCHOR_CACHE_DIR_OVERRIDE = str(root / f"cold-{sample_index}")
-                core._CACHE_DIR = None
-                _clear_caches()
-                for expr in exprs:
-                    core.build_and_cache_hints(expr, "skip")
-            return time.perf_counter() - started
-        if mode != "warm":
-            raise ValueError(f"unknown hint benchmark mode: {mode}")
-        _clear_caches()
-        for expr in exprs:
-            core.build_and_cache_hints(expr, "skip")
-        _clear_caches()
-        t0 = time.perf_counter()
-        for _ in range(max(1, rounds)):
+        saved_load = core.cache_load
+        saved_save = core.cache_save
+        counts = {"hits": 0, "misses": 0, "saves": 0}
+
+        def counted_load(*args, **kwargs):
+            value = saved_load(*args, **kwargs)
+            counts["hits" if value is not None else "misses"] += 1
+            return value
+
+        def counted_save(*args, **kwargs):
+            result = saved_save(*args, **kwargs)
+            if result:
+                counts["saves"] += 1
+            return result
+
+        core.cache_load = counted_load
+        core.cache_save = counted_save
+        try:
+            if mode == "cold":
+                root = Path(core.ANCHOR_CACHE_DIR_OVERRIDE)
+                started = time.perf_counter()
+                for sample_index in range(max(1, rounds)):
+                    core.ANCHOR_CACHE_DIR_OVERRIDE = str(root / f"cold-{sample_index}")
+                    core._CACHE_DIR = None
+                    _clear_caches()
+                    for expr in exprs:
+                        core.build_and_cache_hints(expr, "skip")
+                if counts["hits"] or not counts["misses"]:
+                    raise RuntimeError(f"cold hint benchmark observed unexpected cache state: {counts}")
+                return time.perf_counter() - started
+            if mode != "warm":
+                raise ValueError(f"unknown hint benchmark mode: {mode}")
+            core.cache_load = saved_load
+            core.cache_save = saved_save
+            _clear_caches()
             for expr in exprs:
                 core.build_and_cache_hints(expr, "skip")
-        return time.perf_counter() - t0
+            core.cache_load = counted_load
+            core.cache_save = counted_save
+            counts = {"hits": 0, "misses": 0, "saves": 0}
+            _clear_caches()
+            t0 = time.perf_counter()
+            for _ in range(max(1, rounds)):
+                for expr in exprs:
+                    core.build_and_cache_hints(expr, "skip")
+            if counts["misses"] or not counts["hits"] or counts["saves"]:
+                raise RuntimeError(f"warm hint benchmark observed unexpected cache state: {counts}")
+            return time.perf_counter() - t0
+        finally:
+            core.cache_load = saved_load
+            core.cache_save = saved_save
 
 
 def _bench_cache_key_hot(exprs: list[str], rounds: int) -> float:

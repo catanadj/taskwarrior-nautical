@@ -93,5 +93,10 @@ HOOK_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
     for impl in (_HOOK_IMPL[event],)
 }
 
+# ``panel_colours`` is a core-facade lazy sibling rather than a hook
+# ``_module()`` dependency, but it must still be present in staged releases.
+for _event in HOOK_RUNTIME_FILES:
+    HOOK_RUNTIME_FILES[_event] += ("panel_colours.py",)
+
 
 __all__ = ("HOOK_LAZY_MODULES", "HOOK_RUNTIME_FILES")

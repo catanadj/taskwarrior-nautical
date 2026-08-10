@@ -6032,6 +6032,18 @@ def test_core_import_defers_panel_colour_module():
     expect(result.returncode == 0, f"panel colour helper was eager or failed lazily: {result.stderr!r}")
 
 
+def test_runtime_manifest_covers_lazy_panel_colour_module():
+    """Every hook release must validate the lazily loaded panel-colour module."""
+    from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES
+
+    for event in ("on-add", "on-modify", "on-exit"):
+        files = HOOK_RUNTIME_FILES.get(event, ())
+        expect(
+            "panel_colours.py" in files,
+            f"{event} runtime manifest omits panel_colours.py: {files!r}",
+        )
+
+
 def test_perf_hook_fast_path_ratio_enforcement():
     """Hook latency checks should enforce the normalized fast/full median ratio."""
     perf = _load_hook_module(
@@ -31633,6 +31645,7 @@ TESTS = [
     test_perf_hint_benchmark_isolates_persistent_cache,
     test_perf_cold_import_records_module_profile,
     test_core_import_defers_panel_colour_module,
+    test_runtime_manifest_covers_lazy_panel_colour_module,
     test_perf_hook_fast_path_ratio_enforcement,
     test_load_benchmark_installs_complete_hook_runtime,
     test_load_benchmark_queue_and_lineage_verification,

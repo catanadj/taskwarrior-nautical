@@ -329,7 +329,13 @@ panel_line_from_rows = _lazy_ui_call("panel_line_from_rows")
 panel_line = _lazy_ui_call("panel_line")
 panel_themes = _lazy_ui_call("panel_themes")
 
-chain_colour_root = _import_sibling("panel_colours").chain_colour_root
+_panel_colours = _LazySibling("panel_colours")
+
+
+def chain_colour_root(*args, **kwargs):
+    return _panel_colours.chain_colour_root(*args, **kwargs)
+
+
 DiagnosticEvent = _import_sibling("diagnostic_models").DiagnosticEvent
 
 

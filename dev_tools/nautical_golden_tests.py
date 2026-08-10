@@ -6018,6 +6018,20 @@ def test_perf_cold_import_records_module_profile():
     expect(int(perf.IMPORT_PROFILES.get("core", 0)) > 0, "cold import module profile was not recorded")
 
 
+def test_core_import_defers_panel_colour_module():
+    """Core import should not load presentation colour helpers before use."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(part for part in (ROOT, env.get("PYTHONPATH", "")) if part)
+    probe = (
+        "import sys, nautical_core; "
+        "assert 'nautical_core.panel_colours' not in sys.modules; "
+        "nautical_core.chain_colour_root('chain', 'root'); "
+        "assert 'nautical_core.panel_colours' in sys.modules"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], cwd=ROOT, env=env, capture_output=True, text=True)
+    expect(result.returncode == 0, f"panel colour helper was eager or failed lazily: {result.stderr!r}")
+
+
 def test_perf_hook_fast_path_ratio_enforcement():
     """Hook latency checks should enforce the normalized fast/full median ratio."""
     perf = _load_hook_module(
@@ -31618,6 +31632,7 @@ TESTS = [
     test_perf_budget_config_covers_cache_io_checks,
     test_perf_hint_benchmark_isolates_persistent_cache,
     test_perf_cold_import_records_module_profile,
+    test_core_import_defers_panel_colour_module,
     test_perf_hook_fast_path_ratio_enforcement,
     test_load_benchmark_installs_complete_hook_runtime,
     test_load_benchmark_queue_and_lineage_verification,

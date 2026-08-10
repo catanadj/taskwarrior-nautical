@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import base64
 from contextlib import contextmanager
 import hashlib
+import json
 import os
+import random
 import tempfile
+import time
 from types import SimpleNamespace
 from typing import Any
+import zlib
+
+try:
+    import fcntl
+except Exception:
+    fcntl = None
 
 
 def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
@@ -45,8 +55,8 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         cache_locking.safe_lock_sleep_once(
             sleep_base,
             jitter,
-            time_mod=core["time"],
-            random_mod=core["random"],
+            time_mod=core.get("time", time),
+            random_mod=core.get("random", random),
         )
 
     def safe_lock_ensure_parent(path_str: str, mkdir: bool) -> None:
@@ -55,7 +65,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def safe_lock_age(path_str: str) -> float | None:
         return cache_locking.safe_lock_age(
             path_str,
-            time_mod=core["time"],
+            time_mod=core.get("time", time),
             os_mod=core["os"],
         )
 
@@ -63,7 +73,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         return cache_locking.safe_lock_stale_pid(
             path_str,
             stale_after,
-            time_mod=core["time"],
+            time_mod=core.get("time", time),
             os_mod=core["os"],
         )
 
@@ -86,7 +96,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             mkdir=mkdir,
             safe_lock_ensure_parent=safe_lock_ensure_parent,
             safe_lock_sleep_once=safe_lock_sleep_once,
-            fcntl_mod=core["fcntl"],
+            fcntl_mod=core.get("fcntl", fcntl),
             os_mod=core["os"],
         ) as acquired:
             yield acquired
@@ -115,7 +125,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             safe_lock_age=safe_lock_age,
             safe_lock_sleep_once=safe_lock_sleep_once,
             os_mod=core["os"],
-            time_mod=core["time"],
+            time_mod=core.get("time", time),
         ) as acquired:
             yield acquired
 
@@ -138,10 +148,10 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             mode=mode,
             mkdir=mkdir,
             stale_after=stale_after,
-            fcntl_mod=core["fcntl"],
+            fcntl_mod=core.get("fcntl", fcntl),
             os_mod=core["os"],
-            time_mod=core["time"],
-            random_mod=core["random"],
+            time_mod=core.get("time", time),
+            random_mod=core.get("random", random),
         ) as acquired:
             yield acquired
 
@@ -250,7 +260,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             with core.get("_cache_lock", cache_lock)(key) as locked:
                 if not locked or not core["os"].path.exists(path):
                     return False
-                target = f"{path}.bad.{core['os'].getpid()}.{core['time'].time_ns()}"
+                target = f"{path}.bad.{core['os'].getpid()}.{core.get('time', time).time_ns()}"
                 core["os"].replace(path, target)
                 core["_CACHE_LOAD_MEM"].pop(key, None)
                 return True
@@ -263,7 +273,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             enable_anchor_cache=core["ENABLE_ANCHOR_CACHE"],
             cache_path=cache_path,
             anchor_cache_ttl=core["ANCHOR_CACHE_TTL"],
-            time_mod=core["time"],
+            time_mod=core.get("time", time),
             cache_load_mem=core["_CACHE_LOAD_MEM"],
             cache_load_mem_ttl=core["_CACHE_LOAD_MEM_TTL"],
             clone_cache_payload=core.get("_clone_cache_payload", clone_cache_payload),
@@ -273,9 +283,9 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             diag=core["diag"],
             quarantine_cache=quarantine_cache,
             os_mod=core["os"],
-            json_mod=core["json"],
-            zlib_mod=core["zlib"],
-            base64_mod=core["base64"],
+            json_mod=core.get("json", json),
+            zlib_mod=core.get("zlib", zlib),
+            base64_mod=core.get("base64", base64),
         )
 
     def cache_save_impl(key: str, obj: dict) -> bool:
@@ -283,9 +293,9 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             key,
             obj,
             enable_anchor_cache=core["ENABLE_ANCHOR_CACHE"],
-            json_mod=core["json"],
-            zlib_mod=core["zlib"],
-            base64_mod=core["base64"],
+            json_mod=core.get("json", json),
+            zlib_mod=core.get("zlib", zlib),
+            base64_mod=core.get("base64", base64),
             cache_path=cache_path,
             cache_dir=cache_dir,
             cache_lock=core.get("_cache_lock", cache_lock),
@@ -312,7 +322,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             cache_lock=core.get("_cache_lock", cache_lock),
             stale_lock_check=lambda path, age: safe_lock_stale_pid(path, age)
             and (safe_lock_age(path) or 0.0) >= float(age),
-            time_mod=core["time"],
+            time_mod=core.get("time", time),
             os_mod=core["os"],
         )
 

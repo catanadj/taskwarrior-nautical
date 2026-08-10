@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from types import SimpleNamespace
 from typing import Any
+import zlib
 
 
 def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
@@ -19,8 +21,8 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def acf_unpack(packed: str) -> dict:
         return acf.acf_unpack(
             packed,
-            base64_mod=core["base64"],
-            zlib_mod=core["zlib"],
+            base64_mod=core.get("base64", base64),
+            zlib_mod=core.get("zlib", zlib),
             json_mod=json,
         )
 
@@ -87,8 +89,8 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             mods_to_acf=mods_to_acf,
             atom_sort_key=atom_sort_key,
             json_mod=json,
-            zlib_mod=core["zlib"],
-            base64_mod=core["base64"],
+            zlib_mod=core.get("zlib", zlib),
+            base64_mod=core.get("base64", base64),
             hashlib_mod=hashlib,
             acf_checksum_len=core["ACF_CHECKSUM_LEN"],
         )

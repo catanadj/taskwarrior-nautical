@@ -17,9 +17,10 @@ from datetime import date as _date
 
 if TYPE_CHECKING:
     from .parser_models import AnchorDNF as AnchorDNFType
-import json, zlib, base64, hashlib, time, random
 import importlib
 import types
+import random
+import time
 from contextlib import contextmanager
 try:
     import fcntl  # POSIX advisory lock

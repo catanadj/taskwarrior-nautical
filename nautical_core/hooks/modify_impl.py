@@ -5461,7 +5461,12 @@ def _non_completion_validate_anchor_cache(new: dict, old: dict, anchor_expr: str
     anchor_mode = _non_completion_anchor_mode(old, new)
     due_dt = _safe_dt(new.get("due") or old.get("due"))
     if core.ENABLE_ANCHOR_CACHE:
-        _ = core.build_and_cache_hints(anchor_expr, anchor_mode, default_due_dt=due_dt)
+        _ = core.build_and_cache_hints(
+            anchor_expr,
+            anchor_mode,
+            default_due_dt=due_dt,
+            include_per_year=False,
+        )
     else:
         _ = core.validate_anchor_expr_strict(anchor_expr)
 

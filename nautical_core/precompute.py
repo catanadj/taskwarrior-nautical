@@ -32,6 +32,7 @@ def precompute_hints(
     now_local,
     next_after_expr,
     next_for_or,
+    include_per_year: bool = True,
 ):
     # Operate in local dates; let hooks add times if they prefer.
     today = now_local().date()
@@ -88,6 +89,19 @@ def precompute_hints(
         ref = nxt + timedelta(days=1)
         steps += 1
 
+    hints = {
+        "next_dates": out_next,
+        "limits": {
+            "stop": terminal.kind if terminal is not None else "none",
+            "max_left": 0,
+            "until": "",
+            "message": occurrence_exhaustion_message(terminal) if terminal is not None else "",
+        },
+        "rand_preview": out_next[:10],
+    }
+    if not include_per_year:
+        return hints
+
     year_hits = 0
     first_hit = last_hit = ""
     ref = today
@@ -123,17 +137,8 @@ def precompute_hints(
         ref = nxt + timedelta(days=1)
         steps += 1
 
-    return {
-        "next_dates": out_next,
-        "per_year": {"est": year_hits, "first": first_hit, "last": last_hit},
-        "limits": {
-            "stop": terminal.kind if terminal is not None else "none",
-            "max_left": 0,
-            "until": "",
-            "message": occurrence_exhaustion_message(terminal) if terminal is not None else "",
-        },
-        "rand_preview": out_next[:10],
-    }
+    hints["per_year"] = {"est": year_hits, "first": first_hit, "last": last_hit}
+    return hints
 
 
 def build_and_cache_hints(
@@ -152,6 +157,7 @@ def build_and_cache_hints(
     local_tz_name: str,
     holiday_region: str,
     business_calendar_fingerprint: str = "",
+    include_per_year: bool = True,
 ):
     def _canonical(value):
         if isinstance(value, dict):
@@ -160,9 +166,10 @@ def build_and_cache_hints(
             return [_canonical(item) for item in value]
         return value
 
+    cache_mode = "annual" if include_per_year else "next-only"
     key = cache_key_for_task(
         anchor_expr,
-        anchor_mode,
+        f"{anchor_mode}|hints:{cache_mode}",
         business_calendar_fingerprint,
     )
     cached = cache_load(key)
@@ -180,7 +187,12 @@ def build_and_cache_hints(
 
     dnf = validate_anchor_expr_strict(anchor_expr)
     natural = describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)
-    hints = precompute_hints(dnf, start_dt=default_due_dt, anchor_mode=anchor_mode)
+    hints = precompute_hints(
+        dnf,
+        start_dt=default_due_dt,
+        anchor_mode=anchor_mode,
+        include_per_year=include_per_year,
+    )
 
     payload = {
         "meta": {

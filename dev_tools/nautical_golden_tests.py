@@ -9200,6 +9200,31 @@ def test_precompute_hints_bounds_year_stats_by_days():
     )
 
 
+def test_precompute_hints_can_skip_unused_annual_stats():
+    """Validation-only hint builds must not scan a year of occurrences."""
+    import nautical_core.precompute as precompute
+
+    calls = {"n": 0}
+
+    def daily_next(_dnf, after, _default_seed):
+        calls["n"] += 1
+        return after + timedelta(days=1)
+
+    hints = precompute.precompute_hints(
+        [[{"typ": "w", "spec": "mon"}]],
+        start_dt=date(2026, 1, 1),
+        rand_seed=None,
+        k_next=2,
+        sample_days_for_year=366,
+        now_local=lambda: datetime(2026, 1, 1),
+        next_after_expr=lambda *_args, **_kwargs: (None, None),
+        next_for_or=daily_next,
+        include_per_year=False,
+    )
+    expect("per_year" not in hints, "validation-only hints unexpectedly computed annual stats")
+    expect(calls["n"] == 2, f"annual scan was not skipped, scheduler calls: {calls['n']}")
+
+
 def test_parser_validation():
     """Test parser validation and error messages"""
     # Valid expressions that should parse
@@ -31226,6 +31251,7 @@ TESTS = [
     test_cache_key_for_task_caches_build_acf_results,
     test_build_and_cache_hints_parses_once_per_miss,
     test_precompute_hints_bounds_year_stats_by_days,
+    test_precompute_hints_can_skip_unused_annual_stats,
     test_yearly_rand_natural_and_bounds,
     test_yearly_rand_respects_sibling_month_filter,
     test_yearly_rand_natural_compacts_sibling_filter,

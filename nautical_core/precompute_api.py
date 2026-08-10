@@ -17,6 +17,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         k_next=24,
         sample_days_for_year=366,
         business_calendar=None,
+        include_per_year: bool = True,
     ) -> dict:
         _ = anchor_mode
         business_calendar = core["_business_calendar"].effective_business_calendar(
@@ -35,6 +36,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             next_for_or=core["_with_business_calendar"](
                 core["_next_for_or"], business_calendar
             ),
+            include_per_year=include_per_year,
         )
 
     def build_and_cache_hints(
@@ -42,6 +44,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         anchor_mode: str = "ALL",
         default_due_dt=None,
         business_calendar=None,
+        include_per_year: bool = True,
     ):
         business_calendar = core["_business_calendar"].effective_business_calendar(
             business_calendar
@@ -66,6 +69,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             local_tz_name=core["LOCAL_TZ_NAME"],
             holiday_region=core["HOLIDAY_REGION"],
             business_calendar_fingerprint=calendar_fingerprint,
+            include_per_year=include_per_year,
         )
 
     return SimpleNamespace(

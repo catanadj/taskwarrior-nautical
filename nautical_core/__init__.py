@@ -36,17 +36,22 @@ _PKG_PROXY.__file__ = __file__
 _PKG_PROXY.__package__ = _PKG_IMPORT_ROOT
 _PKG_PROXY.__path__ = [_PKG_DIR]
 
-_parser_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.parser_models")
-_scheduler_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.scheduler_models")
-AnchorMods = _parser_models.AnchorMods
-AnchorAtom = _parser_models.AnchorAtom
-AnchorTerm = _parser_models.AnchorTerm
-AnchorDNF = _parser_models.AnchorDNF
-AnchorValidationResult = _parser_models.AnchorValidationResult
-ParseError = _parser_models.ParseError
-YearTokenFormatError = _parser_models.YearTokenFormatError
-AndTermUnsatisfiable = _parser_models.AndTermUnsatisfiable
-OccurrenceSearchExhausted = _scheduler_models.OccurrenceSearchExhausted
+
+
+_PUBLIC_MODEL_NAMES = (
+    "AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF", "AnchorValidationResult",
+    "ParseError", "YearTokenFormatError", "AndTermUnsatisfiable", "OccurrenceSearchExhausted",
+)
+
+
+def _ensure_public_models() -> None:
+    if "ParseError" in globals():
+        return
+    parser_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.parser_models")
+    scheduler_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.scheduler_models")
+    for name in _PUBLIC_MODEL_NAMES[:-1]:
+        globals()[name] = getattr(parser_models, name)
+    globals()["OccurrenceSearchExhausted"] = scheduler_models.OccurrenceSearchExhausted
 
 
 def _import_sibling(module_name: str):
@@ -99,6 +104,7 @@ class _LazyApiBundle:
 
     def _resolve(self):
         if self._bindings is None:
+            _ensure_public_models()
             refresh_config = globals().get("_refresh_facade_config_exports")
             if callable(refresh_config):
                 refresh_config()
@@ -1225,4 +1231,7 @@ def __getattr__(name: str):
         value = _import_sibling("diagnostic_models").DiagnosticEvent
         globals()[name] = value
         return value
+    if name in _PUBLIC_MODEL_NAMES:
+        _ensure_public_models()
+        return globals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

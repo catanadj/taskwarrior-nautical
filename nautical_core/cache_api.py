@@ -171,6 +171,51 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         core["_CACHE_DIR"] = chosen
         return chosen
 
+    def _source_signature(path: Any) -> str:
+        try:
+            stat = os.stat(path)
+            return f"{getattr(stat, 'st_mtime_ns', 0)}:{stat.st_size}"
+        except Exception:
+            return "unknown"
+
+    semantic_source_files = (
+        "__init__.py",
+        "cache_api.py",
+        "cache_payload.py",
+        "parser_api.py",
+        "parser_atoms.py",
+        "parser_dnf.py",
+        "parser_models.py",
+        "parser_support_api.py",
+        "strict_validation.py",
+        "scheduler_api.py",
+        "scheduler_atom.py",
+        "scheduler_expr.py",
+        "scheduler_models.py",
+        "anchor_inclusion.py",
+        "natural_language.py",
+        "precompute.py",
+        "precompute_api.py",
+        "recurrence_evaluator.py",
+        "time_slots.py",
+    )
+    semantic_fingerprint_state: list[str | None] = [None]
+
+    def cache_semantic_fingerprint() -> str:
+        """Return one process-stable fingerprint for hint semantics."""
+        cached = semantic_fingerprint_state[0]
+        if cached is not None:
+            return cached
+        package_dir = os.path.dirname(os.path.abspath(getattr(module, "__file__", "")))
+        release_hint = str(core.get("NAUTICAL_RELEASE_ID") or os.environ.get("NAUTICAL_RELEASE_ID") or "")
+        source_parts = [
+            f"{name}:{_source_signature(os.path.join(package_dir, name))}"
+            for name in semantic_source_files
+        ]
+        payload = "|".join(("nautical-hints|semantic-v1", f"release:{release_hint}", *source_parts))
+        semantic_fingerprint_state[0] = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+        return semantic_fingerprint_state[0]
+
     def cache_key(
         acf: str,
         anchor_mode: str,
@@ -178,9 +223,10 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         business_calendar_fingerprint: str = "",
     ) -> str:
         config_fingerprint = core["scheduler_config_fingerprint"]()
+        semantic_fingerprint = core.get("_cache_semantic_fingerprint", cache_semantic_fingerprint)()
         profile_fingerprint = (
             f"{business_calendar_fingerprint}|season:{core['SEASON_HEMISPHERE']}"
-            f"|config:{config_fingerprint}|parser:2|cache:2"
+            f"|config:{config_fingerprint}|semantic:{semantic_fingerprint}"
         )
         return cache_support.cache_key(
             acf,
@@ -279,8 +325,10 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         fmt: str,
         business_calendar_fingerprint: str = "",
         config_fingerprint: str = "",
+        semantic_fingerprint: str = "",
     ) -> str:
         _ = config_fingerprint
+        _ = semantic_fingerprint
         return core["_cache_payload"].cache_key_for_task_cached(
             anchor_expr,
             anchor_mode,
@@ -297,20 +345,15 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     ) -> str:
         if calendar_fingerprint is None:
             calendar_fingerprint = core["business_calendar_fingerprint"]()
+        semantic_fingerprint = core.get("_cache_semantic_fingerprint", cache_semantic_fingerprint)()
         return cache_key_for_task_cached(
             anchor_expr or "",
             anchor_mode or "",
             core["_yearfmt"](),
             calendar_fingerprint,
             core["effective_config_fingerprint"](),
+            semantic_fingerprint,
         )
-
-    def _source_signature(path: Any) -> str:
-        try:
-            stat = os.stat(path)
-            return f"{getattr(stat, 'st_mtime_ns', 0)}:{stat.st_size}"
-        except Exception:
-            return "unknown"
 
     def dnf_cache_fingerprint() -> str:
         """Identify parser, cache schema, and installed release inputs."""
@@ -392,6 +435,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         _cache_gc_impl=cache_gc_impl,
         _cache_key_for_task_cached=cache_key_for_task_cached,
         _cache_key_for_task_impl=cache_key_for_task_impl,
+        _cache_semantic_fingerprint=cache_semantic_fingerprint,
         cache_load=cache_load_impl,
         cache_save=cache_save_impl,
         cache_gc=cache_gc_impl,

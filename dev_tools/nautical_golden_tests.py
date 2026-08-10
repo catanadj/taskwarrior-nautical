@@ -5210,6 +5210,22 @@ def test_hot_config_fingerprint_avoids_filesystem_stat():
         config.os.stat = original_stat
 
 
+def test_hint_cache_keys_include_semantic_fingerprint():
+    """Changing the semantic fingerprint must invalidate hint cache keys in-process."""
+    fingerprint = getattr(core, "_cache_semantic_fingerprint", None)
+    expect(callable(fingerprint), "semantic cache fingerprint API is missing")
+    original = fingerprint
+    try:
+        core._cache_semantic_fingerprint = lambda: "semantic-test-a"
+        first = core.cache_key_for_task("w:mon", "skip")
+        core._cache_semantic_fingerprint = lambda: "semantic-test-b"
+        second = core.cache_key_for_task("w:mon", "skip")
+        expect(first != second, "semantic fingerprint changes did not invalidate hint cache keys")
+    finally:
+        core._cache_semantic_fingerprint = original
+        core._clear_all_caches()
+
+
 def test_configuration_drift_detects_edit_and_removal():
     """A long-lived core process should report config edits and removal without reloading partially."""
     with tempfile.TemporaryDirectory() as td:
@@ -31940,6 +31956,7 @@ TESTS.extend([
     test_effective_config_snapshot_isolated_and_provenanced,
     test_config_fingerprint_invalidates_persistent_cache_keys,
     test_hot_config_fingerprint_avoids_filesystem_stat,
+    test_hint_cache_keys_include_semantic_fingerprint,
     test_configuration_drift_detects_edit_and_removal,
     test_doctor_reports_missing_navigator_dependencies,
     test_installer_initializes_explicit_timezone_config,

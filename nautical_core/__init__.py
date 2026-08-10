@@ -1147,6 +1147,7 @@ _cache_api = _LazyApiBundle(
         "_cache_gc_impl",
         "_cache_key_for_task_cached",
         "_cache_key_for_task_impl",
+        "_cache_semantic_fingerprint",
         "cache_load",
         "cache_save",
         "cache_gc",

@@ -101,6 +101,9 @@ class _LazyApiBundle:
 
     def _resolve(self):
         if self._bindings is None:
+            refresh_config = globals().get("_refresh_facade_config_exports")
+            if callable(refresh_config):
+                refresh_config()
             module = _import_sibling(self._module_name)
             self._module = module
             self._bindings = module.for_core(self._core, namespace=self._namespace)
@@ -471,6 +474,7 @@ _timeutil = _import_sibling("timeutil")
 
 def scheduling_configuration_error() -> str:
     """Return a blocking configuration error for Nautical scheduling paths."""
+    _core_config.ensure_loaded()
     if CONFIG_ERROR:
         return CONFIG_ERROR
     return _TIMEZONE_CONFIG_ERROR
@@ -534,6 +538,39 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> dict[str, str | 
     if error:
         raise RuntimeError(f"Invalid Nautical configuration: {error}")
     return result
+
+
+def _refresh_facade_config_exports() -> None:
+    """Resolve deferred config and synchronize facade compatibility exports."""
+    global CONFIG_ERROR, _CONF, MAX_ANCHOR_DNF_TERMS
+    _core_config.ensure_loaded()
+    names = (
+        "WRAND_SALT", "LOCAL_TZ_NAME", "SEASON_HEMISPHERE", "HOLIDAY_REGION",
+        "ANCHOR_FILE_DIR", "OMIT_FILE_DIR", "ANCHOR_PRESETS", "OMIT_PRESETS",
+        "BUSINESS_CALENDAR_CONFIG", "ASTRONOMY_CONFIG", "ENABLE_ANCHOR_CACHE",
+        "ENABLE_UDA_ALIASES", "ANCHOR_CACHE_DIR_OVERRIDE", "ANCHOR_CACHE_TTL",
+        "CHAIN_COLOR_PER_CHAIN", "SHOW_TIMELINE_GAPS", "SHOW_ANALYTICS",
+        "ANALYTICS_STYLE", "ANALYTICS_ONTIME_TOL_SECS", "DEBUG_WAIT_SCHED",
+        "CHECK_CHAIN_INTEGRITY", "PANEL_MODE", "LIVE_PANEL_DURATION_MS",
+        "LIVE_PANEL_FOOTER", "FAST_COLOR", "EXIT_PROGRESS", "SPAWN_QUEUE_MAX_BYTES",
+        "SPAWN_QUEUE_DRAIN_MAX_ITEMS", "MAX_CHAIN_WALK", "MAX_ANCHOR_ITER",
+        "MAX_LINK_NUMBER", "SANITIZE_UDA", "SANITIZE_UDA_MAX_LEN", "MAX_JSON_BYTES",
+        "RECURRENCE_UPDATE_UDAS", "_CACHE_TTL_SECS", "_CACHE_LOAD_MEM_MAX",
+        "_CACHE_LOAD_MEM_TTL",
+    )
+    for name in names:
+        config_name = name if not name.startswith("_") else name[1:]
+        configured_value = getattr(_core_config, config_name)
+        if globals().get(name) == configured_value:
+            globals()[name] = configured_value
+    _CONF = _core_config._CONF
+    CONFIG_ERROR = _core_config.configuration_error()
+    if globals().get("MAX_ANCHOR_DNF_TERMS") == globals().get("_CONFIG_DEFAULT_MAX_ANCHOR_DNF_TERMS", 10_000):
+        MAX_ANCHOR_DNF_TERMS = _conf_int("max_anchor_dnf_terms", 10_000, min_value=64, max_value=200_000)
+    if "_refresh_timezone" in globals():
+        _refresh_timezone()
+    if "_season_support" in globals():
+        _season_support.configure_hemisphere(SEASON_HEMISPHERE)
 
 
 # --- Date/time config ---

@@ -41,6 +41,7 @@ _CONF_CACHE = None
 _CONFIG_ERROR = ""
 _CONFIG_ERROR_PATH = ""
 _CONFIG_TASKDATA_OVERRIDE = ""
+_CONFIG_LOADED = False
 _CACHE_LOAD_MEM_MAX = 128
 _CACHE_LOAD_MEM_TTL = 300
 _CACHE_LOAD_MEM: OrderedDict[str, tuple[int, int, dict, float]] = OrderedDict()
@@ -209,11 +210,12 @@ def _get_config() -> dict:
     return out
 
 
-_CONF = MappingProxyType(_get_config())
+_CONF = MappingProxyType(copy.deepcopy(_DEFAULTS))
 
 
 def effective_config_snapshot() -> dict:
     """Return the effective immutable-at-call-time config and its source hint."""
+    ensure_loaded()
     values = copy.deepcopy(dict(_CONF))
     source = "defaults"
     try:
@@ -316,11 +318,12 @@ def scheduler_config_fingerprint() -> str:
     return _SCHEDULER_FINGERPRINT_CACHE
 
 
-_LOADED_CONFIG_FINGERPRINT = effective_config_fingerprint()
+_LOADED_CONFIG_FINGERPRINT = ""
 
 
 def configuration_drift() -> dict:
     """Report whether the loaded process configuration differs from disk."""
+    ensure_loaded()
     current = effective_config_snapshot()
     changed = current.get("fingerprint") != _LOADED_CONFIG_FINGERPRINT
     return {
@@ -330,6 +333,23 @@ def configuration_drift() -> dict:
         "current_fingerprint": current.get("fingerprint", ""),
         "source": current.get("source", "unknown"),
     }
+
+
+def ensure_loaded() -> None:
+    """Load and validate configuration once, on first scheduling use."""
+    global _CONFIG_LOADED, _CONF, _CONF_CACHE, _LOADED_CONFIG_FINGERPRINT
+    if _CONFIG_LOADED:
+        return
+    loaded = _load_config()
+    error = configuration_error()
+    if error:
+        _CONFIG_LOADED = True
+        return
+    _CONF_CACHE = copy.deepcopy(loaded)
+    _CONF = MappingProxyType(copy.deepcopy(loaded))
+    _refresh_config_exports()
+    _CONFIG_LOADED = True
+    _LOADED_CONFIG_FINGERPRINT = effective_config_fingerprint()
 
 
 def conf_raw(key: str):
@@ -538,7 +558,7 @@ def reload_for_taskdata(taskdata: str | os.PathLike[str]) -> dict[str, str | boo
     normal loader, while allowing reconcile and doctor to supply the resolved
     directory without mutating the process environment.
     """
-    global _CONF, _CONF_CACHE, _CONFIG_ERROR, _CONFIG_ERROR_PATH
+    global _CONF, _CONF_CACHE, _CONFIG_ERROR, _CONFIG_ERROR_PATH, _CONFIG_LOADED
     global _CONFIG_TASKDATA_OVERRIDE, _CONFIG_FINGERPRINT_CACHE
     global _CONFIG_FINGERPRINT_CACHE_KEY, _CONFIG_SOURCE_PATH_CACHE
     global _SCHEDULER_FINGERPRINT_CACHE_KEY, _SCHEDULER_FINGERPRINT_CACHE
@@ -562,6 +582,7 @@ def reload_for_taskdata(taskdata: str | os.PathLike[str]) -> dict[str, str | boo
 
     _CONF_CACHE = copy.deepcopy(loaded)
     _CONF = MappingProxyType(copy.deepcopy(loaded))
+    _CONFIG_LOADED = True
     _refresh_config_exports()
     _CONFIG_FINGERPRINT_CACHE = None
     _CONFIG_FINGERPRINT_CACHE_KEY = None
@@ -596,3 +617,9 @@ def ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
         return _wrapper
 
     return _decorator
+
+
+# Explicit configuration is an opt-in contract and must be validated during
+# import; automatic Taskdata discovery remains deferred until first use.
+if str(os.environ.get("NAUTICAL_CONFIG") or "").strip():
+    ensure_loaded()

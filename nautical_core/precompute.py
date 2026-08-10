@@ -6,101 +6,6 @@ from datetime import date, datetime, timedelta
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 
 
-_WEEKDAY_INDEX = {
-    "mon": 0,
-    "tue": 1,
-    "wed": 2,
-    "thu": 3,
-    "fri": 4,
-    "sat": 5,
-    "sun": 6,
-}
-
-
-def _simple_weekly_weekdays(dnf):
-    """Return weekdays for an unmodified single weekly atom, if eligible."""
-    if not dnf:
-        return None
-    weekdays: set[int] = set()
-    for term in dnf:
-        if len(term) != 1:
-            return None
-        atom = term[0]
-        if atom.get("typ") != "w" or int(atom.get("ival") or 1) != 1:
-            return None
-        mods = atom.get("mods") or {}
-        if (
-            mods.get("roll")
-            or mods.get("wd")
-            or mods.get("bd")
-            or mods.get("day_offset")
-            or mods.get("business_day_offset")
-            or "rand" in str(atom.get("spec") or "").lower()
-        ):
-            return None
-        for token in str(atom.get("spec") or "").lower().split(","):
-            token = token.strip()
-            if ".." in token:
-                left, right = (part.strip() for part in token.split("..", 1))
-                if left not in _WEEKDAY_INDEX or right not in _WEEKDAY_INDEX:
-                    return None
-                current = _WEEKDAY_INDEX[left]
-                target = _WEEKDAY_INDEX[right]
-                while True:
-                    weekdays.add(current)
-                    if current == target:
-                        break
-                    current = (current + 1) % 7
-            elif token in _WEEKDAY_INDEX:
-                weekdays.add(_WEEKDAY_INDEX[token])
-            else:
-                return None
-    return weekdays or None
-
-
-def _simple_weekly_stats(dnf, start: date, end: date):
-    """Return exact annual stats for an unmodified single weekly atom."""
-    weekdays = _simple_weekly_weekdays(dnf)
-    if not weekdays:
-        return None
-    if end <= start:
-        return {"est": 0, "first": "", "last": ""}
-
-    span = (end - start).days
-    full_weeks, remainder = divmod(span, 7)
-    count = full_weeks * len(weekdays)
-    for offset in range(remainder):
-        if (start.weekday() + offset) % 7 in weekdays:
-            count += 1
-    first_offset = next(
-        (offset for offset in range(span) if (start.weekday() + offset) % 7 in weekdays),
-        None,
-    )
-    last_offset = next(
-        (offset for offset in range(span - 1, -1, -1) if (start.weekday() + offset) % 7 in weekdays),
-        None,
-    )
-    iso = lambda offset: (start + timedelta(days=offset)).isoformat() + "T00:00"
-    return {
-        "est": count,
-        "first": iso(first_offset) if first_offset is not None else "",
-        "last": iso(last_offset) if last_offset is not None else "",
-    }
-
-
-def _simple_weekly_next(dnf, start: date, count: int) -> list[date] | None:
-    weekdays = _simple_weekly_weekdays(dnf)
-    if not weekdays:
-        return None
-    out: list[date] = []
-    cursor = start + timedelta(days=1)
-    while len(out) < max(0, int(count)):
-        if cursor.weekday() in weekdays:
-            out.append(cursor)
-        cursor += timedelta(days=1)
-    return out
-
-
 def _has_rand_atoms(dnf: list[list[dict]]) -> bool:
     return any(
         "rand" in str((atom.get("spec") or "")).lower()
@@ -149,10 +54,6 @@ def precompute_hints(
     next_cache: dict[date, object] = {}
     cache_miss = object()
     terminal: OccurrenceSearchExhausted | None = None
-
-    simple_next = _simple_weekly_next(dnf, start_d, k_next) if include_per_year else None
-    if simple_next is not None:
-        out_next = [value.isoformat() + "T00:00" for value in simple_next]
 
     def next_candidate(cursor):
         cached = next_cache.get(cursor, cache_miss)
@@ -209,11 +110,6 @@ def precompute_hints(
     seen = set()
     sample_horizon = max(1, int(sample_days_for_year or 1))
     sample_end = today + timedelta(days=sample_horizon)
-
-    simple_weekly = _simple_weekly_stats(dnf, today, sample_end)
-    if simple_weekly is not None:
-        hints["per_year"] = simple_weekly
-        return hints
 
     # Annual statistics are bounded by calendar coverage, not occurrence count.
     # Sparse rules must not force hundreds of years of scheduling work.

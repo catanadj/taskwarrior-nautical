@@ -6018,26 +6018,6 @@ def test_perf_cold_import_records_module_profile():
     expect(int(perf.IMPORT_PROFILES.get("core", 0)) > 0, "cold import module profile was not recorded")
 
 
-def test_simple_weekly_hint_stats_preserve_calendar_bounds():
-    """The arithmetic weekly hint path reports the same inclusive date window."""
-    precompute = importlib.import_module("nautical_core.precompute")
-    dnf = core.parse_anchor_expr_to_dnf("w:mon..fri@t=09:00")
-    stats = precompute._simple_weekly_stats(dnf, date(2026, 1, 1), date(2027, 1, 1))
-    expect(stats == {
-        "est": 261,
-        "first": "2026-01-01T00:00",
-        "last": "2026-12-31T00:00",
-    }, f"unexpected simple weekly stats: {stats!r}")
-    upcoming = precompute._simple_weekly_next(dnf, date(2026, 1, 1), 3)
-    expect(
-        upcoming == [date(2026, 1, 2), date(2026, 1, 5), date(2026, 1, 6)],
-        f"unexpected simple weekly upcoming dates: {upcoming!r}",
-    )
-    listed = core.parse_anchor_expr_to_dnf("w:mon,tue")
-    listed_stats = precompute._simple_weekly_stats(listed, date(2026, 1, 1), date(2027, 1, 1))
-    expect(listed_stats["est"] == 104, f"unexpected listed weekly count: {listed_stats!r}")
-
-
 def test_core_import_defers_panel_colour_module():
     """Core import should not load presentation colour helpers before use."""
     env = os.environ.copy()
@@ -31694,7 +31674,6 @@ TESTS = [
     test_perf_budget_config_covers_cache_io_checks,
     test_perf_hint_benchmark_isolates_persistent_cache,
     test_perf_cold_import_records_module_profile,
-    test_simple_weekly_hint_stats_preserve_calendar_bounds,
     test_core_import_defers_panel_colour_module,
     test_core_import_defers_diagnostic_model,
     test_core_import_defers_parser_scheduler_models,

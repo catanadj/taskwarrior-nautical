@@ -164,13 +164,19 @@ def _scenario_navigator(env: dict[str, str], cp_result: dict) -> dict:
 
 def _scenario_anchor_preset(env: dict[str, str]) -> dict:
     description = "blackbox preset"
+    # Keep the smoke test independent of the day it runs.  ``today`` can be
+    # the omitted Monday and resolves to a past midnight timestamp, which
+    # exercises a different recovery edge than preset/omit selection.
+    preset_due = (datetime.now(timezone.utc).date() + timedelta(days=2)).strftime(
+        "%Y%m%dT000000Z"
+    )
     _task(
         [
             "add",
             description,
             "anchor:@blackbox_weekdays",
             "omit:@blackbox_monday",
-            "due:today",
+            f"due:{preset_due}",
         ],
         env,
     )

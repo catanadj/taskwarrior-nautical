@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Mapping
+from typing import Any, Mapping, NoReturn
 
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
@@ -28,7 +28,7 @@ from .timeutil import utc_to_local_naive as _utc_to_local_naive
 class _FrozenList(list):
     """List-compatible read-only container for evaluator-owned parsed state."""
 
-    def _readonly(self, *_args, **_kwargs):
+    def _readonly(self, *_args: Any, **_kwargs: Any) -> NoReturn:
         raise TypeError("Recurrence evaluator state is read-only.")
 
     __setitem__ = __delitem__ = __iadd__ = __imul__ = _readonly
@@ -38,7 +38,7 @@ class _FrozenList(list):
 class _FrozenDict(dict):
     """Dict-compatible read-only container for evaluator-owned parsed state."""
 
-    def _readonly(self, *_args, **_kwargs):
+    def _readonly(self, *_args: Any, **_kwargs: Any) -> NoReturn:
         raise TypeError("Recurrence evaluator state is read-only.")
 
     __setitem__ = __delitem__ = __ior__ = _readonly
@@ -495,7 +495,7 @@ class RecurrenceEvaluator:
         if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations <= 0:
             raise ValueError("Occurrence range iteration limit must be a positive integer.")
         if limit == 0:
-            return []
+            return OccurrenceBatch()
 
         events: list[Occurrence] = []
         cursor = start_local
@@ -525,7 +525,7 @@ class RecurrenceEvaluator:
             first = False
         else:
             raise ValueError("Occurrence provider exceeded its range iteration limit.")
-        return events
+        return OccurrenceBatch(events)
 
     def select_mode(
         self,

@@ -587,7 +587,9 @@ class AnchorFileOccurrenceProvider:
                     self._candidate_keys.append(order_key)
                 elif not self._candidate_records[-1][1] and description:
                     self._candidate_records[-1] = (self._candidate_records[-1][0], description)
-        records = self._candidate_records
+        candidate_records = self._candidate_records
+        if candidate_records is None:
+            raise RuntimeError("Anchor-file candidate cache was not initialized.")
         try:
             cursor_aware = cursor_after.tzinfo is not None and cursor_after.utcoffset() is not None
             if self._candidate_keys and cursor_aware != (
@@ -603,19 +605,19 @@ class AnchorFileOccurrenceProvider:
             selected_index = bisect_right(self._candidate_keys, cursor_key)
         except (TypeError, ValueError) as exc:
             raise ValueError("Anchor-file provider returned an incomparable datetime.") from exc
-        if selected_index >= len(records):
-            self._next_index = len(records)
+        if selected_index >= len(candidate_records):
+            self._next_index = len(candidate_records)
             self._last_after = after_local
             self._last_candidate = None
             self._last_candidate_index = None
             self._conversion_key = conversion_key
             return None
-        value, description = records[selected_index]
+        value, description = candidate_records[selected_index]
         local = value
         from .occurrence_provider import _require_forward_progress
 
         _require_forward_progress(cursor_after, local)
-        self._next_index = selected_index + 1 if selected_index is not None else len(candidates)
+        self._next_index = selected_index + 1 if selected_index is not None else len(candidate_records)
         self._last_after = after_local
         self._last_candidate = local
         self._last_candidate_index = selected_index

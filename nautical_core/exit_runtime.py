@@ -55,8 +55,8 @@ class ExitRuntimeServices:
 
 def build_precheck_services(runtime: ExitRuntimeServices) -> ExitPrecheckServices:
     return ExitPrecheckServices(
-        parent_nextlink_state=lambda parent_uuid, child_short, expected_prev: runtime.parent_nextlink_state(
-            parent_uuid, child_short, expected_prev, prefer_cache=True
+        parent_nextlink_state=lambda parent_uuid, child_short, expected_prev=None, *, prefer_cache=True: runtime.parent_nextlink_state(
+            parent_uuid, child_short, expected_prev, prefer_cache=prefer_cache
         ),
         export_uuid=lambda uuid_str, *, prefer_cache=True: runtime.export_uuid(uuid_str, prefer_cache=prefer_cache),
         clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,

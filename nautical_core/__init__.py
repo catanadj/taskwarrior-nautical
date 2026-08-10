@@ -128,6 +128,25 @@ class _LazyApiBundle:
         return getattr(self._resolve(), name)
 
 
+def _bind_lazy_api_aliases(bundle: _LazyApiBundle) -> None:
+    """Install facade aliases while preserving alias/source pairs."""
+    for spec in bundle._aliases:
+        alias_name, source_name = spec if isinstance(spec, tuple) else (spec, spec)
+        globals()[alias_name] = bundle.alias(alias_name, source_name)
+
+
+if TYPE_CHECKING:
+    # These names are installed by lazy API bundles below.  They are declared
+    # for diagnostics/cache helpers without eagerly resolving those bundles.
+    _normalize_spec_for_acf_cached: Any
+    _year_pair_cached: Any
+    _parse_y_token_cached: Any
+    expand_monthly_cached: Any
+    expand_weekly_cached: Any
+    _cache_key_for_task_cached: Any
+    _selection_inner_matcher: Any
+
+
 TaskDict: TypeAlias = dict[str, Any]
 
 
@@ -646,8 +665,7 @@ _token_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _token_api._aliases:
-    globals()[_name] = _token_api.alias(_name)
+_bind_lazy_api_aliases(_token_api)
 
 _ACF_COMPRESSED = True
 ACF_COMPRESSED = _ACF_COMPRESSED
@@ -773,8 +791,7 @@ _recurrence_candidates = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _recurrence_candidates._aliases:
-    globals()[_name] = _recurrence_candidates.alias(_name)
+_bind_lazy_api_aliases(_recurrence_candidates)
 
 
 # Quarter rewrite entry points are bound before parser construction because
@@ -802,8 +819,7 @@ _quarter_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _quarter_api._aliases:
-    globals()[_name] = _quarter_api.alias(_name)
+_bind_lazy_api_aliases(_quarter_api)
 
 # ACF entry points are bound before parser construction because parser
 # validation and canonical-form generation share these compatibility names.
@@ -827,8 +843,7 @@ _acf_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _acf_api._aliases:
-    globals()[_name] = _acf_api.alias(_name)
+_bind_lazy_api_aliases(_acf_api)
 
 _expansion_api = _LazyApiBundle(
     "expansion_api",
@@ -847,8 +862,7 @@ _expansion_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _expansion_api._aliases:
-    globals()[_name] = _expansion_api.alias(_name)
+_bind_lazy_api_aliases(_expansion_api)
 
 _parser_support_api = _LazyApiBundle(
     "parser_support_api",
@@ -874,8 +888,7 @@ _parser_support_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _parser_support_api._aliases:
-    globals()[_name] = _parser_support_api.alias(_name)
+_bind_lazy_api_aliases(_parser_support_api)
 
 # Parser entry points live in ``parser_api``; retain these aliases for the
 # established ``nautical_core`` import contract.
@@ -922,9 +935,7 @@ _parser_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _parser_api._aliases:
-    _alias_name, _source_name = _name if isinstance(_name, tuple) else (_name, _name)
-    globals()[_alias_name] = _parser_api.alias(_alias_name, _source_name)
+_bind_lazy_api_aliases(_parser_api)
 
 # Business-calendar configuration is bound after parser APIs are available so
 # calendar rules can reuse the same strict anchor/omit validators.
@@ -946,8 +957,7 @@ _business_calendar_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _business_calendar_api._aliases:
-    globals()[_name] = _business_calendar_api.alias(_name)
+_bind_lazy_api_aliases(_business_calendar_api)
 
 _linting_api = _LazyApiBundle(
     "linting_api",
@@ -967,8 +977,7 @@ _linting_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _linting_api._aliases:
-    globals()[_name] = _linting_api.alias(_name)
+_bind_lazy_api_aliases(_linting_api)
 
 # Scheduler entry points are bound to this exact core instance for isolated
 # hook/test loaders while preserving the long-standing facade names.
@@ -1033,9 +1042,7 @@ _scheduler_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _scheduler_api._aliases:
-    _alias_name, _source_name = _name if isinstance(_name, tuple) else (_name, _name)
-    globals()[_alias_name] = _scheduler_api.alias(_alias_name, _source_name)
+_bind_lazy_api_aliases(_scheduler_api)
 
 # Date/time adapters are bound after scheduler construction so date-specific
 # slot selection can reuse the facade's business-calendar callback.
@@ -1062,8 +1069,7 @@ _time_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _time_api._aliases:
-    globals()[_name] = _time_api.alias(_name)
+_bind_lazy_api_aliases(_time_api)
 
 _natural_language_api = _LazyApiBundle(
     "natural_language_api",
@@ -1108,8 +1114,7 @@ _natural_language_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _natural_language_api._aliases:
-    globals()[_name] = _natural_language_api.alias(_name)
+_bind_lazy_api_aliases(_natural_language_api)
 
 _cache_api = _LazyApiBundle(
     "cache_api",
@@ -1154,8 +1159,7 @@ _cache_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _cache_api._aliases:
-    globals()[_name] = _cache_api.alias(_name)
+_bind_lazy_api_aliases(_cache_api)
 
 _precompute_api = _LazyApiBundle(
     "precompute_api",
@@ -1163,8 +1167,7 @@ _precompute_api = _LazyApiBundle(
     core=sys.modules[__name__],
     namespace=globals(),
 )
-for _name in _precompute_api._aliases:
-    globals()[_name] = _precompute_api.alias(_name)
+_bind_lazy_api_aliases(_precompute_api)
 
 _compat_api = _import_sibling("compat_api")
 __all__ = _compat_api.PUBLIC_EXPORTS

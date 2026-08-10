@@ -5938,6 +5938,7 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
             f"native until target carry failed: {type(exc).__name__}: {exc}",
         )
         _reject_native_until_carry(old, new, new_target, old_target_field, typed_error)
+    return False
 
 
 def _handle_non_completion_modify(old: dict, new: dict) -> None:

@@ -9249,6 +9249,37 @@ def test_precompute_hints_reuses_no_match_scheduler_result():
     expect(calls["n"] == 1, f"no-match cursor was scheduled repeatedly: {calls['n']}")
 
 
+def test_precompute_hints_skip_stats_preserves_terminal_evidence():
+    """Validation-only hints retain dates and scheduler exhaustion evidence."""
+    import nautical_core.precompute as precompute
+
+    terminal = core.OccurrenceSearchExhausted(
+        "bounded validation hint stream", reference=date(9999, 1, 1), limit=1
+    )
+    calls = {"n": 0}
+
+    def bounded_next(_dnf, after, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return after + timedelta(days=7), None
+        raise terminal
+
+    hints = precompute.precompute_hints(
+        [[{"spec": "rand"}]],
+        start_dt=date(2026, 1, 1),
+        rand_seed="validation",
+        k_next=3,
+        sample_days_for_year=366,
+        now_local=lambda: datetime(2026, 1, 1),
+        next_after_expr=bounded_next,
+        next_for_or=lambda *_args: None,
+        include_per_year=False,
+    )
+    expect(hints["next_dates"] == ["2026-01-08T00:00"], f"validation dates changed: {hints}")
+    expect(hints["limits"]["stop"] == terminal.DATE_LIMIT, f"terminal evidence was lost: {hints}")
+    expect("per_year" not in hints, "validation-only hints unexpectedly included annual statistics")
+
+
 def test_parser_validation():
     """Test parser validation and error messages"""
     # Valid expressions that should parse
@@ -31277,6 +31308,7 @@ TESTS = [
     test_precompute_hints_bounds_year_stats_by_days,
     test_precompute_hints_can_skip_unused_annual_stats,
     test_precompute_hints_reuses_no_match_scheduler_result,
+    test_precompute_hints_skip_stats_preserves_terminal_evidence,
     test_yearly_rand_natural_and_bounds,
     test_yearly_rand_respects_sibling_month_filter,
     test_yearly_rand_natural_compacts_sibling_filter,

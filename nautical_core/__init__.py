@@ -393,7 +393,7 @@ _cache_payload = _LazySibling("cache_payload")
 _cache_locking = _LazySibling("cache_locking")
 _acf_support = _LazySibling("acf_support")
 _business_calendar = _import_sibling("business_calendar")
-_business_calendar_config = _import_sibling("business_calendar_config")
+_business_calendar_config = _LazySibling("business_calendar_config")
 _cached_expansion = _LazySibling("cached_expansion")
 _nth_monthly = _LazySibling("nth_monthly")
 _expansion_support = _LazySibling("expansion_support")
@@ -423,7 +423,6 @@ _year_tokens = _LazySibling("year_tokens")
 
 short_uuid = _common.short_uuid
 DEFAULT_BUSINESS_CALENDAR = _business_calendar.DEFAULT_BUSINESS_CALENDAR
-BusinessCalendarConfigError = _business_calendar_config.BusinessCalendarConfigError
 business_calendar_displacement_for_date = _business_calendar.business_calendar_displacement_for_date
 capture_business_calendar_displacements = _business_calendar.capture_business_calendar_displacements
 
@@ -1219,6 +1218,10 @@ __all__ = _compat_api.PUBLIC_EXPORTS
 
 def __getattr__(name: str):
     """Resolve public types whose implementation is intentionally lazy."""
+    if name == "BusinessCalendarConfigError":
+        value = _business_calendar_config.BusinessCalendarConfigError
+        globals()[name] = value
+        return value
     if name == "tempfile":
         value = importlib.import_module("tempfile")
         globals()[name] = value

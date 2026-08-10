@@ -6033,6 +6033,9 @@ def test_simple_weekly_hint_stats_preserve_calendar_bounds():
         upcoming == [date(2026, 1, 2), date(2026, 1, 5), date(2026, 1, 6)],
         f"unexpected simple weekly upcoming dates: {upcoming!r}",
     )
+    listed = core.parse_anchor_expr_to_dnf("w:mon,tue")
+    listed_stats = precompute._simple_weekly_stats(listed, date(2026, 1, 1), date(2027, 1, 1))
+    expect(listed_stats["est"] == 104, f"unexpected listed weekly count: {listed_stats!r}")
 
 
 def test_core_import_defers_panel_colour_module():

@@ -19,39 +19,42 @@ _WEEKDAY_INDEX = {
 
 def _simple_weekly_weekdays(dnf):
     """Return weekdays for an unmodified single weekly atom, if eligible."""
-    if len(dnf or []) != 1 or len(dnf[0]) != 1:
-        return None
-    atom = dnf[0][0]
-    if atom.get("typ") != "w" or int(atom.get("ival") or 1) != 1:
-        return None
-    mods = atom.get("mods") or {}
-    if (
-        mods.get("roll")
-        or mods.get("wd")
-        or mods.get("bd")
-        or mods.get("day_offset")
-        or mods.get("business_day_offset")
-        or "rand" in str(atom.get("spec") or "").lower()
-    ):
+    if not dnf:
         return None
     weekdays: set[int] = set()
-    for token in str(atom.get("spec") or "").lower().split(","):
-        token = token.strip()
-        if ".." in token:
-            left, right = (part.strip() for part in token.split("..", 1))
-            if left not in _WEEKDAY_INDEX or right not in _WEEKDAY_INDEX:
-                return None
-            current = _WEEKDAY_INDEX[left]
-            target = _WEEKDAY_INDEX[right]
-            while True:
-                weekdays.add(current)
-                if current == target:
-                    break
-                current = (current + 1) % 7
-        elif token in _WEEKDAY_INDEX:
-            weekdays.add(_WEEKDAY_INDEX[token])
-        else:
+    for term in dnf:
+        if len(term) != 1:
             return None
+        atom = term[0]
+        if atom.get("typ") != "w" or int(atom.get("ival") or 1) != 1:
+            return None
+        mods = atom.get("mods") or {}
+        if (
+            mods.get("roll")
+            or mods.get("wd")
+            or mods.get("bd")
+            or mods.get("day_offset")
+            or mods.get("business_day_offset")
+            or "rand" in str(atom.get("spec") or "").lower()
+        ):
+            return None
+        for token in str(atom.get("spec") or "").lower().split(","):
+            token = token.strip()
+            if ".." in token:
+                left, right = (part.strip() for part in token.split("..", 1))
+                if left not in _WEEKDAY_INDEX or right not in _WEEKDAY_INDEX:
+                    return None
+                current = _WEEKDAY_INDEX[left]
+                target = _WEEKDAY_INDEX[right]
+                while True:
+                    weekdays.add(current)
+                    if current == target:
+                        break
+                    current = (current + 1) % 7
+            elif token in _WEEKDAY_INDEX:
+                weekdays.add(_WEEKDAY_INDEX[token])
+            else:
+                return None
     return weekdays or None
 
 

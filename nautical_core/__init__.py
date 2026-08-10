@@ -846,13 +846,37 @@ _months_since = _recurrence_metadata.months_since
 
 # CP parsing is implemented in a focused module; these aliases preserve the
 # long-standing ``nautical_core`` facade used by hooks and third-party callers.
-_cp_parser = _import_sibling("cp_parser")
-parse_cp_duration = _cp_parser.parse_cp_duration
-parse_cp_sequence_tokens = _cp_parser.parse_cp_sequence_tokens
-parse_cp_sequence = _cp_parser.parse_cp_sequence
-cp_sequence_parse_error = _cp_parser.cp_sequence_parse_error
-cp_sequence_interval_for_token = _cp_parser.cp_sequence_interval_for_token
-cp_sequence_interval_for_link = _cp_parser.cp_sequence_interval_for_link
+_cp_parser = _LazySibling("cp_parser")
+
+
+def parse_cp_duration(dur: str):
+    return _cp_parser.parse_cp_duration(dur)
+
+
+def parse_cp_sequence_tokens(cp: str):
+    return _cp_parser.parse_cp_sequence_tokens(cp)
+
+
+def parse_cp_sequence(cp: str):
+    return _cp_parser.parse_cp_sequence(cp)
+
+
+def cp_sequence_parse_error(cp: str) -> str | None:
+    return _cp_parser.cp_sequence_parse_error(cp)
+
+
+def cp_sequence_interval_for_token(token, *, cp: str, link_no: int, token_index: int, chain_id: str | None = None):
+    return _cp_parser.cp_sequence_interval_for_token(
+        token,
+        cp=cp,
+        link_no=link_no,
+        token_index=token_index,
+        chain_id=chain_id,
+    )
+
+
+def cp_sequence_interval_for_link(cp: str, link_no: int, chain_id: str | None = None):
+    return _cp_parser.cp_sequence_interval_for_link(cp, link_no, chain_id)
 
 
 _recurrence_candidates = _LazyApiBundle(

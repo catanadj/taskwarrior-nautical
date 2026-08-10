@@ -8942,6 +8942,23 @@ def test_build_and_cache_hints_returns_isolated_cached_payload():
         first_dnf[0][0]["spec"] = "fri"
         expect(second_dnf[0][0]["spec"] == "mon", "cached hint payload should be isolated per call")
 
+
+def test_build_and_cache_hints_rejects_stale_valid_dnf():
+    """A shape-valid payload for another expression must not bypass validation."""
+    saved_load = core.cache_load
+    saved_save = core.cache_save
+    saved = []
+    try:
+        stale = {"dnf": core.validate_anchor_expr_strict("w:tue"), "natural": "Tuesday"}
+        core.cache_load = lambda _key: stale
+        core.cache_save = lambda key, payload: saved.append((key, payload))
+        payload = core.build_and_cache_hints("w:mon", "skip")
+        expect(payload.get("dnf") == core.validate_anchor_expr_strict("w:mon"), "stale DNF was reused")
+        expect(saved, "revalidated payload was not saved")
+    finally:
+        core.cache_load = saved_load
+        core.cache_save = saved_save
+
 def test_cache_key_for_task_caches_build_acf_results():
     """cache_key_for_task should memoize ACF work for repeated (expr, mode, fmt)."""
     if hasattr(core, "_cache_key_for_task_cached"):
@@ -31095,6 +31112,7 @@ TESTS = [
     test_cache_load_retries_when_file_is_replaced_during_read,
     test_parse_cache_returns_isolated_dnf_instances,
     test_build_and_cache_hints_returns_isolated_cached_payload,
+    test_build_and_cache_hints_rejects_stale_valid_dnf,
     test_cache_key_for_task_caches_build_acf_results,
     test_build_and_cache_hints_parses_once_per_miss,
     test_precompute_hints_bounds_year_stats_by_days,

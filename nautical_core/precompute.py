@@ -160,7 +160,16 @@ def build_and_cache_hints(
     )
     cached = cache_load(key)
     if cached:
-        return cached
+        # A semantic key prevents normal upgrades from reaching this branch,
+        # but validate the stored DNF as a second line of defense.  This keeps
+        # manually restored or legacy entries from bypassing current parser
+        # and satisfiability checks.
+        try:
+            current_dnf = validate_anchor_expr_strict(anchor_expr)
+            if cached.get("dnf") == current_dnf:
+                return cached
+        except Exception:
+            pass
 
     dnf = validate_anchor_expr_strict(anchor_expr)
     natural = describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)

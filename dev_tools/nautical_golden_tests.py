@@ -6032,6 +6032,20 @@ def test_core_import_defers_panel_colour_module():
     expect(result.returncode == 0, f"panel colour helper was eager or failed lazily: {result.stderr!r}")
 
 
+def test_core_import_defers_diagnostic_model():
+    """Core import should not load diagnostic models before diagnostics are used."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(part for part in (ROOT, env.get("PYTHONPATH", "")) if part)
+    probe = (
+        "import sys, nautical_core; "
+        "assert 'nautical_core.diagnostic_models' not in sys.modules; "
+        "assert nautical_core.DiagnosticEvent.__name__ == 'DiagnosticEvent'; "
+        "assert 'nautical_core.diagnostic_models' in sys.modules"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], cwd=ROOT, env=env, capture_output=True, text=True)
+    expect(result.returncode == 0, f"diagnostic model was eager or failed lazily: {result.stderr!r}")
+
+
 def test_runtime_manifest_covers_lazy_panel_colour_module():
     """Every hook release must validate the lazily loaded panel-colour module."""
     from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES
@@ -31645,6 +31659,7 @@ TESTS = [
     test_perf_hint_benchmark_isolates_persistent_cache,
     test_perf_cold_import_records_module_profile,
     test_core_import_defers_panel_colour_module,
+    test_core_import_defers_diagnostic_model,
     test_runtime_manifest_covers_lazy_panel_colour_module,
     test_perf_hook_fast_path_ratio_enforcement,
     test_load_benchmark_installs_complete_hook_runtime,

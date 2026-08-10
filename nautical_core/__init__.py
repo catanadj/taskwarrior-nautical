@@ -332,9 +332,6 @@ def chain_colour_root(*args, **kwargs):
     return _panel_colours.chain_colour_root(*args, **kwargs)
 
 
-DiagnosticEvent = _import_sibling("diagnostic_models").DiagnosticEvent
-
-
 def render_panel(*args, **kwargs):
     ui = _ui._resolve()
     ui.panel_line = panel_line
@@ -1222,6 +1219,10 @@ def __getattr__(name: str):
         return value
     if name == "RecurrenceModeResult":
         value = _import_sibling("recurrence_evaluator").RecurrenceModeResult
+        globals()[name] = value
+        return value
+    if name == "DiagnosticEvent":
+        value = _import_sibling("diagnostic_models").DiagnosticEvent
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

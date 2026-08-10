@@ -17,8 +17,8 @@ _WEEKDAY_INDEX = {
 }
 
 
-def _simple_weekly_stats(dnf, start: date, end: date):
-    """Return exact annual stats for an unmodified single weekly atom."""
+def _simple_weekly_weekdays(dnf):
+    """Return weekdays for an unmodified single weekly atom, if eligible."""
     if len(dnf or []) != 1 or len(dnf[0]) != 1:
         return None
     atom = dnf[0][0]
@@ -52,7 +52,15 @@ def _simple_weekly_stats(dnf, start: date, end: date):
             weekdays.add(_WEEKDAY_INDEX[token])
         else:
             return None
-    if not weekdays or end <= start:
+    return weekdays or None
+
+
+def _simple_weekly_stats(dnf, start: date, end: date):
+    """Return exact annual stats for an unmodified single weekly atom."""
+    weekdays = _simple_weekly_weekdays(dnf)
+    if not weekdays:
+        return None
+    if end <= start:
         return {"est": 0, "first": "", "last": ""}
 
     span = (end - start).days
@@ -75,6 +83,19 @@ def _simple_weekly_stats(dnf, start: date, end: date):
         "first": iso(first_offset) if first_offset is not None else "",
         "last": iso(last_offset) if last_offset is not None else "",
     }
+
+
+def _simple_weekly_next(dnf, start: date, count: int) -> list[date] | None:
+    weekdays = _simple_weekly_weekdays(dnf)
+    if not weekdays:
+        return None
+    out: list[date] = []
+    cursor = start + timedelta(days=1)
+    while len(out) < max(0, int(count)):
+        if cursor.weekday() in weekdays:
+            out.append(cursor)
+        cursor += timedelta(days=1)
+    return out
 
 
 def _has_rand_atoms(dnf: list[list[dict]]) -> bool:
@@ -125,6 +146,10 @@ def precompute_hints(
     next_cache: dict[date, object] = {}
     cache_miss = object()
     terminal: OccurrenceSearchExhausted | None = None
+
+    simple_next = _simple_weekly_next(dnf, start_d, k_next) if include_per_year else None
+    if simple_next is not None:
+        out_next = [value.isoformat() + "T00:00" for value in simple_next]
 
     def next_candidate(cursor):
         cached = next_cache.get(cursor, cache_miss)

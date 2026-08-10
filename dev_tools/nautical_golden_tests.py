@@ -6028,6 +6028,11 @@ def test_simple_weekly_hint_stats_preserve_calendar_bounds():
         "first": "2026-01-01T00:00",
         "last": "2026-12-31T00:00",
     }, f"unexpected simple weekly stats: {stats!r}")
+    upcoming = precompute._simple_weekly_next(dnf, date(2026, 1, 1), 3)
+    expect(
+        upcoming == [date(2026, 1, 2), date(2026, 1, 5), date(2026, 1, 6)],
+        f"unexpected simple weekly upcoming dates: {upcoming!r}",
+    )
 
 
 def test_core_import_defers_panel_colour_module():

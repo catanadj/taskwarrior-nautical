@@ -25595,7 +25595,10 @@ def test_on_exit_equivalent_child_malformed_stdout_is_retryable():
     exit_queries = mod._module("exit_queries")
 
     def _run_task_malformed(*_a, **_k):
-        return True, "warning\n[not-json", ""
+        task_command = importlib.import_module("nautical_core.task_command")
+        return task_command.TaskCommandResult(
+            ("task", "export"), 0, "warning\n[not-json", "", "ok", 1, 0.1
+        )
 
     result = exit_queries.existing_equivalent_child(
         {"chainID": "chain-a", "link": 2},

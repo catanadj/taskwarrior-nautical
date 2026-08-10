@@ -51,7 +51,7 @@ def export_uuid(
         )
     if not uuid_str:
         return ExitExportResult(False, False, "missing uuid", None)
-    ok, out, err = run_task(
+    raw_result = run_task(
         task_cmd_prefix + [
             "rc.hooks=off",
             "rc.json.array=off",
@@ -64,6 +64,10 @@ def export_uuid(
         retries=retries,
         retry_delay=retry_delay,
     )
+    if hasattr(raw_result, "ok"):
+        ok, out, err = raw_result.ok, raw_result.stdout, raw_result.stderr
+    else:
+        ok, out, err = raw_result
     if not ok:
         return ExitExportResult(False, is_lock_error(err), err or "", None)
     try:
@@ -116,12 +120,16 @@ def existing_equivalent_child(
         cmd.append(f"prevLink:{prev_link}")
     cmd.extend(["status.not:deleted", "export"])
 
-    ok, out, err = run_task(
+    raw_result = run_task(
         cmd,
         timeout=timeout,
         retries=retries,
         retry_delay=retry_delay,
     )
+    if hasattr(raw_result, "ok"):
+        ok, out, err = raw_result.ok, raw_result.stdout, raw_result.stderr
+    else:
+        ok, out, err = raw_result
     if not ok:
         return ExitEquivalentChildResult(False, is_lock_error(err), err or "", None)
     try:

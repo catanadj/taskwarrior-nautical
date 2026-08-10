@@ -36,6 +36,14 @@ def has_expiration_evidence(task: dict, *, safe_parse_datetime) -> bool:
         return False
 
 
+def classify_deleted_task(task: dict, *, services: ExpirationServices) -> tuple[str, str]:
+    """Return the deletion disposition without turning unavailable evidence into manual stop."""
+    return services.reconcile.deleted_chain_disposition(
+        task,
+        safe_parse_datetime=services.safe_parse_datetime,
+    )
+
+
 def render_recovery_warning(task: dict, reason: str, *, services: ExpirationServices) -> None:
     services.panel(
         "⚠ Nautical expiration recovery deferred",
@@ -150,6 +158,7 @@ def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -
 
 __all__ = (
     "ExpirationServices",
+    "classify_deleted_task",
     "handle_expired_deleted_modify",
     "has_expiration_evidence",
     "render_recovery_warning",

@@ -6426,35 +6426,38 @@ def _handle_deleted_modify(old: dict, new: dict) -> None:
         return
     if not ((old.get("chainID") or new.get("chainID") or "").strip()):
         return
+    modify_expiration = _module("modify_expiration", required=False)
+    if modify_expiration is None:
+        _expiration_recovery_warning(new, "Expiration recovery module is unavailable; deletion was not classified.")
+        return
     try:
-        if _handle_expired_deleted_modify(new):
-            return
-    except Exception as exc:
-        _diag(f"expiration recovery failed: {exc}")
-        modify_expiration = _module("modify_expiration", required=False)
-        has_expiration_evidence = bool(
-            modify_expiration
-            and modify_expiration.has_expiration_evidence(
-                new,
-                safe_parse_datetime=_safe_parse_datetime,
-            )
+        disposition, disposition_reason = modify_expiration.classify_deleted_task(
+            new,
+            services=_expiration_services(),
         )
-        if modify_expiration is None:
-            try:
-                until_dt, until_err = _safe_parse_datetime(new.get("until"))
-                end_dt, end_err = _safe_parse_datetime(new.get("end"))
-                has_expiration_evidence = bool(
-                    not until_err
-                    and not end_err
-                    and until_dt is not None
-                    and end_dt is not None
-                    and _compare_datetimes(until_dt, end_dt) <= 0
-                )
-            except Exception:
-                has_expiration_evidence = False
-        if has_expiration_evidence:
-            _expiration_recovery_warning(new, "Expiration recovery could not be initialized.")
-            return
+    except Exception as exc:
+        _diag(f"deleted-task disposition failed: {exc}")
+        _expiration_recovery_warning(new, "Deletion evidence could not be classified safely.")
+        return
+    if disposition == "ambiguous":
+        _expiration_recovery_warning(
+            new,
+            disposition_reason or "Deletion evidence is unavailable or malformed.",
+        )
+        return
+    if disposition == "expiration":
+        try:
+            if _handle_expired_deleted_modify(new):
+                return
+        except Exception as exc:
+            _diag(f"expiration recovery failed: {exc}")
+        _expiration_recovery_warning(
+            new,
+            "Expiration recovery could not be initialized; the chain remains active.",
+        )
+        return
+    if disposition == "manual":
+        _diag("deleted Nautical task classified as manual stop")
 
     new["chain"] = "off"
     now_utc = core.now_utc()

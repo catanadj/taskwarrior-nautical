@@ -3581,7 +3581,14 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
     }
     expired = dict(parent, status="deleted", end="20260727T000000Z")
     captured = {"panels": [], "children": [], "stopped": 0}
-    original = (mod._run_task, mod._spawn_child_atomic, mod._panel, mod._end_chain_summary)
+    original = (
+        mod._run_task,
+        mod._spawn_child_atomic,
+        mod._panel,
+        mod._end_chain_summary,
+        mod._handle_expired_deleted_modify,
+        mod._safe_parse_datetime,
+    )
     try:
         mod._run_task = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("expiration orchestration must not query Taskwarrior")
@@ -3658,8 +3665,63 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
             ),
             f"missing deferred-recovery guidance: {captured['panels'][-1]!r}",
         )
+
+        malformed = dict(
+            parent,
+            uuid="00000000-0000-0000-0000-000000000403",
+            status="deleted",
+            until="not-a-timestamp",
+            end="20260727T000000Z",
+        )
+        mod._handle_deleted_modify(parent, malformed)
+        expect(
+            malformed.get("chain") == "on",
+            f"malformed expiration evidence must not disable the chain: {malformed!r}",
+        )
+        expect(
+            captured["panels"][-1][2] == "warning"
+            and any(label == "Action" for label, _value in captured["panels"][-1][1]),
+            f"missing ambiguous-deletion guidance: {captured['panels'][-1]!r}",
+        )
+
+        unavailable = dict(
+            parent,
+            uuid="00000000-0000-0000-0000-000000000404",
+            status="deleted",
+        )
+        mod._safe_parse_datetime = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("Taskwarrior timestamp read unavailable")
+        )
+        mod._handle_deleted_modify(parent, unavailable)
+        expect(
+            unavailable.get("chain") == "on",
+            f"unavailable expiration evidence must not disable the chain: {unavailable!r}",
+        )
+        mod._safe_parse_datetime = original[-1]
+
+        mod._handle_expired_deleted_modify = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("recovery service unavailable")
+        )
+        failed_recovery = dict(
+            parent,
+            uuid="00000000-0000-0000-0000-000000000405",
+            status="deleted",
+            end="20260727T000000Z",
+        )
+        mod._handle_deleted_modify(parent, failed_recovery)
+        expect(
+            failed_recovery.get("chain") == "on",
+            f"failed expiration recovery must not disable the chain: {failed_recovery!r}",
+        )
     finally:
-        mod._run_task, mod._spawn_child_atomic, mod._panel, mod._end_chain_summary = original
+        (
+            mod._run_task,
+            mod._spawn_child_atomic,
+            mod._panel,
+            mod._end_chain_summary,
+            mod._handle_expired_deleted_modify,
+            mod._safe_parse_datetime,
+        ) = original
 
 
 def test_on_modify_expiration_panel_explains_carry():

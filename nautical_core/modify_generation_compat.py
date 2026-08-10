@@ -9,19 +9,75 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
+
+
+class GenerationServicePort(Protocol):
+    """The shared generation surface required by completion adapters.
+
+    ``ChainGenerationService`` is the sole production owner of these
+    operations.  Keeping this protocol here lets the compatibility layer stay
+    lightweight and makes accidental reimplementation in ``modify_impl``
+    visible to type checking and review.
+    """
+
+    def compute_cp_child_due(
+        self, parent: dict[str, Any]
+    ) -> tuple[datetime | None, dict[str, Any] | None]: ...
+
+    def compute_anchor_child_due(
+        self, parent: dict[str, Any]
+    ) -> tuple[datetime | None, dict[str, Any] | None, Any]: ...
+
+    def carry_relative_datetime(
+        self,
+        parent: dict[str, Any],
+        child: dict[str, Any],
+        child_due_utc: datetime,
+        field: str,
+        *,
+        parent_anchor_field: str = "due",
+        child_anchor_field: str = "due",
+    ) -> None: ...
+
+    def carry_native_until(
+        self,
+        parent: dict[str, Any],
+        child: dict[str, Any],
+        child_due_utc: datetime,
+        kind: str,
+        *,
+        parent_anchor_field: str = "due",
+        child_anchor_field: str = "due",
+    ) -> None: ...
+
+    def build_child_from_parent(
+        self,
+        parent: dict[str, Any],
+        child_due_utc: datetime,
+        child_field: str,
+        next_link_no: int,
+        parent_short: str,
+        kind: str,
+        cpmax: int,
+        until_dt: Any,
+    ) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
 class GenerationCompatibilityBindings:
     """Legacy-shaped delegates backed by a task-scoped service getter."""
 
-    service_getter: Callable[[], Any]
+    service_getter: Callable[[], GenerationServicePort]
 
-    def compute_cp_child_due(self, parent: dict[str, Any]):
+    def compute_cp_child_due(
+        self, parent: dict[str, Any]
+    ) -> tuple[datetime | None, dict[str, Any] | None]:
         return self.service_getter().compute_cp_child_due(parent)
 
-    def compute_anchor_child_due(self, parent: dict[str, Any]):
+    def compute_anchor_child_due(
+        self, parent: dict[str, Any]
+    ) -> tuple[datetime | None, dict[str, Any] | None, Any]:
         try:
             return self.service_getter().compute_anchor_child_due(parent)
         except ValueError as exc:
@@ -94,9 +150,21 @@ class GenerationCompatibilityBindings:
         )
 
 
-def bind_generation_compat(service_getter: Callable[[], Any]) -> GenerationCompatibilityBindings:
-    """Bind legacy helper names to a dynamic task-scoped service getter."""
+def bind_generation_compat(
+    service_getter: Callable[[], GenerationServicePort],
+) -> GenerationCompatibilityBindings:
+    """Bind test/integration names to a dynamic task-scoped service getter.
+
+    These adapters are deliberately not a second implementation.  Production
+    lifecycle code receives the service methods directly; the adapters remain
+    only for existing in-repository tests and external monkeypatch callers
+    until those callers can migrate without changing hook behavior.
+    """
     return GenerationCompatibilityBindings(service_getter)
 
 
-__all__ = ("GenerationCompatibilityBindings", "bind_generation_compat")
+__all__ = (
+    "GenerationServicePort",
+    "GenerationCompatibilityBindings",
+    "bind_generation_compat",
+)

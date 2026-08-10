@@ -3477,9 +3477,11 @@ def _generation_compat_bindings():
     return _GENERATION_COMPAT
 
 
-# Keep the historical helper names as thin, lazy delegates while callers move
-# to ChainGenerationService.  The module itself remains safe to import without
-# loading the full nautical_core facade.
+# ChainGenerationService is the sole production owner of recurrence
+# scheduling, carry, and child construction.  These five names are retained
+# as thin, lazy compatibility adapters for the existing golden tests and
+# external monkeypatch callers; do not add production logic here.  Keeping the
+# adapters lazy also avoids importing the shared service during module import.
 def _compute_cp_child_due(parent):
     return _generation_compat_bindings().compute_cp_child_due(parent)
 

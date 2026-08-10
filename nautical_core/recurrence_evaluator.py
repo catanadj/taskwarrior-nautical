@@ -25,6 +25,38 @@ from .timeutil import to_local as _to_local
 from .timeutil import utc_to_local_naive as _utc_to_local_naive
 
 
+class _FrozenList(list):
+    """List-compatible read-only container for evaluator-owned parsed state."""
+
+    def _readonly(self, *_args, **_kwargs):
+        raise TypeError("Recurrence evaluator state is read-only.")
+
+    __setitem__ = __delitem__ = __iadd__ = __imul__ = _readonly
+    append = clear = extend = insert = pop = remove = reverse = sort = _readonly
+
+
+class _FrozenDict(dict):
+    """Dict-compatible read-only container for evaluator-owned parsed state."""
+
+    def _readonly(self, *_args, **_kwargs):
+        raise TypeError("Recurrence evaluator state is read-only.")
+
+    __setitem__ = __delitem__ = __ior__ = _readonly
+    clear = pop = popitem = setdefault = update = _readonly
+
+
+def _freeze_evaluator_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return _FrozenDict({key: _freeze_evaluator_value(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return _FrozenList(_freeze_evaluator_value(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze_evaluator_value(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_evaluator_value(item) for item in value)
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class RecurrenceLimits:
     """Normalized chain limits owned by an evaluator."""
@@ -170,7 +202,7 @@ class RecurrenceEvaluator:
         """Lazily parse the anchor expression through Nautical's cached parser."""
         if not self.spec.anchor:
             return []
-        return self._get_cached("anchor_dnf", self._parse_anchor, clone=True)
+        return self._get_cached("anchor_dnf", self._parse_anchor)
 
     @property
     def omit_dnf(self) -> Any:
@@ -184,7 +216,7 @@ class RecurrenceEvaluator:
         """Lazily parse CP into fixed/random tokens without resolving randomness."""
         if not self.spec.cp:
             return None
-        return self._get_cached("cp_tokens", self._parse_cp_tokens, clone=True)
+        return self._get_cached("cp_tokens", self._parse_cp_tokens)
 
     @property
     def limits(self) -> RecurrenceLimits:
@@ -206,7 +238,7 @@ class RecurrenceEvaluator:
     def _parse_anchor(self) -> list[Any]:
         from . import parse_anchor_expr_to_dnf_cached
 
-        return parse_anchor_expr_to_dnf_cached(self.spec.anchor)
+        return _freeze_evaluator_value(parse_anchor_expr_to_dnf_cached(self.spec.anchor))
 
     def _parse_omit(self) -> Any:
         from . import parse_anchor_expr_to_dnf_cached, resolve_omit_presets
@@ -242,7 +274,7 @@ class RecurrenceEvaluator:
     def _parse_cp_tokens(self) -> list | None:
         from . import parse_cp_sequence_tokens
 
-        return parse_cp_sequence_tokens(self.spec.cp)
+        return _freeze_evaluator_value(parse_cp_sequence_tokens(self.spec.cp))
 
     def _parse_limits(self) -> RecurrenceLimits:
         if self.spec.chain_until:

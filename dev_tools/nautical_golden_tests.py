@@ -20832,6 +20832,18 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     expect(len(parsed_omit) == 1, "omit parsing was not owned by evaluator")
     expect(parsed.anchor_dnf is parsed_anchor, "anchor DNF was copied again after evaluation")
     expect(parsed.omit_dnf is parsed_omit, "omit DNF was copied again after evaluation")
+    try:
+        parsed_anchor[0][0]["spec"] = "corrupted"
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("evaluator anchor DNF remained mutable")
+    try:
+        parsed_anchor.clear()
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("evaluator anchor DNF list remained mutable")
     expect(parsed.limits.chain_max == 4, "chainMax limit was not normalized")
     expect(
         parsed.limits.chain_until == datetime(2025, 12, 31, 23, 0, tzinfo=timezone.utc),
@@ -20840,7 +20852,15 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     cp_evaluator = RecurrenceEvaluator.from_task(
         {"chainID": "cp-chain", "cp": "1d,rand(2d..3d)"}
     )
-    expect(len(cp_evaluator.cp_tokens or []) == 2, "CP token parsing was not owned by evaluator")
+    cp_tokens = cp_evaluator.cp_tokens
+    expect(len(cp_tokens or []) == 2, "CP token parsing was not owned by evaluator")
+    try:
+        if cp_tokens is not None:
+            cp_tokens[0]["kind"] = "corrupted"
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("evaluator CP tokens remained mutable")
     expect(
         cp_evaluator.cp_interval_for_link(1) == timedelta(days=1),
         "fixed CP interval projection changed",

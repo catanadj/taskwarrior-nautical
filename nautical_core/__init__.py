@@ -392,7 +392,7 @@ _common = _import_sibling("common")
 _cache_payload = _LazySibling("cache_payload")
 _cache_locking = _LazySibling("cache_locking")
 _acf_support = _LazySibling("acf_support")
-_business_calendar = _import_sibling("business_calendar")
+_business_calendar = _LazySibling("business_calendar")
 _business_calendar_config = _LazySibling("business_calendar_config")
 _cached_expansion = _LazySibling("cached_expansion")
 _nth_monthly = _LazySibling("nth_monthly")
@@ -425,14 +425,21 @@ def _configure_season_support() -> None:
     _season_support.configure_hemisphere(SEASON_HEMISPHERE)
 
 short_uuid = _common.short_uuid
-DEFAULT_BUSINESS_CALENDAR = _business_calendar.DEFAULT_BUSINESS_CALENDAR
-business_calendar_displacement_for_date = _business_calendar.business_calendar_displacement_for_date
-capture_business_calendar_displacements = _business_calendar.capture_business_calendar_displacements
+
+
+def _ensure_business_calendar_exports() -> None:
+    globals()["DEFAULT_BUSINESS_CALENDAR"] = _business_calendar.DEFAULT_BUSINESS_CALENDAR
+    globals()["business_calendar_displacement_for_date"] = (
+        _business_calendar.business_calendar_displacement_for_date
+    )
+    globals()["capture_business_calendar_displacements"] = (
+        _business_calendar.capture_business_calendar_displacements
+    )
 
 
 def _with_business_calendar(fn: Callable[..., Any], business_calendar) -> Callable[..., Any]:
     business_calendar = _business_calendar.effective_business_calendar(business_calendar)
-    if business_calendar is DEFAULT_BUSINESS_CALENDAR:
+    if business_calendar is _business_calendar.DEFAULT_BUSINESS_CALENDAR:
         return fn
     return partial(fn, business_calendar=business_calendar)
 
@@ -1224,6 +1231,13 @@ def __getattr__(name: str):
         value = _business_calendar_config.BusinessCalendarConfigError
         globals()[name] = value
         return value
+    if name in {
+        "DEFAULT_BUSINESS_CALENDAR",
+        "business_calendar_displacement_for_date",
+        "capture_business_calendar_displacements",
+    }:
+        _ensure_business_calendar_exports()
+        return globals()[name]
     if name == "tempfile":
         value = importlib.import_module("tempfile")
         globals()[name] = value

@@ -32,7 +32,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
                     value,
                     value,
                     seed_base=seed_base,
-                    business_calendar=core["DEFAULT_BUSINESS_CALENDAR"],
+                    business_calendar=core["_business_calendar"].DEFAULT_BUSINESS_CALENDAR,
                 )
                 for atom in term
             )
@@ -86,7 +86,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def business_calendar_for_task(task: dict | None):
         raw_name = str((task or {}).get("bc") or "").strip()
         if not raw_name:
-            return core["DEFAULT_BUSINESS_CALENDAR"]
+            return core["_business_calendar"].DEFAULT_BUSINESS_CALENDAR
         return get_configured_business_calendar(core["_unwrap_quotes"](raw_name))
 
     def normalize_task_business_calendar(task: dict):

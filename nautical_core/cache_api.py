@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import hashlib
 import os
+import tempfile
 from types import SimpleNamespace
 from typing import Any
 
@@ -244,7 +245,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             cache_lock=core.get("_cache_lock", cache_lock),
             diag=core["diag"],
             os_mod=core["os"],
-            tempfile_mod=core["tempfile"],
+            tempfile_mod=tempfile,
             cache_atomic_replace=core.get("_cache_atomic_replace", cache_atomic_replace),
             cache_load_mem=core["_CACHE_LOAD_MEM"],
         )

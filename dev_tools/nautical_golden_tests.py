@@ -14678,7 +14678,9 @@ def test_core_import_defers_optional_stacks():
                 "'nautical_core.linting_api'); "
                 "loaded=sorted(name for name in names if name in sys.modules); "
                 "count=sum(name.startswith('nautical_core') for name in sys.modules); "
-                "assert not loaded, loaded; assert count <= 30, count; "
+                "assert not loaded, loaded; assert 'subprocess' not in sys.modules, 'subprocess loaded'; "
+                "assert 'tempfile' not in sys.modules, 'tempfile loaded'; "
+                "assert count <= 30, count; "
                 "print(json.dumps({'count': count, 'loaded': loaded}))"
             ),
         ],

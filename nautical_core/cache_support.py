@@ -4,7 +4,6 @@ import hashlib
 import os
 import stat
 import sys
-import tempfile
 
 
 def nautical_cache_dir(*, validated_user_dir) -> str:
@@ -88,6 +87,8 @@ def select_cache_dir(
     if safe_default_cache:
         candidates.append(safe_default_cache)
     if os.environ.get("NAUTICAL_ALLOW_TMP_CACHE") == "1":
+        import tempfile
+
         candidates.append(os.path.join(tempfile.gettempdir(), "nautical-cache"))
 
     for p in candidates:

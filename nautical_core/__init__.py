@@ -18,7 +18,7 @@ from datetime import date as _date
 
 if TYPE_CHECKING:
     from .parser_models import AnchorDNF as AnchorDNFType
-import json, zlib, base64, hashlib, tempfile, time, random, subprocess
+import json, zlib, base64, hashlib, time, random
 import difflib
 import importlib
 import types
@@ -667,14 +667,43 @@ resolve_task_data_context = _runtime.resolve_task_data_context
 diag_log_redact = _runtime.diag_log_redact
 diag_log = _runtime.diag_log
 diag = _runtime.diag
-_run_task_should_retry = _runtime._run_task_should_retry
-_run_task_retry_sleep = _runtime._run_task_retry_sleep
-_run_task_prepare_tempfiles = _runtime._run_task_prepare_tempfiles
-_run_task_normalize_input = _runtime._run_task_normalize_input
-_run_task_collect_outputs = _runtime._run_task_collect_outputs
-_run_task_cleanup_paths = _runtime._run_task_cleanup_paths
-run_task = _runtime.run_task
-is_lock_error = _runtime.is_lock_error
+
+
+def _runtime_command_module():
+    """Load subprocess/tempfile support only when a command is requested."""
+    return _import_sibling("runtime_command")
+
+
+def _run_task_should_retry(*args, **kwargs):
+    return _runtime_command_module()._run_task_should_retry(*args, **kwargs)
+
+
+def _run_task_retry_sleep(*args, **kwargs):
+    return _runtime_command_module()._run_task_retry_sleep(*args, **kwargs)
+
+
+def _run_task_prepare_tempfiles(*args, **kwargs):
+    return _runtime_command_module()._run_task_prepare_tempfiles(*args, **kwargs)
+
+
+def _run_task_normalize_input(*args, **kwargs):
+    return _runtime_command_module()._run_task_normalize_input(*args, **kwargs)
+
+
+def _run_task_collect_outputs(*args, **kwargs):
+    return _runtime_command_module()._run_task_collect_outputs(*args, **kwargs)
+
+
+def _run_task_cleanup_paths(*args, **kwargs):
+    return _runtime_command_module()._run_task_cleanup_paths(*args, **kwargs)
+
+
+def run_task(*args, **kwargs):
+    return _runtime_command_module().run_task(*args, **kwargs)
+
+
+def is_lock_error(*args, **kwargs):
+    return _runtime_command_module().is_lock_error(*args, **kwargs)
 
 
 # ---- Core iterator over DNF ---------------------------------------------------
@@ -1143,6 +1172,10 @@ __all__ = _compat_api.PUBLIC_EXPORTS
 
 def __getattr__(name: str):
     """Resolve public types whose implementation is intentionally lazy."""
+    if name == "tempfile":
+        value = importlib.import_module("tempfile")
+        globals()[name] = value
+        return value
     if name == "RecurrenceModeResult":
         value = _import_sibling("recurrence_evaluator").RecurrenceModeResult
         globals()[name] = value

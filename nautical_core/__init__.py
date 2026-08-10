@@ -720,6 +720,10 @@ def run_task(*args, **kwargs):
     return _runtime_command_module().run_task(*args, **kwargs)
 
 
+def run_task_result(*args, **kwargs):
+    return _runtime_command_module().run_task_result(*args, **kwargs)
+
+
 def is_lock_error(*args, **kwargs):
     return _runtime_command_module().is_lock_error(*args, **kwargs)
 

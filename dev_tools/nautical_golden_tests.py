@@ -14788,6 +14788,18 @@ def test_core_run_task_timeout_reports_timeout_with_tempfiles():
     expect(err == "timeout", f"run_task timeout path should return 'timeout', got {err!r}")
 
 
+def test_core_run_task_result_exposes_typed_metadata():
+    """The runtime facade should expose a TaskCommandResult boundary."""
+    result = core.run_task_result(
+        [sys.executable, "-c", "print('typed')"],
+        timeout=2.0,
+        retries=1,
+    )
+    expect(result.ok, f"typed run_task result should succeed: {result}")
+    expect(result.stdout.strip() == "typed", f"typed result lost stdout: {result.stdout!r}")
+    expect(result.attempts == 1 and result.timeout == 2.0, f"typed metadata was not preserved: {result}")
+
+
 def test_core_run_task_nonzero_retries_use_expected_backoff():
     """core.run_task should apply exponential retry backoff for non-zero exits."""
     sleeps = []
@@ -31434,6 +31446,7 @@ TESTS = [
     test_spawn_child_always_verifies_import,
     test_core_run_task_tempfiles_accepts_text_input,
     test_core_run_task_timeout_reports_timeout_with_tempfiles,
+    test_core_run_task_result_exposes_typed_metadata,
     test_core_run_task_nonzero_retries_use_expected_backoff,
     test_core_run_task_tempfiles_fallback_handles_bytes_input,
     test_warn_once_per_day_stamp_written,

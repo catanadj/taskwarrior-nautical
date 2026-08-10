@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import time
 
+from .task_command import TaskCommandResult
+
 
 def _run_task_should_retry(attempt: int, retries: int) -> bool:
     return attempt < retries
@@ -184,6 +186,50 @@ def run_task(
     return False, last_out, last_err
 
 
+def run_task_result(
+    cmd: list[str],
+    *,
+    env: dict | None = None,
+    input_text: str | None = None,
+    timeout: float = 3.0,
+    retries: int = 2,
+    retry_delay: float = 0.15,
+    use_tempfiles: bool = False,
+) -> TaskCommandResult:
+    """Expose the runtime runner through the shared typed command boundary."""
+    ok, stdout, stderr = run_task(
+        cmd,
+        env=env,
+        input_text=input_text,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+        use_tempfiles=use_tempfiles,
+    )
+    text = (stderr or stdout or "").lower()
+    if ok:
+        kind = "ok"
+        returncode = 0
+    elif "timeout" in text:
+        kind = "timeout"
+        returncode = 124
+    elif "lock" in text:
+        kind = "lock_busy"
+        returncode = 1
+    else:
+        kind = "nonzero"
+        returncode = 1
+    return TaskCommandResult(
+        tuple(str(part) for part in cmd),
+        returncode,
+        stdout or "",
+        stderr or "",
+        kind,
+        max(1, int(retries or 1)),
+        float(timeout),
+    )
+
+
 def is_lock_error(err: str) -> bool:
     """Check if stderr indicates a Taskwarrior/database lock error."""
     e = (err or "").lower()
@@ -201,6 +247,7 @@ def is_lock_error(err: str) -> bool:
 
 __all__ = (
     "run_task",
+    "run_task_result",
     "is_lock_error",
     "_run_task_should_retry",
     "_run_task_retry_sleep",

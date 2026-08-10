@@ -14801,7 +14801,7 @@ def test_core_run_task_result_exposes_typed_metadata():
 
 
 def test_core_run_task_nonzero_retries_use_expected_backoff():
-    """core.run_task should apply exponential retry backoff for non-zero exits."""
+    """core.run_task should apply exponential backoff only for lock failures."""
     sleeps = []
     orig_sleep = core.time.sleep
     orig_uniform = core.random.uniform
@@ -14809,7 +14809,7 @@ def test_core_run_task_nonzero_retries_use_expected_backoff():
         core.time.sleep = lambda v: sleeps.append(v)
         core.random.uniform = lambda _a, _b: 0.0
         ok, _out, _err = core.run_task(
-            [sys.executable, "-c", "import sys; sys.exit(3)"],
+            [sys.executable, "-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(3)"],
             timeout=1.0,
             retries=3,
             retry_delay=0.2,
@@ -14822,6 +14822,25 @@ def test_core_run_task_nonzero_retries_use_expected_backoff():
     finally:
         core.time.sleep = orig_sleep
         core.random.uniform = orig_uniform
+
+
+def test_core_run_task_does_not_retry_ordinary_nonzero():
+    """Ordinary command failures should return without transient retries."""
+    sleeps = []
+    orig_sleep = core.time.sleep
+    try:
+        core.time.sleep = lambda value: sleeps.append(value)
+        ok, _out, err = core.run_task(
+            [sys.executable, "-c", "import sys; print('invalid task', file=sys.stderr); sys.exit(3)"],
+            timeout=1.0,
+            retries=3,
+            retry_delay=0.2,
+            use_tempfiles=False,
+        )
+        expect(not ok and "invalid task" in err, f"ordinary failure was not returned: {err!r}")
+        expect(not sleeps, f"ordinary failure unexpectedly retried: {sleeps}")
+    finally:
+        core.time.sleep = orig_sleep
 
 
 def test_core_run_task_tempfiles_fallback_handles_bytes_input():
@@ -31448,6 +31467,7 @@ TESTS = [
     test_core_run_task_timeout_reports_timeout_with_tempfiles,
     test_core_run_task_result_exposes_typed_metadata,
     test_core_run_task_nonzero_retries_use_expected_backoff,
+    test_core_run_task_does_not_retry_ordinary_nonzero,
     test_core_run_task_tempfiles_fallback_handles_bytes_input,
     test_warn_once_per_day_stamp_written,
     test_warn_once_per_day_no_diag_silent,

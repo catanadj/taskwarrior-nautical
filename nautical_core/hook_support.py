@@ -116,7 +116,19 @@ def run_task(
         last_err = err or ""
         if ok:
             return True, last_out, last_err
-        if attempt >= attempts or delay <= 0:
+        retryable = str(last_err or "").strip().lower() == "timeout" or any(
+            marker in str(last_err or "").lower()
+            for marker in (
+                "database is locked",
+                "unable to lock",
+                "resource temporarily unavailable",
+                "another task is running",
+                "lock file",
+                "lockfile",
+                "locked by",
+            )
+        )
+        if attempt >= attempts or delay <= 0 or not retryable:
             break
         jitter = random.uniform(0.0, delay)
         time.sleep(delay * (2 ** (attempt - 1)) + jitter)

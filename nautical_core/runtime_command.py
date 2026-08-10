@@ -21,6 +21,11 @@ def _run_task_retry_sleep(attempt: int, retry_delay: float) -> None:
     time.sleep(delay + jitter)
 
 
+def _run_task_failure_retryable(stderr: str) -> bool:
+    """Retry only transient lock/timeout failures, never ordinary errors."""
+    return str(stderr or "").strip().lower() == "timeout" or is_lock_error(stderr or "")
+
+
 def _run_task_prepare_tempfiles(use_tempfiles: bool):
     out_path = err_path = None
     out_f = err_f = None
@@ -135,7 +140,7 @@ def run_task(
                 last_err = err or ""
                 if ok:
                     return True, last_out, last_err
-                if _run_task_should_retry(attempt, retries):
+                if _run_task_should_retry(attempt, retries) and _run_task_failure_retryable(last_err):
                     _run_task_retry_sleep(attempt, retry_delay)
                     continue
                 return False, last_out, last_err
@@ -172,14 +177,14 @@ def run_task(
             last_err = err or ""
             if proc.returncode == 0:
                 return True, last_out, last_err
-            if _run_task_should_retry(attempt, retries):
+            if _run_task_should_retry(attempt, retries) and _run_task_failure_retryable(last_err):
                 _run_task_retry_sleep(attempt, retry_delay)
                 continue
             return False, last_out, last_err
         except Exception as e:
             last_err = str(e)
             _run_task_cleanup_paths(out_path, err_path)
-            if _run_task_should_retry(attempt, retries):
+            if _run_task_should_retry(attempt, retries) and _run_task_failure_retryable(last_err):
                 _run_task_retry_sleep(attempt, retry_delay)
                 continue
             return False, last_out, last_err

@@ -92,12 +92,15 @@ def _bench_next_after(exprs: list[str], rounds: int) -> float:
 
 
 def _bench_build_hints(exprs: list[str], rounds: int) -> float:
-    _clear_caches()
-    t0 = time.perf_counter()
-    for _ in range(rounds):
-        for expr in exprs:
-            core.build_and_cache_hints(expr, "skip")
-    return time.perf_counter() - t0
+    # Keep hint measurements independent from user and checkout caches.  The
+    # following pass will distinguish cold misses from warm hits explicitly.
+    with _perf_cache_context():
+        _clear_caches()
+        t0 = time.perf_counter()
+        for _ in range(rounds):
+            for expr in exprs:
+                core.build_and_cache_hints(expr, "skip")
+        return time.perf_counter() - t0
 
 
 def _bench_cache_key_hot(exprs: list[str], rounds: int) -> float:

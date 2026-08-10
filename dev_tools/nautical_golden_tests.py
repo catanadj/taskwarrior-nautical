@@ -5962,6 +5962,29 @@ def test_perf_budget_config_covers_cache_io_checks():
     expect(isinstance(slow_budgets, dict), "extended slow-device budgets must be present")
 
 
+def test_perf_hint_benchmark_isolates_persistent_cache():
+    """Hint timing must use a temporary cache and restore production settings."""
+    perf = _load_hook_module(
+        os.path.join(DEV_TOOLS, "nautical_perf_budget.py"),
+        "_nautical_perf_cache_isolation_test",
+    )
+    original_build = perf.core.build_and_cache_hints
+    original_override = getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")
+    seen = []
+    try:
+        perf.core.build_and_cache_hints = lambda *_args, **_kwargs: seen.append(
+            str(getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", ""))
+        ) or {"dnf": []}
+        perf._bench_build_hints(["w:mon"], 1)
+        expect(seen and "nautical-perf-cache-" in seen[0], f"benchmark used a non-isolated cache: {seen!r}")
+        expect(
+            getattr(perf.core, "ANCHOR_CACHE_DIR_OVERRIDE", "") == original_override,
+            "benchmark did not restore cache configuration",
+        )
+    finally:
+        perf.core.build_and_cache_hints = original_build
+
+
 def test_perf_hook_fast_path_ratio_enforcement():
     """Hook latency checks should enforce the normalized fast/full median ratio."""
     perf = _load_hook_module(
@@ -31405,6 +31428,7 @@ TESTS = [
     test_doctor_reports_chain_repair_plan_findings,
     test_doctor_reports_reconcile_backfill_plans,
     test_perf_budget_config_covers_cache_io_checks,
+    test_perf_hint_benchmark_isolates_persistent_cache,
     test_perf_hook_fast_path_ratio_enforcement,
     test_load_benchmark_installs_complete_hook_runtime,
     test_load_benchmark_queue_and_lineage_verification,

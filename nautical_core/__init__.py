@@ -728,14 +728,27 @@ ACF_CHECKSUM_LEN = 8
 # ==============================================================================
 # SECTION: Hook utilities (diag, run_task)
 # ==============================================================================
-_runtime = _import_sibling("runtime")
+_runtime = _LazySibling("runtime")
 
-_DIAG_LOG_REDACT_KEYS: frozenset[str] = _runtime.DIAG_LOG_REDACT_KEYS
-_hook_arg_value = _runtime.hook_arg_value
-resolve_task_data_context = _runtime.resolve_task_data_context
-diag_log_redact = _runtime.diag_log_redact
-diag_log = _runtime.diag_log
-diag = _runtime.diag
+
+def _hook_arg_value(*args, **kwargs):
+    return _runtime.hook_arg_value(*args, **kwargs)
+
+
+def resolve_task_data_context(*args, **kwargs):
+    return _runtime.resolve_task_data_context(*args, **kwargs)
+
+
+def diag_log_redact(*args, **kwargs):
+    return _runtime.diag_log_redact(*args, **kwargs)
+
+
+def diag_log(*args, **kwargs):
+    return _runtime.diag_log(*args, **kwargs)
+
+
+def diag(*args, **kwargs):
+    return _runtime.diag(*args, **kwargs)
 
 
 def _runtime_command_module():
@@ -1244,6 +1257,10 @@ def __getattr__(name: str):
     }:
         _ensure_business_calendar_exports()
         return globals()[name]
+    if name == "_DIAG_LOG_REDACT_KEYS":
+        value = _runtime.DIAG_LOG_REDACT_KEYS
+        globals()[name] = value
+        return value
     if name == "tempfile":
         value = importlib.import_module("tempfile")
         globals()[name] = value

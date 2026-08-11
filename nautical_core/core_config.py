@@ -591,10 +591,13 @@ def reload_for_taskdata(taskdata: str | os.PathLike[str]) -> dict[str, str | boo
     _SCHEDULER_FINGERPRINT_CACHE = None
     _LOADED_CONFIG_FINGERPRINT = effective_config_fingerprint()
     snapshot = effective_config_snapshot()
+    scheduler_fingerprint = scheduler_config_fingerprint()
     return {
         "ok": True,
         "error": "",
         "source": str(snapshot.get("source") or resolved or "explicit"),
+        "fingerprint": str(snapshot.get("fingerprint") or ""),
+        "scheduler_fingerprint": scheduler_fingerprint,
     }
 
 

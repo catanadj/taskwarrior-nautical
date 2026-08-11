@@ -10768,6 +10768,51 @@ def test_discovered_malformed_config_blocks_taskdata_reload():
         expect("config parse failed" in detail, f"parse failure detail missing: {detail[:800]!r}")
 
 
+def test_taskdata_reload_exposes_consistent_validated_fingerprints():
+    """All lifecycle tools should receive one effective configuration identity."""
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td)
+        (taskdata / "config-nautical.toml").write_text(
+            'tz = "Europe/Athens"\nseason_hemisphere = "north"\n', encoding="utf-8"
+        )
+        env = os.environ.copy()
+        env.pop("NAUTICAL_CONFIG", None)
+        env["PYTHONPATH"] = str(ROOT)
+        script = (
+            "import json, os, nautical_core as c\n"
+            "a = c.reload_taskdata_config(os.environ['TASKDATA'])\n"
+            "drift = c.configuration_drift()\n"
+            "b = c.reload_taskdata_config(os.environ['TASKDATA'])\n"
+            "print(json.dumps({'a': a, 'b': b, 'drift': drift,"
+            " 'effective': c.effective_config_fingerprint(),"
+            " 'scheduler': c.scheduler_config_fingerprint()}))\n"
+        )
+        env["TASKDATA"] = str(taskdata)
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(ROOT),
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        expect(proc.returncode == 0, f"validated reload process failed: {proc.stderr[:500]!r}")
+        payload = json.loads(proc.stdout.strip().splitlines()[-1])
+        first = payload["a"]
+        second = payload["b"]
+        expect(first["ok"] and second["ok"], f"reload did not report success: {payload!r}")
+        expect(first["fingerprint"] == second["fingerprint"], "effective fingerprint changed on identical reload")
+        expect(
+            first["scheduler_fingerprint"] == second["scheduler_fingerprint"],
+            "scheduler fingerprint changed on identical reload",
+        )
+        expect(first["fingerprint"] == payload["effective"], "reload and core effective fingerprints differ")
+        expect(
+            first["scheduler_fingerprint"] == payload["scheduler"],
+            "reload and core scheduler fingerprints differ",
+        )
+        expect(payload["drift"]["status"] == "ok", f"identical reload left configuration drifted: {payload!r}")
+
+
 def test_hook_on_modify_rejects_unknown_business_calendar_cleanly():
     """changing bc to an unknown name should fail before recurrence is evaluated."""
     hook = _find_hook_file('on-modify.nautical')
@@ -31522,6 +31567,7 @@ TESTS = [
     test_hook_on_add_rejects_invalid_timezone_for_nautical_task,
     test_core_domain_configuration_validation_fails_closed,
     test_discovered_malformed_config_blocks_taskdata_reload,
+    test_taskdata_reload_exposes_consistent_validated_fingerprints,
     test_hook_on_modify_rejects_unknown_business_calendar_cleanly,
     test_hook_on_modify_rejects_invalid_timezone_for_nautical_task,
     test_on_modify_spawned_child_preserves_business_calendar,

@@ -10740,6 +10740,34 @@ def test_core_domain_configuration_validation_fails_closed():
         core.validate_scheduling_configuration()
 
 
+def test_discovered_malformed_config_blocks_taskdata_reload():
+    """A malformed Taskdata-discovered config must not silently select defaults."""
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td)
+        (taskdata / "config-nautical.toml").write_text(
+            "tz = \"Europe/Athens\"\n[broken\n", encoding="utf-8"
+        )
+        env = os.environ.copy()
+        env["TASKDATA"] = str(taskdata)
+        env["TASKRC"] = str(taskdata / "taskrc")
+        env.pop("NAUTICAL_CONFIG", None)
+        env["PYTHONPATH"] = str(ROOT)
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import os, nautical_core as c; c.reload_taskdata_config(os.environ['TASKDATA'])",
+            ],
+            cwd=str(ROOT),
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        expect(proc.returncode != 0, "malformed discovered config was accepted")
+        detail = f"{proc.stdout}\n{proc.stderr}".lower()
+        expect("config parse failed" in detail, f"parse failure detail missing: {detail[:800]!r}")
+
+
 def test_hook_on_modify_rejects_unknown_business_calendar_cleanly():
     """changing bc to an unknown name should fail before recurrence is evaluated."""
     hook = _find_hook_file('on-modify.nautical')
@@ -31454,6 +31482,7 @@ TESTS = [
     test_hook_on_add_rejects_unknown_business_calendar_cleanly,
     test_hook_on_add_rejects_invalid_timezone_for_nautical_task,
     test_core_domain_configuration_validation_fails_closed,
+    test_discovered_malformed_config_blocks_taskdata_reload,
     test_hook_on_modify_rejects_unknown_business_calendar_cleanly,
     test_hook_on_modify_rejects_invalid_timezone_for_nautical_task,
     test_on_modify_spawned_child_preserves_business_calendar,

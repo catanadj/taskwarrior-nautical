@@ -24487,6 +24487,7 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
     expect(any(k == "Omit preset" and "@wed → w:wed" in str(v) for k, v in fb), f"expected omit preset expansion row in anchor feedback: {fb}")
     expect(any(k == "Preset" and "@payday → m:15,-1bd" in str(v) for k, v in fb), f"expected preset expansion row in anchor feedback: {fb}")
     expect(any(k == "Except" and ("Wednesday" in str(v) or "Wednesdays" in str(v)) for k, v in fb), f"expected natural omit row in anchor feedback: {fb}")
+    expect(any(k == "Result" and "Applied now" in str(v) for k, v in fb), f"expected applied lifecycle result in anchor feedback: {fb}")
     expect(not any(k == "Analytics" for k, _v in fb), f"analytics row should be hidden when show_analytics is false: {fb}")
 
 
@@ -24751,6 +24752,7 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
     expect("title" in captured, "expected preview panel emission")
     expect("Next link" in captured["title"], f"unexpected panel title: {captured}")
     expect(("Step", "3/3 (7d)") in captured["fb"], f"expected sequence step period in feedback rows: {captured}")
+    expect(any(k == "Result" and "Applied now" in str(v) for k, v in captured["fb"]), f"expected applied lifecycle result in CP feedback: {captured}")
 
 
 def test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundaries():

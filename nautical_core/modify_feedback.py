@@ -229,6 +229,31 @@ def _append_chain_boundary_rows(fb: list[tuple[str, object]], task: dict, until_
         fb.append(("Chain end point", core.fmt_dt_local(until_dt)))
 
 
+def _append_lifecycle_result_row(fb: list[tuple[str, object]], lifecycle_result) -> None:
+    """Expose the mutation outcome without making panels part of orchestration."""
+    state = str(getattr(lifecycle_result, "state", "") or "").strip().lower()
+    if not state:
+        return
+    labels = {
+        "applied": "[green]Applied now[/]",
+        "queued": "[yellow]Queued for on-exit[/]",
+        "terminal": "[cyan]Chain complete[/]",
+        "retryable": "[red]Retryable; no successor finalized[/]",
+        "manual_review": "[yellow]Manual review required[/]",
+    }
+    value = labels.get(state, f"[yellow]{state}[/]")
+    child_short = str(getattr(lifecycle_result, "child_short", "") or "").strip()
+    if child_short and state in {"applied", "queued"}:
+        value += f" · child {child_short}"
+    intent_id = str(getattr(lifecycle_result, "spawn_intent_id", "") or "").strip()
+    if intent_id and state == "queued":
+        value += f" · intent {intent_id}"
+    reason = str(getattr(lifecycle_result, "reason", "") or "").strip()
+    if reason and state in {"terminal", "retryable", "manual_review"}:
+        value += f" · {reason}"
+    fb.append(("Result", value))
+
+
 def _child_expiration(core, child: dict):
     try:
         return core.parse_dt_any(child.get("until"))
@@ -393,6 +418,7 @@ def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: 
         "warning",
         "error",
         "intent",
+        "result",
     }
     out: list[tuple[str, object]] = []
     for k, v in rows:
@@ -496,6 +522,7 @@ def render_anchor_completion_feedback(
         return
 
     fb = []
+    _append_lifecycle_result_row(fb, feedback.lifecycle_result)
     fb.append((anchor_label, f"{expr_str}  {mode_tag}"))
     if omit_raw:
         fb.append(_omit_pattern_row(core, omit_raw))
@@ -665,6 +692,7 @@ def render_cp_completion_feedback(
         return
 
     fb = []
+    _append_lifecycle_result_row(fb, feedback.lifecycle_result)
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
     fb.append(("Period", feedback.new.get("cp")))
     if feedback.meta.get("cp_sequence_len"):

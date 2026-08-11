@@ -263,6 +263,10 @@ def terminal_plan_for_snapshot(
         if event in {LifecycleEvent.DISABLE, LifecycleEvent.MANUAL_DELETE}
         else LifecycleAction.FINALIZE_CHAIN
     )
+    if action is LifecycleAction.FINALIZE_CHAIN and str(snapshot.get("nextLink") or "").strip():
+        raise LifecyclePlanningError(
+            "terminal finalization has a persisted successor; retain it and review the chain"
+        )
     postconditions = (
         ("parent_chain_off",)
         if action is LifecycleAction.DISABLE_CHAIN

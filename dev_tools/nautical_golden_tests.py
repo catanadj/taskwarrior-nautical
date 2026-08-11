@@ -1165,6 +1165,15 @@ def test_lifecycle_planner_is_pure_and_deterministic():
         terminal = terminal_plan_for_snapshot(snapshot, event)
         expect(terminal.parent_patch_dict() == {"chain": "off"}, f"terminal patch drifted for {event.value}")
         expect(terminal.identity.event is event, f"terminal event was not retained for {event.value}")
+    linked_snapshot = TaskSnapshot.from_mapping({**source, "nextLink": "child123"})
+    try:
+        terminal_plan_for_snapshot(linked_snapshot, LifecycleEvent.CHAIN_UNTIL)
+    except LifecyclePlanningError as exc:
+        expect("persisted successor" in str(exc), f"successor guard lost detail: {exc}")
+    else:
+        raise AssertionError("terminal finalization accepted an already-linked successor")
+    retained = terminal_plan_for_snapshot(linked_snapshot, LifecycleEvent.MANUAL_DELETE)
+    expect(retained.action is LifecycleAction.DISABLE_CHAIN, "manual disable should retain a persisted successor")
     activation = planner.plan(snapshot, LifecycleEvent.RESUME)
     expect(activation.parent_patch_dict() == {"chain": "on"}, "resume patch was incorrect")
 

@@ -27,16 +27,19 @@ def finalize_completion_modify(
     base_no = ctx.base_no
     next_no = ctx.next_no
     kind = ctx.kind
-    spawned = services.build_and_spawn_child(
-        new,
-        child_due=computed.child_due,
-        child_field="scheduled" if isinstance(computed.meta, dict) and computed.meta.get("target_field") == "scheduled" else "due",
-        next_no=next_no,
-        parent_short=parent_short,
-        kind=kind,
-        cpmax=computed.cpmax,
-        until_dt=computed.until_dt,
-    )
+    spawn_args = {
+        "child_due": computed.child_due,
+        "child_field": "scheduled" if isinstance(computed.meta, dict) and computed.meta.get("target_field") == "scheduled" else "due",
+        "next_no": next_no,
+        "parent_short": parent_short,
+        "kind": kind,
+        "cpmax": computed.cpmax,
+        "until_dt": computed.until_dt,
+    }
+    planned_child = getattr(computed, "planned_child", None)
+    if planned_child is not None:
+        spawn_args["planned_child"] = planned_child
+    spawned = services.build_and_spawn_child(new, **spawn_args)
     if spawned is None:
         return
 

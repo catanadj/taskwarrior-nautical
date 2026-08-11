@@ -6402,13 +6402,64 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
         completion_caps=_completion_caps,
         completion_cap_guard_or_stop=_completion_cap_guard_or_stop,
     )
-    return modify_completion_compute.completion_compute_next_and_limits(
+    computed = modify_completion_compute.completion_compute_next_and_limits(
         new,
         kind,
         next_no,
         now_utc,
         services=services,
     )
+    if computed is None:
+        return None
+
+    # Direct helper callers may exercise computation without a full
+    # Taskwarrior identity.  Completion preflight rejects that shape before a
+    # live hook reaches this point, so retain the helper's result for those
+    # characterization calls instead of weakening the planner contract.
+    if not str(new.get("uuid") or "").strip() or not str(new.get("chainID") or "").strip():
+        return computed
+
+    # The existing preflight still owns user-facing validation and terminal
+    # panels.  The planner now owns the pure successor payload so the spawn
+    # executor does not rebuild it through a second lifecycle path.
+    try:
+        lifecycle_planner = _module("lifecycle_planner")
+        lifecycle_models = _module("lifecycle_models")
+        generation = _chain_generation_service()
+        candidate = lifecycle_planner.RecurrenceCandidate(
+            child_due=computed.child_due,
+            metadata=tuple(sorted(dict(computed.meta or {}).items())),
+            dnf=computed.dnf,
+            until=computed.until_dt,
+        )
+        recurrence = lifecycle_planner.PrecomputedRecurrencePlanningService(
+            candidate=candidate,
+            child_service=lifecycle_planner.ChainGenerationPlanningService(generation),
+        )
+        fingerprint_fn = getattr(core, "scheduler_config_fingerprint", None)
+        fingerprint = fingerprint_fn() if callable(fingerprint_fn) else ""
+        planner = lifecycle_planner.LifecyclePlanner(
+            {"scheduler_fingerprint": fingerprint},
+            recurrence_service=recurrence,
+            successor_limit_policy=lifecycle_planner.ChainGenerationLimitPolicy(_compare_datetimes),
+        )
+        plan = planner.plan(
+            lifecycle_models.TaskSnapshot.from_mapping(new),
+            lifecycle_models.LifecycleEvent.COMPLETE,
+        )
+        if plan.action is lifecycle_models.LifecycleAction.FINALIZE_CHAIN:
+            _end_chain_summary(new, "Reached lifecycle successor limit", now_utc)
+            new["chain"] = "off"
+            _print_task(new)
+            return None
+        computed.lifecycle_plan = plan
+        computed.planned_child = plan.child_dict()
+    except Exception as exc:
+        _diag(f"lifecycle planner failed: {type(exc).__name__}: {exc}")
+        _panel("⛓ Chain error", [("Reason", "Could not construct a lifecycle successor plan")], kind="error")
+        _print_task(new)
+        return None
+    return computed
 
 
 def _completion_build_and_spawn_child(
@@ -6421,6 +6472,7 @@ def _completion_build_and_spawn_child(
     kind: str,
     cpmax: int,
     until_dt,
+    planned_child: dict | None = None,
 ):
     modify_completion_spawn = _module("modify_completion_spawn")
     modify_runtime = _module("modify_runtime")
@@ -6441,6 +6493,7 @@ def _completion_build_and_spawn_child(
         kind=kind,
         cpmax=cpmax,
         until_dt=until_dt,
+        planned_child=planned_child,
         services=services,
     )
 

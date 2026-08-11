@@ -283,6 +283,7 @@ class BuildAndSpawnCallback(Protocol):
         kind: str,
         cpmax: int,
         until_dt: Any,
+        planned_child: TaskRow | None = None,
     ) -> "CompletionSpawnResult | None":
         ...
 
@@ -415,6 +416,8 @@ class CompletionComputeResult:
     cap_no: int | None
     finals: list[tuple[str, Any]]
     until_cap_no: int | None
+    planned_child: dict[str, Any] | None = None
+    lifecycle_plan: Any = None
 
 
 

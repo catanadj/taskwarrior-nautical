@@ -147,6 +147,33 @@ class ChainGenerationPlanningService:
 
 
 @dataclass(frozen=True, slots=True)
+class PrecomputedRecurrencePlanningService:
+    """Reuse a completion candidate while delegating child construction."""
+
+    candidate: RecurrenceCandidate
+    child_service: ChainGenerationPlanningService
+
+    def next_candidate(
+        self,
+        snapshot: TaskSnapshot,
+        event: LifecycleEvent,
+        kind: str,
+        next_link: int,
+    ) -> RecurrenceCandidate:
+        del snapshot, event, kind, next_link
+        return self.candidate
+
+    def build_child(
+        self,
+        snapshot: TaskSnapshot,
+        event: LifecycleEvent,
+        candidate: RecurrenceCandidate,
+        next_link: int,
+    ) -> Mapping[str, Any] | None:
+        return self.child_service.build_child(snapshot, event, candidate, next_link)
+
+
+@dataclass(frozen=True, slots=True)
 class ChainGenerationLimitPolicy:
     """Default numeric and datetime limit policy for generation candidates."""
 
@@ -337,14 +364,16 @@ class LifecyclePlanner:
                 parent_patch={"chain": "off"},
                 expected_postconditions=("terminal_chain", "no_successor"),
             )
-        if not isinstance(child, Mapping) or not child.get("uuid"):
+        if not isinstance(child, Mapping) or child.get("link") in (None, ""):
             raise LifecyclePlanningError("child builder returned an incomplete successor")
+        child_uuid = str(child.get("uuid") or "").strip()
+        parent_patch = {"nextLink": child_uuid[:8]} if child_uuid else {}
         return LifecyclePlan.from_mappings(
             identity=identity,
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=guard,
             child_payload=child,
-            parent_patch={"nextLink": str(child.get("uuid"))[:8]},
+            parent_patch=parent_patch,
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )
 
@@ -358,4 +387,5 @@ __all__ = (
     "RecurrenceCandidate",
     "RecurrencePlanningService",
     "SuccessorLimitPolicy",
+    "PrecomputedRecurrencePlanningService",
 )

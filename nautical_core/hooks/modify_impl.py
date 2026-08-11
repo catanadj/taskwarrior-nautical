@@ -887,10 +887,7 @@ def _load_core() -> None:
     reload_config = getattr(core, "reload_taskdata_config", None)
     if callable(reload_config):
         if _USE_RC_DATA_LOCATION:
-            try:
-                reload_config(TW_DATA_DIR)
-            except Exception as exc:
-                _diag(f"configuration reload blocked scheduling: {type(exc).__name__}: {exc}")
+            reload_config(TW_DATA_DIR)
     elif getattr(core, "__file__", None):
         raise RuntimeError("nautical_core does not provide validated configuration reload")
     try:
@@ -1045,7 +1042,7 @@ def _export_uuid_short_lookup(u_short: str):
     if hook_support is None:
         return None
     return hook_support.export_uuid_short_result(
-        run_task=_run_task,
+        run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         uuid_short=u_short,
         env=os.environ.copy(),
@@ -1877,7 +1874,6 @@ def _run_task(
                 input_text=input_text,
                 timeout=timeout,
                 retries=retries,
-                retry_delay=retry_delay,
                 use_tempfiles=use_tempfiles,
             )
         else:
@@ -1926,6 +1922,78 @@ def _run_task(
     return ok, out, err
 
 
+_DEFAULT_RUN_TASK = _run_task
+
+
+def _run_task_result(
+    cmd: list[str],
+    *,
+    env: dict | None = None,
+    input_text: str | None = None,
+    timeout: float = 3.0,
+    retries: int = 2,
+    retry_delay: float = 0.15,
+    use_tempfiles: bool = False,
+):
+    """Return typed command state while retaining the legacy tuple wrapper."""
+    core_runner = (
+        getattr(core, "run_task_result", None)
+        if core is not None and _run_task is _DEFAULT_RUN_TASK
+        else None
+    )
+    if _run_task is not _DEFAULT_RUN_TASK:
+        from nautical_core.task_command import coerce_command_result
+        return coerce_command_result(
+            _run_task(
+                cmd,
+                env=env,
+                input_text=input_text,
+                timeout=timeout,
+                retries=retries,
+                use_tempfiles=use_tempfiles,
+            ),
+            cmd,
+            timeout=timeout,
+            attempts=retries,
+        )
+    if callable(core_runner):
+        return core_runner(
+            cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+            use_tempfiles=use_tempfiles,
+        )
+    hook_support = _module("hook_support", required=False)
+    if hook_support is not None:
+        return hook_support.run_task_result(
+            run_task=_run_task,
+            cmd=cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+            use_tempfiles=use_tempfiles,
+        )
+    from nautical_core.task_command import coerce_command_result
+    return coerce_command_result(
+        _run_task(
+            cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+        ),
+        cmd,
+        timeout=timeout,
+        attempts=retries,
+    )
+
+
 def _export_uuid_short(u_short: str, env=None):
     if env is None:
         cached_read = _read_query_get("uuid", str(u_short or "").lower())
@@ -1949,7 +2017,7 @@ def _export_uuid_short(u_short: str, env=None):
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         obj = hook_support.export_uuid_short(
-            run_task=_run_task,
+            run_task=_run_task_result,
             task_cmd_prefix=_task_cmd_prefix(),
             uuid_short=u_short,
             env=(env or os.environ.copy()),
@@ -1962,17 +2030,17 @@ def _export_uuid_short(u_short: str, env=None):
             return _seed_runtime_lookup_task(obj)
         return obj
     env = env or os.environ.copy()
-    ok, out, err = _run_task(
+    result = _run_task_result(
         _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{u_short}", "export"],
         env=env,
         timeout=2.5,
         retries=2,
     )
-    if not ok:
-        _diag(f"export uuid:{u_short} failed: {err.strip()}")
+    if not result.ok:
+        _diag(f"export uuid:{u_short} failed: {result.stderr.strip()}")
         return None
     try:
-        obj = json.loads(out.strip() or "{}")
+        obj = json.loads(result.stdout.strip() or "{}")
         if not obj.get("uuid"):
             return None
         if not str(obj.get("uuid") or "").lower().startswith((u_short or "").lower()):
@@ -1999,7 +2067,7 @@ def _task_lookup_by_uuid(u: str, env: dict | None):
             if isinstance(cached_read, dict) and cached_read.get("uuid"):
                 return hook_support.LookupResult.found(cached_read)
     return hook_support.task_lookup_by_uuid_uncached(
-        run_task=_run_task,
+        run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         uuid_str=u,
         env=env,
@@ -2012,18 +2080,18 @@ def _task_lookup_by_uuid(u: str, env: dict | None):
 def _reserve_child_uuid(env: dict) -> str:
     candidate = str(uuid.uuid4())
     while True:
-        ok, out, err = _run_task(
+        result = _run_task_result(
             _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{candidate}", "count"],
             env=env,
             timeout=2.5,
             retries=2,
         )
-        if ok:
-            if (out or "").strip() == "0":
+        if result.ok:
+            if (result.stdout or "").strip() == "0":
                 return candidate
             candidate = str(uuid.uuid4())
             continue
-        _diag(f"uuid availability check failed (uuid={candidate[:8]}): {err.strip()}")
+        _diag(f"uuid availability check failed (uuid={candidate[:8]}): {result.stderr.strip()}")
         return candidate
 
 
@@ -2183,19 +2251,19 @@ def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str
         attempts += 1
         payload = json.dumps(obj) + "\n"
 
-        ok, _out, err = _run_task(
+        result = _run_task_result(
             _task_cmd_prefix() + ["rc.hooks=off", "import", "-"],
             input_text=payload,
             env=env,
             timeout=10,  # prevent hanging
             retries=1,
         )
-        if not ok and err == "timeout":
+        if not result.ok and result.kind == "timeout":
             last_stderr = "Task import timed out (>10s)"
             last_category = "taskwarrior"
             continue
 
-        if ok:
+        if result.ok:
             _invalidate_read_query_cache()
             # Always verify existence to avoid reporting success on partial import failures.
             verification = _task_lookup_by_uuid(child_uuid, env)
@@ -2208,6 +2276,7 @@ def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str
             last_stderr = "task import reported success but child task was not found by UUID"
             category, is_retryable = ("taskwarrior", True)
         else:
+            err = result.stderr
             last_stderr = err or ""
             category, is_retryable = _categorize_spawn_error(1, last_stderr)
         last_category = category
@@ -2425,7 +2494,7 @@ def _task(args, env=None) -> str:
     modify_queries = _module("modify_queries")
     out = modify_queries.task_text(
         args,
-        run_task=_run_task,
+        run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         env=(env or os.environ.copy()),
         timeout=3.0,
@@ -2468,7 +2537,7 @@ def _export_uuid_full_uncached(u: str, env=None) -> dict | None:
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         obj = hook_support.export_uuid_full(
-            run_task=_run_task,
+            run_task=_run_task_result,
             task_cmd_prefix=_task_cmd_prefix(),
             uuid_str=u,
             env=env,
@@ -5197,7 +5266,7 @@ def _tw_export_chain_checked(
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         result = hook_support.run_task_result(
-            run_task=_run_task,
+            run_task=_run_task_result,
             cmd=args,
             env=env,
             timeout=timeout,
@@ -5210,7 +5279,7 @@ def _tw_export_chain_checked(
             _tw_export_chain_failure(chain_id, error, timeout)
             return False, [], error
     else:
-        ok, out, err = _run_task(
+        result = _run_task_result(
             args,
             env=env,
             timeout=timeout,
@@ -5218,11 +5287,11 @@ def _tw_export_chain_checked(
             use_tempfiles=True,
         )
         elapsed = _time.perf_counter() - start
-        if not ok:
-            _tw_export_chain_failure(chain_id, err, timeout)
-            return False, [], err or "task export failed"
+        if not result.ok:
+            _tw_export_chain_failure(chain_id, result.stderr, timeout)
+            return False, [], result.stderr or "task export failed"
         try:
-            parsed = json.loads((out or "").strip())
+            parsed = json.loads((result.stdout or "").strip())
             if not isinstance(parsed, list) or any(not isinstance(row, dict) for row in parsed):
                 raise ValueError("expected an array of task objects")
             rows = parsed
@@ -5258,7 +5327,7 @@ def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
     return modify_queries.export_chain_endpoint(
         chain_id,
         direction,
-        run_task=_run_task,
+        run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         parse_export_array=parser,
         diag=_diag,
@@ -6145,7 +6214,7 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
     snapshot_result = modify_queries.export_completion_chain_snapshot(
         chain_id,
         links,
-        run_task=_run_task,
+        run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         parse_export_array=parser,
         diag=_diag,

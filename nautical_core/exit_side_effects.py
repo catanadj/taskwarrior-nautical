@@ -12,6 +12,20 @@ if TYPE_CHECKING:
     )
 
 
+def _typed_result(run_task, cmd, *, input_text=None, timeout: float, retries: int = 1, retry_delay: float = 0.0):
+    """Use one command-result adapter for typed and legacy runners."""
+    from . import hook_support
+
+    return hook_support.run_task_result(
+        run_task=run_task,
+        cmd=cmd,
+        input_text=input_text,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+    )
+
+
 def import_child(
     obj: dict[str, Any],
     *,
@@ -26,16 +40,17 @@ def import_child(
     max_retries = 4
     last_err = ""
     for attempt in range(max_retries):
-        ok, _out, err = run_task(
+        result = _typed_result(
+            run_task,
             task_cmd_prefix + ["rc.hooks=off", "rc.verbose=nothing", "import", "-"],
             input_text=payload,
             timeout=timeout_import,
         )
-        if ok:
+        if result.ok:
             from nautical_core.exit_models import ExitImportResult
             return ExitImportResult(True, "")
-        last_err = err or ""
-        if not is_lock_error(last_err):
+        last_err = result.stderr or ""
+        if result.kind != "lock_busy" and not is_lock_error(last_err):
             from nautical_core.exit_models import ExitImportResult
             return ExitImportResult(False, last_err)
         if attempt < max_retries - 1:
@@ -103,7 +118,8 @@ def update_parent_nextlink(
             return ExitParentUpdateResult(False, "parent lock busy")
         state_res = parent_nextlink_state_fn(parent_uuid, child_short, expected_prev)
         if state_res.state == "ok":
-            ok, _out, err = run_task(
+            result = _typed_result(
+                run_task,
                 task_cmd_prefix + [
                     "rc.hooks=off",
                     "rc.verbose=nothing",
@@ -115,7 +131,7 @@ def update_parent_nextlink(
                 retries=retries_modify,
                 retry_delay=retry_delay,
             )
-            return ExitParentUpdateResult(ok, err or "")
+            return ExitParentUpdateResult(result.ok, result.stderr or "")
         if state_res.state == "already":
             return ExitParentUpdateResult(True, "")
         return ExitParentUpdateResult(False, state_res.err)
@@ -150,7 +166,8 @@ def clear_parent_nextlink_if_matches(
         current = str(parent.get("nextLink") or "").strip()
         if current != child_short:
             return ExitParentUpdateResult(True, "")
-        ok, _out, err = run_task(
+        result = _typed_result(
+            run_task,
             task_cmd_prefix + [
                 "rc.hooks=off",
                 "rc.verbose=nothing",
@@ -163,7 +180,7 @@ def clear_parent_nextlink_if_matches(
             retries=retries_modify,
             retry_delay=retry_delay,
         )
-        return ExitParentUpdateResult(ok, err or "")
+        return ExitParentUpdateResult(result.ok, result.stderr or "")
 
 
 def cleanup_orphan_child(
@@ -179,7 +196,8 @@ def cleanup_orphan_child(
 ) -> None:
     if not child_uuid:
         return
-    ok, _out, err = run_task(
+    result = _typed_result(
+        run_task,
         task_cmd_prefix + [
             "rc.hooks=off",
             "rc.verbose=nothing",
@@ -191,8 +209,8 @@ def cleanup_orphan_child(
         retries=retries_modify,
         retry_delay=retry_delay,
     )
-    if not ok:
+    if not result.ok:
         if spawn_intent_id:
-            diag(f"orphan cleanup failed (intent={spawn_intent_id} child={child_uuid[:8]}): {err}")
+            diag(f"orphan cleanup failed (intent={spawn_intent_id} child={child_uuid[:8]}): {result.stderr}")
         else:
-            diag(f"orphan cleanup failed (child={child_uuid[:8]}): {err}")
+            diag(f"orphan cleanup failed (child={child_uuid[:8]}): {result.stderr}")

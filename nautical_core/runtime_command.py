@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 
-from .task_command import TaskCommandResult
+from .task_command import TaskCommandResult, run_command_once
 
 
 def _run_task_should_retry(attempt: int, retries: int) -> bool:
@@ -22,7 +22,7 @@ def _run_task_retry_sleep(attempt: int, retry_delay: float) -> None:
 
 
 def _run_task_failure_retryable(stderr: str) -> bool:
-    """Retry only transient lock/timeout failures, never ordinary errors."""
+    """Compatibility helper for legacy callers; typed callers use ``kind``."""
     return str(stderr or "").strip().lower() == "timeout" or is_lock_error(stderr or "")
 
 
@@ -104,91 +104,83 @@ def _run_task_cleanup_paths(out_path: str | None, err_path: str | None) -> None:
         pass
 
 
-def run_task(
+def _run_task_once_with_tempfiles(
     cmd: list[str],
     *,
     env: dict | None = None,
     input_text: str | None = None,
     timeout: float = 3.0,
-    retries: int = 2,
-    retry_delay: float = 0.15,
-    use_tempfiles: bool = False,
-) -> tuple[bool, str, str]:
-    """Run a subprocess; returns ``(ok, stdout, stderr)``."""
-    env = env or os.environ.copy()
-    last_out = ""
-    last_err = ""
-    attempts = max(1, int(retries))
-    normalized_input = input_text
-    for attempt in range(1, attempts + 1):
-        out_f, err_f, out_path, err_path = None, None, None, None
+    attempt: int = 1,
+) -> TaskCommandResult:
+    """Run one command attempt while retaining typed failure evidence."""
+    env_map = env or os.environ.copy()
+    argv = tuple(str(part) for part in cmd)
+    out_f, err_f, out_path, err_path = _run_task_prepare_tempfiles(True)
+    if out_f is None:
+        normalized_input = _run_task_normalize_input(input_text, True)
+        result = run_command_once(
+            argv,
+            env=env_map,
+            input_text=normalized_input,
+            timeout=timeout,
+        )
+        return TaskCommandResult(
+            result.argv,
+            result.returncode,
+            result.stdout,
+            result.stderr,
+            result.kind,
+            attempt,
+            timeout,
+        )
+
+    proc = None
+    try:
+        normalized_input = _run_task_normalize_input(input_text, False)
+        proc = subprocess.Popen(
+            list(argv),
+            stdin=subprocess.PIPE,
+            stdout=out_f,
+            stderr=err_f,
+            text=False,
+            close_fds=True,
+            env=env_map,
+        )
         try:
-            out_f, err_f, out_path, err_path = _run_task_prepare_tempfiles(use_tempfiles)
-            text_mode = not bool(out_f)
-            normalized_input = _run_task_normalize_input(input_text, text_mode)
-            if out_f is None:
-                from . import hook_support
-
-                ok, out, err = hook_support.run_subprocess_once(
-                    cmd,
-                    env=env,
-                    input_text=normalized_input,
-                    timeout=timeout,
-                )
-                out, err = _run_task_collect_outputs(out_f, err_f, out_path, err_path, out, err)
-                last_out = out or ""
-                last_err = err or ""
-                if ok:
-                    return True, last_out, last_err
-                if _run_task_should_retry(attempt, retries) and _run_task_failure_retryable(last_err):
-                    _run_task_retry_sleep(attempt, retry_delay)
-                    continue
-                return False, last_out, last_err
-
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=out_f,
-                stderr=err_f,
-                text=False,
-                close_fds=True,
-                env=env,
-            )
-            try:
-                out_bytes, err_bytes = proc.communicate(input=normalized_input, timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                try:
-                    out_bytes, err_bytes = proc.communicate(timeout=1.0)
-                except Exception:
-                    out_bytes, err_bytes = b"", b""
-                out, err = _run_task_collect_outputs(
-                    out_f, err_f, out_path, err_path, out_bytes, err_bytes
-                )
-                last_err = "timeout"
-                if _run_task_should_retry(attempt, retries):
-                    _run_task_retry_sleep(attempt, retry_delay)
-                    continue
-                return False, out or "", last_err
+            out_bytes, err_bytes = proc.communicate(input=normalized_input, timeout=timeout)
             out, err = _run_task_collect_outputs(
                 out_f, err_f, out_path, err_path, out_bytes, err_bytes
             )
-            last_out = out or ""
-            last_err = err or ""
-            if proc.returncode == 0:
-                return True, last_out, last_err
-            if _run_task_should_retry(attempt, retries) and _run_task_failure_retryable(last_err):
-                _run_task_retry_sleep(attempt, retry_delay)
-                continue
-            return False, last_out, last_err
-        except Exception as e:
-            last_err = str(e)
-            _run_task_cleanup_paths(out_path, err_path)
-            if _run_task_should_retry(attempt, retries) and _run_task_failure_retryable(last_err):
-                _run_task_retry_sleep(attempt, retry_delay)
-                continue
-            return False, last_out, last_err
-    return False, last_out, last_err
+            return TaskCommandResult(
+                argv,
+                int(proc.returncode or 0),
+                out or "",
+                err or "",
+                "ok" if proc.returncode == 0 else (
+                    "lock_busy" if is_lock_error(err or "") else "nonzero"
+                ),
+                attempt,
+                timeout,
+            )
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                out_bytes, err_bytes = proc.communicate(timeout=1.0)
+            except Exception:
+                out_bytes, err_bytes = b"", b""
+            out, err = _run_task_collect_outputs(
+                out_f, err_f, out_path, err_path, out_bytes, err_bytes
+            )
+            return TaskCommandResult(argv, 124, out or "", err or "timeout", "timeout", attempt, timeout)
+    except FileNotFoundError as exc:
+        _run_task_cleanup_paths(out_path, err_path)
+        return TaskCommandResult(argv, 127, "", str(exc), "missing_binary", attempt, timeout)
+    except OSError as exc:
+        _run_task_cleanup_paths(out_path, err_path)
+        return TaskCommandResult(argv, 126, "", str(exc), "exec_error", attempt, timeout)
+    except Exception as exc:
+        _run_task_cleanup_paths(out_path, err_path)
+        return TaskCommandResult(argv, 1, "", str(exc), "exec_error", attempt, timeout)
 
 
 def run_task_result(
@@ -201,8 +193,55 @@ def run_task_result(
     retry_delay: float = 0.15,
     use_tempfiles: bool = False,
 ) -> TaskCommandResult:
-    """Expose the runtime runner through the shared typed command boundary."""
-    ok, stdout, stderr = run_task(
+    """Run a command and return the authoritative typed result."""
+    env_map = env or os.environ.copy()
+    attempts = max(1, int(retries))
+    last: TaskCommandResult | None = None
+    for attempt in range(1, attempts + 1):
+        if use_tempfiles:
+            result = _run_task_once_with_tempfiles(
+                cmd,
+                env=env_map,
+                input_text=input_text,
+                timeout=timeout,
+                attempt=attempt,
+            )
+        else:
+            raw = run_command_once(
+                tuple(str(part) for part in cmd),
+                env=env_map,
+                input_text=input_text,
+                timeout=timeout,
+            )
+            result = TaskCommandResult(
+                raw.argv,
+                raw.returncode,
+                raw.stdout,
+                raw.stderr,
+                raw.kind,
+                attempt,
+                timeout,
+            )
+        last = result
+        if result.ok or result.kind not in {"timeout", "lock_busy"} or attempt >= attempts:
+            return result
+        _run_task_retry_sleep(attempt, retry_delay)
+    assert last is not None
+    return last
+
+
+def run_task(
+    cmd: list[str],
+    *,
+    env: dict | None = None,
+    input_text: str | None = None,
+    timeout: float = 3.0,
+    retries: int = 2,
+    retry_delay: float = 0.15,
+    use_tempfiles: bool = False,
+) -> tuple[bool, str, str]:
+    """Compatibility view of :func:`run_task_result` for external callers."""
+    result = run_task_result(
         cmd,
         env=env,
         input_text=input_text,
@@ -211,28 +250,10 @@ def run_task_result(
         retry_delay=retry_delay,
         use_tempfiles=use_tempfiles,
     )
-    text = (stderr or stdout or "").lower()
-    if ok:
-        kind = "ok"
-        returncode = 0
-    elif "timeout" in text:
-        kind = "timeout"
-        returncode = 124
-    elif "lock" in text:
-        kind = "lock_busy"
-        returncode = 1
-    else:
-        kind = "nonzero"
-        returncode = 1
-    return TaskCommandResult(
-        tuple(str(part) for part in cmd),
-        returncode,
-        stdout or "",
-        stderr or "",
-        kind,
-        max(1, int(retries or 1)),
-        float(timeout),
-    )
+    compatibility_stderr = result.stderr
+    if result.kind == "timeout" and not compatibility_stderr:
+        compatibility_stderr = "timeout"
+    return result.ok, result.stdout, compatibility_stderr
 
 
 def is_lock_error(err: str) -> bool:

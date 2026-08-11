@@ -271,10 +271,7 @@ def _load_core() -> None:
     reload_config = getattr(core, "reload_taskdata_config", None)
     if callable(reload_config):
         if _USE_RC_DATA_LOCATION:
-            try:
-                reload_config(TW_DATA_DIR)
-            except Exception as exc:
-                _diag(f"configuration reload unavailable for exit processing: {type(exc).__name__}: {exc}")
+            reload_config(TW_DATA_DIR)
     elif getattr(core, "__file__", None):
         raise RuntimeError("nautical_core does not provide validated configuration reload")
     _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
@@ -694,7 +691,7 @@ def _preload_export_uuids(entries: list[dict]) -> None:
         allow_negative_cache = False
         if hook_support is not None:
             result = hook_support.run_task_result(
-                run_task=_run_task,
+                run_task=_run_task_result,
                 cmd=cmd,
                 timeout=_TASK_TIMEOUT_EXPORT,
                 retries=_TASK_RETRIES_EXPORT,
@@ -714,14 +711,15 @@ def _preload_export_uuids(entries: list[dict]) -> None:
                 except Exception:
                     pass
         else:
-            ok, out, err = _run_task(
+            result = _run_task_result(
                 cmd,
                 timeout=_TASK_TIMEOUT_EXPORT,
                 retries=_TASK_RETRIES_EXPORT,
                 retry_delay=_TASK_RETRY_DELAY,
             )
-            if not ok:
+            if not result.ok:
                 continue
+            out = result.stdout
             allow_negative_cache = (out or "").lstrip().startswith("[")
             try:
                 parsed = json.loads((out or "").strip() or "[]")
@@ -1213,6 +1211,75 @@ def _run_task(
         _diag_record_run_task(cmd, ok=ok, elapsed=elapsed)
         if not ok:
             _diag_count_exit("run_task_failures")
+
+
+_DEFAULT_RUN_TASK = _run_task
+
+
+def _run_task_result(
+    cmd: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    input_text: str | None = None,
+    timeout: float = 6.0,
+    retries: int = 1,
+    retry_delay: float = 0.0,
+):
+    """Return typed command state while retaining the legacy tuple wrapper."""
+    core_runner = (
+        getattr(core, "run_task_result", None)
+        if core is not None and _run_task is _DEFAULT_RUN_TASK
+        else None
+    )
+    if _run_task is not _DEFAULT_RUN_TASK:
+        from nautical_core.task_command import coerce_command_result
+        return coerce_command_result(
+            _run_task(
+                cmd,
+                env=env,
+                input_text=input_text,
+                timeout=timeout,
+                retries=retries,
+                retry_delay=retry_delay,
+            ),
+            cmd,
+            timeout=timeout,
+            attempts=retries,
+        )
+    if callable(core_runner):
+        return core_runner(
+            cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+        )
+    hook_support = _module("hook_support", required=False)
+    if hook_support is not None:
+        return hook_support.run_task_result(
+            run_task=_run_task,
+            cmd=cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+        )
+    from nautical_core.task_command import coerce_command_result
+    return coerce_command_result(
+        _run_task(
+            cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+        ),
+        cmd,
+        timeout=timeout,
+        attempts=retries,
+    )
 
 
 def _is_lock_error(err: str) -> bool:
@@ -1809,16 +1876,16 @@ def _preload_equivalent_child_slots(entries: list[dict]) -> None:
             first = False
             cmd.extend(slot_specs[key])
         cmd.append("export")
-        ok, out, err = _run_task(
+        result = _run_task_result(
             cmd,
             timeout=_TASK_TIMEOUT_EXPORT,
             retries=_TASK_RETRIES_EXPORT,
             retry_delay=_TASK_RETRY_DELAY,
         )
-        if not ok:
+        if not result.ok:
             continue
         try:
-            rows = json.loads((out or "").strip() or "[]")
+            rows = json.loads((result.stdout or "").strip() or "[]")
         except Exception:
             continue
         if isinstance(rows, dict):
@@ -1885,7 +1952,7 @@ def _export_uuid(uuid_str: str, *, prefer_cache: bool = True):
     result = exit_queries.export_uuid(
         uuid_str,
         hook_support=hook_support,
-        run_task=_run_task,
+        run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         timeout=_TASK_TIMEOUT_EXPORT,
         retries=_TASK_RETRIES_EXPORT,
@@ -1906,7 +1973,7 @@ def _existing_equivalent_child(child: dict, parent_uuid: str = ""):
         child,
         parent_uuid=parent_uuid,
         task_cmd_prefix=_task_cmd_prefix(),
-        run_task=_run_task,
+        run_task=_run_task_result,
         timeout=_TASK_TIMEOUT_EXPORT,
         retries=_TASK_RETRIES_EXPORT,
         retry_delay=_TASK_RETRY_DELAY,
@@ -1922,7 +1989,7 @@ def _import_child(obj: dict):
     exit_side_effects = _module("exit_side_effects")
     return exit_side_effects.import_child(
         obj,
-        run_task=_run_task,
+        run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         timeout_import=_TASK_TIMEOUT_IMPORT,
         is_lock_error=_is_lock_error,
@@ -1941,7 +2008,7 @@ def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: s
         parent_nextlink_state_fn=lambda parent_uuid, child_short, expected_prev: _parent_nextlink_state(
             parent_uuid, child_short, expected_prev, prefer_cache=False
         ),
-        run_task=_run_task,
+        run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         timeout_modify=_TASK_TIMEOUT_MODIFY,
         retries_modify=_TASK_RETRIES_MODIFY,
@@ -1957,7 +2024,7 @@ def _clear_parent_nextlink_if_matches(parent_uuid: str, child_short: str):
             child_short,
             lock_parent_nextlink=_lock_parent_nextlink,
             export_uuid=lambda uuid_str: _export_uuid(uuid_str, prefer_cache=False),
-            run_task=_run_task,
+            run_task=_run_task_result,
             task_cmd_prefix=_task_cmd_prefix(),
             timeout_modify=_TASK_TIMEOUT_MODIFY,
             retries_modify=_TASK_RETRIES_MODIFY,
@@ -1982,7 +2049,7 @@ def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
     exit_side_effects.cleanup_orphan_child(
         child_uuid,
         spawn_intent_id=spawn_intent_id,
-        run_task=_run_task,
+        run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         timeout_modify=_TASK_TIMEOUT_MODIFY,
         retries_modify=_TASK_RETRIES_MODIFY,

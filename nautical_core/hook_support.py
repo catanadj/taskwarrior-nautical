@@ -7,7 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from .task_command import TaskCommandResult, failure_message, run_command_once
+from .task_command import TaskCommandResult, coerce_command_result, failure_message, run_command_once
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,30 +157,11 @@ def run_task_result(
     if use_tempfiles:
         runner_kwargs["use_tempfiles"] = True
     raw_result = run_task(cmd, **runner_kwargs)
-    if isinstance(raw_result, TaskCommandResult):
-        return raw_result
-    ok, stdout, stderr = raw_result
-    text = (stderr or stdout or "").lower()
-    if ok:
-        kind = "ok"
-        returncode = 0
-    elif "timeout" in text:
-        kind = "timeout"
-        returncode = 124
-    elif "lock" in text:
-        kind = "lock_busy"
-        returncode = 1
-    else:
-        kind = "nonzero"
-        returncode = 1
-    return TaskCommandResult(
-        tuple(str(part) for part in cmd),
-        returncode,
-        stdout or "",
-        stderr or "",
-        kind,
-        max(1, int(retries or 1)),
-        float(timeout),
+    return coerce_command_result(
+        raw_result,
+        cmd,
+        timeout=timeout,
+        attempts=max(1, int(retries or 1)),
     )
 
 

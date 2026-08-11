@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from . import hook_support
 from .modify_models import CompletionSnapshotResult
 
 
@@ -31,11 +32,18 @@ def export_completion_chain_snapshot(
             args.append("or")
         args.extend(clause)
     args.append("export")
-    ok, out, err = run_task(args, timeout=timeout, retries=1, use_tempfiles=not bool(links))
-    if not ok:
+    result = hook_support.run_task_result(
+        run_task=run_task,
+        cmd=args,
+        timeout=timeout,
+        retries=1,
+        use_tempfiles=not bool(links),
+    )
+    if not result.ok:
         if callable(diag):
-            diag(f"completion chain snapshot failed: {(err or '').strip()}")
-        return CompletionSnapshotResult(False, [], (err or "completion chain snapshot failed").strip())
+            diag(f"completion chain snapshot failed: {(result.stderr or '').strip()}")
+        return CompletionSnapshotResult(False, [], (result.stderr or "completion chain snapshot failed").strip())
+    out = result.stdout
     if not (out or "").lstrip().startswith("["):
         if callable(diag):
             diag("completion chain snapshot returned malformed JSON")
@@ -59,15 +67,16 @@ def export_completion_chain_snapshot(
 
 def task_text(args, *, run_task, task_cmd_prefix, env=None, timeout: float = 3.0, retries: int = 2, diag=None) -> str:
     env = env or {}
-    ok, out, err = run_task(
-        list(task_cmd_prefix) + ["rc.hooks=off"] + list(args),
+    result = hook_support.run_task_result(
+        run_task=run_task,
+        cmd=list(task_cmd_prefix) + ["rc.hooks=off"] + list(args),
         env=env,
         timeout=timeout,
         retries=retries,
     )
-    if not ok and callable(diag):
-        diag(f"task {' '.join(args)} failed: {(err or '').strip()}")
-    return out or ""
+    if not result.ok and callable(diag):
+        diag(f"task {' '.join(args)} failed: {(result.stderr or '').strip()}")
+    return result.stdout or ""
 
 
 def tw_get(ref: str, *, task_text) -> str:
@@ -136,10 +145,16 @@ def export_chain_endpoint(
         "limit:1",
         "export",
     ]
-    ok, out, err = run_task(args, env=None, timeout=timeout, retries=retries)
-    if not ok:
+    result = hook_support.run_task_result(
+        run_task=run_task,
+        cmd=args,
+        env=None,
+        timeout=timeout,
+        retries=retries,
+    )
+    if not result.ok:
         if callable(diag):
-            diag(f"chain endpoint export failed ({direction}): {(err or '').strip()}")
+            diag(f"chain endpoint export failed ({direction}): {(result.stderr or '').strip()}")
         return None
-    data = parse_export_array(out, diag=diag)
+    data = parse_export_array(result.stdout, diag=diag)
     return data[0] if data else None

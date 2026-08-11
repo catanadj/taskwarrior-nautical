@@ -7,6 +7,19 @@ if TYPE_CHECKING:
     from nautical_core.exit_models import ExitEquivalentChildResult, ExitExportResult
 
 
+def _typed_result(run_task, cmd, *, timeout: float, retries: int, retry_delay: float = 0.0):
+    """Use the shared adapter for typed and legacy command callbacks."""
+    from . import hook_support
+
+    return hook_support.run_task_result(
+        run_task=run_task,
+        cmd=cmd,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+    )
+
+
 def short_uuid(value: str, *, core: Any) -> str:
     if core is not None and hasattr(core, "short_uuid"):
         try:
@@ -51,27 +64,20 @@ def export_uuid(
         )
     if not uuid_str:
         return ExitExportResult(False, False, "missing uuid", None)
-    raw_result = run_task(
+    result = _typed_result(
+        run_task,
         task_cmd_prefix + [
-            "rc.hooks=off",
-            "rc.json.array=off",
-            "rc.verbose=nothing",
-            "rc.color=off",
-            f"uuid:{uuid_str}",
-            "export",
+            "rc.hooks=off", "rc.json.array=off", "rc.verbose=nothing", "rc.color=off",
+            f"uuid:{uuid_str}", "export",
         ],
         timeout=timeout,
         retries=retries,
         retry_delay=retry_delay,
     )
-    if hasattr(raw_result, "ok"):
-        ok, out, err = raw_result.ok, raw_result.stdout, raw_result.stderr
-    else:
-        ok, out, err = raw_result
-    if not ok:
-        return ExitExportResult(False, is_lock_error(err), err or "", None)
+    if not result.ok:
+        return ExitExportResult(False, result.kind == "lock_busy" or is_lock_error(result.stderr), result.stderr or "", None)
     try:
-        obj = json.loads(out.strip() or "{}")
+        obj = json.loads(result.stdout.strip() or "{}")
         if obj.get("uuid"):
             return ExitExportResult(True, False, "", obj)
         return ExitExportResult(False, False, "not found", None)
@@ -120,20 +126,17 @@ def existing_equivalent_child(
         cmd.append(f"prevLink:{prev_link}")
     cmd.extend(["status.not:deleted", "export"])
 
-    raw_result = run_task(
+    result = _typed_result(
+        run_task,
         cmd,
         timeout=timeout,
         retries=retries,
         retry_delay=retry_delay,
     )
-    if hasattr(raw_result, "ok"):
-        ok, out, err = raw_result.ok, raw_result.stdout, raw_result.stderr
-    else:
-        ok, out, err = raw_result
-    if not ok:
-        return ExitEquivalentChildResult(False, is_lock_error(err), err or "", None)
+    if not result.ok:
+        return ExitEquivalentChildResult(False, result.kind == "lock_busy" or is_lock_error(result.stderr), result.stderr or "", None)
     try:
-        rows = json.loads(out.strip() or "[]")
+        rows = json.loads(result.stdout.strip() or "[]")
     except Exception:
         return ExitEquivalentChildResult(False, True, "parse error", None)
     if isinstance(rows, dict):

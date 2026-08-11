@@ -38,6 +38,50 @@ class TaskCommandResult:
         return self.kind == "ok"
 
 
+def coerce_command_result(
+    raw: Any,
+    argv: Sequence[str],
+    *,
+    timeout: float,
+    attempts: int = 1,
+) -> TaskCommandResult:
+    """Normalize a typed result or legacy ``(ok, stdout, stderr)`` tuple."""
+    if isinstance(raw, TaskCommandResult):
+        return raw
+    try:
+        ok, stdout, stderr = raw
+    except (TypeError, ValueError) as exc:
+        return TaskCommandResult(
+            tuple(str(arg) for arg in argv),
+            1,
+            "",
+            f"invalid command result: {exc}",
+            "exec_error",
+            max(1, int(attempts)),
+            float(timeout),
+        )
+    stdout = str(stdout or "")
+    stderr = str(stderr or "")
+    text = f"{stderr}\n{stdout}".lower()
+    if ok:
+        kind, returncode = "ok", 0
+    elif "timeout" in text:
+        kind, returncode = "timeout", 124
+    elif _is_lock_error(text):
+        kind, returncode = "lock_busy", 1
+    else:
+        kind, returncode = "nonzero", 1
+    return TaskCommandResult(
+        tuple(str(arg) for arg in argv),
+        returncode,
+        stdout,
+        stderr,
+        kind,
+        max(1, int(attempts)),
+        float(timeout),
+    )
+
+
 def _text(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")

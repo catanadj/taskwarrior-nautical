@@ -295,10 +295,7 @@ def _load_core() -> None:
     reload_config = getattr(core, "reload_taskdata_config", None)
     if callable(reload_config):
         if _USE_RC_DATA_LOCATION:
-            try:
-                reload_config(TW_DATA_DIR)
-            except Exception as exc:
-                _diag(f"configuration reload blocked scheduling: {type(exc).__name__}: {exc}")
+            reload_config(TW_DATA_DIR)
     elif getattr(core, "__file__", None):
         raise RuntimeError("nautical_core does not provide validated configuration reload")
     try:
@@ -585,6 +582,78 @@ def _run_task(
             except Exception:
                 pass
         return (False, "", str(e))
+
+
+_DEFAULT_RUN_TASK = _run_task
+
+
+def _run_task_result(
+    cmd: list[str],
+    *,
+    env: dict | None = None,
+    input_text: str | None = None,
+    timeout: float = 3.0,
+    retries: int = 2,
+    retry_delay: float = 0.15,
+    use_tempfiles: bool = False,
+):
+    """Return the typed subprocess result; retain ``_run_task`` for compatibility."""
+    try:
+        _load_core()
+    except Exception:
+        # A loaded core with invalid scheduling configuration must block the
+        # command; only an unavailable core may use the compatibility runner.
+        if core is not None:
+            raise
+    core_runner = (
+        getattr(core, "run_task_result", None)
+        if core is not None and _run_task is _DEFAULT_RUN_TASK
+        else None
+    )
+    if _run_task is not _DEFAULT_RUN_TASK:
+        from nautical_core.task_command import coerce_command_result
+        return coerce_command_result(
+            _run_task(cmd, env=env, input_text=input_text, timeout=timeout, retries=retries, retry_delay=retry_delay),
+            cmd,
+            timeout=timeout,
+            attempts=retries,
+        )
+    if callable(core_runner):
+        return core_runner(
+            cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+            use_tempfiles=use_tempfiles,
+        )
+    hook_support = _module("hook_support", required=False)
+    if hook_support is not None:
+        return hook_support.run_task_result(
+            run_task=_run_task,
+            cmd=cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+            use_tempfiles=use_tempfiles,
+        )
+    from nautical_core.task_command import coerce_command_result
+    return coerce_command_result(
+        _run_task(
+            cmd,
+            env=env,
+            input_text=input_text,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+        ),
+        cmd,
+        timeout=timeout,
+        attempts=retries,
+    )
 
 
 
@@ -993,7 +1062,7 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
         return []
     if hook_support is not None:
         result = hook_support.run_task_result(
-            run_task=_run_task,
+            run_task=_run_task_result,
             cmd=args,
             timeout=3.0,
             retries=2,
@@ -1003,14 +1072,12 @@ def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | N
             _diag(f"tw_export_chain failed (chainID={chain_id}): {error}")
             return []
         return rows
-    ok, out, err = _run_task(args, timeout=3.0, retries=2)
-    if not ok:
-        _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
+    result = _run_task_result(args, timeout=3.0, retries=2)
+    if not result.ok:
+        _diag(f"tw_export_chain failed (chainID={chain_id}): {result.stderr.strip()}")
         return []
     try:
-        if hook_support is not None:
-            return hook_support.parse_export_array(out, diag=_diag)
-        data = json.loads(out.strip() or "[]")
+        data = json.loads(result.stdout.strip() or "[]")
         return data if isinstance(data, list) else [data]
     except Exception as e:
         _diag(f"tw_export_chain JSON parse failed: {e}")

@@ -46,12 +46,13 @@ def finalize_completion_modify(
             state="retryable",
             reason="completion child operation returned no result",
         )
-    if getattr(spawned, "outcome_state", "applied") == "manual_review":
+    spawn_state = str(getattr(spawned, "outcome_state", "applied") or "applied").strip().lower()
+    if spawn_state != "applied":
         return CompletionLifecycleResult(
-            state="manual_review",
-            child_short=spawned.child_short,
-            spawn_intent_id=spawned.spawn_intent_id,
-            reason=spawned.reason or "child spawn could not be verified",
+            state="manual_review" if spawn_state == "manual_review" else "retryable",
+            child_short=getattr(spawned, "child_short", ""),
+            spawn_intent_id=getattr(spawned, "spawn_intent_id", None),
+            reason=getattr(spawned, "reason", "") or "child spawn could not be completed",
         )
 
     child = spawned.child

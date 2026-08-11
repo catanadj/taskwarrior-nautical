@@ -24331,6 +24331,57 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
     expect(new.get("nextLink") == "deadbeef", f"verified spawn should stamp nextLink: {new}")
 
 
+def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
+    """A spawn command exception must remain typed and actionable for finalization."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_completion_spawn_exception_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    parent = {
+        "uuid": "00000000-0000-0000-0000-000000000121",
+        "status": "completed",
+        "chainID": "spawn121",
+        "link": 1,
+    }
+    child = {"uuid": "00000000-0000-0000-0000-000000000122", "link": 2}
+    from nautical_core.chain_generation import ChainGenerationService
+
+    class StubGeneration(ChainGenerationService):
+        def build_child_from_parent(self, *_args, **_kwargs):
+            return dict(child)
+
+    original_generation = mod._chain_generation_service
+    original_spawn = mod._spawn_child_atomic
+    original_panel = mod._panel
+    original_print = mod._print_task
+    panels = []
+    try:
+        mod._chain_generation_service = lambda: StubGeneration.from_core(mod.core)
+        mod._spawn_child_atomic = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Taskwarrior lock busy"))
+        mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
+        mod._print_task = lambda _task: None
+        result = mod._completion_build_and_spawn_child(
+            parent,
+            child_due=mod.core.now_utc(),
+            child_field="due",
+            next_no=2,
+            parent_short="00000000",
+            kind="cp",
+            cpmax=0,
+            until_dt=None,
+        )
+    finally:
+        mod._chain_generation_service = original_generation
+        mod._spawn_child_atomic = original_spawn
+        mod._panel = original_panel
+        mod._print_task = original_print
+
+    expect(result is not None and result.outcome_state == "retryable", f"spawn exception lost typed state: {result!r}")
+    expect("Taskwarrior lock busy" in result.reason, f"spawn exception lost reason: {result!r}")
+    expect(any("Taskwarrior lock busy" in str(value) for _title, rows, _kind in panels for _label, value in rows), f"spawn panel lost reason: {panels!r}")
+
+
 def test_carry_field_failure_defers_completion_and_reconcile_mutation():
     """Malformed carry timestamps must block both child spawn paths."""
     hook = _find_hook_file("on-modify.nautical")
@@ -24374,7 +24425,8 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
         mod._print_task = original_print
         mod._spawn_child_atomic = original_spawn
 
-    expect(result is None, f"completion should defer malformed carry, got {result!r}")
+    expect(result is not None and result.outcome_state == "retryable", f"completion should return retryable carry result, got {result!r}")
+    expect("wait carry failed" in result.reason, f"carry result lost actionable reason: {result!r}")
     expect(not spawned, "completion attempted a child spawn after carry failure")
     expect(
         any("wait carry failed" in str(value) for _title, rows, _kind in panels for _label, value in rows),
@@ -33408,6 +33460,7 @@ TESTS = [
     test_on_modify_compute_counted_random_advances_within_period,
     test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails,
     test_on_modify_completion_build_and_spawn_child_happy_path,
+    test_on_modify_completion_spawn_exception_is_retryable_with_reason,
     test_carry_field_failure_defers_completion_and_reconcile_mutation,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
     test_on_modify_render_anchor_completion_feedback_wrapper,

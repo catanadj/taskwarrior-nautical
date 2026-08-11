@@ -45,7 +45,16 @@ def completion_build_and_spawn_child(
             kind="error",
         )
         print_task(new)
-        return None
+        return CompletionSpawnResult(
+            child={},
+            child_short="",
+            stripped_attrs=[],
+            verified=False,
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            outcome_state="retryable",
+            reason=reason,
+        )
 
     deferred_spawn = False
     spawn_intent_id = None
@@ -79,13 +88,23 @@ def completion_build_and_spawn_child(
     except Exception as exc:
         if callable(diag):
             diag(f"spawn child failed: {exc}")
+        reason = str(exc).strip() or "Failed to spawn next link"
         panel(
             "⛓ Chain error",
-            [("Reason", "Failed to spawn next link")],
+            [("Reason", reason)],
             kind="error",
         )
         print_task(new)
-        return None
+        return CompletionSpawnResult(
+            child=child,
+            child_short="",
+            stripped_attrs=[],
+            verified=False,
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            outcome_state="retryable",
+            reason=reason,
+        )
 
     if verified:
         new["nextLink"] = child_short

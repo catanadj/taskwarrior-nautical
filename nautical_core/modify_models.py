@@ -508,7 +508,7 @@ class CompletionSpawnResult:
 
     def __post_init__(self) -> None:
         state = str(self.outcome_state or "").strip().lower()
-        if state not in {"applied", "manual_review"}:
+        if state not in {"applied", "manual_review", "retryable"}:
             raise ValueError(f"unsupported completion spawn state: {self.outcome_state!r}")
         self.outcome_state = state
         self.reason = str(self.reason or "").strip()

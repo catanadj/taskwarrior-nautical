@@ -145,6 +145,8 @@ _HOOK_RESULTS_LOAD_FAILED = False
 _HOOK_RUNTIME = None
 _HOOK_RUNTIME_LOAD_FAILED = False
 _HOOK_MODULE_ACCESS = None
+_LIFECYCLE_MODELS = None
+_LIFECYCLE_MODELS_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_runtime": (
         "_HOOK_RUNTIME",
@@ -193,6 +195,12 @@ _MODULE_SPECS = {
         "_EXIT_MODELS_LOAD_FAILED",
         "exit_models.py",
         "nautical_core.exit_models",
+    ),
+    "lifecycle_models": (
+        "_LIFECYCLE_MODELS",
+        "_LIFECYCLE_MODELS_LOAD_FAILED",
+        "lifecycle_models.py",
+        "nautical_core.lifecycle_models",
     ),
     "exit_runtime": (
         "_EXIT_RUNTIME",

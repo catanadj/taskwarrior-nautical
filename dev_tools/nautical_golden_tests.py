@@ -1012,6 +1012,71 @@ def test_hook_response_models_keep_legacy_names_and_typed_roles():
     expect(task_result.task is task and exit_result.exit_code == 3, "typed response fields changed")
 
 
+def test_lifecycle_models_enforce_transition_contract():
+    """Lifecycle plans are immutable, tagged, identity-safe, and event-complete."""
+    from nautical_core.lifecycle_models import (
+        ExecutionStage,
+        LifecycleAction,
+        LifecycleContractError,
+        LifecycleEvent,
+        LifecycleIdentity,
+        LifecycleOutcome,
+        LifecycleOutcomeKind,
+        LifecyclePlan,
+        ParentGuard,
+        QueueProcessingState,
+        TaskLifecycleState,
+    )
+
+    guard = ParentGuard.from_mapping(
+        {
+            "status": "pending",
+            "chain": "on",
+            "chainID": "chain-1",
+            "link": 4,
+            "recurrence_fingerprint": "fp-1",
+        }
+    )
+    identity = LifecycleIdentity("chain-1", "parent-uuid", 4, 5, LifecycleEvent.COMPLETE)
+    plan = LifecyclePlan.from_mappings(
+        identity=identity,
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=guard,
+        child_payload={"uuid": "child-uuid", "nested": {"unicode": "Répéter 🌊"}},
+        parent_patch={"nextLink": "child-uuid"},
+        expected_postconditions=("child_exists", "parent_linked"),
+    )
+    expect(plan.child_dict()["nested"] == {"unicode": "Répéter 🌊"}, "child payload was not restored")
+    expect(plan.parent_patch_dict() == {"nextLink": "child-uuid"}, "parent patch was not restored")
+    expect(plan.identity.key.endswith(":complete"), "identity key omitted event")
+    expect(TaskLifecycleState.ACTIVE.value != QueueProcessingState.QUEUED.value, "state domains overlap")
+
+    outcome = LifecycleOutcome(
+        LifecycleOutcomeKind.APPLIED,
+        ExecutionStage.FINALIZED,
+        identity,
+        "child imported and parent linked",
+    )
+    expect(outcome.kind is LifecycleOutcomeKind.APPLIED, "outcome tag was not preserved")
+
+    invalid_cases = (
+        lambda: LifecycleIdentity("", "parent-uuid", 0, 1, LifecycleEvent.COMPLETE),
+        lambda: LifecycleIdentity("chain-1", "parent-uuid", 2, 2, LifecycleEvent.COMPLETE),
+        lambda: LifecyclePlan(
+            LifecycleIdentity("chain-1", "parent-uuid", 4, None, LifecycleEvent.ACTIVATE),
+            LifecycleAction.FINALIZE_CHAIN,
+            guard,
+        ),
+        lambda: LifecycleOutcome(LifecycleOutcomeKind.RETRYABLE, ExecutionStage.FINALIZED, identity),
+    )
+    for make_invalid in invalid_cases:
+        try:
+            make_invalid()
+        except LifecycleContractError:
+            continue
+        raise AssertionError("invalid lifecycle model was accepted")
+
+
 def test_diagnostic_event_renders_to_stderr_and_has_stable_record():
     """Structured diagnostics must keep stdout clean and expose stable fields."""
     from nautical_core import diagnostic_models, runtime
@@ -31905,6 +31970,7 @@ TESTS = [
     test_hook_io_contract_rejects_trailing_json_without_partial_success,
     test_hook_io_contract_response_is_single_unescaped_json_object,
     test_hook_response_models_keep_legacy_names_and_typed_roles,
+    test_lifecycle_models_enforce_transition_contract,
     test_diagnostic_event_renders_to_stderr_and_has_stable_record,
     test_taskwarrior_document_is_lossless_with_typed_scalar_accessors,
     test_taskwarrior_document_rejects_non_objects_and_handles_bad_scalars,

@@ -578,6 +578,8 @@ _MODIFY_COMPLETION_SPAWN = None
 _MODIFY_COMPLETION_SPAWN_LOAD_FAILED = False
 _MODIFY_MODELS = None
 _MODIFY_MODELS_LOAD_FAILED = False
+_LIFECYCLE_MODELS = None
+_LIFECYCLE_MODELS_LOAD_FAILED = False
 _MODIFY_FEEDBACK = None
 _MODIFY_FEEDBACK_LOAD_FAILED = False
 _MODIFY_TIMELINE = None
@@ -669,6 +671,12 @@ _MODULE_SPECS = {
         "_MODIFY_MODELS_LOAD_FAILED",
         "modify_models.py",
         "nautical_core.modify_models",
+    ),
+    "lifecycle_models": (
+        "_LIFECYCLE_MODELS",
+        "_LIFECYCLE_MODELS_LOAD_FAILED",
+        "lifecycle_models.py",
+        "nautical_core.lifecycle_models",
     ),
     "modify_feedback": (
         "_MODIFY_FEEDBACK",

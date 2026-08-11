@@ -4,6 +4,8 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from nautical_core.lifecycle_models import LifecycleContractError, LifecyclePlan
+
 
 class QueueEntryError(ValueError):
     pass
@@ -51,6 +53,17 @@ def _clean_parent_guard(value: Any) -> dict[str, str] | None:
     return result
 
 
+def _clean_lifecycle_plan(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise QueueEntryError("invalid lifecycle_plan")
+    try:
+        return LifecyclePlan.from_dict(value).to_dict()
+    except (LifecycleContractError, TypeError, ValueError) as exc:
+        raise QueueEntryError(f"invalid lifecycle_plan: {exc}") from exc
+
+
 def _mapping_value(mapping: Any, key: str, default: Any = None) -> Any:
     if mapping is None:
         return default
@@ -73,6 +86,7 @@ class SpawnQueueEntry:
     child: dict[str, Any]
     spawn_intent_id: str
     parent_guard: dict[str, str] | None = None
+    lifecycle_plan: dict[str, Any] | None = None
     attempts: int = 0
 
     @classmethod
@@ -92,6 +106,7 @@ class SpawnQueueEntry:
             child=child,
             spawn_intent_id=spawn_intent_id,
             parent_guard=_clean_parent_guard(entry.get("parent_guard")),
+            lifecycle_plan=_clean_lifecycle_plan(entry.get("lifecycle_plan")),
             attempts=_clean_attempts(entry.get("attempts")),
         )
 
@@ -105,6 +120,8 @@ class SpawnQueueEntry:
         }
         if self.parent_guard is not None:
             out["parent_guard"] = dict(self.parent_guard)
+        if self.lifecycle_plan is not None:
+            out["lifecycle_plan"] = dict(self.lifecycle_plan)
         if self.attempts:
             out["attempts"] = self.attempts
         return out

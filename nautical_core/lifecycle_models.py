@@ -75,6 +75,7 @@ class QueueProcessingState(str, Enum):
 
 FrozenValue: TypeAlias = Any
 FrozenPairs: TypeAlias = tuple[tuple[str, FrozenValue], ...]
+LIFECYCLE_PLAN_SCHEMA_VERSION = 1
 
 
 # These are the inputs that can change the occurrence or carried timing of a
@@ -301,6 +302,19 @@ class LifecycleIdentity:
         object.__setattr__(self, "parent_uuid", parent_uuid)
         object.__setattr__(self, "event", event)
 
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "LifecycleIdentity":
+        if not isinstance(value, Mapping):
+            raise LifecycleContractError("lifecycle identity must be an object")
+        target = value.get("target_link", value.get("targetLink"))
+        return cls(
+            chain_id=str(value.get("chainID", value.get("chain_id", ""))),
+            parent_uuid=str(value.get("parent_uuid", value.get("parentUUID", ""))),
+            source_link=int(value.get("source_link", value.get("sourceLink"))),
+            target_link=None if target in (None, "") else int(target),
+            event=LifecycleEvent(value.get("event")),
+        )
+
     @property
     def key(self) -> str:
         target = "-" if self.target_link is None else str(self.target_link)
@@ -372,14 +386,75 @@ class LifecyclePlan:
         parent_patch: Mapping[str, Any] | None = None,
         expected_postconditions: tuple[str, ...] = (),
         max_attempts: int = 3,
+        stage: ExecutionStage = ExecutionStage.PLANNED,
     ) -> "LifecyclePlan":
         return cls(
             identity=identity,
             action=action,
             parent_guard=parent_guard,
+            stage=stage,
             child_payload=_freeze_pairs(child_payload),
             parent_patch=_freeze_pairs(parent_patch),
             expected_postconditions=expected_postconditions,
+            max_attempts=max_attempts,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize a complete plan for the durable lifecycle outbox."""
+        return {
+            "schema_version": LIFECYCLE_PLAN_SCHEMA_VERSION,
+            "identity": {
+                "chainID": self.identity.chain_id,
+                "parent_uuid": self.identity.parent_uuid,
+                "source_link": self.identity.source_link,
+                "target_link": self.identity.target_link,
+                "event": self.identity.event.value,
+            },
+            "action": self.action.value,
+            "parent_guard": self.parent_guard.to_dict(),
+            "stage": self.stage.value,
+            "child_payload": self.child_dict(),
+            "parent_patch": self.parent_patch_dict(),
+            "expected_postconditions": list(self.expected_postconditions),
+            "max_attempts": self.max_attempts,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "LifecyclePlan":
+        """Load one supported plan version; future versions fail closed."""
+        if not isinstance(value, Mapping):
+            raise LifecycleContractError("lifecycle plan must be an object")
+        try:
+            version = int(value.get("schema_version"))
+        except (TypeError, ValueError) as exc:
+            raise LifecycleContractError("lifecycle plan schema_version is required") from exc
+        if version != LIFECYCLE_PLAN_SCHEMA_VERSION:
+            raise LifecycleContractError(
+                f"unsupported lifecycle plan schema version: {version}"
+            )
+        child_payload = value.get("child_payload") or {}
+        parent_patch = value.get("parent_patch") or {}
+        expected = value.get("expected_postconditions") or ()
+        if not isinstance(child_payload, Mapping) or not isinstance(parent_patch, Mapping):
+            raise LifecycleContractError("lifecycle plan payloads must be objects")
+        if not isinstance(expected, (list, tuple)):
+            raise LifecycleContractError("lifecycle plan postconditions must be a list")
+        try:
+            stage = ExecutionStage(value.get("stage", ExecutionStage.PLANNED.value))
+            action = LifecycleAction(value.get("action"))
+            max_attempts = int(value.get("max_attempts", 3))
+            identity = LifecycleIdentity.from_mapping(value.get("identity") or {})
+            parent_guard = ParentGuard.from_mapping(value.get("parent_guard") or {})
+        except (TypeError, ValueError, KeyError) as exc:
+            raise LifecycleContractError("invalid lifecycle plan fields") from exc
+        return cls.from_mappings(
+            identity=identity,
+            action=action,
+            parent_guard=parent_guard,
+            stage=stage,
+            child_payload=child_payload,
+            parent_patch=parent_patch,
+            expected_postconditions=tuple(str(item) for item in expected),
             max_attempts=max_attempts,
         )
 
@@ -420,6 +495,7 @@ class LifecycleOutcome:
 
 __all__ = (
     "ExecutionStage",
+    "LIFECYCLE_PLAN_SCHEMA_VERSION",
     "LifecycleAction",
     "LifecycleContractError",
     "LifecycleEvent",

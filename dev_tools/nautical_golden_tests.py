@@ -4399,6 +4399,30 @@ def test_queue_schema_initializes_and_adopts_legacy_rows():
         expect(status.get("status") == "ok", f"fresh schema did not initialize: {status!r}")
 
 
+def test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe():
+    """New queue entries carry a typed plan while old entries remain readable."""
+    from nautical_core import queue_models
+
+    legacy = {
+        "parent_uuid": "parent",
+        "parent_nextlink": "",
+        "child_short": "child123",
+        "child": {"uuid": "child-uuid"},
+        "spawn_intent_id": "si_legacy",
+    }
+    normalized = queue_models.normalize_spawn_queue_entry(legacy)
+    expect("lifecycle_plan" not in normalized, "legacy queue entry was changed without a plan")
+
+    future = dict(legacy)
+    future["lifecycle_plan"] = {"schema_version": 99}
+    try:
+        queue_models.normalize_spawn_queue_entry(future)
+    except queue_models.QueueEntryError as exc:
+        expect("unsupported lifecycle plan schema version" in str(exc), f"unclear future-plan error: {exc}")
+    else:
+        raise AssertionError("future lifecycle plan schema was accepted")
+
+
 def test_queue_database_durable_mode_uses_full_synchronous():
     """Durable queue mode must apply SQLite FULL synchronous semantics."""
     from nautical_core import queue_store
@@ -15532,6 +15556,14 @@ def test_on_modify_spawn_intent_records_parent_guard():
         mod._lifecycle_spawn_intent_id(dict(parent, status="deleted"), child) != first_key,
         "completion and expiration transitions shared an idempotency key",
     )
+    plan_payload = captured.get("lifecycle_plan")
+    expect(
+        isinstance(plan_payload, dict) and plan_payload.get("schema_version") == 1,
+        f"spawn intent did not carry a versioned lifecycle plan: {captured}",
+    )
+    lifecycle_models = mod._module("lifecycle_models")
+    restored = lifecycle_models.LifecyclePlan.from_dict(plan_payload)
+    expect(restored.identity.idempotency_key == first_key, "persisted plan identity did not match queue key")
 
 
 def test_on_exit_stale_parent_guard_prevents_child_import():
@@ -29682,6 +29714,7 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
         {
             "uuid": "00000000-0000-0000-0000-000000000111",
             "chainID": "abcd1234",
+            "chain": "on",
             "link": 1,
             "status": "completed",
             "nextLink": "",
@@ -32237,6 +32270,7 @@ TESTS = [
     test_health_check_critical_queue_bytes,
     test_health_check_critical_queue_db_rows,
     test_queue_schema_initializes_and_adopts_legacy_rows,
+    test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe,
     test_queue_database_durable_mode_uses_full_synchronous,
     test_queue_schema_rejects_incompatible_databases_without_quarantine,
     test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,

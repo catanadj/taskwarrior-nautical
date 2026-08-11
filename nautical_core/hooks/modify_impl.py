@@ -2387,6 +2387,7 @@ def _spawn_intent_entry(
     parent_nextlink: str | None = None,
     spawn_intent_id: str | None = None,
     parent_guard: dict | None = None,
+    lifecycle_plan: dict | None = None,
 ) -> dict:
     intent_id = (spawn_intent_id or "").strip()
     if not intent_id:
@@ -2400,6 +2401,7 @@ def _spawn_intent_entry(
             "child": child_obj,
             "spawn_intent_id": intent_id,
             "parent_guard": parent_guard,
+            "lifecycle_plan": lifecycle_plan,
         }
     )
 
@@ -2415,8 +2417,8 @@ def _enqueue_spawn_intent(entry: dict) -> tuple[bool, str]:
     return _enqueue_deferred_spawn(normalized)
 
 
-def _lifecycle_spawn_intent_id(parent: dict, child: dict) -> str:
-    """Derive one retry-stable queue key from the transition identity."""
+def _lifecycle_spawn_identity(parent: dict, child: dict):
+    """Build one retry-stable transition identity for a child slot."""
     lifecycle_models = _module("lifecycle_models")
     chain_id = str(parent.get("chainID") or "").strip()
     parent_uuid = str(parent.get("uuid") or "").strip()
@@ -2441,7 +2443,12 @@ def _lifecycle_spawn_intent_id(parent: dict, child: dict) -> str:
         target_link=target_link,
         event=event,
     )
-    return identity.idempotency_key
+    return identity
+
+
+def _lifecycle_spawn_intent_id(parent: dict, child: dict) -> str:
+    """Derive one retry-stable queue key from the transition identity."""
+    return _lifecycle_spawn_identity(parent, child).idempotency_key
 
 
 def _spawn_child_atomic(
@@ -2476,24 +2483,35 @@ def _spawn_child_atomic(
 
     # Decision-only mode: enqueue for on-exit spawn and return unverified.
     lifecycle_models = _module("lifecycle_models")
-    spawn_intent_id = _lifecycle_spawn_intent_id(parent_task_with_nextlink, child_obj)
+    lifecycle_identity = _lifecycle_spawn_identity(parent_task_with_nextlink, child_obj)
+    spawn_intent_id = lifecycle_identity.idempotency_key
     recurrence_guard = lifecycle_models.recurrence_fingerprint(
         parent_task_with_nextlink,
         parse_datetime=getattr(core, "parse_dt_any", None),
     )
+    parent_guard = {
+        "status": parent_task_with_nextlink.get("status") or "",
+        "chain": parent_task_with_nextlink.get("chain") or "",
+        "chainID": parent_task_with_nextlink.get("chainID") or "",
+        "link": parent_task_with_nextlink.get("link") or "",
+        "recurrence_fingerprint": recurrence_guard,
+    }
+    lifecycle_plan = lifecycle_models.LifecyclePlan.from_mappings(
+        identity=lifecycle_identity,
+        action=lifecycle_models.LifecycleAction.SPAWN_CHILD,
+        parent_guard=lifecycle_models.ParentGuard.from_mapping(parent_guard),
+        child_payload=child_obj,
+        parent_patch={"nextLink": child_short},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+    ).to_dict()
     entry = _spawn_intent_entry(
         parent_task_with_nextlink.get("uuid") or "",
         child_obj,
         child_short,
         parent_task_with_nextlink.get("nextLink") or "",
         spawn_intent_id,
-        parent_guard={
-            "status": parent_task_with_nextlink.get("status") or "",
-            "chain": parent_task_with_nextlink.get("chain") or "",
-            "chainID": parent_task_with_nextlink.get("chainID") or "",
-            "link": parent_task_with_nextlink.get("link") or "",
-            "recurrence_fingerprint": recurrence_guard,
-        },
+        parent_guard=parent_guard,
+        lifecycle_plan=lifecycle_plan,
     )
     queued, queue_reason = _enqueue_spawn_intent(entry)
     if not queued:

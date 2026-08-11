@@ -186,6 +186,47 @@ def _run_task_export(filters: tuple[str, ...]) -> Any:
             return []
     return _task_command.load_json_result(result, "Navigator Taskwarrior export", empty=[])
 
+
+def _navigator_taskdata() -> Path:
+    """Resolve Taskdata without bypassing Taskwarrior's configured location."""
+    configured = str(os.environ.get("TASKDATA") or "").strip()
+    if configured:
+        return Path(os.path.expandvars(configured)).expanduser().resolve()
+    if _task_command is not None:
+        task_bin = shutil.which("task") or "task"
+        result = _task_command.run_task_command(
+            task_bin,
+            ["rc.hooks=off", "rc.verbose=nothing", "_get", "rc.data.location"],
+            timeout=10.0,
+            retry_locks=True,
+        )
+        if result.ok and str(result.stdout or "").strip():
+            return Path(os.path.expandvars(result.stdout.strip())).expanduser().resolve()
+    # Explain/validate can still use the installed config when Taskwarrior is
+    # unavailable; normal task analysis will fail clearly at its export step.
+    return (Path.home() / ".task").resolve()
+
+
+def _reload_navigator_configuration() -> None:
+    """Apply and validate the same Taskdata configuration used by hooks."""
+    if core is None:
+        raise RuntimeError("Nautical core package is unavailable")
+    reload_config = getattr(core, "reload_taskdata_config", None)
+    if not callable(reload_config):
+        raise RuntimeError("Nautical core does not provide validated configuration reload")
+    taskdata = _navigator_taskdata()
+    try:
+        reload_config(taskdata)
+    except Exception as exc:
+        raise RuntimeError(f"Navigator configuration validation failed: {exc}") from exc
+    global LOCAL_ZONE
+    try:
+        from zoneinfo import ZoneInfo
+
+        LOCAL_ZONE = ZoneInfo(str(getattr(core, "LOCAL_TZ_NAME", "UTC")))
+    except Exception as exc:
+        raise RuntimeError(f"Navigator timezone configuration is invalid: {exc}") from exc
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Navigator helpers (explain/validate/self-check)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -3067,6 +3108,12 @@ def main():
     if not core:
         console.print(f"[{COLORS['error']}]Error: nautical_core package not found.[/]")
         sys.exit(1)
+
+    try:
+        _reload_navigator_configuration()
+    except Exception as exc:
+        console.print(f"[{COLORS['error']}]Error: {_format_runtime_error(exc)}[/]")
+        sys.exit(2)
 
     config_drifted = _show_config_drift_warning()
 

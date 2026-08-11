@@ -20793,6 +20793,45 @@ def test_navigator_surfaces_configuration_drift_warning():
         sys.modules.pop(module_name, None)
 
 
+def test_navigator_reloads_validated_taskdata_configuration():
+    """Navigator must use the same validated Taskdata reload boundary as hooks."""
+    module_name = "_nautical_navigator_config_reload_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    loader.exec_module(navigator)
+    old_reload = navigator.core.reload_taskdata_config
+    old_tz_name = navigator.core.LOCAL_TZ_NAME
+    old_taskdata = os.environ.get("TASKDATA")
+    calls: list[str] = []
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["TASKDATA"] = td
+            navigator.core.LOCAL_TZ_NAME = "UTC"
+            navigator.core.reload_taskdata_config = lambda path: calls.append(str(path))
+            navigator._reload_navigator_configuration()
+            expect(calls == [str(Path(td).resolve())], f"Navigator used the wrong Taskdata path: {calls!r}")
+
+            navigator.core.reload_taskdata_config = lambda _path: (_ for _ in ()).throw(
+                RuntimeError("invalid discovered TOML")
+            )
+            try:
+                navigator._reload_navigator_configuration()
+            except RuntimeError as exc:
+                expect("invalid discovered TOML" in str(exc), f"reload detail was lost: {exc}")
+            else:
+                raise AssertionError("Navigator accepted a failed configuration reload")
+    finally:
+        if old_taskdata is None:
+            os.environ.pop("TASKDATA", None)
+        else:
+            os.environ["TASKDATA"] = old_taskdata
+        navigator.core.reload_taskdata_config = old_reload
+        navigator.core.LOCAL_TZ_NAME = old_tz_name
+        sys.modules.pop(module_name, None)
+
+
 def test_navigator_uses_nautical_configured_timezone():
     """Navigator display conversions must use Nautical's configured timezone."""
     module_name = "_nautical_navigator_timezone_initialization_test"
@@ -32325,6 +32364,7 @@ TESTS.extend([
     test_navigator_empty_task_export_treats_no_matches_as_empty,
     test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime,
     test_navigator_surfaces_configuration_drift_warning,
+    test_navigator_reloads_validated_taskdata_configuration,
     test_navigator_uses_nautical_configured_timezone,
     test_navigator_fallback_export_uses_empty_filter,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,

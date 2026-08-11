@@ -73,6 +73,29 @@ class QueueProcessingState(str, Enum):
     DEAD_LETTERED = "dead_lettered"
 
 
+class DeletionDisposition(str, Enum):
+    """Evidence-based classification for a deleted Nautical occurrence."""
+
+    NOT_APPLICABLE = "not_applicable"
+    EXPIRATION = "expiration"
+    MANUAL = "manual"
+    AMBIGUOUS = "ambiguous"
+
+
+@dataclass(frozen=True, slots=True)
+class DeletionEvidence:
+    disposition: DeletionDisposition
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        try:
+            disposition = DeletionDisposition(self.disposition)
+        except (TypeError, ValueError) as exc:
+            raise LifecycleContractError("invalid deletion disposition") from exc
+        object.__setattr__(self, "disposition", disposition)
+        object.__setattr__(self, "reason", str(self.reason or "").strip())
+
+
 FrozenValue: TypeAlias = Any
 FrozenPairs: TypeAlias = tuple[tuple[str, FrozenValue], ...]
 LIFECYCLE_PLAN_SCHEMA_VERSION = 1
@@ -507,6 +530,8 @@ class LifecycleOutcome:
 
 
 __all__ = (
+    "DeletionDisposition",
+    "DeletionEvidence",
     "ExecutionStage",
     "LIFECYCLE_PLAN_SCHEMA_VERSION",
     "LifecycleAction",

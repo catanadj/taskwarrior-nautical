@@ -33,6 +33,7 @@ from nautical_core.lifecycle_executor import (  # noqa: E402
 )
 from nautical_core.lifecycle_models import (  # noqa: E402
     LifecycleAction,
+    DeletionDisposition,
     LifecycleEvent,
     LifecycleIdentity,
     LifecyclePlan,
@@ -710,11 +711,11 @@ def _existing_children(task_bin: str, parent: dict[str, Any]) -> list[dict[str, 
 
 def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any) -> list[dict[str, Any]]:
     if str(parent.get("status") or "").strip() == "deleted":
-        disposition, _reason = reconcile.deleted_chain_disposition(
+        evidence = reconcile.deleted_chain_disposition(
             parent,
             safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
         )
-        if disposition != "expiration":
+        if evidence.disposition is not DeletionDisposition.EXPIRATION:
             return []
     return _existing_children(task_bin, parent)
 

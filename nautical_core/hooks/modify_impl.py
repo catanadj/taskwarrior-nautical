@@ -6685,10 +6685,12 @@ def _handle_deleted_modify(old: dict, new: dict) -> None:
         _expiration_recovery_warning(new, "Expiration recovery module is unavailable; deletion was not classified.")
         return
     try:
-        disposition, disposition_reason = modify_expiration.classify_deleted_task(
+        deletion_evidence = modify_expiration.classify_deleted_task(
             new,
             services=_expiration_services(),
         )
+        disposition = deletion_evidence.disposition.value
+        disposition_reason = deletion_evidence.reason
     except Exception as exc:
         _diag(f"deleted-task disposition failed: {exc}")
         _expiration_recovery_warning(new, "Deletion evidence could not be classified safely.")

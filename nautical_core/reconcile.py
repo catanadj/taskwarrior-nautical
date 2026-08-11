@@ -25,6 +25,7 @@ from nautical_core.lifecycle_planner import (
     PrecomputedRecurrencePlanningService,
     RecurrenceCandidate,
 )
+from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
@@ -112,36 +113,43 @@ def deleted_chain_disposition(
     task: dict[str, Any],
     *,
     safe_parse_datetime: Any,
-) -> tuple[str, str]:
+) -> DeletionEvidence:
     """Classify an unlinked deleted chain as expiration, manual stop, or ambiguous."""
     if not is_orphan_deleted_chain_candidate(task):
-        return "", ""
+        return DeletionEvidence(DeletionDisposition.NOT_APPLICABLE)
     if not str(task.get("until") or "").strip():
-        return "manual", "deleted without native until"
+        return DeletionEvidence(DeletionDisposition.MANUAL, "deleted without native until")
     try:
         until_dt, until_err = safe_parse_datetime(task.get("until"))
         end_dt, end_err = safe_parse_datetime(task.get("end"))
     except Exception:
-        return "ambiguous", "deleted task has no reliable native-until expiration evidence"
+        return DeletionEvidence(
+            DeletionDisposition.AMBIGUOUS,
+            "deleted task has no reliable native-until expiration evidence",
+        )
     if until_err or end_err or until_dt is None or end_dt is None:
-        return "ambiguous", "deleted task has no reliable native-until expiration evidence"
+        return DeletionEvidence(
+            DeletionDisposition.AMBIGUOUS,
+            "deleted task has no reliable native-until expiration evidence",
+        )
     try:
         if compare_datetimes(until_dt, end_dt) <= 0:
-            return "expiration", "native until elapsed"
-        return "manual", "deleted before native until"
+            return DeletionEvidence(DeletionDisposition.EXPIRATION, "native until elapsed")
+        return DeletionEvidence(DeletionDisposition.MANUAL, "deleted before native until")
     except Exception:
-        return "ambiguous", "deleted task has no reliable native-until expiration evidence"
+        return DeletionEvidence(
+            DeletionDisposition.AMBIGUOUS,
+            "deleted task has no reliable native-until expiration evidence",
+        )
 
 
 def is_orphan_expiration_candidate(task: dict[str, Any], *, safe_parse_datetime: Any) -> bool:
     """Return whether a deleted link has strong evidence of native until expiration."""
-    disposition, _reason = deleted_chain_disposition(
+    evidence = deleted_chain_disposition(
         task,
         safe_parse_datetime=safe_parse_datetime,
     )
-    if not disposition:
-        return False
-    return disposition == "expiration"
+    return evidence.disposition is DeletionDisposition.EXPIRATION
 
 
 def expiration_recurrence_parent(parent: dict[str, Any]) -> dict[str, Any]:
@@ -454,18 +462,18 @@ def _build_reconcile_plan_unscoped(
     next_link = link + 1
     is_expiration = str(parent.get("status") or "").strip() == "deleted"
     if is_expiration:
-        disposition, reason = deleted_chain_disposition(
+        evidence = deleted_chain_disposition(
             parent,
             safe_parse_datetime=generation.safe_parse_datetime,
         )
-        if disposition == "manual":
-            return ReconcilePlan("manual_stop", parent, next_link, reason)
-        if disposition != "expiration":
+        if evidence.disposition is DeletionDisposition.MANUAL:
+            return ReconcilePlan("manual_stop", parent, next_link, evidence.reason)
+        if evidence.disposition is not DeletionDisposition.EXPIRATION:
             return ReconcilePlan(
                 "error",
                 parent,
                 next_link,
-                reason or "deleted task has no reliable native-until expiration evidence",
+                evidence.reason or "deleted task has no reliable native-until expiration evidence",
             )
 
     child_short, child_error = resolve_existing_child(

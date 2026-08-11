@@ -27220,21 +27220,21 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
     expect(is_candidate(parent), "deletion exactly at until should be an expiration candidate")
     manual = dict(parent, end="20260726T205958Z")
     expect(not is_candidate(manual), "manual deletion before until must not advance")
-    disposition, _reason = reconcile.deleted_chain_disposition(
+    evidence = reconcile.deleted_chain_disposition(
         manual,
         safe_parse_datetime=mod._safe_parse_datetime,
     )
-    expect(disposition == "manual", f"early deletion should stop the chain: {disposition!r}")
-    no_until_disposition, _reason = reconcile.deleted_chain_disposition(
+    expect(evidence.disposition.value == "manual", f"early deletion should stop the chain: {evidence!r}")
+    no_until_evidence = reconcile.deleted_chain_disposition(
         {key: value for key, value in parent.items() if key != "until"},
         safe_parse_datetime=mod._safe_parse_datetime,
     )
-    expect(no_until_disposition == "manual", f"deletion without until should stop the chain: {no_until_disposition!r}")
-    malformed_disposition, _reason = reconcile.deleted_chain_disposition(
+    expect(no_until_evidence.disposition.value == "manual", f"deletion without until should stop the chain: {no_until_evidence!r}")
+    malformed_evidence = reconcile.deleted_chain_disposition(
         dict(parent, until="not-a-date"),
         safe_parse_datetime=mod._safe_parse_datetime,
     )
-    expect(malformed_disposition == "ambiguous", f"malformed evidence must fail closed: {malformed_disposition!r}")
+    expect(malformed_evidence.disposition.value == "ambiguous", f"malformed evidence must fail closed: {malformed_evidence!r}")
     manual_plan = reconcile.build_reconcile_plan(manual, existing_children=[], hook=mod)
     expect(manual_plan.action == "manual_stop", f"manual deletion should disable the chain: {manual_plan}")
     expect(not is_candidate(dict(parent, status="completed")), "completed tasks use the completion candidate path")

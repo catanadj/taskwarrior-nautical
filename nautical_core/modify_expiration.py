@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from nautical_core.timeutil import compare_datetimes
+from nautical_core.lifecycle_models import DeletionEvidence
 
 
 @dataclass(slots=True)
@@ -36,7 +37,7 @@ def has_expiration_evidence(task: dict, *, safe_parse_datetime) -> bool:
         return False
 
 
-def classify_deleted_task(task: dict, *, services: ExpirationServices) -> tuple[str, str]:
+def classify_deleted_task(task: dict, *, services: ExpirationServices) -> DeletionEvidence:
     """Return the deletion disposition without turning unavailable evidence into manual stop."""
     return services.reconcile.deleted_chain_disposition(
         task,

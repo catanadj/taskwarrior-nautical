@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from functools import lru_cache
+import math
 from typing import Any
 
 from .moon_phase import PHASES, canonical_phase
@@ -29,6 +30,71 @@ class AstronomyEventUnavailableError(LookupError):
 
 class AstronomyConfigurationError(ValueError):
     """Raised when an astronomy location profile is incomplete."""
+
+
+def validate_configuration(config: dict[str, Any] | None) -> None:
+    """Validate configured astronomy profiles without requiring an event lookup."""
+    if config in (None, {}):
+        return
+    if not isinstance(config, dict):
+        raise AstronomyConfigurationError("astronomy must be a TOML table")
+    locations = config.get("locations")
+    if not isinstance(locations, dict) or not locations:
+        raise AstronomyConfigurationError(
+            "astronomy requires [astronomy.locations.<name>] profiles"
+        )
+    default_name = str(config.get("default_location") or "").strip()
+    if not default_name:
+        if len(locations) == 1:
+            default_name = str(next(iter(locations)))
+        else:
+            raise AstronomyConfigurationError(
+                "astronomy.default_location is required when multiple locations are configured"
+            )
+    if default_name not in locations:
+        available = ", ".join(sorted(str(name) for name in locations)) or "none"
+        raise AstronomyConfigurationError(
+            f"astronomy default_location '{default_name}' is not configured (available: {available})"
+        )
+    try:
+        from zoneinfo import ZoneInfo
+    except Exception as exc:
+        raise AstronomyConfigurationError("timezone support is unavailable") from exc
+    for raw_name, profile in locations.items():
+        name = str(raw_name or "").strip()
+        if not isinstance(profile, dict):
+            raise AstronomyConfigurationError(f"astronomy location '{name}' must be a TOML table")
+        try:
+            latitude = float(profile["latitude"])
+            longitude = float(profile["longitude"])
+            elevation = float(profile.get("elevation", 0) or 0)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AstronomyConfigurationError(
+                f"astronomy location '{name}' requires numeric latitude and longitude"
+            ) from exc
+        if not math.isfinite(latitude) or not -90.0 <= latitude <= 90.0:
+            raise AstronomyConfigurationError(
+                f"astronomy location '{name}' latitude must be between -90 and 90"
+            )
+        if not math.isfinite(longitude) or not -180.0 <= longitude <= 180.0:
+            raise AstronomyConfigurationError(
+                f"astronomy location '{name}' longitude must be between -180 and 180"
+            )
+        if not math.isfinite(elevation):
+            raise AstronomyConfigurationError(
+                f"astronomy location '{name}' elevation must be finite"
+            )
+        timezone_name = str(profile.get("timezone") or "").strip()
+        if not timezone_name:
+            raise AstronomyConfigurationError(
+                f"astronomy location '{name}' requires an explicit timezone"
+            )
+        try:
+            ZoneInfo(timezone_name)
+        except Exception as exc:
+            raise AstronomyConfigurationError(
+                f"astronomy location '{name}' has invalid timezone '{timezone_name}'"
+            ) from exc
 
 
 def scheduling_error_message(exc: BaseException) -> str:

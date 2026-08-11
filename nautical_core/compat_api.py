@@ -7,6 +7,7 @@ PUBLIC_EXPORTS = (
     'YearTokenFormatError', 'AndTermUnsatisfiable', 'OccurrenceSearchExhausted', 'BusinessCalendarConfigError',
     'ANCHOR_CACHE_DIR_OVERRIDE', 'BUSINESS_CALENDAR_CONFIG', 'ASTRONOMY_CONFIG',
     'effective_config_snapshot', 'effective_config_fingerprint', 'reload_taskdata_config',
+    'scheduling_configuration_error', 'validate_scheduling_configuration',
     'scheduler_config_fingerprint', 'configuration_drift', 'DEFAULT_BUSINESS_CALENDAR',
     'ENABLE_ANCHOR_CACHE', 'LOCAL_TZ_NAME', 'SEASON_HEMISPHERE', 'OMIT_FILE_DIR',
     'MAX_LINK_NUMBER', 'PANEL_MODE', 'LIVE_PANEL_DURATION_MS', 'LIVE_PANEL_FOOTER',

@@ -10697,6 +10697,49 @@ def test_hook_on_add_rejects_invalid_timezone_for_nautical_task():
     expect("timezone" in stderr_text.lower(), f"timezone cause missing: {stderr_text[:800]!r}")
 
 
+def test_core_domain_configuration_validation_fails_closed():
+    """Astronomy, preset, and business-calendar config errors block reload validation."""
+    saved = (
+        core.ASTRONOMY_CONFIG,
+        core.ANCHOR_PRESETS,
+        core.OMIT_PRESETS,
+        core.BUSINESS_CALENDAR_CONFIG,
+    )
+
+    def expect_invalid(label: str) -> None:
+        try:
+            core.validate_scheduling_configuration()
+        except RuntimeError as exc:
+            expect(label.lower() in str(exc).lower(), f"{label} detail missing: {exc}")
+        else:
+            raise AssertionError(f"{label} configuration was accepted")
+
+    try:
+        core.ASTRONOMY_CONFIG = {
+            "default_location": "home",
+            "locations": {
+                "home": {"latitude": 91, "longitude": 24, "timezone": "Europe/Athens"},
+            },
+        }
+        expect_invalid("latitude")
+
+        core.ASTRONOMY_CONFIG = {}
+        core.ANCHOR_PRESETS = {"bad": "w:not-a-day"}
+        expect_invalid("weekly")
+
+        core.ANCHOR_PRESETS = {}
+        core.BUSINESS_CALENDAR_CONFIG = {"work": {"anchor": "w:mon@t=09:00"}}
+        expect_invalid("business_calendar.work.anchor")
+    finally:
+        (
+            core.ASTRONOMY_CONFIG,
+            core.ANCHOR_PRESETS,
+            core.OMIT_PRESETS,
+            core.BUSINESS_CALENDAR_CONFIG,
+        ) = saved
+        core.validate_scheduling_configuration()
+
+
 def test_hook_on_modify_rejects_unknown_business_calendar_cleanly():
     """changing bc to an unknown name should fail before recurrence is evaluated."""
     hook = _find_hook_file('on-modify.nautical')
@@ -31410,6 +31453,7 @@ TESTS = [
     test_hook_on_add_reports_business_calendar_displacement_only_when_shifted,
     test_hook_on_add_rejects_unknown_business_calendar_cleanly,
     test_hook_on_add_rejects_invalid_timezone_for_nautical_task,
+    test_core_domain_configuration_validation_fails_closed,
     test_hook_on_modify_rejects_unknown_business_calendar_cleanly,
     test_hook_on_modify_rejects_invalid_timezone_for_nautical_task,
     test_on_modify_spawned_child_preserves_business_calendar,

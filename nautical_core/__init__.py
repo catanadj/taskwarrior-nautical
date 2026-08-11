@@ -523,6 +523,34 @@ def scheduling_configuration_error() -> str:
     return _TIMEZONE_CONFIG_ERROR
 
 
+def validate_scheduling_configuration() -> None:
+    """Validate domain-specific scheduling configuration before mutation."""
+    try:
+        _astronomy.validate_configuration(ASTRONOMY_CONFIG)
+
+        for name in sorted(dict(ANCHOR_PRESETS or {})):
+            expression = resolve_anchor_presets(f"@{name}")
+            validate_anchor_expr_strict(expression)
+
+        anchor_omit = _import_sibling("anchor_omit")
+        for name in sorted(dict(OMIT_PRESETS or {})):
+            anchor_omit.validate_omit_expr_strict(
+                f"@{name}",
+                validate_anchor_expr_cached=validate_anchor_expr_strict,
+                resolve_omit_presets=resolve_omit_presets,
+            )
+
+        configured = globals().get("configured_business_calendars")
+        clear_cache = getattr(configured, "cache_clear", None)
+        if callable(clear_cache):
+            clear_cache()
+        if callable(configured):
+            configured()
+    except Exception as exc:
+        message = str(exc).strip() or type(exc).__name__
+        raise RuntimeError(f"Invalid Nautical scheduling configuration: {message}") from exc
+
+
 def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> dict[str, str | bool]:
     """Apply the validated configuration selected for a Taskwarrior data directory."""
     global CONFIG_ERROR
@@ -576,6 +604,7 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> dict[str, str | 
     globals()["_CONF"] = _core_config._CONF
     CONFIG_ERROR = _core_config.configuration_error()
     _refresh_timezone()
+    validate_scheduling_configuration()
     _configure_season_support()
     error = scheduling_configuration_error()
     if error:

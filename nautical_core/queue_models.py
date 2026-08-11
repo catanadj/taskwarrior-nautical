@@ -4,7 +4,14 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from nautical_core.lifecycle_models import LifecycleContractError, LifecyclePlan
+from nautical_core.lifecycle_models import (
+    LifecycleAction,
+    LifecycleContractError,
+    LifecycleEvent,
+    LifecycleIdentity,
+    LifecyclePlan,
+    ParentGuard,
+)
 
 
 class QueueEntryError(ValueError):
@@ -129,6 +136,54 @@ class SpawnQueueEntry:
 
 def normalize_spawn_queue_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
     return SpawnQueueEntry.from_mapping(entry).to_dict()
+
+
+def migrate_legacy_spawn_queue_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Attach a v1 plan when a legacy spawn entry has sufficient identity.
+
+    Legacy entries without a complete parent guard remain unchanged and are
+    intentionally handled by the compatibility executor.  This keeps
+    migration bounded and prevents guessing an event or chain identity.
+    """
+    try:
+        normalized = SpawnQueueEntry.from_mapping(entry).to_dict()
+    except QueueEntryError:
+        return dict(entry)
+    if normalized.get("lifecycle_plan") is not None:
+        return normalized
+
+    guard = normalized.get("parent_guard")
+    parent_uuid = str(normalized.get("parent_uuid") or "").strip()
+    child = normalized.get("child") or {}
+    if not isinstance(guard, Mapping) or not parent_uuid or not isinstance(child, Mapping):
+        return normalized
+    status = str(guard.get("status") or "").strip().lower()
+    if status not in {"completed", "deleted"}:
+        return normalized
+    try:
+        parent_guard = ParentGuard.from_mapping(guard)
+        target_link = int(child.get("link") or (parent_guard.link + 1))
+        event = LifecycleEvent.EXPIRE if status == "deleted" else LifecycleEvent.COMPLETE
+        identity = LifecycleIdentity(
+            chain_id=parent_guard.chain_id,
+            parent_uuid=parent_uuid,
+            source_link=parent_guard.link,
+            target_link=target_link,
+            event=event,
+        )
+        child_short = str(normalized.get("child_short") or "").strip() or str(child.get("uuid") or "")[:8]
+        plan = LifecyclePlan.from_mappings(
+            identity=identity,
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=parent_guard,
+            child_payload=dict(child),
+            parent_patch={"nextLink": child_short},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+        )
+    except (LifecycleContractError, TypeError, ValueError):
+        return normalized
+    normalized["lifecycle_plan"] = plan.to_dict()
+    return normalized
 
 
 @dataclass(slots=True)

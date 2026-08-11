@@ -4413,6 +4413,30 @@ def test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe():
     normalized = queue_models.normalize_spawn_queue_entry(legacy)
     expect("lifecycle_plan" not in normalized, "legacy queue entry was changed without a plan")
 
+    eligible = {
+        **legacy,
+        "parent_uuid": "parent-uuid",
+        "parent_guard": {
+            "status": "completed",
+            "chain": "on",
+            "chainID": "chain-1",
+            "link": "4",
+        },
+        "child": {"uuid": "child-uuid", "link": 5},
+    }
+    migrated = queue_models.migrate_legacy_spawn_queue_entry(eligible)
+    plan = migrated.get("lifecycle_plan")
+    expect(isinstance(plan, dict) and plan.get("schema_version") == 1, "eligible legacy entry was not migrated")
+    expect(plan.get("identity", {}).get("event") == "complete", "legacy completion event was not inferred")
+    expect(
+        queue_models.migrate_legacy_spawn_queue_entry(migrated) == migrated,
+        "legacy plan migration was not idempotent",
+    )
+    expect(
+        "lifecycle_plan" not in queue_models.migrate_legacy_spawn_queue_entry(legacy),
+        "incomplete legacy identity was upgraded by guessing",
+    )
+
     future = dict(legacy)
     future["lifecycle_plan"] = {"schema_version": 99}
     try:

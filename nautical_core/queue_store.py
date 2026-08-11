@@ -21,6 +21,7 @@ from nautical_core.queue_models import (
     QueueRowClaimResult,
     QueueStoredRow,
     QueueWriteResult,
+    migrate_legacy_spawn_queue_entry,
 )
 
 
@@ -875,6 +876,7 @@ def rows_to_entries_result(rows: list[QueueStoredRow | sqlite3.Row]) -> QueueEnt
             obj["spawn_intent_id"] = spawn_intent_id
         if "attempts" not in obj:
             obj["attempts"] = attempts_db
+        obj = migrate_legacy_spawn_queue_entry(obj)
         obj["__queue_backend"] = "sqlite"
         obj["__queue_id"] = rid
         obj["__queue_claim_token"] = row.claim_token

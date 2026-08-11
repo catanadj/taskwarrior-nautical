@@ -3123,9 +3123,13 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
     }
     already_new = dict(already_old)
     already_new["chain"] = "off"
-    lifecycle.promote_newly_nautical_task(already_old, already_new, short_uuid=mod.core.short_uuid)
-    expect(already_new.get("chain") == "off", f"existing nautical task should keep chain state, got {already_new!r}")
-    expect(not already_new.get("chainID"), f"existing nautical task should not gain chainID here, got {already_new!r}")
+    try:
+        lifecycle.promote_newly_nautical_task(already_old, already_new, short_uuid=mod.core.short_uuid)
+    except ValueError as exc:
+        expect("chainID is missing" in str(exc), f"missing chain identity error lost detail: {exc}")
+    else:
+        raise AssertionError("existing recurrence edit without chainID was accepted")
+    expect(already_new.get("chain") == "off", f"rejected task should retain chain state, got {already_new!r}")
 
 
 def test_modify_ordinary_transition_failure_rejects_instead_of_noop():
@@ -3642,7 +3646,7 @@ def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
     expect(new.get("chain") == "on", f"promotion should set chain:on, got {new!r}")
     expect(bool((new.get("chainID") or "").strip()), f"promotion should stamp chainID, got {new!r}")
 
-    disabled_old = {"uuid": "00000000-0000-0000-0000-000000000448", "status": "pending", "anchor": "w:mon", "chain": "on"}
+    disabled_old = {"uuid": "00000000-0000-0000-0000-000000000448", "status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "00000000"}
     disabled_new = dict(disabled_old)
     disabled_new["chain"] = "off"
     trans = ml.apply_nautical_transition(disabled_old, disabled_new, short_uuid=lambda u: str(u).split("-")[0] if u else "")

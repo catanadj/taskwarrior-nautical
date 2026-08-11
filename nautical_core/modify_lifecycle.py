@@ -140,6 +140,9 @@ def apply_nautical_transition(
     old_chain = (old.get("chain") or "").strip().lower()
     new_chain = (new.get("chain") or "").strip().lower()
 
+    if old_has_recurrence and new_has_recurrence and not _norm_field(new.get("chainID")):
+        raise ValueError("recurrence edit requires a complete chain identity: chainID is missing")
+
     if not old_has_recurrence and new_has_recurrence:
         task_uuid = _norm_field(new.get("uuid"))
         if not task_uuid:

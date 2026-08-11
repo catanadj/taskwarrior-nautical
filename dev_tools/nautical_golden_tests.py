@@ -2880,15 +2880,17 @@ def test_modify_ordinary_transition_failure_rejects_instead_of_noop():
         render_recurrence_updated=lambda *_args: None,
         print_task=lambda *_args: None,
     )
+    candidate = {"uuid": "plain", "status": "pending", "anchor": "w:mon"}
     try:
         ordinary.handle_non_completion_modify(
             {"uuid": "plain", "status": "pending"},
-            {"uuid": "plain", "status": "pending", "anchor": "w:mon"},
+            candidate,
             services=services,
             lifecycle=SimpleNamespace(recurrence_setting_changes=lambda *_args: []),
         )
     except ordinary.RecurrenceActivationError as exc:
         expect("chain identity unavailable" in str(exc), f"transition detail was lost: {exc}")
+        expect("chain" not in candidate and "chainID" not in candidate, f"failed activation mutated task: {candidate!r}")
     else:
         raise AssertionError("failed recurrence transition was treated as no transition")
 

@@ -517,11 +517,11 @@ class CompletionLifecycleResult:
 
     def __post_init__(self) -> None:
         state = str(self.state or "").strip().lower()
-        if state not in {"applied", "queued", "retryable"}:
+        if state not in {"applied", "queued", "terminal", "manual_review", "retryable"}:
             raise ValueError(f"unsupported completion lifecycle state: {self.state!r}")
         if state == "queued" and (not self.deferred_spawn or not str(self.spawn_intent_id or "").strip()):
             raise ValueError("queued completion result requires deferred spawn and an intent ID")
-        if state == "applied" and self.deferred_spawn:
+        if state in {"applied", "terminal", "manual_review"} and self.deferred_spawn:
             raise ValueError("applied completion result cannot be deferred")
         object.__setattr__(self, "state", state)
         object.__setattr__(self, "child_short", str(self.child_short or "").strip())

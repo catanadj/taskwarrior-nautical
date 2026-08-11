@@ -6515,6 +6515,8 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
     )
     if computed is None:
         return None
+    if isinstance(computed, _module("modify_models").CompletionLifecycleResult):
+        return computed
 
     # Direct helper callers may exercise computation without a full
     # Taskwarrior identity.  Completion preflight rejects that shape before a
@@ -6622,6 +6624,8 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
 
     computed = _completion_compute_next_and_limits(new, kind, next_no, now_utc)
     if computed is None:
+        return
+    if isinstance(computed, _module("modify_models").CompletionLifecycleResult):
         return
     snapshot = ctx.chain_snapshot
     preloaded_chain = list(snapshot.rows)

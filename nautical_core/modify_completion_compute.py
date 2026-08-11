@@ -10,6 +10,7 @@ from nautical_core.modify_models import (
     ComputeAnchorChildDueCallback,
     ComputeCpChildDueCallback,
     CompletionComputeResult,
+    CompletionLifecycleResult,
     CompletionComputeServices,
     DatetimeParserCallback,
     EndChainSummaryCallback,
@@ -231,7 +232,7 @@ def completion_compute_next_and_limits(
     now_utc: Any,
     *,
     services: CompletionComputeServices,
-) -> CompletionComputeResult | None:
+) -> CompletionComputeResult | CompletionLifecycleResult | None:
     completion_compute_child_due = services.completion_compute_child_due
     completion_until_or_fail = services.completion_until_or_fail
     completion_until_guard_or_stop = services.completion_until_guard_or_stop
@@ -241,6 +242,11 @@ def completion_compute_next_and_limits(
     completion_cap_guard_or_stop = services.completion_cap_guard_or_stop
     computed = completion_compute_child_due(new, kind)
     if computed is None:
+        if str(new.get("chain") or "").strip().lower() == "off":
+            return CompletionLifecycleResult(
+                state="terminal",
+                reason="recurrence scheduler reached a terminal boundary",
+            )
         return None
     child_due, meta, dnf = computed
 
@@ -249,6 +255,8 @@ def completion_compute_next_and_limits(
         return None
 
     if not completion_until_guard_or_stop(new, child_due, until_dt, now_utc):
+        if str(new.get("chain") or "").strip().lower() == "off":
+            return CompletionLifecycleResult(state="terminal", reason="chainUntil boundary reached")
         return None
 
     if not completion_require_child_due_or_fail(new, child_due):
@@ -258,6 +266,8 @@ def completion_compute_next_and_limits(
     cpmax, until_dt, cap_no, finals, until_cap_no = completion_caps(kind, new, child_due, dnf)
 
     if not completion_cap_guard_or_stop(new, next_no, cap_no, now_utc):
+        if str(new.get("chain") or "").strip().lower() == "off":
+            return CompletionLifecycleResult(state="terminal", reason="successor limit reached")
         return None
 
     return CompletionComputeResult(

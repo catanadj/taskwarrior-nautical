@@ -18537,6 +18537,15 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
     expect(out.cpmax == 3 and out.cap_no == 3, f"unexpected cap data: {out}")
     expect(out.finals == finals and out.until_cap_no == 3, f"unexpected finals: {out}")
 
+    terminal_task = {"chain": "on"}
+    def stop_at_until(task, *_args):
+        task["chain"] = "off"
+        return False
+    mod._completion_until_guard_or_stop = stop_at_until
+    terminal = mod._completion_compute_next_and_limits(terminal_task, "cp", 2, mod.core.now_utc())
+    expect(terminal.state == "terminal", f"terminal completion result was not exposed: {terminal!r}")
+    expect("chainUntil" in terminal.reason, f"terminal result lost boundary reason: {terminal!r}")
+
 
 def test_completion_scheduler_terminal_outcomes_are_not_spawned():
     """Completion must finish only on date exhaustion and reject search exhaustion."""

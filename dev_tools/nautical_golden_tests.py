@@ -4401,7 +4401,7 @@ def test_queue_schema_initializes_and_adopts_legacy_rows():
 
 def test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe():
     """New queue entries carry a typed plan while old entries remain readable."""
-    from nautical_core import queue_models
+    from nautical_core import queue_models, queue_store
 
     legacy = {
         "parent_uuid": "parent",
@@ -4436,6 +4436,23 @@ def test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe():
         "lifecycle_plan" not in queue_models.migrate_legacy_spawn_queue_entry(legacy),
         "incomplete legacy identity was upgraded by guessing",
     )
+
+    with sqlite3.connect(":memory:") as conn:
+        queue_store.init_queue_db(conn)
+        missing_plan = queue_store.enqueue_entries_sqlite_result(
+            conn,
+            [eligible],
+            now=1.0,
+            require_lifecycle_plan=True,
+        )
+        expect(not missing_plan.ok and "missing lifecycle_plan" in missing_plan.err, "unplanned write was accepted")
+        planned_write = queue_store.enqueue_entries_sqlite_result(
+            conn,
+            [migrated],
+            now=2.0,
+            require_lifecycle_plan=True,
+        )
+        expect(planned_write.ok, f"versioned lifecycle plan was not durably written: {planned_write}")
 
     future = dict(legacy)
     future["lifecycle_plan"] = {"schema_version": 99}

@@ -22,6 +22,7 @@ from nautical_core.queue_models import (
     QueueStoredRow,
     QueueWriteResult,
     migrate_legacy_spawn_queue_entry,
+    normalize_spawn_queue_entry,
 )
 
 
@@ -1016,10 +1017,26 @@ def enqueue_entries_sqlite_result(
     now: float,
     diag: Callable[[str], None] | None = None,
     on_lock_busy: Callable[[], None] | None = None,
+    require_lifecycle_plan: bool = False,
 ) -> QueueWriteResult:
     items = [entry for entry in (entries or []) if isinstance(entry, dict)]
     if not items:
         return QueueWriteResult(ok=True, count=0)
+    if require_lifecycle_plan:
+        validated: list[dict[str, Any]] = []
+        for entry in items:
+            try:
+                normalized = normalize_spawn_queue_entry(entry)
+            except QueueEntryError as exc:
+                return QueueWriteResult(ok=False, count=1, err=f"invalid lifecycle outbox entry: {exc}")
+            if not isinstance(normalized.get("lifecycle_plan"), dict):
+                return QueueWriteResult(
+                    ok=False,
+                    count=1,
+                    err="invalid lifecycle outbox entry: missing lifecycle_plan",
+                )
+            validated.append(normalized)
+        items = validated
     try:
         conn.execute("BEGIN IMMEDIATE")
         for entry in items:

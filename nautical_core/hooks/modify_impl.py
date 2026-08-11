@@ -1780,7 +1780,11 @@ def _spawn_queue_write_failure(task_obj: dict, err: Exception) -> tuple[bool, st
     return False, fail_reason
 
 
-def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
+def _enqueue_deferred_spawn_sqlite(
+    task_obj: dict,
+    *,
+    require_lifecycle_plan: bool = False,
+) -> tuple[bool, str]:
     guard = _spawn_queue_capacity_guard(task_obj)
     if guard is not None:
         return guard
@@ -1798,6 +1802,7 @@ def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
             now=_time.time(),
             diag=lambda msg: errors.append(str(msg)),
             on_lock_busy=lambda: lock_busy.__setitem__("value", True),
+            require_lifecycle_plan=require_lifecycle_plan,
         )
         if result.ok:
             queue_store.repair_sqlite_permissions(_SPAWN_QUEUE_DB_PATH)
@@ -1811,8 +1816,12 @@ def _enqueue_deferred_spawn_sqlite(task_obj: dict) -> tuple[bool, str]:
         _queue_close_silent(conn)
 
 
-def _enqueue_deferred_spawn(task_obj: dict) -> tuple[bool, str]:
-    return _enqueue_deferred_spawn_sqlite(task_obj)
+def _enqueue_deferred_spawn(
+    task_obj: dict,
+    *,
+    require_lifecycle_plan: bool = False,
+) -> tuple[bool, str]:
+    return _enqueue_deferred_spawn_sqlite(task_obj, require_lifecycle_plan=require_lifecycle_plan)
 
 
 def _write_dead_letter(entry: dict, reason: str) -> None:
@@ -2414,7 +2423,7 @@ def _enqueue_spawn_intent(entry: dict) -> tuple[bool, str]:
         normalized = queue_models.normalize_spawn_queue_entry(entry)
     except Exception as e:
         return False, str(e)
-    return _enqueue_deferred_spawn(normalized)
+    return _enqueue_deferred_spawn(normalized, require_lifecycle_plan=True)
 
 
 def _lifecycle_spawn_identity(parent: dict, child: dict):

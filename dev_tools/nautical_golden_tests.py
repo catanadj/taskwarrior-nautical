@@ -4765,6 +4765,40 @@ def test_lifecycle_terminal_executor_guards_disablement():
     expect(unavailable.calls == ["validate"], f"terminal mutated after unavailable guard: {unavailable.calls}")
 
 
+def test_reconcile_terminal_state_is_idempotent_but_rejects_linked_successor():
+    """A disabled terminal parent is already complete, but a linked one is a conflict."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_terminal_state_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "terminal01",
+        "link": 2,
+        "cp": "1d",
+    }
+    reconcile_plan = tool.reconcile.ReconcilePlan("legitimate_final", parent, 3, "reached chainMax")
+    lifecycle_plan = tool._terminal_lifecycle_plan(reconcile_plan)
+    original_fresh = tool._fresh_parent
+    try:
+        tool._fresh_parent = lambda _task_bin, _parent: dict(parent, chain="off")
+        services = tool._ReconcileLifecycleServices("task", SimpleNamespace(), parent)
+        already = services.validate_terminal(lifecycle_plan)
+        expect(already.state is tool.OperationState.ALREADY, f"disabled terminal was not idempotent: {already!r}")
+
+        tool._fresh_parent = lambda _task_bin, _parent: dict(parent, chain="off", nextLink="22222222")
+        conflict = services.validate_terminal(lifecycle_plan)
+        expect(conflict.state is tool.OperationState.CONFLICT, f"linked terminal was not rejected: {conflict!r}")
+        try:
+            tool._verify_disabled_parent("task", parent)
+        except RuntimeError as exc:
+            expect("spawnable" in str(exc), f"linked terminal error was unclear: {exc}")
+        else:
+            raise AssertionError("terminal verification accepted a linked successor")
+    finally:
+        tool._fresh_parent = original_fresh
+
+
 def test_queue_database_durable_mode_uses_full_synchronous():
     """Durable queue mode must apply SQLite FULL synchronous semantics."""
     from nautical_core import queue_store
@@ -32870,6 +32904,7 @@ TESTS = [
     test_lifecycle_queue_capacity_guard_is_atomic,
     test_lifecycle_executor_uses_typed_order_and_compensation,
     test_lifecycle_terminal_executor_guards_disablement,
+    test_reconcile_terminal_state_is_idempotent_but_rejects_linked_successor,
     test_queue_database_durable_mode_uses_full_synchronous,
     test_queue_schema_rejects_incompatible_databases_without_quarantine,
     test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,

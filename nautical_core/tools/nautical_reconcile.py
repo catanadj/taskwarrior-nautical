@@ -922,6 +922,12 @@ def _verify_disabled_parent(task_bin: str, parent: dict[str, Any]) -> None:
     if str(fresh_parent.get("chain") or "").strip().lower() != "off":
         shown = str(fresh_parent.get("chain") or "<empty>").strip() or "<empty>"
         raise RuntimeError(f"post-apply verification found parent chain {shown}; expected off")
+    successor = str(fresh_parent.get("nextLink") or "").strip()
+    if successor:
+        raise RuntimeError(
+            f"post-apply verification found successor {successor}; "
+            "terminal chain must not remain spawnable"
+        )
 
 
 def _verify_applied_child(
@@ -1565,6 +1571,19 @@ class _ReconcileLifecycleServices:
         return self._result(OperationState.APPLIED)
 
     def validate_terminal(self, plan: LifecyclePlan) -> OperationResult:
+        try:
+            parent = _fresh_parent(self.task_bin, {"uuid": plan.identity.parent_uuid})
+        except Exception as exc:
+            return self._result(OperationState.UNAVAILABLE, reason=f"terminal parent export unavailable: {exc}")
+        if parent is None:
+            return self._result(OperationState.UNAVAILABLE, reason="terminal parent export unavailable")
+        if str(parent.get("chain") or "").strip().lower() == "off":
+            if str(parent.get("nextLink") or "").strip():
+                return self._result(
+                    OperationState.CONFLICT,
+                    reason="chain is already off but has a successor link",
+                )
+            return self._result(OperationState.ALREADY)
         return self.validate_parent(plan)
 
     def disable_chain(self, plan: LifecyclePlan) -> OperationResult:

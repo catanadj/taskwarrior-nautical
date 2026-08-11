@@ -1209,6 +1209,7 @@ def enqueue_entries_sqlite_result(
     diag: Callable[[str], None] | None = None,
     on_lock_busy: Callable[[], None] | None = None,
     require_lifecycle_plan: bool = False,
+    max_payload_bytes: int = 0,
 ) -> QueueWriteResult:
     items = [entry for entry in (entries or []) if isinstance(entry, dict)]
     if not items:
@@ -1233,6 +1234,7 @@ def enqueue_entries_sqlite_result(
         items = validated
     try:
         conn.execute("BEGIN IMMEDIATE")
+        prepared: list[tuple[dict[str, Any], str, int, str]] = []
         for entry in items:
             out = dict(entry)
             out.pop("__queue_backend", None)
@@ -1244,6 +1246,40 @@ def enqueue_entries_sqlite_result(
                 attempts = 0
             payload = json.dumps(out, ensure_ascii=False, separators=(",", ":"))
             sid = (out.get("spawn_intent_id") or "").strip()
+            prepared.append((out, payload, attempts, sid))
+
+        if max_payload_bytes > 0:
+            current_total = int(
+                conn.execute("SELECT COALESCE(SUM(length(CAST(payload AS BLOB))), 0) FROM queue_entries").fetchone()[0]
+                or 0
+            )
+            existing_by_sid = {
+                str(sid): int(size or 0)
+                for sid, size in conn.execute(
+                    "SELECT spawn_intent_id, length(CAST(payload AS BLOB)) "
+                    "FROM queue_entries WHERE spawn_intent_id IS NOT NULL"
+                ).fetchall()
+                if str(sid or "").strip()
+            }
+            replacement_sids = {sid for _out, _payload, _attempts, sid in prepared if sid}
+            projected = current_total - sum(existing_by_sid.get(sid, 0) for sid in replacement_sids)
+            projected += sum(len(payload.encode("utf-8")) for _out, payload, _attempts, sid in prepared if not sid)
+            last_payload_by_sid: dict[str, str] = {}
+            for _out, payload, _attempts, sid in prepared:
+                if sid:
+                    last_payload_by_sid[sid] = payload
+            projected += sum(
+                len(payload.encode("utf-8"))
+                for payload in last_payload_by_sid.values()
+            )
+            if projected > int(max_payload_bytes):
+                conn.rollback()
+                message = f"queue payload capacity exceeded ({projected} > {int(max_payload_bytes)} bytes)"
+                if callable(diag):
+                    diag(message)
+                return QueueWriteResult(ok=False, count=len(items), err=message)
+
+        for out, payload, attempts, sid in prepared:
             if sid:
                 cur = conn.execute(
                     "UPDATE queue_entries SET payload=?, attempts=?, state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "

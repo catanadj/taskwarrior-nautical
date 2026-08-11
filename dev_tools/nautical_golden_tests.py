@@ -4598,6 +4598,32 @@ def test_lifecycle_stage_advancement_requires_claim_and_valid_transition():
         expect(conn.execute("SELECT COUNT(1) FROM queue_entries WHERE id=?", (row_id,)).fetchone()[0] == 0, "finalized row remained")
 
 
+def test_lifecycle_queue_capacity_guard_is_atomic():
+    """A durable plan over the configured payload budget must not be written."""
+    from nautical_core import queue_models, queue_store
+
+    legacy = {
+        "parent_uuid": "parent-capacity",
+        "parent_nextlink": "",
+        "child_short": "child-cap",
+        "child": {"uuid": "child-cap", "link": 2},
+        "spawn_intent_id": "si_capacity",
+        "parent_guard": {"status": "completed", "chain": "on", "chainID": "chain-cap", "link": "1"},
+    }
+    entry = queue_models.migrate_legacy_spawn_queue_entry(legacy)
+    with sqlite3.connect(":memory:") as conn:
+        queue_store.init_queue_db(conn)
+        result = queue_store.enqueue_entries_sqlite_result(
+            conn,
+            [entry],
+            now=1.0,
+            require_lifecycle_plan=True,
+            max_payload_bytes=1,
+        )
+        expect(not result.ok and "capacity exceeded" in result.err, f"oversized plan was accepted: {result}")
+        expect(conn.execute("SELECT COUNT(1) FROM queue_entries").fetchone()[0] == 0, "capacity rejection was not atomic")
+
+
 def test_queue_database_durable_mode_uses_full_synchronous():
     """Durable queue mode must apply SQLite FULL synchronous semantics."""
     from nautical_core import queue_store
@@ -32536,6 +32562,7 @@ TESTS = [
     test_queue_schema_initializes_and_adopts_legacy_rows,
     test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe,
     test_lifecycle_stage_advancement_requires_claim_and_valid_transition,
+    test_lifecycle_queue_capacity_guard_is_atomic,
     test_queue_database_durable_mode_uses_full_synchronous,
     test_queue_schema_rejects_incompatible_databases_without_quarantine,
     test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,

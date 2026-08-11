@@ -1769,8 +1769,11 @@ def _spawn_queue_capacity_guard(task_obj: dict) -> tuple[bool, str] | None:
             _write_dead_letter(task_obj, "spawn queue full")
             _diag("spawn queue full; intent dropped")
             return False, "spawn queue full"
-    except Exception:
-        pass
+    except Exception as exc:
+        reason = f"spawn queue capacity check unavailable: {exc}"
+        _write_dead_letter(task_obj, reason)
+        _diag(reason)
+        return False, reason
     return None
 
 def _spawn_queue_write_failure(task_obj: dict, err: Exception) -> tuple[bool, str]:
@@ -1803,6 +1806,7 @@ def _enqueue_deferred_spawn_sqlite(
             diag=lambda msg: errors.append(str(msg)),
             on_lock_busy=lambda: lock_busy.__setitem__("value", True),
             require_lifecycle_plan=require_lifecycle_plan,
+            max_payload_bytes=_SPAWN_QUEUE_MAX_BYTES,
         )
         if result.ok:
             queue_store.repair_sqlite_permissions(_SPAWN_QUEUE_DB_PATH)
@@ -1810,7 +1814,7 @@ def _enqueue_deferred_spawn_sqlite(
             return True, ""
         if lock_busy["value"]:
             return _handle_enqueue_lock_busy(task_obj)
-        err = errors[-1] if errors else "spawn queue write failed"
+        err = result.err or (errors[-1] if errors else "spawn queue write failed")
         return _spawn_queue_write_failure(task_obj, RuntimeError(err))
     finally:
         _queue_close_silent(conn)

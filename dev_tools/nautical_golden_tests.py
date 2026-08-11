@@ -14654,6 +14654,44 @@ def test_modify_timeline_marks_projection_failures_instead_of_silent_truncation(
     expect("provider contract broken" in line, f"warning row did not render: {line!r}")
 
 
+def test_modify_timeline_preserves_typed_terminal_projection_evidence():
+    """Timeline cleanup must distinguish a date boundary from a provider failure."""
+    import nautical_core.modify_timeline as timeline
+
+    child_due = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
+    terminal = core.OccurrenceSearchExhausted(
+        "timeline projection",
+        reference=date(9999, 12, 31),
+        limit=1,
+    )
+
+    def date_limited(*_args, **_kwargs):
+        raise terminal
+
+    items = timeline._timeline_future_anchor_items(
+        {"chainID": "timeline-terminal-test", "due": "20260803T090000Z"},
+        [[{"kind": "w", "value": "mon", "mods": {}}]],
+        child_due,
+        start_no=2,
+        allowed_future=1,
+        cap_no=None,
+        to_local_cached=lambda value: value,
+        safe_parse_datetime=lambda value: (child_due, None),
+        next_occurrence_after_local_dt=date_limited,
+        omit_dnf=None,
+        omit_expr_fires_on_date=None,
+        omit_description_for_date=None,
+        max_iterations=4,
+    )
+    expect(items and items[-1][3] == "warning", f"terminal projection was silently truncated: {items!r}")
+    expect(
+        "Projection ended" in items[-1][2]["message"]
+        and "9999-12-31" in items[-1][2]["message"],
+        f"date-limit evidence was not rendered distinctly: {items!r}",
+    )
+
+
+
 def test_modify_timeline_marks_omit_evaluation_failures():
     """Timeline omission failures should not render the slot as an ordinary future link."""
     import nautical_core.modify_timeline as timeline
@@ -32208,6 +32246,7 @@ TESTS = [
     test_anchor_omit_positive_day_offset_matches_shifted_date,
     test_hook_on_modify_timeline_marks_omitted_anchor_slots,
     test_modify_timeline_marks_projection_failures_instead_of_silent_truncation,
+    test_modify_timeline_preserves_typed_terminal_projection_evidence,
     test_modify_timeline_marks_omit_evaluation_failures,
     test_hook_on_modify_merged_timeline_marks_projection_failures,
     test_hook_on_modify_timeline_uses_omit_file_description_label,

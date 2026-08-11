@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 
 
@@ -200,6 +201,20 @@ def _timeline_future_anchor_items(
                 to_local=lambda value: value,
             )
             next_local = occurrence.local_datetime if occurrence is not None else None
+        except OccurrenceSearchExhausted as exc:
+            if exc.is_date_limit:
+                items.append(
+                    _timeline_warning(
+                        f"Projection ended: {occurrence_exhaustion_message(exc)}"
+                    )
+                )
+            else:
+                items.append(
+                    _timeline_warning(
+                        f"Projection unavailable: {occurrence_exhaustion_message(exc)}"
+                    )
+                )
+            break
         except Exception as exc:
             items.append(_timeline_warning(f"Projection unavailable: {type(exc).__name__}: {exc}"))
             break
@@ -298,6 +313,20 @@ def _timeline_omitted_before_next_anchor_items(
                 to_local=lambda value: value,
             )
             next_local = occurrence.local_datetime if occurrence is not None else None
+        except OccurrenceSearchExhausted as exc:
+            if exc.is_date_limit:
+                items.append(
+                    _timeline_warning(
+                        f"Projection ended: {occurrence_exhaustion_message(exc)}"
+                    )
+                )
+            else:
+                items.append(
+                    _timeline_warning(
+                        f"Projection unavailable: {occurrence_exhaustion_message(exc)}"
+                    )
+                )
+            break
         except Exception as exc:
             items.append(_timeline_warning(f"Projection unavailable: {type(exc).__name__}: {exc}"))
             break

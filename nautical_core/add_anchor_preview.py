@@ -1249,6 +1249,7 @@ def handle_anchor_preview_on_add(
 
     cpmax = core.coerce_int(task.get("chainMax"), 0)
     preview: list[str]
+    presentation_terminal = None
     exact_until_count = None
     final_until_dt = None
     if compact_presentation:
@@ -1322,6 +1323,7 @@ def handle_anchor_preview_on_add(
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
         )
+        presentation_terminal = getattr(all_occurrences, "terminal", None)
         if until_dt:
             until_local = core.to_local(until_dt)
             limited = [dt for dt in all_occurrences if compare_datetimes(dt, until_local) <= 0]
@@ -1349,6 +1351,9 @@ def handle_anchor_preview_on_add(
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
         )
+        event_terminal = getattr(events, "terminal", None)
+        if event_terminal is not None:
+            presentation_terminal = event_terminal
         if until_dt:
             until_local = core.to_local(until_dt)
             events = [
@@ -1366,6 +1371,14 @@ def handle_anchor_preview_on_add(
             core=core,
             task=task,
         )
+        if presentation_terminal is not None and presentation_terminal.is_date_limit:
+            rows.append(
+                (
+                    "Note",
+                    f"[yellow]{occurrence_exhaustion_message(presentation_terminal)}; "
+                    "the preview shows the final representable matches.[/]",
+                )
+            )
         if anchor_str:
             anchor_preview_lint_and_validate(anchor_str, prof, core=core, panel=panel)
 

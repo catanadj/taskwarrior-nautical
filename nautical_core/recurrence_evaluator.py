@@ -14,6 +14,7 @@ from typing import Any, Mapping, NoReturn
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
 from .occurrence_provider import Occurrence, OccurrenceBatch
+from .scheduler_models import OccurrenceSearchExhausted
 from .recurrence_protocols import (
     NextOccurrenceCallback,
     PickOccurrenceCallback,
@@ -498,20 +499,27 @@ class RecurrenceEvaluator:
             return OccurrenceBatch()
 
         events: list[Occurrence] = []
+        terminal: OccurrenceSearchExhausted | None = None
         cursor = start_local
         first = inclusive
         included_count = 0
         for _ in range(max_iterations):
-            event = self.next_event_after(
-                cursor,
-                fallback_hhmm=fallback_hhmm,
-                default_seed_date=default_seed_date,
-                inclusive=first,
-                pick_occurrence_local=pick_occurrence_local,
-                anchor_file_provider=anchor_file_provider,
-                include_omitted=include_omitted,
-                max_file_skips=max_file_skips,
-            )
+            try:
+                event = self.next_event_after(
+                    cursor,
+                    fallback_hhmm=fallback_hhmm,
+                    default_seed_date=default_seed_date,
+                    inclusive=first,
+                    pick_occurrence_local=pick_occurrence_local,
+                    anchor_file_provider=anchor_file_provider,
+                    include_omitted=include_omitted,
+                    max_file_skips=max_file_skips,
+                )
+            except OccurrenceSearchExhausted as exc:
+                if events and exc.is_date_limit:
+                    terminal = exc
+                    break
+                raise
             if event is None or event.local_datetime is None:
                 break
             if compare_datetimes(event.local_datetime, end_local) > 0:
@@ -525,7 +533,7 @@ class RecurrenceEvaluator:
             first = False
         else:
             raise ValueError("Occurrence provider exceeded its range iteration limit.")
-        return OccurrenceBatch(events)
+        return OccurrenceBatch(events, terminal=terminal)
 
     def select_mode(
         self,

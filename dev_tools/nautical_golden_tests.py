@@ -21588,6 +21588,49 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         raise AssertionError("evaluator silently invented a chain identity")
 
 
+def test_recurrence_evaluator_events_between_preserves_terminal_evidence():
+    """A valid event prefix must retain date-limit exhaustion evidence."""
+    from unittest.mock import patch
+
+    from nautical_core.occurrence_provider import Occurrence
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+    from nautical_core.scheduler_models import OccurrenceSearchExhausted
+
+    evaluator = RecurrenceEvaluator.from_task(
+        {"chainID": "terminal-events", "anchor": "w:mon"},
+        timezone=timezone.utc,
+    )
+    first_local = datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc)
+    terminal = OccurrenceSearchExhausted(
+        "terminal event stream",
+        reference=date(9999, 12, 31),
+        limit=1,
+    )
+    calls = 0
+
+    def next_event(_self, _cursor, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return Occurrence(
+                first_local.date(),
+                first_local.hour,
+                first_local.minute,
+                local_datetime=first_local,
+            )
+        raise terminal
+
+    with patch.object(RecurrenceEvaluator, "next_event_after", next_event):
+        events = evaluator.events_between(
+            datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc),
+            datetime(9999, 12, 31, 9, 0, tzinfo=timezone.utc),
+            limit=3,
+        )
+    expect(len(events) == 1, f"terminal stream lost its valid prefix: {events!r}")
+    expect(events[0].local_datetime == first_local, f"wrong event prefix: {events!r}")
+    expect(events.terminal is terminal, "terminal exhaustion evidence was discarded")
+
+
 def test_chain_generation_hook_adapter_does_not_capture_modify_helpers():
     """Hook adaptation must keep generation decisions inside the shared service."""
     from nautical_core.chain_generation import ChainGenerationService
@@ -32475,6 +32518,7 @@ TESTS.extend([
     test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,
     test_recurrence_evaluator_loads_omit_file_without_text_rule,
     test_recurrence_evaluator_loads_omit_file_dates_and_descriptions_once,
+    test_recurrence_evaluator_events_between_preserves_terminal_evidence,
     test_recurrence_evaluator_shadow_parity_time_matrix,
     test_recurrence_evaluator_shadow_parity_dst_and_business_calendar,
     test_modify_timeline_uses_explicit_recurrence_identity,

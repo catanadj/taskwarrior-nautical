@@ -28387,6 +28387,50 @@ def test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review():
         tool._apply_parent_atomic = original_apply
 
 
+def test_reconcile_narrow_recovery_lookup_failure_is_partial():
+    """A failed live child read is retryable, not an authoritative missing child."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_lookup_unavailable_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "deleted",
+        "chain": "on",
+        "chainID": "lookup01",
+        "link": 1,
+    }
+    original_apply = tool._apply_parent_atomic
+    original_export = tool._export
+    try:
+        def apply_parent(*_args, **_kwargs):
+            return tool.reconcile.ReconcilePlan(
+                "spawn",
+                parent,
+                2,
+                "expired link missing next link",
+                child={"uuid": "22222222-0000-0000-0000-000000000002"},
+            ), "22222222"
+
+        tool._apply_parent_atomic = apply_parent
+        tool._export = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            TimeoutError("Taskwarrior lock busy")
+        )
+        outcomes = tool._reconcile_candidate(
+            "task",
+            SimpleNamespace(),
+            parent,
+            taskdata=Path("/tmp/nautical-reconcile-lookup-unavailable-test"),
+            apply=True,
+            max_expiration_hops=4,
+            recovery_at=datetime.now(timezone.utc),
+        )
+    finally:
+        tool._apply_parent_atomic = original_apply
+        tool._export = original_export
+
+    expect([plan.action for plan, _applied in outcomes] == ["spawn", "partial"], f"lookup failure was not partial: {outcomes!r}")
+    expect("lookup unavailable" in outcomes[-1][0].reason, f"lookup failure reason was not actionable: {outcomes[-1][0]!r}")
+
+
 def test_reconcile_parent_updates_are_guarded():
     """Reconcile writes should compare the parent state that authorized the plan."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -33090,6 +33134,7 @@ TESTS = [
     test_reconcile_apply_refreshes_parent_under_lock,
     test_reconcile_apply_resumes_after_parent_update_failure,
     test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review,
+    test_reconcile_narrow_recovery_lookup_failure_is_partial,
     test_reconcile_parent_updates_are_guarded,
     test_reconcile_repairs_missing_legacy_root_link_under_guard,
     test_reconcile_repairs_legacy_root_metadata_when_chain_stops,

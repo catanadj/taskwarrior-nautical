@@ -60,6 +60,10 @@ class _LifecycleManualReview(RuntimeError):
     """Signal that a lifecycle transition needs operator review."""
 
 
+class _RecoveryLookupUnavailable(TimeoutError):
+    """Signal that a narrow recovery-child read must be retried."""
+
+
 class _ConfigurationVerification:
     """Validated configuration state used to gate reconcile mutations."""
 
@@ -1193,7 +1197,13 @@ def _next_recovery_child(
     wanted = str(child_short or "").strip().lower()
     if not wanted:
         raise RuntimeError("recovery action did not identify its child")
-    rows = _export(task_bin, [f"uuid:{wanted}"], timeout=30.0)
+    try:
+        rows = _export(task_bin, [f"uuid:{wanted}"], timeout=30.0)
+    except Exception as exc:
+        reason = str(exc).strip() or type(exc).__name__
+        raise _RecoveryLookupUnavailable(
+            f"recovery child {wanted} lookup unavailable: {reason}"
+        ) from exc
     matches = [
         row
         for row in rows
@@ -1341,6 +1351,9 @@ def _reconcile_candidate(
                     child = cached_child
                 else:
                     child = _next_recovery_child(task_bin, plan.parent, child_short)
+            except _RecoveryLookupUnavailable as exc:
+                outcomes.append((_recovery_partial(plan.parent, str(exc)), ""))
+                break
             except Exception as exc:
                 outcomes.append((_recovery_error(plan.parent, str(exc)), ""))
                 break

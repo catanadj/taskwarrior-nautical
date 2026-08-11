@@ -16682,6 +16682,35 @@ def test_queue_claim_quarantines_invalid_lifecycle_plan_schema():
         expect("schema version" in json.loads(payload).get("reason", "").lower(), "schema detail missing")
 
 
+def test_queue_claim_recovers_processing_row_without_claim_timestamp():
+    """A processing row missing claim time must not be stranded indefinitely."""
+    from nautical_core import queue_store
+
+    with sqlite3.connect(":memory:") as conn:
+        queue_store.init_queue_db(conn)
+        conn.execute(
+            "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
+            "VALUES (?, ?, 0, 'processing', ?, NULL, 1.0, 1.0)",
+            (
+                "si_missing_claim_time",
+                json.dumps({"spawn_intent_id": "si_missing_claim_time", "child": {"uuid": "child"}}),
+                "orphaned-claim",
+            ),
+        )
+        conn.commit()
+        claim = queue_store.claim_rows_sqlite_result(
+            conn,
+            token="recovery-claim",
+            now=2.0,
+            processing_stale_after=60.0,
+            max_lines=10,
+        )
+        expect(len(claim.rows) == 1, f"row without claim timestamp was not recovered: {claim}")
+        expect(claim.rows[0].claim_token == "recovery-claim", "recovered row kept the orphaned claim")
+        state, token = conn.execute("SELECT state, claim_token FROM queue_entries").fetchone()
+        expect(state == "processing" and token == "recovery-claim", "recovery did not replace stale ownership")
+
+
 def test_on_exit_dead_letter_on_missing_fields():
     """on-exit should dead-letter entries missing required fields."""
     hook = _find_hook_file("on-exit.nautical")
@@ -32513,6 +32542,7 @@ TESTS = [
     test_queue_status_and_doctor_report_schema_health,
     test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,
     test_queue_claim_quarantines_invalid_lifecycle_plan_schema,
+    test_queue_claim_recovers_processing_row_without_claim_timestamp,
     test_queue_status_json_ok_empty_taskdata,
     test_doctor_json_has_stable_schema_marker,
     test_operator_queue_status_json_ok_empty_taskdata,

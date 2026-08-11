@@ -847,7 +847,7 @@ def claim_rows_sqlite_result(
             cutoff = now - processing_stale_after
             conn.execute(
                 "UPDATE queue_entries SET state='queued', claim_token=NULL, claimed_at=NULL, updated_at=? "
-                "WHERE state='processing' AND claimed_at IS NOT NULL AND claimed_at < ?",
+                "WHERE state='processing' AND (claimed_at IS NULL OR claimed_at < ?)",
                 (now, cutoff),
             )
             conn.commit()

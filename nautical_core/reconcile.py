@@ -9,6 +9,14 @@ from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 from nautical_core.scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
+from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, TaskSnapshot
+from nautical_core.lifecycle_planner import (
+    ChainGenerationLimitPolicy,
+    ChainGenerationPlanningService,
+    LifecyclePlanner,
+    PrecomputedRecurrencePlanningService,
+    RecurrenceCandidate,
+)
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
@@ -507,11 +515,41 @@ def _build_reconcile_plan_unscoped(
     child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"
     parent_short = short_uuid(parent.get("uuid"))
     try:
-        child = generation.build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt)
+        candidate = RecurrenceCandidate(
+            child_due=child_due,
+            metadata=tuple(sorted(dict(meta or {}).items())),
+            dnf=None,
+            until=until_dt,
+        )
+        recurrence = PrecomputedRecurrencePlanningService(
+            candidate=candidate,
+            child_service=ChainGenerationPlanningService(generation),
+        )
+        planner = LifecyclePlanner(
+            {"scheduler_fingerprint": "reconcile"},
+            recurrence_service=recurrence,
+            successor_limit_policy=ChainGenerationLimitPolicy(compare_datetimes),
+        )
+        lifecycle_plan = planner.plan(
+            TaskSnapshot.from_mapping(parent),
+            LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
+        )
+        if lifecycle_plan.action is LifecycleAction.FINALIZE_CHAIN:
+            return ReconcilePlan(
+                "legitimate_final",
+                parent,
+                next_link,
+                "reached lifecycle successor limit",
+                child_due=child_due,
+            )
+        child = lifecycle_plan.child_dict()
     except Exception as exc:
+        underlying = exc
+        while getattr(underlying, "__cause__", None) is not None:
+            underlying = underlying.__cause__
         carry_conflict = (
-            isinstance(exc, native_until.NativeUntilCarryError)
-            and exc.code == native_until.CARRY_CONFLICT
+            isinstance(underlying, native_until.NativeUntilCarryError)
+            and underlying.code == native_until.CARRY_CONFLICT
         )
         if is_expiration and kind in {"anchor", "anchor_file"} and carry_conflict:
             try:

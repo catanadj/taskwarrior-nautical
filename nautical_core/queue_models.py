@@ -42,7 +42,13 @@ def _clean_parent_guard(value: Any) -> dict[str, str] | None:
     fields = ("status", "chain", "chainID", "link")
     if any(field not in value for field in fields):
         raise QueueEntryError("invalid parent_guard")
-    return {field: _clean_str(value.get(field)) for field in fields}
+    result = {field: _clean_str(value.get(field)) for field in fields}
+    # Guards written before recurrence fingerprints existed remain valid.  A
+    # non-empty fingerprint is preserved for the newer stale-plan check.
+    fingerprint = _clean_str(value.get("recurrence_fingerprint"))
+    if fingerprint:
+        result["recurrence_fingerprint"] = fingerprint
+    return result
 
 
 def _mapping_value(mapping: Any, key: str, default: Any = None) -> Any:

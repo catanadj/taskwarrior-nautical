@@ -2447,6 +2447,11 @@ def _spawn_child_atomic(
     last_category = "unknown"
 
     # Decision-only mode: enqueue for on-exit spawn and return unverified.
+    lifecycle_models = _module("lifecycle_models")
+    recurrence_guard = lifecycle_models.recurrence_fingerprint(
+        parent_task_with_nextlink,
+        parse_datetime=getattr(core, "parse_dt_any", None),
+    )
     entry = _spawn_intent_entry(
         parent_task_with_nextlink.get("uuid") or "",
         child_obj,
@@ -2458,6 +2463,7 @@ def _spawn_child_atomic(
             "chain": parent_task_with_nextlink.get("chain") or "",
             "chainID": parent_task_with_nextlink.get("chainID") or "",
             "link": parent_task_with_nextlink.get("link") or "",
+            "recurrence_fingerprint": recurrence_guard,
         },
     )
     queued, queue_reason = _enqueue_spawn_intent(entry)

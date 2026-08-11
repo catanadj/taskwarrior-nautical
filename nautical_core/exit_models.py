@@ -63,6 +63,10 @@ class ExitDiagnosticCallback(Protocol):
     def __call__(self, message: str) -> None: ...
 
 
+class ExitRecurrenceFingerprintCallback(Protocol):
+    def __call__(self, task: dict[str, Any]) -> str: ...
+
+
 class ExitRequeueCallback(Protocol):
     def __call__(self, entry: dict[str, Any], idx: int, state: ExitDrainStateProtocol) -> bool: ...
 
@@ -89,6 +93,7 @@ class ExitPrecheckServices:
     is_lock_error: ExitLockErrorCallback
     diag: ExitDiagnosticCallback
     requeue_or_dead_letter_for_lock: ExitRequeueCallback
+    recurrence_fingerprint: ExitRecurrenceFingerprintCallback | None = None
 
 
 @dataclass(slots=True)

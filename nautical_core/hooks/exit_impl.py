@@ -2312,6 +2312,12 @@ def _precheck_parent_guard(ctx) -> str:
     exit_entry_flow = _module("exit_entry_flow")
     exit_runtime = _module("exit_runtime")
     services = exit_runtime.build_precheck_services(_exit_runtime_services())
+    lifecycle_models = _module("lifecycle_models")
+    parse_datetime = getattr(core, "parse_dt_any", None)
+    services.recurrence_fingerprint = lambda task: lifecycle_models.recurrence_fingerprint(
+        task,
+        parse_datetime=parse_datetime,
+    )
     return exit_entry_flow.precheck_parent_guard(ctx, services=services)
 
 

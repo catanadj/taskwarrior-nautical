@@ -1077,6 +1077,48 @@ def test_lifecycle_models_enforce_transition_contract():
         raise AssertionError("invalid lifecycle model was accepted")
 
 
+def test_recurrence_fingerprint_is_canonical_and_mutation_sensitive():
+    """Formatting-only recurrence changes are stable while scheduling edits invalidate guards."""
+    from nautical_core.lifecycle_models import recurrence_fingerprint
+
+    def parse_datetime(value):
+        text = str(value).strip()
+        if text == "2026-08-13T09:00:00Z":
+            return datetime(2026, 8, 13, 9, tzinfo=timezone.utc)
+        if text == "20260813T090000Z":
+            return datetime(2026, 8, 13, 9, tzinfo=timezone.utc)
+        return None
+
+    base = {
+        "anchor": " w:mon ",
+        "anchor_mode": "SKIP",
+        "chainMax": "5",
+        "due": "2026-08-13T09:00:00Z",
+        "description": "presentation",
+        "project": "same-plan",
+    }
+    equivalent = {
+        **base,
+        "anchor": "w:mon",
+        "anchor_mode": "skip",
+        "chainMax": 5,
+        "due": "20260813T090000Z",
+        "description": "renamed",
+        "modified": "20260813T100000Z",
+    }
+    expect(
+        recurrence_fingerprint(base, parse_datetime=parse_datetime)
+        == recurrence_fingerprint(equivalent, parse_datetime=parse_datetime),
+        "presentation or formatting changes altered recurrence fingerprint",
+    )
+    changed = {**equivalent, "anchor": "w:tue"}
+    expect(
+        recurrence_fingerprint(base, parse_datetime=parse_datetime)
+        != recurrence_fingerprint(changed, parse_datetime=parse_datetime),
+        "recurrence change did not invalidate fingerprint",
+    )
+
+
 def test_lifecycle_planner_is_pure_and_deterministic():
     """The first planner contract produces repeatable plans without mutating snapshots."""
     from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, TaskSnapshot
@@ -1103,6 +1145,7 @@ def test_lifecycle_planner_is_pure_and_deterministic():
     expect(first == second, "equal snapshots did not produce equal plans")
     expect(first.action is LifecycleAction.SPAWN_CHILD, "completion did not produce a spawn plan")
     expect(first.child_dict()["uuid"] == "child-uuid", "child payload was not retained")
+    expect(first.parent_guard.recurrence_fingerprint.startswith("rf1-"), "planner omitted recurrence fingerprint")
     expect(source == snapshot.to_dict(), "planner mutated the source task")
 
     terminal = planner.plan(snapshot, LifecycleEvent.CHAIN_UNTIL)
@@ -15470,15 +15513,16 @@ def test_on_modify_spawn_intent_records_parent_guard():
     )
 
     expect(deferred, "successful queue write should defer the child spawn")
+    guard = captured.get("parent_guard")
+    expect(isinstance(guard, dict), f"spawn intent did not retain its parent guard: {captured}")
     expect(
-        captured.get("parent_guard")
-        == {
-            "status": "completed",
-            "chain": "on",
-            "chainID": "abcd1234",
-            "link": "4",
-        },
-        f"spawn intent did not retain its parent guard: {captured}",
+        {key: guard.get(key) for key in ("status", "chain", "chainID", "link")}
+        == {"status": "completed", "chain": "on", "chainID": "abcd1234", "link": "4"},
+        f"spawn intent parent guard changed unexpectedly: {captured}",
+    )
+    expect(
+        str(guard.get("recurrence_fingerprint") or "").startswith("rf1-"),
+        f"spawn intent did not carry recurrence fingerprint: {captured}",
     )
 
 
@@ -15487,6 +15531,7 @@ def test_on_exit_stale_parent_guard_prevents_child_import():
     hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_stale_parent_guard_test")
     exit_models = mod._module("exit_models")
+    lifecycle_models = mod._module("lifecycle_models")
     parent_uuid = "11111111-0000-0000-0000-000000000111"
     child_uuid = "22222222-0000-0000-0000-000000000222"
     entry = {
@@ -15497,6 +15542,7 @@ def test_on_exit_stale_parent_guard_prevents_child_import():
             "chain": "on",
             "chainID": "abcd1234",
             "link": "4",
+            "recurrence_fingerprint": lifecycle_models.recurrence_fingerprint({"anchor": "w:mon"}),
         },
         "child_short": child_uuid[:8],
         "child": {"uuid": child_uuid},
@@ -15520,11 +15566,12 @@ def test_on_exit_stale_parent_guard_prevents_child_import():
                 "",
                 {
                     "uuid": parent_uuid,
-                    "status": "pending",
+                    "status": "completed",
                     "chain": "on",
                     "chainID": "abcd1234",
                     "link": 4,
                     "nextLink": child_uuid[:8],
+                    "anchor": "w:tue",
                 },
             )
         calls["child_export"] += 1
@@ -32113,6 +32160,7 @@ TESTS = [
     test_hook_io_contract_response_is_single_unescaped_json_object,
     test_hook_response_models_keep_legacy_names_and_typed_roles,
     test_lifecycle_models_enforce_transition_contract,
+    test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
     test_lifecycle_planner_is_pure_and_deterministic,
     test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy,
     test_diagnostic_event_renders_to_stderr_and_has_stable_record,

@@ -8,8 +8,12 @@ hooks, and reconcile can share one vocabulary without sharing mutation code.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Mapping, TypeAlias
+import hashlib
+import json
+import re
+from typing import Any, Callable, Iterable, Mapping, TypeAlias
 
 
 class LifecycleContractError(ValueError):
@@ -71,6 +75,103 @@ class QueueProcessingState(str, Enum):
 
 FrozenValue: TypeAlias = Any
 FrozenPairs: TypeAlias = tuple[tuple[str, FrozenValue], ...]
+
+
+# These are the inputs that can change the occurrence or carried timing of a
+# lifecycle successor.  Presentation-only edits (description, project, value,
+# and similar fields) intentionally do not invalidate a queued transition.
+_RECURRENCE_FINGERPRINT_FIELDS = (
+    "anchor",
+    "anchor_file",
+    "omit",
+    "omit_file",
+    "cp",
+    "anchor_mode",
+    "chainMax",
+    "chainUntil",
+    "bc",
+    "due",
+    "scheduled",
+    "until",
+    "wait",
+)
+_RECURRENCE_DATETIME_FIELDS = frozenset({"chainUntil", "due", "scheduled", "until", "wait"})
+_TASKWARRIOR_DATETIME_RE = re.compile(r"^(\d{8})T(\d{6})(Z|[+-]\d{4})$")
+
+
+def _canonical_datetime_text(value: Any, parse_datetime: Callable[[Any], Any] | None) -> str:
+    """Return one stable representation without making parsing mandatory."""
+    if parse_datetime is not None:
+        try:
+            parsed = parse_datetime(value)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, datetime):
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    text = str(value).strip()
+    match = _TASKWARRIOR_DATETIME_RE.fullmatch(text)
+    if match:
+        try:
+            raw_date, raw_time, zone = match.groups()
+            parsed = datetime.strptime(raw_date + raw_time, "%Y%m%d%H%M%S")
+            if zone == "Z":
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            else:
+                sign = 1 if zone[0] == "+" else -1
+                offset_minutes = sign * (int(zone[1:3]) * 60 + int(zone[3:5]))
+                parsed = parsed.replace(tzinfo=timezone(timedelta(minutes=offset_minutes)))
+            return parsed.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        except (OverflowError, ValueError):
+            pass
+    return re.sub(r"\s+", " ", text)
+
+
+def _canonical_recurrence_value(
+    field: str,
+    value: Any,
+    parse_datetime: Callable[[Any], Any] | None,
+) -> Any:
+    if value is None or value == "":
+        return None
+    if field in _RECURRENCE_DATETIME_FIELDS:
+        return _canonical_datetime_text(value, parse_datetime)
+    if field == "anchor_mode":
+        return str(value).strip().lower()
+    if field == "chainMax":
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return re.sub(r"\s+", " ", str(value).strip())
+    if isinstance(value, (list, tuple)):
+        return [re.sub(r"\s+", " ", str(item).strip()) for item in value]
+    return re.sub(r"\s+", " ", str(value).strip())
+
+
+def recurrence_fingerprint(
+    task: Mapping[str, Any],
+    *,
+    parse_datetime: Callable[[Any], Any] | None = None,
+    extra_fields: Iterable[str] = (),
+) -> str:
+    """Hash canonical recurrence inputs for stale-transition protection.
+
+    The version prefix permits future field-set changes to invalidate old
+    guards while keeping formatting-only datetime and mode differences stable.
+    """
+    fields = tuple(dict.fromkeys((*_RECURRENCE_FINGERPRINT_FIELDS, *(str(item) for item in extra_fields))))
+    canonical: dict[str, Any] = {}
+    for field in fields:
+        if field not in task:
+            continue
+        value = _canonical_recurrence_value(field, task.get(field), parse_datetime)
+        if value is not None:
+            canonical[field] = value
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+    return f"rf1-{digest}"
 
 
 def _freeze(value: Any) -> FrozenValue:
@@ -324,4 +425,5 @@ __all__ = (
     "QueueProcessingState",
     "TaskLifecycleState",
     "TaskSnapshot",
+    "recurrence_fingerprint",
 )

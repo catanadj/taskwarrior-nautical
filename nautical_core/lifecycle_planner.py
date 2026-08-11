@@ -20,6 +20,7 @@ from .lifecycle_models import (
     LifecyclePlan,
     ParentGuard,
     TaskSnapshot,
+    recurrence_fingerprint,
 )
 
 
@@ -223,7 +224,7 @@ def _parent_guard(snapshot: TaskSnapshot) -> ParentGuard:
             chain=str(snapshot.get("chain") or "on"),
             chain_id=str(snapshot.get("chainID") or ""),
             link=_link(snapshot.get("link"), default=0),
-            recurrence_fingerprint=str(snapshot.get("recurrence_fingerprint") or ""),
+            recurrence_fingerprint=recurrence_fingerprint(snapshot.to_dict()),
         )
     except LifecycleContractError as exc:
         raise LifecyclePlanningError(str(exc)) from exc

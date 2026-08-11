@@ -11,7 +11,12 @@ if TYPE_CHECKING:
     )
 
 
-def _parent_guard_mismatch(parent: dict[str, Any], guard: dict[str, str]) -> str:
+def _parent_guard_mismatch(
+    parent: dict[str, Any],
+    guard: dict[str, str],
+    *,
+    recurrence_fingerprint=None,
+) -> str:
     for field in ("status", "chain", "chainID", "link"):
         expected = str(guard.get(field) or "").strip()
         actual = str(parent.get(field) or "").strip()
@@ -20,6 +25,18 @@ def _parent_guard_mismatch(parent: dict[str, Any], guard: dict[str, str]) -> str
             actual = actual.lower()
         if actual != expected:
             return f"parent {field} changed (expected {expected or '-'}, found {actual or '-'})"
+    expected_fingerprint = str(guard.get("recurrence_fingerprint") or "").strip()
+    if expected_fingerprint:
+        if recurrence_fingerprint is None:
+            return "parent recurrence fingerprint unavailable"
+        try:
+            actual_fingerprint = str(recurrence_fingerprint(parent) or "").strip()
+        except Exception:
+            return "parent recurrence fingerprint unavailable"
+        if not actual_fingerprint:
+            return "parent recurrence fingerprint unavailable"
+        if actual_fingerprint != expected_fingerprint:
+            return "parent recurrence inputs changed"
     return ""
 
 
@@ -40,7 +57,11 @@ def precheck_parent_guard(
         ctx.state.reset_lock_streak()
         return "continue"
 
-    mismatch = _parent_guard_mismatch(parent, ctx.parent_guard)
+    mismatch = _parent_guard_mismatch(
+        parent,
+        ctx.parent_guard,
+        recurrence_fingerprint=services.recurrence_fingerprint,
+    )
     if not mismatch:
         return "ok"
 

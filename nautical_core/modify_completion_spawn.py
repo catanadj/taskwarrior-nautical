@@ -59,13 +59,23 @@ def completion_build_and_spawn_child(
             spawn_intent_id,
         ) = spawn_child_atomic(child, new)
         if not verified and not deferred_spawn:
+            review_reason = defer_reason or "Child spawn could not be verified; parent not updated"
             panel(
                 "⛓ Chain warning",
-                [("Reason", defer_reason or "Child spawn could not be verified; parent not updated")],
+                [("Reason", review_reason)],
                 kind="warning",
             )
             print_task(new)
-            return None
+            return CompletionSpawnResult(
+                child=child,
+                child_short=child_short,
+                stripped_attrs=stripped_attrs,
+                verified=False,
+                deferred_spawn=False,
+                spawn_intent_id=spawn_intent_id,
+                outcome_state="manual_review",
+                reason=review_reason,
+            )
     except Exception as exc:
         if callable(diag):
             diag(f"spawn child failed: {exc}")

@@ -503,6 +503,15 @@ class CompletionSpawnResult:
     verified: bool
     deferred_spawn: bool
     spawn_intent_id: str | None
+    outcome_state: str = "applied"
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        state = str(self.outcome_state or "").strip().lower()
+        if state not in {"applied", "manual_review"}:
+            raise ValueError(f"unsupported completion spawn state: {self.outcome_state!r}")
+        self.outcome_state = state
+        self.reason = str(self.reason or "").strip()
 
 
 @dataclass(frozen=True, slots=True)

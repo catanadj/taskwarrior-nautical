@@ -46,6 +46,13 @@ def finalize_completion_modify(
             state="retryable",
             reason="completion child operation returned no result",
         )
+    if getattr(spawned, "outcome_state", "applied") == "manual_review":
+        return CompletionLifecycleResult(
+            state="manual_review",
+            child_short=spawned.child_short,
+            spawn_intent_id=spawned.spawn_intent_id,
+            reason=spawned.reason or "child spawn could not be verified",
+        )
 
     child = spawned.child
     services.seed_runtime_lookup_tasks(new, child)

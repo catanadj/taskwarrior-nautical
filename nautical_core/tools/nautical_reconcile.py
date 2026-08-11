@@ -1577,12 +1577,22 @@ class _ReconcileLifecycleServices:
             return self._result(OperationState.UNAVAILABLE, reason=f"terminal parent export unavailable: {exc}")
         if parent is None:
             return self._result(OperationState.UNAVAILABLE, reason="terminal parent export unavailable")
-        if str(parent.get("chain") or "").strip().lower() == "off":
-            if str(parent.get("nextLink") or "").strip():
+        if str(parent.get("nextLink") or "").strip():
+            return self._result(
+                OperationState.CONFLICT,
+                reason="successor is already linked; retain it and review the terminal transition",
+            )
+        if plan.identity.event is not LifecycleEvent.MANUAL_DELETE:
+            try:
+                successors = _existing_children(self.task_bin, parent)
+            except Exception as exc:
+                return self._result(OperationState.UNAVAILABLE, reason=f"successor lookup unavailable: {exc}")
+            if successors:
                 return self._result(
                     OperationState.CONFLICT,
-                    reason="chain is already off but has a successor link",
+                    reason="successor is already persisted; retain it and review the terminal transition",
                 )
+        if str(parent.get("chain") or "").strip().lower() == "off":
             return self._result(OperationState.ALREADY)
         return self.validate_parent(plan)
 

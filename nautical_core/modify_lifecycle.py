@@ -131,6 +131,12 @@ def apply_nautical_transition(
     new_chain = (new.get("chain") or "").strip().lower()
 
     if not old_has_recurrence and new_has_recurrence:
+        task_uuid = _norm_field(new.get("uuid"))
+        if not task_uuid:
+            raise ValueError("recurrence activation requires a complete root identity: task UUID is missing")
+        linked_already = bool((_norm_field(new.get("prevLink")) or _norm_field(new.get("nextLink"))))
+        if linked_already:
+            raise ValueError("recurrence activation requires an unlinked root task")
         if (new.get("anchor") or "").strip():
             source = "anchor"
         elif (new.get("anchor_file") or "").strip():
@@ -143,10 +149,20 @@ def apply_nautical_transition(
         if new_chain != "on":
             new["chain"] = "on"
 
-        already_chain = bool((new.get("chainID") or "").strip())
-        linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
-        if not already_chain and not linked_already:
-            new["chainID"] = short_uuid(new.get("uuid"))
+        if not _norm_field(new.get("chainID")):
+            generated_chain_id = _norm_field(short_uuid(task_uuid))
+            if not generated_chain_id:
+                raise ValueError("recurrence activation could not derive a chainID from the task UUID")
+            new["chainID"] = generated_chain_id
+        raw_link = _norm_field(new.get("link"))
+        if raw_link:
+            try:
+                if int(float(raw_link)) != 1:
+                    raise ValueError
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("recurrence activation requires root link 1") from exc
+        else:
+            new["link"] = 1
         return ModifyNauticalTransition(
             state="enabled",
             source=source,

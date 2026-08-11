@@ -3147,6 +3147,34 @@ def test_modify_ordinary_transition_failure_rejects_instead_of_noop():
         raise AssertionError("failed recurrence transition was treated as no transition")
 
 
+def test_modify_lifecycle_activation_requires_complete_root_identity():
+    """Recurrence activation must reject missing, linked, or non-root identities."""
+    lifecycle = core._import_sibling("modify_lifecycle")
+    short_uuid = lambda value: str(value or "").split("-")[0]
+    cases = (
+        ({"anchor": "w:mon"}, "UUID is missing"),
+        ({"uuid": "11111111-0000-0000-0000-000000000001", "anchor": "w:mon", "prevLink": "aaaaaaaa"}, "unlinked root"),
+        ({"uuid": "11111111-0000-0000-0000-000000000001", "anchor": "w:mon", "link": 2}, "root link 1"),
+    )
+    for fields, expected in cases:
+        try:
+            lifecycle.apply_nautical_transition(
+                {"status": "pending"},
+                {"status": "pending", **fields},
+                short_uuid=short_uuid,
+            )
+        except ValueError as exc:
+            expect(expected in str(exc), f"activation error lost detail: {exc}")
+        else:
+            raise AssertionError(f"invalid activation identity was accepted: {fields!r}")
+
+    valid = {"uuid": "11111111-0000-0000-0000-000000000001", "status": "pending", "anchor": "w:mon"}
+    transition = lifecycle.apply_nautical_transition({"status": "pending"}, valid, short_uuid=short_uuid)
+    expect(transition.state == "enabled", f"valid root activation failed: {transition!r}")
+    expect(valid.get("chainID") == "11111111", f"valid activation missed chainID: {valid!r}")
+    expect(valid.get("link") == 1, f"valid activation missed root link: {valid!r}")
+
+
 def test_on_modify_promotes_chain_emits_upgrade_panel():
     """Promotion to Nautical should show a small informative panel."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33020,6 +33048,7 @@ TESTS = [
     test_on_modify_ignores_unsafe_core_path_override,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_modify_ordinary_transition_failure_rejects_instead_of_noop,
+    test_modify_lifecycle_activation_requires_complete_root_identity,
     test_on_modify_promotes_chain_emits_upgrade_panel,
     test_on_modify_promotes_cp_emits_period_explanation,
     test_on_modify_disables_chain_emits_disabled_panel,

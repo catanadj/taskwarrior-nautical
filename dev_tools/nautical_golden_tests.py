@@ -17632,6 +17632,59 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
     expect(out.finals == finals and out.until_cap_no == 3, f"unexpected finals: {out}")
 
 
+def test_completion_scheduler_terminal_outcomes_are_not_spawned():
+    """Completion must finish only on date exhaustion and reject search exhaustion."""
+    compute = core._import_sibling("modify_completion_compute")
+    terminal = core.OccurrenceSearchExhausted(
+        "anchor scheduling",
+        reference=date(9999, 12, 31),
+        limit=2,
+    )
+    search_limited = core.OccurrenceSearchExhausted(
+        "anchor scheduling",
+        reference=date(2026, 1, 1),
+        limit=2,
+        kind=core.OccurrenceSearchExhausted.SEARCH_LIMIT,
+    )
+    panels = []
+    printed = []
+    callbacks = []
+
+    def scheduler(_task):
+        raise callbacks.pop(0)
+
+    task = {"chain": "on", "uuid": "terminal-task"}
+    callbacks.append(terminal)
+    result = compute.completion_compute_child_due(
+        task,
+        "anchor",
+        compute_anchor_child_due=scheduler,
+        compute_cp_child_due=scheduler,
+        panel=lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs)),
+        print_task=lambda value: printed.append(dict(value)),
+        on_terminal=lambda exc: task.update({"chain": "off", "terminal": exc.kind}),
+    )
+    # The callback is invoked before the helper returns, and the helper must
+    # never turn terminal evidence into a child tuple.
+    expect(result is None, "date-limit exhaustion must not produce a child tuple")
+    expect(task.get("chain") == "off", "date-limit exhaustion must stop completion spawning")
+    expect(task.get("terminal") == "date_limit", f"terminal kind was lost: {task!r}")
+
+    callbacks.append(search_limited)
+    result = compute.completion_compute_child_due(
+        {"chain": "on"},
+        "anchor",
+        compute_anchor_child_due=scheduler,
+        compute_cp_child_due=scheduler,
+        panel=lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs)),
+        print_task=lambda value: printed.append(dict(value)),
+        on_terminal=lambda exc: panels.append(("terminal", [("kind", exc.kind)], {})),
+    )
+    expect(result is None, "search-limit exhaustion must not produce a child tuple")
+    expect(panels[-1][0] == "terminal" and panels[-1][1] == [("kind", "search_limit")], panels)
+
+
+
 def test_chain_cap_guards_are_inclusive_at_boundary():
     """chainMax and chainUntil should allow the exact boundary and stop only beyond it."""
     compute = core._import_sibling("modify_completion_compute")
@@ -26291,6 +26344,26 @@ def test_reconcile_candidate_and_plan_paths():
         "terminal reconcile evidence was not exposed",
     )
 
+    class SearchLimitedGeneration(FakeGeneration):
+        def compute_cp_child_due(self, _parent):
+            raise core.OccurrenceSearchExhausted(
+                "cp scheduling", reference=date(2026, 1, 1), limit=1,
+                kind=core.OccurrenceSearchExhausted.SEARCH_LIMIT,
+            )
+
+    search_limited = reconcile.build_reconcile_plan(
+        parent,
+        existing_children=[],
+        hook=None,
+        generation=SearchLimitedGeneration(),
+    )
+    expect(
+        search_limited.action == "error"
+        and search_limited.terminal_kind is None
+        and "cp scheduling" in search_limited.reason,
+        f"search-limit exhaustion must remain a retryable reconcile error: {search_limited}",
+    )
+
 
 def test_reconcile_plan_uses_task_business_calendar_context():
     """Reconcile scheduling and child construction must share the task calendar."""
@@ -32023,6 +32096,7 @@ TESTS = [
     test_on_modify_link_limit,
     test_on_modify_completion_preflight_context_happy_path,
     test_on_modify_completion_compute_next_and_limits_happy_path,
+    test_completion_scheduler_terminal_outcomes_are_not_spawned,
     test_chain_cap_guards_are_inclusive_at_boundary,
     test_completion_caps_earliest_limit_wins,
     test_cap_from_until_cp_includes_exact_deadline,

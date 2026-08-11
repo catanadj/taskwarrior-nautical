@@ -22,6 +22,10 @@ from nautical_core.modify_models import (
     ValidateChainDurationCallback,
     ValidateUntilCallback,
 )
+from nautical_core.scheduler_models import (
+    OccurrenceSearchExhausted,
+    occurrence_exhaustion_message,
+)
 from nautical_core.timeutil import compare_datetimes
 
 
@@ -34,6 +38,7 @@ def completion_compute_child_due(
     panel: PanelCallback,
     print_task: PrintTaskCallback,
     diag: DiagnosticCallback | None = None,
+    on_terminal: Any | None = None,
 ) -> tuple[Any, Any, Any] | None:
     try:
         if kind in {"anchor", "anchor_file"}:
@@ -44,6 +49,17 @@ def completion_compute_child_due(
             child_due, meta = compute_cp_child_due(new)
             dnf = None
         return child_due, meta, dnf
+    except OccurrenceSearchExhausted as exc:
+        if callable(on_terminal):
+            on_terminal(exc)
+        else:
+            panel(
+                "⛔ Chain error",
+                [("Scheduler", occurrence_exhaustion_message(exc))],
+                kind="error",
+            )
+            print_task(new)
+        return None
     except ValueError as exc:
         panel(
             "⛔ Chain error",

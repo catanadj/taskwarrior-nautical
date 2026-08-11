@@ -6262,6 +6262,32 @@ def _completion_preflight_context(new: dict, now_utc: datetime):
 def _completion_compute_child_due(new: dict, kind: str):
     modify_completion_compute = _module("modify_completion_compute")
     generation = _chain_generation_service()
+
+    def handle_terminal(exc) -> None:
+        message = core._import_sibling("scheduler_models").occurrence_exhaustion_message(exc)
+        if exc.is_date_limit:
+            new["chain"] = "off"
+            try:
+                _end_chain_summary(new, message, core.now_utc(), current_task=new)
+            except Exception as summary_exc:
+                _diag(f"terminal chain summary failed: {summary_exc}")
+                _panel(
+                    "⛔ Nautical chain stopped",
+                    [("Reason", message), ("Task", _short(new.get("uuid")) or "–")],
+                    kind="summary",
+                )
+            _print_task(new)
+            return
+        _panel(
+            "⛔ Chain error",
+            [
+                ("Scheduler", message),
+                ("Fix", "Use a less sparse rule or adjust its search limits."),
+            ],
+            kind="error",
+        )
+        _print_task(new)
+
     return modify_completion_compute.completion_compute_child_due(
         new,
         kind,
@@ -6270,6 +6296,7 @@ def _completion_compute_child_due(new: dict, kind: str):
         panel=_panel,
         print_task=_print_task,
         diag=_diag,
+        on_terminal=handle_terminal,
     )
 
 

@@ -2283,6 +2283,39 @@ def _handle_lifecycle_stage_failure(entry: dict, idx: int, state: _DrainState, r
     return False
 
 
+def _verify_lifecycle_postconditions(ctx) -> tuple[str, str]:
+    """Freshly verify the child and reciprocal parent link before finalizing."""
+    if not isinstance(ctx.entry.get("lifecycle_plan"), dict):
+        return "ok", ""
+    child_res = _export_uuid(ctx.child_uuid, prefer_cache=False)
+    if child_res.retryable:
+        return "retry", child_res.err or "child verification unavailable"
+    if not child_res.exists:
+        return "retry", "child postcondition missing after lifecycle apply"
+    link_res = _parent_nextlink_state(
+        ctx.parent_uuid,
+        ctx.child_short,
+        ctx.expected_parent_nextlink,
+        prefer_cache=False,
+    )
+    if link_res.state == "already":
+        return "ok", ""
+    if link_res.state == "locked":
+        return "retry", link_res.err or "parent linkage verification unavailable"
+    return "retry", link_res.err or "parent linkage postcondition not satisfied"
+
+
+def _handle_lifecycle_postcondition_failure(entry: dict, idx: int, state: _DrainState, reason: str) -> bool:
+    """Retry a failed final read, bounded by the normal queue retry budget."""
+    message = str(reason or "lifecycle postcondition verification failed")
+    _diag(f"lifecycle postcondition verification deferred: {message}")
+    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+        state.dead_letter(entry, message)
+    else:
+        state.requeue.append(entry)
+    return False
+
+
 def _handle_entry_gate(entry: dict, state: _DrainState) -> bool:
     spawn_intent_id = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
     if spawn_intent_id and spawn_intent_id in state.finalized_intents:
@@ -2488,6 +2521,13 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     parent_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.PARENT_LINKED)
     if not parent_stage.ok:
         return _handle_lifecycle_stage_failure(queue_entry, idx, state, parent_stage)
+
+    verification_action, verification_reason = _verify_lifecycle_postconditions(ctx)
+    if verification_action != "ok":
+        return _handle_lifecycle_postcondition_failure(queue_entry, idx, state, verification_reason)
+    verified_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.VERIFIED)
+    if not verified_stage.ok:
+        return _handle_lifecycle_stage_failure(queue_entry, idx, state, verified_stage)
 
     _seed_equivalent_child_cache(child, parent_uuid, child_uuid)
     state.processed += 1

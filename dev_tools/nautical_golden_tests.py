@@ -15524,6 +15524,14 @@ def test_on_modify_spawn_intent_records_parent_guard():
         str(guard.get("recurrence_fingerprint") or "").startswith("rf1-"),
         f"spawn intent did not carry recurrence fingerprint: {captured}",
     )
+    child = {"uuid": "00000000-0000-0000-0000-00000000abcd", "link": 5}
+    first_key = mod._lifecycle_spawn_intent_id(parent, child)
+    second_key = mod._lifecycle_spawn_intent_id(dict(parent, description="presentation edit"), child)
+    expect(first_key == second_key and first_key.startswith("li1-"), "transition identity was not retry-stable")
+    expect(
+        mod._lifecycle_spawn_intent_id(dict(parent, status="deleted"), child) != first_key,
+        "completion and expiration transitions shared an idempotency key",
+    )
 
 
 def test_on_exit_stale_parent_guard_prevents_child_import():
@@ -29671,7 +29679,13 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
 
     child_short, _stripped, verified, deferred, reason, intent = mod._spawn_child_atomic(
         {"description": "x"},
-        {"uuid": "00000000-0000-0000-0000-000000000111", "nextLink": ""},
+        {
+            "uuid": "00000000-0000-0000-0000-000000000111",
+            "chainID": "abcd1234",
+            "link": 1,
+            "status": "completed",
+            "nextLink": "",
+        },
     )
     expect(child_short == "00000000", f"unexpected child short: {child_short}")
     expect(not verified, "verified should be false when queue fails")

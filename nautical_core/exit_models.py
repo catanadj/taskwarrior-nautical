@@ -55,6 +55,10 @@ class ExitCleanupCallback(Protocol):
     def __call__(self, child_uuid: str, spawn_intent_id: str = "") -> None: ...
 
 
+class ExitParentGuardCallback(Protocol):
+    def __call__(self, ctx: "ExitEntryContext") -> str: ...
+
+
 class ExitLockErrorCallback(Protocol):
     def __call__(self, error: str) -> bool: ...
 
@@ -113,6 +117,7 @@ class ExitApplyParentUpdateServices:
     cleanup_orphan_child: ExitCleanupCallback
     diag: ExitDiagnosticCallback
     requeue_or_dead_letter_for_lock: ExitRequeueCallback
+    recheck_parent_guard: ExitParentGuardCallback | None = None
 
 
 @dataclass(slots=True)

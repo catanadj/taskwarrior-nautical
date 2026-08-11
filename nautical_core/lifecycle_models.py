@@ -306,6 +306,12 @@ class LifecycleIdentity:
         target = "-" if self.target_link is None else str(self.target_link)
         return f"{self.chain_id}:{self.parent_uuid}:{self.source_link}:{target}:{self.event.value}"
 
+    @property
+    def idempotency_key(self) -> str:
+        """Compact durable key for one transition, independent of a retry."""
+        digest = hashlib.sha256(self.key.encode("utf-8")).hexdigest()[:24]
+        return f"li1-{digest}"
+
 
 _EVENT_ACTIONS: dict[LifecycleEvent, frozenset[LifecycleAction]] = {
     LifecycleEvent.ACTIVATE: frozenset({LifecycleAction.UPDATE_PARENT, LifecycleAction.NOOP}),

@@ -2341,6 +2341,7 @@ def _apply_parent_update_for_entry(
     exit_entry_flow = _module("exit_entry_flow")
     exit_runtime = _module("exit_runtime")
     services = exit_runtime.build_apply_parent_update_services(_exit_runtime_services())
+    services.recheck_parent_guard = _precheck_parent_guard
     return exit_entry_flow.apply_parent_update_for_entry(
         ctx,
         parent_linked_already=parent_linked_already,
@@ -2415,6 +2416,11 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     if child_already_exists:
         child_action, imported = ("ok", False)
     else:
+        guard_action = _precheck_parent_guard(ctx)
+        if guard_action == "break":
+            return True
+        if guard_action == "continue":
+            return False
         child_action, imported = _ensure_child_exists_for_entry(ctx, initial_export_res=exact_child)
     if child_action == "break":
         return True

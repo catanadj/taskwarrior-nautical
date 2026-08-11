@@ -48,7 +48,9 @@ def precheck_parent_guard(
     if not ctx.parent_guard:
         return "ok"
 
-    parent_res = services.export_uuid(ctx.parent_uuid)
+    # Guard reads must bypass the request cache: this is the last decision
+    # before an external child import or parent-link mutation.
+    parent_res = services.export_uuid(ctx.parent_uuid, prefer_cache=False)
     if parent_res.retryable:
         return "break" if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else "continue"
     parent = parent_res.obj
@@ -147,6 +149,13 @@ def apply_parent_update_for_entry(
 ) -> str:
     if not (ctx.parent_uuid and ctx.child_short) or parent_linked_already:
         return "ok"
+
+    if services.recheck_parent_guard is not None:
+        guard_action = services.recheck_parent_guard(ctx)
+        if guard_action != "ok":
+            if imported and guard_action == "continue":
+                services.cleanup_orphan_child(ctx.child_uuid, ctx.spawn_intent_id)
+            return guard_action
 
     update_res = services.update_parent_nextlink(ctx.parent_uuid, ctx.child_short, ctx.expected_parent_nextlink)
     if update_res.ok:

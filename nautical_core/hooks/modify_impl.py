@@ -2415,6 +2415,35 @@ def _enqueue_spawn_intent(entry: dict) -> tuple[bool, str]:
     return _enqueue_deferred_spawn(normalized)
 
 
+def _lifecycle_spawn_intent_id(parent: dict, child: dict) -> str:
+    """Derive one retry-stable queue key from the transition identity."""
+    lifecycle_models = _module("lifecycle_models")
+    chain_id = str(parent.get("chainID") or "").strip()
+    parent_uuid = str(parent.get("uuid") or "").strip()
+    try:
+        source_link = int(parent.get("link"))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("lifecycle transition requires a numeric parent link") from exc
+    try:
+        target_link = int(child.get("link") or (source_link + 1))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("lifecycle transition requires a numeric child link") from exc
+    status = str(parent.get("status") or "").strip().lower()
+    event = (
+        lifecycle_models.LifecycleEvent.EXPIRE
+        if status == "deleted"
+        else lifecycle_models.LifecycleEvent.COMPLETE
+    )
+    identity = lifecycle_models.LifecycleIdentity(
+        chain_id=chain_id,
+        parent_uuid=parent_uuid,
+        source_link=source_link,
+        target_link=target_link,
+        event=event,
+    )
+    return identity.idempotency_key
+
+
 def _spawn_child_atomic(
     child_task: dict,
     parent_task_with_nextlink: dict,
@@ -2429,7 +2458,6 @@ def _spawn_child_atomic(
     We enqueue the child for the on-exit hook to import, then update the parent link.
     """
     env = os.environ.copy()
-    spawn_intent_id = f"si_{uuid.uuid4().hex[:12]}"
     modify_spawn_prep = _module("modify_spawn_prep")
     child_obj, child_uuid, child_short = modify_spawn_prep.prepare_spawn_child_payload(
         child_task,
@@ -2448,6 +2476,7 @@ def _spawn_child_atomic(
 
     # Decision-only mode: enqueue for on-exit spawn and return unverified.
     lifecycle_models = _module("lifecycle_models")
+    spawn_intent_id = _lifecycle_spawn_intent_id(parent_task_with_nextlink, child_obj)
     recurrence_guard = lifecycle_models.recurrence_fingerprint(
         parent_task_with_nextlink,
         parse_datetime=getattr(core, "parse_dt_any", None),

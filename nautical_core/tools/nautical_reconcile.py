@@ -64,6 +64,10 @@ class _RecoveryLookupUnavailable(TimeoutError):
     """Signal that a narrow recovery-child read must be retried."""
 
 
+class _PlanReadUnavailable(TimeoutError):
+    """Signal that planning reads are unavailable and must not be treated as empty."""
+
+
 class _ConfigurationVerification:
     """Validated configuration state used to gate reconcile mutations."""
 
@@ -1035,9 +1039,17 @@ def _plan_for_parent(
     generation: ChainGenerationService | None = None,
 ) -> reconcile.ReconcilePlan:
     """Build the one reconcile plan used by both preview and apply paths."""
+    configuration_status, configuration_reason = _configuration_state(hook)
+    if configuration_status != "valid":
+        raise _ConfigurationDrift(configuration_reason)
+    try:
+        existing_children = _existing_children_for_plan(task_bin, parent, hook)
+    except Exception as exc:
+        reason = str(exc).strip() or type(exc).__name__
+        raise _PlanReadUnavailable(f"reconcile child read unavailable: {reason}") from exc
     return reconcile.build_reconcile_plan(
         parent,
-        existing_children=_existing_children_for_plan(task_bin, parent, hook),
+        existing_children=existing_children,
         hook=hook,
         generation=generation or _chain_generation_for_hook(hook),
     )
@@ -1337,12 +1349,23 @@ def _reconcile_candidate(
                 outcomes.append((_recovery_error(current, reason), ""))
                 break
         else:
-            plan = _plan_for_parent(
-                task_bin,
-                hook,
-                current,
-                generation=generation or _chain_generation_for_hook(hook),
-            )
+            try:
+                plan = _plan_for_parent(
+                    task_bin,
+                    hook,
+                    current,
+                    generation=generation or _chain_generation_for_hook(hook),
+                )
+            except _ConfigurationDrift as exc:
+                outcomes.append((_recovery_partial(current, str(exc)), ""))
+                break
+            except _PlanReadUnavailable as exc:
+                outcomes.append((_recovery_partial(current, str(exc)), ""))
+                break
+            except Exception as exc:
+                reason = str(exc).strip() or type(exc).__name__
+                outcomes.append((_recovery_error(current, reason), ""))
+                break
             applied_short = ""
         outcomes.append((plan, applied_short))
 

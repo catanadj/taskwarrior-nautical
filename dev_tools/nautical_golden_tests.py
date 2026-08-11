@@ -28477,6 +28477,40 @@ def test_reconcile_dry_run_and_apply_share_plan_builder():
     )
 
 
+def test_reconcile_planning_configuration_drift_is_partial():
+    """A configuration change at the planning boundary must block preview mutations."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_planning_drift_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "drift01",
+        "link": 1,
+        "cp": "1d",
+    }
+    hook = SimpleNamespace(
+        core=SimpleNamespace(
+            configuration_drift=lambda: {"changed": True, "source": "test-config"},
+        )
+    )
+    outcomes = tool._reconcile_candidate(
+        "task",
+        hook,
+        parent,
+        taskdata=None,
+        apply=False,
+        max_expiration_hops=4,
+        recovery_at=datetime.now(timezone.utc),
+        generation=object(),
+    )
+    expect(len(outcomes) == 1, f"configuration drift produced extra work: {outcomes!r}")
+    plan, applied = outcomes[0]
+    expect(plan.action == "partial", f"configuration drift was not partial: {plan!r}")
+    expect("configuration changed" in plan.reason, f"configuration reason was lost: {plan!r}")
+    expect(not applied, f"configuration drift reported a mutation: {applied!r}")
+
+
 def test_reconcile_parent_updates_are_guarded():
     """Reconcile writes should compare the parent state that authorized the plan."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -28875,8 +28909,9 @@ def test_reconcile_dry_run_isolates_candidate_failures():
         tool._load_on_modify, tool._candidate_rows, tool._existing_children = original
 
     summary = json.loads(output.getvalue())
-    expect(result == 1, f"planning failure should keep a nonzero exit: {result}")
-    expect(summary.get("errors") == 1, f"failed plan was not summarized: {summary!r}")
+    expect(result == 2, f"unavailable planning read should be degraded: {result}")
+    expect(summary.get("errors") == 0, f"unavailable read was treated as a hard error: {summary!r}")
+    expect(summary.get("partial") == 1, f"unavailable read was not preserved as partial: {summary!r}")
     expect(summary.get("backfill_nextlink") == 1, f"later candidate was not reported: {summary!r}")
     expect(not summary.get("applied"), f"dry-run should not apply repairs: {summary!r}")
 
@@ -33182,6 +33217,7 @@ TESTS = [
     test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review,
     test_reconcile_narrow_recovery_lookup_failure_is_partial,
     test_reconcile_dry_run_and_apply_share_plan_builder,
+    test_reconcile_planning_configuration_drift_is_partial,
     test_reconcile_parent_updates_are_guarded,
     test_reconcile_repairs_missing_legacy_root_link_under_guard,
     test_reconcile_repairs_legacy_root_metadata_when_chain_stops,

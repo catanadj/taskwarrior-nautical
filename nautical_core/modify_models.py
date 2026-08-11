@@ -515,6 +515,29 @@ class CompletionSpawnResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CompletionLifecycleDiagnostic:
+    """Structured context for one completion lifecycle decision."""
+
+    transition_id: str = ""
+    chain_id: str = ""
+    parent_link: int | None = None
+    child_link: int | None = None
+    stage: str = ""
+    attempts: int = 0
+    failure_kind: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "transition_id", str(self.transition_id or "").strip())
+        object.__setattr__(self, "chain_id", str(self.chain_id or "").strip())
+        object.__setattr__(self, "stage", str(self.stage or "").strip().lower())
+        object.__setattr__(self, "failure_kind", str(self.failure_kind or "").strip().lower())
+        attempts = int(self.attempts or 0)
+        if attempts < 0:
+            raise ValueError("completion diagnostic attempts cannot be negative")
+        object.__setattr__(self, "attempts", attempts)
+
+
+@dataclass(frozen=True, slots=True)
 class CompletionLifecycleResult:
     """Operational result returned after completion mutation decisions finish."""
 
@@ -523,6 +546,7 @@ class CompletionLifecycleResult:
     deferred_spawn: bool = False
     spawn_intent_id: str | None = None
     reason: str = ""
+    diagnostic: CompletionLifecycleDiagnostic | None = None
 
     def __post_init__(self) -> None:
         state = str(self.state or "").strip().lower()

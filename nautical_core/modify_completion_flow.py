@@ -4,10 +4,30 @@ from typing import Any
 
 from nautical_core.modify_models import (
     CompletionLifecycleResult,
+    CompletionLifecycleDiagnostic,
     CompletionComputeResult,
     CompletionFinalizeServices,
     CompletionPreflightContext,
 )
+
+
+def _completion_diagnostic(
+    ctx: CompletionPreflightContext,
+    chain_id: str,
+    *,
+    stage: str,
+    failure_kind: str = "",
+    transition_id: str = "",
+) -> CompletionLifecycleDiagnostic:
+    transition = transition_id or f"{chain_id}:{ctx.base_no}->{ctx.next_no}"
+    return CompletionLifecycleDiagnostic(
+        transition_id=transition,
+        chain_id=chain_id,
+        parent_link=ctx.base_no,
+        child_link=ctx.next_no,
+        stage=stage,
+        failure_kind=failure_kind,
+    )
 
 
 def finalize_completion_modify(
@@ -45,6 +65,9 @@ def finalize_completion_modify(
         return CompletionLifecycleResult(
             state="retryable",
             reason="completion child operation returned no result",
+            diagnostic=_completion_diagnostic(
+                ctx, chain_id, stage="spawn", failure_kind="missing_result"
+            ),
         )
     spawn_state = str(getattr(spawned, "outcome_state", "applied") or "applied").strip().lower()
     if spawn_state != "applied":
@@ -53,6 +76,13 @@ def finalize_completion_modify(
             child_short=getattr(spawned, "child_short", ""),
             spawn_intent_id=getattr(spawned, "spawn_intent_id", None),
             reason=getattr(spawned, "reason", "") or "child spawn could not be completed",
+            diagnostic=_completion_diagnostic(
+                ctx,
+                chain_id,
+                stage="spawn",
+                failure_kind=spawn_state,
+                transition_id=str(getattr(spawned, "spawn_intent_id", "") or ""),
+            ),
         )
 
     child = spawned.child
@@ -66,6 +96,12 @@ def finalize_completion_modify(
         child_short=child_short,
         deferred_spawn=deferred_spawn,
         spawn_intent_id=spawn_intent_id,
+        diagnostic=_completion_diagnostic(
+            ctx,
+            chain_id,
+            stage="queued" if deferred_spawn else "finalize",
+            transition_id=spawn_intent_id or "",
+        ),
     )
 
     chain = list(preloaded_chain)

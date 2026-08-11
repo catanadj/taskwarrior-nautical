@@ -18917,6 +18917,9 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
     expect(captured.get("integrity_warnings") == ["missing link"], f"integrity checks should still run: {captured}")
     expect(result.state == "applied", f"completion should expose an applied operational result: {result!r}")
     expect(result.child_short == "deadbeef", f"completion result lost child identity: {result!r}")
+    expect(result.diagnostic is not None, f"completion result lost structured diagnostics: {result!r}")
+    expect(result.diagnostic.stage == "finalize", f"unexpected completion diagnostic stage: {result.diagnostic!r}")
+    expect(result.diagnostic.parent_link == 1 and result.diagnostic.child_link == 2, f"completion links missing from diagnostics: {result.diagnostic!r}")
     expect(captured.get("lifecycle_result") == result, "feedback did not receive the finalized lifecycle result")
 
 

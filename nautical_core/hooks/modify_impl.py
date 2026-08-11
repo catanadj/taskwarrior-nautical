@@ -489,6 +489,33 @@ def _diag_summary() -> None:
         pass
 
 
+def _diag_lifecycle_result(result) -> None:
+    """Write structured lifecycle diagnostics only to gated stderr output."""
+    if os.environ.get("NAUTICAL_DIAG") != "1" or result is None:
+        return
+    try:
+        diagnostic = getattr(result, "diagnostic", None)
+        items = [
+            ("state", getattr(result, "state", "")),
+            ("reason", str(getattr(result, "reason", "") or "").replace("\n", " ")),
+        ]
+        if diagnostic is not None:
+            items.extend(
+                [
+                    ("transition", diagnostic.transition_id),
+                    ("chain", diagnostic.chain_id),
+                    ("parent_link", diagnostic.parent_link),
+                    ("child_link", diagnostic.child_link),
+                    ("stage", diagnostic.stage),
+                    ("attempts", diagnostic.attempts),
+                    ("failure_kind", diagnostic.failure_kind),
+                ]
+            )
+        _emit_diag_block("completion lifecycle", items, columns=2)
+    except Exception:
+        pass
+
+
 atexit.register(_dump_diag_stats)
 
 
@@ -6629,6 +6656,7 @@ def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResul
     if computed is None:
         return
     if isinstance(computed, _module("modify_models").CompletionLifecycleResult):
+        _diag_lifecycle_result(computed)
         return computed
     snapshot = ctx.chain_snapshot
     preloaded_chain = list(snapshot.rows)
@@ -6656,7 +6684,7 @@ def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResul
         check_integrity=_CHECK_CHAIN_INTEGRITY,
         analytics_style=_ANALYTICS_STYLE,
     )
-    return modify_completion_flow.finalize_completion_modify(
+    result = modify_completion_flow.finalize_completion_modify(
         new=new,
         ctx=ctx,
         computed=computed,
@@ -6669,6 +6697,8 @@ def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResul
         chain_id=chain_id,
         services=services,
     )
+    _diag_lifecycle_result(result)
+    return result
 
 
 def _expiration_services():

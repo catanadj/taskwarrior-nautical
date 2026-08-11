@@ -7432,6 +7432,47 @@ def test_on_modify_diag_blocks_pretty_print():
     expect("[nautical]   c=3  d=4\n" in out, f"missing second wrapped diag line: {out!r}")
 
 
+def test_on_modify_lifecycle_diagnostics_are_gated_to_stderr():
+    """Structured lifecycle diagnostics must never leak into hook stdout."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_modify_lifecycle_diag_channel_test")
+    models = core._import_sibling("modify_models")
+    result = models.CompletionLifecycleResult(
+        state="retryable",
+        reason="Taskwarrior lock busy",
+        diagnostic=models.CompletionLifecycleDiagnostic(
+            transition_id="chain01:1->2",
+            chain_id="chain01",
+            parent_link=1,
+            child_link=2,
+            stage="spawn",
+            attempts=1,
+            failure_kind="command_error",
+        ),
+    )
+    previous = os.environ.get("NAUTICAL_DIAG")
+    try:
+        os.environ["NAUTICAL_DIAG"] = "1"
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            mod._diag_lifecycle_result(result)
+        text = stderr.getvalue()
+        expect(stdout.getvalue() == "", f"lifecycle diagnostics leaked to stdout: {stdout.getvalue()!r}")
+        expect("completion lifecycle" in text and "failure_kind=command_error" in text, f"structured lifecycle diagnostics missing: {text!r}")
+
+        os.environ.pop("NAUTICAL_DIAG", None)
+        silent = io.StringIO()
+        with contextlib.redirect_stderr(silent):
+            mod._diag_lifecycle_result(result)
+        expect(silent.getvalue() == "", f"lifecycle diagnostics ignored NAUTICAL_DIAG gate: {silent.getvalue()!r}")
+    finally:
+        if previous is None:
+            os.environ.pop("NAUTICAL_DIAG", None)
+        else:
+            os.environ["NAUTICAL_DIAG"] = previous
+
+
 def test_on_modify_run_task_diag_bucket_stats():
     """on-modify should classify Taskwarrior calls into stable diagnostic buckets."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33234,6 +33275,7 @@ TESTS = [
     test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
     test_on_add_tw_export_chain_extra_validation,
     test_on_modify_diag_blocks_pretty_print,
+    test_on_modify_lifecycle_diagnostics_are_gated_to_stderr,
     test_on_modify_run_task_diag_bucket_stats,
     test_on_exit_diag_blocks_pretty_print,
     test_on_exit_run_task_diag_bucket_stats,

@@ -9,7 +9,15 @@ from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 from nautical_core.scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
-from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, TaskSnapshot
+from nautical_core.lifecycle_models import (
+    LifecycleAction,
+    LifecycleEvent,
+    LifecycleIdentity,
+    LifecyclePlan,
+    ParentGuard,
+    TaskSnapshot,
+    recurrence_fingerprint,
+)
 from nautical_core.lifecycle_planner import (
     ChainGenerationLimitPolicy,
     ChainGenerationPlanningService,
@@ -52,6 +60,7 @@ class ReconcilePlan:
     child_short: str = ""
     child_due: Any = None
     terminal_kind: str | None = None
+    lifecycle_plan: LifecyclePlan | None = None
 
 
 def is_terminal_plan(plan: ReconcilePlan) -> bool:
@@ -514,6 +523,7 @@ def _build_reconcile_plan_unscoped(
 
     child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"
     parent_short = short_uuid(parent.get("uuid"))
+    lifecycle_plan: LifecyclePlan | None = None
     try:
         candidate = RecurrenceCandidate(
             child_due=child_due,
@@ -578,8 +588,48 @@ def _build_reconcile_plan_unscoped(
     )
     if carry_reason:
         return ReconcilePlan("error", parent, next_link, carry_reason, child_due=child_due)
+    if lifecycle_plan is None:
+        try:
+            guard = ParentGuard(
+                status=str(parent.get("status") or "pending"),
+                chain=str(parent.get("chain") or "on"),
+                chain_id=str(parent.get("chainID") or ""),
+                link=int(next_link - 1),
+                recurrence_fingerprint=recurrence_fingerprint(parent),
+            )
+            identity = LifecycleIdentity(
+                chain_id=guard.chain_id,
+                parent_uuid=str(parent.get("uuid") or ""),
+                source_link=guard.link,
+                target_link=next_link,
+                event=LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
+            )
+            lifecycle_plan = LifecyclePlan.from_mappings(
+                identity=identity,
+                action=LifecycleAction.SPAWN_CHILD,
+                parent_guard=guard,
+                child_payload=child,
+                parent_patch={},
+                expected_postconditions=("child_present", "parent_linked", "verified"),
+            )
+        except Exception as exc:
+            return ReconcilePlan(
+                "error",
+                parent,
+                next_link,
+                f"failed to build lifecycle plan: {scheduling_error_message(exc)}",
+                child_due=child_due,
+            )
     reason = "expired link missing next link" if is_expiration else "missing next link"
-    return ReconcilePlan("spawn", parent, next_link, reason, child=child, child_due=child_due)
+    return ReconcilePlan(
+        "spawn",
+        parent,
+        next_link,
+        reason,
+        child=child,
+        child_due=child_due,
+        lifecycle_plan=lifecycle_plan,
+    )
 
 
 def build_reconcile_plan(

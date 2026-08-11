@@ -25,6 +25,12 @@ os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
 from nautical_core import queue_store, reconcile, safe_lock, task_command  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
+from nautical_core.lifecycle_executor import (  # noqa: E402
+    LifecycleTransitionExecutor,
+    OperationResult,
+    OperationState,
+)
+from nautical_core.lifecycle_models import LifecyclePlan, LifecycleOutcomeKind  # noqa: E402
 from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 
@@ -1045,8 +1051,23 @@ def _apply_parent_atomic(
             if plan.action == "spawn":
                 if not plan.child:
                     raise RuntimeError("spawn plan has no child payload")
-                child_short, _stripped = _spawn_child(hook, plan.child, plan.parent)
-                _modify_parent_nextlink(task_bin, plan.parent, child_short)
+                lifecycle_plan = getattr(plan, "lifecycle_plan", None)
+                if not isinstance(lifecycle_plan, LifecyclePlan):
+                    raise RuntimeError("reconcile spawn plan has no typed lifecycle plan")
+                services = _ReconcileLifecycleServices(task_bin, hook, plan.parent)
+                executor = LifecycleTransitionExecutor(services)
+                outcome = executor.execute(lifecycle_plan)
+                if outcome.kind is LifecycleOutcomeKind.RETRYABLE:
+                    if os.environ.get("NAUTICAL_DIAG") == "1":
+                        print(f"[nautical] reconcile lifecycle retryable: {outcome.reason}", file=sys.stderr)
+                    raise TimeoutError(f"lifecycle transition retryable: {outcome.reason}")
+                if outcome.kind is not LifecycleOutcomeKind.APPLIED:
+                    if os.environ.get("NAUTICAL_DIAG") == "1":
+                        print(f"[nautical] reconcile lifecycle review: {outcome.reason}", file=sys.stderr)
+                    raise RuntimeError(f"lifecycle transition requires review: {outcome.reason}")
+                child_short = services.last_child_short
+                if not child_short:
+                    raise RuntimeError("lifecycle transition produced no child identity")
                 verified = _verify_applied_child(
                     task_bin,
                     plan.parent,
@@ -1317,6 +1338,203 @@ def _reconcile_candidate(
         current = child
 
     return outcomes
+
+
+class _ReconcileLifecycleServices:
+    """Taskwarrior adapter for the shared lifecycle transition executor."""
+
+    def __init__(self, task_bin: str, hook: Any, parent: dict[str, Any] | None = None):
+        self.task_bin = task_bin
+        self.hook = hook
+        self.parent = dict(parent or {})
+        self.imported = False
+        self.last_child_short = ""
+
+    @staticmethod
+    def _result(state: OperationState, *, value: Any = None, reason: str = "") -> OperationResult:
+        return OperationResult(state, value=value, reason=reason)
+
+    @staticmethod
+    def _link(value: Any) -> int | None:
+        try:
+            return int(float(str(value).strip()))
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def validate_parent(self, plan: LifecyclePlan) -> OperationResult:
+        try:
+            parent = _fresh_parent(self.task_bin, {"uuid": plan.identity.parent_uuid})
+        except Exception as exc:
+            return self._result(OperationState.UNAVAILABLE, reason=f"parent export unavailable: {exc}")
+        if parent is None:
+            return self._result(OperationState.CONFLICT, reason="parent task is unavailable")
+        guard = plan.parent_guard.to_dict()
+        for field in ("status", "chain", "chainID"):
+            expected = str(guard.get(field) or "").strip().casefold()
+            actual = str(parent.get(field) or "").strip().casefold()
+            if expected != actual:
+                return self._result(
+                    OperationState.CONFLICT,
+                    reason=f"parent {field} changed (expected {expected or '-'}, found {actual or '-'})",
+                )
+        expected_link = self._link(guard.get("link"))
+        actual_link = self._link(parent.get("link"))
+        if expected_link is None or actual_link is None or expected_link != actual_link:
+            return self._result(
+                OperationState.CONFLICT,
+                reason=f"parent link changed (expected {guard.get('link')}, found {parent.get('link')})",
+            )
+        expected_fingerprint = str(guard.get("recurrence_fingerprint") or "").strip()
+        if expected_fingerprint:
+            try:
+                from nautical_core.lifecycle_models import recurrence_fingerprint
+
+                actual_fingerprint = recurrence_fingerprint(parent)
+            except Exception as exc:
+                return self._result(OperationState.UNAVAILABLE, reason=f"parent fingerprint unavailable: {exc}")
+            if actual_fingerprint != expected_fingerprint:
+                return self._result(OperationState.CONFLICT, reason="parent recurrence inputs changed")
+        return self._result(OperationState.APPLIED)
+
+    def _rows_for_child(self, plan: LifecyclePlan) -> list[dict[str, Any]]:
+        parent = {"chainID": plan.identity.chain_id, "link": plan.identity.source_link}
+        return _existing_children(self.task_bin, parent)
+
+    def find_equivalent_child(self, plan: LifecyclePlan) -> OperationResult:
+        child = plan.child_dict()
+        child_uuid = str(child.get("uuid") or "").strip().lower()
+        try:
+            rows = self._rows_for_child(plan)
+        except Exception as exc:
+            return self._result(OperationState.UNAVAILABLE, reason=f"child lookup unavailable: {exc}")
+        for row in rows:
+            row_uuid = str(row.get("uuid") or "").strip().lower()
+            if child_uuid and row_uuid == child_uuid:
+                return self._result(OperationState.FOUND, value=row)
+            if (
+                str(row.get("chainID") or "").strip() == plan.identity.chain_id
+                and self._link(row.get("link")) == plan.identity.target_link
+                and str(row.get("prevLink") or "").strip().lower()
+                == str(plan.identity.parent_uuid or "").strip().lower()[:8]
+            ):
+                return self._result(OperationState.FOUND, value=row)
+        return self._result(OperationState.ABSENT)
+
+    def import_child(self, plan: LifecyclePlan) -> OperationResult:
+        child = plan.child_dict()
+        stable_uuid = _stable_child_uuid(self.hook, self.parent, child)
+        if stable_uuid:
+            child["uuid"] = stable_uuid
+        try:
+            child_short, _stripped = _spawn_child(self.hook, child, self.parent)
+        except Exception as exc:
+            reason = str(exc).strip() or type(exc).__name__
+            state = (
+                OperationState.UNAVAILABLE
+                if isinstance(exc, (TimeoutError, ConnectionError)) or "lock" in reason.lower()
+                else OperationState.FAILED
+            )
+            return self._result(state, reason=f"child import failed: {reason}")
+        self.imported = True
+        child["uuid"] = str(child.get("uuid") or child_short).strip()
+        child["_reconcile_child_short"] = str(child_short or "").strip()
+        return self._result(OperationState.APPLIED, value=child)
+
+    def verify_child(self, plan: LifecyclePlan, child: dict[str, Any]) -> OperationResult:
+        wanted_uuid = str(child.get("uuid") or "").strip()
+        try:
+            rows = self._rows_for_child(plan)
+        except Exception as exc:
+            return self._result(OperationState.UNAVAILABLE, reason=f"child verification unavailable: {exc}")
+        wanted_uuid = wanted_uuid.lower()
+        wanted_short = str(child.get("_reconcile_child_short") or "").strip().lower()
+        for row in rows:
+            actual = str(row.get("uuid") or "").strip().lower()
+            if (wanted_uuid and actual == wanted_uuid) or (wanted_short and actual.startswith(wanted_short)):
+                child.clear()
+                child.update(row)
+                return self._result(OperationState.APPLIED)
+        if wanted_uuid and wanted_uuid.count("-") == 0:
+            try:
+                direct_rows = _export(self.task_bin, [f"uuid:{wanted_uuid}"], timeout=30.0)
+            except Exception as exc:
+                return self._result(OperationState.UNAVAILABLE, reason=f"child verification unavailable: {exc}")
+            for row in direct_rows:
+                actual = str(row.get("uuid") or "").strip().lower()
+                if actual == wanted_uuid or actual.startswith(wanted_uuid):
+                    child.clear()
+                    child.update(row)
+                    return self._result(OperationState.APPLIED)
+        return self._result(OperationState.CONFLICT, reason="child postcondition is missing")
+
+    def _child_short(self, plan: LifecyclePlan, child: dict[str, Any]) -> str:
+        patch = plan.parent_patch_dict()
+        value = str(
+            patch.get("nextLink")
+            or child.get("_reconcile_child_short")
+            or str(child.get("uuid") or "")[:8]
+        ).strip()
+        self.last_child_short = value
+        return value
+
+    def apply_parent_patch(self, plan: LifecyclePlan, child: dict[str, Any]) -> OperationResult:
+        child_short = self._child_short(plan, child)
+        if not child_short:
+            return self._result(OperationState.CONFLICT, reason="parent patch has no child identity")
+        try:
+            parent = _fresh_parent(self.task_bin, {"uuid": plan.identity.parent_uuid})
+            if parent is None:
+                return self._result(OperationState.UNAVAILABLE, reason="parent export unavailable")
+            current = str(parent.get("nextLink") or "").strip().lower()
+            if current == child_short.casefold():
+                return self._result(OperationState.ALREADY)
+            if current:
+                return self._result(OperationState.CONFLICT, reason="parent nextLink already set")
+            _modify_parent_nextlink(self.task_bin, parent, child_short)
+            return self._result(OperationState.APPLIED)
+        except Exception as exc:
+            reason = str(exc).strip() or type(exc).__name__
+            state = (
+                OperationState.UNAVAILABLE
+                if isinstance(exc, (TimeoutError, ConnectionError)) or "lock" in reason.lower()
+                else OperationState.FAILED
+            )
+            return self._result(state, reason=f"parent patch failed: {reason}")
+
+    def verify_linkage(self, plan: LifecyclePlan, child: dict[str, Any]) -> OperationResult:
+        child_short = self._child_short(plan, child)
+        try:
+            parent = {"uuid": plan.identity.parent_uuid, "chainID": plan.identity.chain_id}
+            verified = _verify_applied_child(
+                self.task_bin,
+                parent,
+                child_short,
+                hook=self.hook,
+                strict_uuid=bool(str(child.get("uuid") or "").count("-")),
+            )
+        except Exception as exc:
+            reason = str(exc).strip() or type(exc).__name__
+            state = OperationState.UNAVAILABLE if "lock" in reason.lower() else OperationState.CONFLICT
+            return self._result(state, reason=f"parent linkage verification failed: {reason}")
+        child.clear()
+        child.update(verified)
+        return self._result(OperationState.APPLIED)
+
+    def compensate_child(self, _plan: LifecyclePlan, child: dict[str, Any]) -> OperationResult:
+        child_uuid = str(child.get("uuid") or "").strip()
+        if not child_uuid:
+            return self._result(OperationState.FAILED, reason="imported child has no UUID for compensation")
+        try:
+            result = _run_task(
+                self.task_bin,
+                ["rc.hooks=off", "rc.confirmation=off", f"uuid:{child_uuid}", "delete"],
+                timeout=30.0,
+            )
+            if result.returncode == 0:
+                return self._result(OperationState.APPLIED)
+            return self._result(OperationState.FAILED, reason=task_command.failure_message(result, "child compensation"))
+        except Exception as exc:
+            return self._result(OperationState.FAILED, reason=f"child compensation failed: {exc}")
 
 
 def _fmt_parent(parent: dict[str, Any]) -> str:

@@ -12,6 +12,7 @@ Run:
   python3 nautical_golden_tests.py
 Optional:
   python3 nautical_golden_tests.py --only leap --verbose
+  python3 nautical_golden_tests.py --shuffle-seed 20260811
 """
 
 import importlib
@@ -13361,18 +13362,28 @@ def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
             anchor_mode="skip",
         ),
     )
-    for task in cases:
-        proc = _run_hook_script(hook, task, env_extra={"NO_COLOR": "1"})
-        expect(proc.returncode == 0, f"preview failed: {proc.stderr!r}")
-        expect(_assert_stdout_json_only(proc.stdout).get("until") == task["until"], "native until changed")
-        panel = _strip_markup(proc.stderr)
-        for label in ("Expiration", "First expires", "Chain end point", "Last occurrence", "Future links"):
-            expect(label in panel, f"{label!r} missing from preview: {panel!r}")
-        expires_local = core.to_local(core.parse_dt_any(task["until"]))
-        expected_policy = f"Same day at {expires_local.hour:02d}:{expires_local.minute:02d}"
-        expect(expected_policy in panel, f"calendar expiration policy missing from preview: {panel!r}")
-        expect("2026-08-17" in panel, f"chainMax should determine the effective last occurrence: {panel!r}")
-        expect("Final (until)" not in panel, f"ambiguous legacy label remains: {panel!r}")
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "config-nautical.toml"
+        config_path.write_text('tz = "UTC"\n', encoding="utf-8")
+        for task in cases:
+            proc = _run_hook_script(
+                hook,
+                task,
+                env_extra={
+                    "NO_COLOR": "1",
+                    "NAUTICAL_CONFIG": str(config_path),
+                    "NAUTICAL_TRUST_CONFIG_PATH": "1",
+                },
+            )
+            expect(proc.returncode == 0, f"preview failed: {proc.stderr!r}")
+            expect(_assert_stdout_json_only(proc.stdout).get("until") == task["until"], "native until changed")
+            panel = _strip_markup(proc.stderr)
+            for label in ("Expiration", "First expires", "Chain end point", "Last occurrence", "Future links"):
+                expect(label in panel, f"{label!r} missing from preview: {panel!r}")
+            expected_policy = "Same day at 18:00"
+            expect(expected_policy in panel, f"calendar expiration policy missing from preview: {panel!r}")
+            expect("2026-08-17" in panel, f"chainMax should determine the effective last occurrence: {panel!r}")
+            expect("Final (until)" not in panel, f"ambiguous legacy label remains: {panel!r}")
 
 
 def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
@@ -32285,6 +32296,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", help="substring filter for test names")
     ap.add_argument("--verbose", action="store_true", help="show detailed test information")
+    ap.add_argument(
+        "--shuffle-seed",
+        type=int,
+        help="run the selected tests in a deterministic shuffled order",
+    )
     args = ap.parse_args()
 
     selected = TESTS
@@ -32294,6 +32310,9 @@ def main():
             if args.only.lower() in fn.__name__.lower():
                 sel.append(fn)
         selected = sel
+    if args.shuffle_seed is not None:
+        selected = list(selected)
+        random.Random(args.shuffle_seed).shuffle(selected)
 
     fails = 0
     total_tests = 0

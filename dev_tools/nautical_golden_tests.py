@@ -18845,6 +18845,7 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
     def fake_render_anchor_completion_feedback(**kwargs):
         captured["analytics_advice"] = kwargs.get("analytics_advice")
         captured["integrity_warnings"] = kwargs.get("integrity_warnings")
+        captured["lifecycle_result"] = kwargs.get("lifecycle_result")
 
     services = flow.CompletionFinalizeServices(
         build_and_spawn_child=fake_build_and_spawn_child,
@@ -18895,6 +18896,7 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
     expect(captured.get("integrity_warnings") == ["missing link"], f"integrity checks should still run: {captured}")
     expect(result.state == "applied", f"completion should expose an applied operational result: {result!r}")
     expect(result.child_short == "deadbeef", f"completion result lost child identity: {result!r}")
+    expect(captured.get("lifecycle_result") == result, "feedback did not receive the finalized lifecycle result")
 
 
 def test_on_modify_completion_chain_snapshot_modes_and_query():

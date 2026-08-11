@@ -5479,11 +5479,19 @@ def _render_anchor_completion_feedback(
     stripped_attrs: list[str],
     deferred_spawn: bool,
     spawn_intent_id: str | None,
+    lifecycle_result=None,
     chain_by_short: dict | None,
     analytics_advice: str | None,
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
+    if lifecycle_result is None:
+        lifecycle_result = _module("modify_models").CompletionLifecycleResult(
+            state="queued" if deferred_spawn else "applied",
+            child_short=child_short,
+            deferred_spawn=deferred_spawn,
+            spawn_intent_id=spawn_intent_id,
+        )
     calendar_feedback = importlib.import_module("nautical_core.calendar_feedback")
     calendar_feedback.render_business_calendar_displacement(
         new,
@@ -5516,6 +5524,7 @@ def _render_anchor_completion_feedback(
         stripped_attrs=stripped_attrs,
         deferred_spawn=deferred_spawn,
         spawn_intent_id=spawn_intent_id,
+        lifecycle_result=lifecycle_result,
         chain_by_short=chain_by_short,
         analytics_advice=analytics_advice,
         integrity_warnings=integrity_warnings,
@@ -5550,11 +5559,19 @@ def _render_cp_completion_feedback(
     meta: dict,
     deferred_spawn: bool,
     spawn_intent_id: str | None,
+    lifecycle_result=None,
     chain_by_short: dict | None,
     analytics_advice: str | None,
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
+    if lifecycle_result is None:
+        lifecycle_result = _module("modify_models").CompletionLifecycleResult(
+            state="queued" if deferred_spawn else "applied",
+            child_short=child_short,
+            deferred_spawn=deferred_spawn,
+            spawn_intent_id=spawn_intent_id,
+        )
     diagnostics = _module("panel_diagnostics")
     panel_warnings = diagnostics.panel_warnings(core, new, include_files=False)
     if panel_warnings:
@@ -5578,6 +5595,7 @@ def _render_cp_completion_feedback(
         meta=meta,
         deferred_spawn=deferred_spawn,
         spawn_intent_id=spawn_intent_id,
+        lifecycle_result=lifecycle_result,
         chain_by_short=chain_by_short,
         analytics_advice=analytics_advice,
         integrity_warnings=integrity_warnings,

@@ -335,6 +335,7 @@ class AnchorCompletionRenderCallback(Protocol):
         stripped_attrs: list[str],
         deferred_spawn: bool,
         spawn_intent_id: str | None,
+        lifecycle_result: "CompletionLifecycleResult",
         chain_by_short: dict[str, Any] | None,
         analytics_advice: str | None,
         integrity_warnings: list[str] | None,
@@ -363,6 +364,7 @@ class CpCompletionRenderCallback(Protocol):
         meta: dict[str, Any],
         deferred_spawn: bool,
         spawn_intent_id: str | None,
+        lifecycle_result: "CompletionLifecycleResult",
         chain_by_short: dict[str, Any] | None,
         analytics_advice: str | None,
         integrity_warnings: list[str] | None,
@@ -459,6 +461,7 @@ class CpCompletionFeedbackModel:
     meta: dict[str, Any]
     deferred_spawn: bool
     spawn_intent_id: str | None
+    lifecycle_result: "CompletionLifecycleResult"
     chain_by_short: dict[str, Any] | None
     analytics_advice: str | None
     integrity_warnings: list[str] | None
@@ -483,6 +486,7 @@ class AnchorCompletionFeedbackModel:
     stripped_attrs: list[str]
     deferred_spawn: bool
     spawn_intent_id: str | None
+    lifecycle_result: "CompletionLifecycleResult"
     chain_by_short: dict[str, Any] | None
     analytics_advice: str | None
     integrity_warnings: list[str] | None

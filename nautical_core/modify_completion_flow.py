@@ -53,6 +53,12 @@ def finalize_completion_modify(
     stripped_attrs = spawned.stripped_attrs
     deferred_spawn = spawned.deferred_spawn
     spawn_intent_id = spawned.spawn_intent_id
+    lifecycle_result = CompletionLifecycleResult(
+        state="queued" if deferred_spawn else "applied",
+        child_short=child_short,
+        deferred_spawn=deferred_spawn,
+        spawn_intent_id=spawn_intent_id,
+    )
 
     chain = list(preloaded_chain)
     chain_by_link = preloaded_chain_by_link
@@ -109,6 +115,7 @@ def finalize_completion_modify(
             stripped_attrs=stripped_attrs,
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
+            lifecycle_result=lifecycle_result,
             chain_by_short=chain_by_short,
             analytics_advice=analytics_advice,
             integrity_warnings=integrity_warnings,
@@ -130,6 +137,7 @@ def finalize_completion_modify(
             meta=computed.meta,
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
+            lifecycle_result=lifecycle_result,
             chain_by_short=chain_by_short,
             analytics_advice=analytics_advice,
             integrity_warnings=integrity_warnings,
@@ -138,12 +146,7 @@ def finalize_completion_modify(
 
     services.print_task(new)
     services.diag_summary()
-    return CompletionLifecycleResult(
-        state="queued" if deferred_spawn else "applied",
-        child_short=child_short,
-        deferred_spawn=deferred_spawn,
-        spawn_intent_id=spawn_intent_id,
-    )
+    return lifecycle_result
 
 
 __all__ = (

@@ -1079,11 +1079,22 @@ def _apply_parent_atomic(
                     verified_children[str(child_short).strip().lower()] = verified
                 return plan, child_short
             if plan.action == "backfill_nextlink":
-                _modify_parent_nextlink(task_bin, plan.parent, plan.child_short)
-                verified = _verify_applied_child(task_bin, plan.parent, plan.child_short, hook=hook)
+                lifecycle_plan = getattr(plan, "lifecycle_plan", None)
+                if not isinstance(lifecycle_plan, LifecyclePlan):
+                    raise RuntimeError("reconcile backfill plan has no typed lifecycle plan")
+                services = _ReconcileLifecycleServices(task_bin, hook, plan.parent)
+                outcome = LifecycleTransitionExecutor(services).execute(lifecycle_plan)
+                if outcome.kind is LifecycleOutcomeKind.RETRYABLE:
+                    if os.environ.get("NAUTICAL_DIAG") == "1":
+                        print(f"[nautical] reconcile backfill retryable: {outcome.reason}", file=sys.stderr)
+                    raise TimeoutError(f"lifecycle backfill retryable: {outcome.reason}")
+                if outcome.kind is not LifecycleOutcomeKind.APPLIED:
+                    raise RuntimeError(f"lifecycle backfill requires review: {outcome.reason}")
+                child_short = services.last_child_short or plan.child_short
+                verified = _verify_applied_child(task_bin, plan.parent, child_short, hook=hook)
                 if verified_children is not None:
-                    verified_children[str(plan.child_short).strip().lower()] = verified
-                return plan, plan.child_short
+                    verified_children[str(child_short).strip().lower()] = verified
+                return plan, child_short
             if plan.action in {"legitimate_final", "manual_stop"}:
                 _disable_parent_chain(task_bin, plan.parent)
                 _verify_disabled_parent(task_bin, plan.parent)

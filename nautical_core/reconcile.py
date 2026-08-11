@@ -476,7 +476,62 @@ def _build_reconcile_plan_unscoped(
     if child_error:
         return ReconcilePlan("error", parent, next_link, child_error)
     if child_short:
-        return ReconcilePlan("backfill_nextlink", parent, next_link, "next link already exists", child_short=child_short)
+        existing_child = next(
+            (
+                row
+                for row in existing_children
+                if str(row.get("uuid") or "").strip().lower().startswith(child_short.lower())
+            ),
+            None,
+        )
+        if not isinstance(existing_child, dict):
+            return ReconcilePlan(
+                "error",
+                parent,
+                next_link,
+                "existing successor identity could not be loaded",
+                child_short=child_short,
+            )
+        try:
+            guard = ParentGuard(
+                status=str(parent.get("status") or "pending"),
+                chain=str(parent.get("chain") or "on"),
+                chain_id=str(parent.get("chainID") or ""),
+                link=link,
+                recurrence_fingerprint=recurrence_fingerprint(parent),
+            )
+            identity = LifecycleIdentity(
+                chain_id=guard.chain_id,
+                parent_uuid=str(parent.get("uuid") or ""),
+                source_link=guard.link,
+                target_link=next_link,
+                event=LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
+            )
+            lifecycle_plan = LifecyclePlan.from_mappings(
+                identity=identity,
+                action=LifecycleAction.SPAWN_CHILD,
+                parent_guard=guard,
+                child_payload=existing_child,
+                parent_patch={"nextLink": child_short},
+                expected_postconditions=("child_present", "parent_linked", "verified"),
+            )
+        except Exception as exc:
+            return ReconcilePlan(
+                "error",
+                parent,
+                next_link,
+                f"failed to build successor recovery plan: {scheduling_error_message(exc)}",
+                child_short=child_short,
+            )
+        return ReconcilePlan(
+            "backfill_nextlink",
+            parent,
+            next_link,
+            "next link already exists",
+            child_short=child_short,
+            child=existing_child,
+            lifecycle_plan=lifecycle_plan,
+        )
 
     try:
         evaluator = RecurrenceEvaluator.from_task(parent)

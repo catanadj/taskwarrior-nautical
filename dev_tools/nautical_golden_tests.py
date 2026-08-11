@@ -3175,6 +3175,21 @@ def test_modify_lifecycle_activation_requires_complete_root_identity():
     expect(valid.get("link") == 1, f"valid activation missed root link: {valid!r}")
 
 
+def test_modify_lifecycle_terminal_chain_patch_is_idempotent():
+    """All hook-side terminal paths should share one idempotent chain-off patch."""
+    lifecycle = core._import_sibling("modify_lifecycle")
+    task = {"chain": "on", "chainID": "abcd1234"}
+    expect(lifecycle.ensure_terminal_chain_off(task), "first terminal patch should change an active chain")
+    expect(task["chain"] == "off", f"terminal patch did not disable chain: {task!r}")
+    expect(not lifecycle.ensure_terminal_chain_off(task), "replaying terminal patch should be a no-op")
+    try:
+        lifecycle.ensure_terminal_chain_off(None)
+    except ValueError as exc:
+        expect("task mapping" in str(exc), f"terminal patch error lost detail: {exc}")
+    else:
+        raise AssertionError("non-mapping terminal patch input was accepted")
+
+
 def test_on_modify_promotes_chain_emits_upgrade_panel():
     """Promotion to Nautical should show a small informative panel."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33060,6 +33075,7 @@ TESTS = [
     test_on_modify_promotes_chain_when_task_becomes_nautical,
     test_modify_ordinary_transition_failure_rejects_instead_of_noop,
     test_modify_lifecycle_activation_requires_complete_root_identity,
+    test_modify_lifecycle_terminal_chain_patch_is_idempotent,
     test_on_modify_promotes_chain_emits_upgrade_panel,
     test_on_modify_promotes_cp_emits_period_explanation,
     test_on_modify_disables_chain_emits_disabled_panel,

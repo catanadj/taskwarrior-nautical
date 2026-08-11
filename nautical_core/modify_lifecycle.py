@@ -76,6 +76,16 @@ def _norm_field(value: Any) -> str:
         return ""
 
 
+def ensure_terminal_chain_off(task: dict[str, Any]) -> bool:
+    """Apply the idempotent terminal chain patch and report whether it changed."""
+    if not isinstance(task, dict):
+        raise ValueError("terminal chain patch requires a task mapping")
+    if _norm_field(task.get("chain")).lower() == "off":
+        return False
+    task["chain"] = "off"
+    return True
+
+
 def recurrence_setting_changes(old: dict[str, Any] | None, new: dict[str, Any] | None) -> list[tuple[str, str, str]]:
     if not isinstance(old, dict) or not isinstance(new, dict):
         return []
@@ -170,8 +180,7 @@ def apply_nautical_transition(
         )
 
     if old_has_recurrence and not new_has_recurrence:
-        if new_chain != "off":
-            new["chain"] = "off"
+        ensure_terminal_chain_off(new)
         return ModifyNauticalTransition(
             state="disabled",
             reason="This task no longer has Nautical recurrence fields.",
@@ -216,6 +225,7 @@ __all__ = (
     "RECURRENCE_SETTING_FIELDS",
     "apply_nautical_transition",
     "classify_modify_route",
+    "ensure_terminal_chain_off",
     "promote_newly_nautical_task",
     "recurrence_setting_changes",
     "task_has_nautical_chain_fields",

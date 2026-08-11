@@ -5987,6 +5987,11 @@ def _render_disabled_chain_summary(old: dict, new: dict, reason: str) -> None:
         )
 
 
+def _ensure_terminal_chain_off(task: dict) -> bool:
+    """Use one idempotent terminal patch for every hook-side stop."""
+    return _module("modify_lifecycle").ensure_terminal_chain_off(task)
+
+
 def _preserve_cp_relative_offsets_on_due_change(
     old: dict,
     new: dict,
@@ -6356,7 +6361,7 @@ def _completion_compute_child_due(new: dict, kind: str):
     def handle_terminal(exc) -> None:
         message = core._import_sibling("scheduler_models").occurrence_exhaustion_message(exc)
         if exc.is_date_limit:
-            new["chain"] = "off"
+            _ensure_terminal_chain_off(new)
             try:
                 _end_chain_summary(new, message, core.now_utc(), current_task=new)
             except Exception as summary_exc:
@@ -6523,7 +6528,7 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
         )
         if plan.action is lifecycle_models.LifecycleAction.FINALIZE_CHAIN:
             _end_chain_summary(new, "Reached lifecycle successor limit", now_utc)
-            new["chain"] = "off"
+            _ensure_terminal_chain_off(new)
             _print_task(new)
             return None
         computed.lifecycle_plan = plan
@@ -6715,7 +6720,7 @@ def _handle_deleted_modify(old: dict, new: dict) -> None:
     if disposition == "manual":
         _diag("deleted Nautical task classified as manual stop")
 
-    new["chain"] = "off"
+    _ensure_terminal_chain_off(new)
     now_utc = core.now_utc()
     try:
         _end_chain_summary(new, "Pending task deleted.", now_utc, current_task=old)

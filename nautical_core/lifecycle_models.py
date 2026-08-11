@@ -147,6 +147,28 @@ class ParentGuard:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskSnapshot:
+    """Immutable Taskwarrior row supplied to lifecycle planning."""
+
+    fields: FrozenPairs
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "TaskSnapshot":
+        if not isinstance(value, Mapping):
+            raise LifecycleContractError("task snapshot must be an object")
+        return cls(_freeze_pairs(value))
+
+    def get(self, key: str, default: Any = None) -> Any:
+        for field, value in self.fields:
+            if field == key:
+                return _thaw(value)
+        return default
+
+    def to_dict(self) -> dict[str, Any]:
+        return {key: _thaw(value) for key, value in self.fields}
+
+
+@dataclass(frozen=True, slots=True)
 class LifecycleIdentity:
     """Stable identity for one parent-to-slot lifecycle transition."""
 
@@ -301,4 +323,5 @@ __all__ = (
     "ParentGuard",
     "QueueProcessingState",
     "TaskLifecycleState",
+    "TaskSnapshot",
 )

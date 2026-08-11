@@ -1077,6 +1077,50 @@ def test_lifecycle_models_enforce_transition_contract():
         raise AssertionError("invalid lifecycle model was accepted")
 
 
+def test_lifecycle_planner_is_pure_and_deterministic():
+    """The first planner contract produces repeatable plans without mutating snapshots."""
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, TaskSnapshot
+    from nautical_core.lifecycle_planner import LifecyclePlanner, LifecyclePlanningError
+
+    source = {
+        "uuid": "parent-uuid",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "chain-1",
+        "link": 4,
+        "anchor": "w:mon",
+    }
+    snapshot = TaskSnapshot.from_mapping(source)
+
+    def build_child(task, event):
+        expect(event is LifecycleEvent.COMPLETE, "unexpected event passed to child builder")
+        expect(task.to_dict() == source, "planner changed the input snapshot")
+        return {"uuid": "child-uuid", "link": 5, "description": "next"}
+
+    planner = LifecyclePlanner({"scheduler_fingerprint": "fp-1"}, child_builder=build_child)
+    first = planner.plan(snapshot, LifecycleEvent.COMPLETE)
+    second = planner.plan(snapshot, LifecycleEvent.COMPLETE)
+    expect(first == second, "equal snapshots did not produce equal plans")
+    expect(first.action is LifecycleAction.SPAWN_CHILD, "completion did not produce a spawn plan")
+    expect(first.child_dict()["uuid"] == "child-uuid", "child payload was not retained")
+    expect(source == snapshot.to_dict(), "planner mutated the source task")
+
+    terminal = planner.plan(snapshot, LifecycleEvent.CHAIN_UNTIL)
+    expect(terminal.action is LifecycleAction.FINALIZE_CHAIN, "chainUntil did not finalize")
+    activation = planner.plan(snapshot, LifecycleEvent.RESUME)
+    expect(activation.parent_patch_dict() == {"chain": "on"}, "resume patch was incorrect")
+
+    try:
+        LifecyclePlanner({"scheduler_fingerprint": "fp-1"}).plan(
+            TaskSnapshot.from_mapping({"uuid": "parent-uuid", "link": 1}),
+            LifecycleEvent.COMPLETE,
+        )
+    except LifecyclePlanningError:
+        pass
+    else:
+        raise AssertionError("planner accepted a task without mandatory chainID")
+
+
 def test_diagnostic_event_renders_to_stderr_and_has_stable_record():
     """Structured diagnostics must keep stdout clean and expose stable fields."""
     from nautical_core import diagnostic_models, runtime
@@ -31971,6 +32015,7 @@ TESTS = [
     test_hook_io_contract_response_is_single_unescaped_json_object,
     test_hook_response_models_keep_legacy_names_and_typed_roles,
     test_lifecycle_models_enforce_transition_contract,
+    test_lifecycle_planner_is_pure_and_deterministic,
     test_diagnostic_event_renders_to_stderr_and_has_stable_record,
     test_taskwarrior_document_is_lossless_with_typed_scalar_accessors,
     test_taskwarrior_document_rejects_non_objects_and_handles_bad_scalars,

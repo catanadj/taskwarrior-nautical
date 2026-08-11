@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from nautical_core.modify_models import (
+    CompletionLifecycleResult,
     CompletionComputeResult,
     CompletionFinalizeServices,
     CompletionPreflightContext,
@@ -22,7 +23,7 @@ def finalize_completion_modify(
     preloaded_chain_by_short: dict[str, dict[str, Any]],
     chain_id: str,
     services: CompletionFinalizeServices,
-) -> None:
+) -> CompletionLifecycleResult:
     parent_short = ctx.parent_short
     base_no = ctx.base_no
     next_no = ctx.next_no
@@ -41,7 +42,10 @@ def finalize_completion_modify(
         spawn_args["planned_child"] = planned_child
     spawned = services.build_and_spawn_child(new, **spawn_args)
     if spawned is None:
-        return
+        return CompletionLifecycleResult(
+            state="retryable",
+            reason="completion child operation returned no result",
+        )
 
     child = spawned.child
     services.seed_runtime_lookup_tasks(new, child)
@@ -134,6 +138,12 @@ def finalize_completion_modify(
 
     services.print_task(new)
     services.diag_summary()
+    return CompletionLifecycleResult(
+        state="queued" if deferred_spawn else "applied",
+        child_short=child_short,
+        deferred_spawn=deferred_spawn,
+        spawn_intent_id=spawn_intent_id,
+    )
 
 
 __all__ = (

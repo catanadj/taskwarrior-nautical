@@ -18877,7 +18877,7 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
         until_cap_no=None,
     )
 
-    flow.finalize_completion_modify(
+    result = flow.finalize_completion_modify(
         new={"anchor": "w:mon", "chainID": "abcd1234"},
         ctx=ctx,
         computed=computed,
@@ -18893,6 +18893,8 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
 
     expect(captured.get("analytics_advice") is None, f"analytics should stay hidden, got {captured}")
     expect(captured.get("integrity_warnings") == ["missing link"], f"integrity checks should still run: {captured}")
+    expect(result.state == "applied", f"completion should expose an applied operational result: {result!r}")
+    expect(result.child_short == "deadbeef", f"completion result lost child identity: {result!r}")
 
 
 def test_on_modify_completion_chain_snapshot_modes_and_query():

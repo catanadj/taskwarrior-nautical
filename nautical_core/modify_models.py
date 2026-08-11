@@ -501,6 +501,25 @@ class CompletionSpawnResult:
     spawn_intent_id: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class CompletionLifecycleResult:
+    """Operational result returned after completion mutation decisions finish."""
+
+    state: str
+    child_short: str = ""
+    deferred_spawn: bool = False
+    spawn_intent_id: str | None = None
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        state = str(self.state or "").strip().lower()
+        if state not in {"applied", "queued", "retryable"}:
+            raise ValueError(f"unsupported completion lifecycle state: {self.state!r}")
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "child_short", str(self.child_short or "").strip())
+        object.__setattr__(self, "reason", str(self.reason or "").strip())
+
+
 @dataclass(slots=True)
 class CompletionSpawnServices:
     build_child_from_parent: BuildChildCallback

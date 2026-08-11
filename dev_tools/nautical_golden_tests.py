@@ -25121,6 +25121,7 @@ def test_on_modify_render_cp_completion_feedback_text_mode():
     expect("00000000 ✓" in txt, f"expected parent status line in text payload, got {txt!r}")
     expect("Next ⛓ #2 deadbeef" in txt, f"expected next-link line in text payload, got {txt!r}")
     expect("Period: P1D" in txt, f"expected summary line in text payload, got {txt!r}")
+    expect("Result: Applied now" in txt, f"expected lifecycle result in text payload, got {txt!r}")
     expect(captured.get("kwargs", {}).get("kind") == "preview_cp", f"unexpected text line kwargs: {captured}")
     expect(captured.get("kwargs", {}).get("markup_body") is True, f"unexpected markup handling: {captured}")
 

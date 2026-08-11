@@ -254,6 +254,17 @@ def _append_lifecycle_result_row(fb: list[tuple[str, object]], lifecycle_result)
     fb.append(("Result", value))
 
 
+def _lifecycle_result_label(lifecycle_result) -> str:
+    state = str(getattr(lifecycle_result, "state", "") or "").strip().lower()
+    return {
+        "applied": "Applied now",
+        "queued": "Queued for on-exit",
+        "terminal": "Chain complete",
+        "retryable": "Retryable",
+        "manual_review": "Manual review required",
+    }.get(state, state.replace("_", " ").title() if state else "")
+
+
 def _child_expiration(core, child: dict):
     try:
         return core.parse_dt_any(child.get("until"))
@@ -328,6 +339,7 @@ def _build_text_feedback(
     child_expires=None,
     expiration_basis: str = "due",
     last_occurrence=None,
+    lifecycle_result=None,
     extra_line: str | None = None,
 ) -> str:
     text = core.strip_rich_markup(preview_line or "")
@@ -383,6 +395,11 @@ def _build_text_feedback(
         lines.append(summary_text)
     if extra_line and str(extra_line).strip():
         lines.append(extra_line)
+    result_label = _lifecycle_result_label(lifecycle_result)
+    if result_label:
+        result_reason = str(getattr(lifecycle_result, "reason", "") or "").strip()
+        suffix = f": {result_reason}" if result_reason and result_label in {"Retryable", "Manual review required"} else ""
+        lines.append(f"[bold cyan]Result:[/] [white]{result_label}{suffix}[/]")
 
     limit_parts = []
     if cap_no:
@@ -480,6 +497,9 @@ def render_anchor_completion_feedback(
             kind="anchor",
             minimal=(mode == "minimal"),
         )
+        result_label = _lifecycle_result_label(feedback.lifecycle_result)
+        if result_label:
+            line = f"{line} · {result_label}"
         title_style = chain_colour_for_task(feedback.new, "anchor") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_anchor", border_style=title_style, title_style=title_style, markup_body=True)
         return
@@ -514,6 +534,7 @@ def render_anchor_completion_feedback(
                 child_expires=_child_expiration(core, feedback.child),
                 expiration_basis=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
                 last_occurrence=_effective_last_occurrence(feedback.finals),
+                lifecycle_result=feedback.lifecycle_result,
                 extra_line=(f"[bold cyan]Except:[/] [white]{omit_natural or omit_raw}[/]" if omit_raw else (f"[bold cyan]Omit file:[/] [white]{omit_file}[/]" if omit_file else None)),
             ),
             kind="preview_anchor",
@@ -651,6 +672,9 @@ def render_cp_completion_feedback(
             kind="cp",
             minimal=(mode == "minimal"),
         )
+        result_label = _lifecycle_result_label(feedback.lifecycle_result)
+        if result_label:
+            line = f"{line} · {result_label}"
         title_style = chain_colour_for_task(feedback.new, "cp") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_cp", border_style=title_style, title_style=title_style, markup_body=True)
         return
@@ -685,6 +709,7 @@ def render_cp_completion_feedback(
                 child_expires=_child_expiration(core, feedback.child),
                 expiration_basis=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
                 last_occurrence=_effective_last_occurrence(feedback.finals),
+                lifecycle_result=feedback.lifecycle_result,
             ),
             kind="preview_cp",
             markup_body=True,

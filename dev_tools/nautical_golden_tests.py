@@ -3879,6 +3879,35 @@ def test_hook_engine_reports_pending_nautical_delete_without_spawning():
     expect(calls == {"load": 1, "deleted": 1, "completion": 0, "non_completion": 0}, f"unexpected nautical delete routing: {calls!r}")
 
 
+def test_hook_engine_retains_completion_lifecycle_result_on_runtime_context():
+    """Completion routing should retain its typed result without changing JSON output."""
+    from nautical_core import hook_engine
+    from nautical_core.hook_context import HookRuntimeContext
+    from nautical_core.hook_results import HookJsonResult
+    from nautical_core.modify_models import CompletionLifecycleResult
+
+    lifecycle = CompletionLifecycleResult(state="retryable", reason="planner unavailable")
+    runtime = HookRuntimeContext("on-modify", "", False, "", "")
+    request = SimpleNamespace(
+        old={"uuid": "00000000-0000-0000-0000-000000000303", "status": "pending", "chainID": "chain303"},
+        new={"uuid": "00000000-0000-0000-0000-000000000303", "status": "completed", "chainID": "chain303"},
+        runtime=runtime,
+    )
+    result = hook_engine.handle_on_modify(
+        request,
+        json_result_cls=HookJsonResult,
+        task_has_nautical_fields=lambda task: bool(task.get("chainID")),
+        load_core=lambda: None,
+        diag=lambda _msg: None,
+        fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("completion should not fail")),
+        is_non_completion_modify=lambda _old, _new: False,
+        handle_non_completion_modify=lambda *_args: (_ for _ in ()).throw(AssertionError("non-completion route selected")),
+        handle_completion_modify=lambda *_args: lifecycle,
+    )
+    expect(result is None, f"completion routing should not emit an alternate JSON result: {result!r}")
+    expect(runtime.lifecycle_result is lifecycle, f"hook engine dropped lifecycle result: {runtime.lifecycle_result!r}")
+
+
 def test_delete_chain_summary_span_uses_stop_time_without_last_end():
     """Deletion summaries should show active chain span even when the deleted pending task has no end."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33187,6 +33216,7 @@ TESTS = [
     test_on_modify_read_two_array_uuid_mismatch_fails,
     test_on_modify_read_two_array_single_missing_uuid_fails,
     test_hook_engine_reports_pending_nautical_delete_without_spawning,
+    test_hook_engine_retains_completion_lifecycle_result_on_runtime_context,
     test_delete_chain_summary_span_uses_stop_time_without_last_end,
     test_end_summary_history_marks_deleted_pending_tail,
     test_delete_chain_summary_uses_stopped_title,

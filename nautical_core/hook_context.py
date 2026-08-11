@@ -14,6 +14,7 @@ class HookRuntimeContext:
     hook_dir: str
     profile_level: int = 0
     import_ms: float | None = None
+    lifecycle_result: Any | None = None
 
 
 @dataclass(slots=True)

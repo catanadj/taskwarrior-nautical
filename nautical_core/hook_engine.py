@@ -118,5 +118,10 @@ def handle_on_modify(
         handle_non_completion_modify(old, new)
         return None
 
-    handle_completion_modify(old, new)
+    lifecycle_result = handle_completion_modify(old, new)
+    try:
+        request.runtime.lifecycle_result = lifecycle_result
+    except Exception:
+        # Minimal test/request adapters may not expose runtime state.
+        pass
     return None

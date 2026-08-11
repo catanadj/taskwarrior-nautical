@@ -584,6 +584,7 @@ class CompletionFinalizeServices:
     chain_integrity_warnings: ChainIntegrityCallback
     render_anchor_completion_feedback: AnchorCompletionRenderCallback
     render_cp_completion_feedback: CpCompletionRenderCallback
+    render_lifecycle_result: Any
     print_task: PrintTaskCallback
     diag_summary: DiagnosticSummaryCallback
     show_analytics: bool

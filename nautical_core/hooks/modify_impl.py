@@ -5639,6 +5639,23 @@ def _render_cp_completion_feedback(
     )
 
 
+def _render_lifecycle_result(result, task: dict) -> None:
+    """Render one finalized non-success outcome without deciding its state."""
+    state = str(getattr(result, "state", "retryable") or "retryable").strip().lower()
+    title = "⛓ Chain warning" if state == "manual_review" else "⛓ Chain error"
+    rows = [("Result", state.replace("_", " ").title())]
+    reason = str(getattr(result, "reason", "") or "").strip()
+    if reason:
+        rows.append(("Reason", reason))
+    child_short = str(getattr(result, "child_short", "") or "").strip()
+    if child_short:
+        rows.append(("Child", child_short))
+    intent_id = str(getattr(result, "spawn_intent_id", "") or "").strip()
+    if intent_id:
+        rows.append(("Intent", intent_id))
+    _panel(title, rows, kind="warning" if state == "manual_review" else "error", task=task)
+
+
 def _non_completion_anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     has_type_colon = bool(
         re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", anchor_expr, re.IGNORECASE)
@@ -6702,6 +6719,7 @@ def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResul
         chain_integrity_warnings=_chain_integrity_warnings,
         render_anchor_completion_feedback=_render_anchor_completion_feedback,
         render_cp_completion_feedback=_render_cp_completion_feedback,
+        render_lifecycle_result=_render_lifecycle_result,
         print_task=_print_task,
         diag_summary=_diag_summary,
         show_analytics=_SHOW_ANALYTICS,

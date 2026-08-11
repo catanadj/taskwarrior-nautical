@@ -18957,6 +18957,7 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
         chain_integrity_warnings=lambda *_a, **_k: ["missing link"],
         render_anchor_completion_feedback=fake_render_anchor_completion_feedback,
         render_cp_completion_feedback=lambda *_a, **_k: None,
+        render_lifecycle_result=lambda *_a, **_k: None,
         print_task=lambda *_a, **_k: None,
         diag_summary=lambda *_a, **_k: None,
         show_analytics=False,
@@ -24458,7 +24459,7 @@ def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
 
     expect(result is not None and result.outcome_state == "retryable", f"spawn exception lost typed state: {result!r}")
     expect("Taskwarrior lock busy" in result.reason, f"spawn exception lost reason: {result!r}")
-    expect(any("Taskwarrior lock busy" in str(value) for _title, rows, _kind in panels for _label, value in rows), f"spawn panel lost reason: {panels!r}")
+    expect(not panels, f"spawn helper should not render before finalization: {panels!r}")
 
 
 def test_carry_field_failure_defers_completion_and_reconcile_mutation():
@@ -24507,10 +24508,7 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
     expect(result is not None and result.outcome_state == "retryable", f"completion should return retryable carry result, got {result!r}")
     expect("wait carry failed" in result.reason, f"carry result lost actionable reason: {result!r}")
     expect(not spawned, "completion attempted a child spawn after carry failure")
-    expect(
-        any("wait carry failed" in str(value) for _title, rows, _kind in panels for _label, value in rows),
-        f"carry failure was not actionable in completion panel: {panels!r}",
-    )
+    expect(not panels, f"carry helper should not render before finalization: {panels!r}")
 
     import nautical_core.reconcile as reconcile
 

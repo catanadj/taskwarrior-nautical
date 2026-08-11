@@ -21,8 +21,6 @@ def completion_build_and_spawn_child(
 ) -> CompletionSpawnResult | None:
     build_child_from_parent = services.build_child_from_parent
     spawn_child_atomic = services.spawn_child_atomic
-    panel = services.panel
-    print_task = services.print_task
     diag = services.diag
     try:
         child = planned_child or build_child_from_parent(
@@ -39,12 +37,6 @@ def completion_build_and_spawn_child(
         if callable(diag):
             diag(f"build child failed: {exc}")
         reason = str(exc) if isinstance(exc, CarryFieldError) else "Failed to build next link"
-        panel(
-            "⛓ Chain error",
-            [("Reason", reason)],
-            kind="error",
-        )
-        print_task(new)
         return CompletionSpawnResult(
             child={},
             child_short="",
@@ -69,12 +61,6 @@ def completion_build_and_spawn_child(
         ) = spawn_child_atomic(child, new)
         if not verified and not deferred_spawn:
             review_reason = defer_reason or "Child spawn could not be verified; parent not updated"
-            panel(
-                "⛓ Chain warning",
-                [("Reason", review_reason)],
-                kind="warning",
-            )
-            print_task(new)
             return CompletionSpawnResult(
                 child=child,
                 child_short=child_short,
@@ -89,12 +75,6 @@ def completion_build_and_spawn_child(
         if callable(diag):
             diag(f"spawn child failed: {exc}")
         reason = str(exc).strip() or "Failed to spawn next link"
-        panel(
-            "⛓ Chain error",
-            [("Reason", reason)],
-            kind="error",
-        )
-        print_task(new)
         return CompletionSpawnResult(
             child=child,
             child_short="",

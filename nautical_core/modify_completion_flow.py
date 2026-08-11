@@ -30,6 +30,14 @@ def _completion_diagnostic(
     )
 
 
+def _render_lifecycle_result(services: CompletionFinalizeServices, result: CompletionLifecycleResult, task: dict[str, Any]) -> None:
+    """Keep presentation failures from suppressing the task response."""
+    try:
+        services.render_lifecycle_result(result, task)
+    except Exception:
+        pass
+
+
 def finalize_completion_modify(
     *,
     new: dict[str, Any],
@@ -62,16 +70,19 @@ def finalize_completion_modify(
         spawn_args["planned_child"] = planned_child
     spawned = services.build_and_spawn_child(new, **spawn_args)
     if spawned is None:
-        return CompletionLifecycleResult(
+        lifecycle_result = CompletionLifecycleResult(
             state="retryable",
             reason="completion child operation returned no result",
             diagnostic=_completion_diagnostic(
                 ctx, chain_id, stage="spawn", failure_kind="missing_result"
             ),
         )
+        _render_lifecycle_result(services, lifecycle_result, new)
+        services.print_task(new)
+        return lifecycle_result
     spawn_state = str(getattr(spawned, "outcome_state", "applied") or "applied").strip().lower()
     if spawn_state != "applied":
-        return CompletionLifecycleResult(
+        lifecycle_result = CompletionLifecycleResult(
             state="manual_review" if spawn_state == "manual_review" else "retryable",
             child_short=getattr(spawned, "child_short", ""),
             spawn_intent_id=getattr(spawned, "spawn_intent_id", None),
@@ -84,6 +95,9 @@ def finalize_completion_modify(
                 transition_id=str(getattr(spawned, "spawn_intent_id", "") or ""),
             ),
         )
+        _render_lifecycle_result(services, lifecycle_result, new)
+        services.print_task(new)
+        return lifecycle_result
 
     child = spawned.child
     services.seed_runtime_lookup_tasks(new, child)

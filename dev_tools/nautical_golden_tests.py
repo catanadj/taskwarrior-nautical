@@ -13,6 +13,7 @@ Run:
 Optional:
   python3 nautical_golden_tests.py --only leap --verbose
   python3 nautical_golden_tests.py --shuffle-seed 20260811
+  python3 nautical_golden_tests.py --only reconcile --strict-lifecycle-warnings
 """
 
 import importlib
@@ -32301,6 +32302,11 @@ def main():
         type=int,
         help="run the selected tests in a deterministic shuffled order",
     )
+    ap.add_argument(
+        "--strict-lifecycle-warnings",
+        action="store_true",
+        help="fail selected tests on leaked temporary-Taskdata or stale-config warnings",
+    )
     args = ap.parse_args()
 
     selected = TESTS
@@ -32319,8 +32325,24 @@ def main():
     
     for fn in selected:
         total_tests += 1
+        captured_stderr = io.StringIO()
         try:
-            fn()
+            if args.strict_lifecycle_warnings:
+                with contextlib.redirect_stderr(captured_stderr):
+                    fn()
+            else:
+                fn()
+            if args.strict_lifecycle_warnings:
+                warning_text = captured_stderr.getvalue()
+                leaked = [
+                    line.strip()
+                    for line in warning_text.splitlines()
+                    if "Taskwarrior data directory does not exist" in line
+                    or "stale configuration" in line.lower()
+                    or "temporary Taskdata" in line
+                ]
+                if leaked:
+                    raise AssertionError("lifecycle state warning leaked: " + " | ".join(leaked))
             if args.verbose:
                 # Extract docstring and print test description
                 docstring = fn.__doc__ or "No description available"

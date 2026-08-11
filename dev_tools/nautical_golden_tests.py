@@ -28348,6 +28348,45 @@ def test_reconcile_apply_resumes_after_parent_update_failure():
     expect(world["updates"] == 2, f"parent update was not retried exactly once: {world}")
 
 
+def test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review():
+    """Typed lifecycle outcomes remain actionable instead of becoming generic errors."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_lifecycle_outcomes_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "outcome01",
+        "link": 1,
+    }
+    original_apply = tool._apply_parent_atomic
+    try:
+        for exception_type, expected_action in (
+            (tool._LifecycleRetryable, "partial"),
+            (tool._LifecycleManualReview, "manual_review"),
+        ):
+            def fail_apply(*_args, _exception_type=exception_type, **_kwargs):
+                raise _exception_type("typed lifecycle outcome")
+
+            tool._apply_parent_atomic = fail_apply
+            outcomes = tool._reconcile_candidate(
+                "task",
+                SimpleNamespace(),
+                parent,
+                taskdata=Path("/tmp/nautical-reconcile-lifecycle-outcomes-test"),
+                apply=True,
+                max_expiration_hops=4,
+                recovery_at=datetime.now(timezone.utc),
+            )
+            expect(len(outcomes) == 1, f"typed outcome produced extra reconcile work: {outcomes!r}")
+            plan, applied = outcomes[0]
+            expect(plan.action == expected_action, f"typed outcome became {plan.action!r}: {plan!r}")
+            expect("typed lifecycle outcome" in plan.reason, f"typed reason was lost: {plan!r}")
+            expect(not applied, f"typed outcome reported a mutation: {applied!r}")
+    finally:
+        tool._apply_parent_atomic = original_apply
+
+
 def test_reconcile_parent_updates_are_guarded():
     """Reconcile writes should compare the parent state that authorized the plan."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -33050,6 +33089,7 @@ TESTS = [
     test_reconcile_apply_refuses_a_second_full_run,
     test_reconcile_apply_refreshes_parent_under_lock,
     test_reconcile_apply_resumes_after_parent_update_failure,
+    test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review,
     test_reconcile_parent_updates_are_guarded,
     test_reconcile_repairs_missing_legacy_root_link_under_guard,
     test_reconcile_repairs_legacy_root_metadata_when_chain_stops,

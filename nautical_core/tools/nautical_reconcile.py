@@ -52,6 +52,14 @@ class _ConfigurationDrift(RuntimeError):
     """Signal that this run must stop before applying under a new configuration."""
 
 
+class _LifecycleRetryable(TimeoutError):
+    """Signal that a lifecycle read/write should remain retryable."""
+
+
+class _LifecycleManualReview(RuntimeError):
+    """Signal that a lifecycle transition needs operator review."""
+
+
 class _ConfigurationVerification:
     """Validated configuration state used to gate reconcile mutations."""
 
@@ -1060,11 +1068,11 @@ def _apply_parent_atomic(
                 if outcome.kind is LifecycleOutcomeKind.RETRYABLE:
                     if os.environ.get("NAUTICAL_DIAG") == "1":
                         print(f"[nautical] reconcile lifecycle retryable: {outcome.reason}", file=sys.stderr)
-                    raise TimeoutError(f"lifecycle transition retryable: {outcome.reason}")
+                    raise _LifecycleRetryable(f"lifecycle transition retryable: {outcome.reason}")
                 if outcome.kind is not LifecycleOutcomeKind.APPLIED:
                     if os.environ.get("NAUTICAL_DIAG") == "1":
                         print(f"[nautical] reconcile lifecycle review: {outcome.reason}", file=sys.stderr)
-                    raise RuntimeError(f"lifecycle transition requires review: {outcome.reason}")
+                    raise _LifecycleManualReview(f"lifecycle transition requires review: {outcome.reason}")
                 child_short = services.last_child_short
                 if not child_short:
                     raise RuntimeError("lifecycle transition produced no child identity")
@@ -1087,9 +1095,9 @@ def _apply_parent_atomic(
                 if outcome.kind is LifecycleOutcomeKind.RETRYABLE:
                     if os.environ.get("NAUTICAL_DIAG") == "1":
                         print(f"[nautical] reconcile backfill retryable: {outcome.reason}", file=sys.stderr)
-                    raise TimeoutError(f"lifecycle backfill retryable: {outcome.reason}")
+                    raise _LifecycleRetryable(f"lifecycle backfill retryable: {outcome.reason}")
                 if outcome.kind is not LifecycleOutcomeKind.APPLIED:
-                    raise RuntimeError(f"lifecycle backfill requires review: {outcome.reason}")
+                    raise _LifecycleManualReview(f"lifecycle backfill requires review: {outcome.reason}")
                 child_short = services.last_child_short or plan.child_short
                 verified = _verify_applied_child(task_bin, plan.parent, child_short, hook=hook)
                 if verified_children is not None:
@@ -1124,6 +1132,15 @@ def _recovery_terminal(parent: dict[str, Any], reason: str) -> reconcile.Reconci
 def _recovery_partial(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
     return reconcile.ReconcilePlan(
         "partial",
+        parent,
+        reconcile.int_or_default(parent.get("link"), 1) + 1,
+        reason,
+    )
+
+
+def _recovery_manual_review(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
+    return reconcile.ReconcilePlan(
+        "manual_review",
         parent,
         reconcile.int_or_default(parent.get("link"), 1) + 1,
         reason,
@@ -1282,6 +1299,12 @@ def _reconcile_candidate(
                 )
             except _ConfigurationDrift as exc:
                 outcomes.append((_recovery_partial(current, str(exc)), ""))
+                break
+            except _LifecycleRetryable as exc:
+                outcomes.append((_recovery_partial(current, str(exc)), ""))
+                break
+            except _LifecycleManualReview as exc:
+                outcomes.append((_recovery_manual_review(current, str(exc)), ""))
                 break
             except Exception as exc:
                 reason = str(exc).strip() or type(exc).__name__
@@ -1926,6 +1949,7 @@ def main(
     native_until_audit_skipped = int(bool(native_until_audit_warning))
     degraded = (
         any(plan.action == "partial" for plan in plans)
+        or any(plan.action == "manual_review" for plan in plans)
         or native_until_manual_review > 0
         or native_until_audit_skipped > 0
         or bool(configuration_drift_reason)
@@ -1953,6 +1977,7 @@ def main(
         "manual_stop": sum(1 for p in plans if p.action == "manual_stop"),
         "stale": sum(1 for p in plans if p.action == "stale"),
         "partial": sum(1 for p in plans if p.action == "partial"),
+        "manual_review": sum(1 for p in plans if p.action == "manual_review"),
         "errors": total_errors,
         "startup_errors": 0,
         "plan_errors": plan_errors,

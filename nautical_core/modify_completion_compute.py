@@ -10,6 +10,7 @@ from nautical_core.modify_models import (
     ComputeAnchorChildDueCallback,
     ComputeCpChildDueCallback,
     CompletionComputeResult,
+    CompletionLifecycleDiagnostic,
     CompletionLifecycleResult,
     CompletionComputeServices,
     DatetimeParserCallback,
@@ -29,6 +30,22 @@ from nautical_core.scheduler_models import (
 )
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.modify_lifecycle import ensure_terminal_chain_off
+
+
+def _terminal_diagnostic(new: dict[str, Any], next_no: int, failure_kind: str) -> CompletionLifecycleDiagnostic:
+    try:
+        parent_link = int(new.get("link")) if new.get("link") is not None else None
+    except (TypeError, ValueError):
+        parent_link = None
+    chain_id = str(new.get("chainID") or "").strip()
+    return CompletionLifecycleDiagnostic(
+        transition_id=f"{chain_id}:{parent_link}->{next_no}",
+        chain_id=chain_id,
+        parent_link=parent_link,
+        child_link=next_no,
+        stage="compute",
+        failure_kind=failure_kind,
+    )
 
 
 def completion_compute_child_due(
@@ -246,6 +263,7 @@ def completion_compute_next_and_limits(
             return CompletionLifecycleResult(
                 state="terminal",
                 reason="recurrence scheduler reached a terminal boundary",
+                diagnostic=_terminal_diagnostic(new, next_no, "scheduler_exhausted"),
             )
         return None
     child_due, meta, dnf = computed
@@ -256,7 +274,11 @@ def completion_compute_next_and_limits(
 
     if not completion_until_guard_or_stop(new, child_due, until_dt, now_utc):
         if str(new.get("chain") or "").strip().lower() == "off":
-            return CompletionLifecycleResult(state="terminal", reason="chainUntil boundary reached")
+            return CompletionLifecycleResult(
+                state="terminal",
+                reason="chainUntil boundary reached",
+                diagnostic=_terminal_diagnostic(new, next_no, "chain_until"),
+            )
         return None
 
     if not completion_require_child_due_or_fail(new, child_due):
@@ -267,7 +289,11 @@ def completion_compute_next_and_limits(
 
     if not completion_cap_guard_or_stop(new, next_no, cap_no, now_utc):
         if str(new.get("chain") or "").strip().lower() == "off":
-            return CompletionLifecycleResult(state="terminal", reason="successor limit reached")
+            return CompletionLifecycleResult(
+                state="terminal",
+                reason="successor limit reached",
+                diagnostic=_terminal_diagnostic(new, next_no, "successor_limit"),
+            )
         return None
 
     return CompletionComputeResult(

@@ -18586,6 +18586,7 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
     terminal = mod._completion_compute_next_and_limits(terminal_task, "cp", 2, mod.core.now_utc())
     expect(terminal.state == "terminal", f"terminal completion result was not exposed: {terminal!r}")
     expect("chainUntil" in terminal.reason, f"terminal result lost boundary reason: {terminal!r}")
+    expect(terminal.diagnostic is not None and terminal.diagnostic.failure_kind == "chain_until", f"terminal result lost diagnostic kind: {terminal!r}")
 
 
 def test_completion_scheduler_terminal_outcomes_are_not_spawned():

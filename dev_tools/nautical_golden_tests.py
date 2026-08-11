@@ -1125,6 +1125,8 @@ def test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy():
     """Candidate, chainUntil, and missing-recurrence decisions stay pure and typed."""
     from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, TaskSnapshot
     from nautical_core.lifecycle_planner import (
+        ChainGenerationLimitPolicy,
+        ChainGenerationPlanningService,
         LifecyclePlanner,
         RecurrenceCandidate,
     )
@@ -1180,6 +1182,41 @@ def test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy():
         LifecycleEvent.COMPLETE,
     )
     expect(empty.action is LifecycleAction.FINALIZE_CHAIN, "non-recurrence task was treated as spawnable")
+
+    class Generation:
+        class Core:
+            @staticmethod
+            def coerce_int(value, default=0):
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return default
+
+        core = Core()
+
+        def compute_cp_child_due(self, parent):
+            return datetime(2026, 8, 13, 9, tzinfo=timezone.utc), {"target_field": "due"}
+
+        def compute_anchor_child_due(self, parent):
+            return datetime(2026, 8, 13, 9, tzinfo=timezone.utc), {"target_field": "due"}, None
+
+        def safe_parse_datetime(self, value):
+            return datetime(2026, 8, 12, 9, tzinfo=timezone.utc), None
+
+        def build_child_from_parent(self, parent, due, field, link, parent_short, kind, cpmax, until):
+            return {"uuid": "generated-child", field: due, "link": link, "kind": kind, "chainMax": cpmax}
+
+    generated_source = TaskSnapshot.from_mapping({**source.to_dict(), "chainUntil": "2026-08-12T09:00:00Z"})
+    generated = ChainGenerationPlanningService(Generation())
+    generated_planner = LifecyclePlanner(
+        {"scheduler_fingerprint": "fp-1"},
+        recurrence_service=generated,
+        successor_limit_policy=ChainGenerationLimitPolicy(
+            lambda left, right: (left > right) - (left < right),
+        ),
+    )
+    generated_plan = generated_planner.plan(generated_source, LifecycleEvent.COMPLETE)
+    expect(generated_plan.action is LifecycleAction.FINALIZE_CHAIN, "chainUntil policy did not stop generated child")
 
 
 def test_diagnostic_event_renders_to_stderr_and_has_stable_record():

@@ -9,7 +9,7 @@ shared by on-modify and reconcile.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 from .lifecycle_models import (
     ExecutionStage,
@@ -76,6 +76,101 @@ class SuccessorLimitPolicy(Protocol):
         candidate: RecurrenceCandidate,
         next_link: int,
     ) -> str | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ChainGenerationPlanningService:
+    """Adapt ``ChainGenerationService`` to the planner's narrow protocol."""
+
+    generation: Any
+
+    def next_candidate(
+        self,
+        snapshot: TaskSnapshot,
+        event: LifecycleEvent,
+        kind: str,
+        next_link: int,
+    ) -> RecurrenceCandidate | None:
+        del event, next_link
+        parent = snapshot.to_dict()
+        if kind == "cp":
+            child_due, metadata = self.generation.compute_cp_child_due(parent)
+            dnf = None
+        else:
+            child_due, metadata, dnf = self.generation.compute_anchor_child_due(parent)
+        if child_due is None:
+            return None
+        meta = dict(metadata or {})
+        until = None
+        raw_until = parent.get("chainUntil")
+        if raw_until:
+            until, error = self.generation.safe_parse_datetime(raw_until)
+            if error or until is None:
+                raise LifecyclePlanningError(f"invalid chainUntil: {error or raw_until}")
+        return RecurrenceCandidate(
+            child_due=child_due,
+            metadata=tuple(sorted(meta.items())),
+            dnf=dnf,
+            until=until,
+        )
+
+    def build_child(
+        self,
+        snapshot: TaskSnapshot,
+        event: LifecycleEvent,
+        candidate: RecurrenceCandidate,
+        next_link: int,
+    ) -> Mapping[str, Any] | None:
+        del event
+        parent = snapshot.to_dict()
+        metadata = dict(candidate.metadata)
+        child_field = str(metadata.get("target_field") or "due")
+        kind = (
+            "cp"
+            if str(parent.get("cp") or "").strip()
+            else "anchor_file"
+            if str(parent.get("anchor_file") or "").strip()
+            else "anchor"
+        )
+        cpmax = self.generation.core.coerce_int(parent.get("chainMax"), 0)
+        parent_short = str(parent.get("uuid") or "").strip()[:8]
+        return self.generation.build_child_from_parent(
+            parent,
+            candidate.child_due,
+            child_field,
+            next_link,
+            parent_short,
+            kind,
+            cpmax,
+            candidate.until,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ChainGenerationLimitPolicy:
+    """Default numeric and datetime limit policy for generation candidates."""
+
+    compare_datetimes: Callable[[Any, Any], int]
+
+    def __call__(
+        self,
+        snapshot: TaskSnapshot,
+        event: LifecycleEvent,
+        candidate: RecurrenceCandidate,
+        next_link: int,
+    ) -> str | None:
+        del event
+        raw_max = snapshot.get("chainMax")
+        if raw_max not in (None, ""):
+            try:
+                max_link = int(raw_max)
+            except (TypeError, ValueError) as exc:
+                raise LifecyclePlanningError(f"invalid chainMax: {raw_max!r}") from exc
+            if max_link > 0 and next_link > max_link:
+                return f"chainMax reached at link {max_link}"
+        if candidate.until is not None and self.compare_datetimes(candidate.child_due, candidate.until) > 0:
+            return "chainUntil reached"
+        return None
 
 
 def _link(value: Any, *, default: int | None = None) -> int:
@@ -256,6 +351,8 @@ class LifecyclePlanner:
 
 __all__ = (
     "ChildPlanBuilder",
+    "ChainGenerationLimitPolicy",
+    "ChainGenerationPlanningService",
     "LifecyclePlanner",
     "LifecyclePlanningError",
     "RecurrenceCandidate",

@@ -4533,6 +4533,11 @@ def test_lifecycle_stage_advancement_requires_claim_and_valid_transition():
         )
         expect(len(claim.rows) == 1, "stage test entry was not claimed")
         row_id = claim.rows[0].id
+        premature_ack = queue_store.ack_entry_claims_sqlite_result(conn, [(row_id, "claim-stage")])
+        expect(
+            not premature_ack.ok and "finalized stage" in premature_ack.err,
+            f"unfinalized lifecycle row was acknowledged: {premature_ack}",
+        )
 
         stale = queue_store.advance_lifecycle_stage_sqlite_result(
             conn,
@@ -4588,6 +4593,9 @@ def test_lifecycle_stage_advancement_requires_claim_and_valid_transition():
             stored["lifecycle_plan"]["stage"] == ExecutionStage.FINALIZED.value,
             "invalid or stale update changed the durable stage",
         )
+        final_ack = queue_store.ack_entry_claims_sqlite_result(conn, [(row_id, "claim-stage")])
+        expect(final_ack.ok and final_ack.count == 1, f"finalized lifecycle row was not acknowledged: {final_ack}")
+        expect(conn.execute("SELECT COUNT(1) FROM queue_entries WHERE id=?", (row_id,)).fetchone()[0] == 0, "finalized row remained")
 
 
 def test_queue_database_durable_mode_uses_full_synchronous():

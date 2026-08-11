@@ -963,6 +963,28 @@ def ack_entry_claims_sqlite_result(
         conn.execute("BEGIN IMMEDIATE")
         deleted = 0
         for rid, token in claims:
+            row = conn.execute(
+                "SELECT payload FROM queue_entries WHERE id=? AND state='processing' AND claim_token=?",
+                (rid, token),
+            ).fetchone()
+            if row is None:
+                continue
+            try:
+                payload = json.loads(str(row[0] or ""))
+            except Exception as exc:
+                raise QueueEntryError(f"invalid queued payload during acknowledgement: {exc}") from exc
+            if not isinstance(payload, dict):
+                raise QueueEntryError("invalid queued payload during acknowledgement: expected object")
+            raw_plan = payload.get("lifecycle_plan")
+            if raw_plan is not None:
+                try:
+                    plan = LifecyclePlan.from_dict(raw_plan)
+                except Exception as exc:
+                    raise QueueEntryError(f"invalid lifecycle plan during acknowledgement: {exc}") from exc
+                if plan.stage is not ExecutionStage.FINALIZED:
+                    raise QueueEntryError(
+                        f"lifecycle acknowledgement requires finalized stage, found {plan.stage.value}"
+                    )
             cur = conn.execute(
                 "DELETE FROM queue_entries WHERE id=? AND state='processing' AND claim_token=?",
                 (rid, token),

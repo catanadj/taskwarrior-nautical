@@ -26,11 +26,20 @@ os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 from nautical_core import queue_store, reconcile, safe_lock, task_command  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
 from nautical_core.lifecycle_executor import (  # noqa: E402
+    LifecycleTerminalExecutor,
     LifecycleTransitionExecutor,
     OperationResult,
     OperationState,
 )
-from nautical_core.lifecycle_models import LifecyclePlan, LifecycleOutcomeKind  # noqa: E402
+from nautical_core.lifecycle_models import (  # noqa: E402
+    LifecycleAction,
+    LifecycleEvent,
+    LifecycleIdentity,
+    LifecyclePlan,
+    LifecycleOutcomeKind,
+    ParentGuard,
+    recurrence_fingerprint,
+)
 from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 
@@ -1093,6 +1102,67 @@ def _execute_reconcile_lifecycle_plan(
     return child_short
 
 
+def _terminal_lifecycle_plan(plan: reconcile.ReconcilePlan) -> LifecyclePlan:
+    """Create the typed terminal plan for a reconcile final/manual decision."""
+    parent = plan.parent
+    status = str(parent.get("status") or "pending").strip() or "pending"
+    action = LifecycleAction.FINALIZE_CHAIN
+    if plan.action == "manual_stop":
+        event = LifecycleEvent.MANUAL_DELETE
+    elif str(parent.get("status") or "").strip().lower() == "deleted":
+        event = LifecycleEvent.EXPIRE
+    elif "chainmax" in str(plan.reason).replace(" ", "").lower():
+        event = LifecycleEvent.CHAIN_MAX
+    elif "chainuntil" in str(plan.reason).replace(" ", "").lower():
+        event = LifecycleEvent.CHAIN_UNTIL
+    else:
+        event = LifecycleEvent.COMPLETE
+    link = reconcile.int_or_default(parent.get("link"), 0)
+    chain_id = str(parent.get("chainID") or "").strip()
+    parent_uuid = str(parent.get("uuid") or "").strip()
+    guard = ParentGuard(
+        status=status,
+        chain=str(parent.get("chain") or "on").strip() or "on",
+        chain_id=chain_id,
+        link=link,
+        recurrence_fingerprint=recurrence_fingerprint(parent),
+    )
+    identity = LifecycleIdentity(
+        chain_id=chain_id,
+        parent_uuid=parent_uuid,
+        source_link=link,
+        target_link=None,
+        event=event,
+    )
+    return LifecyclePlan.from_mappings(
+        identity=identity,
+        action=action,
+        parent_guard=guard,
+        parent_patch={"chain": "off"},
+        expected_postconditions=("terminal_chain", "no_successor"),
+    )
+
+
+def _execute_reconcile_terminal_plan(
+    task_bin: str,
+    hook: Any,
+    plan: reconcile.ReconcilePlan,
+) -> str:
+    """Apply a guarded terminal plan through the shared terminal executor."""
+    lifecycle_plan = _terminal_lifecycle_plan(plan)
+    services = _ReconcileLifecycleServices(task_bin, hook, plan.parent)
+    outcome = LifecycleTerminalExecutor(services).execute(lifecycle_plan)
+    if outcome.kind is LifecycleOutcomeKind.RETRYABLE:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            print(f"[nautical] reconcile terminal retryable: {outcome.reason}", file=sys.stderr)
+        raise _LifecycleRetryable(f"terminal transition retryable: {outcome.reason}")
+    if outcome.kind is not LifecycleOutcomeKind.APPLIED:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            print(f"[nautical] reconcile terminal review: {outcome.reason}", file=sys.stderr)
+        raise _LifecycleManualReview(f"terminal transition requires review: {outcome.reason}")
+    return "off"
+
+
 def _apply_parent_atomic(
     task_bin: str,
     hook: Any,
@@ -1149,9 +1219,7 @@ def _apply_parent_atomic(
                 )
                 return plan, child_short
             if plan.action in {"legitimate_final", "manual_stop"}:
-                _disable_parent_chain(task_bin, plan.parent)
-                _verify_disabled_parent(task_bin, plan.parent)
-                return plan, "off"
+                return plan, _execute_reconcile_terminal_plan(task_bin, hook, plan)
             return plan, ""
 
 
@@ -1494,6 +1562,40 @@ class _ReconcileLifecycleServices:
             if actual_fingerprint != expected_fingerprint:
                 return self._result(OperationState.CONFLICT, reason="parent recurrence inputs changed")
         return self._result(OperationState.APPLIED)
+
+    def validate_terminal(self, plan: LifecyclePlan) -> OperationResult:
+        return self.validate_parent(plan)
+
+    def disable_chain(self, plan: LifecyclePlan) -> OperationResult:
+        try:
+            parent = _fresh_parent(self.task_bin, {"uuid": plan.identity.parent_uuid})
+            if parent is None:
+                return self._result(OperationState.UNAVAILABLE, reason="terminal parent export unavailable")
+            if str(parent.get("chain") or "").strip().lower() == "off":
+                return self._result(OperationState.ALREADY)
+            _disable_parent_chain(self.task_bin, parent)
+            return self._result(OperationState.APPLIED)
+        except Exception as exc:
+            reason = str(exc).strip() or type(exc).__name__
+            state = (
+                OperationState.UNAVAILABLE
+                if isinstance(exc, (TimeoutError, ConnectionError)) or "lock" in reason.lower()
+                else OperationState.FAILED
+            )
+            return self._result(state, reason=f"chain disablement failed: {reason}")
+
+    def verify_terminal(self, plan: LifecyclePlan) -> OperationResult:
+        try:
+            _verify_disabled_parent(self.task_bin, {"uuid": plan.identity.parent_uuid})
+            return self._result(OperationState.APPLIED)
+        except Exception as exc:
+            reason = str(exc).strip() or type(exc).__name__
+            state = (
+                OperationState.UNAVAILABLE
+                if isinstance(exc, (TimeoutError, ConnectionError)) or "lock" in reason.lower()
+                else OperationState.CONFLICT
+            )
+            return self._result(state, reason=f"terminal chain verification failed: {reason}")
 
     def _rows_for_child(self, plan: LifecyclePlan) -> list[dict[str, Any]]:
         parent = {"chainID": plan.identity.chain_id, "link": plan.identity.source_link}

@@ -4708,6 +4708,63 @@ def test_lifecycle_executor_uses_typed_order_and_compensation():
     expect(unavailable.calls == ["parent"], f"executor mutated after unavailable guard: {unavailable.calls}")
 
 
+def test_lifecycle_terminal_executor_guards_disablement():
+    """Terminal transitions must validate, disable, and verify in that order."""
+    from nautical_core.lifecycle_executor import (
+        LifecycleTerminalExecutor,
+        OperationResult,
+        OperationState,
+    )
+    from nautical_core.lifecycle_models import (
+        LifecycleAction,
+        LifecycleEvent,
+        LifecycleOutcomeKind,
+        LifecyclePlan,
+        LifecycleIdentity,
+        ParentGuard,
+    )
+
+    plan = LifecyclePlan.from_mappings(
+        identity=LifecycleIdentity("chain-terminal", "parent-terminal", 3, None, LifecycleEvent.CHAIN_MAX),
+        action=LifecycleAction.FINALIZE_CHAIN,
+        parent_guard=ParentGuard.from_mapping(
+            {"status": "completed", "chain": "on", "chainID": "chain-terminal", "link": 3}
+        ),
+        parent_patch={"chain": "off"},
+        expected_postconditions=("terminal_chain", "no_successor"),
+    )
+
+    class Services:
+        def __init__(self, unavailable=False):
+            self.unavailable = unavailable
+            self.calls: list[str] = []
+
+        def validate_terminal(self, _plan):
+            self.calls.append("validate")
+            return OperationResult(
+                OperationState.UNAVAILABLE if self.unavailable else OperationState.APPLIED,
+                reason="terminal read unavailable" if self.unavailable else "",
+            )
+
+        def disable_chain(self, _plan):
+            self.calls.append("disable")
+            return OperationResult(OperationState.APPLIED)
+
+        def verify_terminal(self, _plan):
+            self.calls.append("verify")
+            return OperationResult(OperationState.APPLIED)
+
+    applied = Services()
+    outcome = LifecycleTerminalExecutor(applied).execute(plan)
+    expect(outcome.kind is LifecycleOutcomeKind.APPLIED, f"terminal transition did not apply: {outcome}")
+    expect(applied.calls == ["validate", "disable", "verify"], f"wrong terminal order: {applied.calls}")
+
+    unavailable = Services(unavailable=True)
+    outcome = LifecycleTerminalExecutor(unavailable).execute(plan)
+    expect(outcome.kind is LifecycleOutcomeKind.RETRYABLE, f"terminal outage was not retryable: {outcome}")
+    expect(unavailable.calls == ["validate"], f"terminal mutated after unavailable guard: {unavailable.calls}")
+
+
 def test_queue_database_durable_mode_uses_full_synchronous():
     """Durable queue mode must apply SQLite FULL synchronous semantics."""
     from nautical_core import queue_store
@@ -32812,6 +32869,7 @@ TESTS = [
     test_lifecycle_stage_advancement_requires_claim_and_valid_transition,
     test_lifecycle_queue_capacity_guard_is_atomic,
     test_lifecycle_executor_uses_typed_order_and_compensation,
+    test_lifecycle_terminal_executor_guards_disablement,
     test_queue_database_durable_mode_uses_full_synchronous,
     test_queue_schema_rejects_incompatible_databases_without_quarantine,
     test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,

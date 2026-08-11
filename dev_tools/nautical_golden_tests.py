@@ -16636,6 +16636,44 @@ def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
         expect(poison_finding and poison_finding.get("severity") == "error", f"doctor missed poison row: {findings!r}")
 
 
+def test_queue_claim_quarantines_invalid_lifecycle_plan_schema():
+    """Unsupported lifecycle envelopes must not reach the on-exit executor."""
+    from nautical_core import queue_store
+
+    with sqlite3.connect(":memory:") as conn:
+        queue_store.init_queue_db(conn)
+        conn.execute(
+            "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+            "VALUES (?, ?, 0, 'queued', 1.0, 1.0)",
+            (
+                "si_future_plan",
+                json.dumps(
+                    {
+                        "spawn_intent_id": "si_future_plan",
+                        "child": {"uuid": "child-future"},
+                        "lifecycle_plan": {"schema_version": 99},
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            ),
+        )
+        conn.commit()
+        claim = queue_store.claim_rows_sqlite_result(
+            conn,
+            token="future-plan-claim",
+            now=2.0,
+            processing_stale_after=60.0,
+            max_lines=10,
+        )
+        expect(not claim.rows, f"unsupported lifecycle plan was claimed: {claim}")
+        expect(claim.quarantined == 1, f"unsupported lifecycle plan was not quarantined: {claim}")
+        expect("invalid lifecycle plan schema" in " ".join(claim.poison_reasons), "schema reason missing")
+        state, payload = conn.execute("SELECT state, payload FROM queue_entries").fetchone()
+        expect(state == "quarantined", f"unsupported lifecycle plan remained queued: {state!r}")
+        expect("schema version" in json.loads(payload).get("reason", "").lower(), "schema detail missing")
+
+
 def test_on_exit_dead_letter_on_missing_fields():
     """on-exit should dead-letter entries missing required fields."""
     hook = _find_hook_file("on-exit.nautical")
@@ -32466,6 +32504,7 @@ TESTS = [
     test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,
     test_queue_status_and_doctor_report_schema_health,
     test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,
+    test_queue_claim_quarantines_invalid_lifecycle_plan_schema,
     test_queue_status_json_ok_empty_taskdata,
     test_doctor_json_has_stable_schema_marker,
     test_operator_queue_status_json_ok_empty_taskdata,

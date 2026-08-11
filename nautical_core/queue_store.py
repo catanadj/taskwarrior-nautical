@@ -738,6 +738,12 @@ def queue_rows_from_sqlite_result(rows: list[sqlite3.Row]) -> QueueRowsDecodeRes
                 raise ValueError(f"invalid queue payload JSON: {exc}") from exc
             if not isinstance(decoded_payload, dict):
                 raise ValueError("invalid queue payload JSON: expected object")
+            raw_plan = decoded_payload.get("lifecycle_plan")
+            if raw_plan is not None:
+                try:
+                    LifecyclePlan.from_dict(raw_plan)
+                except Exception as exc:
+                    raise ValueError(f"invalid lifecycle plan schema: {exc}") from exc
             stored_rows.append(stored)
         except Exception as exc:
             try:

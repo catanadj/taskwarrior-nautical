@@ -23,6 +23,12 @@ def _parent_guard_mismatch(
         if field in {"status", "chain"}:
             expected = expected.lower()
             actual = actual.lower()
+        elif field == "link":
+            try:
+                expected = str(int(float(expected)))
+                actual = str(int(float(actual)))
+            except (TypeError, ValueError, OverflowError):
+                pass
         if actual != expected:
             return f"parent {field} changed (expected {expected or '-'}, found {actual or '-'})"
     expected_fingerprint = str(guard.get("recurrence_fingerprint") or "").strip()

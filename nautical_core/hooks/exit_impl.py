@@ -2335,6 +2335,7 @@ def _handle_entry_gate(entry: dict, state: _DrainState) -> bool:
 
     valid, reason = _validate_queue_entry(entry)
     if not valid:
+        _diag(f"queue entry rejected before lifecycle execution: {reason}")
         state.dead_letter(entry, reason)
         state.reset_lock_streak()
         return True
@@ -2434,6 +2435,226 @@ def _apply_parent_update_for_entry(
     )
 
 
+def _lifecycle_operation_result(state, *, value=None, reason=""):
+    lifecycle_executor = _module("lifecycle_executor")
+    return lifecycle_executor.OperationResult(state, value=value, reason=reason)
+
+
+def _execute_lifecycle_queue_entry(ctx, state):
+    """Execute a validated queue plan through the shared typed executor."""
+    lifecycle_models = _module("lifecycle_models")
+    lifecycle_executor = _module("lifecycle_executor")
+    try:
+        plan = lifecycle_models.LifecyclePlan.from_dict(ctx.entry["lifecycle_plan"])
+    except Exception as exc:
+        _diag(f"lifecycle executor rejected plan: {exc}")
+        state.dead_letter(ctx.entry, f"invalid lifecycle plan: {exc}")
+        state.reset_lock_streak()
+        return False
+
+    def stage(stage):
+        result = _advance_lifecycle_stage(ctx.entry, stage)
+        if result.ok:
+            return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
+        operation_state = (
+            lifecycle_executor.OperationState.UNAVAILABLE
+            if bool(getattr(result, "lock_busy", False))
+            else lifecycle_executor.OperationState.FAILED
+        )
+        return _lifecycle_operation_result(operation_state, reason=getattr(result, "err", "") or "queue stage update failed")
+
+    class Services:
+        def validate_parent(self, current_plan):
+            result = _export_uuid(current_plan.identity.parent_uuid, prefer_cache=False)
+            if result.retryable:
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.UNAVAILABLE,
+                    reason=result.err or "parent export unavailable",
+                )
+            parent = result.obj
+            if not isinstance(parent, dict):
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.CONFLICT,
+                    reason="parent task is unavailable",
+                )
+            flow = _module("exit_entry_flow")
+            mismatch = flow._parent_guard_mismatch(
+                parent,
+                current_plan.parent_guard.to_dict(),
+                recurrence_fingerprint=lambda task: lifecycle_models.recurrence_fingerprint(
+                    task,
+                    parse_datetime=getattr(core, "parse_dt_any", None),
+                ),
+            )
+            if mismatch:
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.CONFLICT,
+                    reason=mismatch,
+                )
+            return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
+
+        def find_equivalent_child(self, current_plan):
+            child = current_plan.child_dict()
+            child_uuid = str(child.get("uuid") or "").strip()
+            if child_uuid:
+                exact = _export_uuid(child_uuid, prefer_cache=False)
+                if exact.retryable:
+                    return _lifecycle_operation_result(
+                        lifecycle_executor.OperationState.UNAVAILABLE,
+                        reason=exact.err or "child export unavailable",
+                    )
+                if isinstance(exact.obj, dict):
+                    return _lifecycle_operation_result(
+                        lifecycle_executor.OperationState.FOUND,
+                        value=exact.obj,
+                    )
+            equivalent = _existing_equivalent_child(child, current_plan.identity.parent_uuid)
+            if equivalent.retryable:
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.UNAVAILABLE,
+                    reason=equivalent.err or "equivalent child lookup unavailable",
+                )
+            if isinstance(equivalent.obj, dict):
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.FOUND,
+                    value=equivalent.obj,
+                )
+            return _lifecycle_operation_result(lifecycle_executor.OperationState.ABSENT)
+
+        def import_child(self, current_plan):
+            child = current_plan.child_dict()
+            imported = _import_child(child)
+            if imported.ok:
+                stage_result = stage(lifecycle_models.ExecutionStage.CHILD_PRESENT)
+                return stage_result
+            operation_state = (
+                lifecycle_executor.OperationState.UNAVAILABLE
+                if _is_lock_error(imported.err)
+                else lifecycle_executor.OperationState.FAILED
+            )
+            return _lifecycle_operation_result(operation_state, reason=imported.err or "child import failed")
+
+        def verify_child(self, current_plan, child):
+            child_uuid = str(child.get("uuid") or "").strip()
+            if not child_uuid:
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.CONFLICT,
+                    reason="child verification has no UUID",
+                )
+            result = _export_uuid(child_uuid, prefer_cache=False)
+            if result.retryable:
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.UNAVAILABLE,
+                    reason=result.err or "child verification unavailable",
+                )
+            if not isinstance(result.obj, dict):
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.CONFLICT,
+                    reason="child postcondition is missing",
+                )
+            child.clear()
+            child.update(result.obj)
+            return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
+
+        def apply_parent_patch(self, current_plan, child):
+            child_short = str(
+                current_plan.parent_patch_dict().get("nextLink")
+                or ctx.child_short
+                or _short_uuid(str(child.get("uuid") or ""))
+            ).strip()
+            if not child_short:
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.CONFLICT,
+                    reason="parent patch has no child identity",
+                )
+            expected_prev = str(ctx.entry.get("parent_nextlink") or "").strip() or None
+            state_result = _parent_nextlink_state(
+                current_plan.identity.parent_uuid,
+                child_short,
+                expected_prev,
+                prefer_cache=False,
+            )
+            if state_result.state == "locked":
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.UNAVAILABLE,
+                    reason=state_result.err or "parent linkage unavailable",
+                )
+            if state_result.state == "already":
+                return _lifecycle_operation_result(lifecycle_executor.OperationState.ALREADY)
+            if state_result.state != "ok":
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.CONFLICT,
+                    reason=state_result.err or "parent nextLink changed",
+                )
+            updated = _update_parent_nextlink(
+                current_plan.identity.parent_uuid,
+                child_short,
+                expected_prev,
+            )
+            if updated.ok:
+                stage_result = stage(lifecycle_models.ExecutionStage.PARENT_LINKED)
+                return stage_result
+            operation_state = (
+                lifecycle_executor.OperationState.UNAVAILABLE
+                if _is_lock_error(updated.err)
+                else lifecycle_executor.OperationState.FAILED
+            )
+            return _lifecycle_operation_result(operation_state, reason=updated.err or "parent update failed")
+
+        def verify_linkage(self, current_plan, child):
+            child_short = str(
+                current_plan.parent_patch_dict().get("nextLink")
+                or ctx.child_short
+                or _short_uuid(str(child.get("uuid") or ""))
+            ).strip()
+            state_result = _parent_nextlink_state(
+                current_plan.identity.parent_uuid,
+                child_short,
+                str(ctx.entry.get("parent_nextlink") or "").strip() or None,
+                prefer_cache=False,
+            )
+            if state_result.state == "locked":
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.UNAVAILABLE,
+                    reason=state_result.err or "parent linkage verification unavailable",
+                )
+            if state_result.state != "already":
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.CONFLICT,
+                    reason=state_result.err or "parent linkage postcondition not satisfied",
+                )
+            return stage(lifecycle_models.ExecutionStage.VERIFIED)
+
+        def compensate_child(self, _current_plan, child):
+            child_uuid = str(child.get("uuid") or "").strip()
+            if child_uuid:
+                _cleanup_orphan_child(child_uuid, ctx.spawn_intent_id)
+            return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
+
+    outcome = lifecycle_executor.LifecycleTransitionExecutor(Services()).execute(plan)
+    if outcome.kind in {
+        lifecycle_models.LifecycleOutcomeKind.RETRYABLE,
+    }:
+        if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
+            state.dead_letter(ctx.entry, outcome.reason or "lifecycle transition retry limit reached")
+        else:
+            state.requeue.append(ctx.entry)
+        return False
+    if outcome.kind is lifecycle_models.LifecycleOutcomeKind.MANUAL_REVIEW:
+        state.dead_letter(ctx.entry, outcome.reason or "lifecycle transition requires manual review")
+        state.reset_lock_streak()
+        return False
+    final_stage = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.FINALIZED)
+    if not final_stage.ok:
+        return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, final_stage)
+    _seed_equivalent_child_cache(ctx.child, ctx.parent_uuid, ctx.child_uuid)
+    state.processed += 1
+    state.mark_final(ctx.entry, "done", "processed")
+    state.ack_sqlite(ctx.entry)
+    state.reset_lock_streak()
+    return False
+
+
 def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     if _handle_entry_gate(entry, state):
         return False
@@ -2459,6 +2680,9 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
         child_uuid=child_uuid,
         spawn_intent_id=spawn_intent_id,
     )
+
+    if isinstance(queue_entry.get("lifecycle_plan"), dict):
+        return _execute_lifecycle_queue_entry(ctx, state)
 
     guard_action = _precheck_parent_guard(ctx)
     if guard_action == "break":

@@ -1055,6 +1055,44 @@ def _plan_for_parent(
     )
 
 
+def _execute_reconcile_lifecycle_plan(
+    task_bin: str,
+    hook: Any,
+    plan: reconcile.ReconcilePlan,
+    *,
+    verified_children: dict[str, dict[str, Any]] | None,
+    label: str,
+    strict_uuid: bool,
+) -> str:
+    """Execute and verify one reconcile spawn/backfill through the shared executor."""
+    lifecycle_plan = getattr(plan, "lifecycle_plan", None)
+    if not isinstance(lifecycle_plan, LifecyclePlan):
+        raise RuntimeError(f"reconcile {label} plan has no typed lifecycle plan")
+    services = _ReconcileLifecycleServices(task_bin, hook, plan.parent)
+    outcome = LifecycleTransitionExecutor(services).execute(lifecycle_plan)
+    if outcome.kind is LifecycleOutcomeKind.RETRYABLE:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            print(f"[nautical] reconcile {label} retryable: {outcome.reason}", file=sys.stderr)
+        raise _LifecycleRetryable(f"lifecycle {label} retryable: {outcome.reason}")
+    if outcome.kind is not LifecycleOutcomeKind.APPLIED:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            print(f"[nautical] reconcile {label} review: {outcome.reason}", file=sys.stderr)
+        raise _LifecycleManualReview(f"lifecycle {label} requires review: {outcome.reason}")
+    child_short = services.last_child_short or plan.child_short
+    if not child_short:
+        raise RuntimeError(f"lifecycle {label} produced no child identity")
+    verified = _verify_applied_child(
+        task_bin,
+        plan.parent,
+        child_short,
+        hook=hook,
+        strict_uuid=strict_uuid,
+    )
+    if verified_children is not None:
+        verified_children[str(child_short).strip().lower()] = verified
+    return child_short
+
+
 def _apply_parent_atomic(
     task_bin: str,
     hook: Any,
@@ -1091,49 +1129,24 @@ def _apply_parent_atomic(
             if plan.action == "spawn":
                 if not plan.child:
                     raise RuntimeError("spawn plan has no child payload")
-                lifecycle_plan = getattr(plan, "lifecycle_plan", None)
-                if not isinstance(lifecycle_plan, LifecyclePlan):
-                    raise RuntimeError("reconcile spawn plan has no typed lifecycle plan")
-                services = _ReconcileLifecycleServices(task_bin, hook, plan.parent)
-                executor = LifecycleTransitionExecutor(services)
-                outcome = executor.execute(lifecycle_plan)
-                if outcome.kind is LifecycleOutcomeKind.RETRYABLE:
-                    if os.environ.get("NAUTICAL_DIAG") == "1":
-                        print(f"[nautical] reconcile lifecycle retryable: {outcome.reason}", file=sys.stderr)
-                    raise _LifecycleRetryable(f"lifecycle transition retryable: {outcome.reason}")
-                if outcome.kind is not LifecycleOutcomeKind.APPLIED:
-                    if os.environ.get("NAUTICAL_DIAG") == "1":
-                        print(f"[nautical] reconcile lifecycle review: {outcome.reason}", file=sys.stderr)
-                    raise _LifecycleManualReview(f"lifecycle transition requires review: {outcome.reason}")
-                child_short = services.last_child_short
-                if not child_short:
-                    raise RuntimeError("lifecycle transition produced no child identity")
-                verified = _verify_applied_child(
+                child_short = _execute_reconcile_lifecycle_plan(
                     task_bin,
-                    plan.parent,
-                    child_short,
-                    hook=hook,
+                    hook,
+                    plan,
+                    verified_children=verified_children,
+                    label="transition",
                     strict_uuid=True,
                 )
-                if verified_children is not None:
-                    verified_children[str(child_short).strip().lower()] = verified
                 return plan, child_short
             if plan.action == "backfill_nextlink":
-                lifecycle_plan = getattr(plan, "lifecycle_plan", None)
-                if not isinstance(lifecycle_plan, LifecyclePlan):
-                    raise RuntimeError("reconcile backfill plan has no typed lifecycle plan")
-                services = _ReconcileLifecycleServices(task_bin, hook, plan.parent)
-                outcome = LifecycleTransitionExecutor(services).execute(lifecycle_plan)
-                if outcome.kind is LifecycleOutcomeKind.RETRYABLE:
-                    if os.environ.get("NAUTICAL_DIAG") == "1":
-                        print(f"[nautical] reconcile backfill retryable: {outcome.reason}", file=sys.stderr)
-                    raise _LifecycleRetryable(f"lifecycle backfill retryable: {outcome.reason}")
-                if outcome.kind is not LifecycleOutcomeKind.APPLIED:
-                    raise _LifecycleManualReview(f"lifecycle backfill requires review: {outcome.reason}")
-                child_short = services.last_child_short or plan.child_short
-                verified = _verify_applied_child(task_bin, plan.parent, child_short, hook=hook)
-                if verified_children is not None:
-                    verified_children[str(child_short).strip().lower()] = verified
+                child_short = _execute_reconcile_lifecycle_plan(
+                    task_bin,
+                    hook,
+                    plan,
+                    verified_children=verified_children,
+                    label="backfill",
+                    strict_uuid=False,
+                )
                 return plan, child_short
             if plan.action in {"legitimate_final", "manual_stop"}:
                 _disable_parent_chain(task_bin, plan.parent)

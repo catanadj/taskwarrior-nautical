@@ -18826,6 +18826,18 @@ def test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change():
 def test_on_modify_completion_finalize_skips_analytics_when_hidden():
     """completion finalize should keep integrity checks independent from analytics."""
     flow = core._import_sibling("modify_completion_flow")
+    models = core._import_sibling("modify_models")
+
+    for invalid in (
+        lambda: models.CompletionLifecycleResult("queued", deferred_spawn=True),
+        lambda: models.CompletionLifecycleResult("applied", deferred_spawn=True),
+    ):
+        try:
+            invalid()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid completion result state was accepted")
 
     captured = {}
 

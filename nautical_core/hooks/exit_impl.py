@@ -1772,6 +1772,34 @@ def _requeue_entries_sqlite_result(entries: list[dict]):
         _queue_close_silent(conn)
 
 
+def _advance_lifecycle_stage(entry: dict, stage):
+    """Advance a durable plan while retaining the claimed queue row."""
+    queue_store = _module("queue_store")
+    if not isinstance(entry, dict) or not isinstance(entry.get("lifecycle_plan"), dict):
+        # Legacy rows remain owned by the compatibility executor.
+        return queue_store.QueueWriteResult(ok=True, count=0)
+    conn = _queue_db_open_fresh_ready()
+    if conn is None:
+        return queue_store.QueueWriteResult(
+            ok=False,
+            count=1,
+            lock_busy=True,
+            err="queue database unavailable while advancing lifecycle stage",
+        )
+    try:
+        return queue_store.advance_lifecycle_stage_sqlite_result(
+            conn,
+            row_id=entry.get("__queue_id"),
+            claim_token=entry.get("__queue_claim_token"),
+            stage=stage,
+            now=time.time(),
+            diag=_diag,
+            on_lock_busy=_record_queue_lock_failure,
+        )
+    finally:
+        _queue_close_silent(conn)
+
+
 def _enqueue_entries_sqlite_result(entries: list[dict]):
     conn = _queue_db_open_ready()
     exit_models = _module("exit_models")
@@ -2240,6 +2268,21 @@ def _requeue_or_dead_letter_for_lock(entry: dict, idx: int, state: _DrainState) 
     return state.record_lock_event(idx)
 
 
+def _handle_lifecycle_stage_failure(entry: dict, idx: int, state: _DrainState, result) -> bool:
+    """Keep a claimed plan retryable, or quarantine a structurally invalid one."""
+    error = str(getattr(result, "err", "") or "lifecycle stage update failed")
+    if bool(getattr(result, "lock_busy", False)):
+        return _requeue_or_dead_letter_for_lock(entry, idx, state)
+    if "claim ownership lost" in error.lower():
+        # Another worker owns recovery now; requeueing would itself fail the
+        # ownership check and could obscure the original race.
+        state.errors += 1
+        _diag(f"lifecycle stage update abandoned after claim loss: {error}")
+        return True
+    state.dead_letter(entry, f"lifecycle stage update failed: {error}")
+    return False
+
+
 def _handle_entry_gate(entry: dict, state: _DrainState) -> bool:
     spawn_intent_id = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
     if spawn_intent_id and spawn_intent_id in state.finalized_intents:
@@ -2427,6 +2470,11 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     if child_action == "continue":
         return False
 
+    lifecycle_models = _module("lifecycle_models")
+    child_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.CHILD_PRESENT)
+    if not child_stage.ok:
+        return _handle_lifecycle_stage_failure(queue_entry, idx, state, child_stage)
+
     parent_action = _apply_parent_update_for_entry(
         ctx,
         parent_linked_already=parent_linked_already,
@@ -2436,6 +2484,10 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
         return True
     if parent_action == "continue":
         return False
+
+    parent_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.PARENT_LINKED)
+    if not parent_stage.ok:
+        return _handle_lifecycle_stage_failure(queue_entry, idx, state, parent_stage)
 
     _seed_equivalent_child_cache(child, parent_uuid, child_uuid)
     state.processed += 1

@@ -1011,6 +1011,119 @@ def requeue_entries_sqlite_result(
         return QueueWriteResult(ok=False, count=len(items), err=str(exc))
 
 
+_LIFECYCLE_STAGE_TRANSITIONS: dict[ExecutionStage, frozenset[ExecutionStage]] = {
+    ExecutionStage.PLANNED: frozenset({ExecutionStage.PERSISTED}),
+    ExecutionStage.PERSISTED: frozenset({ExecutionStage.CHILD_PRESENT}),
+    ExecutionStage.CHILD_PRESENT: frozenset({ExecutionStage.PARENT_LINKED}),
+    ExecutionStage.PARENT_LINKED: frozenset({ExecutionStage.VERIFIED}),
+    ExecutionStage.VERIFIED: frozenset({ExecutionStage.FINALIZED}),
+    ExecutionStage.RETRYABLE: frozenset(),
+    ExecutionStage.MANUAL_REVIEW: frozenset(),
+    ExecutionStage.FINALIZED: frozenset(),
+}
+
+
+def advance_lifecycle_stage_sqlite_result(
+    conn: sqlite3.Connection,
+    *,
+    row_id: int,
+    claim_token: str,
+    stage: ExecutionStage,
+    now: float,
+    diag: Callable[[str], None] | None = None,
+    on_lock_busy: Callable[[], None] | None = None,
+) -> QueueWriteResult:
+    """Advance one claimed lifecycle plan without relinquishing ownership.
+
+    The row id and claim token are checked both before and during the update.
+    Legacy queue entries without a durable plan remain compatible and are a
+    successful no-op; versioned plans must follow the explicit stage graph.
+    """
+    try:
+        rid = int(row_id)
+    except Exception:
+        rid = 0
+    token = str(claim_token or "").strip()
+    try:
+        target = ExecutionStage(stage)
+    except (TypeError, ValueError) as exc:
+        return QueueWriteResult(ok=False, count=1, err=f"invalid lifecycle stage: {stage!r}")
+    if rid <= 0 or not token:
+        return QueueWriteResult(ok=False, count=1, err="missing queue claim")
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT payload FROM queue_entries WHERE id=? AND state='processing' AND claim_token=?",
+            (rid, token),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            if callable(diag):
+                diag(f"queue lifecycle stage lost claim ownership for id={rid}")
+            return QueueWriteResult(ok=False, count=1, err="queue claim ownership lost")
+        try:
+            payload = json.loads(str(row[0] or ""))
+        except Exception as exc:
+            raise QueueEntryError(f"invalid queued payload: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise QueueEntryError("invalid queued payload: expected object")
+        raw_plan = payload.get("lifecycle_plan")
+        if raw_plan is None:
+            # Older queue rows are intentionally handled by the compatibility
+            # executor and have no durable stage to advance.
+            conn.commit()
+            return QueueWriteResult(ok=True, count=0)
+        try:
+            plan = LifecyclePlan.from_dict(raw_plan)
+        except Exception as exc:
+            raise QueueEntryError(f"invalid lifecycle plan: {exc}") from exc
+        current = plan.stage
+        if current is target:
+            conn.commit()
+            return QueueWriteResult(ok=True, count=0)
+        if target not in _LIFECYCLE_STAGE_TRANSITIONS.get(current, frozenset()):
+            raise QueueEntryError(
+                f"invalid lifecycle stage transition: {current.value} -> {target.value}"
+            )
+        payload["lifecycle_plan"] = plan.with_stage(target).to_dict()
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        cur = conn.execute(
+            "UPDATE queue_entries SET payload=?, updated_at=? "
+            "WHERE id=? AND state='processing' AND claim_token=?",
+            (encoded, now, rid, token),
+        )
+        changed = max(0, int(getattr(cur, "rowcount", 0) or 0))
+        if changed != 1:
+            conn.rollback()
+            if callable(diag):
+                diag(f"queue lifecycle stage lost claim ownership for id={rid}")
+            return QueueWriteResult(ok=False, count=1, err="queue claim ownership lost")
+        conn.commit()
+        return QueueWriteResult(ok=True, count=1)
+    except sqlite3.OperationalError as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        msg = str(exc).lower()
+        lock_busy = "locked" in msg or "busy" in msg
+        if lock_busy:
+            if callable(on_lock_busy):
+                on_lock_busy()
+        elif callable(diag):
+            diag(f"queue lifecycle stage update failed: {exc}")
+        return QueueWriteResult(ok=False, count=1, lock_busy=lock_busy, err=str(exc))
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if callable(diag):
+            diag(f"queue lifecycle stage update failed: {exc}")
+        return QueueWriteResult(ok=False, count=1, err=str(exc))
+
+
 def enqueue_entries_sqlite_result(
     conn: sqlite3.Connection,
     entries: Sequence[dict[str, Any]],

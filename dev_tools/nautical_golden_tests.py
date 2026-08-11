@@ -4471,6 +4471,84 @@ def test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe():
         raise AssertionError("future lifecycle plan schema was accepted")
 
 
+def test_lifecycle_stage_advancement_requires_claim_and_valid_transition():
+    """A stale worker cannot advance a durable plan or skip its stage graph."""
+    from nautical_core import queue_models, queue_store
+    from nautical_core.lifecycle_models import ExecutionStage
+
+    legacy = {
+        "parent_uuid": "parent-uuid",
+        "parent_nextlink": "",
+        "child_short": "child123",
+        "child": {"uuid": "child-uuid", "link": 5},
+        "spawn_intent_id": "si_stage",
+        "parent_guard": {
+            "status": "completed",
+            "chain": "on",
+            "chainID": "chain-stage",
+            "link": "4",
+        },
+    }
+    entry = queue_models.migrate_legacy_spawn_queue_entry(legacy)
+    with sqlite3.connect(":memory:") as conn:
+        queue_store.init_queue_db(conn)
+        write = queue_store.enqueue_entries_sqlite_result(
+            conn,
+            [entry],
+            now=1.0,
+            require_lifecycle_plan=True,
+        )
+        expect(write.ok, f"stage test entry was not queued: {write}")
+        claim = queue_store.claim_rows_sqlite_result(
+            conn,
+            token="claim-stage",
+            now=2.0,
+            processing_stale_after=60.0,
+            max_lines=1,
+        )
+        expect(len(claim.rows) == 1, "stage test entry was not claimed")
+        row_id = claim.rows[0].id
+
+        stale = queue_store.advance_lifecycle_stage_sqlite_result(
+            conn,
+            row_id=row_id,
+            claim_token="stale-token",
+            stage=ExecutionStage.CHILD_PRESENT,
+            now=3.0,
+        )
+        expect(not stale.ok and "ownership" in stale.err, f"stale claim advanced the plan: {stale}")
+
+        child = queue_store.advance_lifecycle_stage_sqlite_result(
+            conn,
+            row_id=row_id,
+            claim_token="claim-stage",
+            stage=ExecutionStage.CHILD_PRESENT,
+            now=4.0,
+        )
+        expect(child.ok, f"valid child stage was rejected: {child}")
+        skipped = queue_store.advance_lifecycle_stage_sqlite_result(
+            conn,
+            row_id=row_id,
+            claim_token="claim-stage",
+            stage=ExecutionStage.PARENT_LINKED,
+            now=5.0,
+        )
+        expect(skipped.ok, f"valid parent stage was rejected: {skipped}")
+        backwards = queue_store.advance_lifecycle_stage_sqlite_result(
+            conn,
+            row_id=row_id,
+            claim_token="claim-stage",
+            stage=ExecutionStage.PERSISTED,
+            now=6.0,
+        )
+        expect(not backwards.ok and "transition" in backwards.err, f"backward stage was accepted: {backwards}")
+        stored = json.loads(conn.execute("SELECT payload FROM queue_entries WHERE id=?", (row_id,)).fetchone()[0])
+        expect(
+            stored["lifecycle_plan"]["stage"] == ExecutionStage.PARENT_LINKED.value,
+            "invalid or stale update changed the durable stage",
+        )
+
+
 def test_queue_database_durable_mode_uses_full_synchronous():
     """Durable queue mode must apply SQLite FULL synchronous semantics."""
     from nautical_core import queue_store
@@ -32319,6 +32397,7 @@ TESTS = [
     test_health_check_critical_queue_db_rows,
     test_queue_schema_initializes_and_adopts_legacy_rows,
     test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe,
+    test_lifecycle_stage_advancement_requires_claim_and_valid_transition,
     test_queue_database_durable_mode_uses_full_synchronous,
     test_queue_schema_rejects_incompatible_databases_without_quarantine,
     test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,

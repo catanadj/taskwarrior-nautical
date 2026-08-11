@@ -1158,6 +1158,13 @@ def test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy():
     expect(service.calls[0][1:] == ("cp", 5, source.to_dict()), "planner did not own kind/link calculation")
     expect(plan.child_dict()["link"] == 5, "planner passed the wrong successor link")
 
+    limited = LifecyclePlanner(
+        {"scheduler_fingerprint": "fp-1"},
+        recurrence_service=service,
+        successor_limit_policy=lambda _task, _event, _candidate, link: "chainMax reached" if link > 4 else None,
+    ).plan(source, LifecycleEvent.COMPLETE)
+    expect(limited.action is LifecycleAction.FINALIZE_CHAIN, "chain limit did not stop successor planning")
+
     terminal_service = Service(RecurrenceCandidate(None, terminal_reason="chainUntil reached"))
     terminal = LifecyclePlanner({"scheduler_fingerprint": "fp-1"}, recurrence_service=terminal_service).plan(
         source,

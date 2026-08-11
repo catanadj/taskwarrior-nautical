@@ -66,6 +66,18 @@ class RecurrencePlanningService(Protocol):
     ) -> Mapping[str, Any] | None: ...
 
 
+class SuccessorLimitPolicy(Protocol):
+    """Return a terminal reason when a candidate exceeds a chain limit."""
+
+    def __call__(
+        self,
+        snapshot: TaskSnapshot,
+        event: LifecycleEvent,
+        candidate: RecurrenceCandidate,
+        next_link: int,
+    ) -> str | None: ...
+
+
 def _link(value: Any, *, default: int | None = None) -> int:
     if value is None or value == "":
         if default is not None:
@@ -102,6 +114,7 @@ class LifecyclePlanner:
     validated_configuration: Any
     child_builder: ChildPlanBuilder | None = None
     recurrence_service: RecurrencePlanningService | None = None
+    successor_limit_policy: SuccessorLimitPolicy | None = None
 
     def __post_init__(self) -> None:
         if self.validated_configuration is None:
@@ -184,6 +197,26 @@ class LifecyclePlanner:
                         parent_patch={"chain": "off"},
                         expected_postconditions=("terminal_chain", "no_successor"),
                     )
+                if self.successor_limit_policy is not None:
+                    try:
+                        limit_reason = self.successor_limit_policy(
+                            snapshot,
+                            event,
+                            candidate,
+                            target_link or 0,
+                        )
+                    except Exception as exc:
+                        raise LifecyclePlanningError(
+                            f"successor limit evaluation failed: {type(exc).__name__}: {exc}"
+                        ) from exc
+                    if limit_reason:
+                        return LifecyclePlan.from_mappings(
+                            identity=identity,
+                            action=LifecycleAction.FINALIZE_CHAIN,
+                            parent_guard=guard,
+                            parent_patch={"chain": "off"},
+                            expected_postconditions=("terminal_chain", "no_successor"),
+                        )
                 child = self.recurrence_service.build_child(
                     snapshot,
                     event,
@@ -227,4 +260,5 @@ __all__ = (
     "LifecyclePlanningError",
     "RecurrenceCandidate",
     "RecurrencePlanningService",
+    "SuccessorLimitPolicy",
 )

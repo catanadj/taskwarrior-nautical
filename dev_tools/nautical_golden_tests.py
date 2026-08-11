@@ -4624,6 +4624,90 @@ def test_lifecycle_queue_capacity_guard_is_atomic():
         expect(conn.execute("SELECT COUNT(1) FROM queue_entries").fetchone()[0] == 0, "capacity rejection was not atomic")
 
 
+def test_lifecycle_executor_uses_typed_order_and_compensation():
+    """The shared executor has one mutation order and compensates only imports."""
+    from nautical_core.lifecycle_executor import (
+        LifecycleTransitionExecutor,
+        OperationResult,
+        OperationState,
+    )
+    from nautical_core.lifecycle_models import (
+        LifecycleAction,
+        LifecycleEvent,
+        LifecycleOutcomeKind,
+        LifecyclePlan,
+        ParentGuard,
+        LifecycleIdentity,
+    )
+
+    plan = LifecyclePlan.from_mappings(
+        identity=LifecycleIdentity("chain-exec", "parent-exec", 1, 2, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=ParentGuard.from_mapping(
+            {"status": "completed", "chain": "on", "chainID": "chain-exec", "link": "1"}
+        ),
+        child_payload={"uuid": "child-exec", "link": 2},
+        parent_patch={"nextLink": "child-ex"},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+        stage="persisted",
+    )
+
+    class Services:
+        def __init__(self, *, found: bool, fail_link: bool = False, unavailable_parent: bool = False):
+            self.found = found
+            self.fail_link = fail_link
+            self.unavailable_parent = unavailable_parent
+            self.calls: list[str] = []
+
+        def validate_parent(self, _plan):
+            self.calls.append("parent")
+            return OperationResult(
+                OperationState.UNAVAILABLE if self.unavailable_parent else OperationState.APPLIED,
+                reason="parent unavailable" if self.unavailable_parent else "",
+            )
+
+        def find_equivalent_child(self, _plan):
+            self.calls.append("find")
+            if self.found:
+                return OperationResult(OperationState.FOUND, {"uuid": "child-existing", "link": 2})
+            return OperationResult(OperationState.ABSENT)
+
+        def import_child(self, _plan):
+            self.calls.append("import")
+            return OperationResult(OperationState.APPLIED, {"uuid": "child-imported", "link": 2})
+
+        def verify_child(self, _plan, _child):
+            self.calls.append("verify_child")
+            return OperationResult(OperationState.APPLIED)
+
+        def apply_parent_patch(self, _plan, _child):
+            self.calls.append("patch")
+            return OperationResult(OperationState.CONFLICT if self.fail_link else OperationState.ALREADY)
+
+        def verify_linkage(self, _plan, _child):
+            self.calls.append("verify_link")
+            return OperationResult(OperationState.APPLIED)
+
+        def compensate_child(self, _plan, _child):
+            self.calls.append("compensate")
+            return OperationResult(OperationState.APPLIED)
+
+    existing = Services(found=True)
+    existing_outcome = LifecycleTransitionExecutor(existing).execute(plan)
+    expect(existing_outcome.kind is LifecycleOutcomeKind.APPLIED, f"existing child did not apply: {existing_outcome}")
+    expect(existing.calls == ["parent", "find", "verify_child", "patch", "verify_link"], f"unexpected existing order: {existing.calls}")
+
+    imported = Services(found=False, fail_link=True)
+    imported_outcome = LifecycleTransitionExecutor(imported).execute(plan)
+    expect(imported_outcome.kind is LifecycleOutcomeKind.MANUAL_REVIEW, f"failed link was not manual review: {imported_outcome}")
+    expect(imported.calls == ["parent", "find", "import", "verify_child", "patch", "compensate"], f"unexpected compensation order: {imported.calls}")
+
+    unavailable = Services(found=True, unavailable_parent=True)
+    unavailable_outcome = LifecycleTransitionExecutor(unavailable).execute(plan)
+    expect(unavailable_outcome.kind is LifecycleOutcomeKind.RETRYABLE, f"unavailable parent was not retryable: {unavailable_outcome}")
+    expect(unavailable.calls == ["parent"], f"executor mutated after unavailable guard: {unavailable.calls}")
+
+
 def test_queue_database_durable_mode_uses_full_synchronous():
     """Durable queue mode must apply SQLite FULL synchronous semantics."""
     from nautical_core import queue_store
@@ -32563,6 +32647,7 @@ TESTS = [
     test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe,
     test_lifecycle_stage_advancement_requires_claim_and_valid_transition,
     test_lifecycle_queue_capacity_guard_is_atomic,
+    test_lifecycle_executor_uses_typed_order_and_compensation,
     test_queue_database_durable_mode_uses_full_synchronous,
     test_queue_schema_rejects_incompatible_databases_without_quarantine,
     test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,

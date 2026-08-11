@@ -582,6 +582,8 @@ _LIFECYCLE_MODELS = None
 _LIFECYCLE_MODELS_LOAD_FAILED = False
 _LIFECYCLE_PLANNER = None
 _LIFECYCLE_PLANNER_LOAD_FAILED = False
+_LIFECYCLE_EXECUTOR = None
+_LIFECYCLE_EXECUTOR_LOAD_FAILED = False
 _MODIFY_FEEDBACK = None
 _MODIFY_FEEDBACK_LOAD_FAILED = False
 _MODIFY_TIMELINE = None
@@ -685,6 +687,12 @@ _MODULE_SPECS = {
         "_LIFECYCLE_PLANNER_LOAD_FAILED",
         "lifecycle_planner.py",
         "nautical_core.lifecycle_planner",
+    ),
+    "lifecycle_executor": (
+        "_LIFECYCLE_EXECUTOR",
+        "_LIFECYCLE_EXECUTOR_LOAD_FAILED",
+        "lifecycle_executor.py",
+        "nautical_core.lifecycle_executor",
     ),
     "modify_feedback": (
         "_MODIFY_FEEDBACK",

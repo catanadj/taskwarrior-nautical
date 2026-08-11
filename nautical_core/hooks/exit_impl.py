@@ -149,6 +149,8 @@ _LIFECYCLE_MODELS = None
 _LIFECYCLE_MODELS_LOAD_FAILED = False
 _LIFECYCLE_PLANNER = None
 _LIFECYCLE_PLANNER_LOAD_FAILED = False
+_LIFECYCLE_EXECUTOR = None
+_LIFECYCLE_EXECUTOR_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_runtime": (
         "_HOOK_RUNTIME",
@@ -209,6 +211,12 @@ _MODULE_SPECS = {
         "_LIFECYCLE_PLANNER_LOAD_FAILED",
         "lifecycle_planner.py",
         "nautical_core.lifecycle_planner",
+    ),
+    "lifecycle_executor": (
+        "_LIFECYCLE_EXECUTOR",
+        "_LIFECYCLE_EXECUTOR_LOAD_FAILED",
+        "lifecycle_executor.py",
+        "nautical_core.lifecycle_executor",
     ),
     "exit_runtime": (
         "_EXIT_RUNTIME",

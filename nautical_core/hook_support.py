@@ -6,8 +6,17 @@ import time
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Callable, Mapping, Sequence, TypeAlias
 
 from .task_command import TaskCommandResult, coerce_command_result, failure_message, run_command_once
+
+
+TaskRow: TypeAlias = dict[str, Any]
+RawCommandResult: TypeAlias = TaskCommandResult | tuple[bool, str, str]
+CommandRunner: TypeAlias = Callable[..., RawCommandResult]
+LegacyCommandRunner: TypeAlias = Callable[..., tuple[bool, str, str]]
+DiagnosticCallback: TypeAlias = Callable[[str], object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +57,7 @@ class LookupResult:
         return self.state == "unavailable"
 
 
-def build_task_cmd_prefix(*, use_rc_data_location: bool, tw_data_dir) -> list[str]:
+def build_task_cmd_prefix(*, use_rc_data_location: bool, tw_data_dir: object) -> list[str]:
     cmd = ["task"]
     if use_rc_data_location:
         cmd.append(f"rc.data.location={tw_data_dir}")
@@ -56,9 +65,9 @@ def build_task_cmd_prefix(*, use_rc_data_location: bool, tw_data_dir) -> list[st
 
 
 def run_subprocess_once(
-    cmd: list[str],
+    cmd: Sequence[str],
     *,
-    env: dict[str, str],
+    env: Mapping[str, str],
     input_text: str | None,
     timeout: float,
 ) -> tuple[bool, str, str]:
@@ -69,9 +78,9 @@ def run_subprocess_once(
 
 
 def _run_task_attempt(
-    cmd: list[str],
+    cmd: Sequence[str],
     *,
-    env: dict[str, str],
+    env: Mapping[str, str],
     input_text: str | None,
     timeout: float,
 ) -> tuple[bool, str, str]:
@@ -79,10 +88,10 @@ def _run_task_attempt(
 
 
 def run_task(
-    cmd: list[str],
+    cmd: Sequence[str],
     *,
-    core_run_task=None,
-    env: dict[str, str] | None = None,
+    core_run_task: LegacyCommandRunner | None = None,
+    env: Mapping[str, str] | None = None,
     input_text: str | None = None,
     timeout: float = 6.0,
     retries: int = 1,
@@ -137,9 +146,9 @@ def run_task(
 
 def run_task_result(
     *,
-    run_task,
-    cmd: list[str],
-    env=None,
+    run_task: CommandRunner,
+    cmd: Sequence[str],
+    env: Mapping[str, str] | None = None,
     input_text: str | None = None,
     timeout: float = 6.0,
     retries: int = 1,
@@ -165,7 +174,11 @@ def run_task_result(
     )
 
 
-def parse_export_array_result(result: TaskCommandResult, *, diag=None) -> tuple[bool, list[dict], str]:
+def parse_export_array_result(
+    result: TaskCommandResult,
+    *,
+    diag: DiagnosticCallback | None = None,
+) -> tuple[bool, list[TaskRow], str]:
     """Strictly parse a successful array export; never turn failures into empty data."""
     if not result.ok:
         return False, [], failure_message(result, "Taskwarrior export")
@@ -189,14 +202,14 @@ def parse_export_array_result(result: TaskCommandResult, *, diag=None) -> tuple[
 
 def export_uuid_short(
     *,
-    run_task,
-    task_cmd_prefix,
+    run_task: CommandRunner,
+    task_cmd_prefix: Sequence[str],
     uuid_short: str,
-    env=None,
+    env: Mapping[str, str] | None = None,
     timeout: float = 2.5,
     retries: int = 2,
-    diag=None,
-):
+    diag: DiagnosticCallback | None = None,
+) -> TaskRow | None:
     lookup = export_uuid_short_result(
         run_task=run_task,
         task_cmd_prefix=task_cmd_prefix,
@@ -211,13 +224,13 @@ def export_uuid_short(
 
 def export_uuid_short_result(
     *,
-    run_task,
-    task_cmd_prefix,
+    run_task: CommandRunner,
+    task_cmd_prefix: Sequence[str],
     uuid_short: str,
-    env=None,
+    env: Mapping[str, str] | None = None,
     timeout: float = 2.5,
     retries: int = 2,
-    diag=None,
+    diag: DiagnosticCallback | None = None,
 ) -> LookupResult:
     result = run_task_result(
         run_task=run_task,
@@ -251,13 +264,13 @@ def export_uuid_short_result(
 
 def task_lookup_by_uuid_uncached(
     *,
-    run_task,
-    task_cmd_prefix,
+    run_task: CommandRunner,
+    task_cmd_prefix: Sequence[str],
     uuid_str: str,
-    env=None,
+    env: Mapping[str, str] | None = None,
     timeout: float = 2.5,
     retries: int = 2,
-    diag=None,
+    diag: DiagnosticCallback | None = None,
 ) -> LookupResult:
     result = run_task_result(
         run_task=run_task,
@@ -288,14 +301,14 @@ def task_lookup_by_uuid_uncached(
 
 def export_uuid_full(
     *,
-    run_task,
-    task_cmd_prefix,
+    run_task: CommandRunner,
+    task_cmd_prefix: Sequence[str],
     uuid_str: str,
-    env=None,
+    env: Mapping[str, str] | None = None,
     timeout: float = 3.0,
     retries: int = 2,
-    diag=None,
-):
+    diag: DiagnosticCallback | None = None,
+) -> TaskRow | None:
     result = run_task_result(
         run_task=run_task,
         cmd=list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=1", f"export uuid:{uuid_str}"],
@@ -315,16 +328,16 @@ def export_uuid_full(
 
 def export_uuid_status(
     *,
-    run_task,
-    task_cmd_prefix,
+    run_task: CommandRunner,
+    task_cmd_prefix: Sequence[str],
     uuid_str: str,
     timeout: float,
     retries: int,
     retry_delay: float = 0.0,
-    env=None,
-    is_lock_error=None,
+    env: Mapping[str, str] | None = None,
+    is_lock_error: Callable[[str], bool] | None = None,
     tolerate_noisy_stdout: bool = False,
-):
+) -> dict[str, Any]:
     if not uuid_str:
         return {"exists": False, "retryable": False, "err": "missing uuid", "obj": None}
     cmd = list(task_cmd_prefix) + [
@@ -392,13 +405,13 @@ def parse_extra_tokens(extra: str | None) -> list[str] | None:
 
 def build_chain_export_args(
     *,
-    task_cmd_prefix,
+    task_cmd_prefix: Sequence[str],
     chain_id: str,
-    since=None,
+    since: datetime | None = None,
     extra: str | None = None,
     limit: int | None = None,
-    parse_extra_tokens,
-    diag=None,
+    parse_extra_tokens: Callable[[str | None], list[str] | None],
+    diag: DiagnosticCallback | None = None,
 ) -> list[str] | None:
     args = list(task_cmd_prefix) + ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
     if since:
@@ -416,7 +429,11 @@ def build_chain_export_args(
     return args
 
 
-def parse_export_array(out: str, *, diag=None) -> list[dict]:
+def parse_export_array(
+    out: str,
+    *,
+    diag: DiagnosticCallback | None = None,
+) -> list[TaskRow]:
     try:
         data = json.loads((out or "").strip() or "[]")
         return data if isinstance(data, list) else [data]

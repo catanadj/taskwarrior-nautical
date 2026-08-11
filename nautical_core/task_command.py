@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 import time
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence, TypeAlias
 
 
 _LOCK_MARKERS = (
@@ -38,8 +38,11 @@ class TaskCommandResult:
         return self.kind == "ok"
 
 
+RawCommandResult: TypeAlias = TaskCommandResult | tuple[bool, str, str]
+
+
 def coerce_command_result(
-    raw: Any,
+    raw: object,
     argv: Sequence[str],
     *,
     timeout: float,
@@ -48,6 +51,16 @@ def coerce_command_result(
     """Normalize a typed result or legacy ``(ok, stdout, stderr)`` tuple."""
     if isinstance(raw, TaskCommandResult):
         return raw
+    if not isinstance(raw, tuple) or len(raw) != 3:
+        return TaskCommandResult(
+            tuple(str(arg) for arg in argv),
+            1,
+            "",
+            "invalid command result: expected (ok, stdout, stderr)",
+            "exec_error",
+            max(1, int(attempts)),
+            float(timeout),
+        )
     try:
         ok, stdout, stderr = raw
     except (TypeError, ValueError) as exc:
@@ -97,7 +110,7 @@ def run_command_once(
     argv: Sequence[str],
     *,
     input_text: str | None = None,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
     timeout: float = 60.0,
 ) -> TaskCommandResult:
     """Run one command attempt using the shared subprocess contract."""
@@ -143,7 +156,7 @@ def run_task_command(
     args: Sequence[str],
     *,
     input_text: str | None = None,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
     timeout: float = 60.0,
     retry_locks: bool = False,
     retry_delay: float = 0.1,

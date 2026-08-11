@@ -3,25 +3,25 @@ from __future__ import annotations
 import os
 import copy
 import hashlib
+import importlib
 import json
 import time
 from collections import OrderedDict
 from functools import lru_cache, wraps
 from types import MappingProxyType
+from typing import Any, TypedDict
 
 from nautical_core import cache_support, config_schema, config_support, warnings
 
+_tomllib: Any = None
 try:
-    import tomllib  # Python 3.11+
+    _tomllib = importlib.import_module("tomllib")  # Python 3.11+
 except Exception:
-    tomllib = None
-if tomllib is None:
     try:
-        import tomli
-
-        tomllib = tomli
+        _tomllib = importlib.import_module("tomli")
     except Exception:
-        tomllib = None
+        _tomllib = None
+tomllib: Any = _tomllib
 
 
 _DEFAULTS = {
@@ -45,6 +45,16 @@ _CONFIG_LOADED = False
 _CACHE_LOAD_MEM_MAX = 128
 _CACHE_LOAD_MEM_TTL = 300
 _CACHE_LOAD_MEM: OrderedDict[str, tuple[int, int, dict, float]] = OrderedDict()
+
+
+class ConfigReloadResult(TypedDict, total=False):
+    """Validated configuration reload outcome shared by lifecycle entry points."""
+
+    ok: bool
+    error: str
+    source: str
+    fingerprint: str
+    scheduler_fingerprint: str
 
 
 def env_flag_true(name: str, env_map: dict | None = None) -> bool:
@@ -550,7 +560,7 @@ def _refresh_config_exports() -> None:
     )
 
 
-def reload_for_taskdata(taskdata: str | os.PathLike[str]) -> dict[str, str | bool]:
+def reload_for_taskdata(taskdata: str | os.PathLike[str]) -> ConfigReloadResult:
     """Reload the selected config after resolving a Taskwarrior data directory.
 
     The normal import can happen before Taskwarrior exposes ``TASKDATA``. This
@@ -615,8 +625,8 @@ def ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
                 last["t"] = time.time()
             return cached(*args, **kwargs)
 
-        _wrapper.cache_clear = cached.cache_clear
-        _wrapper.cache_info = cached.cache_info
+        setattr(_wrapper, "cache_clear", cached.cache_clear)
+        setattr(_wrapper, "cache_info", cached.cache_info)
         return _wrapper
 
     return _decorator

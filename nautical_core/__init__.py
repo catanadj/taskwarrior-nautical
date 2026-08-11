@@ -551,7 +551,7 @@ def validate_scheduling_configuration() -> None:
         raise RuntimeError(f"Invalid Nautical scheduling configuration: {message}") from exc
 
 
-def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> dict[str, str | bool]:
+def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> _core_config.ConfigReloadResult:
     """Apply the validated configuration selected for a Taskwarrior data directory."""
     global CONFIG_ERROR
     result = _core_config.reload_for_taskdata(taskdata)

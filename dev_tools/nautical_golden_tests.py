@@ -1122,7 +1122,11 @@ def test_recurrence_fingerprint_is_canonical_and_mutation_sensitive():
 def test_lifecycle_planner_is_pure_and_deterministic():
     """The first planner contract produces repeatable plans without mutating snapshots."""
     from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, TaskSnapshot
-    from nautical_core.lifecycle_planner import LifecyclePlanner, LifecyclePlanningError
+    from nautical_core.lifecycle_planner import (
+        LifecyclePlanner,
+        LifecyclePlanningError,
+        terminal_plan_for_snapshot,
+    )
 
     source = {
         "uuid": "parent-uuid",
@@ -1150,6 +1154,17 @@ def test_lifecycle_planner_is_pure_and_deterministic():
 
     terminal = planner.plan(snapshot, LifecycleEvent.CHAIN_UNTIL)
     expect(terminal.action is LifecycleAction.FINALIZE_CHAIN, "chainUntil did not finalize")
+    for event in (
+        LifecycleEvent.DISABLE,
+        LifecycleEvent.MANUAL_DELETE,
+        LifecycleEvent.CHAIN_MAX,
+        LifecycleEvent.CHAIN_UNTIL,
+        LifecycleEvent.COMPLETE,
+        LifecycleEvent.EXPIRE,
+    ):
+        terminal = terminal_plan_for_snapshot(snapshot, event)
+        expect(terminal.parent_patch_dict() == {"chain": "off"}, f"terminal patch drifted for {event.value}")
+        expect(terminal.identity.event is event, f"terminal event was not retained for {event.value}")
     activation = planner.plan(snapshot, LifecycleEvent.RESUME)
     expect(activation.parent_patch_dict() == {"chain": "on"}, "resume patch was incorrect")
 

@@ -230,6 +230,53 @@ def _parent_guard(snapshot: TaskSnapshot) -> ParentGuard:
         raise LifecyclePlanningError(str(exc)) from exc
 
 
+def terminal_plan_for_snapshot(
+    snapshot: TaskSnapshot,
+    event: LifecycleEvent,
+) -> LifecyclePlan:
+    """Build the shared terminal contract used by hooks and reconcile."""
+    try:
+        event = LifecycleEvent(event)
+    except (TypeError, ValueError) as exc:
+        raise LifecyclePlanningError(f"unsupported terminal event: {event!r}") from exc
+    terminal_events = {
+        LifecycleEvent.DISABLE,
+        LifecycleEvent.MANUAL_DELETE,
+        LifecycleEvent.CHAIN_MAX,
+        LifecycleEvent.CHAIN_UNTIL,
+        LifecycleEvent.COMPLETE,
+        LifecycleEvent.EXPIRE,
+    }
+    if event not in terminal_events:
+        raise LifecyclePlanningError(f"event {event.value!r} is not a terminal transition")
+    guard = _parent_guard(snapshot)
+    target_link = guard.link + 1 if event in {LifecycleEvent.COMPLETE, LifecycleEvent.EXPIRE} else None
+    identity = LifecycleIdentity(
+        chain_id=guard.chain_id,
+        parent_uuid=str(snapshot.get("uuid") or ""),
+        source_link=guard.link,
+        target_link=target_link,
+        event=event,
+    )
+    action = (
+        LifecycleAction.DISABLE_CHAIN
+        if event in {LifecycleEvent.DISABLE, LifecycleEvent.MANUAL_DELETE}
+        else LifecycleAction.FINALIZE_CHAIN
+    )
+    postconditions = (
+        ("parent_chain_off",)
+        if action is LifecycleAction.DISABLE_CHAIN
+        else ("terminal_chain", "no_successor")
+    )
+    return LifecyclePlan.from_mappings(
+        identity=identity,
+        action=action,
+        parent_guard=guard,
+        parent_patch={"chain": "off"},
+        expected_postconditions=postconditions,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class LifecyclePlanner:
     """Construct side-effect-free lifecycle plans from immutable snapshots."""
@@ -272,23 +319,13 @@ class LifecyclePlanner:
                 expected_postconditions=("parent_chain_on",),
             )
 
-        if event in {LifecycleEvent.DISABLE, LifecycleEvent.MANUAL_DELETE}:
-            return LifecyclePlan.from_mappings(
-                identity=identity,
-                action=LifecycleAction.DISABLE_CHAIN,
-                parent_guard=guard,
-                parent_patch={"chain": "off"},
-                expected_postconditions=("parent_chain_off",),
-            )
-
-        if event in {LifecycleEvent.CHAIN_MAX, LifecycleEvent.CHAIN_UNTIL}:
-            return LifecyclePlan.from_mappings(
-                identity=identity,
-                action=LifecycleAction.FINALIZE_CHAIN,
-                parent_guard=guard,
-                parent_patch={"chain": "off"},
-                expected_postconditions=("terminal_chain", "no_successor"),
-            )
+        if event in {
+            LifecycleEvent.DISABLE,
+            LifecycleEvent.MANUAL_DELETE,
+            LifecycleEvent.CHAIN_MAX,
+            LifecycleEvent.CHAIN_UNTIL,
+        }:
+            return terminal_plan_for_snapshot(snapshot, event)
 
         if event not in {LifecycleEvent.COMPLETE, LifecycleEvent.EXPIRE}:
             raise LifecyclePlanningError(f"event {event.value!r} has no planning policy")
@@ -303,23 +340,11 @@ class LifecyclePlanner:
                 else "anchor"
             )
             if not any(str(snapshot.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
-                return LifecyclePlan.from_mappings(
-                    identity=identity,
-                    action=LifecycleAction.FINALIZE_CHAIN,
-                    parent_guard=guard,
-                    parent_patch={"chain": "off"},
-                    expected_postconditions=("terminal_chain", "no_successor"),
-                )
+                return terminal_plan_for_snapshot(snapshot, event)
             try:
                 candidate = self.recurrence_service.next_candidate(snapshot, event, kind, target_link or 0)
                 if candidate is None or candidate.terminal_reason:
-                    return LifecyclePlan.from_mappings(
-                        identity=identity,
-                        action=LifecycleAction.FINALIZE_CHAIN,
-                        parent_guard=guard,
-                        parent_patch={"chain": "off"},
-                        expected_postconditions=("terminal_chain", "no_successor"),
-                    )
+                    return terminal_plan_for_snapshot(snapshot, event)
                 if self.successor_limit_policy is not None:
                     try:
                         limit_reason = self.successor_limit_policy(
@@ -333,13 +358,7 @@ class LifecyclePlanner:
                             f"successor limit evaluation failed: {type(exc).__name__}: {exc}"
                         ) from exc
                     if limit_reason:
-                        return LifecyclePlan.from_mappings(
-                            identity=identity,
-                            action=LifecycleAction.FINALIZE_CHAIN,
-                            parent_guard=guard,
-                            parent_patch={"chain": "off"},
-                            expected_postconditions=("terminal_chain", "no_successor"),
-                        )
+                        return terminal_plan_for_snapshot(snapshot, event)
                 child = self.recurrence_service.build_child(
                     snapshot,
                     event,
@@ -358,13 +377,7 @@ class LifecyclePlanner:
                     f"could not build {event.value} successor: {type(exc).__name__}: {exc}"
                 ) from exc
         if child is None:
-            return LifecyclePlan.from_mappings(
-                identity=identity,
-                action=LifecycleAction.FINALIZE_CHAIN,
-                parent_guard=guard,
-                parent_patch={"chain": "off"},
-                expected_postconditions=("terminal_chain", "no_successor"),
-            )
+            return terminal_plan_for_snapshot(snapshot, event)
         if not isinstance(child, Mapping) or child.get("link") in (None, ""):
             raise LifecyclePlanningError("child builder returned an incomplete successor")
         child_uuid = str(child.get("uuid") or "").strip()
@@ -389,4 +402,5 @@ __all__ = (
     "RecurrencePlanningService",
     "SuccessorLimitPolicy",
     "PrecomputedRecurrencePlanningService",
+    "terminal_plan_for_snapshot",
 )

@@ -1121,6 +1121,60 @@ def test_lifecycle_planner_is_pure_and_deterministic():
         raise AssertionError("planner accepted a task without mandatory chainID")
 
 
+def test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy():
+    """Candidate, chainUntil, and missing-recurrence decisions stay pure and typed."""
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, TaskSnapshot
+    from nautical_core.lifecycle_planner import (
+        LifecyclePlanner,
+        RecurrenceCandidate,
+    )
+
+    class Service:
+        def __init__(self, candidate):
+            self.candidate = candidate
+            self.calls = []
+
+        def next_candidate(self, snapshot, event, kind, next_link):
+            self.calls.append((event, kind, next_link, snapshot.to_dict()))
+            return self.candidate
+
+        def build_child(self, snapshot, event, candidate, next_link):
+            return {"uuid": f"child-{next_link}", "due": candidate.child_due, "link": next_link}
+
+    source = TaskSnapshot.from_mapping(
+        {
+            "uuid": "parent-uuid",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "chain-1",
+            "link": 4,
+            "cp": "1d",
+        }
+    )
+    service = Service(RecurrenceCandidate("2026-08-13T09:00:00Z"))
+    planner = LifecyclePlanner({"scheduler_fingerprint": "fp-1"}, recurrence_service=service)
+    plan = planner.plan(source, LifecycleEvent.COMPLETE)
+    expect(plan.action is LifecycleAction.SPAWN_CHILD, "candidate did not produce spawn")
+    expect(service.calls[0][1:] == ("cp", 5, source.to_dict()), "planner did not own kind/link calculation")
+    expect(plan.child_dict()["link"] == 5, "planner passed the wrong successor link")
+
+    terminal_service = Service(RecurrenceCandidate(None, terminal_reason="chainUntil reached"))
+    terminal = LifecyclePlanner({"scheduler_fingerprint": "fp-1"}, recurrence_service=terminal_service).plan(
+        source,
+        LifecycleEvent.EXPIRE,
+    )
+    expect(terminal.action is LifecycleAction.FINALIZE_CHAIN, "terminal candidate spawned a child")
+
+    no_recurrence = TaskSnapshot.from_mapping(
+        {"uuid": "parent-uuid", "status": "completed", "chain": "on", "chainID": "chain-1", "link": 4}
+    )
+    empty = LifecyclePlanner({"scheduler_fingerprint": "fp-1"}, recurrence_service=service).plan(
+        no_recurrence,
+        LifecycleEvent.COMPLETE,
+    )
+    expect(empty.action is LifecycleAction.FINALIZE_CHAIN, "non-recurrence task was treated as spawnable")
+
+
 def test_diagnostic_event_renders_to_stderr_and_has_stable_record():
     """Structured diagnostics must keep stdout clean and expose stable fields."""
     from nautical_core import diagnostic_models, runtime
@@ -32016,6 +32070,7 @@ TESTS = [
     test_hook_response_models_keep_legacy_names_and_typed_roles,
     test_lifecycle_models_enforce_transition_contract,
     test_lifecycle_planner_is_pure_and_deterministic,
+    test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy,
     test_diagnostic_event_renders_to_stderr_and_has_stable_record,
     test_taskwarrior_document_is_lossless_with_typed_scalar_accessors,
     test_taskwarrior_document_rejects_non_objects_and_handles_bad_scalars,

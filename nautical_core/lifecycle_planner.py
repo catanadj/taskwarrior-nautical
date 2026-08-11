@@ -9,7 +9,7 @@ shared by on-modify and reconcile.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Mapping, Protocol
 
 from .lifecycle_models import (
     ExecutionStage,
@@ -32,6 +32,37 @@ class ChildPlanBuilder(Protocol):
         self,
         snapshot: TaskSnapshot,
         event: LifecycleEvent,
+    ) -> Mapping[str, Any] | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class RecurrenceCandidate:
+    """Pure recurrence result consumed by completion/expiration planning."""
+
+    child_due: Any
+    metadata: tuple[tuple[str, Any], ...] = ()
+    dnf: Any = None
+    until: Any = None
+    terminal_reason: str = ""
+
+
+class RecurrencePlanningService(Protocol):
+    """Narrow recurrence boundary required by the lifecycle planner."""
+
+    def next_candidate(
+        self,
+        snapshot: TaskSnapshot,
+        event: LifecycleEvent,
+        kind: str,
+        next_link: int,
+    ) -> RecurrenceCandidate | None: ...
+
+    def build_child(
+        self,
+        snapshot: TaskSnapshot,
+        event: LifecycleEvent,
+        candidate: RecurrenceCandidate,
+        next_link: int,
     ) -> Mapping[str, Any] | None: ...
 
 
@@ -70,6 +101,7 @@ class LifecyclePlanner:
 
     validated_configuration: Any
     child_builder: ChildPlanBuilder | None = None
+    recurrence_service: RecurrencePlanningService | None = None
 
     def __post_init__(self) -> None:
         if self.validated_configuration is None:
@@ -126,7 +158,43 @@ class LifecyclePlanner:
             raise LifecyclePlanningError(f"event {event.value!r} has no planning policy")
 
         child = None
-        if self.child_builder is not None:
+        if self.recurrence_service is not None:
+            kind = (
+                "cp"
+                if str(snapshot.get("cp") or "").strip()
+                else "anchor_file"
+                if str(snapshot.get("anchor_file") or "").strip()
+                else "anchor"
+            )
+            if not any(str(snapshot.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
+                return LifecyclePlan.from_mappings(
+                    identity=identity,
+                    action=LifecycleAction.FINALIZE_CHAIN,
+                    parent_guard=guard,
+                    parent_patch={"chain": "off"},
+                    expected_postconditions=("terminal_chain", "no_successor"),
+                )
+            try:
+                candidate = self.recurrence_service.next_candidate(snapshot, event, kind, target_link or 0)
+                if candidate is None or candidate.terminal_reason:
+                    return LifecyclePlan.from_mappings(
+                        identity=identity,
+                        action=LifecycleAction.FINALIZE_CHAIN,
+                        parent_guard=guard,
+                        parent_patch={"chain": "off"},
+                        expected_postconditions=("terminal_chain", "no_successor"),
+                    )
+                child = self.recurrence_service.build_child(
+                    snapshot,
+                    event,
+                    candidate,
+                    target_link or 0,
+                )
+            except Exception as exc:
+                raise LifecyclePlanningError(
+                    f"could not build {event.value} successor: {type(exc).__name__}: {exc}"
+                ) from exc
+        elif self.child_builder is not None:
             try:
                 child = self.child_builder(snapshot, event)
             except Exception as exc:
@@ -157,4 +225,6 @@ __all__ = (
     "ChildPlanBuilder",
     "LifecyclePlanner",
     "LifecyclePlanningError",
+    "RecurrenceCandidate",
+    "RecurrencePlanningService",
 )

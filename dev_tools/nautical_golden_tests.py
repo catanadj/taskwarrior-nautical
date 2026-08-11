@@ -17505,6 +17505,7 @@ def test_on_modify_link_limit():
     mod._SHOW_TIMELINE_GAPS = False
     mod._SHOW_ANALYTICS = False
     mod._CHECK_CHAIN_INTEGRITY = False
+    previous_max_link = mod.core.MAX_LINK_NUMBER
     mod.core.MAX_LINK_NUMBER = 3
 
     mod._spawn_child_atomic = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should not spawn"))
@@ -17535,6 +17536,7 @@ def test_on_modify_link_limit():
             mod.main()
     finally:
         sys.stdin = orig_stdin
+        mod.core.MAX_LINK_NUMBER = previous_max_link
 
     out = json.loads((stdout.getvalue() or "{}").strip() or "{}")
     expect(out.get("link") == 3, "should pass task through unchanged")

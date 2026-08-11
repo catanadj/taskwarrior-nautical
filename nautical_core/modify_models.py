@@ -160,12 +160,12 @@ class HumanDeltaCallback(Protocol):
 
 
 class ComputeAnchorChildDueCallback(Protocol):
-    def __call__(self, task: TaskRow) -> tuple[Any, Any, Any]:
+    def __call__(self, task: TaskRow) -> tuple[datetime | None, dict[str, Any] | None, Any]:
         ...
 
 
 class ComputeCpChildDueCallback(Protocol):
-    def __call__(self, task: TaskRow) -> tuple[Any, Any]:
+    def __call__(self, task: TaskRow) -> tuple[datetime | None, dict[str, Any] | None]:
         ...
 
 

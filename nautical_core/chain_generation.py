@@ -67,6 +67,11 @@ _UDA_CARRY_SKIP_LOWER = frozenset(
 )
 
 
+ChildMetadata = dict[str, Any]
+CpChildDueResult = tuple[datetime | None, ChildMetadata | None]
+AnchorChildDueResult = tuple[datetime | None, ChildMetadata | None, Any]
+
+
 class CarryFieldError(RuntimeError):
     """Raised when a child carry field cannot be reconstructed safely."""
 
@@ -207,7 +212,7 @@ class ChainGenerationService:
         due_local = self._local(anchor_dt) if anchor_dt else end_local
         return end_local, due_local, due_dt
 
-    def compute_cp_child_due(self, parent: dict[str, Any]):
+    def compute_cp_child_due(self, parent: dict[str, Any]) -> CpChildDueResult:
         duration = str(parent.get("cp") or "").strip()
         if not duration:
             return None, None
@@ -264,7 +269,7 @@ class ChainGenerationService:
             meta.update({"cp_sequence_len": len(tokens), "cp_sequence_step": seq_idx + 1})
         return candidate, meta
 
-    def compute_anchor_child_due(self, parent: dict[str, Any]):
+    def compute_anchor_child_due(self, parent: dict[str, Any]) -> AnchorChildDueResult:
         expression = str(parent.get("anchor") or "").strip()
         anchor_file = str(parent.get("anchor_file") or "").strip()
         if not expression and not anchor_file:
@@ -528,4 +533,11 @@ class ChainGenerationService:
         return child
 
 
-__all__ = ("CarryFieldError", "ChainIdentityError", "ChainGenerationService")
+__all__ = (
+    "AnchorChildDueResult",
+    "CarryFieldError",
+    "ChainIdentityError",
+    "ChildMetadata",
+    "CpChildDueResult",
+    "ChainGenerationService",
+)

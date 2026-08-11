@@ -116,7 +116,10 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from nautical_core.modify_models import CompletionLifecycleResult
 
 
 # Optional: DST-aware local TZ helpers (used by some carry-forward variants)
@@ -6604,7 +6607,7 @@ def _completion_build_and_spawn_child(
     )
 
 
-def _handle_completion_modify(old: dict, new: dict) -> None:
+def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResult | None":
     new_cp, new_anchor, new_anchor_file = _completion_validate_cp_and_anchor(old, new)
     _preserve_cp_relative_offsets_on_due_change(old, new, new_cp)
     if any(str(old.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
@@ -6626,7 +6629,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     if computed is None:
         return
     if isinstance(computed, _module("modify_models").CompletionLifecycleResult):
-        return
+        return computed
     snapshot = ctx.chain_snapshot
     preloaded_chain = list(snapshot.rows)
     preloaded_chain_by_link, preloaded_chain_by_short = _build_chain_indexes(preloaded_chain)
@@ -6653,7 +6656,7 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
         check_integrity=_CHECK_CHAIN_INTEGRITY,
         analytics_style=_ANALYTICS_STYLE,
     )
-    modify_completion_flow.finalize_completion_modify(
+    return modify_completion_flow.finalize_completion_modify(
         new=new,
         ctx=ctx,
         computed=computed,

@@ -18920,6 +18920,79 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
     expect(captured.get("lifecycle_result") == result, "feedback did not receive the finalized lifecycle result")
 
 
+def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
+    """The hook helper must expose the typed result returned by finalization."""
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_completion_result_boundary_test")
+    if hasattr(mod, "_load_core"):
+        mod._load_core()
+
+    models = core._import_sibling("modify_models")
+    expected = models.CompletionLifecycleResult(state="applied", child_short="child123")
+    ctx = SimpleNamespace(
+        parent_short="parent01",
+        base_no=1,
+        next_no=2,
+        kind="anchor",
+        chain_id="chain01",
+        chain_snapshot=SimpleNamespace(rows=[], mode="next", loaded=False),
+    )
+    computed = SimpleNamespace(
+        child_due=core.now_utc(),
+        meta={"target_field": "due"},
+        dnf=[],
+        until_dt=None,
+        cpmax=0,
+        cap_no=None,
+        finals=[],
+        until_cap_no=None,
+    )
+    fake_flow = SimpleNamespace(
+        CompletionFinalizeServices=lambda **kwargs: kwargs,
+        finalize_completion_modify=lambda **_kwargs: expected,
+    )
+    original = {
+        "validate": mod._completion_validate_cp_and_anchor,
+        "preserve_cp": mod._preserve_cp_relative_offsets_on_due_change,
+        "preserve_until": mod._preserve_native_until_on_target_change,
+        "validate_until": mod._validate_native_until_after_target_or_fail,
+        "validate_slots": mod._validate_native_until_anchor_slots_or_fail,
+        "preflight": mod._completion_preflight_context,
+        "compute": mod._completion_compute_next_and_limits,
+        "import_module": mod.importlib.import_module,
+    }
+    try:
+        mod._completion_validate_cp_and_anchor = lambda *_a, **_k: ("", "w:mon", "")
+        mod._preserve_cp_relative_offsets_on_due_change = lambda *_a, **_k: None
+        mod._preserve_native_until_on_target_change = lambda *_a, **_k: None
+        mod._validate_native_until_after_target_or_fail = lambda *_a, **_k: None
+        mod._validate_native_until_anchor_slots_or_fail = lambda *_a, **_k: None
+        mod._completion_preflight_context = lambda *_a, **_k: ctx
+        mod._completion_compute_next_and_limits = lambda *_a, **_k: computed
+
+        def fake_import(name):
+            if name == "nautical_core.modify_completion_flow":
+                return fake_flow
+            return original["import_module"](name)
+
+        mod.importlib.import_module = fake_import
+        result = mod._handle_completion_modify(
+            {"uuid": "parent", "status": "pending"},
+            {"uuid": "parent", "status": "completed"},
+        )
+    finally:
+        mod._completion_validate_cp_and_anchor = original["validate"]
+        mod._preserve_cp_relative_offsets_on_due_change = original["preserve_cp"]
+        mod._preserve_native_until_on_target_change = original["preserve_until"]
+        mod._validate_native_until_after_target_or_fail = original["validate_until"]
+        mod._validate_native_until_anchor_slots_or_fail = original["validate_slots"]
+        mod._completion_preflight_context = original["preflight"]
+        mod._completion_compute_next_and_limits = original["compute"]
+        mod.importlib.import_module = original["import_module"]
+
+    expect(result is expected, f"completion helper dropped finalized result: {result!r}")
+
+
 def test_on_modify_completion_chain_snapshot_modes_and_query():
     """completion snapshots should broaden only for feedback or explicit full-chain features."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33765,6 +33838,7 @@ TESTS.extend([
 
 TESTS.append(test_core_explicit_facade_all_contains_supported_symbols)
 TESTS.append(test_all_golden_tests_are_registered)
+TESTS.append(test_on_modify_completion_helper_returns_finalized_lifecycle_result)
 
 if __name__ == "__main__":
     main()

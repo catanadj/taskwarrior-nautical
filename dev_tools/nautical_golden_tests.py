@@ -28431,6 +28431,52 @@ def test_reconcile_narrow_recovery_lookup_failure_is_partial():
     expect("lookup unavailable" in outcomes[-1][0].reason, f"lookup failure reason was not actionable: {outcomes[-1][0]!r}")
 
 
+def test_reconcile_dry_run_and_apply_share_plan_builder():
+    """Preview and apply must invoke the same plan-construction boundary."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    tool = _load_hook_module(str(path), "_nautical_reconcile_plan_builder_parity_test")
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "parity01",
+        "link": 1,
+        "cp": "1d",
+    }
+    original_builder = tool._plan_for_parent
+    original_fresh = tool._fresh_parent
+    calls = []
+    sentinel = object()
+    try:
+        def shared_builder(_task_bin, _hook, current, *, generation=None):
+            calls.append((dict(current), generation))
+            return tool.reconcile.ReconcilePlan("spawn", current, 2, "shared plan")
+
+        tool._plan_for_parent = shared_builder
+        tool._fresh_parent = lambda _task_bin, _parent: dict(parent)
+        applied_plan = tool._refresh_plan("task", SimpleNamespace(), parent, generation=sentinel)
+        preview_plan = tool._reconcile_candidate(
+            "task",
+            SimpleNamespace(),
+            parent,
+            taskdata=None,
+            apply=False,
+            max_expiration_hops=4,
+            recovery_at=datetime.now(timezone.utc),
+            generation=sentinel,
+        )[0][0]
+    finally:
+        tool._plan_for_parent = original_builder
+        tool._fresh_parent = original_fresh
+
+    expect(len(calls) == 2, f"preview/apply did not share one builder: {calls!r}")
+    expect(
+        (applied_plan.action, applied_plan.next_link, applied_plan.reason)
+        == (preview_plan.action, preview_plan.next_link, preview_plan.reason),
+        f"preview/apply plan diverged: {applied_plan!r} vs {preview_plan!r}",
+    )
+
+
 def test_reconcile_parent_updates_are_guarded():
     """Reconcile writes should compare the parent state that authorized the plan."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -33135,6 +33181,7 @@ TESTS = [
     test_reconcile_apply_resumes_after_parent_update_failure,
     test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review,
     test_reconcile_narrow_recovery_lookup_failure_is_partial,
+    test_reconcile_dry_run_and_apply_share_plan_builder,
     test_reconcile_parent_updates_are_guarded,
     test_reconcile_repairs_missing_legacy_root_link_under_guard,
     test_reconcile_repairs_legacy_root_metadata_when_chain_stops,

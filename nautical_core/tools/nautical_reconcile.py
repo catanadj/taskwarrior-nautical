@@ -1019,6 +1019,22 @@ def _refresh_plan(
             else "parent no longer needs reconciliation"
         )
         return _stale_plan(parent, reason)
+    return _plan_for_parent(
+        task_bin,
+        hook,
+        parent,
+        generation=generation or _chain_generation_for_hook(hook),
+    )
+
+
+def _plan_for_parent(
+    task_bin: str,
+    hook: Any,
+    parent: dict[str, Any],
+    *,
+    generation: ChainGenerationService | None = None,
+) -> reconcile.ReconcilePlan:
+    """Build the one reconcile plan used by both preview and apply paths."""
     return reconcile.build_reconcile_plan(
         parent,
         existing_children=_existing_children_for_plan(task_bin, parent, hook),
@@ -1321,10 +1337,10 @@ def _reconcile_candidate(
                 outcomes.append((_recovery_error(current, reason), ""))
                 break
         else:
-            plan = reconcile.build_reconcile_plan(
+            plan = _plan_for_parent(
+                task_bin,
+                hook,
                 current,
-                existing_children=_existing_children_for_plan(task_bin, current, hook),
-                hook=hook,
                 generation=generation or _chain_generation_for_hook(hook),
             )
             applied_short = ""

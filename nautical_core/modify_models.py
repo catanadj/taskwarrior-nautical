@@ -373,6 +373,13 @@ class CpCompletionRenderCallback(Protocol):
         ...
 
 
+class LifecycleResultRenderCallback(Protocol):
+    """Render a finalized non-success result without changing its state."""
+
+    def __call__(self, result: "CompletionLifecycleResult", task: TaskRow) -> None:
+        ...
+
+
 @dataclass(slots=True)
 class CompletionChainSnapshot:
     mode: str
@@ -584,7 +591,7 @@ class CompletionFinalizeServices:
     chain_integrity_warnings: ChainIntegrityCallback
     render_anchor_completion_feedback: AnchorCompletionRenderCallback
     render_cp_completion_feedback: CpCompletionRenderCallback
-    render_lifecycle_result: Any
+    render_lifecycle_result: LifecycleResultRenderCallback
     print_task: PrintTaskCallback
     diag_summary: DiagnosticSummaryCallback
     show_analytics: bool

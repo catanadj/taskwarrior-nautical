@@ -3131,6 +3131,21 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
         raise AssertionError("existing recurrence edit without chainID was accepted")
     expect(already_new.get("chain") == "off", f"rejected task should retain chain state, got {already_new!r}")
 
+    repair_old = {
+        "uuid": "00000000-0000-0000-0000-000000000447",
+        "status": "pending",
+        "anchor": "w:mon",
+        "chain": "on",
+    }
+    repair_new = {"uuid": repair_old["uuid"], "status": "pending", "chain": "off"}
+    repair = lifecycle.apply_nautical_transition(
+        repair_old,
+        repair_new,
+        short_uuid=mod.core.short_uuid,
+    )
+    expect(repair.state == "disabled", f"malformed recurrence should remain repairable: {repair!r}")
+    expect(repair_new.get("chain") == "off", f"repair disable changed chain unexpectedly: {repair_new!r}")
+
 
 def test_modify_ordinary_transition_failure_rejects_instead_of_noop():
     """A failed recurrence transition must not silently continue as an ordinary edit."""

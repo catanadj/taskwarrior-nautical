@@ -4,7 +4,7 @@ import copy
 import os
 import re
 import sys
-from typing import Literal
+from typing import Any, Literal, Mapping
 
 
 _UDA_ATTR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -433,11 +433,11 @@ def get_config(conf_cache, *, load_config):
     return copy.deepcopy(conf_cache), conf_cache
 
 
-def conf_raw(conf: dict, key: str):
+def conf_raw(conf: Mapping[str, Any], key: str):
     return conf.get(key)
 
 
-def conf_str(conf: dict, key: str, default: str) -> str:
+def conf_str(conf: Mapping[str, Any], key: str, default: str) -> str:
     value = conf_raw(conf, key)
     if value is None:
         return str(default)
@@ -446,7 +446,7 @@ def conf_str(conf: dict, key: str, default: str) -> str:
 
 
 def conf_int(
-    conf: dict,
+    conf: Mapping[str, Any],
     key: str,
     default: int,
     min_value: int | None = None,
@@ -465,7 +465,7 @@ def conf_int(
 
 
 def conf_bool(
-    conf: dict,
+    conf: Mapping[str, Any],
     key: str,
     default: bool = False,
     true_values: set[str] | None = None,
@@ -488,7 +488,7 @@ def conf_bool(
     return bool(default)
 
 
-def conf_csv_or_list(conf: dict, key: str, default: list[str] | None = None, lower: bool = False) -> list[str]:
+def conf_csv_or_list(conf: Mapping[str, Any], key: str, default: list[str] | None = None, lower: bool = False) -> list[str]:
     value = conf_raw(conf, key)
     if value is None:
         return list(default or [])
@@ -514,7 +514,7 @@ def conf_csv_or_list(conf: dict, key: str, default: list[str] | None = None, low
     return out if out else list(default or [])
 
 
-def conf_uda_field_list(conf: dict, key: str) -> list[str]:
+def conf_uda_field_list(conf: Mapping[str, Any], key: str) -> list[str]:
     fields = conf_csv_or_list(conf, key, default=[], lower=True)
     out: list[str] = []
     for field in fields:

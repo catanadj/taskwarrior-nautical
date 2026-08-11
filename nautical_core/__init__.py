@@ -7,11 +7,16 @@ Shared core for Taskwarrior Nautical hooks.
 from __future__ import annotations
 import os, re, sys
 from collections import OrderedDict
-from typing import Any, Callable, TYPE_CHECKING, TypeAlias, TypedDict
+from typing import Any, Callable, TYPE_CHECKING, TypeAlias, TypedDict, cast
 from functools import partial
 
 if TYPE_CHECKING:
     from .parser_models import AnchorDNF as AnchorDNFType
+    from .core_config import ConfigReloadResult
+
+    resolve_anchor_presets: Callable[..., str]
+    resolve_omit_presets: Callable[..., str]
+    validate_anchor_expr_strict: Callable[..., Any]
 import importlib
 import types
 import random
@@ -551,7 +556,7 @@ def validate_scheduling_configuration() -> None:
         raise RuntimeError(f"Invalid Nautical scheduling configuration: {message}") from exc
 
 
-def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> _core_config.ConfigReloadResult:
+def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResult:
     """Apply the validated configuration selected for a Taskwarrior data directory."""
     global CONFIG_ERROR
     result = _core_config.reload_for_taskdata(taskdata)
@@ -1331,7 +1336,7 @@ _precompute_api = _LazyApiBundle(
 _bind_lazy_api_aliases(_precompute_api)
 
 _compat_api = _LazySibling("compat_api")
-__all__ = _LazyPublicExports(_compat_api)
+__all__ = cast(Any, _LazyPublicExports(_compat_api))
 
 
 def __getattr__(name: str):

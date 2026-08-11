@@ -6587,14 +6587,38 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
             _end_chain_summary(new, "Reached lifecycle successor limit", now_utc)
             _ensure_terminal_chain_off(new, "complete")
             _print_task(new)
-            return None
+            models = _module("modify_models")
+            return models.CompletionLifecycleResult(
+                state="terminal",
+                reason="successor limit reached",
+                diagnostic=models.CompletionLifecycleDiagnostic(
+                    transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
+                    chain_id=str(new.get("chainID") or "").strip(),
+                    parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
+                    child_link=next_no,
+                    stage="plan",
+                    failure_kind="successor_limit",
+                ),
+            )
         computed.lifecycle_plan = plan
         computed.planned_child = plan.child_dict()
     except Exception as exc:
         _diag(f"lifecycle planner failed: {type(exc).__name__}: {exc}")
-        _panel("⛓ Chain error", [("Reason", "Could not construct a lifecycle successor plan")], kind="error")
+        _panel("⛓ Chain error", [("Reason", str(exc) or "Could not construct a lifecycle successor plan")], kind="error")
         _print_task(new)
-        return None
+        models = _module("modify_models")
+        return models.CompletionLifecycleResult(
+            state="retryable",
+            reason=str(exc).strip() or "Could not construct a lifecycle successor plan",
+            diagnostic=models.CompletionLifecycleDiagnostic(
+                transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
+                chain_id=str(new.get("chainID") or "").strip(),
+                parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
+                child_link=next_no,
+                stage="plan",
+                failure_kind="planner_error",
+            ),
+        )
     return computed
 
 

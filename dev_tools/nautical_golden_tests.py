@@ -18588,6 +18588,11 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
     expect("chainUntil" in terminal.reason, f"terminal result lost boundary reason: {terminal!r}")
     expect(terminal.diagnostic is not None and terminal.diagnostic.failure_kind == "chain_until", f"terminal result lost diagnostic kind: {terminal!r}")
 
+    mod._completion_compute_child_due = lambda *_args, **_kwargs: None
+    retryable = mod._completion_compute_next_and_limits({"chain": "on", "chainID": "diag01", "link": 1}, "cp", 2, mod.core.now_utc())
+    expect(retryable.state == "retryable", f"scheduler failure was not typed: {retryable!r}")
+    expect(retryable.diagnostic.failure_kind == "scheduler_error", f"scheduler failure lost diagnostic kind: {retryable!r}")
+
 
 def test_completion_scheduler_terminal_outcomes_are_not_spawned():
     """Completion must finish only on date exhaustion and reject search exhaustion."""

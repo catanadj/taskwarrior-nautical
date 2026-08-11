@@ -265,12 +265,20 @@ def completion_compute_next_and_limits(
                 reason="recurrence scheduler reached a terminal boundary",
                 diagnostic=_terminal_diagnostic(new, next_no, "scheduler_exhausted"),
             )
-        return None
+        return CompletionLifecycleResult(
+            state="retryable",
+            reason="could not compute next recurrence timestamp",
+            diagnostic=_terminal_diagnostic(new, next_no, "scheduler_error"),
+        )
     child_due, meta, dnf = computed
 
     until_dt = completion_until_or_fail(new, now_utc)
     if until_dt is False:
-        return None
+        return CompletionLifecycleResult(
+            state="retryable",
+            reason="chainUntil validation failed",
+            diagnostic=_terminal_diagnostic(new, next_no, "chain_until_validation"),
+        )
 
     if not completion_until_guard_or_stop(new, child_due, until_dt, now_utc):
         if str(new.get("chain") or "").strip().lower() == "off":
@@ -279,10 +287,18 @@ def completion_compute_next_and_limits(
                 reason="chainUntil boundary reached",
                 diagnostic=_terminal_diagnostic(new, next_no, "chain_until"),
             )
-        return None
+        return CompletionLifecycleResult(
+            state="retryable",
+            reason="chainUntil boundary prevented successor creation",
+            diagnostic=_terminal_diagnostic(new, next_no, "chain_until_guard"),
+        )
 
     if not completion_require_child_due_or_fail(new, child_due):
-        return None
+        return CompletionLifecycleResult(
+            state="retryable",
+            reason="child recurrence timestamp is unavailable",
+            diagnostic=_terminal_diagnostic(new, next_no, "missing_child_due"),
+        )
 
     completion_warn_unreasonable_duration(new, child_due, until_dt, now_utc)
     cpmax, until_dt, cap_no, finals, until_cap_no = completion_caps(kind, new, child_due, dnf)
@@ -294,7 +310,11 @@ def completion_compute_next_and_limits(
                 reason="successor limit reached",
                 diagnostic=_terminal_diagnostic(new, next_no, "successor_limit"),
             )
-        return None
+        return CompletionLifecycleResult(
+            state="retryable",
+            reason="successor limit prevented child creation",
+            diagnostic=_terminal_diagnostic(new, next_no, "successor_limit_guard"),
+        )
 
     return CompletionComputeResult(
         child_due=child_due,

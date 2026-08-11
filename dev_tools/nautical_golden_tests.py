@@ -4542,6 +4542,14 @@ def test_lifecycle_stage_advancement_requires_claim_and_valid_transition():
             now=5.5,
         )
         expect(verified.ok, f"valid verified stage was rejected: {verified}")
+        finalized = queue_store.advance_lifecycle_stage_sqlite_result(
+            conn,
+            row_id=row_id,
+            claim_token="claim-stage",
+            stage=ExecutionStage.FINALIZED,
+            now=5.75,
+        )
+        expect(finalized.ok, f"valid finalized stage was rejected: {finalized}")
         backwards = queue_store.advance_lifecycle_stage_sqlite_result(
             conn,
             row_id=row_id,
@@ -4552,7 +4560,7 @@ def test_lifecycle_stage_advancement_requires_claim_and_valid_transition():
         expect(not backwards.ok and "transition" in backwards.err, f"backward stage was accepted: {backwards}")
         stored = json.loads(conn.execute("SELECT payload FROM queue_entries WHERE id=?", (row_id,)).fetchone()[0])
         expect(
-            stored["lifecycle_plan"]["stage"] == ExecutionStage.VERIFIED.value,
+            stored["lifecycle_plan"]["stage"] == ExecutionStage.FINALIZED.value,
             "invalid or stale update changed the durable stage",
         )
 

@@ -2528,6 +2528,9 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     verified_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.VERIFIED)
     if not verified_stage.ok:
         return _handle_lifecycle_stage_failure(queue_entry, idx, state, verified_stage)
+    finalized_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.FINALIZED)
+    if not finalized_stage.ok:
+        return _handle_lifecycle_stage_failure(queue_entry, idx, state, finalized_stage)
 
     _seed_equivalent_child_cache(child, parent_uuid, child_uuid)
     state.processed += 1

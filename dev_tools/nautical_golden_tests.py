@@ -4461,6 +4461,31 @@ def test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe():
             f"durable enqueue did not advance plan stage: {stored_payload}",
         )
 
+    with sqlite3.connect(":memory:") as conn:
+        queue_store.init_queue_db(conn)
+        legacy_write = queue_store.enqueue_entries_sqlite_result(conn, [eligible], now=3.0)
+        expect(legacy_write.ok, f"legacy queue entry was not written: {legacy_write}")
+        claim = queue_store.claim_rows_sqlite_result(
+            conn,
+            token="legacy-migration-claim",
+            now=4.0,
+            processing_stale_after=60.0,
+            max_lines=1,
+        )
+        expect(len(claim.rows) == 1, f"legacy queue entry was not claimed: {claim}")
+        claimed_payload = json.loads(claim.rows[0].payload)
+        stored_after_claim = json.loads(
+            conn.execute("SELECT payload FROM queue_entries WHERE spawn_intent_id=?", ("si_legacy",)).fetchone()[0]
+        )
+        expect(
+            claimed_payload.get("lifecycle_plan", {}).get("schema_version") == 1,
+            "legacy claim did not carry the migrated plan",
+        )
+        expect(
+            stored_after_claim.get("lifecycle_plan", {}).get("stage") == "persisted",
+            "legacy plan migration was not persisted before claim",
+        )
+
     future = dict(legacy)
     future["lifecycle_plan"] = {"schema_version": 99}
     try:

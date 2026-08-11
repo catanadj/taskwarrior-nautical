@@ -780,6 +780,49 @@ def row_ids(rows: Sequence[QueueStoredRow | sqlite3.Row]) -> list[int]:
     return ids
 
 
+def _materialize_legacy_lifecycle_plans(
+    conn: sqlite3.Connection,
+    rows: list[QueueStoredRow],
+    *,
+    now: float,
+    diag: Callable[[str], None] | None = None,
+) -> list[QueueStoredRow]:
+    """Persist bounded legacy-plan upgrades before a row becomes processing."""
+    materialized: list[QueueStoredRow] = []
+    for row in rows:
+        try:
+            payload = json.loads(row.payload)
+            migrated = migrate_legacy_spawn_queue_entry(payload)
+            if (
+                isinstance(payload, dict)
+                and isinstance(migrated, dict)
+                and "lifecycle_plan" not in payload
+                and isinstance(migrated.get("lifecycle_plan"), dict)
+            ):
+                upgraded = dict(payload)
+                upgraded["lifecycle_plan"] = migrated["lifecycle_plan"]
+                encoded = json.dumps(upgraded, ensure_ascii=False, separators=(",", ":"))
+                cur = conn.execute(
+                    "UPDATE queue_entries SET payload=?, updated_at=? WHERE id=? AND state='queued'",
+                    (encoded, now, row.id),
+                )
+                if int(getattr(cur, "rowcount", 0) or 0) != 1:
+                    raise QueueEntryError("legacy lifecycle row changed during migration")
+                row = QueueStoredRow(
+                    id=row.id,
+                    spawn_intent_id=row.spawn_intent_id,
+                    payload=encoded,
+                    attempts=row.attempts,
+                    claim_token=row.claim_token,
+                )
+        except Exception as exc:
+            if callable(diag):
+                diag(f"legacy lifecycle migration failed for queue row {row.id}: {exc}")
+            raise
+        materialized.append(row)
+    return materialized
+
+
 def claim_rows_sqlite_result(
     conn: sqlite3.Connection,
     *,
@@ -805,7 +848,7 @@ def claim_rows_sqlite_result(
 
         conn.execute("BEGIN IMMEDIATE")
         decoded = queue_rows_from_sqlite_result(select_queued_rows(conn, max_lines=max_lines))
-        rows = decoded.valid
+        rows = _materialize_legacy_lifecycle_plans(conn, decoded.valid, now=now, diag=diag)
         for poison in decoded.poison:
             if poison.id <= 0:
                 raise QueueEntryError("poison queue row has no usable id")

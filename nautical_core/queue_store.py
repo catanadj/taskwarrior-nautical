@@ -732,6 +732,12 @@ def queue_rows_from_sqlite_result(rows: list[sqlite3.Row]) -> QueueRowsDecodeRes
                 raise ValueError("invalid queue row id")
             if not stored.payload:
                 raise ValueError("empty queue payload")
+            try:
+                decoded_payload = json.loads(stored.payload)
+            except Exception as exc:
+                raise ValueError(f"invalid queue payload JSON: {exc}") from exc
+            if not isinstance(decoded_payload, dict):
+                raise ValueError("invalid queue payload JSON: expected object")
             stored_rows.append(stored)
         except Exception as exc:
             try:

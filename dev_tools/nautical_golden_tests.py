@@ -16564,6 +16564,11 @@ def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
                 "VALUES (?, ?, ?, 'queued', ?, ?)",
                 ("si_poison", "{\"child\": {\"uuid\": \"poison\"}}", "broken", 1.0, 1.0),
             )
+            conn.execute(
+                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
+                "VALUES (?, ?, ?, 'queued', ?, ?)",
+                ("si_malformed_json", "{malformed", 0, 1.0, 1.0),
+            )
             conn.commit()
 
         with sqlite3.connect(str(db_path)) as conn:
@@ -16576,19 +16581,26 @@ def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
                 max_lines=10,
             )
             expect(len(claim.rows) == 1, f"valid queue row was not claimed: {claim}")
-            expect(claim.quarantined == 1, f"poison row was not quarantined: {claim}")
+            expect(claim.quarantined == 2, f"poison rows were not quarantined: {claim}")
             expect("invalid attempts" in " ".join(claim.poison_reasons), f"poison reason missing: {claim}")
+            expect("invalid queue payload JSON" in " ".join(claim.poison_reasons), "malformed JSON reason missing")
             states = conn.execute("SELECT state, payload FROM queue_entries ORDER BY id").fetchall()
             expect(states[0][0] == "processing", f"valid row was not claimed: {states!r}")
             expect(states[1][0] == "quarantined", f"poison row remained queued: {states!r}")
+            expect(states[2][0] == "quarantined", f"malformed JSON row remained queued: {states!r}")
             poison = json.loads(states[1][1])
             expect(
                 poison.get("reason", "").endswith("invalid attempts"),
                 f"poison envelope missing reason: {poison!r}",
             )
+            malformed = json.loads(states[2][1])
+            expect(
+                "invalid queue payload JSON" in malformed.get("reason", ""),
+                f"malformed JSON quarantine reason missing: {malformed!r}",
+            )
 
         summary, issues = nautical_queue_status._safe_sqlite_summary(db_path, 300.0, 5)
-        expect(summary.get("quarantined") == 1, f"queue status missed quarantined row: {summary!r}")
+        expect(summary.get("quarantined") == 2, f"queue status missed quarantined rows: {summary!r}")
         expect(
             any("quarantined malformed" in issue for issue in issues),
             f"queue status missed poison issue: {issues!r}",
@@ -16907,7 +16919,7 @@ def test_on_exit_idempotent_skip_for_finalized_intent():
 
 
 def test_on_exit_sqlite_payload_uses_row_spawn_intent_id_for_finalized_skip():
-    """on-exit should preserve sqlite spawn_intent_id even when payload JSON is malformed."""
+    """Malformed sqlite JSON is quarantined before finalized-intent handling."""
     hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_finalized_sid_test")
     if not hasattr(mod, "_drain_queue"):
@@ -16967,13 +16979,17 @@ def test_on_exit_sqlite_payload_uses_row_spawn_intent_id_for_finalized_skip():
 
         mod._run_task = _run_task_should_not_call
         stats = mod._drain_queue()
-        expect(stats.get("processed") == 1, f"expected one processed sqlite skip, got: {stats}")
-        expect(stats.get("entries_skipped_idempotent") == 1, f"expected one sqlite idempotent skip, got: {stats}")
+        expect(stats.get("processed") == 0, f"malformed sqlite row was processed, got: {stats}")
+        expect(stats.get("entries_skipped_idempotent") == 0, f"malformed sqlite row was skipped, got: {stats}")
         expect(stats.get("errors") == 0, f"expected no sqlite errors, got: {stats}")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            state, payload = conn.execute("SELECT state, payload FROM queue_entries").fetchone()
+        expect(state == "quarantined", f"malformed sqlite row was not quarantined: {state!r}")
+        expect("invalid queue payload JSON" in json.loads(payload).get("reason", ""), "quarantine reason missing")
 
 
 def test_on_exit_sqlite_malformed_payload_dead_letter_keeps_spawn_intent_id():
-    """on-exit dead-letter payloads from sqlite should retain the row spawn_intent_id."""
+    """Non-object sqlite payloads are quarantined instead of treated as empty entries."""
     hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_sqlite_bad_payload_test")
     if not hasattr(mod, "_drain_queue"):
@@ -17014,11 +17030,17 @@ def test_on_exit_sqlite_malformed_payload_dead_letter_keeps_spawn_intent_id():
             conn.commit()
 
         stats = mod._drain_queue()
-        expect(stats.get("errors") == 1, f"expected one sqlite payload error, got: {stats}")
-        expect(mod._DEAD_LETTER_PATH.exists(), "dead letter file not created for sqlite bad payload")
-        payload = json.loads(mod._DEAD_LETTER_PATH.read_text(encoding="utf-8").splitlines()[0])
-        expect(payload.get("spawn_intent_id") == sid, f"missing sqlite spawn_intent_id in dead letter: {payload}")
-        expect(payload.get("reason") == "missing child object", f"unexpected sqlite bad payload reason: {payload}")
+        expect(stats.get("errors") == 0, f"expected no sqlite payload processing error, got: {stats}")
+        expect(not mod._DEAD_LETTER_PATH.exists(), "quarantined sqlite payload should not be dead-lettered")
+        with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
+            state, payload = conn.execute("SELECT state, payload FROM queue_entries").fetchone()
+        expect(state == "quarantined", f"non-object sqlite payload was not quarantined: {state!r}")
+        poison = json.loads(payload)
+        expect(poison.get("raw", {}).get("spawn_intent_id") == sid, f"quarantine lost row spawn_intent_id: {poison}")
+        expect(
+            "expected object" in poison.get("reason", ""),
+            f"unexpected sqlite quarantine reason: {poison}",
+        )
 
 
 def test_on_exit_lock_storm_circuit_requeues_remaining():

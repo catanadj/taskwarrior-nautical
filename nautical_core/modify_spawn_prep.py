@@ -4,6 +4,15 @@ import json
 import uuid
 
 
+class SpawnIdentityError(ValueError):
+    """Raised when a persisted child has no canonical Nautical chain ID."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "chainID is required for child spawn; UUID-derived legacy identities are unsupported"
+        )
+
+
 def stable_child_uuid(
     parent_task: dict | None,
     child_task: dict | None,
@@ -21,15 +30,17 @@ def stable_child_uuid(
     link_no = coerce_int(child_task.get("link"), None)
     if link_no is None:
         return ""
-    chain_id = (
-        child_task.get("chainID")
-        or parent_task.get("chainID")
-        or ""
-    )
+    parent_chain_id = str(parent_task.get("chainID") or "").strip()
+    child_chain_id = str(child_task.get("chainID") or "").strip()
+    if not parent_chain_id:
+        raise SpawnIdentityError()
+    if child_chain_id and parent_chain_id != child_chain_id:
+        raise SpawnIdentityError()
+    chain_id = parent_chain_id
     kind = "anchor" if (parent_task.get("anchor") or "").strip() else "cp" if (parent_task.get("cp") or "").strip() else ""
     slot_key = json.dumps(
         {
-            "chain_id": str(chain_id).strip().lower(),
+            "chain_id": chain_id.lower(),
             "kind": kind,
             "link": int(link_no),
             "parent_uuid": parent_uuid.lower(),
@@ -66,9 +77,19 @@ def prepare_spawn_child_payload(
     strip_none_and_cast,
     normalise_datetime_fields,
 ) -> tuple[dict, str, str]:
+    parent_chain_id = str((parent_task or {}).get("chainID") or "").strip()
+    child_chain_id = str(child_task.get("chainID") or "").strip()
+    if parent_task is not None and not parent_chain_id:
+        raise SpawnIdentityError()
+    chain_id = parent_chain_id or child_chain_id
+    if not chain_id:
+        raise SpawnIdentityError()
+    if parent_chain_id and child_chain_id and parent_chain_id != child_chain_id:
+        raise SpawnIdentityError()
     child_uuid = child_uuid_for_spawn(parent_task, child_task, env)
     child_obj = dict(child_task)
     child_obj["uuid"] = child_uuid
+    child_obj["chainID"] = chain_id
     if "entry" not in child_obj:
         child_obj["entry"] = fmt_isoz(now_utc())
     if "modified" not in child_obj:
@@ -100,8 +121,10 @@ def build_child_from_parent(
     carry_native_until,
     recurrence_anchor_field,
     configured_recurrence_uda_fields,
-    short_uuid,
 ) -> dict:
+    parent_chain = str(parent.get("chainID") or "").strip()
+    if not parent_chain:
+        raise SpawnIdentityError()
     child = {k: v for k, v in parent.items() if k not in reserved_drop}
     if debug_wait_sched:
         clear_wait_sched_debug()
@@ -176,12 +199,6 @@ def build_child_from_parent(
     if until_dt:
         child["chainUntil"] = fmt_isoz(until_dt)
 
-    try:
-        parent_chain = (parent.get("chainID") or "").strip()
-        if not parent_chain:
-            parent_chain = short_uuid(parent.get("uuid"))
-        child["chainID"] = parent_chain
-    except Exception:
-        pass
+    child["chainID"] = parent_chain
 
     return child

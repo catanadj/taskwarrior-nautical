@@ -3633,21 +3633,30 @@ def test_chainid_legacy_reads_do_not_drive_chain_identity():
 
     parent = {"chainid": "legacy-1", "uuid": "parent-uuid"}
     child = {"chainid": "legacy-1", "link": 2}
-    with_legacy = modify_spawn_prep.stable_child_uuid(
-        parent,
-        child,
-        task_uuid_or_empty=lambda task: str(task.get("uuid") or "").strip(),
-        coerce_int=core.coerce_int,
-        stable_child_uuid_namespace=uuid.NAMESPACE_URL,
-    )
-    without_legacy = modify_spawn_prep.stable_child_uuid(
-        {"uuid": "parent-uuid"},
-        {"link": 2},
-        task_uuid_or_empty=lambda task: str(task.get("uuid") or "").strip(),
-        coerce_int=core.coerce_int,
-        stable_child_uuid_namespace=uuid.NAMESPACE_URL,
-    )
-    expect(with_legacy == without_legacy, "legacy chainid should not change stable child UUIDs")
+    try:
+        modify_spawn_prep.stable_child_uuid(
+            parent,
+            child,
+            task_uuid_or_empty=lambda task: str(task.get("uuid") or "").strip(),
+            coerce_int=core.coerce_int,
+            stable_child_uuid_namespace=uuid.NAMESPACE_URL,
+        )
+    except modify_spawn_prep.SpawnIdentityError:
+        pass
+    else:
+        raise AssertionError("missing canonical chainID should reject stable child UUID generation")
+    try:
+        modify_spawn_prep.stable_child_uuid(
+            {"uuid": "parent-uuid"},
+            {"link": 2},
+            task_uuid_or_empty=lambda task: str(task.get("uuid") or "").strip(),
+            coerce_int=core.coerce_int,
+            stable_child_uuid_namespace=uuid.NAMESPACE_URL,
+        )
+    except modify_spawn_prep.SpawnIdentityError:
+        pass
+    else:
+        raise AssertionError("UUID-only parent should not provide a chain identity")
     expect(
         modify_chain_reads.existing_next_lookup({"chainid": "legacy-1", "link": 2}, 3, export_uuid_short_cached=lambda _ref: None, get_chain_export=lambda *_args, **_kwargs: [] ).is_absent,
         "legacy chainid should not drive existing next task lookup",
@@ -15645,7 +15654,9 @@ def test_spawn_child_always_verifies_import():
         mod._run_task = _run_task_stub
         mod._task_lookup_by_uuid = _exists_stub
 
-        short, _stripped = mod._spawn_child({"description": "verify-enforced"})
+        short, _stripped = mod._spawn_child(
+            {"description": "verify-enforced", "chainID": "abcd1234"}
+        )
         expect(short == "aaaaaaaa", f"unexpected child short uuid: {short}")
         expect(calls["import"] == 2, f"expected retry after failed verify, got imports={calls['import']}")
         expect(calls["exists"] == 2, f"expected verification on each import, got checks={calls['exists']}")
@@ -15676,7 +15687,7 @@ def test_spawn_child_does_not_reimport_when_verification_unavailable():
         mod._run_task = _run_task_stub
         mod._task_lookup_by_uuid = lambda *_a, **_k: support.LookupResult.unavailable("lock busy")
         try:
-            mod._spawn_child({"description": "verify unavailable"})
+            mod._spawn_child({"description": "verify unavailable", "chainID": "abcd1234"})
         except RuntimeError as exc:
             expect("Taskwarrior import failed" in str(exc), f"unexpected verification failure: {exc}")
         else:

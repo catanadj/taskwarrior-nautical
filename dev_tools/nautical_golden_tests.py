@@ -4453,6 +4453,13 @@ def test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe():
             require_lifecycle_plan=True,
         )
         expect(planned_write.ok, f"versioned lifecycle plan was not durably written: {planned_write}")
+        stored_payload = json.loads(
+            conn.execute("SELECT payload FROM queue_entries WHERE spawn_intent_id=?", ("si_legacy",)).fetchone()[0]
+        )
+        expect(
+            stored_payload.get("lifecycle_plan", {}).get("stage") == "persisted",
+            f"durable enqueue did not advance plan stage: {stored_payload}",
+        )
 
     future = dict(legacy)
     future["lifecycle_plan"] = {"schema_version": 99}

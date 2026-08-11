@@ -11,6 +11,7 @@ from nautical_core.lifecycle_models import (
     LifecycleIdentity,
     LifecyclePlan,
     ParentGuard,
+    ExecutionStage,
 )
 
 
@@ -179,6 +180,7 @@ def migrate_legacy_spawn_queue_entry(entry: Mapping[str, Any]) -> dict[str, Any]
             child_payload=dict(child),
             parent_patch={"nextLink": child_short},
             expected_postconditions=("child_present", "parent_linked", "verified"),
+            stage=ExecutionStage.PERSISTED,
         )
     except (LifecycleContractError, TypeError, ValueError):
         return normalized

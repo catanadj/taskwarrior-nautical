@@ -464,6 +464,19 @@ class LifecyclePlan:
     def parent_patch_dict(self) -> dict[str, Any]:
         return {key: _thaw(value) for key, value in self.parent_patch}
 
+    def with_stage(self, stage: ExecutionStage) -> "LifecyclePlan":
+        """Return the same immutable plan at a new durable execution stage."""
+        return LifecyclePlan(
+            identity=self.identity,
+            action=self.action,
+            parent_guard=self.parent_guard,
+            stage=stage,
+            child_payload=self.child_payload,
+            parent_patch=self.parent_patch,
+            expected_postconditions=self.expected_postconditions,
+            max_attempts=self.max_attempts,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class LifecycleOutcome:

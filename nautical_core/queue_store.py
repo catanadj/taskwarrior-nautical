@@ -24,6 +24,7 @@ from nautical_core.queue_models import (
     migrate_legacy_spawn_queue_entry,
     normalize_spawn_queue_entry,
 )
+from nautical_core.lifecycle_models import ExecutionStage, LifecyclePlan
 
 
 @dataclass(frozen=True, slots=True)
@@ -1035,6 +1036,9 @@ def enqueue_entries_sqlite_result(
                     count=1,
                     err="invalid lifecycle outbox entry: missing lifecycle_plan",
                 )
+            plan = LifecyclePlan.from_dict(normalized["lifecycle_plan"])
+            if plan.stage is ExecutionStage.PLANNED:
+                normalized["lifecycle_plan"] = plan.with_stage(ExecutionStage.PERSISTED).to_dict()
             validated.append(normalized)
         items = validated
     try:

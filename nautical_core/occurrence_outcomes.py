@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 from .occurrence_provider import Occurrence
 from .scheduler_models import OccurrenceSearchExhausted
+from .scheduler_cursor import OccurrenceCursor
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +89,58 @@ OccurrenceOutcome = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class OccurrenceCollectionResult:
+    """Immutable bounded collection with explicit empty/terminal evidence."""
+
+    occurrences: tuple[Occurrence, ...]
+    cursor: OccurrenceCursor
+    source: str = "scheduler"
+    terminal: OccurrenceSearchExhausted | None = None
+    empty_reason: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.occurrences, tuple):
+            raise TypeError("Occurrence collection must be immutable.")
+        if not isinstance(self.cursor, OccurrenceCursor):
+            raise TypeError("Occurrence collection requires its source cursor.")
+        if not self.occurrences and not self.empty_reason:
+            object.__setattr__(self, "empty_reason", "no matching occurrence")
+
+    @property
+    def status(self) -> Literal["found", "empty", "exhausted"]:
+        if self.occurrences:
+            return "found"
+        if self.terminal is not None:
+            return "exhausted"
+        return "empty"
+
+    def __len__(self) -> int:
+        return len(self.occurrences)
+
+    def __iter__(self) -> Iterator[Occurrence]:
+        return iter(self.occurrences)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "source": self.source,
+            "cursor": self.cursor.local_datetime.isoformat(),
+            "inclusive": self.cursor.inclusive,
+            "occurrences": [
+                {
+                    "local": item.local_datetime.isoformat() if item.local_datetime else None,
+                    "source": item.source,
+                    "description": item.description,
+                    "omitted": item.omitted,
+                }
+                for item in self.occurrences
+            ],
+            "empty_reason": self.empty_reason,
+            "terminal": str(self.terminal) if self.terminal else None,
+        }
+
+
 def mutation_candidate(outcome: OccurrenceOutcome) -> FoundOccurrence:
     """Return a found occurrence or fail closed for mutation callers."""
     if isinstance(outcome, FoundOccurrence):
@@ -127,6 +180,7 @@ __all__ = (
     "FoundOccurrence",
     "InvalidOccurrence",
     "OccurrenceOutcome",
+    "OccurrenceCollectionResult",
     "UnavailableOccurrence",
     "outcome_from_occurrence",
     "mutation_candidate",

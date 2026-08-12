@@ -10,6 +10,7 @@ from .recurrence_context import RecurrenceContext
 from .recurrence_evaluator import RecurrenceEvaluator
 from .recurrence_spec import RecurrenceSpec
 from .occurrence_outcomes import OccurrenceOutcome
+from .occurrence_provider import OccurrenceBatch
 from .scheduler_cursor import OccurrenceCursor
 
 
@@ -51,7 +52,7 @@ class EvaluationSession:
     def next_outcome(self, cursor: OccurrenceCursor, **kwargs: Any) -> OccurrenceOutcome:
         return self._evaluator.next_outcome(cursor, **kwargs)
 
-    def collect_after_cursor(self, cursor: OccurrenceCursor, *, limit: int, **kwargs: Any) -> list[Any]:
+    def collect_after_cursor(self, cursor: OccurrenceCursor, *, limit: int, **kwargs: Any) -> OccurrenceBatch:
         return self._evaluator.collect_after_cursor(cursor, limit=limit, **kwargs)
 
     @property

@@ -7,7 +7,8 @@ from datetime import datetime
 from typing import Any, Mapping
 
 from .evaluation_session import EvaluationSession
-from .occurrence_outcomes import OccurrenceOutcome
+from .occurrence_outcomes import OccurrenceCollectionResult, OccurrenceOutcome
+from .occurrence_provider import OccurrenceBatch
 from .occurrence_provider import Occurrence
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
@@ -45,8 +46,16 @@ class SchedulerService:
         *,
         limit: int,
         **kwargs: Any,
-    ) -> list[Occurrence]:
-        return self.session.collect_after_cursor(cursor, limit=limit, **kwargs)
+    ) -> OccurrenceCollectionResult:
+        batch = self.session.collect_after_cursor(cursor, limit=limit, **kwargs)
+        if not isinstance(batch, OccurrenceBatch):
+            batch = OccurrenceBatch(batch)
+        return OccurrenceCollectionResult(
+            occurrences=tuple(batch),
+            cursor=cursor,
+            source=self.session.evaluator.kind or "scheduler",
+            terminal=batch.terminal,
+        )
 
     def preview(
         self,
@@ -56,7 +65,7 @@ class SchedulerService:
         inclusive: bool = True,
         timezone: Any | None = None,
         **kwargs: Any,
-    ) -> list[Occurrence]:
+    ) -> OccurrenceCollectionResult:
         cursor = OccurrenceCursor(
             start,
             inclusive=inclusive,

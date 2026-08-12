@@ -23755,7 +23755,7 @@ def test_scheduler_service_is_one_typed_occurrence_entry_point():
     """Service next, collection, and preview share one session boundary."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_outcomes import FoundOccurrence
+    from nautical_core.occurrence_outcomes import FoundOccurrence, OccurrenceCollectionResult
     from nautical_core.recurrence_context import RecurrenceContext
     from nautical_core.scheduler_cursor import OccurrenceCursor
     from nautical_core.scheduler_service import SchedulerService
@@ -23767,8 +23767,13 @@ def test_scheduler_service_is_one_typed_occurrence_entry_point():
     )
     cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, 0, tzinfo=zone), timezone=zone)
     expect(isinstance(service.next(cursor), FoundOccurrence), "service next did not return typed occurrence")
-    expect(len(service.collect(cursor, limit=2)) == 2, "service collection limit was not honored")
-    expect(len(service.preview(cursor.local_datetime, limit=1, timezone=zone)) == 1, "service preview failed")
+    collected = service.collect(cursor, limit=2)
+    expect(isinstance(collected, OccurrenceCollectionResult), "service collection was not typed")
+    expect(len(collected) == 2 and collected.status == "found", "service collection limit was not honored")
+    preview = service.preview(cursor.local_datetime, limit=1, timezone=zone)
+    expect(isinstance(preview, OccurrenceCollectionResult), "service preview was not typed")
+    expect(len(preview) == 1, "service preview failed")
+    expect(preview.to_dict()["status"] == "found", "service preview evidence was incomplete")
 
 
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():

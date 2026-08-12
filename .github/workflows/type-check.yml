@@ -51,6 +51,9 @@ jobs:
           nautical_core/exit_models.py
           nautical_core/exit_runtime.py
           nautical_core/exit_drain_flow.py
+          nautical_core/occurrence_provider.py
+          nautical_core/scheduler_trace.py
+          nautical_core/scheduler_service.py
 
       - name: Run deployment sanity checks
         run: python3 dev_tools/nautical_deploy_sanity.py --json

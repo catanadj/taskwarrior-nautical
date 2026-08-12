@@ -290,14 +290,6 @@ def _validate_hook_protocol(hook: Any) -> None:
             f"incompatible on-modify reconcile protocol {protocol!r}; "
             f"expected {_RECONCILE_PROTOCOL}"
         )
-    required_hook = (
-        "_task_cmd_prefix",
-        "_safe_parse_datetime",
-        "_compute_anchor_child_due",
-        "_compute_cp_child_due",
-        "_build_child_from_parent",
-        "_spawn_child",
-    )
     required_core = (
         "coerce_int",
         "to_local",
@@ -306,7 +298,7 @@ def _validate_hook_protocol(hook: Any) -> None:
         "build_local_datetime",
         "fmt_isoz",
     )
-    missing = [name for name in required_hook if not callable(getattr(hook, name, None))]
+    missing: list[str] = []
     core = getattr(hook, "core", None)
     missing.extend(f"core.{name}" for name in required_core if not callable(getattr(core, name, None)))
     if missing:
@@ -1950,8 +1942,15 @@ def main(
         return _startup_failure(args, "hook_load", exc)
     try:
         if legacy_hook:
-            _validate_hook_protocol(hook)
-            _bind_hook_task_bin(hook, args.task_bin)
+            if isinstance(hook, ModuleType):
+                # A real hook module is only a source of validated core
+                # configuration here. Mutation and child generation belong to
+                # the public operator gateway, not modify_impl internals.
+                _validate_hook_protocol(hook)
+                hook = TaskwarriorMutationGateway(hook.core, task_bin=args.task_bin)
+                legacy_hook = False
+            else:
+                _bind_hook_task_bin(hook, args.task_bin)
         fmt_dt_local = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
         now_utc = getattr(getattr(hook, "core", None), "now_utc", None)
         recovery_at = now_utc() if callable(now_utc) else datetime.now(timezone.utc)

@@ -7,7 +7,7 @@ from typing import Any
 from nautical_core import astronomy, native_until
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
-from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+from nautical_core.scheduler_service import SchedulerService
 from nautical_core.scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from nautical_core.lifecycle_models import (
     LifecycleAction,
@@ -358,7 +358,7 @@ def resolve_existing_child(
 
 def recurrence_kind(task: dict[str, Any]) -> str:
     try:
-        evaluator = RecurrenceEvaluator.from_task(task)
+        evaluator = SchedulerService.from_task(task).session.evaluator
     except ValueError:
         # Preserve useful classification for incomplete legacy rows; the
         # reconciler reports their missing identity separately.
@@ -534,7 +534,7 @@ def _build_reconcile_plan_unscoped(
         )
 
     try:
-        evaluator = RecurrenceEvaluator.from_task(parent)
+        evaluator = SchedulerService.from_task(parent).session.evaluator
         kind = evaluator.kind or "cp"
         limits = evaluator.limits
         until_dt = limits.chain_until

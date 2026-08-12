@@ -282,14 +282,19 @@ class ChainGenerationService:
         end_local, due_local, due_dt = self._anchor_parent_local_times(parent)
         if end_local is None or due_local is None:
             return None, None, None
-        result = evaluator.select_mode(
-            str(parent.get("anchor_mode") or "skip").strip().lower() or "skip",
-            due_local=due_local,
-            end_local=end_local,
-            due_explicit=due_dt is not None,
-            fallback_hhmm=(due_local.hour, due_local.minute),
-            default_seed_date=due_local.date(),
-        )
+        try:
+            result = evaluator.select_mode(
+                str(parent.get("anchor_mode") or "skip").strip().lower() or "skip",
+                due_local=due_local,
+                end_local=end_local,
+                due_explicit=due_dt is not None,
+                fallback_hhmm=(due_local.hour, due_local.minute),
+                default_seed_date=due_local.date(),
+            )
+        except ValueError as exc:
+            if "Occurrence omission scan exceeded" in str(exc):
+                raise ValueError("No valid anchor occurrences found after applying omit rules.") from exc
+            raise
         if result.selected_occurrence is None:
             raise ValueError("Could not compute next anchor occurrence")
         target_field = "scheduled" if due_dt is None and parent.get("scheduled") else "due"

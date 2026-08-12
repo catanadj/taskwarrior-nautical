@@ -2876,48 +2876,28 @@ def _anchor_included_occurrences(
     dnf,
     anchor_file_provider: Any | None = None,
 ) -> list[datetime]:
-    anchor_inclusion = core._import_sibling("anchor_inclusion")
-    occurrence_provider = core._import_sibling("occurrence_provider")
-    evaluator = _recurrence_evaluator_for_task(parent)
-    anchor_file = (parent.get("anchor_file") or "").strip()
-    if anchor_file_provider is None:
-        anchor_file_provider = (
-            anchor_inclusion._build_anchor_file_provider(
-                anchor_file,
-                anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-                fallback_hhmm=fallback_hhmm,
-                seed_base=seed_base,
-                core=core,
-            )
-            if anchor_file
-            else None
+    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+
+    service = _scheduler_service_for_task(parent)
+    timezone = service.session.evaluator.context.timezone
+    result = service.collect_request(
+        OccurrenceRangeRequest(
+            OccurrenceCursor(
+                after_local_dt,
+                inclusive=inclusive,
+                timezone=timezone,
+            ),
+            limit=limit,
+            omission_policy="exclude",
         )
-    provider = occurrence_provider.AnchorOccurrenceProvider(
-        lambda value: anchor_inclusion.next_included_occurrence_local(
-            dnf=dnf,
-            anchor_file_str=anchor_file,
-            after_local_dt=value,
-            inclusive=False,
-            fallback_hhmm=fallback_hhmm,
-            default_seed_date=default_seed_date,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-            next_occurrence_after_local_dt=evaluator._default_next_occurrence_after_local_dt,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            anchor_file_provider=anchor_file_provider,
-        ),
     )
+    if result.failure is not None:
+        raise RuntimeError(f"Anchor occurrence collection {result.status}: {result.failure.reason}")
+    if result.terminal is not None and not result.occurrences:
+        raise result.terminal
     return [
         occurrence.local_datetime
-        for occurrence in occurrence_provider.collect_after(
-            provider,
-            after_local_dt,
-            limit=limit,
-            inclusive=inclusive,
-            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-            to_local=lambda value: value,
-        )
+        for occurrence in result.occurrences
         if occurrence.local_datetime is not None
     ]
 

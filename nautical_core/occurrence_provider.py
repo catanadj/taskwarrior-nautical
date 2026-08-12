@@ -23,6 +23,20 @@ class OccurrenceProviderInvalid(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderCapabilities:
+    """Optional provider-owned optimizations certified by the provider."""
+
+    batch_generation: bool = False
+    arithmetic_counting: bool = False
+    cursor_reuse: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("batch_generation", "arithmetic_counting", "cursor_reuse"):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"Provider capability {name} must be boolean.")
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderContract:
     """Stable metadata every occurrence adapter exposes to the scheduler."""
 
@@ -32,6 +46,7 @@ class ProviderContract:
     omission_evidence: bool = False
     lower_date: date | None = None
     upper_date: date | None = None
+    capabilities: ProviderCapabilities = field(default_factory=ProviderCapabilities)
 
     def __post_init__(self) -> None:
         if not self.source or not isinstance(self.source, str):
@@ -42,6 +57,8 @@ class ProviderContract:
             raise TypeError("Occurrence provider finiteness must be boolean.")
         if not isinstance(self.omission_evidence, bool):
             raise TypeError("Occurrence provider omission evidence must be boolean.")
+        if not isinstance(self.capabilities, ProviderCapabilities):
+            raise TypeError("Occurrence provider capabilities must be ProviderCapabilities.")
         for value in (self.lower_date, self.upper_date):
             if value is not None and (not isinstance(value, date) or isinstance(value, datetime)):
                 raise TypeError("Occurrence provider bounds must be calendar dates.")
@@ -382,6 +399,7 @@ __all__ = (
     "OccurrenceProvider",
     "OccurrenceProviderInvalid",
     "OccurrenceProviderUnavailable",
+    "ProviderCapabilities",
     "ProviderContract",
     "collect_after",
 )

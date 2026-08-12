@@ -24,7 +24,7 @@ from .file_source_expr import (
 )
 from .schedule_utils import apply_day_offset, roll_apply
 from .recurrence_context import RecurrenceContext
-from .occurrence_provider import Occurrence, ProviderContract, _cursor_before
+from .occurrence_provider import Occurrence, ProviderCapabilities, ProviderContract, _cursor_before
 from .timeutil import compare_datetimes
 from .time_windows import parse_clock_value, parse_random_time_window_spec, parse_time_schedule_spec, parse_time_window_spec
 
@@ -475,7 +475,12 @@ class AnchorFileOccurrenceProvider:
 
     @property
     def contract(self) -> ProviderContract:
-        return ProviderContract(source="anchor_file", cursor="inclusive", finite=True)
+        return ProviderContract(
+            source="anchor_file",
+            cursor="inclusive",
+            finite=True,
+            capabilities=ProviderCapabilities(cursor_reuse=True),
+        )
 
     def _records(self) -> list[tuple[date, tuple[int, int], str]]:
         if self._record_cache is None:

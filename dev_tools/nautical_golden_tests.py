@@ -22016,6 +22016,19 @@ def test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup():
     expect(next_value == Occurrence(date(2026, 8, 4), 9, 0), f"unexpected ordinary provider value: {next_value!r}")
 
 
+def test_provider_contract_advertises_only_certified_capabilities():
+    """Capability flags are explicit metadata and do not enable execution by themselves."""
+    from nautical_core.anchor_files import AnchorFileOccurrenceProvider
+    from nautical_core.occurrence_provider import ProviderCapabilities, ProviderContract
+
+    ordinary = ProviderContract(source="anchor")
+    expect(ordinary.capabilities == ProviderCapabilities(), "ordinary provider gained an implicit optimization")
+    file_provider = AnchorFileOccurrenceProvider(None, None, (9, 0))
+    expect(file_provider.contract.capabilities.cursor_reuse, "anchor-file cursor reuse was not certified")
+    expect(not file_provider.contract.capabilities.batch_generation, "uncertified batch generation was advertised")
+    expect(not file_provider.contract.capabilities.arithmetic_counting, "uncertified arithmetic counting was advertised")
+
+
 def test_occurrence_provider_adapters_preserve_stream_metadata():
     """Provider adapters should retain source and description metadata."""
     from datetime import datetime, timedelta
@@ -35258,6 +35271,7 @@ TESTS = [
     test_included_provider_rebuilds_shared_provider_when_fallback_changes,
     test_included_provider_bounds_anchor_file_omission_scan,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
+    test_provider_contract_advertises_only_certified_capabilities,
     test_occurrence_provider_adapters_preserve_stream_metadata,
     test_occurrence_provider_rejects_dst_fallback_backward_progress,
     test_anchor_file_provider_orders_dst_fallback_by_instant,

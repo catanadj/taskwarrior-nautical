@@ -2518,7 +2518,10 @@ def _execute_lifecycle_queue_entry(ctx, state):
             child = current_plan.child_dict()
             child_uuid = str(child.get("uuid") or "").strip()
             if child_uuid:
-                exact = _export_uuid(child_uuid, prefer_cache=False)
+                # Discovery may use the authoritative drain preload. Fresh
+                # reads remain mandatory for parent guards and every
+                # post-mutation verification below.
+                exact = _export_uuid(child_uuid)
                 if exact.retryable:
                     return _lifecycle_operation_result(
                         lifecycle_executor.OperationState.UNAVAILABLE,

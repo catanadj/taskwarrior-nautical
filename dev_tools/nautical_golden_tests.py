@@ -8377,6 +8377,54 @@ def test_lifecycle_read_service_checked_export_is_typed_and_cached():
     expect(not failed.ok and failed.error == "unavailable", f"failure lost typed detail: {failed}")
 
 
+def test_lifecycle_read_service_export_chain_checked_owns_runner_boundary():
+    """The service wrapper must compose validation, runner, parsing, and caching."""
+    import nautical_core.lifecycle_read_service as read_service
+
+    missing = object()
+    stored = {}
+    calls = {"run": 0, "parse": 0}
+
+    def _read(kind, key):
+        return stored.get((kind, key), missing)
+
+    def _write(kind, key, value):
+        stored[(kind, key)] = list(value)
+
+    def _run(_args, **_kwargs):
+        calls["run"] += 1
+        return type("Result", (), {"ok": True, "stdout": "[{\"uuid\": \"service-child\"}]", "stderr": ""})()
+
+    def _parse(result):
+        calls["parse"] += 1
+        return result.ok, json.loads(result.stdout), result.stderr
+
+    service = read_service.LifecycleReadService(
+        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
+        parse_extra_tokens=lambda _extra: [],
+        token_matcher=lambda _row, _token: True,
+        read_query_get=_read,
+        read_query_set=_write,
+        chain_cache_get=lambda _chain_id: None,
+        export_chain_cached=lambda *_args: (),
+        max_chain_walk=10,
+    )
+    kwargs = dict(
+        since=None,
+        extra=None,
+        env=None,
+        limit=10,
+        run_task_result=_run,
+        parse_result=_parse,
+        timeout_for_chain=lambda _chain_id: 1.0,
+        read_query_missing=missing,
+    )
+    first = service.export_chain_checked("service-chain", **kwargs)
+    second = service.export_chain_checked("service-chain", **kwargs)
+    expect(first.ok and second.ok and first.rows == second.rows, "service export wrapper lost rows")
+    expect(calls == {"run": 1, "parse": 1}, f"service export was not cached: {calls}")
+
+
 def test_lifecycle_read_service_completion_snapshot_promotes_full_reads():
     """A full completion snapshot should populate the general chain read cache."""
     import nautical_core.lifecycle_read_service as read_service
@@ -34393,6 +34441,7 @@ TESTS = [
     test_lifecycle_read_service_indexes_and_merges_chain_rows,
     test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads,
     test_lifecycle_read_service_checked_export_is_typed_and_cached,
+    test_lifecycle_read_service_export_chain_checked_owns_runner_boundary,
     test_lifecycle_read_service_completion_snapshot_promotes_full_reads,
     test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed,
     test_lifecycle_read_service_builds_strict_chain_export_args,

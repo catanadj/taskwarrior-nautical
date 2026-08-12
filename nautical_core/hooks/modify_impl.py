@@ -2892,7 +2892,7 @@ def _anchor_included_occurrences(
         )
     )
     if result.failure is not None:
-        raise RuntimeError(f"Anchor occurrence collection {result.status}: {result.failure.reason}")
+        raise ValueError(f"Anchor occurrence collection {result.status}: {result.failure.reason}")
     if result.terminal is not None and not result.occurrences:
         raise result.terminal
     return [

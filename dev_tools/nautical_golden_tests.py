@@ -19613,7 +19613,7 @@ def test_chain_cap_guards_are_inclusive_at_boundary():
 
     summaries = []
     printed = []
-    task = {"chain": "on"}
+    task = {"chain": "on", "chainID": "cap-boundary", "uuid": "00000000-0000-0000-0000-00000000c001"}
     expect(
         compute.completion_cap_guard_or_stop(
             task,
@@ -19642,7 +19642,7 @@ def test_chain_cap_guards_are_inclusive_at_boundary():
     expect(summaries and "Reached cap #5" in str(summaries[-1]), f"cap stop should explain the boundary: {summaries!r}")
 
     until = now_utc + timedelta(days=2)
-    task = {"chain": "on"}
+    task = {"chain": "on", "chainID": "cap-boundary", "uuid": "00000000-0000-0000-0000-00000000c001"}
     expect(
         compute.completion_until_guard_or_stop(
             task,
@@ -22239,6 +22239,10 @@ def test_modify_inclusion_collection_uses_shared_progress_guard():
     """Modify-side inclusion collection must fail instead of returning a partial stream."""
     from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
+    # The heavy hook is intentionally lazy; initialize its core context before
+    # exercising the private collection helper directly.
+    _hook._load_core()
+
     original = RecurrenceEvaluator._default_next_occurrence_after_local_dt
     RecurrenceEvaluator._default_next_occurrence_after_local_dt = (
         lambda _self, _dnf, value, **_kwargs: value
@@ -22305,6 +22309,7 @@ def test_modify_until_projection_fails_closed_at_iteration_limit():
     """A long until horizon must not return a silently truncated cap."""
     from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
+    _hook._load_core()
     original_next = RecurrenceEvaluator._default_next_occurrence_after_local_dt
 
     def next_daily(_self, _dnf, value, **_kwargs):
@@ -22314,6 +22319,7 @@ def test_modify_until_projection_fails_closed_at_iteration_limit():
     try:
         task = {
             "chainID": "projection-limit",
+            "anchor": "w:mon",
             "link": 1,
             "due": "20260801T090000Z",
             "chainUntil": "20350801T090000Z",

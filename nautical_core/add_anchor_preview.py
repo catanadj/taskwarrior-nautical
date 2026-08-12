@@ -1063,16 +1063,21 @@ def handle_anchor_preview_on_add(
         )
 
     try:
-        from .recurrence_evaluator import RecurrenceEvaluator
+        from .recurrence_context import RecurrenceContext
+        from .scheduler_service import SchedulerService
 
-        recurrence_evaluator = RecurrenceEvaluator.from_task(
+        recurrence_service = SchedulerService.from_task(
             task,
-            fallback_chain_id=seed_base or None,
-            timezone=getattr(core, "_LOCAL_TZ", None),
-            business_calendar=core.business_calendar_for_task(task),
-            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            context=RecurrenceContext.from_task(
+                task,
+                fallback_chain_id=seed_base or None,
+                timezone=getattr(core, "_LOCAL_TZ", None),
+                business_calendar=core.business_calendar_for_task(task),
+                astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+                anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            ),
         )
+        recurrence_evaluator = recurrence_service.session.evaluator
     except Exception as exc:
         error_and_exit(
             [

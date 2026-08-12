@@ -1767,7 +1767,7 @@ def _export_uuid_short(u_short: str, env=None):
         )
         if env is None and isinstance(obj, dict):
             _read_query_set("uuid", str(u_short or "").lower(), obj)
-            return _seed_runtime_lookup_task(obj)
+            return _seed_runtime_lookup_task(obj, lookup_short=u_short)
         return obj
     env = env or os.environ.copy()
     result = _run_task_result(
@@ -1788,7 +1788,7 @@ def _export_uuid_short(u_short: str, env=None):
             return None
         if env is None:
             _read_query_set("uuid", str(u_short or "").lower(), obj)
-            return _seed_runtime_lookup_task(obj)
+            return _seed_runtime_lookup_task(obj, lookup_short=u_short)
         return obj
     except Exception:
         return None
@@ -2680,14 +2680,18 @@ def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
     _diag_count("chain_cache_seeded")
 
 
-def _seed_runtime_lookup_task(task: dict | None) -> dict | None:
+def _seed_runtime_lookup_task(task: dict | None, *, lookup_short: str | None = None) -> dict | None:
     if not isinstance(task, dict):
         return None
     uuid_str = str(task.get("uuid") or "").strip()
     if not uuid_str:
         return None
     short = uuid_str[:8]
-    task_obj = _lifecycle_read_service().seed_lookup_task(dict(task), short_uuid=short)
+    service = _lifecycle_read_service()
+    task_obj = service.seed_lookup_task(dict(task), short_uuid=short)
+    requested_short = str(lookup_short or "").strip()
+    if requested_short and requested_short != short:
+        task_obj = service.seed_lookup_task(task_obj, short_uuid=requested_short)
     entry = task_obj.get("entry")
     if short and entry:
         _query_ctx_set("tw_get", f"{short}.entry", str(entry).strip())

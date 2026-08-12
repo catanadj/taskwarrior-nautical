@@ -2771,14 +2771,14 @@ def test_on_exit_uses_tw_data_dir_for_export_and_modify():
     def _fake_run_task(cmd, **_kwargs):
         calls.append(cmd)
         if "export" in cmd:
-            return True, json.dumps({"uuid": "deadbeef"}), ""
+            return True, json.dumps({"uuid": "beeswax"}), ""
         return True, "", ""
 
     mod._run_task = _fake_run_task
     mod.TW_DATA_DIR = "/tmp/nautical_test_data"
     mod._USE_RC_DATA_LOCATION = True
 
-    mod._export_uuid("deadbeef")
+    mod._export_uuid("beeswax")
     mod._update_parent_nextlink("parent-uuid", "childshort")
 
     expect(calls, "expected _run_task to be called")
@@ -2804,10 +2804,10 @@ def test_on_exit_no_explicit_taskdata_skips_rc_data_location():
 
     def _fake_run_task(cmd, **_kwargs):
         calls.append(cmd)
-        return True, json.dumps({"uuid": "deadbeef"}), ""
+        return True, json.dumps({"uuid": "beeswax"}), ""
 
     mod._run_task = _fake_run_task
-    mod._export_uuid("deadbeef")
+    mod._export_uuid("beeswax")
     expect(calls, "expected _run_task to be called")
     expect(
         all(not str(part).startswith("rc.data.location=") for part in calls[0]),
@@ -2849,10 +2849,10 @@ def test_on_modify_no_explicit_taskdata_skips_rc_data_location():
 
     def _fake_run_task(cmd, **_kwargs):
         calls.append(cmd)
-        return True, json.dumps({"uuid": "deadbeef"}), ""
+        return True, json.dumps({"uuid": "beeswax"}), ""
 
     mod._run_task = _fake_run_task
-    lookup = mod._task_lookup_by_uuid("deadbeef", env={})
+    lookup = mod._task_lookup_by_uuid("beeswax", env={})
     expect(lookup.is_found, f"typed UUID lookup rejected task: {lookup}")
     expect(calls, "expected _run_task to be called")
     expect(
@@ -7451,7 +7451,7 @@ def test_on_modify_enqueue_recovers_from_corrupt_sqlite_db():
                 {
                     "spawn_intent_id": "si_corrupt_recover",
                     "parent_uuid": "00000000-0000-0000-0000-000000000111",
-                    "child_short": "deadbeef",
+                    "child_short": "beeswax",
                     "child": {"uuid": "00000000-0000-0000-0000-000000000999"},
                 }
             )
@@ -7620,14 +7620,14 @@ def test_on_modify_run_task_diag_bucket_stats():
     mod = _load_hook_module(hook, "_nautical_on_modify_diag_bucket_test")
 
     mod._reset_modify_runtime_state()
-    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.verbose=nothing", "_get", "deadbeef.entry"]) == "get", "_get should classify as get")
-    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.json.array=off", "uuid:deadbeef", "export"]) == "export_uuid_short", "short uuid export should classify correctly")
+    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.verbose=nothing", "_get", "beeswax.entry"]) == "get", "_get should classify as get")
+    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.json.array=off", "uuid:beeswax", "export"]) == "export_uuid_short", "short uuid export should classify correctly")
     expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.json.array=1", "export uuid:abcd",]) == "export_uuid_full", "full uuid export should classify correctly")
     expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.json.array=on", "chainID:cid", "export"]) == "export_chain", "chain export should classify correctly")
     expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "import", "-"]) == "import", "import should classify correctly")
 
-    mod._diag_record_run_task(["task", "_get", "deadbeef.entry"], ok=True, elapsed=0.25)
-    mod._diag_record_run_task(["task", "rc.json.array=off", "uuid:deadbeef", "export"], ok=False, elapsed=0.5)
+    mod._diag_record_run_task(["task", "_get", "beeswax.entry"], ok=True, elapsed=0.25)
+    mod._diag_record_run_task(["task", "rc.json.array=off", "uuid:beeswax", "export"], ok=False, elapsed=0.5)
     mod._diag_record_run_task(["task", "rc.json.array=on", "chainID:cid", "export"], ok=True, elapsed=0.75)
 
     stats = mod._modify_runtime_state().diag_stats
@@ -7705,16 +7705,16 @@ def test_on_exit_run_task_diag_bucket_stats():
     mod = _load_hook_module(hook, "_nautical_on_exit_diag_bucket_test")
 
     mod._reset_exit_diag_stats()
-    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "uuid:deadbeef", "export"]) == "export_uuid", "uuid export should classify correctly")
+    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "uuid:beeswax", "export"]) == "export_uuid", "uuid export should classify correctly")
     expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "chainID:cid", "link:2", "export"]) == "export_equivalent_child", "equivalent child export should classify correctly")
     expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "import", "-"]) == "import", "import should classify correctly")
-    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "uuid:parent", "modify", "nextLink:deadbeef"]) == "modify_parent_nextlink", "parent modify should classify correctly")
+    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "uuid:parent", "modify", "nextLink:beeswax"]) == "modify_parent_nextlink", "parent modify should classify correctly")
     expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "uuid:child", "modify", "status:deleted"]) == "modify_cleanup", "cleanup modify should classify correctly")
 
-    mod._diag_record_run_task(["task", "uuid:deadbeef", "export"], ok=True, elapsed=0.25)
+    mod._diag_record_run_task(["task", "uuid:beeswax", "export"], ok=True, elapsed=0.25)
     mod._diag_record_run_task(["task", "chainID:cid", "link:2", "export"], ok=False, elapsed=0.5)
     mod._diag_record_run_task(["task", "import", "-"], ok=True, elapsed=0.75)
-    mod._diag_record_run_task(["task", "uuid:parent", "modify", "nextLink:deadbeef"], ok=True, elapsed=1.0)
+    mod._diag_record_run_task(["task", "uuid:parent", "modify", "nextLink:beeswax"], ok=True, elapsed=1.0)
 
     stats = mod._EXIT_DIAG_STATS
     expect(stats.get("run_task_calls_export_uuid") == 1, f"unexpected export uuid stats: {stats}")
@@ -8766,7 +8766,7 @@ def test_anchor_cache_cleans_stale_tmp_files():
         mod.ENABLE_ANCHOR_CACHE = True
         mod.ANCHOR_CACHE_DIR_OVERRIDE = td
         mod._CACHE_DIR = None
-        key = "deadbeef"
+        key = "beeswax"
         stale = os.path.join(td, f".{key}.stale.tmp")
         with open(stale, "w", encoding="utf-8") as f:
             f.write("stale")
@@ -16327,7 +16327,7 @@ def test_on_modify_spawn_intent_id_in_entry():
     if not hasattr(mod, "_spawn_intent_entry"):
         raise AssertionError("on-modify hook does not expose spawn intent helper")
 
-    entry = mod._spawn_intent_entry("parent", {"uuid": "child"}, "deadbeef", "", "si_test")
+    entry = mod._spawn_intent_entry("parent", {"uuid": "child"}, "beeswax", "", "si_test")
     expect(entry.get("spawn_intent_id") == "si_test", "spawn_intent_id should be preserved in queue entry")
 
 
@@ -16337,7 +16337,7 @@ def test_on_modify_spawn_intent_entry_rejects_missing_child_uuid():
     mod = _load_hook_module(hook, "_nautical_on_modify_spawn_intent_validate_test")
 
     try:
-        mod._spawn_intent_entry("parent", {}, "deadbeef", "", "si_test")
+        mod._spawn_intent_entry("parent", {}, "beeswax", "", "si_test")
     except Exception as exc:
         expect("missing child uuid" in str(exc), f"unexpected error: {exc}")
         return
@@ -16519,7 +16519,7 @@ def test_on_exit_spawn_intents_drain():
                 "chainID": "abcd1234",
                 "link": "1",
             },
-            "child_short": "deadbeef",
+            "child_short": "beeswax",
             "child": {"uuid": child_uuid, "description": "test"},
             "spawn_intent_id": "si_test",
         }
@@ -16551,7 +16551,7 @@ def test_on_exit_spawn_intents_drain():
                 return True, "", ""
             if "modify" in cmd_s and "uuid:00000000-0000-0000-0000-000000000111" in cmd_s:
                 parent_updated["ok"] = True
-                parent_next["value"] = "deadbeef"
+                parent_next["value"] = "beeswax"
                 return True, "", ""
             return False, "", "unexpected"
 
@@ -16944,7 +16944,7 @@ def test_on_exit_drain_skips_finalized_sqlite_intent():
                         {
                             "spawn_intent_id": "si_done",
                             "parent_uuid": "00000000-0000-0000-0000-000000000111",
-                            "child_short": "deadbeef",
+                            "child_short": "beeswax",
                             "child": {"uuid": "00000000-0000-0000-0000-000000000999"},
                         },
                         ensure_ascii=False,
@@ -17004,7 +17004,7 @@ def test_on_exit_take_queue_reclaims_stale_sqlite_processing_row():
                         {
                             "spawn_intent_id": "si_stale_processing",
                             "parent_uuid": "00000000-0000-0000-0000-000000000111",
-                            "child_short": "deadbeef",
+                            "child_short": "beeswax",
                             "child": {"uuid": "00000000-0000-0000-0000-000000000999"},
                         },
                         ensure_ascii=False,
@@ -17068,7 +17068,7 @@ def test_on_exit_take_queue_skips_fresh_sqlite_processing_row():
                     json.dumps(
                         {
                             "spawn_intent_id": "si_fresh_processing",
-                            "child_short": "deadbeef",
+                            "child_short": "beeswax",
                             "child": {"uuid": "00000000-0000-0000-0000-000000000888"},
                         },
                         ensure_ascii=False,
@@ -17126,7 +17126,7 @@ def test_on_exit_requeue_sqlite_clears_claim_metadata():
                     json.dumps(
                         {
                             "spawn_intent_id": "si_requeue_sqlite",
-                            "child_short": "deadbeef",
+                            "child_short": "beeswax",
                             "child": {"uuid": "00000000-0000-0000-0000-000000000777"},
                         },
                         ensure_ascii=False,
@@ -17144,7 +17144,7 @@ def test_on_exit_requeue_sqlite_clears_claim_metadata():
                     "__queue_id": rid,
                     "__queue_claim_token": "claim-a",
                     "spawn_intent_id": "si_requeue_sqlite",
-                    "child_short": "deadbeef",
+                    "child_short": "beeswax",
                     "child": {"uuid": "00000000-0000-0000-0000-000000000777"},
                     "attempts": 3,
                 }
@@ -17172,7 +17172,7 @@ def test_queue_claim_owner_blocks_stale_ack_and_requeue():
             db_path,
             {
                 "spawn_intent_id": "si_claim_owner",
-                "child_short": "deadbeef",
+                "child_short": "beeswax",
                 "child": {"uuid": "00000000-0000-0000-0000-000000000777"},
             },
         )
@@ -17457,7 +17457,7 @@ def test_on_exit_dead_letter_on_missing_fields():
 
         entry_missing_spawn = {
             "parent_uuid": "00000000-0000-0000-0000-000000000111",
-            "child_short": "deadbeef",
+            "child_short": "beeswax",
             "child": {"uuid": "00000000-0000-0000-0000-000000000999"},
         }
         entry_missing_child_uuid = {
@@ -17503,7 +17503,7 @@ def test_on_exit_parent_nextlink_changed_dead_letter():
             "spawn_intent_id": "si_conflict",
             "parent_uuid": parent_uuid,
             "parent_nextlink": "prevlink",
-            "child_short": "deadbeef",
+            "child_short": "beeswax",
             "child": {"uuid": child_uuid},
         }
         _seed_sqlite_queue(mod._QUEUE_DB_PATH, entry)
@@ -18115,7 +18115,7 @@ def test_on_modify_build_child_carries_until_across_dst():
             child_due,
             "due",
             2,
-            "deadbeef",
+            "beeswax",
             "cp",
             0,
             None,
@@ -18177,7 +18177,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
             child_due,
             "due",
             2,
-            "deadbeef",
+            "beeswax",
             kind,
             0,
             None,
@@ -18315,7 +18315,7 @@ def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
             child_due,
             "due",
             2,
-            "deadbeef",
+            "beeswax",
             "cp",
             0,
             None,
@@ -18479,7 +18479,7 @@ def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations(
             mod.core.build_local_datetime(anchor_day, (20, 0)),
             "due",
             2,
-            "deadbeef",
+            "beeswax",
             "anchor",
             0,
             None,
@@ -18775,7 +18775,7 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
             child_due_utc,
             "due",
             2,
-            "deadbeef",
+            "beeswax",
             "cp",
             0,
             None,
@@ -19276,7 +19276,7 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
     def fake_build_and_spawn_child(*_a, **_k):
         return SimpleNamespace(
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
-            child_short="deadbeef",
+            child_short="beeswax",
             stripped_attrs=[],
             verified=False,
             deferred_spawn=False,
@@ -19340,7 +19340,7 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
     expect(captured.get("analytics_advice") is None, f"analytics should stay hidden, got {captured}")
     expect(captured.get("integrity_warnings") == ["missing link"], f"integrity checks should still run: {captured}")
     expect(result.state == "applied", f"completion should expose an applied operational result: {result!r}")
-    expect(result.child_short == "deadbeef", f"completion result lost child identity: {result!r}")
+    expect(result.child_short == "beeswax", f"completion result lost child identity: {result!r}")
     expect(result.diagnostic is not None, f"completion result lost structured diagnostics: {result!r}")
     expect(result.diagnostic.stage == "finalize", f"unexpected completion diagnostic stage: {result.diagnostic!r}")
     expect(result.diagnostic.parent_link == 1 and result.diagnostic.child_link == 2, f"completion links missing from diagnostics: {result.diagnostic!r}")
@@ -23171,7 +23171,7 @@ def test_chain_generation_rejects_missing_chain_id():
             datetime(2025, 1, 7, 9, 0, tzinfo=timezone.utc),
             "due",
             2,
-            "deadbeef",
+            "beeswax",
             "cp",
             0,
             None,
@@ -24169,7 +24169,7 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
                 f"evaluator/file mode drifted from hook mode: {result!r} vs {child_due!r}",
             )
 
-            child = mod._build_child_from_parent(parent, child_due, "due", 2, "deadbeef", "anchor_file", 0, None)
+            child = mod._build_child_from_parent(parent, child_due, "due", 2, "beeswax", "anchor_file", 0, None)
             expect(child.get("anchor_file") == "calendar.csv@nbd@t=12:00", f"child should preserve anchor_file: {child!r}")
             expect(not child.get("anchor"), f"child should not gain anchor expr: {child!r}")
         finally:
@@ -24361,7 +24361,7 @@ def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_ch
                     kind="anchor",
                     task=parent,
                     child_due_utc=child_due,
-                    child_short="deadbeef",
+                    child_short="beeswax",
                     dnf=dnf,
                     next_count=4,
                     cap_no=None,
@@ -24737,7 +24737,7 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
 
     original_generation = mod._chain_generation_service
     mod._chain_generation_service = lambda: StubGeneration.from_core(mod.core)
-    mod._spawn_child_atomic = lambda _child, _parent: ("deadbeef", set(), True, False, None, "si_test")
+    mod._spawn_child_atomic = lambda _child, _parent: ("beeswax", set(), True, False, None, "si_test")
     try:
         out = mod._completion_build_and_spawn_child(
             new,
@@ -24753,10 +24753,10 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
         mod._chain_generation_service = original_generation
     expect(bool(out), f"expected spawn result, got {out}")
     expect(out.child == child, f"unexpected child payload: {out}")
-    expect(out.child_short == "deadbeef", f"unexpected child short: {out}")
+    expect(out.child_short == "beeswax", f"unexpected child short: {out}")
     expect(out.verified is True and out.deferred_spawn is False, f"unexpected verification state: {out}")
     expect(out.spawn_intent_id == "si_test", f"unexpected spawn intent id: {out}")
-    expect(new.get("nextLink") == "deadbeef", f"verified spawn should stamp nextLink: {new}")
+    expect(new.get("nextLink") == "beeswax", f"verified spawn should stamp nextLink: {new}")
 
 
 def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
@@ -24887,7 +24887,7 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
         child_due,
         "scheduled",
         2,
-        "deadbeef",
+        "beeswax",
         "cp",
         0,
         None,
@@ -24934,7 +24934,7 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
             new={"anchor": "@payday", "omit": "@wed", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
-            child_short="deadbeef",
+            child_short="beeswax",
             next_no=2,
             parent_short="00000000",
             cap_no=None,
@@ -25006,7 +25006,7 @@ def test_on_modify_reports_business_calendar_displacement():
                 },
                 child={"uuid": "00000000-0000-0000-0000-000000000128"},
                 child_due=child_due,
-                child_short="deadbeef",
+                child_short="beeswax",
                 next_no=2,
                 parent_short="00000000",
                 cap_no=None,
@@ -25060,7 +25060,7 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
             new={"anchor": "w:mon", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
-            child_short="deadbeef",
+            child_short="beeswax",
             next_no=2,
             parent_short="00000000",
             cap_no=None,
@@ -25111,7 +25111,7 @@ def test_on_modify_render_anchor_file_completion_feedback_wrapper():
             new={"anchor_file": "calendar.csv@t=12:00", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000333", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000444"},
             child_due=mod.core.now_utc(),
-            child_short="deadbeef",
+            child_short="beeswax",
             next_no=2,
             parent_short="00000000",
             cap_no=None,
@@ -25164,7 +25164,7 @@ def test_timeline_completed_rows_place_uuid_before_delta():
 
     prev = timeline._timeline_base_line(
         1,
-        obj={"due": "due", "end": "end", "uuid": "deadbeef-0000"},
+        obj={"due": "due", "end": "end", "uuid": "beeswax-0000"},
         item_type="prev",
         task={},
         **common,
@@ -25177,7 +25177,7 @@ def test_timeline_completed_rows_place_uuid_before_delta():
         **common,
     )
 
-    expect("DATE deadbeef (DELTA)" in prev, f"unexpected previous-row ordering: {prev!r}")
+    expect("DATE beeswax (DELTA)" in prev, f"unexpected previous-row ordering: {prev!r}")
     expect("DATE cafebabe (DELTA)" in current, f"unexpected current-row ordering: {current!r}")
 
 
@@ -25207,7 +25207,7 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
             new={"cp": "3d,20d,7d", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
-            child_short="deadbeef",
+            child_short="beeswax",
             next_no=2,
             parent_short="00000000",
             cap_no=None,
@@ -25270,7 +25270,7 @@ def test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundarie
                 "until": mod.core.fmt_isoz(child_expires),
             },
             child_due=child_due,
-            child_short="deadbeef",
+            child_short="beeswax",
             next_no=2,
             parent_short="00000000",
             cap_no=6,
@@ -25337,7 +25337,7 @@ def test_on_modify_render_cp_completion_feedback_random_selected_interval():
             new={"cp": cp, "link": 2, "uuid": "00000000-0000-0000-0000-000000000111", "chainID": chain_id},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
-            child_short="deadbeef",
+            child_short="beeswax",
             next_no=3,
             parent_short="00000000",
             cap_no=None,
@@ -25393,7 +25393,7 @@ def test_on_modify_render_cp_completion_feedback_jitter_selected_interval():
             new={"cp": "15d~0d", "link": 2, "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
-            child_short="deadbeef",
+            child_short="beeswax",
             next_no=3,
             parent_short="00000000",
             cap_no=None,
@@ -25444,7 +25444,7 @@ def test_on_modify_render_cp_completion_feedback_text_mode():
             new={"cp": "P1D", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-0000-0000-000000000222"},
             child_due=mod.core.now_utc(),
-            child_short="deadbeef",
+            child_short="beeswax",
             next_no=2,
             parent_short="00000000",
             cap_no=None,
@@ -25467,7 +25467,7 @@ def test_on_modify_render_cp_completion_feedback_text_mode():
     txt = mod.core.strip_rich_markup(str(captured["line"]))
     expect("\n" in txt, f"expected stacked text payload, got {txt!r}")
     expect("00000000 ✓" in txt, f"expected parent status line in text payload, got {txt!r}")
-    expect("Next ⛓ #2 deadbeef" in txt, f"expected next-link line in text payload, got {txt!r}")
+    expect("Next ⛓ #2 beeswax" in txt, f"expected next-link line in text payload, got {txt!r}")
     expect("Period: P1D" in txt, f"expected summary line in text payload, got {txt!r}")
     expect("Result: Applied now" in txt, f"expected lifecycle result in text payload, got {txt!r}")
     expect(captured.get("kwargs", {}).get("kind") == "preview_cp", f"unexpected text line kwargs: {captured}")
@@ -27320,7 +27320,7 @@ def test_on_exit_dead_letter_carries_spawn_intent_id():
         entry = {
             "spawn_intent_id": "si_test",
             "parent_uuid": "parent",
-            "child_short": "deadbeef",
+            "child_short": "beeswax",
             "child": {"uuid": "child"},
         }
         mod._write_dead_letter(entry, "reason")
@@ -27348,7 +27348,7 @@ def test_on_exit_requeue_failure_leaves_sqlite_entry_processing():
         entry = {
             "spawn_intent_id": "si_requeue_fail",
             "parent_uuid": "",
-            "child_short": "deadbeef",
+            "child_short": "beeswax",
             "child": {"uuid": "00000000-0000-0000-0000-000000000777"},
         }
         with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
@@ -27566,11 +27566,11 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
 
     def _spawn_child_atomic_stub(_child, _parent):
         called["spawn"] = True
-        return ("deadbeef", set(), False, True, "queued", "si_test1")
+        return ("beeswax", set(), False, True, "queued", "si_test1")
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
     mod._export_uuid_short_cached = lambda _short: {
-        "uuid": "deadbeef-0000-0000-0000-000000000222",
+        "uuid": "beeswax-0000-0000-0000-000000000222",
         "status": "pending",
         "link": 2,
     }
@@ -27582,7 +27582,7 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
         "cp": "P1D",
         "chainID": "abcd1234",
         "link": 1,
-        "nextLink": "deadbeef",
+        "nextLink": "beeswax",
         "due": "20250101T090000Z",
     }
     new = dict(old)
@@ -27607,7 +27607,7 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
 
     out_task = _extract_last_json(buf_out.getvalue())
     expect(not called["spawn"], "re-completion should not trigger duplicate spawn")
-    expect(out_task.get("nextLink") == "deadbeef", "existing nextLink should be preserved")
+    expect(out_task.get("nextLink") == "beeswax", "existing nextLink should be preserved")
 
 
 def test_on_modify_uuid_lookup_does_not_repeat_unavailable_export():
@@ -27623,7 +27623,7 @@ def test_on_modify_uuid_lookup_does_not_repeat_unavailable_export():
 
         mod._export_uuid_short = unavailable
         mod._export_uuid_short_cached.cache_clear()
-        result = mod._export_uuid_short_lookup("deadbeef")
+        result = mod._export_uuid_short_lookup("beeswax")
         expect(getattr(result, "is_unavailable", False), f"lookup did not retain unavailable state: {result!r}")
         expect(calls["n"] == 1, f"unavailable UUID export was repeated: {calls}")
     finally:
@@ -27742,7 +27742,7 @@ def test_reconcile_candidate_and_plan_paths():
     )
     nonreciprocal = reconcile.build_reconcile_plan(
         parent,
-        existing_children=[dict(existing[0], prevLink="deadbeef")],
+        existing_children=[dict(existing[0], prevLink="beeswax")],
         hook=None,
     )
     expect(
@@ -31001,7 +31001,7 @@ def test_on_modify_cp_completion_spawns_next_link():
 
     def _spawn_child_atomic_stub(child, parent):
         spawned["child"] = child
-        return ("deadbeef", set(), False, True, "queued", "si_test3")
+        return ("beeswax", set(), False, True, "queued", "si_test3")
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
     mod._export_uuid_short_cached = lambda _short: {}
@@ -31167,14 +31167,14 @@ def test_on_exit_normalize_queue_entry_strips_fields():
     entry = mod._normalize_queue_entry(
         {
             "parent_uuid": " 00000000-0000-0000-0000-000000000111 ",
-            "parent_nextlink": " deadbeef ",
+            "parent_nextlink": " beeswax ",
             "parent_guard": {
                 "status": " completed ",
                 "chain": " on ",
                 "chainID": " abcd1234 ",
                 "link": 4,
             },
-            "child_short": " deadbeef ",
+            "child_short": " beeswax ",
             "child": {"uuid": " 00000000-0000-0000-0000-000000000999 "},
             "spawn_intent_id": " si_test ",
             "attempts": "2",
@@ -31182,13 +31182,13 @@ def test_on_exit_normalize_queue_entry_strips_fields():
     )
 
     expect(entry["parent_uuid"] == "00000000-0000-0000-0000-000000000111", f"unexpected parent_uuid: {entry}")
-    expect(entry["parent_nextlink"] == "deadbeef", f"unexpected parent_nextlink: {entry}")
+    expect(entry["parent_nextlink"] == "beeswax", f"unexpected parent_nextlink: {entry}")
     expect(
         entry["parent_guard"]
         == {"status": "completed", "chain": "on", "chainID": "abcd1234", "link": "4"},
         f"unexpected parent_guard: {entry}",
     )
-    expect(entry["child_short"] == "deadbeef", f"unexpected child_short: {entry}")
+    expect(entry["child_short"] == "beeswax", f"unexpected child_short: {entry}")
     expect(entry["child"]["uuid"] == "00000000-0000-0000-0000-000000000999", f"unexpected child uuid: {entry}")
     expect(entry["spawn_intent_id"] == "si_test", f"unexpected spawn_intent_id: {entry}")
     expect(entry["attempts"] == 2, f"unexpected attempts: {entry}")
@@ -31200,15 +31200,15 @@ def test_on_modify_export_uuid_short_seeds_runtime_lookup_cache():
     mod = _load_hook_module(hook, "_nautical_on_modify_export_uuid_seed_cache_test")
 
     calls = {"export": 0, "get": 0}
-    uuid_full = "deadbeef-1111-2222-3333-444444444444"
+    uuid_full = "beeswax-1111-2222-3333-444444444444"
     entry = "2026-03-27T09:30:00Z"
 
     def _run_task_stub(cmd, **_kwargs):
         cmd_s = " ".join(cmd)
-        if "uuid:deadbeef" in cmd_s and "export" in cmd_s:
+        if "uuid:beeswax" in cmd_s and "export" in cmd_s:
             calls["export"] += 1
             return True, json.dumps({"uuid": uuid_full, "entry": entry, "id": 42}), ""
-        if " _get deadbeef.entry" in f" {cmd_s}":
+        if " _get beeswax.entry" in f" {cmd_s}":
             calls["get"] += 1
             return True, entry, ""
         return False, "", f"unexpected command: {cmd_s}"
@@ -31216,15 +31216,15 @@ def test_on_modify_export_uuid_short_seeds_runtime_lookup_cache():
     orig = mod._run_task
     mod._run_task = _run_task_stub
     try:
-        obj = mod._export_uuid_short("deadbeef")
+        obj = mod._export_uuid_short("beeswax")
         expect(isinstance(obj, dict), f"expected dict export result, got {obj!r}")
         expect(obj.get("uuid") == uuid_full, f"unexpected exported uuid: {obj}")
         service = mod._lifecycle_read_service()
-        short_obj, _chain_id = service.lookup_short("deadbeef")
+        short_obj, _chain_id = service.lookup_short("beeswax")
         expect(short_obj and short_obj.get("uuid") == uuid_full, f"short map not seeded: {short_obj}")
         full_obj = service.lookup_uuid(uuid_full)
         expect(full_obj and full_obj.get("entry") == entry, f"full map not seeded: {full_obj}")
-        got_entry = mod._tw_get_cached("deadbeef.entry")
+        got_entry = mod._tw_get_cached("beeswax.entry")
     finally:
         mod._run_task = orig
 
@@ -31245,7 +31245,7 @@ def test_on_modify_export_uuid_short_invalid_json():
     orig = mod._run_task
     mod._run_task = _run_task_bad
     try:
-        obj = mod._export_uuid_short("deadbeef")
+        obj = mod._export_uuid_short("beeswax")
     finally:
         mod._run_task = orig
 
@@ -31265,7 +31265,7 @@ def test_on_modify_export_uuid_short_prefix_mismatch():
     orig = mod._run_task
     mod._run_task = _run_task_ok
     try:
-        obj = mod._export_uuid_short("deadbeef")
+        obj = mod._export_uuid_short("beeswax")
     finally:
         mod._run_task = orig
 
@@ -31280,11 +31280,11 @@ def test_hook_lookup_result_distinguishes_absent_and_unavailable():
         return support.export_uuid_short_result(
             run_task=lambda *_a, **_k: (ok, stdout, stderr),
             task_cmd_prefix=["task"],
-            uuid_short="deadbeef",
+            uuid_short="beeswax",
         )
 
     expect(lookup("").is_absent, "empty UUID export should be confirmed absent")
-    expect(lookup('{"uuid":"deadbeef-0000"}').is_found, "valid UUID export should be found")
+    expect(lookup('{"uuid":"beeswax-0000"}').is_found, "valid UUID export should be found")
     expect(lookup("not-json").is_unavailable, "malformed UUID export should be unavailable")
     expect(lookup("", ok=False, stderr="lock busy").is_unavailable, "failed UUID export should be unavailable")
 

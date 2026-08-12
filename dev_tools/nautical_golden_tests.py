@@ -4938,6 +4938,74 @@ def test_lifecycle_terminal_executor_guards_disablement():
     expect(unavailable.calls == ["validate"], f"terminal mutated after unavailable guard: {unavailable.calls}")
 
 
+def test_lifecycle_executor_fault_matrix_fails_closed_at_each_boundary():
+    """Injected lifecycle failures stop before unsafe later mutations."""
+    from nautical_core.lifecycle_executor import LifecycleTransitionExecutor, OperationResult, OperationState
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleOutcomeKind, LifecyclePlan, LifecycleIdentity, ParentGuard
+
+    plan = LifecyclePlan.from_mappings(
+        identity=LifecycleIdentity("chain-fault", "parent-fault", 1, 2, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=ParentGuard.from_mapping(
+            {"status": "completed", "chain": "on", "chainID": "chain-fault", "link": "1"}
+        ),
+        child_payload={"uuid": "child-fault", "link": 2},
+        parent_patch={"nextLink": "child-fau"},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+    )
+
+    for failing_stage in ("parent", "find", "import", "verify_child", "patch", "verify_link"):
+        class Services:
+            def __init__(self):
+                self.calls: list[str] = []
+
+            def result(self, name: str, *, value=None):
+                self.calls.append(name)
+                if name == failing_stage:
+                    return OperationResult(OperationState.UNAVAILABLE, reason=f"{name} unavailable")
+                return OperationResult(OperationState.APPLIED, value=value)
+
+            def validate_parent(self, _plan):
+                return self.result("parent")
+
+            def find_equivalent_child(self, _plan):
+                if failing_stage == "find":
+                    return self.result("find")
+                self.calls.append("find")
+                return OperationResult(OperationState.ABSENT)
+
+            def import_child(self, _plan):
+                return self.result("import", value={"uuid": "child-fault", "link": 2})
+
+            def verify_child(self, _plan, _child):
+                return self.result("verify_child")
+
+            def apply_parent_patch(self, _plan, _child):
+                return self.result("patch")
+
+            def verify_linkage(self, _plan, _child):
+                return self.result("verify_link")
+
+            def compensate_child(self, _plan, _child):
+                return self.result("compensate")
+
+        services = Services()
+        outcome = LifecycleTransitionExecutor(services).execute(plan)
+        expect(outcome.kind is LifecycleOutcomeKind.RETRYABLE, f"{failing_stage} did not fail retryably: {outcome}")
+        expect(failing_stage in services.calls, f"{failing_stage} was not exercised: {services.calls}")
+        failure_index = services.calls.index(failing_stage)
+        later = set(services.calls[failure_index + 1:])
+        forbidden = {
+            "parent": {"find", "import", "verify_child", "patch", "verify_link", "compensate"},
+            "find": {"import", "verify_child", "patch", "verify_link", "compensate"},
+            "import": {"verify_child", "patch", "verify_link", "compensate"},
+            "verify_child": {"patch", "verify_link", "compensate"},
+            "patch": {"verify_link", "compensate"},
+            "verify_link": set(),
+        }[failing_stage]
+        expect(not forbidden.intersection(later), f"{failing_stage} continued after failure: {services.calls}")
+
+
 def test_reconcile_terminal_state_is_idempotent_but_rejects_linked_successor():
     """A disabled terminal parent is already complete, but a linked one is a conflict."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -17021,6 +17089,34 @@ def test_on_exit_finalization_record_failure_retains_claimed_entry():
         expect(state.sqlite_acked_claims == {}, f"retained entry was acknowledged: {state.sqlite_acked_claims!r}")
     finally:
         mod._write_dead_letter, mod._mark_intent_status = saved
+
+
+def test_on_exit_finalized_intent_compaction_is_atomic_and_bounded():
+    """Finalized-intent compaction keeps valid newest records under the lock."""
+    hook = _find_hook_file("on-exit.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_exit_intent_compaction_test")
+    with tempfile.TemporaryDirectory() as td:
+        mod.TW_DATA_DIR = Path(td)
+        old_limits = (mod._INTENT_LOG_MAX_ENTRIES, mod._INTENT_LOG_MAX_BYTES)
+        try:
+            mod._INTENT_LOG_MAX_ENTRIES = 2
+            mod._INTENT_LOG_MAX_BYTES = 1
+            path = mod._intent_log_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            records = [
+                {"status": "done", "spawn_intent_id": f"si_{idx}", "ts": f"2026-01-0{idx}T00:00:00Z"}
+                for idx in range(1, 4)
+            ]
+            path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+            finalized, ready = mod._load_finalized_intents()
+            expect(ready, "intent log compaction reported unavailable")
+            expect(finalized == {"si_2", "si_3"}, f"compaction retained the wrong intents: {finalized!r}")
+            lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            expect(len(lines) == 2, f"compacted intent log was not bounded: {lines!r}")
+            expect(all(json.loads(line).get("spawn_intent_id") in finalized for line in lines), f"compacted log is invalid: {lines!r}")
+            expect(not path.with_suffix(".staging").exists(), "compaction staging file was left behind")
+        finally:
+            mod._INTENT_LOG_MAX_ENTRIES, mod._INTENT_LOG_MAX_BYTES = old_limits
 
 
 def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
@@ -33336,6 +33432,7 @@ TESTS = [
     test_lifecycle_queue_capacity_guard_is_atomic,
     test_lifecycle_executor_uses_typed_order_and_compensation,
     test_lifecycle_terminal_executor_guards_disablement,
+    test_lifecycle_executor_fault_matrix_fails_closed_at_each_boundary,
     test_reconcile_terminal_state_is_idempotent_but_rejects_linked_successor,
     test_queue_database_durable_mode_uses_full_synchronous,
     test_queue_schema_rejects_incompatible_databases_without_quarantine,
@@ -33679,6 +33776,7 @@ TESTS = [
     test_on_exit_requeue_sqlite_clears_claim_metadata,
     test_queue_claim_owner_blocks_stale_ack_and_requeue,
     test_on_exit_finalization_record_failure_retains_claimed_entry,
+    test_on_exit_finalized_intent_compaction_is_atomic_and_bounded,
     test_on_exit_lock_storm_circuit_requeues_remaining,
     test_cache_metrics_emits_when_enabled,
     test_sanitize_task_strings_removes_controls,

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
+from typing import Any, Callable
 
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
+from .occurrence_outcomes import OccurrenceCollectionResult
+from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 
 
 def _has_rand_atoms(dnf: list[list[dict]]) -> bool:
@@ -33,6 +36,7 @@ def precompute_hints(
     next_after_expr,
     next_for_or,
     include_per_year: bool = True,
+    scheduler_service: Any | None = None,
 ):
     # Operate in local dates; let hooks add times if they prefer.
     today = now_local().date()
@@ -59,7 +63,22 @@ def precompute_hints(
         cached = next_cache.get(cursor, cache_miss)
         if cached is not cache_miss:
             return cached
-        if use_expr_scheduler:
+        if scheduler_service is not None:
+            timezone = scheduler_service.session.evaluator.context.timezone
+            cursor_dt = datetime.combine(cursor, dt_time.max, tzinfo=timezone)
+            request = OccurrenceRangeRequest(
+                OccurrenceCursor.strict_after(cursor_dt, timezone=timezone),
+                limit=1,
+            )
+            result = scheduler_service.collect_request(request)
+            if not isinstance(result, OccurrenceCollectionResult):
+                raise TypeError("Scheduler service returned an invalid hint collection.")
+            candidate = (
+                result.occurrences[0].local_datetime.date()
+                if result.occurrences and result.occurrences[0].local_datetime is not None
+                else None
+            )
+        elif use_expr_scheduler:
             candidate = next_after_expr(
                 dnf,
                 cursor,
@@ -159,6 +178,7 @@ def build_and_cache_hints(
     holiday_region: str,
     business_calendar_fingerprint: str = "",
     include_per_year: bool = True,
+    scheduler_service_factory: Callable[..., Any] | None = None,
 ):
     def _canonical(value):
         if isinstance(value, dict):
@@ -193,6 +213,11 @@ def build_and_cache_hints(
         start_dt=default_due_dt,
         anchor_mode=anchor_mode,
         include_per_year=include_per_year,
+        scheduler_service=(
+            scheduler_service_factory(anchor_expr)
+            if scheduler_service_factory is not None
+            else None
+        ),
     )
 
     payload = {

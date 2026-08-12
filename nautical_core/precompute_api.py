@@ -19,6 +19,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         sample_days_for_year=366,
         business_calendar=None,
         include_per_year: bool = True,
+        scheduler_service=None,
     ) -> dict:
         _ = anchor_mode
         business_calendar = core["_business_calendar"].effective_business_calendar(
@@ -38,6 +39,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
                 core["_next_for_or"], business_calendar
             ),
             include_per_year=include_per_year,
+            scheduler_service=scheduler_service,
         )
 
     def build_and_cache_hints(
@@ -51,6 +53,22 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             business_calendar
         )
         calendar_fingerprint = core["business_calendar_fingerprint"](business_calendar)
+
+        def scheduler_service_factory(anchor: str):
+            scheduler_service = core["_import_sibling"]("scheduler_service")
+            context_type = core["_import_sibling"]("recurrence_context").RecurrenceContext
+            context = context_type(
+                chain_id="preview",
+                timezone=core.get("_LOCAL_TZ"),
+                business_calendar=business_calendar,
+                astronomy_config=core.get("ASTRONOMY_CONFIG"),
+                anchor_file_dir=core.get("ANCHOR_FILE_DIR", ""),
+            )
+            return scheduler_service.SchedulerService.from_task(
+                {"chainID": "preview", "anchor": anchor},
+                context=context,
+            )
+
         return core["_precompute"].build_and_cache_hints(
             anchor_expr,
             anchor_mode=anchor_mode,
@@ -71,6 +89,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             holiday_region=core["HOLIDAY_REGION"],
             business_calendar_fingerprint=calendar_fingerprint,
             include_per_year=include_per_year,
+            scheduler_service_factory=scheduler_service_factory,
         )
 
     return SimpleNamespace(

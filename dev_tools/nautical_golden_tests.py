@@ -10910,24 +10910,46 @@ def test_cache_key_for_task_caches_build_acf_results():
 def test_build_and_cache_hints_parses_once_per_miss():
     """build_and_cache_hints should avoid an extra parse for natural text on cache miss."""
     calls = {"n": 0}
-    saved_parse = core.parse_anchor_expr_to_dnf_cached
+    saved_validate = core.validate_anchor_expr_strict
     saved_load = core.cache_load
     saved_save = core.cache_save
     try:
-        def _counting_parse(expr: str):
+        def _counting_validate(expr: str):
             calls["n"] += 1
-            return saved_parse(expr)
+            return saved_validate(expr)
 
-        core.parse_anchor_expr_to_dnf_cached = _counting_parse
+        core.validate_anchor_expr_strict = _counting_validate
         core.cache_load = lambda _k: None
         core.cache_save = lambda _k, _v: None
         payload = core.build_and_cache_hints("w:thu@t=08:45", "skip")
         expect(payload and payload.get("dnf"), "expected build_and_cache_hints payload on miss")
-        # One parse is for cache key canonicalization (build_acf), one for dnf validation.
-        # The natural text path should reuse that dnf instead of parsing a third time.
-        expect(calls["n"] == 2, f"expected two parses on miss, got {calls['n']}")
+        expect(calls["n"] == 1, f"expected one strict validation on miss, got {calls['n']}")
     finally:
-        core.parse_anchor_expr_to_dnf_cached = saved_parse
+        core.validate_anchor_expr_strict = saved_validate
+        core.cache_load = saved_load
+        core.cache_save = saved_save
+
+
+def test_build_and_cache_hints_routes_scheduler_through_service():
+    """Production hint builds must not fall back to callback scheduling."""
+    saved_next = core.next_after_expr
+    saved_or = core._next_for_or
+    saved_load = core.cache_load
+    saved_save = core.cache_save
+    try:
+        def _legacy_callback(*_args, **_kwargs):
+            raise AssertionError("hint build used a legacy scheduler callback")
+
+        core.next_after_expr = _legacy_callback
+        core._next_for_or = _legacy_callback
+        core.cache_load = lambda _key: None
+        core.cache_save = lambda _key, _value: None
+        payload = core.build_and_cache_hints("w:thu@t=08:45", "skip")
+        expect(payload["next_dates"], "service-backed hint build returned no dates")
+        expect(payload["per_year"]["est"] > 0, "service-backed annual hints were not collected")
+    finally:
+        core.next_after_expr = saved_next
+        core._next_for_or = saved_or
         core.cache_load = saved_load
         core.cache_save = saved_save
 
@@ -34482,6 +34504,7 @@ TESTS = [
     test_build_and_cache_hints_rejects_stale_valid_dnf,
     test_cache_key_for_task_caches_build_acf_results,
     test_build_and_cache_hints_parses_once_per_miss,
+    test_build_and_cache_hints_routes_scheduler_through_service,
     test_precompute_hints_bounds_year_stats_by_days,
     test_precompute_hints_can_skip_unused_annual_stats,
     test_precompute_hints_reuses_no_match_scheduler_result,

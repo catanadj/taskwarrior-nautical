@@ -141,7 +141,11 @@ def resolve_time_slots_with_offsets(
             return list(random_window.slots_with_offsets(f"{effective_seed}/{target_date.isoformat()}"))
     ordinary = resolve_time_slots(raw, target_date, config=config, to_local=to_local)
     if offset_minutes:
-        ordinary = resolve_time_slots({"t": ordinary, "time_offset_minutes": offset_minutes}, target_date, config=config, to_local=to_local)
+        shifted: list[tuple[int, int, int]] = []
+        for hour, minute in ordinary:
+            total = hour * 60 + minute + offset_minutes
+            shifted.append((total // 1440, (total % 1440) // 60, total % 60))
+        return shifted
     return [(0, hour, minute) for hour, minute in ordinary]
 
 

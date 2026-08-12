@@ -9,7 +9,7 @@ invalid modifier or a terminal scheduler failure.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Callable, Mapping
 
 from .scheduler_models import OccurrenceSearchExhausted
@@ -25,7 +25,7 @@ class ProjectedTime:
     source: str = "clock"
 
     def __post_init__(self) -> None:
-        if not isinstance(self.selected_date, date):
+        if not isinstance(self.selected_date, date) or isinstance(self.selected_date, datetime):
             raise TypeError("A time projection requires its selected calendar date.")
         if not isinstance(self.slots, tuple):
             raise TypeError("Projected time slots must be immutable.")
@@ -33,8 +33,8 @@ class ProjectedTime:
             if not isinstance(slot, tuple) or len(slot) != 3:
                 raise ValueError("Projected time slots must be (day offset, hour, minute) tuples.")
             day_offset, hour, minute = slot
-            if not isinstance(day_offset, int) or not 0 <= day_offset <= 1:
-                raise ValueError("Projected day offsets must be 0 or 1.")
+            if not isinstance(day_offset, int):
+                raise ValueError("Projected day offsets must be integers.")
             if not isinstance(hour, int) or not 0 <= hour <= 23:
                 raise ValueError("Projected hours must be between 0 and 23.")
             if not isinstance(minute, int) or not 0 <= minute <= 59:
@@ -105,7 +105,7 @@ class TimeProjectionService:
         seed_base: str = "",
         context: Any | None = None,
     ) -> ProjectionResult:
-        if not isinstance(selected_date, date):
+        if not isinstance(selected_date, date) or isinstance(selected_date, datetime):
             raise TypeError("Time projection requires a selected calendar date.")
         if isinstance(value, Mapping) and not any(
             value.get(key) is not None for key in ("t", "time_window", "time_random")

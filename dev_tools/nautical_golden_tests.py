@@ -23641,6 +23641,8 @@ def test_occurrence_cursor_makes_lookup_semantics_explicit():
     inclusive = OccurrenceCursor.inclusive_at(instant, timezone=zone)
     expect(not strict.inclusive and inclusive.inclusive, "cursor inclusivity was not explicit")
     expect(evaluator.next_after_cursor(strict) is not None, "strict cursor returned no occurrence")
+    collected = evaluator.collect_after_cursor(strict, limit=1)
+    expect(len(collected) == 1, "cursor collection did not honor its limit")
     try:
         evaluator.next_after_cursor(OccurrenceCursor.strict_after(instant, timezone=ZoneInfo("UTC")))
     except ValueError as exc:

@@ -710,6 +710,28 @@ class RecurrenceEvaluator:
             to_local=self.to_local,
         )
 
+    def collect_after_cursor(
+        self,
+        cursor: OccurrenceCursor,
+        *,
+        limit: int,
+        **kwargs: Any,
+    ) -> list[Occurrence]:
+        """Collect occurrences from an explicit cursor contract."""
+        if not isinstance(cursor, OccurrenceCursor):
+            raise TypeError("Occurrence collection requires an OccurrenceCursor.")
+        if cursor.timezone is not None and self.context.timezone is not None:
+            expected = getattr(self.context.timezone, "key", self.context.timezone)
+            actual = getattr(cursor.timezone, "key", cursor.timezone)
+            if str(expected) != str(actual):
+                raise ValueError("Occurrence cursor timezone does not match evaluator context.")
+        return self.collect_after(
+            cursor.local_datetime,
+            limit=limit,
+            inclusive=cursor.inclusive,
+            **kwargs,
+        )
+
     @staticmethod
     def _core_module() -> Any:
         from . import _PKG_PROXY

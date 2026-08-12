@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, MutableMapping
 
 from .recurrence_evaluator import RecurrenceEvaluator
+from .scheduler_service import SchedulerService
+from .recurrence_context import RecurrenceContext
 
 
 _RESERVED_DROP = frozenset(
@@ -103,7 +105,7 @@ class ChainGenerationService:
     recurrence_update_udas: tuple[str, ...] = ()
     debug_wait_sched: bool = False
     wait_sched_debug: MutableMapping[str, dict[str, Any]] | None = None
-    _evaluator_cache: dict[tuple[Any, ...], RecurrenceEvaluator] = field(
+    _evaluator_cache: dict[tuple[Any, ...], SchedulerService] = field(
         default_factory=dict,
         repr=False,
     )
@@ -178,17 +180,18 @@ class ChainGenerationService:
         )
         cached = self._evaluator_cache.get(key)
         if cached is not None:
-            return cached
-        evaluator = RecurrenceEvaluator.from_task(
+            return cached.session.evaluator
+        context = RecurrenceContext.from_task(
             task,
-            fallback_chain_id=identity or "preview",
+            fallback_chain_id=identity,
             timezone=getattr(self.core, "_LOCAL_TZ", None),
             business_calendar=self.core.business_calendar_for_task(task),
             astronomy_config=getattr(self.core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(self.core, "ANCHOR_FILE_DIR", ""),
         )
-        self._evaluator_cache[key] = evaluator
-        return evaluator
+        service = SchedulerService.from_task(task, context=context)
+        self._evaluator_cache[key] = service
+        return service.session.evaluator
 
     def _local(self, value: datetime) -> datetime:
         return self.core.to_local(value)

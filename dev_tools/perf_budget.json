@@ -52,6 +52,7 @@
     "queue_schema_hot": 0.2,
     "queue_schema_cold": 3.0,
     "anchor_file_provider": 0.2,
+    "anchor_file_batch_provider": 0.2,
     "seasonal_parse_validate": 0.08,
     "seasonal_next_after": 0.15,
     "seasonal_build_hints_cold": 30.0,
@@ -60,6 +61,7 @@
   "slow_device_budgets_seconds": {
     "build_hints_cold": 30.0,
     "build_hints_warm": 8.0,
+    "anchor_file_batch_provider": 1.0,
     "seasonal_build_hints_cold": 90.0,
     "seasonal_build_hints_warm": 30.0
   },

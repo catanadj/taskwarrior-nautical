@@ -327,6 +327,36 @@ def _bench_anchor_file_provider(rounds: int) -> float:
         return time.perf_counter() - started
 
 
+def _bench_anchor_file_batch_provider(rounds: int) -> float:
+    """Measure provider-owned finite batch generation on a warm file cache."""
+    anchor_files = importlib.import_module("nautical_core.anchor_files")
+    occurrence_provider = importlib.import_module("nautical_core.occurrence_provider")
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-anchor-batch-") as td:
+        path = Path(td) / "calendar.csv"
+        rows = ["date,description"]
+        for index in range(365):
+            item_date = date(2026, 1, 1) + timedelta(days=index)
+            rows.append(f"{item_date.isoformat()},{index}")
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        provider = anchor_files.AnchorFileOccurrenceProvider("calendar.csv@t=09:00", td, (9, 0))
+        build = lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm)
+        identity = lambda value: value
+        started = time.perf_counter()
+        for index in range(max(1, rounds)):
+            after = datetime(2026, 1, 1, 8, 0) + timedelta(days=index % 350)
+            batch = occurrence_provider.collect_after(
+                provider,
+                after,
+                limit=5,
+                build_local_datetime=build,
+                to_local=identity,
+                require_contract=True,
+            )
+            if not batch:
+                raise RuntimeError("anchor-file batch benchmark unexpectedly returned no occurrences")
+        return time.perf_counter() - started
+
+
 def _bench_large_anchor_file_provider(
     rounds: int,
     *,
@@ -1741,6 +1771,7 @@ def main() -> int:
         ("queue_schema_hot", lambda: _bench_queue_schema_hot(queue_schema_hot_rounds), repeats),
         ("queue_schema_cold", lambda: _bench_queue_schema_cold(queue_schema_cold_rounds), repeats),
         ("anchor_file_provider", lambda: _bench_anchor_file_provider(anchor_file_rounds), repeats),
+        ("anchor_file_batch_provider", lambda: _bench_anchor_file_batch_provider(anchor_file_rounds), repeats),
     ]
     if args.workflows_only:
         checks = []

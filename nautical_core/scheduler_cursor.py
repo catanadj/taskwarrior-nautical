@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,4 +40,40 @@ class OccurrenceCursor:
         return cls(local_datetime, inclusive=True, timezone=timezone, date_limit=date_limit)
 
 
-__all__ = ("OccurrenceCursor",)
+@dataclass(frozen=True, slots=True)
+class OccurrenceRangeRequest:
+    """Validated bounded collection request for scheduler consumers."""
+
+    cursor: OccurrenceCursor
+    end_local: datetime | None = None
+    limit: int = 1
+    omission_policy: Literal["exclude", "include", "report"] = "exclude"
+    max_iterations: int = 512
+    max_file_skips: int = 512
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.cursor, OccurrenceCursor):
+            raise TypeError("Occurrence range requires an OccurrenceCursor.")
+        if self.end_local is not None and not isinstance(self.end_local, datetime):
+            raise TypeError("Occurrence range end must be a datetime.")
+        if isinstance(self.limit, bool) or not isinstance(self.limit, int) or self.limit < 0:
+            raise ValueError("Occurrence range limit must be a non-negative integer.")
+        if self.omission_policy not in {"exclude", "include", "report"}:
+            raise ValueError("Occurrence omission policy must be exclude, include, or report.")
+        if isinstance(self.max_iterations, bool) or not isinstance(self.max_iterations, int) or self.max_iterations <= 0:
+            raise ValueError("Occurrence range iteration limit must be positive.")
+        if isinstance(self.max_file_skips, bool) or not isinstance(self.max_file_skips, int) or self.max_file_skips <= 0:
+            raise ValueError("Occurrence range file-skip limit must be positive.")
+        if self.end_local is not None:
+            cursor_value = self.cursor.local_datetime
+            if (self.end_local.tzinfo is None) != (cursor_value.tzinfo is None):
+                raise ValueError("Occurrence range boundaries must use compatible timezone awareness.")
+            if self.end_local < cursor_value:
+                raise ValueError("Occurrence range end must not precede its cursor.")
+
+    @property
+    def timezone(self) -> Any | None:
+        return self.cursor.timezone
+
+
+__all__ = ("OccurrenceCursor", "OccurrenceRangeRequest")

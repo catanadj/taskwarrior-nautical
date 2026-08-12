@@ -12,7 +12,7 @@ from .occurrence_provider import OccurrenceBatch
 from .occurrence_provider import Occurrence
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
-from .scheduler_cursor import OccurrenceCursor
+from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 
 
 @dataclass(slots=True)
@@ -56,6 +56,47 @@ class SchedulerService:
             source=self.session.evaluator.kind or "scheduler",
             terminal=batch.terminal,
         )
+
+    def collect_request(self, request: OccurrenceRangeRequest) -> OccurrenceCollectionResult:
+        """Collect one validated range request through this service."""
+        if not isinstance(request, OccurrenceRangeRequest):
+            raise TypeError("Scheduler collection requires an OccurrenceRangeRequest.")
+        context_timezone = self.session.evaluator.context.timezone
+        if request.timezone is not None and context_timezone is not None:
+            expected = getattr(context_timezone, "key", context_timezone)
+            actual = getattr(request.timezone, "key", request.timezone)
+            if str(expected) != str(actual):
+                raise ValueError("Occurrence range timezone does not match scheduler context.")
+        if request.omission_policy != "exclude":
+            raise NotImplementedError(
+                "The current scheduler collection path supports omission_policy='exclude' only."
+            )
+        result = self.collect(
+            request.cursor,
+            limit=request.limit,
+            max_iterations=request.max_iterations,
+            max_file_skips=request.max_file_skips,
+        )
+        if request.end_local is not None:
+            result = OccurrenceCollectionResult(
+                occurrences=tuple(
+                    item for item in result.occurrences
+                    if item.local_datetime is not None and item.local_datetime <= request.end_local
+                ),
+                cursor=request.cursor,
+                source=result.source,
+                terminal=result.terminal,
+                request=request,
+            )
+        else:
+            result = OccurrenceCollectionResult(
+                occurrences=result.occurrences,
+                cursor=request.cursor,
+                source=result.source,
+                terminal=result.terminal,
+                request=request,
+            )
+        return result
 
     def preview(
         self,

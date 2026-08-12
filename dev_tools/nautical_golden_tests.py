@@ -23834,6 +23834,40 @@ def test_scheduler_parity_matrix_covers_context_sensitive_rules():
         )
 
 
+def test_occurrence_range_request_validates_context_bounds_and_policy():
+    """Range requests are explicit, bounded, and context-checked."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    from nautical_core.occurrence_outcomes import OccurrenceCollectionResult
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+    from nautical_core.scheduler_service import SchedulerService
+
+    zone = ZoneInfo("Europe/Sofia")
+    task = {"chainID": "range-contract", "anchor": "w:mon@t=09:00"}
+    service = SchedulerService.from_task(task, context=RecurrenceContext(chain_id="range-contract", timezone=zone))
+    cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, tzinfo=zone), timezone=zone)
+    request = OccurrenceRangeRequest(
+        cursor,
+        end_local=datetime(2026, 8, 31, 23, tzinfo=zone),
+        limit=3,
+    )
+    result = service.collect_request(request)
+    expect(isinstance(result, OccurrenceCollectionResult), "range request did not return typed result")
+    expect(result.request == request and all(item.local_datetime <= request.end_local for item in result), "range boundary was not preserved")
+    for bad in (
+        lambda: OccurrenceRangeRequest(cursor, end_local=cursor.local_datetime - timedelta(days=1)),
+        lambda: OccurrenceRangeRequest(cursor, omission_policy="unknown"),
+        lambda: service.collect_request(OccurrenceRangeRequest(cursor, omission_policy="include")),
+    ):
+        try:
+            bad()
+        except (ValueError, NotImplementedError) as exc:
+            expect(str(exc), "range contract rejection was not actionable")
+        else:
+            raise AssertionError("invalid range contract was accepted")
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35366,6 +35400,7 @@ TESTS.extend([
     test_scheduler_service_is_one_typed_occurrence_entry_point,
     test_scheduler_parity_harness_compares_legacy_callback_only_in_tests,
     test_scheduler_parity_matrix_covers_context_sensitive_rules,
+    test_occurrence_range_request_validates_context_bounds_and_policy,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

@@ -8,7 +8,7 @@ from typing import Any, Iterator, Literal
 
 from .occurrence_provider import Occurrence
 from .scheduler_models import OccurrenceSearchExhausted
-from .scheduler_cursor import OccurrenceCursor
+from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,12 +98,29 @@ class OccurrenceCollectionResult:
     source: str = "scheduler"
     terminal: OccurrenceSearchExhausted | None = None
     empty_reason: str = ""
+    request: OccurrenceRangeRequest | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.occurrences, tuple):
             raise TypeError("Occurrence collection must be immutable.")
         if not isinstance(self.cursor, OccurrenceCursor):
             raise TypeError("Occurrence collection requires its source cursor.")
+        if self.request is not None:
+            if not isinstance(self.request, OccurrenceRangeRequest):
+                raise TypeError("Occurrence collection request must be typed.")
+            if self.request.cursor != self.cursor:
+                raise ValueError("Occurrence collection request and cursor disagree.")
+            if self.request.end_local is not None:
+                for occurrence in self.occurrences:
+                    if occurrence.local_datetime is None or occurrence.local_datetime > self.request.end_local:
+                        raise ValueError("Occurrence collection contains an event beyond its end boundary.")
+            previous = None
+            for occurrence in self.occurrences:
+                if occurrence.local_datetime is None:
+                    raise ValueError("Occurrence collection contains no local datetime.")
+                if previous is not None and occurrence.local_datetime <= previous:
+                    raise ValueError("Occurrence collection is not strictly monotonic.")
+                previous = occurrence.local_datetime
         if not self.occurrences and not self.empty_reason:
             object.__setattr__(self, "empty_reason", "no matching occurrence")
 
@@ -127,6 +144,9 @@ class OccurrenceCollectionResult:
             "source": self.source,
             "cursor": self.cursor.local_datetime.isoformat(),
             "inclusive": self.cursor.inclusive,
+            "end": self.request.end_local.isoformat() if self.request and self.request.end_local else None,
+            "limit": self.request.limit if self.request else None,
+            "omission_policy": self.request.omission_policy if self.request else None,
             "occurrences": [
                 {
                     "local": item.local_datetime.isoformat() if item.local_datetime else None,

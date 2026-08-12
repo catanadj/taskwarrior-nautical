@@ -21,6 +21,98 @@ def _format_td_short(td: timedelta) -> str:
     return "".join(parts) if parts else "0s"
 
 
+def format_chain_summary_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
+    """Arrange chain-finished rows into compact presentation sections."""
+    groups = (
+        {"Reason", "Chain", "Pattern", "Natural", "Period"},
+        {"First due", "Last end", "Span"},
+        {"Performance", "Avg lateness", "Median lateness", "Best early", "Worst late"},
+        {"Chain cap", "Chain end point", "Chain limits"},
+        {"History"},
+    )
+    grouped: list[list[tuple[str, str]]] = [[] for _ in groups]
+    other: list[tuple[str, str]] = []
+    for key, value in rows:
+        for index, names in enumerate(groups):
+            if key in names:
+                grouped[index].append((key, value))
+                break
+        else:
+            other.append((key, value))
+    grouped[0].extend(other)
+    out: list[tuple[str | None, str]] = []
+    for group in grouped:
+        if not group:
+            continue
+        if out:
+            out.append((None, ""))
+        out.extend(group)
+    return out or rows
+
+
+def format_next_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
+    """Arrange anchor next-link rows into compact presentation sections."""
+    groups = (
+        {"Pattern", "Natural", "Basis", "Sanitised"},
+        {
+            "Next", "Next Due", "Expiration", "Next expires", "Scheduled", "Wait",
+            "Link status", "Links left", "Chain cap", "Chain end point",
+        },
+        {"Last occurrence"},
+        {"Timeline"},
+        {"Rand"},
+    )
+    grouped: list[list[tuple[str, str]]] = [[] for _ in groups]
+    other: list[tuple[str, str]] = []
+    for key, value in rows:
+        for index, names in enumerate(groups):
+            if key in names:
+                grouped[index].append((key, value))
+                break
+        else:
+            other.append((key, value))
+    grouped[0].extend(other)
+    out: list[tuple[str | None, str]] = []
+    for group in grouped:
+        if not group:
+            continue
+        if out:
+            out.append((None, ""))
+        out.extend(group)
+    return out or rows
+
+
+def format_next_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
+    """Arrange CP next-link rows into compact presentation sections."""
+    groups = (
+        {"Period", "Basis"},
+        {
+            "Next", "Next Due", "Expiration", "Next expires", "Scheduled", "Wait",
+            "Link status", "Links left", "Chain cap", "Chain end point",
+        },
+        {"Last occurrence"},
+        {"Timeline"},
+    )
+    grouped: list[list[tuple[str, str]]] = [[] for _ in groups]
+    other: list[tuple[str, str]] = []
+    for key, value in rows:
+        for index, names in enumerate(groups):
+            if key in names:
+                grouped[index].append((key, value))
+                break
+        else:
+            other.append((key, value))
+    grouped[0].extend(other)
+    out: list[tuple[str | None, str]] = []
+    for group in grouped:
+        if not group:
+            continue
+        if out:
+            out.append((None, ""))
+        out.extend(group)
+    return out or rows
+
+
 def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequence=None, cp_sequence_interval_for_link=None) -> str:
     if callable(cp_sequence_interval_for_link):
         td = cp_sequence_interval_for_link(

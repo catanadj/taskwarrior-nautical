@@ -1345,149 +1345,14 @@ def _strip_quotes(s: str) -> str:
 def _format_chain_summary_rows(
     rows: list[tuple[str, str]]
 ) -> list[tuple[str | None, str]]:
-    """
-    Compact layout for chain-finished summary, without section headers.
-
-    Order:
-      Reason / Chain / Pattern-Natural-Period / (other)
-      <blank>
-      First due / Last end / Span
-      <blank>
-      Performance rows
-      <blank>
-      Limits
-      <blank>
-      History
-    """
-    chain_keys = {"Reason", "Chain", "Pattern", "Natural", "Period"}
-    schedule_keys = {"First due", "Last end", "Span"}
-    perf_keys = {
-        "Performance",
-        "Avg lateness",
-        "Median lateness",
-        "Best early",
-        "Worst late",
-    }
-    limits_keys = {"Chain cap", "Chain end point", "Chain limits"}
-    history_keys = {"History"}
-
-    chain: list[tuple[str, str]] = []
-    schedule: list[tuple[str, str]] = []
-    perf: list[tuple[str, str]] = []
-    limits: list[tuple[str, str]] = []
-    history: list[tuple[str, str]] = []
-    others: list[tuple[str, str]] = []
-
-    for k, v in rows:
-        if k in chain_keys:
-            chain.append((k, v))
-        elif k in schedule_keys:
-            schedule.append((k, v))
-        elif k in perf_keys:
-            perf.append((k, v))
-        elif k in limits_keys:
-            limits.append((k, v))
-        elif k in history_keys:
-            history.append((k, v))
-        else:
-            others.append((k, v))
-
-    # Put unknowns next to the chain meta so nothing disappears
-    chain.extend(others)
-
-    out: list[tuple[str | None, str]] = []
-
-    def _add(group: list[tuple[str, str]]):
-        nonlocal out
-        if not group:
-            return
-        if out:
-            out.append((None, ""))  # spacer line
-        out.extend(group)
-
-    _add(chain)
-    _add(schedule)
-    _add(perf)
-    _add(limits)
-    _add(history)
-
-    return out or rows
+    return _module("modify_feedback").format_chain_summary_rows(rows)
 
 
 
 def _format_next_anchor_rows(
     rows: list[tuple[str, str]]
 ) -> list[tuple[str | None, str]]:
-    """
-    Compact layout for anchor next-link feedback, without section headers.
-
-    Order:
-      Pattern / Natural / Basis / Sanitised / (other)
-      <blank>
-      Next Due / Link status / Links left / Limits
-      <blank>
-      Last occurrence
-      <blank>
-      Timeline
-      <blank>
-      Rand
-    """
-    chain_keys = {"Pattern", "Natural", "Basis", "Sanitised"}
-    next_keys = {
-        "Next",
-        "Next Due",
-        "Expiration",
-        "Next expires",
-        "Scheduled",
-        "Wait",
-        "Link status",
-        "Links left",
-        "Chain cap",
-        "Chain end point",
-    }
-    timeline_keys = {"Timeline"}
-    footer_keys = {"Rand"}
-
-    chain: list[tuple[str, str]] = []
-    next_sec: list[tuple[str, str]] = []
-    finals: list[tuple[str, str]] = []
-    timeline: list[tuple[str, str]] = []
-    footer: list[tuple[str, str]] = []
-    others: list[tuple[str, str]] = []
-
-    for k, v in rows:
-        if k in chain_keys:
-            chain.append((k, v))
-        elif k in next_keys:
-            next_sec.append((k, v))
-        elif k == "Last occurrence":
-            finals.append((k, v))
-        elif k in timeline_keys:
-            timeline.append((k, v))
-        elif k in footer_keys:
-            footer.append((k, v))
-        else:
-            others.append((k, v))
-
-    chain.extend(others)
-
-    out: list[tuple[str | None, str]] = []
-
-    def _add(group: list[tuple[str, str]]):
-        nonlocal out
-        if not group:
-            return
-        if out:
-            out.append((None, ""))  # spacer line
-        out.extend(group)
-
-    _add(chain)
-    _add(next_sec)
-    _add(finals)
-    _add(timeline)
-    _add(footer)
-
-    return out or rows
+    return _module("modify_feedback").format_next_anchor_rows(rows)
 
 def _format_gap(prev_dt: datetime, next_dt: datetime, kind: str = "cp", round_hours: bool = True) -> str:
     """
@@ -1545,69 +1410,7 @@ def _format_gap(prev_dt: datetime, next_dt: datetime, kind: str = "cp", round_ho
 def _format_next_cp_rows(
     rows: list[tuple[str, str]]
 ) -> list[tuple[str | None, str]]:
-    """
-    Compact layout for cp next-link feedback, without section headers.
-
-    Order:
-      Period / Basis / (other)
-      <blank>
-      Next Due / Link status / Links left / Limits
-      <blank>
-      Last occurrence
-      <blank>
-      Timeline
-    """
-    chain_keys = {"Period", "Basis"}
-    next_keys = {
-        "Next",
-        "Next Due",
-        "Expiration",
-        "Next expires",
-        "Scheduled",
-        "Wait",
-        "Link status",
-        "Links left",
-        "Chain cap",
-        "Chain end point",
-    }
-    timeline_keys = {"Timeline"}
-
-    chain: list[tuple[str, str]] = []
-    next_sec: list[tuple[str, str]] = []
-    finals: list[tuple[str, str]] = []
-    timeline: list[tuple[str, str]] = []
-    others: list[tuple[str, str]] = []
-
-    for k, v in rows:
-        if k in chain_keys:
-            chain.append((k, v))
-        elif k in next_keys:
-            next_sec.append((k, v))
-        elif k == "Last occurrence":
-            finals.append((k, v))
-        elif k in timeline_keys:
-            timeline.append((k, v))
-        else:
-            others.append((k, v))
-
-    chain.extend(others)
-
-    out: list[tuple[str | None, str]] = []
-
-    def _add(group: list[tuple[str, str]]):
-        nonlocal out
-        if not group:
-            return
-        if out:
-            out.append((None, ""))  # spacer line
-        out.extend(group)
-
-    _add(chain)
-    _add(next_sec)
-    _add(finals)
-    _add(timeline)
-
-    return out or rows
+    return _module("modify_feedback").format_next_cp_rows(rows)
 
 
 

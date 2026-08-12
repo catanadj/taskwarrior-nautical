@@ -29,6 +29,7 @@ class ProviderContract:
     source: str
     cursor: Literal["strict_after", "inclusive"] = "strict_after"
     finite: bool = False
+    omission_evidence: bool = False
     lower_date: date | None = None
     upper_date: date | None = None
 
@@ -39,6 +40,8 @@ class ProviderContract:
             raise ValueError("Occurrence provider cursor must be strict_after or inclusive.")
         if not isinstance(self.finite, bool):
             raise TypeError("Occurrence provider finiteness must be boolean.")
+        if not isinstance(self.omission_evidence, bool):
+            raise TypeError("Occurrence provider omission evidence must be boolean.")
         for value in (self.lower_date, self.upper_date):
             if value is not None and (not isinstance(value, date) or isinstance(value, datetime)):
                 raise TypeError("Occurrence provider bounds must be calendar dates.")
@@ -337,7 +340,7 @@ class AnchorEventOccurrenceProvider:
 
     @property
     def contract(self) -> ProviderContract:
-        return ProviderContract(source=self._source, cursor="strict_after")
+        return ProviderContract(source=self._source, omission_evidence=True)
 
     def next_after(
         self,

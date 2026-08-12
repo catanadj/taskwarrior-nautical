@@ -842,11 +842,23 @@ class RecurrenceEvaluator:
             fallback_hhmm=fallback_hhmm,
         )
 
+    def project_time(self, value: Any, selected_date: date, **kwargs: Any) -> Any:
+        """Project a time modifier against a selected date through one service."""
+        from .time_projection import TimeProjectionService
+
+        service = self._get_cached("time_projection_service", TimeProjectionService)
+        return service.project(value, selected_date, context=self.context, **kwargs)
+
     def _build_scheduler_binding(self) -> NextOccurrenceCallback:
         """Build the evaluator-bound scheduler once per evaluator session."""
         from .add_anchor_compute import anchor_next_occurrence_after_local_dt
         from .anchor_inclusion import _norm_t_mod
-        from .time_slots import resolve_time_slots
+        from .time_projection import (
+            ProjectedTime,
+            ProjectionInvalid,
+            ProjectionTerminal,
+            ProjectionUnavailable,
+        )
 
         core = self._core_module()
 
@@ -917,12 +929,23 @@ class RecurrenceEvaluator:
             else:
                 core_config = getattr(core, "ASTRONOMY_CONFIG", {})
                 config = core_config if isinstance(core_config, dict) else None
-            return resolve_time_slots(
+            projection = self_evaluator.project_time(
                 value,
                 target_date,
                 config=config,
                 to_local=self.to_local,
             )
+            if isinstance(projection, ProjectedTime):
+                if all(day_offset == 0 for day_offset, _hour, _minute in projection.slots):
+                    return [(hour, minute) for _day_offset, hour, minute in projection.slots]
+                return list(projection.slots)
+            if isinstance(projection, ProjectionTerminal):
+                raise projection.error
+            if isinstance(projection, ProjectionUnavailable):
+                raise LookupError(projection.reason)
+            if isinstance(projection, ProjectionInvalid):
+                raise ValueError(projection.reason)
+            raise TypeError("Unknown time projection result.")
 
         def scheduler(
             dnf: Any,

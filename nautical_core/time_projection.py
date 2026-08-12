@@ -107,6 +107,12 @@ class TimeProjectionService:
     ) -> ProjectionResult:
         if not isinstance(selected_date, date):
             raise TypeError("Time projection requires a selected calendar date.")
+        if isinstance(value, Mapping) and not any(
+            value.get(key) is not None for key in ("t", "time_window", "time_random")
+        ):
+            # A recurrence without an explicit @t modifier intentionally uses
+            # the caller's fallback clock; it is not an invalid projection.
+            return ProjectedTime(selected_date, (), "default")
         try:
             raw_slots = self.resolver(
                 value,

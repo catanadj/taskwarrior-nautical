@@ -147,6 +147,7 @@ class LifecycleReadService:
         read_query_set: ReadQuerySet | None = None,
         read_query_delete: ReadQueryDelete | None = None,
         cache_store: ChainCacheStore | None = None,
+        task_cmd_prefix: Callable[[], list[str]] | None = None,
     ) -> None:
         self._coerce_int = coerce_int
         self._parse_extra_tokens = parse_extra_tokens
@@ -160,6 +161,37 @@ class LifecycleReadService:
         self._read_query_set = read_query_set or (lambda _kind, _key, _value: None)
         self._read_query_delete = read_query_delete or (lambda _kind, _key: None)
         self._cache_store = cache_store
+        self._task_cmd_prefix = task_cmd_prefix or (lambda: ["task"])
+
+    def build_export_args(
+        self,
+        chain_id: str,
+        *,
+        since: datetime | None,
+        extra: str | None,
+        limit: int | None,
+    ) -> list[str] | None:
+        """Build a strictly validated Taskwarrior chain export command."""
+        if not chain_id:
+            return None
+        args = self._task_cmd_prefix() + [
+            "rc.hooks=off",
+            "rc.json.array=on",
+            "rc.verbose=nothing",
+            f"chainID:{chain_id}",
+        ]
+        if since:
+            args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
+        if isinstance(limit, int) and limit > 0:
+            args.append(f"limit:{limit}")
+        if extra:
+            tokens = self._parse_extra_tokens(extra)
+            if tokens is None:
+                self._diag(f"tw_export_chain rejected extra: {extra!r}")
+                return None
+            args.extend(tokens)
+        args.append("export")
+        return args
 
     def cached_chain_rows(self, chain_id: str) -> list[TaskRow] | None:
         """Return the service-owned chain cache, if seeded for this chain."""

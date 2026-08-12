@@ -7993,6 +7993,30 @@ def test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed():
     expect(service.cached_chain_rows("other") is None, "cache leaked across chain IDs")
 
 
+def test_lifecycle_read_service_builds_strict_chain_export_args():
+    """The lifecycle service owns safe chain-export command construction."""
+    import nautical_core.lifecycle_read_service as read_service
+
+    service = read_service.LifecycleReadService(
+        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
+        parse_extra_tokens=lambda extra: None if str(extra) == "-bad" else str(extra or "").split(),
+        token_matcher=lambda _row, _token: True,
+        read_query_get=lambda _kind, _key: object(),
+        chain_cache_get=lambda _chain_id: None,
+        export_chain_cached=lambda *_args: (),
+        max_chain_walk=10,
+        task_cmd_prefix=lambda: ["task", "rc.data.location=/tmp/taskdata"],
+    )
+    args = service.build_export_args(
+        "cid",
+        since=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        extra="status:pending",
+        limit=4,
+    )
+    expect(args and args[-2:] == ["status:pending", "export"], f"unexpected export args: {args}")
+    expect(service.build_export_args("cid", since=None, extra="-bad", limit=None) is None, "unsafe filter was accepted")
+
+
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33680,6 +33704,7 @@ TESTS = [
     test_lifecycle_read_service_checked_export_is_typed_and_cached,
     test_lifecycle_read_service_completion_snapshot_promotes_full_reads,
     test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed,
+    test_lifecycle_read_service_builds_strict_chain_export_args,
     test_next_for_and_no_progress_fails_fast,
     test_next_for_and_transient_stall_recovers,
     test_roll_apply_has_guard,

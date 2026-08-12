@@ -2617,6 +2617,7 @@ def _lifecycle_read_service():
         diag=_diag,
         record_stat=_record_chain_snapshot_stat,
         cache_store=state.chain_cache_store,
+        task_cmd_prefix=_task_cmd_prefix,
     )
     state.lifecycle_read_service = service
     return service
@@ -3974,30 +3975,12 @@ def _tw_export_chain_args(
     extra: str | None,
     limit: int | None,
 ) -> list[str] | None:
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.build_chain_export_args(
-            task_cmd_prefix=_task_cmd_prefix(),
-            chain_id=chain_id,
-            since=since,
-            extra=extra,
-            limit=limit,
-            parse_extra_tokens=_parse_extra_tokens,
-            diag=_diag,
-        )
-    args = _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
-    if since:
-        args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
-    if limit and isinstance(limit, int) and limit > 0:
-        args.append(f"limit:{limit}")
-    if extra:
-        extra_tokens = _parse_extra_tokens(extra)
-        if extra_tokens is None:
-            _diag(f"tw_export_chain rejected extra: {extra!r}")
-            return None
-        args += extra_tokens
-    args.append("export")
-    return args
+    return _lifecycle_read_service().build_export_args(
+        chain_id,
+        since=since,
+        extra=extra,
+        limit=limit,
+    )
 
 
 def _tw_export_chain_success(elapsed: float) -> None:
@@ -4108,7 +4091,7 @@ def _tw_export_chain_checked(
         extra=extra,
         env=env,
         limit=limit,
-        build_args=_tw_export_chain_args,
+        build_args=_lifecycle_read_service().build_export_args,
         run_export=_run_checked_chain_export,
         timeout_for_chain=_chain_export_timeout,
         read_query_missing=_READ_QUERY_MISSING,

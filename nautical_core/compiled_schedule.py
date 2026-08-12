@@ -224,6 +224,12 @@ class CompiledSchedule:
             "schedule": _thaw_value(self.canonical),
         }
 
+    def to_diagnostic_json(self) -> str:
+        """Return a stable diagnostic snapshot; it is not a runtime cache format."""
+        return json.dumps(
+            self.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+
 
 __all__ = (
     "COMPILER_SCHEMA_VERSION",

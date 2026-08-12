@@ -217,32 +217,6 @@ def _is_lock_error(stderr: str) -> bool:
     )
 
 
-def _tw_lock_path() -> Path:
-    return TW_DATA_DIR / "lock"
-
-
-def _tw_lock_recent(max_age_s: float = 5.0) -> bool:
-    try:
-        p = _tw_lock_path()
-        if not p.exists():
-            return False
-        age = _time.time() - p.stat().st_mtime
-        return age >= 0 and age <= max_age_s
-    except Exception:
-        return False
-
-
-def _set_wait_sched_debug(field: str, payload: dict) -> None:
-    try:
-        if field in _LAST_WAIT_SCHED_DEBUG:
-            _LAST_WAIT_SCHED_DEBUG.pop(field, None)
-        _LAST_WAIT_SCHED_DEBUG[field] = payload
-        while len(_LAST_WAIT_SCHED_DEBUG) > _MAX_WAIT_SCHED_DEBUG:
-            _LAST_WAIT_SCHED_DEBUG.popitem(last=False)
-    except Exception:
-        pass
-
-
 def _modify_runtime_state():
     global _MODIFY_RUNTIME_STATE
     if _MODIFY_RUNTIME_STATE is None:
@@ -874,18 +848,6 @@ def _task_cmd_prefix() -> list[str]:
 # ------------------------------------------------------------------------------
 # Deferred next-link spawn queue (used when nested `task import` times out due to TW lock)
 # ------------------------------------------------------------------------------
-def _nautical_state_dir_path() -> Path:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        return queue_store.nautical_state_dir_path(TW_DATA_DIR)
-    return TW_DATA_DIR / ".nautical-state"
-
-def _nautical_lock_dir_path() -> Path:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        return queue_store.nautical_lock_dir_path(TW_DATA_DIR)
-    return TW_DATA_DIR / ".nautical-locks"
-
 # Keep import-time state path setup dependency-free.  The queue adapter is
 # loaded by the lifecycle that actually needs it and run_hook refreshes these
 # paths after resolving TASKDATA/rc.data.location.
@@ -1060,11 +1022,6 @@ def _load_anchor_file_dates(name: str):
     return anchor_files.load_anchor_file_dates(name, getattr(core, "ANCHOR_FILE_DIR", ""))
 
 
-def _load_anchor_file_descriptions(name: str):
-    anchor_files = core._import_sibling("anchor_files")
-    return anchor_files.load_anchor_file_descriptions(name, getattr(core, "ANCHOR_FILE_DIR", ""))
-
-
 @lru_cache(maxsize=512)
 def _export_uuid_short_cached(u_short: str):
     obj = _export_uuid_short(u_short, env=None)
@@ -1116,10 +1073,6 @@ def _compare_datetimes(left: datetime, right: datetime) -> int:
     if _DATETIME_COMPARATOR is None:
         _DATETIME_COMPARATOR = core._import_sibling("timeutil").compare_datetimes
     return _DATETIME_COMPARATOR(left, right)
-
-
-def _later_datetime(left: datetime, right: datetime) -> datetime:
-    return left if _compare_datetimes(left, right) >= 0 else right
 
 
 # ------------------------------------------------------------------------------
@@ -1352,10 +1305,6 @@ def _panel(
         label_width_min=6,
         label_width_max=14,
     )
-
-
-def _panel_line_from_rows(title, rows) -> str:
-    return core.panel_line_from_rows(title, rows)
 
 
 def _panel_line(
@@ -1671,26 +1620,6 @@ def _format_next_cp_rows(
 _TW_JISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
 
-
-
-def _fsync_dir(path: Path) -> None:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        queue_store.fsync_dir(path)
-        return
-    try:
-        fd = os.open(str(path), os.O_DIRECTORY)
-    except Exception:
-        return
-    try:
-        os.fsync(fd)
-    except Exception:
-        pass
-    finally:
-        try:
-            os.close(fd)
-        except Exception:
-            pass
 
 
 def _spawn_queue_db_size_bytes() -> int:
@@ -2214,14 +2143,6 @@ def _strip_none_and_cast(obj: dict):
         out[k] = v
     return out
 
-def _emit_line(msg: str) -> None:
-    if not msg:
-        return
-    try:
-        sys.stderr.write(msg + "\n")
-    except Exception:
-        pass
-
 def _format_line_cap(base_no: int, cap_no: int | None, until_dt: datetime | None, until_no: int | None) -> str:
     parts = []
     if cap_no:
@@ -2487,11 +2408,6 @@ def _lifecycle_spawn_identity(parent: dict, child: dict):
         event=event,
     )
     return identity
-
-
-def _lifecycle_spawn_intent_id(parent: dict, child: dict) -> str:
-    """Derive one retry-stable queue key from the transition identity."""
-    return _lifecycle_spawn_identity(parent, child).idempotency_key
 
 
 def _spawn_child_atomic(
@@ -3691,35 +3607,6 @@ def _validate_anchor_mode(mode_str: str) -> tuple[str, str | None]:
             f"anchor_mode must be 'skip', 'all', or 'flex' (got '{raw}'). Defaulting to 'skip'.",
         )
     return (mode, None)
-
-
-def _safe_parse_cp_duration(duration_str: str) -> tuple[timedelta | None, str | None]:
-    """
-    Parse cp duration safely.
-    Returns (timedelta, error_msg).
-    error_msg is None on success, or a user-friendly explanation on failure.
-    """
-    if not (duration_str or "").strip():
-        return (None, None)
-
-    try:
-        seq = core.parse_cp_sequence(duration_str)
-        if not seq:
-            reason = core.cp_sequence_parse_error(duration_str) or f"invalid duration format '{duration_str}'"
-            return (
-                None,
-                f"{reason} (expected: 3d, 2w, 1h, etc.)",
-            )
-        return (seq[0], None)
-    except ValueError as e:
-        _diag(f"duration parse value error: {e}")
-        return (None, "Duration parsing error")
-    except TypeError as e:
-        _diag(f"duration parse type error: {e}")
-        return (None, "Duration type error")
-    except Exception as e:
-        _diag(f"duration parse unexpected error: {e}")
-        return (None, "Unexpected error parsing duration")
 
 
 def _anchor_mode_from_parent(parent: dict) -> str:
@@ -5474,11 +5361,6 @@ def _render_anchor_completion_feedback(
     )
 
 
-def _timezone_fallback_warning_for_task(task: dict) -> str:
-    diagnostics = _module("panel_diagnostics")
-    return diagnostics.recurrence_timezone_warning(core, task)
-
-
 def _render_cp_completion_feedback(
     *,
     new: dict,
@@ -6745,11 +6627,6 @@ def _handle_deleted_modify(old: dict, new: dict) -> None:
             ],
             kind="summary",
         )
-
-
-def _emit_modify_passthrough(task: dict) -> None:
-    hook_results = _module("hook_results")
-    hook_results.emit_passthrough_json(task)
 
 
 def main():

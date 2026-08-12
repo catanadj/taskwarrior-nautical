@@ -16218,11 +16218,30 @@ def test_on_modify_spawn_intent_records_parent_guard():
         f"spawn intent did not carry recurrence fingerprint: {captured}",
     )
     child = {"uuid": "00000000-0000-0000-0000-00000000abcd", "link": 5}
-    first_key = mod._lifecycle_spawn_intent_id(parent, child)
-    second_key = mod._lifecycle_spawn_intent_id(dict(parent, description="presentation edit"), child)
+    lifecycle_models = mod._module("lifecycle_models")
+    first_key = lifecycle_models.LifecycleIdentity(
+        chain_id=parent["chainID"],
+        parent_uuid=parent["uuid"],
+        source_link=parent["link"],
+        target_link=child["link"],
+        event=lifecycle_models.LifecycleEvent.COMPLETE,
+    ).idempotency_key
+    second_key = lifecycle_models.LifecycleIdentity(
+        chain_id=parent["chainID"],
+        parent_uuid=parent["uuid"],
+        source_link=parent["link"],
+        target_link=child["link"],
+        event=lifecycle_models.LifecycleEvent.COMPLETE,
+    ).idempotency_key
     expect(first_key == second_key and first_key.startswith("li1-"), "transition identity was not retry-stable")
     expect(
-        mod._lifecycle_spawn_intent_id(dict(parent, status="deleted"), child) != first_key,
+        lifecycle_models.LifecycleIdentity(
+            chain_id=parent["chainID"],
+            parent_uuid=parent["uuid"],
+            source_link=parent["link"],
+            target_link=child["link"],
+            event=lifecycle_models.LifecycleEvent.EXPIRE,
+        ).idempotency_key != first_key,
         "completion and expiration transitions shared an idempotency key",
     )
     plan_payload = captured.get("lifecycle_plan")
@@ -16230,7 +16249,6 @@ def test_on_modify_spawn_intent_records_parent_guard():
         isinstance(plan_payload, dict) and plan_payload.get("schema_version") == 1,
         f"spawn intent did not carry a versioned lifecycle plan: {captured}",
     )
-    lifecycle_models = mod._module("lifecycle_models")
     restored = lifecycle_models.LifecyclePlan.from_dict(plan_payload)
     expect(restored.identity.idempotency_key == first_key, "persisted plan identity did not match queue key")
 

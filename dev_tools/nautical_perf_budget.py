@@ -942,6 +942,27 @@ def _read_exit_task_call_stats(path: Path) -> dict[str, int]:
     return {str(key): int(value) for key, value in stats.items() if str(key).startswith("run_task_calls")}
 
 
+def _apply_task_call_budgets(result: dict, samples: list[dict[str, int]], budget: dict) -> None:
+    """Attach and enforce per-workflow Taskwarrior call-count budgets."""
+    if not isinstance(budget, dict) or not samples:
+        return
+    maxima = {
+        key: max(int(sample.get(key, 0)) for sample in samples)
+        for key in budget
+        if all(isinstance(sample, dict) for sample in samples)
+    }
+    checks = {
+        key: {
+            "max_observed": value,
+            "budget": int(budget[key]),
+            "pass": value <= int(budget[key]),
+        }
+        for key, value in maxima.items()
+    }
+    result["task_call_budget"] = checks
+    result["pass"] = bool(result.get("pass", True)) and all(item["pass"] for item in checks.values())
+
+
 def _workflow_queue_rows(taskdata: Path) -> list[dict]:
     """Read queued child intents for benchmark mutation assertions."""
     db_path = taskdata / ".nautical-state" / ".nautical_queue.db"
@@ -1191,6 +1212,8 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             _init_empty_queue_db(queue_data)
             stats_path = queue_data / "on-exit-task-stats.json"
             queue_env = dict(base_env, TASKDATA=str(queue_data), NAUTICAL_BENCH_STATS_FILE=str(stats_path))
+            if os.environ.get("NAUTICAL_DIAG") == "1":
+                queue_env["NAUTICAL_DIAG"] = "1"
             parents = []
             parent_uuids: set[str] = set()
             child_uuids: set[str] = set()
@@ -1238,6 +1261,35 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                             "link": str(parent_link),
                         },
                     }
+                    # Exercise the typed lifecycle drain rather than the
+                    # legacy spawn-intent fallback. The queue benchmark must
+                    # measure the same plan/preload/batch path used in
+                    # production.
+                    from nautical_core.lifecycle_models import (
+                        LifecycleAction,
+                        LifecycleEvent,
+                        LifecycleIdentity,
+                        LifecyclePlan,
+                        ParentGuard,
+                        ExecutionStage,
+                    )
+
+                    lifecycle_plan = LifecyclePlan.from_mappings(
+                        identity=LifecycleIdentity(
+                            "queue-perf-chain",
+                            parent_uuid,
+                            parent_link,
+                            child_link,
+                            LifecycleEvent.COMPLETE,
+                        ),
+                        action=LifecycleAction.SPAWN_CHILD,
+                        parent_guard=ParentGuard.from_mapping(payload["parent_guard"]),
+                        child_payload=payload["child"],
+                        parent_patch={"nextLink": child_uuid[:8]},
+                        expected_postconditions=("child_present", "parent_linked", "verified"),
+                        stage=ExecutionStage.PERSISTED,
+                    )
+                    payload["lifecycle_plan"] = lifecycle_plan.to_dict()
                     conn.execute(
                         "INSERT INTO queue_entries (spawn_intent_id, payload, created_at, updated_at) "
                         "VALUES (?, ?, ?, ?)",
@@ -1269,7 +1321,10 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             queue_call_stats.append(_read_exit_task_call_stats(stats_path))
 
             if _workflow_queue_rows(queue_data):
-                raise RuntimeError("queue drain benchmark left intents queued after successful processing")
+                raise RuntimeError(
+                    "queue drain benchmark left intents queued after successful processing: "
+                    f"{_workflow_queue_rows(queue_data)!r}; stderr={_queue_stderr.strip()!r}"
+                )
             dead_letter = queue_data / ".nautical-state" / ".nautical_dead_letter.jsonl"
             if dead_letter.is_file() and dead_letter.read_text(encoding="utf-8").strip():
                 raise RuntimeError("queue drain benchmark dead-lettered a populated parent/child intent")
@@ -1321,6 +1376,13 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             float(budgets.get("workflow_queue_drain", 3.0)),
         )
         queue_result["task_call_stats"] = queue_call_stats
+        call_budgets = workflow_cfg.get("task_call_budgets")
+        if isinstance(call_budgets, dict):
+            _apply_task_call_budgets(
+                queue_result,
+                queue_call_stats,
+                call_budgets.get("workflow_queue_drain", {}),
+            )
         results["workflow_queue_drain"] = queue_result
 
         reconcile_data = root / "reconcile"

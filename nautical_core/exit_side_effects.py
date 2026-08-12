@@ -138,6 +138,7 @@ def update_parent_nextlink(
     retry_delay: float,
     parent_guard: dict[str, Any] | None = None,
     guard_mismatch_fn: Callable[[dict[str, Any], dict[str, Any]], str] | None = None,
+    parent_snapshot: dict[str, Any] | None = None,
 ) -> ExitParentUpdateResult:
     from nautical_core.exit_models import ExitParentUpdateResult
 
@@ -146,7 +147,24 @@ def update_parent_nextlink(
     with lock_parent_nextlink(parent_uuid) as locked:
         if not locked:
             return ExitParentUpdateResult(False, "parent lock busy")
-        if parent_guard is None and guard_mismatch_fn is None:
+        if isinstance(parent_snapshot, dict):
+            from nautical_core.exit_models import ExitParentNextlinkStateResult
+
+            mismatch = ""
+            if parent_guard is not None and guard_mismatch_fn is not None:
+                mismatch = guard_mismatch_fn(parent_snapshot, parent_guard)
+            if mismatch:
+                state_res = ExitParentNextlinkStateResult("conflict", mismatch)
+            else:
+                current = str(parent_snapshot.get("nextLink") or "").strip()
+                expected = str(expected_prev or "").strip()
+                if current == child_short:
+                    state_res = ExitParentNextlinkStateResult("already", "")
+                elif (expected and current != expected) or (not expected and current):
+                    state_res = ExitParentNextlinkStateResult("conflict", "parent nextLink changed")
+                else:
+                    state_res = ExitParentNextlinkStateResult("ok", "")
+        elif parent_guard is None and guard_mismatch_fn is None:
             state_res = parent_nextlink_state_fn(parent_uuid, child_short, expected_prev)
         else:
             state_res = parent_nextlink_state_fn(
@@ -189,16 +207,18 @@ def update_parent_nextlink(
             # reported. Re-read once after a failed modify so a mutation that
             # landed despite a non-zero status is accepted, while stale or
             # conflicting parents remain fail-closed.
-            try:
-                post_state = parent_nextlink_state_fn(
-                    parent_uuid,
-                    child_short,
-                    expected_prev,
-                    parent_guard=parent_guard,
-                    guard_mismatch_fn=guard_mismatch_fn,
-                )
-            except TypeError:
-                post_state = None
+            post_state = None
+            if parent_snapshot is None:
+                try:
+                    post_state = parent_nextlink_state_fn(
+                        parent_uuid,
+                        child_short,
+                        expected_prev,
+                        parent_guard=parent_guard,
+                        guard_mismatch_fn=guard_mismatch_fn,
+                    )
+                except TypeError:
+                    post_state = None
             if post_state is not None:
                 if post_state.state == "already":
                     return ExitParentUpdateResult(True, "", "already")

@@ -2472,6 +2472,7 @@ def _update_parent_nextlink(
     expected_prev: str | None = None,
     *,
     parent_guard: dict[str, Any] | None = None,
+    parent_snapshot: dict[str, Any] | None = None,
 ):
     exit_side_effects = _module("exit_side_effects")
     return exit_side_effects.update_parent_nextlink(
@@ -2488,6 +2489,7 @@ def _update_parent_nextlink(
         retries_modify=_TASK_RETRIES_MODIFY,
         retry_delay=_TASK_RETRY_DELAY,
         parent_guard=parent_guard,
+        parent_snapshot=parent_snapshot,
         guard_mismatch_fn=lambda parent, guard: _module("exit_entry_flow")._parent_guard_mismatch(
             parent,
             guard,
@@ -3113,6 +3115,11 @@ def _execute_lifecycle_queue_entry(ctx, state):
                 child_short,
                 expected_prev,
                 parent_guard=current_plan.parent_guard.to_dict(),
+                parent_snapshot=(
+                    planned_decision().parent
+                    if planned_decision() is not None and isinstance(planned_decision().parent, dict)
+                    else None
+                ),
             )
             if updated.ok:
                 if updated.state == "already":

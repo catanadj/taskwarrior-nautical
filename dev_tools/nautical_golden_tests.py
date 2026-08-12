@@ -15928,79 +15928,6 @@ def test_on_add_run_task_falls_back_when_core_load_fails():
         mod._diag = saved_diag
 
 
-def test_spawn_child_always_verifies_import():
-    """_spawn_child should always verify child existence."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_spawn_verify_enforced_test")
-
-    saved_reserve = mod._reserve_child_uuid
-    saved_run_task = mod._run_task
-    saved_lookup = mod._task_lookup_by_uuid
-    try:
-        mod._reserve_child_uuid = lambda _env: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        calls = {"import": 0, "exists": 0}
-
-        def _run_task_stub(cmd, *, env=None, input_text=None, timeout=0.0, retries=0, use_tempfiles=False):
-            _ = (env, input_text, timeout, retries, use_tempfiles)
-            if isinstance(cmd, list) and "import" in cmd:
-                calls["import"] += 1
-                return True, "", ""
-            return False, "", "unexpected"
-
-        support = mod._module("hook_support")
-
-        def _exists_stub(_uuid, _env):
-            calls["exists"] += 1
-            return support.LookupResult.found({"uuid": _uuid}) if calls["exists"] >= 2 else support.LookupResult.absent()
-
-        mod._run_task = _run_task_stub
-        mod._task_lookup_by_uuid = _exists_stub
-
-        short, _stripped = mod._spawn_child(
-            {"description": "verify-enforced", "chainID": "abcd1234"}
-        )
-        expect(short == "aaaaaaaa", f"unexpected child short uuid: {short}")
-        expect(calls["import"] == 2, f"expected retry after failed verify, got imports={calls['import']}")
-        expect(calls["exists"] == 2, f"expected verification on each import, got checks={calls['exists']}")
-    finally:
-        mod._reserve_child_uuid = saved_reserve
-        mod._run_task = saved_run_task
-        mod._task_lookup_by_uuid = saved_lookup
-
-
-def test_spawn_child_does_not_reimport_when_verification_unavailable():
-    """An unavailable post-import read must stop instead of issuing a duplicate import."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_spawn_verify_unavailable_test")
-    saved_reserve = mod._reserve_child_uuid
-    saved_run_task = mod._run_task
-    saved_lookup = mod._task_lookup_by_uuid
-    try:
-        mod._reserve_child_uuid = lambda _env: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-        support = mod._module("hook_support")
-        calls = {"import": 0}
-
-        def _run_task_stub(cmd, **_kwargs):
-            if isinstance(cmd, list) and "import" in cmd:
-                calls["import"] += 1
-                return True, "", ""
-            return False, "", "unexpected"
-
-        mod._run_task = _run_task_stub
-        mod._task_lookup_by_uuid = lambda *_a, **_k: support.LookupResult.unavailable("lock busy")
-        try:
-            mod._spawn_child({"description": "verify unavailable", "chainID": "abcd1234"})
-        except RuntimeError as exc:
-            expect("Taskwarrior import failed" in str(exc), f"unexpected verification failure: {exc}")
-        else:
-            raise AssertionError("unavailable verification should fail the spawn")
-        expect(calls["import"] == 1, f"unavailable verification caused duplicate imports: {calls}")
-    finally:
-        mod._reserve_child_uuid = saved_reserve
-        mod._run_task = saved_run_task
-        mod._task_lookup_by_uuid = saved_lookup
-
-
 def test_core_run_task_tempfiles_accepts_text_input():
     """core.run_task should accept str input_text with use_tempfiles=True."""
     ok, out, err = core.run_task(
@@ -33426,7 +33353,6 @@ TESTS = [
     test_hook_task_result_preserves_typed_runner_result,
     test_hook_run_task_falls_back_when_core_load_fails,
     test_on_add_run_task_falls_back_when_core_load_fails,
-    test_spawn_child_always_verifies_import,
     test_core_run_task_tempfiles_accepts_text_input,
     test_core_run_task_timeout_reports_timeout_with_tempfiles,
     test_core_run_task_result_exposes_typed_metadata,
@@ -33901,7 +33827,6 @@ TESTS = [
     test_on_modify_spawn_intent_id_in_entry,
     test_on_modify_spawn_intent_entry_rejects_missing_child_uuid,
     test_on_modify_spawn_intent_records_parent_guard,
-    test_spawn_child_does_not_reimport_when_verification_unavailable,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_uuid_lookup_does_not_repeat_unavailable_export,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,

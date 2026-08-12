@@ -23897,6 +23897,42 @@ def test_occurrence_range_request_exposes_omission_provenance():
     expect(not reported.occurrences and len(reported.omitted_occurrences) == 4, "report policy lost omitted evidence")
 
 
+def test_occurrence_range_request_wraps_unavailable_and_invalid_failures():
+    """Collection failures are typed instead of becoming empty success results."""
+    from datetime import datetime
+    from types import SimpleNamespace
+    from zoneinfo import ZoneInfo
+    from nautical_core.occurrence_outcomes import InvalidOccurrence, UnavailableOccurrence
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+    from nautical_core.scheduler_service import SchedulerService
+
+    zone = ZoneInfo("UTC")
+    context = RecurrenceContext(chain_id="failure-contract", timezone=zone)
+    cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 1, tzinfo=zone), timezone=zone)
+    request = OccurrenceRangeRequest(cursor, limit=1)
+
+    class FailingSession:
+        evaluator = SimpleNamespace(context=context, kind="anchor")
+
+        def collect_after_cursor(self, *_args, **_kwargs):
+            raise LookupError("astronomy profile unavailable")
+
+    unavailable = SchedulerService(FailingSession()).collect_request(request)
+    expect(isinstance(unavailable.failure, UnavailableOccurrence), "unavailable failure was not typed")
+    expect(unavailable.status == "unavailable", "unavailable failure changed into empty result")
+
+    class InvalidSession:
+        evaluator = SimpleNamespace(context=context, kind="anchor")
+
+        def collect_after_cursor(self, *_args, **_kwargs):
+            raise ValueError("malformed recurrence result")
+
+    invalid = SchedulerService(InvalidSession()).collect_request(request)
+    expect(isinstance(invalid.failure, InvalidOccurrence), "invalid failure was not typed")
+    expect(invalid.status == "invalid", "invalid failure changed into empty result")
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35425,6 +35461,7 @@ TESTS.extend([
     test_scheduler_parity_matrix_covers_context_sensitive_rules,
     test_occurrence_range_request_validates_context_bounds_and_policy,
     test_occurrence_range_request_exposes_omission_provenance,
+    test_occurrence_range_request_wraps_unavailable_and_invalid_failures,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

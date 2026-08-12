@@ -7,12 +7,18 @@ from datetime import datetime
 from typing import Any, Mapping
 
 from .evaluation_session import EvaluationSession
-from .occurrence_outcomes import OccurrenceCollectionResult, OccurrenceOutcome
+from .occurrence_outcomes import (
+    InvalidOccurrence,
+    OccurrenceCollectionResult,
+    OccurrenceOutcome,
+    UnavailableOccurrence,
+)
 from .occurrence_provider import OccurrenceBatch
 from .occurrence_provider import Occurrence
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
 from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+from .scheduler_models import OccurrenceSearchExhausted
 
 
 @dataclass(slots=True)
@@ -69,39 +75,72 @@ class SchedulerService:
                 raise ValueError("Occurrence range timezone does not match scheduler context.")
         include_omitted = request.omission_policy in {"include", "report"}
         count_omitted = request.omission_policy in {"include", "report"}
-        if request.omission_policy == "exclude":
-            result = self.collect(
-                request.cursor,
-                limit=request.limit,
-                max_iterations=request.max_iterations,
-                max_file_skips=request.max_file_skips,
-            )
+        try:
+            if request.omission_policy == "exclude":
+                result = self.collect(
+                    request.cursor,
+                    limit=request.limit,
+                    max_iterations=request.max_iterations,
+                    max_file_skips=request.max_file_skips,
+                )
+                return OccurrenceCollectionResult(
+                    occurrences=result.occurrences,
+                    cursor=request.cursor,
+                    source=result.source,
+                    terminal=result.terminal,
+                    request=request,
+                )
+
+            if request.end_local is not None:
+                batch = self.session.evaluator.events_between(
+                    request.cursor.local_datetime,
+                    request.end_local,
+                    limit=request.limit,
+                    inclusive=request.cursor.inclusive,
+                    include_omitted=include_omitted,
+                    count_omitted=count_omitted,
+                    max_iterations=request.max_iterations,
+                    max_file_skips=request.max_file_skips,
+                )
+            else:
+                batch = self.session.collect_events_after_cursor(
+                    request.cursor,
+                    limit=request.limit,
+                    count_omitted=count_omitted,
+                    max_iterations=request.max_iterations,
+                    max_file_skips=request.max_file_skips,
+                )
+        except OccurrenceSearchExhausted as exc:
             return OccurrenceCollectionResult(
-                occurrences=result.occurrences,
+                occurrences=(),
                 cursor=request.cursor,
-                source=result.source,
-                terminal=result.terminal,
+                source=self.session.evaluator.kind or "scheduler",
+                terminal=exc,
                 request=request,
             )
-
-        if request.end_local is not None:
-            batch = self.session.evaluator.events_between(
-                request.cursor.local_datetime,
-                request.end_local,
-                limit=request.limit,
-                inclusive=request.cursor.inclusive,
-                include_omitted=include_omitted,
-                count_omitted=count_omitted,
-                max_iterations=request.max_iterations,
-                max_file_skips=request.max_file_skips,
+        except (LookupError, OSError) as exc:
+            failure = UnavailableOccurrence(
+                str(exc) or "scheduler dependency unavailable",
+                type(exc).__name__,
             )
-        else:
-            batch = self.session.collect_events_after_cursor(
-                request.cursor,
-                limit=request.limit,
-                count_omitted=count_omitted,
-                max_iterations=request.max_iterations,
-                max_file_skips=request.max_file_skips,
+            return OccurrenceCollectionResult(
+                occurrences=(),
+                cursor=request.cursor,
+                source=self.session.evaluator.kind or "scheduler",
+                request=request,
+                failure=failure,
+            )
+        except (TypeError, ValueError) as exc:
+            failure = InvalidOccurrence(
+                str(exc) or "scheduler returned an invalid result",
+                type(exc).__name__,
+            )
+            return OccurrenceCollectionResult(
+                occurrences=(),
+                cursor=request.cursor,
+                source=self.session.evaluator.kind or "scheduler",
+                request=request,
+                failure=failure,
             )
         events = tuple(batch)
         omitted = tuple(event for event in events if event.omitted)

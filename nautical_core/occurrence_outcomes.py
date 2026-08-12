@@ -100,6 +100,7 @@ class OccurrenceCollectionResult:
     empty_reason: str = ""
     request: OccurrenceRangeRequest | None = None
     omitted_occurrences: tuple[Occurrence, ...] = ()
+    failure: UnavailableOccurrence | InvalidOccurrence | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.occurrences, tuple):
@@ -108,6 +109,10 @@ class OccurrenceCollectionResult:
             raise TypeError("Occurrence collection requires its source cursor.")
         if not isinstance(self.omitted_occurrences, tuple):
             raise TypeError("Omitted occurrence evidence must be immutable.")
+        if self.failure is not None and not isinstance(self.failure, (UnavailableOccurrence, InvalidOccurrence)):
+            raise TypeError("Occurrence collection failure must be a typed unavailable or invalid result.")
+        if self.failure is not None and (self.occurrences or self.omitted_occurrences):
+            raise ValueError("A failed occurrence collection cannot contain events.")
         if self.request is not None:
             if not isinstance(self.request, OccurrenceRangeRequest):
                 raise TypeError("Occurrence collection request must be typed.")
@@ -134,10 +139,16 @@ class OccurrenceCollectionResult:
                     raise ValueError("Occurrence collection is not strictly monotonic.")
                 previous = occurrence.local_datetime
         if not self.occurrences and not self.empty_reason:
-            object.__setattr__(self, "empty_reason", "no matching occurrence")
+            object.__setattr__(
+                self,
+                "empty_reason",
+                getattr(self.failure, "reason", None) or "no matching occurrence",
+            )
 
     @property
-    def status(self) -> Literal["found", "empty", "exhausted"]:
+    def status(self) -> Literal["found", "empty", "exhausted", "unavailable", "invalid"]:
+        if self.failure is not None:
+            return self.failure.status
         if self.occurrences:
             return "found"
         if self.terminal is not None:
@@ -167,6 +178,7 @@ class OccurrenceCollectionResult:
                 }
                 for item in self.omitted_occurrences
             ],
+            "failure": self.failure.to_dict() if self.failure is not None else None,
             "occurrences": [
                 {
                     "local": item.local_datetime.isoformat() if item.local_datetime else None,

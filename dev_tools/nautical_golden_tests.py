@@ -35734,7 +35734,8 @@ def test_core_explicit_facade_all_contains_supported_symbols() -> None:
 
     exported = set(getattr(core, '__all__', ()))
     assert 'resolve_task_data_context' in exported
-    assert 'next_after_expr' in exported
+    assert 'next_after_expr' not in exported
+    assert 'SchedulerService' not in exported
     assert 'render_panel' in exported
     assert 'should_stamp_chain_id' not in exported
     assert '_config_paths' not in exported
@@ -35750,10 +35751,6 @@ def test_core_explicit_facade_all_contains_supported_symbols() -> None:
         'parse_anchor_expr_to_dnf': ('s',),
         'parse_anchor_expr_to_dnf_cached': ('s',),
         'validate_anchor_expr_strict': ('expr',),
-        'next_after_expr': ('dnf', 'after_date', 'default_seed', 'seed_base', 'date_is_excluded', 'business_calendar'),
-        'next_after_factor': ('factor', 'ref_d', 'default_seed', 'seed_base', 'business_calendar'),
-        'atom_matches_on': ('atom', 'd', 'default_seed', 'seed_base', 'business_calendar'),
-        'factor_matches_on': ('factor', 'd', 'default_seed', 'seed_base', 'business_calendar'),
         'parse_cp_duration': ('dur',),
         'parse_cp_sequence': ('cp',),
         'cp_sequence_interval_for_link': ('cp', 'link_no', 'chain_id'),

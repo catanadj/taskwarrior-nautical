@@ -23723,6 +23723,13 @@ def test_typed_occurrence_outcomes_fail_closed_for_mutation():
         raise AssertionError("mutation helper accepted an absent occurrence")
 
 
+def test_typed_occurrence_outcomes_define_compact_presentation_summary():
+    """UI summaries may be compact without changing mutation semantics."""
+    from nautical_core.occurrence_outcomes import AbsentOccurrence, presentation_summary
+
+    expect(presentation_summary(AbsentOccurrence("no match")) == "absent: no match", "UI outcome summary drifted")
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35250,6 +35257,7 @@ TESTS.extend([
     test_typed_occurrence_outcomes_preserve_found_invalid_and_absent_states,
     test_typed_occurrence_outcomes_preserve_terminal_evidence,
     test_typed_occurrence_outcomes_fail_closed_for_mutation,
+    test_typed_occurrence_outcomes_define_compact_presentation_summary,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

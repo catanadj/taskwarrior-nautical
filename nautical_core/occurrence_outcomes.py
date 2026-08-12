@@ -97,6 +97,15 @@ def mutation_candidate(outcome: OccurrenceOutcome) -> FoundOccurrence:
     )
 
 
+def presentation_summary(outcome: OccurrenceOutcome) -> str:
+    """Return intentionally compact text for UI-only consumers."""
+    if isinstance(outcome, FoundOccurrence):
+        return outcome.local_datetime.isoformat()
+    if isinstance(outcome, ExhaustedOccurrence):
+        return f"exhausted: {outcome.error}"
+    return f"{outcome.status}: {getattr(outcome, 'reason', '')}".rstrip(": ")
+
+
 def outcome_from_occurrence(occurrence: Occurrence | None) -> FoundOccurrence | AbsentOccurrence:
     if occurrence is None:
         return AbsentOccurrence()
@@ -121,4 +130,5 @@ __all__ = (
     "UnavailableOccurrence",
     "outcome_from_occurrence",
     "mutation_candidate",
+    "presentation_summary",
 )

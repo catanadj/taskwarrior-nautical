@@ -29848,6 +29848,11 @@ def test_reconcile_dry_run_and_apply_share_plan_builder():
         == (preview_plan.action, preview_plan.next_link, preview_plan.reason),
         f"preview/apply plan diverged: {applied_plan!r} vs {preview_plan!r}",
     )
+    if applied_plan.lifecycle_plan is not None and preview_plan.lifecycle_plan is not None:
+        expect(
+            applied_plan.lifecycle_plan.semantic_key() == preview_plan.lifecycle_plan.semantic_key(),
+            "preview/apply lifecycle semantic plans diverged",
+        )
 
 
 def test_reconcile_planning_configuration_drift_is_partial():

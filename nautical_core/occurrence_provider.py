@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Generic, Protocol, TypeVar
 
 from .scheduler_models import OccurrenceSearchExhausted
+from .scheduler_cursor import OccurrenceCursor
 from .timeutil import compare_datetimes
 
 
@@ -121,16 +122,25 @@ def _cursor_before(value: datetime) -> datetime:
 
 def collect_after(
     provider: LazyOccurrenceProvider,
-    after_local: datetime,
+    after_local: datetime | OccurrenceCursor,
     *,
     limit: int,
-    inclusive: bool = False,
+    inclusive: bool | None = None,
     max_iterations: int = 512,
     build_local_datetime: Callable[[date, tuple[int, int]], datetime],
     to_local: Callable[[datetime], datetime],
 ) -> OccurrenceBatch[Occurrence]:
     """Collect a bounded stream while counting only non-omitted occurrences."""
-    if not isinstance(after_local, datetime):
+    if isinstance(after_local, OccurrenceCursor):
+        cursor_value = after_local.local_datetime
+        cursor_inclusive = after_local.inclusive
+        if inclusive is not None and inclusive != cursor_inclusive:
+            raise ValueError("Occurrence cursor inclusivity conflicts with collection options.")
+        inclusive = cursor_inclusive
+    else:
+        cursor_value = after_local
+        inclusive = False if inclusive is None else inclusive
+    if not isinstance(cursor_value, datetime):
         raise TypeError("Occurrence collection requires a datetime cursor.")
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
         raise ValueError("Occurrence collection limit must be a non-negative integer.")
@@ -138,7 +148,7 @@ def collect_after(
         raise ValueError("Occurrence collection iteration limit must be a positive integer.")
     if limit == 0:
         return OccurrenceBatch()
-    cursor = _cursor_before(after_local) if inclusive else after_local
+    cursor = _cursor_before(cursor_value) if inclusive else cursor_value
     out: list[Occurrence] = []
     terminal: OccurrenceSearchExhausted | None = None
     included_count = 0

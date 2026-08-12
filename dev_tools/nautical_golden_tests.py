@@ -22029,6 +22029,42 @@ def test_provider_contract_advertises_only_certified_capabilities():
     expect(not file_provider.contract.capabilities.arithmetic_counting, "uncertified arithmetic counting was advertised")
 
 
+def test_anchor_file_cursor_reuse_matches_fresh_provider_reference():
+    """The anchor-file cursor cache is equivalent to fresh authoritative lookups."""
+    import tempfile
+    from pathlib import Path
+    from zoneinfo import ZoneInfo
+    from nautical_core.anchor_files import AnchorFileOccurrenceProvider
+
+    zone = ZoneInfo("UTC")
+    with tempfile.TemporaryDirectory() as td:
+        Path(td, "calendar.csv").write_text(
+            "date,description\n2026-08-03,first\n2026-08-10,second\n2026-08-17,third\n",
+            encoding="utf-8",
+        )
+
+        def build(day, hhmm):
+            return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=zone)
+
+        cursors = (
+            datetime(2026, 8, 1, 9, tzinfo=zone),
+            datetime(2026, 8, 9, 9, tzinfo=zone),
+            datetime(2026, 8, 4, 9, tzinfo=zone),
+        )
+        cached = AnchorFileOccurrenceProvider("calendar.csv", td, (9, 0))
+        for cursor in cursors:
+            optimized = cached.next_after(cursor, build_local_datetime=build, to_local=lambda value: value)
+            reference = AnchorFileOccurrenceProvider("calendar.csv", td, (9, 0)).next_after(
+                cursor, build_local_datetime=build, to_local=lambda value: value
+            )
+            expect(
+                optimized is not None and reference is not None
+                and optimized.local_datetime == reference.local_datetime
+                and optimized.description == reference.description,
+                f"cached anchor-file lookup diverged at {cursor!s}",
+            )
+
+
 def test_occurrence_provider_adapters_preserve_stream_metadata():
     """Provider adapters should retain source and description metadata."""
     from datetime import datetime, timedelta
@@ -35272,6 +35308,7 @@ TESTS = [
     test_included_provider_bounds_anchor_file_omission_scan,
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_provider_contract_advertises_only_certified_capabilities,
+    test_anchor_file_cursor_reuse_matches_fresh_provider_reference,
     test_occurrence_provider_adapters_preserve_stream_metadata,
     test_occurrence_provider_rejects_dst_fallback_backward_progress,
     test_anchor_file_provider_orders_dst_fallback_by_instant,

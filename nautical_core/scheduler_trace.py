@@ -129,5 +129,10 @@ class SchedulerTrace:
                 data_dir,
             )
 
+    def clear(self) -> None:
+        """Discard emitted events so one service call cannot replay history."""
+        self._events.clear()
+        self._dropped = 0
+
 
 __all__ = ("SchedulerTrace", "SchedulerTraceEvent")

@@ -23751,6 +23751,26 @@ def test_evaluation_session_is_task_scoped_and_fingerprint_bound():
     expect(first.next_outcome is not None and first.collect_after_cursor is not None, "session service boundary missing")
 
 
+def test_scheduler_service_is_one_typed_occurrence_entry_point():
+    """Service next, collection, and preview share one session boundary."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from nautical_core.occurrence_outcomes import FoundOccurrence
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor
+    from nautical_core.scheduler_service import SchedulerService
+
+    zone = ZoneInfo("Europe/Sofia")
+    service = SchedulerService.from_task(
+        {"chainID": "service-chain", "anchor": "w:mon@t=09:00"},
+        context=RecurrenceContext(chain_id="service-chain", timezone=zone),
+    )
+    cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, 0, tzinfo=zone), timezone=zone)
+    expect(isinstance(service.next(cursor), FoundOccurrence), "service next did not return typed occurrence")
+    expect(len(service.collect(cursor, limit=2)) == 2, "service collection limit was not honored")
+    expect(len(service.preview(cursor.local_datetime, limit=1, timezone=zone)) == 1, "service preview failed")
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35280,6 +35300,7 @@ TESTS.extend([
     test_typed_occurrence_outcomes_fail_closed_for_mutation,
     test_typed_occurrence_outcomes_define_compact_presentation_summary,
     test_evaluation_session_is_task_scoped_and_fingerprint_bound,
+    test_scheduler_service_is_one_typed_occurrence_entry_point,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

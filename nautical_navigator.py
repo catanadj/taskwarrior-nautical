@@ -2302,14 +2302,21 @@ class TaskAnalyzer:
                 def step(prev_date: date):
                     nonlocal projection_terminal_note
                     try:
-                        nxt_date, _ = _next_after_expr_pair(
-                            dnf,
-                            prev_date,
-                            default_seed=prev_date,
-                            seed_base=recurrence_context.seed_base,
-                            business_calendar=business_calendar,
+                        from nautical_core.occurrence_outcomes import ExhaustedOccurrence, FoundOccurrence
+                        from nautical_core.scheduler_cursor import OccurrenceCursor
+
+                        timezone = recurrence_context.timezone
+                        cursor_dt = datetime.datetime.combine(prev_date, datetime.time.max, tzinfo=timezone)
+                        outcome = scheduler_service.next(
+                            OccurrenceCursor.strict_after(cursor_dt, timezone=timezone),
+                            default_seed_date=prev_date,
                         )
-                        return nxt_date
+                        if isinstance(outcome, FoundOccurrence):
+                            return outcome.occurrence.day
+                        if isinstance(outcome, ExhaustedOccurrence):
+                            projection_terminal_note = _format_runtime_error(outcome.error)
+                            return None
+                        raise RuntimeError(getattr(outcome, "reason", "scheduler returned no occurrence"))
                     except Exception as exc:
                         exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
                         if exhausted_type is not None and isinstance(exc, exhausted_type) and exc.is_date_limit:

@@ -24011,6 +24011,40 @@ def test_scheduler_generated_recurrence_matrix_is_monotonic_and_deterministic():
             step = OccurrenceCursor.strict_after(outcome.local_datetime, timezone=zone)
 
 
+def test_scheduler_conformance_isolated_under_shuffled_session_order():
+    """Fresh task sessions produce identical streams regardless of case order."""
+    import random
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor
+    from nautical_core.scheduler_service import SchedulerService
+
+    cases = (
+        ("w:mon", "shuffle-weekly"),
+        ("m/2:15", "shuffle-monthly"),
+        ("y:02-29", "shuffle-leap"),
+        ("w:mon | w:fri", "shuffle-or"),
+        ("m:rand", "shuffle-random"),
+    )
+    zone = ZoneInfo("Europe/Sofia")
+    cursor = OccurrenceCursor.strict_after(datetime(2026, 1, 1, tzinfo=zone), timezone=zone)
+
+    def collect(anchor: str, chain_id: str) -> tuple[datetime | None, ...]:
+        service = SchedulerService.from_task(
+            {"anchor": anchor, "chainID": chain_id},
+            context=RecurrenceContext(chain_id=chain_id, timezone=zone),
+        )
+        return tuple(item.local_datetime for item in service.collect(cursor, limit=3, max_iterations=2048))
+
+    baseline = {anchor: collect(anchor, chain_id) for anchor, chain_id in cases}
+    for seed in (11, 29, 47):
+        order = list(cases)
+        random.Random(seed).shuffle(order)
+        for anchor, chain_id in order:
+            expect(collect(anchor, chain_id) == baseline[anchor], f"shuffled session leaked state: {anchor}")
+
+
 def test_occurrence_range_request_validates_context_bounds_and_policy():
     """Range requests are explicit, bounded, and context-checked."""
     from datetime import datetime, timedelta
@@ -35678,6 +35712,7 @@ TESTS.extend([
     test_scheduler_cross_path_conformance_matrix,
     test_scheduler_cross_path_preserves_terminal_evidence,
     test_scheduler_generated_recurrence_matrix_is_monotonic_and_deterministic,
+    test_scheduler_conformance_isolated_under_shuffled_session_order,
     test_occurrence_range_request_validates_context_bounds_and_policy,
     test_occurrence_range_request_exposes_omission_provenance,
     test_occurrence_range_request_wraps_unavailable_and_invalid_failures,

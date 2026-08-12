@@ -936,8 +936,6 @@ _ANALYTICS_ONTIME_TOL_SECS = 3600
 _CHECK_CHAIN_INTEGRITY = False
 _DEBUG_WAIT_SCHED = _DEFAULT_DEBUG_WAIT_SCHED
 _RECURRENCE_UPDATE_UDAS: tuple[str, ...] = ()
-_CHAIN_CACHE_CHAIN_ID = ""
-_CHAIN_CACHE: list[dict[str, Any]] = []
 _SPAWN_QUEUE_MAX_BYTES = _DEFAULT_SPAWN_QUEUE_MAX_BYTES
 _MAX_CHAIN_WALK = _MAX_CHAIN_WALK
 
@@ -2606,13 +2604,6 @@ def _lifecycle_read_service():
     if getattr(state, "chain_cache_store", None) is None:
         state.chain_cache_store = lifecycle_read_service.ChainCacheStore()
 
-    def _cached_chain(chain_id: str):
-        state = _modify_chain_state()
-        with state.chain_cache_lock:
-            if state.chain_cache_chain_id == chain_id and state.chain_cache:
-                return list(state.chain_cache)
-        return None
-
     service = lifecycle_read_service.LifecycleReadService(
         coerce_int=core.coerce_int,
         parse_extra_tokens=_parse_extra_tokens,
@@ -2620,7 +2611,7 @@ def _lifecycle_read_service():
         read_query_get=_read_query_get,
         read_query_set=_read_query_set,
         read_query_delete=_read_query_delete,
-        chain_cache_get=_cached_chain,
+        chain_cache_get=lambda _chain_id: None,
         export_chain_cached=_chain_export_for_cache,
         max_chain_walk=_MAX_CHAIN_WALK,
         diag=_diag,
@@ -2684,17 +2675,8 @@ def _build_chain_indexes(chain: list[dict]) -> tuple[dict[int, list[dict]], dict
 
 def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
     """Set per-run chain cache to avoid repeated task exports."""
-    global _CHAIN_CACHE_CHAIN_ID, _CHAIN_CACHE
     chain_copy = list(chain or [])
-    indexes = _lifecycle_read_service().replace_chain_cache(chain_id, chain_copy)
-    state = _modify_chain_state()
-    with state.chain_cache_lock:
-        state.chain_cache_chain_id = chain_id or ""
-        state.chain_cache = chain_copy
-        state.chain_by_short = indexes.by_short
-        state.chain_by_uuid = indexes.by_uuid
-    _CHAIN_CACHE_CHAIN_ID = chain_id or ""
-    _CHAIN_CACHE = list(chain_copy)
+    _lifecycle_read_service().replace_chain_cache(chain_id, chain_copy)
     _diag_count("chain_cache_seeded")
 
 
@@ -2705,12 +2687,7 @@ def _seed_runtime_lookup_task(task: dict | None) -> dict | None:
     if not uuid_str:
         return None
     short = uuid_str[:8]
-    state = _modify_chain_state()
     task_obj = _lifecycle_read_service().seed_lookup_task(dict(task), short_uuid=short)
-    with state.chain_cache_lock:
-        if short:
-            state.chain_by_short[short] = task_obj
-        state.chain_by_uuid[uuid_str] = task_obj
     entry = task_obj.get("entry")
     if short and entry:
         _query_ctx_set("tw_get", f"{short}.entry", str(entry).strip())
@@ -3962,12 +3939,6 @@ def _chain_export_timeout(chain_id: str) -> float:
     est = base
     cache_len = _lifecycle_read_service().cache_size(chain_id) if chain_id else 0
     cache_match = bool(cache_len)
-    if not cache_match:
-        legacy_chain_id = str(globals().get("_CHAIN_CACHE_CHAIN_ID") or "")
-        legacy_chain = list(globals().get("_CHAIN_CACHE") or [])
-        if chain_id and legacy_chain_id == chain_id and legacy_chain:
-            cache_match = True
-            cache_len = len(legacy_chain)
     if cache_match:
         extra = max(0, cache_len // 100)
         est = base + (extra * per_100)

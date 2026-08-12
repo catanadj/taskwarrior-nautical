@@ -7481,8 +7481,8 @@ def test_on_modify_chain_export_timeout_scales():
     os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX"] = "5.0"
     try:
         mod = _load_hook_module(hook, "_nautical_chain_export_timeout_test")
-        mod._CHAIN_CACHE_CHAIN_ID = "cid"
-        mod._CHAIN_CACHE = [{}] * 250
+        mod._reset_modify_runtime_state()
+        mod._set_chain_cache("cid", [{}] * 250)
         mod._tw_lock_recent = lambda: False
         captured = {}
 
@@ -9169,8 +9169,7 @@ def test_on_modify_chain_export_cache_key_includes_params():
 
     mod.tw_export_chain = _fake
     mod._tw_export_chain_cached_key.cache_clear()
-    mod._CHAIN_CACHE_CHAIN_ID = ""
-    mod._CHAIN_CACHE = []
+    mod._reset_modify_runtime_state()
 
     since = datetime(2025, 1, 1, tzinfo=timezone.utc)
     _ = mod._get_chain_export("abc", since=since, extra="status:pending")
@@ -31220,10 +31219,11 @@ def test_on_modify_export_uuid_short_seeds_runtime_lookup_cache():
         obj = mod._export_uuid_short("deadbeef")
         expect(isinstance(obj, dict), f"expected dict export result, got {obj!r}")
         expect(obj.get("uuid") == uuid_full, f"unexpected exported uuid: {obj}")
-        state = mod._modify_chain_state()
-        with state.chain_cache_lock:
-            expect(state.chain_by_short.get("deadbeef", {}).get("uuid") == uuid_full, f"short map not seeded: {state.chain_by_short}")
-            expect(state.chain_by_uuid.get(uuid_full, {}).get("entry") == entry, f"full map not seeded: {state.chain_by_uuid}")
+        service = mod._lifecycle_read_service()
+        short_obj, _chain_id = service.lookup_short("deadbeef")
+        expect(short_obj and short_obj.get("uuid") == uuid_full, f"short map not seeded: {short_obj}")
+        full_obj = service.lookup_uuid(uuid_full)
+        expect(full_obj and full_obj.get("entry") == entry, f"full map not seeded: {full_obj}")
         got_entry = mod._tw_get_cached("deadbeef.entry")
     finally:
         mod._run_task = orig

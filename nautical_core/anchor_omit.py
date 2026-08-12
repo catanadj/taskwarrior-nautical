@@ -11,6 +11,13 @@ from .scheduler_models import OccurrenceSearchExhausted
 _OMIT_TIMED_ERROR = "omit does not support time modifiers (@t). Omit rules are date-based only."
 
 
+def _scheduler_engine(core: Any) -> Any:
+    engine = getattr(core, "_scheduler_api", None)
+    if engine is None:
+        raise RuntimeError("Omission scheduler engine is unavailable")
+    return engine
+
+
 def _freeze_omit_value(value: Any) -> Any:
     if isinstance(value, dict):
         return MappingProxyType({key: _freeze_omit_value(item) for key, item in value.items()})
@@ -148,8 +155,9 @@ def omit_expr_fires_on_date(
         return False
     lookback_days = _omit_expr_match_lookback_days(omit_expr_dnf)
     try:
+        engine = _scheduler_engine(core)
         for k in range(1, lookback_days + 1):
-            nxt, _ = core.next_after_expr(
+            nxt, _ = engine.next_after_expr(
                 omit_expr_dnf,
                 d - timedelta(days=k),
                 default_seed=default_seed,
@@ -206,7 +214,7 @@ def next_after_expr_with_omit(
 ):
     omit_expr_dnf, omit_dates, _omit_descriptions = _split_omit_state(omit_dnf)
     if not omit_expr_dnf and not omit_dates:
-        return core.next_after_expr(
+        return _scheduler_engine(core).next_after_expr(
             dnf,
             after_date,
             default_seed=default_seed,
@@ -214,7 +222,8 @@ def next_after_expr_with_omit(
         )
 
     date_is_excluded = None
-    if core.dnf_has_counted_random(dnf):
+    engine = _scheduler_engine(core)
+    if engine.dnf_has_counted_random(dnf):
         date_is_excluded = lambda candidate: omit_expr_fires_on_date(
             omit_dnf,
             candidate,
@@ -225,7 +234,7 @@ def next_after_expr_with_omit(
 
     probe = after_date
     for _ in range(max_skip_iterations):
-        nxt, meta = core.next_after_expr(
+        nxt, meta = engine.next_after_expr(
             dnf,
             probe,
             default_seed=default_seed,

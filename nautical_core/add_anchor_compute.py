@@ -8,6 +8,13 @@ from .occurrence_provider import OccurrenceBatch
 from .scheduler_models import OccurrenceSearchExhausted
 
 
+def _scheduler_engine(core: Any) -> Any:
+    engine = getattr(core, "_scheduler_api", None)
+    if engine is None:
+        raise RuntimeError("Anchor scheduler engine is unavailable")
+    return engine
+
+
 def anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, *, core: Any):
     return anchor_step_once_with_omit(
         dnf,
@@ -42,7 +49,8 @@ def anchor_step_once_with_omit(dnf, prev_local_date, interval_seed, seed_base, *
 
 def anchor_term_fires_on_date(term, d, interval_seed, seed_base, *, core: Any):
     try:
-        return all(core.factor_matches_on(atom, d, interval_seed, seed_base=seed_base) for atom in term)
+        engine = _scheduler_engine(core)
+        return all(engine.factor_matches_on(atom, d, interval_seed, seed_base=seed_base) for atom in term)
     except OccurrenceSearchExhausted:
         raise
     except Exception:
@@ -62,6 +70,7 @@ def anchor_expr_fires_on_date(dnf, d, interval_seed, seed_base, *, core: Any):
 
 def anchor_expr_fires_on_date_with_omit(dnf, d, interval_seed, seed_base, *, omit_dnf, core: Any):
     try:
+        engine = _scheduler_engine(core)
         anchor_omit = core._import_sibling("anchor_omit")
         if anchor_omit.omit_expr_fires_on_date(
             omit_dnf,
@@ -71,7 +80,7 @@ def anchor_expr_fires_on_date_with_omit(dnf, d, interval_seed, seed_base, *, omi
             core=core,
         ):
             return False
-        if core.dnf_has_counted_random(dnf):
+        if engine.dnf_has_counted_random(dnf):
             date_is_excluded = None
             if omit_dnf:
                 date_is_excluded = lambda candidate: anchor_omit.omit_expr_fires_on_date(
@@ -81,7 +90,7 @@ def anchor_expr_fires_on_date_with_omit(dnf, d, interval_seed, seed_base, *, omi
                     seed_base,
                     core=core,
                 )
-            return core.next_after_expr(
+            return engine.next_after_expr(
                 dnf,
                 d - timedelta(days=1),
                 default_seed=interval_seed,
@@ -110,8 +119,9 @@ def anchor_times_for_date(
     times = set()
     for term in dnf:
         term_matches = anchor_term_fires_on_date(term, d, interval_seed, seed_base, core=core)
-        if not term_matches and core.dnf_has_counted_random([term]):
+        if not term_matches and _scheduler_engine(core).dnf_has_counted_random([term]):
             try:
+                engine = _scheduler_engine(core)
                 anchor_omit = core._import_sibling("anchor_omit")
                 date_is_excluded = None
                 if omit_dnf:
@@ -122,7 +132,7 @@ def anchor_times_for_date(
                         seed_base,
                         core=core,
                     )
-                term_matches = core.next_after_expr(
+                term_matches = engine.next_after_expr(
                     [term],
                     d - timedelta(days=1),
                     default_seed=interval_seed,
@@ -476,7 +486,8 @@ def anchor_until_summary(
     final_hhmm = None
     if resolve_time_slots:
         for term in dnf:
-            if all(core.factor_matches_on(atom, last, first_date_local, seed_base=seed_base) for atom in term):
+            engine = _scheduler_engine(core)
+            if all(engine.factor_matches_on(atom, last, first_date_local, seed_base=seed_base) for atom in term):
                 for atom in term:
                     mods = atom.get("mods") or {}
                     slots = resolve_time_slots(mods, last)

@@ -18302,6 +18302,58 @@ def test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states():
     expect(not captured, f"partial-progress retry imported a duplicate child: {captured!r}")
 
 
+def test_on_exit_batches_orphan_cleanup_and_records_unavailable_evidence():
+    """Batch compensation must verify safe deletion and persist unavailable cleanup."""
+    hook = _find_hook_file("on-exit.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_exit_orphan_batch_test")
+    exit_models = mod._module("exit_models")
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        mod._ORPHAN_CLEANUP_EVIDENCE_PATH = td_path / "orphan-cleanup.jsonl"
+        mod._ORPHAN_CLEANUP_EVIDENCE_LOCK = td_path / "orphan-cleanup.lock"
+        state = mod._DrainState([], 0, set(), True, 0.0)
+        state.lifecycle_orphan_cleanup = {
+            "child-1": ("parent-1", "child-1", "intent-1"),
+            "child-2": ("parent-2", "child-2", "intent-2"),
+            "child-3": ("parent-3", "child-3", "intent-3"),
+        }
+        deleted: set[str] = set()
+        batch_calls = []
+
+        def preload(entries):
+            for entry in entries:
+                parent_uuid = str(entry.get("parent_uuid") or "").strip()
+                child = entry.get("child") or {}
+                child_uuid = str(child.get("uuid") or "").strip()
+                if parent_uuid:
+                    if parent_uuid == "parent-3":
+                        mod._export_cache_set(parent_uuid, exit_models.ExitExportResult(False, True, "locked", None))
+                    else:
+                        mod._export_cache_set(
+                            parent_uuid,
+                            exit_models.ExitExportResult(True, False, "", {"uuid": parent_uuid, "nextLink": ""}),
+                        )
+                if child_uuid:
+                    status = "deleted" if child_uuid in deleted else "pending"
+                    mod._export_cache_set(
+                        child_uuid,
+                        exit_models.ExitExportResult(True, False, "", {"uuid": child_uuid, "status": status}),
+                    )
+
+        def batch_cleanup(child_uuids):
+            batch_calls.append(list(child_uuids))
+            deleted.update(child_uuids)
+            return exit_models.ExitImportResult(True, "")
+
+        mod._preload_export_uuids = preload
+        mod._cleanup_orphan_children = batch_cleanup
+        mod._cleanup_lifecycle_batch(state)
+        expect(batch_calls == [["child-1", "child-2"]], f"unsafe/unavailable child entered batch cleanup: {batch_calls!r}")
+        expect("child-3" in state.lifecycle_cleanup_failures, "unavailable cleanup was not recorded")
+        evidence = mod._ORPHAN_CLEANUP_EVIDENCE_PATH.read_text(encoding="utf-8")
+        expect("child-3" in evidence and "unavailable" in evidence, f"missing durable cleanup evidence: {evidence!r}")
+
+
 def test_on_exit_dead_letter_on_import_failure():
     """on-exit should dead-letter entries that fail to import."""
     hook = _find_hook_file("on-exit.nautical")
@@ -34093,6 +34145,7 @@ TESTS = [
     test_on_exit_import_child_retries_on_lock,
     test_on_exit_import_children_batches_payloads,
     test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states,
+    test_on_exit_batches_orphan_cleanup_and_records_unavailable_evidence,
     test_on_exit_equivalent_child_cache_reuses_slot_lookup,
     test_on_exit_preloads_equivalent_child_slots_for_early_checks,
     test_on_exit_combines_uuid_and_equivalent_slot_preloads,

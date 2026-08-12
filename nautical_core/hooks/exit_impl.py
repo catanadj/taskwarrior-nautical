@@ -382,6 +382,8 @@ def _nautical_lock_dir_path() -> Path:
 _QUEUE_DB_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_queue.db"
 _DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_dead_letter.lock"
+_ORPHAN_CLEANUP_EVIDENCE_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_orphan_cleanup.jsonl"
+_ORPHAN_CLEANUP_EVIDENCE_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_orphan_cleanup.lock"
 HOOK_IMPL_API = 1
 NAUTICAL_HOOK_VERSION = "updateG-20260328"
 _QUEUE_LOCK_FAIL_MARKER = TW_DATA_DIR / ".nautical-locks" / ".nautical_spawn_queue.lock_failed"
@@ -1406,6 +1408,44 @@ def _lock_dead_letter():
         yield acquired
 
 
+@contextmanager
+def _lock_orphan_cleanup_evidence():
+    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
+    with lock_fn(
+        _ORPHAN_CLEANUP_EVIDENCE_LOCK,
+        retries=_QUEUE_LOCK_RETRIES,
+        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
+        stale_after=_QUEUE_LOCK_STALE_AFTER,
+    ) as acquired:
+        yield acquired
+
+
+def _record_orphan_cleanup_evidence(child_uuid: str, spawn_intent_id: str, reason: str) -> None:
+    """Persist cleanup failures separately from the original lifecycle conflict."""
+    queue_store = _module("queue_store", required=False)
+    if queue_store is None:
+        _diag(f"orphan cleanup evidence unavailable: {reason}")
+        return
+    payload = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "hook": "on-exit",
+        "hook_version": NAUTICAL_HOOK_VERSION,
+        "kind": "orphan_cleanup",
+        "child_uuid": str(child_uuid or "").strip(),
+        "spawn_intent_id": str(spawn_intent_id or "").strip(),
+        "reason": str(reason or "cleanup unavailable").strip(),
+    }
+    ok = queue_store.append_dead_letter_jsonl(
+        path=_ORPHAN_CLEANUP_EVIDENCE_PATH,
+        payload=payload,
+        durable=True,
+        acquire_lock=_lock_orphan_cleanup_evidence,
+        diag=_diag,
+    )
+    if not ok:
+        _diag(f"orphan cleanup evidence write failed (child={child_uuid[:8]}): {reason}")
+
+
 def _intent_log_path() -> Path:
     return _nautical_state_dir_path() / ".nautical_spawn_intents.jsonl"
 
@@ -2235,8 +2275,66 @@ def _apply_lifecycle_batch(plan) -> None:
         state.lifecycle_batch_imported.add(decision.spawn_intent_id)
 
 
+def _cleanup_lifecycle_batch(state) -> None:
+    """Safely batch-compensate imported children after multi-entry conflicts."""
+    requests = getattr(state, "lifecycle_orphan_cleanup", {})
+    if not requests:
+        return
+    entries = [
+        {"parent_uuid": parent_uuid, "child": {"uuid": child_uuid}}
+        for child_uuid, (parent_uuid, _child_short, _sid) in requests.items()
+    ]
+    for child_uuid, (parent_uuid, _child_short, _sid) in requests.items():
+        _exit_runtime_state().export_cache.pop(child_uuid, None)
+        _exit_runtime_state().export_cache.pop(parent_uuid, None)
+    _preload_export_uuids(entries)
+    safe: list[tuple[str, str, str]] = []
+    for child_uuid, (parent_uuid, child_short, sid) in requests.items():
+        parent_res = _export_cache_get(parent_uuid)
+        child_res = _export_cache_get(child_uuid)
+        if parent_res is None or parent_res.retryable:
+            reason = "parent unavailable while compensating orphan child"
+            state.lifecycle_cleanup_failures[child_uuid] = reason
+            _record_orphan_cleanup_evidence(child_uuid, sid, reason)
+            continue
+        parent = parent_res.obj if parent_res.exists else None
+        if isinstance(parent, dict) and str(parent.get("nextLink") or "").strip() == str(child_short or "").strip():
+            reason = "cleanup skipped because parent link is now present"
+            state.lifecycle_cleanup_failures[child_uuid] = reason
+            _record_orphan_cleanup_evidence(child_uuid, sid, reason)
+            continue
+        if child_res is None or child_res.retryable:
+            reason = "child unavailable while compensating orphan"
+            state.lifecycle_cleanup_failures[child_uuid] = reason
+            _record_orphan_cleanup_evidence(child_uuid, sid, reason)
+            continue
+        if not child_res.exists:
+            continue
+        safe.append((child_uuid, parent_uuid, sid))
+    if safe:
+        result = _cleanup_orphan_children([child_uuid for child_uuid, _parent, _sid in safe])
+        if not result.ok:
+            for child_uuid, _parent, sid in safe:
+                reason = result.err or "batched orphan cleanup failed"
+                state.lifecycle_cleanup_failures[child_uuid] = reason
+                _record_orphan_cleanup_evidence(child_uuid, sid, reason)
+        else:
+            verify_entries = [{"child": {"uuid": child_uuid}} for child_uuid, _parent, _sid in safe]
+            for child_uuid, _parent, _sid in safe:
+                _exit_runtime_state().export_cache.pop(child_uuid, None)
+            _preload_export_uuids(verify_entries)
+            for child_uuid, _parent, sid in safe:
+                verified = _export_cache_get(child_uuid)
+                status = str((verified.obj or {}).get("status") or "").strip().lower() if verified else ""
+                if verified is None or verified.retryable or not verified.exists or status != "deleted":
+                    reason = "batched orphan cleanup postcondition unavailable"
+                    state.lifecycle_cleanup_failures[child_uuid] = reason
+                    _record_orphan_cleanup_evidence(child_uuid, sid, reason)
+
+
 def _finalize_lifecycle_batch(state) -> None:
     """Verify all deferred lifecycle postconditions with bounded exports."""
+    _cleanup_lifecycle_batch(state)
     pending = getattr(state, "lifecycle_pending_verification", {})
     if not pending:
         return
@@ -2423,6 +2521,18 @@ def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
     )
 
 
+def _cleanup_orphan_children(child_uuids: list[str]):
+    exit_side_effects = _module("exit_side_effects")
+    return exit_side_effects.cleanup_orphan_children(
+        child_uuids,
+        run_task=_run_task_result,
+        task_cmd_prefix=_task_cmd_prefix(),
+        timeout_modify=_TASK_TIMEOUT_MODIFY,
+        retries_modify=_TASK_RETRIES_MODIFY,
+        retry_delay=_TASK_RETRY_DELAY,
+    )
+
+
 def _take_queue_batch():
     return _take_queue_entries_sqlite_batch()
 
@@ -2479,6 +2589,8 @@ class _DrainState:
         self.lifecycle_defer_verification = False
         self.lifecycle_pending_verification: dict[str, tuple[Any, Any, dict[str, Any]]] = {}
         self.lifecycle_batch_plan = None
+        self.lifecycle_orphan_cleanup: dict[str, tuple[str, str, str]] = {}
+        self.lifecycle_cleanup_failures: dict[str, str] = {}
 
     def mark_final(self, entry: dict, status: str, reason: str) -> bool:
         sid = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
@@ -3022,7 +3134,13 @@ def _execute_lifecycle_queue_entry(ctx, state):
         def compensate_child(self, _current_plan, child):
             child_uuid = str(child.get("uuid") or "").strip()
             if child_uuid:
-                _cleanup_orphan_child(child_uuid, ctx.spawn_intent_id)
+                if getattr(state, "lifecycle_defer_verification", False):
+                    state.lifecycle_orphan_cleanup.setdefault(
+                        child_uuid,
+                        (ctx.parent_uuid, ctx.child_short, ctx.spawn_intent_id),
+                    )
+                else:
+                    _cleanup_orphan_child(child_uuid, ctx.spawn_intent_id)
             return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
 
     if ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported:
@@ -3413,6 +3531,7 @@ def run_hook(
     global HOOK_DIR, TW_DIR, _CORE_BASE
     global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
     global _QUEUE_DB_PATH, _DEAD_LETTER_PATH, _DEAD_LETTER_LOCK
+    global _ORPHAN_CLEANUP_EVIDENCE_PATH, _ORPHAN_CLEANUP_EVIDENCE_LOCK
     global _QUEUE_LOCK_FAIL_MARKER, _QUEUE_LOCK_FAIL_COUNT
 
     HOOK_DIR = Path(hook_dir)
@@ -3427,6 +3546,8 @@ def run_hook(
     _QUEUE_DB_PATH = state_dir / ".nautical_queue.db"
     _DEAD_LETTER_PATH = state_dir / ".nautical_dead_letter.jsonl"
     _DEAD_LETTER_LOCK = lock_dir / ".nautical_dead_letter.lock"
+    _ORPHAN_CLEANUP_EVIDENCE_PATH = state_dir / ".nautical_orphan_cleanup.jsonl"
+    _ORPHAN_CLEANUP_EVIDENCE_LOCK = lock_dir / ".nautical_orphan_cleanup.lock"
     _QUEUE_LOCK_FAIL_MARKER = lock_dir / ".nautical_spawn_queue.lock_failed"
     _QUEUE_LOCK_FAIL_COUNT = lock_dir / ".nautical_spawn_queue.lock_failed.count"
     return main()

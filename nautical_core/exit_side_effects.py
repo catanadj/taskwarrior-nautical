@@ -287,3 +287,45 @@ def cleanup_orphan_child(
             diag(f"orphan cleanup failed (intent={spawn_intent_id} child={child_uuid[:8]}): {result.stderr}")
         else:
             diag(f"orphan cleanup failed (child={child_uuid[:8]}): {result.stderr}")
+
+
+def cleanup_orphan_children(
+    child_uuids: list[str],
+    *,
+    run_task: Callable[..., tuple[bool, str, str]],
+    task_cmd_prefix: list[str],
+    timeout_modify: float,
+    retries_modify: int,
+    retry_delay: float,
+) -> ExitImportResult:
+    """Delete a bounded set of unlinked orphan children in one guarded command."""
+    from nautical_core.exit_models import ExitImportResult
+
+    uuids = []
+    seen: set[str] = set()
+    for value in child_uuids or []:
+        token = str(value or "").strip()
+        if token and token not in seen:
+            seen.add(token)
+            uuids.append(token)
+    if not uuids:
+        return ExitImportResult(True, "")
+    selectors: list[str] = []
+    for index, uuid_str in enumerate(uuids):
+        if index:
+            selectors.append("or")
+        selectors.extend((f"uuid:{uuid_str}", "status.not:deleted"))
+    result = _typed_result(
+        run_task,
+        task_cmd_prefix + [
+            "rc.hooks=off",
+            "rc.verbose=nothing",
+            *selectors,
+            "modify",
+            "status:deleted",
+        ],
+        timeout=timeout_modify,
+        retries=retries_modify,
+        retry_delay=retry_delay,
+    )
+    return ExitImportResult(bool(result.ok), result.stderr or "")

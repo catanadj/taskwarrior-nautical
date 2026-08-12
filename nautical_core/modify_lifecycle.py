@@ -76,6 +76,29 @@ def _norm_field(value: Any) -> str:
         return ""
 
 
+def ensure_terminal_chain_off(task: dict[str, Any]) -> bool:
+    """Apply the idempotent terminal chain patch and report whether it changed."""
+    if not isinstance(task, dict):
+        raise ValueError("terminal chain patch requires a task mapping")
+    if _norm_field(task.get("chain")).lower() == "off":
+        return False
+    task["chain"] = "off"
+    return True
+
+
+def apply_terminal_transition(task: dict[str, Any], event: Any) -> bool:
+    """Validate one terminal event, then apply its idempotent chain patch."""
+    from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
+    from nautical_core.lifecycle_planner import terminal_plan_for_snapshot
+
+    try:
+        normalized = LifecycleEvent(event)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"unsupported terminal lifecycle event: {event!r}") from exc
+    terminal_plan_for_snapshot(TaskSnapshot.from_mapping(task), normalized)
+    return ensure_terminal_chain_off(task)
+
+
 def recurrence_setting_changes(old: dict[str, Any] | None, new: dict[str, Any] | None) -> list[tuple[str, str, str]]:
     if not isinstance(old, dict) or not isinstance(new, dict):
         return []
@@ -130,7 +153,16 @@ def apply_nautical_transition(
     old_chain = (old.get("chain") or "").strip().lower()
     new_chain = (new.get("chain") or "").strip().lower()
 
+    if old_has_recurrence and new_has_recurrence and not _norm_field(new.get("chainID")):
+        raise ValueError("recurrence edit requires a complete chain identity: chainID is missing")
+
     if not old_has_recurrence and new_has_recurrence:
+        task_uuid = _norm_field(new.get("uuid"))
+        if not task_uuid:
+            raise ValueError("recurrence activation requires a complete root identity: task UUID is missing")
+        linked_already = bool((_norm_field(new.get("prevLink")) or _norm_field(new.get("nextLink"))))
+        if linked_already:
+            raise ValueError("recurrence activation requires an unlinked root task")
         if (new.get("anchor") or "").strip():
             source = "anchor"
         elif (new.get("anchor_file") or "").strip():
@@ -143,10 +175,20 @@ def apply_nautical_transition(
         if new_chain != "on":
             new["chain"] = "on"
 
-        already_chain = bool((new.get("chainID") or "").strip())
-        linked_already = bool((new.get("prevLink") or new.get("nextLink") or "").strip())
-        if not already_chain and not linked_already:
-            new["chainID"] = short_uuid(new.get("uuid"))
+        if not _norm_field(new.get("chainID")):
+            generated_chain_id = _norm_field(short_uuid(task_uuid))
+            if not generated_chain_id:
+                raise ValueError("recurrence activation could not derive a chainID from the task UUID")
+            new["chainID"] = generated_chain_id
+        raw_link = _norm_field(new.get("link"))
+        if raw_link:
+            try:
+                if int(float(raw_link)) != 1:
+                    raise ValueError
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("recurrence activation requires root link 1") from exc
+        else:
+            new["link"] = 1
         return ModifyNauticalTransition(
             state="enabled",
             source=source,
@@ -154,8 +196,7 @@ def apply_nautical_transition(
         )
 
     if old_has_recurrence and not new_has_recurrence:
-        if new_chain != "off":
-            new["chain"] = "off"
+        ensure_terminal_chain_off(new)
         return ModifyNauticalTransition(
             state="disabled",
             reason="This task no longer has Nautical recurrence fields.",
@@ -198,8 +239,10 @@ __all__ = (
     "ModifyLifecycleRoute",
     "ModifyNauticalTransition",
     "RECURRENCE_SETTING_FIELDS",
+    "apply_terminal_transition",
     "apply_nautical_transition",
     "classify_modify_route",
+    "ensure_terminal_chain_off",
     "promote_newly_nautical_task",
     "recurrence_setting_changes",
     "task_has_nautical_chain_fields",

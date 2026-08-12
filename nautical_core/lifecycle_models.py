@@ -73,6 +73,29 @@ class QueueProcessingState(str, Enum):
     DEAD_LETTERED = "dead_lettered"
 
 
+class DeletionDisposition(str, Enum):
+    """Evidence-based classification for a deleted Nautical occurrence."""
+
+    NOT_APPLICABLE = "not_applicable"
+    EXPIRATION = "expiration"
+    MANUAL = "manual"
+    AMBIGUOUS = "ambiguous"
+
+
+@dataclass(frozen=True, slots=True)
+class DeletionEvidence:
+    disposition: DeletionDisposition
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        try:
+            disposition = DeletionDisposition(self.disposition)
+        except (TypeError, ValueError) as exc:
+            raise LifecycleContractError("invalid deletion disposition") from exc
+        object.__setattr__(self, "disposition", disposition)
+        object.__setattr__(self, "reason", str(self.reason or "").strip())
+
+
 FrozenValue: TypeAlias = Any
 FrozenPairs: TypeAlias = tuple[tuple[str, FrozenValue], ...]
 LIFECYCLE_PLAN_SCHEMA_VERSION = 1
@@ -209,6 +232,7 @@ class ParentGuard:
     chain_id: str
     link: int
     recurrence_fingerprint: str = ""
+    modified: str = ""
 
     def __post_init__(self) -> None:
         for name in ("status", "chain", "chain_id"):
@@ -219,6 +243,7 @@ class ParentGuard:
         if isinstance(self.link, bool) or not isinstance(self.link, int) or self.link < 0:
             raise LifecycleContractError("parent guard link must be a non-negative integer")
         object.__setattr__(self, "recurrence_fingerprint", str(self.recurrence_fingerprint or "").strip())
+        object.__setattr__(self, "modified", str(self.modified or "").strip())
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ParentGuard":
@@ -234,6 +259,7 @@ class ParentGuard:
             chain_id=str(value.get("chainID", value.get("chain_id", ""))),
             link=link,
             recurrence_fingerprint=str(value.get("recurrence_fingerprint", "")),
+            modified=str(value.get("modified", "")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -245,6 +271,8 @@ class ParentGuard:
         }
         if self.recurrence_fingerprint:
             result["recurrence_fingerprint"] = self.recurrence_fingerprint
+        if self.modified:
+            result["modified"] = self.modified
         return result
 
 
@@ -464,6 +492,13 @@ class LifecyclePlan:
     def parent_patch_dict(self) -> dict[str, Any]:
         return {key: _thaw(value) for key, value in self.parent_patch}
 
+    def semantic_key(self) -> str:
+        """Return a stable comparison key excluding durable execution stage."""
+        payload = self.to_dict()
+        payload.pop("stage", None)
+        payload.pop("max_attempts", None)
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+
     def with_stage(self, stage: ExecutionStage) -> "LifecyclePlan":
         """Return the same immutable plan at a new durable execution stage."""
         return LifecyclePlan(
@@ -507,6 +542,8 @@ class LifecycleOutcome:
 
 
 __all__ = (
+    "DeletionDisposition",
+    "DeletionEvidence",
     "ExecutionStage",
     "LIFECYCLE_PLAN_SCHEMA_VERSION",
     "LifecycleAction",

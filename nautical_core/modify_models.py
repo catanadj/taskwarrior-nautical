@@ -260,12 +260,6 @@ SpawnChildCallback: TypeAlias = Callable[
 ]
 ModifyChainStateCallback: TypeAlias = Callable[[], Any]
 SeedLookupCallback: TypeAlias = Callable[[TaskRow, TaskRow], None]
-ChainExportCallback: TypeAlias = Callable[[str], list[TaskRow]]
-ChainIndexesCallback: TypeAlias = Callable[
-    [list[TaskRow]], tuple[dict[int, TaskRow], dict[str, TaskRow]]
-]
-SetChainCacheCallback: TypeAlias = Callable[[str, list[TaskRow]], None]
-MergeChainCallback: TypeAlias = Callable[[list[TaskRow], TaskRow, TaskRow, str], list[TaskRow]]
 DiagnosticSummaryCallback: TypeAlias = Callable[[], Any]
 
 
@@ -335,6 +329,7 @@ class AnchorCompletionRenderCallback(Protocol):
         stripped_attrs: list[str],
         deferred_spawn: bool,
         spawn_intent_id: str | None,
+        lifecycle_result: "CompletionLifecycleResult",
         chain_by_short: dict[str, Any] | None,
         analytics_advice: str | None,
         integrity_warnings: list[str] | None,
@@ -363,11 +358,19 @@ class CpCompletionRenderCallback(Protocol):
         meta: dict[str, Any],
         deferred_spawn: bool,
         spawn_intent_id: str | None,
+        lifecycle_result: "CompletionLifecycleResult",
         chain_by_short: dict[str, Any] | None,
         analytics_advice: str | None,
         integrity_warnings: list[str] | None,
         base_no: int,
     ) -> None:
+        ...
+
+
+class LifecycleResultRenderCallback(Protocol):
+    """Render a finalized non-success result without changing its state."""
+
+    def __call__(self, result: "CompletionLifecycleResult", task: TaskRow) -> None:
         ...
 
 
@@ -459,6 +462,7 @@ class CpCompletionFeedbackModel:
     meta: dict[str, Any]
     deferred_spawn: bool
     spawn_intent_id: str | None
+    lifecycle_result: "CompletionLifecycleResult"
     chain_by_short: dict[str, Any] | None
     analytics_advice: str | None
     integrity_warnings: list[str] | None
@@ -483,6 +487,7 @@ class AnchorCompletionFeedbackModel:
     stripped_attrs: list[str]
     deferred_spawn: bool
     spawn_intent_id: str | None
+    lifecycle_result: "CompletionLifecycleResult"
     chain_by_short: dict[str, Any] | None
     analytics_advice: str | None
     integrity_warnings: list[str] | None
@@ -499,6 +504,62 @@ class CompletionSpawnResult:
     verified: bool
     deferred_spawn: bool
     spawn_intent_id: str | None
+    outcome_state: str = "applied"
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        state = str(self.outcome_state or "").strip().lower()
+        if state not in {"applied", "manual_review", "retryable"}:
+            raise ValueError(f"unsupported completion spawn state: {self.outcome_state!r}")
+        self.outcome_state = state
+        self.reason = str(self.reason or "").strip()
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionLifecycleDiagnostic:
+    """Structured context for one completion lifecycle decision."""
+
+    transition_id: str = ""
+    chain_id: str = ""
+    parent_link: int | None = None
+    child_link: int | None = None
+    stage: str = ""
+    attempts: int = 0
+    failure_kind: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "transition_id", str(self.transition_id or "").strip())
+        object.__setattr__(self, "chain_id", str(self.chain_id or "").strip())
+        object.__setattr__(self, "stage", str(self.stage or "").strip().lower())
+        object.__setattr__(self, "failure_kind", str(self.failure_kind or "").strip().lower())
+        attempts = int(self.attempts or 0)
+        if attempts < 0:
+            raise ValueError("completion diagnostic attempts cannot be negative")
+        object.__setattr__(self, "attempts", attempts)
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionLifecycleResult:
+    """Operational result returned after completion mutation decisions finish."""
+
+    state: str
+    child_short: str = ""
+    deferred_spawn: bool = False
+    spawn_intent_id: str | None = None
+    reason: str = ""
+    diagnostic: CompletionLifecycleDiagnostic | None = None
+
+    def __post_init__(self) -> None:
+        state = str(self.state or "").strip().lower()
+        if state not in {"applied", "queued", "terminal", "manual_review", "retryable"}:
+            raise ValueError(f"unsupported completion lifecycle state: {self.state!r}")
+        if state == "queued" and (not self.deferred_spawn or not str(self.spawn_intent_id or "").strip()):
+            raise ValueError("queued completion result requires deferred spawn and an intent ID")
+        if state in {"applied", "terminal", "manual_review"} and self.deferred_spawn:
+            raise ValueError("applied completion result cannot be deferred")
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "child_short", str(self.child_short or "").strip())
+        object.__setattr__(self, "reason", str(self.reason or "").strip())
 
 
 @dataclass(slots=True)
@@ -515,15 +576,13 @@ class CompletionFinalizeServices:
     build_and_spawn_child: BuildAndSpawnCallback
     seed_runtime_lookup_tasks: SeedLookupCallback
     modify_chain_state: ModifyChainStateCallback
-    get_chain_export: ChainExportCallback
-    build_chain_indexes: ChainIndexesCallback
-    set_chain_cache: SetChainCacheCallback
     export_uuid_short_cached: Any
-    merge_spawned_child_into_chain: MergeChainCallback
+    lifecycle_read_service: Any
     chain_health_advice: ChainHealthCallback
     chain_integrity_warnings: ChainIntegrityCallback
     render_anchor_completion_feedback: AnchorCompletionRenderCallback
     render_cp_completion_feedback: CpCompletionRenderCallback
+    render_lifecycle_result: LifecycleResultRenderCallback
     print_task: PrintTaskCallback
     diag_summary: DiagnosticSummaryCallback
     show_analytics: bool

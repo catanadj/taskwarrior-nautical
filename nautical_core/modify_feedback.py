@@ -21,6 +21,154 @@ def _format_td_short(td: timedelta) -> str:
     return "".join(parts) if parts else "0s"
 
 
+def format_chain_summary_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
+    """Arrange chain-finished rows into compact presentation sections."""
+    groups = (
+        {"Reason", "Chain", "Pattern", "Natural", "Period"},
+        {"First due", "Last end", "Span"},
+        {"Performance", "Avg lateness", "Median lateness", "Best early", "Worst late"},
+        {"Chain cap", "Chain end point", "Chain limits"},
+        {"History"},
+    )
+    grouped: list[list[tuple[str, str]]] = [[] for _ in groups]
+    other: list[tuple[str, str]] = []
+    for key, value in rows:
+        for index, names in enumerate(groups):
+            if key in names:
+                grouped[index].append((key, value))
+                break
+        else:
+            other.append((key, value))
+    grouped[0].extend(other)
+    out: list[tuple[str | None, str]] = []
+    for group in grouped:
+        if not group:
+            continue
+        if out:
+            out.append((None, ""))
+        out.extend(group)
+    return out or rows
+
+
+def format_next_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
+    """Arrange anchor next-link rows into compact presentation sections."""
+    groups = (
+        {"Pattern", "Natural", "Basis", "Sanitised"},
+        {
+            "Next", "Next Due", "Expiration", "Next expires", "Scheduled", "Wait",
+            "Link status", "Links left", "Chain cap", "Chain end point",
+        },
+        {"Last occurrence"},
+        {"Timeline"},
+        {"Rand"},
+    )
+    grouped: list[list[tuple[str, str]]] = [[] for _ in groups]
+    other: list[tuple[str, str]] = []
+    for key, value in rows:
+        for index, names in enumerate(groups):
+            if key in names:
+                grouped[index].append((key, value))
+                break
+        else:
+            other.append((key, value))
+    grouped[0].extend(other)
+    out: list[tuple[str | None, str]] = []
+    for group in grouped:
+        if not group:
+            continue
+        if out:
+            out.append((None, ""))
+        out.extend(group)
+    return out or rows
+
+
+def format_next_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
+    """Arrange CP next-link rows into compact presentation sections."""
+    groups = (
+        {"Period", "Basis"},
+        {
+            "Next", "Next Due", "Expiration", "Next expires", "Scheduled", "Wait",
+            "Link status", "Links left", "Chain cap", "Chain end point",
+        },
+        {"Last occurrence"},
+        {"Timeline"},
+    )
+    grouped: list[list[tuple[str, str]]] = [[] for _ in groups]
+    other: list[tuple[str, str]] = []
+    for key, value in rows:
+        for index, names in enumerate(groups):
+            if key in names:
+                grouped[index].append((key, value))
+                break
+        else:
+            other.append((key, value))
+    grouped[0].extend(other)
+    out: list[tuple[str | None, str]] = []
+    for group in grouped:
+        if not group:
+            continue
+        if out:
+            out.append((None, ""))
+        out.extend(group)
+    return out or rows
+
+
+def format_line_preview(
+    link_no: int,
+    task: dict,
+    child_due_utc: Any,
+    child_short: str,
+    now_utc: Any,
+    *,
+    child_field: str = "due",
+    cap_no: int | None = None,
+    until_dt: Any = None,
+    until_no: int | None = None,
+    child_until_dt: Any = None,
+    kind: str = "cp",
+    minimal: bool = False,
+    core: Any,
+    format_local,
+    parse_datetime,
+    on_time_delta,
+    human_delta,
+) -> str:
+    """Render one compact completion preview line."""
+    due_local = format_local(child_due_utc) if child_due_utc else "—"
+    next_glyph = "⚓" if str(kind or "").lower() == "anchor" else "⛓"
+    lead = f"#{link_no} ✓"
+    if minimal:
+        return " ".join((lead, f"next {next_glyph}", due_local)).strip()
+    cur_due = parse_datetime(task.get("due"))
+    cur_end = parse_datetime(task.get("end"))
+    delta_text = core.strip_rich_markup(on_time_delta(cur_due, cur_end) or "").strip()
+    if delta_text.startswith("(") and delta_text.endswith(")"):
+        delta_text = delta_text[1:-1].strip()
+    due_delta = human_delta(now_utc, child_due_utc, False)
+    due_label = "scheduled" if child_field == "scheduled" else "due"
+    if due_delta.startswith("in "):
+        due_delta = due_label + " " + due_delta
+    elif not due_delta.startswith("overdue by "):
+        due_delta = due_label + " " + due_delta
+    segments = [lead]
+    if delta_text:
+        segments.append(f"[dim]{delta_text}[/]")
+    segments.extend((f"next {next_glyph}", due_local))
+    if due_delta:
+        segments.append(f"[dim]({due_delta})[/]")
+    line = " · ".join(seg for seg in segments if seg).replace("✓ · ", "✓ ", 1)
+    if child_until_dt:
+        line += f" [magenta]· expires {format_local(child_until_dt)}[/]"
+    cap_parts: list[str] = []
+    if cap_no:
+        cap_parts.extend((f"last link #{cap_no}", f"{max(0, cap_no - link_no)} left"))
+    if until_dt:
+        cap_parts.append(f"end point {format_local(until_dt)}")
+    if cap_parts:
+        line += f"[dim] · {' · '.join(cap_parts)}[/]"
+    return line.strip()
+
+
 def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequence=None, cp_sequence_interval_for_link=None) -> str:
     if callable(cp_sequence_interval_for_link):
         td = cp_sequence_interval_for_link(
@@ -229,6 +377,42 @@ def _append_chain_boundary_rows(fb: list[tuple[str, object]], task: dict, until_
         fb.append(("Chain end point", core.fmt_dt_local(until_dt)))
 
 
+def _append_lifecycle_result_row(fb: list[tuple[str, object]], lifecycle_result) -> None:
+    """Expose the mutation outcome without making panels part of orchestration."""
+    state = str(getattr(lifecycle_result, "state", "") or "").strip().lower()
+    if not state:
+        return
+    labels = {
+        "applied": "[green]Applied now[/]",
+        "queued": "[yellow]Queued for on-exit[/]",
+        "terminal": "[cyan]Chain complete[/]",
+        "retryable": "[red]Retryable; no successor finalized[/]",
+        "manual_review": "[yellow]Manual review required[/]",
+    }
+    value = labels.get(state, f"[yellow]{state}[/]")
+    child_short = str(getattr(lifecycle_result, "child_short", "") or "").strip()
+    if child_short and state in {"applied", "queued"}:
+        value += f" · child {child_short}"
+    intent_id = str(getattr(lifecycle_result, "spawn_intent_id", "") or "").strip()
+    if intent_id and state == "queued":
+        value += f" · intent {intent_id}"
+    reason = str(getattr(lifecycle_result, "reason", "") or "").strip()
+    if reason and state in {"terminal", "retryable", "manual_review"}:
+        value += f" · {reason}"
+    fb.append(("Result", value))
+
+
+def _lifecycle_result_label(lifecycle_result) -> str:
+    state = str(getattr(lifecycle_result, "state", "") or "").strip().lower()
+    return {
+        "applied": "Applied now",
+        "queued": "Queued for on-exit",
+        "terminal": "Chain complete",
+        "retryable": "Retryable",
+        "manual_review": "Manual review required",
+    }.get(state, state.replace("_", " ").title() if state else "")
+
+
 def _child_expiration(core, child: dict):
     try:
         return core.parse_dt_any(child.get("until"))
@@ -303,6 +487,7 @@ def _build_text_feedback(
     child_expires=None,
     expiration_basis: str = "due",
     last_occurrence=None,
+    lifecycle_result=None,
     extra_line: str | None = None,
 ) -> str:
     text = core.strip_rich_markup(preview_line or "")
@@ -358,6 +543,11 @@ def _build_text_feedback(
         lines.append(summary_text)
     if extra_line and str(extra_line).strip():
         lines.append(extra_line)
+    result_label = _lifecycle_result_label(lifecycle_result)
+    if result_label:
+        result_reason = str(getattr(lifecycle_result, "reason", "") or "").strip()
+        suffix = f": {result_reason}" if result_reason and result_label in {"Retryable", "Manual review required"} else ""
+        lines.append(f"[bold cyan]Result:[/] [white]{result_label}{suffix}[/]")
 
     limit_parts = []
     if cap_no:
@@ -393,6 +583,7 @@ def _compact_feedback_rows(rows: list[tuple[str, object]], *, include_timeline: 
         "warning",
         "error",
         "intent",
+        "result",
     }
     out: list[tuple[str, object]] = []
     for k, v in rows:
@@ -454,6 +645,9 @@ def render_anchor_completion_feedback(
             kind="anchor",
             minimal=(mode == "minimal"),
         )
+        result_label = _lifecycle_result_label(feedback.lifecycle_result)
+        if result_label:
+            line = f"{line} · {result_label}"
         title_style = chain_colour_for_task(feedback.new, "anchor") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_anchor", border_style=title_style, title_style=title_style, markup_body=True)
         return
@@ -488,6 +682,7 @@ def render_anchor_completion_feedback(
                 child_expires=_child_expiration(core, feedback.child),
                 expiration_basis=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
                 last_occurrence=_effective_last_occurrence(feedback.finals),
+                lifecycle_result=feedback.lifecycle_result,
                 extra_line=(f"[bold cyan]Except:[/] [white]{omit_natural or omit_raw}[/]" if omit_raw else (f"[bold cyan]Omit file:[/] [white]{omit_file}[/]" if omit_file else None)),
             ),
             kind="preview_anchor",
@@ -495,7 +690,8 @@ def render_anchor_completion_feedback(
         )
         return
 
-    fb = []
+    fb: list[tuple[str, Any]] = []
+    _append_lifecycle_result_row(fb, feedback.lifecycle_result)
     fb.append((anchor_label, f"{expr_str}  {mode_tag}"))
     if omit_raw:
         fb.append(_omit_pattern_row(core, omit_raw))
@@ -624,6 +820,9 @@ def render_cp_completion_feedback(
             kind="cp",
             minimal=(mode == "minimal"),
         )
+        result_label = _lifecycle_result_label(feedback.lifecycle_result)
+        if result_label:
+            line = f"{line} · {result_label}"
         title_style = chain_colour_for_task(feedback.new, "cp") if chain_color_per_chain else None
         panel_line(title, line, kind="preview_cp", border_style=title_style, title_style=title_style, markup_body=True)
         return
@@ -658,13 +857,15 @@ def render_cp_completion_feedback(
                 child_expires=_child_expiration(core, feedback.child),
                 expiration_basis=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
                 last_occurrence=_effective_last_occurrence(feedback.finals),
+                lifecycle_result=feedback.lifecycle_result,
             ),
             kind="preview_cp",
             markup_body=True,
         )
         return
 
-    fb = []
+    fb: list[tuple[str, Any]] = []
+    _append_lifecycle_result_row(fb, feedback.lifecycle_result)
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
     fb.append(("Period", feedback.new.get("cp")))
     if feedback.meta.get("cp_sequence_len"):

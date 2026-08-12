@@ -87,7 +87,25 @@
       "workflow_ordinary_modify": 2.0,
       "workflow_expiration_recovery": 2.0,
       "workflow_queue_drain": 3.0,
+      "workflow_queue_drain_partial_recovery": 6.0,
       "workflow_reconcile": 3.0
+    },
+    "task_call_budgets": {
+      "workflow_queue_drain": {
+        "run_task_calls": 11,
+        "run_task_calls_export_uuid": 2,
+        "run_task_calls_import": 1,
+        "run_task_calls_modify_parent_nextlink": 8
+      },
+      "workflow_queue_drain_idempotent": {
+        "run_task_calls": 2
+      },
+      "workflow_queue_drain_partial_recovery": {
+        "run_task_calls": 13,
+        "run_task_calls_export_uuid": 3,
+        "run_task_calls_import": 2,
+        "run_task_calls_modify_parent_nextlink": 8
+      }
     }
   },
   "extended_workload": {

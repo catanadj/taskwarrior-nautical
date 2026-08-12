@@ -62,6 +62,14 @@ class LifecycleExecutorServices(Protocol):
     def compensate_child(self, plan: LifecyclePlan, child: dict[str, Any]) -> OperationResult: ...
 
 
+class LifecycleTerminalServices(Protocol):
+    def validate_terminal(self, plan: LifecyclePlan) -> OperationResult: ...
+
+    def disable_chain(self, plan: LifecyclePlan) -> OperationResult: ...
+
+    def verify_terminal(self, plan: LifecyclePlan) -> OperationResult: ...
+
+
 def _reason(result: OperationResult, fallback: str) -> str:
     return str(result.reason or fallback).strip()
 
@@ -155,8 +163,68 @@ class LifecycleTransitionExecutor:
         return self._outcome(plan, LifecycleOutcomeKind.APPLIED, ExecutionStage.FINALIZED)
 
 
+class LifecycleTerminalExecutor:
+    """Apply one guarded terminal transition and verify chain disablement."""
+
+    def __init__(self, services: LifecycleTerminalServices) -> None:
+        self.services = services
+
+    @staticmethod
+    def _failure(
+        plan: LifecyclePlan,
+        result: OperationResult,
+        fallback: str,
+    ) -> LifecycleOutcome:
+        reason = _reason(result, fallback)
+        kind = (
+            LifecycleOutcomeKind.RETRYABLE
+            if result.state is OperationState.UNAVAILABLE
+            else LifecycleOutcomeKind.MANUAL_REVIEW
+        )
+        stage = (
+            ExecutionStage.RETRYABLE
+            if kind is LifecycleOutcomeKind.RETRYABLE
+            else ExecutionStage.MANUAL_REVIEW
+        )
+        return LifecycleOutcome(kind=kind, stage=stage, identity=plan.identity, reason=reason)
+
+    def execute(self, plan: LifecyclePlan) -> LifecycleOutcome:
+        if not isinstance(plan, LifecyclePlan):
+            raise LifecycleContractError("terminal executor requires a validated plan")
+        if plan.action is LifecycleAction.NOOP:
+            return LifecycleOutcome(
+                kind=LifecycleOutcomeKind.NOOP,
+                stage=ExecutionStage.FINALIZED,
+                identity=plan.identity,
+            )
+        if plan.action not in {LifecycleAction.DISABLE_CHAIN, LifecycleAction.FINALIZE_CHAIN}:
+            return LifecycleOutcome(
+                kind=LifecycleOutcomeKind.MANUAL_REVIEW,
+                stage=ExecutionStage.MANUAL_REVIEW,
+                identity=plan.identity,
+                reason=f"unsupported terminal action: {plan.action.value}",
+            )
+
+        validated = self.services.validate_terminal(plan)
+        if not validated.successful:
+            return self._failure(plan, validated, "terminal parent guard failed")
+        disabled = self.services.disable_chain(plan)
+        if not disabled.successful:
+            return self._failure(plan, disabled, "chain disablement failed")
+        verified = self.services.verify_terminal(plan)
+        if not verified.successful:
+            return self._failure(plan, verified, "terminal chain verification failed")
+        return LifecycleOutcome(
+            kind=LifecycleOutcomeKind.APPLIED,
+            stage=ExecutionStage.FINALIZED,
+            identity=plan.identity,
+        )
+
+
 __all__ = (
     "LifecycleExecutorServices",
+    "LifecycleTerminalExecutor",
+    "LifecycleTerminalServices",
     "LifecycleTransitionExecutor",
     "OperationResult",
     "OperationState",

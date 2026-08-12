@@ -16,10 +16,13 @@ def _parent_guard_mismatch(
     guard: dict[str, str],
     *,
     recurrence_fingerprint=None,
+    check_modified: bool = True,
 ) -> str:
-    for field in ("status", "chain", "chainID", "link"):
+    for field in ("status", "chain", "chainID", "link", "modified"):
         expected = str(guard.get(field) or "").strip()
         actual = str(parent.get(field) or "").strip()
+        if field == "modified" and (not expected or not check_modified):
+            continue
         if field in {"status", "chain"}:
             expected = expected.lower()
             actual = actual.lower()

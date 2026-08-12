@@ -15,6 +15,7 @@ from nautical_core.exit_models import (
     ExitImportCallback,
     ExitLockErrorCallback,
     ExitParentNextlinkStateCallback,
+    ExitParentNextlinkStateResult,
     ExitParentUpdateCallback,
     ExitPrecheckServices,
     ExitRequeueCallback,
@@ -30,9 +31,13 @@ class ExitRuntimeState:
     queue_lock_failures_this_run: int = 0
     last_queue_lock_diag_ts: float = 0.0
     diag_stats: dict[str, Any] = field(default_factory=dict)
+    task_phase: str = ""
     startup_stats: dict[str, float | int] = field(default_factory=dict)
     export_cache: dict[str, Any] = field(default_factory=dict)
     equiv_child_cache: dict[tuple[str, str, str], Any] = field(default_factory=dict)
+    lifecycle_parent_preflight: dict[str, dict[str, Any]] = field(default_factory=dict)
+    lifecycle_batch_imported: set[str] = field(default_factory=set)
+    lifecycle_batch_import_failed: set[str] = field(default_factory=set)
 
 
 def new_runtime_state() -> ExitRuntimeState:
@@ -54,10 +59,34 @@ class ExitRuntimeServices:
 
 
 def build_precheck_services(runtime: ExitRuntimeServices) -> ExitPrecheckServices:
+    def parent_nextlink_state(
+        parent_uuid: str,
+        child_short: str,
+        expected_prev: str | None = None,
+        *,
+        prefer_cache: bool = True,
+        parent_guard: dict[str, Any] | None = None,
+        guard_mismatch_fn: Any = None,
+    ) -> ExitParentNextlinkStateResult:
+        try:
+            return runtime.parent_nextlink_state(
+                parent_uuid,
+                child_short,
+                expected_prev,
+                prefer_cache=prefer_cache,
+                parent_guard=parent_guard,
+                guard_mismatch_fn=guard_mismatch_fn,
+            )
+        except TypeError:
+            return runtime.parent_nextlink_state(
+                parent_uuid,
+                child_short,
+                expected_prev,
+                prefer_cache=prefer_cache,
+            )
+
     return ExitPrecheckServices(
-        parent_nextlink_state=lambda parent_uuid, child_short, expected_prev=None, *, prefer_cache=True: runtime.parent_nextlink_state(
-            parent_uuid, child_short, expected_prev, prefer_cache=prefer_cache
-        ),
+        parent_nextlink_state=parent_nextlink_state,
         export_uuid=lambda uuid_str, *, prefer_cache=True: runtime.export_uuid(uuid_str, prefer_cache=prefer_cache),
         clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,
         is_lock_error=runtime.is_lock_error,

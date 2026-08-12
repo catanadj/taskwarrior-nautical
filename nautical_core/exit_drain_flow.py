@@ -10,6 +10,7 @@ from nautical_core.exit_models import (
     ExitQueueWriteResult,
     ExitRequeueResult,
     ExitDrainStats,
+    LifecycleBatchPlan,
 )
 
 
@@ -19,6 +20,9 @@ QueueDbHook = Callable[[], None]
 TakeQueueBatch = Callable[[], ExitQueueBatch]
 LoadFinalizedIntents = Callable[[], tuple[set[str], bool]]
 PreloadEntries = Callable[[list[Entry]], None]
+PrepareLifecycleBatch = Callable[[list[Entry]], LifecycleBatchPlan | None]
+ApplyLifecycleBatch = Callable[[LifecycleBatchPlan], None]
+FinalizeBatch = Callable[[ExitDrainStateProtocol], None]
 ProcessQueueEntry = Callable[[int, Entry, ExitDrainStateProtocol], bool]
 RequeueEntries = Callable[[list[Entry]], ExitRequeueResult]
 AckQueueEntries = Callable[[list[tuple[int, str]]], ExitQueueWriteResult]
@@ -60,6 +64,9 @@ class ExitDrainServices:
     exit_progress_scope: ExitProgressScope
     preload_export_uuids: PreloadEntries
     preload_equivalent_child_slots: PreloadEntries
+    prepare_lifecycle_batch: PrepareLifecycleBatch | None
+    apply_lifecycle_batch: ApplyLifecycleBatch | None
+    finalize_lifecycle_batch: FinalizeBatch | None
     process_queue_entry: ProcessQueueEntry
     requeue_entries_result: RequeueEntries
     ack_queue_entries_sqlite_result: AckQueueEntries
@@ -85,6 +92,18 @@ def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
             intent_log_ready=bool(intent_log_ready),
             intent_log_load_ms=float(intent_log_load_ms),
         )
+        lifecycle_count = sum(
+            isinstance(entry, dict) and isinstance(entry.get("lifecycle_plan"), dict)
+            for entry in entries
+        )
+        # A single entry gains nothing from batching and remains on the
+        # established per-entry verification path for compatibility and
+        # simpler failure attribution.
+        state.lifecycle_defer_verification = lifecycle_count > 1
+        # Combined discovery is only authoritative when there is an actual
+        # lifecycle batch.  Single-entry drains retain their established
+        # per-entry reads and fixtures.
+        state.lifecycle_batch_discovery = lifecycle_count > 1
         preload_entries = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -99,6 +118,13 @@ def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
                 progress_update(phase="preload", state=state)
             services.preload_export_uuids(preload_entries)
             services.preload_equivalent_child_slots(preload_entries)
+            lifecycle_batch_plan = None
+            if services.prepare_lifecycle_batch is not None:
+                lifecycle_batch_plan = services.prepare_lifecycle_batch(preload_entries)
+                if lifecycle_batch_plan is not None:
+                    state.lifecycle_batch_plan = lifecycle_batch_plan
+            if lifecycle_batch_plan is not None and services.apply_lifecycle_batch is not None:
+                services.apply_lifecycle_batch(lifecycle_batch_plan)
             if progress_update is not None:
                 progress_update(phase="drain", state=state)
 
@@ -108,6 +134,9 @@ def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
                     progress_update(advance=1, phase="drain", state=state)
                 if should_break:
                     break
+
+            if services.finalize_lifecycle_batch is not None:
+                services.finalize_lifecycle_batch(state)
 
             if progress_update is not None:
                 progress_update(phase="finalize", state=state)

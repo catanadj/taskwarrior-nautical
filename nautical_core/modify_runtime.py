@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from collections.abc import Callable
-import threading
 from typing import Any
 import time as _time
 
@@ -114,11 +113,8 @@ class ModifyRuntimeState:
     panel_chain_by_link: dict[int, list[dict[str, Any]]] | None = None
     panel_chain_by_short: dict[str, dict[str, Any]] | None = None
     panel_chain_snapshot_loaded: bool = False
-    chain_cache_chain_id: str = ""
-    chain_cache: list[dict[str, Any]] = field(default_factory=list)
-    chain_by_short: dict[str, dict[str, Any]] = field(default_factory=dict)
-    chain_by_uuid: dict[str, dict[str, Any]] = field(default_factory=dict)
-    chain_cache_lock: threading.RLock = field(default_factory=threading.RLock)
+    lifecycle_read_service: Any = None
+    chain_cache_store: Any = None
     anchor_file_providers: dict[tuple[str, str, tuple[int, int], str], Any] = field(
         default_factory=dict
     )

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.machinery
 import importlib.util
 import json
 import os
@@ -883,25 +882,10 @@ def _safe_parse_datetime(runtime: Any, value: Any):
     return parser(value)
 
 
-def _load_on_modify_hook_for_reconcile(implementation: Path | None):
-    if implementation is None:
-        raise RuntimeError("No validated Nautical on-modify implementation is available.")
-    loader = importlib.machinery.SourceFileLoader("_nautical_doctor_on_modify", str(implementation))
-    spec = importlib.util.spec_from_loader("_nautical_doctor_on_modify", loader)
-    if spec is None:
-        raise RuntimeError(f"could not load {implementation}")
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    if hasattr(module, "_load_core"):
-        module._load_core()
-    return module
-
-
 def _check_reconcile_plans(
     findings: list[dict[str, Any]],
     *,
     rows: list[dict[str, Any]],
-    on_modify_impl: Path | None,
 ) -> None:
     completion_candidates = [row for row in rows if reconcile.is_orphan_completion_candidate(row)]
     deleted_candidates = [row for row in rows if reconcile.is_orphan_deleted_chain_candidate(row)]
@@ -1012,7 +996,6 @@ def _check_chains(
     *,
     task_bin: str,
     env: dict[str, str],
-    on_modify_impl: Path | None,
 ) -> dict[str, int]:
     ok, rows, err = _task_export(task_bin, env)
     if not ok:
@@ -1060,7 +1043,7 @@ def _check_chains(
                 ],
             },
         )
-    _check_reconcile_plans(findings, rows=rows, on_modify_impl=on_modify_impl)
+    _check_reconcile_plans(findings, rows=rows)
 
     nautical = [
         row
@@ -1390,12 +1373,10 @@ def main() -> int:
             details=gc_result,
         )
     queue = _check_queue(findings, taskdata, max(0.0, args.stale_after_seconds))
-    on_modify = hook_runtimes.get("on-modify") or {}
     counts = _check_chains(
         findings,
         task_bin=args.task_bin,
         env=env,
-        on_modify_impl=on_modify.get("implementation"),
     )
 
     status = _overall_status(findings)

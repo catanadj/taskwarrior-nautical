@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from nautical_core.lifecycle_models import LifecyclePlan
 
 
 class ExitDrainStateProtocol(Protocol):
     requeue: list[dict[str, Any]]
     errors: int
     sqlite_acked_claims: dict[int, str]
+    lifecycle_defer_verification: bool
+    lifecycle_batch_discovery: bool
+    lifecycle_batch_plan: LifecycleBatchPlan | None
 
     def dead_letter(self, entry: dict[str, Any], reason: str) -> None: ...
     def record_lock_event(self, idx: int) -> bool: ...
@@ -31,6 +38,8 @@ class ExitParentNextlinkStateCallback(Protocol):
         expected_prev: str | None = None,
         *,
         prefer_cache: bool = True,
+        parent_guard: dict[str, Any] | None = None,
+        guard_mismatch_fn: Any = None,
     ) -> ExitParentNextlinkStateResult: ...
 
 
@@ -44,6 +53,8 @@ class ExitParentUpdateCallback(Protocol):
         parent_uuid: str,
         child_short: str,
         expected_prev: str | None = None,
+        *,
+        parent_guard: dict[str, Any] | None = None,
     ) -> ExitParentUpdateResult: ...
 
 
@@ -150,6 +161,63 @@ class ExitImportResult:
     err: str
 
 
+class LifecycleBatchDecisionKind(str, Enum):
+    """Read-only classification used before a lifecycle batch mutates Taskwarrior."""
+
+    ALREADY_SATISFIED = "already_satisfied"
+    MISSING_CHILD = "missing_child"
+    STALE_CONFLICTING = "stale_conflicting"
+    UNAVAILABLE = "unavailable"
+    READY_TO_APPLY = "ready_to_apply"
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleBatchDecision:
+    """One claimed lifecycle intent and its authoritative preflight outcome."""
+
+    spawn_intent_id: str
+    entry: dict[str, Any]
+    plan: "LifecyclePlan"
+    kind: LifecycleBatchDecisionKind
+    parent: dict[str, Any] | None = None
+    child: dict[str, Any] | None = None
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if not str(self.spawn_intent_id or "").strip():
+            raise ValueError("lifecycle batch decision requires spawn_intent_id")
+        if not isinstance(self.kind, LifecycleBatchDecisionKind):
+            try:
+                object.__setattr__(self, "kind", LifecycleBatchDecisionKind(self.kind))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid lifecycle batch decision kind") from exc
+        object.__setattr__(self, "reason", str(self.reason or "").strip())
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleBatchPlan:
+    """Validated, mutation-free classification of one claimed queue batch."""
+
+    decisions: tuple[LifecycleBatchDecision, ...] = ()
+
+    def __post_init__(self) -> None:
+        normalized = tuple(self.decisions)
+        seen: set[str] = set()
+        for decision in normalized:
+            if not isinstance(decision, LifecycleBatchDecision):
+                raise ValueError("lifecycle batch plan contains an invalid decision")
+            if decision.spawn_intent_id in seen:
+                raise ValueError(f"duplicate lifecycle batch intent: {decision.spawn_intent_id}")
+            seen.add(decision.spawn_intent_id)
+        object.__setattr__(self, "decisions", normalized)
+
+    def for_kind(self, kind: LifecycleBatchDecisionKind) -> tuple[LifecycleBatchDecision, ...]:
+        return tuple(decision for decision in self.decisions if decision.kind is kind)
+
+    def by_intent(self) -> dict[str, LifecycleBatchDecision]:
+        return {decision.spawn_intent_id: decision for decision in self.decisions}
+
+
 @dataclass(slots=True)
 class ExitParentNextlinkStateResult:
     state: str
@@ -160,6 +228,7 @@ class ExitParentNextlinkStateResult:
 class ExitParentUpdateResult:
     ok: bool
     err: str
+    state: str = ""
 
 
 @dataclass(slots=True)

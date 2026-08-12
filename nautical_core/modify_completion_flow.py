@@ -3,10 +3,39 @@ from __future__ import annotations
 from typing import Any
 
 from nautical_core.modify_models import (
+    CompletionLifecycleResult,
+    CompletionLifecycleDiagnostic,
     CompletionComputeResult,
     CompletionFinalizeServices,
     CompletionPreflightContext,
 )
+
+
+def _completion_diagnostic(
+    ctx: CompletionPreflightContext,
+    chain_id: str,
+    *,
+    stage: str,
+    failure_kind: str = "",
+    transition_id: str = "",
+) -> CompletionLifecycleDiagnostic:
+    transition = transition_id or f"{chain_id}:{ctx.base_no}->{ctx.next_no}"
+    return CompletionLifecycleDiagnostic(
+        transition_id=transition,
+        chain_id=chain_id,
+        parent_link=ctx.base_no,
+        child_link=ctx.next_no,
+        stage=stage,
+        failure_kind=failure_kind,
+    )
+
+
+def _render_lifecycle_result(services: CompletionFinalizeServices, result: CompletionLifecycleResult, task: dict[str, Any]) -> None:
+    """Keep presentation failures from suppressing the task response."""
+    try:
+        services.render_lifecycle_result(result, task)
+    except Exception:
+        pass
 
 
 def finalize_completion_modify(
@@ -22,7 +51,7 @@ def finalize_completion_modify(
     preloaded_chain_by_short: dict[str, dict[str, Any]],
     chain_id: str,
     services: CompletionFinalizeServices,
-) -> None:
+) -> CompletionLifecycleResult:
     parent_short = ctx.parent_short
     base_no = ctx.base_no
     next_no = ctx.next_no
@@ -41,7 +70,34 @@ def finalize_completion_modify(
         spawn_args["planned_child"] = planned_child
     spawned = services.build_and_spawn_child(new, **spawn_args)
     if spawned is None:
-        return
+        lifecycle_result = CompletionLifecycleResult(
+            state="retryable",
+            reason="completion child operation returned no result",
+            diagnostic=_completion_diagnostic(
+                ctx, chain_id, stage="spawn", failure_kind="missing_result"
+            ),
+        )
+        _render_lifecycle_result(services, lifecycle_result, new)
+        services.print_task(new)
+        return lifecycle_result
+    spawn_state = str(getattr(spawned, "outcome_state", "applied") or "applied").strip().lower()
+    if spawn_state != "applied":
+        lifecycle_result = CompletionLifecycleResult(
+            state="manual_review" if spawn_state == "manual_review" else "retryable",
+            child_short=getattr(spawned, "child_short", ""),
+            spawn_intent_id=getattr(spawned, "spawn_intent_id", None),
+            reason=getattr(spawned, "reason", "") or "child spawn could not be completed",
+            diagnostic=_completion_diagnostic(
+                ctx,
+                chain_id,
+                stage="spawn",
+                failure_kind=spawn_state,
+                transition_id=str(getattr(spawned, "spawn_intent_id", "") or ""),
+            ),
+        )
+        _render_lifecycle_result(services, lifecycle_result, new)
+        services.print_task(new)
+        return lifecycle_result
 
     child = spawned.child
     services.seed_runtime_lookup_tasks(new, child)
@@ -49,22 +105,43 @@ def finalize_completion_modify(
     stripped_attrs = spawned.stripped_attrs
     deferred_spawn = spawned.deferred_spawn
     spawn_intent_id = spawned.spawn_intent_id
+    lifecycle_result = CompletionLifecycleResult(
+        state="queued" if deferred_spawn else "applied",
+        child_short=child_short,
+        deferred_spawn=deferred_spawn,
+        spawn_intent_id=spawn_intent_id,
+        diagnostic=_completion_diagnostic(
+            ctx,
+            chain_id,
+            stage="queued" if deferred_spawn else "finalize",
+            transition_id=spawn_intent_id or "",
+        ),
+    )
 
     chain = list(preloaded_chain)
     chain_by_link = preloaded_chain_by_link
     chain_by_short = preloaded_chain_by_short
+    read_service = services.lifecycle_read_service
     if chain_id:
         try:
             if chain and spawned.verified and not deferred_spawn:
-                chain = services.merge_spawned_child_into_chain(chain, new, child, child_short)
-                chain_by_link, chain_by_short = services.build_chain_indexes(chain)
-                services.set_chain_cache(chain_id, chain)
+                chain = read_service.merge_spawned_child(
+                    chain,
+                    parent_task=new,
+                    child_task=child,
+                    child_short=child_short,
+                    short_uuid=lambda value: str(value or "")[:8],
+                )
+                indexes = read_service.build_indexes(chain)
+                chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
+                read_service.replace_chain_cache(chain_id, chain)
                 services.export_uuid_short_cached.cache_clear()
             elif need_chain and not chain_snapshot_loaded:
-                chain = services.get_chain_export(chain_id)
+                chain = read_service.get_chain_export(chain_id)
                 if chain:
-                    chain_by_link, chain_by_short = services.build_chain_indexes(chain)
-                    services.set_chain_cache(chain_id, chain)
+                    indexes = read_service.build_indexes(chain)
+                    chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
+                    read_service.replace_chain_cache(chain_id, chain)
                     services.export_uuid_short_cached.cache_clear()
         except Exception:
             pass
@@ -105,6 +182,7 @@ def finalize_completion_modify(
             stripped_attrs=stripped_attrs,
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
+            lifecycle_result=lifecycle_result,
             chain_by_short=chain_by_short,
             analytics_advice=analytics_advice,
             integrity_warnings=integrity_warnings,
@@ -126,6 +204,7 @@ def finalize_completion_modify(
             meta=computed.meta,
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
+            lifecycle_result=lifecycle_result,
             chain_by_short=chain_by_short,
             analytics_advice=analytics_advice,
             integrity_warnings=integrity_warnings,
@@ -134,6 +213,7 @@ def finalize_completion_modify(
 
     services.print_task(new)
     services.diag_summary()
+    return lifecycle_result
 
 
 __all__ = (

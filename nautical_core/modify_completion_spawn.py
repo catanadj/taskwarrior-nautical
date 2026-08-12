@@ -21,8 +21,6 @@ def completion_build_and_spawn_child(
 ) -> CompletionSpawnResult | None:
     build_child_from_parent = services.build_child_from_parent
     spawn_child_atomic = services.spawn_child_atomic
-    panel = services.panel
-    print_task = services.print_task
     diag = services.diag
     try:
         child = planned_child or build_child_from_parent(
@@ -39,13 +37,16 @@ def completion_build_and_spawn_child(
         if callable(diag):
             diag(f"build child failed: {exc}")
         reason = str(exc) if isinstance(exc, CarryFieldError) else "Failed to build next link"
-        panel(
-            "⛓ Chain error",
-            [("Reason", reason)],
-            kind="error",
+        return CompletionSpawnResult(
+            child={},
+            child_short="",
+            stripped_attrs=[],
+            verified=False,
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            outcome_state="retryable",
+            reason=reason,
         )
-        print_task(new)
-        return None
 
     deferred_spawn = False
     spawn_intent_id = None
@@ -59,23 +60,31 @@ def completion_build_and_spawn_child(
             spawn_intent_id,
         ) = spawn_child_atomic(child, new)
         if not verified and not deferred_spawn:
-            panel(
-                "⛓ Chain warning",
-                [("Reason", defer_reason or "Child spawn could not be verified; parent not updated")],
-                kind="warning",
+            review_reason = defer_reason or "Child spawn could not be verified; parent not updated"
+            return CompletionSpawnResult(
+                child=child,
+                child_short=child_short,
+                stripped_attrs=stripped_attrs,
+                verified=False,
+                deferred_spawn=False,
+                spawn_intent_id=spawn_intent_id,
+                outcome_state="manual_review",
+                reason=review_reason,
             )
-            print_task(new)
-            return None
     except Exception as exc:
         if callable(diag):
             diag(f"spawn child failed: {exc}")
-        panel(
-            "⛓ Chain error",
-            [("Reason", "Failed to spawn next link")],
-            kind="error",
+        reason = str(exc).strip() or "Failed to spawn next link"
+        return CompletionSpawnResult(
+            child=child,
+            child_short="",
+            stripped_attrs=[],
+            verified=False,
+            deferred_spawn=False,
+            spawn_intent_id=None,
+            outcome_state="retryable",
+            reason=reason,
         )
-        print_task(new)
-        return None
 
     if verified:
         new["nextLink"] = child_short

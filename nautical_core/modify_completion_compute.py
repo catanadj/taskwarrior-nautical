@@ -10,6 +10,8 @@ from nautical_core.modify_models import (
     ComputeAnchorChildDueCallback,
     ComputeCpChildDueCallback,
     CompletionComputeResult,
+    CompletionLifecycleDiagnostic,
+    CompletionLifecycleResult,
     CompletionComputeServices,
     DatetimeParserCallback,
     EndChainSummaryCallback,
@@ -27,6 +29,25 @@ from nautical_core.scheduler_models import (
     occurrence_exhaustion_message,
 )
 from nautical_core.timeutil import compare_datetimes
+from nautical_core.lifecycle_models import LifecycleEvent
+from nautical_core.modify_lifecycle import apply_terminal_transition
+
+
+def _terminal_diagnostic(new: dict[str, Any], next_no: int, failure_kind: str) -> CompletionLifecycleDiagnostic:
+    try:
+        raw_link = new.get("link")
+        parent_link = int(raw_link) if isinstance(raw_link, (str, int, float)) else None
+    except (TypeError, ValueError):
+        parent_link = None
+    chain_id = str(new.get("chainID") or "").strip()
+    return CompletionLifecycleDiagnostic(
+        transition_id=f"{chain_id}:{parent_link}->{next_no}",
+        chain_id=chain_id,
+        parent_link=parent_link,
+        child_link=next_no,
+        stage="compute",
+        failure_kind=failure_kind,
+    )
 
 
 def completion_compute_child_due(
@@ -119,7 +140,7 @@ def completion_until_guard_or_stop(
 ) -> bool:
     if until_dt and compare_datetimes(child_due, until_dt) > 0:
         end_chain_summary(new, "Reached 'until' limit", now_utc)
-        new["chain"] = "off"
+        apply_terminal_transition(new, LifecycleEvent.CHAIN_UNTIL)
         print_task(new)
         return False
     return True
@@ -217,7 +238,7 @@ def completion_cap_guard_or_stop(
 ) -> bool:
     if cap_no and next_no > cap_no:
         end_chain_summary(new, f"Reached cap #{cap_no}", now_utc, current_task=new)
-        new["chain"] = "off"
+        apply_terminal_transition(new, LifecycleEvent.CHAIN_MAX)
         print_task(new)
         return False
     return True
@@ -230,7 +251,7 @@ def completion_compute_next_and_limits(
     now_utc: Any,
     *,
     services: CompletionComputeServices,
-) -> CompletionComputeResult | None:
+) -> CompletionComputeResult | CompletionLifecycleResult | None:
     completion_compute_child_due = services.completion_compute_child_due
     completion_until_or_fail = services.completion_until_or_fail
     completion_until_guard_or_stop = services.completion_until_guard_or_stop
@@ -240,24 +261,62 @@ def completion_compute_next_and_limits(
     completion_cap_guard_or_stop = services.completion_cap_guard_or_stop
     computed = completion_compute_child_due(new, kind)
     if computed is None:
-        return None
+        if str(new.get("chain") or "").strip().lower() == "off":
+            return CompletionLifecycleResult(
+                state="terminal",
+                reason="recurrence scheduler reached a terminal boundary",
+                diagnostic=_terminal_diagnostic(new, next_no, "scheduler_exhausted"),
+            )
+        return CompletionLifecycleResult(
+            state="retryable",
+            reason="could not compute next recurrence timestamp",
+            diagnostic=_terminal_diagnostic(new, next_no, "scheduler_error"),
+        )
     child_due, meta, dnf = computed
 
     until_dt = completion_until_or_fail(new, now_utc)
     if until_dt is False:
-        return None
+        return CompletionLifecycleResult(
+            state="retryable",
+            reason="chainUntil validation failed",
+            diagnostic=_terminal_diagnostic(new, next_no, "chain_until_validation"),
+        )
 
     if not completion_until_guard_or_stop(new, child_due, until_dt, now_utc):
-        return None
+        if str(new.get("chain") or "").strip().lower() == "off":
+            return CompletionLifecycleResult(
+                state="terminal",
+                reason="chainUntil boundary reached",
+                diagnostic=_terminal_diagnostic(new, next_no, "chain_until"),
+            )
+        return CompletionLifecycleResult(
+            state="retryable",
+            reason="chainUntil boundary prevented successor creation",
+            diagnostic=_terminal_diagnostic(new, next_no, "chain_until_guard"),
+        )
 
     if not completion_require_child_due_or_fail(new, child_due):
-        return None
+        return CompletionLifecycleResult(
+            state="retryable",
+            reason="child recurrence timestamp is unavailable",
+            diagnostic=_terminal_diagnostic(new, next_no, "missing_child_due"),
+        )
 
     completion_warn_unreasonable_duration(new, child_due, until_dt, now_utc)
     cpmax, until_dt, cap_no, finals, until_cap_no = completion_caps(kind, new, child_due, dnf)
 
     if not completion_cap_guard_or_stop(new, next_no, cap_no, now_utc):
-        return None
+        if str(new.get("chain") or "").strip().lower() == "off":
+            return CompletionLifecycleResult(
+                state="terminal",
+                reason="successor limit reached",
+                diagnostic=_terminal_diagnostic(new, next_no, "successor_limit"),
+            )
+        return CompletionLifecycleResult(
+            state="retryable",
+            reason="successor limit prevented child creation",
+            diagnostic=_terminal_diagnostic(new, next_no, "successor_limit_guard"),
+        )
 
     return CompletionComputeResult(
         child_due=child_due,

@@ -76,8 +76,11 @@ def export_uuid(
     )
     if not result.ok:
         return ExitExportResult(False, result.kind == "lock_busy" or is_lock_error(result.stderr), result.stderr or "", None)
+    raw_stdout = (result.stdout or "").strip()
+    if not raw_stdout:
+        return ExitExportResult(False, False, "not found", None)
     try:
-        obj = json.loads(result.stdout.strip() or "{}")
+        obj = json.loads(raw_stdout)
         if obj.get("uuid"):
             return ExitExportResult(True, False, "", obj)
         return ExitExportResult(False, False, "not found", None)

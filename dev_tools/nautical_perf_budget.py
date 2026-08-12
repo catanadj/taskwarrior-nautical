@@ -19,6 +19,7 @@ import importlib
 import importlib.util
 import json
 import os
+import shutil
 import sqlite3
 import statistics
 import subprocess
@@ -486,6 +487,9 @@ def _bench_native_until_reconcile(rounds: int, *, apply: bool) -> float:
                 "NAUTICAL_CORE_PATH": str(ROOT),
                 "NAUTICAL_TRUST_CONFIG_PATH": "1",
                 "NAUTICAL_TRUST_CORE_PATH": "1",
+                # The benchmark deliberately supplies isolated temporary
+                # Taskdata directories; allow the launcher to use them.
+                "NAUTICAL_TRUST_TASKDATA_PATH": "1",
                 "TASKRC": str(taskrc_path),
                 "TZ": "UTC",
             }
@@ -927,6 +931,39 @@ def _measure_workflow(name: str, samples: list[float], budget: float) -> dict:
     }
 
 
+def _read_exit_task_call_stats(path: Path) -> dict[str, int]:
+    """Read benchmark-only command counters without enabling hook diagnostics."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"queue drain benchmark stats were unavailable: {exc}") from exc
+    stats = payload.get("task_stats") if isinstance(payload, dict) else None
+    if not isinstance(stats, dict):
+        raise RuntimeError("queue drain benchmark stats did not contain task_stats")
+    return {str(key): int(value) for key, value in stats.items() if str(key).startswith("run_task_calls")}
+
+
+def _apply_task_call_budgets(result: dict, samples: list[dict[str, int]], budget: dict) -> None:
+    """Attach and enforce per-workflow Taskwarrior call-count budgets."""
+    if not isinstance(budget, dict) or not samples:
+        return
+    maxima = {
+        key: max(int(sample.get(key, 0)) for sample in samples)
+        for key in budget
+        if all(isinstance(sample, dict) for sample in samples)
+    }
+    checks = {
+        key: {
+            "max_observed": value,
+            "budget": int(budget[key]),
+            "pass": value <= int(budget[key]),
+        }
+        for key, value in maxima.items()
+    }
+    result["task_call_budget"] = checks
+    result["pass"] = bool(result.get("pass", True)) and all(item["pass"] for item in checks.values())
+
+
 def _workflow_queue_rows(taskdata: Path) -> list[dict]:
     """Read queued child intents for benchmark mutation assertions."""
     db_path = taskdata / ".nautical-state" / ".nautical_queue.db"
@@ -944,6 +981,78 @@ def _workflow_queue_rows(taskdata: Path) -> list[dict]:
             raise RuntimeError("workflow queue payload is not an object")
         result.append(item)
     return result
+
+
+def _queue_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) -> tuple[list[dict], list[dict]]:
+    """Create an independent persisted-plan queue fixture for recovery tests."""
+    from nautical_core.lifecycle_models import (
+        ExecutionStage,
+        LifecycleAction,
+        LifecycleEvent,
+        LifecycleIdentity,
+        LifecyclePlan,
+        ParentGuard,
+    )
+
+    parents: list[dict] = []
+    payloads: list[dict] = []
+    for index in range(count):
+        parent_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/{prefix}/{sample_index}/parent/{index}"))
+        child_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/{prefix}/{sample_index}/child/{index}"))
+        parent_link = index + 1
+        child_link = parent_link + 1
+        parent = {
+            "uuid": parent_uuid,
+            "status": "completed",
+            "description": f"Queue {prefix} benchmark parent",
+            "chain": "on",
+            "chainID": f"queue-{prefix}-chain",
+            "link": str(parent_link),
+            "due": "20260101T090000Z",
+        }
+        child = {
+            "uuid": child_uuid,
+            "status": "pending",
+            "description": f"Queue {prefix} benchmark child",
+            "chain": "on",
+            "chainID": f"queue-{prefix}-chain",
+            "link": child_link,
+            "prevLink": parent_uuid[:8],
+            "due": "20260101T090000Z",
+        }
+        guard = {"status": "completed", "chain": "on", "chainID": f"queue-{prefix}-chain", "link": str(parent_link)}
+        plan = LifecyclePlan.from_mappings(
+            identity=LifecycleIdentity(
+                f"queue-{prefix}-chain", parent_uuid, parent_link, child_link, LifecycleEvent.COMPLETE
+            ),
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=ParentGuard.from_mapping(guard),
+            child_payload=child,
+            parent_patch={"nextLink": child_uuid[:8]},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+            stage=ExecutionStage.PERSISTED,
+        )
+        parents.append(parent)
+        payloads.append(
+            {
+                "parent_uuid": parent_uuid,
+                "parent_nextlink": "",
+                "child_short": child_uuid[:8],
+                "child": child,
+                "spawn_intent_id": f"{prefix}-intent-{sample_index}-{index}",
+                "parent_guard": guard,
+                "lifecycle_plan": plan.to_dict(),
+            }
+        )
+    return parents, payloads
+
+
+def _merge_task_call_stats(*stats: dict[str, int]) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    for item in stats:
+        for key, value in item.items():
+            merged[key] = merged.get(key, 0) + int(value)
+    return merged
 
 
 def _completion_fixture(kind: str, sample_index: int, *, nonfinal: bool, mode: str) -> dict:
@@ -1019,13 +1128,40 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
     budgets = workflow_cfg.get("budgets_seconds") if isinstance(workflow_cfg.get("budgets_seconds"), dict) else {}
     with tempfile.TemporaryDirectory(prefix="nautical-workflow-perf-") as td:
         root = Path(td)
+        real_task = shutil.which("task")
+        if not real_task:
+            raise RuntimeError("Taskwarrior executable was not found for workflow benchmark")
+        task_wrapper = root / "task-benchmark-wrapper.py"
+        task_wrapper.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, subprocess, sys\n"
+            f"real = {real_task!r}\n"
+            "args = sys.argv[1:]\n"
+            "mode = os.environ.get('NAUTICAL_BENCH_FAIL_MODE', '')\n"
+            "if mode == 'fail-export' and 'export' in args:\n"
+            "    sys.stderr.write('database is locked\\n')\n"
+            "    raise SystemExit(1)\n"
+            "if mode == 'partial-import' and 'import' in args:\n"
+            "    lines = sys.stdin.read().splitlines()\n"
+            "    if lines:\n"
+            "        done = subprocess.run([real, *args], input=lines[0] + '\\n', text=True, capture_output=True)\n"
+            "        sys.stdout.write(done.stdout or '')\n"
+            "        sys.stderr.write(done.stderr or '')\n"
+            "        if done.returncode:\n"
+            "            raise SystemExit(done.returncode)\n"
+            "    sys.stderr.write('simulated partial import failure\\n')\n"
+            "    raise SystemExit(1)\n"
+            "raise SystemExit(subprocess.run([real, *args], text=True).returncode)\n",
+            encoding="utf-8",
+        )
+        task_wrapper.chmod(0o700)
         config_path = root / "config-nautical.toml"
         config_path.write_text('tz = "UTC"\npanel_mode = "minimal"\n', encoding="utf-8")
         taskrc_path = root / "taskrc"
         taskrc_path.write_text(
             "uda.chainID.type=string\n"
             "uda.chain.type=string\n"
-            "uda.link.type=string\n"
+            "uda.link.type=numeric\n"
             "uda.prevLink.type=string\n"
             "uda.nextLink.type=string\n"
             "uda.cp.type=string\n"
@@ -1170,16 +1306,34 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 )
 
         queue_samples = []
+        queue_call_stats: list[dict[str, int]] = []
+        queue_idempotent_samples = []
+        queue_idempotent_call_stats: list[dict[str, int]] = []
+        queue_partial_samples = []
+        queue_partial_first_samples = []
+        queue_partial_recovery_samples = []
+        queue_partial_call_stats: list[dict[str, int]] = []
         for sample_index in range(repeats):
             queue_data = root / f"populated-queue-{sample_index}"
             _init_empty_queue_db(queue_data)
-            queue_env = dict(base_env, TASKDATA=str(queue_data))
+            stats_path = queue_data / "on-exit-task-stats.json"
+            queue_env = dict(base_env, TASKDATA=str(queue_data), NAUTICAL_BENCH_STATS_FILE=str(stats_path))
+            queue_env["NAUTICAL_BENCH_TASK_BIN"] = str(task_wrapper)
+            if os.environ.get("NAUTICAL_DIAG") == "1":
+                queue_env["NAUTICAL_DIAG"] = "1"
             parents = []
+            queue_payloads = []
+            parent_uuids: set[str] = set()
+            child_uuids: set[str] = set()
             with sqlite3.connect(str(queue_data / ".nautical-state" / ".nautical_queue.db")) as conn:
                 now = time.time()
                 for index in range(8):
-                    parent_uuid = f"44444444-4444-4444-4444-{index:012d}"
-                    child_uuid = f"55555555-5555-5555-5555-{index:012d}"
+                    parent_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/queue/parent/{index}"))
+                    child_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/queue/child/{index}"))
+                    parent_uuids.add(parent_uuid)
+                    child_uuids.add(child_uuid)
+                    parent_link = index + 1
+                    child_link = parent_link + 1
                     parents.append(
                         {
                             "uuid": parent_uuid,
@@ -1187,7 +1341,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                             "description": "Queue drain benchmark parent",
                             "chain": "on",
                             "chainID": "queue-perf-chain",
-                            "link": str(index),
+                            "link": str(parent_link),
                             "due": "20260101T090000Z",
                         }
                     )
@@ -1203,7 +1357,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                             "description": "Queue drain benchmark child",
                             "chain": "on",
                             "chainID": "queue-perf-chain",
-                            "link": index + 1,
+                            "link": child_link,
                             "prevLink": parent_uuid[:8],
                             "due": "20260101T090000Z",
                         },
@@ -1212,9 +1366,39 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                             "status": "completed",
                             "chain": "on",
                             "chainID": "queue-perf-chain",
-                            "link": str(index),
+                            "link": str(parent_link),
                         },
                     }
+                    # Exercise the typed lifecycle drain rather than the
+                    # legacy spawn-intent fallback. The queue benchmark must
+                    # measure the same plan/preload/batch path used in
+                    # production.
+                    from nautical_core.lifecycle_models import (
+                        LifecycleAction,
+                        LifecycleEvent,
+                        LifecycleIdentity,
+                        LifecyclePlan,
+                        ParentGuard,
+                        ExecutionStage,
+                    )
+
+                    lifecycle_plan = LifecyclePlan.from_mappings(
+                        identity=LifecycleIdentity(
+                            "queue-perf-chain",
+                            parent_uuid,
+                            parent_link,
+                            child_link,
+                            LifecycleEvent.COMPLETE,
+                        ),
+                        action=LifecycleAction.SPAWN_CHILD,
+                        parent_guard=ParentGuard.from_mapping(payload["parent_guard"]),
+                        child_payload=payload["child"],
+                        parent_patch={"nextLink": child_uuid[:8]},
+                        expected_postconditions=("child_present", "parent_linked", "verified"),
+                        stage=ExecutionStage.PERSISTED,
+                    )
+                    payload["lifecycle_plan"] = lifecycle_plan.to_dict()
+                    queue_payloads.append(payload)
                     conn.execute(
                         "INSERT INTO queue_entries (spawn_intent_id, payload, created_at, updated_at) "
                         "VALUES (?, ?, ?, ?)",
@@ -1236,15 +1420,57 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                     f"{(import_proc.stderr or import_proc.stdout or '').strip()}"
                 )
 
-            queue_samples.append(
-                _run_workflow_hook(ROOT / "on-exit.nautical", input_text="", env=queue_env, expect_output=False)
+            queue_elapsed, _queue_result, _queue_stderr = _run_workflow_hook_result(
+                ROOT / "on-exit.nautical",
+                input_text="",
+                env=queue_env,
+                expect_output=False,
             )
+            queue_samples.append(queue_elapsed)
+            queue_call_stats.append(_read_exit_task_call_stats(stats_path))
 
             if _workflow_queue_rows(queue_data):
-                raise RuntimeError("queue drain benchmark left intents queued after successful processing")
+                raise RuntimeError(
+                    "queue drain benchmark left intents queued after successful processing: "
+                    f"{_workflow_queue_rows(queue_data)!r}; stderr={_queue_stderr.strip()!r}"
+                )
             dead_letter = queue_data / ".nautical-state" / ".nautical_dead_letter.jsonl"
             if dead_letter.is_file() and dead_letter.read_text(encoding="utf-8").strip():
                 raise RuntimeError("queue drain benchmark dead-lettered a populated parent/child intent")
+
+            # Replay finalized intents to measure the idempotent recovery
+            # path. The durable intent log must suppress Taskwarrior work and
+            # leave no duplicate queue entries or children.
+            with sqlite3.connect(str(queue_data / ".nautical-state" / ".nautical_queue.db")) as conn:
+                now = time.time()
+                for index, original in enumerate(queue_payloads):
+                    payload = dict(original)
+                    payload["spawn_intent_id"] = f"perf-idempotent-{index}"
+                    replay_plan = dict(payload["lifecycle_plan"])
+                    replay_plan["stage"] = "verified"
+                    payload["lifecycle_plan"] = replay_plan
+                    conn.execute(
+                        "INSERT INTO queue_entries (spawn_intent_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                        (payload["spawn_intent_id"], json.dumps(payload, ensure_ascii=False), now, now),
+                    )
+                conn.commit()
+            try:
+                stats_path.unlink()
+            except FileNotFoundError:
+                pass
+            idem_elapsed, _idem_result, _idem_stderr = _run_workflow_hook_result(
+                ROOT / "on-exit.nautical",
+                input_text="",
+                env=queue_env,
+                expect_output=False,
+            )
+            queue_idempotent_samples.append(idem_elapsed)
+            queue_idempotent_call_stats.append(_read_exit_task_call_stats(stats_path))
+            if _workflow_queue_rows(queue_data):
+                raise RuntimeError(
+                    "idempotent queue drain left finalized intents queued: "
+                    f"{_workflow_queue_rows(queue_data)!r}; stderr={_idem_stderr.strip()!r}"
+                )
             export_proc = subprocess.run(
                 [
                     "task",
@@ -1277,21 +1503,125 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             children = [
                 row
                 for row in exported
-                if isinstance(row, dict) and str(row.get("uuid") or "").startswith("55555555-")
+                if isinstance(row, dict) and str(row.get("uuid") or "") in child_uuids
             ]
             if len(children) != 8 or any(not str(row.get("prevLink") or "").strip() for row in children):
                 raise RuntimeError("queue drain benchmark did not import/link all child tasks")
             parents_after = [
                 row
                 for row in exported
-                if isinstance(row, dict) and str(row.get("uuid") or "").startswith("44444444-")
+                if isinstance(row, dict) and str(row.get("uuid") or "") in parent_uuids
             ]
             if len(parents_after) != 8 or any(not str(row.get("nextLink") or "").strip() for row in parents_after):
                 raise RuntimeError("queue drain benchmark did not update all parent nextLink values")
-        results["workflow_queue_drain"] = _measure_workflow(
+
+            # Exercise a partial batch import: the runner imports only the
+            # first child and then fails. The next invocation must requeue,
+            # discover that child, import the remaining seven, and converge.
+            partial_data = root / f"partial-queue-{sample_index}"
+            _init_empty_queue_db(partial_data)
+            partial_stats_path = partial_data / "on-exit-task-stats.json"
+            partial_env = dict(base_env, TASKDATA=str(partial_data), NAUTICAL_BENCH_STATS_FILE=str(partial_stats_path))
+            partial_env["NAUTICAL_BENCH_TASK_BIN"] = str(task_wrapper)
+            partial_parents, partial_payloads = _queue_lifecycle_fixture("partial", sample_index)
+            with sqlite3.connect(str(partial_data / ".nautical-state" / ".nautical_queue.db")) as conn:
+                now = time.time()
+                for payload in partial_payloads:
+                    conn.execute(
+                        "INSERT INTO queue_entries (spawn_intent_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                        (payload["spawn_intent_id"], json.dumps(payload, ensure_ascii=False), now, now),
+                    )
+                conn.commit()
+            partial_import_proc = subprocess.run(
+                ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+                input="".join(json.dumps(parent, ensure_ascii=False) + "\n" for parent in partial_parents),
+                text=True,
+                capture_output=True,
+                env=partial_env,
+                timeout=30.0,
+            )
+            if partial_import_proc.returncode != 0:
+                raise RuntimeError("partial queue parent fixture import failed")
+            partial_env["NAUTICAL_BENCH_FAIL_MODE"] = "partial-import"
+            try:
+                partial_stats_path.unlink()
+            except FileNotFoundError:
+                pass
+            partial_t0 = time.perf_counter()
+            _first_partial_elapsed, _first_partial_result, first_partial_stderr = _run_workflow_hook_result(
+                ROOT / "on-exit.nautical", input_text="", env=partial_env, expect_output=False
+            )
+            first_partial_elapsed = time.perf_counter() - partial_t0
+            first_partial_stats = _read_exit_task_call_stats(partial_stats_path)
+            pending_after_partial = _workflow_queue_rows(partial_data)
+            if not 1 <= len(pending_after_partial) <= 8:
+                raise RuntimeError(
+                    "partial import did not requeue all lifecycle intents: "
+                    f"{pending_after_partial!r}; stderr={first_partial_stderr.strip()!r}"
+                )
+            partial_env.pop("NAUTICAL_BENCH_FAIL_MODE", None)
+            try:
+                partial_stats_path.unlink()
+            except FileNotFoundError:
+                pass
+            recovery_t0 = time.perf_counter()
+            _second_partial_elapsed, _second_partial_result, second_partial_stderr = _run_workflow_hook_result(
+                ROOT / "on-exit.nautical", input_text="", env=partial_env, expect_output=False
+            )
+            recovery_elapsed = time.perf_counter() - recovery_t0
+            second_partial_stats = _read_exit_task_call_stats(partial_stats_path)
+            if _workflow_queue_rows(partial_data):
+                raise RuntimeError(
+                    "partial import recovery left lifecycle intents queued: "
+                    f"{_workflow_queue_rows(partial_data)!r}; stderr={second_partial_stderr.strip()!r}"
+                )
+            queue_partial_first_samples.append(first_partial_elapsed)
+            queue_partial_recovery_samples.append(recovery_elapsed)
+            queue_partial_samples.append(first_partial_elapsed + recovery_elapsed)
+            queue_partial_call_stats.append(_merge_task_call_stats(first_partial_stats, second_partial_stats))
+        queue_result = _measure_workflow(
             "workflow_queue_drain", queue_samples,
             float(budgets.get("workflow_queue_drain", 3.0)),
         )
+        queue_result["task_call_stats"] = queue_call_stats
+        call_budgets = workflow_cfg.get("task_call_budgets")
+        if isinstance(call_budgets, dict):
+            _apply_task_call_budgets(
+                queue_result,
+                queue_call_stats,
+                call_budgets.get("workflow_queue_drain", {}),
+            )
+        results["workflow_queue_drain"] = queue_result
+        queue_idempotent_result = _measure_workflow(
+            "workflow_queue_drain_idempotent",
+            queue_idempotent_samples,
+            float(budgets.get("workflow_queue_drain_idempotent", 3.0)),
+        )
+        queue_idempotent_result["task_call_stats"] = queue_idempotent_call_stats
+        if isinstance(call_budgets, dict):
+            _apply_task_call_budgets(
+                queue_idempotent_result,
+                queue_idempotent_call_stats,
+                call_budgets.get("workflow_queue_drain_idempotent", {}),
+            )
+        results["workflow_queue_drain_idempotent"] = queue_idempotent_result
+        queue_partial_result = _measure_workflow(
+            "workflow_queue_drain_partial_recovery",
+            queue_partial_samples,
+            float(budgets.get("workflow_queue_drain_partial_recovery", 6.0)),
+        )
+        queue_partial_result["first_attempt_samples_s"] = sorted(queue_partial_first_samples)
+        queue_partial_result["first_attempt_median_s"] = float(statistics.median(queue_partial_first_samples))
+        queue_partial_result["recovery_samples_s"] = sorted(queue_partial_recovery_samples)
+        queue_partial_result["recovery_median_s"] = float(statistics.median(queue_partial_recovery_samples))
+        queue_partial_result["task_call_stats"] = queue_partial_call_stats
+        if isinstance(call_budgets, dict):
+            _apply_task_call_budgets(
+                queue_partial_result,
+                queue_partial_call_stats,
+                call_budgets.get("workflow_queue_drain_partial_recovery", {}),
+            )
+        results["workflow_queue_drain_partial_recovery"] = queue_partial_result
 
         reconcile_data = root / "reconcile"
         reconcile_data.mkdir()

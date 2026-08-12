@@ -13,6 +13,7 @@ import os
 import time
 import importlib
 import importlib.util
+from contextlib import contextmanager
 from pathlib import Path
 
 _IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
@@ -382,6 +383,8 @@ def _nautical_lock_dir_path() -> Path:
 _QUEUE_DB_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_queue.db"
 _DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_dead_letter.jsonl"
 _DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_dead_letter.lock"
+_ORPHAN_CLEANUP_EVIDENCE_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_orphan_cleanup.jsonl"
+_ORPHAN_CLEANUP_EVIDENCE_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_orphan_cleanup.lock"
 HOOK_IMPL_API = 1
 NAUTICAL_HOOK_VERSION = "updateG-20260328"
 _QUEUE_LOCK_FAIL_MARKER = TW_DATA_DIR / ".nautical-locks" / ".nautical_spawn_queue.lock_failed"
@@ -522,6 +525,17 @@ def _diag_count_exit(key: str, inc: float | int = 1) -> None:
         pass
 
 
+@contextmanager
+def _task_phase(name: str):
+    state = _exit_runtime_state()
+    previous = state.task_phase
+    state.task_phase = str(name or "unclassified")
+    try:
+        yield
+    finally:
+        state.task_phase = previous
+
+
 def _run_task_diag_bucket(cmd: list[str]) -> str:
     try:
         parts = []
@@ -551,6 +565,7 @@ def _run_task_diag_bucket(cmd: list[str]) -> str:
 
 def _diag_record_run_task(cmd: list[str], *, ok: bool, elapsed: float) -> None:
     bucket = _run_task_diag_bucket(cmd)
+    _diag_count_exit(f"run_task_calls_phase_{_exit_runtime_state().task_phase or 'unclassified'}")
     _diag_count_exit(f"run_task_calls_{bucket}")
     _diag_count_exit(f"run_task_seconds_{bucket}", float(elapsed or 0.0))
     if not ok:
@@ -688,6 +703,18 @@ def _preload_export_uuids(entries: list[dict]) -> None:
                 seen.add(uuid_str)
                 uuids.append(uuid_str)
     slot_specs = _equivalent_child_slot_specs(entries)
+    lifecycle_entries = [
+        entry
+        for entry in entries or []
+        if isinstance(entry, dict) and isinstance(entry.get("lifecycle_plan"), dict)
+    ]
+    lifecycle_uuids: set[str] = set()
+    for entry in lifecycle_entries:
+        parent_uuid = str(entry.get("parent_uuid") or "").strip()
+        child = entry.get("child") or {}
+        child_uuid = str(child.get("uuid") or "").strip() if isinstance(child, dict) else ""
+        lifecycle_uuids.update(value for value in (parent_uuid, child_uuid) if value)
+    lifecycle_slots = set(_equivalent_child_slot_specs(lifecycle_entries))
     specs: list[tuple[str, Any, list[str]]] = [
         ("uuid", uuid_str, [f"uuid:{uuid_str}"])
         for uuid_str in uuids
@@ -714,13 +741,14 @@ def _preload_export_uuids(entries: list[dict]) -> None:
         parsed_ok = False
         allow_negative_cache = False
         if hook_support is not None:
-            result = hook_support.run_task_result(
-                run_task=_run_task_result,
-                cmd=cmd,
-                timeout=_TASK_TIMEOUT_EXPORT,
-                retries=_TASK_RETRIES_EXPORT,
-                retry_delay=_TASK_RETRY_DELAY,
-            )
+            with _task_phase("preload_uuid"):
+                result = hook_support.run_task_result(
+                    run_task=_run_task_result,
+                    cmd=cmd,
+                    timeout=_TASK_TIMEOUT_EXPORT,
+                    retries=_TASK_RETRIES_EXPORT,
+                    retry_delay=_TASK_RETRY_DELAY,
+                )
             parsed_ok, rows, _error = hook_support.parse_export_array_result(result, diag=_diag)
             allow_negative_cache = parsed_ok
             if not parsed_ok and result.ok:
@@ -755,6 +783,23 @@ def _preload_export_uuids(entries: list[dict]) -> None:
                     parsed_ok = True
             except Exception:
                 rows = []
+        if not parsed_ok:
+            # A combined preload is authoritative for a lifecycle batch. Do
+            # not silently fall back to one export per UUID after a malformed
+            # or unavailable chunk; affected batch entries must defer.
+            reason = "lifecycle preload unavailable"
+            if hook_support is not None and result is not None:
+                reason = getattr(result, "stderr", "") or reason
+            if len(lifecycle_entries) > 1:
+                for uuid_str in chunk_uuids:
+                    if uuid_str in lifecycle_uuids:
+                        _export_cache_set(uuid_str, exit_models.ExitExportResult(False, True, reason, None))
+                for key in chunk_slots:
+                    if key in lifecycle_slots:
+                        _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(
+                            False, True, reason, None
+                        )
+            continue
         found: set[str] = set()
         for row in rows:
             row_uuid = str(row.get("uuid") or "").strip()
@@ -790,9 +835,13 @@ def _queue_db_begin_run() -> None:
     state.queue_db_reuse_count = 0
     state.queue_lock_failures_this_run = 0
     state.last_queue_lock_diag_ts = 0.0
+    state.task_phase = ""
     _reset_exit_diag_stats()
     _reset_exit_export_cache()
     _reset_exit_equiv_child_cache()
+    state.lifecycle_parent_preflight.clear()
+    state.lifecycle_batch_imported.clear()
+    state.lifecycle_batch_import_failed.clear()
 
 
 def _queue_db_end_run() -> None:
@@ -1271,14 +1320,26 @@ def _run_task_result(
             attempts=retries,
         )
     if callable(core_runner):
-        return core_runner(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        )
+        started = time.perf_counter()
+        ok = False
+        try:
+            result = core_runner(
+                cmd,
+                env=env,
+                input_text=input_text,
+                timeout=timeout,
+                retries=retries,
+                retry_delay=retry_delay,
+            )
+            ok = bool(getattr(result, "ok", False))
+            return result
+        finally:
+            elapsed = time.perf_counter() - started
+            _diag_count_exit("run_task_calls")
+            _diag_count_exit("run_task_seconds", elapsed)
+            _diag_record_run_task(cmd, ok=ok, elapsed=elapsed)
+            if not ok:
+                _diag_count_exit("run_task_failures")
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.run_task_result(
@@ -1389,6 +1450,44 @@ def _lock_dead_letter():
         stale_after=_QUEUE_LOCK_STALE_AFTER,
     ) as acquired:
         yield acquired
+
+
+@contextmanager
+def _lock_orphan_cleanup_evidence():
+    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
+    with lock_fn(
+        _ORPHAN_CLEANUP_EVIDENCE_LOCK,
+        retries=_QUEUE_LOCK_RETRIES,
+        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
+        stale_after=_QUEUE_LOCK_STALE_AFTER,
+    ) as acquired:
+        yield acquired
+
+
+def _record_orphan_cleanup_evidence(child_uuid: str, spawn_intent_id: str, reason: str) -> None:
+    """Persist cleanup failures separately from the original lifecycle conflict."""
+    queue_store = _module("queue_store", required=False)
+    if queue_store is None:
+        _diag(f"orphan cleanup evidence unavailable: {reason}")
+        return
+    payload = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "hook": "on-exit",
+        "hook_version": NAUTICAL_HOOK_VERSION,
+        "kind": "orphan_cleanup",
+        "child_uuid": str(child_uuid or "").strip(),
+        "spawn_intent_id": str(spawn_intent_id or "").strip(),
+        "reason": str(reason or "cleanup unavailable").strip(),
+    }
+    ok = queue_store.append_dead_letter_jsonl(
+        path=_ORPHAN_CLEANUP_EVIDENCE_PATH,
+        payload=payload,
+        durable=True,
+        acquire_lock=_lock_orphan_cleanup_evidence,
+        diag=_diag,
+    )
+    if not ok:
+        _diag(f"orphan cleanup evidence write failed (child={child_uuid[:8]}): {reason}")
 
 
 def _intent_log_path() -> Path:
@@ -1928,12 +2027,13 @@ def _preload_equivalent_child_slots(entries: list[dict]) -> None:
             first = False
             cmd.extend(slot_specs[key])
         cmd.append("export")
-        result = _run_task_result(
-            cmd,
-            timeout=_TASK_TIMEOUT_EXPORT,
-            retries=_TASK_RETRIES_EXPORT,
-            retry_delay=_TASK_RETRY_DELAY,
-        )
+        with _task_phase("preload_slot"):
+            result = _run_task_result(
+                cmd,
+                timeout=_TASK_TIMEOUT_EXPORT,
+                retries=_TASK_RETRIES_EXPORT,
+                retry_delay=_TASK_RETRY_DELAY,
+            )
         if not result.ok:
             continue
         try:
@@ -2050,22 +2150,378 @@ def _import_child(obj: dict):
     )
 
 
-def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: str | None = None):
+def _import_children(children: list[dict]):
     exit_side_effects = _module("exit_side_effects")
-    return exit_side_effects.update_parent_nextlink(
+    return exit_side_effects.import_children(
+        children,
+        run_task=_run_task_result,
+        task_cmd_prefix=_task_cmd_prefix(),
+        timeout_import=_TASK_TIMEOUT_IMPORT,
+    )
+
+
+def _lifecycle_batch_link_token(value: Any) -> str:
+    token = str(value or "").strip()
+    try:
+        return str(int(float(token)))
+    except (TypeError, ValueError, OverflowError):
+        return token
+
+
+def _lifecycle_batch_child_matches(expected: dict[str, Any], actual: dict[str, Any]) -> str:
+    for field in ("chainID", "link", "prevLink"):
+        expected_value = str(expected.get(field) or "").strip()
+        actual_value = str(actual.get(field) or "").strip()
+        if field == "link":
+            expected_value = _lifecycle_batch_link_token(expected_value)
+            actual_value = _lifecycle_batch_link_token(actual_value)
+        if expected_value and actual_value != expected_value:
+            return f"child {field} changed"
+    return ""
+
+
+def _prepare_lifecycle_batch(entries: list[dict]):
+    """Classify claimed lifecycle entries without mutating Taskwarrior."""
+    state = _exit_runtime_state()
+    decisions = []
+    exit_models = _module("exit_models")
+    lifecycle_models = _module("lifecycle_models")
+    flow = _module("exit_entry_flow")
+    use_preload = sum(
+        isinstance(item, dict) and isinstance(item.get("lifecycle_plan"), dict)
+        for item in entries or []
+    ) > 1
+    for entry in entries or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("lifecycle_plan"), dict):
+            continue
+        sid = str(entry.get("spawn_intent_id") or "").strip()
+        if not sid:
+            continue
+        try:
+            plan = lifecycle_models.LifecyclePlan.from_dict(entry["lifecycle_plan"])
+        except Exception as exc:
+            _diag(f"lifecycle batch plan rejected: {exc}")
+            continue
+        with _task_phase("batch_preflight"):
+            parent_res = _export_uuid(plan.identity.parent_uuid, prefer_cache=use_preload)
+        if parent_res.retryable:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
+                reason=parent_res.err or "parent preflight unavailable",
+            ))
+            continue
+        if not isinstance(parent_res.obj, dict):
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                reason="parent task is missing",
+            ))
+            continue
+        expected_short = str(plan.parent_patch_dict().get("nextLink") or "").strip()
+        parent_linked = (
+            expected_short
+            and _lifecycle_batch_link_token(parent_res.obj.get("nextLink"))
+            == _lifecycle_batch_link_token(expected_short)
+        )
+        mismatch = flow._parent_guard_mismatch(
+            parent_res.obj,
+            plan.parent_guard.to_dict(),
+            recurrence_fingerprint=lambda task: lifecycle_models.recurrence_fingerprint(
+                task,
+                parse_datetime=getattr(core, "parse_dt_any", None),
+            ),
+            check_modified=not parent_linked,
+        )
+        if mismatch:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                parent=parent_res.obj, reason=mismatch,
+            ))
+            continue
+        state.lifecycle_parent_preflight[sid] = parent_res.obj
+        child = plan.child_dict()
+        child_uuid = str(child.get("uuid") or "").strip()
+        if not child_uuid:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                parent=parent_res.obj, reason="lifecycle child has no UUID",
+            ))
+            continue
+        with _task_phase("batch_preflight"):
+            exact = _export_uuid(child_uuid, prefer_cache=use_preload)
+        child_obj = exact.obj if exact.exists and isinstance(exact.obj, dict) else None
+        if exact.retryable:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
+                parent=parent_res.obj, reason=exact.err or "child preflight unavailable",
+            ))
+            continue
+        if child_obj is not None:
+            child_reason = _lifecycle_batch_child_matches(child, child_obj)
+            if child_reason:
+                decisions.append(exit_models.LifecycleBatchDecision(
+                    sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                    parent=parent_res.obj, child=child_obj, reason=child_reason,
+                ))
+                continue
+        else:
+            equivalent = _equivalent_child_cache_get(child, plan.identity.parent_uuid)
+            if equivalent is not None and equivalent.retryable:
+                decisions.append(exit_models.LifecycleBatchDecision(
+                    sid, entry, plan, exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
+                    parent=parent_res.obj, reason=equivalent.err or "equivalent child preflight unavailable",
+                ))
+                continue
+            if equivalent is not None and equivalent.exists and isinstance(equivalent.obj, dict):
+                child_obj = equivalent.obj
+                child_reason = _lifecycle_batch_child_matches(child, child_obj)
+                if child_reason:
+                    decisions.append(exit_models.LifecycleBatchDecision(
+                        sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                        parent=parent_res.obj, child=child_obj, reason=child_reason,
+                    ))
+                    continue
+        actual_next = _lifecycle_batch_link_token(parent_res.obj.get("nextLink"))
+        expected_next = _lifecycle_batch_link_token(expected_short)
+        if child_obj is not None:
+            kind = (
+                exit_models.LifecycleBatchDecisionKind.ALREADY_SATISFIED
+                if expected_next and actual_next == expected_next
+                else exit_models.LifecycleBatchDecisionKind.READY_TO_APPLY
+            )
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, kind, parent=parent_res.obj, child=child_obj,
+            ))
+        elif expected_next and actual_next == expected_next:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                parent=parent_res.obj, reason="parent points to a missing child",
+            ))
+        else:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.MISSING_CHILD,
+                parent=parent_res.obj, child=child,
+            ))
+    return exit_models.LifecycleBatchPlan(tuple(decisions))
+
+
+def _apply_lifecycle_batch(plan) -> None:
+    """Apply only the missing-child subset of a read-only batch plan."""
+    exit_models = _module("exit_models")
+    state = _exit_runtime_state()
+    missing = plan.for_kind(exit_models.LifecycleBatchDecisionKind.MISSING_CHILD)
+    if not missing:
+        return
+    result = _import_children([decision.plan.child_dict() for decision in missing])
+    if not result.ok:
+        _diag(f"lifecycle child batch import failed: {result.err or 'unknown error'}")
+        state.lifecycle_batch_import_failed.update(decision.spawn_intent_id for decision in missing)
+        return
+    for decision in missing:
+        child = decision.plan.child_dict()
+        child_uuid = str(child.get("uuid") or "").strip()
+        if not child_uuid:
+            state.lifecycle_batch_import_failed.add(decision.spawn_intent_id)
+            continue
+        _export_cache_set(child_uuid, exit_models.ExitExportResult(True, False, "", dict(child)))
+        state.lifecycle_batch_imported.add(decision.spawn_intent_id)
+
+
+def _cleanup_lifecycle_batch(state) -> None:
+    """Safely batch-compensate imported children after multi-entry conflicts."""
+    requests = getattr(state, "lifecycle_orphan_cleanup", {})
+    if not requests:
+        return
+    entries = [
+        {"parent_uuid": parent_uuid, "child": {"uuid": child_uuid}}
+        for child_uuid, (parent_uuid, _child_short, _sid) in requests.items()
+    ]
+    for child_uuid, (parent_uuid, _child_short, _sid) in requests.items():
+        _exit_runtime_state().export_cache.pop(child_uuid, None)
+        _exit_runtime_state().export_cache.pop(parent_uuid, None)
+    _preload_export_uuids(entries)
+    safe: list[tuple[str, str, str]] = []
+    for child_uuid, (parent_uuid, child_short, sid) in requests.items():
+        parent_res = _export_cache_get(parent_uuid)
+        child_res = _export_cache_get(child_uuid)
+        if parent_res is None or parent_res.retryable:
+            reason = "parent unavailable while compensating orphan child"
+            state.lifecycle_cleanup_failures[child_uuid] = reason
+            _record_orphan_cleanup_evidence(child_uuid, sid, reason)
+            continue
+        parent = parent_res.obj if parent_res.exists else None
+        if isinstance(parent, dict) and str(parent.get("nextLink") or "").strip() == str(child_short or "").strip():
+            reason = "cleanup skipped because parent link is now present"
+            state.lifecycle_cleanup_failures[child_uuid] = reason
+            _record_orphan_cleanup_evidence(child_uuid, sid, reason)
+            continue
+        if child_res is None or child_res.retryable:
+            reason = "child unavailable while compensating orphan"
+            state.lifecycle_cleanup_failures[child_uuid] = reason
+            _record_orphan_cleanup_evidence(child_uuid, sid, reason)
+            continue
+        if not child_res.exists:
+            continue
+        safe.append((child_uuid, parent_uuid, sid))
+    if safe:
+        result = _cleanup_orphan_children([child_uuid for child_uuid, _parent, _sid in safe])
+        if not result.ok:
+            for child_uuid, _parent, sid in safe:
+                reason = result.err or "batched orphan cleanup failed"
+                state.lifecycle_cleanup_failures[child_uuid] = reason
+                _record_orphan_cleanup_evidence(child_uuid, sid, reason)
+        else:
+            verify_entries = [{"child": {"uuid": child_uuid}} for child_uuid, _parent, _sid in safe]
+            for child_uuid, _parent, _sid in safe:
+                _exit_runtime_state().export_cache.pop(child_uuid, None)
+            _preload_export_uuids(verify_entries)
+            for child_uuid, _parent, sid in safe:
+                verified = _export_cache_get(child_uuid)
+                status = str((verified.obj or {}).get("status") or "").strip().lower() if verified else ""
+                if verified is None or verified.retryable or not verified.exists or status != "deleted":
+                    reason = "batched orphan cleanup postcondition unavailable"
+                    state.lifecycle_cleanup_failures[child_uuid] = reason
+                    _record_orphan_cleanup_evidence(child_uuid, sid, reason)
+
+
+def _finalize_lifecycle_batch(state) -> None:
+    """Verify all deferred lifecycle postconditions with bounded exports."""
+    _cleanup_lifecycle_batch(state)
+    pending = getattr(state, "lifecycle_pending_verification", {})
+    if not pending:
+        return
+    specs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for ctx, plan, _child in pending.values():
+        for uuid_str in (ctx.parent_uuid, ctx.child_uuid):
+            uuid_str = str(uuid_str or "").strip()
+            if uuid_str and uuid_str not in seen:
+                seen.add(uuid_str)
+                specs.append((uuid_str, f"uuid:{uuid_str}"))
+    rows: list[dict[str, Any]] = []
+    parsed_ok = False
+    hook_support = _module("hook_support", required=False)
+    for chunk in _chunked(specs, _EXIT_PRELOAD_CHUNK_SIZE):
+        cmd = _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off"]
+        for index, (_uuid, clause) in enumerate(chunk):
+            if index:
+                cmd.append("or")
+            cmd.append(clause)
+        cmd.append("export")
+        with _task_phase("batch_verify"):
+            result = _run_task_result(cmd, timeout=_TASK_TIMEOUT_EXPORT, retries=_TASK_RETRIES_EXPORT, retry_delay=_TASK_RETRY_DELAY)
+        if not result.ok:
+            for ctx, _plan, _child in pending.values():
+                _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, result.stderr or "batch verification unavailable")
+            return
+        if hook_support is not None:
+            parsed_ok, chunk_rows, _error = hook_support.parse_export_array_result(result, diag=_diag)
+            if not parsed_ok:
+                for ctx, _plan, _child in pending.values():
+                    _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, "batch verification returned malformed JSON")
+                return
+            rows.extend(chunk_rows)
+        else:
+            try:
+                parsed = json.loads((result.stdout or "").strip() or "[]")
+            except Exception:
+                parsed = None
+            if not isinstance(parsed, list):
+                for ctx, _plan, _child in pending.values():
+                    _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, "batch verification returned malformed JSON")
+                return
+            rows.extend(row for row in parsed if isinstance(row, dict))
+    by_uuid = {str(row.get("uuid") or "").strip(): row for row in rows if isinstance(row, dict)}
+    flow = _module("exit_entry_flow")
+    lifecycle_models = _module("lifecycle_models")
+    for sid, (ctx, plan, expected_child) in pending.items():
+        child = by_uuid.get(ctx.child_uuid)
+        parent = by_uuid.get(ctx.parent_uuid)
+        reason = ""
+        if not isinstance(child, dict):
+            reason = "child postcondition missing after lifecycle batch"
+        elif not isinstance(parent, dict):
+            reason = "parent postcondition missing after lifecycle batch"
+        else:
+            for field in ("chainID", "link", "prevLink"):
+                expected = str(expected_child.get(field) or "").strip()
+                actual = str(child.get(field) or "").strip()
+                if field == "link":
+                    try:
+                        expected = str(int(float(expected)))
+                        actual = str(int(float(actual)))
+                    except (TypeError, ValueError, OverflowError):
+                        pass
+                if expected and actual != expected:
+                    reason = f"child {field} changed"
+                    break
+            if not reason and str(parent.get("nextLink") or "").strip() != ctx.child_short:
+                reason = "parent linkage postcondition not satisfied"
+            if not reason:
+                mismatch = flow._parent_guard_mismatch(
+                    parent,
+                    plan.parent_guard.to_dict(),
+                    recurrence_fingerprint=lambda task: lifecycle_models.recurrence_fingerprint(
+                        task,
+                        parse_datetime=getattr(core, "parse_dt_any", None),
+                    ),
+                    check_modified=False,
+                )
+                if mismatch:
+                    reason = mismatch
+        if reason:
+            _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, reason)
+            continue
+        verified = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.VERIFIED)
+        if not verified.ok:
+            _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, verified)
+            continue
+        finalized = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.FINALIZED)
+        if not finalized.ok:
+            _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, finalized)
+            continue
+        if not state.mark_final(ctx.entry, "done", "processed"):
+            state.errors += 1
+            state.requeue.append(ctx.entry)
+            continue
+        state.processed += 1
+        state.ack_sqlite(ctx.entry)
+        state.reset_lock_streak()
+
+
+def _update_parent_nextlink(
+    parent_uuid: str,
+    child_short: str,
+    expected_prev: str | None = None,
+    *,
+    parent_guard: dict[str, Any] | None = None,
+    parent_snapshot: dict[str, Any] | None = None,
+):
+    exit_side_effects = _module("exit_side_effects")
+    with _task_phase("parent_update"):
+        return exit_side_effects.update_parent_nextlink(
         parent_uuid,
         child_short,
         expected_prev=expected_prev,
         lock_parent_nextlink=_lock_parent_nextlink,
-        parent_nextlink_state_fn=lambda parent_uuid, child_short, expected_prev: _parent_nextlink_state(
-            parent_uuid, child_short, expected_prev, prefer_cache=False
+        parent_nextlink_state_fn=lambda parent_uuid, child_short, expected_prev, **kwargs: _parent_nextlink_state(
+            parent_uuid, child_short, expected_prev, prefer_cache=False, **kwargs
         ),
         run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         timeout_modify=_TASK_TIMEOUT_MODIFY,
         retries_modify=_TASK_RETRIES_MODIFY,
         retry_delay=_TASK_RETRY_DELAY,
-    )
+        parent_guard=parent_guard,
+        parent_snapshot=parent_snapshot,
+        guard_mismatch_fn=lambda parent, guard: _module("exit_entry_flow")._parent_guard_mismatch(
+            parent,
+            guard,
+            recurrence_fingerprint=lambda task: _module("lifecycle_models").recurrence_fingerprint(
+                task,
+                parse_datetime=getattr(core, "parse_dt_any", None),
+            ),
+        ),
+        )
 
 
 def _clear_parent_nextlink_if_matches(parent_uuid: str, child_short: str):
@@ -2086,13 +2542,23 @@ def _clear_parent_nextlink_if_matches(parent_uuid: str, child_short: str):
         _exit_runtime_state().export_cache.pop(str(parent_uuid or "").strip(), None)
 
 
-def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: str | None = None, *, prefer_cache: bool = True):
+def _parent_nextlink_state(
+    parent_uuid: str,
+    child_short: str,
+    expected_prev: str | None = None,
+    *,
+    prefer_cache: bool = True,
+    parent_guard: dict[str, Any] | None = None,
+    guard_mismatch_fn=None,
+):
     exit_side_effects = _module("exit_side_effects")
     return exit_side_effects.parent_nextlink_state(
         parent_uuid,
         child_short,
         expected_prev=expected_prev,
         export_uuid=lambda uuid_str: _export_uuid(uuid_str, prefer_cache=prefer_cache),
+        parent_guard=parent_guard,
+        guard_mismatch_fn=guard_mismatch_fn,
     )
 
 
@@ -2107,6 +2573,18 @@ def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
         retries_modify=_TASK_RETRIES_MODIFY,
         retry_delay=_TASK_RETRY_DELAY,
         diag=_diag,
+    )
+
+
+def _cleanup_orphan_children(child_uuids: list[str]):
+    exit_side_effects = _module("exit_side_effects")
+    return exit_side_effects.cleanup_orphan_children(
+        child_uuids,
+        run_task=_run_task_result,
+        task_cmd_prefix=_task_cmd_prefix(),
+        timeout_modify=_TASK_TIMEOUT_MODIFY,
+        retries_modify=_TASK_RETRIES_MODIFY,
+        retry_delay=_TASK_RETRY_DELAY,
     )
 
 
@@ -2163,16 +2641,24 @@ class _DrainState:
         self.intent_mark_ok = 0
         self.intent_mark_fail = 0
         self.sqlite_acked_claims: dict[int, str] = {}
+        self.lifecycle_defer_verification = False
+        self.lifecycle_batch_discovery = False
+        self.lifecycle_pending_verification: dict[str, tuple[Any, Any, dict[str, Any]]] = {}
+        self.lifecycle_batch_plan = None
+        self.lifecycle_orphan_cleanup: dict[str, tuple[str, str, str]] = {}
+        self.lifecycle_cleanup_failures: dict[str, str] = {}
 
-    def mark_final(self, entry: dict, status: str, reason: str) -> None:
+    def mark_final(self, entry: dict, status: str, reason: str) -> bool:
         sid = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
         if not sid:
-            return
+            return True
         if _mark_intent_status(sid, status, reason):
             self.finalized_intents.add(sid)
             self.intent_mark_ok += 1
+            return True
         else:
             self.intent_mark_fail += 1
+            return False
 
     def queue_backend(self, entry: dict) -> str:
         if not isinstance(entry, dict):
@@ -2213,9 +2699,16 @@ class _DrainState:
             self.errors += 1
             _diag("dead-letter write failed; entry retained for retry")
             return
+        if not self.mark_final(entry, "dead", reason):
+            # The dead-letter evidence is durable, but without the finalized
+            # intent record the queue row must remain recoverable and cannot
+            # be acknowledged as complete.
+            self.requeue.append(entry)
+            self.errors += 1
+            _diag("dead-letter intent write failed; entry retained for retry")
+            return
         self.dead_lettered += 1
         self.errors += 1
-        self.mark_final(entry, "dead", reason)
         self.ack_sqlite(entry)
 
     def record_lock_event(self, idx: int) -> bool:
@@ -2279,6 +2772,7 @@ def _requeue_or_dead_letter_for_lock(entry: dict, idx: int, state: _DrainState) 
 def _handle_lifecycle_stage_failure(entry: dict, idx: int, state: _DrainState, result) -> bool:
     """Keep a claimed plan retryable, or quarantine a structurally invalid one."""
     error = str(getattr(result, "err", "") or "lifecycle stage update failed")
+    _diag(f"lifecycle stage update failed for queue entry {entry.get('__queue_id')}: {error}")
     if bool(getattr(result, "lock_busy", False)):
         return _requeue_or_dead_letter_for_lock(entry, idx, state)
     if "claim ownership lost" in error.lower():
@@ -2444,6 +2938,7 @@ def _execute_lifecycle_queue_entry(ctx, state):
     """Execute a validated queue plan through the shared typed executor."""
     lifecycle_models = _module("lifecycle_models")
     lifecycle_executor = _module("lifecycle_executor")
+    exit_models = _module("exit_models")
     try:
         plan = lifecycle_models.LifecyclePlan.from_dict(ctx.entry["lifecycle_plan"])
     except Exception as exc:
@@ -2451,6 +2946,57 @@ def _execute_lifecycle_queue_entry(ctx, state):
         state.dead_letter(ctx.entry, f"invalid lifecycle plan: {exc}")
         state.reset_lock_streak()
         return False
+
+    batch_plan = getattr(state, "lifecycle_batch_plan", None)
+    batch_decision = None
+    if batch_plan is not None:
+        batch_decision = batch_plan.by_intent().get(ctx.spawn_intent_id)
+    if batch_decision is not None:
+        if batch_decision.kind is exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING:
+            state.dead_letter(
+                ctx.entry,
+                f"lifecycle batch preflight conflict: {batch_decision.reason or 'state changed'}",
+            )
+            state.reset_lock_streak()
+            return False
+        if batch_decision.kind is exit_models.LifecycleBatchDecisionKind.UNAVAILABLE:
+            reason = batch_decision.reason or "lifecycle batch preflight unavailable"
+            _diag(f"lifecycle batch preflight deferred: {reason}")
+            if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
+                state.dead_letter(ctx.entry, reason)
+            else:
+                state.requeue.append(ctx.entry)
+            return False
+        # A partial batch import may have created a child before Taskwarrior
+        # returned failure. On retry, promote that durable plan before the
+        # executor advances it to linkage/verification.
+        if (
+            isinstance(batch_decision.child, dict)
+            and plan.stage is lifecycle_models.ExecutionStage.PERSISTED
+            and not (
+                batch_decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
+                and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported
+            )
+        ):
+            child_stage = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.CHILD_PRESENT)
+            if not child_stage.ok:
+                return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, child_stage)
+        if (
+            batch_decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
+            and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_import_failed
+        ):
+            reason = "lifecycle child batch import unavailable"
+            _diag(f"lifecycle batch import deferred (intent={ctx.spawn_intent_id})")
+            if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
+                state.dead_letter(ctx.entry, reason)
+            else:
+                state.requeue.append(ctx.entry)
+            return False
+
+    def planned_decision():
+        if batch_plan is None:
+            return None
+        return batch_plan.by_intent().get(ctx.spawn_intent_id)
 
     def stage(stage):
         result = _advance_lifecycle_stage(ctx.entry, stage)
@@ -2465,6 +3011,14 @@ def _execute_lifecycle_queue_entry(ctx, state):
 
     class Services:
         def validate_parent(self, current_plan):
+            decision = planned_decision()
+            if decision is not None and isinstance(decision.parent, dict):
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.APPLIED,
+                    value=decision.parent,
+                )
+            if ctx.spawn_intent_id in _exit_runtime_state().lifecycle_parent_preflight:
+                return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
             result = _export_uuid(current_plan.identity.parent_uuid, prefer_cache=False)
             if result.retryable:
                 return _lifecycle_operation_result(
@@ -2494,10 +3048,28 @@ def _execute_lifecycle_queue_entry(ctx, state):
             return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
 
         def find_equivalent_child(self, current_plan):
+            decision = planned_decision()
+            if decision is not None and isinstance(decision.child, dict):
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.FOUND,
+                    value=decision.child,
+                )
+            if (
+                decision is not None
+                and decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
+                and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported
+            ):
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.FOUND,
+                    value=current_plan.child_dict(),
+                )
             child = current_plan.child_dict()
             child_uuid = str(child.get("uuid") or "").strip()
             if child_uuid:
-                exact = _export_uuid(child_uuid, prefer_cache=False)
+                # Discovery may use the authoritative drain preload. Fresh
+                # reads remain mandatory for parent guards and every
+                # post-mutation verification below.
+                exact = _export_uuid(child_uuid)
                 if exact.retryable:
                     return _lifecycle_operation_result(
                         lifecycle_executor.OperationState.UNAVAILABLE,
@@ -2535,6 +3107,8 @@ def _execute_lifecycle_queue_entry(ctx, state):
             return _lifecycle_operation_result(operation_state, reason=imported.err or "child import failed")
 
         def verify_child(self, current_plan, child):
+            if getattr(state, "lifecycle_defer_verification", False):
+                return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED, value=child)
             child_uuid = str(child.get("uuid") or "").strip()
             if not child_uuid:
                 return _lifecycle_operation_result(
@@ -2557,6 +3131,12 @@ def _execute_lifecycle_queue_entry(ctx, state):
             return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
 
         def apply_parent_patch(self, current_plan, child):
+            decision = planned_decision()
+            if (
+                decision is not None
+                and decision.kind is exit_models.LifecycleBatchDecisionKind.ALREADY_SATISFIED
+            ):
+                return _lifecycle_operation_result(lifecycle_executor.OperationState.ALREADY)
             child_short = str(
                 current_plan.parent_patch_dict().get("nextLink")
                 or ctx.child_short
@@ -2568,32 +3148,32 @@ def _execute_lifecycle_queue_entry(ctx, state):
                     reason="parent patch has no child identity",
                 )
             expected_prev = str(ctx.entry.get("parent_nextlink") or "").strip() or None
-            state_result = _parent_nextlink_state(
-                current_plan.identity.parent_uuid,
-                child_short,
-                expected_prev,
-                prefer_cache=False,
-            )
-            if state_result.state == "locked":
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.UNAVAILABLE,
-                    reason=state_result.err or "parent linkage unavailable",
-                )
-            if state_result.state == "already":
-                return _lifecycle_operation_result(lifecycle_executor.OperationState.ALREADY)
-            if state_result.state != "ok":
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.CONFLICT,
-                    reason=state_result.err or "parent nextLink changed",
-                )
             updated = _update_parent_nextlink(
                 current_plan.identity.parent_uuid,
                 child_short,
                 expected_prev,
+                parent_guard=current_plan.parent_guard.to_dict(),
+                parent_snapshot=(
+                    planned_decision().parent
+                    if planned_decision() is not None and isinstance(planned_decision().parent, dict)
+                    else None
+                ),
             )
             if updated.ok:
+                if updated.state == "already":
+                    return _lifecycle_operation_result(lifecycle_executor.OperationState.ALREADY)
                 stage_result = stage(lifecycle_models.ExecutionStage.PARENT_LINKED)
                 return stage_result
+            if updated.state == "locked":
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.UNAVAILABLE,
+                    reason=updated.err or "parent linkage unavailable",
+                )
+            if updated.state in {"conflict", "missing", "invalid"}:
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.CONFLICT,
+                    reason=updated.err or "parent nextLink changed",
+                )
             operation_state = (
                 lifecycle_executor.OperationState.UNAVAILABLE
                 if _is_lock_error(updated.err)
@@ -2602,6 +3182,8 @@ def _execute_lifecycle_queue_entry(ctx, state):
             return _lifecycle_operation_result(operation_state, reason=updated.err or "parent update failed")
 
         def verify_linkage(self, current_plan, child):
+            if getattr(state, "lifecycle_defer_verification", False):
+                return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED, value=child)
             child_short = str(
                 current_plan.parent_patch_dict().get("nextLink")
                 or ctx.child_short
@@ -2628,13 +3210,28 @@ def _execute_lifecycle_queue_entry(ctx, state):
         def compensate_child(self, _current_plan, child):
             child_uuid = str(child.get("uuid") or "").strip()
             if child_uuid:
-                _cleanup_orphan_child(child_uuid, ctx.spawn_intent_id)
+                if getattr(state, "lifecycle_defer_verification", False):
+                    state.lifecycle_orphan_cleanup.setdefault(
+                        child_uuid,
+                        (ctx.parent_uuid, ctx.child_short, ctx.spawn_intent_id),
+                    )
+                else:
+                    _cleanup_orphan_child(child_uuid, ctx.spawn_intent_id)
             return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
 
+    if ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported:
+        child_stage = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.CHILD_PRESENT)
+        if not child_stage.ok:
+            return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, child_stage)
     outcome = lifecycle_executor.LifecycleTransitionExecutor(Services()).execute(plan)
+    _diag(
+        f"lifecycle transition intent={ctx.spawn_intent_id} stage={plan.stage.value} "
+        f"outcome={outcome.kind.value} reason={outcome.reason or 'none'}"
+    )
     if outcome.kind in {
         lifecycle_models.LifecycleOutcomeKind.RETRYABLE,
     }:
+        _diag(f"lifecycle transition retry: {outcome.reason or 'reason unavailable'}")
         if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
             state.dead_letter(ctx.entry, outcome.reason or "lifecycle transition retry limit reached")
         else:
@@ -2644,12 +3241,19 @@ def _execute_lifecycle_queue_entry(ctx, state):
         state.dead_letter(ctx.entry, outcome.reason or "lifecycle transition requires manual review")
         state.reset_lock_streak()
         return False
+    if getattr(state, "lifecycle_defer_verification", False):
+        state.lifecycle_pending_verification[ctx.spawn_intent_id] = (ctx, plan, plan.child_dict())
+        return False
     final_stage = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.FINALIZED)
     if not final_stage.ok:
         return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, final_stage)
     _seed_equivalent_child_cache(ctx.child, ctx.parent_uuid, ctx.child_uuid)
+    if not state.mark_final(ctx.entry, "done", "processed"):
+        state.errors += 1
+        state.requeue.append(ctx.entry)
+        _diag("finalized intent write failed; retaining queue entry for retry")
+        return False
     state.processed += 1
-    state.mark_final(ctx.entry, "done", "processed")
     state.ack_sqlite(ctx.entry)
     state.reset_lock_streak()
     return False
@@ -2765,8 +3369,12 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
         return _handle_lifecycle_stage_failure(queue_entry, idx, state, finalized_stage)
 
     _seed_equivalent_child_cache(child, parent_uuid, child_uuid)
+    if not state.mark_final(queue_entry, "done", "processed"):
+        state.errors += 1
+        state.requeue.append(queue_entry)
+        _diag("finalized intent write failed; retaining queue entry for retry")
+        return False
     state.processed += 1
-    state.mark_final(queue_entry, "done", "processed")
     state.ack_sqlite(queue_entry)
     state.reset_lock_streak()
     return False
@@ -2783,6 +3391,9 @@ def _drain_queue_result():
             exit_progress_scope=_exit_progress_scope,
             preload_export_uuids=_preload_export_uuids,
             preload_equivalent_child_slots=_preload_equivalent_child_slots,
+            prepare_lifecycle_batch=_prepare_lifecycle_batch,
+            apply_lifecycle_batch=_apply_lifecycle_batch,
+            finalize_lifecycle_batch=_finalize_lifecycle_batch,
             process_queue_entry=_process_queue_entry,
             requeue_entries_result=_requeue_entries_result,
             ack_queue_entries_sqlite_result=_ack_queue_entries_sqlite_result,
@@ -2968,6 +3579,20 @@ def main() -> int:
         drain_queue=_drain_queue,
         strict_exit_result=_strict_exit_feedback_message,
     )
+    stats_path = (os.environ.get("NAUTICAL_BENCH_STATS_FILE") or "").strip()
+    if stats_path:
+        try:
+            Path(stats_path).write_text(
+                json.dumps(
+                    {"task_stats": dict(_exit_runtime_state().diag_stats)},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            _diag(f"benchmark stats write failed: {type(exc).__name__}: {exc}")
     _render_exit_drain_failure_panel(result.stats or {})
     return hook_results.emit_exit_result(
         result,
@@ -2986,6 +3611,7 @@ def run_hook(
     global HOOK_DIR, TW_DIR, _CORE_BASE
     global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
     global _QUEUE_DB_PATH, _DEAD_LETTER_PATH, _DEAD_LETTER_LOCK
+    global _ORPHAN_CLEANUP_EVIDENCE_PATH, _ORPHAN_CLEANUP_EVIDENCE_LOCK
     global _QUEUE_LOCK_FAIL_MARKER, _QUEUE_LOCK_FAIL_COUNT
 
     HOOK_DIR = Path(hook_dir)
@@ -3000,6 +3626,8 @@ def run_hook(
     _QUEUE_DB_PATH = state_dir / ".nautical_queue.db"
     _DEAD_LETTER_PATH = state_dir / ".nautical_dead_letter.jsonl"
     _DEAD_LETTER_LOCK = lock_dir / ".nautical_dead_letter.lock"
+    _ORPHAN_CLEANUP_EVIDENCE_PATH = state_dir / ".nautical_orphan_cleanup.jsonl"
+    _ORPHAN_CLEANUP_EVIDENCE_LOCK = lock_dir / ".nautical_orphan_cleanup.lock"
     _QUEUE_LOCK_FAIL_MARKER = lock_dir / ".nautical_spawn_queue.lock_failed"
     _QUEUE_LOCK_FAIL_COUNT = lock_dir / ".nautical_spawn_queue.lock_failed.count"
     return main()

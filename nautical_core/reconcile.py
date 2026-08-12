@@ -19,12 +19,13 @@ from nautical_core.lifecycle_models import (
     recurrence_fingerprint,
 )
 from nautical_core.lifecycle_planner import (
-    ChainGenerationLimitPolicy,
-    ChainGenerationPlanningService,
-    LifecyclePlanner,
-    PrecomputedRecurrencePlanningService,
+    LifecyclePreflight,
     RecurrenceCandidate,
+    expiration_candidate,
+    plan_expiration_successor,
+    plan_candidate_successor,
 )
+from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
@@ -112,36 +113,43 @@ def deleted_chain_disposition(
     task: dict[str, Any],
     *,
     safe_parse_datetime: Any,
-) -> tuple[str, str]:
+) -> DeletionEvidence:
     """Classify an unlinked deleted chain as expiration, manual stop, or ambiguous."""
     if not is_orphan_deleted_chain_candidate(task):
-        return "", ""
+        return DeletionEvidence(DeletionDisposition.NOT_APPLICABLE)
     if not str(task.get("until") or "").strip():
-        return "manual", "deleted without native until"
+        return DeletionEvidence(DeletionDisposition.MANUAL, "deleted without native until")
     try:
         until_dt, until_err = safe_parse_datetime(task.get("until"))
         end_dt, end_err = safe_parse_datetime(task.get("end"))
     except Exception:
-        return "ambiguous", "deleted task has no reliable native-until expiration evidence"
+        return DeletionEvidence(
+            DeletionDisposition.AMBIGUOUS,
+            "deleted task has no reliable native-until expiration evidence",
+        )
     if until_err or end_err or until_dt is None or end_dt is None:
-        return "ambiguous", "deleted task has no reliable native-until expiration evidence"
+        return DeletionEvidence(
+            DeletionDisposition.AMBIGUOUS,
+            "deleted task has no reliable native-until expiration evidence",
+        )
     try:
         if compare_datetimes(until_dt, end_dt) <= 0:
-            return "expiration", "native until elapsed"
-        return "manual", "deleted before native until"
+            return DeletionEvidence(DeletionDisposition.EXPIRATION, "native until elapsed")
+        return DeletionEvidence(DeletionDisposition.MANUAL, "deleted before native until")
     except Exception:
-        return "ambiguous", "deleted task has no reliable native-until expiration evidence"
+        return DeletionEvidence(
+            DeletionDisposition.AMBIGUOUS,
+            "deleted task has no reliable native-until expiration evidence",
+        )
 
 
 def is_orphan_expiration_candidate(task: dict[str, Any], *, safe_parse_datetime: Any) -> bool:
     """Return whether a deleted link has strong evidence of native until expiration."""
-    disposition, _reason = deleted_chain_disposition(
+    evidence = deleted_chain_disposition(
         task,
         safe_parse_datetime=safe_parse_datetime,
     )
-    if not disposition:
-        return False
-    return disposition == "expiration"
+    return evidence.disposition is DeletionDisposition.EXPIRATION
 
 
 def expiration_recurrence_parent(parent: dict[str, Any]) -> dict[str, Any]:
@@ -159,17 +167,8 @@ def compute_expiration_child_due(
 ) -> tuple[Any, dict[str, Any]]:
     """Compute the next recurrence target after an expired link without mutating it."""
     generation = generation or _generation_service(hook)
-    calculation_parent = expiration_recurrence_parent(parent)
-    kind = recurrence_kind(parent)
-    if kind in {"anchor", "anchor_file"}:
-        child_due, meta, _dnf = generation.compute_anchor_child_due(calculation_parent)
-    else:
-        child_due, meta = generation.compute_cp_child_due(calculation_parent)
-    target_field = "scheduled" if not parent.get("due") and parent.get("scheduled") else "due"
-    result_meta = dict(meta or {})
-    result_meta["basis"] = f"{target_field} recurrence target (expired)"
-    result_meta["target_field"] = target_field
-    return child_due, result_meta
+    candidate = expiration_candidate(TaskSnapshot.from_mapping(parent), generation=generation)
+    return candidate.child_due, dict(candidate.metadata)
 
 
 def native_until_target_field(task: dict[str, Any]) -> str:
@@ -454,18 +453,18 @@ def _build_reconcile_plan_unscoped(
     next_link = link + 1
     is_expiration = str(parent.get("status") or "").strip() == "deleted"
     if is_expiration:
-        disposition, reason = deleted_chain_disposition(
+        evidence = deleted_chain_disposition(
             parent,
             safe_parse_datetime=generation.safe_parse_datetime,
         )
-        if disposition == "manual":
-            return ReconcilePlan("manual_stop", parent, next_link, reason)
-        if disposition != "expiration":
+        if evidence.disposition is DeletionDisposition.MANUAL:
+            return ReconcilePlan("manual_stop", parent, next_link, evidence.reason)
+        if evidence.disposition is not DeletionDisposition.EXPIRATION:
             return ReconcilePlan(
                 "error",
                 parent,
                 next_link,
-                reason or "deleted task has no reliable native-until expiration evidence",
+                evidence.reason or "deleted task has no reliable native-until expiration evidence",
             )
 
     child_short, child_error = resolve_existing_child(
@@ -476,7 +475,63 @@ def _build_reconcile_plan_unscoped(
     if child_error:
         return ReconcilePlan("error", parent, next_link, child_error)
     if child_short:
-        return ReconcilePlan("backfill_nextlink", parent, next_link, "next link already exists", child_short=child_short)
+        existing_child = next(
+            (
+                row
+                for row in existing_children
+                if str(row.get("uuid") or "").strip().lower().startswith(child_short.lower())
+            ),
+            None,
+        )
+        if not isinstance(existing_child, dict):
+            return ReconcilePlan(
+                "error",
+                parent,
+                next_link,
+                "existing successor identity could not be loaded",
+                child_short=child_short,
+            )
+        try:
+            guard = ParentGuard(
+                status=str(parent.get("status") or "pending"),
+                chain=str(parent.get("chain") or "on"),
+                chain_id=str(parent.get("chainID") or ""),
+                link=link,
+                recurrence_fingerprint=recurrence_fingerprint(parent),
+                modified=str(parent.get("modified") or ""),
+            )
+            identity = LifecycleIdentity(
+                chain_id=guard.chain_id,
+                parent_uuid=str(parent.get("uuid") or ""),
+                source_link=guard.link,
+                target_link=next_link,
+                event=LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
+            )
+            lifecycle_plan = LifecyclePlan.from_mappings(
+                identity=identity,
+                action=LifecycleAction.SPAWN_CHILD,
+                parent_guard=guard,
+                child_payload=existing_child,
+                parent_patch={"nextLink": child_short},
+                expected_postconditions=("child_present", "parent_linked", "verified"),
+            )
+        except Exception as exc:
+            return ReconcilePlan(
+                "error",
+                parent,
+                next_link,
+                f"failed to build successor recovery plan: {scheduling_error_message(exc)}",
+                child_short=child_short,
+            )
+        return ReconcilePlan(
+            "backfill_nextlink",
+            parent,
+            next_link,
+            "next link already exists",
+            child_short=child_short,
+            child=existing_child,
+            lifecycle_plan=lifecycle_plan,
+        )
 
     try:
         evaluator = RecurrenceEvaluator.from_task(parent)
@@ -500,7 +555,9 @@ def _build_reconcile_plan_unscoped(
 
     try:
         if is_expiration:
-            child_due, meta = compute_expiration_child_due(parent, hook=hook, generation=generation)
+            expiration = expiration_candidate(TaskSnapshot.from_mapping(parent), generation=generation)
+            child_due = expiration.child_due
+            meta = dict(expiration.metadata)
         elif kind in {"anchor", "anchor_file"}:
             child_due, meta, _dnf = generation.compute_anchor_child_due(parent)
         else:
@@ -523,7 +580,6 @@ def _build_reconcile_plan_unscoped(
 
     child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"
     parent_short = short_uuid(parent.get("uuid"))
-    lifecycle_plan: LifecyclePlan | None = None
     try:
         candidate = RecurrenceCandidate(
             child_due=child_due,
@@ -531,18 +587,32 @@ def _build_reconcile_plan_unscoped(
             dnf=None,
             until=until_dt,
         )
-        recurrence = PrecomputedRecurrencePlanningService(
-            candidate=candidate,
-            child_service=ChainGenerationPlanningService(generation),
-        )
-        planner = LifecyclePlanner(
-            {"scheduler_fingerprint": "reconcile"},
-            recurrence_service=recurrence,
-            successor_limit_policy=ChainGenerationLimitPolicy(compare_datetimes),
-        )
-        lifecycle_plan = planner.plan(
-            TaskSnapshot.from_mapping(parent),
-            LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
+        planner_kwargs = {
+            "generation": generation,
+            "validated_configuration": {"scheduler_fingerprint": "reconcile"},
+            "compare_datetimes": compare_datetimes,
+            "preflight": LifecyclePreflight.from_context(
+                base_link=link,
+                next_link=next_link,
+                kind=kind,
+                chain_id=parent.get("chainID"),
+            ),
+            "carry_validator": lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
+                snapshot.to_dict(),
+                dict(candidate_child),
+                child_field=child_field,
+                generation=generation,
+            ),
+        }
+        lifecycle_plan = (
+            plan_expiration_successor(TaskSnapshot.from_mapping(parent), **planner_kwargs)
+            if is_expiration
+            else plan_candidate_successor(
+                TaskSnapshot.from_mapping(parent),
+                LifecycleEvent.COMPLETE,
+                candidate,
+                **planner_kwargs,
+            )
         )
         if lifecycle_plan.action is LifecycleAction.FINALIZE_CHAIN:
             return ReconcilePlan(
@@ -579,15 +649,6 @@ def _build_reconcile_plan_unscoped(
                 return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
         else:
             return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
-    carry_reason = invalid_relative_carry_reason(
-        parent,
-        child,
-        child_field=child_field,
-        hook=hook,
-        generation=generation,
-    )
-    if carry_reason:
-        return ReconcilePlan("error", parent, next_link, carry_reason, child_due=child_due)
     if lifecycle_plan is None:
         try:
             guard = ParentGuard(
@@ -596,6 +657,7 @@ def _build_reconcile_plan_unscoped(
                 chain_id=str(parent.get("chainID") or ""),
                 link=int(next_link - 1),
                 recurrence_fingerprint=recurrence_fingerprint(parent),
+                modified=str(parent.get("modified") or ""),
             )
             identity = LifecycleIdentity(
                 chain_id=guard.chain_id,

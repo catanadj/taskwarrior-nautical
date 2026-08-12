@@ -116,15 +116,10 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-
-# Optional: DST-aware local TZ helpers (used by some carry-forward variants)
-try:
-    import zoneinfo as _zoneinfo
-except Exception:  # pragma: no cover
-    _zoneinfo = None
-ZoneInfo = _zoneinfo.ZoneInfo if _zoneinfo is not None else None
+if TYPE_CHECKING:
+    from nautical_core.modify_models import CompletionLifecycleResult
 
 
 # set config show_analytics=false to disable analytics panel entry.
@@ -212,32 +207,6 @@ def _is_lock_error(stderr: str) -> bool:
         or "resource temporarily unavailable" in s or "another task is running" in s
         or "lock file" in s or "lockfile" in s or "locked by" in s or "timeout" in s
     )
-
-
-def _tw_lock_path() -> Path:
-    return TW_DATA_DIR / "lock"
-
-
-def _tw_lock_recent(max_age_s: float = 5.0) -> bool:
-    try:
-        p = _tw_lock_path()
-        if not p.exists():
-            return False
-        age = _time.time() - p.stat().st_mtime
-        return age >= 0 and age <= max_age_s
-    except Exception:
-        return False
-
-
-def _set_wait_sched_debug(field: str, payload: dict) -> None:
-    try:
-        if field in _LAST_WAIT_SCHED_DEBUG:
-            _LAST_WAIT_SCHED_DEBUG.pop(field, None)
-        _LAST_WAIT_SCHED_DEBUG[field] = payload
-        while len(_LAST_WAIT_SCHED_DEBUG) > _MAX_WAIT_SCHED_DEBUG:
-            _LAST_WAIT_SCHED_DEBUG.popitem(last=False)
-    except Exception:
-        pass
 
 
 def _modify_runtime_state():
@@ -447,7 +416,6 @@ def _invalidate_read_query_cache() -> None:
         pass
     for name in (
         "_export_uuid_short_cached",
-        "_tw_export_chain_cached_key",
     ):
         try:
             clear = getattr(globals().get(name), "cache_clear", None)
@@ -455,6 +423,10 @@ def _invalidate_read_query_cache() -> None:
                 clear()
         except Exception:
             pass
+    try:
+        _module("lifecycle_read_service").clear_cached_chain_exports()
+    except Exception:
+        pass
 
 
 def _record_chain_snapshot_stat(name: str, inc: int = 1) -> None:
@@ -482,6 +454,33 @@ def _diag_summary() -> None:
             ("queue_lock_failures", _modify_runtime_state().diag_stats.get("queue_lock_failures", 0)),
         ]
         _emit_diag_block("diag summary", parts, columns=2)
+    except Exception:
+        pass
+
+
+def _diag_lifecycle_result(result) -> None:
+    """Write structured lifecycle diagnostics only to gated stderr output."""
+    if os.environ.get("NAUTICAL_DIAG") != "1" or result is None:
+        return
+    try:
+        diagnostic = getattr(result, "diagnostic", None)
+        items = [
+            ("state", getattr(result, "state", "")),
+            ("reason", str(getattr(result, "reason", "") or "").replace("\n", " ")),
+        ]
+        if diagnostic is not None:
+            items.extend(
+                [
+                    ("transition", diagnostic.transition_id),
+                    ("chain", diagnostic.chain_id),
+                    ("parent_link", diagnostic.parent_link),
+                    ("child_link", diagnostic.child_link),
+                    ("stage", diagnostic.stage),
+                    ("attempts", diagnostic.attempts),
+                    ("failure_kind", diagnostic.failure_kind),
+                ]
+            )
+        _emit_diag_block("completion lifecycle", items, columns=2)
     except Exception:
         pass
 
@@ -560,12 +559,8 @@ _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
 _MODIFY_QUERIES = None
 _MODIFY_QUERIES_LOAD_FAILED = False
-_MODIFY_CHAIN_READS = None
-_MODIFY_CHAIN_READS_LOAD_FAILED = False
 _CHAIN_GENERATION = None
 _CHAIN_GENERATION_LOAD_FAILED = False
-_MODIFY_GENERATION_COMPAT = None
-_MODIFY_GENERATION_COMPAT_LOAD_FAILED = False
 _MODIFY_ORDINARY = None
 _MODIFY_ORDINARY_LOAD_FAILED = False
 _MODIFY_SPAWN_PREP = None
@@ -622,11 +617,11 @@ _MODULE_SPECS = {
         "modify_queries.py",
         "nautical_core.modify_queries",
     ),
-    "modify_chain_reads": (
-        "_MODIFY_CHAIN_READS",
-        "_MODIFY_CHAIN_READS_LOAD_FAILED",
-        "modify_chain_reads.py",
-        "nautical_core.modify_chain_reads",
+    "lifecycle_read_service": (
+        "_LIFECYCLE_READ_SERVICE",
+        "_LIFECYCLE_READ_SERVICE_LOAD_FAILED",
+        "lifecycle_read_service.py",
+        "nautical_core.lifecycle_read_service",
     ),
     "modify_spawn_prep": (
         "_MODIFY_SPAWN_PREP",
@@ -639,12 +634,6 @@ _MODULE_SPECS = {
         "_CHAIN_GENERATION_LOAD_FAILED",
         "chain_generation.py",
         "nautical_core.chain_generation",
-    ),
-    "modify_generation_compat": (
-        "_MODIFY_GENERATION_COMPAT",
-        "_MODIFY_GENERATION_COMPAT_LOAD_FAILED",
-        "modify_generation_compat.py",
-        "nautical_core.modify_generation_compat",
     ),
     "modify_ordinary": (
         "_MODIFY_ORDINARY",
@@ -723,6 +712,12 @@ _MODULE_SPECS = {
         "_MODIFY_EXPIRATION_LOAD_FAILED",
         "modify_expiration.py",
         "nautical_core.modify_expiration",
+    ),
+    "modify_analytics": (
+        "_MODIFY_ANALYTICS",
+        "_MODIFY_ANALYTICS_LOAD_FAILED",
+        "modify_analytics.py",
+        "nautical_core.modify_analytics",
     ),
     "anchor_omit": (
         "_ANCHOR_OMIT",
@@ -852,18 +847,6 @@ def _task_cmd_prefix() -> list[str]:
 # ------------------------------------------------------------------------------
 # Deferred next-link spawn queue (used when nested `task import` times out due to TW lock)
 # ------------------------------------------------------------------------------
-def _nautical_state_dir_path() -> Path:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        return queue_store.nautical_state_dir_path(TW_DATA_DIR)
-    return TW_DATA_DIR / ".nautical-state"
-
-def _nautical_lock_dir_path() -> Path:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        return queue_store.nautical_lock_dir_path(TW_DATA_DIR)
-    return TW_DATA_DIR / ".nautical-locks"
-
 # Keep import-time state path setup dependency-free.  The queue adapter is
 # loaded by the lifecycle that actually needs it and run_hook refreshes these
 # paths after resolving TASKDATA/rc.data.location.
@@ -945,8 +928,6 @@ _ANALYTICS_ONTIME_TOL_SECS = 3600
 _CHECK_CHAIN_INTEGRITY = False
 _DEBUG_WAIT_SCHED = _DEFAULT_DEBUG_WAIT_SCHED
 _RECURRENCE_UPDATE_UDAS: tuple[str, ...] = ()
-_CHAIN_CACHE_CHAIN_ID = ""
-_CHAIN_CACHE: list[dict[str, Any]] = []
 _SPAWN_QUEUE_MAX_BYTES = _DEFAULT_SPAWN_QUEUE_MAX_BYTES
 _MAX_CHAIN_WALK = _MAX_CHAIN_WALK
 
@@ -1038,11 +1019,6 @@ def _load_anchor_file_dates(name: str):
     return anchor_files.load_anchor_file_dates(name, getattr(core, "ANCHOR_FILE_DIR", ""))
 
 
-def _load_anchor_file_descriptions(name: str):
-    anchor_files = core._import_sibling("anchor_files")
-    return anchor_files.load_anchor_file_descriptions(name, getattr(core, "ANCHOR_FILE_DIR", ""))
-
-
 @lru_cache(maxsize=512)
 def _export_uuid_short_cached(u_short: str):
     obj = _export_uuid_short(u_short, env=None)
@@ -1094,10 +1070,6 @@ def _compare_datetimes(left: datetime, right: datetime) -> int:
     if _DATETIME_COMPARATOR is None:
         _DATETIME_COMPARATOR = core._import_sibling("timeutil").compare_datetimes
     return _DATETIME_COMPARATOR(left, right)
-
-
-def _later_datetime(left: datetime, right: datetime) -> datetime:
-    return left if _compare_datetimes(left, right) >= 0 else right
 
 
 # ------------------------------------------------------------------------------
@@ -1332,10 +1304,6 @@ def _panel(
     )
 
 
-def _panel_line_from_rows(title, rows) -> str:
-    return core.panel_line_from_rows(title, rows)
-
-
 def _panel_line(
     title: str,
     line: str,
@@ -1376,269 +1344,19 @@ def _strip_quotes(s: str) -> str:
 def _format_chain_summary_rows(
     rows: list[tuple[str, str]]
 ) -> list[tuple[str | None, str]]:
-    """
-    Compact layout for chain-finished summary, without section headers.
-
-    Order:
-      Reason / Chain / Pattern-Natural-Period / (other)
-      <blank>
-      First due / Last end / Span
-      <blank>
-      Performance rows
-      <blank>
-      Limits
-      <blank>
-      History
-    """
-    chain_keys = {"Reason", "Chain", "Pattern", "Natural", "Period"}
-    schedule_keys = {"First due", "Last end", "Span"}
-    perf_keys = {
-        "Performance",
-        "Avg lateness",
-        "Median lateness",
-        "Best early",
-        "Worst late",
-    }
-    limits_keys = {"Chain cap", "Chain end point", "Chain limits"}
-    history_keys = {"History"}
-
-    chain: list[tuple[str, str]] = []
-    schedule: list[tuple[str, str]] = []
-    perf: list[tuple[str, str]] = []
-    limits: list[tuple[str, str]] = []
-    history: list[tuple[str, str]] = []
-    others: list[tuple[str, str]] = []
-
-    for k, v in rows:
-        if k in chain_keys:
-            chain.append((k, v))
-        elif k in schedule_keys:
-            schedule.append((k, v))
-        elif k in perf_keys:
-            perf.append((k, v))
-        elif k in limits_keys:
-            limits.append((k, v))
-        elif k in history_keys:
-            history.append((k, v))
-        else:
-            others.append((k, v))
-
-    # Put unknowns next to the chain meta so nothing disappears
-    chain.extend(others)
-
-    out: list[tuple[str | None, str]] = []
-
-    def _add(group: list[tuple[str, str]]):
-        nonlocal out
-        if not group:
-            return
-        if out:
-            out.append((None, ""))  # spacer line
-        out.extend(group)
-
-    _add(chain)
-    _add(schedule)
-    _add(perf)
-    _add(limits)
-    _add(history)
-
-    return out or rows
+    return _module("modify_feedback").format_chain_summary_rows(rows)
 
 
 
 def _format_next_anchor_rows(
     rows: list[tuple[str, str]]
 ) -> list[tuple[str | None, str]]:
-    """
-    Compact layout for anchor next-link feedback, without section headers.
-
-    Order:
-      Pattern / Natural / Basis / Sanitised / (other)
-      <blank>
-      Next Due / Link status / Links left / Limits
-      <blank>
-      Last occurrence
-      <blank>
-      Timeline
-      <blank>
-      Rand
-    """
-    chain_keys = {"Pattern", "Natural", "Basis", "Sanitised"}
-    next_keys = {
-        "Next",
-        "Next Due",
-        "Expiration",
-        "Next expires",
-        "Scheduled",
-        "Wait",
-        "Link status",
-        "Links left",
-        "Chain cap",
-        "Chain end point",
-    }
-    timeline_keys = {"Timeline"}
-    footer_keys = {"Rand"}
-
-    chain: list[tuple[str, str]] = []
-    next_sec: list[tuple[str, str]] = []
-    finals: list[tuple[str, str]] = []
-    timeline: list[tuple[str, str]] = []
-    footer: list[tuple[str, str]] = []
-    others: list[tuple[str, str]] = []
-
-    for k, v in rows:
-        if k in chain_keys:
-            chain.append((k, v))
-        elif k in next_keys:
-            next_sec.append((k, v))
-        elif k == "Last occurrence":
-            finals.append((k, v))
-        elif k in timeline_keys:
-            timeline.append((k, v))
-        elif k in footer_keys:
-            footer.append((k, v))
-        else:
-            others.append((k, v))
-
-    chain.extend(others)
-
-    out: list[tuple[str | None, str]] = []
-
-    def _add(group: list[tuple[str, str]]):
-        nonlocal out
-        if not group:
-            return
-        if out:
-            out.append((None, ""))  # spacer line
-        out.extend(group)
-
-    _add(chain)
-    _add(next_sec)
-    _add(finals)
-    _add(timeline)
-    _add(footer)
-
-    return out or rows
-
-def _format_gap(prev_dt: datetime, next_dt: datetime, kind: str = "cp", round_hours: bool = True) -> str:
-    """
-    Format the time gap between two timeline items as a compact inline annotation.
-    Returns a string like " └─ +3d →" or empty string.
-    """
-    if not (prev_dt and next_dt):
-        return ""
-
-    gap_seconds = (next_dt - prev_dt).total_seconds()
-
-    # Skip very small gaps
-    if abs(gap_seconds) < 60:
-        return ""
-
-    # Format based on chain type
-    if kind == "cp":
-        # For CP chains, show days/hours
-        days = gap_seconds / 86400
-        if abs(days) >= 1:
-            if days.is_integer():
-                gap_str = f"{int(days)}d"
-            else:
-                # Show fractional days for non-24h multiples
-                gap_str = f"{days:.1f}d"
-        else:
-            hours = gap_seconds / 3600
-            if abs(hours) >= 1:
-                gap_str = f"{hours:.1f}h"
-            else:
-                minutes = gap_seconds / 60
-                gap_str = f"{int(minutes)}m"
-    else:
-        # For anchor chains, optionally round to nearest day
-        total_hours = gap_seconds / 3600
-        days = total_hours / 24
-
-        if round_hours and abs(days) >= 0.5:  # Only round if > 12h
-            # Round to nearest day
-            rounded_days = round(days)
-            gap_str = f"{rounded_days}d"
-        else:
-            # Show days with fractional part
-            if abs(days) >= 1:
-                gap_str = f"{days:.1f}d"
-            else:
-                # Show hours for sub-day gaps
-                gap_str = f"{total_hours:.0f}h"
-
-    return f" ➔ {gap_str}"
-
-
-
+    return _module("modify_feedback").format_next_anchor_rows(rows)
 
 def _format_next_cp_rows(
     rows: list[tuple[str, str]]
 ) -> list[tuple[str | None, str]]:
-    """
-    Compact layout for cp next-link feedback, without section headers.
-
-    Order:
-      Period / Basis / (other)
-      <blank>
-      Next Due / Link status / Links left / Limits
-      <blank>
-      Last occurrence
-      <blank>
-      Timeline
-    """
-    chain_keys = {"Period", "Basis"}
-    next_keys = {
-        "Next",
-        "Next Due",
-        "Expiration",
-        "Next expires",
-        "Scheduled",
-        "Wait",
-        "Link status",
-        "Links left",
-        "Chain cap",
-        "Chain end point",
-    }
-    timeline_keys = {"Timeline"}
-
-    chain: list[tuple[str, str]] = []
-    next_sec: list[tuple[str, str]] = []
-    finals: list[tuple[str, str]] = []
-    timeline: list[tuple[str, str]] = []
-    others: list[tuple[str, str]] = []
-
-    for k, v in rows:
-        if k in chain_keys:
-            chain.append((k, v))
-        elif k in next_keys:
-            next_sec.append((k, v))
-        elif k == "Last occurrence":
-            finals.append((k, v))
-        elif k in timeline_keys:
-            timeline.append((k, v))
-        else:
-            others.append((k, v))
-
-    chain.extend(others)
-
-    out: list[tuple[str | None, str]] = []
-
-    def _add(group: list[tuple[str, str]]):
-        nonlocal out
-        if not group:
-            return
-        if out:
-            out.append((None, ""))  # spacer line
-        out.extend(group)
-
-    _add(chain)
-    _add(next_sec)
-    _add(finals)
-    _add(timeline)
-
-    return out or rows
+    return _module("modify_feedback").format_next_cp_rows(rows)
 
 
 
@@ -1649,26 +1367,6 @@ def _format_next_cp_rows(
 _TW_JISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
 
-
-
-def _fsync_dir(path: Path) -> None:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        queue_store.fsync_dir(path)
-        return
-    try:
-        fd = os.open(str(path), os.O_DIRECTORY)
-    except Exception:
-        return
-    try:
-        os.fsync(fd)
-    except Exception:
-        pass
-    finally:
-        try:
-            os.close(fd)
-        except Exception:
-            pass
 
 
 def _spawn_queue_db_size_bytes() -> int:
@@ -2038,10 +1736,7 @@ def _export_uuid_short(u_short: str, env=None):
             return cached_read
     cache_chain_id = ""
     if env is None and u_short:
-        state = _modify_chain_state()
-        with state.chain_cache_lock:
-            cached = state.chain_by_short.get(u_short)
-            cache_chain_id = state.chain_cache_chain_id
+        cached, cache_chain_id = _lifecycle_read_service().lookup_short(u_short)
         if isinstance(cached, dict):
             _diag_count("export_uuid_cache_hits")
             return dict(cached)
@@ -2064,7 +1759,7 @@ def _export_uuid_short(u_short: str, env=None):
         )
         if env is None and isinstance(obj, dict):
             _read_query_set("uuid", str(u_short or "").lower(), obj)
-            return _seed_runtime_lookup_task(obj)
+            return _seed_runtime_lookup_task(obj, lookup_short=u_short)
         return obj
     env = env or os.environ.copy()
     result = _run_task_result(
@@ -2085,7 +1780,7 @@ def _export_uuid_short(u_short: str, env=None):
             return None
         if env is None:
             _read_query_set("uuid", str(u_short or "").lower(), obj)
-            return _seed_runtime_lookup_task(obj)
+            return _seed_runtime_lookup_task(obj, lookup_short=u_short)
         return obj
     except Exception:
         return None
@@ -2192,25 +1887,6 @@ def _strip_none_and_cast(obj: dict):
         out[k] = v
     return out
 
-def _emit_line(msg: str) -> None:
-    if not msg:
-        return
-    try:
-        sys.stderr.write(msg + "\n")
-    except Exception:
-        pass
-
-def _format_line_cap(base_no: int, cap_no: int | None, until_dt: datetime | None, until_no: int | None) -> str:
-    parts = []
-    if cap_no:
-        left = max(0, cap_no - base_no)
-        parts.append(f"last link #{cap_no}")
-        parts.append(f"{left} left")
-    if until_dt:
-        until_txt = _fmtlocal(until_dt)
-        parts.append(f"end point {until_txt}")
-    return (" · " + " · ".join(parts)) if parts else ""
-
 def _format_line_preview(
     link_no: int,
     task: dict,
@@ -2225,149 +1901,25 @@ def _format_line_preview(
     kind: str = "cp",
     minimal: bool = False,
 ) -> str:
-    due_local = _fmtlocal(child_due_utc) if child_due_utc else "—"
-    next_glyph = "⚓" if str(kind or "").lower() == "anchor" else "⛓"
-    lead = f"#{link_no} ✓"
-    if minimal:
-        segments = [lead, f"next {next_glyph}", due_local]
-        line = " ".join(seg for seg in segments if seg)
-        return line.strip()
-    cur_due = _dtparse(task.get("due"))
-    cur_end = _dtparse(task.get("end"))
-    delta_txt = core.strip_rich_markup(_fmt_on_time_delta(cur_due, cur_end) or "").strip()
-    if delta_txt.startswith("(") and delta_txt.endswith(")"):
-        delta_txt = delta_txt[1:-1].strip()
-    due_delta = _human_delta(now_utc, child_due_utc, False)
-    due_label = "scheduled" if child_field == "scheduled" else "due"
-    if due_delta.startswith("in "):
-        due_delta = due_label + " " + due_delta
-    elif not due_delta.startswith("overdue by "):
-        due_delta = due_label + " " + due_delta
-    segments = [lead]
-    if delta_txt:
-        segments.append(f"[dim]{delta_txt}[/]")
-    segments.append(f"next {next_glyph}")
-    segments.append(due_local)
-    if due_delta:
-        segments.append(f"[dim]({due_delta})[/]")
-    line = " · ".join(seg for seg in segments if seg)
-    line = line.replace("✓ · ", "✓ ", 1)
-    if child_until_dt:
-        line += f" [magenta]· expires {_fmtlocal(child_until_dt)}[/]"
-    cap_txt = _format_line_cap(link_no, cap_no, until_dt, until_no)
-    if cap_txt:
-        line += f"[dim]{cap_txt}[/]"
-    return line.strip()
-
-
-def _spawn_child(child_task: dict, parent_task: dict | None = None) -> tuple[str, set[str]]:
-    """
-    Create child via `task import -`, preserving annotation entries.
-    Returns (short_uuid, stripped_attrs).
-    Raises RuntimeError with detailed context on failure.
-    """
-    env = os.environ.copy()
-    modify_spawn_prep = _module("modify_spawn_prep")
-    obj, child_uuid, _child_short = modify_spawn_prep.prepare_spawn_child_payload(
-        child_task,
-        parent_task,
-        env,
-        child_uuid_for_spawn=_child_uuid_for_spawn,
-        fmt_isoz=core.fmt_isoz,
-        now_utc=core.now_utc,
-        strip_none_and_cast=_strip_none_and_cast,
-        normalise_datetime_fields=_normalise_datetime_fields,
+    return _module("modify_feedback").format_line_preview(
+        link_no,
+        task,
+        child_due_utc,
+        child_short,
+        now_utc,
+        child_field=child_field,
+        cap_no=cap_no,
+        until_dt=until_dt,
+        until_no=until_no,
+        child_until_dt=child_until_dt,
+        kind=kind,
+        minimal=minimal,
+        core=core,
+        format_local=_fmtlocal,
+        parse_datetime=_dtparse,
+        on_time_delta=_fmt_on_time_delta,
+        human_delta=_human_delta,
     )
-
-    attempts = 0
-    stripped_accum: set[str] = set()
-    last_stderr = ""
-    last_category = ""
-
-    while attempts < _MAX_SPAWN_ATTEMPTS:
-        attempts += 1
-        payload = json.dumps(obj) + "\n"
-
-        result = _run_task_result(
-            _task_cmd_prefix() + ["rc.hooks=off", "import", "-"],
-            input_text=payload,
-            env=env,
-            timeout=10,  # prevent hanging
-            retries=1,
-        )
-        if not result.ok and result.kind == "timeout":
-            last_stderr = "Task import timed out (>10s)"
-            last_category = "taskwarrior"
-            continue
-
-        if result.ok:
-            _invalidate_read_query_cache()
-            # Always verify existence to avoid reporting success on partial import failures.
-            verification = _task_lookup_by_uuid(child_uuid, env)
-            if getattr(verification, "is_found", False):
-                return child_uuid[:8], stripped_accum
-            if getattr(verification, "is_unavailable", False):
-                last_stderr = f"child verification unavailable: {verification.reason}"
-                last_category = "taskwarrior"
-                break
-            last_stderr = "task import reported success but child task was not found by UUID"
-            category, is_retryable = ("taskwarrior", True)
-        else:
-            err = result.stderr
-            last_stderr = err or ""
-            category, is_retryable = _categorize_spawn_error(1, last_stderr)
-        last_category = category
-
-        if category == "attribute":
-            # Strip unknown attributes and retry
-            removed = _sanitize_unknown_attrs(last_stderr, obj)
-            if removed:
-                stripped_accum |= removed
-                continue
-
-        # For non-attribute errors, only retry once more
-        if is_retryable and attempts < 2:
-            continue
-
-        # Otherwise, bail out with context
-        break
-
-    # Surface failure with categorized error message
-    error_msg = ""
-    if last_category == "attribute":
-        error_msg = f"Unknown task attributes even after stripping: {', '.join(sorted(stripped_accum))}"
-    elif last_category == "parse":
-        error_msg = (
-            f"Failed to serialize task payload (JSON error). Check task field types."
-        )
-    elif last_category == "validation":
-        error_msg = f"Task validation failed. Common causes: invalid due date, bad field format, or unsupported attribute value."
-    elif last_category == "taskwarrior":
-        error_msg = f"Taskwarrior import failed (after {attempts} attempts)"
-    else:
-        error_msg = "Child import failed for unknown reason"
-
-    try:
-        from rich.console import Console
-        from rich.panel import Panel
-
-        console = Console(file=sys.stderr, force_terminal=True)
-        panel_text = f"[red]{error_msg}[/red]\n\n"
-        panel_text += f"[bold]Category:[/bold] {last_category}\n"
-        panel_text += f"[bold]Attempts:[/bold] {attempts}/{_MAX_SPAWN_ATTEMPTS}\n"
-        panel_text += f"[bold]stderr:[/bold]\n{last_stderr}"
-        console.print(
-            Panel(
-                panel_text, border_style="red", title="[bold]Child import failed[/bold]"
-            )
-        )
-    except Exception:
-        sys.stderr.write(f"{error_msg}\n")
-        sys.stderr.write(f"Category: {last_category}\n")
-        sys.stderr.write(f"Attempts: {attempts}/{_MAX_SPAWN_ATTEMPTS}\n")
-        sys.stderr.write(f"Error details:\n{last_stderr}\n")
-
-    raise RuntimeError(f"Failed to import child task: {error_msg}")
 
 
 # Helper to categorize subprocess failures
@@ -2467,11 +2019,6 @@ def _lifecycle_spawn_identity(parent: dict, child: dict):
     return identity
 
 
-def _lifecycle_spawn_intent_id(parent: dict, child: dict) -> str:
-    """Derive one retry-stable queue key from the transition identity."""
-    return _lifecycle_spawn_identity(parent, child).idempotency_key
-
-
 def _spawn_child_atomic(
     child_task: dict,
     parent_task_with_nextlink: dict,
@@ -2515,6 +2062,7 @@ def _spawn_child_atomic(
         "chain": parent_task_with_nextlink.get("chain") or "",
         "chainID": parent_task_with_nextlink.get("chainID") or "",
         "link": parent_task_with_nextlink.get("link") or "",
+        "modified": parent_task_with_nextlink.get("modified") or "",
         "recurrence_fingerprint": recurrence_guard,
     }
     lifecycle_plan = lifecycle_models.LifecyclePlan.from_mappings(
@@ -2595,59 +2143,6 @@ def _task(args, env=None) -> str:
         _query_ctx_set("task_text", cache_key, out or "")
     return out
 
-def _export_uuid_full(u: str, env=None) -> dict | None:
-    """Export a single task by full UUID."""
-    if env is None:
-        res = _export_uuid_full_cached(u)
-        return dict(res) if isinstance(res, dict) else None
-    return _export_uuid_full_uncached(u, env=env)
-
-
-@lru_cache(maxsize=256)
-def _export_uuid_full_cached(u: str) -> dict | None:
-    return _export_uuid_full_uncached(u, env=None)
-
-
-def _export_uuid_full_uncached(u: str, env=None) -> dict | None:
-    cache_chain_id = ""
-    if env is None and u:
-        state = _modify_chain_state()
-        with state.chain_cache_lock:
-            cached = state.chain_by_uuid.get(u)
-            cache_chain_id = state.chain_cache_chain_id
-        if isinstance(cached, dict):
-            _diag_count("export_full_cache_hits")
-            return dict(cached)
-    if env is None:
-        if cache_chain_id:
-            _diag_count("unexpected_cache_misses")
-            _diag(f"cache miss: full uuid {u} (chainID={cache_chain_id})")
-        else:
-            _diag_count("export_full_cache_misses")
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        obj = hook_support.export_uuid_full(
-            run_task=_run_task_result,
-            task_cmd_prefix=_task_cmd_prefix(),
-            uuid_str=u,
-            env=env,
-            timeout=3.0,
-            retries=2,
-            diag=_diag,
-        )
-        if env is None and isinstance(obj, dict):
-            return _seed_runtime_lookup_task(obj)
-        return obj
-    try:
-        out = _task(["rc.json.array=1", f"export uuid:{u}"], env=env)  # uses existing _task()
-        arr = json.loads(out) if out and out.strip().startswith("[") else []
-        obj = arr[0] if arr else None
-        if env is None and isinstance(obj, dict):
-            return _seed_runtime_lookup_task(obj)
-        return obj
-    except Exception:
-        return None
-
 def tw_export_chain_required(seed_task, env=None):
     """Return full chain export for a task.
 
@@ -2660,7 +2155,7 @@ def tw_export_chain_required(seed_task, env=None):
             "Run dev_tools/nautical_backfill_chainid.py, then retry."
         )
     if env is None:
-        rows = _get_chain_export(chain_id)
+        rows = _lifecycle_read_service().get_chain_export(chain_id)
         if rows is None:
             raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
         return rows
@@ -2673,10 +2168,9 @@ def _tw_get_cached(ref: str) -> str:
     try:
         if ref.endswith(".entry"):
             short = ref[:-6].strip()
-            state = _modify_chain_state()
-            with state.chain_cache_lock:
-                cached = state.chain_by_short.get(short) if short else None
-                cache_chain_id = state.chain_cache_chain_id
+            cached, cache_chain_id = (
+                _lifecycle_read_service().lookup_short(short) if short else (None, "")
+            )
             if short and isinstance(cached, dict):
                 _diag_count("tw_get_cache_hits")
                 return (str(cached.get("entry") or "")).strip()
@@ -2980,164 +2474,6 @@ def _validate_native_until_anchor_slots_or_fail(task: dict) -> None:
 # ------------------------------------------------------------------------------
 # Pretty helpers
 # ------------------------------------------------------------------------------
-@lru_cache(maxsize=512)
-def _chain_colour_root(kind: str, root_uuid: str) -> str:
-    """
-    Deterministic colour derived from the complete chain root identity.
-
-    `kind` is "anchor" or "cp".
-    """
-    # Palettes chosen to match / complement the panel edge colours
-    anchor_palette = [
-        "bright_cyan",
-        "bright_green",
-        "cyan",
-        "cyan1",
-        "cyan2",
-        "cyan3",
-        "turquoise2",
-        "medium_turquoise",
-        "dark_turquoise",
-        "cyan3",
-        "deep_sky_blue1",
-        "sky_blue1",
-        "dodger_blue1",
-        "steel_blue1",
-        "spring_green3",
-        "sea_green2",
-        "green1",
-        "green3",
-        "green4",
-        "green_yellow",
-        "dark_sea_green",
-        "navy_blue",
-        "dark_blue",
-        "cornflower_blue",
-        "royal_blue1",
-        "dodger_blue2",
-        "dodger_blue3",
-        "deep_sky_blue2",
-        "deep_sky_blue3",
-        "deep_sky_blue4",
-        "light_sky_blue1",
-        "light_sky_blue3",
-        "steel_blue",
-        "steel_blue3",
-        "slate_blue1",
-        "slate_blue3",
-        "light_slate_blue",
-        "aquamarine1",
-        "aquamarine3",
-        "turquoise4",
-        "pale_turquoise1",
-        "pale_turquoise4",
-        "dark_cyan",
-        "light_cyan1",
-        "light_cyan3",
-        "dark_slate_gray1",
-        "dark_slate_gray2",
-        "dark_slate_gray3",
-        "light_sea_green",
-        "cadet_blue",
-        "spring_green1",
-        "spring_green2",
-        "spring_green4",
-        "sea_green1",
-        "sea_green3",
-        "pale_green1",
-        "pale_green3",
-        "medium_spring_green",
-        "dark_sea_green1",
-        "dark_sea_green2",
-        "dark_sea_green3",
-        "dark_sea_green4",
-        "honeydew2",
-
-    ]
-    cp_palette = [
-        "orange_red1",
-        "light_salmon1",
-        "light_pink3",
-        "light_coral",
-        "dark_orange",
-        "orange3",
-        "gold3",
-        "indian_red1",
-        "light_coral",
-        "salmon1",
-        "deep_pink3",
-        "hot_pink",
-        "medium_violet_red",
-        "red",
-        "red1",
-        "red3",
-        "pale_violet_red1",
-        "orchid",
-        "orchid1",
-        "dark_violet",
-        "bright_magenta",
-        "magenta",
-        "magenta1",
-        "magenta2",
-        "magenta3",
-        "medium_orchid",
-        "medium_orchid1",
-        "medium_orchid3",
-        "orchid2",
-        "plum1",
-        "plum2",
-        "plum3",
-        "plum4",
-        "violet",
-        "thistle1",
-        "thistle3",
-        "bright_yellow",
-        "yellow",
-        "yellow1",
-        "yellow2",
-        "yellow3",
-        "gold1",
-        "dark_goldenrod",
-        "dark_orange3",
-        "orange1",
-        "orange4",
-        "sandy_brown",
-        "tan",
-        "navajo_white1",
-        "navajo_white3",
-        "wheat1",
-        "khaki1",
-        "khaki3",
-        "cornsilk1",
-        "light_goldenrod1",
-        "light_goldenrod2",
-        "light_goldenrod3",
-        "light_yellow3",
-        "bright_red",
-        "dark_red",
-        "indian_red",
-        "misty_rose1",
-        "misty_rose3",
-        "pink1",
-        "pink3",
-        "light_pink1",
-        "light_pink4",
-        "rosy_brown",
-    ]
-
-    palette = cp_palette if kind == "cp" else anchor_palette
-    if not palette:
-        return "bright_magenta" if kind == "cp" else "bright_cyan"
-
-    s = (root_uuid or "").strip().lower()
-    if not s:
-        return palette[0]
-
-    digest = hashlib.sha256(f"nautical-chain-colour-v2|{kind}|{s}".encode("utf-8")).digest()
-    h = int.from_bytes(digest[:8], "big")
-    return palette[h % len(palette)]
-
-
 def _chain_colour_for_task(task: dict, kind: str) -> str:
     """
     Get the chain colour for this task (uses root uuid, cached).
@@ -3175,26 +2511,22 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
 
 
 def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] | None = None) -> list[dict]:
-    modify_chain_reads = _module("modify_chain_reads")
-    return modify_chain_reads.collect_prev_two(
+    return _lifecycle_read_service().collect_prev_two(
         current_task,
-        coerce_int=core.coerce_int,
-        get_chain_export=_get_chain_export,
+        get_chain_export=lambda chain_id: _lifecycle_read_service().get_chain_export(chain_id),
         panel_chain_by_link=_modify_chain_state().panel_chain_by_link,
         panel_chain_snapshot_loaded=_modify_chain_state().panel_chain_snapshot_loaded,
         chain_by_link=chain_by_link,
     )
 
 
-@lru_cache(maxsize=32)
-def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str, limit: int) -> tuple[dict, ...]:
-    """Cached chain export keyed by stable parameters."""
-    since = datetime.fromisoformat(since_key) if since_key else None
-    extra = extra_key or None
-    state = _modify_chain_state()
-    with state.chain_cache_lock:
-        if state.chain_cache_chain_id and chain_id == state.chain_cache_chain_id and not since and not extra:
-            return tuple(state.chain_cache or [])
+def _chain_export_for_cache(
+    chain_id: str,
+    since: datetime | None,
+    extra: str | None,
+    limit: int,
+) -> tuple[dict, ...]:
+    """Validated exporter injected into the lifecycle read service cache."""
     global _LAST_CHAIN_EXPORT_STATUS
     _LAST_CHAIN_EXPORT_STATUS = (True, "")
     rows = tw_export_chain(chain_id, since=since, extra=extra, env=None, limit=limit)
@@ -3202,22 +2534,6 @@ def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str, l
     if not ok:
         raise RuntimeError(error or "chain export unavailable")
     return tuple(rows)
-
-
-def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None, limit: int) -> tuple[dict, ...]:
-    since_key = since.isoformat() if isinstance(since, datetime) else ""
-    extra_key = str(extra or "")
-    return _tw_export_chain_cached_key(chain_id, since_key, extra_key, limit)
-
-
-def _chain_read_key(chain_id: str, since: datetime | None, extra: str | None, limit: int) -> tuple:
-    return (
-        str(chain_id or ""),
-        since.isoformat() if isinstance(since, datetime) else "",
-        str(extra or ""),
-        int(limit or 0),
-    )
-
 
 def _cached_chain_token_match(task: dict, token: str) -> bool:
     if not isinstance(task, dict) or not isinstance(token, str) or not token:
@@ -3244,76 +2560,34 @@ def _cached_chain_token_match(task: dict, token: str) -> bool:
     return (not matched) if negate else matched
 
 
-def _filter_cached_chain_rows(chain: list[dict], *, extra: str | None, limit: int | None) -> list[dict] | None:
-    tokens = _parse_extra_tokens(extra)
-    if tokens is None:
-        return None
-    rows = list(chain or [])
-    for token in tokens:
-        rows = [task for task in rows if _cached_chain_token_match(task, token)]
-    if limit and isinstance(limit, int) and limit > 0:
-        rows = rows[:limit]
-    return rows
-
-
-def _filter_full_snapshot_rows(chain: list[dict], *, extra: str | None, limit: int | None) -> list[dict] | None:
-    """Filter a full snapshot only for predicates with equivalent semantics."""
-    tokens = _parse_extra_tokens(extra)
-    if tokens is None:
-        return None
-    for token in tokens:
-        if token.startswith("+"):
-            continue
-        key = token.split(":", 1)[0]
-        base_key = key[:-4] if key.endswith(".not") else key
-        if base_key not in {"chainID", "link", "id", "project", "status"}:
-            return None
-    return _filter_cached_chain_rows(chain, extra=extra, limit=limit)
-
-
-def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict] | None:
-    """Return a safe list copy of a chain export (cached when env is None)."""
-    if not chain_id:
-        return []
-    if env is not None:
-        ok, rows, _error = _tw_export_chain_checked(
-            chain_id,
-            since=since,
-            extra=extra,
-            env=env,
-            limit=_MAX_CHAIN_WALK,
-        )
-        return rows if ok else None
-    if not since:
-        full_snapshot = _read_query_get("chain", _chain_read_key(chain_id, None, None, 0))
-        if full_snapshot is not _READ_QUERY_MISSING:
-            if not isinstance(full_snapshot, list):
-                _diag(f"cached chain read has invalid shape (chainID={chain_id})")
-                return None
-            filtered = _filter_full_snapshot_rows(
-                full_snapshot,
-                extra=extra,
-                limit=_MAX_CHAIN_WALK,
-            )
-            if filtered is not None:
-                _record_chain_snapshot_stat("chain_snapshot_filter_hits")
-                return filtered
+def _lifecycle_read_service():
+    """Build the focused chain-read service for this hook invocation."""
     state = _modify_chain_state()
-    with state.chain_cache_lock:
-        cached_chain = list(state.chain_cache) if state.chain_cache_chain_id and chain_id == state.chain_cache_chain_id else []
-    if cached_chain and not since and not extra:
-        return cached_chain
-    if cached_chain and not since:
-        filtered = _filter_cached_chain_rows(cached_chain, extra=extra, limit=_MAX_CHAIN_WALK)
-        if filtered is not None:
-            _diag_count("chain_cache_filter_hits")
-            return filtered
-    try:
-        cached = _tw_export_chain_cached(chain_id, since, extra, _MAX_CHAIN_WALK)
-    except RuntimeError as exc:
-        _diag(f"chain read unavailable (chainID={chain_id}): {exc}")
-        return None
-    return list(cached)
+    existing = getattr(state, "lifecycle_read_service", None)
+    if existing is not None:
+        return existing
+    lifecycle_read_service = _module("lifecycle_read_service")
+    if getattr(state, "chain_cache_store", None) is None:
+        state.chain_cache_store = lifecycle_read_service.ChainCacheStore()
+
+    service = lifecycle_read_service.LifecycleReadService(
+        coerce_int=core.coerce_int,
+        parse_extra_tokens=_parse_extra_tokens,
+        token_matcher=_cached_chain_token_match,
+        read_query_get=_read_query_get,
+        read_query_set=_read_query_set,
+        read_query_delete=_read_query_delete,
+        chain_cache_get=lambda _chain_id: None,
+        export_chain_cached=_chain_export_for_cache,
+        max_chain_walk=_MAX_CHAIN_WALK,
+        diag=_diag,
+        record_stat=_record_chain_snapshot_stat,
+        cache_store=state.chain_cache_store,
+        task_cmd_prefix=_task_cmd_prefix,
+        read_query_missing=_READ_QUERY_MISSING,
+    )
+    state.lifecycle_read_service = service
+    return service
 
 
 def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
@@ -3322,72 +2596,30 @@ def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
         return hook_support.LookupResult.unavailable(
             getattr(chain_snapshot, "error", "completion chain snapshot unavailable")
         )
-    modify_chain_reads = _module("modify_chain_reads")
-    return modify_chain_reads.existing_next_lookup(
+    return _lifecycle_read_service().existing_next_lookup(
         parent_task,
         next_no,
         export_uuid_short_cached=_export_uuid_short_lookup,
-        get_chain_export=_get_chain_export,
+        get_chain_export=lambda chain_id, **kwargs: _lifecycle_read_service().get_chain_export(
+            chain_id, **kwargs
+        ),
         snapshot_rows=getattr(chain_snapshot, "rows", None),
         snapshot_loaded=bool(getattr(chain_snapshot, "loaded", False)),
     )
 
 
-def _build_chain_indexes(chain: list[dict]) -> tuple[dict[int, list[dict]], dict[str, dict]]:
-    """Build link-index and short-uuid index for quick in-memory lookups."""
-    by_link: dict[int, list[dict]] = {}
-    by_short: dict[str, dict] = {}
-    for t in chain:
-        ln = core.coerce_int(t.get("link"), None)
-        if ln is not None:
-            by_link.setdefault(ln, []).append(t)
-        u = t.get("uuid")
-        if isinstance(u, str) and u:
-            by_short[u[:8]] = t
-    return by_link, by_short
-
-
-def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
-    """Set per-run chain cache to avoid repeated task exports."""
-    global _CHAIN_CACHE_CHAIN_ID, _CHAIN_CACHE
-    chain_copy = list(chain or [])
-    _, by_short = _build_chain_indexes(chain_copy)
-    by_uuid = {
-        t.get("uuid"): t for t in chain_copy if isinstance(t.get("uuid"), str) and t.get("uuid")
-    }
-    state = _modify_chain_state()
-    with state.chain_cache_lock:
-        state.chain_cache_chain_id = chain_id or ""
-        state.chain_cache = chain_copy
-        state.chain_by_short = by_short
-        state.chain_by_uuid = by_uuid
-    _CHAIN_CACHE_CHAIN_ID = chain_id or ""
-    _CHAIN_CACHE = list(chain_copy)
-    _diag_count("chain_cache_seeded")
-
-
-def _seed_runtime_lookup_task(task: dict | None) -> dict | None:
+def _seed_runtime_lookup_task(task: dict | None, *, lookup_short: str | None = None) -> dict | None:
     if not isinstance(task, dict):
         return None
     uuid_str = str(task.get("uuid") or "").strip()
     if not uuid_str:
         return None
     short = uuid_str[:8]
-    state = _modify_chain_state()
-    task_obj: dict = dict(task)
-    with state.chain_cache_lock:
-        existing = None
-        if short:
-            existing = state.chain_by_short.get(short)
-        if not isinstance(existing, dict):
-            existing = state.chain_by_uuid.get(uuid_str)
-        if isinstance(existing, dict):
-            merged = dict(existing)
-            merged.update(task)
-            task_obj = merged
-        if short:
-            state.chain_by_short[short] = task_obj
-        state.chain_by_uuid[uuid_str] = task_obj
+    service = _lifecycle_read_service()
+    task_obj = service.seed_lookup_task(dict(task), short_uuid=short)
+    requested_short = str(lookup_short or "").strip()
+    if requested_short and requested_short != short:
+        task_obj = service.seed_lookup_task(task_obj, short_uuid=requested_short)
     entry = task_obj.get("entry")
     if short and entry:
         _query_ctx_set("tw_get", f"{short}.entry", str(entry).strip())
@@ -3397,35 +2629,6 @@ def _seed_runtime_lookup_task(task: dict | None) -> dict | None:
 def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
     for task in tasks:
         _seed_runtime_lookup_task(task)
-
-
-def _merge_spawned_child_into_chain(chain: list[dict], parent_task: dict, child_task: dict, child_short: str) -> list[dict]:
-    if not chain:
-        return []
-    parent_uuid = str(parent_task.get("uuid") or "").strip()
-    parent_short = _short(parent_uuid)
-    child_uuid = str(child_task.get("uuid") or "").strip()
-    merged: list[dict] = []
-    child_present = False
-    for row in chain:
-        row_obj = dict(row)
-        row_uuid = str(row_obj.get("uuid") or "").strip()
-        if parent_uuid and row_uuid == parent_uuid and child_short:
-            row_obj["nextLink"] = child_short
-        if child_uuid and row_uuid == child_uuid:
-            child_present = True
-            row_obj.update(child_task)
-        merged.append(row_obj)
-    if child_uuid and not child_present:
-        child_obj = dict(child_task)
-        if parent_short and not str(child_obj.get("prevLink") or "").strip():
-            child_obj["prevLink"] = parent_short
-        merged.append(child_obj)
-    try:
-        merged.sort(key=lambda task: (core.coerce_int(task.get("link"), 10**9), str(task.get("uuid") or "")))
-    except Exception:
-        pass
-    return merged
 
 
 # ------------------------------------------------------------------------------
@@ -3451,94 +2654,6 @@ def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
         config=getattr(core, "ASTRONOMY_CONFIG", {}),
         to_local=core.to_local,
     )
-
-
-def _extract_time_slots_from_dnf(dnf, target_date=None, seed_base: str = "") -> list[tuple[int, int]]:
-    """Extract a unique, sorted list of time slots from a parsed anchor DNF."""
-    out: set[tuple[int, int]] = set()
-    recurrence_context = (
-        core._import_sibling("recurrence_context").RecurrenceContext(chain_id=seed_base)
-        if seed_base else None
-    )
-    try:
-        for term in dnf:
-            for atom in term:
-                mods = atom.get("mods") or {}
-                if mods.get("time_random"):
-                    out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(
-                        mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                        to_local=core.to_local, context=recurrence_context,
-                    ))
-                    continue
-                window = mods.get("time_window")
-                parsed_window = core._import_sibling("time_windows").parse_time_window_spec(str(window)) if window else None
-                if parsed_window is not None and parsed_window.crosses_midnight:
-                    out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}), to_local=core.to_local))
-                else:
-                    for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
-                        out.add(hhmm)
-    except Exception as exc:
-        astronomy = core._import_sibling("astronomy")
-        if astronomy.is_astronomy_error(exc):
-            raise
-        return []
-    return sorted(out)
-
-def _extract_time_slots_for_date(
-    dnf,
-    target_date,
-    default_seed_date,
-    seed_base: str,
-) -> list[tuple[int, int]]:
-    """Extract time slots for terms that match target_date."""
-    out: set[tuple[int, int]] = set()
-    recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(chain_id=seed_base)
-    matched = False
-    try:
-        for term in dnf:
-            if all(
-                core.factor_matches_on(atom, target_date, default_seed_date, seed_base=seed_base)
-                for atom in term
-            ):
-                matched = True
-                for atom in term:
-                    mods = atom.get("mods") or {}
-                    if mods.get("time_random"):
-                        out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(
-                            mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                            to_local=core.to_local, context=recurrence_context,
-                        ))
-                        continue
-                    window = mods.get("time_window")
-                    parsed_window = core._import_sibling("time_windows").parse_time_window_spec(str(window)) if window else None
-                    if parsed_window is not None and parsed_window.crosses_midnight:
-                        out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}), to_local=core.to_local))
-                    else:
-                        for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
-                            out.add(hhmm)
-    except Exception as exc:
-        astronomy = core._import_sibling("astronomy")
-        if astronomy.is_astronomy_error(exc):
-            raise
-        return []
-    if matched:
-        return sorted(out)
-    return _extract_time_slots_from_dnf(dnf, target_date, seed_base)
-
-def _anchor_slot_local_dt(target_date, hhmm) -> datetime:
-    """Build a configured-local anchor slot, including an optional day offset."""
-    if isinstance(hhmm, tuple) and len(hhmm) == 3:
-        day_offset, hour, minute = hhmm
-        target_date = target_date + timedelta(days=int(day_offset))
-        hhmm = (int(hour), int(minute))
-    return core.to_local(core.build_local_datetime(target_date, hhmm))
-
-def _as_local_dt(d: datetime | None) -> datetime | None:
-    if d is None:
-        return None
-    if d.tzinfo is None:
-        return d.replace(tzinfo=timezone.utc).astimezone(_nautical_local_tz())
-    return d.astimezone(_nautical_local_tz())
 
 
 def _next_occurrence_after_local_dt(
@@ -3630,92 +2745,6 @@ def _chain_generation_service():
     return service
 
 
-_GENERATION_COMPAT = None
-
-
-def _generation_compat_bindings():
-    global _GENERATION_COMPAT
-    if _GENERATION_COMPAT is None:
-        compat = _module("modify_generation_compat")
-        _GENERATION_COMPAT = compat.bind_generation_compat(
-            lambda: _chain_generation_service()
-        )
-    return _GENERATION_COMPAT
-
-
-# ChainGenerationService is the sole production owner of recurrence
-# scheduling, carry, and child construction.  These five names are retained
-# as thin, lazy compatibility adapters for the existing golden tests and
-# external monkeypatch callers; do not add production logic here.  Keeping the
-# adapters lazy also avoids importing the shared service during module import.
-def _compute_cp_child_due(parent):
-    return _generation_compat_bindings().compute_cp_child_due(parent)
-
-
-def _compute_anchor_child_due(parent):
-    return _generation_compat_bindings().compute_anchor_child_due(parent)
-
-
-def _carry_relative_datetime(
-    parent,
-    child,
-    child_due_utc,
-    field,
-    *,
-    parent_anchor_field="due",
-    child_anchor_field="due",
-):
-    return _generation_compat_bindings().carry_relative_datetime(
-        parent,
-        child,
-        child_due_utc,
-        field,
-        parent_anchor_field=parent_anchor_field,
-        child_anchor_field=child_anchor_field,
-    )
-
-
-def _carry_native_until(
-    parent,
-    child,
-    child_due_utc,
-    kind,
-    *,
-    parent_anchor_field="due",
-    child_anchor_field="due",
-):
-    return _generation_compat_bindings().carry_native_until(
-        parent,
-        child,
-        child_due_utc,
-        kind,
-        parent_anchor_field=parent_anchor_field,
-        child_anchor_field=child_anchor_field,
-    )
-
-
-def _build_child_from_parent(
-    parent,
-    child_due_utc,
-    child_field,
-    next_link_no,
-    parent_short,
-    kind,
-    cpmax,
-    until_dt,
-):
-    return _generation_compat_bindings().build_child_from_parent(
-        parent,
-        child_due_utc,
-        child_field,
-        next_link_no,
-        parent_short,
-        kind,
-        cpmax,
-        until_dt,
-    )
-
-
 def _safe_parse_datetime(dt_str: str) -> tuple[datetime | None, str | None]:
     """
     Parse datetime safely.
@@ -3755,52 +2784,6 @@ def _validate_anchor_mode(mode_str: str) -> tuple[str, str | None]:
             f"anchor_mode must be 'skip', 'all', or 'flex' (got '{raw}'). Defaulting to 'skip'.",
         )
     return (mode, None)
-
-
-def _safe_parse_cp_duration(duration_str: str) -> tuple[timedelta | None, str | None]:
-    """
-    Parse cp duration safely.
-    Returns (timedelta, error_msg).
-    error_msg is None on success, or a user-friendly explanation on failure.
-    """
-    if not (duration_str or "").strip():
-        return (None, None)
-
-    try:
-        seq = core.parse_cp_sequence(duration_str)
-        if not seq:
-            reason = core.cp_sequence_parse_error(duration_str) or f"invalid duration format '{duration_str}'"
-            return (
-                None,
-                f"{reason} (expected: 3d, 2w, 1h, etc.)",
-            )
-        return (seq[0], None)
-    except ValueError as e:
-        _diag(f"duration parse value error: {e}")
-        return (None, "Duration parsing error")
-    except TypeError as e:
-        _diag(f"duration parse type error: {e}")
-        return (None, "Duration type error")
-    except Exception as e:
-        _diag(f"duration parse unexpected error: {e}")
-        return (None, "Unexpected error parsing duration")
-
-
-def _anchor_mode_from_parent(parent: dict) -> str:
-    mode = (parent.get("anchor_mode") or "skip").strip().lower()
-    if mode not in ("skip", "all", "flex"):
-        raise ValueError(f"anchor_mode must be 'skip', 'all', or 'flex', got '{mode}'")
-    return mode
-
-
-def _anchor_dnf_from_parent(parent: dict) -> tuple[str, list[list[dict]] | None]:
-    expr_str = (parent.get("anchor") or "").strip()
-    if not expr_str:
-        return "", None
-    try:
-        return expr_str, _validate_anchor_expr_cached(expr_str)
-    except Exception as e:
-        raise ValueError(f"Invalid anchor expression '{expr_str}': {str(e)}")
 
 
 def _omit_dnf_from_parent(parent: dict):
@@ -4114,18 +3097,6 @@ _RESERVED_OVERRIDE = {"due", "entry", "status", "chain", "prevLink", "link"}
 # ------------------------------------------------------------------------------
 # wait/scheduled carry-forward (relative to due)
 # ------------------------------------------------------------------------------
-@lru_cache(maxsize=1)
-def _nautical_local_tz():
-    """Return ZoneInfo for configured local TZ (or None if unavailable)."""
-    if ZoneInfo is None:
-        return None
-    try:
-        name = getattr(core, "LOCAL_TZ_NAME", "") or "UTC"
-        return ZoneInfo(name)
-    except Exception:
-        return None
-
-
 def _utc_to_local_naive(dt_utc: datetime) -> datetime:
     """UTC -> local naive (wall-clock)."""
     if not isinstance(dt_utc, datetime):
@@ -4196,195 +3167,13 @@ def _lateness_stats(chain: list[dict], tol_secs: int = 60) -> dict:
     }
 
 
-def _fmt_td_compact_abs(delta: timedelta) -> str:
-    s = _fmt_td_dd_hhmm(delta)
-    return s[1:] if s and s[0] in "+-" else s
-
-
 def _sort_chain_for_analytics(chain: list[dict]) -> list[dict]:
-    def _link_sort_key(obj):
-        ln = core.coerce_int(obj.get("link"), None)
-        if ln is not None:
-            return (0, ln)
-        due = _dtparse(obj.get("due")) or datetime.max.replace(tzinfo=timezone.utc)
-        return (1, due)
-    try:
-        return sorted(chain, key=_link_sort_key)
-    except Exception:
-        return chain[:]
-
-
-def _chain_health_streak(completed_with_dates: list[dict], tol_secs: int) -> int:
-    streak = 0
-    for t in reversed(completed_with_dates):
-        due = _dtparse(t.get("due"))
-        end = _dtparse(t.get("end"))
-        if not (due and end):
-            continue
-        diff = abs((end - due).total_seconds())
-        if diff <= tol_secs:
-            streak += 1
-        else:
-            break
-    return streak
-
-
-def _chain_health_completed_metrics(ordered: list[dict], tol_secs: int) -> dict:
-    completed = [
-        t for t in ordered
-        if (t.get("status") or "").strip().lower() == "completed"
-    ]
-
-    completed_with_dates = []
-    deltas = []
-    for t in completed:
-        due = _dtparse(t.get("due"))
-        end = _dtparse(t.get("end"))
-        if due and end:
-            completed_with_dates.append(t)
-            deltas.append((end - due).total_seconds())
-
-    on_time_rate = None
-    streak = 0
-    vol = None
-    if deltas:
-        stats = _lateness_stats(completed_with_dates, tol_secs=tol_secs)
-        on_time_rate = stats["on_time"] / max(1, stats["count"])
-        if len(deltas) >= 2:
-            try:
-                import statistics
-                vol = statistics.pstdev(deltas)
-            except Exception:
-                vol = None
-        streak = _chain_health_streak(completed_with_dates, tol_secs)
-
-    return {
-        "on_time_rate": on_time_rate,
-        "streak": streak,
-        "vol": vol,
-    }
-
-
-def _chain_health_drift(ordered: list[dict], kind: str, task: dict) -> tuple[float | None, float | None]:
-    drift_secs = None
-    median_gap = None
-    due_list = []
-    for t in ordered:
-        due = _dtparse(t.get("due"))
-        if due:
-            due_list.append(due)
-
-    if len(due_list) < 2:
-        return drift_secs, median_gap
-
-    gaps = [
-        (due_list[i] - due_list[i - 1]).total_seconds()
-        for i in range(1, len(due_list))
-        if due_list[i] and due_list[i - 1]
-    ]
-    gaps = [g for g in gaps if g > 0]
-    if not gaps:
-        return drift_secs, median_gap
-
-    median_gap = _median(gaps)
-    if kind == "cp":
-        td = core.cp_sequence_interval_for_link(
-            task.get("cp") or "",
-            core.coerce_int(task.get("link"), 1),
-            str(task.get("chainID") or "").strip(),
-        )
-        if td:
-            drift_secs = median_gap - td.total_seconds()
-    elif len(gaps) >= 2:
-        drift_secs = gaps[-1] - median_gap
-    return drift_secs, median_gap
-
-
-def _chain_health_clinical_text(
-    on_time_rate: float | None,
-    drift_secs: float | None,
-    streak: int,
-    vol: float | None,
-) -> str | None:
-    parts = []
-    if on_time_rate is not None:
-        parts.append(f"OT {int(round(100.0 * on_time_rate))}%")
-    if drift_secs is not None:
-        parts.append(f"Drift {_fmt_td_dd_hhmm(timedelta(seconds=drift_secs))}")
-    if streak:
-        parts.append(f"Streak {streak}")
-    if isinstance(vol, (int, float)):
-        parts.append(f"Vol {_fmt_td_compact_abs(timedelta(seconds=abs(vol)))}")
-    return " | ".join(parts) if parts else None
-
-
-def _chain_health_coach_text(
-    kind: str,
-    task: dict,
-    on_time_rate: float | None,
-    drift_secs: float | None,
-    median_gap: float | None,
-    streak: int,
-    vol: float | None,
-) -> str | None:
-    issues = []
-    tips = []
-    positives = []
-
-    if on_time_rate is not None:
-        if on_time_rate < 0.6:
-            issues.append("on-time rate is low")
-            tips.append("try smaller scopes or later due times")
-        elif on_time_rate < 0.8:
-            issues.append("on-time is inconsistent")
-            tips.append("adding a small buffer could help")
-        else:
-            positives.append("on-time is steady")
-
-    if drift_secs is not None:
-        base = None
-        if kind == "cp":
-            td = core.cp_sequence_interval_for_link(
-                task.get("cp") or "",
-                core.coerce_int(task.get("link"), 1),
-                str(task.get("chainID") or "").strip(),
-            )
-            base = td.total_seconds() if td else None
-        else:
-            base = median_gap
-        if base:
-            drift_warn = max(0.35 * base, 6 * 60 * 60)
-            if abs(drift_secs) > drift_warn:
-                issues.append("cadence is drifting")
-                tips.append("review cp/anchors for a better fit")
-            else:
-                positives.append("cadence is stable")
-
-    if isinstance(vol, (int, float)):
-        if vol > 24 * 60 * 60:
-            issues.append("timing is noisy")
-            tips.append("add buffer or split tasks")
-        elif vol < 6 * 60 * 60:
-            positives.append("timing is consistent")
-
-    if not issues:
-        if streak >= 3:
-            return (
-                f"Chain looks healthy with a {streak}-link on-time streak; "
-                "keep the current cadence."
-            )
-        if positives:
-            return "Chain looks healthy; keep the current cadence."
-        return None
-
-    issue_txt = ", ".join(issues)
-    tip_txt = "; ".join(tips[:2]) if tips else "keep an eye on due time fit"
-    if streak >= 3:
-        return (
-            f"Chain needs attention ({issue_txt}); {tip_txt}, and keep the "
-            f"{streak}-link on-time streak going."
-        )
-    return f"Chain needs attention ({issue_txt}); {tip_txt}."
+    analytics = _module("modify_analytics")
+    return analytics.sort_chain_for_analytics(
+        chain,
+        coerce_int=core.coerce_int,
+        parse_datetime=_dtparse,
+    )
 
 
 def _chain_health_advice(
@@ -4394,138 +3183,28 @@ def _chain_health_advice(
     tol_secs: int = _ANALYTICS_ONTIME_TOL_SECS,
     style: str = _ANALYTICS_STYLE,
 ) -> str | None:
-    if not chain:
-        return None
-
-    ordered = _sort_chain_for_analytics(chain)
-    metrics = _chain_health_completed_metrics(ordered, tol_secs)
-    on_time_rate = metrics["on_time_rate"]
-    streak = metrics["streak"]
-    vol = metrics["vol"]
-    drift_secs, median_gap = _chain_health_drift(ordered, kind, task)
-
-    style = (style or "coach").strip().lower()
-    if style == "clinical":
-        return _chain_health_clinical_text(on_time_rate, drift_secs, streak, vol)
-    return _chain_health_coach_text(
+    return _module("modify_analytics").chain_health_advice(
+        chain,
         kind,
         task,
-        on_time_rate,
-        drift_secs,
-        median_gap,
-        streak,
-        vol,
+        core=core,
+        parse_datetime=_dtparse,
+        format_delta=_fmt_td_dd_hhmm,
+        coerce_int=core.coerce_int,
+        tol_secs=tol_secs,
+        style=style,
     )
-
-
-def _chain_integrity_collect(
-    chain: list[dict],
-    expected_chain_id: str | None,
-) -> tuple[dict[str, dict], dict[int, dict], list[str], list[str]]:
-    warnings: list[str] = []
-    short_map: dict[str, dict] = {}
-    link_map: dict[int, dict] = {}
-    missing_link: list[str] = []
-    for t in chain:
-        if not isinstance(t, dict):
-            continue
-        uid = t.get("uuid")
-        if uid:
-            short_map[_short(uid)] = t
-
-        link = core.coerce_int(t.get("link"), None)
-        if link:
-            if link in link_map:
-                warnings.append(
-                    f"duplicate link #{link} ({_short(link_map[link].get('uuid'))} vs {_short(uid)})"
-                )
-            else:
-                link_map[link] = t
-        elif uid:
-            missing_link.append(_short(uid))
-
-        if expected_chain_id is not None:
-            cid = (t.get("chainID") or "").strip()
-            if not cid:
-                warnings.append(f"missing chainID on {_short(uid)}")
-            elif cid != expected_chain_id:
-                warnings.append(f"chainID mismatch on {_short(uid)}")
-    return short_map, link_map, missing_link, warnings
-
-
-def _chain_integrity_missing_link_warning(missing_link: list[str]) -> list[str]:
-    if not missing_link:
-        return []
-    sample = ", ".join(missing_link[:3])
-    tail = "…" if len(missing_link) > 3 else ""
-    return [f"missing link number on {sample}{tail}"]
-
-
-def _chain_integrity_link_sequence_warnings(link_map: dict[int, dict]) -> list[str]:
-    if not link_map:
-        return []
-    warnings: list[str] = []
-    links_sorted = sorted(link_map.keys())
-    if links_sorted[0] != 1:
-        warnings.append(f"chain starts at link #{links_sorted[0]} (expected #1)")
-    expected = set(range(links_sorted[0], links_sorted[-1] + 1))
-    gaps = sorted(expected - set(links_sorted))
-    if gaps:
-        gap_list = ", ".join(str(g) for g in gaps[:5])
-        tail = "…" if len(gaps) > 5 else ""
-        warnings.append(f"missing link(s): {gap_list}{tail}")
-    return warnings
-
-
-def _chain_integrity_reciprocal_warnings(chain: list[dict], short_map: dict[str, dict]) -> list[str]:
-    warnings: list[str] = []
-    for t in chain:
-        if not isinstance(t, dict):
-            continue
-        cur_short = _short(t.get("uuid"))
-        prev_link = (t.get("prevLink") or "").strip()
-        if prev_link:
-            prev_task = short_map.get(prev_link)
-            if not prev_task:
-                warnings.append(f"{cur_short} prevLink {prev_link} not found")
-            elif (prev_task.get("nextLink") or "").strip() != cur_short:
-                warnings.append(f"{cur_short} prevLink {prev_link} not reciprocal")
-
-        next_link = (t.get("nextLink") or "").strip()
-        if next_link:
-            next_task = short_map.get(next_link)
-            if not next_task:
-                warnings.append(f"{cur_short} nextLink {next_link} not found")
-            elif (next_task.get("prevLink") or "").strip() != cur_short:
-                warnings.append(f"{cur_short} nextLink {next_link} not reciprocal")
-    return warnings
-
-
-def _dedupe_preserve_order(items: list[str]) -> list[str]:
-    deduped: list[str] = []
-    seen = set()
-    for item in items:
-        if item in seen:
-            continue
-        seen.add(item)
-        deduped.append(item)
-    return deduped
 
 
 def _chain_integrity_warnings(chain: list[dict], expected_chain_id: str | None = None) -> list[str]:
     if core is None:
-        try:
-            _load_core()
-        except Exception:
-            return []
-    if not isinstance(chain, list) or not chain:
-        return []
-
-    short_map, link_map, missing_link, warnings = _chain_integrity_collect(chain, expected_chain_id)
-    warnings.extend(_chain_integrity_missing_link_warning(missing_link))
-    warnings.extend(_chain_integrity_link_sequence_warnings(link_map))
-    warnings.extend(_chain_integrity_reciprocal_warnings(chain, short_map))
-    return _dedupe_preserve_order(warnings)
+        _load_core()
+    return _module("modify_analytics").chain_integrity_warnings(
+        chain,
+        expected_chain_id=expected_chain_id,
+        coerce_int=core.coerce_int,
+        short=_short,
+    )
 
 
 def _fmt_secs_delta(now_ref, secs: float | None) -> str:
@@ -4626,32 +3305,6 @@ def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
         lines.append(line)
 
     return lines
-
-def _create_timeline_segment(tasks: list[dict], last_link_num) -> list[str]:
-    """Helper to create timeline lines for a segment of tasks."""
-    if not tasks:
-        return []
-
-    base_no = core.coerce_int(last_link_num, len(tasks))
-    labelw = max(4, len(f"#{base_no}"))
-    lines = []
-    start_no = base_no - (len(tasks) - 1)
-
-    for i, obj in enumerate(tasks):
-        no = start_no + i
-        end = _dtparse(obj.get("end"))
-        due = _dtparse(obj.get("due"))
-        end_s = _fmtlocal(end) if end else "(no end)"
-        delta = _fmt_on_time_delta(due, end)
-        short = _short(obj.get("uuid"))
-        lab = f"[bold]#{no:<{labelw-1}}[/]"
-        line = f"{lab} {end_s} {delta} [dim]{short}[/]"
-        if i == len(tasks) - 1:
-            line = f"[green]{line}[/]"
-        lines.append(line)
-
-    return lines
-
 
 def _end_summary_current(current: dict, current_task: dict | None) -> dict:
     return current_task if current_task else current
@@ -5008,16 +3661,17 @@ def _timeline_lines(
                     show_gaps=show_gaps,
                     kind="anchor",
                     round_anchor_gaps=round_anchor_gaps,
-                    format_gap=_format_gap,
+                    format_gap=_module("modify_timeline").format_gap,
                 )
             )
         return lines
     modify_timeline = _module("modify_timeline")
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
     anchor_omit = _module("anchor_omit") if kind == "anchor" else None
+    evaluator = _recurrence_evaluator_for_task(task) if kind in {"anchor", "cp"} else None
     timeline_scheduler = _next_occurrence_after_local_dt
-    if kind == "anchor":
-        timeline_scheduler = _recurrence_evaluator_for_task(task)._default_next_occurrence_after_local_dt
+    if evaluator is not None and kind == "anchor":
+        timeline_scheduler = evaluator._default_next_occurrence_after_local_dt
     return modify_timeline.timeline_lines(
         kind,
         task,
@@ -5041,13 +3695,14 @@ def _timeline_lines(
         next_occurrence_after_local_dt=timeline_scheduler,
         to_local_cached=_to_local_cached,
         safe_parse_datetime=_safe_parse_datetime,
-        format_gap=_format_gap,
+        format_gap=_module("modify_timeline").format_gap,
         omit_dnf=omit_dnf,
         omit_expr_fires_on_date=(
             (lambda dnf_, d, default_seed, seed_base: anchor_omit.omit_expr_fires_on_date(dnf_, d, default_seed, seed_base, core=core))
             if anchor_omit is not None else None
         ),
         omit_description_for_date=(anchor_omit.omit_description_for_date if anchor_omit is not None else None),
+        evaluator=evaluator,
     )
 
 def _got_anchor_invalid(msg: str) -> None:
@@ -5160,22 +3815,11 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
     final_dt = last_hit.astimezone(timezone.utc)
     return (final_no, final_dt)
 
-def _ensure_acf(task: dict) -> None:
-    anch = (task.get("anchor") or "").strip()
-    try:
-        task["acf"] = core.build_acf(anch) if anch else ""
-    except Exception:
-        task["acf"] = ""
-
 def _safe_dt(v):
     try:
         return _dtparse(v) if isinstance(v, str) else v
     except Exception:
         return None
-
-def _extra_safe(extra: str) -> bool:
-    return _parse_extra_tokens(extra) is not None
-
 
 def _parse_extra_tokens(extra: str | None) -> list[str] | None:
     """Parse extra Taskwarrior filters in strict token form: key:value."""
@@ -5217,16 +3861,8 @@ def _chain_export_timeout(chain_id: str) -> float:
     per_100 = float(_CHAIN_EXPORT_TIMEOUT_PER_100)
     max_t = float(_CHAIN_EXPORT_TIMEOUT_MAX)
     est = base
-    state = _modify_chain_state()
-    with state.chain_cache_lock:
-        cache_match = bool(chain_id and state.chain_cache_chain_id == chain_id and state.chain_cache)
-        cache_len = len(state.chain_cache) if cache_match else 0
-    if not cache_match:
-        legacy_chain_id = str(globals().get("_CHAIN_CACHE_CHAIN_ID") or "")
-        legacy_chain = list(globals().get("_CHAIN_CACHE") or [])
-        if chain_id and legacy_chain_id == chain_id and legacy_chain:
-            cache_match = True
-            cache_len = len(legacy_chain)
+    cache_len = _lifecycle_read_service().cache_size(chain_id) if chain_id else 0
+    cache_match = bool(cache_len)
     if cache_match:
         extra = max(0, cache_len // 100)
         est = base + (extra * per_100)
@@ -5250,39 +3886,6 @@ def _chain_export_timeout(chain_id: str) -> float:
     if timeout > max_t:
         timeout = max_t
     return timeout
-
-def _tw_export_chain_args(
-    chain_id: str,
-    *,
-    since: datetime | None,
-    extra: str | None,
-    limit: int | None,
-) -> list[str] | None:
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.build_chain_export_args(
-            task_cmd_prefix=_task_cmd_prefix(),
-            chain_id=chain_id,
-            since=since,
-            extra=extra,
-            limit=limit,
-            parse_extra_tokens=_parse_extra_tokens,
-            diag=_diag,
-        )
-    args = _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
-    if since:
-        args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
-    if limit and isinstance(limit, int) and limit > 0:
-        args.append(f"limit:{limit}")
-    if extra:
-        extra_tokens = _parse_extra_tokens(extra)
-        if extra_tokens is None:
-            _diag(f"tw_export_chain rejected extra: {extra!r}")
-            return None
-        args += extra_tokens
-    args.append("export")
-    return args
-
 
 def _tw_export_chain_success(elapsed: float) -> None:
     global _CHAIN_EXPORT_TIMEOUT_FLOOR
@@ -5332,67 +3935,45 @@ def _tw_export_chain_checked(
     env=None,
     limit: int | None = None,
 ) -> tuple[bool, list[dict], str]:
-    if not chain_id:
-        return True, [], ""
-    args = _tw_export_chain_args(chain_id, since=since, extra=extra, limit=limit)
-    if args is None:
-        return False, [], "invalid chain export filters"
-    read_key = _chain_read_key(chain_id, since, extra, limit or 0)
-    if env is None:
-        cached_read = _read_query_get("chain", read_key)
-        if cached_read is not _READ_QUERY_MISSING:
-            if isinstance(cached_read, list) and all(isinstance(row, dict) for row in cached_read):
-                return True, cached_read, ""
-            return False, [], "cached chain export has invalid shape"
-        if not since and not extra and int(limit or 0) > 0:
-            full_read = _read_query_get("chain", _chain_read_key(chain_id, None, None, 0))
-            if full_read is not _READ_QUERY_MISSING:
-                if not isinstance(full_read, list) or not all(isinstance(row, dict) for row in full_read):
-                    return False, [], "cached chain export has invalid shape"
-                return True, full_read[: int(limit)], ""
-
-    start = _time.perf_counter()
-    timeout = _chain_export_timeout(chain_id)
+    """Compatibility facade for the typed lifecycle chain-read service."""
+    service = _lifecycle_read_service()
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
-        result = hook_support.run_task_result(
-            run_task=_run_task_result,
-            cmd=args,
-            env=env,
-            timeout=timeout,
-            retries=1,
-            use_tempfiles=True,
-        )
-        ok, rows, error = hook_support.parse_export_array_result(result, diag=_diag)
-        elapsed = _time.perf_counter() - start
-        if not ok:
-            _tw_export_chain_failure(chain_id, error, timeout)
-            return False, [], error
+        def run_task_result(command, **kwargs):
+            return hook_support.run_task_result(run_task=_run_task_result, cmd=command, **kwargs)
+
+        def parse_result(result):
+            return hook_support.parse_export_array_result(result, diag=_diag)
     else:
-        result = _run_task_result(
-            args,
-            env=env,
-            timeout=timeout,
-            retries=1,
-            use_tempfiles=True,
-        )
-        elapsed = _time.perf_counter() - start
-        if not result.ok:
-            _tw_export_chain_failure(chain_id, result.stderr, timeout)
-            return False, [], result.stderr or "task export failed"
-        try:
-            parsed = json.loads((result.stdout or "").strip())
-            if not isinstance(parsed, list) or any(not isinstance(row, dict) for row in parsed):
-                raise ValueError("expected an array of task objects")
-            rows = parsed
-        except Exception as exc:
-            error = f"Taskwarrior export returned invalid JSON: {exc}"
-            _tw_export_chain_failure(chain_id, error, timeout)
-            return False, [], error
-    _tw_export_chain_success(elapsed)
-    if env is None:
-        _read_query_set("chain", read_key, rows)
-    return True, rows, ""
+        run_task_result = _run_task_result
+
+        def parse_result(result):
+            if not result.ok:
+                return False, [], result.stderr or "task export failed"
+            try:
+                parsed = json.loads((result.stdout or "").strip())
+                if not isinstance(parsed, list) or any(not isinstance(row, dict) for row in parsed):
+                    raise ValueError("expected an array of task objects")
+                return True, parsed, ""
+            except Exception as exc:
+                return False, [], f"Taskwarrior export returned invalid JSON: {exc}"
+
+    result = service.export_chain_checked(
+        chain_id,
+        since=since,
+        extra=extra,
+        env=env,
+        limit=limit,
+        run_task_result=run_task_result,
+        parse_result=parse_result,
+        timeout_for_chain=_chain_export_timeout,
+        read_query_missing=_READ_QUERY_MISSING,
+        on_failure=lambda error, export_timeout: _tw_export_chain_failure(
+            chain_id, error, export_timeout
+        ),
+        on_success=_tw_export_chain_success,
+    )
+    return result.ok, result.rows, result.error
 
 
 def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None, limit: int | None = None) -> list[dict]:
@@ -5479,11 +4060,19 @@ def _render_anchor_completion_feedback(
     stripped_attrs: list[str],
     deferred_spawn: bool,
     spawn_intent_id: str | None,
+    lifecycle_result=None,
     chain_by_short: dict | None,
     analytics_advice: str | None,
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
+    if lifecycle_result is None:
+        lifecycle_result = _module("modify_models").CompletionLifecycleResult(
+            state="queued" if deferred_spawn else "applied",
+            child_short=child_short,
+            deferred_spawn=deferred_spawn,
+            spawn_intent_id=spawn_intent_id,
+        )
     calendar_feedback = importlib.import_module("nautical_core.calendar_feedback")
     calendar_feedback.render_business_calendar_displacement(
         new,
@@ -5516,6 +4105,7 @@ def _render_anchor_completion_feedback(
         stripped_attrs=stripped_attrs,
         deferred_spawn=deferred_spawn,
         spawn_intent_id=spawn_intent_id,
+        lifecycle_result=lifecycle_result,
         chain_by_short=chain_by_short,
         analytics_advice=analytics_advice,
         integrity_warnings=integrity_warnings,
@@ -5527,11 +4117,6 @@ def _render_anchor_completion_feedback(
         feedback=feedback,
         services=services,
     )
-
-
-def _timezone_fallback_warning_for_task(task: dict) -> str:
-    diagnostics = _module("panel_diagnostics")
-    return diagnostics.recurrence_timezone_warning(core, task)
 
 
 def _render_cp_completion_feedback(
@@ -5550,11 +4135,19 @@ def _render_cp_completion_feedback(
     meta: dict,
     deferred_spawn: bool,
     spawn_intent_id: str | None,
+    lifecycle_result=None,
     chain_by_short: dict | None,
     analytics_advice: str | None,
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
+    if lifecycle_result is None:
+        lifecycle_result = _module("modify_models").CompletionLifecycleResult(
+            state="queued" if deferred_spawn else "applied",
+            child_short=child_short,
+            deferred_spawn=deferred_spawn,
+            spawn_intent_id=spawn_intent_id,
+        )
     diagnostics = _module("panel_diagnostics")
     panel_warnings = diagnostics.panel_warnings(core, new, include_files=False)
     if panel_warnings:
@@ -5578,6 +4171,7 @@ def _render_cp_completion_feedback(
         meta=meta,
         deferred_spawn=deferred_spawn,
         spawn_intent_id=spawn_intent_id,
+        lifecycle_result=lifecycle_result,
         chain_by_short=chain_by_short,
         analytics_advice=analytics_advice,
         integrity_warnings=integrity_warnings,
@@ -5589,6 +4183,23 @@ def _render_cp_completion_feedback(
         feedback=feedback,
         services=services,
     )
+
+
+def _render_lifecycle_result(result, task: dict) -> None:
+    """Render one finalized non-success outcome without deciding its state."""
+    state = str(getattr(result, "state", "retryable") or "retryable").strip().lower()
+    title = "⛓ Chain warning" if state == "manual_review" else "⛓ Chain error"
+    rows = [("Result", state.replace("_", " ").title())]
+    reason = str(getattr(result, "reason", "") or "").strip()
+    if reason:
+        rows.append(("Reason", reason))
+    child_short = str(getattr(result, "child_short", "") or "").strip()
+    if child_short:
+        rows.append(("Child", child_short))
+    intent_id = str(getattr(result, "spawn_intent_id", "") or "").strip()
+    if intent_id:
+        rows.append(("Intent", intent_id))
+    _panel(title, rows, kind="warning" if state == "manual_review" else "error")
 
 
 def _non_completion_anchor_error_message(anchor_expr: str, default_msg: str) -> str:
@@ -5987,6 +4598,18 @@ def _render_disabled_chain_summary(old: dict, new: dict, reason: str) -> None:
         )
 
 
+def _ensure_terminal_chain_off(task: dict, event: str | None = None) -> bool:
+    """Validate and apply one idempotent terminal patch for hook-side stops."""
+    if event:
+        lifecycle_models = _module("lifecycle_models")
+        lifecycle_planner = _module("lifecycle_planner")
+        lifecycle_planner.terminal_plan_for_snapshot(
+            lifecycle_models.TaskSnapshot.from_mapping(task),
+            lifecycle_models.LifecycleEvent(event),
+        )
+    return _module("modify_lifecycle").ensure_terminal_chain_off(task)
+
+
 def _preserve_cp_relative_offsets_on_due_change(
     old: dict,
     new: dict,
@@ -6198,7 +4821,6 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, 
         if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode") or _field_changed(old, new, "anchor_file"):
             if new_anchor:
                 _validate_anchor_on_modify(new_anchor)
-            # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
 
         if (
             _field_changed(old, new, "cp")
@@ -6280,54 +4902,35 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
     links = None if mode == "full" else ([next_no] if mode == "next" else [base_no - 2, base_no - 1, next_no])
     if links is not None:
         links = sorted({link for link in links if link > 0})
-    snapshot_key = (str(chain_id), tuple(links) if links is not None else None)
-    cached_snapshot = _read_query_get("chain_snapshot", snapshot_key)
-    if cached_snapshot is not _READ_QUERY_MISSING:
-        _record_chain_snapshot_stat("chain_snapshot_hits")
-        if not isinstance(cached_snapshot, list) or any(not isinstance(row, dict) for row in cached_snapshot):
-            _read_query_delete("chain_snapshot", snapshot_key)
-            return modify_models.CompletionChainSnapshot(
-                mode=mode,
-                rows=[],
-                loaded=False,
-                chain_id=str(chain_id),
-                error="cached completion snapshot has invalid shape",
-            )
-        rows = cached_snapshot
-        return modify_models.CompletionChainSnapshot(
-            mode=mode,
-            rows=rows,
-            loaded=True,
-            chain_id=str(chain_id),
+
+    def _load_snapshot(snapshot_chain_id: str, snapshot_links: list[int] | None):
+        snapshot_result = modify_queries.export_completion_chain_snapshot(
+            snapshot_chain_id,
+            snapshot_links,
+            run_task=_run_task_result,
+            task_cmd_prefix=_task_cmd_prefix(),
+            parse_export_array=parser,
+            diag=_diag,
+            timeout=_chain_export_timeout(snapshot_chain_id),
         )
-    _record_chain_snapshot_stat("chain_snapshot_misses")
-    snapshot_result = modify_queries.export_completion_chain_snapshot(
+        lifecycle_read_service = _module("lifecycle_read_service")
+        if not snapshot_result.loaded:
+            return lifecycle_read_service.ChainReadResult.failure(snapshot_result.error)
+        return lifecycle_read_service.ChainReadResult.success(snapshot_result.rows)
+
+    snapshot = _lifecycle_read_service().completion_snapshot(
         chain_id,
-        links,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        parse_export_array=parser,
-        diag=_diag,
-        timeout=_chain_export_timeout(chain_id),
-    )
-    loaded = snapshot_result.loaded
-    rows = snapshot_result.rows
-    if loaded:
-        _read_query_set("chain_snapshot", snapshot_key, rows)
-        if links is None:
-            # A full snapshot is interchangeable with an unfiltered chain
-            # export. Narrow snapshots deliberately remain separate entries.
-            _read_query_set(
-                "chain",
-                _chain_read_key(chain_id, None, None, 0),
-                rows,
-            )
-    return modify_models.CompletionChainSnapshot(
         mode=mode,
-        rows=rows,
-        loaded=loaded,
-        chain_id=str(chain_id),
-        error=snapshot_result.error if not loaded else "",
+        links=links,
+        load_snapshot=_load_snapshot,
+        read_query_missing=_READ_QUERY_MISSING,
+    )
+    return modify_models.CompletionChainSnapshot(
+        mode=snapshot.mode,
+        rows=snapshot.rows,
+        loaded=snapshot.loaded,
+        chain_id=snapshot.chain_id,
+        error=snapshot.error,
     )
 
 
@@ -6356,7 +4959,7 @@ def _completion_compute_child_due(new: dict, kind: str):
     def handle_terminal(exc) -> None:
         message = core._import_sibling("scheduler_models").occurrence_exhaustion_message(exc)
         if exc.is_date_limit:
-            new["chain"] = "off"
+            _ensure_terminal_chain_off(new, "complete")
             try:
                 _end_chain_summary(new, message, core.now_utc(), current_task=new)
             except Exception as summary_exc:
@@ -6464,7 +5067,14 @@ def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, n
     )
 
 
-def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime):
+def _completion_compute_next_and_limits(
+    new: dict,
+    kind: str,
+    next_no: int,
+    now_utc: datetime,
+    *,
+    preflight=None,
+):
     modify_completion_compute = _module("modify_completion_compute")
     modify_runtime = _module("modify_runtime")
     services = modify_runtime.build_compute_services(
@@ -6485,6 +5095,8 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
     )
     if computed is None:
         return None
+    if isinstance(computed, _module("modify_models").CompletionLifecycleResult):
+        return computed
 
     # Direct helper callers may exercise computation without a full
     # Taskwarrior identity.  Completion preflight rejects that shape before a
@@ -6506,33 +5118,68 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
             dnf=computed.dnf,
             until=computed.until_dt,
         )
-        recurrence = lifecycle_planner.PrecomputedRecurrencePlanningService(
-            candidate=candidate,
-            child_service=lifecycle_planner.ChainGenerationPlanningService(generation),
-        )
         fingerprint_fn = getattr(core, "scheduler_config_fingerprint", None)
         fingerprint = fingerprint_fn() if callable(fingerprint_fn) else ""
-        planner = lifecycle_planner.LifecyclePlanner(
-            {"scheduler_fingerprint": fingerprint},
-            recurrence_service=recurrence,
-            successor_limit_policy=lifecycle_planner.ChainGenerationLimitPolicy(_compare_datetimes),
-        )
-        plan = planner.plan(
+        plan = lifecycle_planner.plan_candidate_successor(
             lifecycle_models.TaskSnapshot.from_mapping(new),
             lifecycle_models.LifecycleEvent.COMPLETE,
+            candidate,
+            generation=generation,
+            validated_configuration={"scheduler_fingerprint": fingerprint},
+            compare_datetimes=_compare_datetimes,
+            preflight=(
+                lifecycle_planner.LifecyclePreflight.from_context(
+                    base_link=preflight.base_no,
+                    next_link=preflight.next_no,
+                    kind=preflight.kind,
+                    chain_id=preflight.chain_id,
+                )
+                if preflight is not None
+                else None
+            ),
+            carry_validator=lambda snapshot, candidate_child, _candidate: _module("reconcile").invalid_relative_carry_reason(
+                snapshot.to_dict(),
+                dict(candidate_child),
+                child_field=str(computed.meta.get("target_field") or "due"),
+                generation=generation,
+            ),
         )
         if plan.action is lifecycle_models.LifecycleAction.FINALIZE_CHAIN:
             _end_chain_summary(new, "Reached lifecycle successor limit", now_utc)
-            new["chain"] = "off"
+            _ensure_terminal_chain_off(new, "complete")
             _print_task(new)
-            return None
+            models = _module("modify_models")
+            return models.CompletionLifecycleResult(
+                state="terminal",
+                reason="successor limit reached",
+                diagnostic=models.CompletionLifecycleDiagnostic(
+                    transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
+                    chain_id=str(new.get("chainID") or "").strip(),
+                    parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
+                    child_link=next_no,
+                    stage="plan",
+                    failure_kind="successor_limit",
+                ),
+            )
         computed.lifecycle_plan = plan
         computed.planned_child = plan.child_dict()
     except Exception as exc:
         _diag(f"lifecycle planner failed: {type(exc).__name__}: {exc}")
-        _panel("⛓ Chain error", [("Reason", "Could not construct a lifecycle successor plan")], kind="error")
+        _panel("⛓ Chain error", [("Reason", str(exc) or "Could not construct a lifecycle successor plan")], kind="error")
         _print_task(new)
-        return None
+        models = _module("modify_models")
+        return models.CompletionLifecycleResult(
+            state="retryable",
+            reason=str(exc).strip() or "Could not construct a lifecycle successor plan",
+            diagnostic=models.CompletionLifecycleDiagnostic(
+                transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
+                chain_id=str(new.get("chainID") or "").strip(),
+                parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
+                child_link=next_no,
+                stage="plan",
+                failure_kind="planner_error",
+            ),
+        )
     return computed
 
 
@@ -6572,14 +5219,19 @@ def _completion_build_and_spawn_child(
     )
 
 
-def _handle_completion_modify(old: dict, new: dict) -> None:
-    new_cp, new_anchor, new_anchor_file = _completion_validate_cp_and_anchor(old, new)
-    _preserve_cp_relative_offsets_on_due_change(old, new, new_cp)
+def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResult | None":
+    # Prepare carry-forward fields on an isolated snapshot.  A malformed
+    # carry must never leave the Taskwarrior response partially rewritten.
+    prepared = dict(new)
+    new_cp, new_anchor, new_anchor_file = _completion_validate_cp_and_anchor(old, prepared)
+    _preserve_cp_relative_offsets_on_due_change(old, prepared, new_cp)
     if any(str(old.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
         recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
-        _preserve_native_until_on_target_change(old, new, recurrence_kind)
-    _validate_native_until_after_target_or_fail(new)
-    _validate_native_until_anchor_slots_or_fail(new)
+        _preserve_native_until_on_target_change(old, prepared, recurrence_kind)
+    _validate_native_until_after_target_or_fail(prepared)
+    _validate_native_until_anchor_slots_or_fail(prepared)
+    new.clear()
+    new.update(prepared)
     now_utc = core.now_utc()
     ctx = _completion_preflight_context(new, now_utc)
     if ctx is None:
@@ -6590,36 +5242,45 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
     kind = ctx.kind
     chain_id = ctx.chain_id
 
-    computed = _completion_compute_next_and_limits(new, kind, next_no, now_utc)
+    computed = _completion_compute_next_and_limits(
+        new,
+        kind,
+        next_no,
+        now_utc,
+        preflight=ctx,
+    )
     if computed is None:
         return
+    if isinstance(computed, _module("modify_models").CompletionLifecycleResult):
+        _diag_lifecycle_result(computed)
+        return computed
     snapshot = ctx.chain_snapshot
     preloaded_chain = list(snapshot.rows)
-    preloaded_chain_by_link, preloaded_chain_by_short = _build_chain_indexes(preloaded_chain)
+    indexes = _lifecycle_read_service().build_indexes(preloaded_chain)
+    preloaded_chain_by_link, preloaded_chain_by_short = indexes.by_link, indexes.by_short
     if snapshot.mode == "full" and snapshot.loaded:
-        _set_chain_cache(chain_id, preloaded_chain)
+        _lifecycle_read_service().replace_chain_cache(chain_id, preloaded_chain)
+        _diag_count("chain_cache_seeded")
         _export_uuid_short_cached.cache_clear()
     modify_completion_flow = importlib.import_module("nautical_core.modify_completion_flow")
     services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=_completion_build_and_spawn_child,
         seed_runtime_lookup_tasks=_seed_runtime_lookup_tasks,
         modify_chain_state=_modify_chain_state,
-        get_chain_export=_get_chain_export,
-        build_chain_indexes=_build_chain_indexes,
-        set_chain_cache=_set_chain_cache,
         export_uuid_short_cached=_export_uuid_short_cached,
-        merge_spawned_child_into_chain=_merge_spawned_child_into_chain,
+        lifecycle_read_service=_lifecycle_read_service(),
         chain_health_advice=_chain_health_advice,
         chain_integrity_warnings=_chain_integrity_warnings,
         render_anchor_completion_feedback=_render_anchor_completion_feedback,
         render_cp_completion_feedback=_render_cp_completion_feedback,
+        render_lifecycle_result=_render_lifecycle_result,
         print_task=_print_task,
         diag_summary=_diag_summary,
         show_analytics=_SHOW_ANALYTICS,
         check_integrity=_CHECK_CHAIN_INTEGRITY,
         analytics_style=_ANALYTICS_STYLE,
     )
-    modify_completion_flow.finalize_completion_modify(
+    result = modify_completion_flow.finalize_completion_modify(
         new=new,
         ctx=ctx,
         computed=computed,
@@ -6632,6 +5293,8 @@ def _handle_completion_modify(old: dict, new: dict) -> None:
         chain_id=chain_id,
         services=services,
     )
+    _diag_lifecycle_result(result)
+    return result
 
 
 def _expiration_services():
@@ -6685,10 +5348,12 @@ def _handle_deleted_modify(old: dict, new: dict) -> None:
         _expiration_recovery_warning(new, "Expiration recovery module is unavailable; deletion was not classified.")
         return
     try:
-        disposition, disposition_reason = modify_expiration.classify_deleted_task(
+        deletion_evidence = modify_expiration.classify_deleted_task(
             new,
             services=_expiration_services(),
         )
+        disposition = deletion_evidence.disposition.value
+        disposition_reason = deletion_evidence.reason
     except Exception as exc:
         _diag(f"deleted-task disposition failed: {exc}")
         _expiration_recovery_warning(new, "Deletion evidence could not be classified safely.")
@@ -6713,7 +5378,7 @@ def _handle_deleted_modify(old: dict, new: dict) -> None:
     if disposition == "manual":
         _diag("deleted Nautical task classified as manual stop")
 
-    new["chain"] = "off"
+    _ensure_terminal_chain_off(new, "manual_delete")
     now_utc = core.now_utc()
     try:
         _end_chain_summary(new, "Pending task deleted.", now_utc, current_task=old)
@@ -6728,11 +5393,6 @@ def _handle_deleted_modify(old: dict, new: dict) -> None:
             ],
             kind="summary",
         )
-
-
-def _emit_modify_passthrough(task: dict) -> None:
-    hook_results = _module("hook_results")
-    hook_results.emit_passthrough_json(task)
 
 
 def main():

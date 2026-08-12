@@ -3391,14 +3391,6 @@ def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
     )
 
 
-def _as_local_dt(d: datetime | None) -> datetime | None:
-    if d is None:
-        return None
-    if d.tzinfo is None:
-        return d.replace(tzinfo=timezone.utc).astimezone(_nautical_local_tz())
-    return d.astimezone(_nautical_local_tz())
-
-
 def _next_occurrence_after_local_dt(
     dnf,
     after_local_dt: datetime,
@@ -4353,32 +4345,6 @@ def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
 
     return lines
 
-def _create_timeline_segment(tasks: list[dict], last_link_num) -> list[str]:
-    """Helper to create timeline lines for a segment of tasks."""
-    if not tasks:
-        return []
-
-    base_no = core.coerce_int(last_link_num, len(tasks))
-    labelw = max(4, len(f"#{base_no}"))
-    lines = []
-    start_no = base_no - (len(tasks) - 1)
-
-    for i, obj in enumerate(tasks):
-        no = start_no + i
-        end = _dtparse(obj.get("end"))
-        due = _dtparse(obj.get("due"))
-        end_s = _fmtlocal(end) if end else "(no end)"
-        delta = _fmt_on_time_delta(due, end)
-        short = _short(obj.get("uuid"))
-        lab = f"[bold]#{no:<{labelw-1}}[/]"
-        line = f"{lab} {end_s} {delta} [dim]{short}[/]"
-        if i == len(tasks) - 1:
-            line = f"[green]{line}[/]"
-        lines.append(line)
-
-    return lines
-
-
 def _end_summary_current(current: dict, current_task: dict | None) -> dict:
     return current_task if current_task else current
 
@@ -4886,22 +4852,11 @@ def _cap_from_until_anchor(task, next_due_utc, dnf):
     final_dt = last_hit.astimezone(timezone.utc)
     return (final_no, final_dt)
 
-def _ensure_acf(task: dict) -> None:
-    anch = (task.get("anchor") or "").strip()
-    try:
-        task["acf"] = core.build_acf(anch) if anch else ""
-    except Exception:
-        task["acf"] = ""
-
 def _safe_dt(v):
     try:
         return _dtparse(v) if isinstance(v, str) else v
     except Exception:
         return None
-
-def _extra_safe(extra: str) -> bool:
-    return _parse_extra_tokens(extra) is not None
-
 
 def _parse_extra_tokens(extra: str | None) -> list[str] | None:
     """Parse extra Taskwarrior filters in strict token form: key:value."""
@@ -5966,7 +5921,6 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, 
         if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode") or _field_changed(old, new, "anchor_file"):
             if new_anchor:
                 _validate_anchor_on_modify(new_anchor)
-            # _ensure_acf(new)  # keep in-memory ACF consistent (no UDA writes)
 
         if (
             _field_changed(old, new, "cp")

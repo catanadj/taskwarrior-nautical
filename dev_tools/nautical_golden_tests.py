@@ -5607,20 +5607,6 @@ def test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch():
         expect(details.get("actual_api") == 1, f"implementation API missing from mismatch: {findings!r}")
 
 
-def test_doctor_reconcile_loader_uses_validated_implementation():
-    """Doctor reconcile planning should load the implementation selected by its hook inventory."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_reconcile_hook_selection_test")
-    with tempfile.TemporaryDirectory() as td:
-        implementation = Path(td) / "modify_impl.py"
-        implementation.write_text("SOURCE_MARKER = 'validated-runtime'\n", encoding="utf-8")
-        loaded = mod._load_on_modify_hook_for_reconcile(implementation)
-    expect(
-        getattr(loaded, "SOURCE_MARKER", "") == "validated-runtime",
-        "reconcile loader ignored the validated implementation path",
-    )
-
-
 def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
     """Local installs should validate before mutation and safely reuse identical releases."""
     from nautical_core import install_runtime
@@ -9639,7 +9625,9 @@ def test_reconcile_tool_computes_year_ordinal_anchor():
     hook = mod._load_on_modify(str(Path(ROOT) / "on-modify.nautical"))
     due = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (9, 0)))
     end = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (10, 0)))
-    child_due, meta, _dnf = hook._compute_anchor_child_due(
+    from nautical_core.chain_generation import ChainGenerationService
+    generation = ChainGenerationService.from_core(hook.core)
+    child_due, meta, _dnf = generation.compute_anchor_child_due(
         {
             "uuid": "c3f2c233-0000-0000-0000-000000000002",
             "status": "completed",
@@ -29853,6 +29841,16 @@ def test_reconcile_tool_loads_task_hooks_layout():
             os.environ["NAUTICAL_ON_MODIFY_PATH"] = prev_env
 
 
+def test_reconcile_default_runtime_uses_public_gateway():
+    """Default reconcile runtime must not load private on-modify internals."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_public_gateway_runtime_test")
+    runtime, used_hook = mod._load_reconcile_runtime("task")
+    expect(not used_hook, "default reconcile unexpectedly loaded an on-modify implementation")
+    expect(type(runtime).__name__ == "TaskwarriorMutationGateway", f"unexpected reconcile runtime: {runtime!r}")
+    expect(hasattr(runtime, "spawn_child"), "public mutation gateway lacks child spawning")
+
+
 def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
     """Actual reconcile tool loading should compute @t slots as configured-local time."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -29861,7 +29859,9 @@ def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
         os.environ.pop("NAUTICAL_CORE_PATH", None)
         mod = _load_hook_module(str(path), "_nautical_reconcile_tool_timed_anchor_test")
         hook = mod._load_on_modify(str(Path(ROOT) / "on-modify.nautical"))
-        child_due, _meta, _dnf = hook._compute_anchor_child_due(
+        from nautical_core.chain_generation import ChainGenerationService
+        generation = ChainGenerationService.from_core(hook.core)
+        child_due, _meta, _dnf = generation.compute_anchor_child_due(
             {
                 "uuid": "c3f2c233-0000-0000-0000-000000000001",
                 "status": "completed",
@@ -33458,7 +33458,6 @@ TESTS = [
     test_doctor_hook_inventory_allows_third_party_and_symlink_install,
     test_doctor_hook_inventory_rejects_duplicates_without_counting_backups,
     test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch,
-    test_doctor_reconcile_loader_uses_validated_implementation,
     test_installer_dry_run_fresh_install_and_idempotent_reinstall,
     test_installer_upgrade_rollback_restores_active_runtime,
     test_installer_migrates_legacy_core_and_rolls_back_first_switch,
@@ -33871,6 +33870,7 @@ TESTS = [
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_evidence_includes_local_child_time_when_formatter_available,
     test_reconcile_tool_loads_task_hooks_layout,
+    test_reconcile_default_runtime_uses_public_gateway,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
     test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_print_plan_includes_evidence,

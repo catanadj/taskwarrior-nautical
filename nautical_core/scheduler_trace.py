@@ -6,7 +6,12 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 import json
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Mapping
+
+
+_ACTIVE_TRACE: ContextVar["SchedulerTrace | None"] = ContextVar("nautical_scheduler_trace", default=None)
 
 
 def _env_true(value: object) -> bool:
@@ -135,4 +140,18 @@ class SchedulerTrace:
         self._dropped = 0
 
 
-__all__ = ("SchedulerTrace", "SchedulerTraceEvent")
+@contextmanager
+def activate(trace: SchedulerTrace | None):
+    """Make one trace visible to callback-based scheduler internals."""
+    token = _ACTIVE_TRACE.set(trace if trace is not None and trace.enabled else None)
+    try:
+        yield
+    finally:
+        _ACTIVE_TRACE.reset(token)
+
+
+def active_trace() -> SchedulerTrace | None:
+    return _ACTIVE_TRACE.get()
+
+
+__all__ = ("SchedulerTrace", "SchedulerTraceEvent", "activate", "active_trace")

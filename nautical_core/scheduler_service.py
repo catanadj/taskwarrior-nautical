@@ -20,7 +20,7 @@ from .recurrence_spec import RecurrenceSpec
 from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 from .scheduler_models import OccurrenceSearchExhausted
 from .time_projection import ProjectionResult
-from .scheduler_trace import SchedulerTrace
+from .scheduler_trace import SchedulerTrace, activate
 
 
 @dataclass(slots=True)
@@ -38,12 +38,16 @@ class SchedulerService:
         context: RecurrenceContext | None = None,
         trace: SchedulerTrace | None = None,
     ) -> "SchedulerService":
-        return cls(EvaluationSession.from_task(task, context=context), trace or SchedulerTrace.from_env())
+        trace = trace or SchedulerTrace.from_env()
+        return cls(EvaluationSession.from_task(task, context=context), trace)
 
     def _flush_trace(self) -> None:
         if self.trace is not None and self.trace.enabled:
             self.trace.emit()
             self.trace.clear()
+
+    def _trace_scope(self):
+        return activate(self.trace)
 
     def _record_outcome(self, phase: str, outcome: Any, *, cursor: OccurrenceCursor | None = None) -> None:
         if self.trace is None or not self.trace.enabled:
@@ -72,7 +76,8 @@ class SchedulerService:
 
     def next(self, cursor: OccurrenceCursor, **kwargs: Any) -> OccurrenceOutcome:
         try:
-            outcome = self.session.next_outcome(cursor, **kwargs)
+            with self._trace_scope():
+                outcome = self.session.next_outcome(cursor, **kwargs)
             self._record_outcome("next", outcome, cursor=cursor)
             return outcome
         finally:
@@ -85,7 +90,8 @@ class SchedulerService:
     def project_time(self, value: Any, selected_date: Any, **kwargs: Any) -> ProjectionResult:
         """Project ``@t`` on an already selected calendar date."""
         try:
-            result = self.session.project_time(value, selected_date, **kwargs)
+            with self._trace_scope():
+                result = self.session.project_time(value, selected_date, **kwargs)
             if self.trace is not None and self.trace.enabled:
                 self.trace.record(
                     "projection",
@@ -107,10 +113,11 @@ class SchedulerService:
         try:
             # A caller requesting omission-aware evidence needs the event stream;
             # ordinary collection remains on the included-only path.
-            if "count_omitted" in kwargs:
-                batch = self.session.collect_events_after_cursor(cursor, limit=limit, **kwargs)
-            else:
-                batch = self.session.collect_after_cursor(cursor, limit=limit, **kwargs)
+            with self._trace_scope():
+                if "count_omitted" in kwargs:
+                    batch = self.session.collect_events_after_cursor(cursor, limit=limit, **kwargs)
+                else:
+                    batch = self.session.collect_after_cursor(cursor, limit=limit, **kwargs)
             if not isinstance(batch, OccurrenceBatch):
                 batch = OccurrenceBatch(batch)
             result = OccurrenceCollectionResult(

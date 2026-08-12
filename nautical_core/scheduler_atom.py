@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from .business_calendar import is_business_day as default_is_business_day
 from .scheduler_models import OccurrenceSearchExhausted
+from .scheduler_trace import active_trace
 
 
 def base_next_after_atom(
@@ -269,19 +270,33 @@ def next_after_atom_with_mods(
     spec = atom.get("spec") or ""
     roll_kind = mods.get("roll")
     probe = ref_d - timedelta(days=1) if roll_kind == "next-wd" else ref_d
+    trace = active_trace()
+    trace_enabled = trace is not None
 
     if ival == 1 and not active_mod_keys(mods):
         candidate = base_next_after_atom(atom, ref_d, seed_base=seed_base)
         if candidate is None:
+            if trace_enabled:
+                trace.record("terminal", provider=typ, term=spec, reason="no_candidate")
             return None
+        if trace_enabled:
+            trace.record("proposed", provider=typ, candidate=candidate, term=spec)
         if candidate > ref_d:
+            if trace_enabled:
+                trace.record("selected", provider=typ, candidate=candidate, term=spec)
             return candidate
 
     for _ in range(max_anchor_iter):
         base = base_next_after_atom(atom, probe, seed_base=seed_base)
         if base is None:
+            if trace_enabled:
+                trace.record("terminal", provider=typ, term=spec, reason="no_candidate")
             return None
+        if trace_enabled:
+            trace.record("proposed", provider=typ, candidate=base, term=spec)
         if (mods.get("bd") or mods.get("wd") is True) and not is_business_day(base):
+            if trace_enabled:
+                trace.record("rejected", provider=typ, candidate=base, term=spec, reason="business_day")
             probe = base + timedelta(days=1)
             continue
         if typ in ("w", "y") and not interval_allowed_for_atom(
@@ -291,6 +306,8 @@ def next_after_atom_with_mods(
             base,
             spec=spec,
         ):
+            if trace_enabled:
+                trace.record("rejected", provider=typ, candidate=base, term=spec, reason="interval")
             probe = advance_probe_for_interval_bucket(typ, ival, seed, base, spec=spec)
             continue
         if typ == "m" and ival > 1:
@@ -303,12 +320,26 @@ def next_after_atom_with_mods(
             if moon_phase_matches_date is None:
                 raise ValueError("Moon phase filters require the astronomy resolver")
             if not moon_phase_matches_date(phase_filter, cand):
+                if trace_enabled:
+                    trace.record("rejected", provider=typ, candidate=cand, term=spec, reason="moon_phase")
                 probe = cand
                 continue
         if accept_roll_candidate(ref_d, base, cand, roll_kind):
+            if trace_enabled:
+                trace.record("selected", provider=typ, candidate=cand, term=spec)
             return cand
+        if trace_enabled:
+            trace.record("rejected", provider=typ, candidate=cand, term=spec, reason="roll")
         probe = base + timedelta(days=1)
 
+    if trace_enabled:
+        trace.record(
+            "terminal",
+            provider=typ,
+            term=spec,
+            reason="iteration_limit",
+            terminal={"scope": "modified atom scheduling", "limit": max_anchor_iter},
+        )
     if os_mod.environ.get("NAUTICAL_DIAG") == "1":
         warn_once_per_day(
             "next_after_atom_fallback",

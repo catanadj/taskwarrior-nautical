@@ -135,6 +135,8 @@ def _format_local_until(hook: Any, value: Any) -> str:
     if not raw:
         return raw
     parser = getattr(hook, "safe_parse_datetime", None)
+    if not callable(parser):
+        parser = getattr(hook, "_safe_parse_datetime", None)
     formatter = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
     if not callable(parser) or not callable(formatter):
         return raw
@@ -274,7 +276,15 @@ def _load_reconcile_runtime(task_bin: str, hook_path: str | None = None):
 
 
 def _bind_hook_task_bin(hook: Any, task_bin: str) -> None:
-    original_prefix = hook.task_cmd_prefix
+    original_prefix = getattr(hook, "task_cmd_prefix", None)
+    if not callable(original_prefix):
+        original_prefix = getattr(hook, "_task_cmd_prefix", None)
+    if not callable(original_prefix):
+        # Public gateway runtimes do not need a hook command prefix. Test and
+        # embedded runtimes may expose only the historical private spelling;
+        # absence of either is a protocol error, not a reason to fabricate a
+        # Taskwarrior command.
+        raise RuntimeError("on-modify reconcile protocol is missing task command prefix")
 
     def _task_cmd_prefix() -> list[str]:
         prefix = list(original_prefix())

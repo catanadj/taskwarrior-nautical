@@ -1103,6 +1103,38 @@ def test_lifecycle_models_enforce_transition_contract():
         raise AssertionError("invalid lifecycle model was accepted")
 
 
+def test_lifecycle_batch_plan_classifies_typed_outcomes():
+    """Batch decisions are explicit, unique, and partitionable before mutation."""
+    from nautical_core.exit_models import LifecycleBatchDecision, LifecycleBatchDecisionKind, LifecycleBatchPlan
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+
+    guard = ParentGuard.from_mapping({"status": "pending", "chain": "on", "chainID": "batch", "link": 1})
+    plan = LifecyclePlan.from_mappings(
+        identity=LifecycleIdentity("batch", "parent", 1, 2, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=guard,
+        child_payload={"uuid": "child-1", "chainID": "batch", "link": 2, "prevLink": "parent"},
+        parent_patch={"nextLink": "child-1"},
+    )
+    decisions = tuple(
+        LifecycleBatchDecision(f"intent-{index}", {"spawn_intent_id": f"intent-{index}"}, plan, kind)
+        for index, kind in enumerate(LifecycleBatchDecisionKind)
+    )
+    batch = LifecycleBatchPlan(decisions)
+    expect(len(batch.decisions) == 5, "batch plan lost a decision")
+    expect(
+        len(batch.for_kind(LifecycleBatchDecisionKind.UNAVAILABLE)) == 1,
+        "unavailable decisions were not partitionable",
+    )
+    expect(len(batch.by_intent()) == 5, "batch intent index was not unique")
+    try:
+        LifecycleBatchPlan((decisions[0], decisions[0]))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("duplicate lifecycle intents were accepted")
+
+
 def test_recurrence_fingerprint_is_canonical_and_mutation_sensitive():
     """Formatting-only recurrence changes are stable while scheduling edits invalidate guards."""
     from nautical_core.lifecycle_models import recurrence_fingerprint
@@ -33671,6 +33703,7 @@ TESTS = [
     test_hook_io_contract_response_is_single_unescaped_json_object,
     test_hook_response_models_keep_legacy_names_and_typed_roles,
     test_lifecycle_models_enforce_transition_contract,
+    test_lifecycle_batch_plan_classifies_typed_outcomes,
     test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
     test_lifecycle_planner_is_pure_and_deterministic,
     test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy,

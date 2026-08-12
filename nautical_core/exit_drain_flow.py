@@ -10,6 +10,7 @@ from nautical_core.exit_models import (
     ExitQueueWriteResult,
     ExitRequeueResult,
     ExitDrainStats,
+    LifecycleBatchPlan,
 )
 
 
@@ -19,6 +20,8 @@ QueueDbHook = Callable[[], None]
 TakeQueueBatch = Callable[[], ExitQueueBatch]
 LoadFinalizedIntents = Callable[[], tuple[set[str], bool]]
 PreloadEntries = Callable[[list[Entry]], None]
+PrepareLifecycleBatch = Callable[[list[Entry]], LifecycleBatchPlan | None]
+ApplyLifecycleBatch = Callable[[LifecycleBatchPlan], None]
 FinalizeBatch = Callable[[ExitDrainStateProtocol], None]
 ProcessQueueEntry = Callable[[int, Entry, ExitDrainStateProtocol], bool]
 RequeueEntries = Callable[[list[Entry]], ExitRequeueResult]
@@ -61,7 +64,8 @@ class ExitDrainServices:
     exit_progress_scope: ExitProgressScope
     preload_export_uuids: PreloadEntries
     preload_equivalent_child_slots: PreloadEntries
-    prepare_lifecycle_batch: PreloadEntries | None
+    prepare_lifecycle_batch: PrepareLifecycleBatch | None
+    apply_lifecycle_batch: ApplyLifecycleBatch | None
     finalize_lifecycle_batch: FinalizeBatch | None
     process_queue_entry: ProcessQueueEntry
     requeue_entries_result: RequeueEntries
@@ -110,8 +114,13 @@ def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
                 progress_update(phase="preload", state=state)
             services.preload_export_uuids(preload_entries)
             services.preload_equivalent_child_slots(preload_entries)
+            lifecycle_batch_plan = None
             if services.prepare_lifecycle_batch is not None:
-                services.prepare_lifecycle_batch(preload_entries)
+                lifecycle_batch_plan = services.prepare_lifecycle_batch(preload_entries)
+                if lifecycle_batch_plan is not None:
+                    state.lifecycle_batch_plan = lifecycle_batch_plan
+            if lifecycle_batch_plan is not None and services.apply_lifecycle_batch is not None:
+                services.apply_lifecycle_batch(lifecycle_batch_plan)
             if progress_update is not None:
                 progress_update(phase="drain", state=state)
 

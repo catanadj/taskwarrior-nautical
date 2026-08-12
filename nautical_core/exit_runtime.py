@@ -35,6 +35,7 @@ class ExitRuntimeState:
     equiv_child_cache: dict[tuple[str, str, str], Any] = field(default_factory=dict)
     lifecycle_parent_preflight: dict[str, dict[str, Any]] = field(default_factory=dict)
     lifecycle_batch_imported: set[str] = field(default_factory=set)
+    lifecycle_batch_import_failed: set[str] = field(default_factory=set)
 
 
 def new_runtime_state() -> ExitRuntimeState:

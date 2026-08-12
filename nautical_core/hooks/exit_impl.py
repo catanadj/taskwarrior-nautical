@@ -793,6 +793,9 @@ def _queue_db_begin_run() -> None:
     _reset_exit_diag_stats()
     _reset_exit_export_cache()
     _reset_exit_equiv_child_cache()
+    state.lifecycle_parent_preflight.clear()
+    state.lifecycle_batch_imported.clear()
+    state.lifecycle_batch_import_failed.clear()
 
 
 def _queue_db_end_run() -> None:
@@ -2072,10 +2075,31 @@ def _import_children(children: list[dict]):
     )
 
 
-def _prepare_lifecycle_batch(entries: list[dict]) -> None:
-    """Preflight lifecycle parents, then import absent children as one batch."""
+def _lifecycle_batch_link_token(value: Any) -> str:
+    token = str(value or "").strip()
+    try:
+        return str(int(float(token)))
+    except (TypeError, ValueError, OverflowError):
+        return token
+
+
+def _lifecycle_batch_child_matches(expected: dict[str, Any], actual: dict[str, Any]) -> str:
+    for field in ("chainID", "link", "prevLink"):
+        expected_value = str(expected.get(field) or "").strip()
+        actual_value = str(actual.get(field) or "").strip()
+        if field == "link":
+            expected_value = _lifecycle_batch_link_token(expected_value)
+            actual_value = _lifecycle_batch_link_token(actual_value)
+        if expected_value and actual_value != expected_value:
+            return f"child {field} changed"
+    return ""
+
+
+def _prepare_lifecycle_batch(entries: list[dict]):
+    """Classify claimed lifecycle entries without mutating Taskwarrior."""
     state = _exit_runtime_state()
-    pending: list[tuple[str, dict, dict]] = []
+    decisions = []
+    exit_models = _module("exit_models")
     lifecycle_models = _module("lifecycle_models")
     flow = _module("exit_entry_flow")
     for entry in entries or []:
@@ -2086,10 +2110,21 @@ def _prepare_lifecycle_batch(entries: list[dict]) -> None:
             continue
         try:
             plan = lifecycle_models.LifecyclePlan.from_dict(entry["lifecycle_plan"])
-        except Exception:
+        except Exception as exc:
+            _diag(f"lifecycle batch plan rejected: {exc}")
             continue
         parent_res = _export_uuid(plan.identity.parent_uuid, prefer_cache=False)
-        if parent_res.retryable or not isinstance(parent_res.obj, dict):
+        if parent_res.retryable:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
+                reason=parent_res.err or "parent preflight unavailable",
+            ))
+            continue
+        if not isinstance(parent_res.obj, dict):
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                reason="parent task is missing",
+            ))
             continue
         mismatch = flow._parent_guard_mismatch(
             parent_res.obj,
@@ -2100,28 +2135,98 @@ def _prepare_lifecycle_batch(entries: list[dict]) -> None:
             ),
         )
         if mismatch:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                parent=parent_res.obj, reason=mismatch,
+            ))
             continue
         state.lifecycle_parent_preflight[sid] = parent_res.obj
         child = plan.child_dict()
         child_uuid = str(child.get("uuid") or "").strip()
-        exact = _export_uuid(child_uuid) if child_uuid else None
-        if exact is not None and not exact.exists and not exact.retryable:
+        if not child_uuid:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                parent=parent_res.obj, reason="lifecycle child has no UUID",
+            ))
+            continue
+        exact = _export_uuid(child_uuid)
+        child_obj = exact.obj if exact.exists and isinstance(exact.obj, dict) else None
+        if exact.retryable:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
+                parent=parent_res.obj, reason=exact.err or "child preflight unavailable",
+            ))
+            continue
+        if child_obj is not None:
+            child_reason = _lifecycle_batch_child_matches(child, child_obj)
+            if child_reason:
+                decisions.append(exit_models.LifecycleBatchDecision(
+                    sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                    parent=parent_res.obj, child=child_obj, reason=child_reason,
+                ))
+                continue
+        else:
             equivalent = _equivalent_child_cache_get(child, plan.identity.parent_uuid)
-            if equivalent is None or (not equivalent.exists and not equivalent.retryable):
-                pending.append((sid, entry, child))
-    if not pending:
+            if equivalent is not None and equivalent.retryable:
+                decisions.append(exit_models.LifecycleBatchDecision(
+                    sid, entry, plan, exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
+                    parent=parent_res.obj, reason=equivalent.err or "equivalent child preflight unavailable",
+                ))
+                continue
+            if equivalent is not None and equivalent.exists and isinstance(equivalent.obj, dict):
+                child_obj = equivalent.obj
+                child_reason = _lifecycle_batch_child_matches(child, child_obj)
+                if child_reason:
+                    decisions.append(exit_models.LifecycleBatchDecision(
+                        sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                        parent=parent_res.obj, child=child_obj, reason=child_reason,
+                    ))
+                    continue
+        expected_short = str(plan.parent_patch_dict().get("nextLink") or "").strip()
+        actual_next = _lifecycle_batch_link_token(parent_res.obj.get("nextLink"))
+        expected_next = _lifecycle_batch_link_token(expected_short)
+        if child_obj is not None:
+            kind = (
+                exit_models.LifecycleBatchDecisionKind.ALREADY_SATISFIED
+                if expected_next and actual_next == expected_next
+                else exit_models.LifecycleBatchDecisionKind.READY_TO_APPLY
+            )
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, kind, parent=parent_res.obj, child=child_obj,
+            ))
+        elif expected_next and actual_next == expected_next:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+                parent=parent_res.obj, reason="parent points to a missing child",
+            ))
+        else:
+            decisions.append(exit_models.LifecycleBatchDecision(
+                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.MISSING_CHILD,
+                parent=parent_res.obj, child=child,
+            ))
+    return exit_models.LifecycleBatchPlan(tuple(decisions))
+
+
+def _apply_lifecycle_batch(plan) -> None:
+    """Apply only the missing-child subset of a read-only batch plan."""
+    exit_models = _module("exit_models")
+    state = _exit_runtime_state()
+    missing = plan.for_kind(exit_models.LifecycleBatchDecisionKind.MISSING_CHILD)
+    if not missing:
         return
-    result = _import_children([child for _sid, _entry, child in pending])
+    result = _import_children([decision.plan.child_dict() for decision in missing])
     if not result.ok:
         _diag(f"lifecycle child batch import failed: {result.err or 'unknown error'}")
+        state.lifecycle_batch_import_failed.update(decision.spawn_intent_id for decision in missing)
         return
-    exit_models = _module("exit_models")
-    for sid, _entry, child in pending:
+    for decision in missing:
+        child = decision.plan.child_dict()
         child_uuid = str(child.get("uuid") or "").strip()
         if not child_uuid:
+            state.lifecycle_batch_import_failed.add(decision.spawn_intent_id)
             continue
         _export_cache_set(child_uuid, exit_models.ExitExportResult(True, False, "", dict(child)))
-        state.lifecycle_batch_imported.add(sid)
+        state.lifecycle_batch_imported.add(decision.spawn_intent_id)
 
 
 def _finalize_lifecycle_batch(state) -> None:
@@ -2366,6 +2471,7 @@ class _DrainState:
         self.sqlite_acked_claims: dict[int, str] = {}
         self.lifecycle_defer_verification = False
         self.lifecycle_pending_verification: dict[str, tuple[Any, Any, dict[str, Any]]] = {}
+        self.lifecycle_batch_plan = None
 
     def mark_final(self, entry: dict, status: str, reason: str) -> bool:
         sid = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
@@ -2656,6 +2762,7 @@ def _execute_lifecycle_queue_entry(ctx, state):
     """Execute a validated queue plan through the shared typed executor."""
     lifecycle_models = _module("lifecycle_models")
     lifecycle_executor = _module("lifecycle_executor")
+    exit_models = _module("exit_models")
     try:
         plan = lifecycle_models.LifecyclePlan.from_dict(ctx.entry["lifecycle_plan"])
     except Exception as exc:
@@ -2663,6 +2770,38 @@ def _execute_lifecycle_queue_entry(ctx, state):
         state.dead_letter(ctx.entry, f"invalid lifecycle plan: {exc}")
         state.reset_lock_streak()
         return False
+
+    batch_plan = getattr(state, "lifecycle_batch_plan", None)
+    batch_decision = None
+    if batch_plan is not None:
+        batch_decision = batch_plan.by_intent().get(ctx.spawn_intent_id)
+    if batch_decision is not None:
+        if batch_decision.kind is exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING:
+            state.dead_letter(
+                ctx.entry,
+                f"lifecycle batch preflight conflict: {batch_decision.reason or 'state changed'}",
+            )
+            state.reset_lock_streak()
+            return False
+        if batch_decision.kind is exit_models.LifecycleBatchDecisionKind.UNAVAILABLE:
+            reason = batch_decision.reason or "lifecycle batch preflight unavailable"
+            _diag(f"lifecycle batch preflight deferred: {reason}")
+            if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
+                state.dead_letter(ctx.entry, reason)
+            else:
+                state.requeue.append(ctx.entry)
+            return False
+        if (
+            batch_decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
+            and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_import_failed
+        ):
+            reason = "lifecycle child batch import unavailable"
+            _diag(f"lifecycle batch import deferred (intent={ctx.spawn_intent_id})")
+            if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
+                state.dead_letter(ctx.entry, reason)
+            else:
+                state.requeue.append(ctx.entry)
+            return False
 
     def stage(stage):
         result = _advance_lifecycle_stage(ctx.entry, stage)
@@ -3016,6 +3155,7 @@ def _drain_queue_result():
             preload_export_uuids=_preload_export_uuids,
             preload_equivalent_child_slots=_preload_equivalent_child_slots,
             prepare_lifecycle_batch=_prepare_lifecycle_batch,
+            apply_lifecycle_batch=_apply_lifecycle_batch,
             finalize_lifecycle_batch=_finalize_lifecycle_batch,
             process_queue_entry=_process_queue_entry,
             requeue_entries_result=_requeue_entries_result,

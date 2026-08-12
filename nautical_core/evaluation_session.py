@@ -12,6 +12,7 @@ from .recurrence_spec import RecurrenceSpec
 from .occurrence_outcomes import OccurrenceOutcome
 from .occurrence_provider import OccurrenceBatch
 from .scheduler_cursor import OccurrenceCursor
+from .time_projection import ProjectionResult, TimeProjectionService
 
 
 @dataclass(slots=True)
@@ -57,6 +58,11 @@ class EvaluationSession:
 
     def collect_events_after_cursor(self, cursor: OccurrenceCursor, *, limit: int, **kwargs: Any) -> OccurrenceBatch:
         return self._evaluator.collect_events_after_cursor(cursor, limit=limit, **kwargs)
+
+    def project_time(self, value: Any, selected_date: Any, **kwargs: Any) -> ProjectionResult:
+        """Project a time modifier without allowing it to change the date."""
+        service = self.get_or_create("time_projection_service", TimeProjectionService)
+        return service.project(value, selected_date, context=self._evaluator.context, **kwargs)
 
     @property
     def fingerprint(self) -> str:

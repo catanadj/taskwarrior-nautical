@@ -19,6 +19,7 @@ from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
 from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 from .scheduler_models import OccurrenceSearchExhausted
+from .time_projection import ProjectionResult
 
 
 @dataclass(slots=True)
@@ -49,6 +50,10 @@ class SchedulerService:
     def select_mode(self, mode: str, **kwargs: Any) -> Any:
         """Select a recurrence-mode successor through the shared session."""
         return self.session.evaluator.select_mode(mode, **kwargs)
+
+    def project_time(self, value: Any, selected_date: Any, **kwargs: Any) -> ProjectionResult:
+        """Project ``@t`` on an already selected calendar date."""
+        return self.session.project_time(value, selected_date, **kwargs)
 
     def collect(
         self,

@@ -247,6 +247,64 @@ def _check_manifest_alignment(root: Path) -> list[dict]:
     return results
 
 
+def _check_scheduler_ownership(root: Path) -> list[dict]:
+    """Reject operational calls to scheduler aliases removed from the facade."""
+    legacy_names = {
+        "atom_matches_on",
+        "base_next_after_atom",
+        "factor_matches_on",
+        "next_after_atom_with_mods",
+        "next_after_expr",
+        "next_after_factor",
+        "next_after_term",
+        "roll_apply",
+    }
+    files = [
+        *sorted((root / "nautical_core").glob("*.py")),
+        *sorted((root / "nautical_core" / "hooks").glob("*.py")),
+        root / "nautical_navigator.py",
+    ]
+    findings: list[dict] = []
+    for path in files:
+        if not path.is_file() or path.name in {"scheduler_api.py", "scheduler_atom.py", "scheduler_expr.py"}:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except Exception as exc:
+            findings.append({
+                "kind": "scheduler-ownership",
+                "name": str(path.relative_to(root)),
+                "ok": False,
+                "message": f"{type(exc).__name__}: {exc}",
+            })
+            continue
+        violations = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "core"
+            and node.func.attr in legacy_names
+        ]
+        if violations:
+            names = ", ".join(sorted({node.func.attr for node in violations}))
+            findings.append({
+                "kind": "scheduler-ownership",
+                "name": str(path.relative_to(root)),
+                "ok": False,
+                "message": f"direct public scheduler calls remain: {names}",
+            })
+    if findings:
+        return findings
+    return [{
+        "kind": "scheduler-ownership",
+        "name": "operational-call-sites",
+        "ok": True,
+        "message": "ok; scheduler service/private engine boundaries are used",
+    }]
+
+
 def _check_package_layout(root: Path, env: dict[str, str]) -> list[dict]:
     out: list[dict] = []
     pkg_init = root / "nautical_core" / "__init__.py"
@@ -414,6 +472,7 @@ def main() -> int:
         results.extend(_check_package_layout(root, layout_env))
         results.extend(_check_lazy_lifecycle_modules(root, layout_env))
         results.extend(_check_manifest_alignment(root))
+        results.extend(_check_scheduler_ownership(root))
         results.extend(_check_performance_workflow(root))
         results.extend(_check_workflow_script_references(root))
         results.extend(_check_hook_contracts(root, taskdata))

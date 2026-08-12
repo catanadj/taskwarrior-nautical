@@ -23730,6 +23730,23 @@ def test_typed_occurrence_outcomes_define_compact_presentation_summary():
     expect(presentation_summary(AbsentOccurrence("no match")) == "absent: no match", "UI outcome summary drifted")
 
 
+def test_evaluation_session_is_task_scoped_and_fingerprint_bound():
+    """A session reuses one evaluator but cannot cross task identities."""
+    from nautical_core.evaluation_session import EvaluationSession
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.recurrence_spec import RecurrenceSpec
+
+    first = EvaluationSession.from_task(
+        {"chainID": "session-a", "anchor": "w:mon"},
+        context=RecurrenceContext(chain_id="session-a"),
+    )
+    expect(first.evaluator is first.evaluator, "session evaluator was rebuilt")
+    first.get_or_create("provider", lambda: object())
+    expect(first.get_or_create("provider", lambda: object()) is first.get_or_create("provider", lambda: object()), "session cache was not reused")
+    other = RecurrenceSpec.from_task({"chainID": "session-b", "anchor": "w:mon"})
+    expect(not first.matches(other), "session accepted a different task identity")
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35258,6 +35275,7 @@ TESTS.extend([
     test_typed_occurrence_outcomes_preserve_terminal_evidence,
     test_typed_occurrence_outcomes_fail_closed_for_mutation,
     test_typed_occurrence_outcomes_define_compact_presentation_summary,
+    test_evaluation_session_is_task_scoped_and_fingerprint_bound,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

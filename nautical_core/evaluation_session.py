@@ -1,0 +1,68 @@
+"""Task-scoped recurrence evaluation session."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Mapping
+
+from .compiled_schedule import CompiledSchedule
+from .recurrence_context import RecurrenceContext
+from .recurrence_evaluator import RecurrenceEvaluator
+from .recurrence_spec import RecurrenceSpec
+
+
+@dataclass(slots=True)
+class EvaluationSession:
+    """Own one compiled schedule, evaluator, and bounded task-local state."""
+
+    compiled: CompiledSchedule
+    max_cache_entries: int = 32
+    _evaluator: RecurrenceEvaluator = field(init=False, repr=False)
+    _cache: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.compiled, CompiledSchedule):
+            raise TypeError("evaluation session requires a CompiledSchedule")
+        if self.max_cache_entries <= 0:
+            raise ValueError("evaluation session cache capacity must be positive")
+        self._evaluator = RecurrenceEvaluator.from_compiled(self.compiled)
+
+    @classmethod
+    def from_spec(cls, spec: RecurrenceSpec, *, max_cache_entries: int = 32) -> "EvaluationSession":
+        return cls(CompiledSchedule.from_spec(spec), max_cache_entries=max_cache_entries)
+
+    @classmethod
+    def from_task(
+        cls,
+        task: Mapping[str, Any],
+        *,
+        context: RecurrenceContext | None = None,
+        max_cache_entries: int = 32,
+    ) -> "EvaluationSession":
+        spec = RecurrenceSpec.from_task(task, context=context)
+        return cls.from_spec(spec, max_cache_entries=max_cache_entries)
+
+    @property
+    def evaluator(self) -> RecurrenceEvaluator:
+        return self._evaluator
+
+    @property
+    def fingerprint(self) -> str:
+        return self.compiled.fingerprint
+
+    def get_or_create(self, key: str, factory: Any) -> Any:
+        if key not in self._cache:
+            if len(self._cache) >= self.max_cache_entries:
+                self._cache.pop(next(iter(self._cache)))
+            self._cache[key] = factory()
+        return self._cache[key]
+
+    def matches(self, spec: RecurrenceSpec) -> bool:
+        return CompiledSchedule.from_spec(spec).fingerprint == self.fingerprint
+
+    def invalidate(self) -> None:
+        self._cache.clear()
+        self._evaluator = RecurrenceEvaluator.from_compiled(self.compiled)
+
+
+__all__ = ("EvaluationSession",)

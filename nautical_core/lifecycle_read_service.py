@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from collections.abc import Callable, Sequence
+from functools import lru_cache
 from typing import Any
 
 
@@ -22,6 +23,40 @@ TokenMatcher = Callable[[TaskRow, str], bool]
 CoerceInt = Callable[[Any, int | None], int | None]
 Diagnostic = Callable[[str], None]
 Counter = Callable[[str], None]
+
+
+def chain_read_key(
+    chain_id: str,
+    since: datetime | None,
+    extra: str | None,
+    limit: int,
+) -> tuple[Any, ...]:
+    """Build the stable request-cache key for one chain read."""
+    return (
+        str(chain_id or ""),
+        since.isoformat() if isinstance(since, datetime) else "",
+        str(extra or ""),
+        int(limit or 0),
+    )
+
+
+@lru_cache(maxsize=32)
+def cached_chain_export(
+    exporter: Callable[[str, datetime | None, str | None, int], Sequence[TaskRow]],
+    chain_id: str,
+    since_key: str,
+    extra_key: str,
+    limit: int,
+) -> tuple[TaskRow, ...]:
+    """Memoize one validated chain export by all scheduling parameters."""
+    since = datetime.fromisoformat(since_key) if since_key else None
+    rows = exporter(chain_id, since, extra_key or None, limit)
+    return tuple(rows)
+
+
+def clear_cached_chain_exports() -> None:
+    """Clear the process-local export cache after a Taskwarrior mutation."""
+    cached_chain_export.cache_clear()
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,8 +192,12 @@ class LifecycleReadService:
                 self._record_stat("chain_cache_filter_hits")
                 return filtered
         try:
-            rows = self._export_chain_cached(
-                chain_id, since, extra, self._max_chain_walk
+            rows = cached_chain_export(
+                self._export_chain_cached,
+                chain_id,
+                since.isoformat() if isinstance(since, datetime) else "",
+                str(extra or ""),
+                self._max_chain_walk,
             )
         except RuntimeError as exc:
             self._diag(f"chain read unavailable (chainID={chain_id}): {exc}")
@@ -205,4 +244,10 @@ class LifecycleReadService:
         return merged
 
 
-__all__ = ["ChainIndexes", "LifecycleReadService"]
+__all__ = [
+    "ChainIndexes",
+    "LifecycleReadService",
+    "cached_chain_export",
+    "chain_read_key",
+    "clear_cached_chain_exports",
+]

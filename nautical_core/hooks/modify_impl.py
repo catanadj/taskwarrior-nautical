@@ -416,7 +416,6 @@ def _invalidate_read_query_cache() -> None:
         pass
     for name in (
         "_export_uuid_short_cached",
-        "_tw_export_chain_cached_key",
     ):
         try:
             clear = getattr(globals().get(name), "cache_clear", None)
@@ -424,6 +423,10 @@ def _invalidate_read_query_cache() -> None:
                 clear()
         except Exception:
             pass
+    try:
+        _module("lifecycle_read_service").clear_cached_chain_exports()
+    except Exception:
+        pass
 
 
 def _record_chain_snapshot_stat(name: str, inc: int = 1) -> None:
@@ -2532,15 +2535,24 @@ def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] |
     )
 
 
-@lru_cache(maxsize=32)
 def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str, limit: int) -> tuple[dict, ...]:
-    """Cached chain export keyed by stable parameters."""
-    since = datetime.fromisoformat(since_key) if since_key else None
-    extra = extra_key or None
-    state = _modify_chain_state()
-    with state.chain_cache_lock:
-        if state.chain_cache_chain_id and chain_id == state.chain_cache_chain_id and not since and not extra:
-            return tuple(state.chain_cache or [])
+    """Compatibility adapter for the lifecycle read service cache."""
+    return _module("lifecycle_read_service").cached_chain_export(
+        _chain_export_for_cache,
+        chain_id,
+        since_key,
+        extra_key,
+        limit,
+    )
+
+
+def _chain_export_for_cache(
+    chain_id: str,
+    since: datetime | None,
+    extra: str | None,
+    limit: int,
+) -> tuple[dict, ...]:
+    """Validated exporter injected into the lifecycle read service cache."""
     global _LAST_CHAIN_EXPORT_STATUS
     _LAST_CHAIN_EXPORT_STATUS = (True, "")
     rows = tw_export_chain(chain_id, since=since, extra=extra, env=None, limit=limit)
@@ -2550,6 +2562,11 @@ def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str, l
     return tuple(rows)
 
 
+_tw_export_chain_cached_key.cache_clear = (  # type: ignore[attr-defined]
+    lambda: _module("lifecycle_read_service").clear_cached_chain_exports()
+)
+
+
 def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None, limit: int) -> tuple[dict, ...]:
     since_key = since.isoformat() if isinstance(since, datetime) else ""
     extra_key = str(extra or "")
@@ -2557,12 +2574,7 @@ def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | 
 
 
 def _chain_read_key(chain_id: str, since: datetime | None, extra: str | None, limit: int) -> tuple:
-    return (
-        str(chain_id or ""),
-        since.isoformat() if isinstance(since, datetime) else "",
-        str(extra or ""),
-        int(limit or 0),
-    )
+    return _module("lifecycle_read_service").chain_read_key(chain_id, since, extra, limit)
 
 
 def _cached_chain_token_match(task: dict, token: str) -> bool:
@@ -2607,7 +2619,7 @@ def _lifecycle_read_service():
         token_matcher=_cached_chain_token_match,
         read_query_get=_read_query_get,
         chain_cache_get=_cached_chain,
-        export_chain_cached=_tw_export_chain_cached,
+        export_chain_cached=_chain_export_for_cache,
         max_chain_walk=_MAX_CHAIN_WALK,
         diag=_diag,
         record_stat=_record_chain_snapshot_stat,

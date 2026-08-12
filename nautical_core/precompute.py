@@ -171,7 +171,6 @@ def build_and_cache_hints(
     cache_load,
     validate_anchor_expr_strict,
     describe_anchor_expr_from_dnf,
-    precompute_hints=None,
     cache_save,
     anchor_year_fmt: str,
     wrand_salt: str,
@@ -179,7 +178,6 @@ def build_and_cache_hints(
     holiday_region: str,
     business_calendar_fingerprint: str = "",
     include_per_year: bool = True,
-    scheduler_service_factory: Callable[..., Any] | None = None,
     hint_builder: Any | None = None,
     hint_builder_factory: Callable[[], Any] | None = None,
 ):
@@ -225,20 +223,8 @@ def build_and_cache_hints(
             now_local=datetime.now,
             include_per_year=include_per_year,
         )
-    elif precompute_hints is not None:
-        hints = precompute_hints(
-            dnf,
-            start_dt=default_due_dt,
-            anchor_mode=anchor_mode,
-            include_per_year=include_per_year,
-            scheduler_service=(
-                scheduler_service_factory(anchor_expr)
-                if scheduler_service_factory is not None
-                else None
-            ),
-        )
     else:
-        raise TypeError("Hint generation requires a typed HintBuilder.")
+        raise TypeError("Hint generation requires the typed HintBuilder service.")
 
     payload = {
         "meta": {

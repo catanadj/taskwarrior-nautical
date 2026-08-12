@@ -492,6 +492,46 @@ class LifecycleReadService:
             self._read_query_set("chain", read_key, result.rows)
         return result
 
+    def export_chain_checked(
+        self,
+        chain_id: str,
+        *,
+        since: datetime | None,
+        extra: str | None,
+        env: Any,
+        limit: int | None,
+        run_task_result: Callable[..., Any],
+        parse_result: Callable[[Any], tuple[bool, list[TaskRow], str]],
+        timeout_for_chain: Callable[[str], float],
+        read_query_missing: object,
+        on_failure: Callable[[str, float], None] | None = None,
+        on_success: Callable[[float], None] | None = None,
+    ) -> ChainReadResult:
+        """Run one checked export using the service-owned cache boundary."""
+        def run_export(args: list[str], run_env: Any, timeout: float) -> ChainReadResult:
+            return self.run_checked_export(
+                chain_id,
+                args,
+                env=run_env,
+                timeout=timeout,
+                run_task_result=run_task_result,
+                parse_result=parse_result,
+                on_failure=on_failure,
+                on_success=on_success,
+            )
+
+        return self.checked_export(
+            chain_id,
+            since=since,
+            extra=extra,
+            env=env,
+            limit=limit,
+            build_args=self.build_export_args,
+            run_export=run_export,
+            timeout_for_chain=timeout_for_chain,
+            read_query_missing=read_query_missing,
+        )
+
     def build_indexes(self, rows: Sequence[TaskRow]) -> ChainIndexes:
         """Build link, short UUID, and full UUID indexes in one pass."""
         by_link: dict[int, list[TaskRow]] = {}

@@ -3958,30 +3958,20 @@ def _tw_export_chain_checked(
             except Exception as exc:
                 return False, [], f"Taskwarrior export returned invalid JSON: {exc}"
 
-    def run_export(args, run_env, timeout):
-        return service.run_checked_export(
-            chain_id,
-            args,
-            env=run_env,
-            timeout=timeout,
-            run_task_result=run_task_result,
-            parse_result=parse_result,
-            on_failure=lambda error, export_timeout: _tw_export_chain_failure(
-                chain_id, error, export_timeout
-            ),
-            on_success=_tw_export_chain_success,
-        )
-
-    result = service.checked_export(
+    result = service.export_chain_checked(
         chain_id,
         since=since,
         extra=extra,
         env=env,
         limit=limit,
-        build_args=service.build_export_args,
-        run_export=run_export,
+        run_task_result=run_task_result,
+        parse_result=parse_result,
         timeout_for_chain=_chain_export_timeout,
         read_query_missing=_READ_QUERY_MISSING,
+        on_failure=lambda error, export_timeout: _tw_export_chain_failure(
+            chain_id, error, export_timeout
+        ),
+        on_success=_tw_export_chain_success,
     )
     return result.ok, result.rows, result.error
 

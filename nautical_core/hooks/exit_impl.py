@@ -1271,14 +1271,26 @@ def _run_task_result(
             attempts=retries,
         )
     if callable(core_runner):
-        return core_runner(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        )
+        started = time.perf_counter()
+        ok = False
+        try:
+            result = core_runner(
+                cmd,
+                env=env,
+                input_text=input_text,
+                timeout=timeout,
+                retries=retries,
+                retry_delay=retry_delay,
+            )
+            ok = bool(getattr(result, "ok", False))
+            return result
+        finally:
+            elapsed = time.perf_counter() - started
+            _diag_count_exit("run_task_calls")
+            _diag_count_exit("run_task_seconds", elapsed)
+            _diag_record_run_task(cmd, ok=ok, elapsed=elapsed)
+            if not ok:
+                _diag_count_exit("run_task_failures")
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         return hook_support.run_task_result(
@@ -2577,32 +2589,26 @@ def _execute_lifecycle_queue_entry(ctx, state):
                     reason="parent patch has no child identity",
                 )
             expected_prev = str(ctx.entry.get("parent_nextlink") or "").strip() or None
-            state_result = _parent_nextlink_state(
-                current_plan.identity.parent_uuid,
-                child_short,
-                expected_prev,
-                prefer_cache=False,
-            )
-            if state_result.state == "locked":
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.UNAVAILABLE,
-                    reason=state_result.err or "parent linkage unavailable",
-                )
-            if state_result.state == "already":
-                return _lifecycle_operation_result(lifecycle_executor.OperationState.ALREADY)
-            if state_result.state != "ok":
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.CONFLICT,
-                    reason=state_result.err or "parent nextLink changed",
-                )
             updated = _update_parent_nextlink(
                 current_plan.identity.parent_uuid,
                 child_short,
                 expected_prev,
             )
             if updated.ok:
+                if updated.state == "already":
+                    return _lifecycle_operation_result(lifecycle_executor.OperationState.ALREADY)
                 stage_result = stage(lifecycle_models.ExecutionStage.PARENT_LINKED)
                 return stage_result
+            if updated.state == "locked":
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.UNAVAILABLE,
+                    reason=updated.err or "parent linkage unavailable",
+                )
+            if updated.state in {"conflict", "missing", "invalid"}:
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.CONFLICT,
+                    reason=updated.err or "parent nextLink changed",
+                )
             operation_state = (
                 lifecycle_executor.OperationState.UNAVAILABLE
                 if _is_lock_error(updated.err)
@@ -2986,6 +2992,20 @@ def main() -> int:
         drain_queue=_drain_queue,
         strict_exit_result=_strict_exit_feedback_message,
     )
+    stats_path = (os.environ.get("NAUTICAL_BENCH_STATS_FILE") or "").strip()
+    if stats_path:
+        try:
+            Path(stats_path).write_text(
+                json.dumps(
+                    {"task_stats": dict(_exit_runtime_state().diag_stats)},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            _diag(f"benchmark stats write failed: {type(exc).__name__}: {exc}")
     _render_exit_drain_failure_panel(result.stats or {})
     return hook_results.emit_exit_result(
         result,

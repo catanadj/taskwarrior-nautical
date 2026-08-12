@@ -2762,6 +2762,23 @@ def test_on_exit_parent_update_uses_compare_and_set_selector():
     expect("nextLink:" in command[:modify_index], f"missing empty nextLink selector: {command!r}")
     expect(command[-1] == "nextLink:bbbbbbbb", f"unexpected parent update command: {command!r}")
 
+    conflict = side_effects.update_parent_nextlink(
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "dddddddd",
+        expected_prev="bbbbbbbb",
+        lock_parent_nextlink=locked,
+        parent_nextlink_state_fn=lambda *_args: exit_models.ExitParentNextlinkStateResult(
+            "conflict", "parent nextLink changed"
+        ),
+        run_task=lambda *_args, **_kwargs: calls.append(("unexpected", None)) or (True, "", ""),
+        task_cmd_prefix=["task"],
+        timeout_modify=3.0,
+        retries_modify=1,
+        retry_delay=0.0,
+    )
+    expect(not conflict.ok and conflict.state == "conflict", f"parent conflict state was lost: {conflict}")
+    expect(calls[-1][0] != "unexpected", "conflicting parent update should not invoke Taskwarrior")
+
     calls.clear()
     result = side_effects.update_parent_nextlink(
         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",

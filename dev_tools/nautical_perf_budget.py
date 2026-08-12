@@ -930,6 +930,18 @@ def _measure_workflow(name: str, samples: list[float], budget: float) -> dict:
     }
 
 
+def _read_exit_task_call_stats(path: Path) -> dict[str, int]:
+    """Read benchmark-only command counters without enabling hook diagnostics."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"queue drain benchmark stats were unavailable: {exc}") from exc
+    stats = payload.get("task_stats") if isinstance(payload, dict) else None
+    if not isinstance(stats, dict):
+        raise RuntimeError("queue drain benchmark stats did not contain task_stats")
+    return {str(key): int(value) for key, value in stats.items() if str(key).startswith("run_task_calls")}
+
+
 def _workflow_queue_rows(taskdata: Path) -> list[dict]:
     """Read queued child intents for benchmark mutation assertions."""
     db_path = taskdata / ".nautical-state" / ".nautical_queue.db"
@@ -1173,10 +1185,12 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 )
 
         queue_samples = []
+        queue_call_stats: list[dict[str, int]] = []
         for sample_index in range(repeats):
             queue_data = root / f"populated-queue-{sample_index}"
             _init_empty_queue_db(queue_data)
-            queue_env = dict(base_env, TASKDATA=str(queue_data))
+            stats_path = queue_data / "on-exit-task-stats.json"
+            queue_env = dict(base_env, TASKDATA=str(queue_data), NAUTICAL_BENCH_STATS_FILE=str(stats_path))
             parents = []
             parent_uuids: set[str] = set()
             child_uuids: set[str] = set()
@@ -1245,9 +1259,14 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                     f"{(import_proc.stderr or import_proc.stdout or '').strip()}"
                 )
 
-            queue_samples.append(
-                _run_workflow_hook(ROOT / "on-exit.nautical", input_text="", env=queue_env, expect_output=False)
+            queue_elapsed, _queue_result, _queue_stderr = _run_workflow_hook_result(
+                ROOT / "on-exit.nautical",
+                input_text="",
+                env=queue_env,
+                expect_output=False,
             )
+            queue_samples.append(queue_elapsed)
+            queue_call_stats.append(_read_exit_task_call_stats(stats_path))
 
             if _workflow_queue_rows(queue_data):
                 raise RuntimeError("queue drain benchmark left intents queued after successful processing")
@@ -1297,10 +1316,12 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             ]
             if len(parents_after) != 8 or any(not str(row.get("nextLink") or "").strip() for row in parents_after):
                 raise RuntimeError("queue drain benchmark did not update all parent nextLink values")
-        results["workflow_queue_drain"] = _measure_workflow(
+        queue_result = _measure_workflow(
             "workflow_queue_drain", queue_samples,
             float(budgets.get("workflow_queue_drain", 3.0)),
         )
+        queue_result["task_call_stats"] = queue_call_stats
+        results["workflow_queue_drain"] = queue_result
 
         reconcile_data = root / "reconcile"
         reconcile_data.mkdir()

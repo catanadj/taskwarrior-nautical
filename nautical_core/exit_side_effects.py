@@ -137,10 +137,10 @@ def update_parent_nextlink(
                 retries=retries_modify,
                 retry_delay=retry_delay,
             )
-            return ExitParentUpdateResult(result.ok, result.stderr or "")
+            return ExitParentUpdateResult(result.ok, result.stderr or "", "ok" if result.ok else "failed")
         if state_res.state == "already":
-            return ExitParentUpdateResult(True, "")
-        return ExitParentUpdateResult(False, state_res.err)
+            return ExitParentUpdateResult(True, "", "already")
+        return ExitParentUpdateResult(False, state_res.err, state_res.state)
 
 
 def clear_parent_nextlink_if_matches(

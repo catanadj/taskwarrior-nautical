@@ -160,6 +160,7 @@ class ExitParentNextlinkStateResult:
 class ExitParentUpdateResult:
     ok: bool
     err: str
+    state: str = ""
 
 
 @dataclass(slots=True)

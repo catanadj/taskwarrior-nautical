@@ -1354,59 +1354,6 @@ def _format_next_anchor_rows(
 ) -> list[tuple[str | None, str]]:
     return _module("modify_feedback").format_next_anchor_rows(rows)
 
-def _format_gap(prev_dt: datetime, next_dt: datetime, kind: str = "cp", round_hours: bool = True) -> str:
-    """
-    Format the time gap between two timeline items as a compact inline annotation.
-    Returns a string like " └─ +3d →" or empty string.
-    """
-    if not (prev_dt and next_dt):
-        return ""
-
-    gap_seconds = (next_dt - prev_dt).total_seconds()
-
-    # Skip very small gaps
-    if abs(gap_seconds) < 60:
-        return ""
-
-    # Format based on chain type
-    if kind == "cp":
-        # For CP chains, show days/hours
-        days = gap_seconds / 86400
-        if abs(days) >= 1:
-            if days.is_integer():
-                gap_str = f"{int(days)}d"
-            else:
-                # Show fractional days for non-24h multiples
-                gap_str = f"{days:.1f}d"
-        else:
-            hours = gap_seconds / 3600
-            if abs(hours) >= 1:
-                gap_str = f"{hours:.1f}h"
-            else:
-                minutes = gap_seconds / 60
-                gap_str = f"{int(minutes)}m"
-    else:
-        # For anchor chains, optionally round to nearest day
-        total_hours = gap_seconds / 3600
-        days = total_hours / 24
-
-        if round_hours and abs(days) >= 0.5:  # Only round if > 12h
-            # Round to nearest day
-            rounded_days = round(days)
-            gap_str = f"{rounded_days}d"
-        else:
-            # Show days with fractional part
-            if abs(days) >= 1:
-                gap_str = f"{days:.1f}d"
-            else:
-                # Show hours for sub-day gaps
-                gap_str = f"{total_hours:.0f}h"
-
-    return f" ➔ {gap_str}"
-
-
-
-
 def _format_next_cp_rows(
     rows: list[tuple[str, str]]
 ) -> list[tuple[str | None, str]]:
@@ -3876,7 +3823,7 @@ def _timeline_lines(
                     show_gaps=show_gaps,
                     kind="anchor",
                     round_anchor_gaps=round_anchor_gaps,
-                    format_gap=_format_gap,
+                    format_gap=_module("modify_timeline").format_gap,
                 )
             )
         return lines
@@ -3909,7 +3856,7 @@ def _timeline_lines(
         next_occurrence_after_local_dt=timeline_scheduler,
         to_local_cached=_to_local_cached,
         safe_parse_datetime=_safe_parse_datetime,
-        format_gap=_format_gap,
+        format_gap=_module("modify_timeline").format_gap,
         omit_dnf=omit_dnf,
         omit_expr_fires_on_date=(
             (lambda dnf_, d, default_seed, seed_base: anchor_omit.omit_expr_fires_on_date(dnf_, d, default_seed, seed_base, core=core))

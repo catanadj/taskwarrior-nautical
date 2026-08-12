@@ -71,6 +71,31 @@ def _format_td_short(td: timedelta) -> str:
     return "".join(parts) if parts else "0s"
 
 
+def format_gap(prev_dt: Any, next_dt: Any, kind: str = "cp", round_hours: bool = True) -> str:
+    """Format the time gap between two timeline items as a compact annotation."""
+    if not (prev_dt and next_dt):
+        return ""
+    gap_seconds = (next_dt - prev_dt).total_seconds()
+    if abs(gap_seconds) < 60:
+        return ""
+    if kind == "cp":
+        days = gap_seconds / 86400
+        if abs(days) >= 1:
+            gap_text = f"{int(days)}d" if days.is_integer() else f"{days:.1f}d"
+        else:
+            hours = gap_seconds / 3600
+            gap_text = f"{hours:.1f}h" if abs(hours) >= 1 else f"{int(gap_seconds / 60)}m"
+    else:
+        days = gap_seconds / 86400
+        if round_hours and abs(days) >= 0.5:
+            gap_text = f"{round(days)}d"
+        elif abs(days) >= 1:
+            gap_text = f"{days:.1f}d"
+        else:
+            gap_text = f"{gap_seconds / 3600:.0f}h"
+    return f" ➔ {gap_text}"
+
+
 def _timeline_initial_items(
     task: dict[str, Any],
     cur_no: int,

@@ -13,6 +13,7 @@ from typing import Any, Mapping, NoReturn
 
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
+from .scheduler_cursor import OccurrenceCursor
 from .compiled_schedule import CompiledSchedule
 from .occurrence_provider import Occurrence, OccurrenceBatch
 from .scheduler_models import OccurrenceSearchExhausted
@@ -418,6 +419,25 @@ class RecurrenceEvaluator:
             recurrence_context=self.context,
             business_calendar=self.context.business_calendar,
             max_file_skips=max_file_skips,
+        )
+
+    def next_after_cursor(
+        self,
+        cursor: OccurrenceCursor,
+        **kwargs: Any,
+    ) -> Occurrence | None:
+        """Resolve an explicit cursor without caller-side time arithmetic."""
+        if not isinstance(cursor, OccurrenceCursor):
+            raise TypeError("Occurrence lookup requires an OccurrenceCursor.")
+        if cursor.timezone is not None and self.context.timezone is not None:
+            expected = getattr(self.context.timezone, "key", self.context.timezone)
+            actual = getattr(cursor.timezone, "key", cursor.timezone)
+            if str(expected) != str(actual):
+                raise ValueError("Occurrence cursor timezone does not match evaluator context.")
+        return self.next_after(
+            cursor.local_datetime,
+            inclusive=cursor.inclusive,
+            **kwargs,
         )
 
     def next_event_after(

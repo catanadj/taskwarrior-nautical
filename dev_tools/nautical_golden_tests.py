@@ -23623,6 +23623,32 @@ def test_compiled_schedule_is_canonical_and_reusable():
             raise AssertionError(f"invalid compiled schedule was accepted: {invalid!r}")
 
 
+def test_occurrence_cursor_makes_lookup_semantics_explicit():
+    """Strict-after and inclusive cursors carry their policy explicitly."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+    from nautical_core.scheduler_cursor import OccurrenceCursor
+
+    zone = ZoneInfo("Europe/Sofia")
+    evaluator = RecurrenceEvaluator.from_task(
+        {"chainID": "cursor-chain", "anchor": "w:mon@t=09:00"},
+        context=RecurrenceContext(chain_id="cursor-chain", timezone=zone),
+    )
+    instant = datetime(2026, 8, 3, 9, 0, tzinfo=zone)
+    strict = OccurrenceCursor.strict_after(instant, timezone=zone)
+    inclusive = OccurrenceCursor.inclusive_at(instant, timezone=zone)
+    expect(not strict.inclusive and inclusive.inclusive, "cursor inclusivity was not explicit")
+    expect(evaluator.next_after_cursor(strict) is not None, "strict cursor returned no occurrence")
+    try:
+        evaluator.next_after_cursor(OccurrenceCursor.strict_after(instant, timezone=ZoneInfo("UTC")))
+    except ValueError as exc:
+        expect("timezone" in str(exc), f"cursor timezone error was unclear: {exc}")
+    else:
+        raise AssertionError("cursor accepted a conflicting timezone")
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35145,6 +35171,7 @@ TESTS.extend([
     test_random_time_window_flows_through_anchor_parser_and_resolver,
     test_recurrence_spec_normalizes_task_fields_and_context,
     test_compiled_schedule_is_canonical_and_reusable,
+    test_occurrence_cursor_makes_lookup_semantics_explicit,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

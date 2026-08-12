@@ -248,7 +248,15 @@ def anchors_between_large_range(
     seed_base=None,
     until_count_cap: int,
     next_after_expr,
+    scheduler_service=None,
 ):
+    if scheduler_service is not None:
+        return _anchors_between_service(
+            scheduler_service,
+            start_excl,
+            end_excl,
+            until_count_cap,
+        )
     acc: list = []
     cur = start_excl
 
@@ -264,6 +272,34 @@ def anchors_between_large_range(
     return acc
 
 
+def _anchors_between_service(service, start_excl, end_excl, limit: int) -> list:
+    """Collect a bounded date range through the typed scheduler service."""
+    if start_excl >= end_excl or limit <= 0:
+        return []
+    timezone = service.session.evaluator.context.timezone
+    start_dt = datetime.combine(start_excl, dt_time.max, tzinfo=timezone)
+    end_dt = datetime.combine(end_excl - timedelta(days=1), dt_time.max, tzinfo=timezone)
+    request = OccurrenceRangeRequest(
+        OccurrenceCursor.strict_after(start_dt, timezone=timezone),
+        end_local=end_dt,
+        limit=limit,
+    )
+    result = service.collect_request(request)
+    if not isinstance(result, OccurrenceCollectionResult):
+        raise TypeError("Scheduler service returned an invalid range collection.")
+    dates: list = []
+    seen: set = set()
+    for occurrence in result.occurrences:
+        local = occurrence.local_datetime
+        if local is None:
+            continue
+        day = local.date()
+        if start_excl < day < end_excl and day not in seen:
+            seen.add(day)
+            dates.append(day)
+    return dates
+
+
 def anchors_between_expr(
     dnf,
     start_excl,
@@ -276,6 +312,7 @@ def anchors_between_expr(
     anchors_between_large_range,
     warn_once_per_day,
     os_mod,
+    scheduler_service=None,
 ):
     """Find all matching dates between start_excl and end_excl."""
     if start_excl >= end_excl:
@@ -288,6 +325,15 @@ def anchors_between_expr(
             end_excl,
             default_seed,
             seed_base=seed_base,
+            scheduler_service=scheduler_service,
+        )
+
+    if scheduler_service is not None:
+        return _anchors_between_service(
+            scheduler_service,
+            start_excl,
+            end_excl,
+            until_count_cap,
         )
 
     acc: list = []

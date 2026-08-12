@@ -16,6 +16,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         end_excl,
         default_seed,
         seed_base=None,
+        scheduler_service=None,
     ):
         return core["_precompute"].anchors_between_large_range(
             dnf,
@@ -25,9 +26,18 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             seed_base=seed_base,
             until_count_cap=core["UNTIL_COUNT_CAP"],
             next_after_expr=core["next_after_expr"],
+            scheduler_service=scheduler_service,
         )
 
-    def anchors_between_expr(dnf, start_excl, end_excl, default_seed, seed_base=None):
+    def anchors_between_expr(
+        dnf,
+        start_excl,
+        end_excl,
+        default_seed,
+        seed_base=None,
+        *,
+        scheduler_service=None,
+    ):
         return core["_precompute"].anchors_between_expr(
             dnf,
             start_excl,
@@ -39,6 +49,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             anchors_between_large_range=anchors_between_large_range,
             warn_once_per_day=core["_warn_once_per_day"],
             os_mod=core["os"],
+            scheduler_service=scheduler_service,
         )
 
     return SimpleNamespace(

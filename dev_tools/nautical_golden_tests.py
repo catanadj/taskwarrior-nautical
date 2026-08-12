@@ -10954,6 +10954,37 @@ def test_build_and_cache_hints_routes_scheduler_through_service():
         core.cache_save = saved_save
 
 
+def test_large_range_candidates_use_typed_scheduler_collection():
+    """Large-range enumeration can use one bounded typed service request."""
+    from datetime import date
+    from zoneinfo import ZoneInfo
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_service import SchedulerService
+
+    import nautical_core.precompute as precompute
+
+    zone = ZoneInfo("Europe/Sofia")
+    service = SchedulerService.from_task(
+        {"chainID": "range-service", "anchor": "w:mon"},
+        context=RecurrenceContext(chain_id="range-service", timezone=zone),
+    )
+    dates = precompute.anchors_between_expr(
+        [[{"typ": "w", "spec": "mon"}]],
+        date(2026, 8, 1),
+        date(2026, 9, 1),
+        date(2026, 8, 1),
+        until_count_cap=8,
+        next_after_expr=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("typed range used legacy callback")
+        ),
+        anchors_between_large_range=precompute.anchors_between_large_range,
+        warn_once_per_day=lambda *_args, **_kwargs: None,
+        os_mod=__import__("os"),
+        scheduler_service=service,
+    )
+    expect(dates == [date(2026, 8, 3), date(2026, 8, 10), date(2026, 8, 17), date(2026, 8, 24), date(2026, 8, 31)], f"unexpected typed range: {dates}")
+
+
 def test_precompute_hints_bounds_year_stats_by_days():
     """Annual hint statistics should not count occurrences beyond the sample horizon."""
     import nautical_core.precompute as precompute
@@ -34505,6 +34536,7 @@ TESTS = [
     test_cache_key_for_task_caches_build_acf_results,
     test_build_and_cache_hints_parses_once_per_miss,
     test_build_and_cache_hints_routes_scheduler_through_service,
+    test_large_range_candidates_use_typed_scheduler_collection,
     test_precompute_hints_bounds_year_stats_by_days,
     test_precompute_hints_can_skip_unused_annual_stats,
     test_precompute_hints_reuses_no_match_scheduler_result,

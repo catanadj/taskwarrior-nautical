@@ -7833,7 +7833,13 @@ def test_chain_integrity_warnings_detects_issues():
             "chainID": "",
         },
     ]
-    warnings = mod._chain_integrity_warnings(chain, expected_chain_id="cid")
+    analytics = mod.core._import_sibling("modify_analytics")
+    warnings = analytics.chain_integrity_warnings(
+        chain,
+        expected_chain_id="cid",
+        coerce_int=mod.core.coerce_int,
+        short=mod._short,
+    )
     expect(any("missing link(s): 2" in w for w in warnings), f"expected link gap warning, got {warnings}")
     expect(any("missing chainID" in w for w in warnings), f"expected chainID warning, got {warnings}")
 
@@ -7848,7 +7854,18 @@ def test_chain_health_advice_coach_healthy_streak():
         {"uuid": "c", "link": 3, "status": "completed", "due": "20250107T090000Z", "end": "20250107T090800Z"},
         {"uuid": "d", "link": 4, "status": "pending", "due": "20250110T090000Z"},
     ]
-    got = mod._chain_health_advice(chain, "cp", {"cp": "3d"}, style="coach")
+    analytics = mod.core._import_sibling("modify_analytics")
+    got = analytics.chain_health_advice(
+        chain,
+        "cp",
+        {"cp": "3d"},
+        core=mod.core,
+        parse_datetime=mod._dtparse,
+        format_delta=mod._fmt_td_dd_hhmm,
+        coerce_int=mod.core.coerce_int,
+        tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
+        style="coach",
+    )
     expect(
         got == "Chain looks healthy with a 3-link on-time streak; keep the current cadence.",
         f"unexpected healthy advice: {got!r}",
@@ -7865,7 +7882,18 @@ def test_chain_health_advice_coach_low_ontime_issue():
         {"uuid": "c", "link": 3, "status": "completed", "due": "20250103T090000Z", "end": "20250103T093000Z"},
         {"uuid": "d", "link": 4, "status": "pending", "due": "20250105T090000Z"},
     ]
-    got = mod._chain_health_advice(chain, "cp", {"cp": "1d"}, style="coach")
+    analytics = mod.core._import_sibling("modify_analytics")
+    got = analytics.chain_health_advice(
+        chain,
+        "cp",
+        {"cp": "1d"},
+        core=mod.core,
+        parse_datetime=mod._dtparse,
+        format_delta=mod._fmt_td_dd_hhmm,
+        coerce_int=mod.core.coerce_int,
+        tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
+        style="coach",
+    )
     expect(
         got == "Chain needs attention (on-time rate is low); try smaller scopes or later due times.",
         f"unexpected issue advice: {got!r}",
@@ -7882,7 +7910,18 @@ def test_chain_health_advice_clinical_drift_and_style_normalization():
         {"uuid": "c", "link": 3, "status": "completed", "due": "20250103T090000Z", "end": "20250103T090500Z"},
         {"uuid": "d", "link": 4, "status": "completed", "due": "20250105T090000Z", "end": "20250105T090500Z"},
     ]
-    got = mod._chain_health_advice(chain, "anchor", {}, style=" Clinical ")
+    analytics = mod.core._import_sibling("modify_analytics")
+    got = analytics.chain_health_advice(
+        chain,
+        "anchor",
+        {},
+        core=mod.core,
+        parse_datetime=mod._dtparse,
+        format_delta=mod._fmt_td_dd_hhmm,
+        coerce_int=mod.core.coerce_int,
+        tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
+        style=" Clinical ",
+    )
     expect(
         got == "OT 100% | Drift +1d 00h:00m | Streak 4 | Vol 0d 00h:23m",
         f"unexpected clinical advice: {got!r}",

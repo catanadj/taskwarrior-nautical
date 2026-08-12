@@ -720,6 +720,12 @@ _MODULE_SPECS = {
         "modify_expiration.py",
         "nautical_core.modify_expiration",
     ),
+    "modify_analytics": (
+        "_MODIFY_ANALYTICS",
+        "_MODIFY_ANALYTICS_LOAD_FAILED",
+        "modify_analytics.py",
+        "nautical_core.modify_analytics",
+    ),
     "anchor_omit": (
         "_ANCHOR_OMIT",
         "_ANCHOR_OMIT_LOAD_FAILED",
@@ -3762,16 +3768,12 @@ def _fmt_td_compact_abs(delta: timedelta) -> str:
 
 
 def _sort_chain_for_analytics(chain: list[dict]) -> list[dict]:
-    def _link_sort_key(obj):
-        ln = core.coerce_int(obj.get("link"), None)
-        if ln is not None:
-            return (0, ln)
-        due = _dtparse(obj.get("due")) or datetime.max.replace(tzinfo=timezone.utc)
-        return (1, due)
-    try:
-        return sorted(chain, key=_link_sort_key)
-    except Exception:
-        return chain[:]
+    analytics = _module("modify_analytics")
+    return analytics.sort_chain_for_analytics(
+        chain,
+        coerce_int=core.coerce_int,
+        parse_datetime=_dtparse,
+    )
 
 
 def _chain_health_streak(completed_with_dates: list[dict], tol_secs: int) -> int:
@@ -3954,27 +3956,16 @@ def _chain_health_advice(
     tol_secs: int = _ANALYTICS_ONTIME_TOL_SECS,
     style: str = _ANALYTICS_STYLE,
 ) -> str | None:
-    if not chain:
-        return None
-
-    ordered = _sort_chain_for_analytics(chain)
-    metrics = _chain_health_completed_metrics(ordered, tol_secs)
-    on_time_rate = metrics["on_time_rate"]
-    streak = metrics["streak"]
-    vol = metrics["vol"]
-    drift_secs, median_gap = _chain_health_drift(ordered, kind, task)
-
-    style = (style or "coach").strip().lower()
-    if style == "clinical":
-        return _chain_health_clinical_text(on_time_rate, drift_secs, streak, vol)
-    return _chain_health_coach_text(
+    return _module("modify_analytics").chain_health_advice(
+        chain,
         kind,
         task,
-        on_time_rate,
-        drift_secs,
-        median_gap,
-        streak,
-        vol,
+        core=core,
+        parse_datetime=_dtparse,
+        format_delta=_fmt_td_dd_hhmm,
+        coerce_int=core.coerce_int,
+        tol_secs=tol_secs,
+        style=style,
     )
 
 
@@ -4074,18 +4065,13 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
 
 def _chain_integrity_warnings(chain: list[dict], expected_chain_id: str | None = None) -> list[str]:
     if core is None:
-        try:
-            _load_core()
-        except Exception:
-            return []
-    if not isinstance(chain, list) or not chain:
-        return []
-
-    short_map, link_map, missing_link, warnings = _chain_integrity_collect(chain, expected_chain_id)
-    warnings.extend(_chain_integrity_missing_link_warning(missing_link))
-    warnings.extend(_chain_integrity_link_sequence_warnings(link_map))
-    warnings.extend(_chain_integrity_reciprocal_warnings(chain, short_map))
-    return _dedupe_preserve_order(warnings)
+        _load_core()
+    return _module("modify_analytics").chain_integrity_warnings(
+        chain,
+        expected_chain_id=expected_chain_id,
+        coerce_int=core.coerce_int,
+        short=_short,
+    )
 
 
 def _fmt_secs_delta(now_ref, secs: float | None) -> str:

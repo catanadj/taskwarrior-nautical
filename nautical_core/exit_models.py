@@ -31,6 +31,8 @@ class ExitParentNextlinkStateCallback(Protocol):
         expected_prev: str | None = None,
         *,
         prefer_cache: bool = True,
+        parent_guard: dict[str, Any] | None = None,
+        guard_mismatch_fn: Any = None,
     ) -> ExitParentNextlinkStateResult: ...
 
 

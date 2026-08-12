@@ -61,12 +61,36 @@ def import_child(
     return ExitImportResult(False, last_err)
 
 
+def import_children(
+    children: list[dict[str, Any]],
+    *,
+    run_task: Callable[..., tuple[bool, str, str]],
+    task_cmd_prefix: list[str],
+    timeout_import: float,
+) -> ExitImportResult:
+    """Import a bounded deterministic child batch in one Taskwarrior call."""
+    from nautical_core.exit_models import ExitImportResult
+
+    if not children:
+        return ExitImportResult(True, "")
+    payload = "".join(json.dumps(child, ensure_ascii=False, separators=(",", ":")) + "\n" for child in children)
+    result = _typed_result(
+        run_task,
+        task_cmd_prefix + ["rc.hooks=off", "rc.verbose=nothing", "import", "-"],
+        input_text=payload,
+        timeout=timeout_import,
+    )
+    return ExitImportResult(bool(result.ok), result.stderr or "")
+
+
 def parent_nextlink_state(
     parent_uuid: str,
     child_short: str,
     *,
     expected_prev: str | None,
     export_uuid: Callable[[str], ExitExportResult],
+    parent_guard: dict[str, Any] | None = None,
+    guard_mismatch_fn: Callable[[dict[str, Any], dict[str, Any]], str] | None = None,
 ) -> ExitParentNextlinkStateResult:
     if not parent_uuid or not child_short:
         from nautical_core.exit_models import ExitParentNextlinkStateResult
@@ -79,6 +103,10 @@ def parent_nextlink_state(
     if not parent:
         from nautical_core.exit_models import ExitParentNextlinkStateResult
         return ExitParentNextlinkStateResult("missing", "parent missing")
+    if parent_guard and guard_mismatch_fn is not None:
+        mismatch = guard_mismatch_fn(parent, parent_guard)
+        if mismatch:
+            return ExitParentNextlinkStateResult("conflict", mismatch)
     current = (parent.get("nextLink") or "").strip()
     expected = (expected_prev or "").strip()
     if current == child_short:
@@ -108,6 +136,8 @@ def update_parent_nextlink(
     timeout_modify: float,
     retries_modify: int,
     retry_delay: float,
+    parent_guard: dict[str, Any] | None = None,
+    guard_mismatch_fn: Callable[[dict[str, Any], dict[str, Any]], str] | None = None,
 ) -> ExitParentUpdateResult:
     from nautical_core.exit_models import ExitParentUpdateResult
 
@@ -116,7 +146,16 @@ def update_parent_nextlink(
     with lock_parent_nextlink(parent_uuid) as locked:
         if not locked:
             return ExitParentUpdateResult(False, "parent lock busy")
-        state_res = parent_nextlink_state_fn(parent_uuid, child_short, expected_prev)
+        if parent_guard is None and guard_mismatch_fn is None:
+            state_res = parent_nextlink_state_fn(parent_uuid, child_short, expected_prev)
+        else:
+            state_res = parent_nextlink_state_fn(
+                parent_uuid,
+                child_short,
+                expected_prev,
+                parent_guard=parent_guard,
+                guard_mismatch_fn=guard_mismatch_fn,
+            )
         if state_res.state == "ok":
             # Keep the optimistic read and Taskwarrior mutation coupled. The
             # filesystem lock serializes Nautical writers, while this selector

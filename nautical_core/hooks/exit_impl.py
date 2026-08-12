@@ -2062,21 +2062,98 @@ def _import_child(obj: dict):
     )
 
 
-def _update_parent_nextlink(parent_uuid: str, child_short: str, expected_prev: str | None = None):
+def _import_children(children: list[dict]):
+    exit_side_effects = _module("exit_side_effects")
+    return exit_side_effects.import_children(
+        children,
+        run_task=_run_task_result,
+        task_cmd_prefix=_task_cmd_prefix(),
+        timeout_import=_TASK_TIMEOUT_IMPORT,
+    )
+
+
+def _prepare_lifecycle_batch(entries: list[dict]) -> None:
+    """Preflight lifecycle parents, then import absent children as one batch."""
+    state = _exit_runtime_state()
+    pending: list[tuple[str, dict, dict]] = []
+    lifecycle_models = _module("lifecycle_models")
+    flow = _module("exit_entry_flow")
+    for entry in entries or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("lifecycle_plan"), dict):
+            continue
+        sid = str(entry.get("spawn_intent_id") or "").strip()
+        if not sid:
+            continue
+        try:
+            plan = lifecycle_models.LifecyclePlan.from_dict(entry["lifecycle_plan"])
+        except Exception:
+            continue
+        parent_res = _export_uuid(plan.identity.parent_uuid, prefer_cache=False)
+        if parent_res.retryable or not isinstance(parent_res.obj, dict):
+            continue
+        mismatch = flow._parent_guard_mismatch(
+            parent_res.obj,
+            plan.parent_guard.to_dict(),
+            recurrence_fingerprint=lambda task: lifecycle_models.recurrence_fingerprint(
+                task,
+                parse_datetime=getattr(core, "parse_dt_any", None),
+            ),
+        )
+        if mismatch:
+            continue
+        state.lifecycle_parent_preflight[sid] = parent_res.obj
+        child = plan.child_dict()
+        child_uuid = str(child.get("uuid") or "").strip()
+        exact = _export_uuid(child_uuid) if child_uuid else None
+        if exact is not None and not exact.exists and not exact.retryable:
+            equivalent = _equivalent_child_cache_get(child, plan.identity.parent_uuid)
+            if equivalent is None or (not equivalent.exists and not equivalent.retryable):
+                pending.append((sid, entry, child))
+    if not pending:
+        return
+    result = _import_children([child for _sid, _entry, child in pending])
+    if not result.ok:
+        _diag(f"lifecycle child batch import failed: {result.err or 'unknown error'}")
+        return
+    exit_models = _module("exit_models")
+    for sid, _entry, child in pending:
+        child_uuid = str(child.get("uuid") or "").strip()
+        if not child_uuid:
+            continue
+        _export_cache_set(child_uuid, exit_models.ExitExportResult(True, False, "", dict(child)))
+        state.lifecycle_batch_imported.add(sid)
+
+
+def _update_parent_nextlink(
+    parent_uuid: str,
+    child_short: str,
+    expected_prev: str | None = None,
+    *,
+    parent_guard: dict[str, Any] | None = None,
+):
     exit_side_effects = _module("exit_side_effects")
     return exit_side_effects.update_parent_nextlink(
         parent_uuid,
         child_short,
         expected_prev=expected_prev,
         lock_parent_nextlink=_lock_parent_nextlink,
-        parent_nextlink_state_fn=lambda parent_uuid, child_short, expected_prev: _parent_nextlink_state(
-            parent_uuid, child_short, expected_prev, prefer_cache=False
+        parent_nextlink_state_fn=lambda parent_uuid, child_short, expected_prev, **kwargs: _parent_nextlink_state(
+            parent_uuid, child_short, expected_prev, prefer_cache=False, **kwargs
         ),
         run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         timeout_modify=_TASK_TIMEOUT_MODIFY,
         retries_modify=_TASK_RETRIES_MODIFY,
         retry_delay=_TASK_RETRY_DELAY,
+        parent_guard=parent_guard,
+        guard_mismatch_fn=lambda parent, guard: _module("exit_entry_flow")._parent_guard_mismatch(
+            parent,
+            guard,
+            recurrence_fingerprint=lambda task: _module("lifecycle_models").recurrence_fingerprint(
+                task,
+                parse_datetime=getattr(core, "parse_dt_any", None),
+            ),
+        ),
     )
 
 
@@ -2098,13 +2175,23 @@ def _clear_parent_nextlink_if_matches(parent_uuid: str, child_short: str):
         _exit_runtime_state().export_cache.pop(str(parent_uuid or "").strip(), None)
 
 
-def _parent_nextlink_state(parent_uuid: str, child_short: str, expected_prev: str | None = None, *, prefer_cache: bool = True):
+def _parent_nextlink_state(
+    parent_uuid: str,
+    child_short: str,
+    expected_prev: str | None = None,
+    *,
+    prefer_cache: bool = True,
+    parent_guard: dict[str, Any] | None = None,
+    guard_mismatch_fn=None,
+):
     exit_side_effects = _module("exit_side_effects")
     return exit_side_effects.parent_nextlink_state(
         parent_uuid,
         child_short,
         expected_prev=expected_prev,
         export_uuid=lambda uuid_str: _export_uuid(uuid_str, prefer_cache=prefer_cache),
+        parent_guard=parent_guard,
+        guard_mismatch_fn=guard_mismatch_fn,
     )
 
 
@@ -2486,6 +2573,8 @@ def _execute_lifecycle_queue_entry(ctx, state):
 
     class Services:
         def validate_parent(self, current_plan):
+            if ctx.spawn_intent_id in _exit_runtime_state().lifecycle_parent_preflight:
+                return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
             result = _export_uuid(current_plan.identity.parent_uuid, prefer_cache=False)
             if result.retryable:
                 return _lifecycle_operation_result(
@@ -2596,6 +2685,7 @@ def _execute_lifecycle_queue_entry(ctx, state):
                 current_plan.identity.parent_uuid,
                 child_short,
                 expected_prev,
+                parent_guard=current_plan.parent_guard.to_dict(),
             )
             if updated.ok:
                 if updated.state == "already":
@@ -2649,6 +2739,10 @@ def _execute_lifecycle_queue_entry(ctx, state):
                 _cleanup_orphan_child(child_uuid, ctx.spawn_intent_id)
             return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
 
+    if ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported:
+        child_stage = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.CHILD_PRESENT)
+        if not child_stage.ok:
+            return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, child_stage)
     outcome = lifecycle_executor.LifecycleTransitionExecutor(Services()).execute(plan)
     if outcome.kind in {
         lifecycle_models.LifecycleOutcomeKind.RETRYABLE,
@@ -2810,6 +2904,7 @@ def _drain_queue_result():
             exit_progress_scope=_exit_progress_scope,
             preload_export_uuids=_preload_export_uuids,
             preload_equivalent_child_slots=_preload_equivalent_child_slots,
+            prepare_lifecycle_batch=_prepare_lifecycle_batch,
             process_queue_entry=_process_queue_entry,
             requeue_entries_result=_requeue_entries_result,
             ack_queue_entries_sqlite_result=_ack_queue_entries_sqlite_result,

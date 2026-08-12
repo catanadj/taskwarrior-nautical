@@ -60,6 +60,7 @@ class ExitDrainServices:
     exit_progress_scope: ExitProgressScope
     preload_export_uuids: PreloadEntries
     preload_equivalent_child_slots: PreloadEntries
+    prepare_lifecycle_batch: PreloadEntries | None
     process_queue_entry: ProcessQueueEntry
     requeue_entries_result: RequeueEntries
     ack_queue_entries_sqlite_result: AckQueueEntries
@@ -99,6 +100,8 @@ def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
                 progress_update(phase="preload", state=state)
             services.preload_export_uuids(preload_entries)
             services.preload_equivalent_child_slots(preload_entries)
+            if services.prepare_lifecycle_batch is not None:
+                services.prepare_lifecycle_batch(preload_entries)
             if progress_update is not None:
                 progress_update(phase="drain", state=state)
 

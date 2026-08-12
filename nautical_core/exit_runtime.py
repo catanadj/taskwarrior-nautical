@@ -33,6 +33,8 @@ class ExitRuntimeState:
     startup_stats: dict[str, float | int] = field(default_factory=dict)
     export_cache: dict[str, Any] = field(default_factory=dict)
     equiv_child_cache: dict[tuple[str, str, str], Any] = field(default_factory=dict)
+    lifecycle_parent_preflight: dict[str, dict[str, Any]] = field(default_factory=dict)
+    lifecycle_batch_imported: set[str] = field(default_factory=set)
 
 
 def new_runtime_state() -> ExitRuntimeState:

@@ -18064,6 +18064,32 @@ def test_on_exit_import_child_retries_on_lock():
         expect(len(sleeps) == 2, f"unexpected sleep calls: {sleeps}")
 
 
+def test_on_exit_import_children_batches_payloads():
+    """Lifecycle child batches use one import command and preserve JSON lines."""
+    hook = _find_hook_file("on-exit.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_exit_batch_import_test")
+    side_effects = mod._module("exit_side_effects")
+    calls = []
+
+    def run_task(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return True, "", ""
+
+    children = [{"uuid": "child-1", "link": 2}, {"uuid": "child-2", "link": 3}]
+    result = side_effects.import_children(
+        children,
+        run_task=run_task,
+        task_cmd_prefix=["task"],
+        timeout_import=3.0,
+    )
+    expect(result.ok, f"batch import should succeed: {result}")
+    expect(len(calls) == 1, f"batch import should use one command: {calls!r}")
+    payload = calls[0][1].get("input_text") or ""
+    expect(payload.count("\n") == 2, f"batch import should send two JSON lines: {payload!r}")
+    expect(json.loads(payload.splitlines()[0])["uuid"] == "child-1", f"first child was not preserved: {payload!r}")
+    expect(json.loads(payload.splitlines()[1])["uuid"] == "child-2", f"second child was not preserved: {payload!r}")
+
+
 def test_on_exit_dead_letter_on_import_failure():
     """on-exit should dead-letter entries that fail to import."""
     hook = _find_hook_file("on-exit.nautical")
@@ -33852,6 +33878,7 @@ TESTS = [
     test_on_exit_drain_updates_progress_per_entry,
     test_on_exit_dead_letter_on_missing_fields,
     test_on_exit_import_child_retries_on_lock,
+    test_on_exit_import_children_batches_payloads,
     test_on_exit_equivalent_child_cache_reuses_slot_lookup,
     test_on_exit_preloads_equivalent_child_slots_for_early_checks,
     test_on_exit_combines_uuid_and_equivalent_slot_preloads,

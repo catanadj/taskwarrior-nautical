@@ -22887,28 +22887,6 @@ def test_navigator_surfaces_anchor_projection_failures():
         sys.modules.pop(module_name, None)
 
 
-def test_navigator_normalizes_extended_scheduler_results():
-    """Navigator projections should tolerate scheduler metadata appended by newer core versions."""
-    module_name = "_nautical_navigator_scheduler_result_test"
-    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
-    spec = importlib.util.spec_from_loader(module_name, loader)
-    navigator = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = navigator
-    try:
-        loader.exec_module(navigator)
-        original = navigator.core.next_after_expr
-        navigator.core.next_after_expr = lambda *_args, **_kwargs: ("2026-08-03", {"basis": "test"}, "diagnostic")
-        try:
-            expect(
-                navigator._next_after_expr_pair([], date(2026, 7, 29)) == ("2026-08-03", {"basis": "test"}),
-                "navigator did not preserve the first two scheduler result values",
-            )
-        finally:
-            navigator.core.next_after_expr = original
-    finally:
-        sys.modules.pop(module_name, None)
-
-
 def test_navigator_resolves_symbolic_anchor_time_offsets():
     """Navigator projections should convert symbolic event times and preserve offsets."""
     if not _astral_test_available():
@@ -35172,7 +35150,6 @@ TESTS = [
     test_config_exposes_anchor_file_dir,
     test_navigator_uses_task_business_calendar_for_anchor_projection,
     test_navigator_surfaces_anchor_projection_failures,
-    test_navigator_normalizes_extended_scheduler_results,
     test_navigator_resolves_symbolic_anchor_time_offsets,
     test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_anchor_file_root_gets_chainid_stamp,

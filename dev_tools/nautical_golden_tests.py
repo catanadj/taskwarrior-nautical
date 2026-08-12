@@ -23834,6 +23834,85 @@ def test_scheduler_parity_matrix_covers_context_sensitive_rules():
         )
 
 
+def test_scheduler_cross_path_conformance_matrix():
+    """Next, preview, collection, and range paths agree across recurrence families."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    from nautical_core.occurrence_outcomes import FoundOccurrence
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+    from nautical_core.scheduler_service import SchedulerService
+    from dev_tools.nautical_scheduler_parity import assert_monotonic, _occurrence_signature
+
+    zone = ZoneInfo("Europe/Sofia")
+    cases = (
+        ("ordinary", {"anchor": "w:mon,wed,fri@t=09:00"}, "2026-03-01T09:00:00", 3),
+        ("sparse", {"anchor": "y:02-29@t=09:00"}, "2026-01-01T09:00:00", 2),
+        ("interval", {"anchor": "m/2:15@t=09:00"}, "2026-01-01T09:00:00", 3),
+        ("and-or", {"anchor": "(w:mon + m:1) | w:fri@t=09:00"}, "2026-03-01T09:00:00", 3),
+        ("omit", {"anchor": "w:mon | w:wed@t=09:00", "omit": "w:wed"}, "2026-03-01T09:00:00", 3),
+        ("random", {"anchor": "m:rand@t=09:00"}, "2026-04-01T09:00:00", 3),
+        ("overnight", {"anchor": "w:mon@t=22:30..06:30/2"}, "2026-08-03T23:00:00", 3),
+    )
+    for name, task, stamp, limit in cases:
+        task = dict(task, chainID=f"conformance-{name}")
+        context = RecurrenceContext(chain_id=task["chainID"], timezone=zone)
+        service = SchedulerService.from_task(task, context=context)
+        cursor = OccurrenceCursor.strict_after(
+            datetime.fromisoformat(stamp).replace(tzinfo=zone), timezone=zone
+        )
+        first = service.next(cursor)
+        collected = service.collect(cursor, limit=limit)
+        preview = service.preview(cursor.local_datetime, limit=1, timezone=zone)
+        ranged = service.collect_request(
+            OccurrenceRangeRequest(
+                cursor,
+                end_local=cursor.local_datetime + timedelta(days=2400),
+                limit=limit,
+            )
+        )
+        assert_monotonic(collected.occurrences)
+        assert_monotonic(ranged.occurrences)
+        expect(isinstance(first, FoundOccurrence), f"{name} next path did not find an occurrence: {first!r}")
+        expect(collected.occurrences, f"{name} collection returned no occurrence")
+        expect(preview.occurrences, f"{name} preview returned no occurrence")
+        expect(ranged.occurrences, f"{name} range returned no occurrence")
+        first_signature = _occurrence_signature(first.occurrence)
+        expect(first_signature == _occurrence_signature(collected.occurrences[0]), f"{name} next/collection diverged")
+        expect(first_signature == _occurrence_signature(preview.occurrences[0]), f"{name} next/preview diverged")
+        expect(first_signature == _occurrence_signature(ranged.occurrences[0]), f"{name} next/range diverged")
+        repeat = service.collect(cursor, limit=limit)
+        expect(
+            tuple(_occurrence_signature(item) for item in collected.occurrences)
+            == tuple(_occurrence_signature(item) for item in repeat.occurrences),
+            f"{name} collection was not deterministic",
+        )
+
+    if _astral_test_available() and getattr(core, "ASTRONOMY_CONFIG", {}):
+        task = {"anchor": "w:mon@t=sunrise", "chainID": "conformance-astronomy"}
+        context = RecurrenceContext(
+            chain_id=task["chainID"], timezone=zone,
+            astronomy_config=core.ASTRONOMY_CONFIG,
+        )
+        service = SchedulerService.from_task(task, context=context)
+        cursor = OccurrenceCursor.strict_after(
+            datetime(2026, 6, 1, 9, tzinfo=zone), timezone=zone
+        )
+        expect(isinstance(service.next(cursor), FoundOccurrence), "astronomy next path did not find an occurrence")
+
+    with tempfile.TemporaryDirectory() as td:
+        Path(td, "calendar.csv").write_text("date,description\n2026-08-03,first\n2026-08-10,second\n", encoding="utf-8")
+        task = {"anchor_file": "calendar.csv@t=09:00", "chainID": "conformance-file"}
+        context = RecurrenceContext(chain_id=task["chainID"], timezone=zone, anchor_file_dir=td)
+        service = SchedulerService.from_task(task, context=context)
+        cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 1, 9, tzinfo=zone), timezone=zone)
+        first = service.next(cursor)
+        ranged = service.collect_request(OccurrenceRangeRequest(cursor, limit=2))
+        expect(isinstance(first, FoundOccurrence), "file next path did not find an occurrence")
+        expect(ranged.occurrences and ranged.occurrences[0].description == "first", "file range lost description")
+        expect(_occurrence_signature(first.occurrence) == _occurrence_signature(ranged.occurrences[0]), "file next/range diverged")
+
+
 def test_occurrence_range_request_validates_context_bounds_and_policy():
     """Range requests are explicit, bounded, and context-checked."""
     from datetime import datetime, timedelta
@@ -35498,6 +35577,7 @@ TESTS.extend([
     test_scheduler_service_is_one_typed_occurrence_entry_point,
     test_scheduler_parity_harness_compares_legacy_callback_only_in_tests,
     test_scheduler_parity_matrix_covers_context_sensitive_rules,
+    test_scheduler_cross_path_conformance_matrix,
     test_occurrence_range_request_validates_context_bounds_and_policy,
     test_occurrence_range_request_exposes_omission_provenance,
     test_occurrence_range_request_wraps_unavailable_and_invalid_failures,

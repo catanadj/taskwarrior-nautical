@@ -1520,6 +1520,85 @@ def test_expiration_candidate_uses_scheduled_recurrence_basis():
     expect(plan.child_dict()["scheduled"] == candidate.child_due, "expiration plan lost scheduled target field")
 
 
+def test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries():
+    """The shared planner must preserve semantic plans across supported recurrence boundaries."""
+    from datetime import datetime, timezone
+    from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
+    from nautical_core.lifecycle_planner import LifecyclePreflight, RecurrenceCandidate, plan_candidate_successor
+
+    due = datetime(2026, 8, 17, 9, tzinfo=timezone.utc)
+
+    class Generation:
+        class Core:
+            @staticmethod
+            def coerce_int(value, default=0):
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return default
+
+            @staticmethod
+            def fmt_isoz(value):
+                return value.isoformat().replace("+00:00", "Z")
+
+        core = Core()
+
+        def compute_cp_child_due(self, _task):
+            return due, {"target_field": "due"}
+
+        def compute_anchor_child_due(self, _task):
+            return due, {"target_field": "due"}, ["anchor"]
+
+        def safe_parse_datetime(self, value):
+            return (due, None) if value else (None, None)
+
+        def build_child_from_parent(self, task, child_due, field, link, parent_short, kind, cpmax, until):
+            child = {
+                "uuid": "55555555-0000-0000-0000-000000000005",
+                "status": "pending",
+                "chain": "on",
+                "chainID": task["chainID"],
+                "link": link,
+                "prevLink": parent_short,
+                field: child_due,
+            }
+            if task.get("until"):
+                child["until"] = task["until"]
+            return child
+
+    generation = Generation()
+    cases = (
+        ({"cp": "1d", "due": "20260816T090000Z"}, "cp", {"target_field": "due"}),
+        ({"anchor": "w:mon", "due": "20260816T090000Z"}, "anchor", {"target_field": "due"}),
+        ({"anchor_file": "dates.txt", "due": "20260816T090000Z"}, "anchor_file", {"target_field": "due"}),
+        ({"cp": "1d", "scheduled": "20260816T090000Z"}, "cp", {"target_field": "scheduled"}),
+        ({"cp": "1d", "due": "20260816T090000Z", "until": "20260818T090000Z"}, "cp", {"target_field": "due"}),
+    )
+    for index, (fields, kind, metadata) in enumerate(cases):
+        parent = {
+            "uuid": f"66666666-0000-0000-0000-00000000000{index}",
+            "status": "completed",
+            "chain": "on",
+            "chainID": f"matrix-{index}",
+            "link": 1,
+            **fields,
+        }
+        snapshot = TaskSnapshot.from_mapping(parent)
+        candidate = RecurrenceCandidate(child_due=due, metadata=tuple(metadata.items()))
+        preflight = LifecyclePreflight.from_context(base_link=1, next_link=2, kind=kind, chain_id=f"matrix-{index}")
+        first = plan_candidate_successor(
+            snapshot, LifecycleEvent.COMPLETE, candidate,
+            generation=generation, validated_configuration={"scheduler_fingerprint": "matrix"},
+            compare_datetimes=lambda left, right: (left > right) - (left < right), preflight=preflight,
+        )
+        second = plan_candidate_successor(
+            snapshot, LifecycleEvent.COMPLETE, candidate,
+            generation=generation, validated_configuration={"scheduler_fingerprint": "matrix"},
+            compare_datetimes=lambda left, right: (left > right) - (left < right), preflight=preflight,
+        )
+        expect(first.semantic_key() == second.semantic_key(), f"plan parity drifted for {kind} case")
+
+
 def test_diagnostic_event_renders_to_stderr_and_has_stable_record():
     """Structured diagnostics must keep stdout clean and expose stable fields."""
     from nautical_core import diagnostic_models, runtime
@@ -34121,6 +34200,7 @@ TESTS = [
     test_lifecycle_planner_is_pure_and_deterministic,
     test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile,
     test_expiration_candidate_uses_scheduled_recurrence_basis,
+    test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries,
     test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy,
     test_diagnostic_event_renders_to_stderr_and_has_stable_record,
     test_taskwarrior_document_is_lossless_with_typed_scalar_accessors,

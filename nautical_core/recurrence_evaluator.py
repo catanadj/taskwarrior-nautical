@@ -791,6 +791,7 @@ class RecurrenceEvaluator:
             max_iterations=max_iterations,
             build_local_datetime=self.build_local_datetime,
             to_local=self.to_local,
+            require_contract=True,
         )
 
     def collect_after_cursor(

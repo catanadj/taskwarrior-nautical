@@ -159,6 +159,7 @@ def collect_after(
     count_omitted: bool = False,
     build_local_datetime: Callable[[date, tuple[int, int]], datetime],
     to_local: Callable[[datetime], datetime],
+    require_contract: bool = False,
 ) -> OccurrenceBatch[Occurrence]:
     """Collect a bounded stream while counting only non-omitted occurrences."""
     if isinstance(after_local, OccurrenceCursor):
@@ -178,6 +179,9 @@ def collect_after(
         raise ValueError("Occurrence collection iteration limit must be a positive integer.")
     if limit == 0:
         return OccurrenceBatch()
+    contract = getattr(provider, "contract", None)
+    if require_contract and not isinstance(contract, ProviderContract):
+        raise TypeError("Occurrence provider must expose a typed ProviderContract.")
     cursor = _cursor_before(cursor_value) if inclusive else cursor_value
     out: list[Occurrence] = []
     terminal: OccurrenceSearchExhausted | None = None
@@ -205,6 +209,11 @@ def collect_after(
             raise TypeError("Occurrence provider returned an invalid value.")
         if occurrence.local_datetime is None:
             raise ValueError("Lazy occurrence provider returned no local datetime.")
+        if isinstance(contract, ProviderContract):
+            if contract.lower_date is not None and occurrence.day < contract.lower_date:
+                raise ValueError("Occurrence provider returned a date before its declared bound.")
+            if contract.upper_date is not None and occurrence.day > contract.upper_date:
+                raise ValueError("Occurrence provider returned a date after its declared bound.")
         _require_forward_progress(cursor, occurrence.local_datetime)
         cursor = occurrence.local_datetime
         out.append(occurrence)

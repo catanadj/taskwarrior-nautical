@@ -515,33 +515,8 @@ def _collect_included_with_provider(
     return_occurrences: bool = False,
     anchor_file_provider: Any | None = None,
     evaluator: Any | None = None,
-    scheduler_service: Any | None = None,
 ) -> list[datetime] | list[Occurrence]:
     """Collect included occurrences through the typed provider boundary."""
-    if scheduler_service is not None:
-        from .scheduler_cursor import OccurrenceCursor
-
-        result = scheduler_service.collect(
-            OccurrenceCursor(
-                after_local_dt,
-                inclusive=inclusive,
-                timezone=getattr(scheduler_service.session.evaluator.context, "timezone", None),
-            ),
-            limit=limit,
-            fallback_hhmm=fallback_hhmm,
-            default_seed_date=default_seed_date,
-            pick_occurrence_local=pick_occurrence_local,
-            anchor_file_provider=anchor_file_provider,
-            max_iterations=max_iterations,
-            max_file_skips=max_iterations,
-        )
-        collected = result.occurrences
-        if return_occurrences:
-            return collected
-        return OccurrenceBatch(
-            [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None],
-            terminal=result.terminal,
-        )
     if evaluator is not None:
         collected = evaluator.collect_after(
             after_local_dt,

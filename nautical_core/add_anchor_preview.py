@@ -203,6 +203,7 @@ def anchor_preview_first_due(
     core: Any,
     to_local_cached: Callable[[datetime], datetime],
     evaluator: Any,
+    scheduler_service: Any,
     error_and_exit: Callable[[list[tuple[str, str]]], None],
     fmt_local_for_task: Callable[[datetime], str],
 ) -> tuple[Any, datetime, datetime, Any, tuple[int, int]]:
@@ -215,20 +216,22 @@ def anchor_preview_first_due(
 
     inclusive = not user_provided_due
     reference_local = to_local_cached(due_dt) if user_provided_due else now_local
-    provider = AnchorOccurrenceProvider(
-        lambda value: evaluator.next_after(
-            value,
-            fallback_hhmm=fallback_hhmm,
-            default_seed_date=interval_seed,
+    from .occurrence_outcomes import FoundOccurrence
+    from .scheduler_cursor import OccurrenceCursor
+
+    outcome = scheduler_service.next(
+        OccurrenceCursor(
+            reference_local,
             inclusive=inclusive,
+            timezone=getattr(scheduler_service.session.evaluator.context, "timezone", None),
         ),
+        fallback_hhmm=fallback_hhmm,
+        default_seed_date=interval_seed,
     )
-    occurrence = provider.next_after(
-        reference_local,
-        build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-        to_local=lambda value: value,
-    )
-    first_due_local_dt = occurrence.local_datetime if occurrence is not None else None
+    if isinstance(outcome, FoundOccurrence):
+        first_due_local_dt = outcome.local_datetime
+    else:
+        first_due_local_dt = None
     if not first_due_local_dt:
         if omit_dnf:
             message = "No matching anchor dates found. Omit rules removed every future occurrence."
@@ -1063,16 +1066,18 @@ def handle_anchor_preview_on_add(
         )
 
     try:
-        from .recurrence_evaluator import RecurrenceEvaluator
+        from .recurrence_context import RecurrenceContext
+        from .scheduler_service import SchedulerService
 
-        recurrence_evaluator = RecurrenceEvaluator.from_task(
-            task,
-            fallback_chain_id=seed_base or None,
+        context = RecurrenceContext(
+            chain_id=str(task.get("chainID") or seed_base or "preview"),
             timezone=getattr(core, "_LOCAL_TZ", None),
             business_calendar=core.business_calendar_for_task(task),
             astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         )
+        scheduler_service = SchedulerService.from_task(task, context=context)
+        recurrence_evaluator = scheduler_service.session.evaluator
     except Exception as exc:
         error_and_exit(
             [
@@ -1105,6 +1110,7 @@ def handle_anchor_preview_on_add(
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
+            scheduler_service=scheduler_service,
         )
         if not occurrences:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
@@ -1144,6 +1150,7 @@ def handle_anchor_preview_on_add(
             core=core,
             to_local_cached=to_local_cached,
             evaluator=recurrence_evaluator,
+            scheduler_service=scheduler_service,
             error_and_exit=error_and_exit,
             fmt_local_for_task=fmt_local_for_task,
         )

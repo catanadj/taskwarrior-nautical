@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Callable, Generic, Protocol, TypeVar
+from typing import Callable, Generic, Literal, Protocol, TypeVar
 
 from .scheduler_models import OccurrenceSearchExhausted
 from .scheduler_cursor import OccurrenceCursor
@@ -12,6 +12,30 @@ from .timeutil import compare_datetimes
 
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderContract:
+    """Stable metadata every occurrence adapter exposes to the scheduler."""
+
+    source: str
+    cursor: Literal["strict_after", "inclusive"] = "strict_after"
+    finite: bool = False
+    lower_date: date | None = None
+    upper_date: date | None = None
+
+    def __post_init__(self) -> None:
+        if not self.source or not isinstance(self.source, str):
+            raise ValueError("Occurrence provider source must be a non-empty string.")
+        if self.cursor not in {"strict_after", "inclusive"}:
+            raise ValueError("Occurrence provider cursor must be strict_after or inclusive.")
+        if not isinstance(self.finite, bool):
+            raise TypeError("Occurrence provider finiteness must be boolean.")
+        for value in (self.lower_date, self.upper_date):
+            if value is not None and (not isinstance(value, date) or isinstance(value, datetime)):
+                raise TypeError("Occurrence provider bounds must be calendar dates.")
+        if self.lower_date is not None and self.upper_date is not None and self.lower_date > self.upper_date:
+            raise ValueError("Occurrence provider lower bound exceeds its upper bound.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +96,11 @@ class OccurrenceBatch(list[T], Generic[T]):
 
 
 class LazyOccurrenceProvider(Protocol):
+    @property
+    def contract(self) -> ProviderContract:
+        """Declare cursor semantics and any known finite date bounds."""
+        ...
+
     def next_after(
         self,
         after_local: datetime,
@@ -242,6 +271,10 @@ class AnchorOccurrenceProvider:
         self._source = source
         self._description = description
 
+    @property
+    def contract(self) -> ProviderContract:
+        return ProviderContract(source=self._source)
+
     def next_after(
         self,
         after_local: datetime,
@@ -281,6 +314,10 @@ class AnchorEventOccurrenceProvider:
         self._source = source
         self._description = description
 
+    @property
+    def contract(self) -> ProviderContract:
+        return ProviderContract(source=self._source, cursor="strict_after")
+
     def next_after(
         self,
         after_local: datetime,
@@ -319,5 +356,6 @@ __all__ = (
     "Occurrence",
     "OccurrenceBatch",
     "OccurrenceProvider",
+    "ProviderContract",
     "collect_after",
 )

@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping, MutableMapping
 
-from .recurrence_evaluator import RecurrenceEvaluator
 from .scheduler_service import SchedulerService
 from .recurrence_context import RecurrenceContext
 
@@ -165,7 +164,7 @@ class ChainGenerationService:
             raise ChainIdentityError()
         return chain_id
 
-    def _task_evaluator(self, task: Mapping[str, Any]) -> RecurrenceEvaluator:
+    def _task_scheduler(self, task: Mapping[str, Any]) -> SchedulerService:
         identity = self._require_chain_id(task)
         key = (
             identity,
@@ -180,7 +179,7 @@ class ChainGenerationService:
         )
         cached = self._evaluator_cache.get(key)
         if cached is not None:
-            return cached.session.evaluator
+            return cached
         context = RecurrenceContext.from_task(
             task,
             fallback_chain_id=identity,
@@ -191,7 +190,7 @@ class ChainGenerationService:
         )
         service = SchedulerService.from_task(task, context=context)
         self._evaluator_cache[key] = service
-        return service.session.evaluator
+        return service
 
     def _local(self, value: datetime) -> datetime:
         return self.core.to_local(value)
@@ -278,12 +277,13 @@ class ChainGenerationService:
         if not expression and not anchor_file:
             return None, None, None
         self._require_chain_id(parent)
-        evaluator = self._task_evaluator(parent)
+        scheduler = self._task_scheduler(parent)
+        evaluator = scheduler.session.evaluator
         end_local, due_local, due_dt = self._anchor_parent_local_times(parent)
         if end_local is None or due_local is None:
             return None, None, None
         try:
-            result = evaluator.select_mode(
+            result = scheduler.select_mode(
                 str(parent.get("anchor_mode") or "skip").strip().lower() or "skip",
                 due_local=due_local,
                 end_local=end_local,

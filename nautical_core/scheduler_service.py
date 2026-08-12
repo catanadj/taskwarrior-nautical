@@ -46,6 +46,10 @@ class SchedulerService:
     def next(self, cursor: OccurrenceCursor, **kwargs: Any) -> OccurrenceOutcome:
         return self.session.next_outcome(cursor, **kwargs)
 
+    def select_mode(self, mode: str, **kwargs: Any) -> Any:
+        """Select a recurrence-mode successor through the shared session."""
+        return self.session.evaluator.select_mode(mode, **kwargs)
+
     def collect(
         self,
         cursor: OccurrenceCursor,

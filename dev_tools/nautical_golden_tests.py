@@ -28676,15 +28676,15 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         chain_generation_service = FakeGeneration()
 
         @staticmethod
-        def _safe_parse_datetime(value):
+        def safe_parse_datetime(value):
             return FakeHook.chain_generation_service.safe_parse_datetime(value)
 
         @staticmethod
-        def _task_cmd_prefix():
+        def task_cmd_prefix():
             return ["task"]
 
         @staticmethod
-        def _spawn_child(_child, _parent):
+        def spawn_child(_child, _parent):
             return "22222222", set()
 
     original = (
@@ -28865,11 +28865,11 @@ def test_reconcile_apply_refreshes_parent_under_lock():
         chain_generation_service = FakeGeneration()
 
         @staticmethod
-        def _safe_parse_datetime(_value):
+        def safe_parse_datetime(_value):
             return None, None
 
         @staticmethod
-        def _spawn_child(child, _parent):
+        def spawn_child(child, _parent):
             world["imports"] += 1
             child_uuid = "22222222-0000-0000-0000-000000000002"
             world["children"].append({**child, "uuid": child_uuid, "status": "pending"})
@@ -28979,11 +28979,11 @@ def test_reconcile_apply_resumes_after_parent_update_failure():
         chain_generation_service = FakeGeneration()
 
         @staticmethod
-        def _safe_parse_datetime(_value):
+        def safe_parse_datetime(_value):
             return None, None
 
         @staticmethod
-        def _spawn_child(child, _parent):
+        def spawn_child(child, _parent):
             world["imports"] += 1
             child_uuid = "22222222-0000-0000-0000-000000000002"
             world["children"].append({**child, "uuid": child_uuid, "status": "pending"})
@@ -29388,7 +29388,7 @@ def test_reconcile_post_apply_strict_uuid_is_compatibility_aware():
     }
     tool._fresh_parent = lambda _task_bin, _parent: dict(parent)
     tool._existing_children = lambda _task_bin, _parent: [dict(child)]
-    hook = SimpleNamespace(_stable_child_uuid=lambda _parent, _child: "33333333-0000-0000-0000-000000000003")
+    hook = SimpleNamespace(stable_child_uuid=lambda _parent, _child: "33333333-0000-0000-0000-000000000003")
     tool._verify_applied_child("task", parent, "22222222", hook=hook)
     try:
         tool._verify_applied_child("task", parent, "22222222", hook=hook, strict_uuid=True)

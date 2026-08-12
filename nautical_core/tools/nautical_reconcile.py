@@ -136,7 +136,7 @@ def _format_local_until(hook: Any, value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
         return raw
-    parser = getattr(hook, "safe_parse_datetime", None) or getattr(hook, "_safe_parse_datetime", None)
+    parser = getattr(hook, "safe_parse_datetime", None)
     formatter = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
     if not callable(parser) or not callable(formatter):
         return raw
@@ -150,19 +150,19 @@ def _format_local_until(hook: Any, value: Any) -> str:
 
 
 def _safe_parse_datetime(hook: Any, value: Any):
-    parser = getattr(hook, "safe_parse_datetime", None) or getattr(hook, "_safe_parse_datetime", None)
+    parser = getattr(hook, "safe_parse_datetime", None)
     if not callable(parser):
         return None, "datetime parser unavailable"
     return parser(value)
 
 
 def _stable_child_uuid(hook: Any, parent: dict[str, Any], child: dict[str, Any]) -> str:
-    resolver = getattr(hook, "stable_child_uuid", None) or getattr(hook, "_stable_child_uuid", None)
+    resolver = getattr(hook, "stable_child_uuid", None)
     return str(resolver(parent, child) or "") if callable(resolver) else ""
 
 
 def _spawn_child(hook: Any, child: dict[str, Any], parent: dict[str, Any]) -> tuple[str, set[str]]:
-    spawn = getattr(hook, "spawn_child", None) or getattr(hook, "_spawn_child", None)
+    spawn = getattr(hook, "spawn_child", None)
     if not callable(spawn):
         raise RuntimeError("Taskwarrior mutation gateway does not provide child spawning")
     return spawn(child, parent)
@@ -270,7 +270,7 @@ def _load_reconcile_runtime(task_bin: str, hook_path: str | None = None):
 
 
 def _bind_hook_task_bin(hook: Any, task_bin: str) -> None:
-    original_prefix = hook._task_cmd_prefix
+    original_prefix = hook.task_cmd_prefix
 
     def _task_cmd_prefix() -> list[str]:
         prefix = list(original_prefix())
@@ -278,7 +278,7 @@ def _bind_hook_task_bin(hook: Any, task_bin: str) -> None:
             prefix[0] = task_bin
         return prefix
 
-    hook._task_cmd_prefix = _task_cmd_prefix
+    hook.task_cmd_prefix = _task_cmd_prefix
 
 
 def _validate_hook_protocol(hook: Any) -> None:
@@ -968,9 +968,7 @@ def _verify_applied_child(
     )
     if matched is None:
         raise RuntimeError("post-apply child verification could not identify the resolved child")
-    if callable(getattr(hook, "stable_child_uuid", None)) or callable(
-        getattr(hook, "_stable_child_uuid", None)
-    ):
+    if callable(getattr(hook, "stable_child_uuid", None)):
         expected_uuid = _stable_child_uuid(hook, fresh_parent, matched).strip().lower()
         actual_uuid = str(matched.get("uuid") or "").strip().lower()
         if strict_uuid and expected_uuid and actual_uuid != expected_uuid:

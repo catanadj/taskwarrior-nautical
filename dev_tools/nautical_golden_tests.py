@@ -23560,7 +23560,7 @@ def test_recurrence_spec_normalizes_task_fields_and_context():
 def test_compiled_schedule_is_canonical_and_reusable():
     """Equivalent recurrence formatting compiles to one immutable schedule."""
     import json
-    from nautical_core.compiled_schedule import CompiledSchedule
+    from nautical_core.compiled_schedule import CompiledSchedule, CompiledScheduleCache
     from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
     first = CompiledSchedule.from_task({
@@ -23576,6 +23576,9 @@ def test_compiled_schedule_is_canonical_and_reusable():
         "chainMax": 4,
     })
     expect(first.fingerprint == second.fingerprint, "canonical schedule fingerprint drifted")
+    cache = CompiledScheduleCache(max_entries=2)
+    cached_first = cache.get_or_compile(first.spec)
+    expect(cached_first is cache.get_or_compile(second.spec), "compiled schedules were not reused")
     expect(first.to_dict()["compiler_schema"] == 1, "compiled schedule schema was not versioned")
     diagnostic = first.to_diagnostic_json()
     expect(json.loads(diagnostic) == first.to_dict(), "compiled diagnostic JSON did not round-trip")

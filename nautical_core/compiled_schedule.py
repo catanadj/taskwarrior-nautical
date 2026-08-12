@@ -85,6 +85,57 @@ class ScheduleLimits:
         return {"chain_max": self.chain_max, "chain_until": self.chain_until}
 
 
+class CompiledScheduleCache:
+    """Bounded task/request-scoped reuse cache for compiled schedules."""
+
+    def __init__(self, *, max_entries: int = 32) -> None:
+        if max_entries <= 0:
+            raise ValueError("compiled schedule cache capacity must be positive")
+        self._max_entries = max_entries
+        self._entries: dict[str, CompiledSchedule] = {}
+
+    def get_or_compile(self, spec: RecurrenceSpec) -> "CompiledSchedule":
+        if not isinstance(spec, RecurrenceSpec):
+            raise TypeError("compiled schedule cache requires a RecurrenceSpec")
+        key = _spec_cache_key(spec)
+        existing = self._entries.get(key)
+        if existing is not None:
+            return existing
+        compiled = CompiledSchedule.from_spec(spec)
+        if len(self._entries) >= self._max_entries:
+            self._entries.pop(next(iter(self._entries)))
+        self._entries[key] = compiled
+        return compiled
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+def _spec_cache_key(spec: RecurrenceSpec) -> str:
+    context = spec.context
+    payload = {
+        "anchor": spec.anchor,
+        "anchor_file": spec.anchor_file,
+        "omit": spec.omit,
+        "omit_file": spec.omit_file,
+        "cp": spec.cp,
+        "anchor_mode": spec.anchor_mode,
+        "chain_max": spec.chain_max,
+        "chain_until": spec.chain_until,
+        "context": {
+            "chain_id": context.chain_id,
+            "timezone": _stable_context_value(context.timezone),
+            "business_calendar": _stable_context_value(context.business_calendar),
+            "astronomy_config": _stable_context_value(context.astronomy_config),
+            "anchor_file_dir": context.anchor_file_dir,
+            "namespace": context.namespace,
+        },
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
     """Parse expression fields once and describe the provider-facing inputs."""
     if spec.cp and (spec.anchor or spec.anchor_file):
@@ -237,4 +288,5 @@ __all__ = (
     "ProviderInstruction",
     "ProjectionInstruction",
     "ScheduleLimits",
+    "CompiledScheduleCache",
 )

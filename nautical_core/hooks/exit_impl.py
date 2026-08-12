@@ -2308,6 +2308,7 @@ def _finalize_lifecycle_batch(state) -> None:
                         task,
                         parse_datetime=getattr(core, "parse_dt_any", None),
                     ),
+                    check_modified=False,
                 )
                 if mismatch:
                     reason = mismatch

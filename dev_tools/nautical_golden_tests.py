@@ -2828,6 +2828,85 @@ def test_on_exit_parent_update_uses_compare_and_set_selector():
     command = calls[0][0]
     expect("nextLink:bbbbbbbb" in command[:command.index("modify")], f"missing expected link selector: {command!r}")
 
+
+def test_on_exit_parent_update_guards_revision_and_recovers_no_match():
+    """Guarded updates select the exported revision and classify failed modifies by reread."""
+    hook = _find_hook_file("on-exit.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_exit_parent_revision_guard_test")
+    exit_models = mod._module("exit_models")
+
+    @contextlib.contextmanager
+    def locked(_parent_uuid):
+        yield True
+
+    guard = {
+        "status": "pending",
+        "chain": "on",
+        "chainID": "chain-1",
+        "link": "4",
+        "modified": "20260812T120000Z",
+    }
+    calls = []
+    state_calls = {"count": 0}
+
+    def applied_after_no_match(*_args, **_kwargs):
+        state_calls["count"] += 1
+        if state_calls["count"] == 1:
+            return exit_models.ExitParentNextlinkStateResult("ok", "")
+        return exit_models.ExitParentNextlinkStateResult("already", "")
+
+    result = mod._module("exit_side_effects").update_parent_nextlink(
+        "parent-uuid",
+        "child-uuid",
+        expected_prev="",
+        lock_parent_nextlink=locked,
+        parent_nextlink_state_fn=applied_after_no_match,
+        run_task=lambda cmd, **kwargs: calls.append((cmd, kwargs)) or (False, "", "No matches."),
+        task_cmd_prefix=["task"],
+        timeout_modify=3.0,
+        retries_modify=0,
+        retry_delay=0.0,
+        parent_guard=guard,
+        guard_mismatch_fn=lambda *_args: "",
+    )
+    expect(result.ok and result.state == "already", f"post-failure applied state was not recovered: {result}")
+    command = calls[0][0]
+    before_modify = command[:command.index("modify")]
+    for selector in (
+        "nextLink:",
+        "status:pending",
+        "chain:on",
+        "chainID:chain-1",
+        "link:4",
+        "modified:20260812T120000Z",
+    ):
+        expect(selector in before_modify, f"missing guarded selector {selector}: {command!r}")
+
+    state_calls["count"] = 0
+
+    def conflicting_after_no_match(*_args, **_kwargs):
+        state_calls["count"] += 1
+        return exit_models.ExitParentNextlinkStateResult(
+            "ok" if state_calls["count"] == 1 else "conflict",
+            "parent modified revision changed",
+        )
+
+    conflict = mod._module("exit_side_effects").update_parent_nextlink(
+        "parent-uuid",
+        "child-uuid",
+        expected_prev="",
+        lock_parent_nextlink=locked,
+        parent_nextlink_state_fn=conflicting_after_no_match,
+        run_task=lambda *_args, **_kwargs: (False, "", "No matches."),
+        task_cmd_prefix=["task"],
+        timeout_modify=3.0,
+        retries_modify=0,
+        retry_delay=0.0,
+        parent_guard=guard,
+        guard_mismatch_fn=lambda *_args: "parent modified revision changed",
+    )
+    expect(not conflict.ok and conflict.state == "conflict", f"stale no-match was accepted: {conflict}")
+
 def test_on_exit_uses_tw_data_dir_for_export_and_modify():
     """on-exit should target TW_DATA_DIR when explicit data dir is enabled."""
     hook = _find_hook_file("on-exit.nautical")
@@ -33998,6 +34077,7 @@ TESTS = [
     test_on_exit_rolls_back_parent_nextlink_on_missing_child,
     test_on_exit_guarded_parent_clear_preserves_changed_link,
     test_on_exit_parent_update_uses_compare_and_set_selector,
+    test_on_exit_parent_update_guards_revision_and_recovers_no_match,
     test_on_exit_stale_parent_guard_prevents_child_import,
     test_on_exit_uses_tw_data_dir_for_export_and_modify,
     test_on_exit_no_explicit_taskdata_skips_rc_data_location,

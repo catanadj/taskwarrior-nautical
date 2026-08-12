@@ -235,6 +235,7 @@ def _parent_guard(snapshot: TaskSnapshot) -> ParentGuard:
             chain_id=str(snapshot.get("chainID") or ""),
             link=_link(snapshot.get("link"), default=0),
             recurrence_fingerprint=recurrence_fingerprint(snapshot.to_dict()),
+            modified=str(snapshot.get("modified") or ""),
         )
     except LifecycleContractError as exc:
         raise LifecyclePlanningError(str(exc)) from exc

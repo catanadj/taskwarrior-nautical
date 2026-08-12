@@ -232,6 +232,7 @@ class ParentGuard:
     chain_id: str
     link: int
     recurrence_fingerprint: str = ""
+    modified: str = ""
 
     def __post_init__(self) -> None:
         for name in ("status", "chain", "chain_id"):
@@ -242,6 +243,7 @@ class ParentGuard:
         if isinstance(self.link, bool) or not isinstance(self.link, int) or self.link < 0:
             raise LifecycleContractError("parent guard link must be a non-negative integer")
         object.__setattr__(self, "recurrence_fingerprint", str(self.recurrence_fingerprint or "").strip())
+        object.__setattr__(self, "modified", str(self.modified or "").strip())
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ParentGuard":
@@ -257,6 +259,7 @@ class ParentGuard:
             chain_id=str(value.get("chainID", value.get("chain_id", ""))),
             link=link,
             recurrence_fingerprint=str(value.get("recurrence_fingerprint", "")),
+            modified=str(value.get("modified", "")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -268,6 +271,8 @@ class ParentGuard:
         }
         if self.recurrence_fingerprint:
             result["recurrence_fingerprint"] = self.recurrence_fingerprint
+        if self.modified:
+            result["modified"] = self.modified
         return result
 
 

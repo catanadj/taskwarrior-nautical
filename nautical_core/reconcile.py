@@ -507,6 +507,7 @@ def _build_reconcile_plan_unscoped(
                 chain_id=str(parent.get("chainID") or ""),
                 link=link,
                 recurrence_fingerprint=recurrence_fingerprint(parent),
+                modified=str(parent.get("modified") or ""),
             )
             identity = LifecycleIdentity(
                 chain_id=guard.chain_id,
@@ -659,6 +660,7 @@ def _build_reconcile_plan_unscoped(
                 chain_id=str(parent.get("chainID") or ""),
                 link=int(next_link - 1),
                 recurrence_fingerprint=recurrence_fingerprint(parent),
+                modified=str(parent.get("modified") or ""),
             )
             identity = LifecycleIdentity(
                 chain_id=guard.chain_id,

@@ -2062,6 +2062,7 @@ def _spawn_child_atomic(
         "chain": parent_task_with_nextlink.get("chain") or "",
         "chainID": parent_task_with_nextlink.get("chainID") or "",
         "link": parent_task_with_nextlink.get("link") or "",
+        "modified": parent_task_with_nextlink.get("modified") or "",
         "recurrence_fingerprint": recurrence_guard,
     }
     lifecycle_plan = lifecycle_models.LifecyclePlan.from_mappings(

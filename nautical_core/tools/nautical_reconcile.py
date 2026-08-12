@@ -1123,6 +1123,7 @@ def _terminal_lifecycle_plan(plan: reconcile.ReconcilePlan) -> LifecyclePlan:
         chain_id=chain_id,
         link=link,
         recurrence_fingerprint=recurrence_fingerprint(parent),
+        modified=str(parent.get("modified") or ""),
     )
     identity = LifecycleIdentity(
         chain_id=chain_id,

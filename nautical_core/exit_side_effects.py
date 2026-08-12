@@ -162,6 +162,11 @@ def update_parent_nextlink(
             # also protects against an external Taskwarrior writer changing
             # nextLink between the export and modify commands.
             expected_filter = f"nextLink:{(expected_prev or '').strip()}"
+            guard_filters: list[str] = []
+            for field in ("status", "chain", "chainID", "link", "modified"):
+                value = str((parent_guard or {}).get(field) or "").strip()
+                if value:
+                    guard_filters.append(f"{field}:{value}")
             result = _typed_result(
                 run_task,
                 task_cmd_prefix + [
@@ -169,6 +174,7 @@ def update_parent_nextlink(
                     "rc.verbose=nothing",
                     f"uuid:{parent_uuid}",
                     expected_filter,
+                    *guard_filters,
                     "modify",
                     f"nextLink:{child_short}",
                 ],
@@ -176,7 +182,29 @@ def update_parent_nextlink(
                 retries=retries_modify,
                 retry_delay=retry_delay,
             )
-            return ExitParentUpdateResult(result.ok, result.stderr or "", "ok" if result.ok else "failed")
+            if result.ok:
+                return ExitParentUpdateResult(True, "", "ok")
+
+            # Taskwarrior versions differ in how a selector no-match is
+            # reported. Re-read once after a failed modify so a mutation that
+            # landed despite a non-zero status is accepted, while stale or
+            # conflicting parents remain fail-closed.
+            try:
+                post_state = parent_nextlink_state_fn(
+                    parent_uuid,
+                    child_short,
+                    expected_prev,
+                    parent_guard=parent_guard,
+                    guard_mismatch_fn=guard_mismatch_fn,
+                )
+            except TypeError:
+                post_state = None
+            if post_state is not None:
+                if post_state.state == "already":
+                    return ExitParentUpdateResult(True, "", "already")
+                if post_state.state in {"locked", "conflict", "missing", "invalid"}:
+                    return ExitParentUpdateResult(False, post_state.err, post_state.state)
+            return ExitParentUpdateResult(False, result.stderr or "parent update failed", "failed")
         if state_res.state == "already":
             return ExitParentUpdateResult(True, "", "already")
         return ExitParentUpdateResult(False, state_res.err, state_res.state)

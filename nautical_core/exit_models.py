@@ -50,6 +50,8 @@ class ExitParentUpdateCallback(Protocol):
         parent_uuid: str,
         child_short: str,
         expected_prev: str | None = None,
+        *,
+        parent_guard: dict[str, Any] | None = None,
     ) -> ExitParentUpdateResult: ...
 
 

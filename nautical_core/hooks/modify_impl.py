@@ -3627,7 +3627,12 @@ def _timeline_lines(
     modify_timeline = _module("modify_timeline")
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
     anchor_omit = _module("anchor_omit") if kind == "anchor" else None
-    evaluator = _recurrence_evaluator_for_task(task) if kind in {"anchor", "cp"} else None
+    scheduler_service = _scheduler_service_for_task(task) if kind == "anchor" else None
+    evaluator = (
+        scheduler_service.session.evaluator
+        if scheduler_service is not None
+        else (_recurrence_evaluator_for_task(task) if kind == "cp" else None)
+    )
     timeline_scheduler = _next_occurrence_after_local_dt
     if evaluator is not None and kind == "anchor":
         timeline_scheduler = evaluator._default_next_occurrence_after_local_dt
@@ -3652,6 +3657,7 @@ def _timeline_lines(
         short=_short,
         tolocal=_tolocal,
         next_occurrence_after_local_dt=timeline_scheduler,
+        scheduler_service=scheduler_service,
         to_local_cached=_to_local_cached,
         safe_parse_datetime=_safe_parse_datetime,
         format_gap=_module("modify_timeline").format_gap,

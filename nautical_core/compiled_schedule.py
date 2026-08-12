@@ -8,6 +8,7 @@ not perform Taskwarrior I/O, provider lookup, or occurrence evaluation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 import hashlib
 import json
 from typing import Any, Mapping
@@ -33,14 +34,18 @@ def _freeze_value(value: Any) -> Any:
 
 
 def _thaw_value(value: Any) -> Any:
+    if isinstance(value, Mapping) and set(value) == {"__timedelta_seconds"}:
+        return timedelta(seconds=float(value["__timedelta_seconds"]))
     if isinstance(value, tuple):
         if all(isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str) for item in value):
-            return {key: _thaw_value(item) for key, item in value}
+            return _thaw_value({key: _thaw_value(item) for key, item in value})
         return [_thaw_value(item) for item in value]
     return value
 
 
 def _jsonable(value: Any) -> Any:
+    if isinstance(value, timedelta):
+        return {"__timedelta_seconds": value.total_seconds()}
     if isinstance(value, ProviderInstruction):
         return value.to_dict()
     if isinstance(value, ProjectionInstruction):

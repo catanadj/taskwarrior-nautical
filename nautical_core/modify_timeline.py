@@ -191,6 +191,7 @@ def _timeline_future_anchor_items(
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
     next_occurrence_after_local_dt: Callable[..., Any],
+    scheduler_service: Any | None = None,
     omit_dnf,
     omit_expr_fires_on_date: Callable[..., bool] | None,
     omit_description_for_date: Callable[[Any, Any], str | None] | None,
@@ -204,18 +205,20 @@ def _timeline_future_anchor_items(
     due0, _ = safe_parse_datetime(task.get("due"))
     sched0, _ = safe_parse_datetime(task.get("scheduled"))
     default_seed = to_local_cached(due0 or sched0 or child_due_utc).date()
-    from .occurrence_provider import AnchorOccurrenceProvider
+    provider = None
+    if scheduler_service is None:
+        from .occurrence_provider import AnchorOccurrenceProvider
 
-    provider = AnchorOccurrenceProvider(
-        lambda value: next_occurrence_after_local_dt(
-            dnf,
-            value,
-            default_seed_date=default_seed,
-            seed_base=seed_base,
-            omit_dnf=None,
-            fallback_hhmm=fallback_hhmm,
-        ),
-    )
+        provider = AnchorOccurrenceProvider(
+            lambda value: next_occurrence_after_local_dt(
+                dnf,
+                value,
+                default_seed_date=default_seed,
+                seed_base=seed_base,
+                omit_dnf=None,
+                fallback_hhmm=fallback_hhmm,
+            ),
+        )
     after_local = nxt_local
     iterations = 0
     actual_future = 0
@@ -226,12 +229,33 @@ def _timeline_future_anchor_items(
             break
         iterations += 1
         try:
-            occurrence = provider.next_after(
-                after_local,
-                build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-                to_local=lambda value: value,
-            )
-            next_local = occurrence.local_datetime if occurrence is not None else None
+            if scheduler_service is not None:
+                from .occurrence_outcomes import ExhaustedOccurrence, FoundOccurrence
+                from .scheduler_cursor import OccurrenceCursor
+
+                outcome = scheduler_service.next(
+                    OccurrenceCursor.strict_after(
+                        after_local,
+                        timezone=scheduler_service.session.evaluator.context.timezone,
+                    ),
+                    fallback_hhmm=fallback_hhmm,
+                    default_seed_date=default_seed,
+                )
+                if isinstance(outcome, FoundOccurrence):
+                    next_local = outcome.local_datetime
+                elif isinstance(outcome, ExhaustedOccurrence):
+                    raise outcome.error
+                elif getattr(outcome, "status", "") in {"unavailable", "invalid"}:
+                    raise RuntimeError(getattr(outcome, "reason", "scheduler lookup failed"))
+                else:
+                    next_local = None
+            else:
+                occurrence = provider.next_after(
+                    after_local,
+                    build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+                    to_local=lambda value: value,
+                )
+                next_local = occurrence.local_datetime if occurrence is not None else None
         except OccurrenceSearchExhausted as exc:
             if exc.is_date_limit:
                 items.append(
@@ -506,6 +530,7 @@ def timeline_lines(
     short: Callable[[Any], str],
     tolocal: Callable[[datetime], datetime],
     next_occurrence_after_local_dt: Callable[..., Any],
+    scheduler_service: Any | None = None,
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
     format_gap: Callable[[Any, Any, str, bool], str],
@@ -575,6 +600,7 @@ def timeline_lines(
                     to_local_cached=to_local_cached,
                     safe_parse_datetime=safe_parse_datetime,
                     next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+                    scheduler_service=scheduler_service,
                     omit_dnf=omit_dnf,
                     omit_expr_fires_on_date=omit_expr_fires_on_date,
                     omit_description_for_date=omit_description_for_date,

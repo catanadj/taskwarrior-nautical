@@ -10,7 +10,7 @@ from typing import Any
 def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     core = namespace if namespace is not None else vars(module)
 
-    def precompute_hints(
+    def _precompute_hints(
         dnf,
         start_dt=None,
         anchor_mode="ALL",
@@ -77,7 +77,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             cache_load=core["cache_load"],
             validate_anchor_expr_strict=core["validate_anchor_expr_strict"],
             describe_anchor_expr_from_dnf=core["_describe_anchor_expr_from_dnf"],
-            precompute_hints=lambda dnf, **kwargs: precompute_hints(
+            precompute_hints=lambda dnf, **kwargs: _precompute_hints(
                 dnf,
                 business_calendar=business_calendar,
                 **kwargs,
@@ -92,10 +92,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             scheduler_service_factory=scheduler_service_factory,
         )
 
-    return SimpleNamespace(
-        precompute_hints=precompute_hints,
-        build_and_cache_hints=build_and_cache_hints,
-    )
+    return SimpleNamespace(build_and_cache_hints=build_and_cache_hints)
 
 
 __all__ = ("for_core",)

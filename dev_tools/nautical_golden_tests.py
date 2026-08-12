@@ -32926,12 +32926,7 @@ def test_position_selection_public_acf_natural_and_cache_shape():
     json_roundtrip = json.loads(json.dumps(dnf, ensure_ascii=False))
     expect(core.validate_anchor_expr_strict(json_roundtrip), "JSON cache round-trip rejected selection DNF")
 
-    hints = core.precompute_hints(
-        dnf,
-        start_dt=datetime(2026, 7, 1),
-        k_next=4,
-        sample_days_for_year=8,
-    )
+    hints = core.build_and_cache_hints(expr, "skip", default_due_dt=datetime(2026, 7, 1))
     expect(
         hints.get("next_dates", [])[:4]
         == [
@@ -34186,11 +34181,10 @@ def test_position_selection_public_period_scopes_acf_natural_and_hints():
         expect(phrase in core.describe_anchor_expr(expr), f"natural text omitted {phrase}: {expr}")
 
     yearly = core.validate_anchor_expr_strict("(w:mon)@in-year=last@+7d@t=09:00")
-    hints = core.precompute_hints(
-        yearly,
-        start_dt=datetime(2026, 7, 1),
-        k_next=3,
-        sample_days_for_year=3,
+    hints = core.build_and_cache_hints(
+        "(w:mon)@in-year=last@+7d@t=09:00",
+        "skip",
+        default_due_dt=datetime(2026, 7, 1),
     )
     expect(
         hints.get("next_dates", [])[:3]

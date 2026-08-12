@@ -73,11 +73,12 @@ def precompute_hints(
             result = scheduler_service.collect_request(request)
             if not isinstance(result, OccurrenceCollectionResult):
                 raise TypeError("Scheduler service returned an invalid hint collection.")
-            candidate = (
+            candidate_date = (
                 result.occurrences[0].local_datetime.date()
                 if result.occurrences and result.occurrences[0].local_datetime is not None
                 else None
             )
+            candidate = (candidate_date, None) if use_expr_scheduler else candidate_date
         elif use_expr_scheduler:
             candidate = next_after_expr(
                 dnf,

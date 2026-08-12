@@ -1320,7 +1320,7 @@ _bind_lazy_api_aliases(_cache_api)
 
 _hint_builder_api = _LazyApiBundle(
     "hint_builder_api",
-    ("precompute_hints", "build_and_cache_hints"),
+    ("build_and_cache_hints",),
     core=sys.modules[__name__],
     namespace=globals(),
 )

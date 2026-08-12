@@ -3638,6 +3638,22 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
         raise AssertionError("existing recurrence edit without chainID was accepted")
     expect(already_new.get("chain") == "off", f"rejected task should retain chain state, got {already_new!r}")
 
+    identity_old = {
+        "uuid": "00000000-0000-0000-0000-000000000446",
+        "status": "pending",
+        "anchor": "w:mon",
+        "chain": "on",
+        "chainID": "immutable-chain",
+    }
+    identity_new = dict(identity_old)
+    identity_new["chainID"] = "manually-replaced"
+    try:
+        lifecycle.apply_nautical_transition(identity_old, identity_new, short_uuid=mod.core.short_uuid)
+    except ValueError as exc:
+        expect("chainID is immutable" in str(exc), f"chainID mutation error lost detail: {exc}")
+    else:
+        raise AssertionError("manual chainID modification was accepted")
+
     repair_old = {
         "uuid": "00000000-0000-0000-0000-000000000447",
         "status": "pending",

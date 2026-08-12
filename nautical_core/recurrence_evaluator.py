@@ -862,9 +862,15 @@ class RecurrenceEvaluator:
         )
 
         core = self._core_module()
+        scheduler_engine = getattr(core, "_scheduler_api", None)
+        if scheduler_engine is None:
+            raise RuntimeError("Recurrence evaluator scheduler engine is unavailable")
 
         class SchedulerCoreProxy:
             """Expose core helpers while binding all wall-clock conversion to this evaluator."""
+
+            def __init__(self):
+                self._engine = scheduler_engine
 
             def __getattr__(self, name: str) -> Any:
                 return getattr(core, name)
@@ -884,7 +890,7 @@ class RecurrenceEvaluator:
                 seed_base: Any = None,
                 business_calendar: Any = None,
             ) -> Any:
-                return core.factor_matches_on(
+                return self._engine.factor_matches_on(
                     factor,
                     day,
                     default_seed,
@@ -906,7 +912,7 @@ class RecurrenceEvaluator:
                 date_is_excluded: Any = None,
                 business_calendar: Any = None,
             ) -> Any:
-                return core.next_after_expr(
+                return self._engine.next_after_expr(
                     expression,
                     ref_date,
                     default_seed=default_seed,

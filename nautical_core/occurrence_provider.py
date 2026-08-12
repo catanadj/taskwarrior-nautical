@@ -14,6 +14,14 @@ from .timeutil import compare_datetimes
 T = TypeVar("T")
 
 
+class OccurrenceProviderUnavailable(LookupError):
+    """A provider dependency or source cannot be read for this lookup."""
+
+
+class OccurrenceProviderInvalid(ValueError):
+    """A provider returned malformed, incomparable, or non-advancing data."""
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderContract:
     """Stable metadata every occurrence adapter exposes to the scheduler."""
@@ -203,6 +211,10 @@ def collect_after(
                 terminal = exc
                 break
             raise
+        except (LookupError, OSError) as exc:
+            raise OccurrenceProviderUnavailable(str(exc) or type(exc).__name__) from exc
+        except (TypeError, ValueError) as exc:
+            raise OccurrenceProviderInvalid(str(exc) or type(exc).__name__) from exc
         if occurrence is None:
             break
         if not isinstance(occurrence, Occurrence):
@@ -365,6 +377,8 @@ __all__ = (
     "Occurrence",
     "OccurrenceBatch",
     "OccurrenceProvider",
+    "OccurrenceProviderInvalid",
+    "OccurrenceProviderUnavailable",
     "ProviderContract",
     "collect_after",
 )

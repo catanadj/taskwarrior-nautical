@@ -597,6 +597,7 @@ class CompletionFinalizeServices:
     show_analytics: bool
     check_integrity: bool
     analytics_style: str
+    lifecycle_read_service: Any = None
 
 
 @dataclass(slots=True)

@@ -149,6 +149,7 @@ class LifecycleReadService:
         read_query_delete: ReadQueryDelete | None = None,
         cache_store: ChainCacheStore | None = None,
         task_cmd_prefix: Callable[[], list[str]] | None = None,
+        read_query_missing: object | None = None,
     ) -> None:
         self._coerce_int = coerce_int
         self._parse_extra_tokens = parse_extra_tokens
@@ -163,6 +164,7 @@ class LifecycleReadService:
         self._read_query_delete = read_query_delete or (lambda _kind, _key: None)
         self._cache_store = cache_store
         self._task_cmd_prefix = task_cmd_prefix or (lambda: ["task"])
+        self._read_query_missing = read_query_missing
 
     def build_export_args(
         self,
@@ -551,17 +553,18 @@ class LifecycleReadService:
         *,
         since: datetime | None = None,
         extra: str | None = None,
-        read_query_missing: object,
-        read_query_key: Callable[[str, datetime | None, str | None, int], tuple[Any, ...]],
+        read_query_missing: object | None = None,
+        read_query_key: Callable[[str, datetime | None, str | None, int], tuple[Any, ...]] = chain_read_key,
     ) -> list[TaskRow] | None:
         """Read one chain using the request snapshot, run cache, or exporter."""
+        missing = self._read_query_missing if read_query_missing is None else read_query_missing
         if not chain_id:
             return []
         if not since:
             full_snapshot = self._read_query_get(
                 "chain", read_query_key(chain_id, None, None, 0)
             )
-            if full_snapshot is not read_query_missing:
+            if full_snapshot is not missing:
                 if not isinstance(full_snapshot, list) or any(
                     not isinstance(row, dict) for row in full_snapshot
                 ):

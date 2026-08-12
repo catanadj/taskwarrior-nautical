@@ -2618,6 +2618,7 @@ def _lifecycle_read_service():
         record_stat=_record_chain_snapshot_stat,
         cache_store=state.chain_cache_store,
         task_cmd_prefix=_task_cmd_prefix,
+        read_query_missing=_READ_QUERY_MISSING,
     )
     state.lifecycle_read_service = service
     return service
@@ -5367,6 +5368,7 @@ def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResul
         show_analytics=_SHOW_ANALYTICS,
         check_integrity=_CHECK_CHAIN_INTEGRITY,
         analytics_style=_ANALYTICS_STYLE,
+        lifecycle_read_service=_lifecycle_read_service(),
     )
     result = modify_completion_flow.finalize_completion_modify(
         new=new,

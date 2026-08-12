@@ -23913,6 +23913,58 @@ def test_scheduler_cross_path_conformance_matrix():
         expect(_occurrence_signature(first.occurrence) == _occurrence_signature(ranged.occurrences[0]), "file next/range diverged")
 
 
+def test_scheduler_cross_path_preserves_terminal_evidence():
+    """A valid prefix followed by exhaustion stays terminal in every service path."""
+    from datetime import datetime
+    from types import SimpleNamespace
+    from zoneinfo import ZoneInfo
+    from nautical_core.occurrence_outcomes import ExhaustedOccurrence
+    from nautical_core.occurrence_provider import Occurrence, OccurrenceBatch
+    from nautical_core.scheduler_models import OccurrenceSearchExhausted
+    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+    from nautical_core.scheduler_service import SchedulerService
+
+    zone = ZoneInfo("UTC")
+    cursor = OccurrenceCursor.strict_after(datetime(9998, 12, 30, 9, tzinfo=zone), timezone=zone)
+    value = Occurrence(
+        cursor.local_datetime.date() + timedelta(days=1), 9, 0,
+        local_datetime=datetime(9998, 12, 31, 9, tzinfo=zone),
+    )
+    terminal = OccurrenceSearchExhausted(
+        "conformance finite provider", reference=date(9999, 12, 31), limit=2,
+        kind=OccurrenceSearchExhausted.DATE_LIMIT,
+    )
+
+    class FiniteSession:
+        evaluator = SimpleNamespace(context=SimpleNamespace(timezone=zone), kind="finite")
+
+        def collect_after_cursor(self, *_args, **_kwargs):
+            return OccurrenceBatch((value,), terminal=terminal)
+
+        def collect_events_after_cursor(self, *_args, **_kwargs):
+            return OccurrenceBatch((value,), terminal=terminal)
+
+    service = SchedulerService(FiniteSession())
+    result = service.collect(cursor, limit=3)
+    expect(result.terminal is terminal, "collection dropped terminal evidence")
+    expect(result.occurrences == (value,), "collection dropped valid prefix")
+    ranged = service.collect_request(OccurrenceRangeRequest(cursor, limit=3))
+    expect(ranged.terminal is terminal, "range dropped terminal evidence")
+
+    class EmptyFiniteSession(FiniteSession):
+        def collect_after_cursor(self, *_args, **_kwargs):
+            return OccurrenceBatch((), terminal=terminal)
+
+        def collect_events_after_cursor(self, *_args, **_kwargs):
+            return OccurrenceBatch((), terminal=terminal)
+
+    empty_service = SchedulerService(EmptyFiniteSession())
+    empty = empty_service.collect(cursor, limit=1)
+    expect(empty.status == "exhausted", "empty terminal result became ordinary absence")
+    outcome = ExhaustedOccurrence(terminal)
+    expect(outcome.terminal_evidence["kind"] == "date_limit", "terminal kind was not retained")
+
+
 def test_occurrence_range_request_validates_context_bounds_and_policy():
     """Range requests are explicit, bounded, and context-checked."""
     from datetime import datetime, timedelta
@@ -35578,6 +35630,7 @@ TESTS.extend([
     test_scheduler_parity_harness_compares_legacy_callback_only_in_tests,
     test_scheduler_parity_matrix_covers_context_sensitive_rules,
     test_scheduler_cross_path_conformance_matrix,
+    test_scheduler_cross_path_preserves_terminal_evidence,
     test_occurrence_range_request_validates_context_bounds_and_policy,
     test_occurrence_range_request_exposes_omission_provenance,
     test_occurrence_range_request_wraps_unavailable_and_invalid_failures,

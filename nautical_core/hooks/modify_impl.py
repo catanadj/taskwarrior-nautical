@@ -2818,6 +2818,11 @@ def _omit_dnf_from_parent(parent: dict):
 
 def _recurrence_evaluator_for_task(task: dict):
     """Build the task-scoped evaluator used by completion projections."""
+    return _scheduler_service_for_task(task).session.evaluator
+
+
+def _scheduler_service_for_task(task: dict):
+    """Build the task-scoped scheduler service used by completion projections."""
     state = _modify_runtime_state()
     identity = str(task.get("uuid") or task.get("chainID") or "").strip()
     if identity:
@@ -2837,13 +2842,15 @@ def _recurrence_evaluator_for_task(task: dict):
         )
     else:
         cache_key = ("object", id(task))
-    cached = state.evaluator_sessions.get(cache_key)
-    if cached is not None:
-        _diag_count("evaluator_session_hits")
-        return cached[1]
-    _diag_count("evaluator_session_misses")
-    evaluator_module = _module("recurrence_evaluator")
-    evaluator = evaluator_module.RecurrenceEvaluator.from_task(
+    cached_service = state.scheduler_services.get(cache_key)
+    if cached_service is not None:
+        return cached_service
+    from nautical_core.evaluation_session import EvaluationSession
+    from nautical_core.scheduler_service import SchedulerService
+
+    from nautical_core.recurrence_context import RecurrenceContext
+
+    context = RecurrenceContext.from_task(
         task,
         fallback_chain_id=_recurrence_seed_base(task),
         timezone=core._LOCAL_TZ,
@@ -2851,8 +2858,9 @@ def _recurrence_evaluator_for_task(task: dict):
         astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
     )
-    state.evaluator_sessions[cache_key] = (task, evaluator)
-    return evaluator
+    service = SchedulerService(EvaluationSession.from_task(task, context=context))
+    state.scheduler_services[cache_key] = service
+    return service
 
 
 def _anchor_included_occurrences(

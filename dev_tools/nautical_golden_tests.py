@@ -1599,6 +1599,32 @@ def test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries():
         expect(first.semantic_key() == second.semantic_key(), f"plan parity drifted for {kind} case")
 
 
+def test_terminal_policy_routes_all_terminal_events_through_one_patch():
+    """Terminal causes share typed validation and idempotent chain disablement."""
+    from nautical_core.lifecycle_models import LifecycleEvent
+    from nautical_core.modify_lifecycle import apply_terminal_transition
+
+    events = (
+        LifecycleEvent.DISABLE,
+        LifecycleEvent.MANUAL_DELETE,
+        LifecycleEvent.CHAIN_MAX,
+        LifecycleEvent.CHAIN_UNTIL,
+        LifecycleEvent.COMPLETE,
+        LifecycleEvent.EXPIRE,
+    )
+    for event in events:
+        task = {
+            "uuid": "77777777-0000-0000-0000-000000000007",
+            "status": "deleted" if event is LifecycleEvent.MANUAL_DELETE else "completed",
+            "chain": "on",
+            "chainID": "terminal-policy",
+            "link": 7,
+        }
+        changed = apply_terminal_transition(task, event)
+        expect(changed and task["chain"] == "off", f"{event.value} did not disable chain")
+        expect(not apply_terminal_transition(task, event), f"{event.value} was not idempotent")
+
+
 def test_diagnostic_event_renders_to_stderr_and_has_stable_record():
     """Structured diagnostics must keep stdout clean and expose stable fields."""
     from nautical_core import diagnostic_models, runtime
@@ -34201,6 +34227,7 @@ TESTS = [
     test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile,
     test_expiration_candidate_uses_scheduled_recurrence_basis,
     test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries,
+    test_terminal_policy_routes_all_terminal_events_through_one_patch,
     test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy,
     test_diagnostic_event_renders_to_stderr_and_has_stable_record,
     test_taskwarrior_document_is_lossless_with_typed_scalar_accessors,

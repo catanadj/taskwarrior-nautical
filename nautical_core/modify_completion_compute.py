@@ -29,7 +29,8 @@ from nautical_core.scheduler_models import (
     occurrence_exhaustion_message,
 )
 from nautical_core.timeutil import compare_datetimes
-from nautical_core.modify_lifecycle import ensure_terminal_chain_off
+from nautical_core.lifecycle_models import LifecycleEvent
+from nautical_core.modify_lifecycle import apply_terminal_transition
 
 
 def _terminal_diagnostic(new: dict[str, Any], next_no: int, failure_kind: str) -> CompletionLifecycleDiagnostic:
@@ -138,7 +139,7 @@ def completion_until_guard_or_stop(
 ) -> bool:
     if until_dt and compare_datetimes(child_due, until_dt) > 0:
         end_chain_summary(new, "Reached 'until' limit", now_utc)
-        ensure_terminal_chain_off(new)
+        apply_terminal_transition(new, LifecycleEvent.CHAIN_UNTIL)
         print_task(new)
         return False
     return True
@@ -236,7 +237,7 @@ def completion_cap_guard_or_stop(
 ) -> bool:
     if cap_no and next_no > cap_no:
         end_chain_summary(new, f"Reached cap #{cap_no}", now_utc, current_task=new)
-        ensure_terminal_chain_off(new)
+        apply_terminal_transition(new, LifecycleEvent.CHAIN_MAX)
         print_task(new)
         return False
     return True

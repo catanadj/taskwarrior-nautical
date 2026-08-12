@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from typing import Any
 
 from nautical_core.timeutil import compare_datetimes
-from nautical_core.lifecycle_models import DeletionEvidence
-from nautical_core.modify_lifecycle import ensure_terminal_chain_off
+from nautical_core.lifecycle_models import DeletionEvidence, LifecycleEvent
+from nautical_core.modify_lifecycle import apply_terminal_transition
 
 
 @dataclass(slots=True)
@@ -118,7 +118,7 @@ def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -
     plan = reconcile.build_reconcile_plan(task, existing_children=[], hook=plan_hook)
 
     if plan.action == "legitimate_final":
-        ensure_terminal_chain_off(task)
+        apply_terminal_transition(task, LifecycleEvent.EXPIRE)
         _render_recovery_panel(
             task,
             plan,

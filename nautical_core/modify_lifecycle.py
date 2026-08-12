@@ -86,6 +86,19 @@ def ensure_terminal_chain_off(task: dict[str, Any]) -> bool:
     return True
 
 
+def apply_terminal_transition(task: dict[str, Any], event: Any) -> bool:
+    """Validate one terminal event, then apply its idempotent chain patch."""
+    from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
+    from nautical_core.lifecycle_planner import terminal_plan_for_snapshot
+
+    try:
+        normalized = LifecycleEvent(event)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"unsupported terminal lifecycle event: {event!r}") from exc
+    terminal_plan_for_snapshot(TaskSnapshot.from_mapping(task), normalized)
+    return ensure_terminal_chain_off(task)
+
+
 def recurrence_setting_changes(old: dict[str, Any] | None, new: dict[str, Any] | None) -> list[tuple[str, str, str]]:
     if not isinstance(old, dict) or not isinstance(new, dict):
         return []
@@ -226,6 +239,7 @@ __all__ = (
     "ModifyLifecycleRoute",
     "ModifyNauticalTransition",
     "RECURRENCE_SETTING_FIELDS",
+    "apply_terminal_transition",
     "apply_nautical_transition",
     "classify_modify_route",
     "ensure_terminal_chain_off",

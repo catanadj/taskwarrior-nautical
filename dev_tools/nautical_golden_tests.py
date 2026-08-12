@@ -23858,7 +23858,6 @@ def test_occurrence_range_request_validates_context_bounds_and_policy():
     for bad in (
         lambda: OccurrenceRangeRequest(cursor, end_local=cursor.local_datetime - timedelta(days=1)),
         lambda: OccurrenceRangeRequest(cursor, omission_policy="unknown"),
-        lambda: service.collect_request(OccurrenceRangeRequest(cursor, omission_policy="include")),
     ):
         try:
             bad()
@@ -23866,6 +23865,36 @@ def test_occurrence_range_request_validates_context_bounds_and_policy():
             expect(str(exc), "range contract rejection was not actionable")
         else:
             raise AssertionError("invalid range contract was accepted")
+    included = service.collect_request(OccurrenceRangeRequest(cursor, omission_policy="include"))
+    expect(isinstance(included, OccurrenceCollectionResult), "include omission policy was not accepted")
+
+
+def test_occurrence_range_request_exposes_omission_provenance():
+    """Range policies expose omitted events without changing normal exclusion."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+    from nautical_core.scheduler_service import SchedulerService
+
+    zone = ZoneInfo("Europe/Sofia")
+    task = {"chainID": "omission-contract", "anchor": "w:mon", "omit": "w:mon"}
+    service = SchedulerService.from_task(
+        task,
+        context=RecurrenceContext(chain_id="omission-contract", timezone=zone),
+    )
+    cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 2, 23, 59, tzinfo=zone), timezone=zone)
+    end = datetime(2026, 8, 31, 23, 59, tzinfo=zone)
+    excluded = service.collect_request(OccurrenceRangeRequest(cursor, end_local=end, limit=4))
+    expect(not excluded.occurrences, "excluded omission policy returned an omitted occurrence")
+    included = service.collect_request(
+        OccurrenceRangeRequest(cursor, end_local=end, limit=4, omission_policy="include")
+    )
+    expect(included.occurrences and all(item.omitted for item in included), "include policy lost omission markers")
+    reported = service.collect_request(
+        OccurrenceRangeRequest(cursor, end_local=end, limit=4, omission_policy="report")
+    )
+    expect(not reported.occurrences and len(reported.omitted_occurrences) == 4, "report policy lost omitted evidence")
 
 
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
@@ -35395,6 +35424,7 @@ TESTS.extend([
     test_scheduler_parity_harness_compares_legacy_callback_only_in_tests,
     test_scheduler_parity_matrix_covers_context_sensitive_rules,
     test_occurrence_range_request_validates_context_bounds_and_policy,
+    test_occurrence_range_request_exposes_omission_provenance,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

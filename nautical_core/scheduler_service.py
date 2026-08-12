@@ -67,36 +67,55 @@ class SchedulerService:
             actual = getattr(request.timezone, "key", request.timezone)
             if str(expected) != str(actual):
                 raise ValueError("Occurrence range timezone does not match scheduler context.")
-        if request.omission_policy != "exclude":
-            raise NotImplementedError(
-                "The current scheduler collection path supports omission_policy='exclude' only."
+        include_omitted = request.omission_policy in {"include", "report"}
+        count_omitted = request.omission_policy in {"include", "report"}
+        if request.omission_policy == "exclude":
+            result = self.collect(
+                request.cursor,
+                limit=request.limit,
+                max_iterations=request.max_iterations,
+                max_file_skips=request.max_file_skips,
             )
-        result = self.collect(
-            request.cursor,
-            limit=request.limit,
-            max_iterations=request.max_iterations,
-            max_file_skips=request.max_file_skips,
-        )
-        if request.end_local is not None:
-            result = OccurrenceCollectionResult(
-                occurrences=tuple(
-                    item for item in result.occurrences
-                    if item.local_datetime is not None and item.local_datetime <= request.end_local
-                ),
-                cursor=request.cursor,
-                source=result.source,
-                terminal=result.terminal,
-                request=request,
-            )
-        else:
-            result = OccurrenceCollectionResult(
+            return OccurrenceCollectionResult(
                 occurrences=result.occurrences,
                 cursor=request.cursor,
                 source=result.source,
                 terminal=result.terminal,
                 request=request,
             )
-        return result
+
+        if request.end_local is not None:
+            batch = self.session.evaluator.events_between(
+                request.cursor.local_datetime,
+                request.end_local,
+                limit=request.limit,
+                inclusive=request.cursor.inclusive,
+                include_omitted=include_omitted,
+                count_omitted=count_omitted,
+                max_iterations=request.max_iterations,
+                max_file_skips=request.max_file_skips,
+            )
+        else:
+            batch = self.session.collect_events_after_cursor(
+                request.cursor,
+                limit=request.limit,
+                count_omitted=count_omitted,
+                max_iterations=request.max_iterations,
+                max_file_skips=request.max_file_skips,
+            )
+        events = tuple(batch)
+        omitted = tuple(event for event in events if event.omitted)
+        occurrences = events if request.omission_policy == "include" else tuple(
+            event for event in events if not event.omitted
+        )
+        return OccurrenceCollectionResult(
+            occurrences=occurrences,
+            cursor=request.cursor,
+            source=self.session.evaluator.kind or "scheduler",
+            terminal=batch.terminal,
+            request=request,
+            omitted_occurrences=omitted if request.omission_policy == "report" else (),
+        )
 
     def preview(
         self,

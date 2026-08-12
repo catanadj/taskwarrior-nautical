@@ -55,6 +55,9 @@ class EvaluationSession:
     def collect_after_cursor(self, cursor: OccurrenceCursor, *, limit: int, **kwargs: Any) -> OccurrenceBatch:
         return self._evaluator.collect_after_cursor(cursor, limit=limit, **kwargs)
 
+    def collect_events_after_cursor(self, cursor: OccurrenceCursor, *, limit: int, **kwargs: Any) -> OccurrenceBatch:
+        return self._evaluator.collect_events_after_cursor(cursor, limit=limit, **kwargs)
+
     @property
     def fingerprint(self) -> str:
         return self.compiled.fingerprint

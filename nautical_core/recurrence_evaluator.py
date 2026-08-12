@@ -540,6 +540,7 @@ class RecurrenceEvaluator:
         pick_occurrence_local: PickOccurrenceCallback | None = None,
         anchor_file_provider: Any | None = None,
         include_omitted: bool = False,
+        count_omitted: bool = False,
         max_iterations: int = 512,
         max_file_skips: int = 512,
     ) -> OccurrenceBatch[Occurrence]:
@@ -589,7 +590,7 @@ class RecurrenceEvaluator:
             if compare_datetimes(event.local_datetime, end_local) > 0:
                 break
             events.append(event)
-            if not event.omitted:
+            if count_omitted or not event.omitted:
                 included_count += 1
             if included_count >= limit:
                 break
@@ -598,6 +599,46 @@ class RecurrenceEvaluator:
         else:
             raise ValueError("Occurrence provider exceeded its range iteration limit.")
         return OccurrenceBatch(events, terminal=terminal)
+
+    def collect_events_after_cursor(
+        self,
+        cursor: OccurrenceCursor,
+        *,
+        limit: int,
+        count_omitted: bool = False,
+        max_iterations: int = 512,
+        max_file_skips: int = 512,
+    ) -> OccurrenceBatch[Occurrence]:
+        """Collect an event stream while retaining omission provenance."""
+        if not isinstance(cursor, OccurrenceCursor):
+            raise TypeError("Occurrence collection requires an explicit cursor.")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("Occurrence collection limit must be non-negative.")
+        if limit == 0:
+            return OccurrenceBatch()
+        events: list[Occurrence] = []
+        included_count = 0
+        current = cursor.local_datetime
+        first = cursor.inclusive
+        for _ in range(max_iterations):
+            event = self.next_event_after(
+                current,
+                inclusive=first,
+                include_omitted=True,
+                max_file_skips=max_file_skips,
+            )
+            if event is None or event.local_datetime is None:
+                break
+            events.append(event)
+            if count_omitted or not event.omitted:
+                included_count += 1
+            if included_count >= limit:
+                break
+            current = event.local_datetime
+            first = False
+        else:
+            raise ValueError("Occurrence provider exceeded its collection iteration limit.")
+        return OccurrenceBatch(events)
 
     def select_mode(
         self,

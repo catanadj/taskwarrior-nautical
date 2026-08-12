@@ -127,6 +127,7 @@ def collect_after(
     limit: int,
     inclusive: bool | None = None,
     max_iterations: int = 512,
+    count_omitted: bool = False,
     build_local_datetime: Callable[[date, tuple[int, int]], datetime],
     to_local: Callable[[datetime], datetime],
 ) -> OccurrenceBatch[Occurrence]:
@@ -178,7 +179,7 @@ def collect_after(
         _require_forward_progress(cursor, occurrence.local_datetime)
         cursor = occurrence.local_datetime
         out.append(occurrence)
-        if not occurrence.omitted:
+        if count_omitted or not occurrence.omitted:
             included_count += 1
     if included_count < limit and iterations >= max_iterations:
         raise ValueError("Occurrence provider exceeded its collection iteration limit.")

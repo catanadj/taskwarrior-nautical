@@ -99,12 +99,15 @@ class OccurrenceCollectionResult:
     terminal: OccurrenceSearchExhausted | None = None
     empty_reason: str = ""
     request: OccurrenceRangeRequest | None = None
+    omitted_occurrences: tuple[Occurrence, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.occurrences, tuple):
             raise TypeError("Occurrence collection must be immutable.")
         if not isinstance(self.cursor, OccurrenceCursor):
             raise TypeError("Occurrence collection requires its source cursor.")
+        if not isinstance(self.omitted_occurrences, tuple):
+            raise TypeError("Omitted occurrence evidence must be immutable.")
         if self.request is not None:
             if not isinstance(self.request, OccurrenceRangeRequest):
                 raise TypeError("Occurrence collection request must be typed.")
@@ -112,6 +115,13 @@ class OccurrenceCollectionResult:
                 raise ValueError("Occurrence collection request and cursor disagree.")
             if len(self.occurrences) > self.request.limit:
                 raise ValueError("Occurrence collection exceeds its requested limit.")
+            for occurrence in self.omitted_occurrences:
+                if not isinstance(occurrence, Occurrence):
+                    raise TypeError("Omitted occurrence evidence contains an invalid value.")
+                if occurrence.local_datetime is None:
+                    raise ValueError("Omitted occurrence evidence contains no local datetime.")
+                if self.request.end_local is not None and occurrence.local_datetime > self.request.end_local:
+                    raise ValueError("Omitted occurrence evidence exceeds its end boundary.")
             if self.request.end_local is not None:
                 for occurrence in self.occurrences:
                     if occurrence.local_datetime is None or occurrence.local_datetime > self.request.end_local:
@@ -149,6 +159,14 @@ class OccurrenceCollectionResult:
             "end": self.request.end_local.isoformat() if self.request and self.request.end_local else None,
             "limit": self.request.limit if self.request else None,
             "omission_policy": self.request.omission_policy if self.request else None,
+            "omitted_occurrences": [
+                {
+                    "local": item.local_datetime.isoformat() if item.local_datetime else None,
+                    "source": item.source,
+                    "description": item.description,
+                }
+                for item in self.omitted_occurrences
+            ],
             "occurrences": [
                 {
                     "local": item.local_datetime.isoformat() if item.local_datetime else None,

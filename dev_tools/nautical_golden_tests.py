@@ -25910,12 +25910,12 @@ def test_timeline_completed_rows_place_uuid_before_delta():
         "dtparse": lambda value: value,
         "fmt_on_time_delta": lambda _due, _end: "(DELTA)",
         "fmtlocal": lambda _dt: "DATE",
-        "short": lambda value: str(value)[:8],
+        "short": lambda value: str(value).replace("-", "")[:8],
     }
 
     prev = timeline._timeline_base_line(
         1,
-        obj={"due": "due", "end": "end", "uuid": "beeswax-0000"},
+        obj={"due": "due", "end": "end", "uuid": "beeswax"},
         item_type="prev",
         task={},
         **common,

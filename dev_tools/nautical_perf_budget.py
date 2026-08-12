@@ -1161,7 +1161,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
         taskrc_path.write_text(
             "uda.chainID.type=string\n"
             "uda.chain.type=string\n"
-            "uda.link.type=string\n"
+            "uda.link.type=numeric\n"
             "uda.prevLink.type=string\n"
             "uda.nextLink.type=string\n"
             "uda.cp.type=string\n"

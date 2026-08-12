@@ -278,6 +278,29 @@ def expiration_candidate(snapshot: TaskSnapshot, *, generation: Any) -> Recurren
     )
 
 
+def plan_expiration_successor(
+    snapshot: TaskSnapshot,
+    *,
+    generation: Any,
+    validated_configuration: Any,
+    compare_datetimes: Callable[[Any, Any], int],
+    preflight: LifecyclePreflight | None = None,
+    carry_validator: CarryValidator | None = None,
+) -> LifecyclePlan:
+    """Build the shared expiration plan from the prior recurrence target."""
+    candidate = expiration_candidate(snapshot, generation=generation)
+    return plan_candidate_successor(
+        snapshot,
+        LifecycleEvent.EXPIRE,
+        candidate,
+        generation=generation,
+        validated_configuration=validated_configuration,
+        compare_datetimes=compare_datetimes,
+        preflight=preflight,
+        carry_validator=carry_validator,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ChainGenerationLimitPolicy:
     """Default numeric and datetime limit policy for generation candidates."""
@@ -557,5 +580,6 @@ __all__ = (
     "PrecomputedRecurrencePlanningService",
     "plan_candidate_successor",
     "expiration_candidate",
+    "plan_expiration_successor",
     "terminal_plan_for_snapshot",
 )

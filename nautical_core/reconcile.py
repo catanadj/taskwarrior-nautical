@@ -22,6 +22,7 @@ from nautical_core.lifecycle_planner import (
     LifecyclePreflight,
     RecurrenceCandidate,
     expiration_candidate,
+    plan_expiration_successor,
     plan_candidate_successor,
 )
 from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
@@ -587,25 +588,32 @@ def _build_reconcile_plan_unscoped(
             dnf=None,
             until=until_dt,
         )
-        lifecycle_plan = plan_candidate_successor(
-            TaskSnapshot.from_mapping(parent),
-            LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
-            candidate,
-            generation=generation,
-            validated_configuration={"scheduler_fingerprint": "reconcile"},
-            compare_datetimes=compare_datetimes,
-            preflight=LifecyclePreflight.from_context(
+        planner_kwargs = {
+            "generation": generation,
+            "validated_configuration": {"scheduler_fingerprint": "reconcile"},
+            "compare_datetimes": compare_datetimes,
+            "preflight": LifecyclePreflight.from_context(
                 base_link=link,
                 next_link=next_link,
                 kind=kind,
                 chain_id=parent.get("chainID"),
             ),
-            carry_validator=lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
+            "carry_validator": lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
                 snapshot.to_dict(),
                 dict(candidate_child),
                 child_field=child_field,
                 generation=generation,
             ),
+        }
+        lifecycle_plan = (
+            plan_expiration_successor(TaskSnapshot.from_mapping(parent), **planner_kwargs)
+            if is_expiration
+            else plan_candidate_successor(
+                TaskSnapshot.from_mapping(parent),
+                LifecycleEvent.COMPLETE,
+                candidate,
+                **planner_kwargs,
+            )
         )
         if lifecycle_plan.action is LifecycleAction.FINALIZE_CHAIN:
             return ReconcilePlan(

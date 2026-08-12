@@ -21278,6 +21278,7 @@ def test_anchor_file_occurrence_provider_supports_lazy_next_after():
     """The provider can project one bounded successor without exporting all values."""
     import nautical_core.anchor_files as anchor_files
     from datetime import datetime
+    from zoneinfo import ZoneInfo
 
     with tempfile.TemporaryDirectory() as td:
         sample = Path(td) / "calendar.csv"
@@ -23649,6 +23650,24 @@ def test_occurrence_cursor_makes_lookup_semantics_explicit():
         expect("timezone" in str(exc), f"cursor timezone error was unclear: {exc}")
     else:
         raise AssertionError("cursor accepted a conflicting timezone")
+
+
+def test_occurrence_cursor_keeps_adjacent_weekday_occurrences():
+    """Strict-after lookup must not skip the first valid day after a gap."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+    from nautical_core.scheduler_cursor import OccurrenceCursor
+
+    evaluator = RecurrenceEvaluator.from_task(
+        {"chainID": "cursor-weekday", "anchor": "w:mon..fri"},
+        context=RecurrenceContext(chain_id="cursor-weekday", timezone=ZoneInfo("Europe/Sofia")),
+    )
+    result = evaluator.next_after_cursor(
+        OccurrenceCursor.strict_after(datetime(2026, 8, 7, 9, 0, tzinfo=ZoneInfo("Europe/Sofia")), timezone=ZoneInfo("Europe/Sofia"))
+    )
+    expect(result is not None and result.day.isoformat() == "2026-08-10", f"weekday cursor skipped Monday: {result!r}")
 
 
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
@@ -35174,6 +35193,7 @@ TESTS.extend([
     test_recurrence_spec_normalizes_task_fields_and_context,
     test_compiled_schedule_is_canonical_and_reusable,
     test_occurrence_cursor_makes_lookup_semantics_explicit,
+    test_occurrence_cursor_keeps_adjacent_weekday_occurrences,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

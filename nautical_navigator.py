@@ -529,19 +529,6 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
     return natural, next_dates
 
 
-def _next_after_expr_pair(dnf, after_date, **kwargs):
-    """Normalize core scheduler results for navigator compatibility.
-
-    Core historically returned ``(date, metadata)``; newer versions may append
-    diagnostic fields. The navigator only needs the first two values.
-    """
-    result = core.next_after_expr(dnf, after_date, **kwargs)
-    if isinstance(result, (tuple, list)):
-        if len(result) < 2:
-            raise ValueError("next_after_expr returned fewer than two values")
-        return result[0], result[1]
-    raise TypeError("next_after_expr returned a non-sequence result")
-
 class _NavigatorTrace:
     """Keep an explicit explain trace available for the concise UI summary."""
 
@@ -2304,155 +2291,38 @@ class TaskAnalyzer:
         default_hhmm = (due_local_dt.hour, due_local_dt.minute) if due_local_dt else (9, 0)
         after_dt_local = due_local_dt if due_local_dt else core.build_local_datetime(start_from_date, default_hhmm)
 
-        def resolve_hhmms(dnf, target_date, seed_date):
-            """Resolve every wall-clock slot belonging to the matching term."""
-            time_slots = core._import_sibling("time_slots")
-            recurrence_context = recurrence_evaluator.context
-            for term in dnf:
-                if not all(
-                    core.atom_matches_on(
-                        atom,
-                        target_date,
-                        seed_date,
-                        seed_base=recurrence_context.seed_base,
-                        business_calendar=business_calendar,
-                    )
-                    for atom in term
-                ):
-                    continue
-                for atom in term:
-                    mods = atom.get("mods") or {}
-                    if mods.get("time_random"):
-                        resolved = time_slots.resolve_time_slots_with_offsets(
-                            mods,
-                            target_date,
-                            config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                            to_local=core.to_local,
-                            context=recurrence_context,
-                        )
-                    elif mods.get("t"):
-                        window = mods.get("time_window")
-                        parsed_window = core._import_sibling("time_windows").parse_time_window_spec(str(window)) if window else None
-                        if parsed_window is not None and parsed_window.crosses_midnight:
-                            resolved = time_slots.resolve_time_slots_with_offsets(
-                                mods,
-                                target_date,
-                                config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                                to_local=core.to_local,
-                            )
-                        else:
-                            resolved = time_slots.resolve_time_slots(
-                                mods,
-                                target_date,
-                                config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                                to_local=core.to_local,
-                            )
-                    return resolved or [default_hhmm]
-            return [default_hhmm]
-
         anchor_out: List[datetime.datetime] = []
         file_out: List[datetime.datetime] = []
         projection_terminal_note: str | None = None
 
         if anchor_expr:
             try:
-                dnf = recurrence_evaluator.anchor_dnf
-            except Exception as exc:
-                self._record_projection_warning(f"Anchor expression: {_format_runtime_error(exc)}")
-                dnf = None
-            if dnf:
-                def step(prev_date: date):
-                    nonlocal projection_terminal_note
-                    try:
-                        from nautical_core.occurrence_outcomes import ExhaustedOccurrence, FoundOccurrence
-                        from nautical_core.scheduler_cursor import OccurrenceCursor
-
-                        timezone = recurrence_context.timezone
-                        cursor_dt = datetime.datetime.combine(prev_date, datetime.time.max, tzinfo=timezone)
-                        outcome = scheduler_service.next(
-                            OccurrenceCursor.strict_after(cursor_dt, timezone=timezone),
-                            default_seed_date=prev_date,
-                        )
-                        if isinstance(outcome, FoundOccurrence):
-                            return outcome.occurrence.day
-                        if isinstance(outcome, ExhaustedOccurrence):
-                            projection_terminal_note = _format_runtime_error(outcome.error)
-                            return None
-                        raise RuntimeError(getattr(outcome, "reason", "scheduler returned no occurrence"))
-                    except Exception as exc:
-                        exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
-                        if exhausted_type is not None and isinstance(exc, exhausted_type) and exc.is_date_limit:
-                            projection_terminal_note = _format_runtime_error(exc)
-                            return None
-                        raise
-
-                projection_seed_date = step(start_from_date)
-
-                def next_anchor_after(after_local: datetime.datetime) -> datetime.datetime | None:
-                    """Resolve the next ordinary-anchor slot after a local datetime."""
-                    candidate_dates = [after_local.date() - datetime.timedelta(days=1), after_local.date()]
-
-                    for cur_date in candidate_dates:
-                        if not cur_date:
-                            continue
-                        for cur_slot in resolve_hhmms(dnf, cur_date, projection_seed_date or cur_date):
-                            if cur_date < after_local.date() and not (isinstance(cur_slot, tuple) and len(cur_slot) == 3 and int(cur_slot[0]) > 0):
-                                continue
-                            if isinstance(cur_slot, tuple) and len(cur_slot) == 3:
-                                day_offset, hour, minute = cur_slot
-                                slot_date = cur_date + datetime.timedelta(days=int(day_offset))
-                                cur_hhmm = (int(hour), int(minute))
-                            else:
-                                slot_date = cur_date
-                                cur_hhmm = cur_slot
-                            projected_local = core.to_local(core.build_local_datetime(slot_date, cur_hhmm))
-                            if projected_local > after_local:
-                                if (projected_local.date(), projected_local.hour, projected_local.minute) != (slot_date, cur_hhmm[0], cur_hhmm[1]):
-                                    self._record_projection_warning(
-                                        f"DST normalized {slot_date.isoformat()} {cur_hhmm[0]:02d}:{cur_hhmm[1]:02d} to {projected_local.strftime('%Y-%m-%d %H:%M %Z')}"
-                                    )
-                                return projected_local
-                    cur_date = step(after_local.date())
-                    for _ in range(limit):
-                        if not cur_date:
-                            return None
-                        for cur_slot in resolve_hhmms(dnf, cur_date, projection_seed_date or cur_date):
-                            if isinstance(cur_slot, tuple) and len(cur_slot) == 3:
-                                day_offset, hour, minute = cur_slot
-                                slot_date = cur_date + datetime.timedelta(days=int(day_offset))
-                                cur_hhmm = (int(hour), int(minute))
-                            else:
-                                slot_date = cur_date
-                                cur_hhmm = cur_slot
-                            projected_local = core.to_local(core.build_local_datetime(slot_date, cur_hhmm))
-                            if projected_local > after_local:
-                                return projected_local
-                        cur_date = step(cur_date)
-                    return None
-
-                occurrence_provider = core._import_sibling("occurrence_provider")
-                provider = occurrence_provider.AnchorOccurrenceProvider(
-                    next_anchor_after,
-                )
                 if due_local_dt is not None and due_local_dt.date() == start_from_date:
                     cur_after = due_local_dt
                 else:
                     next_day = start_from_date + datetime.timedelta(days=1)
                     cur_after = core.to_local(core.build_local_datetime(next_day, (0, 0))) - datetime.timedelta(microseconds=1)
+                from nautical_core.occurrence_outcomes import ExhaustedOccurrence
+                from nautical_core.scheduler_cursor import OccurrenceCursor
+
+                timezone = recurrence_context.timezone
+                result = scheduler_service.collect(
+                    OccurrenceCursor.strict_after(cur_after, timezone=timezone),
+                    limit=limit,
+                    fallback_hhmm=default_hhmm,
+                    default_seed_date=start_from_date,
+                    max_iterations=max(512, limit),
+                    max_file_skips=max(512, limit),
+                )
                 anchor_out = [
                     occurrence.local_datetime
-                    for occurrence in occurrence_provider.collect_after(
-                        provider,
-                        cur_after,
-                        limit=limit,
-                        max_iterations=max(512, limit),
-                        build_local_datetime=core.build_local_datetime,
-                        to_local=core.to_local,
-                    )
+                    for occurrence in result.occurrences
                     if occurrence.local_datetime is not None
                 ]
-                if projection_terminal_note:
-                    self._record_projection_warning(projection_terminal_note)
+                if isinstance(result.terminal, ExhaustedOccurrence):
+                    projection_terminal_note = _format_runtime_error(result.terminal.error)
+            except Exception as exc:
+                self._record_projection_warning(f"Anchor expression: {_format_runtime_error(exc)}")
 
 
         if anchor_file:

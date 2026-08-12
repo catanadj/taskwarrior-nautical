@@ -814,17 +814,34 @@ def handle_anchor_file_preview_on_add(
     )
     t_occ = time.perf_counter()
     seed_base = _preview_seed_base(task, "preview")
-    all_occurrences = _anchor_file_preview_occurrences(
-        anchor_file_str,
-        core=core,
-        fallback_hhmm=(due_hhmm if user_provided_due else (9, 0)),
-        omit_dnf=omit_dnf,
-        seed_base=seed_base,
-        after_local_dt=(core.to_local(due_dt) if user_provided_due else now_local)
-        if compact_presentation
-        else None,
+    from .recurrence_context import RecurrenceContext
+    from .scheduler_service import SchedulerService
+
+    scheduler_service = SchedulerService.from_task(
+        task,
+        context=RecurrenceContext(
+            chain_id=str(task.get("chainID") or seed_base),
+            timezone=getattr(core, "_LOCAL_TZ", None),
+            business_calendar=core.business_calendar_for_task(task),
+            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        ),
+    )
+    all_occurrences = _collect_included_with_provider(
+        dnf=None,
+        anchor_file_str=anchor_file_str,
+        after_local_dt=(core.to_local(due_dt) if user_provided_due else now_local),
         inclusive=False if user_provided_due else True,
-        limit=1 if compact_presentation else None,
+        limit=_initial_occurrence_limit(preview_hard_cap, compact_presentation),
+        fallback_hhmm=(due_hhmm if user_provided_due else (9, 0)),
+        default_seed_date=(core.to_local(due_dt).date() if user_provided_due else now_local.date()),
+        seed_base=seed_base,
+        omit_dnf=omit_dnf,
+        core=core,
+        next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
+        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        evaluator=scheduler_service.session.evaluator,
+        scheduler_service=scheduler_service,
     )
     prof.add_ms("anchor_file:occurrences", (time.perf_counter() - t_occ) * 1000.0)
     if not all_occurrences:
@@ -922,6 +939,7 @@ def handle_anchor_file_preview_on_add(
         next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         return_occurrences=True,
+        scheduler_service=scheduler_service,
         )
         if until_dt:
             until_local = core.to_local(until_dt)

@@ -40,6 +40,51 @@ def _thaw_value(value: Any) -> Any:
     return value
 
 
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, ProviderInstruction):
+        return value.to_dict()
+    if isinstance(value, ProjectionInstruction):
+        return value.to_dict()
+    if isinstance(value, ScheduleLimits):
+        return value.to_dict()
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderInstruction:
+    """Typed source instructions for a compiled schedule."""
+
+    kind: str
+    anchor_file: str = ""
+    cp: str = ""
+
+    def to_dict(self) -> dict[str, str]:
+        return {"kind": self.kind, "anchor_file": self.anchor_file, "cp": self.cp}
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionInstruction:
+    """Typed time projection instructions extracted from parser output."""
+
+    modifiers: tuple[Any, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"modifiers": [_thaw_value(item) for item in self.modifiers]}
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleLimits:
+    chain_max: int | None = None
+    chain_until: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"chain_max": self.chain_max, "chain_until": self.chain_until}
+
+
 def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
     """Parse expression fields once and describe the provider-facing inputs."""
     if spec.cp and (spec.anchor or spec.anchor_file):
@@ -82,13 +127,20 @@ def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
                 collect_time(item)
 
     collect_time(anchor_dnf)
-    provider = "cp" if spec.cp else ("anchor+file" if spec.anchor and spec.anchor_file else "anchor_file" if spec.anchor_file else "anchor")
+    provider = ProviderInstruction(
+        kind="cp" if spec.cp else ("anchor+file" if spec.anchor and spec.anchor_file else "anchor_file" if spec.anchor_file else "anchor"),
+        anchor_file=spec.anchor_file,
+        cp=spec.cp,
+    )
+    projection = ProjectionInstruction(
+        modifiers=tuple(_freeze_value(item) for item in time_modifiers)
+    )
     return {
         "anchor_dnf": _freeze_value(anchor_dnf),
         "omit_dnf": _freeze_value(omit_dnf),
         "provider": provider,
-        "time_projection": tuple(_freeze_value(item) for item in time_modifiers),
-        "limits": _freeze_value({"chain_max": spec.chain_max, "chain_until": spec.chain_until}),
+        "time_projection": projection,
+        "limits": ScheduleLimits(chain_max=spec.chain_max, chain_until=spec.chain_until),
         "identity": spec.context.chain_id,
     }
 
@@ -151,14 +203,14 @@ class CompiledSchedule:
                 "namespace": context.namespace,
             },
         }
-        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        canonical = _freeze_value(payload)
+        encoded = json.dumps(_jsonable(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        canonical = _freeze_value(_jsonable(payload))
         fingerprint = "cs1-" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
         return cls(
             spec=spec,
             canonical=canonical,
             fingerprint=fingerprint,
-            normalized=_freeze_value(normalized),
+            normalized=_freeze_value(_jsonable(normalized)),
         )
 
     @classmethod
@@ -173,4 +225,10 @@ class CompiledSchedule:
         }
 
 
-__all__ = ("COMPILER_SCHEMA_VERSION", "CompiledSchedule")
+__all__ = (
+    "COMPILER_SCHEMA_VERSION",
+    "CompiledSchedule",
+    "ProviderInstruction",
+    "ProjectionInstruction",
+    "ScheduleLimits",
+)

@@ -23582,7 +23582,7 @@ def test_compiled_schedule_is_canonical_and_reusable():
         "omit": "y:07-04",
         "chainMax": 4,
     }).to_dict()["schedule"]["normalized"]
-    expect(normalized["provider"] == "anchor", "compiled provider instruction was not recorded")
+    expect(normalized["provider"]["kind"] == "anchor", "compiled provider instruction was not recorded")
     expect(normalized["identity"] == "compiled-chain", "compiled identity was not recorded")
     expect(normalized["anchor_dnf"] and normalized["omit_dnf"], "compiled DNF instructions were not recorded")
     expect(normalized["time_projection"], "compiled time projection was not recorded")

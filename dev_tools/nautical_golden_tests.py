@@ -7811,6 +7811,72 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
     expect(rows[0].get("uuid") == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f"unexpected filtered row: {rows}")
 
 
+def test_lifecycle_read_service_indexes_and_merges_chain_rows():
+    """The lifecycle read service owns snapshot indexes and child merges."""
+    import nautical_core.lifecycle_read_service as read_service
+
+    service = read_service.LifecycleReadService(
+        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
+        parse_extra_tokens=lambda extra: [] if not extra else str(extra).split(),
+        token_matcher=lambda row, token: token == "status:pending" and row.get("status") == "pending",
+        read_query_get=lambda _kind, _key: object(),
+        chain_cache_get=lambda _chain_id: None,
+        export_chain_cached=lambda *_args: (),
+        max_chain_walk=10,
+    )
+    parent = {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1}
+    rows = [parent, {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "link": 2}]
+    indexes = service.build_indexes(rows)
+    expect(indexes.by_link[1][0] is parent, f"unexpected link index: {indexes.by_link}")
+    expect(indexes.by_short["bbbbbbbb"]["link"] == 2, f"unexpected short index: {indexes.by_short}")
+    merged = service.merge_spawned_child(
+        rows,
+        parent_task=parent,
+        child_task={"uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc", "link": 3},
+        child_short="cccccccc",
+        short_uuid=lambda value: str(value)[:8],
+    )
+    expect(len(merged) == 3, f"expected merged child in chain, got {merged}")
+    expect(merged[0].get("nextLink") == "cccccccc", f"parent nextLink was not merged: {merged}")
+
+
+def test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads():
+    """Safe full-snapshot predicates must avoid a second Taskwarrior export."""
+    import nautical_core.lifecycle_read_service as read_service
+
+    missing = object()
+    calls = {"export": 0}
+    snapshot = [
+        {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1, "status": "completed"},
+        {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "link": 2, "status": "pending"},
+    ]
+
+    def _read(_kind, _key):
+        return snapshot
+
+    def _export(*_args):
+        calls["export"] += 1
+        return snapshot
+
+    service = read_service.LifecycleReadService(
+        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
+        parse_extra_tokens=lambda extra: [] if not extra else str(extra).split(),
+        token_matcher=lambda row, token: token in {f"link:{row.get('link')}", f"status:{row.get('status')}"},
+        read_query_get=_read,
+        chain_cache_get=lambda _chain_id: None,
+        export_chain_cached=_export,
+        max_chain_walk=10,
+    )
+    rows = service.get_chain_export(
+        "chain-1",
+        extra="link:2 status:pending",
+        read_query_missing=missing,
+        read_query_key=lambda chain_id, since, extra, limit: (chain_id, since, extra, limit),
+    )
+    expect(len(rows or []) == 1 and rows[0].get("link") == 2, f"unexpected filtered snapshot: {rows}")
+    expect(calls["export"] == 0, f"full snapshot filter unexpectedly exported Taskwarrior: {calls}")
+
+
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33493,6 +33559,8 @@ TESTS = [
     test_on_exit_run_task_diag_bucket_stats,
     test_on_modify_chain_cache_thread_safety_smoke,
     test_on_modify_get_chain_export_filters_cached_chain_in_memory,
+    test_lifecycle_read_service_indexes_and_merges_chain_rows,
+    test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads,
     test_next_for_and_no_progress_fails_fast,
     test_next_for_and_transient_stall_recovers,
     test_roll_apply_has_guard,

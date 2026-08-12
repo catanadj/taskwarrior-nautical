@@ -622,6 +622,12 @@ _MODULE_SPECS = {
         "modify_chain_reads.py",
         "nautical_core.modify_chain_reads",
     ),
+    "lifecycle_read_service": (
+        "_LIFECYCLE_READ_SERVICE",
+        "_LIFECYCLE_READ_SERVICE_LOAD_FAILED",
+        "lifecycle_read_service.py",
+        "nautical_core.lifecycle_read_service",
+    ),
     "modify_spawn_prep": (
         "_MODIFY_SPAWN_PREP",
         "_MODIFY_SPAWN_PREP_LOAD_FAILED",
@@ -2584,37 +2590,41 @@ def _cached_chain_token_match(task: dict, token: str) -> bool:
     return (not matched) if negate else matched
 
 
-def _filter_cached_chain_rows(chain: list[dict], *, extra: str | None, limit: int | None) -> list[dict] | None:
-    tokens = _parse_extra_tokens(extra)
-    if tokens is None:
+def _lifecycle_read_service():
+    """Build the focused chain-read service for this hook invocation."""
+    lifecycle_read_service = _module("lifecycle_read_service")
+
+    def _cached_chain(chain_id: str):
+        state = _modify_chain_state()
+        with state.chain_cache_lock:
+            if state.chain_cache_chain_id == chain_id and state.chain_cache:
+                return list(state.chain_cache)
         return None
-    rows = list(chain or [])
-    for token in tokens:
-        rows = [task for task in rows if _cached_chain_token_match(task, token)]
-    if limit and isinstance(limit, int) and limit > 0:
-        rows = rows[:limit]
-    return rows
+
+    return lifecycle_read_service.LifecycleReadService(
+        coerce_int=core.coerce_int,
+        parse_extra_tokens=_parse_extra_tokens,
+        token_matcher=_cached_chain_token_match,
+        read_query_get=_read_query_get,
+        chain_cache_get=_cached_chain,
+        export_chain_cached=_tw_export_chain_cached,
+        max_chain_walk=_MAX_CHAIN_WALK,
+        diag=_diag,
+        record_stat=_record_chain_snapshot_stat,
+    )
+
+
+def _filter_cached_chain_rows(chain: list[dict], *, extra: str | None, limit: int | None) -> list[dict] | None:
+    return _lifecycle_read_service().filter_rows(chain or [], extra=extra, limit=limit)
 
 
 def _filter_full_snapshot_rows(chain: list[dict], *, extra: str | None, limit: int | None) -> list[dict] | None:
     """Filter a full snapshot only for predicates with equivalent semantics."""
-    tokens = _parse_extra_tokens(extra)
-    if tokens is None:
-        return None
-    for token in tokens:
-        if token.startswith("+"):
-            continue
-        key = token.split(":", 1)[0]
-        base_key = key[:-4] if key.endswith(".not") else key
-        if base_key not in {"chainID", "link", "id", "project", "status"}:
-            return None
-    return _filter_cached_chain_rows(chain, extra=extra, limit=limit)
+    return _lifecycle_read_service().filter_full_snapshot(chain or [], extra=extra, limit=limit)
 
 
 def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict] | None:
     """Return a safe list copy of a chain export (cached when env is None)."""
-    if not chain_id:
-        return []
     if env is not None:
         ok, rows, _error = _tw_export_chain_checked(
             chain_id,
@@ -2624,36 +2634,13 @@ def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str |
             limit=_MAX_CHAIN_WALK,
         )
         return rows if ok else None
-    if not since:
-        full_snapshot = _read_query_get("chain", _chain_read_key(chain_id, None, None, 0))
-        if full_snapshot is not _READ_QUERY_MISSING:
-            if not isinstance(full_snapshot, list):
-                _diag(f"cached chain read has invalid shape (chainID={chain_id})")
-                return None
-            filtered = _filter_full_snapshot_rows(
-                full_snapshot,
-                extra=extra,
-                limit=_MAX_CHAIN_WALK,
-            )
-            if filtered is not None:
-                _record_chain_snapshot_stat("chain_snapshot_filter_hits")
-                return filtered
-    state = _modify_chain_state()
-    with state.chain_cache_lock:
-        cached_chain = list(state.chain_cache) if state.chain_cache_chain_id and chain_id == state.chain_cache_chain_id else []
-    if cached_chain and not since and not extra:
-        return cached_chain
-    if cached_chain and not since:
-        filtered = _filter_cached_chain_rows(cached_chain, extra=extra, limit=_MAX_CHAIN_WALK)
-        if filtered is not None:
-            _diag_count("chain_cache_filter_hits")
-            return filtered
-    try:
-        cached = _tw_export_chain_cached(chain_id, since, extra, _MAX_CHAIN_WALK)
-    except RuntimeError as exc:
-        _diag(f"chain read unavailable (chainID={chain_id}): {exc}")
-        return None
-    return list(cached)
+    return _lifecycle_read_service().get_chain_export(
+        chain_id,
+        since=since,
+        extra=extra,
+        read_query_missing=_READ_QUERY_MISSING,
+        read_query_key=_chain_read_key,
+    )
 
 
 def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
@@ -2675,32 +2662,21 @@ def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
 
 def _build_chain_indexes(chain: list[dict]) -> tuple[dict[int, list[dict]], dict[str, dict]]:
     """Build link-index and short-uuid index for quick in-memory lookups."""
-    by_link: dict[int, list[dict]] = {}
-    by_short: dict[str, dict] = {}
-    for t in chain:
-        ln = core.coerce_int(t.get("link"), None)
-        if ln is not None:
-            by_link.setdefault(ln, []).append(t)
-        u = t.get("uuid")
-        if isinstance(u, str) and u:
-            by_short[u[:8]] = t
-    return by_link, by_short
+    indexes = _lifecycle_read_service().build_indexes(chain or [])
+    return indexes.by_link, indexes.by_short
 
 
 def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
     """Set per-run chain cache to avoid repeated task exports."""
     global _CHAIN_CACHE_CHAIN_ID, _CHAIN_CACHE
     chain_copy = list(chain or [])
-    _, by_short = _build_chain_indexes(chain_copy)
-    by_uuid = {
-        t.get("uuid"): t for t in chain_copy if isinstance(t.get("uuid"), str) and t.get("uuid")
-    }
+    indexes = _lifecycle_read_service().build_indexes(chain_copy)
     state = _modify_chain_state()
     with state.chain_cache_lock:
         state.chain_cache_chain_id = chain_id or ""
         state.chain_cache = chain_copy
-        state.chain_by_short = by_short
-        state.chain_by_uuid = by_uuid
+        state.chain_by_short = indexes.by_short
+        state.chain_by_uuid = indexes.by_uuid
     _CHAIN_CACHE_CHAIN_ID = chain_id or ""
     _CHAIN_CACHE = list(chain_copy)
     _diag_count("chain_cache_seeded")
@@ -2740,32 +2716,13 @@ def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
 
 
 def _merge_spawned_child_into_chain(chain: list[dict], parent_task: dict, child_task: dict, child_short: str) -> list[dict]:
-    if not chain:
-        return []
-    parent_uuid = str(parent_task.get("uuid") or "").strip()
-    parent_short = _short(parent_uuid)
-    child_uuid = str(child_task.get("uuid") or "").strip()
-    merged: list[dict] = []
-    child_present = False
-    for row in chain:
-        row_obj = dict(row)
-        row_uuid = str(row_obj.get("uuid") or "").strip()
-        if parent_uuid and row_uuid == parent_uuid and child_short:
-            row_obj["nextLink"] = child_short
-        if child_uuid and row_uuid == child_uuid:
-            child_present = True
-            row_obj.update(child_task)
-        merged.append(row_obj)
-    if child_uuid and not child_present:
-        child_obj = dict(child_task)
-        if parent_short and not str(child_obj.get("prevLink") or "").strip():
-            child_obj["prevLink"] = parent_short
-        merged.append(child_obj)
-    try:
-        merged.sort(key=lambda task: (core.coerce_int(task.get("link"), 10**9), str(task.get("uuid") or "")))
-    except Exception:
-        pass
-    return merged
+    return _lifecycle_read_service().merge_spawned_child(
+        chain or [],
+        parent_task=parent_task,
+        child_task=child_task,
+        child_short=child_short,
+        short_uuid=_short,
+    )
 
 
 # ------------------------------------------------------------------------------

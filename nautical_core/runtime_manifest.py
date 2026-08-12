@@ -25,6 +25,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "hook_support",
         "modify_queries",
         "modify_chain_reads",
+        "lifecycle_read_service",
         "modify_spawn_prep",
         "chain_generation",
         "modify_ordinary",

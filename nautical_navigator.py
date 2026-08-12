@@ -869,55 +869,54 @@ class TaskAnalyzer:
                 return scheduled
             # ---------- ANCHOR ----------
             try:
-                dnf = core.validate_anchor_expr_strict(anchor_expr)
+                from nautical_core.recurrence_context import RecurrenceContext
+                from nautical_core.scheduler_cursor import OccurrenceCursor
+                from nautical_core.scheduler_service import SchedulerService
+
+                due_dt = core.parse_dt_any(last.get("due")) if last.get("due") else None
+                due_local = core.to_local(due_dt) if due_dt else None
+                clock = (due_local.hour, due_local.minute) if due_local else (core.DEFAULT_DUE_HOUR, 0)
+                context = RecurrenceContext.from_task(
+                    last,
+                    fallback_chain_id=last.get("uuid") or "navigator",
+                    timezone=getattr(core, "_LOCAL_TZ", None),
+                    business_calendar=business_calendar,
+                    astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+                    anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+                )
+                scheduler_service = SchedulerService.from_task(last, context=context)
+                cursor = OccurrenceCursor.strict_after(
+                    core.build_local_datetime(window_start - timedelta(days=1), (23, 59)),
+                    timezone=context.timezone,
+                )
+                result = scheduler_service.collect(
+                    cursor,
+                    limit=MAX_CAL_FUTURE_STEPS,
+                    fallback_hhmm=clock,
+                    default_seed_date=(due_local.date() if due_local else window_start),
+                    max_iterations=max(512, MAX_CAL_FUTURE_STEPS),
+                    max_file_skips=max(512, MAX_CAL_FUTURE_STEPS),
+                )
             except Exception:
                 return scheduled
 
-            # choose seed: prefer 'due'; else compute next from window_start
-            due_dt = core.parse_dt_any(last.get("due")) if last.get("due") else None
-            if due_dt:
-                seed_day = core.to_local(due_dt).date()
-                clock = (core.to_local(due_dt).hour, core.to_local(due_dt).minute)
-            else:
-                seed_day, hhmm = _next_after_expr_pair(
-                    dnf,
-                    window_start,
-                    default_seed=window_start,
-                    business_calendar=business_calendar,
-                )
-                clock = hhmm or (core.DEFAULT_DUE_HOUR, 0)
-
-            # walk forward until window_end / chainUntil / chainMax (future)
-            cur = seed_day
-            prev = None
             future_taken = 0
-            for _ in range(MAX_CAL_FUTURE_STEPS):
-                nxt, _ = _next_after_expr_pair(
-                    dnf,
-                    cur,
-                    default_seed=seed_day,
-                    business_calendar=business_calendar,
-                )
-                if prev is not None and nxt <= prev:
-                    cur = prev + timedelta(days=1); continue
-                prev = nxt
-                # hard stop by window_end
+            for occurrence in result.occurrences:
+                if occurrence.local_datetime is None:
+                    break
+                nxt = occurrence.local_datetime.date()
                 if nxt > window_end:
                     break
-                # chainUntil check
                 if until_utc:
-                    dt_utc = core.build_local_datetime(nxt, clock)
+                    dt_utc = occurrence.local_datetime.astimezone(UTC_ZONE)
                     if dt_utc > until_utc:
                         break
-                # chainMax enforcement only for future occurrences
                 if left is not None and nxt >= now_local:
                     if future_taken >= left:
                         break
                     future_taken += 1
-
                 if nxt >= window_start:
                     scheduled.add(nxt)
-                cur = nxt
 
         elif cp_period:
             # ---------- CLASSIC CP ----------

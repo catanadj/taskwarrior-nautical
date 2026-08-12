@@ -8,7 +8,7 @@ import json
 import os
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping, cast
 
 
 _ACTIVE_TRACE: ContextVar["SchedulerTrace | None"] = ContextVar("nautical_scheduler_trace", default=None)
@@ -103,7 +103,7 @@ class SchedulerTrace:
         if len(self._events) >= self.max_events:
             self._dropped += 1
             return
-        self._events.append(SchedulerTraceEvent(phase=str(phase), **kwargs))
+        self._events.append(SchedulerTraceEvent(phase=str(phase), **cast(Any, kwargs)))
 
     @property
     def events(self) -> tuple[SchedulerTraceEvent, ...]:
@@ -149,7 +149,7 @@ class SchedulerTrace:
 
 
 @contextmanager
-def activate(trace: SchedulerTrace | None):
+def activate(trace: SchedulerTrace | None) -> Iterator[None]:
     """Make one trace visible to callback-based scheduler internals."""
     token = _ACTIVE_TRACE.set(trace if trace is not None and trace.enabled else None)
     try:

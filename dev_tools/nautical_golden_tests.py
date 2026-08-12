@@ -9360,12 +9360,12 @@ def test_anchor_cache_cleans_stale_tmp_files():
 def test_anchor_cache_garbage_collection_prunes_expired_and_overflow():
     """Explicit cache GC should remove expired/overflow entries and stale temps only."""
     saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
-    saved_cache_dir = core._CACHE_DIR
+    saved_cache_dir = getattr(core, "_CACHE_DIR", None)
     saved_ttl = core.ANCHOR_CACHE_TTL
     try:
         with tempfile.TemporaryDirectory() as td:
             core.ANCHOR_CACHE_DIR_OVERRIDE = td
-            core._CACHE_DIR = None
+            setattr(core, "_CACHE_DIR", None)
             core.ANCHOR_CACHE_TTL = 1
             old_path = Path(td) / "old-entry.jsonz"
             new_path = Path(td) / "new-entry.jsonz"
@@ -9396,7 +9396,7 @@ def test_anchor_cache_garbage_collection_prunes_expired_and_overflow():
             expect(ignored.exists(), "cache GC touched an unrelated file")
     finally:
         core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
-        core._CACHE_DIR = saved_cache_dir
+        setattr(core, "_CACHE_DIR", saved_cache_dir)
         core.ANCHOR_CACHE_TTL = saved_ttl
 
 def test_weeks_between_iso_boundary():
@@ -16617,8 +16617,10 @@ def test_on_add_dnf_cache_uses_central_api_and_fingerprints_parser():
     with tempfile.TemporaryDirectory() as td:
         old_dir = getattr(mod.core, "ANCHOR_CACHE_DIR_OVERRIDE", "")
         old_cache = getattr(mod.core, "_CACHE_DIR", None)
+        old_enabled = getattr(mod.core, "ENABLE_ANCHOR_CACHE", True)
         mod.core.ANCHOR_CACHE_DIR_OVERRIDE = td
-        mod.core._CACHE_DIR = None
+        mod.core.ENABLE_ANCHOR_CACHE = True
+        setattr(mod.core, "_CACHE_DIR", None)
         try:
             dnf = mod.core.validate_anchor_expr_strict("w:mon")
             expect(mod.core._dnf_cache_save("w:mon", dnf), "central DNF cache save failed")
@@ -16631,7 +16633,8 @@ def test_on_add_dnf_cache_uses_central_api_and_fingerprints_parser():
             expect(cache_path.suffix == ".jsonz" and cache_path.exists(), f"central cache path missing: {cache_path}")
         finally:
             mod.core.ANCHOR_CACHE_DIR_OVERRIDE = old_dir
-            mod.core._CACHE_DIR = old_cache
+            mod.core.ENABLE_ANCHOR_CACHE = old_enabled
+            setattr(mod.core, "_CACHE_DIR", old_cache)
 
 
 def test_on_add_dnf_cache_quarantines_central_corruption():
@@ -22271,6 +22274,7 @@ def test_modify_until_projection_reuses_anchor_file_provider():
     """Until-cap projection should expand an anchor file once per reconciliation."""
     import nautical_core.anchor_inclusion as anchor_inclusion
 
+    _hook._load_core()
     builders = []
     providers = []
     original_builder = anchor_inclusion._build_anchor_file_provider

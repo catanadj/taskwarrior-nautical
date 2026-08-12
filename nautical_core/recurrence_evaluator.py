@@ -869,12 +869,13 @@ class RecurrenceEvaluator:
         scheduler_engine = getattr(core, "_scheduler_api", None)
         if scheduler_engine is None:
             raise RuntimeError("Recurrence evaluator scheduler engine is unavailable")
+        engine: Any = scheduler_engine
 
         class SchedulerCoreProxy:
             """Expose core helpers while binding all wall-clock conversion to this evaluator."""
 
-            def __init__(self):
-                self._engine = scheduler_engine
+            def __init__(self) -> None:
+                self._engine: Any = engine
 
             def __getattr__(self, name: str) -> Any:
                 return getattr(core, name)

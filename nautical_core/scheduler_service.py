@@ -219,7 +219,7 @@ class SchedulerService:
                 request=request,
             )
         except (LookupError, OSError) as exc:
-            failure = UnavailableOccurrence(
+            failure: UnavailableOccurrence | InvalidOccurrence = UnavailableOccurrence(
                 str(exc) or "scheduler dependency unavailable",
                 type(exc).__name__,
             )

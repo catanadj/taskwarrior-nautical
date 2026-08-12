@@ -118,12 +118,18 @@ def update_parent_nextlink(
             return ExitParentUpdateResult(False, "parent lock busy")
         state_res = parent_nextlink_state_fn(parent_uuid, child_short, expected_prev)
         if state_res.state == "ok":
+            # Keep the optimistic read and Taskwarrior mutation coupled. The
+            # filesystem lock serializes Nautical writers, while this selector
+            # also protects against an external Taskwarrior writer changing
+            # nextLink between the export and modify commands.
+            expected_filter = f"nextLink:{(expected_prev or '').strip()}"
             result = _typed_result(
                 run_task,
                 task_cmd_prefix + [
                     "rc.hooks=off",
                     "rc.verbose=nothing",
                     f"uuid:{parent_uuid}",
+                    expected_filter,
                     "modify",
                     f"nextLink:{child_short}",
                 ],

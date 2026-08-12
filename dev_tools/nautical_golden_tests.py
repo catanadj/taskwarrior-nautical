@@ -2704,6 +2704,55 @@ def test_on_exit_guarded_parent_clear_preserves_changed_link():
     expect(result.ok, f"changed parent link should be preserved without error: {result}")
     expect(not calls, f"guarded cleanup overwrote a changed parent link: {calls!r}")
 
+
+def test_on_exit_parent_update_uses_compare_and_set_selector():
+    """Parent nextLink updates must retain the value checked before mutation."""
+    hook = _find_hook_file("on-exit.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_exit_parent_compare_set_test")
+    exit_models = mod._module("exit_models")
+    side_effects = mod._module("exit_side_effects")
+    calls = []
+
+    @contextlib.contextmanager
+    def locked(_parent_uuid):
+        yield True
+
+    result = side_effects.update_parent_nextlink(
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "bbbbbbbb",
+        expected_prev=None,
+        lock_parent_nextlink=locked,
+        parent_nextlink_state_fn=lambda *_args: exit_models.ExitParentNextlinkStateResult("ok", ""),
+        run_task=lambda cmd, **kwargs: calls.append((cmd, kwargs)) or (True, "", ""),
+        task_cmd_prefix=["task"],
+        timeout_modify=3.0,
+        retries_modify=1,
+        retry_delay=0.0,
+    )
+    expect(result.ok, f"compare-and-set parent update failed: {result}")
+    expect(len(calls) == 1, f"expected one parent update command: {calls!r}")
+    command = calls[0][0]
+    modify_index = command.index("modify")
+    expect("nextLink:" in command[:modify_index], f"missing empty nextLink selector: {command!r}")
+    expect(command[-1] == "nextLink:bbbbbbbb", f"unexpected parent update command: {command!r}")
+
+    calls.clear()
+    result = side_effects.update_parent_nextlink(
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "cccccccc",
+        expected_prev="bbbbbbbb",
+        lock_parent_nextlink=locked,
+        parent_nextlink_state_fn=lambda *_args: exit_models.ExitParentNextlinkStateResult("ok", ""),
+        run_task=lambda cmd, **kwargs: calls.append((cmd, kwargs)) or (True, "", ""),
+        task_cmd_prefix=["task"],
+        timeout_modify=3.0,
+        retries_modify=1,
+        retry_delay=0.0,
+    )
+    expect(result.ok, f"guarded compare-and-set parent update failed: {result}")
+    command = calls[0][0]
+    expect("nextLink:bbbbbbbb" in command[:command.index("modify")], f"missing expected link selector: {command!r}")
+
 def test_on_exit_uses_tw_data_dir_for_export_and_modify():
     """on-exit should target TW_DATA_DIR when explicit data dir is enabled."""
     hook = _find_hook_file("on-exit.nautical")
@@ -33386,6 +33435,7 @@ TESTS = [
     test_on_exit_queue_drain_idempotent,
     test_on_exit_rolls_back_parent_nextlink_on_missing_child,
     test_on_exit_guarded_parent_clear_preserves_changed_link,
+    test_on_exit_parent_update_uses_compare_and_set_selector,
     test_on_exit_stale_parent_guard_prevents_child_import,
     test_on_exit_uses_tw_data_dir_for_export_and_modify,
     test_on_exit_no_explicit_taskdata_skips_rc_data_location,

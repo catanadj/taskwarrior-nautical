@@ -634,31 +634,31 @@ class RecurrenceEvaluator:
             raise ValueError("Occurrence collection limit must be non-negative.")
         if limit == 0:
             return OccurrenceBatch()
-        events: list[Occurrence] = []
-        included_count = 0
-        current = cursor.local_datetime
-        first = cursor.inclusive
-        for _ in range(max_iterations):
-            event = self.next_event_after(
+        from .occurrence_provider import AnchorEventOccurrenceProvider, collect_after
+
+        provider = AnchorEventOccurrenceProvider(
+            lambda current: self.next_event_after(
                 current,
                 fallback_hhmm=fallback_hhmm,
                 default_seed_date=default_seed_date,
-                inclusive=first,
+                inclusive=False,
                 include_omitted=True,
                 max_file_skips=max_file_skips,
-            )
-            if event is None or event.local_datetime is None:
-                break
-            events.append(event)
-            if count_omitted or not event.omitted:
-                included_count += 1
-            if included_count >= limit:
-                break
-            current = event.local_datetime
-            first = False
-        else:
-            raise ValueError("Occurrence provider exceeded its collection iteration limit.")
-        return OccurrenceBatch(events)
+            ),
+            source="anchor+anchor_file" if self.spec.anchor and self.spec.anchor_file else (
+                "anchor_file" if self.spec.anchor_file else "anchor"
+            ),
+        )
+        return collect_after(
+            provider,
+            cursor,
+            limit=limit,
+            max_iterations=max_iterations,
+            count_omitted=count_omitted,
+            build_local_datetime=self.build_local_datetime,
+            to_local=self.to_local,
+            require_contract=True,
+        )
 
     def select_mode(
         self,

@@ -2481,22 +2481,30 @@ class TaskAnalyzer:
         due_day = due_local.date()
         if anchor_expr:
             try:
-                dnf = core.validate_anchor_expr_strict(anchor_expr)
-            except Exception:
-                dnf = None
-            if dnf:
-                def step(prev_date: date):
-                    nxt_date, _ = _next_after_expr_pair(
-                        dnf,
-                        prev_date,
-                        default_seed=prev_date,
-                        seed_base=recurrence_context.seed_base,
-                        business_calendar=business_calendar,
-                    )
-                    return nxt_date
-                first_on_or_after = step(due_day - timedelta(days=1))
-                if first_on_or_after == due_day:
+                from nautical_core.occurrence_outcomes import FoundOccurrence
+                from nautical_core.recurrence_context import RecurrenceContext
+                from nautical_core.scheduler_cursor import OccurrenceCursor
+                from nautical_core.scheduler_service import SchedulerService
+
+                context = RecurrenceContext.from_task(
+                    task,
+                    fallback_chain_id=task.get("uuid") or "analyzer",
+                    timezone=getattr(core, "_LOCAL_TZ", None),
+                    business_calendar=business_calendar,
+                    astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+                    anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+                )
+                service = SchedulerService.from_task(task, context=context)
+                cursor_dt = core.build_local_datetime(due_day - timedelta(days=1), (23, 59))
+                outcome = service.next(
+                    OccurrenceCursor.strict_after(cursor_dt, timezone=context.timezone),
+                    fallback_hhmm=(0, 0),
+                    default_seed_date=due_day - timedelta(days=1),
+                )
+                if isinstance(outcome, FoundOccurrence) and outcome.occurrence.day == due_day:
                     return True
+            except Exception:
+                pass
 
         if anchor_file:
             try:

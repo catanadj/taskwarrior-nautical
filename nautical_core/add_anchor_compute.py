@@ -15,6 +15,16 @@ def _scheduler_engine(core: Any) -> Any:
     return engine
 
 
+def _scheduler_business_calendar(core: Any) -> Any:
+    configured = getattr(core, "business_calendar", None)
+    if configured is not None:
+        return configured
+    try:
+        return core._import_sibling("business_calendar").active_business_calendar()
+    except Exception:
+        return None
+
+
 def anchor_step_once(dnf, prev_local_date, interval_seed, seed_base, *, core: Any):
     return anchor_step_once_with_omit(
         dnf,
@@ -37,6 +47,7 @@ def anchor_step_once_with_omit(dnf, prev_local_date, interval_seed, seed_base, *
             omit_dnf=omit_dnf,
             core=core,
             max_skip_iterations=max(getattr(core, "MAX_ANCHOR_ITER", 128), 128),
+            business_calendar=_scheduler_business_calendar(core),
         )
         if nxt_date is None or nxt_date <= prev_local_date:
             return None
@@ -295,6 +306,7 @@ def anchor_pick_occurrence_local(
                 dnf, candidate, default_seed=interval_seed, seed_base=seed_base,
                 omit_dnf=omit_dnf, core=core,
                 max_skip_iterations=max(getattr(core, "MAX_ANCHOR_ITER", 128), 128),
+                business_calendar=_scheduler_business_calendar(core),
             )
             if not nxt_d:
                 break
@@ -347,6 +359,10 @@ def anchor_next_occurrence_after_local_dt(
         interval_seed = default_seed_date
     if core is None:
         from . import _PKG_PROXY
+        import sys
+        package = sys.modules.get(__package__ or "nautical_core")
+        if package is not None:
+            _PKG_PROXY.__dict__.update(vars(package))
         core = _PKG_PROXY
     if norm_t_mod is None:
         from .anchor_inclusion import _norm_t_mod

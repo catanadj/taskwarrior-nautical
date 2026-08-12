@@ -7,6 +7,7 @@ limits, and local-time conversion while callers migrate incrementally.
 from __future__ import annotations
 
 import copy
+import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping, NoReturn
@@ -819,6 +820,9 @@ class RecurrenceEvaluator:
     @staticmethod
     def _core_module() -> Any:
         from . import _PKG_PROXY
+        package = sys.modules.get(__package__ or "nautical_core")
+        if package is not None:
+            _PKG_PROXY.__dict__.update(vars(package))
 
         return _PKG_PROXY
 
@@ -880,6 +884,10 @@ class RecurrenceEvaluator:
 
             def build_local_datetime(self, day: Any, hhmm: tuple[int, int]) -> Any:
                 return self_evaluator.build_local_datetime(day, hhmm)
+
+            @property
+            def business_calendar(self) -> Any:
+                return self_evaluator.context.business_calendar
 
             def factor_matches_on(
                 self,

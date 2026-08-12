@@ -18,6 +18,16 @@ def _scheduler_engine(core: Any) -> Any:
     return engine
 
 
+def _scheduler_business_calendar(core: Any) -> Any:
+    configured = getattr(core, "business_calendar", None)
+    if configured is not None:
+        return configured
+    try:
+        return core._import_sibling("business_calendar").active_business_calendar()
+    except Exception:
+        return None
+
+
 def _freeze_omit_value(value: Any) -> Any:
     if isinstance(value, dict):
         return MappingProxyType({key: _freeze_omit_value(item) for key, item in value.items()})
@@ -156,12 +166,14 @@ def omit_expr_fires_on_date(
     lookback_days = _omit_expr_match_lookback_days(omit_expr_dnf)
     try:
         engine = _scheduler_engine(core)
+        business_calendar = _scheduler_business_calendar(core)
         for k in range(1, lookback_days + 1):
             nxt, _ = engine.next_after_expr(
                 omit_expr_dnf,
                 d - timedelta(days=k),
                 default_seed=default_seed,
                 seed_base=seed_base,
+                business_calendar=business_calendar,
             )
             if nxt == d:
                 return True
@@ -211,14 +223,17 @@ def next_after_expr_with_omit(
     omit_dnf=None,
     core: Any,
     max_skip_iterations: int = 512,
+    business_calendar: Any | None = None,
 ):
     omit_expr_dnf, omit_dates, _omit_descriptions = _split_omit_state(omit_dnf)
+    business_calendar = business_calendar or _scheduler_business_calendar(core)
     if not omit_expr_dnf and not omit_dates:
         return _scheduler_engine(core).next_after_expr(
             dnf,
             after_date,
             default_seed=default_seed,
             seed_base=seed_base,
+            business_calendar=business_calendar,
         )
 
     date_is_excluded = None
@@ -240,6 +255,7 @@ def next_after_expr_with_omit(
             default_seed=default_seed,
             seed_base=seed_base,
             date_is_excluded=date_is_excluded,
+            business_calendar=business_calendar,
         )
         if nxt is None:
             return (None, meta)

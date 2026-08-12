@@ -156,6 +156,7 @@ def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
     from .parser_api import (
         parse_anchor_expr_to_dnf_cached,
         resolve_anchor_presets,
+        resolve_omit_presets,
         validate_anchor_expr_strict,
     )
 
@@ -167,7 +168,7 @@ def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
         omit_dnf = validate_omit_expr_strict(
             spec.omit,
             validate_anchor_expr_cached=parse_anchor_expr_to_dnf_cached,
-            resolve_omit_presets=resolve_anchor_presets,
+            resolve_omit_presets=resolve_omit_presets,
         )
     time_modifiers: list[Any] = []
 

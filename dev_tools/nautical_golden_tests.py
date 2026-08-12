@@ -347,8 +347,24 @@ def _load_hook_module(path: str, module_name: str):
         # no longer carry these compatibility delegates.
         mod._compute_cp_child_due = lambda parent: mod._chain_generation_service().compute_cp_child_due(parent)
         mod._compute_anchor_child_due = lambda parent: mod._chain_generation_service().compute_anchor_child_due(parent)
-        mod._carry_relative_datetime = lambda parent, child, child_due, field, **kwargs: mod._chain_generation_service().carry_relative_datetime(parent, child, child_due, field, **kwargs)
-        mod._carry_native_until = lambda parent, child, child_due, kind, **kwargs: mod._chain_generation_service().carry_native_until(parent, child, child_due, kind, **kwargs)
+        mod._carry_relative_datetime = lambda parent, child, child_due, field, **kwargs: mod._chain_generation_service().carry_relative_datetime(
+            parent,
+            child,
+            child_due,
+            field,
+            parent_anchor_field=kwargs.pop("parent_anchor_field", "due"),
+            child_anchor_field=kwargs.pop("child_anchor_field", "due"),
+            **kwargs,
+        )
+        mod._carry_native_until = lambda parent, child, child_due, kind, **kwargs: mod._chain_generation_service().carry_native_until(
+            parent,
+            child,
+            child_due,
+            kind,
+            parent_anchor_field=kwargs.pop("parent_anchor_field", "due"),
+            child_anchor_field=kwargs.pop("child_anchor_field", "due"),
+            **kwargs,
+        )
         mod._build_child_from_parent = lambda parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt: mod._chain_generation_service().build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt)
     return mod
 
@@ -12902,6 +12918,8 @@ def test_astronomical_time_skips_unavailable_candidate_dates():
         class FakeCore:
             MAX_ANCHOR_ITER = 4
 
+            _scheduler_api = SimpleNamespace()
+
             @staticmethod
             def factor_matches_on(_atom, _day, _seed, seed_base=None):
                 return True
@@ -12921,6 +12939,9 @@ def test_astronomical_time_skips_unavailable_candidate_dates():
             @staticmethod
             def to_local(value):
                 return value
+
+        FakeCore._scheduler_api.factor_matches_on = FakeCore.factor_matches_on
+        FakeCore._scheduler_api.dnf_has_counted_random = FakeCore.dnf_has_counted_random
 
         def fake_step(_dnf, previous, *_args, **_kwargs):
             return None
@@ -14940,15 +14961,15 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
     }
     ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
     panels = []
-    evaluator_cls = importlib.import_module("nautical_core.recurrence_evaluator").RecurrenceEvaluator
-    original_from_task = evaluator_cls.__dict__["from_task"]
+    service_cls = importlib.import_module("nautical_core.scheduler_service").SchedulerService
+    original_from_task = service_cls.__dict__["from_task"]
     original_next = mod._anchor_next_occurrence_after_local_dt
 
     def fail_from_task(cls, *args, **kwargs):
         raise RuntimeError("astronomy profile is unavailable")
 
     try:
-        evaluator_cls.from_task = classmethod(fail_from_task)
+        service_cls.from_task = classmethod(fail_from_task)
         mod._anchor_next_occurrence_after_local_dt = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("legacy scheduler fallback was called")
         )
@@ -14963,7 +14984,7 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
         else:
             raise AssertionError("evaluator initialization failure was accepted")
     finally:
-        evaluator_cls.from_task = original_from_task
+        service_cls.from_task = original_from_task
         mod._anchor_next_occurrence_after_local_dt = original_next
 
     expect(panels and panels[-1][0] == "❌ Invalid Chain", f"missing evaluator error panel: {panels!r}")

@@ -1058,6 +1058,7 @@ _parser_api = _LazyApiBundle(
         "omit_preset_display",
         "_resolve_preset_refs",
         "_resolve_anchor_presets_impl",
+        ("_resolve_omit_presets_impl", "resolve_omit_presets"),
         "_normalize_anchor_expr_input",
         "_normalize_monthly_ordinal_spec",
         "_build_anchor_atom_dnf",

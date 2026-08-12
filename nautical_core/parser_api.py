@@ -373,6 +373,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         build_acf=lambda expr: module._build_acf_impl(expr),
         _resolve_preset_refs=resolve_preset_refs,
         _resolve_anchor_presets_impl=resolve_anchor_presets_impl,
+        _resolve_omit_presets_impl=resolve_omit_presets,
         resolve_omit_presets=resolve_omit_presets,
         anchor_preset_display=anchor_preset_display,
         omit_preset_display=omit_preset_display,
@@ -417,6 +418,10 @@ def resolve_anchor_presets(expr: str, *, _seen=None) -> str:
     return _core_module()._resolve_anchor_presets_impl(expr, _seen=_seen)
 
 
+def resolve_omit_presets(expr: str, *, _seen=None) -> str:
+    return _core_module()._resolve_omit_presets_impl(expr, _seen=_seen)
+
+
 def parse_anchor_expr_to_dnf(s: str):
     return _parse_anchor_expr_to_dnf_impl(_core_module(), s)
 
@@ -434,5 +439,6 @@ __all__ = (
     "parse_anchor_expr_to_dnf",
     "parse_anchor_expr_to_dnf_cached",
     "resolve_anchor_presets",
+    "resolve_omit_presets",
     "validate_anchor_expr_strict",
 )

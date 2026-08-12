@@ -23576,6 +23576,16 @@ def test_compiled_schedule_is_canonical_and_reusable():
     })
     expect(first.fingerprint == second.fingerprint, "canonical schedule fingerprint drifted")
     expect(first.to_dict()["compiler_schema"] == 1, "compiled schedule schema was not versioned")
+    normalized = CompiledSchedule.from_task({
+        "chainID": "compiled-chain",
+        "anchor": "w:mon + y:jul@t=09:00",
+        "omit": "y:07-04",
+        "chainMax": 4,
+    }).to_dict()["schedule"]["normalized"]
+    expect(normalized["provider"] == "anchor", "compiled provider instruction was not recorded")
+    expect(normalized["identity"] == "compiled-chain", "compiled identity was not recorded")
+    expect(normalized["anchor_dnf"] and normalized["omit_dnf"], "compiled DNF instructions were not recorded")
+    expect(normalized["time_projection"], "compiled time projection was not recorded")
     evaluator = RecurrenceEvaluator.from_compiled(first)
     expect(evaluator.spec == first.spec, "compiled schedule was not reusable by evaluator")
     try:

@@ -53,7 +53,12 @@ class SchedulerService:
         limit: int,
         **kwargs: Any,
     ) -> OccurrenceCollectionResult:
-        batch = self.session.collect_after_cursor(cursor, limit=limit, **kwargs)
+        # A caller requesting omission-aware evidence needs the event stream;
+        # ordinary collection remains on the included-only path.
+        if "count_omitted" in kwargs:
+            batch = self.session.collect_events_after_cursor(cursor, limit=limit, **kwargs)
+        else:
+            batch = self.session.collect_after_cursor(cursor, limit=limit, **kwargs)
         if not isinstance(batch, OccurrenceBatch):
             batch = OccurrenceBatch(batch)
         return OccurrenceCollectionResult(

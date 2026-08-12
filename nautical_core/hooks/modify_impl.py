@@ -3507,57 +3507,28 @@ def _timeline_lines(
         modify_timeline = _module("modify_timeline")
         _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
         anchor_omit = _module("anchor_omit") if omit_dnf else None
-        seed_base = _recurrence_seed_base(task)
         child_local = _to_local_cached(child_due_utc)
         fallback_hhmm = _anchor_file_fallback_hhmm(task, child_local)
         default_seed = child_local.date()
-        dnf_for_merge = dnf if kind == "anchor" else None
-        anchor_inclusion = core._import_sibling("anchor_inclusion")
         evaluator = _recurrence_evaluator_for_task(task)
-        AnchorEventOccurrenceProvider = core._import_sibling("occurrence_provider").AnchorEventOccurrenceProvider
-        collect_after = core._import_sibling("occurrence_provider").collect_after
-        anchor_file_str = (task.get("anchor_file") or "").strip()
-        anchor_file_provider = (
-            _anchor_file_provider_for(
-                anchor_file_str, fallback_hhmm=fallback_hhmm, seed_base=seed_base
-            )
-            if anchor_file_str
-            else None
-        )
-
-        event_provider = AnchorEventOccurrenceProvider(
-            lambda value: anchor_inclusion.next_occurrence_event_local(
-                dnf=dnf_for_merge,
-                anchor_file_str=anchor_file_str,
-                after_local_dt=value,
-                inclusive=False,
-                fallback_hhmm=fallback_hhmm,
-                default_seed_date=default_seed,
-                seed_base=seed_base,
-                omit_dnf=omit_dnf,
-                core=core,
-                next_occurrence_after_local_dt=evaluator._default_next_occurrence_after_local_dt,
-                scheduler_omit_dnf=None,
-                anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-                anchor_file_provider=anchor_file_provider,
-            ),
-            source="anchor+anchor_file" if anchor_file_str and dnf else ("anchor_file" if anchor_file_str else "anchor"),
-        )
         projection_warning = None
         try:
-            events = [
-                occurrence
-                for occurrence in collect_after(
-                    event_provider,
+            from nautical_core.scheduler_cursor import OccurrenceCursor
+
+            result = _scheduler_service_for_task(task).collect(
+                OccurrenceCursor(
                     child_local,
-                    limit=max(8, next_count + 6),
                     inclusive=True,
-                    max_iterations=_MAX_ITERATIONS,
-                    build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-                    to_local=lambda value: value,
-                )
-                if occurrence.local_datetime is not None
-            ]
+                    timezone=evaluator.context.timezone,
+                ),
+                limit=max(8, next_count + 6),
+                count_omitted=False,
+                fallback_hhmm=fallback_hhmm,
+                default_seed_date=default_seed,
+                max_iterations=_MAX_ITERATIONS,
+                max_file_skips=_MAX_ITERATIONS,
+            )
+            events = [occurrence for occurrence in result.occurrences if occurrence.local_datetime is not None]
         except Exception as exc:
             events = []
             projection_warning = modify_timeline._timeline_warning(

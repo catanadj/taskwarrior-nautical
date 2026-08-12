@@ -622,6 +622,8 @@ class RecurrenceEvaluator:
         *,
         limit: int,
         count_omitted: bool = False,
+        fallback_hhmm: tuple[int, int] = (9, 0),
+        default_seed_date: date | None = None,
         max_iterations: int = 512,
         max_file_skips: int = 512,
     ) -> OccurrenceBatch[Occurrence]:
@@ -639,6 +641,8 @@ class RecurrenceEvaluator:
         for _ in range(max_iterations):
             event = self.next_event_after(
                 current,
+                fallback_hhmm=fallback_hhmm,
+                default_seed_date=default_seed_date,
                 inclusive=first,
                 include_omitted=True,
                 max_file_skips=max_file_skips,

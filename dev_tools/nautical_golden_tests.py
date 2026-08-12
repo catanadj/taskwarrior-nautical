@@ -23594,6 +23594,17 @@ def test_compiled_schedule_is_canonical_and_reusable():
         expect("without a recurrence" in str(exc), f"invalid schedule error was unclear: {exc}")
     else:
         raise AssertionError("plain task produced a compiled recurrence schedule")
+    for invalid, message in (
+        ({"cp": "1d", "anchor": "w:mon"}, "both cp and anchor"),
+        ({"anchor": "w:mon", "chainMax": 0}, "greater than zero"),
+        ({"anchor": "w:mon", "anchor_mode": "unknown"}, "anchor_mode"),
+    ):
+        try:
+            CompiledSchedule.from_task({"chainID": "compiled-chain", **invalid})
+        except ValueError as exc:
+            expect(message in str(exc), f"compiled validation error was unclear: {exc}")
+        else:
+            raise AssertionError(f"invalid compiled schedule was accepted: {invalid!r}")
 
 
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():

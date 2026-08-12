@@ -42,6 +42,15 @@ def _thaw_value(value: Any) -> Any:
 
 def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
     """Parse expression fields once and describe the provider-facing inputs."""
+    if spec.cp and (spec.anchor or spec.anchor_file):
+        raise ValueError("A compiled schedule cannot contain both cp and anchor providers.")
+    if spec.chain_max is not None and spec.chain_max <= 0:
+        raise ValueError("chainMax must be greater than zero in a compiled schedule.")
+    if spec.anchor_mode not in {"skip", "all", "flex"}:
+        raise ValueError(
+            "anchor_mode must be 'skip', 'all', or 'flex' in a compiled schedule."
+        )
+
     from .anchor_omit import validate_omit_expr_strict
     from .parser_api import (
         parse_anchor_expr_to_dnf_cached,
@@ -50,6 +59,8 @@ def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
     )
 
     anchor_dnf = validate_anchor_expr_strict(spec.anchor) if spec.anchor else None
+    if not spec.cp and not anchor_dnf and not spec.anchor_file:
+        raise ValueError("A compiled schedule requires an anchor, anchor_file, or cp provider.")
     omit_dnf = None
     if spec.omit:
         omit_dnf = validate_omit_expr_strict(

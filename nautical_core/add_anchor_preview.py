@@ -515,8 +515,33 @@ def _collect_included_with_provider(
     return_occurrences: bool = False,
     anchor_file_provider: Any | None = None,
     evaluator: Any | None = None,
+    scheduler_service: Any | None = None,
 ) -> list[datetime] | list[Occurrence]:
     """Collect included occurrences through the typed provider boundary."""
+    if scheduler_service is not None:
+        from .scheduler_cursor import OccurrenceCursor
+
+        result = scheduler_service.collect(
+            OccurrenceCursor(
+                after_local_dt,
+                inclusive=inclusive,
+                timezone=getattr(scheduler_service.session.evaluator.context, "timezone", None),
+            ),
+            limit=limit,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            pick_occurrence_local=pick_occurrence_local,
+            anchor_file_provider=anchor_file_provider,
+            max_iterations=max_iterations,
+            max_file_skips=max_iterations,
+        )
+        collected = result.occurrences
+        if return_occurrences:
+            return collected
+        return OccurrenceBatch(
+            [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None],
+            terminal=result.terminal,
+        )
     if evaluator is not None:
         collected = evaluator.collect_after(
             after_local_dt,
@@ -1063,21 +1088,16 @@ def handle_anchor_preview_on_add(
         )
 
     try:
-        from .recurrence_context import RecurrenceContext
-        from .scheduler_service import SchedulerService
+        from .recurrence_evaluator import RecurrenceEvaluator
 
-        recurrence_service = SchedulerService.from_task(
+        recurrence_evaluator = RecurrenceEvaluator.from_task(
             task,
-            context=RecurrenceContext.from_task(
-                task,
-                fallback_chain_id=seed_base or None,
-                timezone=getattr(core, "_LOCAL_TZ", None),
-                business_calendar=core.business_calendar_for_task(task),
-                astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-                anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            ),
+            fallback_chain_id=seed_base or None,
+            timezone=getattr(core, "_LOCAL_TZ", None),
+            business_calendar=core.business_calendar_for_task(task),
+            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         )
-        recurrence_evaluator = recurrence_service.session.evaluator
     except Exception as exc:
         error_and_exit(
             [

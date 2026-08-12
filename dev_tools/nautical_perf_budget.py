@@ -1310,6 +1310,8 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
         queue_idempotent_samples = []
         queue_idempotent_call_stats: list[dict[str, int]] = []
         queue_partial_samples = []
+        queue_partial_first_samples = []
+        queue_partial_recovery_samples = []
         queue_partial_call_stats: list[dict[str, int]] = []
         for sample_index in range(repeats):
             queue_data = root / f"populated-queue-{sample_index}"
@@ -1573,6 +1575,8 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                     "partial import recovery left lifecycle intents queued: "
                     f"{_workflow_queue_rows(partial_data)!r}; stderr={second_partial_stderr.strip()!r}"
                 )
+            queue_partial_first_samples.append(first_partial_elapsed)
+            queue_partial_recovery_samples.append(recovery_elapsed)
             queue_partial_samples.append(first_partial_elapsed + recovery_elapsed)
             queue_partial_call_stats.append(_merge_task_call_stats(first_partial_stats, second_partial_stats))
         queue_result = _measure_workflow(
@@ -1604,8 +1608,12 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
         queue_partial_result = _measure_workflow(
             "workflow_queue_drain_partial_recovery",
             queue_partial_samples,
-            float(budgets.get("workflow_queue_drain_partial_recovery", 3.0)),
+            float(budgets.get("workflow_queue_drain_partial_recovery", 6.0)),
         )
+        queue_partial_result["first_attempt_samples_s"] = sorted(queue_partial_first_samples)
+        queue_partial_result["first_attempt_median_s"] = float(statistics.median(queue_partial_first_samples))
+        queue_partial_result["recovery_samples_s"] = sorted(queue_partial_recovery_samples)
+        queue_partial_result["recovery_median_s"] = float(statistics.median(queue_partial_recovery_samples))
         queue_partial_result["task_call_stats"] = queue_partial_call_stats
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(

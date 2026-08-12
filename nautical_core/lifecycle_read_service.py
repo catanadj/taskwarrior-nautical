@@ -167,11 +167,65 @@ class LifecycleReadService:
             return self._cache_store.rows_for(chain_id)
         return list(self._chain_cache_get(chain_id) or []) or None
 
+    def lookup_short(self, short_uuid: str) -> tuple[TaskRow | None, str]:
+        """Return a cached short UUID row and the cache's chain ID."""
+        if self._cache_store is not None:
+            with self._cache_store.lock:
+                row = self._cache_store.indexes.by_short.get(short_uuid) if self._cache_store.indexes else None
+                return (dict(row) if isinstance(row, dict) else None, self._cache_store.chain_id)
+        return None, ""
+
+    def lookup_uuid(self, uuid_value: str) -> TaskRow | None:
+        """Return a cached full UUID row, if present."""
+        if self._cache_store is not None:
+            with self._cache_store.lock:
+                row = self._cache_store.indexes.by_uuid.get(uuid_value) if self._cache_store.indexes else None
+                return dict(row) if isinstance(row, dict) else None
+        return None
+
+    def cache_size(self, chain_id: str) -> int:
+        """Return the number of cached rows for adaptive export timeouts."""
+        if self._cache_store is not None:
+            with self._cache_store.lock:
+                return len(self._cache_store.rows) if self._cache_store.chain_id == chain_id else 0
+        return len(self.cached_chain_rows(chain_id) or [])
+
+    def seed_lookup_task(self, task: TaskRow, *, short_uuid: str) -> TaskRow:
+        """Merge one exported task into the service-owned lookup indexes."""
+        if self._cache_store is None:
+            return dict(task)
+        uuid_value = str(task.get("uuid") or "").strip()
+        task_obj = dict(task)
+        with self._cache_store.lock:
+            existing = None
+            if short_uuid and self._cache_store.indexes:
+                existing = self._cache_store.indexes.by_short.get(short_uuid)
+            if not isinstance(existing, dict) and uuid_value and self._cache_store.indexes:
+                existing = self._cache_store.indexes.by_uuid.get(uuid_value)
+            if isinstance(existing, dict):
+                merged = dict(existing)
+                merged.update(task)
+                task_obj = merged
+            by_short = dict(self._cache_store.indexes.by_short) if self._cache_store.indexes else {}
+            by_uuid = dict(self._cache_store.indexes.by_uuid) if self._cache_store.indexes else {}
+            if short_uuid:
+                by_short[short_uuid] = task_obj
+            if uuid_value:
+                by_uuid[uuid_value] = task_obj
+            existing_indexes = self._cache_store.indexes
+            self._cache_store.indexes = ChainIndexes(
+                by_link=existing_indexes.by_link if existing_indexes else {},
+                by_short=by_short,
+                by_uuid=by_uuid,
+            )
+        return task_obj
+
     def replace_chain_cache(self, chain_id: str, rows: Sequence[TaskRow]) -> ChainIndexes:
         """Replace cached chain rows and their indexes atomically."""
-        indexes = self.build_indexes(rows)
+        stored_rows = [dict(row) for row in rows if isinstance(row, dict)]
+        indexes = self.build_indexes(stored_rows)
         if self._cache_store is not None:
-            self._cache_store.replace(chain_id, rows, indexes)
+            self._cache_store.replace(chain_id, stored_rows, indexes)
         return indexes
 
     def collect_prev_two(

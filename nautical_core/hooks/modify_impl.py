@@ -1746,10 +1746,7 @@ def _export_uuid_short(u_short: str, env=None):
             return cached_read
     cache_chain_id = ""
     if env is None and u_short:
-        state = _modify_chain_state()
-        with state.chain_cache_lock:
-            cached = state.chain_by_short.get(u_short)
-            cache_chain_id = state.chain_cache_chain_id
+        cached, cache_chain_id = _lifecycle_read_service().lookup_short(u_short)
         if isinstance(cached, dict):
             _diag_count("export_uuid_cache_hits")
             return dict(cached)
@@ -2180,10 +2177,9 @@ def _tw_get_cached(ref: str) -> str:
     try:
         if ref.endswith(".entry"):
             short = ref[:-6].strip()
-            state = _modify_chain_state()
-            with state.chain_cache_lock:
-                cached = state.chain_by_short.get(short) if short else None
-                cache_chain_id = state.chain_cache_chain_id
+            cached, cache_chain_id = (
+                _lifecycle_read_service().lookup_short(short) if short else (None, "")
+            )
             if short and isinstance(cached, dict):
                 _diag_count("tw_get_cache_hits")
                 return (str(cached.get("entry") or "")).strip()
@@ -2710,17 +2706,8 @@ def _seed_runtime_lookup_task(task: dict | None) -> dict | None:
         return None
     short = uuid_str[:8]
     state = _modify_chain_state()
-    task_obj: dict = dict(task)
+    task_obj = _lifecycle_read_service().seed_lookup_task(dict(task), short_uuid=short)
     with state.chain_cache_lock:
-        existing = None
-        if short:
-            existing = state.chain_by_short.get(short)
-        if not isinstance(existing, dict):
-            existing = state.chain_by_uuid.get(uuid_str)
-        if isinstance(existing, dict):
-            merged = dict(existing)
-            merged.update(task)
-            task_obj = merged
         if short:
             state.chain_by_short[short] = task_obj
         state.chain_by_uuid[uuid_str] = task_obj
@@ -3973,10 +3960,8 @@ def _chain_export_timeout(chain_id: str) -> float:
     per_100 = float(_CHAIN_EXPORT_TIMEOUT_PER_100)
     max_t = float(_CHAIN_EXPORT_TIMEOUT_MAX)
     est = base
-    state = _modify_chain_state()
-    with state.chain_cache_lock:
-        cache_match = bool(chain_id and state.chain_cache_chain_id == chain_id and state.chain_cache)
-        cache_len = len(state.chain_cache) if cache_match else 0
+    cache_len = _lifecycle_read_service().cache_size(chain_id) if chain_id else 0
+    cache_match = bool(cache_len)
     if not cache_match:
         legacy_chain_id = str(globals().get("_CHAIN_CACHE_CHAIN_ID") or "")
         legacy_chain = list(globals().get("_CHAIN_CACHE") or [])

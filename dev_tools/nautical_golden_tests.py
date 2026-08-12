@@ -22046,6 +22046,7 @@ def test_anchor_file_cursor_reuse_matches_fresh_provider_reference():
         def build(day, hhmm):
             return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=zone)
 
+        identity = lambda value: value
         cursors = (
             datetime(2026, 8, 1, 9, tzinfo=zone),
             datetime(2026, 8, 9, 9, tzinfo=zone),
@@ -22053,9 +22054,9 @@ def test_anchor_file_cursor_reuse_matches_fresh_provider_reference():
         )
         cached = AnchorFileOccurrenceProvider("calendar.csv", td, (9, 0))
         for cursor in cursors:
-            optimized = cached.next_after(cursor, build_local_datetime=build, to_local=lambda value: value)
+            optimized = cached.next_after(cursor, build_local_datetime=build, to_local=identity)
             reference = AnchorFileOccurrenceProvider("calendar.csv", td, (9, 0)).next_after(
-                cursor, build_local_datetime=build, to_local=lambda value: value
+                cursor, build_local_datetime=build, to_local=identity
             )
             expect(
                 optimized is not None and reference is not None
@@ -22063,6 +22064,9 @@ def test_anchor_file_cursor_reuse_matches_fresh_provider_reference():
                 and optimized.description == reference.description,
                 f"cached anchor-file lookup diverged at {cursor!s}",
             )
+        stats = cached.cache_stats
+        expect(stats["lookups"] == 3 and stats["builds"] == 1, f"unexpected anchor-file cache stats: {stats!r}")
+        expect(stats["records"] == 3 and stats["hit_ratio"] > 0.6, f"anchor-file cache reuse was not measurable: {stats!r}")
 
 
 def test_anchor_file_batch_generation_matches_repeated_reference_lookups():

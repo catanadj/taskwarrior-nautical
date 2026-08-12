@@ -478,6 +478,8 @@ class AnchorFileOccurrenceProvider:
         self._conversion_key: tuple[object, ...] | None = None
         self._candidate_records: list[tuple[datetime, str]] | None = None
         self._candidate_keys: list[datetime] = []
+        self._candidate_cache_builds = 0
+        self._candidate_lookup_calls = 0
 
     @property
     def contract(self) -> ProviderContract:
@@ -523,6 +525,20 @@ class AnchorFileOccurrenceProvider:
                 )
             )
         return values
+
+    @property
+    def cache_stats(self) -> dict[str, int | float]:
+        """Return immutable cache-use counters for diagnostics and benchmarks."""
+        lookups = self._candidate_lookup_calls
+        builds = self._candidate_cache_builds
+        hits = max(0, lookups - builds)
+        return {
+            "lookups": lookups,
+            "builds": builds,
+            "records": len(self._candidate_records or ()),
+            "hits": hits,
+            "hit_ratio": (hits / lookups) if lookups else 0.0,
+        }
 
     def first_after(
         self,
@@ -584,6 +600,7 @@ class AnchorFileOccurrenceProvider:
         to_local: Callable[[datetime], datetime],
         inclusive: bool = False,
     ) -> Occurrence | None:
+        self._candidate_lookup_calls += 1
         # Inclusive lookups use an instant just before the requested value so
         # the shared strict-progress guard remains valid.
         cursor_after = _cursor_before(after_local) if inclusive else after_local
@@ -602,6 +619,7 @@ class AnchorFileOccurrenceProvider:
             self._last_candidate = None
             self._last_candidate_index = None
         if self._candidate_records is None:
+            self._candidate_cache_builds += 1
             candidates: list[datetime] = []
             descriptions: list[str] = []
             for d0, hhmm, description in records:

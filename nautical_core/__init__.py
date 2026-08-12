@@ -950,15 +950,6 @@ def cp_sequence_interval_for_link(cp: str, link_no: int, chain_id: str | None = 
     return _cp_parser.cp_sequence_interval_for_link(cp, link_no, chain_id)
 
 
-_recurrence_candidates = _LazyApiBundle(
-    "recurrence_candidates",
-    ("anchors_between_large_range", "anchors_between_expr"),
-    core=sys.modules[__name__],
-    namespace=globals(),
-)
-_bind_lazy_api_aliases(_recurrence_candidates)
-
-
 # Quarter rewrite entry points are bound before parser construction because
 # the parser's DNF pipeline applies quarter normalization.
 _quarter_api = _LazyApiBundle(
@@ -1327,13 +1318,13 @@ _cache_api = _LazyApiBundle(
 )
 _bind_lazy_api_aliases(_cache_api)
 
-_precompute_api = _LazyApiBundle(
-    "precompute_api",
+_hint_builder_api = _LazyApiBundle(
+    "hint_builder_api",
     ("precompute_hints", "build_and_cache_hints"),
     core=sys.modules[__name__],
     namespace=globals(),
 )
-_bind_lazy_api_aliases(_precompute_api)
+_bind_lazy_api_aliases(_hint_builder_api)
 
 _compat_api = _LazySibling("compat_api")
 __all__ = cast(Any, _LazyPublicExports(_compat_api))

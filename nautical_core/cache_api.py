@@ -205,7 +205,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         "anchor_inclusion.py",
         "natural_language.py",
         "precompute.py",
-        "precompute_api.py",
+        "hint_builder_api.py",
         "recurrence_evaluator.py",
         "time_slots.py",
     )

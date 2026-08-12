@@ -1,4 +1,4 @@
-"""Core-bound recurrence hint and precompute orchestration."""
+"""Core-bound hint-builder orchestration."""
 
 from __future__ import annotations
 

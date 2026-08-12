@@ -10539,13 +10539,28 @@ def test_weekday_weekend_single_time():
     """Weekday vs weekend @t should not merge into same-day multi-times."""
     expr = "w:wd@t=09:00 | w:we@t=11:00"
     dnf = core.validate_anchor_expr_strict(expr)
-    dates = core.anchors_between_expr(
-        dnf,
-        start_excl=date(2026, 1, 4),
-        end_excl=date(2026, 1, 20),
-        default_seed=date(2026, 1, 5),
-        seed_base="test",
+    from datetime import time
+    from zoneinfo import ZoneInfo
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+    from nautical_core.scheduler_service import SchedulerService
+
+    start_excl, end_excl = date(2026, 1, 4), date(2026, 1, 20)
+    zone = ZoneInfo("UTC")
+    service = SchedulerService.from_task(
+        {"chainID": "weekday-weekend", "anchor": expr},
+        context=RecurrenceContext(chain_id="weekday-weekend", timezone=zone),
     )
+    result = service.collect_request(
+        OccurrenceRangeRequest(
+            OccurrenceCursor.strict_after(
+                datetime.combine(start_excl, time.max, tzinfo=zone), timezone=zone
+            ),
+            end_local=datetime.combine(end_excl - timedelta(days=1), time.max, tzinfo=zone),
+            limit=32,
+        )
+    )
+    dates = [occurrence.local_datetime.date() for occurrence in result]
     time_slots = core._import_sibling("time_slots")
     seen = set()
     for d in dates[:8]:
@@ -10573,32 +10588,6 @@ def test_weekday_weekend_single_time():
         seen.add(key)
 
 
-def test_anchors_between_expr_stops_on_no_progress():
-    """anchors_between_expr should stop safely when next_after_expr does not advance."""
-    import nautical_core as core
-
-    saved_next = core.next_after_expr
-    calls = {"n": 0}
-    try:
-        def _stuck_next(_dnf, cur, _seed, seed_base=None):
-            _ = seed_base
-            calls["n"] += 1
-            return cur, {"basis": "stuck"}
-
-        core.next_after_expr = _stuck_next
-        out = core.anchors_between_expr(
-            [[{"typ": "w", "spec": "mon", "mods": {}}]],
-            start_excl=date(2026, 1, 1),
-            end_excl=date(2026, 1, 15),
-            default_seed=date(2026, 1, 1),
-            seed_base="stuck",
-        )
-        expect(out == [], f"expected no anchors for no-progress engine, got {out}")
-        expect(calls["n"] == 1, f"expected single call on no-progress, got {calls['n']}")
-    finally:
-        core.next_after_expr = saved_next
-
-
 def test_anchors_between_large_range_honors_count_cap():
     """Large-range expansion must continue past the historical 100-result prefix."""
     from nautical_core.precompute import anchors_between_large_range
@@ -10620,60 +10609,6 @@ def test_anchors_between_large_range_honors_count_cap():
     )
     expect(len(result) == 250, f"large-range expansion truncated at {len(result)} results")
     expect(result[-1] == start + timedelta(days=250), f"large-range expansion stopped at {result[-1]!r}")
-
-
-def test_anchors_between_expr_matches_iterative_scheduler():
-    """Bulk expansion should return the same dates as repeated next-after scheduling."""
-    import nautical_core as core
-
-    cases = [
-        "w:mon..fri",
-        "w/2:fri",
-        "w:mon,wed,fri + y:apr",
-        "m:last-fri",
-        "m:rand + y:apr",
-    ]
-    start = date(2026, 1, 1)
-    end = date(2027, 1, 1)
-    seed = "bulk-agreement-v1"
-
-    for expr in cases:
-        dnf = core.validate_anchor_expr_strict(expr)
-        expected = []
-        current = start
-        while len(expected) < 20:
-            nxt, _meta = core.next_after_expr(dnf, current, default_seed=start, seed_base=seed)
-            if nxt is None or nxt >= end:
-                break
-            expected.append(nxt)
-            current = nxt
-
-        actual = core.anchors_between_expr(
-            dnf,
-            start_excl=start,
-            end_excl=end,
-            default_seed=start,
-            seed_base=seed,
-        )
-        expect(actual[:20] == expected, f"{expr}: bulk dates disagree with iterative scheduler: {actual[:20]!r} != {expected!r}")
-
-    weekdays = core.validate_anchor_expr_strict("w:mon..fri")
-    expected_prefix = [
-        date(2026, 1, 2),
-        date(2026, 1, 5),
-        date(2026, 1, 6),
-        date(2026, 1, 7),
-        date(2026, 1, 8),
-        date(2026, 1, 9),
-    ]
-    actual = core.anchors_between_expr(
-        weekdays,
-        start_excl=start,
-        end_excl=date(2029, 1, 1),
-        default_seed=start,
-        seed_base=seed,
-    )
-    expect(actual[:6] == expected_prefix, f"large-range bulk expansion skipped consecutive weekdays: {actual[:6]!r}")
 
 
 def test_rand_with_year_window():
@@ -13643,13 +13578,25 @@ def test_random_weekday_explicit_or_keeps_separate_draws():
     dnf = core.validate_anchor_expr_strict(expr)
     expect(len(dnf) == 2, f"explicit random weekday OR should retain two branches: {dnf!r}")
     start = date(2025, 12, 31)
-    dates = core.anchors_between_expr(
-        dnf,
-        start_excl=start,
-        end_excl=date(2026, 4, 1),
-        default_seed=start,
-        seed_base="explicit-random-weekday-or",
+    from datetime import time
+    from zoneinfo import ZoneInfo
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+    from nautical_core.scheduler_service import SchedulerService
+
+    zone = ZoneInfo("UTC")
+    service = SchedulerService.from_task(
+        {"chainID": "explicit-random-weekday-or", "anchor": expr},
+        context=RecurrenceContext(chain_id="explicit-random-weekday-or", timezone=zone),
     )
+    result = service.collect_request(
+        OccurrenceRangeRequest(
+            OccurrenceCursor.strict_after(datetime.combine(start, time.max, tzinfo=zone), timezone=zone),
+            end_local=datetime.combine(date(2026, 3, 31), time.max, tzinfo=zone),
+            limit=32,
+        )
+    )
+    dates = [occurrence.local_datetime.date() for occurrence in result]
     by_month = {}
     for pick in dates:
         by_month.setdefault((pick.year, pick.month), []).append(pick)
@@ -16948,10 +16895,10 @@ def test_core_import_defers_optional_stacks():
                 "'nautical_core.acf_api','nautical_core.expansion_api',"
                 "'nautical_core.quarter_api','nautical_core.scheduler_api',"
                 "'nautical_core.cached_expansion','nautical_core.monthly_support',"
-                "'nautical_core.recurrence_evaluator','nautical_core.recurrence_candidates',"
+                "'nautical_core.recurrence_evaluator',"
                 "'nautical_core.token_api','nautical_core.time_api',"
                 "'nautical_core.business_calendar_api','nautical_core.cache_api',"
-                "'nautical_core.precompute_api','nautical_core.natural_language_api',"
+                "'nautical_core.hint_builder_api','nautical_core.natural_language_api',"
                 "'nautical_core.linting_api'); "
                 "loaded=sorted(name for name in names if name in sys.modules); "
                 "count=sum(name.startswith('nautical_core') for name in sys.modules); "
@@ -34446,9 +34393,7 @@ TESTS = [
     test_same_day_prev_weekday_roll_moves_back_one_week,
     test_next_weekday_roll_cross_year_date_still_matches_expression,
     test_weekly_multi_days_every_2weeks_spacing_and_days,
-    test_anchors_between_expr_stops_on_no_progress,
     test_anchors_between_large_range_honors_count_cap,
-    test_anchors_between_expr_matches_iterative_scheduler,
     test_inline_time_mods_split_ok,
     test_weekly_trailing_time_modifier_applies_to_whole_list,
     test_group_time_modifier_distributes_to_all_branches,

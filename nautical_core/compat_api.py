@@ -26,7 +26,7 @@ PUBLIC_EXPORTS = (
     '_validate_yearly_spec_token', '_validate_yearly_token_format',
     '_warn_once_per_day', '_warn_once_per_day_any', '_warn_rate_limited_any',
     '_weekly_spec_to_wset', '_weeks_between', '_y_ranges_from_spec',
-    'anchor_cache_dir', 'anchor_cache_ttl', 'anchors_between_expr',
+    'anchor_cache_dir', 'anchor_cache_ttl',
     'anchor_preset_display', 'atom_matches_on', 'base_next_after_atom', 'build_acf',
     'build_and_cache_hints', 'build_local_datetime', 'business_calendar_fingerprint',
     'business_calendar_displacement_for_date', 'business_calendar_for_task',

@@ -7,6 +7,7 @@ not imported by Nautical runtime modules and must be removed after cutover.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from datetime import timezone
 from typing import Any
 
 from nautical_core.occurrence_outcomes import FoundOccurrence, OccurrenceCollectionResult
@@ -17,6 +18,30 @@ from nautical_core.scheduler_service import SchedulerService
 
 class SchedulerParityMismatch(AssertionError):
     """Raised when old and new scheduling paths disagree."""
+
+
+def _occurrence_signature(item: Occurrence) -> tuple[Any, bool, str, str]:
+    if not isinstance(item, Occurrence):
+        raise SchedulerParityMismatch(f"scheduler returned a non-occurrence value: {item!r}")
+    if item.local_datetime is None:
+        raise SchedulerParityMismatch("scheduler returned an occurrence without a local datetime")
+    instant = item.local_datetime.astimezone(timezone.utc) if item.local_datetime.tzinfo else item.local_datetime
+    return instant, item.omitted, item.source, item.description
+
+
+def assert_monotonic(items: Iterable[Occurrence]) -> tuple[Occurrence, ...]:
+    """Assert one strict instant-ordered occurrence stream and return it."""
+    values = tuple(items)
+    previous = None
+    for item in values:
+        signature = _occurrence_signature(item)
+        instant = signature[0]
+        if previous is not None and instant <= previous:
+            raise SchedulerParityMismatch(
+                f"occurrence stream is not strictly monotonic: {previous!r} then {instant!r}"
+            )
+        previous = instant
+    return values
 
 
 def compare_next(
@@ -49,8 +74,10 @@ def compare_collection(
 ) -> OccurrenceCollectionResult:
     result = service.collect(cursor, limit=limit, **kwargs)
     legacy = tuple(legacy_collect())
-    current = tuple(item.local_datetime for item in result.occurrences)
-    expected = tuple(item.local_datetime for item in legacy)
+    current_values = assert_monotonic(result.occurrences)
+    expected_values = assert_monotonic(legacy)
+    current = tuple(_occurrence_signature(item) for item in current_values)
+    expected = tuple(_occurrence_signature(item) for item in expected_values)
     if current != expected:
         raise SchedulerParityMismatch(
             f"collection mismatch: service={current!r}, legacy={expected!r}"
@@ -58,4 +85,4 @@ def compare_collection(
     return result
 
 
-__all__ = ("SchedulerParityMismatch", "compare_collection", "compare_next")
+__all__ = ("SchedulerParityMismatch", "assert_monotonic", "compare_collection", "compare_next")

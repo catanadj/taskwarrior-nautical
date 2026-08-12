@@ -125,32 +125,23 @@ def finalize_completion_modify(
     if chain_id:
         try:
             if chain and spawned.verified and not deferred_spawn:
-                if read_service is not None:
-                    chain = read_service.merge_spawned_child(
-                        chain,
-                        parent_task=new,
-                        child_task=child,
-                        child_short=child_short,
-                        short_uuid=lambda value: str(value or "")[:8],
-                    )
+                chain = read_service.merge_spawned_child(
+                    chain,
+                    parent_task=new,
+                    child_task=child,
+                    child_short=child_short,
+                    short_uuid=lambda value: str(value or "")[:8],
+                )
+                indexes = read_service.build_indexes(chain)
+                chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
+                read_service.replace_chain_cache(chain_id, chain)
+                services.export_uuid_short_cached.cache_clear()
+            elif need_chain and not chain_snapshot_loaded:
+                chain = read_service.get_chain_export(chain_id)
+                if chain:
                     indexes = read_service.build_indexes(chain)
                     chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
                     read_service.replace_chain_cache(chain_id, chain)
-                else:
-                    chain = services.merge_spawned_child_into_chain(chain, new, child, child_short)
-                    chain_by_link, chain_by_short = services.build_chain_indexes(chain)
-                    services.set_chain_cache(chain_id, chain)
-                services.export_uuid_short_cached.cache_clear()
-            elif need_chain and not chain_snapshot_loaded:
-                chain = read_service.get_chain_export(chain_id) if read_service is not None else services.get_chain_export(chain_id)
-                if chain:
-                    if read_service is not None:
-                        indexes = read_service.build_indexes(chain)
-                        chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
-                        read_service.replace_chain_cache(chain_id, chain)
-                    else:
-                        chain_by_link, chain_by_short = services.build_chain_indexes(chain)
-                        services.set_chain_cache(chain_id, chain)
                     services.export_uuid_short_cached.cache_clear()
         except Exception:
             pass

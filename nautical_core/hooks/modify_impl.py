@@ -5353,11 +5353,8 @@ def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResul
         build_and_spawn_child=_completion_build_and_spawn_child,
         seed_runtime_lookup_tasks=_seed_runtime_lookup_tasks,
         modify_chain_state=_modify_chain_state,
-        get_chain_export=_get_chain_export,
-        build_chain_indexes=_build_chain_indexes,
-        set_chain_cache=_set_chain_cache,
         export_uuid_short_cached=_export_uuid_short_cached,
-        merge_spawned_child_into_chain=_merge_spawned_child_into_chain,
+        lifecycle_read_service=_lifecycle_read_service(),
         chain_health_advice=_chain_health_advice,
         chain_integrity_warnings=_chain_integrity_warnings,
         render_anchor_completion_feedback=_render_anchor_completion_feedback,
@@ -5368,7 +5365,6 @@ def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResul
         show_analytics=_SHOW_ANALYTICS,
         check_integrity=_CHECK_CHAIN_INTEGRITY,
         analytics_style=_ANALYTICS_STYLE,
-        lifecycle_read_service=_lifecycle_read_service(),
     )
     result = modify_completion_flow.finalize_completion_modify(
         new=new,

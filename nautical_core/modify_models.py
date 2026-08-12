@@ -260,12 +260,6 @@ SpawnChildCallback: TypeAlias = Callable[
 ]
 ModifyChainStateCallback: TypeAlias = Callable[[], Any]
 SeedLookupCallback: TypeAlias = Callable[[TaskRow, TaskRow], None]
-ChainExportCallback: TypeAlias = Callable[[str], list[TaskRow]]
-ChainIndexesCallback: TypeAlias = Callable[
-    [list[TaskRow]], tuple[dict[int, TaskRow], dict[str, TaskRow]]
-]
-SetChainCacheCallback: TypeAlias = Callable[[str, list[TaskRow]], None]
-MergeChainCallback: TypeAlias = Callable[[list[TaskRow], TaskRow, TaskRow, str], list[TaskRow]]
 DiagnosticSummaryCallback: TypeAlias = Callable[[], Any]
 
 
@@ -582,11 +576,8 @@ class CompletionFinalizeServices:
     build_and_spawn_child: BuildAndSpawnCallback
     seed_runtime_lookup_tasks: SeedLookupCallback
     modify_chain_state: ModifyChainStateCallback
-    get_chain_export: ChainExportCallback
-    build_chain_indexes: ChainIndexesCallback
-    set_chain_cache: SetChainCacheCallback
     export_uuid_short_cached: Any
-    merge_spawned_child_into_chain: MergeChainCallback
+    lifecycle_read_service: Any
     chain_health_advice: ChainHealthCallback
     chain_integrity_warnings: ChainIntegrityCallback
     render_anchor_completion_feedback: AnchorCompletionRenderCallback
@@ -597,7 +588,6 @@ class CompletionFinalizeServices:
     show_analytics: bool
     check_integrity: bool
     analytics_style: str
-    lifecycle_read_service: Any = None
 
 
 @dataclass(slots=True)

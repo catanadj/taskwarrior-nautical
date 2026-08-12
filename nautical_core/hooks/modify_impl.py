@@ -2524,10 +2524,8 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
 
 
 def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] | None = None) -> list[dict]:
-    modify_chain_reads = _module("modify_chain_reads")
-    return modify_chain_reads.collect_prev_two(
+    return _lifecycle_read_service().collect_prev_two(
         current_task,
-        coerce_int=core.coerce_int,
         get_chain_export=_get_chain_export,
         panel_chain_by_link=_modify_chain_state().panel_chain_by_link,
         panel_chain_snapshot_loaded=_modify_chain_state().panel_chain_snapshot_loaded,
@@ -2669,8 +2667,7 @@ def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
         return hook_support.LookupResult.unavailable(
             getattr(chain_snapshot, "error", "completion chain snapshot unavailable")
         )
-    modify_chain_reads = _module("modify_chain_reads")
-    return modify_chain_reads.existing_next_lookup(
+    return _lifecycle_read_service().existing_next_lookup(
         parent_task,
         next_no,
         export_uuid_short_cached=_export_uuid_short_lookup,

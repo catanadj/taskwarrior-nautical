@@ -13,6 +13,8 @@ from collections.abc import Callable, Sequence
 from functools import lru_cache
 from typing import Any
 
+from .hook_support import LookupResult
+
 
 TaskRow = dict[str, Any]
 ReadQuery = Callable[[str, tuple[Any, ...]], Any]
@@ -133,6 +135,106 @@ class LifecycleReadService:
         self._record_stat = record_stat or (lambda _name: None)
         self._read_query_set = read_query_set or (lambda _kind, _key, _value: None)
         self._read_query_delete = read_query_delete or (lambda _kind, _key: None)
+
+    def collect_prev_two(
+        self,
+        current_task: TaskRow,
+        *,
+        get_chain_export: Callable[[str], list[TaskRow] | None],
+        panel_chain_by_link: dict[int, list[TaskRow]] | None = None,
+        panel_chain_snapshot_loaded: bool = False,
+        chain_by_link: dict[int, list[TaskRow]] | None = None,
+    ) -> list[TaskRow]:
+        """Return up to two previous links from one authoritative chain read."""
+        chain_id = str(current_task.get("chainID") or "").strip()
+        if not chain_id:
+            return []
+        current_no = self._coerce_int(current_task.get("link"), None)
+        if not current_no or current_no <= 1:
+            return []
+
+        def pick_best(candidates: list[TaskRow]) -> TaskRow | None:
+            for status in ("pending", "completed", "deleted"):
+                for task in candidates:
+                    if str(task.get("status") or "").strip().lower() == status:
+                        return task
+            return candidates[0] if candidates else None
+
+        chain_index = chain_by_link or panel_chain_by_link or {}
+        if not chain_index and not panel_chain_snapshot_loaded:
+            try:
+                chain = get_chain_export(chain_id)
+            except Exception:
+                return []
+            if not isinstance(chain, list):
+                return []
+            chain_index = self.build_indexes(chain).by_link
+
+        previous: list[TaskRow] = []
+        for wanted in (current_no - 2, current_no - 1):
+            if wanted < 1:
+                continue
+            task = pick_best(chain_index.get(wanted, []))
+            if task:
+                previous.append(task)
+        return previous
+
+    def existing_next_lookup(
+        self,
+        parent_task: TaskRow,
+        next_no: int,
+        *,
+        export_uuid_short_cached: Callable[[str], Any],
+        get_chain_export: Callable[..., list[TaskRow] | None],
+        snapshot_rows: list[TaskRow] | None = None,
+        snapshot_loaded: bool = False,
+    ) -> LookupResult:
+        """Find an existing successor while preserving found/absent/unavailable."""
+        if not isinstance(parent_task, dict):
+            return LookupResult.unavailable("parent task is not an object")
+        rows = [
+            row
+            for row in (snapshot_rows or [])
+            if isinstance(row, dict)
+            and str(row.get("link") or "").strip() == str(int(next_no))
+            and str(row.get("status") or "").strip().lower() != "deleted"
+        ]
+        if rows:
+            picked = self._pick_existing_next(rows)
+            return LookupResult.found(picked) if picked else LookupResult.absent()
+
+        next_ref = str(parent_task.get("nextLink") or "").strip()
+        if next_ref:
+            obj = export_uuid_short_cached(next_ref)
+            if isinstance(obj, LookupResult):
+                if obj.is_found or obj.is_unavailable:
+                    return obj
+                obj = None
+            if isinstance(obj, dict) and str(obj.get("status") or "").strip().lower() != "deleted":
+                return LookupResult.found(obj)
+
+        chain_id = str(parent_task.get("chainID") or "").strip()
+        if not chain_id or snapshot_loaded:
+            return LookupResult.absent()
+        try:
+            rows = get_chain_export(
+                chain_id,
+                extra=f"link:{int(next_no)} status.not:deleted",
+            )
+        except Exception as exc:
+            return LookupResult.unavailable(f"chain export failed: {exc}")
+        if rows is None:
+            return LookupResult.unavailable("chain export was unavailable")
+        picked = self._pick_existing_next(rows)
+        return LookupResult.found(picked) if picked else LookupResult.absent()
+
+    @staticmethod
+    def _pick_existing_next(rows: list[TaskRow]) -> TaskRow | None:
+        for status in ("pending", "waiting", "completed"):
+            for row in rows:
+                if str(row.get("status") or "").strip().lower() == status:
+                    return row
+        return rows[0] if rows else None
 
     def completion_snapshot(
         self,

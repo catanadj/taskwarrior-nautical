@@ -12995,19 +12995,19 @@ def test_chain_colour_uses_complete_root_identity():
 
     root = "12345678-1234-4234-8234-00000000abcd"
     expect(
-        hook._chain_colour_root("anchor", root) == hook._chain_colour_root("anchor", root),
+        hook.core.chain_colour_root("anchor", root) == hook.core.chain_colour_root("anchor", root),
         "chain colour should replay deterministically",
     )
     expect(
-        hook._chain_colour_root("anchor", root.upper()) == hook._chain_colour_root("anchor", root),
+        hook.core.chain_colour_root("anchor", root.upper()) == hook.core.chain_colour_root("anchor", root),
         "UUID case should not change the chain colour",
     )
     expect(
-        hook._chain_colour_root("anchor", "") == "bright_cyan",
+        hook.core.chain_colour_root("anchor", "") == "bright_cyan",
         "empty anchor roots should retain the existing fallback colour",
     )
     expect(
-        hook._chain_colour_root("cp", "") == "orange_red1",
+        hook.core.chain_colour_root("cp", "") == "orange_red1",
         "empty cp roots should retain the existing fallback colour",
     )
 
@@ -13016,11 +13016,11 @@ def test_chain_colour_uses_complete_root_identity():
         for idx in range(256)
     ]
     anchor_colours = {
-        hook._chain_colour_root("anchor", candidate)
+        hook.core.chain_colour_root("anchor", candidate)
         for candidate in same_suffix_roots
     }
     cp_colours = {
-        hook._chain_colour_root("cp", candidate)
+        hook.core.chain_colour_root("cp", candidate)
         for candidate in same_suffix_roots
     }
     expect(
@@ -13034,11 +13034,11 @@ def test_chain_colour_uses_complete_root_identity():
 
     legacy = "legacy/root identifier"
     expect(
-        hook._chain_colour_root("anchor", legacy) == hook._chain_colour_root("anchor", legacy),
+        hook.core.chain_colour_root("anchor", legacy) == hook.core.chain_colour_root("anchor", legacy),
         "non-UUID legacy roots should remain deterministic",
     )
     expect(
-        hook._chain_colour_root("anchor", root) != hook._chain_colour_root("cp", root),
+        hook.core.chain_colour_root("anchor", root) != hook.core.chain_colour_root("cp", root),
         "anchor and cp colour domains should remain separated",
     )
 

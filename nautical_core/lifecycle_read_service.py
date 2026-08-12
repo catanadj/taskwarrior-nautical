@@ -18,11 +18,31 @@ TaskRow = dict[str, Any]
 ReadQuery = Callable[[str, tuple[Any, ...]], Any]
 ChainExport = Callable[[str, datetime | None, str | None, int], Sequence[TaskRow]]
 ChainCache = Callable[[str], Sequence[TaskRow] | None]
+BuildExportArgs = Callable[..., list[str] | None]
+RunCheckedExport = Callable[[list[str], Any, float], "ChainReadResult"]
+ReadQuerySet = Callable[[str, tuple[Any, ...], Any], None]
 TokenParser = Callable[[str | None], list[str] | None]
 TokenMatcher = Callable[[TaskRow, str], bool]
 CoerceInt = Callable[[Any, int | None], int | None]
 Diagnostic = Callable[[str], None]
 Counter = Callable[[str], None]
+
+
+@dataclass(frozen=True, slots=True)
+class ChainReadResult:
+    """Typed result for a chain export at the Taskwarrior boundary."""
+
+    ok: bool
+    rows: list[TaskRow]
+    error: str = ""
+
+    @classmethod
+    def success(cls, rows: Sequence[TaskRow]) -> "ChainReadResult":
+        return cls(True, list(rows), "")
+
+    @classmethod
+    def failure(cls, error: str) -> "ChainReadResult":
+        return cls(False, [], str(error or "chain export unavailable"))
 
 
 def chain_read_key(
@@ -83,6 +103,7 @@ class LifecycleReadService:
         max_chain_walk: int,
         diag: Diagnostic | None = None,
         record_stat: Counter | None = None,
+        read_query_set: ReadQuerySet | None = None,
     ) -> None:
         self._coerce_int = coerce_int
         self._parse_extra_tokens = parse_extra_tokens
@@ -93,6 +114,47 @@ class LifecycleReadService:
         self._max_chain_walk = max(1, int(max_chain_walk))
         self._diag = diag or (lambda _message: None)
         self._record_stat = record_stat or (lambda _name: None)
+        self._read_query_set = read_query_set or (lambda _kind, _key, _value: None)
+
+    def checked_export(
+        self,
+        chain_id: str,
+        *,
+        since: datetime | None,
+        extra: str | None,
+        env: Any,
+        limit: int | None,
+        build_args: BuildExportArgs,
+        run_export: RunCheckedExport,
+        timeout_for_chain: Callable[[str], float],
+        read_query_missing: object,
+    ) -> ChainReadResult:
+        """Load one chain with typed failures and request-scoped reuse."""
+        if not chain_id:
+            return ChainReadResult.success([])
+        args = build_args(chain_id, since=since, extra=extra, limit=limit)
+        if args is None:
+            return ChainReadResult.failure("invalid chain export filters")
+        read_key = chain_read_key(chain_id, since, extra, int(limit or 0))
+        if env is None:
+            cached_read = self._read_query_get("chain", read_key)
+            if cached_read is not read_query_missing:
+                if isinstance(cached_read, list) and all(isinstance(row, dict) for row in cached_read):
+                    return ChainReadResult.success(cached_read)
+                return ChainReadResult.failure("cached chain export has invalid shape")
+            if not since and not extra and int(limit or 0) > 0:
+                full_key = chain_read_key(chain_id, None, None, 0)
+                full_read = self._read_query_get("chain", full_key)
+                if full_read is not read_query_missing:
+                    if not isinstance(full_read, list) or not all(
+                        isinstance(row, dict) for row in full_read
+                    ):
+                        return ChainReadResult.failure("cached chain export has invalid shape")
+                    return ChainReadResult.success(full_read[: int(limit)])
+        result = run_export(args, env, timeout_for_chain(chain_id))
+        if result.ok and env is None:
+            self._read_query_set("chain", read_key, result.rows)
+        return result
 
     def build_indexes(self, rows: Sequence[TaskRow]) -> ChainIndexes:
         """Build link, short UUID, and full UUID indexes in one pass."""
@@ -245,6 +307,7 @@ class LifecycleReadService:
 
 
 __all__ = [
+    "ChainReadResult",
     "ChainIndexes",
     "LifecycleReadService",
     "cached_chain_export",

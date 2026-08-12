@@ -7877,6 +7877,56 @@ def test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads():
     expect(calls["export"] == 0, f"full snapshot filter unexpectedly exported Taskwarrior: {calls}")
 
 
+def test_lifecycle_read_service_checked_export_is_typed_and_cached():
+    """Checked lifecycle exports distinguish failures and reuse valid request reads."""
+    import nautical_core.lifecycle_read_service as read_service
+
+    missing = object()
+    stored = {}
+    calls = {"run": 0}
+
+    def _read(kind, key):
+        return stored.get((kind, key), missing)
+
+    def _write(kind, key, value):
+        stored[(kind, key)] = list(value)
+
+    def _run(_args, _env, _timeout):
+        calls["run"] += 1
+        return read_service.ChainReadResult.success([{"uuid": "aaaaaaaa", "link": 1}])
+
+    service = read_service.LifecycleReadService(
+        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
+        parse_extra_tokens=lambda _extra: [],
+        token_matcher=lambda _row, _token: True,
+        read_query_get=_read,
+        read_query_set=_write,
+        chain_cache_get=lambda _chain_id: None,
+        export_chain_cached=lambda *_args: (),
+        max_chain_walk=10,
+    )
+    kwargs = dict(
+        since=None,
+        extra=None,
+        env=None,
+        limit=10,
+        build_args=lambda *_args, **_kwargs: ["chainID:cid", "export"],
+        run_export=_run,
+        timeout_for_chain=lambda _chain_id: 1.0,
+        read_query_missing=missing,
+    )
+    first = service.checked_export("cid", **kwargs)
+    second = service.checked_export("cid", **kwargs)
+    expect(first.ok and first.rows and second.ok, f"typed checked export failed: {first}, {second}")
+    expect(calls["run"] == 1, f"valid checked export was not reused: {calls}")
+
+    failed = service.checked_export(
+        "cid-2",
+        **{**kwargs, "run_export": lambda *_args: read_service.ChainReadResult.failure("unavailable")},
+    )
+    expect(not failed.ok and failed.error == "unavailable", f"failure lost typed detail: {failed}")
+
+
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33561,6 +33611,7 @@ TESTS = [
     test_on_modify_get_chain_export_filters_cached_chain_in_memory,
     test_lifecycle_read_service_indexes_and_merges_chain_rows,
     test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads,
+    test_lifecycle_read_service_checked_export_is_typed_and_cached,
     test_next_for_and_no_progress_fails_fast,
     test_next_for_and_transient_stall_recovers,
     test_roll_apply_has_guard,

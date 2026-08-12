@@ -2618,6 +2618,7 @@ def _lifecycle_read_service():
         parse_extra_tokens=_parse_extra_tokens,
         token_matcher=_cached_chain_token_match,
         read_query_get=_read_query_get,
+        read_query_set=_read_query_set,
         chain_cache_get=_cached_chain,
         export_chain_cached=_chain_export_for_cache,
         max_chain_walk=_MAX_CHAIN_WALK,
@@ -4073,34 +4074,10 @@ def _tw_export_chain_parse(out: str) -> list[dict]:
         return []
 
 
-def _tw_export_chain_checked(
-    chain_id: str,
-    since: datetime | None = None,
-    extra: str | None = None,
-    env=None,
-    limit: int | None = None,
-) -> tuple[bool, list[dict], str]:
-    if not chain_id:
-        return True, [], ""
-    args = _tw_export_chain_args(chain_id, since=since, extra=extra, limit=limit)
-    if args is None:
-        return False, [], "invalid chain export filters"
-    read_key = _chain_read_key(chain_id, since, extra, limit or 0)
-    if env is None:
-        cached_read = _read_query_get("chain", read_key)
-        if cached_read is not _READ_QUERY_MISSING:
-            if isinstance(cached_read, list) and all(isinstance(row, dict) for row in cached_read):
-                return True, cached_read, ""
-            return False, [], "cached chain export has invalid shape"
-        if not since and not extra and int(limit or 0) > 0:
-            full_read = _read_query_get("chain", _chain_read_key(chain_id, None, None, 0))
-            if full_read is not _READ_QUERY_MISSING:
-                if not isinstance(full_read, list) or not all(isinstance(row, dict) for row in full_read):
-                    return False, [], "cached chain export has invalid shape"
-                return True, full_read[: int(limit)], ""
-
+def _run_checked_chain_export(args: list[str], env, timeout: float):
+    """Run and validate one Taskwarrior chain export for the read service."""
+    lifecycle_read_service = _module("lifecycle_read_service")
     start = _time.perf_counter()
-    timeout = _chain_export_timeout(chain_id)
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         result = hook_support.run_task_result(
@@ -4114,8 +4091,8 @@ def _tw_export_chain_checked(
         ok, rows, error = hook_support.parse_export_array_result(result, diag=_diag)
         elapsed = _time.perf_counter() - start
         if not ok:
-            _tw_export_chain_failure(chain_id, error, timeout)
-            return False, [], error
+            _tw_export_chain_failure(_chain_id_from_export_args(args), error, timeout)
+            return lifecycle_read_service.ChainReadResult.failure(error)
     else:
         result = _run_task_result(
             args,
@@ -4126,8 +4103,9 @@ def _tw_export_chain_checked(
         )
         elapsed = _time.perf_counter() - start
         if not result.ok:
-            _tw_export_chain_failure(chain_id, result.stderr, timeout)
-            return False, [], result.stderr or "task export failed"
+            error = result.stderr or "task export failed"
+            _tw_export_chain_failure(_chain_id_from_export_args(args), error, timeout)
+            return lifecycle_read_service.ChainReadResult.failure(error)
         try:
             parsed = json.loads((result.stdout or "").strip())
             if not isinstance(parsed, list) or any(not isinstance(row, dict) for row in parsed):
@@ -4135,12 +4113,40 @@ def _tw_export_chain_checked(
             rows = parsed
         except Exception as exc:
             error = f"Taskwarrior export returned invalid JSON: {exc}"
-            _tw_export_chain_failure(chain_id, error, timeout)
-            return False, [], error
+            _tw_export_chain_failure(_chain_id_from_export_args(args), error, timeout)
+            return lifecycle_read_service.ChainReadResult.failure(error)
     _tw_export_chain_success(elapsed)
-    if env is None:
-        _read_query_set("chain", read_key, rows)
-    return True, rows, ""
+    return lifecycle_read_service.ChainReadResult.success(rows)
+
+
+def _chain_id_from_export_args(args: list[str]) -> str:
+    for arg in args:
+        value = str(arg)
+        if value.startswith("chainID:"):
+            return value.split(":", 1)[1]
+    return ""
+
+
+def _tw_export_chain_checked(
+    chain_id: str,
+    since: datetime | None = None,
+    extra: str | None = None,
+    env=None,
+    limit: int | None = None,
+) -> tuple[bool, list[dict], str]:
+    """Compatibility adapter for the typed lifecycle chain-read service."""
+    result = _lifecycle_read_service().checked_export(
+        chain_id,
+        since=since,
+        extra=extra,
+        env=env,
+        limit=limit,
+        build_args=_tw_export_chain_args,
+        run_export=_run_checked_chain_export,
+        timeout_for_chain=_chain_export_timeout,
+        read_query_missing=_READ_QUERY_MISSING,
+    )
+    return result.ok, result.rows, result.error
 
 
 def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None, limit: int | None = None) -> list[dict]:

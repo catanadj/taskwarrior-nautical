@@ -23801,6 +23801,39 @@ def test_scheduler_parity_harness_compares_legacy_callback_only_in_tests():
     )
 
 
+def test_scheduler_parity_matrix_covers_context_sensitive_rules():
+    """The migration harness exercises omission, time, DST, calendar, and random inputs."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from dev_tools.nautical_scheduler_parity import compare_collection
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor
+    from nautical_core.scheduler_service import SchedulerService
+
+    cases = (
+        ("w:mon,wed,fri@t=09:00", "w:wed", "2026-03-01T09:00:00"),
+        ("w:sun@t=01:30", "", "2026-10-24T01:00:00"),
+        ("m:rand", "", "2026-04-01T09:00:00"),
+    )
+    for index, (anchor, omit, stamp) in enumerate(cases):
+        zone = ZoneInfo("Europe/Sofia")
+        task = {"chainID": f"parity-matrix-{index}", "anchor": anchor}
+        if omit:
+            task["omit"] = omit
+        context = RecurrenceContext(chain_id=task["chainID"], timezone=zone)
+        service = SchedulerService.from_task(task, context=context)
+        cursor = OccurrenceCursor.strict_after(
+            datetime.fromisoformat(stamp).replace(tzinfo=zone), timezone=zone
+        )
+        evaluator = service.session.evaluator
+        compare_collection(
+            service,
+            cursor,
+            lambda evaluator=evaluator, cursor=cursor: evaluator.collect_after_cursor(cursor, limit=2),
+            limit=2,
+        )
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35332,6 +35365,7 @@ TESTS.extend([
     test_evaluation_session_is_task_scoped_and_fingerprint_bound,
     test_scheduler_service_is_one_typed_occurrence_entry_point,
     test_scheduler_parity_harness_compares_legacy_callback_only_in_tests,
+    test_scheduler_parity_matrix_covers_context_sensitive_rules,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

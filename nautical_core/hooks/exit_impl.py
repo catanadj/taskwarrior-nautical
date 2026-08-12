@@ -2124,6 +2124,108 @@ def _prepare_lifecycle_batch(entries: list[dict]) -> None:
         state.lifecycle_batch_imported.add(sid)
 
 
+def _finalize_lifecycle_batch(state) -> None:
+    """Verify all deferred lifecycle postconditions with bounded exports."""
+    pending = getattr(state, "lifecycle_pending_verification", {})
+    if not pending:
+        return
+    specs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for ctx, plan, _child in pending.values():
+        for uuid_str in (ctx.parent_uuid, ctx.child_uuid):
+            uuid_str = str(uuid_str or "").strip()
+            if uuid_str and uuid_str not in seen:
+                seen.add(uuid_str)
+                specs.append((uuid_str, f"uuid:{uuid_str}"))
+    rows: list[dict[str, Any]] = []
+    parsed_ok = False
+    hook_support = _module("hook_support", required=False)
+    for chunk in _chunked(specs, _EXIT_PRELOAD_CHUNK_SIZE):
+        cmd = _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off"]
+        for index, (_uuid, clause) in enumerate(chunk):
+            if index:
+                cmd.append("or")
+            cmd.append(clause)
+        cmd.append("export")
+        result = _run_task_result(cmd, timeout=_TASK_TIMEOUT_EXPORT, retries=_TASK_RETRIES_EXPORT, retry_delay=_TASK_RETRY_DELAY)
+        if not result.ok:
+            for ctx, _plan, _child in pending.values():
+                _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, result.stderr or "batch verification unavailable")
+            return
+        if hook_support is not None:
+            parsed_ok, chunk_rows, _error = hook_support.parse_export_array_result(result, diag=_diag)
+            if not parsed_ok:
+                for ctx, _plan, _child in pending.values():
+                    _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, "batch verification returned malformed JSON")
+                return
+            rows.extend(chunk_rows)
+        else:
+            try:
+                parsed = json.loads((result.stdout or "").strip() or "[]")
+            except Exception:
+                parsed = None
+            if not isinstance(parsed, list):
+                for ctx, _plan, _child in pending.values():
+                    _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, "batch verification returned malformed JSON")
+                return
+            rows.extend(row for row in parsed if isinstance(row, dict))
+    by_uuid = {str(row.get("uuid") or "").strip(): row for row in rows if isinstance(row, dict)}
+    flow = _module("exit_entry_flow")
+    lifecycle_models = _module("lifecycle_models")
+    for sid, (ctx, plan, expected_child) in pending.items():
+        child = by_uuid.get(ctx.child_uuid)
+        parent = by_uuid.get(ctx.parent_uuid)
+        reason = ""
+        if not isinstance(child, dict):
+            reason = "child postcondition missing after lifecycle batch"
+        elif not isinstance(parent, dict):
+            reason = "parent postcondition missing after lifecycle batch"
+        else:
+            for field in ("chainID", "link", "prevLink"):
+                expected = str(expected_child.get(field) or "").strip()
+                actual = str(child.get(field) or "").strip()
+                if field == "link":
+                    try:
+                        expected = str(int(float(expected)))
+                        actual = str(int(float(actual)))
+                    except (TypeError, ValueError, OverflowError):
+                        pass
+                if expected and actual != expected:
+                    reason = f"child {field} changed"
+                    break
+            if not reason and str(parent.get("nextLink") or "").strip() != ctx.child_short:
+                reason = "parent linkage postcondition not satisfied"
+            if not reason:
+                mismatch = flow._parent_guard_mismatch(
+                    parent,
+                    plan.parent_guard.to_dict(),
+                    recurrence_fingerprint=lambda task: lifecycle_models.recurrence_fingerprint(
+                        task,
+                        parse_datetime=getattr(core, "parse_dt_any", None),
+                    ),
+                )
+                if mismatch:
+                    reason = mismatch
+        if reason:
+            _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, reason)
+            continue
+        verified = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.VERIFIED)
+        if not verified.ok:
+            _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, verified)
+            continue
+        finalized = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.FINALIZED)
+        if not finalized.ok:
+            _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, finalized)
+            continue
+        if not state.mark_final(ctx.entry, "done", "processed"):
+            state.errors += 1
+            state.requeue.append(ctx.entry)
+            continue
+        state.processed += 1
+        state.ack_sqlite(ctx.entry)
+        state.reset_lock_streak()
+
+
 def _update_parent_nextlink(
     parent_uuid: str,
     child_short: str,
@@ -2262,6 +2364,8 @@ class _DrainState:
         self.intent_mark_ok = 0
         self.intent_mark_fail = 0
         self.sqlite_acked_claims: dict[int, str] = {}
+        self.lifecycle_defer_verification = False
+        self.lifecycle_pending_verification: dict[str, tuple[Any, Any, dict[str, Any]]] = {}
 
     def mark_final(self, entry: dict, status: str, reason: str) -> bool:
         sid = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
@@ -2648,6 +2752,8 @@ def _execute_lifecycle_queue_entry(ctx, state):
             return _lifecycle_operation_result(operation_state, reason=imported.err or "child import failed")
 
         def verify_child(self, current_plan, child):
+            if getattr(state, "lifecycle_defer_verification", False):
+                return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED, value=child)
             child_uuid = str(child.get("uuid") or "").strip()
             if not child_uuid:
                 return _lifecycle_operation_result(
@@ -2710,6 +2816,8 @@ def _execute_lifecycle_queue_entry(ctx, state):
             return _lifecycle_operation_result(operation_state, reason=updated.err or "parent update failed")
 
         def verify_linkage(self, current_plan, child):
+            if getattr(state, "lifecycle_defer_verification", False):
+                return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED, value=child)
             child_short = str(
                 current_plan.parent_patch_dict().get("nextLink")
                 or ctx.child_short
@@ -2756,6 +2864,9 @@ def _execute_lifecycle_queue_entry(ctx, state):
     if outcome.kind is lifecycle_models.LifecycleOutcomeKind.MANUAL_REVIEW:
         state.dead_letter(ctx.entry, outcome.reason or "lifecycle transition requires manual review")
         state.reset_lock_streak()
+        return False
+    if getattr(state, "lifecycle_defer_verification", False):
+        state.lifecycle_pending_verification[ctx.spawn_intent_id] = (ctx, plan, plan.child_dict())
         return False
     final_stage = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.FINALIZED)
     if not final_stage.ok:
@@ -2905,6 +3016,7 @@ def _drain_queue_result():
             preload_export_uuids=_preload_export_uuids,
             preload_equivalent_child_slots=_preload_equivalent_child_slots,
             prepare_lifecycle_batch=_prepare_lifecycle_batch,
+            finalize_lifecycle_batch=_finalize_lifecycle_batch,
             process_queue_entry=_process_queue_entry,
             requeue_entries_result=_requeue_entries_result,
             ack_queue_entries_sqlite_result=_ack_queue_entries_sqlite_result,

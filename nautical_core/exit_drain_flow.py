@@ -19,6 +19,7 @@ QueueDbHook = Callable[[], None]
 TakeQueueBatch = Callable[[], ExitQueueBatch]
 LoadFinalizedIntents = Callable[[], tuple[set[str], bool]]
 PreloadEntries = Callable[[list[Entry]], None]
+FinalizeBatch = Callable[[ExitDrainStateProtocol], None]
 ProcessQueueEntry = Callable[[int, Entry, ExitDrainStateProtocol], bool]
 RequeueEntries = Callable[[list[Entry]], ExitRequeueResult]
 AckQueueEntries = Callable[[list[tuple[int, str]]], ExitQueueWriteResult]
@@ -61,6 +62,7 @@ class ExitDrainServices:
     preload_export_uuids: PreloadEntries
     preload_equivalent_child_slots: PreloadEntries
     prepare_lifecycle_batch: PreloadEntries | None
+    finalize_lifecycle_batch: FinalizeBatch | None
     process_queue_entry: ProcessQueueEntry
     requeue_entries_result: RequeueEntries
     ack_queue_entries_sqlite_result: AckQueueEntries
@@ -86,6 +88,14 @@ def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
             intent_log_ready=bool(intent_log_ready),
             intent_log_load_ms=float(intent_log_load_ms),
         )
+        lifecycle_count = sum(
+            isinstance(entry, dict) and isinstance(entry.get("lifecycle_plan"), dict)
+            for entry in entries
+        )
+        # A single entry gains nothing from batching and remains on the
+        # established per-entry verification path for compatibility and
+        # simpler failure attribution.
+        state.lifecycle_defer_verification = lifecycle_count > 1
         preload_entries = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -111,6 +121,9 @@ def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
                     progress_update(advance=1, phase="drain", state=state)
                 if should_break:
                     break
+
+            if services.finalize_lifecycle_batch is not None:
+                services.finalize_lifecycle_batch(state)
 
             if progress_update is not None:
                 progress_update(phase="finalize", state=state)

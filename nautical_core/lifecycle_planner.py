@@ -9,6 +9,7 @@ shared by on-modify and reconcile.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Callable, Mapping, Protocol
 
 from .lifecycle_models import (
@@ -211,7 +212,16 @@ def _link(value: Any, *, default: int | None = None) -> int:
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
-        raise LifecyclePlanningError(f"invalid lifecycle link: {value!r}") from exc
+        # Taskwarrior exports numeric UDAs as fixed-point text (for example
+        # ``256.000000``). Accept only an exactly integral representation;
+        # fractional, NaN, and infinite values remain invalid links.
+        try:
+            numeric = float(str(value).strip())
+        except (TypeError, ValueError) as float_exc:
+            raise LifecyclePlanningError(f"invalid lifecycle link: {value!r}") from float_exc
+        if not math.isfinite(numeric) or not numeric.is_integer():
+            raise LifecyclePlanningError(f"invalid lifecycle link: {value!r}") from exc
+        parsed = int(numeric)
     if parsed < 0:
         raise LifecyclePlanningError("lifecycle link must be non-negative")
     return parsed

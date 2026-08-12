@@ -2644,6 +2644,7 @@ def _execute_lifecycle_queue_entry(ctx, state):
     if outcome.kind in {
         lifecycle_models.LifecycleOutcomeKind.RETRYABLE,
     }:
+        _diag(f"lifecycle transition retry: {outcome.reason or 'reason unavailable'}")
         if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
             state.dead_letter(ctx.entry, outcome.reason or "lifecycle transition retry limit reached")
         else:

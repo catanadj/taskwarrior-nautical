@@ -486,6 +486,9 @@ def _bench_native_until_reconcile(rounds: int, *, apply: bool) -> float:
                 "NAUTICAL_CORE_PATH": str(ROOT),
                 "NAUTICAL_TRUST_CONFIG_PATH": "1",
                 "NAUTICAL_TRUST_CORE_PATH": "1",
+                # The benchmark deliberately supplies isolated temporary
+                # Taskdata directories; allow the launcher to use them.
+                "NAUTICAL_TRUST_TASKDATA_PATH": "1",
                 "TASKRC": str(taskrc_path),
                 "TZ": "UTC",
             }
@@ -1175,11 +1178,17 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             _init_empty_queue_db(queue_data)
             queue_env = dict(base_env, TASKDATA=str(queue_data))
             parents = []
+            parent_uuids: set[str] = set()
+            child_uuids: set[str] = set()
             with sqlite3.connect(str(queue_data / ".nautical-state" / ".nautical_queue.db")) as conn:
                 now = time.time()
                 for index in range(8):
-                    parent_uuid = f"44444444-4444-4444-4444-{index:012d}"
-                    child_uuid = f"55555555-5555-5555-5555-{index:012d}"
+                    parent_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/queue/parent/{index}"))
+                    child_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/queue/child/{index}"))
+                    parent_uuids.add(parent_uuid)
+                    child_uuids.add(child_uuid)
+                    parent_link = index + 1
+                    child_link = parent_link + 1
                     parents.append(
                         {
                             "uuid": parent_uuid,
@@ -1187,7 +1196,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                             "description": "Queue drain benchmark parent",
                             "chain": "on",
                             "chainID": "queue-perf-chain",
-                            "link": str(index),
+                            "link": str(parent_link),
                             "due": "20260101T090000Z",
                         }
                     )
@@ -1203,7 +1212,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                             "description": "Queue drain benchmark child",
                             "chain": "on",
                             "chainID": "queue-perf-chain",
-                            "link": index + 1,
+                            "link": child_link,
                             "prevLink": parent_uuid[:8],
                             "due": "20260101T090000Z",
                         },
@@ -1212,7 +1221,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                             "status": "completed",
                             "chain": "on",
                             "chainID": "queue-perf-chain",
-                            "link": str(index),
+                            "link": str(parent_link),
                         },
                     }
                     conn.execute(
@@ -1277,14 +1286,14 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             children = [
                 row
                 for row in exported
-                if isinstance(row, dict) and str(row.get("uuid") or "").startswith("55555555-")
+                if isinstance(row, dict) and str(row.get("uuid") or "") in child_uuids
             ]
             if len(children) != 8 or any(not str(row.get("prevLink") or "").strip() for row in children):
                 raise RuntimeError("queue drain benchmark did not import/link all child tasks")
             parents_after = [
                 row
                 for row in exported
-                if isinstance(row, dict) and str(row.get("uuid") or "").startswith("44444444-")
+                if isinstance(row, dict) and str(row.get("uuid") or "") in parent_uuids
             ]
             if len(parents_after) != 8 or any(not str(row.get("nextLink") or "").strip() for row in parents_after):
                 raise RuntimeError("queue drain benchmark did not update all parent nextLink values")

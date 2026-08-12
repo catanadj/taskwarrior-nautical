@@ -16138,6 +16138,22 @@ def test_hook_task_result_preserves_typed_runner_result():
     expect(actual is expected, "typed command result metadata was reconstructed or discarded")
 
 
+def test_hook_export_uuid_empty_success_is_absent():
+    """A successful empty UUID export is an authoritative Taskwarrior absence."""
+    support = importlib.import_module("nautical_core.hook_support")
+    task_command = importlib.import_module("nautical_core.task_command")
+    result = support.export_uuid_status(
+        run_task=lambda *_args, **_kwargs: task_command.TaskCommandResult(
+            ("task", "export"), 0, "", "", "ok", 1, 1.0
+        ),
+        task_cmd_prefix=["task"],
+        uuid_str="00000000-0000-0000-0000-000000000001",
+        timeout=1.0,
+        retries=1,
+    )
+    expect(result == {"exists": False, "retryable": False, "err": "not found", "obj": None}, f"unexpected empty export result: {result!r}")
+
+
 def test_hook_run_task_falls_back_when_core_load_fails():
     """on-modify _run_task should fall back to subprocess if core load fails."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33585,6 +33601,7 @@ TESTS = [
     test_hook_task_runner_handles_nonzero,
     test_shared_hook_subprocess_runner_preserves_output_and_status,
     test_hook_task_result_preserves_typed_runner_result,
+    test_hook_export_uuid_empty_success_is_absent,
     test_hook_run_task_falls_back_when_core_load_fails,
     test_on_add_run_task_falls_back_when_core_load_fails,
     test_core_run_task_tempfiles_accepts_text_input,

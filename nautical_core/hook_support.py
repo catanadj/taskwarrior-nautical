@@ -359,8 +359,14 @@ def export_uuid_status(
     if not result.ok:
         retryable = bool(is_lock_error(result.stderr)) if callable(is_lock_error) else result.kind == "lock_busy"
         return {"exists": False, "retryable": retryable, "err": failure_message(result, "UUID status lookup"), "obj": None}
+    raw_stdout = (result.stdout or "").strip()
+    if not raw_stdout:
+        # Taskwarrior uses a successful empty export for a valid query with
+        # no matching UUID.  This is an authoritative absence, not malformed
+        # protocol data; preserve fail-closed behavior for non-empty junk.
+        return {"exists": False, "retryable": False, "err": "not found", "obj": None}
     try:
-        obj = json.loads((result.stdout or "").strip())
+        obj = json.loads(raw_stdout)
         if isinstance(obj, dict) and obj.get("uuid"):
             return {"exists": True, "retryable": False, "err": "", "obj": obj}
         return {"exists": False, "retryable": False, "err": "not found", "obj": None}

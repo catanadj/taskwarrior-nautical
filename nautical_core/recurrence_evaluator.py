@@ -174,7 +174,21 @@ class RecurrenceEvaluator:
         """Build an evaluator without reparsing an already compiled schedule."""
         if not isinstance(compiled, CompiledSchedule):
             raise TypeError("recurrence evaluator requires a CompiledSchedule")
-        return cls.from_spec(compiled.spec)
+        evaluator = cls.from_spec(compiled.spec)
+        normalized = compiled.normalized_payload
+        if compiled.spec.anchor:
+            anchor_dnf = normalized.get("anchor_dnf")
+            if anchor_dnf is not None:
+                evaluator._cache["anchor_dnf"] = _freeze_evaluator_value(anchor_dnf)
+        if compiled.spec.omit and not compiled.spec.omit_file:
+            omit_dnf = normalized.get("omit_dnf")
+            if omit_dnf is not None:
+                evaluator._cache["omit_dnf"] = _freeze_evaluator_value(omit_dnf)
+        if compiled.spec.cp:
+            cp_tokens = normalized.get("cp_tokens")
+            if cp_tokens is not None:
+                evaluator._cache["cp_tokens"] = _freeze_evaluator_value(cp_tokens)
+        return evaluator
 
     @property
     def context(self) -> RecurrenceContext:

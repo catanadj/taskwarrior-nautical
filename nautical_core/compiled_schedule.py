@@ -178,6 +178,11 @@ def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
                 collect_time(item)
 
     collect_time(anchor_dnf)
+    cp_tokens = None
+    if spec.cp:
+        from . import parse_cp_sequence_tokens
+
+        cp_tokens = parse_cp_sequence_tokens(spec.cp)
     provider = ProviderInstruction(
         kind="cp" if spec.cp else ("anchor+file" if spec.anchor and spec.anchor_file else "anchor_file" if spec.anchor_file else "anchor"),
         anchor_file=spec.anchor_file,
@@ -192,6 +197,7 @@ def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
         "provider": provider,
         "time_projection": projection,
         "limits": ScheduleLimits(chain_max=spec.chain_max, chain_until=spec.chain_until),
+        "cp_tokens": _freeze_value(cp_tokens),
         "identity": spec.context.chain_id,
     }
 
@@ -274,6 +280,11 @@ class CompiledSchedule:
             "fingerprint": self.fingerprint,
             "schedule": _thaw_value(self.canonical),
         }
+
+    @property
+    def normalized_payload(self) -> dict[str, Any]:
+        """Return normalized instructions for an evaluator session."""
+        return _thaw_value(self.normalized)
 
     def to_diagnostic_json(self) -> str:
         """Return a stable diagnostic snapshot; it is not a runtime cache format."""

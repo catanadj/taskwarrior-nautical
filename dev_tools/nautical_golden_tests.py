@@ -23595,6 +23595,15 @@ def test_compiled_schedule_is_canonical_and_reusable():
     expect(normalized["time_projection"], "compiled time projection was not recorded")
     evaluator = RecurrenceEvaluator.from_compiled(first)
     expect(evaluator.spec == first.spec, "compiled schedule was not reusable by evaluator")
+    import nautical_core as core
+    parser = core.parse_anchor_expr_to_dnf_cached
+    core.parse_anchor_expr_to_dnf_cached = lambda _expr: (_ for _ in ()).throw(
+        AssertionError("compiled evaluator reparsed its anchor")
+    )
+    try:
+        expect(evaluator.anchor_dnf, "compiled evaluator lost normalized anchor DNF")
+    finally:
+        core.parse_anchor_expr_to_dnf_cached = parser
     try:
         CompiledSchedule.from_task({"chainID": "plain-task"})
     except ValueError as exc:

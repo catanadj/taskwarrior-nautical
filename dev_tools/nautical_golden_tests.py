@@ -22025,7 +22025,7 @@ def test_provider_contract_advertises_only_certified_capabilities():
     expect(ordinary.capabilities == ProviderCapabilities(), "ordinary provider gained an implicit optimization")
     file_provider = AnchorFileOccurrenceProvider(None, None, (9, 0))
     expect(file_provider.contract.capabilities.cursor_reuse, "anchor-file cursor reuse was not certified")
-    expect(not file_provider.contract.capabilities.batch_generation, "uncertified batch generation was advertised")
+    expect(file_provider.contract.capabilities.batch_generation, "anchor-file batch generation was not certified")
     expect(not file_provider.contract.capabilities.arithmetic_counting, "uncertified arithmetic counting was advertised")
 
 
@@ -22063,6 +22063,49 @@ def test_anchor_file_cursor_reuse_matches_fresh_provider_reference():
                 and optimized.description == reference.description,
                 f"cached anchor-file lookup diverged at {cursor!s}",
             )
+
+
+def test_anchor_file_batch_generation_matches_repeated_reference_lookups():
+    """The provider-owned batch slice matches its strict next-after reference."""
+    import tempfile
+    from pathlib import Path
+    from zoneinfo import ZoneInfo
+    from nautical_core.anchor_files import AnchorFileOccurrenceProvider
+    from nautical_core.occurrence_provider import collect_after
+
+    zone = ZoneInfo("UTC")
+    with tempfile.TemporaryDirectory() as td:
+        Path(td, "calendar.csv").write_text(
+            "date,description\n2026-08-03,first\n2026-08-10,second\n2026-08-17,third\n",
+            encoding="utf-8",
+        )
+
+        def build(day, hhmm):
+            return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=zone)
+
+        provider = AnchorFileOccurrenceProvider("calendar.csv", td, (9, 0))
+        optimized = collect_after(
+            provider,
+            datetime(2026, 8, 1, 9, tzinfo=zone),
+            limit=3,
+            build_local_datetime=build,
+            to_local=lambda value: value,
+            require_contract=True,
+        )
+        reference_provider = AnchorFileOccurrenceProvider("calendar.csv", td, (9, 0))
+        reference = collect_after(
+            reference_provider,
+            datetime(2026, 8, 1, 9, tzinfo=zone),
+            limit=3,
+            build_local_datetime=build,
+            to_local=lambda value: value,
+            require_contract=True,
+        )
+        expect(
+            [(item.local_datetime, item.description) for item in optimized]
+            == [(item.local_datetime, item.description) for item in reference],
+            "anchor-file batch generation diverged from the reference collector",
+        )
 
 
 def test_occurrence_provider_adapters_preserve_stream_metadata():
@@ -35309,6 +35352,7 @@ TESTS = [
     test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
     test_provider_contract_advertises_only_certified_capabilities,
     test_anchor_file_cursor_reuse_matches_fresh_provider_reference,
+    test_anchor_file_batch_generation_matches_repeated_reference_lookups,
     test_occurrence_provider_adapters_preserve_stream_metadata,
     test_occurrence_provider_rejects_dst_fallback_backward_progress,
     test_anchor_file_provider_orders_dst_fallback_by_instant,

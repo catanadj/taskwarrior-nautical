@@ -139,6 +139,21 @@ class LazyOccurrenceProvider(Protocol):
         """Return the first occurrence strictly after a local datetime."""
 
 
+class BatchOccurrenceProvider(LazyOccurrenceProvider, Protocol):
+    """Optional provider-owned bounded batch generation contract."""
+
+    def collect_after(
+        self,
+        after_local: datetime,
+        *,
+        limit: int,
+        inclusive: bool,
+        build_local_datetime: Callable[[date, tuple[int, int]], datetime],
+        to_local: Callable[[datetime], datetime],
+    ) -> "OccurrenceBatch[Occurrence]":
+        ...
+
+
 class OccurrenceProvider(LazyOccurrenceProvider, Protocol):
     def occurrences(self) -> list[Occurrence]:
         """Return sorted, deduplicated local occurrences."""
@@ -210,6 +225,41 @@ def collect_after(
     contract = getattr(provider, "contract", None)
     if require_contract and not isinstance(contract, ProviderContract):
         raise TypeError("Occurrence provider must expose a typed ProviderContract.")
+    capabilities = contract.capabilities if isinstance(contract, ProviderContract) else None
+    if capabilities is not None and capabilities.batch_generation:
+        batch_method = getattr(provider, "collect_after", None)
+        if not callable(batch_method):
+            raise TypeError("Provider advertised batch generation without collect_after().")
+        if limit > max_iterations:
+            raise ValueError("Occurrence provider batch exceeds its collection iteration limit.")
+        try:
+            batch = batch_method(
+                cursor_value,
+                limit=limit,
+                inclusive=bool(inclusive),
+                build_local_datetime=build_local_datetime,
+                to_local=to_local,
+            )
+        except OccurrenceSearchExhausted:
+            raise
+        except (LookupError, OSError) as exc:
+            raise OccurrenceProviderUnavailable(str(exc) or type(exc).__name__) from exc
+        except (TypeError, ValueError) as exc:
+            raise OccurrenceProviderInvalid(str(exc) or type(exc).__name__) from exc
+        if not isinstance(batch, OccurrenceBatch):
+            raise TypeError("Batch occurrence provider returned an invalid result.")
+        previous = _cursor_before(cursor_value) if inclusive else cursor_value
+        included_count = 0
+        for occurrence in batch:
+            if not isinstance(occurrence, Occurrence) or occurrence.local_datetime is None:
+                raise TypeError("Batch occurrence provider returned an invalid occurrence.")
+            _require_forward_progress(previous, occurrence.local_datetime)
+            previous = occurrence.local_datetime
+            if count_omitted or not occurrence.omitted:
+                included_count += 1
+        if included_count > limit:
+            raise ValueError("Batch occurrence provider exceeded its requested limit.")
+        return batch
     cursor = _cursor_before(cursor_value) if inclusive else cursor_value
     out: list[Occurrence] = []
     terminal: OccurrenceSearchExhausted | None = None

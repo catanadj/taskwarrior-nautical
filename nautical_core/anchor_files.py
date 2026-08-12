@@ -24,7 +24,13 @@ from .file_source_expr import (
 )
 from .schedule_utils import apply_day_offset, roll_apply
 from .recurrence_context import RecurrenceContext
-from .occurrence_provider import Occurrence, ProviderCapabilities, ProviderContract, _cursor_before
+from .occurrence_provider import (
+    Occurrence,
+    OccurrenceBatch,
+    ProviderCapabilities,
+    ProviderContract,
+    _cursor_before,
+)
 from .timeutil import compare_datetimes
 from .time_windows import parse_clock_value, parse_random_time_window_spec, parse_time_schedule_spec, parse_time_window_spec
 
@@ -479,7 +485,7 @@ class AnchorFileOccurrenceProvider:
             source="anchor_file",
             cursor="inclusive",
             finite=True,
-            capabilities=ProviderCapabilities(cursor_reuse=True),
+            capabilities=ProviderCapabilities(batch_generation=True, cursor_reuse=True),
         )
 
     def _records(self) -> list[tuple[date, tuple[int, int], str]]:
@@ -533,6 +539,42 @@ class AnchorFileOccurrenceProvider:
             to_local=to_local,
             inclusive=inclusive,
         )
+
+    def collect_after(
+        self,
+        after_local: datetime,
+        *,
+        limit: int,
+        inclusive: bool,
+        build_local_datetime: Callable[[date, tuple[int, int]], datetime],
+        to_local: Callable[[datetime], datetime],
+    ) -> OccurrenceBatch[Occurrence]:
+        """Return a bounded cached slice without repeated provider callbacks."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("Anchor-file batch limit must be a non-negative integer.")
+        if limit == 0:
+            return OccurrenceBatch()
+        first = self.next_after(
+            after_local,
+            build_local_datetime=build_local_datetime,
+            to_local=to_local,
+            inclusive=inclusive,
+        )
+        if first is None or self._last_candidate_index is None or self._candidate_records is None:
+            return OccurrenceBatch()
+        start = self._last_candidate_index
+        values = [
+            Occurrence(
+                day=value.date(),
+                hour=value.hour,
+                minute=value.minute,
+                source="anchor_file",
+                description=description,
+                local_datetime=value,
+            )
+            for value, description in self._candidate_records[start:start + limit]
+        ]
+        return OccurrenceBatch(values)
 
     def next_after(
         self,

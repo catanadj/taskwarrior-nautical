@@ -64,5 +64,15 @@ class EvaluationSession:
         self._cache.clear()
         self._evaluator = RecurrenceEvaluator.from_compiled(self.compiled)
 
+    def refresh(self, spec: RecurrenceSpec) -> bool:
+        """Replace the session when scheduling-affecting state changes."""
+        replacement = CompiledSchedule.from_spec(spec)
+        if replacement.fingerprint == self.fingerprint:
+            return False
+        self.compiled = replacement
+        self._cache.clear()
+        self._evaluator = RecurrenceEvaluator.from_compiled(replacement)
+        return True
+
 
 __all__ = ("EvaluationSession",)

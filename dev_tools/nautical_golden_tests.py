@@ -23745,6 +23745,9 @@ def test_evaluation_session_is_task_scoped_and_fingerprint_bound():
     expect(first.get_or_create("provider", lambda: object()) is first.get_or_create("provider", lambda: object()), "session cache was not reused")
     other = RecurrenceSpec.from_task({"chainID": "session-b", "anchor": "w:mon"})
     expect(not first.matches(other), "session accepted a different task identity")
+    changed = RecurrenceSpec.from_task({"chainID": "session-a", "anchor": "w:tue"})
+    expect(first.refresh(changed), "session did not refresh after scheduling state changed")
+    expect(first.evaluator.spec.anchor == "w:tue", "session retained stale evaluator after refresh")
 
 
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():

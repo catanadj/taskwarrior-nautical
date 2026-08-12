@@ -9,6 +9,8 @@ from .compiled_schedule import CompiledSchedule
 from .recurrence_context import RecurrenceContext
 from .recurrence_evaluator import RecurrenceEvaluator
 from .recurrence_spec import RecurrenceSpec
+from .occurrence_outcomes import OccurrenceOutcome
+from .scheduler_cursor import OccurrenceCursor
 
 
 @dataclass(slots=True)
@@ -45,6 +47,12 @@ class EvaluationSession:
     @property
     def evaluator(self) -> RecurrenceEvaluator:
         return self._evaluator
+
+    def next_outcome(self, cursor: OccurrenceCursor, **kwargs: Any) -> OccurrenceOutcome:
+        return self._evaluator.next_outcome(cursor, **kwargs)
+
+    def collect_after_cursor(self, cursor: OccurrenceCursor, *, limit: int, **kwargs: Any) -> list[Any]:
+        return self._evaluator.collect_after_cursor(cursor, limit=limit, **kwargs)
 
     @property
     def fingerprint(self) -> str:

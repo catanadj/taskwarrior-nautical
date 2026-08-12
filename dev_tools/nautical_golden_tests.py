@@ -23748,6 +23748,7 @@ def test_evaluation_session_is_task_scoped_and_fingerprint_bound():
     changed = RecurrenceSpec.from_task({"chainID": "session-a", "anchor": "w:tue"})
     expect(first.refresh(changed), "session did not refresh after scheduling state changed")
     expect(first.evaluator.spec.anchor == "w:tue", "session retained stale evaluator after refresh")
+    expect(first.next_outcome is not None and first.collect_after_cursor is not None, "session service boundary missing")
 
 
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():

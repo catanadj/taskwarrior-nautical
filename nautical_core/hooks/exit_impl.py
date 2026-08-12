@@ -690,6 +690,18 @@ def _preload_export_uuids(entries: list[dict]) -> None:
                 seen.add(uuid_str)
                 uuids.append(uuid_str)
     slot_specs = _equivalent_child_slot_specs(entries)
+    lifecycle_entries = [
+        entry
+        for entry in entries or []
+        if isinstance(entry, dict) and isinstance(entry.get("lifecycle_plan"), dict)
+    ]
+    lifecycle_uuids: set[str] = set()
+    for entry in lifecycle_entries:
+        parent_uuid = str(entry.get("parent_uuid") or "").strip()
+        child = entry.get("child") or {}
+        child_uuid = str(child.get("uuid") or "").strip() if isinstance(child, dict) else ""
+        lifecycle_uuids.update(value for value in (parent_uuid, child_uuid) if value)
+    lifecycle_slots = set(_equivalent_child_slot_specs(lifecycle_entries))
     specs: list[tuple[str, Any, list[str]]] = [
         ("uuid", uuid_str, [f"uuid:{uuid_str}"])
         for uuid_str in uuids
@@ -757,6 +769,23 @@ def _preload_export_uuids(entries: list[dict]) -> None:
                     parsed_ok = True
             except Exception:
                 rows = []
+        if not parsed_ok:
+            # A combined preload is authoritative for a lifecycle batch. Do
+            # not silently fall back to one export per UUID after a malformed
+            # or unavailable chunk; affected batch entries must defer.
+            reason = "lifecycle preload unavailable"
+            if hook_support is not None and result is not None:
+                reason = getattr(result, "stderr", "") or reason
+            if getattr(_exit_runtime_state(), "lifecycle_batch_discovery", False):
+                for uuid_str in chunk_uuids:
+                    if uuid_str in lifecycle_uuids:
+                        _export_cache_set(uuid_str, exit_models.ExitExportResult(False, True, reason, None))
+                for key in chunk_slots:
+                    if key in lifecycle_slots:
+                        _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(
+                            False, True, reason, None
+                        )
+            continue
         found: set[str] = set()
         for row in rows:
             row_uuid = str(row.get("uuid") or "").strip()
@@ -2142,6 +2171,7 @@ def _prepare_lifecycle_batch(entries: list[dict]):
     exit_models = _module("exit_models")
     lifecycle_models = _module("lifecycle_models")
     flow = _module("exit_entry_flow")
+    use_preload = bool(getattr(state, "lifecycle_batch_discovery", False))
     for entry in entries or []:
         if not isinstance(entry, dict) or not isinstance(entry.get("lifecycle_plan"), dict):
             continue
@@ -2153,7 +2183,7 @@ def _prepare_lifecycle_batch(entries: list[dict]):
         except Exception as exc:
             _diag(f"lifecycle batch plan rejected: {exc}")
             continue
-        parent_res = _export_uuid(plan.identity.parent_uuid, prefer_cache=False)
+        parent_res = _export_uuid(plan.identity.parent_uuid, prefer_cache=use_preload)
         if parent_res.retryable:
             decisions.append(exit_models.LifecycleBatchDecision(
                 sid, entry, plan, exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
@@ -2196,7 +2226,7 @@ def _prepare_lifecycle_batch(entries: list[dict]):
                 parent=parent_res.obj, reason="lifecycle child has no UUID",
             ))
             continue
-        exact = _export_uuid(child_uuid)
+        exact = _export_uuid(child_uuid, prefer_cache=use_preload)
         child_obj = exact.obj if exact.exists and isinstance(exact.obj, dict) else None
         if exact.retryable:
             decisions.append(exit_models.LifecycleBatchDecision(
@@ -2587,6 +2617,7 @@ class _DrainState:
         self.intent_mark_fail = 0
         self.sqlite_acked_claims: dict[int, str] = {}
         self.lifecycle_defer_verification = False
+        self.lifecycle_batch_discovery = False
         self.lifecycle_pending_verification: dict[str, tuple[Any, Any, dict[str, Any]]] = {}
         self.lifecycle_batch_plan = None
         self.lifecycle_orphan_cleanup: dict[str, tuple[str, str, str]] = {}

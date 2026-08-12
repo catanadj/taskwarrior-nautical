@@ -100,6 +100,10 @@ def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
         # established per-entry verification path for compatibility and
         # simpler failure attribution.
         state.lifecycle_defer_verification = lifecycle_count > 1
+        # Combined discovery is only authoritative when there is an actual
+        # lifecycle batch.  Single-entry drains retain their established
+        # per-entry reads and fixtures.
+        state.lifecycle_batch_discovery = lifecycle_count > 1
         preload_entries = []
         for entry in entries:
             if not isinstance(entry, dict):

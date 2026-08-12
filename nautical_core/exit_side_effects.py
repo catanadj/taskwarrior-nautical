@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from nautical_core.exit_models import (
         ExitExportResult,
         ExitImportResult,
+        ExitParentNextlinkStateCallback,
         ExitParentNextlinkStateResult,
         ExitParentUpdateResult,
     )
@@ -130,7 +131,7 @@ def update_parent_nextlink(
     *,
     expected_prev: str | None,
     lock_parent_nextlink: Callable[[str], Any],
-    parent_nextlink_state_fn: Callable[[str, str, str | None], ExitParentNextlinkStateResult],
+    parent_nextlink_state_fn: ExitParentNextlinkStateCallback,
     run_task: Callable[..., tuple[bool, str, str]],
     task_cmd_prefix: list[str],
     timeout_modify: float,
@@ -167,13 +168,18 @@ def update_parent_nextlink(
         elif parent_guard is None and guard_mismatch_fn is None:
             state_res = parent_nextlink_state_fn(parent_uuid, child_short, expected_prev)
         else:
-            state_res = parent_nextlink_state_fn(
-                parent_uuid,
-                child_short,
-                expected_prev,
-                parent_guard=parent_guard,
-                guard_mismatch_fn=guard_mismatch_fn,
-            )
+            try:
+                state_res = parent_nextlink_state_fn(
+                    parent_uuid,
+                    child_short,
+                    expected_prev,
+                    parent_guard=parent_guard,
+                    guard_mismatch_fn=guard_mismatch_fn,
+                )
+            except TypeError:
+                # Isolated fixtures may still provide the original narrow
+                # callback; production services implement the typed protocol.
+                state_res = parent_nextlink_state_fn(parent_uuid, child_short, expected_prev)
         if state_res.state == "ok":
             # Keep the optimistic read and Taskwarrior mutation coupled. The
             # filesystem lock serializes Nautical writers, while this selector

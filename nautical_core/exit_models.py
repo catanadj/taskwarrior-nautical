@@ -12,6 +12,9 @@ class ExitDrainStateProtocol(Protocol):
     requeue: list[dict[str, Any]]
     errors: int
     sqlite_acked_claims: dict[int, str]
+    lifecycle_defer_verification: bool
+    lifecycle_batch_discovery: bool
+    lifecycle_batch_plan: LifecycleBatchPlan | None
 
     def dead_letter(self, entry: dict[str, Any], reason: str) -> None: ...
     def record_lock_event(self, idx: int) -> bool: ...

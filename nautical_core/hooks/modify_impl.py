@@ -4199,7 +4199,7 @@ def _render_lifecycle_result(result, task: dict) -> None:
     intent_id = str(getattr(result, "spawn_intent_id", "") or "").strip()
     if intent_id:
         rows.append(("Intent", intent_id))
-    _panel(title, rows, kind="warning" if state == "manual_review" else "error", task=task)
+    _panel(title, rows, kind="warning" if state == "manual_review" else "error")
 
 
 def _non_completion_anchor_error_message(anchor_expr: str, default_msg: str) -> str:

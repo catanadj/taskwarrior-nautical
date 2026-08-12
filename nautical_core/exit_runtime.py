@@ -15,6 +15,7 @@ from nautical_core.exit_models import (
     ExitImportCallback,
     ExitLockErrorCallback,
     ExitParentNextlinkStateCallback,
+    ExitParentNextlinkStateResult,
     ExitParentUpdateCallback,
     ExitPrecheckServices,
     ExitRequeueCallback,
@@ -58,10 +59,34 @@ class ExitRuntimeServices:
 
 
 def build_precheck_services(runtime: ExitRuntimeServices) -> ExitPrecheckServices:
+    def parent_nextlink_state(
+        parent_uuid: str,
+        child_short: str,
+        expected_prev: str | None = None,
+        *,
+        prefer_cache: bool = True,
+        parent_guard: dict[str, Any] | None = None,
+        guard_mismatch_fn: Any = None,
+    ) -> ExitParentNextlinkStateResult:
+        try:
+            return runtime.parent_nextlink_state(
+                parent_uuid,
+                child_short,
+                expected_prev,
+                prefer_cache=prefer_cache,
+                parent_guard=parent_guard,
+                guard_mismatch_fn=guard_mismatch_fn,
+            )
+        except TypeError:
+            return runtime.parent_nextlink_state(
+                parent_uuid,
+                child_short,
+                expected_prev,
+                prefer_cache=prefer_cache,
+            )
+
     return ExitPrecheckServices(
-        parent_nextlink_state=lambda parent_uuid, child_short, expected_prev=None, *, prefer_cache=True: runtime.parent_nextlink_state(
-            parent_uuid, child_short, expected_prev, prefer_cache=prefer_cache
-        ),
+        parent_nextlink_state=parent_nextlink_state,
         export_uuid=lambda uuid_str, *, prefer_cache=True: runtime.export_uuid(uuid_str, prefer_cache=prefer_cache),
         clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,
         is_lock_error=runtime.is_lock_error,

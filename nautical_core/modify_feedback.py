@@ -159,7 +159,7 @@ def format_line_preview(
     line = " · ".join(seg for seg in segments if seg).replace("✓ · ", "✓ ", 1)
     if child_until_dt:
         line += f" [magenta]· expires {format_local(child_until_dt)}[/]"
-    cap_parts = []
+    cap_parts: list[str] = []
     if cap_no:
         cap_parts.extend((f"last link #{cap_no}", f"{max(0, cap_no - link_no)} left"))
     if until_dt:
@@ -690,7 +690,7 @@ def render_anchor_completion_feedback(
         )
         return
 
-    fb = []
+    fb: list[tuple[str, Any]] = []
     _append_lifecycle_result_row(fb, feedback.lifecycle_result)
     fb.append((anchor_label, f"{expr_str}  {mode_tag}"))
     if omit_raw:
@@ -864,7 +864,7 @@ def render_cp_completion_feedback(
         )
         return
 
-    fb = []
+    fb: list[tuple[str, Any]] = []
     _append_lifecycle_result_row(fb, feedback.lifecycle_result)
     delta = core.humanize_delta(feedback.now_utc, feedback.child_due, use_months_days=False)
     fb.append(("Period", feedback.new.get("cp")))

@@ -580,7 +580,6 @@ def _build_reconcile_plan_unscoped(
 
     child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"
     parent_short = short_uuid(parent.get("uuid"))
-    lifecycle_plan: LifecyclePlan | None = None
     try:
         candidate = RecurrenceCandidate(
             child_due=child_due,

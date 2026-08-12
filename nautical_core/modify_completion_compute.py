@@ -35,7 +35,8 @@ from nautical_core.modify_lifecycle import apply_terminal_transition
 
 def _terminal_diagnostic(new: dict[str, Any], next_no: int, failure_kind: str) -> CompletionLifecycleDiagnostic:
     try:
-        parent_link = int(new.get("link")) if new.get("link") is not None else None
+        raw_link = new.get("link")
+        parent_link = int(raw_link) if isinstance(raw_link, (str, int, float)) else None
     except (TypeError, ValueError):
         parent_link = None
     chain_id = str(new.get("chainID") or "").strip()

@@ -471,56 +471,45 @@ def _anchor_preview_details(expr: str, count: int = 5) -> tuple[str, list[str], 
             natural = ""
 
     if dnf:
-        after_date = core.to_local(core.now_utc()).date()
-        seed = after_date
-        for _ in range(count):
-            try:
-                nxt, _meta = _next_after_expr_pair(
-                    dnf, after_date, default_seed=seed, seed_base="preview"
-                )
-            except Exception as exc:
-                exhausted_type = getattr(core, "OccurrenceSearchExhausted", None)
-                if exhausted_type is not None and isinstance(exc, exhausted_type) and exc.is_date_limit:
-                    terminal_note = _format_runtime_error(exc)
-                    break
-                raise
-            if not nxt:
-                break
-            time_slots = core._import_sibling("time_slots")
-            recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(chain_id="preview")
-            slots = []
-            for term in dnf:
-                if not all(core.atom_matches_on(atom, nxt, seed, seed_base="preview") for atom in term):
-                    continue
-                for atom in term:
-                    mods = atom.get("mods") or {}
-                    if mods.get("time_random"):
-                        slots = time_slots.resolve_time_slots_with_offsets(
-                            mods,
-                            nxt,
-                            config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                            to_local=core.to_local,
-                            context=recurrence_context,
-                        )
-                    elif mods.get("t"):
-                        slots = time_slots.resolve_time_slots(
-                            mods,
-                            nxt,
-                            config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                            to_local=core.to_local,
-                        )
-                        break
-                if slots:
-                    break
-            if slots:
-                for slot in slots:
-                    if len(next_dates) >= count:
-                        break
-                    dt_utc = core.build_local_datetime(nxt, slot)
-                    next_dates.append(core.fmt_dt_local(dt_utc))
-            else:
-                next_dates.append(str(nxt))
-            after_date = nxt
+        from nautical_core.occurrence_outcomes import ExhaustedOccurrence
+        from nautical_core.recurrence_context import RecurrenceContext
+        from nautical_core.scheduler_cursor import OccurrenceCursor
+        from nautical_core.scheduler_service import SchedulerService
+
+        now_local = core.to_local(core.now_utc())
+        # Navigator previews are date-oriented: start after today's final
+        # minute, matching the historical next-date explain behavior rather
+        # than exposing a partial set of today's time slots.
+        after_local = core.build_local_datetime(now_local.date(), (23, 59))
+        context = RecurrenceContext(
+            chain_id="preview",
+            timezone=getattr(core, "_LOCAL_TZ", None),
+            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        )
+        service = SchedulerService.from_task({"anchor": expr, "chainID": "preview"}, context=context)
+        try:
+            result = service.collect(
+                OccurrenceCursor(
+                    after_local,
+                    inclusive=False,
+                    timezone=context.timezone,
+                ),
+                limit=count,
+                fallback_hhmm=(9, 0),
+                default_seed_date=now_local.date(),
+                max_iterations=max(512, count * 8),
+                max_file_skips=max(512, count * 8),
+            )
+        except Exception:
+            raise
+        if isinstance(result.terminal, ExhaustedOccurrence):
+            terminal_note = _format_runtime_error(result.terminal.error)
+        next_dates = [
+            core.fmt_dt_local(occurrence.local_datetime.astimezone(datetime.timezone.utc))
+            for occurrence in result.occurrences
+            if occurrence.local_datetime is not None
+        ]
 
     return natural, next_dates[:count], terminal_note
 
@@ -2419,6 +2408,9 @@ class TaskAnalyzer:
             except Exception as exc:
                 self._record_projection_warning(f"Anchor file: {_format_runtime_error(exc)}")
 
+        if anchor_out and file_out:
+            file_dates = {value.date() for value in file_out}
+            anchor_out = [value for value in anchor_out if value.date() not in file_dates]
         out = sorted(set(anchor_out + file_out))
         if len(out) > limit:
             out = out[:limit]

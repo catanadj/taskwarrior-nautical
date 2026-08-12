@@ -1891,17 +1891,6 @@ def _strip_none_and_cast(obj: dict):
         out[k] = v
     return out
 
-def _format_line_cap(base_no: int, cap_no: int | None, until_dt: datetime | None, until_no: int | None) -> str:
-    parts = []
-    if cap_no:
-        left = max(0, cap_no - base_no)
-        parts.append(f"last link #{cap_no}")
-        parts.append(f"{left} left")
-    if until_dt:
-        until_txt = _fmtlocal(until_dt)
-        parts.append(f"end point {until_txt}")
-    return (" · " + " · ".join(parts)) if parts else ""
-
 def _format_line_preview(
     link_no: int,
     task: dict,
@@ -1916,39 +1905,25 @@ def _format_line_preview(
     kind: str = "cp",
     minimal: bool = False,
 ) -> str:
-    due_local = _fmtlocal(child_due_utc) if child_due_utc else "—"
-    next_glyph = "⚓" if str(kind or "").lower() == "anchor" else "⛓"
-    lead = f"#{link_no} ✓"
-    if minimal:
-        segments = [lead, f"next {next_glyph}", due_local]
-        line = " ".join(seg for seg in segments if seg)
-        return line.strip()
-    cur_due = _dtparse(task.get("due"))
-    cur_end = _dtparse(task.get("end"))
-    delta_txt = core.strip_rich_markup(_fmt_on_time_delta(cur_due, cur_end) or "").strip()
-    if delta_txt.startswith("(") and delta_txt.endswith(")"):
-        delta_txt = delta_txt[1:-1].strip()
-    due_delta = _human_delta(now_utc, child_due_utc, False)
-    due_label = "scheduled" if child_field == "scheduled" else "due"
-    if due_delta.startswith("in "):
-        due_delta = due_label + " " + due_delta
-    elif not due_delta.startswith("overdue by "):
-        due_delta = due_label + " " + due_delta
-    segments = [lead]
-    if delta_txt:
-        segments.append(f"[dim]{delta_txt}[/]")
-    segments.append(f"next {next_glyph}")
-    segments.append(due_local)
-    if due_delta:
-        segments.append(f"[dim]({due_delta})[/]")
-    line = " · ".join(seg for seg in segments if seg)
-    line = line.replace("✓ · ", "✓ ", 1)
-    if child_until_dt:
-        line += f" [magenta]· expires {_fmtlocal(child_until_dt)}[/]"
-    cap_txt = _format_line_cap(link_no, cap_no, until_dt, until_no)
-    if cap_txt:
-        line += f"[dim]{cap_txt}[/]"
-    return line.strip()
+    return _module("modify_feedback").format_line_preview(
+        link_no,
+        task,
+        child_due_utc,
+        child_short,
+        now_utc,
+        child_field=child_field,
+        cap_no=cap_no,
+        until_dt=until_dt,
+        until_no=until_no,
+        child_until_dt=child_until_dt,
+        kind=kind,
+        minimal=minimal,
+        core=core,
+        format_local=_fmtlocal,
+        parse_datetime=_dtparse,
+        on_time_delta=_fmt_on_time_delta,
+        human_delta=_human_delta,
+    )
 
 
 # Helper to categorize subprocess failures

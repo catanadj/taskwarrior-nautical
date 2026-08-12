@@ -113,6 +113,62 @@ def format_next_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, s
     return out or rows
 
 
+def format_line_preview(
+    link_no: int,
+    task: dict,
+    child_due_utc: Any,
+    child_short: str,
+    now_utc: Any,
+    *,
+    child_field: str = "due",
+    cap_no: int | None = None,
+    until_dt: Any = None,
+    until_no: int | None = None,
+    child_until_dt: Any = None,
+    kind: str = "cp",
+    minimal: bool = False,
+    core: Any,
+    format_local,
+    parse_datetime,
+    on_time_delta,
+    human_delta,
+) -> str:
+    """Render one compact completion preview line."""
+    due_local = format_local(child_due_utc) if child_due_utc else "—"
+    next_glyph = "⚓" if str(kind or "").lower() == "anchor" else "⛓"
+    lead = f"#{link_no} ✓"
+    if minimal:
+        return " ".join((lead, f"next {next_glyph}", due_local)).strip()
+    cur_due = parse_datetime(task.get("due"))
+    cur_end = parse_datetime(task.get("end"))
+    delta_text = core.strip_rich_markup(on_time_delta(cur_due, cur_end) or "").strip()
+    if delta_text.startswith("(") and delta_text.endswith(")"):
+        delta_text = delta_text[1:-1].strip()
+    due_delta = human_delta(now_utc, child_due_utc, False)
+    due_label = "scheduled" if child_field == "scheduled" else "due"
+    if due_delta.startswith("in "):
+        due_delta = due_label + " " + due_delta
+    elif not due_delta.startswith("overdue by "):
+        due_delta = due_label + " " + due_delta
+    segments = [lead]
+    if delta_text:
+        segments.append(f"[dim]{delta_text}[/]")
+    segments.extend((f"next {next_glyph}", due_local))
+    if due_delta:
+        segments.append(f"[dim]({due_delta})[/]")
+    line = " · ".join(seg for seg in segments if seg).replace("✓ · ", "✓ ", 1)
+    if child_until_dt:
+        line += f" [magenta]· expires {format_local(child_until_dt)}[/]"
+    cap_parts = []
+    if cap_no:
+        cap_parts.extend((f"last link #{cap_no}", f"{max(0, cap_no - link_no)} left"))
+    if until_dt:
+        cap_parts.append(f"end point {format_local(until_dt)}")
+    if cap_parts:
+        line += f"[dim] · {' · '.join(cap_parts)}[/]"
+    return line.strip()
+
+
 def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequence=None, cp_sequence_interval_for_link=None) -> str:
     if callable(cp_sequence_interval_for_link):
         td = cp_sequence_interval_for_link(

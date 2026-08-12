@@ -5230,13 +5230,18 @@ def _completion_build_and_spawn_child(
 
 
 def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResult | None":
-    new_cp, new_anchor, new_anchor_file = _completion_validate_cp_and_anchor(old, new)
-    _preserve_cp_relative_offsets_on_due_change(old, new, new_cp)
+    # Prepare carry-forward fields on an isolated snapshot.  A malformed
+    # carry must never leave the Taskwarrior response partially rewritten.
+    prepared = dict(new)
+    new_cp, new_anchor, new_anchor_file = _completion_validate_cp_and_anchor(old, prepared)
+    _preserve_cp_relative_offsets_on_due_change(old, prepared, new_cp)
     if any(str(old.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
         recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
-        _preserve_native_until_on_target_change(old, new, recurrence_kind)
-    _validate_native_until_after_target_or_fail(new)
-    _validate_native_until_anchor_slots_or_fail(new)
+        _preserve_native_until_on_target_change(old, prepared, recurrence_kind)
+    _validate_native_until_after_target_or_fail(prepared)
+    _validate_native_until_anchor_slots_or_fail(prepared)
+    new.clear()
+    new.update(prepared)
     now_utc = core.now_utc()
     ctx = _completion_preflight_context(new, now_utc)
     if ctx is None:

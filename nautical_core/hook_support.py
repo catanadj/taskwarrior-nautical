@@ -58,7 +58,9 @@ class LookupResult:
 
 
 def build_task_cmd_prefix(*, use_rc_data_location: bool, tw_data_dir: object) -> list[str]:
-    cmd = ["task"]
+    # Test-only binary injection keeps failure-path benchmarks deterministic
+    # without changing the production Taskwarrior command contract.
+    cmd = [os.environ.get("NAUTICAL_BENCH_TASK_BIN", "task")]
     if use_rc_data_location:
         cmd.append(f"rc.data.location={tw_data_dir}")
     return cmd

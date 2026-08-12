@@ -2772,6 +2772,7 @@ def _requeue_or_dead_letter_for_lock(entry: dict, idx: int, state: _DrainState) 
 def _handle_lifecycle_stage_failure(entry: dict, idx: int, state: _DrainState, result) -> bool:
     """Keep a claimed plan retryable, or quarantine a structurally invalid one."""
     error = str(getattr(result, "err", "") or "lifecycle stage update failed")
+    _diag(f"lifecycle stage update failed for queue entry {entry.get('__queue_id')}: {error}")
     if bool(getattr(result, "lock_busy", False)):
         return _requeue_or_dead_letter_for_lock(entry, idx, state)
     if "claim ownership lost" in error.lower():
@@ -2966,11 +2967,20 @@ def _execute_lifecycle_queue_entry(ctx, state):
             else:
                 state.requeue.append(ctx.entry)
             return False
-
-    def planned_decision():
-        if batch_plan is None:
-            return None
-        return batch_plan.by_intent().get(ctx.spawn_intent_id)
+        # A partial batch import may have created a child before Taskwarrior
+        # returned failure. On retry, promote that durable plan before the
+        # executor advances it to linkage/verification.
+        if (
+            isinstance(batch_decision.child, dict)
+            and plan.stage is lifecycle_models.ExecutionStage.PERSISTED
+            and not (
+                batch_decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
+                and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported
+            )
+        ):
+            child_stage = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.CHILD_PRESENT)
+            if not child_stage.ok:
+                return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, child_stage)
         if (
             batch_decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
             and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_import_failed
@@ -2982,6 +2992,11 @@ def _execute_lifecycle_queue_entry(ctx, state):
             else:
                 state.requeue.append(ctx.entry)
             return False
+
+    def planned_decision():
+        if batch_plan is None:
+            return None
+        return batch_plan.by_intent().get(ctx.spawn_intent_id)
 
     def stage(stage):
         result = _advance_lifecycle_stage(ctx.entry, stage)
@@ -3209,6 +3224,10 @@ def _execute_lifecycle_queue_entry(ctx, state):
         if not child_stage.ok:
             return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, child_stage)
     outcome = lifecycle_executor.LifecycleTransitionExecutor(Services()).execute(plan)
+    _diag(
+        f"lifecycle transition intent={ctx.spawn_intent_id} stage={plan.stage.value} "
+        f"outcome={outcome.kind.value} reason={outcome.reason or 'none'}"
+    )
     if outcome.kind in {
         lifecycle_models.LifecycleOutcomeKind.RETRYABLE,
     }:

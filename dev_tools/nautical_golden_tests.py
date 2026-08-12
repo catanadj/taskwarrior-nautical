@@ -7482,7 +7482,7 @@ def test_on_modify_chain_export_timeout_scales():
     try:
         mod = _load_hook_module(hook, "_nautical_chain_export_timeout_test")
         mod._reset_modify_runtime_state()
-        mod._set_chain_cache("cid", [{}] * 250)
+        mod._lifecycle_read_service().replace_chain_cache("cid", [{}] * 250)
         mod._tw_lock_recent = lambda: False
         captured = {}
 
@@ -7736,7 +7736,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     mod = _load_hook_module(hook, "_nautical_chain_cache_thread_safety_test")
 
     full_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-    mod._set_chain_cache(
+    mod._lifecycle_read_service().replace_chain_cache(
         "cid-a",
         [{"uuid": full_uuid, "link": 1, "entry": "2026-01-01T00:00:00Z"}],
     )
@@ -7748,7 +7748,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     def _writer(chain_id: str):
         try:
             for i in range(300):
-                mod._set_chain_cache(
+                mod._lifecycle_read_service().replace_chain_cache(
                     chain_id,
                     [{"uuid": full_uuid, "link": 1, "entry": f"2026-01-01T00:00:{i % 60:02d}Z"}],
                 )
@@ -7784,7 +7784,7 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_get_chain_export_cached_filter_test")
 
-    mod._set_chain_cache(
+    mod._lifecycle_read_service().replace_chain_cache(
         "cid-1",
         [
             {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1, "status": "completed", "entry": "2026-01-01T00:00:00Z"},
@@ -7802,7 +7802,9 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
     orig = mod.tw_export_chain
     mod.tw_export_chain = _tw_export_chain_fail
     try:
-        rows = mod._get_chain_export("cid-1", extra="link:2 status.not:deleted")
+        rows = mod._lifecycle_read_service().get_chain_export(
+            "cid-1", extra="link:2 status.not:deleted"
+        )
     finally:
         mod.tw_export_chain = orig
 
@@ -9212,8 +9214,6 @@ def test_on_modify_chain_export_cache_key_includes_params():
     """Chain export cache should include since/extra in its key."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cache_key_test")
-    if not hasattr(mod, "_tw_export_chain_cached_key"):
-        raise AssertionError("on-modify hook does not expose chain cache helper")
     calls = []
 
     def _fake(chain_id: str, since=None, extra=None, env=None, limit=None):
@@ -9221,13 +9221,14 @@ def test_on_modify_chain_export_cache_key_includes_params():
         return [{"uuid": "x"}]
 
     mod.tw_export_chain = _fake
-    mod._tw_export_chain_cached_key.cache_clear()
+    mod._module("lifecycle_read_service").clear_cached_chain_exports()
     mod._reset_modify_runtime_state()
 
     since = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    _ = mod._get_chain_export("abc", since=since, extra="status:pending")
-    _ = mod._get_chain_export("abc", since=since, extra="status:pending")
-    _ = mod._get_chain_export("abc", since=since, extra="status:completed")
+    service = mod._lifecycle_read_service()
+    _ = service.get_chain_export("abc", since=since, extra="status:pending")
+    _ = service.get_chain_export("abc", since=since, extra="status:pending")
+    _ = service.get_chain_export("abc", since=since, extra="status:completed")
     expect(len(calls) == 2, f"cache key ignored params, calls={calls}")
 
 
@@ -9242,9 +9243,10 @@ def test_on_modify_chain_export_malformed_json_fails_closed_without_caching():
         return True, "{not-json", ""
 
     mod._run_task = _fake_run_task
-    mod._tw_export_chain_cached_key.cache_clear()
-    first = mod._get_chain_export("abc")
-    second = mod._get_chain_export("abc")
+    mod._module("lifecycle_read_service").clear_cached_chain_exports()
+    service = mod._lifecycle_read_service()
+    first = service.get_chain_export("abc")
+    second = service.get_chain_export("abc")
     expect(first is None and second is None, f"malformed export should fail closed: {first!r}, {second!r}")
     expect(len(calls) == 2, f"malformed export was cached as empty: calls={calls}")
 
@@ -19562,9 +19564,6 @@ def test_on_modify_completion_defers_chain_export_until_after_preflight():
     mod._completion_validate_cp_and_anchor = lambda *_a, **_k: ("P1D", "", "")
     mod._completion_preflight_context = lambda *_a, **_k: None
     mod._completion_compute_next_and_limits = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("compute should not run after preflight failure"))
-    mod._get_chain_export = lambda *_a, **_k: called.__setitem__("chain_export", called["chain_export"] + 1) or (_ for _ in ()).throw(AssertionError("chain export should not run before preflight succeeds"))
-    mod._build_chain_indexes = lambda chain: (None, None)
-    mod._set_chain_cache = lambda *_a, **_k: None
     mod._export_uuid_short_cached = SimpleNamespace(cache_clear=lambda: None)
     mod._SHOW_ANALYTICS = True
     mod._SHOW_TIMELINE_GAPS = False
@@ -27714,7 +27713,7 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
             ]
         return []
 
-    mod._get_chain_export = _get_chain_export_stub
+    mod._lifecycle_read_service().get_chain_export = _get_chain_export_stub
 
     old = {
         "uuid": "00000000-0000-0000-0000-000000000111",
@@ -30939,7 +30938,7 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     mod._render_cp_completion_feedback = lambda **_k: None
     mod._chain_health_advice = lambda *_a, **_k: None
     mod._append_next_wait_sched_rows = lambda *_a, **_k: None
-    mod._tw_export_chain_cached_key.cache_clear()
+    mod._module("lifecycle_read_service").clear_cached_chain_exports()
     mod._export_uuid_short_cached.cache_clear()
     mod._reset_modify_runtime_state()
 
@@ -30968,7 +30967,7 @@ def test_on_modify_read_query_broker_deduplicates_and_invalidates_exports():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_read_query_broker_test")
     mod._reset_modify_runtime_state()
-    mod._tw_export_chain_cached_key.cache_clear()
+    mod._module("lifecycle_read_service").clear_cached_chain_exports()
     calls = {"count": 0}
     original_run_task = mod._run_task
     try:
@@ -31026,9 +31025,10 @@ def test_on_modify_completion_snapshot_reuses_full_chain_read():
         mod._run_task = unexpected_run_task
         snapshot = mod._completion_chain_snapshot("reuse01", 1, 2)
         expect(snapshot.loaded and snapshot.coverage == "full", f"unexpected full snapshot: {snapshot!r}")
-        reused = mod._get_chain_export("reuse01")
+        service = mod._lifecycle_read_service()
+        reused = service.get_chain_export("reuse01")
         expect(reused == rows, f"full snapshot was not reused: {reused!r}")
-        filtered = mod._get_chain_export("reuse01", extra="status:completed")
+        filtered = service.get_chain_export("reuse01", extra="status:completed")
         expect(filtered == [], f"safe in-memory snapshot filter returned wrong rows: {filtered!r}")
         expect(calls["count"] == 1, f"full snapshot was exported more than once: {calls}")
     finally:
@@ -31061,7 +31061,7 @@ def test_on_modify_cp_completion_spawns_next_link():
     )
     # A confirmed empty chain is distinct from an unavailable Taskwarrior
     # export; keep this spawn-path test deterministic and network-free.
-    mod._get_chain_export = lambda *_a, **_k: []
+    mod._lifecycle_read_service().get_chain_export = lambda *_a, **_k: []
 
     old = {
         "uuid": "00000000-0000-0000-0000-000000000111",

@@ -2162,7 +2162,7 @@ def tw_export_chain_required(seed_task, env=None):
             "Run dev_tools/nautical_backfill_chainid.py, then retry."
         )
     if env is None:
-        rows = _get_chain_export(chain_id)
+        rows = _lifecycle_read_service().get_chain_export(chain_id)
         if rows is None:
             raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
         return rows
@@ -2520,21 +2520,10 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
 def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] | None = None) -> list[dict]:
     return _lifecycle_read_service().collect_prev_two(
         current_task,
-        get_chain_export=_get_chain_export,
+        get_chain_export=lambda chain_id: _lifecycle_read_service().get_chain_export(chain_id),
         panel_chain_by_link=_modify_chain_state().panel_chain_by_link,
         panel_chain_snapshot_loaded=_modify_chain_state().panel_chain_snapshot_loaded,
         chain_by_link=chain_by_link,
-    )
-
-
-def _tw_export_chain_cached_key(chain_id: str, since_key: str, extra_key: str, limit: int) -> tuple[dict, ...]:
-    """Compatibility adapter for the lifecycle read service cache."""
-    return _module("lifecycle_read_service").cached_chain_export(
-        _chain_export_for_cache,
-        chain_id,
-        since_key,
-        extra_key,
-        limit,
     )
 
 
@@ -2552,22 +2541,6 @@ def _chain_export_for_cache(
     if not ok:
         raise RuntimeError(error or "chain export unavailable")
     return tuple(rows)
-
-
-_tw_export_chain_cached_key.cache_clear = (  # type: ignore[attr-defined]
-    lambda: _module("lifecycle_read_service").clear_cached_chain_exports()
-)
-
-
-def _tw_export_chain_cached(chain_id: str, since: datetime | None, extra: str | None, limit: int) -> tuple[dict, ...]:
-    since_key = since.isoformat() if isinstance(since, datetime) else ""
-    extra_key = str(extra or "")
-    return _tw_export_chain_cached_key(chain_id, since_key, extra_key, limit)
-
-
-def _chain_read_key(chain_id: str, since: datetime | None, extra: str | None, limit: int) -> tuple:
-    return _module("lifecycle_read_service").chain_read_key(chain_id, since, extra, limit)
-
 
 def _cached_chain_token_match(task: dict, token: str) -> bool:
     if not isinstance(task, dict) or not isinstance(token, str) or not token:
@@ -2624,35 +2597,6 @@ def _lifecycle_read_service():
     return service
 
 
-def _filter_cached_chain_rows(chain: list[dict], *, extra: str | None, limit: int | None) -> list[dict] | None:
-    return _lifecycle_read_service().filter_rows(chain or [], extra=extra, limit=limit)
-
-
-def _filter_full_snapshot_rows(chain: list[dict], *, extra: str | None, limit: int | None) -> list[dict] | None:
-    """Filter a full snapshot only for predicates with equivalent semantics."""
-    return _lifecycle_read_service().filter_full_snapshot(chain or [], extra=extra, limit=limit)
-
-
-def _get_chain_export(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None) -> list[dict] | None:
-    """Return a safe list copy of a chain export (cached when env is None)."""
-    if env is not None:
-        ok, rows, _error = _tw_export_chain_checked(
-            chain_id,
-            since=since,
-            extra=extra,
-            env=env,
-            limit=_MAX_CHAIN_WALK,
-        )
-        return rows if ok else None
-    return _lifecycle_read_service().get_chain_export(
-        chain_id,
-        since=since,
-        extra=extra,
-        read_query_missing=_READ_QUERY_MISSING,
-        read_query_key=_chain_read_key,
-    )
-
-
 def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
     hook_support = _module("hook_support", required=False)
     if getattr(chain_snapshot, "is_unavailable", False) and hook_support is not None:
@@ -2663,23 +2607,12 @@ def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
         parent_task,
         next_no,
         export_uuid_short_cached=_export_uuid_short_lookup,
-        get_chain_export=_get_chain_export,
+        get_chain_export=lambda chain_id, **kwargs: _lifecycle_read_service().get_chain_export(
+            chain_id, **kwargs
+        ),
         snapshot_rows=getattr(chain_snapshot, "rows", None),
         snapshot_loaded=bool(getattr(chain_snapshot, "loaded", False)),
     )
-
-
-def _build_chain_indexes(chain: list[dict]) -> tuple[dict[int, list[dict]], dict[str, dict]]:
-    """Build link-index and short-uuid index for quick in-memory lookups."""
-    indexes = _lifecycle_read_service().build_indexes(chain or [])
-    return indexes.by_link, indexes.by_short
-
-
-def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
-    """Set per-run chain cache to avoid repeated task exports."""
-    chain_copy = list(chain or [])
-    _lifecycle_read_service().replace_chain_cache(chain_id, chain_copy)
-    _diag_count("chain_cache_seeded")
 
 
 def _seed_runtime_lookup_task(task: dict | None, *, lookup_short: str | None = None) -> dict | None:
@@ -2703,16 +2636,6 @@ def _seed_runtime_lookup_task(task: dict | None, *, lookup_short: str | None = N
 def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
     for task in tasks:
         _seed_runtime_lookup_task(task)
-
-
-def _merge_spawned_child_into_chain(chain: list[dict], parent_task: dict, child_task: dict, child_short: str) -> list[dict]:
-    return _lifecycle_read_service().merge_spawned_child(
-        chain or [],
-        parent_task=parent_task,
-        child_task=child_task,
-        child_short=child_short,
-        short_uuid=_short,
-    )
 
 
 # ------------------------------------------------------------------------------
@@ -3969,21 +3892,6 @@ def _chain_export_timeout(chain_id: str) -> float:
         timeout = max_t
     return timeout
 
-def _tw_export_chain_args(
-    chain_id: str,
-    *,
-    since: datetime | None,
-    extra: str | None,
-    limit: int | None,
-) -> list[str] | None:
-    return _lifecycle_read_service().build_export_args(
-        chain_id,
-        since=since,
-        extra=extra,
-        limit=limit,
-    )
-
-
 def _tw_export_chain_success(elapsed: float) -> None:
     global _CHAIN_EXPORT_TIMEOUT_FLOOR
     if elapsed > 0:
@@ -4025,9 +3933,15 @@ def _tw_export_chain_parse(out: str) -> list[dict]:
         return []
 
 
-def _run_checked_chain_export(args: list[str], env, timeout: float):
-    """Run and validate one Taskwarrior chain export for the read service."""
-    lifecycle_read_service = _module("lifecycle_read_service")
+def _tw_export_chain_checked(
+    chain_id: str,
+    since: datetime | None = None,
+    extra: str | None = None,
+    env=None,
+    limit: int | None = None,
+) -> tuple[bool, list[dict], str]:
+    """Compatibility facade for the typed lifecycle chain-read service."""
+    service = _lifecycle_read_service()
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
         def run_task_result(command, **kwargs):
@@ -4049,44 +3963,28 @@ def _run_checked_chain_export(args: list[str], env, timeout: float):
             except Exception as exc:
                 return False, [], f"Taskwarrior export returned invalid JSON: {exc}"
 
-    return _lifecycle_read_service().run_checked_export(
-        _chain_id_from_export_args(args),
-        args,
-        env=env,
-        timeout=timeout,
-        run_task_result=run_task_result,
-        parse_result=parse_result,
-        on_failure=lambda error, export_timeout: _tw_export_chain_failure(
-            _chain_id_from_export_args(args), error, export_timeout
-        ),
-        on_success=_tw_export_chain_success,
-    )
+    def run_export(args, run_env, timeout):
+        return service.run_checked_export(
+            chain_id,
+            args,
+            env=run_env,
+            timeout=timeout,
+            run_task_result=run_task_result,
+            parse_result=parse_result,
+            on_failure=lambda error, export_timeout: _tw_export_chain_failure(
+                chain_id, error, export_timeout
+            ),
+            on_success=_tw_export_chain_success,
+        )
 
-
-def _chain_id_from_export_args(args: list[str]) -> str:
-    for arg in args:
-        value = str(arg)
-        if value.startswith("chainID:"):
-            return value.split(":", 1)[1]
-    return ""
-
-
-def _tw_export_chain_checked(
-    chain_id: str,
-    since: datetime | None = None,
-    extra: str | None = None,
-    env=None,
-    limit: int | None = None,
-) -> tuple[bool, list[dict], str]:
-    """Compatibility adapter for the typed lifecycle chain-read service."""
-    result = _lifecycle_read_service().checked_export(
+    result = service.checked_export(
         chain_id,
         since=since,
         extra=extra,
         env=env,
         limit=limit,
-        build_args=_lifecycle_read_service().build_export_args,
-        run_export=_run_checked_chain_export,
+        build_args=service.build_export_args,
+        run_export=run_export,
         timeout_for_chain=_chain_export_timeout,
         read_query_missing=_READ_QUERY_MISSING,
     )
@@ -5344,9 +5242,11 @@ def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResul
         return computed
     snapshot = ctx.chain_snapshot
     preloaded_chain = list(snapshot.rows)
-    preloaded_chain_by_link, preloaded_chain_by_short = _build_chain_indexes(preloaded_chain)
+    indexes = _lifecycle_read_service().build_indexes(preloaded_chain)
+    preloaded_chain_by_link, preloaded_chain_by_short = indexes.by_link, indexes.by_short
     if snapshot.mode == "full" and snapshot.loaded:
-        _set_chain_cache(chain_id, preloaded_chain)
+        _lifecycle_read_service().replace_chain_cache(chain_id, preloaded_chain)
+        _diag_count("chain_cache_seeded")
         _export_uuid_short_cached.cache_clear()
     modify_completion_flow = importlib.import_module("nautical_core.modify_completion_flow")
     services = modify_completion_flow.CompletionFinalizeServices(

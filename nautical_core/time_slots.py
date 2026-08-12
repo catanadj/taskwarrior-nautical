@@ -46,6 +46,19 @@ def resolve_time_slots(
         offset_minutes = int(value.get("time_offset_minutes", 0) or 0)
         value = value.get("t")
 
+    # Parsed DNF modifiers commonly carry clock pairs as JSON-style lists
+    # (``[[9, 0], [12, 0]]``), while callers may also pass tuple pairs.
+    # Treat one numeric pair as a slot before recursing through a list of
+    # slots; otherwise the two integers are mistaken for separate values.
+    if isinstance(value, list) and len(value) == 2 and all(
+        isinstance(part, (int, str)) and not isinstance(part, bool) for part in value
+    ):
+        try:
+            slot = (int(value[0]), int(value[1]))
+        except (TypeError, ValueError):
+            return []
+        return [_apply_offset(slot, offset_minutes)]
+
     if isinstance(value, list):
         slots: list[tuple[int, int]] = []
         for item in value:

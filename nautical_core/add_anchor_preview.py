@@ -518,31 +518,8 @@ def _collect_included_with_provider(
     return_occurrences: bool = False,
     anchor_file_provider: Any | None = None,
     evaluator: Any | None = None,
-    scheduler_service: Any | None = None,
 ) -> list[datetime] | list[Occurrence]:
     """Collect included occurrences through the typed provider boundary."""
-    if scheduler_service is not None:
-        from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
-
-        result = scheduler_service.collect_request(
-            OccurrenceRangeRequest(
-                OccurrenceCursor(
-                    after_local_dt,
-                    inclusive=inclusive,
-                    timezone=getattr(scheduler_service.session.evaluator.context, "timezone", None),
-                ),
-                limit=limit,
-            )
-        )
-        if result.failure is not None:
-            raise RuntimeError(f"Anchor preview scheduling {result.status}: {result.failure.reason}")
-        collected = list(result.occurrences)
-        if return_occurrences:
-            return collected
-        return OccurrenceBatch(
-            [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None],
-            terminal=result.terminal,
-        )
     if evaluator is not None:
         collected = evaluator.collect_after(
             after_local_dt,
@@ -1133,7 +1110,6 @@ def handle_anchor_preview_on_add(
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
-            scheduler_service=scheduler_service,
         )
         if not occurrences:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
@@ -1193,7 +1169,6 @@ def handle_anchor_preview_on_add(
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
-            scheduler_service=scheduler_service,
         )
         if not occurrences:
             error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])

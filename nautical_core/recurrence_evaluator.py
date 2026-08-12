@@ -489,6 +489,7 @@ class RecurrenceEvaluator:
             raise ValueError("Anchor-file omission scan limit must be a positive integer.")
         from . import anchor_inclusion
         from .occurrence_provider import _require_forward_progress
+        from .timeutil import compare_datetimes
         next_occurrence_after_local_dt = self._default_next_occurrence_after_local_dt
         anchor_file_provider = anchor_file_provider or self._anchor_file_provider_for(fallback_hhmm)
 
@@ -518,8 +519,23 @@ class RecurrenceEvaluator:
             )
             if event is None or event.local_datetime is None:
                 return None
+            if first:
+                try:
+                    if compare_datetimes(event.local_datetime, cursor) < 0:
+                        raise ValueError("Occurrence event provider returned an event before its cursor.")
+                except (TypeError, ValueError) as exc:
+                    if isinstance(exc, ValueError) and str(exc).startswith("Occurrence event provider"):
+                        raise
+                    raise ValueError("Occurrence event provider returned an incomparable datetime.") from exc
             if include_omitted or not event.omitted:
                 return event
+            if first and compare_datetimes(event.local_datetime, cursor) == 0:
+                # An inclusive cursor may surface an omitted event exactly at
+                # its boundary. Advance by one microsecond before continuing
+                # the omitted scan so the provider cannot repeat that event.
+                cursor = event.local_datetime + timedelta(microseconds=1)
+                first = False
+                continue
             _require_forward_progress(cursor, event.local_datetime)
             cursor = event.local_datetime
             first = False

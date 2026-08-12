@@ -21,6 +21,7 @@ ChainCache = Callable[[str], Sequence[TaskRow] | None]
 BuildExportArgs = Callable[..., list[str] | None]
 RunCheckedExport = Callable[[list[str], Any, float], "ChainReadResult"]
 ReadQuerySet = Callable[[str, tuple[Any, ...], Any], None]
+ReadQueryDelete = Callable[[str, tuple[Any, ...]], None]
 TokenParser = Callable[[str | None], list[str] | None]
 TokenMatcher = Callable[[TaskRow, str], bool]
 CoerceInt = Callable[[Any, int | None], int | None]
@@ -43,6 +44,21 @@ class ChainReadResult:
     @classmethod
     def failure(cls, error: str) -> "ChainReadResult":
         return cls(False, [], str(error or "chain export unavailable"))
+
+
+@dataclass(frozen=True, slots=True)
+class ChainSnapshotResult:
+    """Typed completion snapshot result, including its lookup coverage."""
+
+    mode: str
+    rows: list[TaskRow]
+    loaded: bool
+    chain_id: str = ""
+    error: str = ""
+
+    @property
+    def is_unavailable(self) -> bool:
+        return not self.loaded and bool(self.error)
 
 
 def chain_read_key(
@@ -104,6 +120,7 @@ class LifecycleReadService:
         diag: Diagnostic | None = None,
         record_stat: Counter | None = None,
         read_query_set: ReadQuerySet | None = None,
+        read_query_delete: ReadQueryDelete | None = None,
     ) -> None:
         self._coerce_int = coerce_int
         self._parse_extra_tokens = parse_extra_tokens
@@ -115,6 +132,64 @@ class LifecycleReadService:
         self._diag = diag or (lambda _message: None)
         self._record_stat = record_stat or (lambda _name: None)
         self._read_query_set = read_query_set or (lambda _kind, _key, _value: None)
+        self._read_query_delete = read_query_delete or (lambda _kind, _key: None)
+
+    def completion_snapshot(
+        self,
+        chain_id: str,
+        *,
+        mode: str,
+        links: Sequence[int] | None,
+        load_snapshot: Callable[[str, list[int] | None], ChainReadResult],
+        read_query_missing: object,
+    ) -> ChainSnapshotResult:
+        """Reuse or load one completion snapshot and promote full coverage."""
+        normalized_links = None if links is None else tuple(sorted({int(link) for link in links if int(link) > 0}))
+        snapshot_key = (str(chain_id), normalized_links)
+        cached_snapshot = self._read_query_get("chain_snapshot", snapshot_key)
+        if cached_snapshot is not read_query_missing:
+            self._record_stat("chain_snapshot_hits")
+            if not isinstance(cached_snapshot, list) or any(
+                not isinstance(row, dict) for row in cached_snapshot
+            ):
+                self._read_query_delete("chain_snapshot", snapshot_key)
+                return ChainSnapshotResult(
+                    mode=mode,
+                    rows=[],
+                    loaded=False,
+                    chain_id=str(chain_id),
+                    error="cached completion snapshot has invalid shape",
+                )
+            return ChainSnapshotResult(
+                mode=mode,
+                rows=list(cached_snapshot),
+                loaded=True,
+                chain_id=str(chain_id),
+            )
+
+        self._record_stat("chain_snapshot_misses")
+        result = load_snapshot(str(chain_id), None if normalized_links is None else list(normalized_links))
+        if not result.ok:
+            return ChainSnapshotResult(
+                mode=mode,
+                rows=[],
+                loaded=False,
+                chain_id=str(chain_id),
+                error=result.error,
+            )
+        self._read_query_set("chain_snapshot", snapshot_key, result.rows)
+        if normalized_links is None:
+            self._read_query_set(
+                "chain",
+                chain_read_key(str(chain_id), None, None, 0),
+                result.rows,
+            )
+        return ChainSnapshotResult(
+            mode=mode,
+            rows=list(result.rows),
+            loaded=True,
+            chain_id=str(chain_id),
+        )
 
     def checked_export(
         self,
@@ -308,6 +383,7 @@ class LifecycleReadService:
 
 __all__ = [
     "ChainReadResult",
+    "ChainSnapshotResult",
     "ChainIndexes",
     "LifecycleReadService",
     "cached_chain_export",

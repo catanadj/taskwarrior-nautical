@@ -2619,6 +2619,7 @@ def _lifecycle_read_service():
         token_matcher=_cached_chain_token_match,
         read_query_get=_read_query_get,
         read_query_set=_read_query_set,
+        read_query_delete=_read_query_delete,
         chain_cache_get=_cached_chain,
         export_chain_cached=_chain_export_for_cache,
         max_chain_walk=_MAX_CHAIN_WALK,
@@ -5075,54 +5076,35 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
     links = None if mode == "full" else ([next_no] if mode == "next" else [base_no - 2, base_no - 1, next_no])
     if links is not None:
         links = sorted({link for link in links if link > 0})
-    snapshot_key = (str(chain_id), tuple(links) if links is not None else None)
-    cached_snapshot = _read_query_get("chain_snapshot", snapshot_key)
-    if cached_snapshot is not _READ_QUERY_MISSING:
-        _record_chain_snapshot_stat("chain_snapshot_hits")
-        if not isinstance(cached_snapshot, list) or any(not isinstance(row, dict) for row in cached_snapshot):
-            _read_query_delete("chain_snapshot", snapshot_key)
-            return modify_models.CompletionChainSnapshot(
-                mode=mode,
-                rows=[],
-                loaded=False,
-                chain_id=str(chain_id),
-                error="cached completion snapshot has invalid shape",
-            )
-        rows = cached_snapshot
-        return modify_models.CompletionChainSnapshot(
-            mode=mode,
-            rows=rows,
-            loaded=True,
-            chain_id=str(chain_id),
+
+    def _load_snapshot(snapshot_chain_id: str, snapshot_links: list[int] | None):
+        snapshot_result = modify_queries.export_completion_chain_snapshot(
+            snapshot_chain_id,
+            snapshot_links,
+            run_task=_run_task_result,
+            task_cmd_prefix=_task_cmd_prefix(),
+            parse_export_array=parser,
+            diag=_diag,
+            timeout=_chain_export_timeout(snapshot_chain_id),
         )
-    _record_chain_snapshot_stat("chain_snapshot_misses")
-    snapshot_result = modify_queries.export_completion_chain_snapshot(
+        lifecycle_read_service = _module("lifecycle_read_service")
+        if not snapshot_result.loaded:
+            return lifecycle_read_service.ChainReadResult.failure(snapshot_result.error)
+        return lifecycle_read_service.ChainReadResult.success(snapshot_result.rows)
+
+    snapshot = _lifecycle_read_service().completion_snapshot(
         chain_id,
-        links,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        parse_export_array=parser,
-        diag=_diag,
-        timeout=_chain_export_timeout(chain_id),
-    )
-    loaded = snapshot_result.loaded
-    rows = snapshot_result.rows
-    if loaded:
-        _read_query_set("chain_snapshot", snapshot_key, rows)
-        if links is None:
-            # A full snapshot is interchangeable with an unfiltered chain
-            # export. Narrow snapshots deliberately remain separate entries.
-            _read_query_set(
-                "chain",
-                _chain_read_key(chain_id, None, None, 0),
-                rows,
-            )
-    return modify_models.CompletionChainSnapshot(
         mode=mode,
-        rows=rows,
-        loaded=loaded,
-        chain_id=str(chain_id),
-        error=snapshot_result.error if not loaded else "",
+        links=links,
+        load_snapshot=_load_snapshot,
+        read_query_missing=_READ_QUERY_MISSING,
+    )
+    return modify_models.CompletionChainSnapshot(
+        mode=snapshot.mode,
+        rows=snapshot.rows,
+        loaded=snapshot.loaded,
+        chain_id=snapshot.chain_id,
+        error=snapshot.error,
     )
 
 

@@ -7927,6 +7927,50 @@ def test_lifecycle_read_service_checked_export_is_typed_and_cached():
     expect(not failed.ok and failed.error == "unavailable", f"failure lost typed detail: {failed}")
 
 
+def test_lifecycle_read_service_completion_snapshot_promotes_full_reads():
+    """A full completion snapshot should populate the general chain read cache."""
+    import nautical_core.lifecycle_read_service as read_service
+
+    missing = object()
+    stored = {}
+    calls = {"load": 0}
+
+    def _read(kind, key):
+        return stored.get((kind, key), missing)
+
+    def _write(kind, key, value):
+        stored[(kind, key)] = list(value)
+
+    def _load(_chain_id, _links):
+        calls["load"] += 1
+        return read_service.ChainReadResult.success([{"uuid": "aaaaaaaa", "link": 1}])
+
+    service = read_service.LifecycleReadService(
+        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
+        parse_extra_tokens=lambda _extra: [],
+        token_matcher=lambda _row, _token: True,
+        read_query_get=_read,
+        read_query_set=_write,
+        chain_cache_get=lambda _chain_id: None,
+        export_chain_cached=lambda *_args: (),
+        max_chain_walk=10,
+    )
+    first = service.completion_snapshot(
+        "cid",
+        mode="full",
+        links=None,
+        load_snapshot=_load,
+        read_query_missing=missing,
+    )
+    second = service.get_chain_export(
+        "cid",
+        read_query_missing=missing,
+        read_query_key=read_service.chain_read_key,
+    )
+    expect(first.loaded and second and second[0].get("link") == 1, f"full snapshot was not promoted: {first}, {second}")
+    expect(calls["load"] == 1, f"full snapshot loaded more than once: {calls}")
+
+
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33612,6 +33656,7 @@ TESTS = [
     test_lifecycle_read_service_indexes_and_merges_chain_rows,
     test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads,
     test_lifecycle_read_service_checked_export_is_typed_and_cached,
+    test_lifecycle_read_service_completion_snapshot_promotes_full_reads,
     test_next_for_and_no_progress_fails_fast,
     test_next_for_and_transient_stall_recovers,
     test_roll_apply_has_guard,

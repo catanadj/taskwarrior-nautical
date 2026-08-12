@@ -492,6 +492,13 @@ class LifecyclePlan:
     def parent_patch_dict(self) -> dict[str, Any]:
         return {key: _thaw(value) for key, value in self.parent_patch}
 
+    def semantic_key(self) -> str:
+        """Return a stable comparison key excluding durable execution stage."""
+        payload = self.to_dict()
+        payload.pop("stage", None)
+        payload.pop("max_attempts", None)
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+
     def with_stage(self, stage: ExecutionStage) -> "LifecyclePlan":
         """Return the same immutable plan at a new durable execution stage."""
         return LifecyclePlan(

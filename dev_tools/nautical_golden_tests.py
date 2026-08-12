@@ -1455,6 +1455,10 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
         actual == completion_plan,
         f"completion/reconcile plans diverged:\ncompletion={completion_plan!r}\nreconcile={actual!r}",
     )
+    expect(
+        actual.semantic_key() == completion_plan.semantic_key(),
+        "semantic plan key diverged across completion and reconcile",
+    )
 
 
 def test_expiration_candidate_uses_scheduled_recurrence_basis():

@@ -13,6 +13,7 @@ from typing import Any, Mapping, NoReturn
 
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
+from .compiled_schedule import CompiledSchedule
 from .occurrence_provider import Occurrence, OccurrenceBatch
 from .scheduler_models import OccurrenceSearchExhausted
 from .recurrence_protocols import (
@@ -167,6 +168,13 @@ class RecurrenceEvaluator:
         if not isinstance(spec, RecurrenceSpec):
             raise TypeError("Recurrence evaluator requires a RecurrenceSpec.")
         return cls(spec)
+
+    @classmethod
+    def from_compiled(cls, compiled: CompiledSchedule) -> "RecurrenceEvaluator":
+        """Build an evaluator without reparsing an already compiled schedule."""
+        if not isinstance(compiled, CompiledSchedule):
+            raise TypeError("recurrence evaluator requires a CompiledSchedule")
+        return cls.from_spec(compiled.spec)
 
     @property
     def context(self) -> RecurrenceContext:

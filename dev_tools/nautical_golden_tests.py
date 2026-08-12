@@ -23557,6 +23557,35 @@ def test_recurrence_spec_normalizes_task_fields_and_context():
         expect("Conflicting recurrence identities" in str(exc), f"unexpected spec identity error: {exc}")
 
 
+def test_compiled_schedule_is_canonical_and_reusable():
+    """Equivalent recurrence formatting compiles to one immutable schedule."""
+    from nautical_core.compiled_schedule import CompiledSchedule
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+
+    first = CompiledSchedule.from_task({
+        "chainID": "compiled-chain",
+        "anchor": " w:mon ",
+        "anchor_mode": "SKIP",
+        "chainMax": "4",
+    })
+    second = CompiledSchedule.from_task({
+        "chainID": "compiled-chain",
+        "anchor": "w:mon",
+        "anchor_mode": "skip",
+        "chainMax": 4,
+    })
+    expect(first.fingerprint == second.fingerprint, "canonical schedule fingerprint drifted")
+    expect(first.to_dict()["compiler_schema"] == 1, "compiled schedule schema was not versioned")
+    evaluator = RecurrenceEvaluator.from_compiled(first)
+    expect(evaluator.spec == first.spec, "compiled schedule was not reusable by evaluator")
+    try:
+        CompiledSchedule.from_task({"chainID": "plain-task"})
+    except ValueError as exc:
+        expect("without a recurrence" in str(exc), f"invalid schedule error was unclear: {exc}")
+    else:
+        raise AssertionError("plain task produced a compiled recurrence schedule")
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35078,6 +35107,7 @@ TESTS.extend([
     test_random_time_window_parser_selects_deterministic_bucketed_slots,
     test_random_time_window_flows_through_anchor_parser_and_resolver,
     test_recurrence_spec_normalizes_task_fields_and_context,
+    test_compiled_schedule_is_canonical_and_reusable,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

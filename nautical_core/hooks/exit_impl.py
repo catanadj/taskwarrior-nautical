@@ -2126,6 +2126,12 @@ def _prepare_lifecycle_batch(entries: list[dict]):
                 reason="parent task is missing",
             ))
             continue
+        expected_short = str(plan.parent_patch_dict().get("nextLink") or "").strip()
+        parent_linked = (
+            expected_short
+            and _lifecycle_batch_link_token(parent_res.obj.get("nextLink"))
+            == _lifecycle_batch_link_token(expected_short)
+        )
         mismatch = flow._parent_guard_mismatch(
             parent_res.obj,
             plan.parent_guard.to_dict(),
@@ -2133,6 +2139,7 @@ def _prepare_lifecycle_batch(entries: list[dict]):
                 task,
                 parse_datetime=getattr(core, "parse_dt_any", None),
             ),
+            check_modified=not parent_linked,
         )
         if mismatch:
             decisions.append(exit_models.LifecycleBatchDecision(
@@ -2182,7 +2189,6 @@ def _prepare_lifecycle_batch(entries: list[dict]):
                         parent=parent_res.obj, child=child_obj, reason=child_reason,
                     ))
                     continue
-        expected_short = str(plan.parent_patch_dict().get("nextLink") or "").strip()
         actual_next = _lifecycle_batch_link_token(parent_res.obj.get("nextLink"))
         expected_next = _lifecycle_batch_link_token(expected_short)
         if child_obj is not None:

@@ -18212,7 +18212,13 @@ def test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states():
         parent_uuid = f"parent-{index}"
         child_uuid = f"child-{index}"
         guard = lifecycle_models.ParentGuard.from_mapping(
-            {"status": "pending", "chain": "on", "chainID": "batch", "link": index}
+            {
+                "status": "pending",
+                "chain": "on",
+                "chainID": "batch",
+                "link": index,
+                "modified": "revision-1",
+            }
         )
         plan = lifecycle_models.LifecyclePlan.from_mappings(
             identity=lifecycle_models.LifecycleIdentity(
@@ -18240,6 +18246,7 @@ def test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states():
             "chain": "on",
             "chainID": "batch",
             "link": plan.identity.source_link,
+            "modified": "revision-1",
             "nextLink": plan.parent_patch_dict()["nextLink"] if label == "already" else "",
         }
         child = {"uuid": child_uuid, "chainID": "batch", "link": plan.identity.target_link}
@@ -18272,6 +18279,27 @@ def test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states():
         expect(by_intent[intent].kind is kind, f"{intent} classified as {by_intent[intent].kind}")
     mod._apply_lifecycle_batch(plan)
     expect(len(captured) == 1 and captured[0]["uuid"] == "child-3", f"wrong batch import set: {captured!r}")
+
+    # Simulate a crash after import and parent mutation, before durable stage
+    # persistence/final verification. The changed Taskwarrior revision is
+    # acceptable only because the deterministic successor link is present.
+    missing_parent, missing_child, _missing_plan = records["missing"]
+    rows[missing_child] = {
+        "uuid": missing_child,
+        "chainID": "batch",
+        "link": 4,
+    }
+    rows[missing_parent]["nextLink"] = missing_child
+    rows[missing_parent]["modified"] = "revision-2"
+    retry_plan = mod._prepare_lifecycle_batch([entries[2]])
+    retry_decision = retry_plan.by_intent()["missing"]
+    expect(
+        retry_decision.kind is exit_models.LifecycleBatchDecisionKind.ALREADY_SATISFIED,
+        f"partial-progress retry was not idempotent: {retry_decision}",
+    )
+    captured.clear()
+    mod._apply_lifecycle_batch(retry_plan)
+    expect(not captured, f"partial-progress retry imported a duplicate child: {captured!r}")
 
 
 def test_on_exit_dead_letter_on_import_failure():

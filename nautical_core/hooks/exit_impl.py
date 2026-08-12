@@ -13,6 +13,7 @@ import os
 import time
 import importlib
 import importlib.util
+from contextlib import contextmanager
 from pathlib import Path
 
 _IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
@@ -524,6 +525,17 @@ def _diag_count_exit(key: str, inc: float | int = 1) -> None:
         pass
 
 
+@contextmanager
+def _task_phase(name: str):
+    state = _exit_runtime_state()
+    previous = state.task_phase
+    state.task_phase = str(name or "unclassified")
+    try:
+        yield
+    finally:
+        state.task_phase = previous
+
+
 def _run_task_diag_bucket(cmd: list[str]) -> str:
     try:
         parts = []
@@ -553,6 +565,7 @@ def _run_task_diag_bucket(cmd: list[str]) -> str:
 
 def _diag_record_run_task(cmd: list[str], *, ok: bool, elapsed: float) -> None:
     bucket = _run_task_diag_bucket(cmd)
+    _diag_count_exit(f"run_task_calls_phase_{_exit_runtime_state().task_phase or 'unclassified'}")
     _diag_count_exit(f"run_task_calls_{bucket}")
     _diag_count_exit(f"run_task_seconds_{bucket}", float(elapsed or 0.0))
     if not ok:
@@ -728,13 +741,14 @@ def _preload_export_uuids(entries: list[dict]) -> None:
         parsed_ok = False
         allow_negative_cache = False
         if hook_support is not None:
-            result = hook_support.run_task_result(
-                run_task=_run_task_result,
-                cmd=cmd,
-                timeout=_TASK_TIMEOUT_EXPORT,
-                retries=_TASK_RETRIES_EXPORT,
-                retry_delay=_TASK_RETRY_DELAY,
-            )
+            with _task_phase("preload_uuid"):
+                result = hook_support.run_task_result(
+                    run_task=_run_task_result,
+                    cmd=cmd,
+                    timeout=_TASK_TIMEOUT_EXPORT,
+                    retries=_TASK_RETRIES_EXPORT,
+                    retry_delay=_TASK_RETRY_DELAY,
+                )
             parsed_ok, rows, _error = hook_support.parse_export_array_result(result, diag=_diag)
             allow_negative_cache = parsed_ok
             if not parsed_ok and result.ok:
@@ -776,7 +790,7 @@ def _preload_export_uuids(entries: list[dict]) -> None:
             reason = "lifecycle preload unavailable"
             if hook_support is not None and result is not None:
                 reason = getattr(result, "stderr", "") or reason
-            if getattr(_exit_runtime_state(), "lifecycle_batch_discovery", False):
+            if len(lifecycle_entries) > 1:
                 for uuid_str in chunk_uuids:
                     if uuid_str in lifecycle_uuids:
                         _export_cache_set(uuid_str, exit_models.ExitExportResult(False, True, reason, None))
@@ -821,6 +835,7 @@ def _queue_db_begin_run() -> None:
     state.queue_db_reuse_count = 0
     state.queue_lock_failures_this_run = 0
     state.last_queue_lock_diag_ts = 0.0
+    state.task_phase = ""
     _reset_exit_diag_stats()
     _reset_exit_export_cache()
     _reset_exit_equiv_child_cache()
@@ -2012,12 +2027,13 @@ def _preload_equivalent_child_slots(entries: list[dict]) -> None:
             first = False
             cmd.extend(slot_specs[key])
         cmd.append("export")
-        result = _run_task_result(
-            cmd,
-            timeout=_TASK_TIMEOUT_EXPORT,
-            retries=_TASK_RETRIES_EXPORT,
-            retry_delay=_TASK_RETRY_DELAY,
-        )
+        with _task_phase("preload_slot"):
+            result = _run_task_result(
+                cmd,
+                timeout=_TASK_TIMEOUT_EXPORT,
+                retries=_TASK_RETRIES_EXPORT,
+                retry_delay=_TASK_RETRY_DELAY,
+            )
         if not result.ok:
             continue
         try:
@@ -2171,7 +2187,10 @@ def _prepare_lifecycle_batch(entries: list[dict]):
     exit_models = _module("exit_models")
     lifecycle_models = _module("lifecycle_models")
     flow = _module("exit_entry_flow")
-    use_preload = bool(getattr(state, "lifecycle_batch_discovery", False))
+    use_preload = sum(
+        isinstance(item, dict) and isinstance(item.get("lifecycle_plan"), dict)
+        for item in entries or []
+    ) > 1
     for entry in entries or []:
         if not isinstance(entry, dict) or not isinstance(entry.get("lifecycle_plan"), dict):
             continue
@@ -2183,7 +2202,8 @@ def _prepare_lifecycle_batch(entries: list[dict]):
         except Exception as exc:
             _diag(f"lifecycle batch plan rejected: {exc}")
             continue
-        parent_res = _export_uuid(plan.identity.parent_uuid, prefer_cache=use_preload)
+        with _task_phase("batch_preflight"):
+            parent_res = _export_uuid(plan.identity.parent_uuid, prefer_cache=use_preload)
         if parent_res.retryable:
             decisions.append(exit_models.LifecycleBatchDecision(
                 sid, entry, plan, exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
@@ -2226,7 +2246,8 @@ def _prepare_lifecycle_batch(entries: list[dict]):
                 parent=parent_res.obj, reason="lifecycle child has no UUID",
             ))
             continue
-        exact = _export_uuid(child_uuid, prefer_cache=use_preload)
+        with _task_phase("batch_preflight"):
+            exact = _export_uuid(child_uuid, prefer_cache=use_preload)
         child_obj = exact.obj if exact.exists and isinstance(exact.obj, dict) else None
         if exact.retryable:
             decisions.append(exit_models.LifecycleBatchDecision(
@@ -2386,7 +2407,8 @@ def _finalize_lifecycle_batch(state) -> None:
                 cmd.append("or")
             cmd.append(clause)
         cmd.append("export")
-        result = _run_task_result(cmd, timeout=_TASK_TIMEOUT_EXPORT, retries=_TASK_RETRIES_EXPORT, retry_delay=_TASK_RETRY_DELAY)
+        with _task_phase("batch_verify"):
+            result = _run_task_result(cmd, timeout=_TASK_TIMEOUT_EXPORT, retries=_TASK_RETRIES_EXPORT, retry_delay=_TASK_RETRY_DELAY)
         if not result.ok:
             for ctx, _plan, _child in pending.values():
                 _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, result.stderr or "batch verification unavailable")
@@ -2475,7 +2497,8 @@ def _update_parent_nextlink(
     parent_snapshot: dict[str, Any] | None = None,
 ):
     exit_side_effects = _module("exit_side_effects")
-    return exit_side_effects.update_parent_nextlink(
+    with _task_phase("parent_update"):
+        return exit_side_effects.update_parent_nextlink(
         parent_uuid,
         child_short,
         expected_prev=expected_prev,
@@ -2498,7 +2521,7 @@ def _update_parent_nextlink(
                 parse_datetime=getattr(core, "parse_dt_any", None),
             ),
         ),
-    )
+        )
 
 
 def _clear_parent_nextlink_if_matches(parent_uuid: str, child_short: str):

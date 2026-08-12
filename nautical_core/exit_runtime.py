@@ -30,6 +30,7 @@ class ExitRuntimeState:
     queue_lock_failures_this_run: int = 0
     last_queue_lock_diag_ts: float = 0.0
     diag_stats: dict[str, Any] = field(default_factory=dict)
+    task_phase: str = ""
     startup_stats: dict[str, float | int] = field(default_factory=dict)
     export_cache: dict[str, Any] = field(default_factory=dict)
     equiv_child_cache: dict[tuple[str, str, str], Any] = field(default_factory=dict)

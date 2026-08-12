@@ -17000,6 +17000,29 @@ def test_queue_claim_owner_blocks_stale_ack_and_requeue():
 
 
 
+def test_on_exit_finalization_record_failure_retains_claimed_entry():
+    """A missing finalized-intent record must prevent queue acknowledgement."""
+    hook = _find_hook_file("on-exit.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_exit_finalization_retention_test")
+    saved = (mod._write_dead_letter, mod._mark_intent_status)
+    try:
+        mod._write_dead_letter = lambda *_args, **_kwargs: True
+        mod._mark_intent_status = lambda *_args, **_kwargs: False
+        entry = {
+            "spawn_intent_id": "si_finalize_unavailable",
+            "__queue_backend": "sqlite",
+            "__queue_id": 7,
+            "__queue_claim_token": "claim-a",
+        }
+        state = mod._DrainState([entry], 1, set(), True, 0.0)
+        state.dead_letter(entry, "permanent conflict")
+        expect(state.dead_lettered == 0, f"entry was dead-lettered without finalized evidence: {state.dead_lettered}")
+        expect(state.requeue == [entry], f"claimed entry was not retained for retry: {state.requeue!r}")
+        expect(state.sqlite_acked_claims == {}, f"retained entry was acknowledged: {state.sqlite_acked_claims!r}")
+    finally:
+        mod._write_dead_letter, mod._mark_intent_status = saved
+
+
 def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
     """Malformed SQLite rows must leave the queue atomically and remain visible to diagnostics."""
     from nautical_core import queue_store
@@ -33655,6 +33678,7 @@ TESTS = [
     test_on_exit_take_queue_skips_fresh_sqlite_processing_row,
     test_on_exit_requeue_sqlite_clears_claim_metadata,
     test_queue_claim_owner_blocks_stale_ack_and_requeue,
+    test_on_exit_finalization_record_failure_retains_claimed_entry,
     test_on_exit_lock_storm_circuit_requeues_remaining,
     test_cache_metrics_emits_when_enabled,
     test_sanitize_task_strings_removes_controls,

@@ -2164,15 +2164,17 @@ class _DrainState:
         self.intent_mark_fail = 0
         self.sqlite_acked_claims: dict[int, str] = {}
 
-    def mark_final(self, entry: dict, status: str, reason: str) -> None:
+    def mark_final(self, entry: dict, status: str, reason: str) -> bool:
         sid = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
         if not sid:
-            return
+            return True
         if _mark_intent_status(sid, status, reason):
             self.finalized_intents.add(sid)
             self.intent_mark_ok += 1
+            return True
         else:
             self.intent_mark_fail += 1
+            return False
 
     def queue_backend(self, entry: dict) -> str:
         if not isinstance(entry, dict):
@@ -2213,9 +2215,16 @@ class _DrainState:
             self.errors += 1
             _diag("dead-letter write failed; entry retained for retry")
             return
+        if not self.mark_final(entry, "dead", reason):
+            # The dead-letter evidence is durable, but without the finalized
+            # intent record the queue row must remain recoverable and cannot
+            # be acknowledged as complete.
+            self.requeue.append(entry)
+            self.errors += 1
+            _diag("dead-letter intent write failed; entry retained for retry")
+            return
         self.dead_lettered += 1
         self.errors += 1
-        self.mark_final(entry, "dead", reason)
         self.ack_sqlite(entry)
 
     def record_lock_event(self, idx: int) -> bool:
@@ -2648,8 +2657,12 @@ def _execute_lifecycle_queue_entry(ctx, state):
     if not final_stage.ok:
         return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, final_stage)
     _seed_equivalent_child_cache(ctx.child, ctx.parent_uuid, ctx.child_uuid)
+    if not state.mark_final(ctx.entry, "done", "processed"):
+        state.errors += 1
+        state.requeue.append(ctx.entry)
+        _diag("finalized intent write failed; retaining queue entry for retry")
+        return False
     state.processed += 1
-    state.mark_final(ctx.entry, "done", "processed")
     state.ack_sqlite(ctx.entry)
     state.reset_lock_streak()
     return False
@@ -2765,8 +2778,12 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
         return _handle_lifecycle_stage_failure(queue_entry, idx, state, finalized_stage)
 
     _seed_equivalent_child_cache(child, parent_uuid, child_uuid)
+    if not state.mark_final(queue_entry, "done", "processed"):
+        state.errors += 1
+        state.requeue.append(queue_entry)
+        _diag("finalized intent write failed; retaining queue entry for retry")
+        return False
     state.processed += 1
-    state.mark_final(queue_entry, "done", "processed")
     state.ack_sqlite(queue_entry)
     state.reset_lock_streak()
     return False

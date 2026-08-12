@@ -2791,6 +2791,11 @@ def _execute_lifecycle_queue_entry(ctx, state):
             else:
                 state.requeue.append(ctx.entry)
             return False
+
+    def planned_decision():
+        if batch_plan is None:
+            return None
+        return batch_plan.by_intent().get(ctx.spawn_intent_id)
         if (
             batch_decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
             and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_import_failed
@@ -2816,6 +2821,12 @@ def _execute_lifecycle_queue_entry(ctx, state):
 
     class Services:
         def validate_parent(self, current_plan):
+            decision = planned_decision()
+            if decision is not None and isinstance(decision.parent, dict):
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.APPLIED,
+                    value=decision.parent,
+                )
             if ctx.spawn_intent_id in _exit_runtime_state().lifecycle_parent_preflight:
                 return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
             result = _export_uuid(current_plan.identity.parent_uuid, prefer_cache=False)
@@ -2847,6 +2858,21 @@ def _execute_lifecycle_queue_entry(ctx, state):
             return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
 
         def find_equivalent_child(self, current_plan):
+            decision = planned_decision()
+            if decision is not None and isinstance(decision.child, dict):
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.FOUND,
+                    value=decision.child,
+                )
+            if (
+                decision is not None
+                and decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
+                and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported
+            ):
+                return _lifecycle_operation_result(
+                    lifecycle_executor.OperationState.FOUND,
+                    value=current_plan.child_dict(),
+                )
             child = current_plan.child_dict()
             child_uuid = str(child.get("uuid") or "").strip()
             if child_uuid:
@@ -2915,6 +2941,12 @@ def _execute_lifecycle_queue_entry(ctx, state):
             return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
 
         def apply_parent_patch(self, current_plan, child):
+            decision = planned_decision()
+            if (
+                decision is not None
+                and decision.kind is exit_models.LifecycleBatchDecisionKind.ALREADY_SATISFIED
+            ):
+                return _lifecycle_operation_result(lifecycle_executor.OperationState.ALREADY)
             child_short = str(
                 current_plan.parent_patch_dict().get("nextLink")
                 or ctx.child_short

@@ -18122,6 +18122,79 @@ def test_on_exit_import_children_batches_payloads():
     expect(json.loads(payload.splitlines()[1])["uuid"] == "child-2", f"second child was not preserved: {payload!r}")
 
 
+def test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states():
+    """Preflight must partition mixed queue state before importing any child."""
+    hook = _find_hook_file("on-exit.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_exit_batch_mixed_state_test")
+    exit_models = mod._module("exit_models")
+    lifecycle_models = mod._module("lifecycle_models")
+
+    def make_plan(index: int):
+        parent_uuid = f"parent-{index}"
+        child_uuid = f"child-{index}"
+        guard = lifecycle_models.ParentGuard.from_mapping(
+            {"status": "pending", "chain": "on", "chainID": "batch", "link": index}
+        )
+        plan = lifecycle_models.LifecyclePlan.from_mappings(
+            identity=lifecycle_models.LifecycleIdentity(
+                "batch", parent_uuid, index, index + 1, lifecycle_models.LifecycleEvent.COMPLETE
+            ),
+            action=lifecycle_models.LifecycleAction.SPAWN_CHILD,
+            parent_guard=guard,
+            child_payload={"uuid": child_uuid, "chainID": "batch", "link": index + 1},
+            parent_patch={"nextLink": child_uuid},
+        )
+        return parent_uuid, child_uuid, plan
+
+    entries = []
+    records = {}
+    for index, label in enumerate(("already", "ready", "missing", "stale", "unavailable"), 1):
+        parent_uuid, child_uuid, plan = make_plan(index)
+        entries.append({"spawn_intent_id": label, "lifecycle_plan": plan.to_dict()})
+        records[label] = (parent_uuid, child_uuid, plan)
+
+    rows = {}
+    for label, (parent_uuid, child_uuid, plan) in records.items():
+        parent = {
+            "uuid": parent_uuid,
+            "status": "pending",
+            "chain": "on",
+            "chainID": "batch",
+            "link": plan.identity.source_link,
+            "nextLink": plan.parent_patch_dict()["nextLink"] if label == "already" else "",
+        }
+        child = {"uuid": child_uuid, "chainID": "batch", "link": plan.identity.target_link}
+        rows[parent_uuid] = parent
+        if label != "missing":
+            rows[child_uuid] = child
+    rows[records["stale"][0]]["chain"] = "off"
+
+    def export(uuid_str: str, *, prefer_cache=True):
+        if uuid_str == records["unavailable"][0]:
+            return exit_models.ExitExportResult(False, True, "database is locked", None)
+        obj = rows.get(uuid_str)
+        return exit_models.ExitExportResult(obj is not None, False, "" if obj else "not found", obj)
+
+    mod._reset_exit_runtime_state()
+    mod._export_uuid = export
+    captured = []
+    mod._import_children = lambda children: (captured.extend(children) or exit_models.ExitImportResult(True, ""))
+    plan = mod._prepare_lifecycle_batch(entries)
+    expect(plan is not None, "mixed lifecycle batch did not produce a plan")
+    by_intent = plan.by_intent()
+    expected = {
+        "already": exit_models.LifecycleBatchDecisionKind.ALREADY_SATISFIED,
+        "ready": exit_models.LifecycleBatchDecisionKind.READY_TO_APPLY,
+        "missing": exit_models.LifecycleBatchDecisionKind.MISSING_CHILD,
+        "stale": exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
+        "unavailable": exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
+    }
+    for intent, kind in expected.items():
+        expect(by_intent[intent].kind is kind, f"{intent} classified as {by_intent[intent].kind}")
+    mod._apply_lifecycle_batch(plan)
+    expect(len(captured) == 1 and captured[0]["uuid"] == "child-3", f"wrong batch import set: {captured!r}")
+
+
 def test_on_exit_dead_letter_on_import_failure():
     """on-exit should dead-letter entries that fail to import."""
     hook = _find_hook_file("on-exit.nautical")
@@ -33912,6 +33985,7 @@ TESTS = [
     test_on_exit_dead_letter_on_missing_fields,
     test_on_exit_import_child_retries_on_lock,
     test_on_exit_import_children_batches_payloads,
+    test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states,
     test_on_exit_equivalent_child_cache_reuses_slot_lookup,
     test_on_exit_preloads_equivalent_child_slots_for_early_checks,
     test_on_exit_combines_uuid_and_equivalent_slot_preloads,

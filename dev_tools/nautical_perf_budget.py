@@ -1207,6 +1207,8 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
 
         queue_samples = []
         queue_call_stats: list[dict[str, int]] = []
+        queue_idempotent_samples = []
+        queue_idempotent_call_stats: list[dict[str, int]] = []
         for sample_index in range(repeats):
             queue_data = root / f"populated-queue-{sample_index}"
             _init_empty_queue_db(queue_data)
@@ -1215,6 +1217,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 queue_env["NAUTICAL_DIAG"] = "1"
             parents = []
+            queue_payloads = []
             parent_uuids: set[str] = set()
             child_uuids: set[str] = set()
             with sqlite3.connect(str(queue_data / ".nautical-state" / ".nautical_queue.db")) as conn:
@@ -1290,6 +1293,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                         stage=ExecutionStage.PERSISTED,
                     )
                     payload["lifecycle_plan"] = lifecycle_plan.to_dict()
+                    queue_payloads.append(payload)
                     conn.execute(
                         "INSERT INTO queue_entries (spawn_intent_id, payload, created_at, updated_at) "
                         "VALUES (?, ?, ?, ?)",
@@ -1328,6 +1332,40 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             dead_letter = queue_data / ".nautical-state" / ".nautical_dead_letter.jsonl"
             if dead_letter.is_file() and dead_letter.read_text(encoding="utf-8").strip():
                 raise RuntimeError("queue drain benchmark dead-lettered a populated parent/child intent")
+
+            # Replay finalized intents to measure the idempotent recovery
+            # path. The durable intent log must suppress Taskwarrior work and
+            # leave no duplicate queue entries or children.
+            with sqlite3.connect(str(queue_data / ".nautical-state" / ".nautical_queue.db")) as conn:
+                now = time.time()
+                for index, original in enumerate(queue_payloads):
+                    payload = dict(original)
+                    payload["spawn_intent_id"] = f"perf-idempotent-{index}"
+                    replay_plan = dict(payload["lifecycle_plan"])
+                    replay_plan["stage"] = "verified"
+                    payload["lifecycle_plan"] = replay_plan
+                    conn.execute(
+                        "INSERT INTO queue_entries (spawn_intent_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                        (payload["spawn_intent_id"], json.dumps(payload, ensure_ascii=False), now, now),
+                    )
+                conn.commit()
+            try:
+                stats_path.unlink()
+            except FileNotFoundError:
+                pass
+            idem_elapsed, _idem_result, _idem_stderr = _run_workflow_hook_result(
+                ROOT / "on-exit.nautical",
+                input_text="",
+                env=queue_env,
+                expect_output=False,
+            )
+            queue_idempotent_samples.append(idem_elapsed)
+            queue_idempotent_call_stats.append(_read_exit_task_call_stats(stats_path))
+            if _workflow_queue_rows(queue_data):
+                raise RuntimeError(
+                    "idempotent queue drain left finalized intents queued: "
+                    f"{_workflow_queue_rows(queue_data)!r}; stderr={_idem_stderr.strip()!r}"
+                )
             export_proc = subprocess.run(
                 [
                     "task",
@@ -1384,6 +1422,19 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 call_budgets.get("workflow_queue_drain", {}),
             )
         results["workflow_queue_drain"] = queue_result
+        queue_idempotent_result = _measure_workflow(
+            "workflow_queue_drain_idempotent",
+            queue_idempotent_samples,
+            float(budgets.get("workflow_queue_drain_idempotent", 3.0)),
+        )
+        queue_idempotent_result["task_call_stats"] = queue_idempotent_call_stats
+        if isinstance(call_budgets, dict):
+            _apply_task_call_budgets(
+                queue_idempotent_result,
+                queue_idempotent_call_stats,
+                call_budgets.get("workflow_queue_drain_idempotent", {}),
+            )
+        results["workflow_queue_drain_idempotent"] = queue_idempotent_result
 
         reconcile_data = root / "reconcile"
         reconcile_data.mkdir()

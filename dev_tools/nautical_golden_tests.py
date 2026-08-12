@@ -9763,9 +9763,24 @@ def test_weekday_weekend_single_time():
         default_seed=date(2026, 1, 5),
         seed_base="test",
     )
+    time_slots = core._import_sibling("time_slots")
     seen = set()
     for d in dates[:8]:
-        slots = _hook._extract_time_slots_for_date(dnf, d, date(2026, 1, 5), "test")
+        slots = set()
+        for term in dnf:
+            if all(core.factor_matches_on(atom, d, date(2026, 1, 5), seed_base="test") for atom in term):
+                for atom in term:
+                    slots.update(
+                        (hour, minute)
+                        for _offset, hour, minute in time_slots.resolve_time_slots_with_offsets(
+                            atom.get("mods") or {},
+                            d,
+                            config=getattr(core, "ASTRONOMY_CONFIG", {}),
+                            to_local=core.to_local,
+                            seed_base="test",
+                        )
+                    )
+        slots = sorted(slots)
         if d.weekday() < 5:
             expect(slots == [(9, 0)], f"{d} should use 09:00, got {slots}")
         else:
@@ -13452,7 +13467,7 @@ def test_on_modify_overnight_window_completion_uses_next_day_slots():
 
     capped = parent(due, due + timedelta(minutes=10))
     capped["chainUntil"] = "20251216T063000Z"
-    _expr, capped_dnf = mod._anchor_dnf_from_parent(capped)
+    capped_dnf = mod.core.validate_anchor_expr_strict(capped["anchor"])
     final_no, final_dt = mod._cap_from_until_anchor(capped, due.astimezone(timezone.utc), capped_dnf)
     expect(final_no == 8, f"overnight chainUntil counted the wrong number of links: {final_no!r}, final={final_dt!r}")
     expect(
@@ -13468,8 +13483,14 @@ def test_on_modify_random_time_window_completion_reuses_stable_slots():
     target_date = date(2025, 12, 15)
     mods = {"time_random": "rand(06:00..18:00/3)", "t": []}
     slots = mod.core._import_sibling("time_slots").resolve_time_slots_with_offsets(mods, target_date, seed_base=chain_id)
-    first = mod._anchor_slot_local_dt(target_date, slots[0])
-    expected = mod._anchor_slot_local_dt(target_date, slots[1])
+    def local_slot(slot):
+        day_offset, hour, minute = slot
+        return mod.core.to_local(
+            mod.core.build_local_datetime(target_date + timedelta(days=day_offset), (hour, minute))
+        )
+
+    first = local_slot(slots[0])
+    expected = local_slot(slots[1])
     parent = {
         "uuid": "00000000-0000-0000-0000-000000000121",
         "description": "random completion",
@@ -13583,7 +13604,7 @@ def test_chain_until_overnight_window_survives_dst_fallback():
             "due": mod.core.fmt_isoz(due.astimezone(timezone.utc)),
             "end": mod.core.fmt_isoz(due.astimezone(timezone.utc)),
         }
-        _expr, dnf = mod._anchor_dnf_from_parent(parent)
+        dnf = mod.core.validate_anchor_expr_strict(parent["anchor"])
         final_no, final_dt = mod._cap_from_until_anchor(parent, due.astimezone(timezone.utc), dnf)
         expect(final_no == 6, f"DST fallback chainUntil counted the wrong final link: {final_no!r}")
         expect(final_dt is not None and mod.core.to_local(final_dt).strftime("%Y-%m-%d %H:%M") == "2026-11-01 02:30", f"DST fallback chainUntil stopped early: {final_dt!r}")
@@ -19787,7 +19808,8 @@ def test_on_modify_anchor_dnf_accepts_configured_preset():
     prev_anchor_presets = getattr(mod.core, "ANCHOR_PRESETS", {})
     try:
         mod.core.ANCHOR_PRESETS = {"payday": "m:15,-1bd"}
-        expr, dnf = mod._anchor_dnf_from_parent({"anchor": "@payday"})
+        expr = "@payday"
+        dnf = mod.core.validate_anchor_expr_strict(expr)
     finally:
         mod.core.ANCHOR_PRESETS = prev_anchor_presets
 

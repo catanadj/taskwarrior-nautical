@@ -3391,86 +3391,6 @@ def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
     )
 
 
-def _extract_time_slots_from_dnf(dnf, target_date=None, seed_base: str = "") -> list[tuple[int, int]]:
-    """Extract a unique, sorted list of time slots from a parsed anchor DNF."""
-    out: set[tuple[int, int]] = set()
-    recurrence_context = (
-        core._import_sibling("recurrence_context").RecurrenceContext(chain_id=seed_base)
-        if seed_base else None
-    )
-    try:
-        for term in dnf:
-            for atom in term:
-                mods = atom.get("mods") or {}
-                if mods.get("time_random"):
-                    out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(
-                        mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                        to_local=core.to_local, context=recurrence_context,
-                    ))
-                    continue
-                window = mods.get("time_window")
-                parsed_window = core._import_sibling("time_windows").parse_time_window_spec(str(window)) if window else None
-                if parsed_window is not None and parsed_window.crosses_midnight:
-                    out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}), to_local=core.to_local))
-                else:
-                    for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
-                        out.add(hhmm)
-    except Exception as exc:
-        astronomy = core._import_sibling("astronomy")
-        if astronomy.is_astronomy_error(exc):
-            raise
-        return []
-    return sorted(out)
-
-def _extract_time_slots_for_date(
-    dnf,
-    target_date,
-    default_seed_date,
-    seed_base: str,
-) -> list[tuple[int, int]]:
-    """Extract time slots for terms that match target_date."""
-    out: set[tuple[int, int]] = set()
-    recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(chain_id=seed_base)
-    matched = False
-    try:
-        for term in dnf:
-            if all(
-                core.factor_matches_on(atom, target_date, default_seed_date, seed_base=seed_base)
-                for atom in term
-            ):
-                matched = True
-                for atom in term:
-                    mods = atom.get("mods") or {}
-                    if mods.get("time_random"):
-                        out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(
-                            mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                            to_local=core.to_local, context=recurrence_context,
-                        ))
-                        continue
-                    window = mods.get("time_window")
-                    parsed_window = core._import_sibling("time_windows").parse_time_window_spec(str(window)) if window else None
-                    if parsed_window is not None and parsed_window.crosses_midnight:
-                        out.update(core._import_sibling("time_slots").resolve_time_slots_with_offsets(mods, target_date, config=getattr(core, "ASTRONOMY_CONFIG", {}), to_local=core.to_local))
-                    else:
-                        for hhmm in _norm_hhmm_list(mods.get("t"), target_date):
-                            out.add(hhmm)
-    except Exception as exc:
-        astronomy = core._import_sibling("astronomy")
-        if astronomy.is_astronomy_error(exc):
-            raise
-        return []
-    if matched:
-        return sorted(out)
-    return _extract_time_slots_from_dnf(dnf, target_date, seed_base)
-
-def _anchor_slot_local_dt(target_date, hhmm) -> datetime:
-    """Build a configured-local anchor slot, including an optional day offset."""
-    if isinstance(hhmm, tuple) and len(hhmm) == 3:
-        day_offset, hour, minute = hhmm
-        target_date = target_date + timedelta(days=int(day_offset))
-        hhmm = (int(hour), int(minute))
-    return core.to_local(core.build_local_datetime(target_date, hhmm))
-
 def _as_local_dt(d: datetime | None) -> datetime | None:
     if d is None:
         return None
@@ -3607,23 +3527,6 @@ def _validate_anchor_mode(mode_str: str) -> tuple[str, str | None]:
             f"anchor_mode must be 'skip', 'all', or 'flex' (got '{raw}'). Defaulting to 'skip'.",
         )
     return (mode, None)
-
-
-def _anchor_mode_from_parent(parent: dict) -> str:
-    mode = (parent.get("anchor_mode") or "skip").strip().lower()
-    if mode not in ("skip", "all", "flex"):
-        raise ValueError(f"anchor_mode must be 'skip', 'all', or 'flex', got '{mode}'")
-    return mode
-
-
-def _anchor_dnf_from_parent(parent: dict) -> tuple[str, list[list[dict]] | None]:
-    expr_str = (parent.get("anchor") or "").strip()
-    if not expr_str:
-        return "", None
-    try:
-        return expr_str, _validate_anchor_expr_cached(expr_str)
-    except Exception as e:
-        raise ValueError(f"Invalid anchor expression '{expr_str}': {str(e)}")
 
 
 def _omit_dnf_from_parent(parent: dict):

@@ -105,6 +105,7 @@ def anchor_times_for_date(
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
+    project_time: Callable[[Any, date], Any] | None = None,
 ):
     times = set()
     for term in dnf:
@@ -135,7 +136,26 @@ def anchor_times_for_date(
         if term_matches:
             for atom in term:
                 mods = atom.get("mods") or {}
-                if mods.get("time_random"):
+                if project_time is not None:
+                    from .time_projection import (
+                        ProjectedTime,
+                        ProjectionInvalid,
+                        ProjectionTerminal,
+                        ProjectionUnavailable,
+                    )
+
+                    projection = project_time(mods, d)
+                    if isinstance(projection, ProjectedTime):
+                        slots = list(projection.slots)
+                    elif isinstance(projection, ProjectionTerminal):
+                        raise projection.error
+                    elif isinstance(projection, ProjectionUnavailable):
+                        raise LookupError(projection.reason)
+                    elif isinstance(projection, ProjectionInvalid):
+                        raise ValueError(projection.reason)
+                    else:
+                        raise TypeError("Unknown time projection result.")
+                elif mods.get("time_random"):
                     recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
                         chain_id=seed_base,
                     )
@@ -196,6 +216,7 @@ def _available_time_after_date(
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None,
+    project_time: Callable[[Any, date], Any] | None = None,
     max_days: int = 32,
 ):
     """Search the current phase/month window after an unavailable event date."""
@@ -209,6 +230,7 @@ def _available_time_after_date(
             tlist = anchor_times_for_date(
                 dnf, candidate, interval_seed, seed_base, omit_dnf=omit_dnf,
                 core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+                project_time=project_time,
             ) or [fallback_hhmm]
         except LookupError:
             continue
@@ -228,6 +250,7 @@ def anchor_pick_occurrence_local(
     core: Any,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]],
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
+    project_time: Callable[[Any, date], Any] | None = None,
 ):
     d0 = ref_dt_local.date()
     unavailable = None
@@ -236,6 +259,7 @@ def anchor_pick_occurrence_local(
             tlist = anchor_times_for_date(
                 dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core,
                 norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+                project_time=project_time,
             ) or [fallback_hhmm]
             for cand_local in _unique_local_candidates(d0, tlist, core=core):
                 comparison = compare_datetimes(cand_local, ref_dt_local)
@@ -247,6 +271,7 @@ def anchor_pick_occurrence_local(
             same_window = _available_time_after_date(
                 dnf, d0, interval_seed, seed_base, fallback_hhmm, omit_dnf,
                 core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+                project_time=project_time,
             )
             if same_window:
                 candidate, tlist = same_window
@@ -306,6 +331,7 @@ def anchor_next_occurrence_after_local_dt(
     core: Any | None = None,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]] | None = None,
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
+    project_time: Callable[[Any, date], Any] | None = None,
 ):
     if default_seed_date is not None:
         interval_seed = default_seed_date
@@ -329,6 +355,7 @@ def anchor_next_occurrence_after_local_dt(
             tlist = anchor_times_for_date(
                 dnf, d0, interval_seed, seed_base, omit_dnf=omit_dnf, core=core,
                 norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+                project_time=project_time,
             ) or [fallback_hhmm]
             for cand_local in _unique_local_candidates(d0, tlist, core=core):
                 if compare_datetimes(cand_local, after_dt_local) > 0:
@@ -338,6 +365,7 @@ def anchor_next_occurrence_after_local_dt(
             same_window = _available_time_after_date(
                 dnf, d0, interval_seed, seed_base, fallback_hhmm, omit_dnf,
                 core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+                project_time=project_time,
             )
             if same_window:
                 candidate, tlist = same_window
@@ -376,6 +404,7 @@ def anchor_next_occurrence_after_local_dt(
             same_window = _available_time_after_date(
                 dnf, candidate, interval_seed, seed_base, fallback_hhmm, omit_dnf,
                 core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+                project_time=project_time,
             )
             if same_window:
                 candidate, tlist = same_window

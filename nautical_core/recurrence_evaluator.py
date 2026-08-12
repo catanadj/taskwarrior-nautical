@@ -967,6 +967,7 @@ class RecurrenceEvaluator:
                 core=scheduler_core,
                 norm_t_mod=_norm_t_mod,
                 resolve_time_slots=resolve_slots,
+                project_time=self_evaluator.project_time,
             )
 
         return scheduler

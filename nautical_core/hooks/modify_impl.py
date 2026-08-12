@@ -122,14 +122,6 @@ if TYPE_CHECKING:
     from nautical_core.modify_models import CompletionLifecycleResult
 
 
-# Optional: DST-aware local TZ helpers (used by some carry-forward variants)
-try:
-    import zoneinfo as _zoneinfo
-except Exception:  # pragma: no cover
-    _zoneinfo = None
-ZoneInfo = _zoneinfo.ZoneInfo if _zoneinfo is not None else None
-
-
 # set config show_analytics=false to disable analytics panel entry.
 
 # ------------------------------------------------------------------------------
@@ -3680,18 +3672,6 @@ _RESERVED_OVERRIDE = {"due", "entry", "status", "chain", "prevLink", "link"}
 # ------------------------------------------------------------------------------
 # wait/scheduled carry-forward (relative to due)
 # ------------------------------------------------------------------------------
-@lru_cache(maxsize=1)
-def _nautical_local_tz():
-    """Return ZoneInfo for configured local TZ (or None if unavailable)."""
-    if ZoneInfo is None:
-        return None
-    try:
-        name = getattr(core, "LOCAL_TZ_NAME", "") or "UTC"
-        return ZoneInfo(name)
-    except Exception:
-        return None
-
-
 def _utc_to_local_naive(dt_utc: datetime) -> datetime:
     """UTC -> local naive (wall-clock)."""
     if not isinstance(dt_utc, datetime):

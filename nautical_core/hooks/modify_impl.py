@@ -5077,7 +5077,14 @@ def _completion_cap_guard_or_stop(new: dict, next_no: int, cap_no: int | None, n
     )
 
 
-def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_utc: datetime):
+def _completion_compute_next_and_limits(
+    new: dict,
+    kind: str,
+    next_no: int,
+    now_utc: datetime,
+    *,
+    preflight=None,
+):
     modify_completion_compute = _module("modify_completion_compute")
     modify_runtime = _module("modify_runtime")
     services = modify_runtime.build_compute_services(
@@ -5130,6 +5137,16 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
             generation=generation,
             validated_configuration={"scheduler_fingerprint": fingerprint},
             compare_datetimes=_compare_datetimes,
+            preflight=(
+                lifecycle_planner.LifecyclePreflight.from_context(
+                    base_link=preflight.base_no,
+                    next_link=preflight.next_no,
+                    kind=preflight.kind,
+                    chain_id=preflight.chain_id,
+                )
+                if preflight is not None
+                else None
+            ),
         )
         if plan.action is lifecycle_models.LifecycleAction.FINALIZE_CHAIN:
             _end_chain_summary(new, "Reached lifecycle successor limit", now_utc)
@@ -5224,7 +5241,13 @@ def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResul
     kind = ctx.kind
     chain_id = ctx.chain_id
 
-    computed = _completion_compute_next_and_limits(new, kind, next_no, now_utc)
+    computed = _completion_compute_next_and_limits(
+        new,
+        kind,
+        next_no,
+        now_utc,
+        preflight=ctx,
+    )
     if computed is None:
         return
     if isinstance(computed, _module("modify_models").CompletionLifecycleResult):

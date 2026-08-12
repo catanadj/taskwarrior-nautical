@@ -48,6 +48,40 @@ class RecurrenceCandidate:
     terminal_reason: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class LifecyclePreflight:
+    """Validated, side-effect-free inputs gathered before planning."""
+
+    base_link: int
+    next_link: int
+    kind: str
+    chain_id: str
+
+    @classmethod
+    def from_context(
+        cls,
+        *,
+        base_link: Any,
+        next_link: Any,
+        kind: str,
+        chain_id: Any,
+    ) -> "LifecyclePreflight":
+        try:
+            base = _link(base_link)
+            target = _link(next_link)
+        except LifecyclePlanningError:
+            raise
+        if target != base + 1:
+            raise LifecyclePlanningError("lifecycle preflight next link is not adjacent to the parent")
+        normalized_kind = str(kind or "").strip().lower()
+        if normalized_kind not in {"cp", "anchor", "anchor_file"}:
+            raise LifecyclePlanningError(f"unsupported lifecycle recurrence kind: {kind!r}")
+        normalized_chain = str(chain_id or "").strip()
+        if not normalized_chain:
+            raise LifecyclePlanningError("lifecycle preflight has no chainID")
+        return cls(base, target, normalized_kind, normalized_chain)
+
+
 class RecurrencePlanningService(Protocol):
     """Narrow recurrence boundary required by the lifecycle planner."""
 
@@ -183,6 +217,7 @@ def plan_candidate_successor(
     generation: Any,
     validated_configuration: Any,
     compare_datetimes: Callable[[Any, Any], int],
+    preflight: LifecyclePreflight | None = None,
 ) -> LifecyclePlan:
     """Build one candidate-backed plan for hooks, expiration, and reconcile.
 
@@ -199,7 +234,7 @@ def plan_candidate_successor(
         recurrence_service=recurrence,
         successor_limit_policy=ChainGenerationLimitPolicy(compare_datetimes),
     )
-    return planner.plan(snapshot, event)
+    return planner.plan(snapshot, event, preflight=preflight)
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,6 +371,8 @@ class LifecyclePlanner:
         self,
         snapshot: TaskSnapshot,
         event: LifecycleEvent,
+        *,
+        preflight: LifecyclePreflight | None = None,
     ) -> LifecyclePlan:
         try:
             event = LifecycleEvent(event)
@@ -344,6 +381,22 @@ class LifecyclePlanner:
 
         guard = _parent_guard(snapshot)
         target_link = guard.link + 1 if event in {LifecycleEvent.COMPLETE, LifecycleEvent.EXPIRE} else None
+        if preflight is not None:
+            if preflight.chain_id != guard.chain_id:
+                raise LifecyclePlanningError("lifecycle preflight chainID differs from the task snapshot")
+            if preflight.base_link != guard.link:
+                raise LifecyclePlanningError("lifecycle preflight parent link differs from the task snapshot")
+            if target_link is not None and preflight.next_link != target_link:
+                raise LifecyclePlanningError("lifecycle preflight next link differs from the task snapshot")
+            snapshot_kind = (
+                "cp"
+                if str(snapshot.get("cp") or "").strip()
+                else "anchor_file"
+                if str(snapshot.get("anchor_file") or "").strip()
+                else "anchor"
+            )
+            if preflight.kind != snapshot_kind:
+                raise LifecyclePlanningError("lifecycle preflight recurrence kind differs from the task snapshot")
         identity = LifecycleIdentity(
             chain_id=guard.chain_id,
             parent_uuid=str(snapshot.get("uuid") or ""),
@@ -440,6 +493,7 @@ __all__ = (
     "ChainGenerationPlanningService",
     "LifecyclePlanner",
     "LifecyclePlanningError",
+    "LifecyclePreflight",
     "RecurrenceCandidate",
     "RecurrencePlanningService",
     "SuccessorLimitPolicy",

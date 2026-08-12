@@ -19,6 +19,7 @@ from nautical_core.lifecycle_models import (
     recurrence_fingerprint,
 )
 from nautical_core.lifecycle_planner import (
+    LifecyclePreflight,
     RecurrenceCandidate,
     plan_candidate_successor,
 )
@@ -599,6 +600,12 @@ def _build_reconcile_plan_unscoped(
             generation=generation,
             validated_configuration={"scheduler_fingerprint": "reconcile"},
             compare_datetimes=compare_datetimes,
+            preflight=LifecyclePreflight.from_context(
+                base_link=link,
+                next_link=next_link,
+                kind=kind,
+                chain_id=parent.get("chainID"),
+            ),
         )
         if lifecycle_plan.action is LifecycleAction.FINALIZE_CHAIN:
             return ReconcilePlan(

@@ -1183,6 +1183,7 @@ def test_lifecycle_planner_is_pure_and_deterministic():
     from nautical_core.lifecycle_planner import (
         LifecyclePlanner,
         LifecyclePlanningError,
+        LifecyclePreflight,
         terminal_plan_for_snapshot,
     )
 
@@ -1209,6 +1210,29 @@ def test_lifecycle_planner_is_pure_and_deterministic():
     expect(first.child_dict()["uuid"] == "child-uuid", "child payload was not retained")
     expect(first.parent_guard.recurrence_fingerprint.startswith("rf1-"), "planner omitted recurrence fingerprint")
     expect(source == snapshot.to_dict(), "planner mutated the source task")
+    preflight = LifecyclePreflight.from_context(
+        base_link=4,
+        next_link=5,
+        kind="anchor",
+        chain_id="chain-1",
+    )
+    checked = planner.plan(snapshot, LifecycleEvent.COMPLETE, preflight=preflight)
+    expect(checked == first, "validated preflight changed the candidate plan")
+    try:
+        planner.plan(
+            snapshot,
+            LifecycleEvent.COMPLETE,
+            preflight=LifecyclePreflight.from_context(
+                base_link=4,
+                next_link=6,
+                kind="anchor",
+                chain_id="chain-1",
+            ),
+        )
+    except LifecyclePlanningError as exc:
+        expect("adjacent" in str(exc), f"preflight mismatch was not actionable: {exc}")
+    else:
+        raise AssertionError("planner accepted a non-adjacent preflight")
 
     terminal = planner.plan(snapshot, LifecycleEvent.CHAIN_UNTIL)
     expect(terminal.action is LifecycleAction.FINALIZE_CHAIN, "chainUntil did not finalize")

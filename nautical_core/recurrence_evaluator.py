@@ -14,9 +14,16 @@ from typing import Any, Mapping, NoReturn
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
 from .scheduler_cursor import OccurrenceCursor
+from .occurrence_outcomes import (
+    ExhaustedOccurrence,
+    InvalidOccurrence,
+    OccurrenceOutcome,
+    UnavailableOccurrence,
+    outcome_from_occurrence,
+)
+from .scheduler_models import OccurrenceSearchExhausted
 from .compiled_schedule import CompiledSchedule
 from .occurrence_provider import Occurrence, OccurrenceBatch
-from .scheduler_models import OccurrenceSearchExhausted
 from .recurrence_protocols import (
     NextOccurrenceCallback,
     PickOccurrenceCallback,
@@ -439,6 +446,21 @@ class RecurrenceEvaluator:
             inclusive=cursor.inclusive,
             **kwargs,
         )
+
+    def next_outcome(
+        self,
+        cursor: OccurrenceCursor,
+        **kwargs: Any,
+    ) -> OccurrenceOutcome:
+        """Return a typed lookup outcome without collapsing terminal states."""
+        try:
+            return outcome_from_occurrence(self.next_after_cursor(cursor, **kwargs))
+        except OccurrenceSearchExhausted as exc:
+            return ExhaustedOccurrence(exc)
+        except LookupError as exc:
+            return UnavailableOccurrence(str(exc) or type(exc).__name__, type(exc).__name__)
+        except (TypeError, ValueError) as exc:
+            return InvalidOccurrence(str(exc) or type(exc).__name__, type(exc).__name__)
 
     def next_event_after(
         self,

@@ -23670,6 +23670,32 @@ def test_occurrence_cursor_keeps_adjacent_weekday_occurrences():
     expect(result is not None and result.day.isoformat() == "2026-08-10", f"weekday cursor skipped Monday: {result!r}")
 
 
+def test_typed_occurrence_outcomes_preserve_found_invalid_and_absent_states():
+    """Evaluator lookup exposes mutation-safe typed outcome states."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from nautical_core.occurrence_outcomes import FoundOccurrence, InvalidOccurrence
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+    from nautical_core.scheduler_cursor import OccurrenceCursor
+
+    zone = ZoneInfo("Europe/Sofia")
+    evaluator = RecurrenceEvaluator.from_task(
+        {"chainID": "outcome-chain", "anchor": "w:mon@t=09:00"},
+        context=RecurrenceContext(chain_id="outcome-chain", timezone=zone),
+    )
+    found = evaluator.next_outcome(
+        OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, 0, tzinfo=zone), timezone=zone)
+    )
+    expect(isinstance(found, FoundOccurrence), f"expected found outcome, got {found!r}")
+    absent = evaluator.next_outcome(
+        OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, 0, tzinfo=zone), timezone=zone),
+        max_file_skips=0,
+    )
+    expect(isinstance(absent, InvalidOccurrence), "invalid lookup was not typed")
+    expect(isinstance(evaluator.next_outcome("bad-cursor"), InvalidOccurrence), "bad cursor was not invalid")
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35194,6 +35220,7 @@ TESTS.extend([
     test_compiled_schedule_is_canonical_and_reusable,
     test_occurrence_cursor_makes_lookup_semantics_explicit,
     test_occurrence_cursor_keeps_adjacent_weekday_occurrences,
+    test_typed_occurrence_outcomes_preserve_found_invalid_and_absent_states,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

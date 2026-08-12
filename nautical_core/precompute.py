@@ -171,7 +171,7 @@ def build_and_cache_hints(
     cache_load,
     validate_anchor_expr_strict,
     describe_anchor_expr_from_dnf,
-    precompute_hints,
+    precompute_hints=None,
     cache_save,
     anchor_year_fmt: str,
     wrand_salt: str,
@@ -180,6 +180,8 @@ def build_and_cache_hints(
     business_calendar_fingerprint: str = "",
     include_per_year: bool = True,
     scheduler_service_factory: Callable[..., Any] | None = None,
+    hint_builder: Any | None = None,
+    hint_builder_factory: Callable[[], Any] | None = None,
 ):
     def _canonical(value):
         if isinstance(value, dict):
@@ -189,9 +191,13 @@ def build_and_cache_hints(
         return value
 
     cache_mode = "annual" if include_per_year else "next-only"
+    request_signature = (
+        f"{anchor_mode}|hints:{cache_mode}|schema:2|"
+        f"start:{default_due_dt.isoformat() if hasattr(default_due_dt, 'isoformat') else default_due_dt}"
+    )
     key = cache_key_for_task(
         anchor_expr,
-        f"{anchor_mode}|hints:{cache_mode}",
+        request_signature,
         business_calendar_fingerprint,
     )
     cached = cache_load(key)
@@ -209,17 +215,30 @@ def build_and_cache_hints(
 
     dnf = validate_anchor_expr_strict(anchor_expr)
     natural = describe_anchor_expr_from_dnf(dnf, default_due_dt=default_due_dt)
-    hints = precompute_hints(
-        dnf,
-        start_dt=default_due_dt,
-        anchor_mode=anchor_mode,
-        include_per_year=include_per_year,
-        scheduler_service=(
-            scheduler_service_factory(anchor_expr)
-            if scheduler_service_factory is not None
-            else None
-        ),
-    )
+    if hint_builder is None and hint_builder_factory is not None:
+        hint_builder = hint_builder_factory()
+    if hint_builder is not None:
+        hints = hint_builder.build(
+            start_dt=default_due_dt,
+            k_next=24,
+            sample_days_for_year=366,
+            now_local=datetime.now,
+            include_per_year=include_per_year,
+        )
+    elif precompute_hints is not None:
+        hints = precompute_hints(
+            dnf,
+            start_dt=default_due_dt,
+            anchor_mode=anchor_mode,
+            include_per_year=include_per_year,
+            scheduler_service=(
+                scheduler_service_factory(anchor_expr)
+                if scheduler_service_factory is not None
+                else None
+            ),
+        )
+    else:
+        raise TypeError("Hint generation requires a typed HintBuilder.")
 
     payload = {
         "meta": {

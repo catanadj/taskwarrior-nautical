@@ -110,6 +110,8 @@ class OccurrenceCollectionResult:
                 raise TypeError("Occurrence collection request must be typed.")
             if self.request.cursor != self.cursor:
                 raise ValueError("Occurrence collection request and cursor disagree.")
+            if len(self.occurrences) > self.request.limit:
+                raise ValueError("Occurrence collection exceeds its requested limit.")
             if self.request.end_local is not None:
                 for occurrence in self.occurrences:
                     if occurrence.local_datetime is None or occurrence.local_datetime > self.request.end_local:

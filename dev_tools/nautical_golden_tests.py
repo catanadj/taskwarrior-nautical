@@ -23965,6 +23965,52 @@ def test_scheduler_cross_path_preserves_terminal_evidence():
     expect(outcome.terminal_evidence["kind"] == "date_limit", "terminal kind was not retained")
 
 
+def test_scheduler_generated_recurrence_matrix_is_monotonic_and_deterministic():
+    """Generated recurrence cases preserve cursor order, timezone, and replay."""
+    import random
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from nautical_core.occurrence_outcomes import FoundOccurrence
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor
+    from nautical_core.scheduler_service import SchedulerService
+    from dev_tools.nautical_scheduler_parity import assert_monotonic
+
+    rng = random.Random(20260812)
+    anchors = [
+        "w:mon", "w/2:tue", "m:1", "m/2:15", "y:01-01", "y:02-29",
+        "w:mon + m:1", "w:mon | w:fri", "m:rand", "w:sun@t=01:30",
+    ]
+    rng.shuffle(anchors)
+    zone = ZoneInfo("Europe/Sofia")
+    for index, anchor in enumerate(anchors):
+        chain_id = f"generated-matrix-{index}"
+        task = {"anchor": anchor, "chainID": chain_id}
+        context = RecurrenceContext(chain_id=chain_id, timezone=zone)
+        service = SchedulerService.from_task(task, context=context)
+        cursor = OccurrenceCursor.strict_after(
+            datetime(2026, 1, 1, 0, 0, tzinfo=zone), timezone=zone,
+        )
+        collected = service.collect(cursor, limit=3, max_iterations=2048)
+        assert_monotonic(collected.occurrences)
+        expect(collected.occurrences, f"generated case produced no events: {anchor}")
+        expect(
+            all(item.local_datetime is not None and item.local_datetime.tzinfo is not None for item in collected),
+            f"generated case lost timezone: {anchor}",
+        )
+        replay = service.collect(cursor, limit=3, max_iterations=2048)
+        expect(
+            [item.local_datetime for item in collected] == [item.local_datetime for item in replay],
+            f"generated case was not deterministic: {anchor}",
+        )
+        step = cursor
+        for _ in range(3):
+            outcome = service.next(step, max_file_skips=2048)
+            expect(isinstance(outcome, FoundOccurrence), f"generated cursor lookup failed: {anchor}: {outcome!r}")
+            expect(outcome.local_datetime > step.local_datetime, f"generated cursor did not advance: {anchor}")
+            step = OccurrenceCursor.strict_after(outcome.local_datetime, timezone=zone)
+
+
 def test_occurrence_range_request_validates_context_bounds_and_policy():
     """Range requests are explicit, bounded, and context-checked."""
     from datetime import datetime, timedelta
@@ -35631,6 +35677,7 @@ TESTS.extend([
     test_scheduler_parity_matrix_covers_context_sensitive_rules,
     test_scheduler_cross_path_conformance_matrix,
     test_scheduler_cross_path_preserves_terminal_evidence,
+    test_scheduler_generated_recurrence_matrix_is_monotonic_and_deterministic,
     test_occurrence_range_request_validates_context_bounds_and_policy,
     test_occurrence_range_request_exposes_omission_provenance,
     test_occurrence_range_request_wraps_unavailable_and_invalid_failures,

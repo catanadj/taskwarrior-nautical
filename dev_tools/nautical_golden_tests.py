@@ -28572,6 +28572,26 @@ def test_reconcile_apply_lease_serializes_mutations():
             expect(released, "reconcile apply lease was not released")
 
 
+def test_on_exit_and_reconcile_share_parent_mutation_lock():
+    """Hook and reconcile writers must serialize on one stable parent lock."""
+    exit_hook = _find_hook_file("on-exit.nautical")
+    exit_mod = _load_hook_module(exit_hook, "_nautical_on_exit_reconcile_lock_identity_test")
+    reconcile_path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    reconcile_mod = _load_hook_module(str(reconcile_path), "_nautical_reconcile_lock_identity_test")
+    parent_uuid = "11111111-0000-0000-0000-000000000001"
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td)
+        exit_mod.TW_DATA_DIR = taskdata
+        with exit_mod._lock_parent_nextlink(parent_uuid) as exit_acquired:
+            expect(exit_acquired, "on-exit could not acquire parent mutation lock")
+            with reconcile_mod._parent_apply_lock(taskdata, parent_uuid) as reconcile_acquired:
+                expect(not reconcile_acquired, "reconcile bypassed the on-exit parent lock")
+        with reconcile_mod._parent_apply_lock(taskdata, parent_uuid) as reconcile_acquired:
+            expect(reconcile_acquired, "reconcile could not acquire released parent lock")
+            with exit_mod._lock_parent_nextlink(parent_uuid) as exit_acquired:
+                expect(not exit_acquired, "on-exit bypassed the reconcile parent lock")
+
+
 def test_reconcile_apply_refuses_a_second_full_run():
     """A held apply lease must reject another reconcile before it loads hooks or exports tasks."""
     tool = _load_hook_module(
@@ -33698,6 +33718,7 @@ TESTS = [
     test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,
     test_reconcile_tool_exports_and_applies_expired_candidates,
     test_reconcile_apply_lease_serializes_mutations,
+    test_on_exit_and_reconcile_share_parent_mutation_lock,
     test_reconcile_apply_refuses_a_second_full_run,
     test_reconcile_apply_refreshes_parent_under_lock,
     test_reconcile_apply_resumes_after_parent_update_failure,

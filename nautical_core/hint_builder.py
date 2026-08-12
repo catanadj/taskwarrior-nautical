@@ -45,6 +45,10 @@ class HintBuilder:
         result = self.service.collect_request(request)
         if not isinstance(result, OccurrenceCollectionResult):
             raise TypeError("Scheduler service returned an invalid hint collection.")
+        if result.failure is not None:
+            raise RuntimeError(
+                f"Hint scheduling {result.status}: {result.failure.reason}"
+            )
         return result
 
     @staticmethod

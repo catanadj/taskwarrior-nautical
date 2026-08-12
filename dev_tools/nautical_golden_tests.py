@@ -23933,6 +23933,45 @@ def test_occurrence_range_request_wraps_unavailable_and_invalid_failures():
     expect(invalid.status == "invalid", "invalid failure changed into empty result")
 
 
+def test_hint_builder_does_not_convert_typed_failure_to_empty_hints():
+    """Hint generation fails closed when its typed range result is unavailable."""
+    from datetime import datetime
+    from types import SimpleNamespace
+    from zoneinfo import ZoneInfo
+    from nautical_core.hint_builder import HintBuilder
+    from nautical_core.occurrence_outcomes import OccurrenceCollectionResult, UnavailableOccurrence
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor
+
+    zone = ZoneInfo("UTC")
+    cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 1, tzinfo=zone), timezone=zone)
+    failure = OccurrenceCollectionResult(
+        occurrences=(),
+        cursor=cursor,
+        failure=UnavailableOccurrence("astronomy profile unavailable", "LookupError"),
+    )
+
+    class FailingService:
+        session = SimpleNamespace(
+            evaluator=SimpleNamespace(context=RecurrenceContext(chain_id="hint-failure", timezone=zone))
+        )
+
+        def collect_request(self, _request):
+            return failure
+
+    try:
+        HintBuilder(FailingService()).build(
+            start_dt=datetime(2026, 8, 1, tzinfo=zone),
+            k_next=2,
+            sample_days_for_year=2,
+            now_local=lambda: datetime(2026, 8, 1, tzinfo=zone),
+        )
+    except RuntimeError as exc:
+        expect("unavailable" in str(exc), "hint failure message was not actionable")
+    else:
+        raise AssertionError("hint builder converted typed failure to empty output")
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35462,6 +35501,7 @@ TESTS.extend([
     test_occurrence_range_request_validates_context_bounds_and_policy,
     test_occurrence_range_request_exposes_omission_provenance,
     test_occurrence_range_request_wraps_unavailable_and_invalid_failures,
+    test_hint_builder_does_not_convert_typed_failure_to_empty_hints,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

@@ -77,12 +77,29 @@ class SchedulerService:
         count_omitted = request.omission_policy in {"include", "report"}
         try:
             if request.omission_policy == "exclude":
-                result = self.collect(
-                    request.cursor,
-                    limit=request.limit,
-                    max_iterations=request.max_iterations,
-                    max_file_skips=request.max_file_skips,
-                )
+                if request.end_local is not None:
+                    batch = self.session.evaluator.events_between(
+                        request.cursor.local_datetime,
+                        request.end_local,
+                        limit=request.limit,
+                        inclusive=request.cursor.inclusive,
+                        include_omitted=False,
+                        max_iterations=request.max_iterations,
+                        max_file_skips=request.max_file_skips,
+                    )
+                    result = OccurrenceCollectionResult(
+                        occurrences=tuple(batch),
+                        cursor=request.cursor,
+                        source=self.session.evaluator.kind or "scheduler",
+                        terminal=batch.terminal,
+                    )
+                else:
+                    result = self.collect(
+                        request.cursor,
+                        limit=request.limit,
+                        max_iterations=request.max_iterations,
+                        max_file_skips=request.max_file_skips,
+                    )
                 return OccurrenceCollectionResult(
                     occurrences=result.occurrences,
                     cursor=request.cursor,

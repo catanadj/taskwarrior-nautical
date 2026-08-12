@@ -518,8 +518,31 @@ def _collect_included_with_provider(
     return_occurrences: bool = False,
     anchor_file_provider: Any | None = None,
     evaluator: Any | None = None,
+    scheduler_service: Any | None = None,
 ) -> list[datetime] | list[Occurrence]:
     """Collect included occurrences through the typed provider boundary."""
+    if scheduler_service is not None:
+        from .scheduler_cursor import OccurrenceCursor
+
+        result = scheduler_service.collect(
+            OccurrenceCursor(
+                after_local_dt,
+                inclusive=inclusive,
+                timezone=scheduler_service.session.evaluator.context.timezone,
+            ),
+            limit=limit,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            max_iterations=max_iterations,
+            max_file_skips=max_iterations,
+        )
+        collected = list(result.occurrences)
+        if return_occurrences:
+            return collected
+        return OccurrenceBatch(
+            [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None],
+            terminal=result.terminal,
+        )
     if evaluator is not None:
         collected = evaluator.collect_after(
             after_local_dt,
@@ -618,7 +641,35 @@ def _collect_events_with_provider(
     return_occurrences: bool = False,
     anchor_file_provider: Any | None = None,
     evaluator: Any | None = None,
+    scheduler_service: Any | None = None,
 ) -> list[Occurrence] | list[tuple[datetime, bool]]:
+    if scheduler_service is not None:
+        from .scheduler_cursor import OccurrenceCursor
+
+        result = scheduler_service.collect(
+            OccurrenceCursor(
+                after_local_dt,
+                inclusive=inclusive,
+                timezone=scheduler_service.session.evaluator.context.timezone,
+            ),
+            limit=limit_included,
+            count_omitted=False,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed_date,
+            max_iterations=max_iterations,
+            max_file_skips=max_iterations,
+        )
+        collected = list(result.occurrences)
+        if return_occurrences:
+            return collected
+        return OccurrenceBatch(
+            [
+                (occurrence.local_datetime, occurrence.omitted)
+                for occurrence in collected
+                if occurrence.local_datetime is not None
+            ],
+            terminal=result.terminal,
+        )
     from .occurrence_provider import AnchorEventOccurrenceProvider, collect_after
 
     if evaluator is not None:
@@ -1110,6 +1161,7 @@ def handle_anchor_preview_on_add(
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
+            scheduler_service=scheduler_service,
         )
         if not occurrences:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
@@ -1169,6 +1221,7 @@ def handle_anchor_preview_on_add(
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
+            scheduler_service=scheduler_service,
         )
         if not occurrences:
             error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])
@@ -1328,6 +1381,7 @@ def handle_anchor_preview_on_add(
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
+            scheduler_service=scheduler_service,
         )
         presentation_terminal = getattr(all_occurrences, "terminal", None)
         if until_dt:
@@ -1356,6 +1410,7 @@ def handle_anchor_preview_on_add(
             return_occurrences=True,
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
+            scheduler_service=scheduler_service,
         )
         event_terminal = getattr(events, "terminal", None)
         if event_terminal is not None:
@@ -1412,6 +1467,7 @@ def handle_anchor_preview_on_add(
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
+            scheduler_service=scheduler_service,
         )
         if len(future_for_max) == future_needed:
             final_max_dt = future_for_max[-1].astimezone(timezone.utc)

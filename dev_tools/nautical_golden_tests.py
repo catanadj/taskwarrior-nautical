@@ -23776,6 +23776,25 @@ def test_scheduler_service_is_one_typed_occurrence_entry_point():
     expect(preview.to_dict()["status"] == "found", "service preview evidence was incomplete")
 
 
+def test_scheduler_trace_is_disabled_bounded_and_redacted():
+    """Tracing stays inert by default and cannot leak file-backed configuration."""
+    import json
+    from nautical_core.scheduler_trace import SchedulerTrace
+
+    disabled = SchedulerTrace()
+    disabled.record("selected", provider="anchor", term="w:mon")
+    expect(not disabled.events, "disabled scheduler tracing recorded an event")
+
+    trace = SchedulerTrace(enabled=True, max_events=2)
+    trace.record("proposed", provider="anchor_file", term="/private/calendar.csv")
+    trace.record("selected", provider="anchor_file", term="calendar.csv")
+    trace.record("selected", provider="anchor_file", term="third")
+    payload = json.dumps(trace.summary(), ensure_ascii=False)
+    expect(trace.dropped == 1, "scheduler trace did not enforce its event bound")
+    expect("/private/calendar.csv" not in payload, "scheduler trace leaked a file path")
+    expect("<redacted>" in payload, "scheduler trace redaction marker is missing")
+
+
 def test_scheduler_parity_harness_compares_legacy_callback_only_in_tests():
     """Migration parity is test-only and detects timestamp divergence."""
     from datetime import datetime
@@ -35707,6 +35726,7 @@ TESTS.extend([
     test_typed_occurrence_outcomes_define_compact_presentation_summary,
     test_evaluation_session_is_task_scoped_and_fingerprint_bound,
     test_scheduler_service_is_one_typed_occurrence_entry_point,
+    test_scheduler_trace_is_disabled_bounded_and_redacted,
     test_scheduler_parity_harness_compares_legacy_callback_only_in_tests,
     test_scheduler_parity_matrix_covers_context_sensitive_rules,
     test_scheduler_cross_path_conformance_matrix,

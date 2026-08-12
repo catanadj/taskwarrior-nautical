@@ -31,6 +31,14 @@ def _safe_value(value: object) -> object:
     return _safe_text(value)
 
 
+def _safe_term(value: object) -> str:
+    """Keep recurrence terms useful while hiding file and URL-like values."""
+    text = _safe_text(value, limit=96)
+    if "/" in text or "\\" in text or "://" in text:
+        return "<redacted>"
+    return text
+
+
 @dataclass(frozen=True, slots=True)
 class SchedulerTraceEvent:
     """One redacted scheduling decision or terminal explanation."""
@@ -51,7 +59,7 @@ class SchedulerTraceEvent:
             ("status", self.status),
             ("cursor", self.cursor),
             ("candidate", self.candidate),
-            ("term", self.term),
+            ("term", _safe_term(self.term)),
             ("reason", self.reason),
         ):
             if value not in (None, ""):

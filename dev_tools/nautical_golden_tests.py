@@ -34952,6 +34952,16 @@ def main():
                 traceback.print_exc()
             else:
                 print(f"✗ {fn.__name__}: unexpected error {e}")
+        except SystemExit as e:
+            fails += 1
+            message = f"unexpected SystemExit({e.code!r})"
+            if args.verbose:
+                docstring = fn.__doc__ or "No description available"
+                description = docstring.strip().split('\n')[0] if docstring else fn.__name__
+                print(f"✗ {fn.__name__}: {description}")
+                print(f"  ERROR: {message}")
+            else:
+                print(f"✗ {fn.__name__}: {message}")
 
     print(f"\n{'='*60}")
     print(f"TEST SUMMARY")
